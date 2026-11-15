@@ -1,10 +1,11 @@
 //! What `settings.json` may say, and what applies when it says nothing. The shell reads the file.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-/// `conversation_view` when the settings name none. Terminal until the native view has passed
-/// a real-CLI check (`docs/ai/agent-runners.md`, "Real-CLI check").
-pub const DEFAULT_VIEW: crate::transcript::View = crate::transcript::View::Terminal;
+/// `conversation_view` when the settings name none. Native: it passed the real-CLI check
+/// (`docs/ai/agent-runners.md`, "Real-CLI check"). A runner without a verified structured mode
+/// still shows in a terminal (`Model::talk_view`).
+pub const DEFAULT_VIEW: crate::transcript::View = crate::transcript::View::Native;
 
 /// `~/.ottospace/settings.json`. Every key is optional. An unknown key is an error, so a typing
 /// mistake does not pass for a setting that silently does nothing.
@@ -17,7 +18,7 @@ pub const DEFAULT_VIEW: crate::transcript::View = crate::transcript::View::Termi
 ///   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
 ///   "session_quiet_minutes": 3,
 ///   "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
-///   "conversation_view": "terminal",
+///   "conversation_view": "native",
 ///   "capture_key": "ctrl-alt-cmd-space",
 ///   "capture": { "keep_images": true, "ax": true },
 ///   "workbook_scrollback_lines": 500,
@@ -72,8 +73,8 @@ pub struct Settings {
     /// The agent a task with no `@agent` starts with: a name `@` takes. Default: `claude`.
     #[serde(default)]
     pub default_agent: Option<String>,
-    /// How the drawer shows a Claude Code conversation: `terminal` (default: the CLI's own TUI)
-    /// or `native` (drawn by ottospace). Codex always shows in a terminal for now.
+    /// How the drawer shows a Claude Code conversation: `native` (default: drawn by ottospace) or
+    /// `terminal` (the CLI's own TUI). Codex always shows in a terminal for now.
     #[serde(default)]
     pub conversation_view: Option<crate::transcript::View>,
     /// The key that captures the pane in use, from any app: modifiers and a key with `-`
@@ -98,8 +99,8 @@ pub struct Settings {
     /// user picks one in the section's header.
     #[serde(default)]
     pub tasks_view: Option<crate::model::TasksView>,
-    /// Which sessions Other sessions lists: `today` (default), `week`, `month` or `all`. Written
-    /// when the user picks one on its heading.
+    /// Which sessions Elsewhere lists: `today`, `week` (default), `month` or `all`. Set by hand:
+    /// nothing on screen picks it.
     #[serde(default)]
     pub sessions_range: Option<crate::sessions::Range>,
     /// The calendar feed of the meeting timeline: an `https://` link (a private feed's link holds
@@ -126,12 +127,28 @@ pub struct Settings {
     /// machine: never in the state, a log or the feed's request.
     #[serde(default)]
     pub calendar_email: Option<String>,
+    /// Leave out entries that keep the time free (Outlook's FREE, `TRANSP:TRANSPARENT`).
+    /// Default: false.
+    #[serde(default)]
+    pub calendar_hide_free: Option<bool>,
+    /// Colours by title, first match wins: `[{"match": "1:1", "color": "teal"}]`.
+    #[serde(default)]
+    pub calendar_colors: Option<Vec<ColorSetting>>,
     /// Feature flags by name, e.g. `{ "marks": true }`: see `features`. One not named keeps its default.
     #[serde(default)]
     pub features: std::collections::BTreeMap<String, bool>,
     /// When ⌘V into a terminal asks first: `multiline` (default: text with a line break) or `never`.
     #[serde(default)]
     pub paste_confirm: Option<crate::clip::PasteConfirm>,
+}
+
+/// One of `calendar_colors`: a title that holds `match` (case ignored) takes `color`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColorSetting {
+    #[serde(rename = "match")]
+    pub text: String,
+    pub color: String,
 }
 
 /// Which meetings alert when they start (`calendar_notify_for`).
@@ -284,6 +301,12 @@ impl Settings {
                 return Err("calendar_email must be an e-mail address, as me@example.com".into());
             }
         }
+        if let Some(rules) = settings.calendar_colors.as_deref() {
+            if rules.len() > crate::calendar::MAX_RULES {
+                return Err(format!("at most {} rules", crate::calendar::MAX_RULES));
+            }
+            rules.iter().try_for_each(|r| crate::calendar::ColorRule::new(&r.text, &r.color).map(drop))?;
+        }
         // A flag no feature has is a mistake; one retired is ignored (`read` warns of it).
         let retired = |name: &String| crate::features::RETIRED.contains(&name.as_str());
         let unknown = settings.features.keys().filter(|name| !retired(name));
@@ -352,6 +375,12 @@ impl Settings {
         }
     }
 
+    /// `calendar_colors` as rules, those that are right, in order.
+    pub fn color_rules(&self) -> Vec<crate::calendar::ColorRule> {
+        let rules = self.calendar_colors.iter().flatten().take(crate::calendar::MAX_RULES);
+        rules.filter_map(|r| crate::calendar::ColorRule::new(&r.text, &r.color).ok()).collect()
+    }
+
     /// `calendar_workday`, else 09:00 to 17:00.
     pub fn workday(&self) -> crate::calendar::Workday {
         self.calendar_workday.as_deref().and_then(crate::calendar::Workday::parse).unwrap_or_default()
@@ -379,6 +408,14 @@ pub struct Watch {
     retired: Option<&'static str>,
     /// Flags of features that are stable now: a warning, which blocks nothing.
     flags_retired: Vec<String>,
+}
+
+/// How the status bar draws a line: something to know, or something wrong to fix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Level {
+    Info,
+    Error,
 }
 
 /// What the status bar says of a retired key.
@@ -413,6 +450,12 @@ impl Watch {
 
     pub fn errors(&self) -> usize {
         self.problems.len()
+    }
+
+    /// How `line` is drawn: a problem is an error; a restart to ask for, or a retired key or
+    /// flag, is information (nothing is wrong, the file applies).
+    pub fn level(&self) -> Level {
+        if self.problems.is_empty() { Level::Info } else { Level::Error }
     }
 
     /// The status bar's line: the first problem and how many more, else the keys that need a
@@ -503,6 +546,9 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         calendar_notify: _,
         calendar_notify_for: _,
         calendar_email,
+        // Told to the core again on each good read.
+        calendar_hide_free: _,
+        calendar_colors: _,
         // Told to the core again on each good read, as Features… writes them.
         features: _,
         paste_confirm: _,
@@ -936,7 +982,7 @@ mod tests {
         // Retired: read, so the rest of the file applies; the status bar says to remove it.
         let mut watch = Watch::default();
         assert!(watch.read(r#"{"calendar_window_hours": 8, "tasks_view": "project"}"#, false).is_some());
-        assert_eq!((watch.errors(), watch.line().as_deref()), (0, Some(RETIRED)));
+        assert_eq!((watch.errors(), watch.line().as_deref(), watch.level()), (0, Some(RETIRED), Level::Info));
         assert_eq!(read(r#"{"calendar_refresh_minutes": 0}"#).1.len(), 1);
         assert_eq!(read(r#"{"calendar_notify": false}"#).0.calendar_notify, Some(false));
         assert_eq!(read(r#"{"calendar_notify_for": "links"}"#).0.calendar_notify_for, Some(NotifyFor::Links));
@@ -949,6 +995,36 @@ mod tests {
             assert!(settings.calendar_email.is_none() && wrong.len() == 1, "{bad:?}");
             assert!(wrong[0].starts_with("calendar_email: ") && !wrong[0].contains("s3"), "{wrong:?}");
         }
+    }
+
+    #[test]
+    fn calendar_colors_name_a_palette_colour_and_free_entries_may_be_hidden() {
+        let read = |text: &str| Settings::read(text);
+        let (ok, wrong) = read(
+            r#"{"calendar_hide_free": true, "calendar_colors": [{"match": "1:1", "color": "teal"}, {"match": "Focus", "color": "Lime"}]}"#,
+        );
+        assert_eq!((ok.calendar_hide_free, wrong.len()), (Some(true), 0));
+        let rules = ok.color_rules();
+        assert_eq!(rules.iter().map(|r| (r.text.as_str(), r.color)).collect::<Vec<_>>(), [("1:1", 7), ("focus", 4)]);
+        let table = [
+            (r#"[{"match": "x", "color": "blue"}]"#, "calendar_colors: color is one of red, indigo, orange, pink"),
+            (r#"[{"match": "", "color": "red"}]"#, "calendar_colors: match must be 1 to 100 characters"),
+            (r#"[{"match": "x", "color": "red", "regex": true}]"#, "calendar_colors: unknown field `regex`"),
+            (r#"{"match": "x", "color": "red"}"#, "calendar_colors: invalid type"),
+        ];
+        for (colors, said) in table {
+            let (settings, wrong) = read(&format!(r#"{{"calendar_colors": {colors}}}"#));
+            assert!(settings.calendar_colors.is_none() && wrong.len() == 1, "{colors}: {wrong:?}");
+            assert!(wrong[0].starts_with(said), "{colors}: {wrong:?}");
+        }
+        let many =
+            serde_json::json!({ "calendar_colors": vec![serde_json::json!({"match": "x", "color": "red"}); 65] });
+        assert_eq!(read(&many.to_string()).1, ["calendar_colors: at most 64 rules"]);
+        // Both apply as the app runs: no restart asked.
+        let mut watch = Watch::default();
+        watch.read("{}", false);
+        assert!(watch.read(r#"{"calendar_hide_free": true, "calendar_colors": []}"#, false).is_some());
+        assert_eq!(watch.line(), None);
     }
 
     #[test]
@@ -1182,10 +1258,11 @@ mod tests {
             r#"{"terminal": {"font_size": 16}, "tasks": "~/t", "apps": ["Slack"], "calendar_workday": "08:00-16:00"}"#;
         assert!(watch.read(later, false).is_some());
         let restart = "settings.json: restart to apply terminal, tasks, calendar_workday";
-        assert_eq!(watch.line().as_deref(), Some(restart));
+        assert_eq!((watch.line().as_deref(), watch.level()), (Some(restart), Level::Info), "information, not an error");
         // A problem goes first; put back as at start, there is nothing to restart for.
         assert_eq!(watch.read("{", false), None);
         assert!(watch.line().unwrap().starts_with("settings.json:1:1 EOF"), "{:?}", watch.line());
+        assert_eq!(watch.level(), Level::Error);
         assert!(watch.read(r#"{"terminal": {"font_size": 14}, "apps": ["Slack"]}"#, false).is_some());
         assert_eq!(watch.line(), None);
     }

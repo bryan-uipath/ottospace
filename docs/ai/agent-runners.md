@@ -488,9 +488,14 @@ OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --n
 
 0.1.0 shipped the native view as the default, tested only against the fake `claude`, and it
 never got a reply from the real one (the CLI was stopped over the terminal ottospace was
-started from; see the driver's `setsid`). Until this check passes, `conversation_view`
-defaults to `terminal` (`settings::DEFAULT_VIEW`). Before it flips back, run, with the user's
-approval (one short model session on their account, on `claude-haiku-5-5`):
+started from; see the driver's `setsid`). Until this check passed, `conversation_view`
+defaulted to `terminal` (`settings::DEFAULT_VIEW`).
+
+2026-11-14: `real_cli_native_smoke` passed on Claude Code, and the user's own build drew the
+native chat. The default is `native` again; Codex still shows in a terminal (its structured
+mode is not verified). Run the check again, with the user's approval (one short model session
+on their account, on `claude-haiku-5-5`), before a change to the driver or the native view
+ships:
 
 ```
 OTTOSPACE_REAL_CLI=1 cargo test -p ottospace --test e2e -- --ignored --nocapture real_cli_native_smoke

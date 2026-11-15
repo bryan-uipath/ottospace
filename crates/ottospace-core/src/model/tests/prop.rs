@@ -6,11 +6,12 @@
 
 use super::*;
 use crate::ax::{Frame, Source};
-use crate::calendar::Event;
+use crate::calendar::{ColorRule, Event};
 use crate::clip::{Amount, Verb};
 use crate::compose::{Known, Names, PathFound};
 use crate::features::{self, Feature, Features};
 use crate::fuzz::{self, Rng};
+use crate::ics::Show;
 use crate::layout_file;
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
 use crate::progress;
@@ -199,7 +200,7 @@ impl Gen<'_> {
             title: self.text(),
             location: self.text(),
             link: link.map(String::from),
-            tentative: self.rng.coin(),
+            show: self.rng.pick(&[Show::Busy, Show::Tentative, Show::Free, Show::Away]),
         }
     }
 
@@ -1136,7 +1137,11 @@ const MAKERS: &[Make] = &[
     |g| Action::TalkKeys { on: g.rng.coin() },
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
     |_| Action::TalkWide,
-    |g| Action::SetCalendar { on: g.rng.coin(), notify: g.rng.coin(), links_only: g.rng.coin() },
+    |g| {
+        let colors = g.rng.coin().then(|| ColorRule { text: g.text().to_lowercase(), color: 1 });
+        let (on, notify, links_only, hide_free) = (g.rng.coin(), g.rng.coin(), g.rng.coin(), g.rng.coin());
+        Action::SetCalendar { on, notify, links_only, hide_free, colors: colors.into_iter().collect() }
+    },
     |g| {
         let events = g.rng.coin().then(|| (0..g.rng.below(4)).map(|_| g.meeting()).collect());
         let day = g.m.now - g.m.now % 86_400_000;
@@ -1287,6 +1292,11 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(t.live || t.turn.is_none(), "{subject:?} has a turn and no agent");
         ensure!(!chat.armed || t.turn.is_some(), "{subject:?} waits for a second Esc with no turn");
     }
+    // A stop asked for is of an agent that runs, until its process is gone.
+    for subject in &m.ending {
+        ensure!(m.agent_runs(subject), "{subject:?} is ending with no agent");
+        ensure!(!m.switching.contains(subject), "{subject:?} is ending and switching: it would start again");
+    }
     let chats: Vec<String> = m.chats.iter().map(|chat| format!("{:?}", chat.subject)).collect();
     ensure!(unique(&chats), "two transcripts for one conversation: {chats:?}");
     // Tabs, their trees and the panes.
@@ -1356,14 +1366,14 @@ fn check(m: &Model) -> Result<(), String> {
     }
 
     // The drawer is on a task there is; the keyboard is in it only while it is open, its agent
-    // runs, and no app, list or visual mode has the keyboard.
+    // runs (or its native composer can go on with it), and no app, list or visual mode has it.
     let gone = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_none());
     let dismissed = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_some_and(|t| t.dismissed));
     if let Some(talk) = &m.talk {
         ensure!(!gone(&talk.task), "the drawer is on task {:?}, which is gone", talk.task);
         let free = m.live.is_none() && m.list.is_none() && m.visual.is_none() && m.annotated().is_none();
         ensure!(
-            !talk.keys || (talk.open && m.talk_live(&talk.task) && free),
+            !talk.keys || (talk.open && m.talk_writable(&talk.task) && free),
             "the keyboard is in a conversation that is closed, has no agent, or under another: {talk:?}"
         );
     }
@@ -1903,9 +1913,10 @@ fn check_layout(m: &Model) -> Result<(), String> {
     let mut fresh = Model::default();
     let floor = m.tasks.list.iter().map(|task| task.id).max().unwrap_or(0);
     let (on, notify, links_only) = (m.calendar.on, m.calendar.notify, m.calendar.links_only);
+    let (hide_free, colors) = (m.calendar.hide_free, m.calendar.rules.clone());
     for action in [
         // The settings are read before the layout, as at a start.
-        Action::SetCalendar { on, notify, links_only },
+        Action::SetCalendar { on, notify, links_only, hide_free, colors },
         Action::RestoreTasks { tasks: m.tasks.list.clone(), floor },
         Action::RestoreWorkbooks { workbooks: m.workbooks.list.clone() },
         Action::RestoreMarks { marks: m.marks.list.clone(), extra: m.marks.extra.clone() },
@@ -1944,7 +1955,7 @@ fn check_state(m: &Model) -> Result<(), String> {
     ensure!(round_trips(&m.found), "the sessions do not read back as written");
     ensure!(m.panes.iter().all(|pane| round_trips(&pane.kind)), "a pane's kind does not read back as written");
     ensure!(round_trips(&(m.sidebar, m.collapsed.clone())), "the bar does not read back as written");
-    // Other sessions: each row once and in range; under All every listed one, unless folded.
+    // Elsewhere: each row once and in range; under All every listed one, unless folded.
     let bar = m.sessions_bar();
     let ids: Vec<(String, String)> = bar.rows.iter().map(|row| (row.runner.clone(), row.id.clone())).collect();
     ensure!(unique(&ids), "a session is listed twice: {ids:?}");
@@ -2589,9 +2600,6 @@ impl Run {
                 Effect::SaveTasksView { view } => {
                     ensure!(user && m.tasks_view == *view, "{origin:?} wrote tasks_view {view:?}")
                 }
-                Effect::SaveSessionsRange { range } => {
-                    ensure!(user && m.sessions_range == *range, "{origin:?} wrote sessions_range {range:?}")
-                }
                 Effect::Run { command } => {
                     ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")
                 }
@@ -3014,6 +3022,7 @@ fn code(sent: &Envelope) -> String {
         "Truncated",
         "AppRead",
         "Event",
+        "ColorRule",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("verb", "Verb"),
@@ -3045,6 +3054,7 @@ fn code(sent: &Envelope) -> String {
         ("id", "Subject"),
         ("shows", "View"),
         ("binding", "Binding"),
+        ("show", "Show"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {
@@ -4129,4 +4139,102 @@ fn the_palettes_highlight_stays_on_a_row_when_a_feature_goes() {
 #[test]
 fn marks_turned_off_take_the_jumps_wait_with_them() {
     replay(&[Action::MarkPrefix.into(), by(Origin::System, set_features(&[]))]).unwrap();
+}
+
+/// Seed 1247 (long run): the drawer's native agent ended while it had the keyboard; its composer
+/// can go on with it (#130), so the keyboard may stay. The check asked for a running agent.
+#[test]
+fn an_ended_agent_lets_the_keyboard_go() {
+    let none = || Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] };
+    let known = Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] };
+    replay(&[
+        Action::TaskAdd { title: "a".into(), priority: 2, state: State::Running, tab: None, assign: none() }.into(),
+        Action::TaskAdd { title: "b".into(), priority: 1, state: State::NeedsYou, tab: None, assign: none() }.into(),
+        Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known, open: false }.into(),
+        Action::NewTabOf { task: Some(3) }.into(),
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.into(),
+        Action::NewTab.into(),
+        Action::CycleTab { delta: 2 }.into(),
+        Action::TaskTalk { id: 1 }.into(),
+        Action::MovePane { pane: None, tab: 1 }.into(),
+        Action::TalkStart.into(),
+        Action::AgentStarted {
+            task: Subject::Task(3),
+            session: Some("8f14e45f-ceea-467f-a8d3-0242ac130003".into()),
+            at: 32,
+        }
+        .into(),
+        by(Origin::System, Action::AgentExited { task: Subject::Task(3) }),
+    ])
+    .unwrap();
+}
+
+/// Seed 1627 (long run): the tab a brief showed with was closed by the system; the brief stayed.
+#[test]
+fn a_brief_goes_with_its_tab() {
+    replay(&[
+        Action::SetSessions {
+            found: vec![
+                Found {
+                    runner: "claude".into(),
+                    id: "s1".into(),
+                    cwd: "/code/app".into(),
+                    repo: "/code/app".into(),
+                    started: Some(1),
+                    last_activity: Some(999000),
+                    active: true,
+                    station: None,
+                    label: None,
+                    title: None,
+                    model: None,
+                    held: false,
+                },
+                Found {
+                    runner: "claude".into(),
+                    id: "s2".into(),
+                    cwd: "/code/app".into(),
+                    repo: "/code/app".into(),
+                    started: Some(1),
+                    last_activity: Some(5),
+                    active: false,
+                    station: None,
+                    label: None,
+                    title: None,
+                    model: None,
+                    held: false,
+                },
+            ],
+            day: 0,
+        }
+        .sent_by(Origin::User),
+        Action::Open {
+            kind: Kind::App { window: 9, title: "w9".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: None,
+        }
+        .sent_by(Origin::User),
+        Action::CaptureStart {
+            pane: None,
+            draft: "u3".into(),
+            word: "w0rdw0rdw0rd".into(),
+            facts: vec![
+                Facts { pane: 3, cwd: None, program: Some("".into()), title: Some("".into()), ignored: false },
+                Facts {
+                    pane: 2,
+                    cwd: Some("S".repeat(657)),
+                    program: Some("/p#../..p1".into()),
+                    title: None,
+                    ignored: false,
+                },
+            ],
+            images: true,
+        }
+        .sent_by(Origin::User),
+        Action::ComposeEnter.sent_by(Origin::User),
+        Action::SessionAdopt { runner: "claude".into(), id: "s2".into() }.sent_by(Origin::User),
+        Action::TalkGo.sent_by(Origin::User),
+        Action::TaskGo { id: Some(1) }.sent_by(Origin::User),
+        Action::CloseTab { index: None }.sent_by(Origin::System),
+    ])
+    .unwrap();
 }

@@ -8,7 +8,7 @@
 use serde::Serialize;
 
 use super::{Calendar, Event, MAX_EVENTS, MAX_TITLE, Workday, has_meeting_link, overlaps};
-use crate::ics::{self, Table};
+use crate::ics::{self, Show, Table};
 
 const DAY: i64 = 86_400;
 /// Days one request spans at most.
@@ -50,6 +50,7 @@ pub struct Meeting {
     pub location: Option<String>,
     /// A Zoom, Meet or Teams link: its address is not given (it may hold a passcode).
     pub has_call_link: bool,
+    /// `tentative`, `free` or `away`; none for busy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<&'static str>,
 }
@@ -119,10 +120,11 @@ pub fn answer(calendar: &Calendar, (from, to): (i64, i64), workday: Workday, loc
     let within: Vec<&Event> = calendar.events.iter().filter(|e| overlaps(e, from_ms, to_ms)).collect();
     // Nothing read yet: nothing known. Events cut at `MAX_EVENTS` (the earliest kept): nothing
     // known from the last one's start.
-    let full = calendar.events.len() >= MAX_EVENTS;
+    // Of what was read, free entries too: hiding them cuts nothing more.
+    let full = calendar.received.len() >= MAX_EVENTS;
     let known = match calendar.updated {
         None => Some(from_ms),
-        Some(_) => calendar.events.last().filter(|_| full).map(|e| e.start),
+        Some(_) => calendar.received.last().filter(|_| full).map(|e| e.start),
     }
     .filter(|known| *known < to_ms);
     let at = |ms: u64| rfc3339(ms, local);
@@ -136,7 +138,7 @@ pub fn answer(calendar: &Calendar, (from, to): (i64, i64), workday: Workday, loc
             title: Some(text(&e.title)).filter(|t| !t.is_empty()).unwrap_or_else(|| "(no title)".into()),
             location: Some(text(&e.location)).filter(|l| !l.is_empty()),
             has_call_link: has_meeting_link(e),
-            status: e.tentative.then_some("tentative"),
+            status: (e.show != Show::Busy).then_some(e.show.name()),
         })
         .collect();
     let busy = busy(&within, from_ms, to_ms);
@@ -169,12 +171,12 @@ pub fn answer(calendar: &Calendar, (from, to): (i64, i64), workday: Workday, loc
     }
 }
 
-/// Timed events cut to `from..to` and merged where they overlap or meet. All-day events and
-/// those with no length are no busy time.
+/// Timed events cut to `from..to` and merged where they overlap or meet. All-day events, free
+/// ones and those with no length are no busy time.
 fn busy(events: &[&Event], from: u64, to: u64) -> Vec<(u64, u64)> {
     let mut spans: Vec<(u64, u64)> = events
         .iter()
-        .filter(|e| !e.all_day)
+        .filter(|e| !e.all_day && e.show != Show::Free)
         .map(|e| (e.start.max(from), e.end.min(to)))
         .filter(|(start, end)| start < end)
         .collect();
@@ -209,7 +211,7 @@ fn free(busy: &[(u64, u64)], windows: &[(u64, u64)]) -> Vec<(u64, u64)> {
 
 /// A title or place as a client gets it: one line of characters that show, capped, and no word
 /// that looks like a link (`https://…`, `zoom.us/j/1?pwd=…`, `www.…`): a join link holds a passcode.
-fn text(raw: &str) -> String {
+pub(crate) fn text(raw: &str) -> String {
     let link = |w: &&str| {
         let host = w.split('/').next().unwrap_or_default();
         w.contains("://") || w.to_ascii_lowercase().starts_with("www.") || (w.contains('/') && host.contains('.'))

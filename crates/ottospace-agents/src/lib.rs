@@ -287,12 +287,10 @@ pub enum Event {
     },
 }
 
-/// `Unknown` kinds the runners send that are known and read on purpose by nothing: the user's
-/// hooks, status lines, rate limits (`docs/ai/agent-runners.md`, "Lines no rule reads"). Every
-/// other `Unknown` is a line not understood, and the drawer counts it.
-pub const QUIET: &[&str] = &[
-    "system.hook_started",
-    "system.hook_response",
+/// `Unknown` kinds the runners send that are known and read on purpose by nothing: status lines,
+/// rate limits (`docs/ai/agent-runners.md`, "Lines no rule reads"); and the user's hooks, by
+/// `is_quiet`. Every other `Unknown` is a line not understood, and the drawer counts it.
+const QUIET: &[&str] = &[
     "system.status",
     "system.thinking_tokens",
     "rate_limit_event",
@@ -302,6 +300,12 @@ pub const QUIET: &[&str] = &[
     "mcpServer.startupStatus.updated",
     "account.rateLimits.updated",
 ];
+
+/// True if an `Unknown` kind is read by nothing on purpose: one of `QUIET`, or any `system`
+/// line of the user's hooks (`system.hook_started`, `system.hook_progress`, a new `hook_*`).
+pub fn is_quiet(kind: &str) -> bool {
+    QUIET.contains(&kind) || kind.starts_with("system.hook_")
+}
 
 /// Why an input was not sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -454,6 +458,22 @@ fn session_of(value: &Value) -> Option<String> {
 mod tests {
     use super::*;
     use ottospace_core::runner::Status;
+
+    /// SYNTHETIC: no recording has a `hook_progress` line's fields; only `type` and `subtype` are read.
+    #[test]
+    fn every_hook_line_is_quiet_and_other_system_lines_are_not() {
+        let mut claude = claude::Claude::new();
+        let kinds = ["hook_progress", "hook_started", "hook_seen_by_no_build_yet", "compact_boundary_v9"].map(|sub| {
+            let line = format!(r#"{{"type":"system","subtype":"{sub}","session_id":"s"}}"#);
+            claude.read(&line).events.into_iter().find_map(|e| match e {
+                Event::Unknown { kind } => Some(kind),
+                _ => None,
+            })
+        });
+        let quiet = kinds.clone().map(|kind| kind.as_deref().map(is_quiet));
+        assert_eq!(quiet, [Some(true), Some(true), Some(true), Some(false)], "{kinds:?}");
+        assert!(!is_quiet("control.hook_callback"), "a request, not a system line");
+    }
 
     #[test]
     fn every_runner_with_a_structured_mode_has_a_wire_and_its_program() {

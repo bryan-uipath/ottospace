@@ -1,0 +1,20 @@
+# The key reference (⌘/). A fresh home: nothing learned. Then the user's own keys, a second apart
+# (a press within a second is the same use): ⌘D, ⌘] and ⌘T five times each are known; ⌘⇧D and
+# ⌘⌃← a little. ↵ opens Known.
+{"cmd":"split"}
+{"cmd":"key","keys":"cmd-/","as":"user"}
+{"shot":"fresh"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"cmd":"key","keys":"cmd-] cmd-t cmd-d","as":"user"}
+{"sleep_ms":1100}
+{"cmd":"key","keys":"cmd-] cmd-t cmd-d cmd-ctrl-left","as":"user"}
+{"sleep_ms":1100}
+{"cmd":"key","keys":"cmd-] cmd-t cmd-d cmd-ctrl-left","as":"user"}
+{"sleep_ms":1100}
+{"cmd":"key","keys":"cmd-] cmd-t cmd-d","as":"user"}
+{"sleep_ms":1100}
+{"cmd":"key","keys":"cmd-] cmd-t cmd-d cmd-shift-d","as":"user"}
+{"cmd":"key","keys":"cmd-/","as":"user"}
+{"shot":"used"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"shot":"known"}

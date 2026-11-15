@@ -295,9 +295,8 @@ pub enum Request {
         runner: String,
         id: String,
     },
-    /// Which sessions Other sessions lists, by when each was last active: `today`, `week`,
-    /// `month` or `all`. `{"cmd":"sessions_range","range":"week"}`. For this run: the settings
-    /// are written for the user's pick alone.
+    /// Which sessions Elsewhere lists, by when each was last active: `today`, `week`,
+    /// `month` or `all`. `{"cmd":"sessions_range","range":"week"}`. For this run, never written.
     SessionsRange {
         range: ottospace_core::sessions::Range,
     },
@@ -405,6 +404,14 @@ pub enum Request {
     CalendarCall {
         in_call: Option<bool>,
     },
+    /// For tests (`test_refusal`): records ottospace's own window into the folder `dir`, as
+    /// `scripts/shot --record` reads it (`record.rs`): `{"cmd":"record_start","dir":"/tmp/rec"}`.
+    /// The reply is `{"ok":true}`, not the state. Never for an agent: no client films the screen.
+    RecordStart {
+        dir: String,
+    },
+    /// For tests: stops the recording. The reply is `{"ok":true,"frames":42}`, not the state.
+    RecordStop,
     /// The user's meetings of `day` (`today`, the default, `tomorrow` or `YYYY-MM-DD`) and the
     /// `days` (1 to 7) from it, busy and free time: `{"ok":true,"configured":true,"meetings":[..],..}`,
     /// not the state. Only what the app holds (today and the next 7 days), never a fetch. Titles
@@ -513,7 +520,7 @@ pub enum Modifier {
 /// capture hands over a hosted app's picture and text, and outside a test only the user starts one.
 /// `repo_add`: it writes the user's settings, as only the user's own choice in the folder picker does.
 /// `sneak_app_tree`: it would choose what sneak mode labels in another app. `calendar_call`: it
-/// would raise or silence the user's meeting alert.
+/// would raise or silence the user's meeting alert. `record_start`: it would film the window.
 pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
     match request {
         _ if e2e => None,
@@ -537,6 +544,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         }
         Request::CalendarCall { .. } => {
             Some("calendar_call is for tests (OTTOSPACE_E2E): ottospace looks whether a call is on itself")
+        }
+        Request::RecordStart { .. } | Request::RecordStop => {
+            Some("record_start and record_stop are for tests (OTTOSPACE_E2E): scripts/shot films its own instance")
         }
         _ => None,
     }
@@ -731,5 +741,10 @@ mod tests {
         let add = parse(r#"{"cmd":"repo_add","path":"/tmp/app"}"#);
         assert!(test_refusal(&add, false).expect("refused").contains("only the user"));
         assert_eq!(test_refusal(&add, true), None);
+        // Nor a recording of the window.
+        for line in [r#"{"cmd":"record_start","dir":"/tmp/rec"}"#, r#"{"cmd":"record_stop"}"#] {
+            assert!(test_refusal(&parse(line), false).expect(line).contains("for tests"));
+            assert_eq!(test_refusal(&parse(line), true), None);
+        }
     }
 }
