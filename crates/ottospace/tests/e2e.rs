@@ -7312,6 +7312,11 @@ fn the_dial_counts_calls_by_station_and_keeps_the_users_collapse() {
     otto.user_key("cmd-shift-a");
     assert_eq!(dial(&otto)["collapsed"], true);
 
+    // The user stops it (a running task is not gone on with from another run).
+    otto.user_key("cmd-p");
+    otto.user_key("s t o p space t h e space a g e n t");
+    otto.user_key("enter");
+    otto.wait_for("its end", |o| Some(dial(o)).filter(|d| d["pulse"] != "running" && d["pulse"] != "idle").map(|_| ()));
     // Kept with the layout: the next run goes on with the session and the dial stays collapsed,
     // though its agent runs (open by default then).
     let layout =
