@@ -1,6 +1,6 @@
 //! What `settings.json` may say, and what applies when it says nothing. The shell reads the file.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// `conversation_view` when the settings name none. Native: it passed the real-CLI check
 /// (`docs/ai/agent-runners.md`, "Real-CLI check"). A runner without a verified structured mode
@@ -410,6 +410,14 @@ pub struct Watch {
     flags_retired: Vec<String>,
 }
 
+/// How the status bar draws a line: something to know, or something wrong to fix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Level {
+    Info,
+    Error,
+}
+
 /// What the status bar says of a retired key.
 const RETIRED: &str = "settings.json: calendar_window_hours is retired (the band shows calendar_workday): remove it";
 
@@ -442,6 +450,12 @@ impl Watch {
 
     pub fn errors(&self) -> usize {
         self.problems.len()
+    }
+
+    /// How `line` is drawn: a problem is an error; a restart to ask for, or a retired key or
+    /// flag, is information (nothing is wrong, the file applies).
+    pub fn level(&self) -> Level {
+        if self.problems.is_empty() { Level::Info } else { Level::Error }
     }
 
     /// The status bar's line: the first problem and how many more, else the keys that need a
@@ -968,7 +982,7 @@ mod tests {
         // Retired: read, so the rest of the file applies; the status bar says to remove it.
         let mut watch = Watch::default();
         assert!(watch.read(r#"{"calendar_window_hours": 8, "tasks_view": "project"}"#, false).is_some());
-        assert_eq!((watch.errors(), watch.line().as_deref()), (0, Some(RETIRED)));
+        assert_eq!((watch.errors(), watch.line().as_deref(), watch.level()), (0, Some(RETIRED), Level::Info));
         assert_eq!(read(r#"{"calendar_refresh_minutes": 0}"#).1.len(), 1);
         assert_eq!(read(r#"{"calendar_notify": false}"#).0.calendar_notify, Some(false));
         assert_eq!(read(r#"{"calendar_notify_for": "links"}"#).0.calendar_notify_for, Some(NotifyFor::Links));
@@ -1244,10 +1258,11 @@ mod tests {
             r#"{"terminal": {"font_size": 16}, "tasks": "~/t", "apps": ["Slack"], "calendar_workday": "08:00-16:00"}"#;
         assert!(watch.read(later, false).is_some());
         let restart = "settings.json: restart to apply terminal, tasks, calendar_workday";
-        assert_eq!(watch.line().as_deref(), Some(restart));
+        assert_eq!((watch.line().as_deref(), watch.level()), (Some(restart), Level::Info), "information, not an error");
         // A problem goes first; put back as at start, there is nothing to restart for.
         assert_eq!(watch.read("{", false), None);
         assert!(watch.line().unwrap().starts_with("settings.json:1:1 EOF"), "{:?}", watch.line());
+        assert_eq!(watch.level(), Level::Error);
         assert!(watch.read(r#"{"terminal": {"font_size": 14}, "apps": ["Slack"]}"#, false).is_some());
         assert_eq!(watch.line(), None);
     }

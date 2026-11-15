@@ -245,7 +245,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    permission mode, how long the agent has run and its folder), the folder itself only when it
    is not the task's repository; Go to its tabs (⌘↵)
    shows the one of them shown last; a task with none offers Claim this tab (the tab on show is
-   no task's) or New tab (a shell in its repository); Brief (when it has captures); Stop ends the agent;
+   no task's) or New tab (a shell in its repository); Brief (when it has captures); Stop ends the agent (in the terminal view; drawn natively, "Stop the Agent" in the palette or the menu);
    × (⌘⇧L) closes the drawer to the right rail and the agent goes on. ⌘L moves the keyboard in
    and out. At its foot, muted, the model in short, and a permission mode that lets the agent
    act without asking (`auto`, `accept edits`; `bypass` in the warning colour): `haiku-5.5 ·
@@ -294,8 +294,13 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    in the browser, a file inside the task's repository revealed in Finder; anything else is
    text. Nothing is fetched: an image on the web is a link, a local image in the repository a
    thumbnail. The composer at the bottom: ↵ sends, ⇧↵ starts a new line, Esc leaves; while a
-   turn runs ↵ sends nothing (write the next message meanwhile), Esc Esc or Stop ends the turn
-   and the session goes on. A permission request is a card in place of the composer: the
+   turn runs ↵ sends nothing (write the next message meanwhile), and Stop sits at the composer's
+   right: it, or Esc Esc, ends the turn and the session goes on. No turn, no Stop. Once the agent
+   ended (or was stopped: nothing starts on its session until its process is gone), Resume
+   session (or Start agent) takes that place. A stop and the resume after it are one thin
+   divider (`stopped · resumed`) in the same conversation; "Earlier turns are in its file" only
+   when its turns are not on show. Lines no rule reads are a small mark at the end (`? 2`): its
+   hover and click say what they were. Hook lines (`system.hook_*`) are read on purpose by nothing. A permission request is a card in place of the composer: the
    request as the CLI asked it, a labelled line per field, and the agent's own words apart.
    `a` allows this one request, `d` denies it, `m` writes a message for the Deny (↵ denies with
    it), `s` shows all of a request cut at 4 KB, which must be seen before `a` works. ↵ does
@@ -841,7 +846,7 @@ first. Again while that tab is open brings it forward; quitting the editor close
 you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
 the editor running again ([Restoring the layout](#restoring-the-layout)).
 
-A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `paste_confirm` and `features` apply at once; any other key changed says "restart to apply" with its name (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `paste_confirm` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
 
 ```json

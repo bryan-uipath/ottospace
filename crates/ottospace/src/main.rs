@@ -40,7 +40,7 @@ use ottospace_core::model::{CONFIRM_UP, TabAt};
 use ottospace_core::repos::{Checkout, Repo};
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::scrollbar::{Extent, key_step};
-use ottospace_core::settings::Installed;
+use ottospace_core::settings::{Installed, Level};
 use ottospace_core::sneak::{SneakKey, sneak_key};
 use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, State, Task, TaskId, TaskRow};
 use ottospace_core::terminal::{
@@ -1597,16 +1597,20 @@ impl Workspace {
 
     /// What the status bar says is wrong, most pressing first: the last request that failed, a
     /// task that is not saved, then a problem found at start.
-    fn problem(&self) -> Option<String> {
+    /// The problem the status bar shows, and how it is drawn: the settings' line by its own level (a restart to ask
+    /// for is information), anything else as an error.
+    fn status_line(&self) -> Option<(String, Level)> {
         // What is wrong with `settings.json` and `marks.json` has its own place beside a notice from the start.
-        let start = [self.model.settings_line(), self.notice.clone(), self.kept_marks.notice.clone()];
-        let start: Vec<String> = start.into_iter().flatten().collect();
-        let start = (!start.is_empty()).then(|| start.join(" · "));
-        let start = start.or(self.key_notice.clone()).or(self.kept_workbooks.notice.clone());
-        let start = start.or(self.kept_layout.notice.clone());
+        let others: Vec<String> = [self.notice.clone(), self.kept_marks.notice.clone()].into_iter().flatten().collect();
+        let level = if others.is_empty() { self.model.settings_level() } else { Level::Error };
+        let start: Vec<String> = self.model.settings_line().into_iter().chain(others).collect();
+        let start = (!start.is_empty()).then(|| (start.join(" · "), level));
+        let error = |text: Option<String>| text.map(|text| (text, Level::Error));
+        let start = start.or(error(self.key_notice.clone())).or(error(self.kept_workbooks.notice.clone()));
+        let start = start.or(error(self.kept_layout.notice.clone()));
         let unsaved = self.unsaved.clone().or(self.kept_marks.unsaved.clone()).or(self.kept_workbooks.unsaved.clone());
         let unsaved = unsaved.or(self.kept_layout.unsaved.clone());
-        self.error.clone().or(unsaved).or(start)
+        error(self.error.clone()).or(error(unsaved)).or(start)
     }
 
     /// Reads `settings.json` again once a change to it has held for one look: a file an editor
@@ -2654,6 +2658,7 @@ impl Workspace {
                 (*id, terminal)
             })
             .collect();
+        let status = self.status_line();
         serde_json::json!({
             "ok": true,
             "mode": self.model.mode(),
@@ -2696,7 +2701,9 @@ impl Workspace {
             "font": terminal::font_in_use(),
             "cell": [f32::from(self.cell.width), f32::from(self.cell.height)],
             // The problem the status bar shows, or null. Not `error`: that key means the request failed.
-            "notice": self.problem(),
+            "notice": status.as_ref().map(|(text, _)| text),
+            // How the status bar draws it: `info` (muted: a restart to ask for, a retired key) or `error`.
+            "notice_level": status.as_ref().map(|(_, level)| level),
             // How many problems the last read of `settings.json` found.
             "settings_errors": self.model.settings_errors(),
             // Each hosted window's real frame, in the same global coordinates as `parking`.
@@ -5083,7 +5090,10 @@ impl Workspace {
                     .filter(|clip| clip.shows(now_ms()))
                     .map(|clip| div().flex_none().text_color(rgb(theme::PRIMARY)).child(clip.text.clone())),
             )
-            .children(self.problem().map(|e| div().min_w_0().truncate().text_color(rgb(theme::ERROR)).child(e)))
+            .children(self.status_line().map(|(text, level)| {
+                let color = if level == Level::Info { theme::MUTED } else { theme::ERROR };
+                div().min_w_0().truncate().text_color(rgb(color)).child(text)
+            }))
     }
 }
 
