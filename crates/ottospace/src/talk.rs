@@ -318,7 +318,6 @@ impl Workspace {
                 self.new_task(window, cx);
                 return true;
             }
-            ("talk", "talk-go", _) => Action::TalkGo,
             ("talk", "talk-start", _) => Action::TalkStart,
             ("talk", "talk-brief", Some(id)) if self.model.brief == Some(id) => Action::BriefClose,
             ("talk", "talk-brief", Some(id)) => Action::BriefShow { id },
@@ -511,17 +510,6 @@ impl Workspace {
         let line = self.agent_line(subject);
         let facts: gpui::SharedString =
             line.facts.iter().map(|(name, value)| format!("{name}: {value}")).collect::<Vec<_>>().join("\n").into();
-        // ⌘↵: to the task's tabs; with none, claim the tab on show or make it a new one.
-        let go = self.model.talk_go().map(|go| {
-            let tip = match go {
-                talk::Go::Tabs => "Show the tab of this task shown last",
-                talk::Go::Claim => "Make the tab on show this task's",
-                talk::Go::New => "A new tab of this task, with a terminal in its repository",
-            };
-            self.talk_button("talk-go", &format!("{} ⌘↵", go.label()), tip).on_click(
-                cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkGo, this.input, window, cx))),
-            )
-        });
         let brief = shown.filter(|task| !task.materials.is_empty()).map(|task| {
             let (task, on) = (task.id, self.model.brief == Some(task.id));
             self.talk_button("talk-brief", if on { "Agent" } else { "Brief" }, "The task's brief, or its agent")
@@ -598,7 +586,6 @@ impl Workspace {
                 }))
                 .children(self.watch_chip(subject))
                 .children(self.view_switch(subject, cx))
-                .children(go)
                 .children(brief)
                 .children(adopt)
                 .children(stop)
@@ -911,7 +898,6 @@ impl Workspace {
             "width": self.drawer.width,
             "agents": agents,
             "native": self.chats_snapshot(),
-            "goes_to": self.model.talk_go(),
             // The shown conversation's foot, header folder and title hover (`talk::agent_line`).
             "line": self.model.talk.as_ref().map(|talk| self.agent_line(&talk.task)),
             // The right rail's conversations, in order: task, badge, state, at work, shown, tooltip.

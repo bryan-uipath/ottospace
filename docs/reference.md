@@ -120,14 +120,13 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘N | New task, in the drawer. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task and starts its agent; ⇧↵ adds it for later; Esc closes. [Its keys](#keys) |
 | ⌘L | The keyboard into the drawer's conversation, or back to the workspace |
 | ⌘⇧L | Close the drawer to the right rail, or open it again. The agent goes on |
-| ⌘↵ | With a task's conversation open: Go to its tabs (the one shown last); with none, Claim this tab (the tab on show, if it is no task's) or a New tab of it |
-| ⌘⌃1 … ⌘⌃9 | Show the nth conversation of the right rail; on the one shown, close the drawer. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
-| ⌘⇧N | Next task: the conversation of the first task that needs you. The tab on show stays |
+| ⌘⌃1 … ⌘⌃9 | Show the nth conversation of the right rail (its task's space); on the one shown, close the drawer. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
+| ⌘⇧N | Next task: the space and chat of the first task that needs you |
 | ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
 | ⌘B / ⌘⇧B | With the `marks` [flag](#features) on (so for the next two rows): mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
 | ⌘⌥1 … ⌘⌥9 | Go to one of the first nine marks, in the order of the Marks section |
-| ⌘⌃E | List mode: the bar (Tasks, Calendar while a feed is set, Apps, Workbook, Repos, Marks; Apps and Marks only while their [flags](#features) are on) takes the keyboard, on the open section, or Apps if none is (with Apps off, the first). On a workbook ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); Esc or ⌘⌃E leaves |
+| ⌘⌃E | List mode: the bar (Tasks, Calendar while a feed is set, Apps, Workbook, Repos, Marks; Apps and Marks only while their [flags](#features) are on) takes the keyboard, on the open section, or Apps if none is (with Apps off, the first). On a workbook ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); in Calendar ← and → go a day back and on, `t` to today; Esc or ⌘⌃E leaves |
 | ⌘; or ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the drawer's buttons and picks, the right rail's badges, the home screen's buttons, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. The focused app pane's elements get labels too, in orange (APP mode's colour), always two letters or more so one stray key presses nothing in another app: those its accessibility tree says can be pressed (`AXPress`) or typed in (text fields), enabled, at least 4 points each way where the pane shows them, the innermost of nested ones, at most 150 (nearest the pane's top left). Their labels start with the letters ottospace's own leave free, 19 two-letter labels to each such letter (e.g. `ta`, `ts`, `td`); the first letter only narrows. Only when those letters run out do they go under a × label's first letter, or take three letters. They appear once the app's tree is read, a moment after ottospace's own, and follow it while the mode is on (read again each second); the status bar says how many, e.g. `12 controls in Calculator`. An orange label presses that element (`AXPress`) and the pane stays parked; a text field's label focuses the field and gives the app the keyboard, so you type there. Before it presses, ottospace finds the element again and checks it is the same (role, enabled, place in its window within 2 points); if not, nothing is pressed and the status bar says the control moved. Sneak sets no value, opens no menu and scrolls nothing in the app, and only your own typed letter presses: a socket client's letter of an orange label is refused. Apps that build their accessibility tree only on request (Electron, Chrome's pages, Spotify) show few elements, and get few labels: ottospace does not switch their fuller mode on. Entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
@@ -243,25 +242,26 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    A saved agent cannot be started yet: the drawer says so too.
 4. **The drawer.** Its header: the task's badge and title (hover it for the model, the
    permission mode, how long the agent has run and its folder), the folder itself only when it
-   is not the task's repository; Go to its tabs (⌘↵)
-   shows the one of them shown last; a task with none offers Claim this tab (the tab on show is
-   no task's) or New tab (a shell in its repository); Brief (when it has captures); Stop ends the agent (in the terminal view; drawn natively, "Stop the Agent" in the palette or the menu);
+   is not the task's repository; Brief (when it has captures); Stop ends the agent (in the terminal view; drawn natively, "Stop the Agent" in the palette or the menu);
    × (⌘⇧L) closes the drawer to the right rail and the agent goes on. ⌘L moves the keyboard in
    and out. At its foot, muted, the model in short, and a permission mode that lets the agent
    act without asking (`auto`, `accept edits`; `bypass` in the warning colour): `haiku-5.5 ·
    auto`. It stays once the agent ended. Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
 5. **The right rail.** The task's badge per open conversation: its border in the task's own
-   colour, its state as the corner dot; hover for its card. A click shows it, and the tab stays;
-   on the one shown, closes the drawer. A dismissed task leaves the rail and the drawer (the
+   colour, its state as the corner dot; hover for its card. A click shows it and its task's
+   space; on the one shown, closes the drawer. A dismissed task leaves the rail and the drawer (the
    drawer shows nothing, not another conversation); a done one stays only while it is shown or its
    agent runs. Dismissing a task whose agent runs asks first: Stop its agent and dismiss?
-6. **Tabs and the drawer.** Selecting a tab of a task shows that task's conversation in the
-   open drawer, starting nothing and leaving the keyboard where it was; a closed drawer stays
-   closed, and a tab of no task leaves it as it is. ⌘T makes a tab in the group on show; New Tab
-   outside the Task, one of no task. Drag a tab onto another group's tab or badge to move it
-   there, onto a tab of no task to unlink it; Remove Tab from Task does that from the palette,
-   and Move Tab to Task… lists the tasks (and No task) to move the tab on show to.
+6. **Spaces and the drawer.** Workspace, then each open task (and session, and workbook) is a
+   space with its own tabs; one is selected, and the drawer is only ever on its agent: a task's
+   chat, none for Workspace. Selecting starts nothing; a closed drawer stays closed. A task
+   started (↵ in the box, or its row clicked) opens its space with one empty tab; started from a
+   Workspace tab a Repos row opened for its folder, that tab moves into it. ⌘T makes a tab in the
+   space on show. Drag a tab onto another space's tab or badge to move it there; Remove Tab from
+   Task moves it to Workspace, and Move Tab to Task… lists Workspace, the tasks and the workbooks.
+   Closing a space's last tab closes the space. A click on a Repos row opens a terminal there in
+   a Workspace tab of its own. See `docs/ai/spaces.md`.
 7. **Following.** The task runs while its agent works. Claude is given the session's id; Codex
    names its own, and ottospace finds it where Codex wrote it: the one session that started in
    the task's folder after the agent did and before the next agent there, that nothing else
@@ -357,7 +357,7 @@ its score, when it was last used and whether it is known; no key text and nothin
 the socket. A test run keeps none unless it names `OTTOSPACE_HOME`.
 
 The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Open or Close the
-Conversation (⌘⇧L), Go to Its Tabs (⌘↵) and Stop the Agent (the drawer's Stop), each for
+Conversation (⌘⇧L) and Stop the Agent (the drawer's Stop), each for
 the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
 it: the agent gets no key while it is open, and when it closes the keyboard goes back to it.
 
@@ -728,16 +728,23 @@ the way.
   and `calendar_hide_free: true` leaves every free entry out. The address stays in
   `settings.json`: it is not sent with the feed's request, shown, logged or in the state.
 - **The Calendar section** (its rail cell, second, is there only while `calendar_ics` is set):
-  today's meetings, all-day ones first, then by start: the time, the title, and the place (or the
-  link's host) below. The meeting that runs is outlined in amber, past ones are dimmed, and a thin
-  amber line marks now. `Join` shows on hover or selection for a meeting with an `https:` link.
-  Below, a folded "Tomorrow · n". "Nothing today" when the day is empty; at the foot, when the feed
-  was last read. The rail cell shows a steady amber dot while a meeting is 2 minutes off or runs,
-  and a filled amber badge while the banner is up. In list mode (⌘⌃E) `j`/`k` move and ↵ joins
-  (or folds "Tomorrow"). The open Calendar is not kept in the restored layout: a build without
-  the section could not read the file.
+  one day's meetings, its all-day events on one line at the top, then one row a meeting as the
+  Tasks section's rows: a dot and a faint tint in the meeting's colour (the band's), its start, its
+  title, and at most one quiet fact at the end (`now`, or `in 12m` for the next within the hour).
+  Hover a row for the band's card. Past meetings are faded; the one that runs is stronger, with a
+  white bar at its edge, as now's tick. `Join` shows on hover or selection for a meeting with an
+  `https:` link. "No meetings" when the day is empty. The header: `‹ Today ›`, or `‹ Mon 16 Nov ›`
+  and `Today` on another day, from 7 days back to 7 on; its date's tooltip says when the feed was
+  read. The section goes back to today when the day turns and at start; the band, the alerts and
+  now's tick are always of today. The rail cell shows a steady amber dot while a meeting is 2
+  minutes off or runs, and a filled amber badge while the banner is up. In list mode (⌘⌃E)
+  `j`/`k` move, ↵ joins, ← and → go a day back and on, `t` back to today; the View menu and the
+  palette have the same (`Previous Day in Calendar`, `Next Day in Calendar`, `Today in
+  Calendar`). The open Calendar is not kept in the restored layout: a build without the section
+  could not read the file.
 - **Agents**: the `calendar` request gives an agent the meetings of a day, or of up to 7 from
-  it (`{"cmd":"calendar","day":"tomorrow","days":2}`; today and the next 7 days are held): start
+  it (`{"cmd":"calendar","day":"tomorrow","days":2}`; the 7 days before today, today and the next
+  7 are held, `yesterday` names the day before): start
   and end (RFC 3339 with your offset), all day or not, title, place, whether it has a Zoom, Meet
   or Teams link, `status` (`tentative`, `free` or `away`; none when busy); busy time (meetings
   merged, free ones left out) and free time (the gaps in each day's

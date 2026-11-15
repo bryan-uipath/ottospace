@@ -16,7 +16,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     focus: "nothing",
     state: {
       panes: [],
-      tabs: [{ id: 1, title: "Tab 1", task: null }],
+      tabs: [{ id: 1, title: "Tab 1", space: { kind: "workspace" } }],
       active: 0,
       layout: null,
       focused: null,
@@ -119,7 +119,10 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     workbook_offer: null,
     scrollbars: {},
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
-    groups: [{ task: 1, tabs: [0] }, { task: null, tabs: [1] }],
+    spaces: [
+      { of: { kind: "workspace" }, hidden: false, selected: true, tabs: [0] },
+      { of: { kind: "task", id: 1 }, hidden: true, selected: false, tabs: [1] },
+    ],
     badges: { "1": "FL" },
     calendar: {
       on: true, events_today: 3, all_day_today: 1, events_tomorrow: 2, next_start: 1794560400000, stage: "approaching",
@@ -134,7 +137,9 @@ function replyWith(overlay: unknown): Record<string, unknown> {
         outside: [{ count: 1, rect: [1, 870.5, 4, 4] }, { count: 0, rect: null }], status_bar: [0, 877, 1400, 23],
       },
       banner: { join: [0, 28, 40, 20], dismiss: [44, 28, 60, 20] }, alerts: 1, joins: null,
-      rows: 4, rail: "near", tomorrow_open: false,
+      rows: 4, rail: "near", day: -1, day_start: 1794470400000,
+      all_day_line: [70, 66, 236, 20], first_row: [70, 90, 236, 30],
+      nav: { back: [140, 38, 14, 19], forward: [232, 38, 14, 19], today: [252, 38, 42, 19] },
     },
     drawer: {
       body: [880, 40, 470, 820],
@@ -177,7 +182,6 @@ function replyWith(overlay: unknown): Record<string, unknown> {
         },
         opened: ["web"],
       },
-      goes_to: null,
       line: null,
       note: null,
       rail: [

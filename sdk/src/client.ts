@@ -59,6 +59,7 @@ import type {
   PickerArgs,
   ScrollArgs,
   Section,
+  Owner,
   Snapshot,
   SplitArgs,
   TaskAddArgs,
@@ -254,12 +255,25 @@ export class Client {
   newTab(): Promise<Snapshot> {
     return this.snapshot({ cmd: "new_tab" });
   }
-  /** `index` is the position in `state.tabs`, not the tab's `id`. */
+  /** `index` is the position in `state.tabs`, not the tab's `id`. Its space is selected with it. */
   selectTab(args: { index: number }): Promise<Snapshot> {
     return this.snapshot({ cmd: "select_tab", ...args });
   }
+  /** The next or previous tab of the selected space. */
   cycleTab(args: { delta: number }): Promise<Snapshot> {
     return this.snapshot({ cmd: "cycle_tab", ...args });
+  }
+  /** `index` is the place on the top row (Workspace is 0): hidden spaces are not counted. */
+  selectSpace(args: { index: number }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "select_space", ...args });
+  }
+  /** Takes a space (default: the selected one) off the top row; nothing in it ends. Not Workspace. */
+  hideSpace(args: { index?: number } = {}): Promise<Snapshot> {
+    return this.snapshot({ cmd: "hide_space", ...args });
+  }
+  /** Opens a space and selects it: made with one empty tab if it has none, shown if hidden. */
+  openSpace(args: { space: Owner }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "open_space", ...args });
   }
   /** Closes a tab (default: the one showing) and its panes. */
   closeTab(args: { index?: number } = {}): Promise<Snapshot> {
@@ -373,7 +387,7 @@ export class Client {
   composeDrop(args: { paths: string[] }): Promise<Snapshot> {
     return this.snapshot({ cmd: "compose_drop", ...args });
   }
-  /** Shows the tabs of the first task that needs the user. */
+  /** Opens the space of the first task that needs the user. */
   async taskPop(): Promise<TaskPopReply> {
     return taskPopReply(await this.send({ cmd: "task_pop" }));
   }

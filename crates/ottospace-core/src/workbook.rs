@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::edit::{Edit, Field};
 use crate::layout::Node;
 use crate::marks::{self, Extra, MAX_NAME, MarkInput, Need, PaneRecord, RecordKind, TabRecord};
-use crate::model::{Effect, Kind, Model, PaneId, Section};
+use crate::model::{Effect, Kind, Model, Owner, PaneId, Section};
 use crate::tasks::NOTICE_MS;
 
 pub type WorkbookId = u32;
@@ -667,16 +667,16 @@ impl Model {
         }
     }
 
-    /// Why the tabs on the bar cannot be saved as a workbook, for the shell to say.
+    /// Why the selected space's tabs cannot be saved as a workbook, for the shell to say.
     pub fn workbook_save_all_refusal(&self) -> Option<String> {
         self.workbook_all_records((&[], &[])).err()
     }
 
-    /// Each tab on the bar as a workbook keeps it, in bar order, but those with nothing in them.
-    /// Refused whole rather than saved in part: more than `MAX_TABS`, or one that cannot be kept.
+    /// Each tab of the selected space as a workbook keeps it, in order, but those with nothing in
+    /// them. Refused whole rather than saved in part: more than `MAX_TABS`, or one that cannot be kept.
     fn workbook_all_records(&self, read: Read) -> Result<Vec<(u32, TabRecord)>, String> {
         let mut tabs = Vec::new();
-        for at in 0..self.tabs.len() {
+        for at in self.space_tabs(self.space()) {
             match self.workbook_record(at, read.0, read.1) {
                 Ok(record) => tabs.push((self.tabs[at].id, record)),
                 Err(why) if why == EMPTY => {}
@@ -684,8 +684,8 @@ impl Model {
             }
         }
         match tabs.len() {
-            0 => Err("no tab on the bar has anything to save".into()),
-            n if n > MAX_TABS => Err(format!("{n} tabs on the bar; a workbook keeps {MAX_TABS} at most")),
+            0 => Err("no tab of this space has anything to save".into()),
+            n if n > MAX_TABS => Err(format!("{n} tabs in this space; a workbook keeps {MAX_TABS} at most")),
             _ => {
                 let mut book =
                     Workbook::new(String::new(), String::new(), tabs.iter().map(|(_, r)| r.clone()).collect());
@@ -827,9 +827,9 @@ impl Model {
         self.tabs.iter().position(|open| Some(open.id) == tab)
     }
 
-    /// Opens a workbook's tabs (`tab`: that one alone) in order, each built as a tab's mark is
-    /// (`rebuild_tab`), as a tab of no task, and selects the first. One that is open is kept, not
-    /// built again. `home`: where a terminal starts whose directory is gone.
+    /// Opens a workbook as a space: its tabs (`tab`: that one alone) in order, each built as a
+    /// tab's mark is (`rebuild_tab`), and selects the first. One that is open is kept where it
+    /// is, not built again. `home`: where a terminal starts whose directory is gone.
     pub(crate) fn workbook_open(
         &mut self,
         id: WorkbookId,
@@ -856,7 +856,7 @@ impl Model {
             }
             // Each tab asks for its windows as it is built; the shell parks those of tabs not on show.
             let base = self.next_id;
-            let tab = self.rebuild_tab(&record, effects);
+            let tab = self.rebuild_tab(&record, Owner::Workbook { id }, effects);
             // Each terminal that started shows its history, in panes numbered from `base` in reading order.
             for (pane, kept) in (base + 1..).zip(record.shown()) {
                 let started = self.pane(pane).is_some_and(|open| open.kind == Kind::Terminal);
@@ -869,6 +869,15 @@ impl Model {
             }
         }
         self.list = None;
+        // Its tabs open in Workspace (one saved from there) come into its space; a task's stays the task's.
+        let of = Owner::Workbook { id };
+        let live: Vec<u32> =
+            self.workbooks.get(id).map(|book| book.live.iter().flatten().copied().collect()).unwrap_or_default();
+        self.add_space(&of);
+        for tab in self.tabs.iter_mut().filter(|tab| live.contains(&tab.id) && tab.space == Owner::Workspace) {
+            tab.space = of.clone();
+        }
+        self.regroup();
         let first = self.workbooks.get(id).and_then(|book| self.open_tab(book.live(first)));
         if let Some(index) = first {
             self.select_tab(index, effects);
@@ -1178,21 +1187,23 @@ mod tests {
         m.update(Action::FieldEdit { edit: Edit::Insert("DRI".into()) });
         m.update(Action::MarkSubmit);
         let shares = m.layout.clone();
-        // Its tab is open: it comes forward, and no second one is built.
+        // Its tab is open: it comes into the workbook's space, forward, and no second one is built.
         m.update(Action::NewTab);
         assert_eq!(
             (m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None }), m.active, m.tabs.len()),
-            (vec![], 0, 2)
+            (vec![], 1, 2)
         );
+        assert_eq!(m.space(), &Owner::Workbook { id: 1 });
         // Closed, it is built again: the splits and ratios, a terminal in its directory, the
         // app asked of the shell as a mark's tab asks, and the empty pane empty.
-        m.update(Action::CloseTab { index: Some(0) });
+        m.update(Action::CloseTab { index: Some(1) });
         assert_eq!(m.workbook_rows()[0].open, false);
         m.workbooks.list[0].tabs[0].panes[1].extra.insert("url".into(), serde_json::json!("https://x"));
         let effects = m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
         assert_eq!(effects, opened(4, 5));
         let tab = &m.tabs[m.active];
-        assert_eq!((tab.title.as_str(), tab.task, m.workbook_rows()[0].tab), ("DRI", None, Some(tab.id)));
+        let owner = Owner::Workbook { id: 1 };
+        assert_eq!((tab.title.as_str(), &tab.space, m.workbook_rows()[0].tab), ("DRI", &owner, Some(tab.id)));
         let renumbered = |tree: &Node| format!("{tree:?}").replace("Leaf(4)", "Leaf(1)").replace("Leaf(5)", "Leaf(2)");
         let same = m.layout.as_ref().map(renumbered).map(|tree| tree.replace("Leaf(6)", "Leaf(3)"));
         assert_eq!(same, shares.as_ref().map(|tree| format!("{tree:?}")));
@@ -1404,7 +1415,7 @@ mod tests {
         assert_eq!(m.workbooks.offered(), Some(Change::Updated));
         // An empty bar has nothing to save.
         let empty = Model::default();
-        assert_eq!(empty.workbook_save_all_refusal().as_deref(), Some("no tab on the bar has anything to save"));
+        assert_eq!(empty.workbook_save_all_refusal().as_deref(), Some("no tab of this space has anything to save"));
     }
 
     #[test]
@@ -1418,7 +1429,8 @@ mod tests {
         let effects = m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
         // Only the closed tab is built: its terminal starts, and Slack is asked for, into it.
         let titles: Vec<&str> = m.tabs.iter().map(|tab| tab.title.as_str()).collect();
-        assert_eq!((titles, m.active, m.tabs.len()), (vec!["Tab 2", "Tab 1"], 1, 2));
+        // The open one comes into its space too; Workspace keeps a tab of its own.
+        assert_eq!((titles, m.active, m.tabs.len()), (vec!["Tab 3", "Tab 2", "Tab 1"], 2, 3));
         assert_eq!(effects.len(), 2, "{effects:?}");
         assert!(
             matches!(&effects[1], Effect::HostWindow { into: Some(_), name, .. } if name == "Slack"),
@@ -1428,13 +1440,13 @@ mod tests {
         // pane asks for Slack again, as a tab's mark does.
         m.update(Action::SelectTab { index: 0 });
         let again = m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
-        assert_eq!((again, m.active, m.tabs.len()), (vec![effects[1].clone()], 1, 2));
+        assert_eq!((again, m.active, m.tabs.len()), (vec![effects[1].clone()], 2, 3));
         // All closed: both are built, in order, and the first is on show.
+        m.update(Action::CloseTab { index: Some(2) });
         m.update(Action::CloseTab { index: Some(1) });
-        m.update(Action::CloseTab { index: Some(0) });
         m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
         let titles: Vec<&str> = m.tabs.iter().map(|tab| tab.title.as_str()).collect();
-        assert_eq!((titles, m.active), (vec!["Tab 1", "Tab 1", "Tab 2"], 1));
+        assert_eq!((titles, m.active), (vec!["Tab 3", "Tab 1", "Tab 2"], 1));
         let row = &m.workbook_rows()[0];
         assert_eq!((row.tabs[0].tab, row.tabs[1].tab), (Some(m.tabs[1].id), Some(m.tabs[2].id)));
         // One tab alone, by its place.
@@ -1515,7 +1527,8 @@ mod tests {
         m.update(Action::CloseTab { index: Some(1) });
         m.list = Some(2);
         m.update(Action::ListChoose { axis: Right });
-        assert_eq!((m.tabs.len(), m.tabs[m.active].title.as_str()), (2, "logs"));
+        // Both its tabs in its space now; Workspace keeps one of its own.
+        assert_eq!((m.tabs.len(), m.tabs[m.active].title.as_str()), (3, "logs"));
         // Removing a workbook's last tab deletes it.
         m.update(Action::WorkbookRemove { workbook: 1, tab: Some(0) });
         m.update(Action::WorkbookRemove { workbook: 1, tab: Some(0) });
@@ -1736,7 +1749,7 @@ mod tests {
             m.update(Action::NewTab);
             m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
         }
-        let refused = Some(format!("{} tabs on the bar; a workbook keeps {MAX_TABS} at most", MAX_TABS + 1));
+        let refused = Some(format!("{} tabs in this space; a workbook keeps {MAX_TABS} at most", MAX_TABS + 1));
         assert_eq!(m.workbook_save_all_refusal(), refused);
         m.update(Action::WorkbookSaveAll { uid: UID.into(), cwds: vec![], histories: Vec::new() });
         assert_eq!(names(&m), Vec::<&str>::new());
