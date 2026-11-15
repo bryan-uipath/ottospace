@@ -74,6 +74,12 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
             .into_iter()
             .chain(mark_tab.into_iter().filter(|_| marks))
             .chain([MenuItem::separator(), item("Next Tab", NextTab), item("Previous Tab", PrevTab)])
+            .chain([
+                MenuItem::separator(),
+                item("Next Task Tab", NextSpace),
+                item("Previous Task Tab", PrevSpace),
+                item("Hide Task", HideSpace),
+            ])
             .collect(),
         },
         Menu {

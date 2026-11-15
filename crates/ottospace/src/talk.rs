@@ -365,11 +365,6 @@ impl Workspace {
         true
     }
 
-    /// True if the open drawer is on this task: its header names it.
-    pub(crate) fn talk_names(&self, task: TaskId) -> bool {
-        self.model.talk.as_ref().is_some_and(|talk| talk.open && talk.task == Subject::Task(task))
-    }
-
     /// A task's badge as drawn everywhere: its letters (`Model::badges`), its identity colour,
     /// its state's dot. `None`: no such task, or it is dismissed.
     pub(crate) fn task_badge(&self, id: TaskId, size: f32) -> Option<Div> {
@@ -541,7 +536,7 @@ impl Workspace {
             cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkToggle, this.input, window, cx))),
         );
         Some(
-            // As high as the tab strip: one title strip runs across the window.
+            // As high as the top row above it.
             div()
                 .h(px(crate::TOP_BAR))
                 .flex_none()
@@ -803,13 +798,6 @@ impl Workspace {
             .children(cells)
             .children(divider)
             .child(new)
-    }
-
-    /// ⌘⌃1 … ⌘⌃9: the nth conversation of the right rail, as a click on its cell.
-    pub(crate) fn rail_key(&mut self, n: usize, window: &Window, cx: &mut Context<Self>) {
-        if let Some(cell) = self.model.rail().into_iter().nth(n) {
-            self.dispatch(Action::TalkPick { id: cell.task }, self.input, window, cx);
-        }
     }
 
     /// About once a second while an agent's session is not known (`Model::seeking`): reads, on a

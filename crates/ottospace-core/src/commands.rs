@@ -104,6 +104,10 @@ commands! {
     RemoveTabFromTask: "Remove Tab from Task", Tabs;
     MoveTabToTask: "Move Tab to Task…", Tabs;
     NextTask: "Next Task", Tasks;
+    // After Next Task: a query of its name ranks a later tie lower.
+    NextSpace: "Next Task Tab", Tabs;
+    PrevSpace: "Previous Task Tab", Tabs;
+    HideSpace: "Hide Task", Tabs;
     CapturePane: "Capture the Pane", Tasks;
     TalkFocus: "Type in the Conversation", Tasks;
     EditMessage: "Edit Message in Editor", Tasks;

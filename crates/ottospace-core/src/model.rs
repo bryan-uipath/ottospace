@@ -685,7 +685,7 @@ pub enum Action {
     TaskGo {
         id: Option<TaskId>,
     },
-    /// Select a tab by its place among the tabs of the spaces on the top row.
+    /// Select a tab by its place among the selected space's tabs (⌘1…⌘9).
     SelectVisibleTab {
         index: usize,
     },
@@ -2211,13 +2211,6 @@ pub enum TabAt {
     Before(u32),
 }
 
-/// One space's tabs, side by side on the bar: `tabs` index into `Model::tabs`.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Group {
-    pub space: Owner,
-    pub tabs: Vec<usize>,
-}
-
 pub mod zones;
 
 pub mod spaces;
@@ -3332,9 +3325,8 @@ impl Model {
                 }
             }
             Action::SelectVisibleTab { index } => {
-                let shown: Vec<usize> = (0..self.tabs.len()).filter(|at| !self.tab_hidden(*at)).collect();
-                if let Some(at) = shown.get(index) {
-                    self.select_tab(*at, effects);
+                if let Some(at) = self.visible_tab(index) {
+                    self.select_tab(at, effects);
                 }
             }
             Action::OpenRepo { path, axis } => {
@@ -3401,9 +3393,9 @@ impl Model {
                 self.workbook_open(id, None, self.home.clone(), effects)
             }
             Action::SpaceOpen { space: of } => self.open_space(of, effects),
-            // Along the tabs of the spaces on the row, as the one bar draws them.
+            // Within the selected space.
             Action::CycleTab { delta } => {
-                let tabs: Vec<usize> = (0..self.tabs.len()).filter(|at| !self.tab_hidden(*at)).collect();
+                let tabs = self.space_tabs(self.space());
                 let at = tabs.iter().position(|at| *at == self.active).unwrap_or(0) as i64;
                 let to = tabs[(at + delta as i64).rem_euclid(tabs.len() as i64) as usize];
                 self.select_tab(to, effects);
@@ -3953,14 +3945,11 @@ impl Model {
                 self.leave(effects);
                 // Workspace, the live tasks in their order, then the workbooks.
                 let tasks = matches!(action, Action::PaletteTasks).then(|| {
-                    let workspace = TaskChoice { to: Owner::Workspace, title: "Workspace".into() };
                     let live = self.tasks.list.iter().filter(|task| !task.dismissed);
-                    let live =
-                        live.map(|task| TaskChoice { to: Owner::Task { id: task.id }, title: task.title.clone() });
-                    let books = self.workbooks.list.iter();
-                    let books =
-                        books.map(|book| TaskChoice { to: Owner::Workbook { id: book.id }, title: book.name.clone() });
-                    std::iter::once(workspace).chain(live).chain(books).collect()
+                    let live = live.map(|task| Owner::Task { id: task.id });
+                    let books = self.workbooks.list.iter().map(|book| Owner::Workbook { id: book.id });
+                    let all = std::iter::once(Owner::Workspace).chain(live).chain(books);
+                    all.map(|to| TaskChoice { title: self.space_title(&to), to }).collect()
                 });
                 let features = matches!(action, Action::PaletteFeatures).then(|| {
                     let choice = |feature| FeatureChoice { feature, on: self.features.on(feature) };
@@ -6239,18 +6228,6 @@ impl Model {
         self.space().task()
     }
 
-    /// The tab at `at` is of a space off the row.
-    pub(crate) fn tab_hidden(&self, at: usize) -> bool {
-        let of = self.tabs.get(at).map(|tab| &tab.space);
-        self.spaces.iter().any(|space| Some(&space.of) == of && space.hidden)
-    }
-
-    /// The tab bar's groups in order, one a space on the row: its tabs side by side.
-    pub fn groups(&self) -> Vec<Group> {
-        let group = |space: &&Space| Group { space: space.of.clone(), tabs: self.space_tabs(&space.of) };
-        self.shown_spaces().iter().map(group).filter(|group| !group.tabs.is_empty()).collect()
-    }
-
     /// Moves a tab into a space, or before a tab, taking that one's space. The tab on show stays
     /// on show, its space selected.
     fn place_tab(&mut self, tab: Option<u32>, at: TabAt) {
@@ -6443,7 +6420,9 @@ impl Model {
     /// The home screen, while it is on show: the tab on show has no panes.
     /// `keep_out`: where the shell draws text over the lattice (see `home::home`).
     pub fn home(&self, keep_out: &[Rect]) -> Option<Home<'_>> {
-        self.layout.is_none().then(|| home::home(&self.tasks, keep_out))
+        // A task's empty tab is its own, not the home screen: the shell says what goes in it.
+        let workspace = *self.space() == Owner::Workspace;
+        (self.layout.is_none() && workspace).then(|| home::home(&self.tasks, keep_out))
     }
 
     /// Pane ids of each tab, in tab order. The state dump uses it to show which tab holds a pane.
@@ -8161,14 +8140,18 @@ mod tests {
         m.update(Action::NewTab.sent_by(Origin::Socket));
         assert_eq!((m.active, m.space()), (1, &Owner::Workspace));
         assert_eq!(row(&m), [(Owner::Workspace, false, vec![0, 1]), (task_space(1), false, vec![2, 3])]);
-        // Cycling goes along the bar's tabs; a space shows the tab it showed last.
+        // ⌘1… (and ⌘⇧⌥1…) count the selected space's tabs only.
+        assert_eq!((m.visible_tab(1), m.visible_tab(2)), (Some(1), None));
+        // Cycling stays in the space; a space shows the tab it showed last.
         m.update(Action::CycleTab { delta: 1 });
         m.update(Action::CycleTab { delta: 1 });
-        assert_eq!(m.active, 3);
-        m.update(Action::SpaceSelect { index: 0 });
         assert_eq!(m.active, 1);
         m.update(Action::SpaceSelect { index: 1 });
-        assert_eq!(m.active, 3);
+        m.update(Action::CycleTab { delta: -1 });
+        assert_eq!(m.active, 2);
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::SpaceSelect { index: 1 });
+        assert_eq!(m.active, 2);
         // Going to a task opens its space; a task there is not opens none.
         m.update(Action::TaskGo { id: Some(2) });
         assert_eq!((m.space(), m.tabs.len()), (&task_space(2), 5));

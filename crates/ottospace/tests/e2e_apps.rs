@@ -1110,7 +1110,7 @@ fn a_hosted_window_is_captured_with_the_part_of_its_tree_under_the_circle() {
 
     // The window takes a title the rules say to leave alone: it is not captured again. (The task
     // started in its own space: back to Workspace, where the pane is.)
-    key("cmd-1");
+    key("cmd-ctrl-1");
     canary.call(json!({"cmd": "retitle", "index": 0, "title": "Private notes"}));
     let refused = wait_for("the capture to be refused", || {
         let mut stream = UnixStream::connect(&otto.socket).ok()?;

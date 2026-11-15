@@ -36,7 +36,9 @@ ottospace            # opens on the Repos list
 | Find an action by name | ⌘P: type part of its name, ↵ runs it. Or the menu bar |
 | Edit the settings | ⌘, (Open Settings): `settings.json` in your editor, in a tab of its own |
 | See what an app exposes to accessibility | Focus its pane, ⌘P, "inspector": its tree in a panel on the right, counted by role. Click a row to outline it |
-| Switch tab | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
+| Switch tab (of the task on show) | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
+| Switch task (top row) | ⌘⌃1 … ⌘⌃9 · ⌘⌃] ⌘⌃[ |
+| Hide the task on show | ⌘⌃W, or its × on the top row. Its row in Tasks opens it again |
 | Close the tab and its panes | ⌘⇧W |
 | Save the tab as a workbook | ⌘⇧S |
 | Fill the screen | ⌘⌃F (again to restore) |
@@ -120,7 +122,7 @@ what can be opened, and its other panes are empty and say why. Marks are kept in
 | Write a message in your editor | ⌃G in the composer or the new-task box: `$VISUAL`/`$EDITOR` opens in the drawer on the text. Save and quit puts it back (not sent; ↵ sends); quit with an error keeps it as it was. A permission card meanwhile shows under the editor: click it to answer, ⌃G back |
 | Talk to a task's agent | Click the task (or ↵ on it): its conversation shows in the drawer. Not running: Start agent, or Resume session once it ended (a click never starts one). ⌘L moves the keyboard in and out; ⌘⇧L closes the drawer to the right rail; Stop ends the agent (natively: Stop the Agent in the palette); drag its left edge to resize |
 | Chat with Claude Code in the drawer | ↵ send, ⇧↵ new line, Esc leaves; Esc Esc, or Stop at the composer's right while a turn runs, stops the turn. Once the agent ended, ↵ or Resume session (at the composer's right) goes on with its session; an ended agent says why, a stop and its resume are one thin divider, and Show details opens what its program printed. Hover a message: Copy, Copy as Markdown; a code block has its own Copy. An edit shows its diff under its call. A link opens on your click only. A permission card: `a` allow (this one request), `d` deny, `m` deny with a message, `s` show all (needed before `a` on a long one); ↵ does nothing there. `Chat \| Terminal` in the header switches to the CLI's TUI and back (`conversation_view` sets the default). The model is at the drawer's foot (with a mode that acts unasked: `haiku-5.5 · auto`); hover the title for mode, time and folder |
-| Switch between running agents | Click a badge on the right rail, or ⌘⌃1 … ⌘⌃9. Hover a badge for what it is doing |
+| Switch between running agents | Click its task on the top row, or ⌘⌃1 … ⌘⌃9 |
 | See a task's tabs | Click its row, or ⌘⇧N for the next that needs you: its space |
 | Point at something for a task ("this message", "this error") | ⌃⌥⌘Space, from any app: the pane in use freezes as a picture and a draft opens on the right. Drag to circle, ⇧-drag a box, ⌥-drag a line, click to type a note. ↵, type what you want, ↵ starts it (⇧↵ for later). Esc leaves the picture; Esc in the title cancels the draft. The task keeps the pictures and the text under what you circled as its brief: [Capture](reference.md#capture) |
 | Capture a second pane into the same draft | While drawing, click the other pane. Or press ⌃⌥⌘Space again |

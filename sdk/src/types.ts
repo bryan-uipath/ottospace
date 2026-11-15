@@ -1024,8 +1024,10 @@ export interface Snapshot {
   closes: Record<string, Rect>;
   /** Each drawn pane's header text: a terminal's directory and program (`app-api · cargo test`), an app's window title, "" for an empty pane. */
   titles: Record<string, string>;
-  /** Each tab on the bar, by place. */
-  tabs: Rect[];
+  /** Each tab by its place in `state.tabs`: null for one not drawn (the second row shows the selected space's, when it has more than one). */
+  tabs: (Rect | null)[];
+  /** Each space of the top row, by its place there. */
+  space_rects: (Rect | null)[];
   /** The left column's title strip, and the open section's header (null: none open). */
   strip: Rect | null;
   bar_header: Rect | null;
