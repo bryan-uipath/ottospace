@@ -1,9 +1,9 @@
 //! Key caps: a key from the keymap as one small box per key, and the two ways to fill an
 //! empty tab listed with them. The same list on the home screen and in an empty tab.
 
-use gpui::{Context, Div, Keystroke, Modifiers, Stateful, div, prelude::*, px, rgb};
+use gpui::{Context, Div, Keymap, Keystroke, Modifiers, Stateful, Window, div, prelude::*, px, rgb};
 use ottospace_core::commands::Command;
-use ottospace_core::{Action, Axis, Kind, theme};
+use ottospace_core::{Action, Axis, Kind, Picker, theme};
 
 use crate::{Workspace, commands, key_use};
 
@@ -45,14 +45,42 @@ pub fn key_caps(stroke: &Keystroke, held: Modifiers, fired: bool) -> Div {
     div().flex().gap_1().children(caps(stroke, held, fired).into_iter().map(|(text, lit)| cap(text, lit)))
 }
 
+/// A command's first key in the keymap.
+fn stroke(keymap: &Keymap, command: Command) -> Option<Keystroke> {
+    key_use::first_stroke(keymap, commands::action(command).as_ref())
+}
+
+/// The modifiers whose caps are lit: those down, in the active window only (⌘ let go in another
+/// app is never heard of). A test run's window is never active.
+pub fn held(window: &Window) -> Modifiers {
+    let listens = window.is_window_active() || std::env::var_os("OTTOSPACE_E2E").is_some();
+    if listens { window.modifiers() } else { Modifiers::default() }
+}
+
 impl Workspace {
+    /// A modifier changed: the list is drawn again only if it is on show and its lit caps differ
+    /// from those drawn. ⇧ while typing beside an empty tab draws nothing.
+    pub(crate) fn modifiers_changed(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.model.layout.is_some() {
+            return;
+        }
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let strokes = [Command::PickPane, Command::SplitRight].map(|command| stroke(&keymap, command));
+        let lit = |held: Modifiers| strokes.each_ref().map(|s| s.as_ref().map(|s| caps(s, held, false)));
+        if lit(held(window)) != lit(self.caps_drawn.get()) {
+            cx.notify();
+        }
+    }
+
     /// The two ways to fill an empty tab, a row each: its key's caps, then what it does. A click
     /// does what the key does. `held`: the modifiers down now, whose caps are lit.
     pub(crate) fn fill_list(&self, held: Modifiers, cx: &mut Context<Self>) -> Div {
+        self.caps_drawn.set(held);
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
         let row = |id: &'static str, command: Command, label: &'static str, fired: bool| -> Stateful<Div> {
-            let stroke = key_use::first_stroke(&keymap, commands::action(command).as_ref());
+            let stroke = stroke(&keymap, command);
             // Their room also with no key, so the labels line up.
             let keys = div().min_w(px(48.)).children(stroke.map(|stroke| key_caps(&stroke, held, fired)));
             div()
@@ -71,9 +99,9 @@ impl Workspace {
                 .child(label)
                 .child(self.controls.mark(format!("home:{id}")))
         };
-        // The picker open is this row's chord, pressed: its caps stay lit. A terminal fills the
+        // This row's picker open is its chord, pressed: its caps stay lit. A terminal fills the
         // tab at once, so its row has nothing to show.
-        let picking = self.model.picker.is_some();
+        let picking = matches!(self.model.picker, Some(Picker { axis: Axis::Right, new_tab: false, .. }));
         let open_app = row("open_app", Command::PickPane, "Open an app", picking);
         let open_app = open_app.on_click(cx.listener(|this, _, window, cx| {
             this.open_picker(Axis::Right, false, window, cx);
