@@ -756,6 +756,8 @@ export interface Confirm {
   dismiss: TaskId | null;
   /** Not the quit question: "Paste 4 lines?" over that terminal pane. Only the user answers it. */
   paste: PasteAsk | null;
+  /** Not the quit question: "Unlist this repository?" for the one at this path, which a task works in. Only the user answers it. */
+  unlist: string | null;
 }
 
 /** What a mark waits for while it has the keyboard (`mode` is `mark`). */

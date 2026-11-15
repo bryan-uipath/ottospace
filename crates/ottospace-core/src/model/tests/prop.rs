@@ -1285,7 +1285,7 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(m.calendar.day >= m.calendar.first_day(), "the Calendar shows day {}, cut by the cap", m.calendar.day);
     // "Paste 4 lines?" is a question of its own, and only of text with a line break.
     if let Some(confirm) = m.confirm.as_ref().filter(|c| c.paste.is_some()) {
-        let alone = confirm.running.is_empty() && confirm.dismiss.is_none();
+        let alone = confirm.running.is_empty() && confirm.dismiss.is_none() && confirm.unlist.is_none();
         ensure!(alone && confirm.paste.is_some_and(|ask| ask.amount.newline), "a paste asks with {confirm:?}");
     }
     // The meeting banner is of an event that runs, with no call on.
@@ -1587,6 +1587,7 @@ fn check(m: &Model) -> Result<(), String> {
         let loses = match confirm.dismiss {
             Some(id) => m.agent_runs(&Subject::Task(id)),
             None if let Some(ask) = confirm.paste => m.pane(ask.pane).is_some(),
+            None if let Some(path) = &confirm.unlist => m.repos.iter().any(|r| r.path == *path),
             None => !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty() || m.editing.is_some(),
         };
         ensure!(
@@ -2711,6 +2712,12 @@ impl Run {
                     ensure!(parts.len() == 2 && parts.iter().all(plain), "a worktree at {path:?}, outside {root:?}");
                 }
                 Effect::Notice { text } => ensure!(user && !text.is_empty(), "{origin:?} is told {text:?}"),
+                Effect::Told { text } => {
+                    ensure!(
+                        user && matches!(action, Action::RepoRemove { .. } | Action::QuitConfirm),
+                        "{origin:?} is told {text:?}"
+                    )
+                }
                 // The settings file is the user's.
                 Effect::SaveTasksView { view } => {
                     ensure!(user && m.tasks_view == *view, "{origin:?} wrote tasks_view {view:?}")

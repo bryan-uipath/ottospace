@@ -15,3 +15,15 @@
 {"shot":"new-worktree"}
 {"cmd":"key","keys":"f i x / p a n","as":"user"}
 {"shot":"new-worktree-typed"}
+# The trash on a repository a task works in asks first; on another it unlists and says so.
+{"cmd":"key","keys":"escape","as":"user"}
+{"hover":"repo-fold:{ROOT}/repos/canvas-app","at":[0.3,0.5]}
+{"click":"repo-remove:{ROOT}/repos/canvas-app"}
+{"until":"mode","is":"confirm"}
+{"shot":"unlist-ask"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"hover":"repo-fold:{ROOT}/repos/notes","at":[0.3,0.5]}
+{"click":"repo-remove:{ROOT}/repos/notes"}
+{"until":"notice","is":"Unlisted notes · nothing on disk changed"}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"unlisted"}

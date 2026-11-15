@@ -823,6 +823,8 @@ struct Workspace {
     tags_repo: Option<Option<String>>,
     /// Worktrees asked for (`Effect::AddWorktree`) and made, or not, off the main thread.
     worktrees: (Sender<worktree::Made>, Receiver<worktree::Made>),
+    /// What the user's last step did, said for a few seconds as information (`Effect::Told`).
+    told: Option<(String, Instant)>,
     /// Socket calls that file a task and wait for the reader: (the call's number, what to file, where to reply).
     filing: Vec<(u64, Filing, Sender<String>)>,
     /// How many such calls there were: each has its own number.
@@ -897,6 +899,8 @@ const E2E_SLIVER: f32 = 12.;
 
 /// How long the `s` key snoozes a task: one hour.
 const SNOOZE_MS: u64 = 3_600_000;
+/// How long a step's information (`Effect::Told`) stays in the status bar.
+const TOLD_FOR: Duration = Duration::from_secs(8);
 
 /// Longest a `wait` request may run: 10 minutes.
 const MAX_WAIT_MS: u64 = 600_000;
@@ -1177,6 +1181,7 @@ impl Workspace {
             tags: tags::Reader::start(),
             tags_repo: None,
             worktrees: std::sync::mpsc::channel(),
+            told: None,
             filing: Vec::new(),
             calls: 0,
             sessions: sessions::Poller::start(),
@@ -1437,6 +1442,7 @@ impl Workspace {
                     worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), done);
                 }
                 Effect::Notice { text } => self.error = Some(text.clone()),
+                Effect::Told { text } => self.told = Some((text.clone(), Instant::now())),
                 // A picture of the pane is asked for: the cursor's going scrolls the terminal to
                 // its bottom, so it waits until the picture of what is on show is taken.
                 Effect::Visual { pane, on: false } if self.snapshot_pending(*pane) => self.visual_after.push(*pane),
@@ -1659,7 +1665,9 @@ impl Workspace {
         let unsaved = self.unsaved.clone().or(self.kept_marks.unsaved.clone()).or(self.kept_workbooks.unsaved.clone());
         let unsaved = unsaved.or(self.kept_layout.unsaved.clone());
         let editor = self.model.editor_note().map(|text| (text.to_string(), Level::Info));
-        error(self.error.clone()).or(error(unsaved)).or(start).or(editor)
+        let told =
+            self.told.as_ref().filter(|(_, at)| at.elapsed() < TOLD_FOR).map(|(text, _)| (text.clone(), Level::Info));
+        error(self.error.clone()).or(error(unsaved)).or(told).or(start).or(editor)
     }
 
     /// Reads `settings.json` again once a change to it has held for one look: a file an editor
@@ -5358,6 +5366,7 @@ impl Workspace {
             }
             Mode::Sneak => ("SNEAK", "esc"),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.dismiss.is_some()) => ("DISMISS?", ""),
+            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.unlist.is_some()) => ("UNLIST?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.paste.is_some()) => ("PASTE?", ""),
             Mode::Confirm => ("QUIT?", ""),
             // The capture bar lists the annotate keys.

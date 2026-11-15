@@ -53,6 +53,8 @@ The Repos section lists each repository's name over its checkouts. Clicks on a r
 
 - No worktree is removed: that deletes a folder, and was not asked for.
 - The trash on a name stops listing the repository (`RepoRemove`): it changes `settings.json`,
-  never anything on disk.
+  never anything on disk. While a live task works in one of its checkouts it asks first (the shared
+  confirm, `Confirm::unlist`, the user's to answer); after, the status bar says, as information,
+  "Unlisted <name> · nothing on disk changed" (`Effect::Told`).
 - No argument is built from anything but the checked branch and the folder made here; git runs
   as an argv, never through a shell.

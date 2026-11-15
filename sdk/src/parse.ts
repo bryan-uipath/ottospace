@@ -1072,6 +1072,7 @@ function confirm(value: unknown, at: string): Confirm {
     running: list(running)(o.running, `${at}.running`),
     dismiss: orNull(num)(o.dismiss, `${at}.dismiss`),
     paste: orNull(pasteAsk)(o.paste, `${at}.paste`),
+    unlist: orNull(str)(o.unlist, `${at}.unlist`),
   };
 }
 

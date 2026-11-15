@@ -128,6 +128,9 @@ pub struct Confirm {
     pub dismiss: Option<TaskId>,
     /// Not the quit question: "Paste 4 lines?" in that pane (`clip::asks`).
     pub paste: Option<clip::PasteAsk>,
+    /// Not the quit question: "Unlist this repository?" for the one at this path, which a live
+    /// task works in. Nothing on disk changes either way.
+    pub unlist: Option<String>,
 }
 
 impl Confirm {
@@ -151,6 +154,9 @@ impl Confirm {
     pub fn title(&self) -> String {
         if self.dismiss.is_some() {
             return "Stop its agent and dismiss?".into();
+        }
+        if self.unlist.is_some() {
+            return "Unlist this repository?".into();
         }
         if let Some(ask) = self.paste {
             return ask.title();
@@ -2053,6 +2059,10 @@ pub enum Effect {
     SaveRepos {
         changes: Vec<crate::settings::ListChange>,
     },
+    /// Say `text` in the status bar as information: what the user's own step did.
+    Told {
+        text: String,
+    },
     /// The user asked for a worktree of the repository at `repo` on `branch` (checked) at `path`,
     /// inside `root` (`worktrees_dir`): `git worktree add`, then `Action::WorktreeAdded`.
     AddWorktree {
@@ -2763,6 +2773,12 @@ impl Model {
             {
                 Some(clip::USERS_ALONE)
             }
+            // So is "Unlist this repository?": it writes the settings.
+            Action::QuitConfirm | Action::QuitCancel
+                if self.confirm.as_ref().is_some_and(|confirm| confirm.unlist.is_some()) =>
+            {
+                Some(apps::USERS_ALONE)
+            }
             // "Stop its agent and dismiss?" is the user's to answer yes to.
             Action::QuitConfirm | Action::QuitCancel
                 if self.confirm.as_ref().is_some_and(|confirm| confirm.dismiss.is_some()) =>
@@ -3288,6 +3304,8 @@ impl Model {
                 Some(id) => self.agent_runs(&Subject::Task(id)),
                 // "Paste 4 lines?" goes with its pane.
                 None if let Some(ask) = confirm.paste => panes.iter().any(|p| p.id == ask.pane),
+                // "Unlist this repository?" goes once it is not listed.
+                None if let Some(path) = &confirm.unlist => self.repos.iter().any(|r| r.path == *path),
                 None => !confirm.running.is_empty() || discards || !self.agents.is_empty() || self.editing.is_some(),
             };
             if !asks {
@@ -3322,6 +3340,11 @@ impl Model {
             }
             Action::SetRepoDirs { dirs } => self.repo_dirs = dirs,
             Action::RepoAdd { dir, found } => self.repo_add(dir, found, effects),
+            // A repository a live task works in: asked first (the trash is one hover away).
+            Action::RepoRemove { path } if self.repo_worked_in(&path) && self.repo_dirs.to_remove(&path).is_ok() => {
+                self.leave(effects);
+                self.confirm = Some(Confirm { running: Vec::new(), dismiss: None, paste: None, unlist: Some(path) });
+            }
             Action::RepoRemove { path } => self.repo_remove(&path, effects),
             Action::RepoFold { path, fold } => self.repo_fold(&path, fold),
             Action::WorktreeEdit { repo } => self.worktree_edit(repo, effects),
@@ -4258,14 +4281,14 @@ impl Model {
                     || self
                         .confirm
                         .as_ref()
-                        .is_some_and(|confirm| confirm.dismiss.is_none() && confirm.paste.is_none()) =>
+                        .is_some_and(|confirm| confirm.dismiss.is_none() && confirm.paste.is_none() && confirm.unlist.is_none()) =>
             {
                 effects.push(Effect::Quit)
             }
             Action::QuitAsked { running } => {
                 // The question is ottospace's own UI: a live window would cover it.
                 self.leave(effects);
-                self.confirm = Some(Confirm { running, dismiss: None, paste: None });
+                self.confirm = Some(Confirm { running, dismiss: None, paste: None, unlist: None });
             }
             // Yes to "Paste 4 lines?": into its pane, if that is still a terminal.
             Action::QuitConfirm if let Some(ask) = self.confirm.as_ref().and_then(|confirm| confirm.paste) => {
@@ -4280,6 +4303,7 @@ impl Model {
                             running: Vec::new(),
                             dismiss: None,
                             paste: Some(clip::PasteAsk { pane, amount }),
+                            unlist: None,
                         })
                     }
                     false => self.pasted(pane, amount, effects),
@@ -4294,6 +4318,11 @@ impl Model {
                 self.confirm = None;
                 self.act(Action::TaskStop { id: Subject::Task(id) }, effects);
                 self.row_move(id, Moved::Dismissed, |tasks| tasks.dismiss(id));
+            }
+            // Yes to "Unlist this repository?".
+            Action::QuitConfirm if let Some(path) = self.confirm.as_ref().and_then(|confirm| confirm.unlist.clone()) => {
+                self.confirm = None;
+                self.repo_remove(&path, effects);
             }
             Action::QuitConfirm if self.confirm.is_some() => effects.push(Effect::Quit),
             Action::QuitConfirm | Action::QuitCancel => {}
@@ -5656,7 +5685,7 @@ impl Model {
         if self.agent_runs(&Subject::Task(id)) && self.tasks.live(id).is_some() {
             // The question is ottospace's own UI: a live window would cover it.
             self.leave(effects);
-            self.confirm = Some(Confirm { running: Vec::new(), dismiss: Some(id), paste: None });
+            self.confirm = Some(Confirm { running: Vec::new(), dismiss: Some(id), paste: None, unlist: None });
             return;
         }
         match moved {
@@ -6503,6 +6532,12 @@ impl Model {
         self.repos_held.retain(|path| busy.contains(path));
     }
 
+    /// True if a live task works in one of the checkouts of the repository at `path`.
+    fn repo_worked_in(&self, path: &str) -> bool {
+        let repo = self.repos.iter().find(|repo| repo.path == path);
+        repo.is_some_and(|repo| repo.checkouts().iter().any(|c| self.repo_task(&c.path).is_some()))
+    }
+
     /// The repository whose rows list mode's selection is on: its name or one of its checkouts.
     pub fn selected_repo(&self) -> Option<String> {
         let row = self.list.and_then(|at| self.list_rows().into_iter().nth(at))?;
@@ -6556,6 +6591,8 @@ impl Model {
                 let held = self.repo_dirs.holder(path).is_some();
                 self.repos.retain(|repo| held || repo.path != path);
                 self.repo_field_gone();
+                let text = format!("Unlisted {} · nothing on disk changed", repos::name_of(path));
+                effects.push(Effect::Told { text });
             }
         }
     }
@@ -11164,9 +11201,36 @@ mod tests {
         // Remove: only a directory named as itself. One held by `~/code` is the user's to edit.
         let through = "app is listed through ~/code: take that directory out of `repos` in settings.json";
         assert_eq!(m.update(Action::RepoRemove { path: "/code/app".into() }), notice(through));
-        let saved = vec![Effect::SaveRepos { changes: vec![change(false, "/src/zed")] }];
+        // Unlisted: said, as information, so nobody wonders whether files went.
+        let told = Effect::Told { text: "Unlisted zed · nothing on disk changed".into() };
+        let saved = vec![Effect::SaveRepos { changes: vec![change(false, "/src/zed")] }, told];
         assert_eq!(m.update(Action::RepoRemove { path: "/src/zed".into() }), saved);
         assert_eq!((m.repo_dirs.dirs.len(), m.repos.len(), m.repo_listed("/src/zed")), (1, 1, false));
+    }
+
+    #[test]
+    fn the_trash_asks_before_unlisting_a_repository_a_live_task_works_in() {
+        let dir = |text: &str| repos::RepoDir { text: text.into(), path: text.into() };
+        let mut m = Model::default();
+        m.update(Action::SetRepoDirs { dirs: repos::RepoDirs { dirs: vec![dir("/code/app")], ..Default::default() } });
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::TaskFromLine { line: "zoom >app-2".into(), known: Default::default(), open: false });
+        let remove = Action::RepoRemove { path: "/code/app".into() };
+        // Asked, and nothing written yet; Esc keeps it listed.
+        assert_eq!((m.update(remove.clone()), m.mode()), (vec![], Mode::Confirm));
+        assert_eq!(m.confirm.as_ref().map(Confirm::title).as_deref(), Some("Unlist this repository?"));
+        // Only the user answers: a client's ↵ is refused.
+        assert_eq!(m.refusal(&Action::QuitConfirm, Origin::Socket), Some(apps::USERS_ALONE));
+        m.update(Action::QuitCancel);
+        assert!(m.confirm.is_none() && m.repo_listed("/code/app"));
+        // ↵: unlisted, said, and the settings written.
+        m.update(remove);
+        let effects = m.update(Action::QuitConfirm);
+        assert!(
+            effects.contains(&Effect::Told { text: "Unlisted app · nothing on disk changed".into() }),
+            "{effects:?}"
+        );
+        assert!(!m.repo_listed("/code/app") && m.confirm.is_none());
     }
 
     #[test]
@@ -11943,7 +12007,10 @@ mod tests {
         assert_eq!(m.update(Action::QuitConfirm), [], "no question, no answer");
         assert_eq!(m.update(Action::QuitAsked { running: vec![running(1, "sleep")] }), []);
         assert_eq!(m.mode(), Mode::Confirm);
-        assert_eq!(m.confirm, Some(Confirm { running: vec![running(1, "sleep")], dismiss: None, paste: None }));
+        assert_eq!(
+            m.confirm,
+            Some(Confirm { running: vec![running(1, "sleep")], dismiss: None, paste: None, unlist: None })
+        );
         assert_eq!(m.update(Action::QuitConfirm), [Effect::Quit]);
     }
 
@@ -12087,7 +12154,10 @@ mod tests {
         m.update(Action::Close { pane: Some(3) });
         assert_eq!(m.confirm.as_ref().map(|c| c.running.len()), Some(2), "pane 3 ran nothing");
         m.update(Action::Close { pane: Some(1) });
-        assert_eq!(m.confirm, Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None }));
+        assert_eq!(
+            m.confirm,
+            Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None, unlist: None })
+        );
         // Nothing left to ask about: no question, and no quit either.
         let effects = m.update(Action::Close { pane: Some(2) });
         assert!(!effects.contains(&Effect::Quit), "{effects:?}");
@@ -12206,7 +12276,10 @@ mod tests {
         assert_eq!((m.mode(), ids(&m)), (Mode::Confirm, vec![1, 2]));
         // A shell exits: its pane drops off the list.
         m.update(Action::Close { pane: Some(1) }.sent_by(Origin::System));
-        assert_eq!(m.confirm, Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None }));
+        assert_eq!(
+            m.confirm,
+            Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None, unlist: None })
+        );
         // A client may not take the keyboard from under it, nor ask again as the user's yes.
         for taking in [Action::ToggleKeys, Action::Enter { pane: 2 }, ask.clone()] {
             assert_eq!(m.refusal(&taking, Origin::Socket), Some(CONFIRM_UP), "{taking:?}");
@@ -12242,16 +12315,22 @@ mod tests {
             running: vec![Running { pane: 4, program: None, background: false }],
             dismiss: None,
             paste: None,
+            unlist: None,
         };
         assert_eq!((one.title().as_str(), one.lines()), ("1 terminal is running", vec!["pane 4".to_string()]));
         let job = Confirm {
             running: vec![Running { pane: 2, program: Some("sleep".into()), background: true }],
             dismiss: None,
             paste: None,
+            unlist: None,
         };
         assert_eq!(job.lines(), ["pane 2 · sleep (background)"]);
-        let seven =
-            Confirm { running: (1..=7).map(|pane| running(pane, "claude")).collect(), dismiss: None, paste: None };
+        let seven = Confirm {
+            running: (1..=7).map(|pane| running(pane, "claude")).collect(),
+            dismiss: None,
+            paste: None,
+            unlist: None,
+        };
         assert_eq!(seven.title(), "7 terminals are running");
         let lines = seven.lines();
         assert_eq!((lines.len(), lines[0].as_str(), lines[5].as_str()), (6, "pane 1 · claude", "and 2 more"));

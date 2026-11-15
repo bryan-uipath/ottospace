@@ -849,11 +849,21 @@ fn a_directory_is_added_to_the_repos_list_and_removed_in_the_settings() {
     let reply = otto.mouse("move", header(&otto.drawn(), 2));
     assert_eq!(reply["repos_bar"][2]["name"], "zed");
     let client = sneak_to(&otto, &remove);
-    assert_eq!((names(&client), file()), (vec!["app".to_string(), "web".into(), "zed".into()], added));
-    // The user's does: the directory comes off the settings, and the repository off the list.
+    assert_eq!((names(&client), file()), (vec!["app".to_string(), "web".into(), "zed".into()], added.clone()));
+    // The user's asks first, since a task works there: Esc keeps it, ↵ takes the directory off the
+    // settings and the repository off the list, and the status bar says nothing on disk changed.
+    otto.call(json!({"cmd": "task_new", "line": "zoom >zed"}));
+    otto.mouse("move", header(&otto.drawn(), 2));
     let (_, labels) = sneak(&otto);
-    let reply = otto.user_key(&letters(&labels[&remove]));
+    let asked = otto.user_key(&letters(&labels[&remove]));
+    assert_eq!((asked["mode"].as_str(), names(&asked).len(), file()), (Some("confirm"), 3, added.clone()));
+    assert_eq!(otto.user_key("escape")["mode"], "normal");
+    otto.mouse("move", header(&otto.drawn(), 2));
+    let (_, labels) = sneak(&otto);
+    otto.user_key(&letters(&labels[&remove]));
+    let reply = otto.user_key("enter");
     assert_eq!((names(&reply), file()), (vec!["app".to_string(), "web".into()], settings.clone()));
+    assert_eq!(reply["notice"], "Unlisted zed · nothing on disk changed");
     // One that a folder of the settings holds is not removed: the status bar says where it comes from.
     otto.mouse("move", header(&otto.drawn(), 0));
     let (_, labels) = sneak(&otto);
