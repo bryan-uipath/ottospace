@@ -4210,8 +4210,12 @@ impl Workspace {
                     self.pr_note = None;
                     self.dispatch(Action::SetPrs { repo, prs, branches }, Origin::System, window, cx);
                 }
-                // Quiet unless asked for: no markers, and a line only for an explicit `on`.
-                Err(why) => self.pr_note = (setting == ottospace_core::prs::Setting::On).then_some(why),
+                // No marks from a read that failed; quiet unless asked for: a line only for an explicit `on`.
+                Err(why) => {
+                    self.pr_note = (setting == ottospace_core::prs::Setting::On).then_some(why);
+                    let none = Action::SetPrs { repo, prs: Vec::new(), branches: Vec::new() };
+                    self.dispatch(none, Origin::System, window, cx);
+                }
             }
             cx.notify();
         }

@@ -49,3 +49,13 @@ pub fn run(mut command: Command, timeout: Duration, most: u64) -> Result<Said, S
     let done = |rx: mpsc::Receiver<String>| rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
     Ok(Said { ok: status.success(), out: done(out), err: done(err) })
 }
+
+/// `git -C <dir>`: no prompt, and no environment that points it at another repository.
+pub fn git(dir: &std::path::Path) -> Command {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(dir).env("GIT_TERMINAL_PROMPT", "0");
+    for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
+        command.env_remove(name);
+    }
+    command
+}

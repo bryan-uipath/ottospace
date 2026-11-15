@@ -68,7 +68,9 @@ impl Reader {
                 continue;
             }
             self.last.insert(repo.clone(), now);
-            if small_text(&Path::new(&repo).join(".git/config")).is_some_and(|config| prs::on_github(&config)) {
+            if crate::repos::small_text(&Path::new(&repo).join(".git/config"), 64 * 1024)
+                .is_some_and(|config| prs::on_github(&config))
+            {
                 let _ = self.jobs.send(Job { repo, checkouts });
             }
         }
@@ -84,7 +86,10 @@ fn gh() -> Result<PathBuf, &'static str> {
         None => {
             let path: Vec<PathBuf> =
                 std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
-            let dirs = path.into_iter().chain(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from));
+            let dirs = path
+                .into_iter()
+                .filter(|dir| dir.is_absolute())
+                .chain(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from));
             dirs.map(|dir| dir.join("gh")).find(|p| p.is_file())
         }
     };
@@ -110,8 +115,8 @@ fn command(gh: &Path) -> Command {
 /// requests (gh, in the repository's folder).
 fn read(gh: &Path, job: &Job) -> Result<(Vec<Pr>, Vec<Branch>), &'static str> {
     let git = |dir: &str, args: &[&str]| {
-        let mut command = Command::new("git");
-        command.arg("-C").arg(dir).args(args).env("GIT_TERMINAL_PROMPT", "0");
+        let mut command = crate::child::git(Path::new(dir));
+        command.args(args);
         crate::child::run(command, TIMEOUT, 256 * 1024).ok().filter(|said| said.ok).map(|said| said.out)
     };
     let config =
@@ -142,10 +147,4 @@ fn read(gh: &Path, job: &Job) -> Result<(Vec<Pr>, Vec<Branch>), &'static str> {
         return Err("gh could not list pull requests");
     }
     Ok((prs::parse(&said.out).map_err(|_| "gh's answer does not read")?, branches))
-}
-
-/// A small regular file's text.
-fn small_text(file: &Path) -> Option<String> {
-    let meta = std::fs::metadata(file).ok()?;
-    (meta.is_file() && meta.len() < 64 * 1024).then(|| std::fs::read_to_string(file).ok()).flatten()
 }

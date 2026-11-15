@@ -3376,8 +3376,11 @@ impl Model {
             Action::RepoFold { path, fold } => self.repo_fold(&path, fold),
             Action::WorktreeEdit { repo } => self.worktree_edit(repo, effects),
             Action::SetPrs { repo, prs, branches } => {
+                // None to match (gh off, or a failed read): the repository has no marks.
                 self.prs.retain(|(of, ..)| *of != repo);
-                self.prs.push((repo, prs, branches));
+                if !branches.is_empty() {
+                    self.prs.push((repo, prs, branches));
+                }
             }
             Action::PrOpen { path } => {
                 if let Some(url) = self.checkout_pr(&path).and_then(crate::prs::Pr::link) {
@@ -6576,8 +6579,10 @@ impl Model {
 
     /// The open pull request of the branch checked out at `path`, by `prs::pick`.
     pub fn checkout_pr(&self, path: &str) -> Option<&crate::prs::Pr> {
+        // The branch read with the pull requests must be the one listed now: none after a switch.
+        let now = self.repos.iter().flat_map(Repo::checkouts).find(|c| c.path == path)?.branch;
         let (_, prs, branches) = self.prs.iter().find(|(_, _, branches)| branches.iter().any(|b| b.path == path))?;
-        crate::prs::pick(prs, branches.iter().find(|b| b.path == path)?)
+        crate::prs::pick(prs, branches.iter().find(|b| b.path == path).filter(|b| b.name == now)?)
     }
 
     /// The repository whose rows list mode's selection is on: its name or one of its checkouts.
@@ -11433,6 +11438,14 @@ mod tests {
         assert_eq!(m.update(open("/code/app-2")), [Effect::OpenPr { url: "https://github.com/o/app/pull/7".into() }]);
         // A link that is not a plain GitHub pull request's never opens.
         assert_eq!(m.update(open("/code/app")), []);
+        // Switched to another branch since the read: not that pull request's row any more.
+        let mut switched = listed();
+        switched[0].worktrees[0].branch = Some("other".into());
+        m.update(Action::SetRepos { repos: switched });
+        assert_eq!(m.checkout_pr("/code/app-2"), None);
+        // A read with nothing to match (gh off, or failed) leaves no marks, and nothing kept.
+        m.update(Action::SetPrs { repo: "/code/app".into(), prs: Vec::new(), branches: Vec::new() });
+        assert!(m.prs.is_empty());
     }
 
     #[test]

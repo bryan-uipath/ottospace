@@ -250,17 +250,18 @@ pub struct Card {
     pub merge: String,
 }
 
+/// A GitHub owner's or repository's name: letters, digits, `-`, `_`, `.`; not `.` or `..`.
+fn plain(part: &str) -> bool {
+    !matches!(part, "" | "." | "..") && part.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 /// True for a link a click may open: `https://github.com/<owner>/<repo>/pull/<n>`, no more.
 pub fn openable(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://github.com/") else { return false };
     let parts: Vec<&str> = rest.split('/').collect();
-    let plain = |part: &&str| {
-        !matches!(*part, "" | "." | "..")
-            && part.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-    };
     url.len() <= 300
         && parts.len() == 4
-        && parts[..2].iter().all(plain)
+        && parts[..2].iter().all(|part| plain(part))
         && parts[2] == "pull"
         && parts[3].chars().all(|c| c.is_ascii_digit())
         && !parts[3].is_empty()
@@ -269,11 +270,7 @@ pub fn openable(url: &str) -> bool {
 /// Other people's text as a card shows it: cleaned as any text is, on one line, cut to `most` characters.
 fn shown(text: &str, most: usize) -> String {
     let text = crate::transcript::clean(text).replace('\n', " ");
-    let text = text.trim();
-    match text.char_indices().nth(most) {
-        Some((cut, _)) => format!("{}…", &text[..cut]),
-        None => text.to_string(),
-    }
+    crate::ax::truncate(text.trim(), most)
 }
 
 /// gh's answer: at most `MAX_PRS` pull requests, or why it does not read.
@@ -349,10 +346,6 @@ pub fn slug(url: &str) -> Option<String> {
         .find_map(|prefix| url.strip_prefix(prefix))?;
     let rest = rest.trim_end_matches('/');
     let rest = rest.strip_suffix(".git").unwrap_or(rest);
-    let plain = |part: &str| {
-        !matches!(part, "" | "." | "..")
-            && part.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-    };
     match rest.split('/').collect::<Vec<_>>()[..] {
         [owner, name] if plain(owner) && plain(name) => Some(format!("{owner}/{name}").to_lowercase()),
         _ => None,
@@ -399,10 +392,7 @@ pub fn on_github(config: &str) -> bool {
         let Some(url) = line.strip_prefix("url").map(str::trim_start).and_then(|l| l.strip_prefix('=')) else {
             continue;
         };
-        let url = url.trim();
-        let github =
-            ["git@github.com:", "ssh://git@github.com/", "https://github.com/"].iter().any(|p| url.starts_with(p));
-        if origin && github {
+        if origin && slug(url).is_some() {
             return true;
         }
     }

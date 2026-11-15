@@ -54,7 +54,7 @@ The Repos section lists each repository's name over its checkouts. Clicks on a r
 - **When**: only while the Repos section is open (`prs::due`): a repository is read every 5
   minutes, and on the section's opening if its last read is a minute old or more. Only a
   repository whose `origin` is on github.com (`.git/config`). `repos_prs`: `auto` (default),
-  `on`, `off`. gh is found on `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin`; a test run uses
+  `on`, `off`. gh is found in the absolute folders of `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin`; a test run uses
   only `OTTOSPACE_GH`, a stand-in.
 - **What runs**, on its own thread, 20 s each, no prompt, no colour, no update check:
   - once, and again after 5 minutes while it fails: `gh auth status --hostname github.com`
