@@ -62,7 +62,8 @@ impl Workspace {
     /// `Effect::PressApp`: the user typed the label of an element in `pane`'s window. It is found
     /// again, checked and pressed on a background thread; if it is not the one labelled any more,
     /// nothing is pressed and the status bar says why. A text field that took focus then gets the
-    /// keyboard, as the user's own move; one that did not never does.
+    /// keyboard; one that did not never does. That comes later, so it is the system's: it takes
+    /// no keyboard from what the user has started typing in since.
     pub(crate) fn press_app(
         &mut self,
         pane: PaneId,
@@ -85,7 +86,7 @@ impl Workspace {
                 cx.background_executor().spawn(async move { ax_press::press(pid, id, &path, &role, at) }).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 match pressed {
-                    Ok(Press::Focus) => drop(this.dispatch(Action::Enter { pane }, Origin::User, window, cx)),
+                    Ok(Press::Focus) => drop(this.dispatch(Action::Enter { pane }, Origin::System, window, cx)),
                     Ok(Press::Press) => {}
                     Err(why) => this.error = Some(why.into()),
                 }

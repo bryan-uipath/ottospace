@@ -440,12 +440,19 @@ const SPLITS: [(&str, &str, &str, Axis, bool); 3] = [
     ("split_down", "icons/split-down.svg", "Split down…  ⌘⇧E", Axis::Down, false),
 ];
 
+/// A rail cell's control id: `rail:tasks`. The Workspaces cell keeps `rail:workbook`, as the
+/// requests and the state keep that name.
+pub(crate) fn rail_id(label: &str) -> String {
+    let name = if label == "Workspaces" { "workbook".into() } else { label.to_lowercase() };
+    format!("rail:{name}")
+}
+
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 6] = [
     (Section::Tasks, "icons/tasks.svg", "Tasks"),
     (Section::Calendar, "icons/calendar.svg", "Calendar"),
     (Section::Apps, "icons/apps.svg", "Apps"),
-    (Section::Workbook, "icons/workbook.svg", "Workbook"),
+    (Section::Workbook, "icons/workbook.svg", "Workspaces"),
     (Section::Repos, "icons/repos.svg", "Repos"),
     (Section::Marks, "icons/marks.svg", "Marks"),
 ];
@@ -706,6 +713,8 @@ struct Workspace {
     abandoned: Option<gpui::Task<()>>,
     /// The pointer event in hand came from a `mouse` or `drag` request, not from the user.
     injected: bool,
+    /// A launched app's window is being looked for, some time after the click that started it.
+    launched_later: bool,
     /// Where headers, their × and tabs were last drawn.
     marks: Marks,
     /// Where every copy goes and every paste comes from: a stand-in in an E2E run.
@@ -1148,6 +1157,7 @@ impl Workspace {
             held: false,
             abandoned: None,
             injected: false,
+            launched_later: false,
             marks: Marks::default(),
             clipboard: clipboard::Clipboard::new(std::env::var_os("OTTOSPACE_E2E").is_some()),
             pasting: None,
@@ -1259,6 +1269,12 @@ impl Workspace {
     /// everywhere else `with_origin`.
     fn swap_origin(&mut self, origin: Origin) -> Origin {
         std::mem::replace(&mut self.input, origin)
+    }
+
+    /// Who sends a focus that follows a launch: the system's once it comes later than the click,
+    /// so it takes no keyboard from what the user types in by then.
+    pub(crate) fn follow_up(&self) -> Origin {
+        if self.launched_later { Origin::System } else { self.input }
     }
 
     /// Runs `f` with `origin` as the sender, then puts the previous sender back.
@@ -3081,7 +3097,7 @@ impl Workspace {
         // Already in a pane: go to it (and its tab) instead of doing nothing.
         if let Some((pane, _)) = self.hosted.iter().find(|(_, h)| h.window_id == target.id) {
             let pane = *pane;
-            self.dispatch(Action::Focus { pane }, self.input, window, cx);
+            self.dispatch(Action::Focus { pane }, self.follow_up(), window, cx);
             return Ok(());
         }
         let hosted = Hosted::new(target)?;
@@ -3149,12 +3165,14 @@ impl Workspace {
                 ottospace_core::marks::settled(count, since.elapsed().as_millis() as u64)
             });
             // Listed, but its main window may not be ready yet: try again until the time is up.
+            self.launched_later = true;
             let hosted = app.is_some_and(|app| match &launch.wanted {
                 Some(wanted) => settled && self.host_window_of(app.pid, wanted, window, cx).is_ok(),
                 None => self.with_origin(launch.origin, |this| {
                     this.open_app(&app.name, launch.axis, launch.new_tab, window, cx).is_ok()
                 }),
             });
+            self.launched_later = false;
             if hosted {
                 continue;
             }
@@ -4054,7 +4072,7 @@ impl Workspace {
                         })))
                         .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(label.into()))))
                         .children((section == Section::Calendar).then(|| self.calendar_rail_mark()).flatten())
-                        .child(self.controls.mark(format!("rail:{}", label.to_lowercase())))
+                        .child(self.controls.mark(rail_id(label)))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.dispatch(Action::ToggleSection { section }, this.input, window, cx);
                         }))
@@ -4101,7 +4119,7 @@ impl Workspace {
         let add = match section {
             Section::Tasks => Some(("New task (⌘N)", "bar:add")),
             Section::Repos => Some(("Add a repository…", "bar:add")),
-            Section::Workbook => Some(("Save this tab as a workbook (⌘⇧S)", "bar:save_tab")),
+            Section::Workbook => Some(("New workspace", "bar:add")),
             _ => None,
         };
         div()
@@ -4140,12 +4158,12 @@ impl Workspace {
             ))
     }
 
-    /// The header's +: a new task in Tasks, a repository to list in Repos, the tab on show in Workbook.
+    /// The header's +: a new task in Tasks, a repository to list in Repos, a new workspace in Workspaces.
     pub(crate) fn bar_add(&mut self, section: Section, window: &Window, cx: &mut Context<Self>) {
         match section {
             Section::Tasks => self.new_task(window, cx),
             Section::Repos => self.pick_repo(window, cx),
-            Section::Workbook => self.save_workbook(window, cx),
+            Section::Workbook => self.new_workspace(window, cx),
             _ => {}
         }
     }
@@ -5310,8 +5328,8 @@ impl Workspace {
                     this.dispatch(Action::SpaceCycle { delta: 1 }, this.input, window, cx);
                 }))
         });
-        let new_task = div()
-            .id("new-task")
+        let new_space = div()
+            .id("new-workspace")
             .flex_none()
             .w(px(28.))
             .h(px(24.))
@@ -5324,9 +5342,9 @@ impl Workspace {
             .text_color(rgb(theme::MUTED))
             .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
             .child("+")
-            .child(self.controls.mark("top:new_task"))
-            .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New task (⌘N)".into()))))
-            .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)));
+            .child(self.controls.mark("top:new_workspace"))
+            .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New workspace".into()))))
+            .on_click(cx.listener(|this, _, window, cx| this.new_workspace(window, cx)));
         // The traffic lights sit over the left column: room for them only where it is narrower.
         div()
             .h(px(TOP_BAR))
@@ -5350,7 +5368,7 @@ impl Workspace {
             )
             .child(div().flex_shrink().min_w_0().h_full().flex().overflow_hidden().children(spaces))
             .children(more)
-            .child(new_task)
+            .child(new_space)
             .child(self.render_top_buttons(cx))
     }
 
@@ -5437,7 +5455,7 @@ impl Workspace {
                     .when_some(self.workbook_of(id), |d, book| {
                         let icon = svg().path("icons/workbook.svg").size(px(12.)).flex_none();
                         d.child(icon.text_color(rgb(theme::MUTED))).tooltip(move |_, cx| {
-                            AnyView::from(cx.new(|_| Tooltip(format!("Workbook: {book}").into())))
+                            AnyView::from(cx.new(|_| Tooltip(format!("Workspace: {book}").into())))
                         })
                     })
                     .child(div().flex_1().min_w_0().truncate().child(tab.title.clone()))
@@ -5511,7 +5529,7 @@ impl Workspace {
             Mode::Mark => match self.model.mark_input {
                 Some(MarkInput::Rename { .. }) => ("MARK", ""),
                 Some(MarkInput::SetKey { .. }) => ("MARK", "a letter for the mark · ⌫ for none · esc cancels"),
-                Some(MarkInput::Workbook { .. }) => ("WORKBOOK", ""),
+                Some(MarkInput::Workbook { .. }) => ("WORKSPACE", ""),
                 Some(MarkInput::Worktree { .. }) => ("WORKTREE", "↵ add · esc cancels"),
                 _ => ("MARK?", "a mark's letter · esc cancels"),
             },

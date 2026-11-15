@@ -207,7 +207,7 @@ export interface Tab {
   space: Owner;
 }
 
-/** Whose a space of the top row is: Workspace (always first), a task's, a session's that is no task's, a workbook's. */
+/** Whose a space of the top row is: Workspace (always first), a task's, a session's that is no task's, a workspace of the user's (`workbook`: the name it had). */
 export type Owner =
   | { kind: "workspace" }
   | { kind: "task"; id: TaskId }
@@ -675,7 +675,7 @@ export interface Palette {
   query: string;
   /** An index into `palette_rows`. */
   selected: number;
-  /** Move Tab to…: the spaces it lists (Workspace, the live tasks, the workbooks), in order; null while it lists commands. */
+  /** Move Tab to…: the spaces it lists (Workspace, the live tasks, the user's workspaces), in order; null while it lists commands. */
   tasks: PaletteTask[] | null;
   /** Features…: the flags it lists, each with whether it is on; null while it lists commands. */
   features: PaletteFeature[] | null;
@@ -815,12 +815,12 @@ export type MarkInput =
   | { type: "jump" }
   | { type: "rename"; mark: number; text: string }
   | { type: "set_key"; mark: number }
-  /** A workbook's name is being typed in its row; with `tab`, the title of that tab of it. */
+  /** A workspace's name is being typed in its row; with `tab`, the title of that tab of it. */
   | { type: "workbook"; workbook: number; tab?: number; text: string }
   /** A new worktree's branch is being typed in the rows of the repository at `repo` (the user's alone). */
   | { type: "worktree"; repo: string; text: string };
 
-/** A pane of a workbook's tab. `app`: an app pane's app, by name. A terminal's `lines` and
+/** A pane of a workspace's saved tab. `app`: an app pane's app, by name. A terminal's `lines` and
  * `has_command` count the history it kept; the text is never in the state. */
 export interface WorkbookPane {
   kind: "terminal" | "app" | "empty";
@@ -829,7 +829,7 @@ export interface WorkbookPane {
   has_command?: boolean;
 }
 
-/** One tab of a workbook. */
+/** One saved tab of a workspace. */
 export interface WorkbookTab {
   title: string;
   /** What it holds, in reading order. */
@@ -839,12 +839,12 @@ export interface WorkbookTab {
   /** It is open now: `tab` is that tab's `id`. */
   open: boolean;
   tab: number | null;
-  /** Where the Workbook section drew its row and the row's words (while unfolded), or null. */
+  /** Where the Workspaces section drew its row and the row's words (while unfolded), or null. */
   row: Rect | null;
   buttons: { open: Rect | null; rename: Rect | null; remove: Rect | null };
 }
 
-/** A workbook: a saved, named set of tabs. No directory is listed: `panes` names kinds only. */
+/** A workspace of the user's (the user reads "workspace"; the state keeps `workbook`): a named set of saved tabs, none in a new one. No directory is listed: `panes` names kinds only. */
 export interface Workbook {
   /** This run's id for it. */
   id: number;
@@ -853,13 +853,13 @@ export interface Workbook {
   panes: WorkbookPane[];
   /** e.g. "3 tabs · 4 terminals · Chrome, Slack"; one tab: "2 terminals · Chrome, Slack". */
   summary: string;
-  /** One of its tabs is open now: `tab` is the first open one's `id`. */
+  /** Its space is on the top row, or one of its tabs is open now: `tab` is the first open one's `id`. */
   open: boolean;
   tab: number | null;
   tabs: WorkbookTab[];
   /** Its tabs are listed under its row. */
   unfolded: boolean;
-  /** Where the Workbook section drew its row and the row's words, or null. */
+  /** Where the Workspaces section drew its row and the row's words, or null. */
   row: Rect | null;
   buttons: { open: Rect | null; add: Rect | null; fold: Rect | null; rename: Rect | null; delete: Rect | null };
 }
@@ -1188,9 +1188,9 @@ export interface Snapshot {
   marks: Mark[];
   /** The name of the mark just taken off, while the Marks section offers to put it back. */
   mark_removed: string | null;
-  /** The workbooks, by name. Only the user saves, opens, renames or deletes one. */
+  /** The user's workspaces, by name. Only the user makes, saves, opens, renames or deletes one. */
   workbooks: Workbook[];
-  /** What the Workbook section offers to take back, while it offers. */
+  /** What the Workspaces section offers to take back, while it offers. */
   workbook_offer: "deleted" | "updated" | null;
   /** Each scroll area whose content does not fit, by id (`tasks`, `picker`, `keys`, `terminal:1`). */
   scrollbars: Record<string, Scrollbar>;

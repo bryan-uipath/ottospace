@@ -1197,6 +1197,12 @@ pub enum Action {
         cwds: Vec<(PaneId, String)>,
         histories: Vec<(PaneId, History)>,
     },
+    /// + on the top row or in the section: a new workbook of no tab, "Workspace 2" (the lowest
+    /// number free), its space after the selected one with one empty tab, selected. It takes
+    /// and records no tab. `uid`: its file's name, made up by the shell.
+    WorkbookNew {
+        uid: String,
+    },
     /// Add the tab on show to a workbook, or update it there.
     WorkbookAddTab {
         workbook: WorkbookId,
@@ -1483,6 +1489,7 @@ impl Action {
                 | Action::ListReorder { .. }
                 | Action::CaptureBack
                 | Action::WorkbookSave { .. }
+                | Action::WorkbookNew { .. }
                 | Action::WorkbookAddTab { .. }
                 | Action::WorkbookSaveAll { .. }
                 | Action::WorkbookOpen { .. }
@@ -1700,6 +1707,7 @@ impl Action {
             | Action::EditSettings
             | Action::SettingsRead { .. }
             | Action::UnfilledOpen { .. }
+            | Action::WorkbookNew { .. }
             | Action::WorkbookAddTab { .. }
             | Action::WorkbookOpen { .. }
             | Action::WorkbookRemove { .. }
@@ -1934,6 +1942,7 @@ impl Action {
             | Action::StartFresh
             | Action::UnfilledOpen { .. }
             | Action::WorkbookSave { .. }
+            | Action::WorkbookNew { .. }
             | Action::WorkbookAddTab { .. }
             | Action::WorkbookSaveAll { .. }
             | Action::WorkbookOpen { .. }
@@ -2790,6 +2799,7 @@ impl Model {
             // A workbook is the user's file, and opening one starts their apps.
             Action::SpaceOpen { space: Owner::Workbook { .. } }
             | Action::WorkbookSave { .. }
+            | Action::WorkbookNew { .. }
             | Action::WorkbookAddTab { .. }
             | Action::WorkbookSaveAll { .. }
             | Action::WorkbookOpen { .. }
@@ -3051,11 +3061,18 @@ impl Model {
             _ if self.edits_compose() => None,
             // A mark that opens nothing takes no keyboard.
             Action::MarkGo { mark, .. } if !self.mark_goes(mark) => None,
+            // Nor does a branch's field that would not open: no such repository, no folder for it.
+            Action::WorktreeEdit { repo }
+                if self.repo_dirs.worktrees.is_none() || !self.repos.iter().any(|r| r.path == *repo) =>
+            {
+                None
+            }
             Action::SelectTab { .. }
             | Action::SpaceSelect { .. }
             | Action::SpaceCycle { .. }
             | Action::SpaceHide { .. }
             | Action::SpaceOpen { .. }
+            | Action::WorkbookNew { .. }
             | Action::OpenRepo { .. }
             | Action::RepoClick { .. }
             | Action::MarkGo { .. }
@@ -4523,6 +4540,7 @@ impl Model {
             Action::SettingsRead { text, written } => self.settings_read(&text, written, effects),
             Action::UnfilledOpen { pane } => self.unfilled_open(pane, effects),
             Action::WorkbookSave { uid, cwds, histories } => self.workbook_save(uid, (&cwds, &histories), effects),
+            Action::WorkbookNew { uid } => self.workbook_make(uid, effects),
             Action::WorkbookAddTab { workbook, cwds, histories } => {
                 self.workbook_add_tab(workbook, (&cwds, &histories))
             }
@@ -7409,6 +7427,7 @@ mod tests {
         Action::SettingsRead { .. },
         Action::UnfilledOpen { .. },
         Action::WorkbookSave { .. },
+        Action::WorkbookNew { .. },
         Action::WorkbookAddTab { .. },
         Action::WorkbookSaveAll { .. },
         Action::WorkbookOpen { .. },
@@ -7651,6 +7670,7 @@ mod tests {
             Action::SettingsRead { text: "{}".into(), written: false },
             Action::UnfilledOpen { pane: 1 },
             Action::WorkbookSave { uid: text(), cwds: Vec::new(), histories: Vec::new() },
+            Action::WorkbookNew { uid: text() },
             Action::WorkbookAddTab { workbook: 1, cwds: Vec::new(), histories: Vec::new() },
             Action::WorkbookSaveAll { uid: text(), cwds: Vec::new(), histories: Vec::new() },
             Action::WorkbookOpen { workbook: 1, tab: None, home: None },
@@ -7727,6 +7747,7 @@ mod tests {
         matches!(
             action,
             Action::WorkbookSave { .. }
+                | Action::WorkbookNew { .. }
                 | Action::WorkbookAddTab { .. }
                 | Action::WorkbookSaveAll { .. }
                 | Action::WorkbookOpen { .. }
@@ -8812,6 +8833,21 @@ mod tests {
             m.update(action);
             assert_eq!((m.sidebar, m.tabs.len(), line(&m)), (None, 1, "mine"));
         }
+        // A follow-up that comes later (a pressed field's app, a launched app's window) is the
+        // system's: it waits, and the line stays where it is. So does a branch's field with no folder.
+        let mut m = boxed();
+        let later = [Action::Enter { pane: 1 }, Action::Focus { pane: 1 }];
+        for action in later.into_iter().chain([Action::WorktreeEdit { repo: "/code/app".into() }]) {
+            let origin = if matches!(action, Action::WorktreeEdit { .. }) { Origin::User } else { Origin::System };
+            m.update(action.clone().sent_by(origin));
+            assert_eq!((line(&m), cursor(&m), m.mode()), ("mine", Some(3), Mode::Compose), "{action:?}");
+        }
+        // The top row's + makes a workspace as a space pick does: the line is put aside.
+        let mut m = boxed();
+        m.update(Action::WorkbookNew { uid: "00000000000000a1".into() });
+        assert_eq!((line(&m), m.tabs.len()), ("<closed>", 2));
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!(line(&m), "mine");
         // A line kept is not lost to a later one put aside empty, or a client's.
         let mut m = boxed();
         m.update(Action::Focus { pane: 1 });

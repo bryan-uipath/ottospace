@@ -423,7 +423,7 @@ impl Workspace {
                 Some(opened.ok_or_else(|| format!("{}: no pane could be opened for its window", wanted.name))?)
             }
             (Pick::Focus(pane), None) => {
-                self.dispatch(Action::Focus { pane }, self.input, window, cx);
+                self.dispatch(Action::Focus { pane }, self.follow_up(), window, cx);
                 Some(pane)
             }
             (Pick::Focus(pane), Some(_)) => {

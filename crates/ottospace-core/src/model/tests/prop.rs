@@ -1109,6 +1109,7 @@ const MAKERS: &[Make] = &[
     },
     |g| Action::UnfilledOpen { pane: g.pane() },
     |g| Action::WorkbookSave { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS), histories: g.histories() },
+    |g| Action::WorkbookNew { uid: g.rng.pick(BOOK_UIDS).to_string() },
     |g| Action::WorkbookAddTab { workbook: g.workbook(), cwds: g.read(DIRS), histories: g.histories() },
     |g| Action::WorkbookSaveAll {
         uid: g.rng.pick(BOOK_UIDS).to_string(),
@@ -1272,6 +1273,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::SpaceCycle { .. }
             | Action::SpaceHide { .. }
             | Action::SpaceOpen { .. }
+            | Action::WorkbookNew { .. }
             | Action::TaskTalk { .. }
             | Action::SessionOpen { .. }
             | Action::SessionAdopt { .. }
@@ -1863,7 +1865,8 @@ fn check(m: &Model) -> Result<(), String> {
     for book in books {
         ensure!(book.live.len() <= book.tabs.len(), "workbook {:?} stands for tabs it does not have", book.name);
         let tabs = book.tabs.len();
-        ensure!((1..=workbook::MAX_TABS).contains(&tabs), "workbook {:?} has {tabs} tabs", book.name);
+        // None: a new one (+), nothing saved into it yet.
+        ensure!(tabs <= workbook::MAX_TABS, "workbook {:?} has {tabs} tabs", book.name);
         let size = workbook::write(book).len();
         ensure!(size <= workbook::MAX_FILE_BYTES, "workbook {:?} is {size} bytes: too large to read back", book.name);
         let read = workbook::parse(&workbook::write(book), &book.uid);
@@ -2207,6 +2210,7 @@ impl Run {
         );
         let hides = matches!(action, Action::SpaceHide { .. });
         let owners_before: Vec<(u32, Owner)> = m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect();
+        let books_before: Vec<String> = m.workbooks.list.iter().map(workbook::write).collect();
         let typing_to = m.talk.clone().filter(|talk| talk.keys && origin != Origin::User);
         let written = m.compose_line().is_some_and(|line| !line.is_empty());
         let composing_before = m.composing() && written && !m.compose_theirs && origin != Origin::User;
@@ -2272,6 +2276,7 @@ impl Run {
                     | Action::SpaceCycle { .. }
                     | Action::SpaceHide { .. }
                     | Action::SpaceOpen { .. }
+                    | Action::WorkbookNew { .. }
             );
             if let Some(field) = field.filter(|_| clicks) {
                 let aside = m.compose_kept.as_ref().is_some_and(|kept| kept.line == field);
@@ -2373,6 +2378,21 @@ impl Run {
                 moved || bound || gone || undone || adopted || gathered,
                 "{origin:?}'s {action:?} moved tab {id} from {was:?} to {now:?}"
             );
+        }
+        // + makes at most one workbook, of no tab, with a new empty tab on show in its space;
+        // it records nothing in any other, and no tab there was changes space (above).
+        if let Action::WorkbookNew { .. } = action {
+            let books: Vec<String> = m.workbooks.list.iter().map(workbook::write).collect();
+            let new: Vec<&Workbook> =
+                m.workbooks.list.iter().filter(|book| !books_before.contains(&workbook::write(book))).collect();
+            let kept = books_before.iter().all(|book| books.contains(book));
+            ensure!(kept && new.len() <= 1, "{origin:?}'s + changed a workbook there was, or made {}", new.len());
+            for book in new {
+                let made = origin == Origin::User && book.tabs.is_empty() && book.live.is_empty();
+                ensure!(made, "{origin:?}'s + made workbook {:?} with {} tabs", book.name, book.tabs.len());
+                let shown = *m.space() == Owner::Workbook { id: book.id } && m.layout.is_none();
+                ensure!(shown && !tabs_before.contains(&m.tabs[m.active].id), "+ did not show a new empty tab");
+            }
         }
         check_zones(m)?;
         if !self.sparse || self.steps.len().is_multiple_of(8) {
