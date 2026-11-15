@@ -400,7 +400,7 @@ pub fn load_workbooks() -> KeptWorkbooks {
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return KeptWorkbooks::default(),
-        Err(err) => return KeptWorkbooks { error: Some(format!("workbooks: {err}")), ..KeptWorkbooks::default() },
+        Err(err) => return KeptWorkbooks { error: Some(format!("workspaces: {err}")), ..KeptWorkbooks::default() },
     };
     let json = |path: &PathBuf| path.extension().is_some_and(|ext| ext == "json");
     let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).filter(json).collect();
@@ -421,14 +421,14 @@ pub fn load_workbooks() -> KeptWorkbooks {
 /// Writes one workbook to `<uid>.json` in the workbooks folder, as `save_task` writes a task.
 pub fn save_workbook(uid: &str, text: &str) -> io::Result<()> {
     let Some(dir) = workbooks_dir() else { return Ok(()) };
-    let name = workbook_file(uid).ok_or_else(|| io::Error::other("not a workbook's id"))?;
+    let name = workbook_file(uid).ok_or_else(|| io::Error::other("not a workspace's id"))?;
     write_whole(&dir, &name, text)
 }
 
 /// Removes a workbook's file. One that is gone already is removed.
 pub fn remove_workbook(uid: &str) -> io::Result<()> {
     let Some(dir) = workbooks_dir() else { return Ok(()) };
-    let name = workbook_file(uid).ok_or_else(|| io::Error::other("not a workbook's id"))?;
+    let name = workbook_file(uid).ok_or_else(|| io::Error::other("not a workspace's id"))?;
     removed(fs::remove_file(dir.join(name)))
 }
 

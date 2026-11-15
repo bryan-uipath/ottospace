@@ -38,20 +38,21 @@ ottospace            # opens on the Repos list
 | Edit the settings | ⌘, (Open Settings): `settings.json` in your editor, in a tab of its own |
 | See what an app exposes to accessibility | Focus its pane, ⌘P, "inspector": its tree in a panel on the right, counted by role. Click a row to outline it |
 | Switch tab (of the task on show) | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
-| Switch task (top row) | ⌘⌃1 … ⌘⌃9 · ⌘⌃] ⌘⌃[ |
-| Hide the task on show | ⌘⌃W, or its × on the top row. Its row in Tasks opens it again |
+| Switch task or workspace (top row) | ⌘⌃1 … ⌘⌃9 · ⌘⌃] ⌘⌃[ |
+| New workspace | + on the top row, or in the Workspaces section's header |
+| Hide the task or workspace on show | ⌘⌃W, or its × on the top row. Its row in Tasks or Workspaces opens it again |
 | Close the tab and its panes | ⌘⇧W |
-| Save the tab as a workbook | ⌘⇧S |
+| Save the tab into its workspace, else as a new one | ⌘⇧S |
 | Fill the screen | ⌘⌃F (again to restore) |
 
-## The bar on the left (Tasks, Calendar, Workbook, Repos; Apps and Marks behind flags)
+## The bar on the left (Tasks, Calendar, Workspaces, Repos; Apps and Marks behind flags)
 
 | I want to | Do |
 |---|---|
 | Open a section | Click its icon on the rail |
 | Use it from the keyboard | ⌘⌃E (the open section, else Apps, or with it off the first), then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
 | Read the lists again | Close and open the section, or ⌘⌃E: Apps and Repos are read when they open |
-| Add something | + in the bar's header: a new task in Tasks, the tab on show in Workbook, a repository in Repos (pick a folder that is one or holds some; it goes into `repos` in the settings) |
+| Add something | + in the bar's header: a new task in Tasks, a new empty workspace in Workspaces, a repository in Repos (pick a folder that is one or holds some; it goes into `repos` in the settings) |
 | Stop listing a repository | Point at its name in Repos: the trash. Only for one added as itself; nothing on disk is touched. While a task works there it asks first (↵ unlists, Esc keeps it) |
 | New worktree | Point at a repository's name in Repos: +, type a branch, ↵. It goes in `~/.ottospace/worktrees/<repo>/<branch>` (`worktrees_dir`) and opens as a terminal tab |
 | Fold a repository | Its chevron, or ← / → in list mode |
@@ -79,21 +80,25 @@ Without it, ⌘E puts an app in a pane.
 
 The badge on an app is how many windows it has open. A new window of a hosted app gets its own pane.
 
-## Workbooks
+## Workspaces
 
-A workbook is a saved, named set of tabs, for a context that comes back. It is kept between runs.
+A workspace is a named set of tabs, for a context that comes back. It is kept between runs, and
+listed in the Workspaces section whether it is open or not. The first space of the top row,
+"Workspace", is always there: the tabs of no task and no other workspace.
 
 | I want to | Do |
 |---|---|
-| Save the tab on show | ⌘⇧S, or + in the Workbook section's header. Type its name, ↵ |
+| Make a new, empty one | + on the top row, or in the Workspaces section's header: "Workspace 2", one empty tab, selected. It never takes the tab on show |
+| Take it off the top row | Its ×, or ⌘⌃W. Nothing in it stops; it stays listed, and its row opens it again |
+| Save the tab on show | ⌘⇧S. In a workspace: into that one. Elsewhere: as a new one; type its name, ↵ |
 | Add the tab on show to one | `Add tab` on its row, or ⌘⌃E, then `a` on it |
-| Save every tab on the bar as one | File ▸ Save All Tabs as Workbook |
+| Save every tab on the bar as one | File ▸ Save All Tabs as Workspace |
 | Update a tab of it after changing it | ⌘⇧S again on that tab. Undo on the line at the top (six seconds) |
-| Open it | Workbook, click it. Or ⌘⌃E, ↵. Its tabs open in order; one already open is kept |
+| Open it | Workspaces, click it. Or ⌘⌃E, ↵. Its saved tabs open in order; one already open is kept. None saved: one empty tab |
 | See, open, rename or remove one of its tabs | ▸ on its row (⌘⌃E: space), then the tab's row: click, Rename, Remove |
 | Rename or delete it | Hover its row: Rename, Delete. Or ⌘⌃E, then `r`, `x`; `u` puts a deleted one back |
 
-It keeps the splits, each app, and each terminal's directory, last 500 lines and the command
+A saved tab keeps the splits, each app, and each terminal's directory, last 500 lines and the command
 running in it. Opened, a terminal shows those lines above its prompt with the command typed on
 it, not run: ↵ runs it. Not the page or document an app showed. A directory that is gone: the terminal starts in your home
 folder. Kept in `~/.ottospace/workbooks`.

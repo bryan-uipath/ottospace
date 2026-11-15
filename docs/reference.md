@@ -35,7 +35,7 @@ running, and the rest of the design is not built: see the
 | Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a file edit's change as a diff card under its call, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls and edits, not what it says; "Watching · updates per message" in the header), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
 | New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do when it is not the default. A `/path` stays in the title the agent reads, and a folder taken from its dropdown is where the agent runs; `$skill` is stored and shown, nothing acts on it yet | Works today |
 | Home screen: a tab with no panes says what goes there (Open an app ⌘E, Terminal ⌘D), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. With nothing open at all, the drawer shows a new task by itself | Works today |
-| Two rows of tabs: the top row holds Workspace, then each open task (its badge and title) and workbook; under it, the selected one's tabs, when it has more than one. One selection: the drawer shows the selected task's chat. × hides a task (nothing stops); its row opens it again. Short of room, the tasks not selected are their badges alone; shorter still, those that do not fit are a count (+3), and the selected one always shows. Drag a tab onto a task to move it there | Works today |
+| Two rows of tabs: the top row holds the first space, Workspace, then each open task (its badge and title) and workspace; under it, the selected one's tabs, when it has more than one. One selection: the drawer shows the selected task's chat. × hides a task or a workspace (nothing stops); its row opens it again. + at the row's end makes a new, empty workspace. Short of room, the tasks not selected are their badges alone; shorter still, those that do not fit are a count (+3), and the selected one always shows. Drag a tab onto a task to move it there | Works today |
 | Tabs, each with its own split tree | Works today |
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar | Works today |
@@ -48,8 +48,8 @@ running, and the rest of the design is not built: see the
 | [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today, behind the `marks` [flag](#features), off by default |
 | Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the drawer; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`), and its agent is told the brief's path. Kept in `~/.ottospace/materials` | Works today |
-| Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
-| Tabs and layout come back after quitting: every tab (with its task and workbook), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
+| Workspaces: + on the top row or in the Workspaces section makes a new, empty one, listed there and kept between runs. ⌘⇧S saves a tab into one (its splits, each terminal's directory, each app), to open again from the section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
+| Tabs and layout come back after quitting: every tab (with its task and workspace), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
 | [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
 
@@ -64,7 +64,7 @@ None of these is in the app today.
 | Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
 | Focus blocks: hide Slack, with an agent that can break through | Designed |
 | Fast app switcher | Designed |
-| Workbooks: the URL, channel or document each app showed; a workbook on the rail; its tabs as a scope on the tab bar | Designed |
+| Workspaces: the URL, channel or document each app showed; a workspace on the rail; a workspace of a task or a worktree | Designed |
 | TypeScript scripting, with contextual quick actions in an action deck (Zoom meeting layout, spin for stand-up) | Designed |
 | Hide private panes while screen sharing | Designed |
 | Session restore beyond the layout: what each app showed (URLs, channels, documents) | Designed |
@@ -108,11 +108,11 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘T | New tab, with an empty pane: ⌘E picks what goes in it |
 | ⌘1 … ⌘9 | Select a tab of the selected task (the second row) |
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab of the selected task |
-| ⌘⌃1 … ⌘⌃9 | Select a space of the top row: Workspace, then each open task and workbook. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
+| ⌘⌃1 … ⌘⌃9 | Select a space of the top row: the first, Workspace, then each open task and workspace. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
 | ⌘⌃] / ⌘⌃[ | Next / previous space of the top row |
-| ⌘⌃W | Hide the selected task or workbook (Hide): it leaves the top row and nothing in it stops; its row in Tasks or Workbook opens it again |
+| ⌘⌃W | Hide the selected task or workspace (Hide): it leaves the top row and nothing in it stops; its row in Tasks or Workspaces opens it again. Not the first space, Workspace |
 | ⌘⇧W | Close the tab and its panes |
-| ⌘⇧S | Save the tab on show as a [workbook](#workbooks). On a tab that came from one, or was saved into one: update its tab there |
+| ⌘⇧S | Save the tab on show into the [workspace](#workspaces) it is in; in the first space or a task's, as a new one. On a tab that came from one, or was saved into one: update its tab there |
 | ⌘Q | Quit. While a terminal runs something (a program in front of its shell, or a background or stopped job) it asks first, and lists them: ↵, Q or ⌘Q again quits; Esc, any other key or any other shortcut cancels and does nothing else |
 | Wheel / trackpad | Scroll a terminal back through its history |
 | ⇧PageUp / ⇧PageDown | Scroll a terminal a page |
@@ -130,7 +130,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘B / ⌘⇧B | With the `marks` [flag](#features) on (so for the next two rows): mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
 | ⌘⌥1 … ⌘⌥9 | Go to one of the first nine marks, in the order of the Marks section |
-| ⌘⌃E | List mode: the bar (Tasks, Calendar while a feed is set, Apps, Workbook, Repos, Marks; Apps and Marks only while their [flags](#features) are on) takes the keyboard, on the open section, or Apps if none is (with Apps off, the first). On a workbook ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; in Repos so is a repository's name: ↵ or space folds or unfolds it, ← folds the selected row's repository and → unfolds it, `a` makes a worktree of it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); in Calendar ← and → go a day back and on, `t` to today; Esc or ⌘⌃E leaves |
+| ⌘⌃E | List mode: the bar (Tasks, Calendar while a feed is set, Apps, Workspaces, Repos, Marks; Apps and Marks only while their [flags](#features) are on) takes the keyboard, on the open section, or Apps if none is (with Apps off, the first). On a workspace ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; in Repos so is a repository's name: ↵ or space folds or unfolds it, ← folds the selected row's repository and → unfolds it, `a` makes a worktree of it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); in Calendar ← and → go a day back and on, `t` to today; Esc or ⌘⌃E leaves |
 | ⌘; or ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the drawer's buttons and picks, the top row's spaces and their ×, the home screen's buttons, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. The focused app pane's elements get labels too, in orange (APP mode's colour), always two letters or more so one stray key presses nothing in another app: those its accessibility tree says can be pressed (`AXPress`) or typed in (text fields), enabled, at least 4 points each way where the pane shows them, the innermost of nested ones, at most 150 (nearest the pane's top left). Their labels start with the letters ottospace's own leave free, 19 two-letter labels to each such letter (e.g. `ta`, `ts`, `td`); the first letter only narrows. Only when those letters run out do they go under a × label's first letter, or take three letters. They appear once the app's tree is read, a moment after ottospace's own, and follow it while the mode is on (read again each second); the status bar says how many, e.g. `12 controls in Calculator`. An orange label presses that element (`AXPress`) and the pane stays parked; a text field's label focuses the field and gives the app the keyboard, so you type there. Before it presses, ottospace finds the element again and checks it is the same (role, enabled, place in its window within 2 points); if not, nothing is pressed and the status bar says the control moved. Sneak sets no value, opens no menu and scrolls nothing in the app, and only your own typed letter presses: a socket client's letter of an orange label is refused. Apps that build their accessibility tree only on request (Electron, Chrome's pages, Spotify) show few elements, and get few labels: ottospace does not switch their fuller mode on. Entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
@@ -152,7 +152,7 @@ Typed text replaces the selection. Movement and deletion go by whole characters 
 A line wider than the field scrolls with the cursor. The picker's filter holds 200 characters.
 While the quit question is over a field, nothing edits it.
 
-**The new-task box.** ⌘N, the Tasks section's `+` and the top row's `+` open it in the drawer,
+**The new-task box.** ⌘N and the Tasks section's `+` open it in the drawer,
 beside the workspace. Over it: picks for where (the first listed repositories, "no repository")
 and who (the default agent, then each runner and its models), which set the line's `>repo` and
 `@agent`, and, unless ↵ would start the default agent in your home folder, a line that says what
@@ -256,13 +256,14 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 5. **Dismissing.** A dismissed task leaves the top row and the drawer (the drawer shows
    nothing, not another conversation); its tabs go to Workspace. Dismissing a task whose agent
    runs asks first: Stop its agent and dismiss?
-6. **Spaces and the drawer.** Workspace, then each open task (and session, and workbook) is a
+6. **Spaces and the drawer.** Workspace, then each open task (and session, and workspace) is a
    space with its own tabs; one is selected, and the drawer is only ever on its agent: a task's
    chat, none for Workspace. Selecting starts nothing; a closed drawer stays closed. A task
    started (↵ in the box, or its row clicked) opens its space with one empty tab; started from a
    Workspace tab a Repos row opened for its folder, that tab moves into it. ⌘T makes a tab in the
    space on show. Drag a tab onto another space's tab or badge to move it there; Move Tab to…
-   lists Workspace, the tasks and the workbooks.
+   lists Workspace, the tasks and the workspaces. The top row's + makes a new, empty
+   [workspace](#workspaces) after the selected space.
    Closing a space's last tab closes the space. A click on a Repos row opens a terminal there in
    a Workspace tab of its own; a row a live task works in carries its badge, and its click selects
    that task (Terminal, on hover, opens a terminal anyway). See `docs/ai/spaces.md`. A
@@ -322,7 +323,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 ## Command palette
 
 ⌘P, or View ▸ Command Palette…, opens a box with every command of the menu bar that needs no
-argument: its group (Panes, Tabs, Tasks, Workbook, Marks, View, Developer, App), its name and its
+argument: its group (Panes, Tabs, Tasks, Workspace, Marks, View, Developer, App), its name and its
 key. Type to filter: the letters in order, ignoring case and spaces (`tr` finds Terminal Right);
 a word's first letter and letters side by side rank first, then a group's name (`dev` lists the
 Developer group). ↑/↓ or ⌃N/⌃P move, a click or ↵ runs the command as its menu item does, Esc, ⌘P
@@ -340,7 +341,7 @@ About ottospace (App, also ottospace ▸ About ottospace) shows the version and 
 About panel. The hover of the status bar's empty middle shows them too.
 
 Move Tab to… (Tabs, also File ▸ Move Tab to…) turns the box into a list of Workspace, the
-tasks not dismissed, in their order, then the workbooks. Type to filter by title; ↵ or a click
+tasks not dismissed, in their order, then the workspaces. Type to filter by title; ↵ or a click
 moves the tab on show to the end of that space's tabs.
 
 The Developer group, also the Developer menu: Accessibility Overlay (⌘⌃A), [Accessibility
@@ -600,28 +601,43 @@ unfolds it. A session at work does not unfold it.
   session's title (above). Design: [sessions.md](ai/sessions.md).
 - Turn it off with `"sessions": false`. See [Settings](#settings) for where sessions are read from.
 
-## Workbooks
+## Workspaces
 
-A workbook is a saved, named set of tabs for a context that comes back, e.g. "Maestro DRI": a
-tab of dashboards, a tab of docs. It is not a task: no agent works it and it is never done.
+A workspace is a named set of tabs for a context that comes back, e.g. "Maestro DRI": a tab of
+dashboards, a tab of docs. It is listed in the Workspaces section whether it is open or not, and
+kept between runs. It is not a task: no agent works it and it is never done. (It was called a
+workbook: its folder, its setting and the control socket still say `workbook`.) The first space
+of the top row, "Workspace", is always there and is not listed: the tabs of no task and no other
+workspace.
 
-- **Save**: ⌘⇧S, File ▸ Save Tab as Workbook, or + in the Workbook section's header. It records
+- **New**: + on the top row, + in the Workspaces section's header, or `New workspace` in the
+  empty section. Each makes a new, empty workspace, "Workspace 2", "Workspace 3" (the lowest
+  number free): its space goes after the selected one on the top row, with one empty tab,
+  selected, ready for ⌘E or ⌘D. It never takes or records the tab on show.
+- **Close**: × on its space (⌘⌃W) takes it off the top row. Nothing in it stops, it stays
+  listed, and its row opens it again as it was. With its last tab closed it leaves the row too.
+- **Save**: ⌘⇧S, or File ▸ Save Tab as Workspace. In a workspace, the tab on show is saved into
+  it; in the first space or a task's, as a new workspace of that tab. It records
   the tab's splits and their sizes, and each app pane's app (bundle id and name); for each
   terminal, its directory as it is then, its last 500 lines (`workbook_scrollback_lines`; `0`
   keeps none; only once you typed in it: a shell left at its prompt keeps none) and the command line of the program in front of its shell, if one runs. No window
-  title, URL or document. A tab with nothing in it is not saved.
-- **Add a tab**: `Add tab` on a workbook's row, `a` on it in list mode, or File ▸ Add Tab to
-  Workbook… (it opens the section in list mode: pick the row, `a`). **All tabs**: File ▸ Save All
-  Tabs as Workbook saves every tab on the bar that has something in it, in bar order, as one new
-  workbook (at most 32; with more it saves none and says so). A tab stands for one workbook's tab at most: added to another, it leaves the first.
-- A new workbook is named for the tab (all tabs: "Workbook"), and the section opens with the
-  name selected: type over it, ↵ keeps it, Esc keeps it as it is. No two workbooks share a name
+  title, URL or document. A tab with nothing in it is not saved. What is saved is what opens
+  again once its tabs are closed; a tab not saved comes back only with the [layout](#restoring-the-layout).
+- **Add a tab**: `Add tab` on a workspace's row, `a` on it in list mode, or File ▸ Add Tab to
+  Workspace… (it opens the section in list mode: pick the row, `a`). **All tabs**: File ▸ Save All
+  Tabs as Workspace saves every tab on the bar that has something in it, in bar order, as one new
+  workspace (at most 32; with more it saves none and says so). A tab stands for one workspace's tab at most: added to another, it leaves the first.
+- A workspace made by saving a tab is named for the tab (all tabs: "Workspace 2", as a new
+  one), and the section opens with the
+  name selected: type over it, ↵ keeps it, Esc keeps it as it is. No two workspaces share a name
   (`DRI`, `DRI 2`).
-- **Save again** on a tab that came from a workbook, or was saved into one, updates that tab of
+- **Save again** on a tab that came from a workspace, or was saved into one, updates that tab of
   it. The section says `Updated · Undo` for six seconds.
-- **Open**: click its row, or ⌘⌃E and ↵. Each of its tabs opens in a new tab, in order, and the
-  first is selected; a tab of it that is open already is kept, not opened twice. A workbook of
-  one tab opens under the workbook's name; of several, each tab under its own title. Each
+- **Open**: click its row, or ⌘⌃E and ↵. Its space comes back on the top row, selected. Each of
+  its saved tabs that is not open opens in a new tab, in order, and the
+  first is selected; a tab of it that is open already is kept, not opened twice. With none saved
+  and none open it gets one empty tab. A workspace of
+  one saved tab opens it under the workspace's name; of several, each tab under its own title. Each
   terminal starts a new shell in its directory; if the directory is gone it starts in your home
   folder, and the notice bar says so. Above its prompt, in grey, are the lines it kept, then
   `── saved <date> ──`. A command it kept is typed on the prompt, not run: ↵ runs it, or edit or
@@ -629,30 +645,33 @@ tab of dashboards, a tab of docs. It is not a task: no agent works it and it is 
   survive: this is not session restore. Each app pane gets a window of its app as a tab's mark does: one no
   pane holds (the only one, else the main one); an app that is not running is started. A pane
   whose app is not installed, or whose window is in another pane, stays empty and says why. A
-  dot marks the row while a tab of it is open, and the tab bar marks its tabs with the workbook
-  icon (hover: its name).
-- **Its tabs**: ▸ before a workbook of several tabs (space in list mode) lists them under it.
+  dot marks the row while its space is on the top row or a tab of it is open, and the tab bar
+  marks its saved tabs with the workspace icon (hover: its name). A row with nothing saved says
+  `no saved tabs`.
+- **Its tabs**: ▸ before a workspace of several saved tabs (space in list mode) lists them under it.
   Each opens alone (click, ↵), and has `Rename` (its title, `r`) and `Remove` (`x`: out of the
-  workbook; the last one deletes the workbook).
+  workspace; the last one deletes the workspace).
 - **Rename, Delete**: the words on its row (hover it, or select it in list mode), or `r` and
-  `x` in list mode. Deleting leaves the open tabs alone; `Workbook deleted · Undo` shows for six
+  `x` in list mode. Deleting leaves the open tabs alone; `Workspace deleted · Undo` shows for six
   seconds (`u` in list mode).
 - Kept lines and commands can hold secrets a tool printed, or a token in a command line. They
-  stay in your workbook files, plain text with escape sequences taken out, at most 64 KB a
-  terminal and 1 MB a workbook. Credential-shaped text is hidden as `[hidden]` (tokens, `key=`
+  stay in your workspace files, plain text with escape sequences taken out, at most 64 KB a
+  terminal and 1 MB a workspace. Credential-shaped text is hidden as `[hidden]` (tokens, `key=`
   passwords, `user:pass@` URLs, `Authorization:` headers; a private key block is left out), and
   a command holding any is not kept. This is best effort: a secret of another shape is kept as
   printed. Set `workbook_scrollback_lines` to `0` and no terminal text is saved at all. The save
-  says what it kept in the notice bar, and the row says `history` while a workbook holds any;
-  deleting the workbook deletes its file. Never in the control socket's state (it counts them:
+  says what it kept in the notice bar, and the row says `history` while a workspace holds any;
+  deleting the workspace deletes its file. Never in the control socket's state (it counts them:
   `lines`, `has_command`).
 - Kept in `~/.ottospace/workbooks`, one file each, readable by you alone. A file there that
-  ottospace cannot read is counted in the notice bar and left as it is.
-- Only you save, open, rename or delete a workbook: a socket client's key, click or label is
+  ottospace cannot read is counted in the notice bar and left as it is. A build from before
+  workspaces could be empty does not read a file with no saved tab: it counts it and leaves it.
+- Only you make, save, open, rename or delete a workspace: a socket client's key, click or label is
   refused. The state lists them (`workbooks`: names, tabs and pane kinds, no directories).
 
-Not built: bringing an app back on the URL, channel or document it showed, and a workbook's
-tabs as a scope of their own on the tab bar. Design: [workbook.md](ai/workbook.md).
+Not built: bringing an app back on the URL, channel or document it showed, and a workspace
+that belongs to a task or a worktree. Design: [workbook.md](ai/workbook.md),
+[spaces.md](ai/spaces.md).
 
 ## Restoring the layout
 
@@ -660,13 +679,13 @@ Quit ottospace and start it again: the workspace comes back. `~/.ottospace/layou
 written a second after a change and at quit, readable by you alone.
 
 - **What comes back**: every tab in bar order, each with its task (a task's tabs together, tabs of
-  no task last) and the workbook it came from; its splits and their sizes; which pane had focus;
+  no task last) and the workspace it came from; its splits and their sizes; which pane had focus;
   the tab on show; the section that was open; the drawer (the conversation it showed, open or
   closed, its width). A task's tabs live here, keyed by the task's number, not in the task's file;
   its badge colour is in the task's file. A tab of a task that is gone or dismissed comes back as
   a tab of no task.
 - **Terminals** start a new shell in the folder they were in (one that is gone: your home folder,
-  and the notice bar says so). As a [workbook](#workbooks)'s do, they show their last lines in
+  and the notice bar says so). As a [workspace](#workspaces)'s do, they show their last lines in
   grey above the prompt, and a program that ran in front is typed on the prompt, not run: ↵ runs
   it. The same setting (`workbook_scrollback_lines`; `0` keeps no terminal text) and the same
   cleaning apply: escape sequences taken out, credential-shaped text hidden, capped. The program
@@ -678,7 +697,7 @@ written a second after a change and at quit, readable by you alone.
   at once and its pane closes.
 - **App panes** keep the app (bundle id and name), never a window title. A running app's window
   goes back in its pane; an app that is not running is not started: its pane says so and offers
-  `Open <App>`. `restore_apps: true` starts it instead. Opening a workbook starts its apps: you
+  `Open <App>`. `restore_apps: true` starts it instead. Opening a workspace starts its apps: you
   asked for them; a start does not.
 - **The drawer** shows the task's conversation again, not running: Resume session in the drawer
   goes on with its session. No agent starts by itself.
@@ -970,7 +989,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 | `agent_models` | The models the `@agent` dropdown offers after each runner, in place of the built-in list: ids as the runner's CLI takes them. `claude` and `codex` are each a list; a runner left out keeps its own, an empty list offers the runner alone. An id that does not start with the runner's name gets it in the tag: `gpt-6-astra` is `@codex-gpt-6-astra`, `opus` is `@claude-opus`. An entry that is not a name (letters and digits, with `.`, `-` or `_` between them one at a time; at most 64) is left out and named in the status bar | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`; `gpt-6-astra` |
 | `default_agent` | The agent a task with no `@agent` starts: a runner (`claude`, `codex`) or a runner and a model (`claude-opus-5-5`, `codex-gpt-6-astra`). The first WHO pick in the drawer | `claude` |
 | `conversation_view` | How the drawer shows a Claude Code conversation: `native` (drawn by ottospace: markdown, cards for permission requests, a composer) or `terminal` (the CLI's own TUI). The header's `Chat \| Terminal` switches one conversation, and the layout keeps the pick. Codex always shows in a terminal for now | `native` |
-| `workbook_scrollback_lines` | How many of a terminal's last lines a [workbook](#workbooks), and the [restored layout](#restoring-the-layout), keeps, shown again above its prompt when it opens. At most `2000`. `0`: none is kept | `500` |
+| `workbook_scrollback_lines` | How many of a terminal's last lines a [workspace](#workspaces), and the [restored layout](#restoring-the-layout), keeps, shown again above its prompt when it opens. At most `2000`. `0`: none is kept | `500` |
 | `restore_layout` | [Restore the layout](#restoring-the-layout) at start and keep it in `layout.json`. `false`: every start is empty | `true` |
 | `restore_apps` | At a restore, start an app a pane names that is not running. `false`: its pane waits and offers `Open <App>` | `false` |
 | `tasks_view` | How the Tasks section groups: `state` or `project`. Written when you pick one in the section's header | `state` |
@@ -1127,7 +1146,7 @@ first brainstorm:
 
 [capture.md](ai/capture.md): the capture key, annotate mode, what a capture stores, and how a brief quotes it.
 [marks.md](ai/marks.md): marks, what one records, and how they sit beside session restore, pins and tasks.
-[workbook.md](ai/workbook.md): workbooks beside tasks, marks and session restore; stages 1 and 2 as built, and what is later.
+[workbook.md](ai/workbook.md): workspaces (there still "workbooks") beside tasks, marks and session restore; stages 1 and 2 as built, and what is later.
 [session-restore.md](ai/session-restore.md): the workspace back after quitting, in layers; layer 1, the layout file, as built.
 [terminal-persistence.md](ai/terminal-persistence.md): terminals and agents that outlive a quit or an update, held outside the app; with session restore, tasks come back as they were.
 [task-conversation.md](ai/task-conversation.md): a task's agent in a right drawer, the three zones, how an agent is started; stage 1 as built (the agent's terminal in the drawer), and what is later.

@@ -1203,6 +1203,12 @@ pub enum Action {
         cwds: Vec<(PaneId, String)>,
         histories: Vec<(PaneId, History)>,
     },
+    /// + on the top row or in the section: a new workbook of no tab, "Workspace 2" (the lowest
+    /// number free), its space after the selected one with one empty tab, selected. It takes
+    /// and records no tab. `uid`: its file's name, made up by the shell.
+    WorkbookNew {
+        uid: String,
+    },
     /// Add the tab on show to a workbook, or update it there.
     WorkbookAddTab {
         workbook: WorkbookId,
@@ -1489,6 +1495,7 @@ impl Action {
                 | Action::ListReorder { .. }
                 | Action::CaptureBack
                 | Action::WorkbookSave { .. }
+                | Action::WorkbookNew { .. }
                 | Action::WorkbookAddTab { .. }
                 | Action::WorkbookSaveAll { .. }
                 | Action::WorkbookOpen { .. }
@@ -1707,6 +1714,7 @@ impl Action {
             | Action::EditSettings
             | Action::SettingsRead { .. }
             | Action::UnfilledOpen { .. }
+            | Action::WorkbookNew { .. }
             | Action::WorkbookAddTab { .. }
             | Action::WorkbookOpen { .. }
             | Action::WorkbookRemove { .. }
@@ -1942,6 +1950,7 @@ impl Action {
             | Action::StartFresh
             | Action::UnfilledOpen { .. }
             | Action::WorkbookSave { .. }
+            | Action::WorkbookNew { .. }
             | Action::WorkbookAddTab { .. }
             | Action::WorkbookSaveAll { .. }
             | Action::WorkbookOpen { .. }
@@ -2809,6 +2818,7 @@ impl Model {
             // A workbook is the user's file, and opening one starts their apps.
             Action::SpaceOpen { space: Owner::Workbook { .. } }
             | Action::WorkbookSave { .. }
+            | Action::WorkbookNew { .. }
             | Action::WorkbookAddTab { .. }
             | Action::WorkbookSaveAll { .. }
             | Action::WorkbookOpen { .. }
@@ -3256,6 +3266,7 @@ impl Model {
                 | Action::SpaceCycle { .. }
                 | Action::SpaceHide { .. }
                 | Action::SpaceOpen { .. }
+                | Action::WorkbookNew { .. }
         );
         if user && picks_tab && self.compose_host() == Some(Host::Drawer) && self.capture.is_none() {
             self.put_compose_aside();
@@ -4524,6 +4535,7 @@ impl Model {
             Action::SettingsRead { text, written } => self.settings_read(&text, written, effects),
             Action::UnfilledOpen { pane } => self.unfilled_open(pane, effects),
             Action::WorkbookSave { uid, cwds, histories } => self.workbook_save(uid, (&cwds, &histories), effects),
+            Action::WorkbookNew { uid } => self.workbook_make(uid, effects),
             Action::WorkbookAddTab { workbook, cwds, histories } => {
                 self.workbook_add_tab(workbook, (&cwds, &histories))
             }
@@ -7413,6 +7425,7 @@ mod tests {
         Action::SettingsRead { .. },
         Action::UnfilledOpen { .. },
         Action::WorkbookSave { .. },
+        Action::WorkbookNew { .. },
         Action::WorkbookAddTab { .. },
         Action::WorkbookSaveAll { .. },
         Action::WorkbookOpen { .. },
@@ -7656,6 +7669,7 @@ mod tests {
             Action::SettingsRead { text: "{}".into(), written: false },
             Action::UnfilledOpen { pane: 1 },
             Action::WorkbookSave { uid: text(), cwds: Vec::new(), histories: Vec::new() },
+            Action::WorkbookNew { uid: text() },
             Action::WorkbookAddTab { workbook: 1, cwds: Vec::new(), histories: Vec::new() },
             Action::WorkbookSaveAll { uid: text(), cwds: Vec::new(), histories: Vec::new() },
             Action::WorkbookOpen { workbook: 1, tab: None, home: None },
@@ -7732,6 +7746,7 @@ mod tests {
         matches!(
             action,
             Action::WorkbookSave { .. }
+                | Action::WorkbookNew { .. }
                 | Action::WorkbookAddTab { .. }
                 | Action::WorkbookSaveAll { .. }
                 | Action::WorkbookOpen { .. }
