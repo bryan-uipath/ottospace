@@ -949,13 +949,18 @@ impl Model {
             Some(_) => name,
         };
         let Some(book) = self.workbooks.get_mut(id) else { return };
+        // The empty tab a new one opened with has its name as its title: it takes the new name.
+        let was = Some(book.name.clone()).filter(|_| book.tabs.is_empty());
+        let of = Owner::Workbook { id };
+        let named = |open: &&mut Tab| open.space == of && Some(&open.title) == was.as_ref();
+        let named = self.tabs.iter_mut().find(named).map(|open| open.id);
         let live = match tab {
             // One tab opens under the workbook's name: it keeps that title once a second is added.
             None if book.tabs.len() == 1 => {
                 book.tabs[0].title = name.clone();
                 book.live(0)
             }
-            None => None,
+            None => named,
             Some(at) => match book.tabs.get_mut(at) {
                 Some(record) => {
                     record.title = name.clone();
@@ -1272,6 +1277,13 @@ mod tests {
         let space = |m: &Model| (m.space().clone(), m.layout.is_none(), m.space_tabs(m.space()).len());
         assert_eq!(m.update(Action::WorkbookNew { uid: UID.into() }), []);
         assert_eq!(space(&m), (Owner::Workbook { id: 1 }, true, 1));
+        // Renamed with nothing saved: its empty tab, opened under its name, takes the new one.
+        for name in ["dri", "Workspace 2"] {
+            m.update(Action::WorkbookEdit { workbook: 1, tab: None });
+            m.update(Action::FieldEdit { edit: Edit::Insert(name.into()) });
+            m.update(Action::MarkSubmit);
+            assert_eq!((m.tabs[m.active].title.as_str(), names(&m)), (name, vec![name]));
+        }
         // Again, from the new one: another, after it on the row. Nothing is "Updated".
         m.update(Action::WorkbookNew { uid: UID_2.into() });
         assert_eq!((space(&m), m.workbooks.offered()), ((Owner::Workbook { id: 2 }, true, 1), None));
