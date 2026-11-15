@@ -5735,7 +5735,8 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.wait_for("nothing listed", |o| (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == 0).then_some(()));
-    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    otto.user_key("cmd-shift-l");
+    otto.user_key("cmd-shift-l");
     let reading = otto.user_start();
     assert_eq!((&reading["mode"], &reading["state"]["talk"]["task"]), (&json!("talk"), &json!(1)), "{reading}");
     let argv = otto.wait_for("claude --resume, read first", |_| agent_argv(&bin, "claude"));
