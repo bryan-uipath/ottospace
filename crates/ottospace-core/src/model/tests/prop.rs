@@ -310,6 +310,22 @@ impl Gen<'_> {
         RepoDirs { dirs, fixed: self.rng.below(4) == 0, worktrees: self.rng.coin().then(|| "/w".into()) }
     }
 
+    /// Pull requests on the listed branches and others, with links good and bad.
+    fn prs(&mut self) -> Vec<crate::prs::Pr> {
+        let branches: Vec<String> = self.m.repos.iter().flat_map(|r| r.checkouts()).map(|c| c.branch).collect();
+        let pr = |g: &mut Self| crate::prs::Pr {
+            number: g.rng.below(200) as u32,
+            is_draft: g.rng.coin(),
+            head_ref_name: Some(g.one_of(&branches, |g| g.text())),
+            url: Some(g.rng.pick(&["https://github.com/o/r/pull/1", "javascript:x", ""]).to_string()),
+            head_repository_owner: Some(crate::prs::Login { login: "o".into() }),
+            head_repository: Some(crate::prs::Named { name: "r".into() }),
+            title: Some(g.text()),
+            ..Default::default()
+        };
+        (0..self.rng.below(3)).map(|_| pr(self)).collect()
+    }
+
     fn repo_path(&mut self) -> String {
         let real: Vec<String> = self.m.repo_names().map(|(_, path)| path.to_string()).collect();
         self.one_of(&real, |g| g.name(DIRS))
@@ -736,6 +752,16 @@ const MAKERS: &[Make] = &[
     |g| Action::RepoFold { path: g.repo_path(), fold: g.rng.pick(&[None, Some(true), Some(false)]) },
     |g| Action::WorktreeEdit { repo: g.repo_path() },
     |g| Action::WorktreeAdded { repo: g.repo_path(), path: g.repo_path(), repos: g.repos() },
+    |g| {
+        let branches = g.m.repos.iter().flat_map(|r| r.checkouts()).map(|c| crate::prs::Branch {
+            path: c.path,
+            name: c.branch,
+            slug: Some("o/r".into()),
+            ..Default::default()
+        });
+        Action::SetPrs { repo: g.repo_path(), branches: branches.collect(), prs: g.prs() }
+    },
+    |g| Action::PrOpen { path: g.repo_path() },
     |g| {
         let tasks = (0..g.rng.below(4)).map(|_| g.kept_task()).collect();
         Action::RestoreTasks { tasks, floor: g.rng.pick(&[0, 5, tasks::MAX_ID, u32::MAX]) }
@@ -2735,6 +2761,11 @@ impl Run {
                     ensure!(matches!(action, Action::Tick { .. }) && *started <= m.now, "an alert by {action:?}")
                 }
                 Effect::OpenLink { .. } => {}
+                // A pull request opens by the user's click alone, and only a plain GitHub link.
+                Effect::OpenPr { url } => {
+                    ensure!(user && matches!(action, Action::PrOpen { .. }), "{origin:?}'s {action:?} opened {url}");
+                    ensure!(crate::prs::openable(url), "{url} is opened");
+                }
                 // The settings file is the user's: only their choice in Features… writes a flag.
                 Effect::SaveFeature { feature, on } => {
                     let listed = listed_flags.iter().any(|(f, was)| f == feature && was != on);
@@ -3122,6 +3153,11 @@ fn code(sent: &Envelope) -> String {
         "RepoDir",
         "RepoDirs",
         "Worktree",
+        "Pr",
+        "Check",
+        "Branch",
+        "Login",
+        "Named",
         "Task",
         "Assign",
         "Names",

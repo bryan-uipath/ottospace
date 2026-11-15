@@ -645,6 +645,17 @@ pub enum Action {
         path: String,
         repos: Vec<Repo>,
     },
+    /// The open pull requests of the repository at `repo`, as gh last told them, and its checkouts'
+    /// branches as git did (the shell's read).
+    SetPrs {
+        repo: String,
+        prs: Vec<crate::prs::Pr>,
+        branches: Vec<crate::prs::Branch>,
+    },
+    /// The user's click on a row's pull request: its link opens in the browser.
+    PrOpen {
+        path: String,
+    },
     /// Start from the tasks kept on disk. `floor`: new ids start above it (see `Tasks::restore`).
     RestoreTasks {
         tasks: Vec<Task>,
@@ -1551,6 +1562,8 @@ impl Action {
             | Action::RepoClick { .. }
             | Action::RepoFold { .. }
             | Action::WorktreeAdded { .. }
+            | Action::SetPrs { .. }
+            | Action::PrOpen { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
             | Action::SetKnown { .. }
@@ -1806,6 +1819,8 @@ impl Action {
             | Action::RepoFold { .. }
             | Action::WorktreeEdit { .. }
             | Action::WorktreeAdded { .. }
+            | Action::SetPrs { .. }
+            | Action::PrOpen { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
             | Action::SetKnown { .. }
@@ -2063,6 +2078,10 @@ pub enum Effect {
     Told {
         text: String,
     },
+    /// Open a pull request's link (`prs::openable`) in the browser.
+    OpenPr {
+        url: String,
+    },
     /// The user asked for a worktree of the repository at `repo` on `branch` (checked) at `path`,
     /// inside `root` (`worktrees_dir`): `git worktree add`, then `Action::WorktreeAdded`.
     AddWorktree {
@@ -2315,6 +2334,10 @@ pub struct Model {
     /// the same, until that ends.
     #[serde(skip)]
     repos_held: Vec<String>,
+    /// Each GitHub repository's open pull requests, by its path, as gh last told them. Other
+    /// people's text: never in the state (`checkout_pr` gives what may be).
+    #[serde(skip)]
+    pub prs: Vec<(String, Vec<crate::prs::Pr>, Vec<crate::prs::Branch>)>,
     pub tasks: Tasks,
     /// What the new-task box's tags may name, as the shell last read it.
     #[serde(skip)]
@@ -2530,6 +2553,7 @@ impl Default for Model {
             repo_dirs: repos::RepoDirs::default(),
             repos_folded: Vec::new(),
             repos_held: Vec::new(),
+            prs: Vec::new(),
             tasks: Tasks::default(),
             known: compose::Known::default(),
             known_line: None,
@@ -2750,6 +2774,9 @@ impl Model {
             // and only the shell says it is made.
             Action::WorktreeEdit { .. } => Some(repos::USERS_ALONE),
             Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(repos::USERS_ALONE),
+            // A link opens in the user's browser; only ottospace tells what gh said.
+            Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
+            Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
             Action::FieldEdit { .. }
             | Action::MarkSubmit
             | Action::MarkType { .. }
@@ -3348,6 +3375,15 @@ impl Model {
             Action::RepoRemove { path } => self.repo_remove(&path, effects),
             Action::RepoFold { path, fold } => self.repo_fold(&path, fold),
             Action::WorktreeEdit { repo } => self.worktree_edit(repo, effects),
+            Action::SetPrs { repo, prs, branches } => {
+                self.prs.retain(|(of, ..)| *of != repo);
+                self.prs.push((repo, prs, branches));
+            }
+            Action::PrOpen { path } => {
+                if let Some(url) = self.checkout_pr(&path).and_then(crate::prs::Pr::link) {
+                    effects.push(Effect::OpenPr { url: url.to_string() });
+                }
+            }
             Action::WorktreeAdded { repo, path, repos } => {
                 self.repos = repos::arrange(repos);
                 self.repo_field_gone();
@@ -6538,6 +6574,12 @@ impl Model {
         repo.is_some_and(|repo| repo.checkouts().iter().any(|c| self.repo_task(&c.path).is_some()))
     }
 
+    /// The open pull request of the branch checked out at `path`, by `prs::pick`.
+    pub fn checkout_pr(&self, path: &str) -> Option<&crate::prs::Pr> {
+        let (_, prs, branches) = self.prs.iter().find(|(_, _, branches)| branches.iter().any(|b| b.path == path))?;
+        crate::prs::pick(prs, branches.iter().find(|b| b.path == path)?)
+    }
+
     /// The repository whose rows list mode's selection is on: its name or one of its checkouts.
     pub fn selected_repo(&self) -> Option<String> {
         let row = self.list.and_then(|at| self.list_rows().into_iter().nth(at))?;
@@ -7084,6 +7126,8 @@ mod tests {
         Action::RepoFold { .. },
         Action::WorktreeEdit { .. },
         Action::WorktreeAdded { .. },
+        Action::SetPrs { .. },
+        Action::PrOpen { .. },
         Action::RestoreTasks { .. },
         Action::TaskAdd { .. },
         Action::SetKnown { .. },
@@ -7317,6 +7361,8 @@ mod tests {
             Action::RepoFold { path: text(), fold: None },
             Action::WorktreeEdit { repo: text() },
             Action::WorktreeAdded { repo: text(), path: text(), repos: Vec::new() },
+            Action::SetPrs { repo: text(), prs: Vec::new(), branches: Vec::new() },
+            Action::PrOpen { path: text() },
             Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
             Action::TaskAdd { title: text(), priority: 3, state: State::Running, tab: None, assign: Assign::default() },
             Action::SetKnown { line: text(), typing: None, names: None, paths: Vec::new(), entries: Vec::new() },
@@ -7658,6 +7704,8 @@ mod tests {
                     Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
                     Action::WorktreeEdit { .. } => Some(crate::repos::USERS_ALONE),
                     Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(crate::repos::USERS_ALONE),
+                    Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
+                    Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -11354,6 +11402,40 @@ mod tests {
     }
 
     #[test]
+    fn a_rows_pull_request_is_its_branch_s_and_only_the_users_click_opens_it() {
+        let mut m = Model::default();
+        let mut repos = listed();
+        repos[0].worktrees[0].branch = Some("fix/zoom".into());
+        m.update(Action::SetRepos { repos });
+        let pr = |number: u32, branch: &str, url: &str| crate::prs::Pr {
+            number,
+            head_ref_name: Some(branch.into()),
+            head_repository_owner: Some(crate::prs::Login { login: "o".into() }),
+            head_repository: Some(crate::prs::Named { name: "app".into() }),
+            url: Some(url.into()),
+            ..Default::default()
+        };
+        let prs = vec![pr(7, "fix/zoom", "https://github.com/o/app/pull/7"), pr(8, "main", "javascript:x")];
+        let branch = |path: &str, name: &str| crate::prs::Branch {
+            path: path.into(),
+            name: name.into(),
+            slug: Some("o/app".into()),
+            ..Default::default()
+        };
+        let branches = vec![branch("/code/app", "main"), branch("/code/app-2", "fix/zoom")];
+        let set = Action::SetPrs { repo: "/code/app".into(), prs, branches };
+        assert_eq!(m.refusal(&set, Origin::Socket), Some("only ottospace reads pull requests"));
+        m.update(set.sent_by(Origin::System));
+        assert_eq!(m.checkout_pr("/code/app-2").map(|pr| pr.number), Some(7));
+        assert_eq!(m.checkout_pr("/code/elsewhere"), None);
+        let open = |path: &str| Action::PrOpen { path: path.into() };
+        assert_eq!(m.refusal(&open("/code/app-2"), Origin::Socket), Some(crate::prs::USERS_ALONE));
+        assert_eq!(m.update(open("/code/app-2")), [Effect::OpenPr { url: "https://github.com/o/app/pull/7".into() }]);
+        // A link that is not a plain GitHub pull request's never opens.
+        assert_eq!(m.update(open("/code/app")), []);
+    }
+
+    #[test]
     fn the_branch_field_closes_when_its_repository_is_no_longer_listed() {
         let mut m = Model::default();
         m.update(Action::SetRepoDirs { dirs: repos::RepoDirs { worktrees: Some("/w".into()), ..Default::default() } });
@@ -12233,6 +12315,8 @@ mod tests {
                     Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
                     Action::WorktreeEdit { .. } => Some(crate::repos::USERS_ALONE),
                     Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(crate::repos::USERS_ALONE),
+                    Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
+                    Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");

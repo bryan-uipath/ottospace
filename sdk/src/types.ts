@@ -481,8 +481,23 @@ export interface CheckoutRow {
   default: boolean;
   /** Its directory's name (the row's tooltip has its path). */
   label: string;
+  /** Its open pull request (read with gh), by numbers and kinds only; null if none. */
+  pr: PullRequest | null;
   /** Where the row was laid out, scrolled out of view or not. Null while the section is not drawn. */
   row: Rect | null;
+}
+
+/** A checkout's pull request as the state tells it: no title, name or link. */
+export interface PullRequest {
+  number: number;
+  draft: boolean;
+  /** The row's mark, by precedence: `failing` (a check failed, changes requested, a conflict), `draft`, `pending` (checks running, review required), `ready` (approved, checks passing, clean), else `open`. */
+  look: "failing" | "draft" | "pending" | "ready" | "open";
+  checks: "none" | "passing" | "running" | "failing";
+  /** How many checks failed. */
+  failed: number;
+  review: "none" | "approved" | "changes_requested" | "required";
+  merge: "clean" | "conflicts" | "behind" | "blocked" | "unknown";
 }
 
 /** A row of the Tasks section, as drawn. */

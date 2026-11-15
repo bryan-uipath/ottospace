@@ -80,6 +80,7 @@ mod marks;
 mod menus;
 mod new_task;
 mod progress;
+mod prs;
 mod record;
 mod repos;
 mod running;
@@ -825,6 +826,11 @@ struct Workspace {
     worktrees: (Sender<worktree::Made>, Receiver<worktree::Made>),
     /// What the user's last step did, said for a few seconds as information (`Effect::Told`).
     told: Option<(String, Instant)>,
+    /// Pull requests read with gh; why none are, when the settings say `"repos_prs": "on"`; how many
+    /// the user opened (a test run counts them and opens none).
+    prs: prs::Reader,
+    pr_note: Option<&'static str>,
+    pr_opens: u32,
     /// Socket calls that file a task and wait for the reader: (the call's number, what to file, where to reply).
     filing: Vec<(u64, Filing, Sender<String>)>,
     /// How many such calls there were: each has its own number.
@@ -1059,6 +1065,7 @@ impl Workspace {
                         }
                         this.tick_timeline(window, cx);
                         this.take_worktrees(window, cx);
+                        this.tick_prs(window, cx);
                     });
                     this.take_snapshots(window, cx);
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
@@ -1182,6 +1189,9 @@ impl Workspace {
             tags_repo: None,
             worktrees: std::sync::mpsc::channel(),
             told: None,
+            prs: prs::Reader::new(),
+            pr_note: None,
+            pr_opens: 0,
             filing: Vec::new(),
             calls: 0,
             sessions: sessions::Poller::start(),
@@ -1450,6 +1460,12 @@ impl Workspace {
                         config::set_repo_roots(&self.model.repo_dirs);
                     }
                 }
+                Effect::OpenPr { url } if ottospace_core::prs::openable(url) => match std::env::var_os("OTTOSPACE_E2E")
+                {
+                    Some(_) => self.pr_opens += 1,
+                    None => drop(ottospace_mac::meeting::open_url(url)),
+                },
+                Effect::OpenPr { .. } => {}
                 Effect::AddWorktree { repo, branch, path, root } => {
                     let done = self.worktrees.0.clone();
                     worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), done);
@@ -2327,7 +2343,10 @@ impl Workspace {
         let mut index = 0;
         let group = |(n, repo): (usize, &Repo)| {
             let row = |checkout: Checkout| {
+                // Its pull request by numbers and kinds: no title, name or link.
+                let pr = self.model.checkout_pr(&checkout.path).map(ottospace_core::prs::Pr::summary);
                 let mut row = serde_json::json!(checkout);
+                row["pr"] = serde_json::json!(pr);
                 row["row"] = serde_json::json!(drawn(Mark::Checkout(index)));
                 index += 1;
                 row
@@ -2876,6 +2895,8 @@ impl Workspace {
             // layout sync read a hosted window's frame over accessibility.
             "counts": std::env::var_os("OTTOSPACE_E2E").map(|_| serde_json::json!({
                 "live": self.went_live,
+                // Pull requests the user's click opened (a test run opens none).
+                "pr_opens": self.pr_opens,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
                 // Scrolls over an app pane's picture, peeks they started, and the one on now (its pane; 0:
                 // none).
@@ -4166,6 +4187,36 @@ impl Workspace {
         }
     }
 
+    /// Pull requests: asked for while the Repos section is open (`prs::due`), and what gh said, to
+    /// the core. `"repos_prs": "off"`: none read, and none shown.
+    fn tick_prs(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let setting = config::live().repos_prs.unwrap_or_default();
+        if setting == ottospace_core::prs::Setting::Off {
+            for repo in self.model.prs.iter().map(|(repo, ..)| repo.clone()).collect::<Vec<_>>() {
+                let none = Action::SetPrs { repo, prs: Vec::new(), branches: Vec::new() };
+                self.dispatch(none, Origin::System, window, cx);
+            }
+            self.pr_note = None;
+            return;
+        }
+        let checkouts = |repo: &Repo| repo.checkouts().into_iter().map(|c| (c.path, c.branch)).collect();
+        let open = self.model.sidebar == Some(Section::Repos);
+        let repos = self.model.repos.iter().filter(|_| open).map(|repo| (repo.path.clone(), checkouts(repo))).collect();
+        self.prs.ask(open, repos, now_ms());
+        let reads: Vec<prs::Read> = self.prs.reads.try_iter().collect();
+        for prs::Read { repo, result } in reads {
+            match result {
+                Ok((prs, branches)) => {
+                    self.pr_note = None;
+                    self.dispatch(Action::SetPrs { repo, prs, branches }, Origin::System, window, cx);
+                }
+                // Quiet unless asked for: no markers, and a line only for an explicit `on`.
+                Err(why) => self.pr_note = (setting == ottospace_core::prs::Setting::On).then_some(why),
+            }
+            cx.notify();
+        }
+    }
+
     /// The user's + on a repository's name: the field for a new worktree's branch, with the
     /// worktrees folder as the settings say now.
     pub(crate) fn add_worktree(&mut self, repo: &str, window: &Window, cx: &mut Context<Self>) {
@@ -4579,8 +4630,12 @@ impl Workspace {
                 ))
             });
             let badge = task.and_then(|id| self.task_badge(id, 16.));
-            // Room at the end for what is drawn there, so the branch never runs under it.
-            let room = if badge.is_some() { 30. } else { 8. };
+            // At its end, in this order: the pull request's mark, the task's badge. The branch is given
+            // the room left, so it never runs under them.
+            let badge_room = if badge.is_some() { 22. } else { 0. };
+            let pr = self.pr_marker(&checkout.path, cx);
+            let pr_room = pr.as_ref().map_or(0., |(_, width)| width + 6.);
+            let room = 8. + badge_room + pr_room;
             let dot = checkout.default.then(|| {
                 div().absolute().left(px(12.)).top(px(11.)).size(px(5.)).rounded_full().bg(rgb(theme::PRIMARY))
             });
@@ -4594,6 +4649,7 @@ impl Workspace {
                 .pr(px(room))
                 .children(dot)
                 .children(badge.map(|badge| badge.absolute().right(px(8.)).top(px(5.))))
+                .children(pr.map(|(marker, _)| marker.absolute().right(px(8. + badge_room)).top(px(4.))))
                 .child(div().truncate().child(checkout.branch))
                 .children(terminal.map(|words| words.top(px(4.))))
                 .child(mark(&self.marks, Mark::Checkout(index)))
@@ -4639,9 +4695,49 @@ impl Workspace {
         let list = div().id("repos").flex_1().flex().flex_col().p_2().overflow_y_scroll();
         self.bars.tracked(
             "repos",
-            list.track_scroll(&self.list_scroll).children(empty).children(items),
+            list.track_scroll(&self.list_scroll).children(empty).children(items).children(self.pr_note.map(|note| {
+                div().px_2().pt_2().text_xs().text_color(rgb(theme::MUTED)).child(format!("Pull requests: {note}"))
+            })),
             &self.list_scroll,
         )
+    }
+
+    /// The open pull request of the checkout at `path`, as one small mark: `#131`, muted for a
+    /// draft, then a green tick (ready to merge), an amber dot (waiting) or a red dot (failing).
+    /// Hover: its card; the user's click opens it. Its drawn width, for the row to leave room.
+    fn pr_marker(&self, path: &str, cx: &mut Context<Self>) -> Option<(Stateful<Div>, f32)> {
+        use ottospace_core::prs::Look;
+        let pr = self.model.checkout_pr(path)?;
+        let (summary, card) = (pr.summary(), pr.card());
+        let number = format!("#{}", summary.number);
+        let (sign, color) = match summary.look {
+            Look::Ready => (Some("✓"), theme::PICK),
+            Look::Pending => (Some("●"), theme::SNEAK),
+            Look::Failing => (Some("●"), theme::ERROR),
+            Look::Draft | Look::Open => (None, theme::MUTED),
+        };
+        let width = 7. * number.len() as f32 + if sign.is_some() { 12. } else { 0. };
+        let path = path.to_string();
+        let marker = div()
+            .id(ElementId::Name(format!("repo-pr:{path}").into()))
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_0p5()
+            .rounded_sm()
+            .text_xs()
+            .line_height(px(17.))
+            .text_color(rgb(if summary.draft { theme::MUTED } else { theme::TEXT }))
+            .hover(|s| s.bg(rgb(theme::BORDER_STRONG)))
+            .child(number)
+            .children(sign.map(|sign| div().text_size(px(9.)).text_color(rgb(color)).child(sign)))
+            .child(self.controls.mark(format!("repo-pr:{path}")))
+            .tooltip(move |_, cx| AnyView::from(cx.new(|_| progress::PrCard(card.clone(), color))))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation(); // not a click on the row
+                this.dispatch(Action::PrOpen { path: path.clone() }, this.input, window, cx);
+            }));
+        Some((marker, width))
     }
 
     /// A repository's name: a chevron that folds its rows (a click anywhere on the line does),
