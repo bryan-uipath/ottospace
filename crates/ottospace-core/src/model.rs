@@ -3039,6 +3039,10 @@ impl Model {
         }
         match action {
             Action::ToggleSection { .. } | Action::CloseSidebar | Action::WorkbookAddTab { .. } => Some(false),
+            // The user's editor has the line: there is none to put aside until it is back.
+            _ if self.edits_compose() => None,
+            // A mark that opens nothing takes no keyboard.
+            Action::MarkGo { mark, .. } if !self.mark_goes(mark) => None,
             Action::SelectTab { .. }
             | Action::SpaceSelect { .. }
             | Action::SpaceCycle { .. }
@@ -5145,7 +5149,11 @@ impl Model {
     fn put_compose_aside(&mut self) {
         let line = self.compose.take().filter(|line| !line.text().is_empty());
         let (refs, folder) = (std::mem::take(&mut self.compose_refs), self.compose_folder.take());
-        self.compose_kept = line.map(|line| KeptDraft { line, refs, folder, theirs: self.compose_theirs });
+        // An empty line takes no kept line's place, nor a client's line the user's.
+        let users = self.compose_kept.as_ref().is_some_and(|kept| !kept.theirs);
+        if let Some(line) = line.filter(|_| !(users && self.compose_theirs)) {
+            self.compose_kept = Some(KeptDraft { line, refs, folder, theirs: self.compose_theirs });
+        }
         self.compose_reset();
     }
 
@@ -8765,6 +8773,19 @@ mod tests {
             m.update(action);
             assert_eq!((m.sidebar, m.tabs.len(), line(&m)), (None, 1, "mine"));
         }
+        // A line kept is not lost to a later one put aside empty, or a client's.
+        let mut m = boxed();
+        m.update(Action::Focus { pane: 1 });
+        m.update(Action::OpenCompose { text: "theirs".into() }.sent_by(Origin::Socket));
+        m.update(Action::Focus { pane: 1 });
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!(line(&m), "mine");
+        // While the user's editor has the line, a click that would put it aside waits.
+        m.update(Action::EditorOpen);
+        assert_eq!((m.edits_compose(), m.waits_for(&open(), Origin::User)), (true, Some(WHY)));
+        m.update(open());
+        m.update(toggle());
+        assert_eq!((m.tabs.len(), m.sidebar, m.edits_compose(), line(&m)), (1, Some(Section::Repos), true, "mine"));
     }
 
     #[test]

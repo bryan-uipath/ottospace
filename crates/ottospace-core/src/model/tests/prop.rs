@@ -2213,14 +2213,21 @@ impl Run {
         let listed_flags: Vec<(Feature, bool)> =
             m.palette.iter().flat_map(|p| p.feature_matches()).map(|c| (c.feature, c.on)).collect();
         let key_use = m.key_use.clone();
-        // The new task in the drawer with the keyboard, the bar beside it, and the line written.
+        // The new task in the drawer with the keyboard, the bar beside it, and the user's line.
         let beside = (m.compose_modal() && m.mode() == Mode::Compose && !m.keys && gated.is_none())
-            .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty())));
+            .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty() && !m.compose_theirs)));
+        let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let effects = m.update(sent);
         check(m)?;
         // The user's click on a rail icon or the bar's × acts beside the new task, which keeps its
         // line, its cursor and the keyboard; anyone else's waits. No click beside it loses the
         // line: it stays, or is put aside for the box's next opening.
+        // A line of the user's put aside stays there until a box takes it back, or a later line
+        // of the user's is put aside: never for an empty line or a client's.
+        if let Some(line) = kept_before {
+            let aside = m.compose_kept.as_ref().is_some_and(|kept| kept.line == line || !kept.theirs);
+            ensure!(aside || m.compose.as_ref() == Some(&line), "{origin:?}'s {action:?} lost the line put aside");
+        }
         if let Some((sidebar, field)) = beside {
             let asked = match &action {
                 Action::ToggleSection { section: Section::Calendar } if !m.calendar.on => Some(sidebar),
@@ -2251,6 +2258,11 @@ impl Run {
                     | Action::WorktreeEdit { .. }
                     | Action::Focus { .. }
                     | Action::Enter { .. }
+                    | Action::SelectTab { .. }
+                    | Action::SpaceSelect { .. }
+                    | Action::SpaceCycle { .. }
+                    | Action::SpaceHide { .. }
+                    | Action::SpaceOpen { .. }
             );
             if let Some(field) = field.filter(|_| clicks) {
                 let aside = m.compose_kept.as_ref().is_some_and(|kept| kept.line == field);

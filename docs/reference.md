@@ -162,8 +162,10 @@ The box is beside the rest of the window, not over it, and your pointer works th
 it. A click that only changes the bar (a rail icon, the bar's ×, a fold, a row's button) leaves
 the box its line, its cursor and the keyboard. A click that takes the keyboard elsewhere (a
 tab, a pane, a repository's terminal, a mark, a workbook, a task's conversation, a name or a
-filter typed in the bar) puts the line aside: it is back when the box next opens empty. Keys
-for panes (⌘D, ⌘W, ⌘T) wait until the box closes; a socket client's requests wait too.
+filter typed in the bar) puts the line aside: it is back when the box next opens empty. So do
+the keys that go to a space or a mark (⌘⌃1–9, ⌘⌥1–9). Keys that act on panes (⌘D, ⌘W, ⌘T) wait
+until the box closes, and so do a socket client's requests. While your editor has the line (⌃G),
+a click that would put it aside waits too.
 
 | Key | Action |
 |---|---|
