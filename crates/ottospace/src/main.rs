@@ -360,7 +360,7 @@ impl Hosted {
     /// Places the window over its pane and activates its app: entering, and a peek. The app may
     /// have resized its window since it was parked: a click is judged against what it covers now.
     fn bring_up(&mut self, notice: f32, keep: Option<ottospace_core::ax::Frame>, window: &Window, cx: &App) {
-        let rect = pane_rect(self.bounds.get(), keep, window, cx);
+        let rect = pane_rect(self.bounds.get(), keep, true, window, cx);
         self.place(rect, self.crop_at(rect, top_limit(notice, window, cx)));
         self.window.raise();
         self.show(window.scale_factor() as f64);
@@ -1570,7 +1570,7 @@ impl Workspace {
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("park", serde_json::json!({ "pane": id, "window": hosted.window_id }));
                         let limit = top_limit(self.bar.height, window, cx);
-                        let rect = pane_rect(hosted.bounds.get(), keep, window, cx);
+                        let rect = pane_rect(hosted.bounds.get(), keep, false, window, cx);
                         hosted.park(rect.size, window.scale_factor() as f64, hosted.crop_at(rect, limit));
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
@@ -3431,7 +3431,7 @@ impl Workspace {
         let limit = top_limit(self.bar.height, window, cx);
         let keep = self.bars_leave();
         for (id, hosted) in &mut self.hosted {
-            let rect = pane_rect(hosted.bounds.get(), keep, window, cx);
+            let rect = pane_rect(hosted.bounds.get(), keep, live == Some(*id), window, cx);
             if rect.size.width < 1.0 {
                 continue; // not laid out yet
             }
@@ -6064,10 +6064,16 @@ fn title_bar(window: &ax::Window) -> f64 {
 }
 
 /// An app pane's content rect on screen, for its window: while the window fills its display
-/// (`keep`: what the bars leave), none of it under the Dock (`fill::within`).
-fn pane_rect(body: Bounds<Pixels>, keep: Option<ottospace_core::ax::Frame>, window: &Window, cx: &App) -> CGRect {
-    let rect = on_screen(body, window, cx);
-    keep.map_or(rect, |visible| recovery::to_rect(fill::within(recovery::to_frame(rect), visible)))
+/// (`keep`: what the bars leave), a `live` one stops at the Dock's top (`fill::app_rect`).
+fn pane_rect(
+    body: Bounds<Pixels>,
+    keep: Option<ottospace_core::ax::Frame>,
+    live: bool,
+    window: &Window,
+    cx: &App,
+) -> CGRect {
+    let rect = recovery::to_frame(on_screen(body, window, cx));
+    recovery::to_rect(fill::app_rect(rect, keep, live))
 }
 
 /// A pane body's rect (window-content coordinates) in global top-left screen coordinates.

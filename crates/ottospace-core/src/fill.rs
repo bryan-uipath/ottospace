@@ -14,11 +14,16 @@ pub fn frame(display: Frame, safe_top: f64) -> Frame {
     Frame::new(display.x, display.y + safe_top, display.w, display.h - safe_top)
 }
 
-/// The part of pane content `rect` an app's window takes while the mode is on: none of it below
-/// `visible` (what the bars leave when they show). macOS lets no window be resized into the
-/// Dock's strip, and the Dock comes back over it while the app is in front. A pane wholly in the
-/// strip keeps its rect.
-pub fn within(rect: Frame, visible: Frame) -> Frame {
+/// The part of pane content `rect` an app's window is sized to. `keep`: while the mode is on,
+/// what the bars leave when they show. Live, its app is in front and the Dock back over the
+/// pane's foot: none of it below the Dock's top, where macOS lets no window be resized. Parked,
+/// ottospace is in front and the Dock away: all of it, or the picture leaves the Dock's strip empty.
+pub fn app_rect(rect: Frame, keep: Option<Frame>, live: bool) -> Frame {
+    keep.filter(|_| live).map_or(rect, |visible| within(rect, visible))
+}
+
+/// None of `rect` below `visible`. A pane wholly in the Dock's strip keeps its rect.
+fn within(rect: Frame, visible: Frame) -> Frame {
     let h = (visible.y + visible.h - rect.y).min(rect.h);
     if h < 1.0 { rect } else { Frame { h, ..rect } }
 }
@@ -58,6 +63,17 @@ mod tests {
         let upper = Frame::new(319., 75., 702., 300.);
         let strip = Frame::new(319., 720., 702., 20.);
         assert_eq!((within(upper, visible), within(strip, visible)), (upper, strip));
+    }
+
+    #[test]
+    fn a_parked_apps_picture_reaches_its_panes_foot_and_only_a_live_window_stops_at_the_dock() {
+        let visible = Frame::new(0., 31., 1024., 677.);
+        let pane = Frame::new(319., 75., 702., 666.);
+        // ottospace in front, the Dock away: nothing of the pane is left empty.
+        assert_eq!(app_rect(pane, Some(visible), false), pane);
+        assert_eq!(app_rect(pane, Some(visible), true), Frame::new(319., 75., 702., 633.));
+        // The mode off: the pane as it is, live or not.
+        assert_eq!((app_rect(pane, None, true), app_rect(pane, None, false)), (pane, pane));
     }
 
     #[test]
