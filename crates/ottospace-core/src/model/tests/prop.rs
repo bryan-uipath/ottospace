@@ -2539,7 +2539,10 @@ impl Run {
                 Action::ComposeSubmit { open: true } | Action::ComposeEnter | Action::TaskFromLine { open: true, .. }
             );
             let undone = matches!(action, Action::TaskUndo | Action::ListUndo);
-            ensure!(origin == Origin::User && (starts || undone), "{origin:?}'s {action:?} joined a task to a workspace");
+            ensure!(
+                origin == Origin::User && (starts || undone),
+                "{origin:?}'s {action:?} joined a task to a workspace"
+            );
         }
         // Only the user's ↵ on a new task binds a workspace (or an undo of its dismissal, or the
         // files read again); and binding moves no pane, closes none and ends nothing.

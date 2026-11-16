@@ -6217,7 +6217,8 @@ impl Model {
             return self.settle_joined(undone, finished);
         }
         // A joined task dismissed is remembered with its space, for the user's undo.
-        let gone: Vec<(TaskId, Owner)> = self.joined_before.iter().filter(|(id, _)| !live(self, *id)).cloned().collect();
+        let gone: Vec<(TaskId, Owner)> =
+            self.joined_before.iter().filter(|(id, _)| !live(self, *id)).cloned().collect();
         for (id, of) in gone {
             if self.tasks.get(id).is_some() && !self.left.iter().any(|(left, _)| *left == id) {
                 self.left.push((id, of));
@@ -9125,6 +9126,152 @@ mod tests {
         assert_eq!(m.space_tabs(&Owner::Workspace).len(), 4);
         m.update(Action::TaskUndo);
         assert_eq!((m.space_tabs(&task_space(1)).len(), m.space_tabs(&Owner::Workspace).len()), (3, 1));
+    }
+
+    /// A model with a kept workspace of two tabs and a task `first >app` started in it.
+    fn workspace_of_one_task() -> Model {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::WorkbookNew { uid: "9f3a61c2d4e5b708".into() });
+        term(&mut m);
+        m.update(Action::NewTab);
+        term(&mut m);
+        m.update(Action::OpenCompose { text: "first >app".into() });
+        m.update(Action::ComposeEnter);
+        m
+    }
+
+    /// The user's ↵ on a new task in the selected workspace, which has tasks.
+    fn join(m: &mut Model, line: &str) -> Vec<Effect> {
+        m.update(Action::OpenCompose { text: line.into() });
+        m.update(Action::ComposeEnter)
+    }
+
+    /// The owner: "a task is always associated with a workspace, but a workspace may have
+    /// multiple tasks", "lets join the workspace and share the checkout".
+    #[test]
+    fn a_task_started_in_a_workspace_that_has_tasks_joins_it_in_front_and_shares_its_folder() {
+        let mut m = workspace_of_one_task();
+        let before = (pane_tabs(&m), m.tabs[m.active].id, m.layout.clone(), m.panes.clone(), row(&m));
+        m.update(Action::OpenCompose { text: "second".into() });
+        let said = "↵ will start claude in app, in this workspace";
+        assert_eq!(m.compose_plan_line().as_deref(), Some(said));
+        let effects = m.update(Action::ComposeEnter);
+        // No space is made, no pane moves; the new one is in front, in the first one's folder.
+        assert_eq!((pane_tabs(&m), m.tabs[m.active].id, m.layout.clone(), m.panes.clone(), row(&m)), before);
+        let cwd = effects.iter().find_map(|effect| match effect {
+            Effect::StartAgent { task: Subject::Task(2), cwd, .. } => cwd.clone(),
+            _ => None,
+        });
+        assert_eq!(
+            (cwd.as_deref(), m.tasks.get(2).and_then(|task| task.repo.as_deref())),
+            (Some("/code/app"), Some("/code/app"))
+        );
+        let of = task_space(1);
+        assert_eq!(
+            (m.members(&of), m.front(&of), m.tab_task(), m.strip(&of)),
+            (vec![1, 2], Some(2), Some(2), vec![1, 2])
+        );
+        assert_eq!(m.talk.as_ref().map(|talk| (&talk.task, talk.open)), Some((&Subject::Task(2), true)));
+        assert_eq!((m.task_space(2), m.space_title(&of)), (of.clone(), "Workspace 2".to_string()));
+        // Its own `>repo` wins.
+        join(&mut m, "third >app-2");
+        assert_eq!(m.tasks.get(3).and_then(|task| task.repo.as_deref()), Some("/code/app-2"));
+        // For later (⇧↵), or a client's: in no workspace, and the front one stays.
+        m.update(Action::OpenCompose { text: "later".into() });
+        m.update(Action::ComposeSubmit { open: false });
+        let theirs = Action::TaskFromLine { line: "theirs".into(), known: Default::default(), open: true };
+        m.update(theirs.sent_by(Origin::Socket));
+        assert_eq!(
+            (m.members(&of), m.front(&of), m.task_space(4), m.task_space(5)),
+            (vec![1, 2, 3], Some(3), task_space(4), task_space(5))
+        );
+        // A workspace of one task has no strip.
+        assert_eq!(workspace_of_one_task().strip(&of), Vec::<TaskId>::new());
+    }
+
+    #[test]
+    fn only_the_user_says_which_conversation_is_in_front() {
+        let mut m = workspace_of_one_task();
+        join(&mut m, "second");
+        join(&mut m, "third");
+        let of = task_space(1);
+        // The strip's tab, and the keys: next and previous, around.
+        m.update(Action::TalkFront { task: 1 });
+        assert_eq!((m.front(&of), m.talk.as_ref().map(|talk| &talk.task)), (Some(1), Some(&Subject::Task(1))));
+        m.update(Action::TalkCycle { delta: -1 });
+        assert_eq!(m.front(&of), Some(3));
+        m.update(Action::TalkCycle { delta: 1 });
+        m.update(Action::TalkCycle { delta: 1 });
+        assert_eq!((m.front(&of), m.tab_task()), (Some(2), Some(2)));
+        // A task's row, or "the next that needs you": its workspace, and it in front.
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::TaskTalk { id: 3 });
+        assert_eq!((m.space(), m.front(&of), m.spaces().len()), (&of, Some(3), 2));
+        // A client changes none of it: its requests are refused, its `task_go` only selects.
+        for action in [Action::TalkFront { task: 1 }, Action::TalkCycle { delta: 1 }] {
+            assert_eq!(m.refusal(&action, Origin::Socket), Some(spaces::FRONT_USERS));
+        }
+        m.update(Action::TalkKeys { on: false });
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::TaskGo { id: Some(1) }.sent_by(Origin::Socket));
+        assert_eq!((m.space(), m.front(&of)), (&of, Some(3)));
+        // A task of another space is not put in front here.
+        m.update(Action::TalkFront { task: 9 });
+        assert_eq!(m.front(&of), Some(3));
+    }
+
+    #[test]
+    fn the_front_task_gone_gives_way_to_the_most_urgent_and_the_workspace_keeps_its_tabs() {
+        let mut m = workspace_of_one_task();
+        join(&mut m, "second");
+        join(&mut m, "third");
+        let exited =
+            |m: &mut Model, id| m.update(Action::AgentExited { task: Subject::Task(id) }.sent_by(Origin::System));
+        let state = |id, state| Action::TaskSetState { id, state }.sent_by(Origin::Socket);
+        let of = task_space(1);
+        let tabs = pane_tabs(&m);
+        // Its badges on the top row: the most urgent first.
+        m.update(state(1, State::NeedsYou));
+        m.update(state(2, State::Running));
+        assert_eq!((m.space_tasks(&of), m.front(&of)), (vec![1, 2, 3], Some(3)));
+        // An agent's report of done takes no conversation from under the user; the user's own
+        // done gives way to the most urgent one that is not. Done, it leaves the strip.
+        m.update(state(3, State::Done));
+        assert_eq!((m.front(&of), m.strip(&of)), (Some(3), vec![1, 2, 3]));
+        m.update(Action::TalkFront { task: 2 });
+        assert_eq!(m.strip(&of), [1, 2]);
+        m.update(Action::TaskSetState { id: 2, state: State::Done });
+        assert_eq!((m.front(&of), m.strip(&of)), (Some(1), vec![]));
+        m.update(state(2, State::Running));
+        // The front one dismissed, by anyone: the most urgent remaining.
+        m.update(Action::TalkFront { task: 2 });
+        exited(&mut m, 2);
+        m.update(Action::TaskDismiss { id: 2 }.sent_by(Origin::Socket));
+        assert_eq!((m.members(&of), m.front(&of)), (vec![1, 3], Some(1)));
+        // The user's undo: it is in the workspace again. Not in front: that was not undone.
+        exited(&mut m, 3);
+        m.update(Action::RowDismiss { id: 3 });
+        assert_eq!(m.members(&of), [1]);
+        m.update(Action::TaskUndo);
+        assert_eq!((m.members(&of), m.front(&of)), (vec![1, 3], Some(1)));
+        // The workspace's own task dismissed: it is the remaining one's, in place, with its
+        // tabs, and still the kept workspace's.
+        exited(&mut m, 1);
+        m.update(Action::RowDismiss { id: 1 });
+        let heir = task_space(3);
+        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (heir.clone(), false, vec![1, 2])]);
+        assert_eq!((pane_tabs(&m), m.members(&heir), m.workbooks.bound_to(3)), (tabs.clone(), vec![3], Some(1)));
+        // Taken back: in it again, as one of its tasks.
+        m.update(Action::TaskUndo);
+        assert_eq!((m.members(&heir), m.task_space(1), m.front(&heir)), (vec![3, 1], heir.clone(), Some(3)));
+        // Its last task gone: the workspace is its own again, with its tabs.
+        exited(&mut m, 3);
+        m.update(Action::RowDismiss { id: 1 });
+        m.update(Action::RowDismiss { id: 3 });
+        let book = Owner::Workbook { id: 1 };
+        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (book, false, vec![1, 2])]);
+        assert_eq!((pane_tabs(&m), m.workbooks.list[0].task), (tabs, None));
     }
 
     /// `>repo` on the line is as before: the agent runs where the line says.

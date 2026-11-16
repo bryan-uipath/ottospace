@@ -407,8 +407,7 @@ impl Model {
             }
         }
         let workspace = self.spaces.iter().position(|space| space.of == Owner::Workspace);
-        let mut first =
-            workspace.map_or(Space::new(Owner::Workspace), |at| self.spaces.remove(at));
+        let mut first = workspace.map_or(Space::new(Owner::Workspace), |at| self.spaces.remove(at));
         first.hidden = false;
         self.spaces.insert(0, first);
         if !self.tabs.iter().any(|tab| tab.space == Owner::Workspace) {

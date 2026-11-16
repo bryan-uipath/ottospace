@@ -651,6 +651,29 @@ mod tests {
     }
 
     #[test]
+    fn a_workspaces_tasks_and_the_one_in_front_come_back() {
+        let mut m = workspace();
+        for line in ["second", "third"] {
+            m.update(Action::OpenCompose { text: line.into() });
+            m.update(Action::ComposeEnter);
+        }
+        m.update(Action::TalkFront { task: 2 });
+        let of = Owner::Task { id: 1 };
+        assert_eq!((m.members(&of), m.front(&of)), (vec![1, 2, 3], Some(2)));
+        let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
+        assert_eq!((&file.spaces[1].tasks, file.spaces[1].front), (&vec![2, 3], Some(2)));
+        let (r, _) = restored(&m, file.clone(), &[], false);
+        assert_eq!((r.members(&of), r.front(&of), r.tab_task()), (vec![1, 2, 3], Some(2), Some(2)));
+        assert_eq!(r.talk.as_ref().map(|talk| &talk.task), Some(&Subject::Task(2)));
+        assert_eq!(write(&r.layout_file(&[], &[], 0)), write(&file));
+        // A task of the file that is gone, or in two spaces, is left out.
+        let mut odd = file;
+        odd.spaces[1].tasks = vec![3, 3, 8, 1];
+        let (r, _) = restored(&m, odd, &[], false);
+        assert_eq!((r.members(&of), r.front(&of)), (vec![1, 3], Some(1)));
+    }
+
+    #[test]
     fn the_row_comes_back_with_its_hidden_spaces_and_each_ones_last_tab() {
         let mut m = workspace();
         m.update(Action::NewTab); // the task's second tab
