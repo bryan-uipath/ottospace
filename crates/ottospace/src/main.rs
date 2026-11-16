@@ -393,6 +393,8 @@ impl AssetSource for Assets {
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
             "icons/dismiss.svg" => Some(include_bytes!("../assets/icons/dismiss.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
+            "icons/runner-claude.svg" => Some(include_bytes!("../assets/icons/runner-claude.svg")),
+            "icons/runner-codex.svg" => Some(include_bytes!("../assets/icons/runner-codex.svg")),
             _ => None,
         };
         Ok(bytes.map(Into::into))
@@ -786,6 +788,8 @@ struct Workspace {
     controls: sneak::Controls,
     /// Where the agent chip's line was last painted; none while it is the badge alone.
     chip_line: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The shown dial's moving parts: view state, stepped each frame it is drawn.
+    dial_motion: RefCell<dial::DialMotion>,
     /// The key that ended sneak mode is still down: its repeats are typed nowhere.
     sneak_spent: bool,
     /// Reads of the focused app pane's tree while sneak mode is on.
@@ -1222,6 +1226,7 @@ impl Workspace {
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
             chip_line: Rc::default(),
+            dial_motion: RefCell::default(),
             sneak_spent: false,
             sneak_reads: sneak_apps::Reads::default(),
             wheel: app_wheel::Wheel::default(),
@@ -2959,6 +2964,8 @@ impl Workspace {
                 "live": self.went_live,
                 // Pull requests the user's click opened (a test run opens none).
                 "pr_opens": self.pr_opens,
+                // Frames the dial asked for because something in it moves: none at rest.
+                "dial_frames": self.dial_motion.borrow().frames,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
                 // Scrolls over an app pane's picture, peeks they started, and the one on now (its pane; 0:
                 // none).
@@ -5926,6 +5933,7 @@ impl Render for Workspace {
         }
         self.controls.begin();
         self.chip_line.set(None);
+        self.dial_motion.borrow_mut().moving = false;
         self.bars.begin();
         self.move_notice_bar(window);
         // The notice bar's room: everything under the top row starts this much lower.
