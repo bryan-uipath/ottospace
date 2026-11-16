@@ -189,7 +189,7 @@ right now"; "i'd expect < 5 so the ui should be suitable for that".
   (`FRONT_USERS`), and its `task_open` selects the workspace and leaves the front one.
 - **The front one gone**: dismissed or deleted by anyone, the most urgent remaining task is
   in front (needs you, running, later, on hold, done; then priority, then the older). Marked
-  done by the user: the same, among those not done. Marked done by its agent's report: it
+  done by the user (in any workspace): the same, among those not done. Marked done by its agent's report: it
   stays in front, since that is no act of the user's and a conversation is not taken from
   under them; it leaves the strip once another is in front.
 - **The drawer's strip** (`Model::strip`, `talk_strip`): over the conversation, a tab a task

@@ -2317,8 +2317,10 @@ impl Run {
         };
         let (bound_before, panes_before) = (bindings(m), (m.panes.clone(), tab_panes_by_id(m)));
         let menu_before = m.row_menu.clone();
-        let fronts_before: Vec<TaskId> = m.spaces().iter().filter_map(|space| m.front(&space.of)).collect();
-        let joined_before: Vec<TaskId> = m.spaces().iter().flat_map(|space| space.joined.clone()).collect();
+        let fronts_before: Vec<(Owner, TaskId)> =
+            m.spaces().iter().filter_map(|space| Some((space.of.clone(), m.front(&space.of)?))).collect();
+        let joined_before: Vec<(Owner, TaskId)> =
+            m.spaces().iter().flat_map(|space| space.joined.iter().map(|id| (space.of.clone(), *id))).collect();
         let typing_to = m.talk.clone().filter(|talk| talk.keys && origin != Origin::User);
         // A click on a space that is not the user's opens no conversation.
         let clicked = matches!(action, Action::SpaceClick { .. }) && origin != Origin::User;
@@ -2526,14 +2528,22 @@ impl Run {
         // was in front and is still there to be, is. And only the user's ↵ on a new task (or
         // their undo of its dismissal) puts a task in a workspace that has one.
         if origin != Origin::User && !matches!(action, Action::RestoreLayout { .. }) {
-            for id in fronts_before.iter().filter(|id| m.tasks.live(**id).is_some()) {
-                let of = m.task_space(*id);
-                let there = m.spaces().iter().any(|space| space.of == of);
-                ensure!(!there || m.front(&of) == Some(*id), "{origin:?}'s {action:?} took task {id} from the front");
+            let on_row = |of: &Owner| m.spaces().iter().any(|space| space.of == *of);
+            for (was, id) in fronts_before.iter().filter(|(_, id)| m.tasks.live(*id).is_some()) {
+                // The space it was in front of, or the one that space became (its own task gone).
+                let of = if on_row(was) { was.clone() } else { m.task_space(*id) };
+                let front = m.front(&of);
+                ensure!(!on_row(&of) || front == Some(*id), "{origin:?}'s {action:?} took task {id} from the front");
+            }
+            // Nor does a task leave a workspace by another's step, but with the workspace:
+            // its tabs gone, or its own task gone and this one its heir.
+            for (was, id) in joined_before.iter().filter(|(_, id)| m.tasks.live(*id).is_some()) {
+                let stays = m.task_space(*id) == *was || !on_row(was);
+                ensure!(stays, "{origin:?}'s {action:?} took task {id} out of {was:?}");
             }
         }
         let joined_now: Vec<TaskId> = m.spaces().iter().flat_map(|space| space.joined.clone()).collect();
-        if joined_now.iter().any(|id| !joined_before.contains(id)) {
+        if joined_now.iter().any(|id| !joined_before.iter().any(|(_, was)| was == id)) {
             let starts = matches!(
                 action,
                 Action::ComposeSubmit { open: true } | Action::ComposeEnter | Action::TaskFromLine { open: true, .. }
@@ -2543,6 +2553,10 @@ impl Run {
                 origin == Origin::User && (starts || undone),
                 "{origin:?}'s {action:?} joined a task to a workspace"
             );
+            if starts {
+                let now = (m.panes.clone(), tab_panes_by_id(m));
+                ensure!(now == panes_before, "{action:?} joined a task to a workspace and moved or closed a pane");
+            }
         }
         // Only the user's ↵ on a new task binds a workspace (or an undo of its dismissal, or the
         // files read again); and binding moves no pane, closes none and ends nothing.

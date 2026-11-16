@@ -3210,7 +3210,7 @@ impl Model {
         }
         let (origin, line) = (sent.origin, self.compose_line().cloned());
         let states: Vec<(TaskId, State)> = self.tasks.list.iter().map(|task| (task.id, task.state)).collect();
-        let front_was = self.tab_task();
+        let fronts_were: Vec<TaskId> = self.spaces.iter().filter_map(|space| self.front(&space.of)).collect();
         let listed = self.sidebar.zip(self.list);
         let undo = matches!(sent.action, Action::TaskUndo | Action::ListUndo);
         // Where the keyboard was before the step: a tab change moves it out of the drawer.
@@ -3249,8 +3249,9 @@ impl Model {
         self.repo_unhold();
         // Only the user's own undo links a dismissed task's tabs again.
         let was_done = |id: &TaskId| states.iter().any(|(task, state)| task == id && *state == State::Done);
-        let finished = front_was.filter(|id| origin == Origin::User && !was_done(id));
-        self.settle_tasks(undo && origin == Origin::User, finished);
+        let finished: Vec<TaskId> =
+            fronts_were.into_iter().filter(|id| origin == Origin::User && !was_done(id)).collect();
+        self.settle_tasks(undo && origin == Origin::User, &finished);
         self.settle_spaces();
         self.settle_left();
         self.follow_space(origin, drawer_keys);
@@ -3772,6 +3773,8 @@ impl Model {
             Action::SpaceOpen { space: Owner::Workbook { id } } => {
                 self.workbook_open(id, None, self.home.clone(), effects)
             }
+            // A task that is in another's space has none of its own to open: that one.
+            Action::SpaceOpen { space: Owner::Task { id } } => self.open_space(self.task_space(id), effects),
             Action::SpaceOpen { space: of } => self.open_space(of, effects),
             // Within the selected space.
             Action::CycleTab { delta } => {
@@ -6025,7 +6028,7 @@ impl Model {
     /// undo of the dismissal takes back those of its tabs still open there; a task back by other
     /// means, such as a state report, gets none); a dismissed task's conversation leaves the
     /// rail and the drawer.
-    fn settle_tasks(&mut self, undone: bool, finished: Option<TaskId>) {
+    fn settle_tasks(&mut self, undone: bool, finished: &[TaskId]) {
         self.settle_joined(undone, finished);
         let tasks = &self.tasks;
         let gone = |id: &TaskId| tasks.live(*id).is_none();
@@ -6185,9 +6188,9 @@ impl Model {
     /// After every step, before a gone task's tabs are given back: each joined task is live,
     /// in one space and has none of its own; a space whose own task is gone is the most urgent
     /// remaining one's, in place, with its tabs; the front task is one of the space's. `undone`:
-    /// a task back by the user's undo joins again the space it left. `finished`: the front task
+    /// a task back by the user's undo joins again the space it left. `finished`: each front task
     /// the user's step marked done gives way to the most urgent one not done.
-    fn settle_joined(&mut self, undone: bool, finished: Option<TaskId>) {
+    fn settle_joined(&mut self, undone: bool, finished: &[TaskId]) {
         let live = |m: &Model, id: TaskId| m.tasks.live(id).is_some();
         let owns = |m: &Model, id: TaskId| m.tabs.iter().any(|tab| tab.space == Owner::Task { id });
         let mut seen: Vec<TaskId> = Vec::new();
@@ -6196,10 +6199,15 @@ impl Model {
                 self.spaces[at].joined.clear();
                 continue;
             };
-            let mut joined = std::mem::take(&mut self.spaces[at].joined);
-            joined.retain(|id| *id != own && live(self, *id) && !owns(self, *id) && !seen.contains(id));
-            joined.dedup();
-            seen.extend(&joined);
+            let joined = std::mem::take(&mut self.spaces[at].joined);
+            let mut kept: Vec<TaskId> = Vec::new();
+            for id in joined {
+                if id != own && live(self, id) && !owns(self, id) && !seen.contains(&id) {
+                    kept.push(id);
+                    seen.push(id);
+                }
+            }
+            let joined = kept;
             self.spaces[at].joined = joined;
             if live(self, own) || self.spaces[at].joined.is_empty() {
                 continue;
@@ -6250,7 +6258,8 @@ impl Model {
             self.spaces[at].front = self.spaces[at].front.filter(|id| members.contains(id));
         }
         let done = |m: &Model, id: TaskId| m.tasks.get(id).is_some_and(|task| task.state == State::Done);
-        if let Some(was) = finished.filter(|id| done(self, *id)) {
+        let finished: Vec<TaskId> = finished.iter().copied().filter(|id| done(self, *id)).collect();
+        for was in finished {
             let of = self.task_space(was);
             let rest = self.members(&of).into_iter().filter(|id| !done(self, *id));
             if let Some(next) = rest.min_by_key(|id| self.urgency(*id)).filter(|_| self.front(&of) == Some(was)) {
@@ -9225,6 +9234,11 @@ mod tests {
         m.update(Action::SpaceSelect { index: 0 });
         m.update(Action::TaskGo { id: Some(1) }.sent_by(Origin::Socket));
         assert_eq!((m.space(), m.front(&of)), (&of, Some(3)));
+        // Review: a client's `open_space` of a task that is in the workspace made that task a
+        // space of its own. It opens the workspace the task is in.
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::SpaceOpen { space: task_space(3) }.sent_by(Origin::Socket));
+        assert_eq!((m.space(), m.members(&of), m.front(&of), m.spaces().len()), (&of, vec![1, 2, 3], Some(3), 2));
         // A task of another space is not put in front here.
         m.update(Action::TalkFront { task: 9 });
         assert_eq!(m.front(&of), Some(3));

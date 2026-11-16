@@ -668,9 +668,9 @@ mod tests {
         assert_eq!(write(&r.layout_file(&[], &[], 0)), write(&file));
         // A task of the file that is gone, or in two spaces, is left out.
         let mut odd = file;
-        odd.spaces[1].tasks = vec![3, 3, 8, 1];
+        odd.spaces[1].tasks = vec![3, 2, 3, 8, 1, 2];
         let (r, _) = restored(&m, odd, &[], false);
-        assert_eq!((r.members(&of), r.front(&of)), (vec![1, 3], Some(1)));
+        assert_eq!((r.members(&of), r.front(&of)), (vec![1, 3, 2], Some(2)));
     }
 
     #[test]
