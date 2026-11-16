@@ -300,7 +300,12 @@ impl Workspace {
             });
             let name = self.workbook_name(renaming, row.name.clone(), cx);
             let title = div().w_full().flex().items_center().gap_1().children(fold).child(name.flex_1().min_w_0());
-            let title = title.child(dot(row.open));
+            // Bound to a task: the task's badge, where the dot is.
+            let badge = row.task.and_then(|task| self.task_badge(task, 16.));
+            let title = match badge {
+                Some(badge) => title.child(badge.flex_none()),
+                None => title.child(dot(row.open)),
+            };
             let summary = div().w_full().truncate().text_xs().text_color(rgb(theme::MUTED)).child(row.summary.clone());
             let dots = self.row_dots(ListRow::Workbook(id), self.dots_shown(&ListRow::Workbook(id)), cx);
             let book = list_button(ElementId::Name(format!("workbook:{id}").into()), selected)

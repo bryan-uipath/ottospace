@@ -819,6 +819,7 @@ function agentDial(value: unknown, at: string): AgentDial {
       failed: num(s.failed, `${at}.failed`),
       failing: num(s.failing, `${at}.failing`),
       lit: bool(s.lit, `${at}.lit`),
+      running: num(s.running, `${at}.running`),
     };
   };
   const leg = (value: unknown, at: string) => ({ station: station(fields(value, at).station, `${at}.station`) });
@@ -832,6 +833,7 @@ function agentDial(value: unknown, at: string): AgentDial {
     route: list(leg)(o.route, `${at}.route`),
     timed: bool(o.timed, `${at}.timed`),
     collapsed: bool(o.collapsed, `${at}.collapsed`),
+    animating: bool(o.animating, `${at}.animating`),
   };
 }
 
@@ -1254,6 +1256,7 @@ function workbook(value: unknown, at: string): Workbook {
     tab: orNull(num)(o.tab, `${at}.tab`),
     tabs: list(tab)(o.tabs, `${at}.tabs`),
     unfolded: bool(o.unfolded, `${at}.unfolded`),
+    task: orNull(num)(o.task, `${at}.task`),
     row: orNull(rect)(o.row, `${at}.row`),
     buttons: {
       fold: orNull(rect)(buttons.fold, `${at}.buttons.fold`),

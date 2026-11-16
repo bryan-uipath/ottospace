@@ -188,8 +188,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
             dial: {
               pulse: "needs_you",
               stations: [
-                { station: "you", calls: 1, failed: 0, failing: 0, lit: true },
-                { station: "shell", calls: 2, failed: 1, failing: 1, lit: true },
+                { station: "you", calls: 1, failed: 0, failing: 0, lit: true, running: 1 },
+                { station: "shell", calls: 2, failed: 1, failing: 1, lit: true, running: 2 },
               ],
               context: 0.75,
               level: "amber",
@@ -198,6 +198,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
               route: [{ station: "model" }, { station: "shell" }],
               timed: true,
               collapsed: false,
+              animating: true,
             },
           },
         },

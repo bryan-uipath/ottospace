@@ -157,7 +157,8 @@ beside the workspace. Over it: picks for where (the first listed repositories, "
 and who (the default agent, then each runner and its models), which set the line's `>repo` and
 `@agent`, and, unless ↵ would start the default agent in your home folder, a line that says what
 it will do: "↵ will start claude in app on main", or for a saved agent "↵ files it; nothing
-starts". Under the line, while the box is open, the tags it may hold, each mark in a small cap
+starts"; and, when ↵ would take the workspace you are in and there is something in it, "↵ makes
+this workspace the task's". Under the line, while the box is open, the tags it may hold, each mark in a small cap
 (`[#] project`, `[>] repo`, … `[p1] priority`), dimmer once something is typed; a click on one
 types its mark at the cursor (spaced from the words beside it) and opens its dropdown, as the key
 would. At their right, what ↵ does when it is not "add": `[↵] completes` while it would take a
@@ -273,8 +274,11 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 6. **Spaces and the drawer.** Workspace, then each open task (and session, and workspace) is a
    space with its own tabs; one is selected, and the drawer is only ever on its agent: a task's
    chat, none for Workspace. Selecting starts nothing; a closed drawer stays closed. A task
-   started (↵ in the box, or its row clicked) opens its space with one empty tab; started from a
-   Workspace tab a Repos row opened for its folder, that tab moves into it. ⌘T makes a tab in the
+   started with ↵ in a workspace you made that has no task takes it: it becomes the task's
+   space where it is, with all its tabs (the box says "↵ makes this workspace the task's" when
+   there is something in it). A workspace you made stays listed, bound to the task, until the
+   task is dismissed; then it is its own again, with its tabs. From Workspace or a task's
+   space, the task gets a space of its own with one empty tab. ⇧↵ takes nothing. ⌘T makes a tab in the
    space on show. Drag a tab onto another space's tab or badge to move it there; Move Tab to…
    lists Workspace, the tasks and the workspaces. The top row's + makes a new, empty
    [workspace](#workspaces) after the selected space.
@@ -409,13 +413,18 @@ a space with one tab has no tab row, so it sits on the top row, left of the spli
 A native conversation has a dial under its header: where its agent's calls go, at a glance.
 
 - **Centre**: the agent's kind (✳ Claude Code), coloured by its state: running, needs you, idle,
-  ended, or an error (a failed turn, an end you did not ask for) until your next message.
+  ended, or an error (a failed turn, an end you did not ask for) until your next message. It
+  turns about its upright axis while the model thinks (it has the turn and no call runs).
 - **Ring**: the context used (tokens in the context over the window); amber from 70%, red from 90%.
 - **Stations**, clockwise from the top: You, Model, Files, Shell, Network, Browser, Agents,
   Skills, Memory, Hooks, Tools (any other tool). A spoke is heavier for more use, the older uses
   counting less (half after ten minutes). A station is lit while a call there runs (Model while
   the model has the turn, You while a request waits), with two arcs for its time: the inner fills
   in a minute, the outer in ten. A red dot: a call there failed since your last message.
+  Each has its name beside it, brighter while lit. A lit station's dot pulses (not while a
+  request waits for you), and is larger for
+  each further call running there at once (up to four): it springs to its size, with a kick
+  when a call starts, and settles back when one ends.
 - **Dashes**: the route of the last calls, fading out over a minute.
 - Beside it, when the drawer is wide enough: what it does now (`Shell · cargo test · 0:14`), or
   the last thing and when; the context used (`62% of context`); turns and how long.
@@ -424,10 +433,13 @@ A native conversation has a dial under its header: where its agent's calls go, a
   badge (the ring, a white dot while a call runs, a red one for a failure); a click on the marker
   opens it. It is open while the agent runs and collapsed once it ended, unless you left it the
   other way: that is kept per task, with the layout.
-- A watched session's dial steps a message at a time, with no time arcs. With Reduce motion on,
-  nothing fades: the route shows until it expires.
-- The state reply has its stations, counts, what is lit, the context used and `collapsed`, never
-  a command, path or label. Design: [docs/ai/agent-dial.md](ai/agent-dial.md).
+- A watched session's dial steps a message at a time, with no time arcs: its dots spring to
+  their sizes, nothing pulses or turns. With Reduce motion on, nothing fades or moves: the route
+  shows until it expires, and a lit station is its colour and its larger size.
+- It is drawn frame by frame only while something in it moves; at rest, collapsed or not on
+  screen, never.
+- The state reply has its stations, counts, what is lit (and how many calls run there), the
+  context used, `collapsed` and `animating`, never a command, path or label. Design: [docs/ai/agent-dial.md](ai/agent-dial.md).
 
 ## Accessibility inspector
 
