@@ -44,12 +44,15 @@ in the pane's header beside `fit`.
   `key` toward the menu, its click, or its typed sneak label reaches `AgentLevel` as `Socket` and
   is refused, the status bar says why. Under `OTTOSPACE_E2E` a test sets it with `key`/`mouse`
   `"as":"user"`, as other user-only acts are tested.
-- **Drawn.** Off: a muted eye glyph, shown while the header is hovered or the pane focused (as
-  `fit` keeps to the right and never shrinks). See: the eye in the task's badge colour, with the
-  badge. See and act: eye and a hand, badge colour, and a 1 pt border of the pane in that colour,
-  so act is visible from across the screen. While a read or an action runs: the glyph pulses
-  (the clip's glow, `main.rs:4940-4944`); reduce motion: filled, no pulse. A tooltip says
-  "Task 7 can see this window" / "… and press its controls".
+- **Drawn.** One compact control in the header (the owner's call, from the design canvas: "condense
+  this into a dropdown - maybe with a robot icon … to show that it relates to automation"): a robot
+  glyph, the level's word (`Off`, `See`, `Act`) and a caret. Off: muted, and always shown on an app
+  pane, so the switch can be found. See: the control in the see colour (the app's primary), with the
+  task's badge beside it. See and act: the act colour (the needs-you amber) and a 1 pt border of the
+  pane in it, so act is visible from across the screen. While a read or an action runs: the glyph
+  pulses (the clip's glow, `main.rs:4940-4944`), and at act the control about to be pressed is
+  outlined; reduce motion: filled, no pulse. A tooltip says "Task 7 can see this window" /
+  "… and press its controls".
 - **Changing it.** A click opens a three-item menu (`row_menu`'s one list of items, `row_items`):
   Off, See, See and act. Not a cycling click or key: one press too many must never grant act.
   Key: ⌘⌃V opens the same menu on the focused app pane (free today; owner's call). Palette:
