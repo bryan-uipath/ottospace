@@ -3299,6 +3299,12 @@ impl Model {
             fronts_were.into_iter().filter(|id| origin == Origin::User && !was_done(id)).collect();
         self.settle_tasks(undo && origin == Origin::User, &finished);
         self.settle_spaces(origin, &home);
+        // A terminal opened now, wherever its tab went (Home's go to a workspace), starts in its space's default.
+        for effect in &effects {
+            if let Effect::Opened(pane) = effect {
+                self.start_in_default(*pane);
+            }
+        }
         self.settle_left();
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
@@ -3642,7 +3648,6 @@ impl Model {
             Action::Split { axis, kind } => {
                 self.leave(effects);
                 let id = self.add(kind, self.focused, axis);
-                self.start_in_default(id);
                 effects.push(Effect::Opened(id));
             }
             Action::Open { kind, axis, beside } => drop(self.open(kind, axis, beside, effects)),
@@ -4713,7 +4718,6 @@ impl Model {
                 let empty = self.panes.iter_mut().find(|p| p.id == pane && p.kind == Kind::Empty);
                 if let Some(empty) = empty {
                     empty.kind = kind;
-                    self.start_in_default(pane);
                     effects.push(Effect::Opened(pane));
                 }
             }
@@ -6849,7 +6853,6 @@ impl Model {
             None => self.add(kind, target, axis),
         };
         self.focused = Some(id);
-        self.start_in_default(id);
         effects.push(Effect::Opened(id));
         id
     }
@@ -9976,6 +9979,10 @@ mod tests {
         let empty = m.focused.unwrap_or_default();
         m.update(Action::Fill { pane: empty, kind: Kind::Terminal }.sent_by(Origin::System));
         assert_eq!(m.pane(empty).and_then(|p| p.cwd.as_deref()), Some("/code/app-2"));
+        // A client's terminal on Home goes to the workspace selected last: in its default.
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal }.sent_by(Origin::Socket));
+        assert_eq!((m.space(), cwd(&m).as_deref()), (&WORKSPACE, Some("/code/app-2")));
         // A workspace made with + has none.
         m.update(Action::WorkbookNew { uid: "9f3a61c2d4e5b708".into() });
         term(&mut m);
