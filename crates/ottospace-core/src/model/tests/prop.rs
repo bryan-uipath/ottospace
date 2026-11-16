@@ -24,6 +24,9 @@ use crate::workbook::{self, History, Workbook, WorkbookId};
 
 const WORDS: &[&str] = &["fix", "zoom", "flicker", "deploy", "x"];
 const REPOS: &[&str] = &["app", "canvas", "My Project", "2048", "Ottospace"];
+/// Where a session may say its agent works: checkouts, below one, a sub-agent's worktree, elsewhere.
+const CWDS: &[&str] =
+    &["/code/app", "/code/app-2", "/code/app-2/src", "/code/app/.claude/worktrees/agent-x", "/code/canvas", "/tmp"];
 const DIRS: &[&str] = &["/code/app", "/code/canvas", "/code/app-2", "/tmp", "/Users/me/My Notes", "relative"];
 const AGENTS: &[&str] = &["claude", "codex", "Claude Code", "claude-opus-5-5", "codex-gpt-6-astra"];
 const SKILLS: &[&str] = &["code-review", "deploy"];
@@ -373,6 +376,7 @@ impl Gen<'_> {
             project: self.rng.coin().then(|| self.name(REPOS)),
             repo: self.rng.coin().then(|| self.name(DIRS)),
             folder: self.rng.one_in(4).then(|| self.name(DIRS)),
+            worktree: self.rng.one_in(4).then(|| self.name(DIRS)),
             agent: self.rng.coin().then(|| self.name(AGENTS)),
             paths: self.names(DIRS, 2),
             resolved: self.names(DIRS, 2),
@@ -916,7 +920,7 @@ const MAKERS: &[Make] = &[
             if named.is_empty() || g.rng.one_in(4) { g.rng.coin().then(|| g.name(REPOS)) } else { g.rng.pick(&named) };
         Action::ToggleProject { project, done: g.rng.coin() }
     },
-    |g| Action::SessionWork { work: g.work() },
+    |g| Action::SessionWork { work: g.work(), cwd: g.rng.coin().then(|| g.name(CWDS)) },
     |g| Action::SetSessions { found: (0..g.rng.below(5)).map(|_| g.found()).collect(), day: g.time() },
     |g| Action::SessionQuiet { ms: g.rng.pick(&[0, 1, sessions::QUIET_MS, u64::MAX]) },
     |g| {
@@ -3241,6 +3245,11 @@ impl Run {
                 Effect::Run { command } => {
                     ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")
                 }
+                // The list is read again only for a folder an agent's session moved into, and a while after.
+                Effect::ReadRepos => {
+                    let reads = matches!(action, Action::SessionWork { cwd: Some(_), .. } | Action::Tick { .. });
+                    ensure!(reads && origin != Origin::Socket, "{origin:?}'s {action:?} asked for the Repos list");
+                }
                 // Only the user starts fresh; after that the layout is never told to the shell.
                 Effect::ForgetLayout => {
                     ensure!(user && matches!(action, Action::StartFresh), "{origin:?} forgot the layout: {action:?}");
@@ -3724,9 +3733,9 @@ fn code(sent: &Envelope) -> String {
     if let Action::RestoreKeyUse { uses } = &sent.action {
         return format!("restore_key_use({:?}).sent_by(Origin::{:?})", uses.write(), sent.origin);
     }
-    if let Action::SessionWork { work } = &sent.action {
+    if let Action::SessionWork { work, cwd } = &sent.action {
         let work = serde_json::to_string(work).unwrap_or_default();
-        return format!("session_work({work:?}).sent_by(Origin::{:?})", sent.origin);
+        return format!("session_work({work:?}, {cwd:?}).sent_by(Origin::{:?})", sent.origin);
     }
     if let Action::RestoreLayout { layout, gone, home, launch } = &sent.action {
         let (layout, gone, home) = (
@@ -3894,8 +3903,9 @@ fn restore_key_use(text: &str) -> Action {
     Action::RestoreKeyUse { uses: KeyUse::parse(text).expect("a regression's key counts are keys.json") }
 }
 
-fn session_work(work: &str) -> Action {
-    Action::SessionWork { work: serde_json::from_str(work).expect("a regression's work is JSON") }
+fn session_work(work: &str, cwd: Option<&str>) -> Action {
+    let work = serde_json::from_str(work).expect("a regression's work is JSON");
+    Action::SessionWork { work, cwd: cwd.map(String::from) }
 }
 
 /// `RestoreLayout` from the JSON of its file, as `code` writes it.
@@ -3976,7 +3986,7 @@ fn every_action_can_be_written_as_code() {
     let tasks = Action::RestoreTasks { tasks: vec![], floor: 3 };
     assert_eq!(restore_tasks("[]", 3), tasks);
     assert_eq!(code(&tasks.sent_by(Origin::System)), "restore_tasks(\"[]\", 3).sent_by(Origin::System)");
-    assert_eq!(session_work(&work), Action::SessionWork { work: progress::Work::default() });
+    assert_eq!(session_work(&work, None), Action::SessionWork { work: progress::Work::default(), cwd: None });
 }
 
 #[test]

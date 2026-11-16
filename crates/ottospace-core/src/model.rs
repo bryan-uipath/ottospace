@@ -842,9 +842,11 @@ pub enum Action {
         project: Option<String>,
         done: bool,
     },
-    /// What a session of a task's agent did, as the shell last read it (`progress`).
+    /// What a session of a task's agent did, as the shell last read it (`progress`), and the
+    /// folder its records last said the agent works in. The shell's alone.
     SessionWork {
         work: progress::Work,
+        cwd: Option<String>,
     },
     /// Replace the sessions the shell found on this machine for the listed repositories. `day`:
     /// the start of the local day they were read in, from which Today lists.
@@ -2273,6 +2275,8 @@ pub enum Effect {
     },
     /// Start Fresh: remove `layout.json`, and write none this run.
     ForgetLayout,
+    /// Read the Repos list again (`SetRepos`): an agent moved into a folder it does not hold yet.
+    ReadRepos,
     /// Show a workbook's saved history in terminal `pane`, just opened (`Opened`), above its
     /// prompt, and type its command there without running it.
     History {
@@ -2397,6 +2401,7 @@ pub use spaces::{HOME, HOME_TAB, Owner, Space};
 pub mod chat;
 pub mod editor;
 mod worktrees;
+pub use worktrees::{MOVE_RETRY_MS, MOVE_WAIT_MS, subagent_path};
 
 #[derive(Debug, Serialize)]
 pub struct Model {
@@ -2432,6 +2437,12 @@ pub struct Model {
     /// The workspaces selected, the last one last, each once: where a stray tab goes.
     #[serde(skip)]
     pub(crate) last_spaces: Vec<Owner>,
+    /// The folder each task's agent last said it works in (`agent_cwd`).
+    #[serde(skip)]
+    agent_cwds: Vec<(TaskId, String)>,
+    /// Folders agents moved into that the Repos list does not hold yet.
+    #[serde(skip)]
+    moving: Vec<worktrees::Moving>,
     /// The name of the workspace this step's tab is to make, if it makes one: a folder's.
     #[serde(skip)]
     pub(crate) home_hint: Option<(String, String)>,
@@ -2780,6 +2791,8 @@ impl Default for Model {
             departed: Vec::new(),
             joined_before: Vec::new(),
             last_spaces: Vec::new(),
+            agent_cwds: Vec::new(),
+            moving: Vec::new(),
             home_hint: None,
             next_tab: 0,
             layout_seen: None,
@@ -2962,6 +2975,7 @@ impl Model {
             // A link opens in the user's browser; only ottospace tells what gh said.
             Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
             Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
+            Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
             Action::FieldEdit { .. }
             | Action::MarkSubmit
             | Action::MarkType { .. }
@@ -3299,6 +3313,12 @@ impl Model {
             fronts_were.into_iter().filter(|id| origin == Origin::User && !was_done(id)).collect();
         self.settle_tasks(undo && origin == Origin::User, &finished);
         self.settle_spaces(origin, &home);
+        // A terminal opened now, wherever its tab went (Home's go to a workspace), starts in its space's default.
+        for effect in &effects {
+            if let Effect::Opened(pane) = effect {
+                self.start_in_default(*pane);
+            }
+        }
         self.settle_left();
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
@@ -3642,13 +3662,13 @@ impl Model {
             Action::Split { axis, kind } => {
                 self.leave(effects);
                 let id = self.add(kind, self.focused, axis);
-                self.start_in_default(id);
-                effects.push(Effect::Opened(id));
+                                effects.push(Effect::Opened(id));
             }
             Action::Open { kind, axis, beside } => drop(self.open(kind, axis, beside, effects)),
             Action::SetRepos { repos } => {
                 self.repos = repos::arrange(repos);
                 self.repo_field_gone();
+                self.follow_moves();
             }
             Action::SetRepoDirs { dirs } => self.repo_dirs = dirs,
             Action::RepoAdd { dir, found } => self.repo_add(dir, found, effects),
@@ -3675,6 +3695,7 @@ impl Model {
             Action::WorktreeAdded { repo, path, repos } => {
                 self.repos = repos::arrange(repos);
                 self.repo_field_gone();
+                self.follow_moves();
                 self.repos_folded.retain(|folded| *folded != repo);
                 // The user's + made it: it opens as their click on its row would.
                 self.repo_click(path, Axis::Right, true, effects);
@@ -3718,6 +3739,7 @@ impl Model {
                 self.left.1.get_or_insert(now);
                 self.tasks.tick(now);
                 self.workbooks.tick(now);
+                self.retry_moves(effects);
                 self.undo_offer = self.undo_offer.filter(|offer| offer.until > now);
                 self.clip = self.clip.take().filter(|clip| clip.shows(now));
                 let alerts = self.calendar.tick(now);
@@ -4212,8 +4234,11 @@ impl Model {
                     None => list.push(project),
                 }
             }
-            Action::SessionWork { work } => {
+            Action::SessionWork { work, cwd } => {
                 let Some(work) = work.kept() else { return };
+                if let Some(cwd) = cwd {
+                    self.agent_cwd(&work.runner, &work.session, cwd, effects);
+                }
                 let of = |task: &Task| {
                     task.session.as_ref().is_some_and(|link| (&link.runner, &link.id) == (&work.runner, &work.session))
                 };
@@ -4713,7 +4738,6 @@ impl Model {
                 let empty = self.panes.iter_mut().find(|p| p.id == pane && p.kind == Kind::Empty);
                 if let Some(empty) = empty {
                     empty.kind = kind;
-                    self.start_in_default(pane);
                     effects.push(Effect::Opened(pane));
                 }
             }
@@ -5179,7 +5203,9 @@ impl Model {
                     None => {
                         let default = self.default_agent();
                         let launch = agents::launch(task.agent.as_deref(), default, &self.models, task.title.clone());
-                        launch.map(|launch| (agents::Start::New(launch), task.dir().cloned()))
+                        // Where it works: the worktree its agent moved into, else its folder.
+                        let dir = self.task_moved(*id).map(String::from).or_else(|| task.dir().cloned());
+                        launch.map(|launch| (agents::Start::New(launch), dir))
                     }
                 }
             }
@@ -6849,7 +6875,6 @@ impl Model {
             None => self.add(kind, target, axis),
         };
         self.focused = Some(id);
-        self.start_in_default(id);
         effects.push(Effect::Opened(id));
         id
     }
@@ -8216,7 +8241,7 @@ mod tests {
             Action::EditorDone { saved: None, more: false },
             Action::TasksView { view: TasksView::Project },
             Action::ToggleProject { project: None, done: false },
-            Action::SessionWork { work: progress::Work::default() },
+            Action::SessionWork { work: progress::Work::default(), cwd: None },
             Action::SetFeatures { features: Features::default() },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
@@ -8432,6 +8457,7 @@ mod tests {
                     Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(crate::repos::USERS_ALONE),
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
+                    Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
                     Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
@@ -11460,12 +11486,12 @@ mod tests {
             window: Some(200_000),
         };
         // Another session's work, or a runner not listed: no task takes it.
-        m.update(Action::SessionWork { work: work("other", 9, 0, 0, Vec::new()) });
+        m.update(Action::SessionWork { work: work("other", 9, 0, 0, Vec::new()), cwd: None });
         assert!(m.tasks.list[0].work.is_empty());
         let rows = vec![tokens("claude-opus-5-5", false, 10), tokens("claude-haiku-5", true, 4)];
-        m.update(Action::SessionWork { work: work(UUID, 60_000, 0, 0, rows.clone()) });
+        m.update(Action::SessionWork { work: work(UUID, 60_000, 0, 0, rows.clone()), cwd: None });
         // Read again: it replaces what was kept of that session, it does not add to it.
-        m.update(Action::SessionWork { work: work(UUID, 90_000, 1_000, 30_000, rows) });
+        m.update(Action::SessionWork { work: work(UUID, 90_000, 1_000, 30_000, rows), cwd: None });
         let task = &m.tasks.list[0];
         assert_eq!(
             (task.work.len(), task.work[0].clock.ms, task.work[0].tokens[0].model.as_str()),
@@ -13976,6 +14002,7 @@ mod tests {
                     Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(crate::repos::USERS_ALONE),
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
+                    Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
                     Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };

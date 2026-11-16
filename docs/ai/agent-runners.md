@@ -215,6 +215,7 @@ The table, written by a test from the specs (`runner::tests`): every capability 
 | interrupt | true | true |
 | held (live holder on disk) | true | false |
 | cwd on disk | true | true |
+| cwd moves with the agent | true | false |
 | watch | Yes | Yes |
 | take over when idle | Yes | Yes |
 | attach live | ViaOwnTerminal | ViaDaemon |
