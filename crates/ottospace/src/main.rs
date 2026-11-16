@@ -1570,9 +1570,9 @@ impl Workspace {
                     None => drop(ottospace_mac::meeting::open_url(url)),
                 },
                 Effect::OpenPr { .. } => {}
-                Effect::AddWorktree { repo, branch, path, root } => {
+                Effect::AddWorktree { repo, branch, path, root, fresh } => {
                     let done = self.worktrees.0.clone();
-                    worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), done);
+                    worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), *fresh, done);
                 }
                 Effect::Notice { text } => (self.error, self.refused) = (Some(text.clone()), Some(text.clone())),
                 Effect::NoticeDismissed { kind } => self.notice_dismissed(*kind),
@@ -3094,6 +3094,9 @@ impl Workspace {
         });
         // Restored or rebuilt panes still empty: `pane`, `why`, and where its "Open <App>" is drawn, or null.
         state["unfilled"] = unfilled.into();
+        // Where the box offers a choice of where the task works: `new` (a new worktree, the user's
+        // choice), the repository's name and the `branch` it would make; else null.
+        state["compose_worktree"] = serde_json::json!(self.model.compose_worktree());
         state
     }
 
@@ -4337,20 +4340,21 @@ impl Workspace {
     /// Worktrees git made, or did not: the list is read again; a made one opens, a failure is said.
     fn take_worktrees(&mut self, window: &Window, cx: &mut Context<Self>) {
         let made: Vec<worktree::Made> = self.worktrees.1.try_iter().collect();
-        for worktree::Made { repo, result } in made {
+        for worktree::Made { repo, asked, result } in made {
             let repos = repos::scan();
             match result {
                 // Made from a repository listed only as a worktree of another: not in the list to open.
                 Ok(path) if !repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == path)) => {
                     self.error = Some(format!("Made {path}: its repository is not listed"));
-                    self.dispatch(Action::SetRepos { repos }, Origin::System, window, cx);
+                    self.dispatch(Action::WorktreeFailed { asked, repos }, Origin::System, window, cx);
                 }
                 Ok(path) => {
-                    drop(self.dispatch(Action::WorktreeAdded { repo, path, repos }, Origin::System, window, cx))
+                    let made = Action::WorktreeAdded { repo, path, asked, repos };
+                    drop(self.dispatch(made, Origin::System, window, cx))
                 }
                 Err(why) => {
                     self.error = Some(why);
-                    self.dispatch(Action::SetRepos { repos }, Origin::System, window, cx);
+                    self.dispatch(Action::WorktreeFailed { asked, repos }, Origin::System, window, cx);
                 }
             }
             cx.notify();

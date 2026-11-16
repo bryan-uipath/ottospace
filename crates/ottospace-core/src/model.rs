@@ -673,10 +673,18 @@ pub enum Action {
         repo: String,
     },
     /// The shell made the worktree at `path` of the repository at `repo`: `repos` as read after.
-    /// It opens as its row's click would. A failure is the shell's to say.
+    /// `asked`: the path `Effect::AddWorktree` named. A new task's (the box's choice): its agent
+    /// starts there. Else it opens as its row's click would. A failure is the shell's to say.
     WorktreeAdded {
         repo: String,
         path: String,
+        asked: String,
+        repos: Vec<Repo>,
+    },
+    /// The shell could not make the worktree `Effect::AddWorktree` asked for at `asked` (it said
+    /// why): `repos` as read after. A new task's waits, unstarted, in its checkout.
+    WorktreeFailed {
+        asked: String,
         repos: Vec<Repo>,
     },
     /// The open pull requests of the repository at `repo`, as gh last told them, and its checkouts'
@@ -791,6 +799,11 @@ pub enum Action {
     },
     /// The × on the box's folder: the task's agent will not run there. The path stays in the line.
     ComposeFolderClear,
+    /// The box's choice of where the task works: its checkout, or a new worktree (`new`; `None`
+    /// toggles). Only while the box offers it (`compose_worktree`). Only the user's.
+    ComposeWorktree {
+        new: Option<bool>,
+    },
     /// A click on a tag's cap under the box: its mark goes in at the cursor, as typed, with a
     /// space before it inside a word, so its dropdown opens. Only a mark of `TAG_KEYS`.
     ComposeTag {
@@ -1649,6 +1662,7 @@ impl Action {
             | Action::RepoClick { .. }
             | Action::RepoFold { .. }
             | Action::WorktreeAdded { .. }
+            | Action::WorktreeFailed { .. }
             | Action::SetPrs { .. }
             | Action::PrOpen { .. }
             | Action::RestoreTasks { .. }
@@ -1659,6 +1673,7 @@ impl Action {
             | Action::ComposeMove { .. }
             | Action::ComposeAccept { .. }
             | Action::ComposeFolderClear
+            | Action::ComposeWorktree { .. }
             | Action::ComposeTag { .. }
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
@@ -1925,6 +1940,7 @@ impl Action {
             | Action::RepoFold { .. }
             | Action::WorktreeEdit { .. }
             | Action::WorktreeAdded { .. }
+            | Action::WorktreeFailed { .. }
             | Action::SetPrs { .. }
             | Action::PrOpen { .. }
             | Action::RestoreTasks { .. }
@@ -1949,6 +1965,7 @@ impl Action {
             | Action::ComposeMove { .. }
             | Action::ComposeAccept { .. }
             | Action::ComposeFolderClear
+            | Action::ComposeWorktree { .. }
             | Action::ComposeTag { .. }
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
@@ -2198,11 +2215,13 @@ pub enum Effect {
     },
     /// The user asked for a worktree of the repository at `repo` on `branch` (checked) at `path`,
     /// inside `root` (`worktrees_dir`): `git worktree add`, then `Action::WorktreeAdded`.
+    /// `fresh`: a new task's, whose branch must be new (taken: not made).
     AddWorktree {
         repo: String,
         branch: String,
         path: String,
         root: String,
+        fresh: bool,
     },
     /// Pane `pane` was just opened (`Opened`) for the user's editor on `settings.json`: its
     /// terminal runs that, not a shell. Carried out with the pane's `Opened`.
@@ -2400,7 +2419,7 @@ pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
 
 pub mod chat;
 pub mod editor;
-mod worktrees;
+pub mod worktrees;
 pub(crate) use worktrees::subagent_path;
 #[cfg(test)]
 use worktrees::{MOVE_RETRY_MS, MOVE_WAIT_MS};
@@ -2445,6 +2464,9 @@ pub struct Model {
     /// Folders agents moved into that the Repos list does not hold yet.
     #[serde(skip)]
     moving: Vec<worktrees::Moving>,
+    /// New tasks whose worktree the box asked for and git has not made yet: none starts till then.
+    #[serde(skip)]
+    pub(crate) making: Vec<worktrees::Making>,
     /// The name of the workspace this step's tab is to make, if it makes one: a folder's.
     #[serde(skip)]
     pub(crate) home_hint: Option<(String, String)>,
@@ -2515,6 +2537,9 @@ pub struct Model {
     /// was typed by the user.
     #[serde(skip)]
     pub(crate) compose_theirs: bool,
+    /// The user chose a new worktree for the task in the box (`ComposeWorktree`).
+    #[serde(skip)]
+    pub(crate) compose_worktree: bool,
     /// The new-task line a conversation's opening put aside: back when the box opens empty.
     #[serde(skip)]
     compose_kept: Option<KeptDraft>,
@@ -2727,6 +2752,7 @@ impl Default for Model {
             compose_refs: Vec::new(),
             compose_note: None,
             compose_theirs: false,
+            compose_worktree: false,
             compose_kept: None,
             terminals: Vec::new(),
             home: None,
@@ -2795,6 +2821,7 @@ impl Default for Model {
             last_spaces: Vec::new(),
             agent_cwds: Vec::new(),
             moving: Vec::new(),
+            making: Vec::new(),
             home_hint: None,
             next_tab: 0,
             layout_seen: None,
@@ -2972,8 +2999,10 @@ impl Model {
             }
             // A new worktree runs git in the user's repository: only their +, keys and ↵ make one,
             // and only the shell says it is made.
-            Action::WorktreeEdit { .. } => Some(repos::USERS_ALONE),
-            Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(repos::USERS_ALONE),
+            Action::WorktreeEdit { .. } | Action::ComposeWorktree { .. } => Some(repos::USERS_ALONE),
+            Action::WorktreeAdded { .. } | Action::WorktreeFailed { .. } if origin == Origin::Socket => {
+                Some(repos::USERS_ALONE)
+            }
             // A link opens in the user's browser; only ottospace tells what gh said.
             Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
             Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
@@ -3126,6 +3155,7 @@ impl Model {
             | Action::ComposeMove { .. }
             | Action::ComposeAccept { .. }
             | Action::ComposeFolderClear
+            | Action::ComposeWorktree { .. }
             | Action::ComposeTag { .. }
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
@@ -3694,16 +3724,32 @@ impl Model {
                     effects.push(Effect::OpenPr { url: url.to_string() });
                 }
             }
-            Action::WorktreeAdded { repo, path, repos } => {
+            Action::WorktreeAdded { repo, path, asked, repos } => {
                 self.repos = repos::arrange(repos);
                 self.repo_field_gone();
                 self.follow_moves();
                 self.repos_folded.retain(|folded| *folded != repo);
-                // The user's + made it: it opens as their click on its row would.
-                self.repo_click(path, Axis::Right, true, effects);
+                match self.making.iter().position(|making| making.asked == asked) {
+                    // The box's choice: the task works there, and its agent starts.
+                    Some(at) => {
+                        let making = self.making.remove(at);
+                        self.worktree_made(making.task, path, effects);
+                    }
+                    // The user's + made it: it opens as their click on its row would.
+                    None => self.repo_click(path, Axis::Right, true, effects),
+                }
+            }
+            Action::WorktreeFailed { asked, repos } => {
+                self.repos = repos::arrange(repos);
+                self.repo_field_gone();
+                self.follow_moves();
+                // A new task's waits in its checkout, unstarted: its Start is the user's.
+                self.making.retain(|making| making.asked != asked);
             }
             Action::RestoreTasks { tasks, floor } => {
                 self.tasks.restore(tasks, floor);
+                // Tasks read again are not the ones that waited: none starts by an answer for those.
+                self.making.clear();
                 self.settle_links();
                 // A tab of a task that is not among them is a tab of no task: `update` unlinks it.
             }
@@ -4036,6 +4082,10 @@ impl Model {
             }
             Action::ComposeAccept { index } => self.accept(index),
             Action::ComposeFolderClear => self.compose_folder = None,
+            Action::ComposeWorktree { new } if self.composing() && self.compose_worktree().is_some() => {
+                self.compose_worktree = new.unwrap_or(!self.compose_worktree);
+            }
+            Action::ComposeWorktree { .. } => {}
             Action::ComposeMove { delta } => match self.dropdown().filter(|menu| !menu.rows.is_empty()) {
                 Some(menu) => {
                     let to = complete::moved(menu.selected, delta, menu.rows.len());
@@ -4078,11 +4128,16 @@ impl Model {
                 // A draft with captures needs no title typed: key, circle, ↵.
                 let untitled = self.draft(&line).title.is_empty();
                 let named = self.capture_title().filter(|_| untitled);
+                // A new worktree only by the user's own ↵ that starts it.
+                let worktree = self.box_worktree().filter(|_| self.compose_worktree && open && self.by_user);
                 if let Some(id) = self.file_titled(&line, None, named) {
                     self.compose = None;
                     self.compose_reset();
                     self.capture_keep(id, effects);
-                    self.start(id, open, effects);
+                    match worktree {
+                        Some(new) => self.start_in_worktree(id, new, effects),
+                        None => self.start(id, open, effects),
+                    }
                 }
             }
             // Not while the box is hidden under the key reference: nothing changes a line unseen.
@@ -5187,6 +5242,8 @@ impl Model {
                 let session = self.session(runner, id).filter(|s| !self.in_use(s))?;
                 Some((resume(runner, id)?, Some(self.resume_dir(session)?)))
             }
+            // Its worktree is being made: it starts there once it is (`worktree_made`).
+            Subject::Task(id) if self.making.iter().any(|making| making.task == *id) => None,
             Subject::Task(id) => {
                 let task = self.tasks.get(*id)?;
                 match &task.session {
@@ -5242,6 +5299,9 @@ impl Model {
         let subject = &self.talk.as_ref()?.task;
         if self.agent_runs(subject) || self.agent_start(subject).is_some() {
             return None;
+        }
+        if let Some(making) = self.making.iter().find(|making| Subject::Task(making.task) == *subject) {
+            return Some(format!("making its worktree {}…", making.branch));
         }
         // Being read: nothing to say yet.
         if self.awaiting.contains(subject) {
@@ -5413,7 +5473,8 @@ impl Model {
         if let Subject::Task(id) = &subject {
             self.set_front(*id);
         }
-        let keys = self.talk_live(&subject) || start.is_some();
+        let making = subject.task().is_some_and(|id| self.making.iter().any(|making| making.task == id));
+        let keys = self.talk_live(&subject) || start.is_some() || making;
         self.talk = Some(Talk { task: subject.clone(), open: true, keys });
         self.opened.retain(|seen| *seen != subject);
         self.opened.push(subject.clone());
@@ -5423,15 +5484,26 @@ impl Model {
             self.talk_titles.retain(|(r, i, _)| (r, i) != (runner, id));
             self.talk_titles.push((runner.clone(), id.clone(), title));
         }
-        if let Some((start, cwd)) = start {
-            let runner = match &start {
-                agents::Start::New(launch) => Some(launch.runner),
-                agents::Start::Resume { .. } => None,
-            };
-            let brief = brief.filter(|_| runner.is_some());
-            self.starting.push((subject.clone(), runner));
-            effects.push(Effect::StartAgent { task: subject, start, cwd, brief });
+        if let Some(start) = start {
+            self.launch(subject, start, brief, effects);
         }
+    }
+
+    /// Starts a conversation's agent as `agent_start` said: `brief`, a task's materials, for a new one.
+    pub(crate) fn launch(
+        &mut self,
+        subject: Subject,
+        (start, cwd): (agents::Start, Option<String>),
+        brief: Option<String>,
+        effects: &mut Vec<Effect>,
+    ) {
+        let runner = match &start {
+            agents::Start::New(launch) => Some(launch.runner),
+            agents::Start::Resume { .. } => None,
+        };
+        let brief = brief.filter(|_| runner.is_some());
+        self.starting.push((subject.clone(), runner));
+        effects.push(Effect::StartAgent { task: subject, start, cwd, brief });
     }
 
     /// A session became a task's: its conversation, open or with an agent running, is the
@@ -5554,7 +5626,7 @@ impl Model {
     /// The box closed, or its task was added: what it kept for its line is the line's no more.
     pub(crate) fn compose_reset(&mut self) {
         (self.menu, self.compose_refs, self.compose_note) = (Menu::default(), Vec::new(), None);
-        (self.path_shown, self.compose_folder) = (None, None);
+        (self.path_shown, self.compose_folder, self.compose_worktree) = (None, None, false);
     }
 
     /// The folder the user took from the dropdown, as the line has it (`~/notes/`), while a word
@@ -5798,10 +5870,11 @@ impl Model {
         if !plan.starts {
             return Some("↵ files it; nothing starts".into());
         }
-        let place = match (&plan.dir, &plan.branch) {
-            (Some(dir), Some(branch)) => format!("in {dir} on {branch}"),
-            (Some(dir), None) => format!("in {dir}"),
-            (None, _) => "in your home folder".into(),
+        let place = match (&plan.dir, &plan.branch, self.compose_worktree().filter(|choice| choice.new)) {
+            (Some(_), _, Some(choice)) => format!("in a new worktree of {} on {}", choice.repo, choice.branch),
+            (Some(dir), Some(branch), None) => format!("in {dir} on {branch}"),
+            (Some(dir), None, None) => format!("in {dir}"),
+            (None, ..) => "in your home folder".into(),
         };
         let takes = if binds { BINDS_TOO } else { "" };
         Some(format!("↵ will start {} {place}{takes}", plan.agent))
@@ -7297,8 +7370,12 @@ impl Model {
             return effects.push(Effect::Notice { text });
         }
         let path = repos::worktree_dir(&root, &repo, &self.repos, &branch);
+        // A new task's is being made there: its answer must be the task's alone.
+        if self.making.iter().any(|making| making.asked == path) {
+            return effects.push(Effect::Notice { text: repos::BEING_MADE.into() });
+        }
         self.mark_input = None;
-        effects.push(Effect::AddWorktree { repo, branch, path, root });
+        effects.push(Effect::AddWorktree { repo, branch, path, root, fresh: false });
     }
 
     /// "Remove" on a repository's name: its directory comes off the settings, or a notice says
@@ -7811,6 +7888,7 @@ mod tests {
         Action::RepoFold { .. },
         Action::WorktreeEdit { .. },
         Action::WorktreeAdded { .. },
+        Action::WorktreeFailed { .. },
         Action::SetPrs { .. },
         Action::PrOpen { .. },
         Action::RestoreTasks { .. },
@@ -7821,6 +7899,7 @@ mod tests {
         Action::ComposeMove { .. },
         Action::ComposeAccept { .. },
         Action::ComposeFolderClear,
+        Action::ComposeWorktree { .. },
         Action::ComposeTag { .. },
         Action::ComposeAttach { .. },
         Action::ComposeRef { .. },
@@ -8061,7 +8140,8 @@ mod tests {
             Action::RepoClick { path: text(), axis: Right },
             Action::RepoFold { path: text(), fold: None },
             Action::WorktreeEdit { repo: text() },
-            Action::WorktreeAdded { repo: text(), path: text(), repos: Vec::new() },
+            Action::WorktreeAdded { repo: text(), path: text(), asked: text(), repos: Vec::new() },
+            Action::WorktreeFailed { asked: text(), repos: Vec::new() },
             Action::SetPrs { repo: text(), prs: Vec::new(), branches: Vec::new() },
             Action::PrOpen { path: text() },
             Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
@@ -8072,6 +8152,7 @@ mod tests {
             Action::ComposeMove { delta: 1 },
             Action::ComposeAccept { index: 0 },
             Action::ComposeFolderClear,
+            Action::ComposeWorktree { new: None },
             Action::ComposeTag { mark: '>' },
             Action::ComposeAttach { paths: Vec::new(), home: None, unreadable: 0 },
             Action::ComposeRef { target: Pointed::Tab(1) },
@@ -8455,8 +8536,10 @@ mod tests {
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
                     Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
-                    Action::WorktreeEdit { .. } => Some(crate::repos::USERS_ALONE),
-                    Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(crate::repos::USERS_ALONE),
+                    Action::WorktreeEdit { .. } | Action::ComposeWorktree { .. } => Some(crate::repos::USERS_ALONE),
+                    Action::WorktreeAdded { .. } | Action::WorktreeFailed { .. } if origin == Origin::Socket => {
+                        Some(crate::repos::USERS_ALONE)
+                    }
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
@@ -10072,6 +10155,120 @@ mod tests {
         assert_eq!(cwd(&effects, 2).as_deref(), Some("/code/zed"));
         let effects = join(&mut m, "third");
         assert_eq!(cwd(&effects, 3).as_deref(), Some("/code/app-2"), "the default, not the task in front's");
+    }
+
+    /// Where task `id`'s agent was asked to start, by these effects.
+    fn started_in(effects: &[Effect], id: TaskId) -> Option<Option<String>> {
+        effects.iter().find_map(|effect| match effect {
+            Effect::StartAgent { task: Subject::Task(task), cwd, .. } if *task == id => Some(cwd.clone()),
+            _ => None,
+        })
+    }
+
+    /// The owner's canvas: "⌘N here joins this workspace and shares its checkout; the new-task box
+    /// offers a new worktree as the other choice". The user's ↵ with it asks git for one named
+    /// for the task; the task is in the workspace at once, and its agent starts there once it is
+    /// made. A workspace of one task follows it there; with several, only the task moves.
+    #[test]
+    fn the_new_task_box_offers_a_new_worktree_where_the_task_starts_once_it_is_made() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: branched() });
+        let root = "/home/.ottospace/worktrees";
+        let dirs = repos::RepoDirs { worktrees: Some(root.into()), ..Default::default() };
+        m.update(Action::SetRepoDirs { dirs });
+        m.update(Action::RepoClick { path: "/code/app".into(), axis: Right });
+        m.update(Action::OpenCompose { text: "Fix the zoom!".into() });
+        let choice =
+            |new, branch: &str| Some(worktrees::WorktreeChoice { new, repo: "app".into(), branch: branch.into() });
+        assert_eq!(m.compose_worktree(), choice(false, "fix-the-zoom"), "this checkout, by default");
+        let toggle = Action::ComposeWorktree { new: None };
+        for origin in [Origin::Socket, Origin::System] {
+            assert_eq!(m.refusal(&toggle, origin), Some(repos::USERS_ALONE));
+        }
+        m.update(toggle);
+        assert_eq!(m.compose_worktree(), choice(true, "fix-the-zoom"));
+        let said = "↵ will start claude in a new worktree of app on fix-the-zoom, in this workspace";
+        assert_eq!(m.compose_plan_line().as_deref(), Some(said));
+        let path = format!("{root}/app/fix-the-zoom");
+        let asked = |branch: &str, path: &str| Effect::AddWorktree {
+            repo: "/code/app".into(),
+            branch: branch.into(),
+            path: path.into(),
+            root: root.into(),
+            fresh: true,
+        };
+        let effects = m.update(Action::ComposeEnter);
+        assert!(effects.contains(&asked("fix-the-zoom", &path)), "{effects:?}");
+        assert_eq!(started_in(&effects, 1), None, "nothing starts before the worktree is made");
+        // In the workspace at once, its conversation open: it says what it waits for.
+        let of = task_space(1);
+        assert_eq!((m.space(), m.compose_worktree.then_some(())), (&of, None));
+        assert_eq!(m.talk_note().as_deref(), Some("making its worktree fix-the-zoom…"));
+        assert_eq!((m.talk_resumes(), m.agent_dir(&Subject::Task(1))), (None, None));
+        // Made: the agent starts there, and the workspace of one task follows.
+        let mut repos = branched();
+        let listed = |name: &str, path: &str| repos::Worktree {
+            name: name.into(),
+            path: path.into(),
+            branch: Some(name.into()),
+        };
+        repos[0].worktrees.push(listed("fix-the-zoom", &path));
+        let made = |path: &str, repos: &[Repo]| Action::WorktreeAdded {
+            repo: "/code/app".into(),
+            path: path.into(),
+            asked: path.into(),
+            repos: repos.to_vec(),
+        };
+        let effects = m.update(made(&path, &repos).sent_by(Origin::System));
+        assert_eq!(started_in(&effects, 1), Some(Some(path.clone())));
+        assert_eq!((m.task_worktree(1), m.space_worktree(&of), m.space()), (Some(&*path), Some(&*path), &of));
+        // A second there, the same words: the next free branch. Two tasks: only its own moves.
+        m.update(Action::OpenCompose { text: "fix the zoom".into() });
+        m.update(Action::ComposeWorktree { new: Some(true) });
+        assert_eq!(m.compose_worktree(), choice(true, "fix-the-zoom-2"));
+        let second = format!("{root}/app/fix-the-zoom-2");
+        assert!(m.update(Action::ComposeEnter).contains(&asked("fix-the-zoom-2", &second)));
+        repos[0].worktrees.push(listed("fix-the-zoom-2", &second));
+        let effects = m.update(made(&second, &repos).sent_by(Origin::System));
+        assert_eq!(started_in(&effects, 2), Some(Some(second.clone())));
+        assert_eq!((m.task_worktree(2), m.space_worktree(&of)), (Some(&*second), Some(&*path)));
+        // Git refused: the task waits in the workspace's checkout, unstarted; its Start is the user's.
+        m.update(Action::OpenCompose { text: "deploy".into() });
+        m.update(Action::ComposeWorktree { new: Some(true) });
+        m.update(Action::ComposeEnter);
+        let failed = Action::WorktreeFailed { asked: format!("{root}/app/deploy"), repos: repos.clone() };
+        assert_eq!(m.refusal(&failed, Origin::Socket), Some(repos::USERS_ALONE));
+        assert_eq!(m.update(failed.sent_by(Origin::System)), []);
+        assert_eq!((m.talk_note(), m.talk_resumes()), (None, Some(false)));
+        assert_eq!(m.agent_dir(&Subject::Task(3)).as_deref(), Some(&*path));
+        // A line a client wrote, filed by its ↵: no worktree, nothing started.
+        m.update(Action::OpenCompose { text: "theirs".into() }.sent_by(Origin::Socket));
+        m.update(Action::ComposeWorktree { new: Some(true) });
+        let effects = m.update(Action::ComposeEnter.sent_by(Origin::Socket));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::AddWorktree { .. } | Effect::StartAgent { .. })));
+    }
+
+    /// The choice is offered only where the task would work in a listed checkout, and there is
+    /// a folder for worktrees.
+    #[test]
+    fn the_new_worktree_choice_is_absent_with_no_repository_to_make_it_of() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: branched() });
+        m.update(Action::WorkbookNew { uid: "9f3a61c2d4e5b708".into() });
+        m.update(Action::OpenCompose { text: "notes".into() });
+        assert_eq!(m.compose_worktree(), None, "no folder for worktrees");
+        let dirs = repos::RepoDirs { worktrees: Some("/w".into()), ..Default::default() };
+        m.update(Action::SetRepoDirs { dirs });
+        assert_eq!(m.compose_worktree(), None, "a workspace of no repository");
+        m.update(Action::ComposeWorktree { new: Some(true) });
+        assert!(!m.compose_worktree);
+        // The line names one: offered.
+        m.update(Action::FieldEdit { edit: Edit::Insert(" >zed".into()) });
+        assert_eq!(m.compose_worktree().map(|choice| (choice.repo, choice.new)), Some(("zed".into(), false)));
+        // ⇧↵ (for later) makes none.
+        m.update(Action::ComposeWorktree { new: Some(true) });
+        let effects = m.update(Action::ComposeSubmit { open: false });
+        assert!(!effects.iter().any(|e| matches!(e, Effect::AddWorktree { .. })));
     }
 
     const MOVED_SESSION: &str = "8f14e45f-ceea-467f-a8d3-0242ac130009";
@@ -13240,12 +13437,13 @@ mod tests {
             branch: "fix/zoom".into(),
             path: path.into(),
             root: "/home/.ottospace/worktrees".into(),
+            fresh: false,
         };
         assert_eq!((m.update(Action::MarkSubmit), &m.mark_input), (vec![asked], &None));
         // Made: the list as read again, and a terminal there in a workspace named for it.
         let mut repos = listed();
         repos[0].worktrees.push(repos::Worktree { name: "fix-zoom".into(), path: path.into(), branch: None });
-        let made = Action::WorktreeAdded { repo: "/code/app".into(), path: path.into(), repos };
+        let made = Action::WorktreeAdded { repo: "/code/app".into(), path: path.into(), asked: path.into(), repos };
         assert_eq!(m.refusal(&made, Origin::Socket), Some(repos::USERS_ALONE));
         assert_eq!(m.update(made.sent_by(Origin::System)), [Effect::Opened(1)]);
         assert_eq!((m.pane(1).and_then(|p| p.cwd.as_deref()), m.space()), (Some(path), &WORKSPACE));
@@ -14190,8 +14388,10 @@ mod tests {
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
                     Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
-                    Action::WorktreeEdit { .. } => Some(crate::repos::USERS_ALONE),
-                    Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(crate::repos::USERS_ALONE),
+                    Action::WorktreeEdit { .. } | Action::ComposeWorktree { .. } => Some(crate::repos::USERS_ALONE),
+                    Action::WorktreeAdded { .. } | Action::WorktreeFailed { .. } if origin == Origin::Socket => {
+                        Some(crate::repos::USERS_ALONE)
+                    }
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),

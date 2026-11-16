@@ -6257,6 +6257,87 @@ fn a_repos_click_makes_a_workspace_of_its_worktree_where_terminals_and_tasks_sta
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The owner's canvas: "the new-task box offers a new worktree as the other choice". In a
+/// workspace of a real repository, the user's choice and ↵: git makes a worktree named for the
+/// task, the stand-in agent starts there, and the workspace of one task follows. A branch that is
+/// there already: nothing made, the task kept, the notice says why.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_new_task_box_makes_a_new_worktree_and_starts_the_task_there() {
+    let root = support::temp(&format!("ottospace-e2e-box-worktree-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, sessions, app) = (root.join("bin"), root.join("sessions"), root.join("repos/app"));
+    fake_agents(&bin, &sessions);
+    std::fs::create_dir_all(&app).unwrap();
+    git(&app, &["init", "-q", "-b", "main"]);
+    git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"]);
+    git(&app, &["branch", "deploy"]);
+    let app = app.canonicalize().unwrap().to_string_lossy().into_owned();
+    let settings = json!({"repos": [root.join("repos")], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("box-worktree", &settings.to_string());
+    let env = [
+        ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ];
+    let otto = Otto::launch_with("box-worktree", &env);
+    let made = home.canonicalize().unwrap().join("worktrees/app/fix-the-zoom").to_string_lossy().into_owned();
+    let space = |reply: &Value| -> Value {
+        let spaces = reply["spaces"].as_array().cloned().unwrap_or_default();
+        spaces.iter().find(|s| s["selected"] == true).cloned().unwrap_or_default()
+    };
+
+    // The repository's workspace, and the box: this checkout by default, the branch it would make.
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    otto.user_click(at(otto.control(&format!("repo:{app}")), 0.5, 0.5));
+    otto.user_key("cmd-n");
+    let typed = otto.user_key("F i x space t h e space z o o m");
+    assert_eq!(typed["compose_worktree"], json!({"new": false, "repo": "app", "branch": "fix-the-zoom"}));
+    // A client's key changes nothing; the user's does.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-alt-n"}));
+    assert_eq!(reply["compose_worktree"]["new"], false, "a client chose: {}", reply["compose_worktree"]);
+    let chosen = otto.user_key("cmd-alt-n");
+    assert_eq!(chosen["compose_worktree"]["new"], true);
+    let said = "↵ will start claude in a new worktree of app on fix-the-zoom, in this workspace";
+    assert_eq!(chosen["compose_plan_line"], said);
+
+    // ↵: the worktree is made, the agent starts there, the workspace's default follows it.
+    otto.user_key("enter");
+    let started = |dir: String| {
+        let bin = bin.clone();
+        move |_: &Otto| agent_argv(&bin, "claude").filter(|argv| argv.first() == Some(&dir)).map(|_| ())
+    };
+    otto.wait_for("the agent, in the new worktree", started(made.clone()));
+    assert!(Path::new(&made).join(".git").is_file(), "no worktree at {made}");
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(space(&state)["worktree"], json!(made), "{}", space(&state));
+    let listed = state["state"]["repos"][0]["worktrees"].as_array().cloned().unwrap_or_default();
+    assert!(listed.iter().any(|w| w["path"] == made && w["branch"] == "fix-the-zoom"), "{listed:?}");
+
+    // A branch there already: refused, said, the task kept unstarted, the default as it was.
+    std::fs::remove_file(bin.join("claude.argv")).unwrap();
+    otto.user_key("cmd-n");
+    otto.user_key("d e p l o y");
+    otto.user_key("cmd-alt-n");
+    otto.user_key("enter");
+    let refused = |o: &Otto| {
+        let s = o.call(json!({"cmd": "state"}));
+        (s["notice"] == "A branch deploy is there already: no worktree made").then_some(s)
+    };
+    let state = otto.wait_for("the refusal", refused);
+    let tasks = state["state"]["tasks"]["list"].as_array().cloned().unwrap_or_default();
+    let task = |title: &str| tasks.iter().find(|t| t["title"] == title).cloned().unwrap_or_default();
+    assert_eq!((&task("Fix the zoom")["repo"], &task("deploy")["repo"]), (&json!(made), &json!(made)), "{tasks:?}");
+    assert_eq!(task("deploy")["state"], "captured");
+    assert_eq!(space(&state)["worktree"], json!(made));
+    assert!(agent_argv(&bin, "claude").is_none(), "an agent started for the refused task");
+    assert!(!home.join("worktrees/app/deploy").exists());
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A stand-in `claude` whose session says it moves: it starts where it is run, its sub-agent's
 /// worktree (`<repo>/.claude/worktrees/agent-x`, made and listed) is written in its records, then,
 /// once `<root>/go` is there, it makes the worktree `<repos>/app-3` as git lays one out and works
