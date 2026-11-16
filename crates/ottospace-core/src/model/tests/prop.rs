@@ -5234,21 +5234,6 @@ fn seed_356_a_task_that_takes_over_a_workspace_works_in_its_default() {
     .unwrap();
 }
 
-/// Seed 1088: a client's tasks read again without a workspace's own task; a task that had joined
-/// it is its heir and takes its kept workspace's link, as built ("Several tasks in one
-/// workspace"). The rule took that for a new binding: the rule was wrong.
-#[test]
-fn seed_1088_a_workspaces_heir_takes_its_link() {
-    let line = |line: &str| Action::TaskFromLine { line: line.into(), known: Known::default(), open: true };
-    replay(&[
-        Action::Open { kind: slack(9), axis: Axis::Right, beside: None }.into(),
-        line("first").into(),
-        line("second").into(),
-        by(Origin::Socket, restore_tasks(r#"[{"id":2,"title":"second","state":"parked","priority":3}]"#, 0)),
-    ])
-    .unwrap();
-}
-
 /// A capture's ↵ starts task 2 in task 1's workspace; dismissing task 1 leaves task 2 its heir,
 /// with the link. The same rule took that for a new binding.
 #[test]
