@@ -69,6 +69,11 @@ GPUI drops the resize AppKit reports when the frame is set inside one of its upd
 first try left the layout at the old size inside a larger window. The frame is set from a task
 of its own, as GPUI's `zoom_window` does.
 
+Turning the mode off, the window was once not put back: read after the options were reset, its
+frame was no longer the display's, so it counted as moved by the user and stayed. The cause was
+not measured; the likeliest is AppKit keeping the window under the menu bar that comes back.
+Where the window was is now read before the bars return, and the test for it passes.
+
 ## What was chosen, and why
 
 - **The bars overlay; nothing is inset.** While an app is in front its menu bar covers
