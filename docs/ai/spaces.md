@@ -143,7 +143,7 @@ main checkout.
 - **Set by the user's Repos click.** A click on a checkout's row (`repo_click`): the workspace
   whose default it is, else one that holds a live task working there (its task in front); of
   several, the one selected last, then the first on the row. A kept workspace that is closed
-  opens, as its row would. None: a NEW kept workspace after the selected space, named for the
+  opens, as its row would. None: a NEW kept workspace after the selected one (from Home: at the row's end), named for the
   worktree's branch, else its folder (a repository's own folder: the repository's name), that
   checkout its default, one tab with a terminal there, selected. From Home too; and the
   Terminal word from Home (`OpenRepo`, Home's rule) gives the workspace it makes the default.
