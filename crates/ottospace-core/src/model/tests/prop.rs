@@ -99,6 +99,7 @@ impl Gen<'_> {
             name: self.name(WORDS),
             tabs: (0..self.rng.below(3)).map(|_| tab.clone()).collect(),
             task: self.rng.one_in(3).then(|| self.task()),
+            worktree: self.rng.one_in(3).then(|| self.name(DIRS)),
             live: Vec::new(),
             extra: self.extra(),
         }
@@ -1428,6 +1429,11 @@ fn check(m: &Model) -> Result<(), String> {
     // The spaces: Workspace first and shown, each once; each tab of exactly one space on the row,
     // each space's tabs side by side in row order; no space without a tab; exactly one selected
     // (the tab on show's), shown; a task's space of a live task, a workbook's of one kept.
+    // A space's default worktree is a listed checkout, or none.
+    for space in &m.spaces {
+        let default = m.space_worktree(&space.of);
+        ensure!(default.is_none_or(|path| m.repo_listed(path)), "{:?}'s default {default:?} is not listed", space.of);
+    }
     let owners: Vec<&Owner> = m.spaces.iter().map(|space| &space.of).collect();
     ensure!(owners.first() == Some(&&Owner::Home) && !m.spaces[0].hidden, "Workspace is not first: {owners:?}");
     ensure!(unique(&owners), "a space twice: {owners:?}");
@@ -2352,6 +2358,10 @@ impl Run {
             m.workbooks.list.iter().map(|book| (book.uid.clone(), book.task)).collect()
         };
         let (bound_before, panes_before) = (bindings(m), (m.panes.clone(), tab_panes_by_id(m)));
+        let defaults = |m: &Model| -> Vec<(String, Option<String>)> {
+            m.workbooks.list.iter().map(|book| (book.uid.clone(), book.worktree.clone())).collect()
+        };
+        let defaults_before = defaults(m);
         let menu_before = m.row_menu.clone();
         let fronts_before: Vec<(Owner, TaskId)> =
             m.spaces().iter().filter_map(|space| Some((space.of.clone(), m.front(&space.of)?))).collect();
@@ -2611,6 +2621,17 @@ impl Run {
                 ensure!(now == panes_before, "{action:?} bound a workspace and moved or closed a pane");
             }
         }
+        // A workspace's default worktree is set only by the user's act (a Repos click, a worktree
+        // their + made), or the files read again; a new workspace of anyone else's has none.
+        let moved = |(uid, worktree): &(String, Option<String>)| {
+            let was = defaults_before.iter().find(|(known, _)| known == uid).map(|(_, was)| was);
+            was.map_or(worktree.is_some(), |was| was != worktree)
+        };
+        if defaults(m).iter().any(moved) {
+            let read = matches!(action, Action::RestoreWorkbooks { .. });
+            let made = matches!(action, Action::WorktreeAdded { .. });
+            ensure!(read || made || origin == Origin::User, "{origin:?}'s {action:?} changed a workspace's default");
+        }
         // + makes at most one workbook, of no tab, with a new empty tab on show in its space;
         // it records nothing in any other, and no tab there was changes space (above).
         if let Action::WorkbookNew { .. } = action {
@@ -2627,8 +2648,13 @@ impl Run {
             }
         }
         // A step that is not the user's makes a workspace only for a tab that had none to go
-        // to: one at most, with nothing saved, and no workspace there was is on the row.
-        if origin != Origin::User && !matches!(action, Action::RestoreWorkbooks { .. } | Action::RestoreLayout { .. }) {
+        // to: one at most, with nothing saved, and no workspace there was is on the row. A
+        // worktree made (`WorktreeAdded`) is the user's +, and opens as their click would.
+        let users = matches!(action, Action::WorktreeAdded { .. });
+        if origin != Origin::User
+            && !users
+            && !matches!(action, Action::RestoreWorkbooks { .. } | Action::RestoreLayout { .. })
+        {
             let made: Vec<&Workbook> =
                 m.workbooks.list.iter().filter(|book| !uids_before.contains(&book.uid)).collect();
             ensure!(made.len() <= 1, "{origin:?}'s {action:?} made {} workspaces", made.len());

@@ -500,9 +500,13 @@ impl Model {
             let to = match last.filter(|_| !made) {
                 Some(of) => of,
                 None => {
-                    let to = self.stray_workspace(hint);
+                    let to = self.stray_workspace(hint.as_ref().map(|(name, _)| name.clone()));
                     if let Owner::Workbook { id } = to {
                         self.workbooks.note_made(&ids, id);
+                        // The user's, for a folder of the Repos list: it is its default.
+                        if made {
+                            self.workbooks.set_worktree(id, hint.map(|(_, path)| path));
+                        }
                     }
                     to
                 }

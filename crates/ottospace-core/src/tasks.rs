@@ -394,7 +394,7 @@ pub struct Assign {
 pub const MAX_RESOLVED: usize = 1024;
 
 /// A folder an agent may run in: an absolute path, with no control character, not too long.
-fn folder_fits(path: &str) -> bool {
+pub(crate) fn folder_fits(path: &str) -> bool {
     path.starts_with('/') && path.chars().count() <= MAX_RESOLVED && !path.chars().any(char::is_control)
 }
 

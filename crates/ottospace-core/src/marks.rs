@@ -953,7 +953,8 @@ impl Model {
     /// `axis`. Returns its pane.
     pub(crate) fn open_terminal_at(&mut self, axis: Axis, cwd: Option<String>, effects: &mut Vec<Effect>) -> PaneId {
         let pane = self.open(Kind::Terminal, axis, None, effects);
-        if let Some(opened) = self.panes.iter_mut().find(|p| p.id == pane) {
+        // No folder of its own: it keeps its space's default (`start_in_default`).
+        if let Some(opened) = self.panes.iter_mut().find(|p| p.id == pane).filter(|_| cwd.is_some()) {
             opened.cwd = cwd;
         }
         pane
