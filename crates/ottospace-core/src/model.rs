@@ -3998,16 +3998,22 @@ impl Model {
                 if !self.composing() => {}
             Action::ComposeTag { .. } if !self.composing() => {}
             Action::ComposeTag { mark } if TAG_KEYS.iter().any(|(key, _)| key.chars().eq([mark])) => {
-                // Spaced from the words either side: `fix|bug` becomes `fix >|bug`, so taking a
-                // row replaces no word of the user's.
+                // In place of the selection, spaced from the words either side: `fix|bug` becomes
+                // `fix >|bug`, so taking a row replaces no word of the user's. One undo step, whole.
                 let Some(field) = &mut self.compose else { return };
-                let (before, after) = (&field.text()[..field.cursor()], &field.text()[field.cursor()..]);
-                let lead = before.chars().last().is_some_and(|c| !c.is_whitespace());
-                let trail = after.chars().next().is_some_and(|c| !c.is_whitespace());
-                field.apply(Edit::Insert(format!("{}{mark}{}", if lead { " " } else { "" }, if trail { " " } else { "" })));
+                let at = field.selection();
+                let lead = field.text()[..at.start].chars().last().is_some_and(|c| !c.is_whitespace());
+                let trail = field.text()[at.end..].chars().next().is_some_and(|c| !c.is_whitespace());
+                let text = format!("{}{mark}{}", if lead { " " } else { "" }, if trail { " " } else { "" });
+                if !field.fits(at.clone(), &text) {
+                    self.compose_note = Some("no room in the line".into());
+                    return;
+                }
+                field.splice(at, &text);
                 if trail {
                     field.apply(Edit::Move { to: Motion::Left, select: false });
                 }
+                self.compose_note = None;
             }
             Action::ComposeTag { .. } => {}
             Action::ComposePick { mark, name } => self.compose_pick(mark, name),
@@ -11903,6 +11909,23 @@ mod tests {
             m.update(Action::ComposeTag { mark });
         }
         assert_eq!(line(&m), ">app fix # bug");
+        // Its own undo step: ⌘Z takes the mark and its spaces, not the word before.
+        m.update(Action::FieldEdit { edit: Edit::Undo });
+        assert_eq!(line(&m), ">app fixbug");
+        // In place of a selection, spaced from what is outside it.
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::End, select: false } });
+        for _ in 0..3 {
+            m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Left, select: true } });
+        }
+        m.update(Action::ComposeTag { mark: '@' });
+        assert_eq!(line(&m), ">app fix @");
+        // No room for the mark whole: nothing goes in, and the box says so.
+        let full = "x".repeat(MAX_TITLE - 1);
+        m.update(Action::CloseCompose);
+        m.update(Action::OpenCompose { text: full.clone() });
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Left, select: false } });
+        m.update(Action::ComposeTag { mark: '#' });
+        assert_eq!((line(&m), m.compose_note()), (full.as_str(), Some("no room in the line")));
     }
 
     #[test]
