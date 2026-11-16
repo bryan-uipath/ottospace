@@ -433,9 +433,11 @@ impl Workbooks {
         self.list.iter_mut().find(|book| book.id == id)
     }
 
-    /// `name`, or `name 2`, `name 3`: no two workbooks share a name.
+    /// `name`, or `name 2`, `name 3`: no two workbooks share a name, nor one the name of a
+    /// workbook an undo may bring back.
     fn unique_name(&self, name: &str, but: Option<WorkbookId>) -> String {
-        let taken = |name: &str| self.list.iter().any(|book| Some(book.id) != but && book.name == name);
+        let books = || self.list.iter().chain(self.deleted());
+        let taken = |name: &str| books().any(|book| Some(book.id) != but && book.name == name);
         marks::unique_name(name, "workspace", taken)
     }
 
@@ -1389,6 +1391,19 @@ mod tests {
         assert_eq!(m.workbooks.offered(), None);
         m.update(Action::WorkbookNew { uid: UID.into() });
         assert_eq!(names(&m), ["Workspace 2", "Workspace 3"]);
+    }
+
+    /// A rename does not take it either: the deleted one comes back under its own name.
+    #[test]
+    fn a_rename_takes_no_name_an_undo_may_bring_back() {
+        let mut m = Model::default();
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::WorkbookNew { uid: UID_2.into() });
+        m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        m.workbook_rename(2, None, "Workspace 2");
+        assert_eq!(names(&m), ["Workspace 2 2"]);
+        m.update(Action::WorkbookUndo);
+        assert_eq!(names(&m), ["Workspace 2", "Workspace 2 2"]);
     }
 
     #[test]
