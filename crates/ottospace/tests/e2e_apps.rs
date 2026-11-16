@@ -1700,3 +1700,48 @@ fn a_killed_ottospace_has_its_guardian_give_a_peeked_window_back() {
     });
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_live_window_moves_down_with_its_pane_under_the_notice_bar() {
+    const RIGHT: &str = r#"{"repos": [], "restore_layout": false}"#;
+    let home = support::temp(&format!("otto-apps-notice-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).expect("make the folder");
+    std::fs::write(home.join("settings.json"), RIGHT).expect("write settings");
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-notice", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = otto_for(&canary, "otto-notice", &[("OTTOSPACE_HOME", home.to_str().expect("a plain path"))]);
+    let state = || otto.call(json!({"cmd": "state"}));
+    host_and_park(&otto);
+    let crop = || state()["crop"]["1"].as_f64().filter(|c| (16.0..=40.0).contains(c));
+    let cropped = wait_for("the title bar's crop", crop);
+    // The one pane is the top pane. Live: the window's title bar covers the pane's header.
+    assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
+    let pane = || rect(&state()["bounds"]["1"]).filter(|b| b[2] > 1.0);
+    let hosted = || rect(&state()["hosted"]["1"]);
+    let body = wait_for("the pane layout", pane);
+    // Settled over its pane: two reads the same, and as tall as the pane and its title bar.
+    let settled = || {
+        let (a, b) = (hosted()?, hosted()?);
+        (a == b && close(a[3], pane()?[3] + cropped)).then_some(a)
+    };
+    let live = wait_for("the window over its pane", settled);
+
+    // An error: the bar opens, the pane moves down by its height and the window with it, its
+    // title bar still on the header: under the bar, never over it.
+    std::fs::write(home.join("settings.json"), "{ not json").expect("write settings");
+    wait_for("the notice bar", || Some(state()).filter(|s| s["notice_bar"]["height"] == 28.0));
+    let lower = wait_for("the pane under the bar", || pane().filter(|b| close(b[1], body[1] + 28.0)));
+    assert!(close(lower[3], body[3] - 28.0), "{lower:?} from {body:?}");
+    let moved = wait_for("the window under the bar", || settled().filter(|f| close(f[1], live[1] + 28.0)));
+    assert!(close(moved[0], live[0]) && close(moved[3], lower[3] + cropped), "{moved:?} from {live:?}");
+    assert_eq!(crop(), Some(cropped), "the title bar is still cropped");
+
+    // Fixed: the bar closes and the window is back where it was.
+    std::fs::write(home.join("settings.json"), RIGHT).expect("write settings");
+    wait_for("the bar to close", || Some(state()).filter(|s| s["notice_bar"].is_null()));
+    wait_for("the window back up", || settled().filter(|f| close(f[1], live[1]) && close(f[3], live[3])));
+    assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
+    let _ = std::fs::remove_dir_all(&home);
+}

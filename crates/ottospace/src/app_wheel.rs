@@ -58,7 +58,7 @@ impl Workspace {
         crate::trace::record("peek", serde_json::json!({ "pane": pane, "window": hosted.window_id }));
         // An inactive app's window stays under the active app's (AXRaise alone, or ottospace's
         // window ordered below it, left it there on CI): the app is activated, as on entering.
-        hosted.bring_up(window, cx);
+        hosted.bring_up(self.bar.height, window, cx);
         self.wheel.peeks += 1;
         self.wheel.since = Some(Instant::now());
     }

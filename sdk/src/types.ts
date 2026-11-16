@@ -1095,6 +1095,25 @@ export interface AppEntry {
   icon: boolean;
 }
 
+/** A notice's level, least pressing first. */
+export type NoticeLevel = "info" | "warning" | "error";
+
+/** The notice bar: one message, full width under the top row. */
+export interface NoticeBar {
+  /** What it is about: `failed`, `refused`, `unsaved`, `told`, `settings_problem`, `settings_retired`, `settings_restart`, `start`, `keys`, `editor`. */
+  kind: string;
+  level: NoticeLevel;
+  text: string;
+  /** What it offers beside the text: `open_settings`, or null. */
+  offer: string | null;
+  offer_rect: Rect | null;
+  /** Its ×. Only the user's click dismisses. */
+  close: Rect | null;
+  rect: Rect | null;
+  /** How much of it shows: less than 28 while it opens or closes. The rest of the window starts this much lower. */
+  height: number;
+}
+
 /** The reply to most requests: the full state after the request. */
 export interface Snapshot {
   ok: true;
@@ -1138,10 +1157,12 @@ export interface Snapshot {
   font: { name: string; size: number };
   /** One character cell: `[w, h]` in points. */
   cell: [number, number];
-  /** The problem the status bar shows. Not an error of this request. */
+  /** What the notice bar says to the user. Not an error of this request. */
   notice: string | null;
-  /** How the status bar draws `notice`: `info` (muted) or `error`. */
-  notice_level: "info" | "error" | null;
+  /** Its level: the bar's colour. */
+  notice_level: NoticeLevel | null;
+  /** The notice bar as drawn, or null while it takes no room. */
+  notice_bar: NoticeBar | null;
   /** How many problems the last read of `settings.json` found: the first is in `notice`. */
   settings_errors: number;
   /** The user's editor on a draft, or null while none runs. */

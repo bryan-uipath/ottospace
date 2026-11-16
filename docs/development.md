@@ -141,6 +141,7 @@ folder), `{REPO}` (the checkout), `{NOW+3600}` (an ICS time from now) and `{TODA
 | `{"until":"drawer.native.chats.1.transcript.cards","len":1}` | waits on the state (`"is"`, `"len"`, or there at all) |
 | `{"settle":500}`, `{"sleep_ms":700}` | waits |
 | `{"record":"start"}`, `{"record":"stop"}` | what `--record` covers (default: all of it) |
+| `{"write":"home/settings.json","text":"{}"}` | a file in the instance's own folder, as an editor saves it |
 | `{"env":{..}}` | first line only: more environment for the instance |
 | `{"controls":true}`, `{"print":"repos_bar"}` | prints the named controls, or a part of the state, while writing one |
 
