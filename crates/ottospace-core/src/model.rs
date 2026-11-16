@@ -30,7 +30,7 @@ use crate::settings::{Installed, closed_apps};
 use crate::sneak::{Sneak, Typed};
 use crate::talk::{self, Subject, Talk};
 use crate::tasks::{
-    self, Assign, Heading, MAX_TITLE, Moved, NOTICE_MS, Notice, Ref, RefKind, State, Task, TaskId, TaskRow,
+    self, Assign, Caller, Heading, MAX_TITLE, Moved, NOTICE_MS, Notice, Ref, RefKind, State, Task, TaskId, TaskRow,
     TaskSection, Tasks,
 };
 use crate::workbook::{self, History, Workbook, WorkbookId, Workbooks};
@@ -119,6 +119,10 @@ pub const CONFIRM_UP: &str = "the quit question is up";
 /// What the new-task box says when ↵ would make the selected workspace the task's.
 pub const BINDS: &str = "↵ starts it in this workspace";
 const BINDS_TOO: &str = ", in this workspace";
+/// A `task_brief` with no task to give.
+const NAME_A_TASK: &str = "name a task: {\"cmd\":\"task_brief\",\"id\":7}";
+/// A `task_brief` whose pass no live agent holds. Wrong or ended alike: which, it does not say.
+const STALE_PASS: &str = "this pass is no running agent's: ask the user to start the task's agent again";
 /// Why a client may not link a tab to a task, or unlink it.
 pub const TABS_USERS: &str = "only the user says which space a tab is of";
 /// Why a client's Open Settings is refused.
@@ -6988,6 +6992,20 @@ impl Model {
         self.front(self.space())
     }
 
+    /// Whose brief `task_brief` gives: the task named; else the caller's (its pass); else the
+    /// task of tab `tab`, the one on show, the drawer's. A pass no live agent holds gets none:
+    /// a dead agent's child is not handed whatever task is on show.
+    pub fn brief_task(&self, id: Option<TaskId>, caller: Caller, tab: Option<u32>) -> Result<TaskId, &'static str> {
+        let of_tab = || tab.and_then(|tab| self.tabs.iter().find(|t| t.id == tab)).and_then(|t| t.space.task());
+        let talking = || self.talk.as_ref().and_then(|talk| talk.task.task());
+        match (id, caller) {
+            (Some(id), _) => Ok(id),
+            (None, Caller::Task(id)) => Ok(id),
+            (None, Caller::Unknown) => Err(STALE_PASS),
+            (None, Caller::Anyone) => of_tab().or_else(|| self.tab_task()).or_else(talking).ok_or(NAME_A_TASK),
+        }
+    }
+
     /// Moves a tab into a space, or before a tab, taking that one's space. The tab on show stays
     /// on show, its space selected.
     fn place_tab(&mut self, tab: Option<u32>, at: TabAt) {
@@ -9263,6 +9281,25 @@ mod tests {
         m.update(Action::TaskDismiss { id: a }.sent_by(Origin::Socket));
         m.update(theirs.sent_by(Origin::User));
         assert_eq!(m.tabs.iter().find(|tab| tab.id == 1).map(|tab| &tab.space), Some(&WORKSPACE));
+    }
+
+    #[test]
+    fn a_brief_goes_to_the_task_named_then_the_callers_then_the_one_on_show() {
+        let mut m = Model::default();
+        let (a, b) = (add_task(&mut m, "fix login", State::Running), add_task(&mut m, "docs", State::Running));
+        // Nothing on show: only a name or a pass finds a task.
+        assert_eq!(m.brief_task(None, Caller::Anyone, None), Err(NAME_A_TASK));
+        assert_eq!(m.brief_task(None, Caller::Task(b), None), Ok(b));
+        m.update(Action::SpaceOpen { space: task_space(a) }); // tab 1, on show
+        assert_eq!(m.brief_task(None, Caller::Anyone, None), Ok(a));
+        assert_eq!(m.brief_task(None, Caller::Anyone, Some(1)), Ok(a));
+        // The caller's own, whatever is on show; a name wins over both.
+        assert_eq!(m.brief_task(None, Caller::Task(b), Some(1)), Ok(b));
+        assert_eq!(m.brief_task(Some(a), Caller::Task(b), None), Ok(a));
+        // A pass no live agent holds: none, never the task on show.
+        assert_eq!(m.brief_task(None, Caller::Unknown, None), Err(STALE_PASS));
+        assert_eq!(m.brief_task(None, Caller::Unknown, Some(1)), Err(STALE_PASS));
+        assert_eq!(m.brief_task(Some(b), Caller::Unknown, None), Ok(b));
     }
 
     #[test]

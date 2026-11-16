@@ -85,6 +85,7 @@ mod marks;
 mod menus;
 mod new_task;
 mod notice_bar;
+mod pass;
 mod progress;
 mod prs;
 mod record;
@@ -1881,7 +1882,7 @@ impl Workspace {
         if !calls.is_empty() {
             self.check_marks(cx);
         }
-        for Call { request, reply } in calls {
+        for Call { request, reply, pass } in calls {
             if let Some(why) = control::test_refusal(&request, std::env::var_os("OTTOSPACE_E2E").is_some()) {
                 let _ = reply.send(control::error(why));
                 continue;
@@ -2261,7 +2262,8 @@ impl Workspace {
                     }
                 },
                 Request::TaskBrief { id, tab } => {
-                    let _ = reply.send(self.serve_brief(id, tab));
+                    let caller = self.caller(pass.as_ref());
+                    let _ = reply.send(self.serve_brief(id, caller, tab));
                     continue;
                 }
                 Request::Capture { pane, history } => {
@@ -6426,7 +6428,9 @@ fn ctl(args: &[String]) -> ! {
         eprintln!("usage: ottospace ctl '{{\"cmd\":\"state\"}}'");
         std::process::exit(2);
     };
-    let reply = control::send(&control::path(), request).unwrap_or_else(|err| {
+    // An agent ottospace started for a task carries its pass: the reply knows whose it is.
+    let request = control::with_pass(request, std::env::var(pass::VAR).ok().as_deref());
+    let reply = control::send(&control::path(), &request).unwrap_or_else(|err| {
         eprintln!("no ottospace at {}: {err}", control::path().display());
         std::process::exit(1);
     });
@@ -6491,6 +6495,9 @@ fn main() {
     if args.get(1).is_some_and(|a| a == "ctl") {
         ctl(&args[2..]);
     }
+    // Started from a task agent's shell (a dev build): that pass is its, not for our children.
+    // SAFETY: no thread has started yet.
+    unsafe { std::env::remove_var(pass::VAR) };
     // Hidden while its output has no stable shape. Reads other programs' session files.
     if args.get(1).is_some_and(|a| a == "sessions") {
         sessions(args.get(2));
