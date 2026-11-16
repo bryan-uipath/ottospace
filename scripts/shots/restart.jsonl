@@ -1,0 +1,8 @@
+# After a restart: a task whose agent ran when ottospace last quit (its file kept the link as
+# running) and its session's file. The drawer shows the session's past (calls, an edit's diff, a
+# line per message) and Resume: no "live in another terminal". Nothing is started.
+{"cmd":"split","kind":"empty"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"settle":3000}
+{"shot":"past"}
