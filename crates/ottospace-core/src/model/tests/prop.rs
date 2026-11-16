@@ -376,7 +376,7 @@ impl Gen<'_> {
             project: self.rng.coin().then(|| self.name(REPOS)),
             repo: self.rng.coin().then(|| self.name(DIRS)),
             folder: self.rng.one_in(4).then(|| self.name(DIRS)),
-            worktree: self.rng.one_in(4).then(|| self.name(DIRS)),
+            worktree: self.rng.one_in(4).then(|| self.name(CWDS)),
             agent: self.rng.coin().then(|| self.name(AGENTS)),
             paths: self.names(DIRS, 2),
             resolved: self.names(DIRS, 2),
@@ -1433,6 +1433,9 @@ fn check(m: &Model) -> Result<(), String> {
     // The spaces: Workspace first and shown, each once; each tab of exactly one space on the row,
     // each space's tabs side by side in row order; no space without a tab; exactly one selected
     // (the tab on show's), shown; a task's space of a live task, a workbook's of one kept.
+    // A sub-agent's worktree is never a task's.
+    let sub = m.tasks.list.iter().find(|task| task.worktree.as_deref().is_some_and(crate::model::subagent_path));
+    ensure!(sub.is_none(), "a sub-agent's worktree is a task's: {sub:?}");
     let owners: Vec<&Owner> = m.spaces.iter().map(|space| &space.of).collect();
     ensure!(owners.first() == Some(&&Owner::Home) && !m.spaces[0].hidden, "Workspace is not first: {owners:?}");
     ensure!(unique(&owners), "a space twice: {owners:?}");
@@ -2366,6 +2369,10 @@ impl Run {
             m.workbooks.list.iter().map(|book| (book.uid.clone(), book.worktree.clone())).collect()
         };
         let defaults_before = defaults(m);
+        let task_worktrees = |m: &Model| -> Vec<(TaskId, Option<String>)> {
+            m.tasks.list.iter().map(|task| (task.id, task.worktree.clone())).collect()
+        };
+        let task_worktrees_before = task_worktrees(m);
         let menu_before = m.row_menu.clone();
         let fronts_before: Vec<(Owner, TaskId)> =
             m.spaces().iter().filter_map(|space| Some((space.of.clone(), m.front(&space.of)?))).collect();
@@ -2631,10 +2638,34 @@ impl Run {
             let was = defaults_before.iter().find(|(known, _)| known == uid).map(|(_, was)| was);
             was.map_or(worktree.is_some(), |was| was != worktree)
         };
+        // Or its one task's agent moved (its session read, or the list read again for it).
+        // (Anyone's list read again may find the folder the session said: the agent chose it, not they.)
+        let follows = match action {
+            Action::SessionWork { .. } => origin != Origin::Socket,
+            Action::SetRepos { .. } | Action::WorktreeAdded { .. } => true,
+            _ => false,
+        };
         if defaults(m).iter().any(moved) {
             let read = matches!(action, Action::RestoreWorkbooks { .. });
             let made = matches!(action, Action::WorktreeAdded { .. });
-            ensure!(read || made || origin == Origin::User, "{origin:?}'s {action:?} changed a workspace's default");
+            ensure!(
+                read || made || follows || origin == Origin::User,
+                "{origin:?}'s {action:?} changed a workspace's default"
+            );
+        }
+        // A task's worktree moves only with its agent: the system's reading of its session (or the
+        // list read again for a folder it said), or the tasks read again.
+        let changed = task_worktrees(m)
+            .into_iter()
+            .filter(|(id, worktree)| task_worktrees_before.iter().any(|(was, before)| was == id && before != worktree));
+        if let Some((id, worktree)) = changed.into_iter().next() {
+            let read = matches!(action, Action::RestoreTasks { .. });
+            let follows = match action {
+                Action::SessionWork { .. } => origin != Origin::Socket,
+                Action::SetRepos { .. } | Action::WorktreeAdded { .. } => true,
+                _ => false,
+            };
+            ensure!(read || follows, "{origin:?}'s {action:?} moved task {id} to {worktree:?}");
         }
         // + makes at most one workbook, of no tab, with a new empty tab on show in its space;
         // it records nothing in any other, and no tab there was changes space (above).

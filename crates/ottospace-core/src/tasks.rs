@@ -518,7 +518,9 @@ impl Tasks {
             task.materials.retain(kept);
             task.materials.dedup();
             task.folder = task.folder.take().filter(|path| folder_fits(path));
-            task.worktree = task.worktree.take().filter(|path| folder_fits(path));
+            // A sub-agent's worktree is never the task's.
+            let sub = |path: &String| crate::model::subagent_path(path);
+            task.worktree = task.worktree.take().filter(|path| folder_fits(path) && !sub(path));
         }
         self.next_id = tasks.last().map_or(0, |task| task.id).max(floor.min(MAX_ID));
         // A task from before colours, or with one out of range, is given one, oldest first.

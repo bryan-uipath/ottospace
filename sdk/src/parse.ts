@@ -444,6 +444,7 @@ function task(value: unknown, at: string): Task {
     project: orNull(str)(o.project, `${at}.project`),
     repo: orNull(str)(o.repo, `${at}.repo`),
     ...(o.folder === undefined ? {} : { folder: str(o.folder, `${at}.folder`) }),
+    ...(o.worktree === undefined ? {} : { worktree: str(o.worktree, `${at}.worktree`) }),
     agent: orNull(str)(o.agent, `${at}.agent`),
     paths: list(str)(o.paths, `${at}.paths`),
     resolved: list(str)(o.resolved, `${at}.resolved`),

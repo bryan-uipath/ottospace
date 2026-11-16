@@ -1628,6 +1628,10 @@ impl Workspace {
                     }
                 }
                 Effect::ForgetLayout => self.forget_layout(),
+                // An agent moved into a folder the list does not hold yet: a worktree just made.
+                Effect::ReadRepos => {
+                    self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
+                }
                 Effect::Snapshot { draft, material, pane } => self.ask_snapshot(draft, *material, *pane),
                 Effect::CaptureDropped { draft, material } => self.drop_capture(draft, *material),
                 Effect::CaptureKept { draft, dir, brief } => self.keep_capture(draft, dir, brief, cx),
@@ -2497,8 +2501,8 @@ impl Workspace {
                 sessions::Read::Work(list) => worked.extend(list),
             }
         }
-        for work in worked {
-            self.dispatch(Action::SessionWork { work }, Origin::System, window, cx);
+        for (work, cwd) in worked {
+            self.dispatch(Action::SessionWork { work, cwd }, Origin::System, window, cx);
             cx.notify();
         }
         if let Some(seen) = seen {

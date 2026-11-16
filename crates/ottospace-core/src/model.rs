@@ -10041,6 +10041,141 @@ mod tests {
         assert_eq!(cwd(&effects, 3).as_deref(), Some("/code/app-2"), "the default, not the task in front's");
     }
 
+    const MOVED_SESSION: &str = "8f14e45f-ceea-467f-a8d3-0242ac130009";
+
+    /// What the shell reads of task `id`'s session, as the system: it says its agent is in `cwd`.
+    fn agent_in(m: &mut Model, runner: &str, cwd: &str) -> Vec<Effect> {
+        let work = progress::Work { runner: runner.into(), session: MOVED_SESSION.into(), ..Default::default() };
+        m.update(Action::SessionWork { work, cwd: Some(cwd.into()) }.sent_by(Origin::System))
+    }
+
+    /// The workspace of the repository's own folder, its one task started there and following session
+    /// `MOVED_SESSION` of `runner`.
+    fn one_task_in_app(runner: &str) -> Model {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: branched() });
+        m.update(Action::RepoClick { path: "/code/app".into(), axis: Right });
+        join(&mut m, "first");
+        m.tasks.link(1, sessions::Link { runner: runner.into(), id: MOVED_SESSION.into(), state: None });
+        m
+    }
+
+    /// The owner: "an agent could create a worktree when starting a task - in that case, we'd want
+    /// the workspace associated with that task to connect to that worktree". Its session says it
+    /// works in another checkout of its repository: the task works there, and so does its
+    /// workspace, which had the task's old one and no other task.
+    #[test]
+    fn a_task_follows_its_agent_into_a_worktree_and_so_does_its_workspace_of_one_task() {
+        let mut m = one_task_in_app("claude");
+        let of = task_space(1);
+        assert_eq!((m.task_worktree(1), m.space_worktree(&of)), (Some("/code/app"), Some("/code/app")));
+        // A `cd` in its own checkout moves nothing.
+        agent_in(&mut m, "claude", "/code/app");
+        assert_eq!(m.task_worktree(1), Some("/code/app"));
+        let effects = agent_in(&mut m, "claude", "/code/app-2/src");
+        assert!(!effects.contains(&Effect::ReadRepos), "listed already: {effects:?}");
+        assert_eq!((m.task_worktree(1), m.space_worktree(&of)), (Some("/code/app-2"), Some("/code/app-2")));
+        assert_eq!(m.tasks.get(1).and_then(|task| task.worktree.as_deref()), Some("/code/app-2"), "kept with the task");
+        // A terminal opened there now starts in the new one; so does an agent started afresh.
+        term(&mut m);
+        assert_eq!(m.focused.and_then(|id| m.pane(id)).and_then(|p| p.cwd.as_deref()), Some("/code/app-2"));
+        m.tasks.list[0].session = None;
+        assert_eq!(m.agent_dir(&Subject::Task(1)).as_deref(), Some("/code/app-2"));
+        // A client says nothing of where an agent works.
+        let theirs = progress::Work { runner: "claude".into(), session: "x".into(), ..Default::default() };
+        let action = Action::SessionWork { work: theirs, cwd: Some("/code/app".into()) };
+        assert_eq!(m.refusal(&action, Origin::Socket), Some("only ottospace reads sessions"));
+    }
+
+    /// The owner: "good call on differentiating the subagent worktrees". A sub-agent's worktree is
+    /// never the task's; nor is anything a runner whose records do not move with its agent says.
+    #[test]
+    fn a_subagents_worktree_and_a_runner_that_never_moves_move_no_task() {
+        let mut repos = branched();
+        let sub = "/code/app/.claude/worktrees/agent-a1b2";
+        repos[0].worktrees.push(repos::Worktree { name: "agent-a1b2".into(), path: sub.into(), branch: None });
+        let mut m = one_task_in_app("claude");
+        m.update(Action::SetRepos { repos: repos.clone() });
+        let effects = agent_in(&mut m, "claude", &format!("{sub}/src"));
+        assert_eq!((m.task_worktree(1), effects.contains(&Effect::ReadRepos)), (Some("/code/app"), false));
+        assert!(
+            subagent_path(sub) && !subagent_path("/code/app/.claude/worktrees/fix") && !subagent_path("/code/agent-x")
+        );
+        // Codex: its `turn_context` cwd is the client's, never the agent's.
+        let mut m = one_task_in_app("codex");
+        agent_in(&mut m, "codex", "/code/app-2");
+        assert_eq!(m.task_worktree(1), Some("/code/app"));
+        // Another repository's checkout is no worktree of the task's.
+        let mut m = one_task_in_app("claude");
+        agent_in(&mut m, "claude", "/code/zed");
+        assert_eq!(m.task_worktree(1), Some("/code/app"));
+    }
+
+    /// A worktree made a moment ago may not be in the list yet: it is read again, every
+    /// `MOVE_RETRY_MS` for `MOVE_WAIT_MS`, and the task follows once it is there.
+    #[test]
+    fn a_worktree_not_listed_yet_is_looked_for_again_a_while() {
+        let mut m = one_task_in_app("claude");
+        m.update(Action::Tick { now: 1_000 });
+        let fresh = "/code/app/.claude/worktrees/fix-zoom";
+        assert!(agent_in(&mut m, "claude", fresh).contains(&Effect::ReadRepos));
+        assert_eq!(m.task_worktree(1), Some("/code/app"));
+        // Said again by the next read: not asked again at once.
+        assert!(!agent_in(&mut m, "claude", fresh).contains(&Effect::ReadRepos));
+        assert!(!m.update(Action::Tick { now: 1_000 + MOVE_RETRY_MS - 1 }).contains(&Effect::ReadRepos));
+        assert!(m.update(Action::Tick { now: 1_000 + MOVE_RETRY_MS }).contains(&Effect::ReadRepos));
+        // Listed now: the task works there.
+        let mut repos = branched();
+        repos[0].worktrees.push(repos::Worktree { name: "fix-zoom".into(), path: fresh.into(), branch: None });
+        m.update(Action::SetRepos { repos }.sent_by(Origin::System));
+        assert_eq!(m.task_worktree(1), Some(fresh));
+        assert!(!m.update(Action::Tick { now: 1_000 + 2 * MOVE_RETRY_MS }).contains(&Effect::ReadRepos));
+        // One never listed: asked for until the wait is over, then no more.
+        agent_in(&mut m, "claude", "/code/app-9");
+        let asks = (1..=10).filter(|n| {
+            let now = 1_000 + 2 * MOVE_RETRY_MS + n * MOVE_RETRY_MS;
+            m.update(Action::Tick { now }).contains(&Effect::ReadRepos)
+        });
+        assert_eq!(asks.count() as u64, MOVE_WAIT_MS / MOVE_RETRY_MS);
+        assert_eq!(m.task_worktree(1), Some(fresh));
+    }
+
+    /// The owner: with several tasks in a workspace, one that moves "like the subagent case": the
+    /// workspace does not change; that task has its own worktree, and says so.
+    #[test]
+    fn a_task_that_moves_in_a_workspace_of_several_leaves_its_default_as_it_is() {
+        let mut m = one_task_in_app("claude");
+        join(&mut m, "second");
+        agent_in(&mut m, "claude", "/code/app-2");
+        let of = task_space(1);
+        assert_eq!((m.task_worktree(1), m.task_worktree(2), m.space_worktree(&of)), {
+            (Some("/code/app-2"), Some("/code/app"), Some("/code/app"))
+        });
+        assert_eq!((m.worktree_label(1), m.worktree_label(2)), (Some("app-2".into()), Some("app".into())));
+        // A task that joins now starts in the workspace's default.
+        join(&mut m, "third");
+        assert_eq!(m.task_worktree(3), Some("/code/app"));
+    }
+
+    /// A task's worktree is kept in its file; an older file, or one that could be no folder, has none.
+    #[test]
+    fn a_tasks_worktree_is_kept_and_an_older_file_has_none() {
+        let mut m = Model::default();
+        let kept = |worktree: &str| {
+            let text =
+                format!(r#"{{"id":7,"title":"app","state":"captured","priority":3,"repo":"/code/app"{worktree}}}"#);
+            serde_json::from_str::<Task>(&text).expect("kept")
+        };
+        m.update(Action::RestoreTasks { tasks: vec![kept(""), kept(r#","worktree":"relative""#)], floor: 7 });
+        assert!(m.tasks.list.iter().all(|task| task.worktree.is_none()));
+        let task = kept(r#","worktree":"/code/app-2""#);
+        let text = serde_json::to_string(&task.for_file()).expect("written");
+        assert_eq!(
+            serde_json::from_str::<Task>(&text).map(|task| task.worktree).ok(),
+            Some(Some("/code/app-2".into()))
+        );
+    }
+
     /// Where a workspace's tasks work in different worktrees, each says which; else none does.
     #[test]
     fn a_tasks_worktree_is_named_only_where_its_workspaces_tasks_are_apart() {
