@@ -527,7 +527,8 @@ impl Workspace {
                 .when(on, |d| {
                     d.flex_1().min_w(px(96.)).bg(rgb(theme::SELECTED)).text_xs().child(crate::cut_text(title).flex_1())
                 })
-                .when(!on, |d| d.flex_none().hover(|s| s.bg(rgb(theme::SELECTED))))
+                // Below the one in front.
+                .when(!on, |d| d.flex_none().hover(|s| s.bg(rgb(theme::SELECTED))).child(crate::inner_shade(false, 6.)))
                 .child(self.controls.mark(format!("strip:{id}")))
                 .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
                 .on_click(cx.listener(move |this, _, window, cx| {

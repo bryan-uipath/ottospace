@@ -4638,10 +4638,12 @@ impl Workspace {
         let heading = heading.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(total.clone()))));
         let mut rows = vec![heading.into_any_element()];
         listed += 1;
+        let mut group = Vec::new();
         for row in &bar.rows {
-            rows.push(self.session_row(row, self.model.list == Some(listed), cx));
+            group.push(self.session_row(row, self.model.list == Some(listed), cx));
             listed += 1;
         }
+        rows.extend(well(group, 4.));
         rows
     }
 
@@ -4695,12 +4697,14 @@ impl Workspace {
                 self.heading_row(section.heading, section.count, section.collapsed, selected, cx).into_any_element(),
             );
             listed += 1;
+            let mut group = Vec::new();
             for row in &section.rows {
                 if let Some(task) = self.model.tasks.get(row.id) {
-                    rows.push(self.task_row(task, row, self.model.list == Some(listed), cx));
+                    group.push(self.task_row(task, row, self.model.list == Some(listed), cx));
                 }
                 listed += 1;
             }
+            rows.extend(well(group, 4.));
         }
         // Nothing listed: say so, with the button that files a task.
         let empty = rows.is_empty().then(|| {
@@ -4852,13 +4856,15 @@ impl Workspace {
                 let line = div().flex_none().pl(px(26.)).pr_2().py_0p5().rounded_md().border_1();
                 items.push(line.border_color(rgb(theme::MARK)).text_size(px(13.)).child(field).into_any_element());
             }
+            let mut group = Vec::new();
             for checkout in checkouts {
                 if !folded {
-                    items.push(row(index, at, checkout, cx).into_any_element());
+                    group.push(row(index, at, checkout, cx).into_any_element());
                     at += 1;
                 }
                 index += 1;
             }
+            items.extend(well(group, 0.));
         }
         let empty = self.model.repos.is_empty().then(|| {
             let roots: Vec<String> = repos::roots().iter().map(|root| root.display().to_string()).collect();
@@ -5500,10 +5506,15 @@ impl Workspace {
             .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New workspace".into()))))
             .on_click(cx.listener(|this, _, window, cx| this.new_workspace(window, cx)));
         // The traffic lights sit over the left column: room for them only where it is narrower.
+        let lights = (TRAFFIC_LIGHTS - left).max(0.);
+        // The row sits below the selected space: a shadow at its foot, which only that space covers.
+        let below = inner_shade(false, 7.).left(px(lights));
         div()
             .h(px(TOP_BAR))
             .flex_none()
-            .pl(px((TRAFFIC_LIGHTS - left).max(0.)))
+            .relative()
+            .child(below)
+            .pl(px(lights))
             .flex()
             .items_center()
             .border_b_1()
@@ -5599,6 +5610,8 @@ impl Workspace {
                         let line = div().absolute().left_0().right_0().bottom_0().h(px(2.)).bg(rgb(colour));
                         d.text_color(rgb(theme::TEXT)).child(line)
                     })
+                    // A tab not on show sits below the one that is.
+                    .when(!active, |d| d.child(inner_shade(false, 6.)))
                     .hover(|s| s.text_color(rgb(theme::TEXT)))
                     .child(mark(&self.marks, Mark::Tab(place)))
                     .children(
@@ -5813,13 +5826,43 @@ fn title_shadow() -> Div {
 /// `inner` as if it lay under the app, seen through a gap: a shadow falls on its top and bottom
 /// edges, `depth` points deep. The shadows take no room and no clicks; the caller sizes the result.
 pub(crate) fn recessed(inner: impl IntoElement, depth: f32) -> Div {
+    div().relative().overflow_hidden().child(inner).child(inner_shade(true, depth)).child(inner_shade(false, depth))
+}
+
+/// The shadow cast into a box from its top (`top`) or bottom edge, `depth` points deep: the box
+/// sits below its edge. It takes no room and no clicks; the box is `relative`.
+pub(crate) fn inner_shade(top: bool, depth: f32) -> Div {
     let (dark, clear) = (black().opacity(0.6), black().opacity(0.));
-    let edge = |from, to| {
-        let shade = gpui::linear_gradient(180., gpui::linear_color_stop(from, 0.), gpui::linear_color_stop(to, 1.));
-        div().absolute().left_0().right_0().h(px(depth)).bg(shade)
-    };
-    let (top, bottom) = (edge(dark, clear).top_0(), edge(clear, dark).bottom_0());
-    div().relative().overflow_hidden().child(inner).child(top).child(bottom)
+    let (from, to) = if top { (dark, clear) } else { (clear, dark) };
+    let shade = gpui::linear_gradient(180., gpui::linear_color_stop(from, 0.), gpui::linear_color_stop(to, 1.));
+    let edge = div().absolute().left_0().right_0().h(px(depth)).bg(shade);
+    if top { edge.top_0() } else { edge.bottom_0() }
+}
+
+/// A row of an open sidebar group, in the group's well: darker than the section and across its
+/// padding, a shadow at the well's top (`first`) and bottom (`last`). Each row stays a child of
+/// the list, so list mode still scrolls to it; it covers the list's `gap` above it.
+pub(crate) fn in_well(row: impl IntoElement, first: bool, last: bool, gap: f32) -> Div {
+    const PAD: f32 = 8.; // the list's padding (`p_2`)
+    const RIM: f32 = 5.; // the well's own room at its top and bottom
+    div()
+        .flex_none()
+        .relative()
+        .mx(px(-PAD))
+        .px(px(PAD))
+        .bg(rgb(theme::BACKGROUND))
+        .when(!first, |d| d.mt(px(-gap)).pt(px(gap)))
+        .when(first, |d| d.pt(px(RIM)))
+        .when(last, |d| d.pb(px(RIM)))
+        .child(row)
+        .when(first, |d| d.child(inner_shade(true, 7.)))
+        .when(last, |d| d.child(inner_shade(false, 7.)))
+}
+
+/// `rows` of an open group, each in its well (`in_well`).
+pub(crate) fn well(rows: Vec<AnyElement>, gap: f32) -> impl Iterator<Item = AnyElement> {
+    let last = rows.len().saturating_sub(1);
+    rows.into_iter().enumerate().map(move |(at, row)| in_well(row, at == 0, at == last, gap).into_any_element())
 }
 
 /// The rail's open cell, raised: the panel's background, a soft shadow below it, and an accent bar

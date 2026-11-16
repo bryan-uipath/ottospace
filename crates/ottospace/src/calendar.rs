@@ -564,13 +564,15 @@ impl Workspace {
         if rows.is_empty() {
             children.push(div().px_2().text_xs().text_color(rgb(theme::MUTED)).child("No meetings").into_any_element());
         }
+        let mut meetings = Vec::new();
         for (index, row) in rows.iter().enumerate() {
             let ListRow::Meeting(id) = row else { continue };
             let Some(event) = calendar.events.iter().find(|e| e.id == *id) else { continue };
             let row = self.meeting_row(event, (index, self.model.list == Some(index)), now, cx);
             let first = (index == 0).then(|| mark(&self.marks, Mark::CalendarFirstRow));
-            children.push(div().flex_none().relative().children(first).child(row).into_any_element());
+            meetings.push(div().flex_none().relative().children(first).child(row).into_any_element());
         }
+        children.extend(crate::well(meetings, 4.));
         // Its own scroll, at the top when the section opens (it was not drawn the frame before)
         // or its day changes; never another section's.
         let (frame, day) = self.calendar_shown.get();
