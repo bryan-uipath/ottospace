@@ -27,6 +27,8 @@ const EMPTY: &str = "a tab with nothing in it has nothing to save";
 
 /// Why a client's workbook action does nothing: they are the user's files and apps.
 pub const USERS_ALONE: &str = "only the user makes, saves, opens, renames or deletes a workspace";
+/// Why a client's list of workspaces is refused: ottospace reads them from the folder, at start.
+pub const READ_ALONE: &str = "only ottospace reads the workspaces folder";
 
 /// What the shell read of its terminals at a save: each one's directory, and its history.
 type Read<'a> = (&'a [(PaneId, String)], &'a [(PaneId, History)]);
@@ -245,6 +247,10 @@ pub struct Workbook {
     /// space until the task is dismissed or gone. One workspace a task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<TaskId>,
+    /// Its default worktree: a repository's checkout (its own folder counts) where its new
+    /// terminals and tasks start. Set by the user's Repos click; `None`: none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
     /// The id of each tab's open tab, this run, by place in `tabs`. Shorter than `tabs`: the rest are closed.
     #[serde(skip)]
     pub live: Vec<Option<u32>>,
@@ -274,6 +280,8 @@ pub fn parse(text: &str, stem: &str) -> Result<Workbook, String> {
         return Err("its id is not its file's name".into());
     }
     book.name = marks::clean(&book.name);
+    // A default that could be no folder reads as none.
+    book.worktree = book.worktree.take().filter(|path| crate::tasks::folder_fits(path));
     match book.unsound() {
         Some(wrong) => Err(wrong.into()),
         None => Ok(book),
@@ -293,7 +301,8 @@ fn sized(book: &Workbook) -> Result<(), String> {
 
 impl Workbook {
     fn new(uid: String, name: String, tabs: Vec<TabRecord>) -> Self {
-        Workbook { id: 0, version: VERSION, uid, name, tabs, task: None, live: Vec::new(), extra: Extra::new() }
+        let (live, extra) = (Vec::new(), Extra::new());
+        Workbook { id: 0, version: VERSION, uid, name, tabs, task: None, worktree: None, live, extra }
     }
 
     /// What is wrong with it as read from disk, if anything.
@@ -485,6 +494,13 @@ impl Workbooks {
     pub(crate) fn bind(&mut self, id: WorkbookId, task: Option<TaskId>) {
         if let Some(book) = self.get_mut(id) {
             book.task = task;
+        }
+    }
+
+    /// Sets a workbook's default worktree, or (`None`) clears it.
+    pub(crate) fn set_worktree(&mut self, id: WorkbookId, worktree: Option<String>) {
+        if let Some(book) = self.get_mut(id) {
+            book.worktree = worktree.filter(|path| crate::tasks::folder_fits(path));
         }
     }
 
@@ -1887,6 +1903,20 @@ mod tests {
         let many =
             format!(r#"{{"version": 2, "id": "{UID}", "name": "x", "tabs": [{}]}}"#, vec![tab; MAX_TABS + 1].join(","));
         assert_eq!(parse(&many, UID), Err("it has too many tabs".into()));
+    }
+
+    /// A workspace's default worktree is in its file; an older file, or one that could be no
+    /// folder, reads as none.
+    #[test]
+    fn a_default_worktree_reads_back_and_an_older_file_has_none() {
+        let text = format!(r#"{{"version": 2, "id": "{UID}", "name": "fix", "tabs": []}}"#);
+        assert_eq!(parse(&text, UID).map(|book| book.worktree), Ok(None));
+        let book = Workbook { worktree: Some("/code/app-2".into()), ..parse(&text, UID).expect("it reads") };
+        assert_eq!(parse(&write(&book), UID).map(|read| read.worktree), Ok(Some("/code/app-2".into())));
+        for wrong in ["relative", "/a\u{7}b"] {
+            let text = text.replace("\"tabs\"", &format!("\"worktree\": {}, \"tabs\"", serde_json::json!(wrong)));
+            assert_eq!(parse(&text, UID).map(|book| book.worktree), Ok(None), "{wrong:?}");
+        }
     }
 
     fn history(lines: &[&str], command: Option<&str>) -> History {

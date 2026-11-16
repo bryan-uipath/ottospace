@@ -297,9 +297,15 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    space on show. Drag a tab onto another space's tab or badge to move it there; Move Tab to…
    lists the tasks and the workspaces. The top row's + makes a new, empty
    [workspace](#workspaces) after the selected space.
-   Closing a space's last tab closes the space. A click on a Repos row opens a terminal there: in the
-   empty tab on show of a workspace, else in a new workspace named for the folder; a row a live task works in carries its badge, and its click selects
-   that task (Terminal, on hover, opens a terminal anyway). See `docs/ai/spaces.md`. A
+   Closing a space's last tab closes the space. A click on a Repos row selects the workspace of
+   that checkout: the one whose default worktree it is, else one that holds a task working there
+   (the one selected last). None: a new workspace for it, named for its branch (a repository's
+   own folder: for the repository), that checkout its default worktree, a terminal there. A
+   workspace's new terminals (⌘D, a split, a new tab's) and new tasks start in its default
+   worktree, unless the task's line names another (`>repo`, `/path`); where a workspace's tasks
+   work in different worktrees, each task's row and its strip tab's hover name its worktree. A
+   row a live task works in carries its badge (Terminal, on hover, opens a terminal anyway).
+   See `docs/ai/spaces.md`. A
    repository's + (on its name, under the pointer) asks for a branch: a local one is checked out, one only a remote has is
    tracked, a new name is made from the repository's HEAD, in `<worktrees_dir>/<repo>/<branch>`; the
    new worktree opens the same way. See `docs/ai/repos.md`.

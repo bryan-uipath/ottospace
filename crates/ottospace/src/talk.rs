@@ -508,7 +508,9 @@ impl Workspace {
         let tab = |id: TaskId| {
             let (task, badge) = (self.model.tasks.get(id)?, self.task_badge(id, 18.)?);
             let (on, title) = (Some(id) == front, gpui::SharedString::from(task.title.clone()));
-            let tip = title.clone();
+            // Its workspace's tasks in different worktrees: the hover says which is its.
+            let label = self.model.worktree_label(id);
+            let tip = label.map_or(title.clone(), |label| format!("{title} · {label}").into());
             let tab = div()
                 .id(("strip", id as usize))
                 .relative()
