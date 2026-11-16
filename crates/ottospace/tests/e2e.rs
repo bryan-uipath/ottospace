@@ -1684,6 +1684,39 @@ fn the_home_screen_shows_tasks_as_nodes_until_a_pane_opens() {
     assert!(otto.call(json!({"cmd": "select_tab", "index": 0}))["home"].is_object());
 }
 
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn an_empty_tab_lists_what_fills_it_and_a_row_does_what_its_key_does() {
+    let otto = Otto::launch("empty-tab-keys");
+    // Two rows, Open an app over Terminal, lined up: on the home screen and in a task's empty tab.
+    let rows = |o: &Otto| {
+        let [app, terminal] = ["home:open_app", "home:terminal"].map(|id| o.control(id));
+        assert!(app[0] == terminal[0] && app[1] + app[3] <= terminal[1], "a list: {app:?} {terminal:?}");
+        terminal
+    };
+    assert!(otto.call(json!({"cmd": "state"}))["home"].is_object());
+    rows(&otto);
+    otto.call(json!({"cmd": "task_new", "line": "Fix the login loop #auth"}));
+    let reply = otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+    assert!(reply["home"].is_null() && reply["state"]["layout"].is_null(), "a task's empty tab: {reply}");
+    // The user's click on Terminal opens one in that tab, as ⌘D does.
+    let reply = otto.user_click(at(rows(&otto), 0.5, 0.5));
+    let state = &reply["state"];
+    assert_eq!(
+        (&state["active"], &state["layout"], &state["panes"][0]["kind"]["type"]),
+        (&json!(1), &leaf(1), &json!("terminal"))
+    );
+    assert_eq!(otto.control_opt("home:terminal"), None, "the list goes when a pane opens");
+    // A client's click is the client's: a client may split, so it opens one too.
+    otto.call(json!({"cmd": "new_tab"}));
+    let reply = otto.click(at(rows(&otto), 0.5, 0.5), 1);
+    assert_eq!(reply["state"]["layout"], leaf(2));
+    // Open an app: the picker, with the list still behind it.
+    otto.call(json!({"cmd": "new_tab"}));
+    let app = otto.control("home:open_app");
+    assert_eq!(otto.user_click(at(app, 0.5, 0.5))["mode"], "pick");
+}
+
 /// A fresh folder to pass as `OTTOSPACE_HOME`, with `settings` as its `settings.json`.
 fn user_folder(name: &str, settings: &str) -> PathBuf {
     let home = support::temp(&format!("ottospace-e2e-home-{name}-{}", std::process::id()));

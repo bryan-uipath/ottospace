@@ -77,6 +77,7 @@ mod give_back;
 mod home;
 mod inspector;
 mod key_use;
+mod keycaps;
 mod layout_file;
 mod markdown;
 mod marks;
@@ -813,6 +814,8 @@ struct Workspace {
     kept_layout: layout_file::Kept,
     /// `keys.json` as last read and written.
     kept_keys: key_use::Kept,
+    /// The modifiers the empty tab's list was last drawn with (`keycaps`): input, not model state.
+    caps_drawn: Cell<Modifiers>,
     /// Scroll position of the bar's list, so list mode can bring the selected row into view.
     list_scroll: ScrollHandle,
     /// The Calendar section's own: at the top when it opens and when its day changes. The frame
@@ -1239,6 +1242,7 @@ impl Workspace {
             kept_workbooks: workbook::Kept::default(),
             kept_layout: layout_file::Kept::default(),
             kept_keys: key_use::Kept::default(),
+            caps_drawn: Cell::default(),
             hosting,
             host_only,
             control,
@@ -5882,12 +5886,13 @@ impl Render for Workspace {
         // Only while the tab on show has no panes. Its lines are built once and kept: a frame
         // that moves nothing (a terminal printing in another tab) only paints them again.
         let keep_out = self.home.borrow().keep_out();
-        let home = self.model.home(&keep_out).map(|home| self.render_home(home, cx).into_any_element());
+        // The modifiers down now light their caps in the list of an empty tab.
+        let held = keycaps::held(window);
+        let home = self.model.home(&keep_out).map(|home| self.render_home(home, held, cx).into_any_element());
         // An empty tab of a task, a session or a workbook: what goes in it.
         let empty = (self.model.layout.is_none() && home.is_none()).then(|| {
-            let line = "An empty tab: ⌘E picks what goes in it, ⌘D opens a terminal";
-            let hint = div().text_sm().text_color(rgb(theme::MUTED)).child(line);
-            div().size_full().flex().items_center().justify_center().child(hint).into_any_element()
+            let list = self.fill_list(held, cx);
+            div().size_full().flex().items_center().justify_center().child(list).into_any_element()
         });
         let home = home.or(empty);
         // The left column's width, and the drawer's: as dragged, or half the window when widened.
@@ -5914,6 +5919,8 @@ impl Render for Workspace {
             .text_color(rgb(theme::TEXT))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
+            // A held modifier lights its caps in an empty tab's list.
+            .on_modifiers_changed(cx.listener(|this, _, window, cx| this.modifiers_changed(window, cx)))
             .map(|root| self.command_actions(root, cx))
             // On the root, so a selection drag keeps going over other panes.
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {

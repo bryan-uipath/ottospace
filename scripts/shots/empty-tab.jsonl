@@ -1,0 +1,10 @@
+# The two ways to fill an empty tab, as key caps: on the home screen, in a task's empty tab,
+# there with ⌘ held (its caps lit), and with the picker open (⌘E pressed: its row lit).
+{"shot":"home"}
+{"cmd":"task_new","line":"Fix the login loop #auth p1"}
+{"cmd":"open_space","space":{"kind":"task","id":1}}
+{"shot":"task-tab"}
+{"hover":"top:new_tab","at":[0.5,8],"modifiers":["cmd"]}
+{"shot":"cmd-held"}
+{"cmd":"key","keys":"cmd-e","as":"user"}
+{"shot":"picker"}
