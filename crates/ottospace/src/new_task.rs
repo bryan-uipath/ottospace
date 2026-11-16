@@ -9,11 +9,11 @@ use gpui::{
     Bounds, Context, Div, ExternalPaths, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions,
     Pixels, Point, Window, div, prelude::*, px, rgb,
 };
-use ottospace_core::complete::{self, Dropdown, Row};
-use ottospace_core::model::{Pointed, TerminalInfo};
+use ottospace_core::complete::{self, Dropdown, Enter, Row};
+use ottospace_core::model::{Pointed, TAG_KEYS, TerminalInfo};
 use ottospace_core::{Action, Origin, theme};
 
-use crate::{KEYS_HINT, Workspace, dialog};
+use crate::{Workspace, dialog, keycaps};
 
 /// The dropdown's width, and a row's height: the shell knows its room from them.
 const MENU_WIDTH: f32 = 340.;
@@ -235,6 +235,39 @@ impl Workspace {
             )
     }
 
+    /// The tags a line may hold, under it: each mark in a small cap, then its word, e.g. [>] repo.
+    /// A click types the mark at the cursor, as the user's key would, and its dropdown opens.
+    fn tag_caps(&self, cx: &mut Context<Self>) -> Div {
+        let tags = TAG_KEYS.iter().map(|&(key, word)| {
+            let mark = key.chars().next().filter(|_| key.chars().count() == 1);
+            let id = format!("compose:tag:{key}");
+            div()
+                .id(gpui::SharedString::from(id.clone()))
+                .relative()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap_1()
+                .rounded_sm()
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child(keycaps::cap(key, false, true))
+                .child(word)
+                .child(self.controls.mark(id))
+                .when_some(mark, |d, mark| {
+                    // On the press, and no further: the line keeps the keyboard and its cursor.
+                    d.cursor_pointer().hover(|s| s.text_color(rgb(theme::TEXT))).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.dispatch(Action::ComposeTag { mark }, this.input, window, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                })
+        });
+        div().flex_1().min_w_0().flex().flex_wrap().items_center().gap_x_3().gap_y_1().children(tags)
+    }
+
     /// The dropdown, and whether it goes above the line: under the tag it finishes, unless
     /// the window has no room below.
     fn render_dropdown(&self, menu: &Dropdown, cx: &mut Context<Self>) -> (Div, bool) {
@@ -278,16 +311,27 @@ impl Workspace {
     pub fn new_task_content(&self, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
         let menu = self.model.dropdown();
         let dropdown = menu.as_ref().map(|menu| self.render_dropdown(menu, cx));
-        let above = dropdown.as_ref().is_some_and(|(_, above)| *above);
         let (over, under) = match dropdown {
             Some((list, true)) => (Some(list), None),
             Some((list, false)) => (None, Some(list)),
             None => (None, None),
         };
-        // The one key a text box does not have; none while the dropdown lists rows.
-        let keys = menu.as_ref().is_none_or(|menu| menu.rows.is_empty()).then_some(KEYS_HINT);
-        let hint = self.model.compose_hint().filter(|_| !above);
         let muted = |text: &'static str| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
+        // What ↵ does when it is not "add": it finishes the tag. Else the one key a text box does not have.
+        let keys: &[&'static str] = match self.model.enter() {
+            Enter::Wait => &[],
+            _ if self.model.enter_completes() => &["↵", "completes"],
+            _ => &["⇧", "↵", "later"],
+        };
+        // As wide whatever it says: the tags beside it wrap the same, and the line above stays put.
+        let caps = keys.split_last().map(|(word, caps)| {
+            let caps = caps.iter().map(|text| keycaps::cap(*text, false, true));
+            div().flex().items_center().gap_1().children(caps).child(muted(*word))
+        });
+        let keys = div().w(px(96.)).flex_none().flex().justify_end().children(caps);
+        // The tags, a cap each: dimmer once something is typed.
+        let typed = self.model.compose_line().is_some_and(|line| !line.is_empty());
+        let hint = self.model.compose_hint().map(|_| self.tag_caps(cx).when(typed, |d| d.opacity(0.6)));
         // What the box could not do: a name with no room, files left out.
         let note =
             self.model.compose_note().map(|note| div().text_xs().text_color(rgb(theme::ERROR)).child(note.to_string()));
@@ -393,18 +437,8 @@ impl Workspace {
             .child(line)
             .children(under)
             .children(note)
-            // One row: the tag hint while the line is empty, the key beside it. Typing drops the hint, not the row.
-            .when(hint.is_some() || keys.is_some(), |d| {
-                let hint = hint.map(|hint| muted(hint).flex_1().min_w_0().truncate());
-                d.child(
-                    div()
-                        .h(px(16.))
-                        .flex()
-                        .gap_3()
-                        .children(hint)
-                        .children(keys.map(|k| muted(k).flex_none().ml_auto())),
-                )
-            })
+            // One row while the box is open: the tags, then the key. A narrow box wraps it, never clips.
+            .child(div().min_h(px(16.)).flex().items_start().gap_3().children(hint).child(keys))
     }
 
     /// The drawer in its new-task state, `width` points wide: one-click picks for where and who,

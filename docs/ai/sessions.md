@@ -315,8 +315,10 @@ check on every `StartAgent`:
 - **The directory** is where the session started, if it is inside a listed repository or
   worktree with no `..` (`sessions::below`); the shell checks again with links resolved
   before it starts anything.
-- **No second program.** A session at work, or held (`Found.held`: Claude Code's
-  `sessions/<pid>.json` names a pid that exists), is not resumed. One whose agent runs in the
+- **No second program.** A session at work, or held (`Found.held`: one of Claude Code's
+  `sessions/<pid>.json` records of it names a process that lives and started before the record
+  was last written, `sessions::holds`; one started after only has the pid again), is not
+  resumed. After a restart see `agent-runners.md`, "After a restart". One whose agent runs in the
   drawer is shown, not started again. What the drawer's own agent left behind is not another's:
   for a minute after it ends (`ENDED_MS`), a file last written no later than 2 s after that
   (`ENDED_GRACE_MS`) is taken for ours (`Model::in_use`), and a task does not follow that

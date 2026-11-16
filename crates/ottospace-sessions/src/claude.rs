@@ -139,7 +139,10 @@ impl SessionReader for Claude {
                     if !dirs.iter().any(|dir| head.cwd.starts_with(dir)) {
                         continue;
                     }
-                    let (pid, busy) = live.get(id).map_or((None, None), |(pid, busy)| (Some(*pid), *busy));
+                    let holders = live.get(id).cloned().unwrap_or_default();
+                    let last = holders.iter().max_by_key(|(holder, _)| holder.recorded);
+                    let (pid, busy) = last.map_or((None, None), |(holder, busy)| (Some(holder.pid), *busy));
+                    let holders = holders.into_iter().map(|(holder, _)| holder).collect();
                     let (runner, id, last_activity) = (RunnerId::Claude, id.to_string(), Some(modified));
                     let (cwd, started) = (head.cwd, head.started);
                     let (model, parent) = (None, None);
@@ -153,6 +156,7 @@ impl SessionReader for Claude {
                         model,
                         pid,
                         busy,
+                        holders,
                         parent,
                     });
                 }
@@ -197,6 +201,7 @@ impl SessionReader for Claude {
                 model: None,
                 pid: None,
                 busy: None,
+                holders: Vec::new(),
                 parent: Some(session.id.clone()),
             });
         }
@@ -227,18 +232,22 @@ impl SessionReader for Claude {
     }
 }
 
-/// Running Claude Code processes of one config dir: session id → (pid, busy).
-fn live(config: &Path) -> HashMap<String, (u32, Option<bool>)> {
+/// Claude Code's process records of one config dir: session id → each (process, busy). Two
+/// records may name one session: every one is kept, so one of a dead process hides no live one.
+fn live(config: &Path) -> HashMap<String, Vec<(crate::Holder, Option<bool>)>> {
     let Ok(files) = fs::read_dir(config.join("sessions")) else { return HashMap::new() };
     let records = files.flatten().filter(|f| f.path().extension().is_some_and(|e| e == "json"));
-    records
-        .filter_map(|file| {
-            let record: Value = serde_json::from_str(&jsonl::small(&file.path())?).ok()?;
-            let pid = u32::try_from(record["pid"].as_u64()?).ok()?;
-            let busy = record["status"].as_str().map(|s| s == "busy");
-            Some((record["sessionId"].as_str()?.to_string(), (pid, busy)))
-        })
-        .collect()
+    let mut live: HashMap<String, Vec<_>> = HashMap::new();
+    for file in records {
+        let record = jsonl::small(&file.path()).and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        let Some(record) = record else { continue };
+        let pid = record["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok());
+        let (Some(pid), Some(id)) = (pid, record["sessionId"].as_str()) else { continue };
+        let busy = record["status"].as_str().map(|s| s == "busy");
+        let holder = crate::Holder { pid, recorded: record["updatedAt"].as_u64() };
+        live.entry(id.to_string()).or_default().push((holder, busy));
+    }
+    live
 }
 
 /// Where and when a transcript's session started.

@@ -334,10 +334,17 @@ fn as_found(session: &SessionRef, repo: &std::path::Path, now: u64) -> Found {
         label: None,
         title: None,
         model: None,
-        // Only a runner that records its process can say so (`disk.held`). A pid used again by
-        // another program reads as alive: then it is not gone on with.
-        held: session.runner.spec().disk.held && session.pid.is_some_and(crate::running::alive),
+        // Only a runner that records its process can say so (`disk.held`): any of its records
+        // whose process lives and is the one that wrote it (`sessions::holds`).
+        held: session.runner.spec().disk.held && session.holders.iter().any(holds),
     }
+}
+
+/// True if the process a runner's record names lives, and is not another program with the pid
+/// of one that is gone (killed, its record left behind).
+fn holds(holder: &ottospace_sessions::Holder) -> bool {
+    let started = i32::try_from(holder.pid).ok().and_then(ottospace_mac::process::started);
+    crate::running::alive(holder.pid) && ottospace_core::sessions::holds(started, holder.recorded)
 }
 
 /// One session, read for a resume the user asked for: where it started, if it is at work or a
@@ -383,6 +390,7 @@ fn works(
             model: None,
             pid: None,
             busy: None,
+            holders: Vec::new(),
             parent: None,
         };
         // Times wait until every file is read to its end: a long transcript takes several rounds,
@@ -438,6 +446,19 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::*;
+
+    #[test]
+    fn a_record_holds_while_its_own_process_lives() {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let record = |pid: u32, recorded: Option<u64>| ottospace_sessions::Holder { pid, recorded };
+        // This process, with a record written now (or at a time not known): it holds.
+        let own = std::process::id();
+        assert!(holds(&record(own, Some(now))) && holds(&record(own, None)));
+        // A record written a day before this process started: the pid is used again. Not held.
+        assert!(!holds(&record(own, Some(now - 86_400_000))));
+        // A process that is gone holds nothing.
+        assert!(!holds(&record(i32::MAX as u32, Some(now))));
+    }
 
     #[test]
     fn an_adopted_sessions_file_is_at_work_if_it_changed_lately_or_since_the_last_look() {

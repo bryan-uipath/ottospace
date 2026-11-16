@@ -102,13 +102,17 @@ def read_steps(name, root):
 
 
 def copy_fixtures(name, root):
-    """scripts/shots/<name>/ into the instance's folder; `_git` becomes `.git` (git keeps none)."""
+    """scripts/shots/<name>/ into the instance's folder; `_git` becomes `.git` (git keeps none).
+    A folder `_slug-repos-app` is named as Claude Code names its sessions' folder for
+    `{ROOT}/repos/app`: the path, every character but letters and digits as `-`."""
     src = os.path.join(SCENARIOS, name)
     if not os.path.isdir(src):
         return
+    slug = re.sub(r"[^A-Za-z0-9]", "-", root)
+    named = lambda p: ".git" if p == "_git" else slug + p[5:] if p.startswith("_slug") else p
     for dirpath, _, files in os.walk(src):
         rel = os.path.relpath(dirpath, src)
-        to = os.path.normpath(os.path.join(root, *[".git" if p == "_git" else p for p in rel.split(os.sep)]))
+        to = os.path.normpath(os.path.join(root, *[named(p) for p in rel.split(os.sep)]))
         os.makedirs(to, exist_ok=True)
         for file in files:
             with open(os.path.join(dirpath, file), "rb") as f:
