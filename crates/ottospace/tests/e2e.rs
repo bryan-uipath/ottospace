@@ -1008,9 +1008,6 @@ fn a_repository_folds_and_the_users_plus_makes_a_worktree_there() {
 
     // The user's: a field in the repository's rows. A client's keys do not type in it.
     let open_field = || {
-        // Where it is now: a notice since moved the list down.
-        otto.mouse("move", at(rect(&otto.drawn()["repos_bar"][0]["header"]), 0.5, 0.5));
-        let frame = otto.control(&plus);
         otto.mouse("move", at(frame, 0.5, 0.5));
         let reply = otto.user_click(at(frame, 0.5, 0.5));
         assert_eq!(reply["state"]["mark_input"]["type"], "worktree", "{}", reply["state"]["mark_input"]);
@@ -6577,15 +6574,14 @@ fn the_agent_chip_brings_a_closed_conversation_back() {
     assert!(drawn[1] >= tab[1] && drawn[1] + drawn[3] <= tab[1] + tab[3], "{drawn:?} on the tab row {tab:?}");
     assert!(drawn[0] >= tab[0] + tab[2], "{drawn:?} right of the tabs {tab:?}");
     assert_eq!(closed["tabs"], two["tabs"], "the tabs did not move");
-    // A notice moves the tab row down by the bar's height, and the chip with it.
+    // A notice opens at the window's foot: the tab row and the chip stay where they are.
     std::fs::write(home.join("settings.json"), "{ not json").unwrap();
     let barred = |o: &Otto| Some(o.drawn()).filter(|state| state["notice_bar"]["height"] == 28.0);
-    let lowered = otto.wait_for("the notice bar", barred);
-    let (chip, row) = (rect(&lowered["agent_chip"]["rect"]), rect(&lowered["tabs"][2]));
-    assert_eq!((chip[0], chip[1], row[1]), (drawn[0], drawn[1] + 28.0, tab[1] + 28.0), "{chip:?} on {row:?}");
+    let noticed = otto.wait_for("the notice bar", barred);
+    assert_eq!((rect(&noticed["agent_chip"]["rect"]), rect(&noticed["tabs"][2])), (drawn, tab));
     std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
     let mended = |o: &Otto| Some(o.drawn()).filter(|s| s["notice_bar"].is_null() && s["settings_errors"] == 0);
-    assert_eq!(rect(&otto.wait_for("the bar gone", mended)["agent_chip"]["rect"]), drawn);
+    otto.wait_for("the bar gone", mended);
     // Tabs to the row's end: the chip is its badge alone, still there to click.
     let short = (0..40).find_map(|_| Some(otto.user_key("cmd-t")).filter(|state| state["agent_chip"]["short"] == true));
     let short = short.expect("the row filled");
@@ -9307,7 +9303,7 @@ fn a_tasks_x_hides_it_and_its_row_brings_it_back() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn the_notice_bar_splits_the_top_row_from_the_rest_and_only_the_user_dismisses_it() {
+fn the_notice_bar_sits_at_the_foot_moves_nothing_above_and_only_the_user_dismisses_it() {
     const RIGHT: &str = r#"{"repos": [], "restore_layout": false}"#;
     const WRONG: &str = "{\n  \"repos\": [],\n  \"restore_layout\": false,\n}\n";
     let home = user_folder("notice-bar", RIGHT);
@@ -9358,17 +9354,21 @@ fn the_notice_bar_splits_the_top_row_from_the_rest_and_only_the_user_dismisses_i
         (&drawn["level"], &drawn["text"], &drawn["offer"]),
         (&json!("error"), &shown["notice"], &json!("open_settings"))
     );
-    // Full width, right under the top row (the strip left of it and the spaces), over the tab row.
-    let (strip, space, window) = (rect(&shown["strip"]), rect(&shown["space_rects"][0]), rect(&shown["window"]));
+    // Full width, at the foot: right above the status bar (24 high; no timeline in a test run).
+    let window = rect(&shown["window"]);
     assert_eq!((at_rest[0], at_rest[2], at_rest[3]), (0.0, window[2], 28.0), "{at_rest:?} in {window:?}");
-    // The strip's own line is between them.
-    assert_eq!(at_rest[1], strip[1] + strip[3] + 1.0);
-    assert!(space[1] + space[3] <= at_rest[1], "the top row {space:?} is over the bar {at_rest:?}");
-    // The rest moved down by its height: it is pushed, not covered.
-    assert_eq!(tab(&shown)[1], tab(&before)[1] + 28.0);
-    assert!(tab(&shown)[1] >= at_rest[1] + at_rest[3]);
+    assert_eq!(at_rest[1] + at_rest[3], window[3] - 24.0, "{at_rest:?} in {window:?}");
+    // Nothing above it moves: the top row, the strip, the tab row and the pane's top. Only the
+    // pane's foot rises by the bar's height, to the bar's top.
+    for key in ["strip", "bar_header"] {
+        assert_eq!(shown[key], before[key], "{key}");
+    }
+    assert_eq!((&shown["space_rects"], tab(&shown)), (&before["space_rects"], tab(&before)));
     let (was, is) = (rect(&before["frames"][&pane]), rect(&shown["frames"][&pane]));
-    assert_eq!((is[1], is[3]), (was[1] + 28.0, was[3] - 28.0));
+    assert_eq!((is[0], is[1], is[2], is[3]), (was[0], was[1], was[2], was[3] - 28.0));
+    let header = |reply: &Value| rect(&reply["headers"][&pane]);
+    assert_eq!(header(&shown), header(&before));
+    assert!(is[1] + is[3] <= at_rest[1], "the pane {is:?} reaches over the bar {at_rest:?}");
 
     // A client cannot dismiss it: not by a click on ×, not by Esc. The user's Esc is the terminal's.
     let close = at(rect(&drawn["close"]), 0.5, 0.5);

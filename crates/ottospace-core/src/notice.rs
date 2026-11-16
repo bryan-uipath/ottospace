@@ -1,4 +1,4 @@
-//! The notice bar: one app-level message between the top row and the rest, by level.
+//! The notice bar: one app-level message at the window's foot, by level.
 
 use serde::Serialize;
 
@@ -125,10 +125,11 @@ impl Notice {
         self.kind.level()
     }
 
-    /// A level glyph, so the level is not said by colour alone.
+    /// A level glyph, so the level is not said by colour alone. Never a cross: × is Dismiss.
+    /// An error's `!` is drawn in a filled circle (`round`).
     pub fn glyph(&self) -> &'static str {
         match self.level() {
-            Level::Error => "✕",
+            Level::Error => "!",
             Level::Warning => "▲",
             Level::Info => "ⓘ",
         }
@@ -190,12 +191,6 @@ impl Held {
     }
 }
 
-/// The lowest a raised live window's title bar may reach, from the window's top: under the top
-/// row (`top_bar` high) and the notice bar, as much of it as shows (`shown`). The bar is never covered.
-pub fn top_limit(top_bar: f32, shown: f32) -> f32 {
-    top_bar + shown
-}
-
 /// The bar's height when open, in points.
 pub const HEIGHT: f32 = 28.;
 /// How long it takes to open or close, in milliseconds.
@@ -232,6 +227,13 @@ mod tests {
         for (kind, level, offer, held) in table {
             assert_eq!((kind.level(), kind.offer(), kind.held()), (level, offer, held), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn no_levels_glyph_reads_as_the_dismissal() {
+        let kinds = [Kind::Failed, Kind::Refused, Kind::Told];
+        let glyphs: Vec<&str> = kinds.map(|kind| Notice { kind, text: String::new() }.glyph()).to_vec();
+        assert_eq!(glyphs, ["!", "▲", "ⓘ"]);
     }
 
     #[test]
@@ -347,21 +349,6 @@ mod tests {
         ] {
             assert_eq!(replaces(by, over), may, "{by:?} over {over:?}");
         }
-    }
-
-    #[test]
-    fn a_live_windows_title_bar_stays_under_the_notice_bar() {
-        use crate::titlebar::crop;
-        let (top_bar, title) = (40., 28.);
-        assert_eq!((top_limit(top_bar, 0.), top_limit(top_bar, 10.), top_limit(top_bar, HEIGHT)), (40., 50., 68.));
-        // A pane whose header is right under the top row: its window's title bar covers the header.
-        assert_eq!(crop(title, top_bar + title, top_limit(top_bar, 0.)), title);
-        // The bar opens and the pane has not moved yet: the title bar would lie on the notice. No crop.
-        assert_eq!(crop(title, top_bar + title, top_limit(top_bar, HEIGHT)), 0.);
-        assert_eq!(crop(title, top_bar + title + 10., top_limit(top_bar, 11.)), 0.);
-        // Moved down with it, half way and at rest: the crop is back, under the bar.
-        assert_eq!(crop(title, top_bar + 10. + title, top_limit(top_bar, 10.)), title);
-        assert_eq!(crop(title, top_bar + HEIGHT + title, top_limit(top_bar, HEIGHT)), title);
     }
 
     #[test]
