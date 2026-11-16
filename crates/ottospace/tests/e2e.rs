@@ -8947,6 +8947,114 @@ fn an_agent_that_ends_before_replying_says_why() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A task's agent carries a pass of its own: its `ottospace ctl task_brief` with no id finds its
+/// task, whatever is on show. A made-up pass is refused, and none falls back to the task on show.
+/// Once the agent ends, its pass is dead, also in a child that outlived it; a new start has a
+/// new one. Made-up tasks; the stand-in `claude` runs the requests itself.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_task_agents_pass_finds_its_task_until_it_ends() {
+    let extra = [
+        ("FAKE_EXIT", "0"),
+        ("FAKE_CTL", r#"{"cmd":"task_brief"}"#),
+        ("FAKE_OTTOSPACE", env!("CARGO_BIN_EXE_ottospace")),
+    ];
+    let (root, record, env) = native_setup("pass", &[], &extra);
+    let otto = launch_env("pass", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+    otto.call(json!({"cmd": "task_new", "line": "second >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["2"].clone();
+    let file = |name: &str| std::fs::read_to_string(record.join(name)).ok().filter(|text| text.ends_with('\n'));
+    let reply = |o: &Otto, name: &str| -> Value {
+        let text = o.wait_for(name, |_| file(name));
+        serde_json::from_str(text.trim()).unwrap_or_else(|_| panic!("{name}: {text}"))
+    };
+    let touch = |name: &str| std::fs::write(record.join(name), "").unwrap();
+    // Task 2's agent; then the user shows task 1, so the task on show is not the caller's.
+    otto.start_task(2);
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    touch("ask-1");
+    // Its own pass: task 2 (it has nothing captured, which the error says by its id).
+    let own = reply(&otto, "ctl-own-1");
+    assert_eq!(own, json!({"ok": false, "error": "task 2 has no materials: nothing was captured for it"}));
+    let stale =
+        json!({"ok": false, "error": "this pass is no running agent's: ask the user to start the task's agent again"});
+    assert_eq!(reply(&otto, "ctl-wrong-1"), stale);
+    let none = json!({"ok": false, "error": "task 1 has no materials: nothing was captured for it"});
+    assert_eq!(reply(&otto, "ctl-none-1"), none, "no pass: the task on show, as before");
+    // The pass is in no state reply, nor the trace.
+    let pass = file("pass-1").expect("the fake wrote its pass").trim().to_string();
+    assert_eq!(pass.len(), 32, "a pass in the agent's environment");
+    let state = otto.call(json!({"cmd": "state"})).to_string();
+    let trace = otto.call(json!({"cmd": "trace"})).to_string();
+    assert!(!state.contains(&pass) && !trace.contains(&pass), "the pass leaked");
+    // It ended (`FAKE_EXIT`): the child it left asks with a dead pass.
+    otto.wait_for("the end", |o| (chat(o)["transcript"]["live"] == false).then_some(()));
+    // Started again: a new process, a new pass. The old child's is still dead while it runs.
+    otto.start_task(2);
+    let starts = || std::fs::read_to_string(record.join("starts")).unwrap_or_default().lines().count();
+    otto.wait_for("a second start", |_| (starts() == 2).then_some(()));
+    touch("go-1");
+    assert_eq!(reply(&otto, "ctl-after-1"), stale, "a child that outlived its agent holds a dead pass");
+    touch("ask-2");
+    assert_eq!(reply(&otto, "ctl-own-2"), own, "the new process's pass is its task's");
+    let ends = |o: &Otto| {
+        let entries = chat(o)["transcript"]["entries"].as_array().cloned().unwrap_or_default();
+        entries.iter().filter(|e| e["notice"] == "ended").count()
+    };
+    otto.wait_for("the second end", |o| (ends(o) == 2).then_some(()));
+    touch("go-2");
+    assert_eq!(reply(&otto, "ctl-after-2"), stale);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The same pass in the terminal view: the TUI's environment has it, and its end kills it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_task_agents_pass_in_its_terminal_finds_its_task_until_it_ends() {
+    let extra = [
+        ("FAKE_EXIT", "0"),
+        ("FAKE_CTL", r#"{"cmd":"task_brief"}"#),
+        ("FAKE_OTTOSPACE", env!("CARGO_BIN_EXE_ottospace")),
+    ];
+    let (root, record, env) = native_setup("pass-tui", &[], &extra);
+    let settings = root.join("home/settings.json");
+    let mut written: Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    written["conversation_view"] = json!("terminal");
+    std::fs::write(&settings, written.to_string()).unwrap();
+    let otto = launch_env("pass-tui", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+    otto.call(json!({"cmd": "task_new", "line": "second >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let file = |name: &str| std::fs::read_to_string(record.join(name)).ok().filter(|text| text.ends_with('\n'));
+    let reply = |o: &Otto, name: &str| -> Value {
+        let text = o.wait_for(name, |_| file(name));
+        serde_json::from_str(text.trim()).unwrap_or_else(|_| panic!("{name}: {text}"))
+    };
+    let touch = |name: &str| std::fs::write(record.join(name), "").unwrap();
+    otto.start_task(2);
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    touch("ask-1");
+    let own = json!({"ok": false, "error": "task 2 has no materials: nothing was captured for it"});
+    assert_eq!(reply(&otto, "ctl-own-1"), own);
+    let stale =
+        json!({"ok": false, "error": "this pass is no running agent's: ask the user to start the task's agent again"});
+    assert_eq!(reply(&otto, "ctl-wrong-1"), stale);
+    let none = json!({"ok": false, "error": "task 1 has no materials: nothing was captured for it"});
+    assert_eq!(reply(&otto, "ctl-none-1"), none);
+    // Its program ended; its last screen stays, its pass does not.
+    let ended = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["agents"]["2"]["ended"] == true;
+    otto.wait_for("the end", |o| ended(o).then_some(()));
+    touch("go-1");
+    assert_eq!(reply(&otto, "ctl-after-1"), stale);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The recorded 2.1.325 turn is read whole ("ok", once); once its agent is stopped, the
 /// composer still takes the user's words, and ↵ starts it again and sends them.
 #[test]

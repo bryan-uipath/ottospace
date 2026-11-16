@@ -3029,8 +3029,9 @@ impl Run {
                     ensure!(named || task.dir() == Some(default), "{task:?} joined a workspace of default {default:?}");
                 }
                 let repo = draft.repo.as_deref().and_then(|name| m.repo_named(name));
-                // A task that joined a workspace and named no repository shares the workspace's.
-                let shares = repo.is_none() && m.task_space(task.id) != Owner::Task { id: task.id };
+                // A task that joined a workspace (or made it its own) and named no repository shares
+                // the workspace's.
+                let shares = repo.is_none() && joined;
                 let repo = if shares { task.repo.clone() } else { repo };
                 let read = (&draft.title, draft.priority.unwrap_or(3), &draft.project, &repo, &draft.agent);
                 ensure!(
@@ -4097,6 +4098,20 @@ fn split(axis: Axis, kind: Kind) -> Envelope {
     Action::Split { axis, kind }.into()
 }
 
+/// A task filed in a workspace it then made its own, with a default worktree, works there: the
+/// rule took only a joined workspace as sharing its repository (seed 1664).
+#[test]
+fn a_task_that_makes_a_workspace_its_own_shares_its_default() {
+    let tree = |name: &str, path: &str| Worktree { name: name.into(), path: path.into(), branch: None };
+    let repo = Repo { name: "app".into(), path: "".into(), branch: None, worktrees: vec![tree("$", "/code/app-2")] };
+    replay(&[
+        Action::WorktreeAdded { repo: "relative".into(), path: "/code/app-2".into(), repos: vec![repo] }.into(),
+        Action::OpenCompose { text: "fix #2048".into() }.into(),
+        Action::ComposeSubmit { open: true }.into(),
+    ])
+    .unwrap();
+}
+
 /// A permission in the same batch as its agent's exit put a card up with no agent to answer it.
 #[test]
 fn a_permission_after_its_agent_exited_puts_up_no_card() {
@@ -5123,6 +5138,36 @@ fn an_edit_with_no_field_ends_the_inspectors_filter_and_types_nothing() {
         Action::InspectorFilter { on: true }.into(),
         by(Origin::Socket, Action::ToggleKeys),
         Action::FieldEdit { edit: Edit::Unmark }.into(),
+    ])
+    .unwrap();
+}
+
+/// Seed 356: the user's ↵ in a kept workspace of a default worktree started a task that took the
+/// workspace over and works in its default, as the rule before it asks; this rule gave the
+/// workspace's place only to a task that joined a task's. Bound to it, it joined: the rule was wrong.
+#[test]
+fn seed_356_a_task_that_takes_over_a_workspace_works_in_its_default() {
+    replay(&[
+        Action::Open {
+            kind: Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: Some(1),
+        }
+        .sent_by(Origin::User),
+        Action::NewTab.sent_by(Origin::User),
+        Action::SetRepos {
+            repos: vec![Repo {
+                name: "2048".into(),
+                path: "ß.İ".into(),
+                branch: None,
+                worktrees: vec![Worktree { name: "canvas".into(), path: "/tmp".into(), branch: None }],
+            }],
+        }
+        .sent_by(Origin::Socket),
+        Action::RepoClick { path: "/tmp".into(), axis: Axis::Down }.sent_by(Origin::User),
+        Action::OpenCompose { text: "#SS>y\u{202e}abc >İa\u{300}\u{301}\u{302}\\ #2048".into() }.sent_by(Origin::User),
+        Action::ComposeRef { target: Pointed::Tab(3) }.sent_by(Origin::System),
+        Action::ComposeSubmit { open: true }.sent_by(Origin::User),
     ])
     .unwrap();
 }
