@@ -373,12 +373,12 @@ impl Workspace {
         if let Some(running) = capture::apps().into_iter().filter(|app| only(app.pid)).find(same) {
             return self.host_window_of(running.pid, &wanted, window, cx);
         }
-        if self.host_only.is_some() {
-            return Err("this test run may host only the app it started".into());
-        }
         // A restored pane waits for the user's "Open": no app is started at start by itself.
         if !wanted.launch {
             return Err(format!("{} is not running", wanted.name));
+        }
+        if self.host_only.is_some() {
+            return Err("this test run may host only the app it started".into());
         }
         // Where the system has it: nothing written in `marks.json` is ever run.
         let path = icon::installed(wanted.bundle.as_deref(), &wanted.name);

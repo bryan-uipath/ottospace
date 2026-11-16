@@ -1274,9 +1274,10 @@ fn a_restored_pane_whose_app_runs_with_its_window_minimised_says_so_and_the_user
     let waiting = wait_or(
         "the pane to say why",
         || state().to_string(),
-        || Some(state()).filter(|s| s["unfilled"][0]["why"] == json!(why) && rect(&s["unfilled"][0]["open"]).is_some()),
+        || Some(state()).filter(|s| s["unfilled"][0]["why"].is_string() && rect(&s["unfilled"][0]["open"]).is_some()),
     );
-    assert_eq!((&waiting["notice"], hosted(&waiting)), (&Value::Null, Some(0)), "{waiting}");
+    let said = (&waiting["unfilled"][0]["why"], &waiting["notice"], hosted(&waiting));
+    assert_eq!(said, (&json!(why), &Value::Null, Some(0)));
 
     // A window again, and the user's "Open" hosts it in that pane.
     canary.call(json!({"cmd": "open_window"}));
