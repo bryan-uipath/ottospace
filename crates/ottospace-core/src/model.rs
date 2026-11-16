@@ -5993,6 +5993,8 @@ impl Model {
         self.unlinked.retain(|(id, ..)| tasks.get(*id).is_some());
         let back: Vec<(TaskId, Vec<u32>, Owner)> = self.unlinked.extract_if(.., |(id, ..)| !gone(id)).collect();
         for (id, ids, home) in back.into_iter().filter(|_| undone) {
+            // Its workspace deleted since: its tabs went to the first space.
+            let home = if self.owner_valid(&home) { home } else { Owner::Workspace };
             for tab in self.tabs.iter_mut().filter(|tab| ids.contains(&tab.id) && tab.space == home) {
                 tab.space = Owner::Task { id };
             }
@@ -8944,6 +8946,12 @@ mod tests {
         assert_eq!((m.space_tabs(&task_space(1)).len(), m.panes.len(), listed(&m).len()), (3, 3, 0));
         m.update(Action::WorkbookUndo);
         assert_eq!((m.space_tabs(&task_space(1)).len(), listed(&m)[0].1), (3, Some(1)));
+        // Dismissed, its workspace deleted, the dismissal taken back: the tabs are the task's.
+        m.update(Action::RowDismiss { id: 1 });
+        m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        assert_eq!(m.space_tabs(&Owner::Workspace).len(), 4);
+        m.update(Action::TaskUndo);
+        assert_eq!((m.space_tabs(&task_space(1)).len(), m.space_tabs(&Owner::Workspace).len()), (3, 1));
     }
 
     /// `>repo` on the line is as before: the agent runs where the line says.

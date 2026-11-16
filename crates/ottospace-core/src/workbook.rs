@@ -923,16 +923,15 @@ impl Model {
         effects: &mut Vec<Effect>,
     ) {
         let Some(book) = self.workbooks.get(id).cloned() else { return };
-        // Bound to a task: its space is that task's. That space gone (its last tab closed, no
-        // layout restored): unbound, it opens as its own, with its saved tabs.
-        if let Some(task) = book.task {
-            let of = Owner::Task { id: task };
-            if self.spaces.iter().any(|space| space.of == of) {
-                self.list = None;
-                return self.open_space(of, effects);
-            }
+        // Bound to a task: its space is that task's, and its tabs open there. That space gone
+        // (its last tab closed, no layout restored): unbound, it opens as its own.
+        let of = self.workbooks.space_of(&Owner::Workbook { id });
+        let of = if self.spaces.iter().any(|space| space.of == of) {
+            of
+        } else {
             self.workbooks.bind(id, None);
-        }
+            Owner::Workbook { id }
+        };
         let places: Vec<usize> = match tab {
             Some(at) if at < book.tabs.len() => vec![at],
             Some(_) => return,
@@ -941,7 +940,7 @@ impl Model {
         // No tab saved in it: its space as it is, else with one empty tab.
         let Some(&first) = places.first() else {
             self.list = None;
-            return self.open_space(Owner::Workbook { id }, effects);
+            return self.open_space(of, effects);
         };
         let was_open = self.open_tab(book.live(first)).is_some();
         let missing = self.marks.missing().to_vec();
@@ -955,7 +954,7 @@ impl Model {
             }
             // Each tab asks for its windows as it is built; the shell parks those of tabs not on show.
             let base = self.next_id;
-            let tab = self.rebuild_tab(&record, Owner::Workbook { id }, effects);
+            let tab = self.rebuild_tab(&record, of.clone(), effects);
             // Each terminal that started shows its history, in panes numbered from `base` in reading order.
             for (pane, kept) in (base + 1..).zip(record.shown()) {
                 let started = self.pane(pane).is_some_and(|open| open.kind == Kind::Terminal);
@@ -969,7 +968,6 @@ impl Model {
         }
         self.list = None;
         // Its tabs open in Workspace (one saved from there) come into its space; a task's stays the task's.
-        let of = Owner::Workbook { id };
         let live: Vec<u32> =
             self.workbooks.get(id).map(|book| book.live.iter().flatten().copied().collect()).unwrap_or_default();
         self.add_space(&of);
@@ -1413,6 +1411,28 @@ mod tests {
         m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
         save(&mut m, UID_2, &[]);
         assert_eq!(kept(&m), [("Workspace 2".into(), 2)]);
+    }
+
+    /// Review: a bound workspace's row only showed the task's space, so a saved tab closed there
+    /// could not be opened again while the task lived.
+    #[test]
+    fn a_closed_tab_of_a_bound_workspace_opens_again_in_the_tasks_space() {
+        let mut m = Model::default();
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        save(&mut m, UID_2, &[(1, "/code/app")]);
+        m.update(Action::NewTab);
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        save(&mut m, UID_2, &[]);
+        m.update(Action::OpenCompose { text: "fix zoom".into() });
+        m.update(Action::ComposeEnter);
+        let of = Owner::Task { id: 1 };
+        assert_eq!((m.workbooks.list[0].task, m.space_tabs(&of).len()), (Some(1), 2));
+        m.update(Action::CloseTab { index: None });
+        assert_eq!(m.space_tabs(&of).len(), 1);
+        m.update(Action::WorkbookOpen { workbook: 1, tab: Some(1), home: None });
+        assert_eq!((m.space(), m.space_tabs(&of).len(), m.workbooks.list[0].task), (&of, 2, Some(1)));
+        assert!(!m.spaces().iter().any(|space| space.of == Owner::Workbook { id: 1 }));
     }
 
     /// Seed 2831, and what a user does with no clash of file names: delete "Workspace 2", +,

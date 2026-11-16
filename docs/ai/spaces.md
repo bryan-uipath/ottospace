@@ -135,7 +135,7 @@ the task (right now - a new task/workspace gets created for the task)".
 - **A kept workspace** (made with +, or saved) stays what it is: listed in Workspaces, its file
   kept, now with `task` (`Workbook::task`, in its file). On the top row it shows as the task
   (badge and title); its row in the section carries the task's badge and opens the task's
-  space; ⌘⇧S there saves into it; a tab moved "to the workspace" goes to the task's space.
+  space (a saved tab of it that is closed is built there); ⌘⇧S there saves into it; a tab moved "to the workspace" goes to the task's space.
   Deleted while bound, the task keeps the space and its tabs; the delete's Undo binds it again.
   The task's space gone while bound (its last tab closed, or no layout restored): its row
   opens it as its own again, with its saved tabs, unbound.

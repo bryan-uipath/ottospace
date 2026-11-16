@@ -2479,7 +2479,7 @@ impl Run {
                 matches!((was, now, &action), (Owner::Session { .. }, Owner::Task { .. }, Action::SessionAdopt { .. }));
             // Opening a workbook gathers its tabs from Workspace.
             let gathered = *was == Owner::Workspace
-                && matches!(now, Owner::Workbook { .. })
+                && matches!(now, Owner::Workbook { .. } | Owner::Task { .. })
                 && matches!(action, Action::WorkbookOpen { .. } | Action::SpaceOpen { .. } | Action::ListChoose { .. });
             ensure!(
                 moved || bound || gone || undone || adopted || gathered,
@@ -2500,8 +2500,11 @@ impl Run {
         };
         if bound_now.iter().any(newly) {
             let read = matches!(action, Action::RestoreWorkbooks { .. });
-            let starts =
-                matches!(action, Action::ComposeSubmit { .. } | Action::ComposeEnter | Action::TaskFromLine { .. });
+            // ⇧↵ (`open: false`) binds nothing.
+            let starts = matches!(
+                action,
+                Action::ComposeSubmit { open: true } | Action::ComposeEnter | Action::TaskFromLine { open: true, .. }
+            );
             let undone = matches!(action, Action::TaskUndo | Action::ListUndo | Action::WorkbookUndo);
             ensure!(
                 read || (origin == Origin::User && (starts || undone)),
