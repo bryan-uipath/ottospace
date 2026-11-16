@@ -177,6 +177,8 @@ right now"; "i'd expect < 5 so the ui should be suitable for that".
   that was in front, unless its line names a repository or a folder. The box says "↵ starts
   it in this workspace" (after the plan when there is one) while the workspace holds a pane or
   a task. Not from the first "Workspace" (a space of its own, until Home) nor a session's.
+- **↵ on a row of the dropdown** takes the row: no task, nothing joined, and the box says
+  "↵ completes", not "starts it in this workspace". A click on a tag's cap joins nothing.
 - **⇧↵ (for later) joins nothing**: it has no agent and no conversation to put in front, so it
   is listed in Tasks with no workspace; started later from its row, it gets its own. A
   client's `task_new` joins nothing either: it never puts a task in the user's workspace.
