@@ -7251,7 +7251,7 @@ mod tests {
 
     fn control(id: &str, x: f64) -> Target {
         let frame = crate::ax::Frame { x, y: 0., w: 20., h: 20. };
-        Target { frame, source: crate::ax::Source::Own { id: id.into() } }
+        Target { frame, source: crate::ax::Source::Own { id: id.into() }, clip: None }
     }
 
     /// `n` controls in a row: `c0`, `c1`, ...

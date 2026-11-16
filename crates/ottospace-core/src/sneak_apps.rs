@@ -12,6 +12,7 @@ use serde::Serialize;
 use crate::ax::{self, Frame, Labelled, Node, Source, Target};
 use crate::model::PaneId;
 use crate::sneak::{self, Sneak};
+use crate::sneak_place;
 
 /// Most labels an app pane gets: those nearest its top left.
 pub const CAP: usize = 150;
@@ -97,7 +98,8 @@ pub fn targets(pane: PaneId, read: &AppRead) -> (Vec<Target>, usize) {
             let clipped = ax::on_pane(g, *window, *crop, *content)?;
             let at = Frame { x: g.x - window.x, y: g.y - window.y, ..g };
             let source = Source::App { pane, path: f.path, role: f.node.role.clone(), at };
-            (clipped.w >= MIN_SIDE && clipped.h >= MIN_SIDE).then_some(Target { frame: clipped, source })
+            let clip = Some(ax::shown(*window, *crop, *content));
+            (clipped.w >= MIN_SIDE && clipped.h >= MIN_SIDE).then_some(Target { frame: clipped, source, clip })
         })
         .collect();
     let path = |t: &Target| match &t.source {
@@ -177,7 +179,8 @@ impl Sneak {
             // None when own labels used every letter: those never change under the user's eyes.
             let labels = more_labels(&taken, found.len());
             if labels.len() == found.len() {
-                let labelled = found.into_iter().zip(labels).map(|(target, label)| Labelled { label, target });
+                let labelled =
+                    found.into_iter().zip(labels).map(|(target, label)| Labelled { label, target, pill: None });
                 self.targets.extend(labelled);
             }
         } else {
@@ -192,6 +195,7 @@ impl Sneak {
         }
         let controls = self.targets.iter().filter(|t| is_app(t)).count();
         self.app = Some(AppLabels { pane, controls, found: total });
+        sneak_place::place(&mut self.targets);
     }
 
     /// The app pane's window is gone or no longer shown: its labels go.
@@ -321,7 +325,7 @@ mod tests {
     }
 
     fn own(id: &str, x: f64) -> Target {
-        Target { frame: Frame { x, y: 0., w: 20., h: 20. }, source: Source::Own { id: id.into() } }
+        Target { frame: Frame { x, y: 0., w: 20., h: 20. }, source: Source::Own { id: id.into() }, clip: None }
     }
 
     fn assert_prefix_free(sneak: &Sneak) {

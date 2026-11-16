@@ -98,6 +98,7 @@ import type {
   ClosedApp,
   Sneak,
   SneakApp,
+  SneakTarget,
   KeyReference,
   Snapshot,
   Station,
@@ -1388,10 +1389,14 @@ function axTarget(value: unknown, at: string): AxTarget {
   };
 }
 
+function sneakTarget(value: unknown, at: string): SneakTarget {
+  return { ...axTarget(value, at), pill: frame(fields(value, at).pill, `${at}.pill`) };
+}
+
 function sneak(value: unknown, at: string): Sneak {
   const o = fields(value, at);
   return {
-    targets: list(axTarget)(o.targets, `${at}.targets`),
+    targets: list(sneakTarget)(o.targets, `${at}.targets`),
     typed: str(o.typed, `${at}.typed`),
     app: orNull(sneakApp)(o.app, `${at}.app`),
   };

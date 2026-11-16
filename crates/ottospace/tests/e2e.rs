@@ -3765,14 +3765,34 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     unique.sort();
     unique.dedup();
     assert_eq!(unique.len(), labels.len(), "a label names one control: {labels:?}");
-    // Each label is on its control, inside the window.
+    // Each control and each label's pill is inside the window, and no two pills meet.
     let window = reply["window"].as_array().expect("window");
-    for t in reply["sneak"]["targets"].as_array().unwrap() {
-        let f = &t["frame"];
+    let rect = |f: &Value| {
         let (x, y, w, h) = (f["x"].as_f64(), f["y"].as_f64(), f["w"].as_f64(), f["h"].as_f64());
-        let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) else { panic!("frame of {t}") };
-        assert!(x >= 0.0 && y >= 0.0 && w > 1.0 && h > 1.0, "{t}");
-        assert!(x + w <= window[2].as_f64().unwrap() + 1.0 && y + h <= window[3].as_f64().unwrap() + 1.0, "{t}");
+        let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) else { panic!("a rect: {f}") };
+        [x, y, w, h]
+    };
+    let meet =
+        |a: [f64; 4], b: [f64; 4]| a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
+    let targets = reply["sneak"]["targets"].as_array().unwrap();
+    for t in targets {
+        for [x, y, w, h] in [rect(&t["frame"]), rect(&t["pill"])] {
+            assert!(x >= 0.0 && y >= 0.0 && w > 1.0 && h > 1.0, "{t}");
+            assert!(x + w <= window[2].as_f64().unwrap() + 1.0 && y + h <= window[3].as_f64().unwrap() + 1.0, "{t}");
+        }
+        let others = targets.iter().filter(|o| o["source"] != t["source"]);
+        assert!(others.clone().all(|o| !meet(rect(&t["pill"]), rect(&o["pill"]))), "{t} meets another pill");
+    }
+    // A small control's label sits beside it, not on it: the top row's buttons, and the rail's
+    // icons, which have no room beside them and keep a corner off the icon in their middle.
+    let of = |id: &str| targets.iter().find(|t| t["source"]["id"] == id).unwrap_or_else(|| panic!("no {id}"));
+    for id in ["top:new_tab", "top:split_right", "top:split_down", "top:new_workspace", "bar:add", "bar:close"] {
+        assert!(!meet(rect(&of(id)["frame"]), rect(&of(id)["pill"])), "{}", of(id));
+    }
+    for id in ["rail:apps", "rail:workbook", "rail:tasks", "rail:repos"] {
+        let ([x, y, w, h], pill) = (rect(&of(id)["frame"]), rect(&of(id)["pill"]));
+        let middle = [x + w / 2. - 8., y + h / 2. - 8., 16., 16.];
+        assert!(!meet(middle, pill), "{}", of(id));
     }
 
     // A × never has a one-letter label: one stray key closes nothing.
@@ -3855,6 +3875,12 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     let body = reply["sneak"]["targets"].as_array().unwrap().iter().find(|t| t["source"]["id"] == "pane:2").unwrap();
     assert!((body["frame"]["x"].as_f64().unwrap() - drawn[1][0]).abs() < 1.0, "{body} {drawn:?}");
     assert!((body["frame"]["w"].as_f64().unwrap() - drawn[1][2]).abs() < 1.0, "{body} {drawn:?}");
+    // A pane's ×, its header and the top row's buttons: each label beside its control.
+    let targets = reply["sneak"]["targets"].as_array().unwrap();
+    for id in ["close:1", "close:3", "header:1", "header:3", "top:new_tab", "top:split_right", "top:split_down"] {
+        let t = targets.iter().find(|t| t["source"]["id"] == id).unwrap_or_else(|| panic!("no {id}"));
+        assert!(!meet(rect(&t["frame"]), rect(&t["pill"])), "{t}");
+    }
     otto.call(json!({"cmd": "key", "keys": "escape"}));
 
     // A pane's label, or its header's, moves focus there. Its × closes it.

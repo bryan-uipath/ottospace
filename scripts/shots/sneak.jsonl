@@ -1,0 +1,14 @@
+# Sneak mode (⌘;) over small controls: the top row's + and split buttons, a tab's ×, the rail's
+# icons, the Tasks section's rows and a pane's header. A small control's label sits beside it.
+{"cmd":"split","kind":"empty"}
+{"cmd":"split","axis":"right","kind":"empty"}
+{"cmd":"new_tab"}
+{"cmd":"select_tab","index":0}
+{"cmd":"task_new","line":"Review the zoom fix #canvas"}
+{"cmd":"task_new","line":"Socket guide for agents #docs"}
+{"cmd":"task_new","line":"Minimap spike #canvas"}
+{"cmd":"section","section":"tasks"}
+{"settle":500}
+{"cmd":"sneak"}
+{"shot":"labels"}
+{"print":"sneak"}
