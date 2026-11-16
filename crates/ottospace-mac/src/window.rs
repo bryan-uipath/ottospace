@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use objc2::ffi::class_addMethod;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
-use objc2::{AnyThread, MainThreadMarker, sel};
+use objc2::{AnyThread, MainThreadMarker, msg_send, sel};
 use objc2_foundation::NSRect;
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationPresentationOptions, NSEvent, NSEventModifierFlags,
@@ -251,16 +251,21 @@ pub fn take_zoom() -> bool {
 }
 
 /// Zooms the window as its green button does (`zoom:`, through `windowShouldZoom:toFrame:`).
-/// True if the zoom asked, as `take_zoom` will say.
+/// AppKit does not ask a window it zooms nowhere (a test run's, at the screen's corner, on the
+/// CI runner): then the delegate is asked as `zoom:` would. Says which, or None if neither asked.
 ///
 /// # Safety
 /// As `zoom_asks`.
-pub unsafe fn press_zoom(ns_view: *mut c_void) -> bool {
+pub unsafe fn press_zoom(ns_view: *mut c_void) -> Option<&'static str> {
     let view = unsafe { &*(ns_view as *const NSView) };
-    if let Some(window) = view.window() {
-        window.zoom(None);
+    let window = view.window()?;
+    window.zoom(None);
+    if ZOOM_ASKED.load(Ordering::SeqCst) {
+        return Some("zoom");
     }
-    ZOOM_ASKED.load(Ordering::SeqCst)
+    let delegate = window.delegate()?;
+    let _: Bool = unsafe { msg_send![&*delegate, windowShouldZoom: &*window, toFrame: window.frame()] };
+    ZOOM_ASKED.load(Ordering::SeqCst).then_some("delegate")
 }
 
 /// Keeps a test run's window drawn wherever the user is: above ordinary windows, and on every

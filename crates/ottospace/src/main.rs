@@ -2396,11 +2396,10 @@ impl Workspace {
                 Request::ZoomPress => {
                     match ns_view(window).filter(|_| self.zoom_asks) {
                         // SAFETY: GPUI's own view, on the main thread.
-                        Some(view) => {
-                            if !unsafe { ottospace_mac::window::press_zoom(view) } {
-                                failure = Some("the zoom did not ask the window's delegate".into());
-                            }
-                        }
+                        Some(view) => match unsafe { ottospace_mac::window::press_zoom(view) } {
+                            Some(how) => trace::record("zoom_press", serde_json::json!({ "how": how })),
+                            None => failure = Some("the zoom did not ask the window's delegate".into()),
+                        },
                         // It would zoom the test's window over the user's screen.
                         None => failure = Some("the window's zoom does not fill the display".into()),
                     }
