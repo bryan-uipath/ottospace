@@ -6257,6 +6257,87 @@ fn a_repos_click_makes_a_workspace_of_its_worktree_where_terminals_and_tasks_sta
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The owner's canvas: "the new-task box offers a new worktree as the other choice". In a
+/// workspace of a real repository, the user's choice and ↵: git makes a worktree named for the
+/// task, the stand-in agent starts there, and the workspace of one task follows. A branch that is
+/// there already: nothing made, the task kept, the notice says why.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_new_task_box_makes_a_new_worktree_and_starts_the_task_there() {
+    let root = support::temp(&format!("ottospace-e2e-box-worktree-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, sessions, app) = (root.join("bin"), root.join("sessions"), root.join("repos/app"));
+    fake_agents(&bin, &sessions);
+    std::fs::create_dir_all(&app).unwrap();
+    git(&app, &["init", "-q", "-b", "main"]);
+    git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"]);
+    git(&app, &["branch", "deploy"]);
+    let app = app.canonicalize().unwrap().to_string_lossy().into_owned();
+    let settings = json!({"repos": [root.join("repos")], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("box-worktree", &settings.to_string());
+    let env = [
+        ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ];
+    let otto = Otto::launch_with("box-worktree", &env);
+    let made = home.canonicalize().unwrap().join("worktrees/app/fix-the-zoom").to_string_lossy().into_owned();
+    let space = |reply: &Value| -> Value {
+        let spaces = reply["spaces"].as_array().cloned().unwrap_or_default();
+        spaces.iter().find(|s| s["selected"] == true).cloned().unwrap_or_default()
+    };
+
+    // The repository's workspace, and the box: this checkout by default, the branch it would make.
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    otto.user_click(at(otto.control(&format!("repo:{app}")), 0.5, 0.5));
+    otto.user_key("cmd-n");
+    let typed = otto.user_key("F i x space t h e space z o o m");
+    assert_eq!(typed["compose_worktree"], json!({"new": false, "repo": "app", "branch": "fix-the-zoom"}));
+    // A client's key changes nothing; the user's does.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-alt-n"}));
+    assert_eq!(reply["compose_worktree"]["new"], false, "a client chose: {}", reply["compose_worktree"]);
+    let chosen = otto.user_key("cmd-alt-n");
+    assert_eq!(chosen["compose_worktree"]["new"], true);
+    let said = "↵ will start claude in a new worktree of app on fix-the-zoom, in this workspace";
+    assert_eq!(chosen["compose_plan_line"], said);
+
+    // ↵: the worktree is made, the agent starts there, the workspace's default follows it.
+    otto.user_key("enter");
+    let started = |dir: String| {
+        let bin = bin.clone();
+        move |_: &Otto| agent_argv(&bin, "claude").filter(|argv| argv.first() == Some(&dir)).map(|_| ())
+    };
+    otto.wait_for("the agent, in the new worktree", started(made.clone()));
+    assert!(Path::new(&made).join(".git").is_file(), "no worktree at {made}");
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(space(&state)["worktree"], json!(made), "{}", space(&state));
+    let listed = state["state"]["repos"][0]["worktrees"].as_array().cloned().unwrap_or_default();
+    assert!(listed.iter().any(|w| w["path"] == made && w["branch"] == "fix-the-zoom"), "{listed:?}");
+
+    // A branch there already: refused, said, the task kept unstarted, the default as it was.
+    std::fs::remove_file(bin.join("claude.argv")).unwrap();
+    otto.user_key("cmd-n");
+    otto.user_key("d e p l o y");
+    otto.user_key("cmd-alt-n");
+    otto.user_key("enter");
+    let refused = |o: &Otto| {
+        let s = o.call(json!({"cmd": "state"}));
+        (s["notice"] == "A branch deploy is there already: no worktree made").then_some(s)
+    };
+    let state = otto.wait_for("the refusal", refused);
+    let tasks = state["state"]["tasks"]["list"].as_array().cloned().unwrap_or_default();
+    let task = |title: &str| tasks.iter().find(|t| t["title"] == title).cloned().unwrap_or_default();
+    assert_eq!((&task("Fix the zoom")["repo"], &task("deploy")["repo"]), (&json!(made), &json!(made)), "{tasks:?}");
+    assert_eq!(task("deploy")["state"], "captured");
+    assert_eq!(space(&state)["worktree"], json!(made));
+    assert!(agent_argv(&bin, "claude").is_none(), "an agent started for the refused task");
+    assert!(!home.join("worktrees/app/deploy").exists());
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A stand-in `claude` whose session says it moves: it starts where it is run, its sub-agent's
 /// worktree (`<repo>/.claude/worktrees/agent-x`, made and listed) is written in its records, then,
 /// once `<root>/go` is there, it makes the worktree `<repos>/app-3` as git lays one out and works
@@ -8943,6 +9024,114 @@ fn an_agent_that_ends_before_replying_says_why() {
     let again = otto.wait_for("its end", |o| (chat(o)["transcript"]["live"] == false).then_some(chat(o)));
     let users = again["transcript"]["entries"].as_array().unwrap().iter().filter(|e| e["kind"] == "user").count();
     assert_eq!(users, 2, "{again}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A task's agent carries a pass of its own: its `ottospace ctl task_brief` with no id finds its
+/// task, whatever is on show. A made-up pass is refused, and none falls back to the task on show.
+/// Once the agent ends, its pass is dead, also in a child that outlived it; a new start has a
+/// new one. Made-up tasks; the stand-in `claude` runs the requests itself.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_task_agents_pass_finds_its_task_until_it_ends() {
+    let extra = [
+        ("FAKE_EXIT", "0"),
+        ("FAKE_CTL", r#"{"cmd":"task_brief"}"#),
+        ("FAKE_OTTOSPACE", env!("CARGO_BIN_EXE_ottospace")),
+    ];
+    let (root, record, env) = native_setup("pass", &[], &extra);
+    let otto = launch_env("pass", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+    otto.call(json!({"cmd": "task_new", "line": "second >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["2"].clone();
+    let file = |name: &str| std::fs::read_to_string(record.join(name)).ok().filter(|text| text.ends_with('\n'));
+    let reply = |o: &Otto, name: &str| -> Value {
+        let text = o.wait_for(name, |_| file(name));
+        serde_json::from_str(text.trim()).unwrap_or_else(|_| panic!("{name}: {text}"))
+    };
+    let touch = |name: &str| std::fs::write(record.join(name), "").unwrap();
+    // Task 2's agent; then the user shows task 1, so the task on show is not the caller's.
+    otto.start_task(2);
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    touch("ask-1");
+    // Its own pass: task 2 (it has nothing captured, which the error says by its id).
+    let own = reply(&otto, "ctl-own-1");
+    assert_eq!(own, json!({"ok": false, "error": "task 2 has no materials: nothing was captured for it"}));
+    let stale =
+        json!({"ok": false, "error": "this pass is no running agent's: ask the user to start the task's agent again"});
+    assert_eq!(reply(&otto, "ctl-wrong-1"), stale);
+    let none = json!({"ok": false, "error": "task 1 has no materials: nothing was captured for it"});
+    assert_eq!(reply(&otto, "ctl-none-1"), none, "no pass: the task on show, as before");
+    // The pass is in no state reply, nor the trace.
+    let pass = file("pass-1").expect("the fake wrote its pass").trim().to_string();
+    assert_eq!(pass.len(), 32, "a pass in the agent's environment");
+    let state = otto.call(json!({"cmd": "state"})).to_string();
+    let trace = otto.call(json!({"cmd": "trace"})).to_string();
+    assert!(!state.contains(&pass) && !trace.contains(&pass), "the pass leaked");
+    // It ended (`FAKE_EXIT`): the child it left asks with a dead pass.
+    otto.wait_for("the end", |o| (chat(o)["transcript"]["live"] == false).then_some(()));
+    // Started again: a new process, a new pass. The old child's is still dead while it runs.
+    otto.start_task(2);
+    let starts = || std::fs::read_to_string(record.join("starts")).unwrap_or_default().lines().count();
+    otto.wait_for("a second start", |_| (starts() == 2).then_some(()));
+    touch("go-1");
+    assert_eq!(reply(&otto, "ctl-after-1"), stale, "a child that outlived its agent holds a dead pass");
+    touch("ask-2");
+    assert_eq!(reply(&otto, "ctl-own-2"), own, "the new process's pass is its task's");
+    let ends = |o: &Otto| {
+        let entries = chat(o)["transcript"]["entries"].as_array().cloned().unwrap_or_default();
+        entries.iter().filter(|e| e["notice"] == "ended").count()
+    };
+    otto.wait_for("the second end", |o| (ends(o) == 2).then_some(()));
+    touch("go-2");
+    assert_eq!(reply(&otto, "ctl-after-2"), stale);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The same pass in the terminal view: the TUI's environment has it, and its end kills it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_task_agents_pass_in_its_terminal_finds_its_task_until_it_ends() {
+    let extra = [
+        ("FAKE_EXIT", "0"),
+        ("FAKE_CTL", r#"{"cmd":"task_brief"}"#),
+        ("FAKE_OTTOSPACE", env!("CARGO_BIN_EXE_ottospace")),
+    ];
+    let (root, record, env) = native_setup("pass-tui", &[], &extra);
+    let settings = root.join("home/settings.json");
+    let mut written: Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    written["conversation_view"] = json!("terminal");
+    std::fs::write(&settings, written.to_string()).unwrap();
+    let otto = launch_env("pass-tui", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+    otto.call(json!({"cmd": "task_new", "line": "second >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let file = |name: &str| std::fs::read_to_string(record.join(name)).ok().filter(|text| text.ends_with('\n'));
+    let reply = |o: &Otto, name: &str| -> Value {
+        let text = o.wait_for(name, |_| file(name));
+        serde_json::from_str(text.trim()).unwrap_or_else(|_| panic!("{name}: {text}"))
+    };
+    let touch = |name: &str| std::fs::write(record.join(name), "").unwrap();
+    otto.start_task(2);
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    touch("ask-1");
+    let own = json!({"ok": false, "error": "task 2 has no materials: nothing was captured for it"});
+    assert_eq!(reply(&otto, "ctl-own-1"), own);
+    let stale =
+        json!({"ok": false, "error": "this pass is no running agent's: ask the user to start the task's agent again"});
+    assert_eq!(reply(&otto, "ctl-wrong-1"), stale);
+    let none = json!({"ok": false, "error": "task 1 has no materials: nothing was captured for it"});
+    assert_eq!(reply(&otto, "ctl-none-1"), none);
+    // Its program ended; its last screen stays, its pass does not.
+    let ended = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["agents"]["2"]["ended"] == true;
+    otto.wait_for("the end", |o| ended(o).then_some(()));
+    touch("go-1");
+    assert_eq!(reply(&otto, "ctl-after-1"), stale);
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -20,7 +20,7 @@ use gpui::{
 };
 use ottospace_core::capture::{self, Brief, Content, Facts, MAX_BRIEF_BYTES, Material, Shape, Shot as Lie, Tool};
 use ottospace_core::rules;
-use ottospace_core::tasks::{self, TaskId};
+use ottospace_core::tasks::{self, Caller, TaskId};
 use ottospace_core::{Action, Kind, Mode, Origin, PaneId, theme};
 use ottospace_mac::{ax, image, process};
 
@@ -621,11 +621,10 @@ impl Workspace {
     }
 
     /// The `task_brief` request.
-    pub(crate) fn serve_brief(&mut self, id: Option<TaskId>, tab: Option<u32>) -> String {
-        let of_tab = tab.and_then(|tab| self.model.tabs.iter().find(|t| t.id == tab)).and_then(|t| t.space.task());
-        let talking = self.model.talk.as_ref().and_then(|talk| talk.task.task());
-        let Some(id) = id.or(of_tab).or(self.model.tab_task()).or(talking) else {
-            return control::error("name a task: {\"cmd\":\"task_brief\",\"id\":7}");
+    pub(crate) fn serve_brief(&mut self, id: Option<TaskId>, caller: Caller, tab: Option<u32>) -> String {
+        let id = match self.model.brief_task(id, caller, tab) {
+            Ok(id) => id,
+            Err(why) => return control::error(why),
         };
         match self.model.tasks.get(id).map(|task| task.materials.is_empty()) {
             None => return control::error(&format!("no task {id}")),

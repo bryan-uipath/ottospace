@@ -33,7 +33,8 @@ pub fn tag_color(mark: char) -> u32 {
 
 impl Workspace {
     /// The box's keys. ↵ takes the dropdown's highlighted row, else adds the task and starts
-    /// its agent; ⇧↵ adds it for later; ⌘↵ adds and starts it; Tab takes a row; ↑ ↓ (⌃P ⌃N) move over the rows; ⌃G edits the line in the user's editor; Esc closes the dropdown,
+    /// its agent; ⇧↵ adds it for later; ⌘↵ adds and starts it; ⌥⌘N switches between this checkout
+    /// and a new worktree, where offered; Tab takes a row; ↑ ↓ (⌃P ⌃N) move over the rows; ⌃G edits the line in the user's editor; Esc closes the dropdown,
     /// then the box; ⌘O picks files. The rest edit the line. ⌘ shortcuts the line does not use
     /// still reach their bindings; pane ones wait.
     pub fn compose_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
@@ -53,6 +54,7 @@ impl Workspace {
             "n" if plain && m.control => Action::ComposeMove { delta: 1 },
             // The line in the user's editor.
             "g" if plain && m.control => Action::EditorOpen,
+            "n" if m.platform && m.alt && !m.shift && !m.control => Action::ComposeWorktree { new: None },
             "o" if m.platform && !m.shift && !m.alt && !m.control => {
                 self.pick_files(window, cx);
                 return cx.stop_propagation();
@@ -478,6 +480,40 @@ impl Workspace {
             let on = agent.as_ref().is_some_and(|agent| agent.eq_ignore_ascii_case(name));
             pick('@', Some(name.clone()), format!("@{name}"), on)
         });
+        // Where it works, where there is a choice: this checkout, or a new worktree (⌥⌘N switches).
+        let choice = self.model.compose_worktree().map(|choice| {
+            let side = |new: bool, label: &'static str| {
+                let id = format!("pick:worktree:{}", if new { "new" } else { "checkout" });
+                let on = choice.new == new;
+                div()
+                    .id(gpui::SharedString::from(id.clone()))
+                    .relative()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(if on { theme::COMPOSE } else { theme::BORDER_STRONG }))
+                    .text_xs()
+                    .text_color(rgb(if on { theme::TEXT } else { theme::MUTED }))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(theme::SELECTED)))
+                    .child(label)
+                    .child(self.controls.mark(id))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        drop(this.dispatch(Action::ComposeWorktree { new: Some(new) }, this.input, window, cx))
+                    }))
+            };
+            let key = div().text_xs().text_color(rgb(theme::MUTED)).child("⌥⌘N");
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .child(side(false, "this checkout"))
+                .child(side(true, "new worktree"))
+                .child(key)
+        });
         let plan =
             self.model.compose_plan_line().map(|text| div().text_xs().text_color(rgb(theme::COMPOSE)).child(text));
         let idle = (!open).then(|| {
@@ -514,6 +550,7 @@ impl Workspace {
             .p_3()
             .child(div().flex().flex_wrap().gap_1().children(wheres).child(none))
             .child(div().flex().flex_wrap().gap_1().children(whos))
+            .children(choice)
             .child(div().flex_1())
             .children(plan)
             .children(open.then(|| self.new_task_content(cx)))
