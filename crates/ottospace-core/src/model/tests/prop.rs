@@ -2161,6 +2161,17 @@ struct Run {
     /// The app elements labelled when nothing was last typed: a press must be of one of them,
     /// so every letter of its label was typed after the label was drawn.
     drawn_before: Vec<String>,
+    /// The notice bar's slot for a step's line, kept as the shell keeps it (`notice::Held`).
+    held: crate::notice::Held,
+}
+
+/// What the notice bar shows: the step's line it holds, the settings' line, the editor's note.
+fn bar(m: &Model, held: &crate::notice::Held) -> Option<crate::notice::Notice> {
+    use crate::notice::{Kind, Notice};
+    let settings = m.settings_line().map(|text| Notice { kind: m.settings_kind(), text });
+    let editor = m.editor_note().map(|text| Notice { kind: Kind::Editor, text: text.into() });
+    let live: Vec<Notice> = held.said.clone().into_iter().chain(settings).chain(editor).collect();
+    crate::notice::shown(&live, &m.notice_hidden)
 }
 
 /// An app's label as `drawn_before` keeps it: the letters and the element, whatever its frame.
@@ -2182,6 +2193,7 @@ impl Run {
         let drawn_before = self.drawn_before.clone();
         let m = &mut self.m;
         let refused = m.refusal(&action, origin).map(|_| format!("{m:?}"));
+        let (why, bar_before) = (m.refusal(&action, origin), bar(m, &self.held));
         let awaiting = m.awaiting.clone();
         let switching = m.switching.clone();
         let chats_before = m.chats.clone();
@@ -2561,6 +2573,22 @@ impl Run {
             ensure!(
                 effects.is_empty() && format!("{m:?}") == *before,
                 "a refused action changed the model, or had effects"
+            );
+        }
+        // The step's line: the core's reason why it did nothing. Another sender's refusal is
+        // its answer: the bar shows what it did, so nothing under it moves (and the model, all
+        // that is drawn there, is as it was: above).
+        let reason = effects.iter().find_map(|effect| match effect {
+            Effect::Notice { text } => Some(text.clone()),
+            _ => None,
+        });
+        if let Some(text) = reason.or(why.map(String::from)) {
+            let kind = crate::notice::said(true, false, origin);
+            self.held = self.held.after(Some(crate::notice::Notice { kind, text }), origin);
+            ensure!(
+                origin == Origin::User || bar(m, &self.held) == bar_before,
+                "{origin:?}'s refused {action:?} changed the notice bar: {:?}, was {bar_before:?}",
+                bar(m, &self.held)
             );
         }
         let user = origin == Origin::User;

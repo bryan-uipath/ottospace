@@ -211,7 +211,7 @@ impl Workspace {
             return;
         }
         match config::save_apps(changes) {
-            Err(why) => self.error = Some(format!("{}{why}", Self::NOT_WRITTEN)),
+            Err(why) => self.broke(format!("{}{why}", Self::NOT_WRITTEN)),
             Ok(()) if self.error.as_ref().is_some_and(|error| error.starts_with(Self::NOT_WRITTEN)) => {
                 self.error = None
             }
