@@ -9026,16 +9026,16 @@ mod tests {
         }
         let at_start = (m.space(), tab_titles(&m), row(&m));
         let home = |tabs| (Owner::Home, false, tabs);
-        assert_eq!(at_start, (&WORKSPACE, vec!["Tab 1"], vec![home(vec![1]), (WORKSPACE, false, vec![0])]));
+        assert_eq!(at_start, (&WORKSPACE, vec!["Tab 1"], vec![home(vec![]), (WORKSPACE, false, vec![0])]));
         // Opened, a task's space is made at the row's end: one empty tab, named for its repository.
         assert_eq!(m.update(Action::SpaceOpen { space: task_space(1) }), []);
         assert_eq!((m.space(), tab_titles(&m), m.layout.is_none()), (&task_space(1), vec!["Tab 1", "app-2"], true));
         // The user's new tab joins the selected space, and so does a client's: Home takes none.
         m.update(Action::NewTab);
-        assert_eq!(row(&m), [home(vec![3]), (WORKSPACE, false, vec![0]), (task_space(1), false, vec![1, 2])]);
+        assert_eq!(row(&m), [home(vec![]), (WORKSPACE, false, vec![0]), (task_space(1), false, vec![1, 2])]);
         m.update(Action::NewTab.sent_by(Origin::Socket));
         assert_eq!((m.active, m.space()), (3, &task_space(1)));
-        assert_eq!(row(&m), [home(vec![4]), (WORKSPACE, false, vec![0]), (task_space(1), false, vec![1, 2, 3])]);
+        assert_eq!(row(&m), [home(vec![]), (WORKSPACE, false, vec![0]), (task_space(1), false, vec![1, 2, 3])]);
         // ⌘1… (and ⌘⇧⌥1…) count the selected space's tabs only.
         assert_eq!((m.visible_tab(1), m.visible_tab(3)), (Some(2), None));
         // Cycling stays in the space; a space shows the tab it showed last.
@@ -9077,7 +9077,7 @@ mod tests {
         assert_eq!((ids(&m), m.space()), (vec![1, 4, 3, 2], &task_space(a)));
         m.update(Action::TabPlace { tab: Some(4), at: TabAt::End(WORKSPACE) });
         assert_eq!((ids(&m), m.space()), (vec![1, 4, 3, 2], &WORKSPACE));
-        let home = (Owner::Home, false, vec![4]);
+        let home = (Owner::Home, false, vec![]);
         assert_eq!(row(&m), [home, (WORKSPACE, false, vec![0, 1]), (task_space(b), false, vec![2, 3])]);
         // A client moves nothing, and a dismissed task takes no tab.
         let theirs = Action::TabPlace { tab: Some(1), at: TabAt::End(task_space(a)) };
@@ -9216,7 +9216,7 @@ mod tests {
         let effects = m.update(Action::ComposeEnter);
         assert!(matches!(effects[..], [Effect::StartAgent { .. }]), "{effects:?}");
         assert_eq!((m.tab_task(), m.mode(), m.tabs.len()), (Some(1), Mode::Talk, 3));
-        let (home, app) = ((Owner::Home, false, vec![2]), (WORKSPACE, false, vec![0]));
+        let (home, app) = ((Owner::Home, false, vec![]), (WORKSPACE, false, vec![0]));
         assert_eq!(row(&m), [home, app, (task_space(1), false, vec![1])]);
         // The workspace's tab is as it was.
         m.update(Action::SpaceSelect { index: 1 });
@@ -9241,7 +9241,7 @@ mod tests {
         term(&mut m);
         m.update(Action::NewTab);
         term(&mut m);
-        let (book, home) = (Owner::Workbook { id: 1 }, (Owner::Home, false, vec![2]));
+        let (book, home) = (Owner::Workbook { id: 1 }, (Owner::Home, false, vec![]));
         let before = (pane_tabs(&m), m.tabs[m.active].id, m.layout.clone(), m.panes.clone());
         assert_eq!(row(&m), [home.clone(), (book.clone(), false, vec![0, 1])]);
         m.update(Action::OpenCompose { text: "fix zoom".into() });
@@ -9435,7 +9435,7 @@ mod tests {
         exited(&mut m, 1);
         m.update(Action::RowDismiss { id: 1 });
         let heir = task_space(3);
-        assert_eq!(row(&m), [(Owner::Home, false, vec![2]), (heir.clone(), false, vec![0, 1])]);
+        assert_eq!(row(&m), [(Owner::Home, false, vec![]), (heir.clone(), false, vec![0, 1])]);
         assert_eq!((pane_tabs(&m), m.members(&heir), m.workbooks.bound_to(3)), (tabs.clone(), vec![3], Some(1)));
         // Taken back: in it again, as one of its tasks.
         m.update(Action::TaskUndo);
@@ -9445,7 +9445,7 @@ mod tests {
         m.update(Action::RowDismiss { id: 1 });
         m.update(Action::RowDismiss { id: 3 });
         let book = Owner::Workbook { id: 1 };
-        assert_eq!(row(&m), [(Owner::Home, false, vec![2]), (book, false, vec![0, 1])]);
+        assert_eq!(row(&m), [(Owner::Home, false, vec![]), (book, false, vec![0, 1])]);
         assert_eq!((pane_tabs(&m), m.workbooks.list[0].task), (tabs, None));
     }
 

@@ -671,7 +671,7 @@ mod tests {
         let file = parse(BEFORE_HOME).unwrap();
         let (r, effects) = restored(&m, file.clone(), &[], false);
         // Its tabs, the empty one too, are a workspace's, where the first space was; Home holds none.
-        let home = ("Home".to_string(), vec![3]);
+        let home = ("Home".to_string(), vec![]);
         assert_eq!(row(&r), [home, ("Workspace".into(), vec![0, 1]), ("fix zoom".into(), vec![2])]);
         let book = &r.workbooks.list[0];
         assert_eq!((book.name.as_str(), book.tabs.len(), valid(&book.uid)), ("Workspace", 0, true));
@@ -707,7 +707,7 @@ mod tests {
         task(&mut m, "fix zoom");
         let (r, _) = restored(&m, file.clone(), &[], false);
         // The empty tab was on show: Home is. No workspace is made for nothing.
-        assert_eq!(row(&r), [("Home".to_string(), vec![1]), ("fix zoom".into(), vec![0])]);
+        assert_eq!(row(&r), [("Home".to_string(), vec![]), ("fix zoom".into(), vec![0])]);
         assert_eq!((r.space(), r.workbooks.list.len(), r.home(&[]).is_some()), (&Owner::Home, 0, true));
         // No tab at all: Home alone.
         let (r, _) = restored(&Model::default(), Layout { tabs: Vec::new(), spaces: Vec::new(), ..file }, &[], false);
@@ -728,11 +728,11 @@ mod tests {
         let mut gone = Model::default();
         gone.update(Action::RestoreWorkbooks { workbooks: m.workbooks.list.clone() }.sent_by(Origin::System));
         gone.update(restore(Layout { home: false, selected: Some(0), ..file.clone() }).sent_by(Origin::System));
-        assert_eq!(row(&gone), [("Home".to_string(), vec![3]), ("Workspace 2".into(), vec![0, 1, 2])]);
+        assert_eq!(row(&gone), [("Home".to_string(), vec![]), ("Workspace 2".into(), vec![0, 1, 2])]);
         // Home on show and no workspace left either: one is made, kept like any other.
         let mut none = Model::default();
         none.update(restore(file).sent_by(Origin::System));
-        assert_eq!(row(&none), [("Home".to_string(), vec![3]), ("Workspace 2".into(), vec![0, 1, 2])]);
+        assert_eq!(row(&none), [("Home".to_string(), vec![]), ("Workspace 2".into(), vec![0, 1, 2])]);
         assert_eq!((none.workbooks.list.len(), none.tab_panes()[3].len()), (1, 0));
     }
 
@@ -769,7 +769,7 @@ mod tests {
         let (r, _) = restored(&m, file, &[], false);
         let order: Vec<&str> = r.tabs.iter().map(|tab| tab.title.as_str()).collect();
         assert_eq!((order, r.tabs[r.active].title.as_str()), (vec!["a", "e", "b", "d", "c", "Home"], "d"));
-        let spaces = [("Home", vec![5]), ("Workspace", vec![0, 1]), ("two", vec![2, 3]), ("one", vec![4])];
+        let spaces = [("Home", vec![]), ("Workspace", vec![0, 1]), ("two", vec![2, 3]), ("one", vec![4])];
         assert_eq!(row(&r), spaces.map(|(name, tabs)| (name.to_string(), tabs)));
     }
 

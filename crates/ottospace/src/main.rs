@@ -2004,7 +2004,7 @@ impl Workspace {
                     failure = Some(format!("no pane {pane}"));
                     None
                 }
-                Request::MovePane { tab, .. } if tab >= self.model.tabs.len() => {
+                Request::MovePane { tab, .. } if tab >= self.model.bar_tabs() => {
                     failure = Some(format!("no tab at place {tab} on the tab bar"));
                     None
                 }
@@ -2052,6 +2052,11 @@ impl Workspace {
                     None
                 }
                 Request::NewTab => Some(Action::NewTab),
+                // Home has no tab on the bar: `select_space` 0 goes there.
+                Request::SelectTab { index } if index >= self.model.bar_tabs() => {
+                    failure = Some(format!("no tab at place {index} on the tab bar"));
+                    None
+                }
                 Request::SelectTab { index } => Some(Action::SelectTab { index }),
                 Request::CycleTab { delta } => Some(Action::CycleTab { delta }),
                 Request::SelectSpace { index } => Some(Action::SpaceSelect { index }),
@@ -2151,7 +2156,7 @@ impl Workspace {
                     None
                 }
                 Request::TaskAdd { tab: Some(tab), .. }
-                    if self.model.tabs.iter().any(|t| t.id == tab && t.space != Owner::Home) =>
+                    if self.model.tabs.iter().any(|t| t.id == tab && t.space.task().is_some()) =>
                 {
                     failure =
                         Some(format!("tab {tab} belongs to another task; leave out `tab` to file a task without one"));
@@ -2818,7 +2823,7 @@ impl Workspace {
         };
         // By place in `state.tabs`: null for a tab not drawn (one row shows one space's tabs).
         let tabs: Vec<Option<[f32; 4]>> =
-            (0..self.model.tabs.len()).map(|place| marks.get(&Mark::Tab(place)).copied().map(rect)).collect();
+            (0..self.model.bar_tabs()).map(|place| marks.get(&Mark::Tab(place)).copied().map(rect)).collect();
         let spaces: Vec<Option<[f32; 4]>> = (0..self.model.shown_spaces().len())
             .map(|place| marks.get(&Mark::Space(place)).copied().map(rect))
             .collect();
@@ -2845,12 +2850,24 @@ impl Workspace {
             })
             .collect();
         let status = self.notice_replied();
+        // Home's own tab, after all the others, is no tab of the bar: `tabs` leaves it out, and
+        // `active` is null while Home is on show.
+        let mut model = serde_json::to_value(&self.model).unwrap_or_default();
+        let bar = self.model.bar_tabs();
+        if let Some(tabs) = model.get_mut("tabs").and_then(serde_json::Value::as_array_mut) {
+            tabs.truncate(bar);
+        }
+        if self.model.active >= bar {
+            model["active"] = serde_json::Value::Null;
+        }
+        let mut tab_panes = self.model.tab_panes();
+        tab_panes.truncate(bar);
         serde_json::json!({
             "ok": true,
             "mode": self.model.mode(),
             // Where the keyboard is: a pane, the list, a rail's cell, the drawer.
             "focus": self.model.focus_target(),
-            "state": self.model,
+            "state": model,
             "bounds": bounds,
             // Each drawn pane's bounds inside its border.
             "frames": frames,
@@ -2876,7 +2893,7 @@ impl Workspace {
             })),
             // Each drawn app pane's preview: the part of the window it shows, where it is drawn.
             "shown": shown,
-            "tab_panes": self.model.tab_panes(),
+            "tab_panes": tab_panes,
             // ottospace's own window frame, so a test can turn pane bounds into screen positions.
             "window": frame,
             // Whether that window has the keyboard: a user's wheel over a parked app pane peeks only then.

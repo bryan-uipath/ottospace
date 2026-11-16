@@ -128,13 +128,18 @@ impl Model {
         self.spaces.iter().filter(|space| !space.hidden).collect()
     }
 
-    /// Every space, with its tabs, for the state.
+    /// How many tabs the bars hold: all but Home's own, which is after them in `tabs`.
+    pub fn bar_tabs(&self) -> usize {
+        self.tabs.iter().filter(|tab| tab.id != HOME_TAB).count()
+    }
+
+    /// Every space, with its tabs, for the state: Home has none to list.
     pub fn space_rows(&self) -> Vec<SpaceRow> {
         let row = |space: &Space| SpaceRow {
             of: space.of.clone(),
             hidden: space.hidden,
             selected: *self.space() == space.of,
-            tabs: self.space_tabs(&space.of),
+            tabs: self.space_tabs(&space.of).into_iter().filter(|at| self.tabs[*at].id != HOME_TAB).collect(),
             tasks: self.space_tasks(&space.of),
             front: self.front(&space.of),
             strip: self.strip(&space.of),
