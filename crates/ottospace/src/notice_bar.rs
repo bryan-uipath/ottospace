@@ -1,4 +1,5 @@
-//! The notice bar: the one app-level message, full width between the top row and the rest.
+//! The notice bar: the one app-level message, full width at the window's foot, above the
+//! timeline and the status bar. Nothing above it moves when it opens: the content's foot rises.
 //! Which notice shows, its level and who may dismiss it are the core's (`ottospace_core::notice`).
 
 use std::time::Instant;
@@ -8,7 +9,7 @@ use ottospace_core::model::Action;
 use ottospace_core::notice::{self, Kind, Notice, Offer};
 use ottospace_core::theme;
 
-use crate::{Mark, TOLD_FOR, TOP_BAR, Tooltip, Workspace, mark, recessed};
+use crate::{Mark, TOLD_FOR, Tooltip, Workspace, mark, recessed};
 
 /// How deep the shadows on the bar's edges are, in points.
 const DEPTH: f32 = 7.;
@@ -19,7 +20,7 @@ pub(crate) struct Bar {
     /// Where the height was when it last began to move, and when that was.
     from: f32,
     since: Instant,
-    /// Its height in this frame: the rest of the window starts this much lower.
+    /// Its height in this frame: the content above it ends this much higher.
     pub(crate) height: f32,
     /// What it says. Kept while it closes: the bar still shows it.
     last: Option<Notice>,
@@ -133,7 +134,8 @@ impl Workspace {
     }
 
     /// The bar, `height` points of it showing: a level glyph, the text (in full on hover), what
-    /// it offers, and ×. Laid out at its full height and cut, so it is uncovered, not squeezed.
+    /// it offers, and ×. Laid out at its full height on its foot and cut, so its top edge rises
+    /// over it: uncovered, not squeezed.
     pub(crate) fn render_notice_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
         let shown = self.bar.last.clone().filter(|_| self.bar.height > 0.)?;
         let (background, text) = theme::notice(shown.level());
@@ -170,7 +172,7 @@ impl Workspace {
             }));
         let line = div()
             .absolute()
-            .top_0()
+            .bottom_0()
             .left_0()
             .w_full()
             .h(px(notice::HEIGHT))
@@ -180,12 +182,12 @@ impl Workspace {
             .gap_2()
             .text_xs()
             .text_color(rgb(text))
-            .child(div().flex_none().child(shown.glyph()))
+            .child(glyph(&shown, background, text))
             .child(div().id("notice-text").min_w_0().truncate().child(shown.text.clone()).tooltip(tip))
             .children(offer)
             .child(div().flex_1())
             .child(close);
-        let bar = recessed(line, DEPTH).absolute().top(px(TOP_BAR)).left_0().w_full().h(px(self.bar.height));
+        let bar = recessed(line, DEPTH).flex_none().w_full().h(px(self.bar.height));
         Some(bar.bg(rgb(background)).child(mark(&self.marks, Mark::Notice)))
     }
 
@@ -209,4 +211,15 @@ impl Workspace {
             "height": self.bar.height,
         })
     }
+}
+
+/// The level's glyph. An error's `!` sits in a filled circle of the text's colour: no cross
+/// beside the text that could read as the × on the right.
+fn glyph(shown: &Notice, background: u32, text: u32) -> Div {
+    let glyph = div().flex_none().child(shown.glyph());
+    if shown.level() != notice::Level::Error {
+        return glyph;
+    }
+    let round = glyph.size(px(13.)).rounded_full().flex().items_center().justify_center();
+    round.bg(rgb(text)).text_color(rgb(background)).font_weight(gpui::FontWeight::BOLD)
 }
