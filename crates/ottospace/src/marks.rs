@@ -378,7 +378,7 @@ impl Workspace {
             .into_iter()
             .filter(|(pid, ..)| only(*pid))
             .find_map(|(pid, bundle, name)| marks::same_app(app, (bundle.as_deref(), &name)).then_some(pid));
-        let shown = |pid: i32| ax::Window::standard_of(pid).iter().any(|w| !w.minimized() && window_managed(w));
+        let shown = |pid: i32| ax::Window::standard_of(pid).iter().any(hostable);
         if let Some(pid) = pid.filter(|pid| shown(*pid)) {
             return self.host_window_of(pid, &wanted, window, cx);
         }
@@ -409,8 +409,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let main = ax::Window::main_id(pid);
-        // A minimised window stays in the Dock: its stream would draw nothing.
-        let hostable = |window: &ax::Window| !window.minimized() && window_managed(window);
         let windows: Vec<ax::Window> = ax::Window::standard_of(pid).into_iter().filter(hostable).collect();
         let held = |id: u32| self.hosted.iter().find(|(_, hosted)| hosted.window_id == id).map(|(pane, _)| *pane);
         let fact = |window: &ax::Window| {
@@ -582,4 +580,9 @@ impl Workspace {
         let list = list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows);
         self.bars.tracked("marks", list.children(hint), &self.list_scroll)
     }
+}
+
+/// A window that may go in a pane: one the rules let in, not minimised (its stream would draw nothing).
+fn hostable(window: &ax::Window) -> bool {
+    !window.minimized() && window_managed(window)
 }
