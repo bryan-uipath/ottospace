@@ -185,6 +185,7 @@ a click that would put it aside waits too.
 | ↑ / ↓ or ⌃P / ⌃N | Move over the dropdown's rows. With no dropdown: to the line's start or end |
 | Esc | Closes the dropdown. With no dropdown open: closes the box |
 | ⌘O, or `+ file` | The system's file picker: what is chosen goes into the line as `/path` words |
+| ⌥⌘N, or `this checkout` / `new worktree` | Where the task works, when the box offers a choice (below): its workspace's checkout (the default), or a new worktree |
 | ⌥-click on a tab or a pane | Puts its `^reference` into the line. The tab is not selected, the pane not focused. While ⌥ is held the tab or pane under the pointer is outlined |
 
 - **The dropdown** opens when the cursor is in a tag: up to 8 names for it, with what each is
@@ -213,6 +214,19 @@ a click that would put it aside waits too.
 - **Files.** Files and folders dragged from Finder onto the box, picked with ⌘O, or copied in
   Finder and pasted (⌘V), each go in as a `/path` word, after the word the cursor is in: one
   inside the home folder as `~/..`, a space with a backslash before it.
+- **A new worktree.** When the task would work in a listed checkout (the workspace's default
+  worktree, the checkout of the task in front, or the line's `>repo`), not in a folder you took,
+  and there is a folder for worktrees (`worktrees_dir`), the drawer offers `this checkout`
+  (the default) or `new worktree`; ⌥⌘N switches. With `new worktree`, the line above says
+  "↵ will start claude in a new worktree of app on fix-the-zoom". ↵ puts the task in the
+  workspace at once and asks git for a new branch from the repository's HEAD, named for the
+  task's first words (lowercase, `-` between, `-2` after a name a listed checkout has), in
+  `<worktrees_dir>/<repo>/<branch>`; the drawer says "making its worktree …", and the agent
+  starts there once it is made. A workspace of that one task takes it as its default; with
+  other tasks there, only this task works there. A name a local or remote branch has already:
+  nothing is made, the notice bar says so, and the task waits unstarted in the checkout (its
+  Start starts it there). Only your choice and your ↵: a socket client's key, click or ↵
+  makes no worktree.
 - **When it cannot.** A name the line has no room for (it holds 500 characters) is not put in
   in part: the line stays as it is and the box says "no room". ↵ then adds the task as typed.
   Files left out (a name too long, one with a line break) are counted in the same place.
@@ -586,7 +600,11 @@ once, read-only: nothing in the app is pressed or set), for a terminal the rows.
 - The files are in `~/.ottospace/materials/<task id>-<a word of its own>/`, readable by you alone: `brief.md`,
   `brief.json`, and for each capture `1.png`, `1.annotated.png`, `1.json`. They are never in the
   tasks folder. A cancelled draft leaves nothing.
-- A terminal opened in a task's tab has `OTTOSPACE_TASK`; an agent there reads the brief with
+- An agent ottospace starts for a task reads its brief with `ottospace ctl '{"cmd":"task_brief"}'`:
+  it has a pass of its own in its environment (`OTTOSPACE_TASK_PASS`), which `ottospace ctl` and
+  the SDK send with each request. The pass dies with the agent's process; a new start has a new one.
+  ottospace never writes it to the state, a log or a file; an agent that prints it puts it in its own transcript.
+- A terminal opened in a task's tab has `OTTOSPACE_TASK`, not the pass; an agent there reads the brief with
   `ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"`.
 - In the brief, everything that came from another app or a terminal is quoted and labelled as
   untrusted: a message someone else wrote is data for the agent, not an instruction.

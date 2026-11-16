@@ -116,6 +116,9 @@ pub const USERS_ALONE: &str = "only the user adds a worktree";
 /// Why the + makes none: no `worktrees_dir`, and no ottospace folder to put one in.
 pub const WORKTREES_NONE: &str = "No folder for worktrees in this run";
 
+/// Why the + makes none there: a new task's worktree is being made in that folder.
+pub const BEING_MADE: &str = "A new task's worktree is being made there";
+
 /// The longest branch name a new worktree takes, in bytes.
 pub const MAX_BRANCH: usize = 200;
 
@@ -147,6 +150,33 @@ pub fn worktree_dir(worktrees: &str, repo: &str, listed: &[Repo], branch: &str) 
     let shared = listed.iter().any(|other| other.path != repo && name_of(&other.path) == name);
     let folder = if shared { format!("{name}-{}", short_hash(repo)) } else { name };
     format!("{}/{folder}/{}", worktrees.trim_end_matches('/'), branch.replace('/', "-"))
+}
+
+/// The most of a task's title a new worktree's branch takes: words, and bytes.
+const BRANCH_WORDS: usize = 4;
+const BRANCH_BYTES: usize = 32;
+
+/// A new branch named for a task's title: its first plain words, lowercase, `-` between
+/// (`Fix the zoom flicker!` → `fix-the-zoom-flicker`); none (`修正`): `task`. Not among `taken`:
+/// `-2`, `-3` after. Always one `check_branch` takes.
+pub fn branch_for(title: &str, taken: impl Fn(&str) -> bool) -> String {
+    let words = title.split(|c: char| !c.is_ascii_alphanumeric()).filter(|word| !word.is_empty());
+    let mut name = String::new();
+    for word in words.take(BRANCH_WORDS) {
+        if !name.is_empty() && name.len() + 1 + word.len() > BRANCH_BYTES {
+            break;
+        }
+        if !name.is_empty() {
+            name.push('-');
+        }
+        name.push_str(&word.to_ascii_lowercase());
+    }
+    name.truncate(BRANCH_BYTES);
+    if name.is_empty() {
+        name = "task".into();
+    }
+    let free = (1..).map(|n| if n == 1 { name.clone() } else { format!("{name}-{n}") }).find(|name| !taken(name));
+    free.unwrap_or(name)
 }
 
 /// The most of git's message the status bar shows, in characters.
@@ -314,6 +344,21 @@ mod tests {
             assert!(check_branch(branch).is_ok());
             let dir = worktree_dir("/w", "/code/app", &[], branch);
             assert_eq!(dir.matches('/').count(), 3, "{dir}");
+        }
+    }
+
+    #[test]
+    fn a_tasks_branch_is_its_first_plain_words_and_never_one_taken() {
+        let none = |_: &str| false;
+        assert_eq!(branch_for("Fix the zoom flicker, again!", none), "fix-the-zoom-flicker");
+        assert_eq!(branch_for("../HEAD @{-1} -x ~^:?*[\\ a.lock", none), "head-1-x-a");
+        assert_eq!(branch_for("修正 🎉", none), "task");
+        assert_eq!(branch_for(&"a".repeat(300), none).len(), BRANCH_BYTES);
+        assert_eq!(branch_for("deploy averylongwordthatcannotfitatall", none), "deploy");
+        // Taken (a listed branch, a folder there already): the next number.
+        assert_eq!(branch_for("fix zoom", |b| ["fix-zoom", "fix-zoom-2"].contains(&b)), "fix-zoom-3");
+        for title in ["", "-", "Fix", "a..b", "x.lock", "@", "HEAD", "日本 x"] {
+            assert!(check_branch(&branch_for(title, none)).is_ok(), "{title:?}");
         }
     }
 

@@ -179,6 +179,23 @@ main checkout.
   workspace's one task (the main checkout to the new worktree: "some cases the agent will use
   the main checkout, and some cases it will create a worktree"); with others there it stays
   ("like the subagent case"), and the task's row and strip tab name its own.
+- **A new worktree from the box** (`ComposeWorktree`, `box_worktree`, `Making`). The owner's
+  canvas: "⌘N here joins this workspace and shares its checkout; the new-task box offers a new
+  worktree as the other choice". Offered (`compose_worktree`) while the box is the drawer's, the
+  task would start an agent in a listed checkout (the line's `>repo`, else the workspace's default
+  or its front task's repository), not in a folder taken in the box, and `worktrees_dir` is set.
+  Picks `this checkout` (default) / `new worktree`, ⌥⌘N switches; reset when the box closes. The
+  user's ↵ (`ComposeSubmit { open }` by the user alone) files the task and joins it as any ↵ does,
+  then asks for `Effect::AddWorktree { fresh: true }` on `repos::branch_for` the title (first four
+  plain words, lowercase, `-`; `-2`… past a listed branch or folder) and remembers it (`making`):
+  meanwhile `agent_start` is `None` and the drawer says "making its worktree …".
+  `WorktreeAdded` with that `asked` path: the task's folder is the worktree, the default of a
+  workspace of that one task follows from its old checkout (`default_follows`, #186's rule), and
+  its agent starts (`launch`, the system's, for the user's ↵). `WorktreeFailed`: the task waits,
+  unstarted, in its checkout; the shell's notice says git's or its own why. The shell makes a
+  `fresh` one only as a new branch from HEAD: a name `refs/heads/` or any `refs/remotes/*/` has
+  is refused before anything is made, so no one's code is checked out for an agent. A client's
+  choice is refused; a client's ↵ makes none.
 - **Never a sub-agent's.** A `cwd` in `<repo>/.claude/worktrees/agent-*` (Claude Code's
   isolated sub-agents; `subagent_path`) moves nothing, nor does one in another repository.
 - **Made a moment ago.** A `cwd` the list does not hold yet: the list is read again at once
@@ -217,7 +234,7 @@ workspace with only a task or worktree, and a workspace with both".
 - **Replaced by the owner** ("Several tasks in one workspace", below): a task belongs to one
   workspace, a workspace holds none or more. A second task in a workspace joins it and shares
   the checkout; "a new worktree for this task" becomes a pick in the new-task box, not the
-  default (not built: there is no worktree made from the box yet; it comes with the links).
+  default (built: "Worktrees", "A new worktree from the box").
 
 ## A task started in a workspace (built)
 
