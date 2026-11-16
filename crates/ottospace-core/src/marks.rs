@@ -959,6 +959,12 @@ impl Model {
         pane
     }
 
+    /// Going to the mark would show or open something: it is there, or can be opened.
+    pub(crate) fn mark_goes(&self, mark: &MarkRef) -> bool {
+        let Some(mark) = self.marks.find(mark).and_then(|id| self.marks.get(id)) else { return false };
+        self.mark_pane(mark).is_some() || self.mark_tab(mark).is_some() || self.marks.unavailable(mark).is_none()
+    }
+
     /// Goes to a mark. Open now: its tab comes forward and its pane takes focus (an app pane is
     /// focused, not entered); panes of its tab that are still empty are tried again. Else it is
     /// opened: a terminal in the recorded directory, an app's window (the shell hosts it), or

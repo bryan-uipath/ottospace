@@ -158,6 +158,15 @@ and who (the default agent, then each runner and its models), which set the line
 it will do: "↵ will start claude in app on main", or for a saved agent "↵ files it; nothing
 starts". Under the line, while it is empty, the tags it may hold; the dropdown teaches the rest.
 
+The box is beside the rest of the window, not over it, and your pointer works there as without
+it. A click that only changes the bar (a rail icon, the bar's ×, a fold, a row's button) leaves
+the box its line, its cursor and the keyboard. A click that takes the keyboard elsewhere (a
+tab, a pane, a repository's terminal, a mark, a workbook, a task's conversation, a name or a
+filter typed in the bar) puts the line aside: it is back when the box next opens empty. So do
+the keys that go to a space or a mark (⌘⌃1–9, ⌘⌥1–9). Keys that act on panes (⌘D, ⌘W, ⌘T) wait
+until the box closes, and so do a socket client's requests. While your editor has the line (⌃G),
+a click that would put it aside waits too.
+
 | Key | Action |
 |---|---|
 | ↵ | Takes the dropdown's highlighted row. With no row highlighted, or when the word is that name already, adds the task and starts its agent: the drawer becomes its conversation |
