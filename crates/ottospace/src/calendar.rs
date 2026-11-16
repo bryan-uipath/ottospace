@@ -732,7 +732,7 @@ impl Workspace {
             .children(running.then(|| bar.bg(rgb(theme::TEXT))))
             .child(div().h(px(20.)).flex().items_center().child(home::dot(paint.color).opacity(paint.alpha.max(0.5))))
             .child(muted().relative().w(px(34.)).child(clock(event.start)))
-            .child(div().relative().flex_1().min_w_0().truncate().child(event.title.clone()))
+            .child(crate::cut_text(event.title.clone()).flex_1())
             .children(fact.map(|fact| muted().relative().child(fact)))
             .children(join)
             .tooltip(card)
