@@ -722,6 +722,8 @@ struct Workspace {
     abandoned: Option<gpui::Task<()>>,
     /// The pointer event in hand came from a `mouse` or `drag` request, not from the user.
     injected: bool,
+    /// A launched app's window is being looked for, some time after the click that started it.
+    launched_later: bool,
     /// Where headers, their × and tabs were last drawn.
     marks: Marks,
     /// Where every copy goes and every paste comes from: a stand-in in an E2E run.
@@ -1176,6 +1178,7 @@ impl Workspace {
             held: false,
             abandoned: None,
             injected: false,
+            launched_later: false,
             marks: Marks::default(),
             clipboard: clipboard::Clipboard::new(std::env::var_os("OTTOSPACE_E2E").is_some()),
             pasting: None,
@@ -1300,6 +1303,12 @@ impl Workspace {
             }
         }
         std::mem::replace(&mut self.input, origin)
+    }
+
+    /// Who sends a focus that follows a launch: the system's once it comes later than the click,
+    /// so it takes no keyboard from what the user types in by then.
+    pub(crate) fn follow_up(&self) -> Origin {
+        if self.launched_later { Origin::System } else { self.input }
     }
 
     /// Runs `f` with `origin` as the sender, then puts the previous sender back.
@@ -3110,7 +3119,7 @@ impl Workspace {
         // Already in a pane: go to it (and its tab) instead of doing nothing.
         if let Some((pane, _)) = self.hosted.iter().find(|(_, h)| h.window_id == target.id) {
             let pane = *pane;
-            self.dispatch(Action::Focus { pane }, self.input, window, cx);
+            self.dispatch(Action::Focus { pane }, self.follow_up(), window, cx);
             return Ok(());
         }
         let hosted = Hosted::new(target)?;
@@ -3178,12 +3187,14 @@ impl Workspace {
                 ottospace_core::marks::settled(count, since.elapsed().as_millis() as u64)
             });
             // Listed, but its main window may not be ready yet: try again until the time is up.
+            self.launched_later = true;
             let hosted = app.is_some_and(|app| match &launch.wanted {
                 Some(wanted) => settled && self.host_window_of(app.pid, wanted, window, cx).is_ok(),
                 None => self.with_origin(launch.origin, |this| {
                     this.open_app(&app.name, launch.axis, launch.new_tab, window, cx).is_ok()
                 }),
             });
+            self.launched_later = false;
             if hosted {
                 continue;
             }

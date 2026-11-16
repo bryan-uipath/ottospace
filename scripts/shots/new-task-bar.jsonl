@@ -1,0 +1,13 @@
+# The bar beside the new task: the user's click on the Repos icon opens the section, one on a
+# repository's name folds it, and the box keeps its line. By points: labels are not drawn under the box.
+{"cmd":"split","kind":"empty"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"f i x space t h e space e x p o r t","as":"user"}
+{"cmd":"mouse","action":"down","x":27,"y":140,"as":"user"}
+{"cmd":"mouse","action":"up","x":27,"y":140,"as":"user"}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"section"}
+{"cmd":"mouse","action":"down","x":125,"y":101,"as":"user"}
+{"cmd":"mouse","action":"up","x":125,"y":101,"as":"user"}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"folded"}

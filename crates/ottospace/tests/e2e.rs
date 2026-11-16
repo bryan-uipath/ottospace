@@ -1061,6 +1061,52 @@ fn a_repository_folds_and_the_users_plus_makes_a_worktree_there() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn the_users_clicks_on_the_bar_work_beside_the_new_task() {
+    let root = support::temp(&format!("ottospace-e2e-box-bar-{}", std::process::id()));
+    for name in ["app", "web"] {
+        fake_repo(&root.join(name));
+    }
+    let root = root.canonicalize().unwrap();
+    let otto = Otto::launch_with("box-bar", &[("OTTOSPACE_REPOS", &root.to_string_lossy())]);
+    otto.call(json!({"cmd": "repos"}));
+    // The rail's cell, read before the box opens: labels are not drawn under it.
+    let rail = at(otto.control("rail:repos"), 0.5, 0.5);
+    assert_eq!(otto.user_key("cmd-n")["mode"], "compose");
+    let typed = otto.user_key("f i x space z o o m");
+    assert_eq!((typed["state"]["compose"].as_str(), typed["state"]["sidebar"].is_null()), (Some("fix zoom"), true));
+    let boxed = |s: &Value| (s["mode"].as_str().map(String::from), s["state"]["compose"].as_str().map(String::from));
+    let kept = (Some("compose".to_string()), Some("fix zoom".to_string()));
+
+    // A client's click on the rail waits behind the box; the user's opens the section.
+    assert!(otto.click(rail, 1)["state"]["sidebar"].is_null(), "a client's click opened the section");
+    let reply = otto.user_click(rail);
+    assert_eq!((&reply["state"]["sidebar"], boxed(&reply)), (&json!("repos"), kept.clone()));
+    let drawn = |o: &Otto| Some(o.drawn()).filter(|s| !s["repos_bar"][0]["rows"][0]["row"].is_null());
+    let state = otto.wait_for("the Repos list beside the box", drawn);
+
+    // A click on a repository's name folds it, and the box still has its line and the keyboard.
+    otto.user_click(at(rect(&state["repos_bar"][0]["header"]), 0.25, 0.5));
+    let folded = otto.drawn();
+    assert_eq!((&folded["repos_bar"][0]["folded"], boxed(&folded)), (&json!(true), kept));
+    assert_eq!(otto.user_key("!")["state"]["compose"], "fix zoom!");
+
+    // A click on a repository's row opens its terminal: the keyboard goes there, the line is
+    // put aside and is back when the box next opens.
+    let row = at(rect(&otto.drawn()["repos_bar"][1]["rows"][0]["row"]), 0.3, 0.5);
+    let reply = otto.user_click(row);
+    let panes = reply["state"]["panes"].as_array().map(Vec::len);
+    assert_eq!((panes, reply["mode"].as_str(), &reply["state"]["compose"]), (Some(1), Some("normal"), &json!(null)));
+    assert_eq!(otto.user_key("cmd-n")["state"]["compose"], "fix zoom!");
+    // So does a click on a pane; a client's waits.
+    let pane = at(otto.bounds(&[1])[0], 0.5, 0.5);
+    assert_eq!(otto.click(pane, 1)["mode"], "compose");
+    let reply = otto.user_click(pane);
+    assert_eq!((reply["mode"].as_str(), &reply["focus"]), (Some("normal"), &json!({"pane": 1})));
+    assert_eq!(otto.user_key("cmd-n")["state"]["compose"], "fix zoom!");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_worktrees_pull_request_is_marked_from_a_stand_in_gh_and_only_the_users_click_opens_it() {
     use std::os::unix::fs::PermissionsExt;
     // A real repository whose origin is on github.com (never fetched), a worktree for each branch.
