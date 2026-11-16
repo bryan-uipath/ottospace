@@ -40,9 +40,9 @@ impl Default for Bar {
 }
 
 impl Workspace {
-    /// Every notice there is to show, newest and most pressing first: `line` (the last step
-    /// that failed), what is not saved, what a step did, the settings' line, a problem found at
-    /// start, a key not registered, the editor's note.
+    /// Every notice there is to show, newest and most pressing first: a meeting that started,
+    /// `line` (the last step that failed), what is not saved, what a step did, the settings'
+    /// line, a problem found at start, a key not registered, the editor's note.
     fn notices(&self, line: Option<Notice>) -> Vec<Notice> {
         let said = |kind: Kind, text: Option<String>| text.map(|text| Notice { kind, text });
         let unsaved = self.unsaved.clone().or(self.kept_marks.unsaved.clone()).or(self.kept_workbooks.unsaved.clone());
@@ -52,7 +52,9 @@ impl Workspace {
         let start = [&self.notice, &self.kept_marks.notice, &self.kept_workbooks.notice, &self.kept_layout.notice];
         let start: Vec<String> = start.into_iter().flatten().cloned().collect();
         let start = (!start.is_empty()).then(|| start.join(" · "));
+        let meeting = self.model.calendar.banner_line(crate::now_ms()).map(|(_, line, _)| format!("Meeting: {line}"));
         let all = [
+            said(Kind::Meeting, meeting),
             line,
             said(Kind::Unsaved, unsaved),
             said(Kind::Told, told),
@@ -77,7 +79,12 @@ impl Workspace {
         let refused = self.error.is_some() && self.error == self.refused;
         let kind = if refused { Kind::Refused } else { Kind::Failed };
         let line = self.error.clone().map(|text| Notice { kind, text });
-        notice::shown(&self.notices(line), &self.model.notice_hidden)
+        // A meeting does not cover a line the bar does not hold (why a client's step did nothing);
+        // over the bar's own line it stands, as on the bar.
+        let theirs = line.is_some() && line != self.held_now().said;
+        let mut all = self.notices(line);
+        all.retain(|n| !theirs || n.kind != Kind::Meeting);
+        notice::shown(&all, &self.model.notice_hidden)
     }
 
     /// The user dismissed a notice of `kind`: the slot that held it is empty.
@@ -100,11 +107,33 @@ impl Workspace {
     }
 
     /// × on the bar, or Esc: the core takes it from the user alone. False: no notice shows.
+    /// A meeting's is the calendar's Dismiss.
     pub(crate) fn dismiss_notice(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         let Some(shown) = self.notice_shown() else { return false };
-        self.dispatch(Action::NoticeDismiss { notice: shown.kind, text: shown.text }, self.input, window, cx);
+        let action = match self.meeting_shown(&shown) {
+            Some((id, _)) => Action::CalendarDismiss { id },
+            None => Action::NoticeDismiss { notice: shown.kind, text: shown.text },
+        };
+        self.dispatch(action, self.input, window, cx);
         cx.notify();
         true
+    }
+
+    /// The meeting `shown` is about, if it is one: its id, and whether it has a link to join.
+    fn meeting_shown(&self, shown: &Notice) -> Option<(u64, bool)> {
+        let (id, _, link) = self.model.calendar.banner_line(crate::now_ms()).filter(|_| shown.kind == Kind::Meeting)?;
+        Some((id, link))
+    }
+
+    /// What `shown` offers beside its text, and the action it takes: Join only for a link.
+    pub(crate) fn notice_offer(&self, shown: &Notice) -> Option<(Offer, Action)> {
+        match shown.kind.offer()? {
+            Offer::OpenSettings => Some((Offer::OpenSettings, Action::EditSettings)),
+            Offer::Join => {
+                let (id, link) = self.meeting_shown(shown)?;
+                link.then_some((Offer::Join, Action::CalendarJoin { id }))
+            }
+        }
     }
 
     /// Whether the bar must be drawn again: a notice came, went, or says something else.
@@ -148,10 +177,7 @@ impl Workspace {
                 .hover(|s| s.bg(gpui::white().opacity(0.12)))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         };
-        let offer = shown.kind.offer().map(|offer| {
-            let action = match offer {
-                Offer::OpenSettings => Action::EditSettings,
-            };
+        let offer = self.notice_offer(&shown).map(|(offer, action)| {
             let click = cx.listener(move |this, _, window, cx| {
                 this.dispatch(action.clone(), this.input, window, cx);
                 cx.notify();
@@ -198,13 +224,15 @@ impl Workspace {
         };
         let marks = self.marks.borrow();
         let drawn = |mark: Mark| marks.get(&mark).copied().map(crate::rect);
+        let offer = self.notice_offer(shown).map(|(offer, _)| offer);
         serde_json::json!({
             "kind": shown.kind,
             "level": shown.level(),
-            "text": shown.text,
-            // What it offers beside the text (`open_settings`), and where; null: nothing.
-            "offer": shown.kind.offer(),
-            "offer_rect": shown.kind.offer().and_then(|_| drawn(Mark::NoticeOffer)),
+            // A meeting's title is never here: "Meeting started".
+            "text": shown.public_text(),
+            // What it offers beside the text (`open_settings`, `join`), and where; null: nothing.
+            "offer": offer,
+            "offer_rect": offer.and_then(|_| drawn(Mark::NoticeOffer)),
             "close": drawn(Mark::NoticeClose),
             // Where it is drawn, and how much of it shows: less than its full height while it moves.
             "rect": drawn(Mark::Notice),
@@ -222,4 +250,17 @@ fn glyph(shown: &Notice, background: u32, text: u32) -> Div {
     }
     let round = glyph.size(px(13.)).rounded_full().flex().items_center().justify_center();
     round.bg(rgb(text)).text_color(rgb(background)).font_weight(gpui::FontWeight::BOLD)
+}
+
+impl Workspace {
+    /// The calendar's banner in the state: where its Join and Dismiss are on the bar, while the
+    /// bar shows the meeting (null rects under an error that covers it).
+    pub(crate) fn meeting_controls(&self) -> (Option<[f32; 4]>, Option<[f32; 4]>) {
+        let shown = self.bar.last.as_ref().filter(|n| n.kind == Kind::Meeting && self.bar.height > 0.);
+        let Some(shown) = shown else { return (None, None) };
+        let marks = self.marks.borrow();
+        let drawn = |mark: Mark| marks.get(&mark).copied().map(crate::rect);
+        let join = self.notice_offer(shown).and_then(|_| drawn(Mark::NoticeOffer));
+        (join, drawn(Mark::NoticeClose))
+    }
 }

@@ -785,7 +785,8 @@ const MAKERS: &[Make] = &[
     |_| Action::KeysKnown,
     |g| {
         use crate::notice::Kind::*;
-        let kinds = [Failed, Refused, Unsaved, Told, SettingsProblem, SettingsRetired, SettingsRestart, Start, Keys];
+        let kinds =
+            [Failed, Refused, Unsaved, Told, SettingsProblem, SettingsRetired, SettingsRestart, Start, Keys, Meeting];
         let said = g.m.settings_line().filter(|_| g.rng.coin());
         Action::NoticeDismiss { notice: g.rng.pick(&kinds), text: said.unwrap_or_else(|| g.text()) }
     },

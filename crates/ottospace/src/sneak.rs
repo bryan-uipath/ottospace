@@ -316,7 +316,7 @@ impl Workspace {
                 self.dismiss_notice(window, cx);
                 None
             }
-            ("notice", "offer") => Some(Action::EditSettings),
+            ("notice", "offer") => self.notice_shown().and_then(|shown| self.notice_offer(&shown)).map(|(_, a)| a),
             ("bar", "add") => {
                 if let Some(section) = self.model.sidebar {
                     self.bar_add(section, window, cx);
@@ -440,8 +440,6 @@ impl Workspace {
             }
             ("header", _) => number.map(|pane| Action::Focus { pane }),
             ("unfilled-open", _) => number.map(|pane| Action::UnfilledOpen { pane }),
-            ("meeting-join", _) => name.parse().ok().map(|id| Action::CalendarJoin { id }),
-            ("meeting-dismiss", _) => name.parse().ok().map(|id| Action::CalendarDismiss { id }),
             ("calendar-day", _) => {
                 let step = match name {
                     "back" => ottospace_core::calendar::DayStep::Back,

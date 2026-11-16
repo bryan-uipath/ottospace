@@ -34,9 +34,9 @@ running, and the rest of the design is not built: see the
 | A task's agent in the right drawer: ↵ in the new-task box, or Start agent in the drawer, starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. A click on a task only shows its conversation; Resume session goes on with one that ended. See [Flow of a task](#flow-of-a-task) | Works today |
 | Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a file edit's change as a diff card under its call, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls and edits, not what it says; "Watching · updates per message" in the header), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
 | New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do when it is not the default. A `/path` stays in the title the agent reads, and a folder taken from its dropdown is where the agent runs; `$skill` is stored and shown, nothing acts on it yet | Works today |
-| Home screen: Home lists what goes there (Open an app ⌘E, Terminal ⌘D: each key a cap, as the keymap has it; a row's click does what its key does; a held ⌘ lights its caps), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. A workspace's or a task's empty tab shows the same list alone. With nothing open at all, the drawer shows a new task by itself | Works today |
+| Home screen: under the house and the word Home, what goes there (Open an app ⌘E, Terminal ⌘D, New task ⌘N: each key a cap, as the keymap has it; a row's click does what its key does; a held ⌘ lights its caps), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. A workspace's or a task's empty tab shows the lattice and the same three rows alone; there ⌘N's task starts in that workspace. With nothing open at all, the drawer shows a new task by itself | Works today |
 | Home: the top row's first item, a house (no word, no ×). It holds no pane: what you open there (a pane, ⌘T, a Repos row) gets a new workspace, selected; ⌘N there gives the task a space of its own. Tabs of nothing (a dismissed task's, a deleted workspace's, a client's) go to the workspace selected last. Its screen is the home screen. ⌘⌃1, or Go to Home (palette, View menu) | Works today |
-| Two rows of tabs: the top row holds Home, then each open task (its badge and title) and workspace; under it, the selected one's tabs, when it has more than one. One selection: the drawer shows the selected task's chat. × hides a task or a workspace (nothing stops); its row opens it again. + at the row's end makes a new, empty workspace. Short of room, the tasks not selected are their badges alone; shorter still, those that do not fit are a count (+3), and the selected one always shows. Drag a tab onto a task to move it there | Works today |
+| Two rows of tabs: the top row holds Home, then each open task (its badge and title) and workspace (its name; holding one app pane and nothing else, that app's icon); under it, the selected one's tabs, when it has more than one. One selection: the drawer shows the selected task's chat. × hides a task or a workspace (nothing stops); its row opens it again. + at the row's end makes a new, empty workspace. Short of room, the tasks not selected are their badges alone; shorter still, those that do not fit are a count (+3), and the selected one always shows. Drag a tab onto a task to move it there | Works today |
 | Tabs, each with its own split tree | Works today |
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar | Works today |
@@ -52,7 +52,7 @@ running, and the rest of the design is not built: see the
 | Workspaces: + on the top row or in the Workspaces section makes a new, empty one, listed there and kept between runs. ⌘⇧S saves a tab into one (its splits, each terminal's directory, each app), to open again from the section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | Tabs and layout come back after quitting: every tab (with its task and workspace), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
-| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
+| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; a soft pulse as one comes near; a meeting notice on the notice bar, a notification and a sound when one has started and you are in no call | Works today |
 
 ### Roadmap: designed, not built
 
@@ -816,8 +816,9 @@ the way.
   Accessibility, Display) the colour steps up instead, with no movement. Nothing else in
   ottospace pulses.
 - **At the start**, if you are in no call, or still in an earlier one (on from 10 minutes before,
-  or the meeting before, running over): a banner under the title strip (`Meeting started`, the
-  title, how long ago it started, **Join** if the meeting has an `https:` link, **Dismiss**), which stays until
+  or the meeting before, running over): a meeting notice on the [notice bar](#notice-bar) at the
+  window's foot (◷, indigo: `Meeting:` the title and how long ago it started, **Join** if the meeting
+  has an `https:` link, × to dismiss; over a warning or information, under an error), which stays until
   you dismiss it, join, a call starts or the meeting ends; and a system notification with the
   alert sound, so you see it when ottospace is behind other windows. Once more 2 minutes later
   if you have not joined; never a third time. Only in a meeting's first 10 minutes: one you
@@ -859,7 +860,7 @@ the way.
   and `Today` on another day, from 7 days back to 7 on; its date's tooltip says when the feed was
   read. The section goes back to today when the day turns and at start; the band, the alerts and
   now's tick are always of today. The rail cell shows a steady amber dot while a meeting is 2
-  minutes off or runs, and a filled amber badge while the banner is up. In list mode (⌘⌃E)
+  minutes off or runs, and a filled amber badge while its notice stands (also under an error that covers it). In list mode (⌘⌃E)
   `j`/`k` move, ↵ joins, ← and → go a day back and on, `t` back to today; the View menu and the
   palette have the same (`Previous Day in Calendar`, `Next Day in Calendar`, `Today in
   Calendar`). The open Calendar is not kept in the restored layout: a build without the section
@@ -993,11 +994,13 @@ stay under the pointer): the content's foot rises by its height. It grows upward
 once under the system's Reduce Motion. A live app window in a bottom pane stops above it too.
 
 - **Level**: red for an error, amber for a warning (a move that did nothing, a retired setting, a
-  global key not registered), blue for information. A glyph says the level too.
+  global key not registered), blue for information, and amber on indigo for a meeting that started
+  (`meeting`: over a warning, under an error). A glyph says the level too: `!` in a circle, `▲`,
+  `ⓘ`, `◷`. The state says a meeting's notice as `Meeting started`, never its title.
 - **One at a time**: the most pressing, and of those the newest. An error is not replaced by
   information; when it goes, what it covered shows.
 - **One line**: text too long is cut with an ellipsis, and the hover shows all of it. A settings
-  problem offers **Open settings**.
+  problem offers **Open settings**; a meeting with a link, **Join**.
 - **Dismiss**: × on the bar, or Esc when no mode and no terminal takes it. Only you dismiss a
   notice: a socket client cannot, and its failure never takes the place of what your own step
   said. A dismissed settings line comes back when it says something else.
@@ -1019,6 +1022,7 @@ once under the system's Reduce Motion. A live app window in a bottom pane stops 
 | `start` | error | the app: found at start | yes |
 | `keys` | warning | the app: a global key not registered | yes |
 | `editor` | information | the app: your editor gave its text back | yes |
+| `meeting` | meeting | the app: a meeting started and you are in no call; × is its Dismiss, Join its link | yes; its title never in the state |
 
 A copy's "Copied 3 lines", the mode and the count of tasks that need you stay in the status bar.
 
@@ -1092,7 +1096,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 | `calendar_ics` | The [meeting timeline](#meeting-timeline)'s calendar feed: an `https://` link (to a host on the internet, not an address or `localhost`) or a file's path (`/…` or `~/…`). Never shown: a private feed's link holds a secret | none: no timeline |
 | `calendar_workday` | The workday the timeline's band spans: `"HH:MM-HH:MM"`, local 24-hour time, the start at least an hour before the end (`"06:00-22:00"`; `24:00` ends the day). `calendar_window_hours`, from before, is retired: the status bar asks to remove it, and the rest applies | `"09:00-17:00"` |
 | `calendar_refresh_minutes` | How often the feed is read again, at least 1 | `5` |
-| `calendar_notify` | A meeting that starts while you are in no call, or in another call, shows the banner, a notification and a sound | `true` |
+| `calendar_notify` | A meeting that starts while you are in no call, or in another call, shows a meeting notice on the notice bar, a notification and a sound | `true` |
 | `calendar_notify_for` | Which meetings alert: `all`, or only those with a Zoom, Meet or Teams `links` | `all` |
 | `calendar_email` | Your address among a meeting's attendees in the feed: a meeting you declined is left out. Kept on this machine, never shown. A feed with no attendees (Outlook's published calendars) cannot say who declined: use `calendar_hide_free` | none: nothing is left out |
 | `calendar_hide_free` | Leave out entries that keep the time free (Outlook's FREE, `TRANSP:TRANSPARENT`): the band, the section, the alerts and the `calendar` request | `false` |
@@ -1252,6 +1256,8 @@ first brainstorm:
 [agent-dial.md](ai/agent-dial.md): the agent dial over a native conversation: its model, the station table.
 
 [agent-runners.md](ai/agent-runners.md): a native (non-terminal) agent conversation: driving Claude Code and Codex in their structured modes, permission prompts, trust rules. Not wired in yet.
+
+[agent-mode.md](ai/agent-mode.md): a per-pane switch that lets a task See, or See and act on, a hosted app's window; who is asking, what each level grants, what Off closes. Not built.
 
 [meeting-timeline.md](ai/meeting-timeline.md): the meeting timeline as built, how a call is detected, the network decision, and what the calendar reader does not follow.
 

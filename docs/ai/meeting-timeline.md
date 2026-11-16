@@ -16,7 +16,7 @@ User-facing description: [reference](../reference.md#meeting-timeline).
 | Rules | `ottospace-core::calendar` | Stages, the workday, the band's span, blocks and lanes, the hover cards, the alert rule, the link allow-function, the feed-link check and curl's config |
 | Model | `Calendar` in `Model` | The events of today and the next 7 days, whether a call is on, the alerts given. Actions `SetCalendar`, `CalendarRead`, `CallSeen`, `CalendarDismiss` and `CalendarJoin` (the last two the user's alone); effects `MeetingAlert` and `OpenLink` |
 | macOS | `ottospace-mac::meeting` | Zone offsets (CoreFoundation), whether a call is on (CoreAudio), Reduce motion, the alert sound, opening a link |
-| Shell | `ottospace::calendar` | The feed thread, the band, the banner, the state's `calendar`, the `calendar` request's reply (`calendar::reply` in the core) |
+| Shell | `ottospace::calendar` | The feed thread, the band, the meeting's notice (on the notice bar), the state's `calendar`, the `calendar` request's reply (`calendar::reply` in the core) |
 
 - **Stages** by time to the start: far (more than 10 minutes), approaching (10), imminent (2),
   running, past. The glow is a cosine ease (2.4 s a period approaching, 0.9 s imminent), steady

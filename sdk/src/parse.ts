@@ -56,6 +56,7 @@ import type {
   Focus,
   RailFocus,
   Home,
+  Glyph,
   HomeDrawn,
   HomeNode,
   InboxReply,
@@ -681,7 +682,7 @@ function composePicks(value: unknown, at: string): Snapshot["compose_picks"] {
 }
 
 function noticeLevel(value: unknown, at: string): NoticeLevel {
-  if (value === "info" || value === "warning" || value === "error") return value;
+  if (value === "info" || value === "warning" || value === "meeting" || value === "error") return value;
   throw new Error(`${at}: not a level: ${JSON.stringify(value)}`);
 }
 
@@ -724,7 +725,22 @@ function spaceRow(value: unknown, at: string): SpaceRow {
     tasks: list(num)(o.tasks, `${at}.tasks`),
     front: orNull(num)(o.front, `${at}.front`),
     strip: list(num)(o.strip, `${at}.strip`),
+    glyph: glyph(o.glyph, `${at}.glyph`),
   };
+}
+
+function glyph(value: unknown, at: string): Glyph {
+  const o = fields(value, at);
+  switch (o.kind) {
+    case "home":
+    case "tasks":
+    case "name":
+      return { kind: o.kind };
+    case "app":
+      return { kind: "app", name: str(o.name, `${at}.name`) };
+    default:
+      throw new Error(`${at}.kind: not a glyph: ${JSON.stringify(o.kind)}`);
+  }
 }
 
 function nativeChat(value: unknown, at: string): NativeChat {
@@ -1501,6 +1517,7 @@ function homeDrawn(value: unknown, at: string): HomeDrawn {
     area: rect(o.area, `${at}.area`),
     panel: rect(o.panel, `${at}.panel`),
     nodes: map(rect)(o.nodes, `${at}.nodes`),
+    heading: orNull(str)(o.heading, `${at}.heading`),
     lattice_builds: num(o.lattice_builds, `${at}.lattice_builds`),
     lattice_paints: num(o.lattice_paints, `${at}.lattice_paints`),
   };
