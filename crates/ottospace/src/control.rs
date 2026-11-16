@@ -120,7 +120,7 @@ pub enum Request {
         #[serde(default)]
         index: Option<usize>,
     },
-    /// Opens a space and selects it: `{"kind":"workspace"}` or `{"kind":"task","id":3}`. One a task
+    /// Opens a space and selects it: `{"kind":"home"}` or `{"kind":"task","id":3}`. One a task
     /// has not yet is made with one empty tab; a hidden one comes back where it was.
     OpenSpace {
         space: Owner,

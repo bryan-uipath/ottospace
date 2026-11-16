@@ -76,6 +76,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
             .chain([MenuItem::separator(), item("Next Tab", NextTab), item("Previous Tab", PrevTab)])
             .chain([
                 MenuItem::separator(),
+                item("Go to Home", GoHome),
                 item("Next Tab Group", NextSpace),
                 item("Previous Tab Group", PrevSpace),
                 item("Next Conversation in This Workspace", NextChat),

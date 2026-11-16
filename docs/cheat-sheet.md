@@ -9,9 +9,9 @@ ottospace            # opens on the Repos list
 ```
 
 - First run: grant your terminal Accessibility (ottospace will not start without it) and Screen Recording (for app panes), in System Settings ▸ Privacy & Security.
-- Repos lists each repository's name over its checkouts, one line each: the branch, a dot on the repository's own folder. The chevron (or a click on the name) folds a repository; a count shows while folded. Point at a name: + makes a worktree (an existing branch, or a new one from HEAD), the trash stops listing it. Click a row: a terminal opens there, in a Workspace tab of its own. A row a task works in carries the task's badge, and its click shows that task (Terminal, on hover, opens a terminal anyway).
+- Repos lists each repository's name over its checkouts, one line each: the branch, a dot on the repository's own folder. The chevron (or a click on the name) folds a repository; a count shows while folded. Point at a name: + makes a worktree (an existing branch, or a new one from HEAD), the trash stops listing it. Click a row: a terminal opens there, in the empty tab on show of a workspace, else in a new workspace named for the folder. A row a task works in carries the task's badge, and its click shows that task (Terminal, on hover, opens a terminal anyway).
 - The status bar (bottom left) shows who has the keyboard when it is not the focused pane's: `APP`, `PICK`, `COMMAND`, `INSPECT`, `LIST`, `TASK`, `VISUAL`, `SNEAK`, `QUIT?`. Nothing there: normal. Its right end shows `● 2` when two tasks need you; the version is under About ottospace (⌘P, or the app menu) and the hover of the bar's empty middle.
-- A coloured bar under the top row is a notice: red an error, amber a warning, blue information. × or Esc dismisses it; a settings problem offers Open settings.
+- A coloured bar at the window's foot is a notice: red an error, amber a warning, blue information. × or Esc dismisses it; a settings problem offers Open settings.
 - Stuck in an app? Click ottospace's rail or top bar. Or press the return key: F18, which most keyboards lack, so map Caps Lock to it (see [the return key](reference.md#the-return-key)) or start with `OTTOSPACE_RETURN_KEY=f13` (f13 to f20). The status bar names the key in use.
 
 ## Panes and tabs
@@ -39,6 +39,7 @@ ottospace            # opens on the Repos list
 | See what an app exposes to accessibility | Focus its pane, ⌘P, "inspector": its tree in a panel on the right, counted by role. Click a row to outline it |
 | Switch tab (of the task on show) | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
 | Switch task or workspace (top row) | ⌘⌃1 … ⌘⌃9 · ⌘⌃] ⌘⌃[ |
+| Go to Home (the house, first on the top row) | ⌘⌃1, or Go to Home in the palette |
 | Switch conversation in a workspace of several tasks | The strip over the drawer (a tab a task; + adds one) · ⌘⌥] ⌘⌥[ |
 | New workspace | + on the top row, or in the Workspaces section's header |
 | Hide the task or workspace on show | ⌘⌃W, or its × on the top row. Its row in Tasks or Workspaces opens it again |
@@ -85,8 +86,9 @@ The badge on an app is how many windows it has open. A new window of a hosted ap
 ## Workspaces
 
 A workspace is a named set of tabs, for a context that comes back. It is kept between runs, and
-listed in the Workspaces section whether it is open or not. The first space of the top row,
-"Workspace", is always there: the tabs of no task and no other workspace.
+listed in the Workspaces section whether it is open or not. The first item of the top row is
+Home, a house: it holds no pane. What you open there (a pane, ⌘T, a Repos row) gets a new
+workspace; tabs of nothing (a dismissed task's, a client's) go to the workspace selected last.
 
 | I want to | Do |
 |---|---|
@@ -148,9 +150,9 @@ Key Counts forgets it.
 | Add files to the task | Drag them from Finder onto the box, ⌘O, or copy in Finder and ⌘V: each becomes a `/path` |
 | Run the agent in a folder | Type `~/`, `/` or (with a `>repo`) `./`, and take a folder from the dropdown: "runs in ~/notes/ ×" shows it. The path stays in the title |
 | Point the task at a tab, a pane, a mark or an app | `^name` in the line, or ⌥-click the tab or pane while the box is open |
-| A task's tabs | Its space, behind its badge on the bar. Starting a task (↵) in a workspace (one you made, or a task's) puts it there, tabs and all untouched: a workspace may hold several, sharing its folder. From the first Workspace it opens its own, with one empty tab; ⌘T joins the space on show; drag a tab onto another space; palette: Move Tab to… |
+| A task's tabs | Its space, behind its badge on the bar. Starting a task (↵) in a workspace (one you made, or a task's) puts it there, tabs and all untouched: a workspace may hold several, sharing its folder. From Home it opens its own, with one empty tab; ⌘T joins the space on show; drag a tab onto another space; palette: Move Tab to… |
 | The next task that needs me | ⌘⇧N: its space and chat |
-| See what needs me at a glance | A tab with no panes is the home screen: a list of what goes there (Open an app ⌘E, Terminal ⌘D: click a row or press its key; a task's empty tab has the same list), up to three tasks under Needs you, and a node for each of the first 12 listed tasks. Left to right is the project; within a project the older task is farther; the colour is the state. No node sits under the text, so a small window shows fewer. Hover a node for its title; click a node or a row to open its conversation |
+| See what needs me at a glance | Home (⌘⌃1) is the home screen: a list of what goes there (Open an app ⌘E, Terminal ⌘D: click a row or press its key; a task's empty tab has the same list), up to three tasks under Needs you, and a node for each of the first 12 listed tasks. Left to right is the project; within a project the older task is farther; the colour is the state. No node sits under the text, so a small window shows fewer. Hover a node for its title; click a node or a row to open its conversation |
 | See the inbox | Tasks on the rail: Needs you, Running, Later, Done (folded). Click a heading to fold it, or ⌘⌃E, move to it, ↵ or space |
 | See tasks by project | Project in the Tasks header (State goes back): a group a `#project` with a bar of its states, then "no project". Today's work is under the list |
 | See a task's time and tokens | Hover its row: started, agent time, workspace, tokens by model |

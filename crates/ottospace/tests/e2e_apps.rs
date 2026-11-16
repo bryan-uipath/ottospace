@@ -987,7 +987,8 @@ fn a_mark_hosts_its_canary_window_again_and_of_two_windows_the_one_with_its_titl
     otto.call(json!({"cmd": "mark_go", "name": "both"}));
     let built = wait_for("both windows in the tab's panes", || Some(state()).filter(|s| titled(s).len() == 2));
     assert_eq!(titled(&built), [(5, "Canary 2".to_string()), (6, "Canary 1".to_string())]);
-    assert_eq!(built["tab_panes"], json!([[], [5, 6]]), "{}", built["state"]["tabs"]);
+    // Home keeps no tab: the built one is a workspace's.
+    assert_eq!(built["tab_panes"], json!([[5, 6]]), "{}", built["state"]["tabs"]);
     assert_eq!(built["hosted"].as_object().map(|h| h.len()), Some(2));
     // The pane marks are of the same windows, under their new ids.
     assert_eq!((&mark(&built, "two")["pane"], &mark(&built, "one")["pane"]), (&json!(5), &json!(6)));
@@ -1117,9 +1118,9 @@ fn a_hosted_window_is_captured_with_the_part_of_its_tree_under_the_circle() {
     // The way back to the app is still offered, and takes it.
     assert_eq!(state()["state"]["back_to"], 1);
 
-    // The window takes a title the rules say to leave alone: it is not captured again. (The task
-    // started in its own space: back to Workspace, where the pane is.)
-    key("cmd-ctrl-1");
+    // The window takes a title the rules say to leave alone: it is not captured again. (Back to
+    // the pane's space, after Home: the workspace made for the app.)
+    key("cmd-ctrl-2");
     canary.call(json!({"cmd": "retitle", "index": 0, "title": "Private notes"}));
     let refused = wait_for("the capture to be refused", || {
         let mut stream = UnixStream::connect(&otto.socket).ok()?;
@@ -1703,7 +1704,7 @@ fn a_killed_ottospace_has_its_guardian_give_a_peeked_window_back() {
 
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
-fn a_live_window_moves_down_with_its_pane_under_the_notice_bar() {
+fn a_window_in_a_bottom_pane_stops_above_the_notice_bar() {
     const RIGHT: &str = r#"{"repos": [], "restore_layout": false}"#;
     let home = support::temp(&format!("otto-apps-notice-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
@@ -1716,7 +1717,7 @@ fn a_live_window_moves_down_with_its_pane_under_the_notice_bar() {
     host_and_park(&otto);
     let crop = || state()["crop"]["1"].as_f64().filter(|c| (16.0..=40.0).contains(c));
     let cropped = wait_for("the title bar's crop", crop);
-    // The one pane is the top pane. Live: the window's title bar covers the pane's header.
+    // The one pane is the bottom pane too. Live: the window's title bar covers the pane's header.
     assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
     let pane = || rect(&state()["bounds"]["1"]).filter(|b| b[2] > 1.0);
     let hosted = || rect(&state()["hosted"]["1"]);
@@ -1728,21 +1729,29 @@ fn a_live_window_moves_down_with_its_pane_under_the_notice_bar() {
     };
     let live = wait_for("the window over its pane", settled);
 
-    // An error: the bar opens, the pane moves down by its height and the window with it, its
-    // title bar still on the header: under the bar, never over it.
+    // An error: the bar opens at the foot. The pane's top and the window's stay where they
+    // were, its title bar still on the header; both feet rise to the bar's top, never over it.
     std::fs::write(home.join("settings.json"), "{ not json").expect("write settings");
-    wait_for("the notice bar", || Some(state()).filter(|s| s["notice_bar"]["height"] == 28.0));
-    let lower = wait_for("the pane under the bar", || pane().filter(|b| close(b[1], body[1] + 28.0)));
-    assert!(close(lower[3], body[3] - 28.0), "{lower:?} from {body:?}");
-    let moved = wait_for("the window under the bar", || settled().filter(|f| close(f[1], live[1] + 28.0)));
-    assert!(close(moved[0], live[0]) && close(moved[3], lower[3] + cropped), "{moved:?} from {live:?}");
+    let barred = wait_for("the notice bar", || Some(state()).filter(|s| s["notice_bar"]["height"] == 28.0));
+    let (bar, window) =
+        (rect(&barred["notice_bar"]["rect"]).expect("the bar"), rect(&barred["window"]).expect("frame"));
+    let higher = wait_for("the pane above the bar", || pane().filter(|b| close(b[3], body[3] - 28.0)));
+    assert!(close(higher[1], body[1]) && higher[1] + higher[3] <= bar[1] + 0.5, "{higher:?} over {bar:?}");
+    let moved = wait_for("the window above the bar", || settled().filter(|f| close(f[3], live[3] - 28.0)));
+    assert!(close(moved[0], live[0]) && close(moved[1], live[1]), "{moved:?} from {live:?}");
+    assert!(moved[1] + moved[3] <= window[1] + bar[1] + 0.5, "{moved:?} over {bar:?} in {window:?}");
     assert_eq!(crop(), Some(cropped), "the title bar is still cropped");
 
-    // Fixed: the bar closes and the window is back where it was.
+    // Parked, its picture stops there too: as tall as the pane, drawn in it.
+    assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
+    let fits = |s: &[f64; 4]| s[2] > 100.0 && close(s[3], higher[3]);
+    let shown = wait_for("the parked picture", || rect(&state()["shown"]["1"]).filter(fits));
+    assert!(shown[1] + shown[3] <= bar[1] + 0.5, "{shown:?} over {bar:?}");
+
+    // Fixed: the bar closes and the pane is as tall as it was.
     std::fs::write(home.join("settings.json"), RIGHT).expect("write settings");
     wait_for("the bar to close", || Some(state()).filter(|s| s["notice_bar"].is_null()));
-    wait_for("the window back up", || settled().filter(|f| close(f[1], live[1]) && close(f[3], live[3])));
-    assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
+    wait_for("the pane back down", || pane().filter(|b| close(b[1], body[1]) && close(b[3], body[3])));
     let _ = std::fs::remove_dir_all(&home);
 }
 

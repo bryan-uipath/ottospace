@@ -21,7 +21,7 @@ running, and the rest of the design is not built: see the
 |---|---|
 | Split panes mixing terminals and real app windows | Works today |
 | Key bindings and a status bar showing the mode (`APP`, `PICK`…; none when normal) | Works today |
-| [Notice bar](#notice-bar): one app-level message, full width under the top row, red, amber or blue by level (error, warning, information) | Works today |
+| [Notice bar](#notice-bar): one app-level message, full width at the window's foot, red, amber or blue by level (error, warning, information) | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page (in a terminal a click beside the thumb is the terminal's). They follow the system's "Show scroll bars" setting | Works today |
@@ -34,8 +34,9 @@ running, and the rest of the design is not built: see the
 | A task's agent in the right drawer: ↵ in the new-task box, or Start agent in the drawer, starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. A click on a task only shows its conversation; Resume session goes on with one that ended. See [Flow of a task](#flow-of-a-task) | Works today |
 | Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a file edit's change as a diff card under its call, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls and edits, not what it says; "Watching · updates per message" in the header), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
 | New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do when it is not the default. A `/path` stays in the title the agent reads, and a folder taken from its dropdown is where the agent runs; `$skill` is stored and shown, nothing acts on it yet | Works today |
-| Home screen: a tab with no panes lists what goes there (Open an app ⌘E, Terminal ⌘D: each key a cap, as the keymap has it; a row's click does what its key does; a held ⌘ lights its caps), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. A task's or another workspace's empty tab shows the same list alone. With nothing open at all, the drawer shows a new task by itself | Works today |
-| Two rows of tabs: the top row holds the first space, Workspace, then each open task (its badge and title) and workspace; under it, the selected one's tabs, when it has more than one. One selection: the drawer shows the selected task's chat. × hides a task or a workspace (nothing stops); its row opens it again. + at the row's end makes a new, empty workspace. Short of room, the tasks not selected are their badges alone; shorter still, those that do not fit are a count (+3), and the selected one always shows. Drag a tab onto a task to move it there | Works today |
+| Home screen: Home lists what goes there (Open an app ⌘E, Terminal ⌘D: each key a cap, as the keymap has it; a row's click does what its key does; a held ⌘ lights its caps), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. A workspace's or a task's empty tab shows the same list alone. With nothing open at all, the drawer shows a new task by itself | Works today |
+| Home: the top row's first item, a house (no word, no ×). It holds no pane: what you open there (a pane, ⌘T, a Repos row) gets a new workspace, selected; ⌘N there gives the task a space of its own. Tabs of nothing (a dismissed task's, a deleted workspace's, a client's) go to the workspace selected last. Its screen is the home screen. ⌘⌃1, or Go to Home (palette, View menu) | Works today |
+| Two rows of tabs: the top row holds Home, then each open task (its badge and title) and workspace; under it, the selected one's tabs, when it has more than one. One selection: the drawer shows the selected task's chat. × hides a task or a workspace (nothing stops); its row opens it again. + at the row's end makes a new, empty workspace. Short of room, the tasks not selected are their badges alone; shorter still, those that do not fit are a count (+3), and the selected one always shows. Drag a tab onto a task to move it there | Works today |
 | Tabs, each with its own split tree | Works today |
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar | Works today |
@@ -109,12 +110,12 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘T | New tab, with an empty pane: ⌘E picks what goes in it |
 | ⌘1 … ⌘9 | Select a tab of the selected task (the second row) |
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab of the selected task |
-| ⌘⌃1 … ⌘⌃9 | Select a space of the top row: the first, Workspace, then each open task and workspace. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
+| ⌘⌃1 … ⌘⌃9 | Select a space of the top row: the first, Home, then each open task and workspace. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
 | ⌘⌃] / ⌘⌃[ | Next / previous space of the top row |
 | ⌘⌥] / ⌘⌥[ | Next / previous conversation of this workspace (the drawer's strip) |
-| ⌘⌃W | Hide the selected task or workspace (Hide): it leaves the top row and nothing in it stops; its row in Tasks or Workspaces opens it again. Not the first space, Workspace |
+| ⌘⌃W | Hide the selected task or workspace (Hide): it leaves the top row and nothing in it stops; its row in Tasks or Workspaces opens it again. Not Home |
 | ⌘⇧W | Close the tab and its panes |
-| ⌘⇧S | Save the tab on show into the [workspace](#workspaces) it is in; in the first space or a task's, as a new one. On a tab that came from one, or was saved into one: update its tab there |
+| ⌘⇧S | Save the tab on show into the [workspace](#workspaces) it is in; in a task's space, as a new one. On a tab that came from one, or was saved into one: update its tab there |
 | ⌘Q | Quit. While a terminal runs something (a program in front of its shell, or a background or stopped job) it asks first, and lists them: ↵, Q or ⌘Q again quits; Esc, any other key or any other shortcut cancels and does nothing else |
 | Wheel / trackpad | Scroll a terminal back through its history |
 | ⇧PageUp / ⇧PageDown | Scroll a terminal a page |
@@ -276,11 +277,11 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    [dial](#the-agent-dial). Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
 5. **Dismissing.** A dismissed task leaves the top row and the drawer (the drawer shows
-   nothing, not another conversation); its tabs go to Workspace. Dismissing a task whose agent
+   nothing, not another conversation); its tabs go to the workspace selected last. Dismissing a task whose agent
    runs asks first: Stop its agent and dismiss?
-6. **Spaces and the drawer.** Workspace, then each open task (and session, and workspace) is a
+6. **Spaces and the drawer.** Home, then each open task (and session, and workspace) is a
    space with its own tabs; one is selected, and the drawer is only ever on its agent: a task's
-   chat, none for Workspace. Selecting starts nothing; a closed drawer stays closed. A task
+   chat, none for Home. Selecting starts nothing; a closed drawer stays closed. A task
    started with ↵ is in the workspace you are in: one you made, or a task's. No space is made
    and nothing moves (the box says "↵ starts it in this workspace" when there is something in
    it). A workspace may hold several tasks: a later one works in the same folder unless its
@@ -290,14 +291,14 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    a task's row or ⌘⇧N puts a conversation in front; nothing but you does. The top row shows
    the workspace's badges stacked, the most urgent first. A task dismissed (or one you mark
    done) leaves the strip and the most urgent remaining is in front; the last one gone, a
-   workspace you made is its own again, with its tabs. From the first Workspace, the task gets
+   workspace you made is its own again, with its tabs. From Home, the task gets
    a space of its own with one empty tab. ⇧↵ files it for later, in no workspace: started from
    its row, it gets its own. ⌘T makes a tab in the
    space on show. Drag a tab onto another space's tab or badge to move it there; Move Tab to…
-   lists Workspace, the tasks and the workspaces. The top row's + makes a new, empty
+   lists the tasks and the workspaces. The top row's + makes a new, empty
    [workspace](#workspaces) after the selected space.
-   Closing a space's last tab closes the space. A click on a Repos row opens a terminal there in
-   a Workspace tab of its own; a row a live task works in carries its badge, and its click selects
+   Closing a space's last tab closes the space. A click on a Repos row opens a terminal there: in the
+   empty tab on show of a workspace, else in a new workspace named for the folder; a row a live task works in carries its badge, and its click selects
    that task (Terminal, on hover, opens a terminal anyway). See `docs/ai/spaces.md`. A
    repository's + (on its name, under the pointer) asks for a branch: a local one is checked out, one only a remote has is
    tracked, a new name is made from the repository's HEAD, in `<worktrees_dir>/<repo>/<branch>`; the
@@ -986,8 +987,10 @@ is four spaces.
 
 What ottospace has to say about itself (a settings file it cannot read, a file not saved, a
 shell that did not start, why a move of yours did nothing, a key that needs a restart) shows in
-one bar, the window's width, between the top row and everything under it. It opens by pushing
-the rest down, and at once under the system's Reduce Motion.
+one bar, the window's width, at the window's foot: above the meeting timeline and the status
+bar. Nothing above it moves when it opens (the top row, the tabs, the sidebar and the panes' tops
+stay under the pointer): the content's foot rises by its height. It grows upwards, and is there at
+once under the system's Reduce Motion. A live app window in a bottom pane stops above it too.
 
 - **Level**: red for an error, amber for a warning (a move that did nothing, a retired setting, a
   global key not registered), blue for information. A glyph says the level too.
@@ -1002,7 +1005,7 @@ the rest down, and at once under the system's Reduce Motion.
   the file is right; a failure stays until the next one, or until dismissed.
 - **Whose**: the bar is yours. Why a step did nothing, and what it did, is an answer to the one
   who took the step: your own shows on the bar; a socket client's (or a timer's) is in the
-  reply's `notice` alone, so a refused client opens no bar, moves nothing under the top row and
+  reply's `notice` alone, so a refused client opens no bar, moves nothing of yours and
   closes no menu of yours. What is wrong with the app itself shows whoever's step found it, and
   a client's success clears only a client's line.
 
@@ -1246,6 +1249,8 @@ first brainstorm:
 [agent-runners.md](ai/agent-runners.md): a native (non-terminal) agent conversation: driving Claude Code and Codex in their structured modes, permission prompts, trust rules. Not wired in yet.
 
 [meeting-timeline.md](ai/meeting-timeline.md): the meeting timeline as built, how a call is detected, the network decision, and what the calendar reader does not follow.
+
+[transcripts.md](ai/transcripts.md): an app's audio transcribed on the Mac, live, started and stopped by the user alone. Not built.
 
 [repos.md](ai/repos.md): the Repos section: folding, the default folder's dot, and how + makes a worktree (the git it runs, what it refuses).
 
