@@ -44,7 +44,7 @@ and what it allows.
   only of an element labelled when nothing was last typed). If no label is free outside what is
   typed, the app gets none until the next read. A later read keeps a label on its element only
   while the element keeps its path, role and place (within 2 points); one that moved loses its
-  label. A label is never handed from one element to another while the mode is on. Tinted APP mode's orange. Read off the main thread
+  label. A label is never handed from one element to another while the mode is on. Tinted APP mode's orange. Placed by `sneak_place` as ottospace's own labels are, clipped to the pane and around ottospace's labels, which never move for them. Read off the main thread
   with the `ax_tree` reader's limits (depth 40, 3000 nodes, 0.5 s per call, the first timeout ends
   the walk), once on entering and then each second while the mode is on; a label follows its
   element (same path and role) and goes when the element does. A slow app: ottospace's own labels

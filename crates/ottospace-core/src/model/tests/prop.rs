@@ -464,6 +464,7 @@ impl Gen<'_> {
                 1 | 2 => Source::Own { id: format!("c{i}") },
                 _ => Source::Own { id: g.name(CONTROLS) },
             },
+            clip: None,
         };
         (0..n).map(|i| target(self, i)).collect()
     }
@@ -1707,6 +1708,11 @@ fn check(m: &Model) -> Result<(), String> {
         // Each app label names one element.
         let sources: Vec<String> = apps.iter().map(|t| format!("{:?}", t.target.source)).collect();
         ensure!(unique(&sources), "two labels on one element");
+        // Every label is drawn where its targets now place it (`{:?}`: a NaN frame is never `==`).
+        let mut again = sneak.targets.clone();
+        crate::sneak_place::place(&mut again);
+        let placed = sneak.targets.iter().all(|t| t.pill.is_some());
+        ensure!(placed && format!("{again:?}") == format!("{:?}", sneak.targets), "a pill is stale or missing");
         let covered = boxed || m.keys || m.live.is_some() || m.visual.is_some() || m.mark_input.is_some();
         ensure!(!covered && !m.ax_overlay && m.confirm.is_none(), "sneak mode is on under something else");
         let _ = sneak.visible().count();
@@ -3941,8 +3947,11 @@ fn back_from_the_rail_under_the_inspector_shows_the_conversation() {
 /// user's next letter pressed an element they never saw labelled. (Found by review.)
 #[test]
 fn an_app_label_drawn_after_the_first_letter_is_not_pressed_by_the_second() {
-    let own =
-        |id: &str, x: f64| Target { frame: Frame { x, y: 0., w: 20., h: 20. }, source: Source::Own { id: id.into() } };
+    let own = |id: &str, x: f64| Target {
+        frame: Frame { x, y: 0., w: 20., h: 20. },
+        source: Source::Own { id: id.into() },
+        clip: None,
+    };
     // 17 controls take one letter each; the ×'s two-letter label starts with the 18th, `o`.
     let mut targets: Vec<Target> = (0..17).map(|i| own(&format!("c{i}"), i as f64 * 30.)).collect();
     targets.push(own("close:1", 600.));
@@ -3969,7 +3978,8 @@ fn an_app_label_drawn_after_the_first_letter_is_not_pressed_by_the_second() {
 /// An app's control had a one-letter label (`s`): one stray key pressed it. (Found by review.)
 #[test]
 fn one_key_never_presses_in_an_app() {
-    let own = Target { frame: Frame { x: 0., y: 0., w: 20., h: 20. }, source: Source::Own { id: "c0".into() } };
+    let own =
+        Target { frame: Frame { x: 0., y: 0., w: 20., h: 20. }, source: Source::Own { id: "c0".into() }, clip: None };
     let button = crate::ax::Node {
         role: "AXButton".into(),
         actions: vec!["AXPress".into()],

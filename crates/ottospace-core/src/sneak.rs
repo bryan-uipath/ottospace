@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::ax::{self, Labelled, Source, Target};
 use crate::sneak_apps::AppLabels;
+use crate::sneak_place;
 
 /// What a key does in sneak mode.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,13 +65,13 @@ fn assign(mut targets: Vec<Target>, spare: usize) -> Vec<Labelled> {
     // More controls than two letters can name (hundreds): three letters, and none has one.
     let Some(short) = short else {
         let labels = ax::labels(all, ax::ALPHABET);
-        return targets.into_iter().zip(labels).map(|(target, label)| Labelled { label, target }).collect();
+        return targets.into_iter().zip(labels).map(|(target, label)| Labelled { label, target, pill: None }).collect();
     };
     let mut one = letters[..short].iter().map(char::to_string);
     let mut two = letters[short..].iter().flat_map(|a| letters.iter().map(move |b| format!("{a}{b}")));
     let label = |target: Target| {
         let short = safe(&target).then(|| one.next()).flatten();
-        Some(Labelled { label: short.or_else(|| two.next())?, target })
+        Some(Labelled { label: short.or_else(|| two.next())?, target, pill: None })
     };
     targets.into_iter().filter_map(label).collect()
 }
@@ -112,7 +113,8 @@ impl Sneak {
     /// and these keep theirs.
     pub fn leaving_room(targets: Vec<Target>, room: bool) -> Option<Self> {
         let own = targets.into_iter().filter(|t| own_id(t).is_some()).collect();
-        let targets = assign(own, room.into());
+        let mut targets = assign(own, room.into());
+        sneak_place::place(&mut targets);
         (!targets.is_empty()).then(|| Self { targets, typed: String::new(), hid_overlay: false, app: None })
     }
 
@@ -133,11 +135,12 @@ impl Sneak {
         self.targets.retain_mut(|t| match drawn.iter().find(|d| d.source == t.target.source) {
             _ if own_id(&t.target).is_none() => true,
             Some(now) => {
-                t.target.frame = now.frame;
+                t.target = now.clone();
                 true
             }
             None => false,
         });
+        sneak_place::place(&mut self.targets);
     }
 
     /// One more letter. Labels are prefix-free, so a spelled label is chosen with no wait and no ↵.
@@ -164,7 +167,7 @@ mod tests {
     use crate::ax::Frame;
 
     fn own(id: &str, x: f64, y: f64) -> Target {
-        Target { frame: Frame { x, y, w: 20., h: 20. }, source: Source::Own { id: id.into() } }
+        Target { frame: Frame { x, y, w: 20., h: 20. }, source: Source::Own { id: id.into() }, clip: None }
     }
 
     /// `n` controls in a row, left to right: `c0`, `c1`, ...
@@ -196,6 +199,7 @@ mod tests {
         let node = Target {
             frame: Frame { x: 0., y: 0., w: 9., h: 9. },
             source: Source::App { pane: 1, path: vec![0], role: "AXButton".into(), at: Frame::default() },
+            clip: None,
         };
         let sneak = Sneak::new(vec![node.clone(), own("rail:apps", 0., 40.)]).unwrap();
         assert_eq!(sneak.targets.len(), 1);
