@@ -1006,7 +1006,7 @@ impl Model {
             Target::Tab(record) => {
                 // A task's tab goes to its space, while the task is live; else to Workspace.
                 let task = record.task.filter(|task| self.tasks.live(*task).is_some());
-                let of = task.map_or(Owner::Workspace, |id| self.task_space(id));
+                let of = task.map_or(Owner::Home, |id| self.task_space(id));
                 let tab = self.rebuild_tab(record, of, effects);
                 self.marks.bind(id, tab);
             }

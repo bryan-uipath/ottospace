@@ -178,7 +178,7 @@ impl Gen<'_> {
     /// Whose a space is: Workspace, a task's, a session's, a workbook's.
     fn owner(&mut self) -> Owner {
         match self.rng.below(4) {
-            0 => Owner::Workspace,
+            0 => Owner::Home,
             1 => Owner::Task { id: self.task() },
             2 => Owner::Workbook { id: self.workbook() },
             _ => {
@@ -1429,7 +1429,7 @@ fn check(m: &Model) -> Result<(), String> {
     // each space's tabs side by side in row order; no space without a tab; exactly one selected
     // (the tab on show's), shown; a task's space of a live task, a workbook's of one kept.
     let owners: Vec<&Owner> = m.spaces.iter().map(|space| &space.of).collect();
-    ensure!(owners.first() == Some(&&Owner::Workspace) && !m.spaces[0].hidden, "Workspace is not first: {owners:?}");
+    ensure!(owners.first() == Some(&&Owner::Home) && !m.spaces[0].hidden, "Workspace is not first: {owners:?}");
     ensure!(unique(&owners), "a space twice: {owners:?}");
     // Home's own tab is after all: a tab's place counts the workspaces' tabs alone.
     let rank = |of: &Owner| owners.iter().position(|o| *o == of).map(|at| if at == 0 { usize::MAX } else { at });
@@ -1438,7 +1438,7 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(ranks.is_sorted(), "a space's tabs are apart, or out of row order: {ranks:?}");
     // Home never owns a pane: its one tab is empty, and no other tab is Home's.
     let home: Vec<(u32, usize)> = (m.tabs.iter().zip(m.tab_panes()))
-        .filter(|(tab, _)| tab.space == Owner::Workspace)
+        .filter(|(tab, _)| tab.space == Owner::Home)
         .map(|(tab, panes)| (tab.id, panes.len()))
         .collect();
     ensure!(home == [(HOME_TAB, 0)], "Home's tabs and their panes are {home:?}");

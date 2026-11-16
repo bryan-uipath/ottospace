@@ -1398,13 +1398,13 @@ mod tests {
         m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
         // × takes it off the row: its pane stays, and its row opens it as it was.
         m.update(Action::SpaceHide { index: None });
-        assert_eq!((m.space(), m.shown_spaces().len(), m.panes.len()), (&Owner::Workspace, 1, 1));
+        assert_eq!((m.space(), m.shown_spaces().len(), m.panes.len()), (&Owner::Home, 1, 1));
         assert_eq!(m.workbook_rows().iter().map(|row| row.summary.as_str()).collect::<Vec<_>>(), ["no saved tabs"]);
         m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
         assert_eq!((m.space(), m.focused, m.tabs.len()), (&Owner::Workbook { id: 1 }, Some(1), 2));
         // Its last tab closed: off the row, still listed; opened, it has one empty tab.
         m.update(Action::CloseTab { index: None });
-        assert_eq!((m.space(), names(&m), m.panes.len()), (&Owner::Workspace, vec!["Workspace 2"], 0));
+        assert_eq!((m.space(), names(&m), m.panes.len()), (&Owner::Home, vec!["Workspace 2"], 0));
         m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
         assert_eq!((m.space(), m.layout.is_none(), m.tabs.len()), (&Owner::Workbook { id: 1 }, true, 2));
     }
@@ -1735,7 +1735,7 @@ mod tests {
         // All closed: both are built, in order, and the first is on show.
         m.update(Action::CloseTab { index: Some(1) });
         m.update(Action::CloseTab { index: Some(0) });
-        assert_eq!((m.space(), m.tabs.len()), (&Owner::Workspace, 1));
+        assert_eq!((m.space(), m.tabs.len()), (&Owner::Home, 1));
         m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
         let titles: Vec<&str> = m.tabs.iter().map(|tab| tab.title.as_str()).collect();
         assert_eq!((titles, m.active), (vec!["DRI", "Tab 2", "Home"], 0));

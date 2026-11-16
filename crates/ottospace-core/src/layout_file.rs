@@ -270,7 +270,7 @@ impl Model {
         // The row as kept. A session's space is not: its tabs name none.
         let kept = |space: &Space| {
             let (kind, task, workbook) = match &space.of {
-                Owner::Workspace => ("workspace", None, None),
+                Owner::Home => ("workspace", None, None),
                 Owner::Task { id } => ("task", Some(known(Some(*id))?), None),
                 Owner::Workbook { id } => ("workbook", None, Some(self.workbooks.get(*id)?.uid.clone())),
                 Owner::Session { .. } => return None,
@@ -352,7 +352,7 @@ impl Model {
         // Of listed repositories only: one gone from the list takes its fold with it.
         let listed = |path: &&String| folded_path(path) && self.repos.iter().any(|repo| repo.path == **path);
         let repos_folded = self.repos_folded.iter().filter(listed).take(MAX_FOLDED).cloned().collect();
-        let home = *self.space() == Owner::Workspace;
+        let home = *self.space() == Owner::Home;
         let extra = Extra::new();
         let mut layout = Layout { version: VERSION, selected, home, section, drawer, tabs, spaces, repos_folded, extra };
         // What is written always reads back: the last histories go first, then the last tabs.
@@ -371,11 +371,11 @@ impl Model {
 
     /// True while the model is as it starts: Home alone. Only that is restored into.
     fn fresh(&self) -> bool {
-        let empty = |tab: &crate::model::Tab| tab.space == Owner::Workspace && tab.layout.is_none();
+        let empty = |tab: &crate::model::Tab| tab.space == Owner::Home && tab.layout.is_none();
         self.panes.is_empty() && self.layout.is_none() && self.tabs.iter().all(empty) && self.spaces.len() == 1
     }
 
-    /// Whose a kept space is now: no one's (`Owner::Workspace`), if its task is gone or its
+    /// Whose a kept space is now: no one's (`Owner::Home`), if its task is gone or its
     /// workbook not kept.
     fn owner_of(&self, saved: &SavedSpace) -> Owner {
         let task = saved.task.filter(|id| saved.kind == "task" && self.tasks.live(*id).is_some());
@@ -384,7 +384,7 @@ impl Model {
         match (task, book) {
             (Some(id), _) => Owner::Task { id },
             (_, Some(book)) => Owner::Workbook { id: book.id },
-            _ => Owner::Workspace,
+            _ => Owner::Home,
         }
     }
 
@@ -429,7 +429,7 @@ impl Model {
         }
         let task_of = |model: &Model, saved: &SavedTab| {
             let task = saved.tab.task.filter(|id| model.tasks.live(*id).is_some());
-            task.map_or(Owner::Workspace, |id| Owner::Task { id })
+            task.map_or(Owner::Home, |id| Owner::Task { id })
         };
         let of_tab = |model: &Model, at: usize, saved: &SavedTab| match (&upgraded, firsts[at]) {
             (Some(of), true) => of.clone(),
@@ -487,7 +487,7 @@ impl Model {
         for (of, saved) in owners.iter().zip(&layout.spaces) {
             let live = |id: &TaskId| self.tasks.live(*id).is_some();
             let joined: Vec<TaskId> = saved.tasks.iter().copied().filter(live).collect();
-            if let Some(space) = self.spaces.iter_mut().find(|space| space.of == *of && *of != Owner::Workspace) {
+            if let Some(space) = self.spaces.iter_mut().find(|space| space.of == *of && *of != Owner::Home) {
                 space.hidden = saved.hidden;
                 // A task's space only; what is unsound of it (a task twice, one with a space
                 // of its own) goes at the step's end (`settle_joined`).
@@ -708,7 +708,7 @@ mod tests {
         let (r, _) = restored(&m, file.clone(), &[], false);
         // The empty tab was on show: Home is. No workspace is made for nothing.
         assert_eq!(row(&r), [("Home".to_string(), vec![1]), ("fix zoom".into(), vec![0])]);
-        assert_eq!((r.space(), r.workbooks.list.len(), r.home(&[]).is_some()), (&Owner::Workspace, 0, true));
+        assert_eq!((r.space(), r.workbooks.list.len(), r.home(&[]).is_some()), (&Owner::Home, 0, true));
         // No tab at all: Home alone.
         let (r, _) = restored(&Model::default(), Layout { tabs: Vec::new(), spaces: Vec::new(), ..file }, &[], false);
         assert_eq!((r.tabs.len(), r.spaces().len(), r.workbooks.list.len()), (1, 1, 0));
@@ -718,11 +718,11 @@ mod tests {
     fn home_on_show_comes_back_and_a_tab_of_no_space_goes_to_the_workspace_selected_last() {
         let mut m = workspace();
         m.update(Action::SpaceSelect { index: 0 });
-        assert_eq!(m.space(), &Owner::Workspace);
+        assert_eq!(m.space(), &Owner::Home);
         let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
         assert_eq!((file.home, file.selected, file.tabs.len()), (true, None, 3));
         let (r, _) = restored(&m, file.clone(), &[], false);
-        assert_eq!((r.space(), r.tabs.len(), r.layout.is_none()), (&Owner::Workspace, 4, true));
+        assert_eq!((r.space(), r.tabs.len(), r.layout.is_none()), (&Owner::Home, 4, true));
         assert_eq!(write(&r.layout_file(&[], &[], 0)), write(&file));
         // The task gone: its tab is the selected workspace's, and no workspace is made for it.
         let mut gone = Model::default();
@@ -833,7 +833,7 @@ mod tests {
         // The workspace's tabs first, then the task's space; Home's own tab after all.
         let (tab, book) = (|title: &str, of| (title.to_string(), of), Owner::Workbook { id: 1 });
         let task = tab("fix zoom", Owner::Task { id: 1 });
-        assert_eq!(titles(&r), [tab("Tab 1", book.clone()), tab("Tab 2", book), task, tab("Home", Owner::Workspace)]);
+        assert_eq!(titles(&r), [tab("Tab 1", book.clone()), tab("Tab 2", book), task, tab("Home", Owner::Home)]);
         assert_eq!((r.tab_task(), r.active, r.sidebar), (Some(1), 2, Some(Section::Tasks)));
         assert_eq!(write(&r.layout_file(&[], &[], 0)), write(&m.layout_file(&cwds, &[], 0)));
         // The split's ratio, and each terminal's directory.

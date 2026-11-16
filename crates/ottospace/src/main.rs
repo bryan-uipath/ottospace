@@ -2152,7 +2152,7 @@ impl Workspace {
                     None
                 }
                 Request::TaskAdd { tab: Some(tab), .. }
-                    if self.model.tabs.iter().any(|t| t.id == tab && t.space != Owner::Workspace) =>
+                    if self.model.tabs.iter().any(|t| t.id == tab && t.space != Owner::Home) =>
                 {
                     failure =
                         Some(format!("tab {tab} belongs to another task; leave out `tab` to file a task without one"));
@@ -5300,7 +5300,7 @@ impl Workspace {
         let tight = compact && room < NAMED_WORKSPACE + TITLED_SPACE + BADGE_SPACE;
         let workspace = if tight { BADGE_SPACE } else { NAMED_WORKSPACE };
         let selected_width = if tight { MIN_SPACE } else { TITLED_SPACE };
-        let others = shown.iter().filter(|space| space.of != selected && space.of != Owner::Workspace).count();
+        let others = shown.iter().filter(|space| space.of != selected && space.of != Owner::Home).count();
         let fits = |n: usize| workspace + selected_width + n as f32 * BADGE_SPACE <= room;
         let badges =
             if !compact || fits(others) { others } else { (0..others).rev().find(|n| fits(n + 1)).unwrap_or(0) };
@@ -5309,8 +5309,8 @@ impl Workspace {
             .into_iter()
             .enumerate()
             .filter(|(_, space)| {
-                let keep = space.of == selected || space.of == Owner::Workspace || room_for > 0;
-                if keep && space.of != selected && space.of != Owner::Workspace {
+                let keep = space.of == selected || space.of == Owner::Home || room_for > 0;
+                if keep && space.of != selected && space.of != Owner::Home {
                     room_for -= 1;
                 }
                 keep
@@ -5320,7 +5320,7 @@ impl Workspace {
         let spaces = shown.into_iter().map(|(place, space)| {
             let of = space.of.clone();
             let on = of == selected;
-            let small = compact && !on && (of != Owner::Workspace || tight);
+            let small = compact && !on && (of != Owner::Home || tight);
             let tip: SharedString = self.model.space_title(&of).into();
             let colour = self.space_colour(&of);
             let count = self.model.space_tabs(&of).len();
@@ -5348,10 +5348,10 @@ impl Workspace {
                 Owner::Session { .. } if small => {
                     Some(div().child(ottospace_core::talk::monogram(&self.model.space_title(&of))).into_any_element())
                 }
-                Owner::Workspace if small => Some(div().child("W").into_any_element()),
-                Owner::Workspace | Owner::Session { .. } => None,
+                Owner::Home if small => Some(div().child("W").into_any_element()),
+                Owner::Home | Owner::Session { .. } => None,
             };
-            let hide = (of != Owner::Workspace).then(|| {
+            let hide = (of != Owner::Home).then(|| {
                 div()
                     .id(("space-hide", place))
                     .flex_none()
@@ -5377,7 +5377,7 @@ impl Workspace {
                 .h_full()
                 // Workspace and the selected space keep their names; the others give way first.
                 .when(!small, |d| d.min_w(px(MIN_SPACE)).max_w(px(MAX_SPACE)).flex_shrink())
-                .when(of == Owner::Workspace, |d| d.flex_none())
+                .when(of == Owner::Home, |d| d.flex_none())
                 .when(on && compact, |d| d.min_w(px(selected_width)))
                 .when(small, |d| d.flex_none().tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))))
                 .overflow_hidden()
