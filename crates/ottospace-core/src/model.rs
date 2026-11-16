@@ -8939,6 +8939,11 @@ mod tests {
             (&m.spaces()[1].of, m.space_tabs(&task_space(1)).len(), listed(&m)[0].1),
             (&task_space(1), 3, Some(1))
         );
+        // The workspace deleted while bound: the task keeps the space and its tabs; put back, bound.
+        m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        assert_eq!((m.space_tabs(&task_space(1)).len(), m.panes.len(), listed(&m).len()), (3, 3, 0));
+        m.update(Action::WorkbookUndo);
+        assert_eq!((m.space_tabs(&task_space(1)).len(), listed(&m)[0].1), (3, Some(1)));
     }
 
     /// `>repo` on the line is as before: the agent runs where the line says.
@@ -8956,7 +8961,10 @@ mod tests {
             Effect::StartAgent { cwd, .. } => Some(cwd.clone()),
             _ => None,
         });
-        assert_eq!((cwd, m.workbooks.list[0].task, m.space()), (Some(Some("/code/app".into())), Some(1), &task_space(1)));
+        assert_eq!(
+            (cwd, m.workbooks.list[0].task, m.space()),
+            (Some(Some("/code/app".into())), Some(1), &task_space(1))
+        );
     }
 
     #[test]
@@ -8994,6 +9002,11 @@ mod tests {
         // Its file keeps the link.
         let text = crate::workbook::write(&m.workbooks.list[0]);
         assert_eq!(crate::workbook::parse(&text, UID).map(|book| book.task), Ok(task));
+        // Its space gone (the last tab closed): opened from the list it is its own again.
+        m.update(Action::CloseTab { index: None });
+        assert_eq!((m.space(), m.workbooks.list[0].task), (&Owner::Workspace, task));
+        m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
+        assert_eq!((m.space(), m.workbooks.list[0].task), (&Owner::Workbook { id: 1 }, None));
     }
 
     /// The bug of 0.1.0: with the new task open in the drawer, a click on a tab did nothing (the

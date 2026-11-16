@@ -87,10 +87,11 @@ tab never saved with ⌘⇧S is gone), and a tab closed with ⌘⇧W.
   panes, terminals stay; hosted windows stay parked as for any tab not on show. Its row in Tasks
   (`TaskTalk`), `TaskGo`, its Workspaces row (`WorkbookOpen`) or `SpaceOpen` bring it back where
   it was. Selecting one of its tabs (`SelectTab`, a pane focused, a mark) shows it too.
-- **New task** (⌘N, ↵ in the box): started in a workspace of no task, the task takes that
-  workspace (below, "A task started in a workspace"). Else (from a task's, a session's or a
-  bound workspace's space; from an empty first space) its space is made at the row's end with
-  one empty tab and selected.
+- **New task** (⌘N, ↵ in the box): started in a kept workspace of no task, the task takes that
+  workspace (below, "A task started in a workspace"). Else (from the first space, a task's, a
+  session's or a bound workspace's) its space is made at the row's end with one empty tab and
+  selected.
+- **A task gone** gives its tabs to the workspace it was bound to, else to the first space.
 - **Repos**: a click on a repository or worktree opens a terminal there in a tab of the first
   space of its own (the empty one on show, else a new one) and selects it. A row a live task
   works in carries that task's badge, and its click (`RepoClick`) selects the task's space
@@ -135,25 +136,25 @@ the task (right now - a new task/workspace gets created for the task)".
   kept, now with `task` (`Workbook::task`, in its file). On the top row it shows as the task
   (badge and title); its row in the section carries the task's badge and opens the task's
   space; ⌘⇧S there saves into it; a tab moved "to the workspace" goes to the task's space.
-- **The first "Workspace"**, when it holds a pane: its tabs become the task's space, next to
-  it on the row, and a fresh empty first Workspace stays at the front (there is always
-  somewhere for stray tabs). Its Settings tab stays the first space's, and from that tab
-  nothing is taken. Empty (the home screen), it is not taken: the task's space is made at the
-  row's end, as before.
+  Deleted while bound, the task keeps the space and its tabs; the delete's Undo binds it again.
+  The task's space gone while bound (its last tab closed, or no layout restored): its row
+  opens it as its own again, with its saved tabs, unbound.
+- **The first "Workspace"** is not taken: a task started there gets a space of its own, as
+  before. (It becomes Home, which holds no tabs: the next change.) The one-tab exception is
+  gone with `bind_tab`: a Repos tab stays the first space's.
 - **Unbound when the task goes.** The task dismissed, or deleted: the workspace is its own
-  again, where it was on the row, with its tabs; for the first Workspace's, the tabs go back to
-  the first space, as any task's do. The user's undo of the dismissal binds it again. A task
-  that is done but not dismissed keeps its space, as every task does.
+  again, where it was on the row, with its tabs. The user's undo of the dismissal binds it
+  again. A task that is done but not dismissed keeps its space, as every task does.
 - **Nothing else binds.** ⇧↵ (for later; no agent), a line whose agent would not start, a
-  client's `task_new` (it never takes the user's workspace), a task started from a task's, a
-  session's or an already bound workspace's space: a space of its own at the row's end.
+  client's `task_new` (it never takes the user's workspace), a task started from the first
+  space, a task's, a session's or an already bound workspace's: a space of its own at the row's end.
 - **The box says so.** While ↵ would take a workspace that holds a pane: "↵ makes this workspace
   the task's" (after the plan, when there is one: "↵ will start codex in app on main, and makes
   this workspace the task's"). An empty workspace is bound with nothing said: nothing is taken.
 - `>repo` on the line is as before: the agent runs where the line says. Binding changes no folder.
 - **How it is modelled.** The smallest thing that gives the behaviour: the space changes kind
-  in place (`Owner::Workbook` or the first space's tabs → `Owner::Task`), and the kept
-  workspace records the link (`task`). So every rule about a task's space (drawer, hide,
+  in place (`Owner::Workbook` → `Owner::Task`), and the kept workspace records the link
+  (`task`). So every rule about a task's space (drawer, hide,
   restore) holds as it was. The end state is still one kind of space with two optional links
   (above): then binding is only setting the field.
 - Property rules: one workspace a task, a live one; a bound workspace has no space of its own;

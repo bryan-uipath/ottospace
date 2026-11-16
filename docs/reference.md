@@ -269,11 +269,11 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 6. **Spaces and the drawer.** Workspace, then each open task (and session, and workspace) is a
    space with its own tabs; one is selected, and the drawer is only ever on its agent: a task's
    chat, none for Workspace. Selecting starts nothing; a closed drawer stays closed. A task
-   started with ↵ in a workspace that has no task takes that workspace: it becomes the task's
+   started with ↵ in a workspace you made that has no task takes it: it becomes the task's
    space where it is, with all its tabs (the box says "↵ makes this workspace the task's" when
    there is something in it). A workspace you made stays listed, bound to the task, until the
-   task is dismissed; then it is its own again, with its tabs. From a task's space, or with
-   nothing open, the task gets a space of its own with one empty tab. ⇧↵ takes nothing. ⌘T makes a tab in the
+   task is dismissed; then it is its own again, with its tabs. From Workspace or a task's
+   space, the task gets a space of its own with one empty tab. ⇧↵ takes nothing. ⌘T makes a tab in the
    space on show. Drag a tab onto another space's tab or badge to move it there; Move Tab to…
    lists Workspace, the tasks and the workspaces. The top row's + makes a new, empty
    [workspace](#workspaces) after the selected space.

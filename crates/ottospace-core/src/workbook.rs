@@ -923,10 +923,15 @@ impl Model {
         effects: &mut Vec<Effect>,
     ) {
         let Some(book) = self.workbooks.get(id).cloned() else { return };
-        // Bound to a task: its space is that task's.
+        // Bound to a task: its space is that task's. That space gone (its last tab closed, no
+        // layout restored): unbound, it opens as its own, with its saved tabs.
         if let Some(task) = book.task {
-            self.list = None;
-            return self.open_space(Owner::Task { id: task }, effects);
+            let of = Owner::Task { id: task };
+            if self.spaces.iter().any(|space| space.of == of) {
+                self.list = None;
+                return self.open_space(of, effects);
+            }
+            self.workbooks.bind(id, None);
         }
         let places: Vec<usize> = match tab {
             Some(at) if at < book.tabs.len() => vec![at],

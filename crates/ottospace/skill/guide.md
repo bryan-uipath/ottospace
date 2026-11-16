@@ -253,7 +253,7 @@ with its git worktrees. `open_repo` opens a terminal whose shell starts in a rep
 worktree, in a tab of Workspace: the tab on show if it is Workspace's and empty (or its focused
 pane is), else a new one, selected, named for the repository. `path` must be a `path` from
 `state.repos`; any other path is refused. A task the user starts (their own ↵) while in a
-workspace of no task takes that workspace, tabs and all, as its space; a task you add takes none.
+workspace they made that has no task takes that workspace, tabs and all, as its space; a task you add takes none.
 
 Tasks (the inbox in the Tasks section):
 
