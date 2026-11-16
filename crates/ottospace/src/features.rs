@@ -37,7 +37,7 @@ impl Workspace {
     /// test run that named no folder writes none, and the flag turns for the run.
     pub fn save_feature(&mut self, feature: Feature, on: bool, cx: &mut App) {
         if let Err(why) = config::save_feature(feature.name(), on) {
-            self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
+            self.broke(format!("{}{why}", Self::NOT_WRITTEN));
             return;
         }
         self.set_features(self.model.features.with(feature, on), cx);

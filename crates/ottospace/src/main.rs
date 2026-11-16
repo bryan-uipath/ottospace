@@ -918,8 +918,13 @@ struct Workspace {
     error: Option<String>,
     /// The last `Effect::Notice`: while `error` says it, it is a refusal, not a failure.
     refused: Option<String>,
-    /// `error` as last settled and whose step set it (`swap_origin`): a client's never covers the user's.
-    error_was: (Option<String>, Option<Origin>),
+    /// `error` while it is the app's own failure, not an answer (`broke`).
+    broke: Option<String>,
+    /// What the bar holds of `error` (`swap_origin`): a client's answer is not on it.
+    bar_line: notice::Held,
+    /// `error` as `bar_line` last saw it, and where its text was: the same words said again
+    /// are a new line (a new `String`), e.g. the user's refusal after a client's same one.
+    error_seen: (Option<String>, Option<usize>),
     /// The notice bar's height as it opens and closes.
     bar: notice_bar::Bar,
     /// False in e2e runs, which must never move the user's real windows.
@@ -1300,7 +1305,9 @@ impl Workspace {
             wanted: None,
             error: None,
             refused: None,
-            error_was: (None, None),
+            broke: None,
+            bar_line: notice::Held::default(),
+            error_seen: (None, None),
             bar: notice_bar::Bar::default(),
             notice,
             settings_looked: settings_read,
@@ -1348,16 +1355,32 @@ impl Workspace {
     /// back. For where the handlers run outside any one call (an injected key or pointer event);
     /// everywhere else `with_origin`.
     fn swap_origin(&mut self, origin: Origin) -> Origin {
-        // What failed since the last swap was the step of the sender now left: a client's
-        // neither covers nor clears what the user's step said (`notice::replaces`).
-        if self.error != self.error_was.0 {
-            if self.error_was.0.is_some() && !notice::replaces(self.input, self.error_was.1) {
-                self.error.clone_from(&self.error_was.0);
-            } else {
-                self.error_was = (self.error.clone(), Some(self.input));
-            }
-        }
+        // What was said since the last swap was the step of the sender now left.
+        self.bar_line = self.held_now();
+        self.error_seen = (self.error.clone(), self.error_at());
         std::mem::replace(&mut self.input, origin)
+    }
+
+    /// What the bar holds of `error`, with what the sender's step has said since the last swap:
+    /// a client's answer is its reply's alone, and its failure never over the user's (`Held::after`).
+    pub(crate) fn held_now(&self) -> notice::Held {
+        if (&self.error, self.error_at()) == (&self.error_seen.0, self.error_seen.1) {
+            return self.bar_line.clone();
+        }
+        let is = |mark: &Option<String>| self.error.is_some() && self.error == *mark;
+        let kind = notice::said(is(&self.refused), is(&self.broke), self.input);
+        self.bar_line.after(self.error.clone().map(|text| Notice { kind, text }), self.input)
+    }
+
+    /// Where `error`'s text is kept.
+    fn error_at(&self) -> Option<usize> {
+        self.error.as_ref().map(|error| error.as_ptr() as usize)
+    }
+
+    /// The app's own failure (a shell or agent not started, a file not written, a window of
+    /// the user's moved): on the bar whoever's step found it.
+    pub(crate) fn broke(&mut self, why: String) {
+        (self.error, self.broke) = (Some(why.clone()), Some(why));
     }
 
     /// Who sends a focus that follows a launch: the system's once it comes later than the click,
@@ -1395,7 +1418,7 @@ impl Workspace {
             self.refresh_apps();
             self.offer_installed(cx);
         }
-        // A client's key, click or label at the user's draft: the notice bar says why it did nothing.
+        // A client's key, click or label at the user's draft: its reply's `notice` says why it did nothing.
         let draft = ottospace_core::capture::DRAFT_USERS;
         if origin == Origin::Socket && self.model.refusal(&action, origin) == Some(draft) {
             self.error = Some(draft.into());
@@ -1479,7 +1502,7 @@ impl Workspace {
                     match self.start_agent(task, start, cwd.as_deref(), brief.as_deref()) {
                         Ok(session) => agents.push(Action::AgentStarted { task: task.clone(), session, at }),
                         Err(why) => {
-                            self.error = Some(format!("agent: {why}"));
+                            self.broke(format!("agent: {why}"));
                             agents.push(Action::AgentExited { task: task.clone() });
                         }
                     }
@@ -1519,7 +1542,7 @@ impl Workspace {
                         };
                         match started {
                             Ok(terminal) => drop(self.terminals.insert(*id, terminal)),
-                            Err(err) => self.error = Some(format!("terminal: {err}")),
+                            Err(err) => self.broke(format!("terminal: {err}")),
                         }
                         let (took, ok) = (spawned.elapsed().as_millis() as u64, self.terminals.contains_key(id));
                         trace::record("terminal_spawn", serde_json::json!({ "pane": id, "took_ms": took, "ok": ok }));
@@ -1562,7 +1585,7 @@ impl Workspace {
                 Effect::SaveFeature { feature, on } => self.save_feature(*feature, *on, cx),
                 Effect::SaveTasksView { view } => {
                     if let Err(why) = config::save_value("tasks_view", &serde_json::json!(view)) {
-                        self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
+                        self.broke(format!("{}{why}", Self::NOT_WRITTEN));
                     }
                 }
                 // Later reads of the list look where the model now does (also after "Unlist?" is
@@ -2860,7 +2883,7 @@ impl Workspace {
                 (*id, terminal)
             })
             .collect();
-        let status = self.notice_shown();
+        let status = self.notice_replied();
         serde_json::json!({
             "ok": true,
             "mode": self.model.mode(),
@@ -2906,7 +2929,8 @@ impl Workspace {
             // The terminal font in use, and the size of one character cell in points.
             "font": terminal::font_in_use(),
             "cell": [f32::from(self.cell.width), f32::from(self.cell.height)],
-            // What the notice bar says, or null. Not `error`: that key means the request failed.
+            // What the last step said (a client's refusal is here alone, never on the user's bar),
+            // else what the notice bar says, or null. Not `error`: that key means the request failed.
             "notice": status.as_ref().map(|notice| &notice.text),
             // Its level: `info` (a restart to ask for), `warning` (a move that did nothing) or `error`.
             "notice_level": status.as_ref().map(Notice::level),
@@ -3122,8 +3146,7 @@ impl Workspace {
                 let _ = hosted.window.set_position(display::parking_spot());
             }
             if hosted.off_screen {
-                self.error =
-                    Some(format!("{}'s window was off screen: it goes back to the middle of the screen", hosted.app));
+                self.broke(format!("{}'s window was off screen: it goes back to the middle of the screen", hosted.app));
             }
             trace::record("host", serde_json::json!({ "pane": id, "window": hosted.window_id }));
             self.cells.insert(*id, hosted.bounds.clone());

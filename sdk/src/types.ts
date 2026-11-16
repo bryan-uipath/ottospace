@@ -1163,9 +1163,9 @@ export interface Snapshot {
   font: { name: string; size: number };
   /** One character cell: `[w, h]` in points. */
   cell: [number, number];
-  /** What the notice bar says to the user. Not an error of this request. */
+  /** What the last step said (why a request did nothing), else what the notice bar says to the user. Not an error of this request. A client's refusal is here alone, never on the bar. */
   notice: string | null;
-  /** Its level: the bar's colour. */
+  /** The level of `notice`, the reply's line: the bar's colour when the bar shows it. */
   notice_level: NoticeLevel | null;
   /** The notice bar as drawn, or null while it takes no room. */
   notice_bar: NoticeBar | null;
