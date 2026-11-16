@@ -5805,6 +5805,13 @@ fn mods(m: gpui::Modifiers) -> Mods {
 
 /// A row of a secondary-bar list. A button at rest: its outline shows. Hover lifts it.
 /// `selected`: list mode's keys act on this row.
+/// One line of `text`, cut with "…" where it does not fit. GPUI 0.2.2 keeps a text's first
+/// measure, which for a flex item has no width: laid over a box of the row's height, it has one.
+pub(crate) fn cut_text(text: impl Into<SharedString>) -> Div {
+    let over = div().absolute().inset_0().truncate().child(text.into());
+    div().relative().min_w_0().child("\u{200b}").child(over)
+}
+
 fn list_button(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
     let lifted = BoxShadow {
         color: black().opacity(0.7),
