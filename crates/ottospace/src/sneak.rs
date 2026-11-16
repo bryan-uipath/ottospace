@@ -338,7 +338,8 @@ impl Workspace {
                 number.map(|id| Action::TaskTalk { id })
             }
             ("task" | "home-row" | "home-node", _) => number.map(|id| Action::TaskGo { id: Some(id) }),
-            ("space", _) => name.parse().ok().map(|index| Action::SpaceSelect { index }),
+            ("space", _) => name.parse().ok().map(|index| Action::SpaceClick { index }),
+            ("agent-chip", _) => self.model.agent_chip().map(|chip| Action::SpaceClick { index: chip.space }),
             ("space-hide", _) => name.parse().ok().map(|index| Action::SpaceHide { index: Some(index) }),
             ("top", "new_workspace") | ("workbook-new", _) => {
                 self.new_workspace(window, cx);

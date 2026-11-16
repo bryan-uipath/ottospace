@@ -62,6 +62,21 @@ export type Station =
   | "hooks"
   | "other";
 
+/** The chip at the end of the tab row (the top row, for a space of one tab) while the conversation is closed. Only the user's click on it opens the conversation. */
+export interface AgentChip {
+  task: Subject;
+  /** Its space's place on the top row. */
+  space: number;
+  /** As the dial's `pulse`; `needs_you` also while the agent waits and its task is under Needs you. */
+  state: AgentDial["pulse"];
+  /** `Working · cargo test`, `Needs you · git push`, `Idle`, `Ended`, `Failed`. After the dot: the agent's label, untrusted. */
+  line: string;
+  /** Where it was drawn; null before its first frame. */
+  rect: Rect | null;
+  /** Short of room for the line: the badge alone. */
+  short: boolean;
+}
+
 /** A conversation's dial: structure and counts, never a command, path or label. */
 export interface AgentDial {
   pulse: "running" | "needs_you" | "idle" | "ended" | "error";
@@ -1109,6 +1124,8 @@ export interface Snapshot {
   tabs: (Rect | null)[];
   /** Each space of the top row, by its place there. */
   space_rects: (Rect | null)[];
+  /** The agent chip, or null: the selected space's conversation while it is closed and nothing else is in the drawer's place. */
+  agent_chip: AgentChip | null;
   /** The left column's title strip, and the open section's header (null: none open). */
   strip: Rect | null;
   bar_header: Rect | null;

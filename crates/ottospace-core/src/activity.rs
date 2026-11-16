@@ -209,6 +209,21 @@ impl Activity {
         self.latest = self.latest.max(at);
     }
 
+    /// The centre's state, for a conversation in the state `is`. No clock in it.
+    pub fn pulse(&self, is: &Is) -> Pulse {
+        if self.error.is_some() {
+            Pulse::Error
+        } else if !is.live && !is.watched {
+            Pulse::Ended
+        } else if is.asking.is_some() {
+            Pulse::NeedsYou
+        } else if is.turn || (is.watched && !self.running.is_empty()) {
+            Pulse::Running
+        } else {
+            Pulse::Idle
+        }
+    }
+
     /// The dial as drawn at `now`, for a conversation in the state `is`.
     pub fn dial(&self, now: u64, is: &Is) -> Dial {
         let model_lit = is.turn && self.running.is_empty() && is.asking.is_none();
@@ -240,17 +255,7 @@ impl Activity {
             Some(f) if f >= AMBER => Level::Amber,
             _ => Level::Calm,
         };
-        let pulse = if self.error.is_some() {
-            Pulse::Error
-        } else if !is.live && !is.watched {
-            Pulse::Ended
-        } else if is.asking.is_some() {
-            Pulse::NeedsYou
-        } else if is.turn || (is.watched && !self.running.is_empty()) {
-            Pulse::Running
-        } else {
-            Pulse::Idle
-        };
+        let pulse = self.pulse(is);
         let lines = self.lines(now, is, pulse, context, model_lit);
         let failed = stations.iter().any(|spot| spot.failing > 0);
         let lit = stations.iter().any(|spot| spot.lit && spot.station != Station::You);

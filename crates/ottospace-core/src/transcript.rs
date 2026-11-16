@@ -8,7 +8,7 @@ use std::fmt;
 
 use serde::Serialize;
 
-use crate::activity::{Activity, Dial, Is, Station};
+use crate::activity::{Activity, Dial, Is, Pulse, Station};
 use crate::diff::{Diff, DiffShape};
 
 /// Text a model, a tool or the CLI wrote. Never `Serialize`; `Debug` prints its length only.
@@ -438,10 +438,18 @@ impl Transcript {
 
     /// Its dial at `now` (ms since 1970). A watched one steps a message at a time: no clocks.
     pub fn dial(&self, now: u64) -> Dial {
+        self.activity.dial(now, &self.is())
+    }
+
+    /// Its dial's state alone: what the agent chip says while the conversation is closed.
+    pub fn pulse(&self) -> Pulse {
+        self.activity.pulse(&self.is())
+    }
+
+    fn is(&self) -> Is<'_> {
         let asking = self.cards.front().map(|card| card.label.as_str());
         let (live, watched, turn) = (self.live, self.watched && !self.live, self.turn.is_some());
-        let is = Is { live, watched, turn, asking, context: self.context, window: self.window, timed: !watched };
-        self.activity.dial(now, &is)
+        Is { live, watched, turn, asking, context: self.context, window: self.window, timed: !watched }
     }
 
     /// A process for this conversation started (again). A resume with its earlier turns on show
