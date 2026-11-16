@@ -383,6 +383,7 @@ impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
             "icons/apps.svg" => Some(include_bytes!("../assets/icons/apps.svg")),
+            "icons/home.svg" => Some(include_bytes!("../assets/icons/home.svg")),
             "icons/workbook.svg" => Some(include_bytes!("../assets/icons/workbook.svg")),
             "icons/tasks.svg" => Some(include_bytes!("../assets/icons/tasks.svg")),
             "icons/repos.svg" => Some(include_bytes!("../assets/icons/repos.svg")),
@@ -422,6 +423,8 @@ const MIN_SPACE: f32 = 72.;
 /// What a space wants with its title: past the row's room for that many, the others are badges.
 const TITLED_SPACE: f32 = 150.;
 const MAX_SPACE: f32 = 220.;
+/// Home's item on the top row: a house.
+const HOME_ICON: &str = "icons/home.svg";
 /// A space drawn as its badge alone, as Home always is: its icon.
 const BADGE_SPACE: f32 = 36.;
 const TRAFFIC_LIGHTS: f32 = 80.;
@@ -5365,7 +5368,7 @@ impl Workspace {
                 }
                 Owner::Home => {
                     let ink = if on { theme::TEXT } else { theme::MUTED };
-                    let house = svg().path("icons/home.svg").size(px(15.)).flex_none().text_color(rgb(ink));
+                    let house = svg().path(HOME_ICON).size(px(15.)).flex_none().text_color(rgb(ink));
                     Some(house.into_any_element())
                 }
                 Owner::Session { .. } => None,
@@ -6714,7 +6717,7 @@ mod tests {
     #[test]
     fn every_rail_icon_is_embedded() {
         let icons = SECTIONS.iter().map(|(_, icon, _)| *icon).chain(SPLITS.iter().map(|(_, icon, ..)| *icon));
-        for path in icons {
+        for path in icons.chain([HOME_ICON]) {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }
     }

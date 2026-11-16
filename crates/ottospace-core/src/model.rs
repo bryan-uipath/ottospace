@@ -9070,6 +9070,18 @@ mod tests {
     }
 
     #[test]
+    fn a_clients_pane_on_home_under_the_users_typing_leaves_home_on_show_and_makes_one_workspace() {
+        let mut m = Model::default();
+        m.update(Action::OpenCompose { text: "fix".into() });
+        // A client's pane while the box is open (its tab, its split wait; an app's pane does not).
+        let open = || Action::Open { kind: Kind::Terminal, axis: Right, beside: None }.sent_by(Origin::Socket);
+        for _ in 0..3 {
+            m.update(open());
+            assert_eq!((m.space(), m.compose.is_some(), m.workbooks.list.len()), (&Owner::Home, true, 1));
+        }
+    }
+
+    #[test]
     fn a_tab_moves_between_spaces_by_the_user_alone() {
         let mut m = Model::in_workspace();
         let (a, b) = (add_task(&mut m, "a", State::Running), add_task(&mut m, "b", State::Running));

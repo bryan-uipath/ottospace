@@ -519,6 +519,10 @@ impl Workbooks {
     pub(crate) fn forget_tab(&mut self, tab: u32) {
         let books = self.list.iter_mut().chain(self.offer.as_mut().map(|offer| &mut offer.before));
         books.flat_map(|book| book.live.iter_mut()).filter(|live| **live == Some(tab)).for_each(|live| *live = None);
+        // Its id may be a later tab's: a delete's undo takes back none of that one.
+        if let Some(offer) = self.offer.as_mut() {
+            offer.tabs.retain(|id| *id != tab);
+        }
     }
 
     /// The workbook and place of the open tab `tab`.
@@ -1548,6 +1552,14 @@ mod tests {
         m.update(Action::WorkbookUndo);
         let back = (vec!["Workspace 2"], Some(1), None, &Owner::Workbook { id: 1 });
         assert_eq!((names(&m), m.workbook_of_tab(), m.workbooks.offered(), m.space()), back);
+        // Its tab closed and its id given to a new tab: the undo takes that one nowhere.
+        m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        m.update(Action::CloseTab { index: None });
+        m.update(Action::NewTab);
+        let new = |m: &Model| m.tabs.iter().find(|tab| tab.id == 1).map(|tab| tab.space.clone());
+        let before = new(&m);
+        m.update(Action::WorkbookUndo);
+        assert_eq!((new(&m), before.is_some()), (before, true));
         // Put back after its tab closed, it stands for no tab: a later tab may get that id.
         m.update(Action::WorkbookRemove { workbook: 1, tab: None });
         m.update(Action::CloseTab { index: None });

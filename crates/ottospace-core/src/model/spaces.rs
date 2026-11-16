@@ -476,7 +476,8 @@ impl Model {
             .partition(|at| !panes[**at].is_empty() || new_tab);
         let filled = moves.iter().any(own);
         // Another's pane on Home under the user's typing: Home stays on show.
-        let stays = filled && step.typing && self.tabs[self.active].id == HOME_TAB;
+        // Another's pane or tab from Home under the user's typing: Home stays on show.
+        let stays = step.typing && step.on_show && moves.contains(&self.active);
         if !moves.is_empty() {
             let new = moves.iter().any(|at| !step.tabs.contains(&self.tabs[*at].id));
             let made = origin == Origin::User && (hint.is_some() || (step.on_show && (filled || new)));
@@ -487,7 +488,14 @@ impl Model {
             let any = || self.spaces.iter().filter(|space| open(&&space.of)).find(kept).map(|space| space.of.clone());
             // Then the last one still kept, though closed: no file is made while one is.
             let kept_last = || self.last_spaces.iter().rfind(|of| self.owner_valid(of)).cloned();
-            let last = self.last_spaces.iter().rfind(open).cloned().or_else(any).or_else(kept_last);
+            // Then any kept workspace of no task: one is made only while there is none.
+            let book = || {
+                self.workbooks.list.iter().find(|book| book.task.is_none()).map(|book| Owner::Workbook { id: book.id })
+            };
+            // One on the row before a hidden one: a step of another's unhides none it need not.
+            let shown = |of: &&Owner| open(of) && self.spaces.iter().any(|s| s.of == **of && !s.hidden);
+            let last = self.last_spaces.iter().rfind(shown).cloned().or_else(any);
+            let last = last.or_else(|| self.last_spaces.iter().rfind(open).cloned()).or_else(kept_last).or_else(book);
             let ids: Vec<u32> = moves.iter().map(|at| self.tabs[*at].id).collect();
             let to = match last.filter(|_| !made) {
                 Some(of) => of,
@@ -525,7 +533,7 @@ impl Model {
         }
         if stays {
             self.park_active();
-            self.active = self.tabs.len() - 1;
+            self.active = self.tabs.iter().position(|tab| tab.id == HOME_TAB).unwrap_or(0);
         }
         for id in closes {
             let Some(at) = self.tabs.iter().position(|tab| tab.id == id) else { continue };
