@@ -1121,6 +1121,8 @@ const MAKERS: &[Make] = &[
         }
         layout.selected = g.rng.coin().then(|| g.rng.pick(&[0, 1, 2, 99]));
         layout.drawer.task = g.rng.coin().then(|| g.task());
+        // A run before that quit filled or not, whatever this model is now.
+        layout.fill = g.rng.coin();
         let layout = layout_file::parse(&layout_file::write(&layout)).unwrap_or(layout);
         let gone = g.names(DIRS, 2);
         let home = g.rng.coin().then(|| g.name(DIRS));
@@ -2388,8 +2390,8 @@ impl Run {
         let effects = m.update(sent);
         check(m)?;
         // Only the user puts the window over the menu bar and the Dock, now or in the run whose
-        // layout the shell restores; anyone's end of it tells the shell.
-        let restores = matches!(action, Action::RestoreLayout { .. }) && origin == Origin::System;
+        // layout is restored (a client's restore is refused); anyone's end of it tells the shell.
+        let restores = matches!(action, Action::RestoreLayout { .. }) && origin != Origin::Socket;
         let fills = matches!(action, Action::FillDisplay) && origin == Origin::User || restores;
         ensure!(fills || !m.fill_display || filled_before, "{origin:?}'s {action:?} filled the display");
         // A notice is said to the user: only their dismissal takes one off the bar, and only a
