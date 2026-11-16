@@ -1,5 +1,5 @@
-//! Key caps: a key from the keymap as one small box per key, and the two ways to fill an
-//! empty tab listed with them. The same list on the home screen and in an empty tab.
+//! Key caps: a key from the keymap as one small box per key, and what to do in an empty tab
+//! listed with them. The same list on the home screen and in an empty tab.
 
 use gpui::{Context, Div, Keymap, Keystroke, Modifiers, SharedString, Stateful, Window, div, prelude::*, px, rgb};
 use ottospace_core::commands::Command;
@@ -69,15 +69,16 @@ impl Workspace {
         }
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
-        let strokes = [Command::PickPane, Command::SplitRight].map(|command| stroke(&keymap, command));
+        let strokes =
+            [Command::PickPane, Command::SplitRight, Command::NewTask].map(|command| stroke(&keymap, command));
         let lit = |held: Modifiers| strokes.each_ref().map(|s| s.as_ref().map(|s| caps(s, held, false)));
         if lit(held(window)) != lit(self.caps_drawn.get()) {
             cx.notify();
         }
     }
 
-    /// The two ways to fill an empty tab, a row each: its key's caps, then what it does. A click
-    /// does what the key does. `held`: the modifiers down now, whose caps are lit.
+    /// What to do in an empty tab, a row each: its key's caps, then what it does. A click does
+    /// what the key does. `held`: the modifiers down now, whose caps are lit.
     pub(crate) fn fill_list(&self, held: Modifiers, cx: &mut Context<Self>) -> Div {
         self.caps_drawn.set(held);
         let keymap = cx.key_bindings();
@@ -114,7 +115,10 @@ impl Workspace {
             let split = Action::Split { axis: Axis::Right, kind: Kind::Terminal };
             this.dispatch(split, this.input, window, cx);
         }));
-        div().flex().flex_col().gap_1().child(open_app).child(terminal)
+        // ⌘N's box: in a workspace ↵ starts the task there, on Home in a space of its own.
+        let new_task = row("new_task", Command::NewTask, "New task", false);
+        let new_task = new_task.on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)));
+        div().flex().flex_col().gap_1().child(open_app).child(terminal).child(new_task)
     }
 }
 

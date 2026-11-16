@@ -54,6 +54,7 @@ import type {
   Focus,
   RailFocus,
   Home,
+  Glyph,
   HomeDrawn,
   HomeNode,
   InboxReply,
@@ -724,7 +725,22 @@ function spaceRow(value: unknown, at: string): SpaceRow {
     front: orNull(num)(o.front, `${at}.front`),
     strip: list(num)(o.strip, `${at}.strip`),
     worktree: orNull(str)(o.worktree, `${at}.worktree`),
+    glyph: glyph(o.glyph, `${at}.glyph`),
   };
+}
+
+function glyph(value: unknown, at: string): Glyph {
+  const o = fields(value, at);
+  switch (o.kind) {
+    case "home":
+    case "tasks":
+    case "name":
+      return { kind: o.kind };
+    case "app":
+      return { kind: "app", name: str(o.name, `${at}.name`) };
+    default:
+      throw new Error(`${at}.kind: not a glyph: ${JSON.stringify(o.kind)}`);
+  }
 }
 
 function nativeChat(value: unknown, at: string): NativeChat {
@@ -1476,6 +1492,7 @@ function homeDrawn(value: unknown, at: string): HomeDrawn {
     area: rect(o.area, `${at}.area`),
     panel: rect(o.panel, `${at}.panel`),
     nodes: map(rect)(o.nodes, `${at}.nodes`),
+    heading: orNull(str)(o.heading, `${at}.heading`),
     lattice_builds: num(o.lattice_builds, `${at}.lattice_builds`),
     lattice_paints: num(o.lattice_paints, `${at}.lattice_paints`),
   };
@@ -1583,6 +1600,11 @@ export function snapshot(value: unknown): Snapshot {
     key_reference: orNull(keyReference)(o.key_reference, "key_reference"),
     marks: list(mark)(o.marks, "marks"),
     mark_removed: orNull(str)(o.mark_removed, "mark_removed"),
+    unfilled: list((value, at) => {
+      const empty = fields(value, at);
+      const open = orNull(rect)(empty.open, `${at}.open`);
+      return { pane: num(empty.pane, `${at}.pane`), why: str(empty.why, `${at}.why`), open };
+    })(o.unfilled, "unfilled"),
     workbooks: list(workbook)(o.workbooks, "workbooks"),
     workbook_offer: orNull(workbookOffer)(o.workbook_offer, "workbook_offer"),
     row_menu: orNull(rowMenu)(o.row_menu, "row_menu"),

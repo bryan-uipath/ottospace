@@ -38,7 +38,7 @@ use ottospace_core::keys::{self, FilterKey, Mods};
 use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
 use ottospace_core::model::zones::RailFocus;
-use ottospace_core::model::{CONFIRM_UP, Owner, TabAt};
+use ottospace_core::model::{CONFIRM_UP, Glyph, Owner, TabAt};
 use ottospace_core::notice::{self, Notice};
 use ottospace_core::repos::{Checkout, Repo};
 use ottospace_core::rules::{self, Facts};
@@ -1598,7 +1598,7 @@ impl Workspace {
                         if let Some(pane) = into {
                             self.model.update(Action::Unfilled { pane, why: why.clone() }.sent_by(Origin::System));
                         }
-                        if !unhosted.contains(&why) {
+                        if !unhosted.contains(&why) && notice::unhosted_on_bar(self.input, into.is_some()) {
                             unhosted.push(why);
                         }
                     }
@@ -2861,7 +2861,19 @@ impl Workspace {
         }
         let mut tab_panes = self.model.tab_panes();
         tab_panes.truncate(bar);
-        serde_json::json!({
+        let unfilled: Vec<serde_json::Value> = self
+            .model
+            .marks
+            .unfilled()
+            .iter()
+            .map(|empty| {
+                serde_json::json!({
+                    "pane": empty.pane, "why": empty.why,
+                    "open": self.controls.bounds(&format!("unfilled-open:{}", empty.pane)).map(rect),
+                })
+            })
+            .collect();
+        let mut state = serde_json::json!({
             "ok": true,
             "mode": self.model.mode(),
             // Where the keyboard is: a pane, the list, a rail's cell, the drawer.
@@ -3074,7 +3086,10 @@ impl Workspace {
                 "number": self.renders, "seq": self.seq, "drawn": self.drawn_seq, "waited_ms": 0,
                 "window": ns_view(window).map(|view| unsafe { ottospace_mac::window::number(view) }),
             },
-        })
+        });
+        // Restored or rebuilt panes still empty: `pane`, `why`, and where its "Open <App>" is drawn, or null.
+        state["unfilled"] = unfilled.into();
+        state
     }
 
     /// The hosted window behind `pane`, if it is an app pane.
@@ -5338,10 +5353,16 @@ impl Workspace {
             let tip: SharedString = self.model.space_title(&of).into();
             let colour = self.space_colour(&of);
             let count = self.model.space_tabs(&of).len();
-            // Home's house, a task's badge, a workbook's glyph; a session's chat none.
-            let lead = match &of {
+            // Home's house, a task's badge, a lone app's icon, a workbook's glyph; a session's chat
+            // none. Which one is the core's (`Model::glyph`).
+            let glyph = self.model.glyph(&of);
+            let lead = match (&glyph, &of) {
+                // As its pane header's icon, at the house's size.
+                (Glyph::App { name }, _) if self.icons.contains_key(name) => {
+                    Some(img(self.icons[name].clone()).size(px(16.)).flex_none().into_any_element())
+                }
                 // Its tasks' badges, the most urgent first and on top of the next.
-                Owner::Task { .. } => {
+                (Glyph::Tasks, _) => {
                     let tasks = self.model.space_tasks(&of);
                     let badges: Vec<Div> = tasks.iter().take(5).filter_map(|id| self.task_badge(*id, 18.)).collect();
                     // Each 11 points right of the one before; drawn last to first, so the first is on top.
@@ -5351,7 +5372,7 @@ impl Workspace {
                         placed.map(|(at, badge)| div().absolute().top_0().left(px(11. * at as f32)).child(badge));
                     Some(div().relative().flex_none().w(px(width)).h(px(18.)).children(placed).into_any_element())
                 }
-                Owner::Workbook { .. } => Some(
+                (_, Owner::Workbook { .. }) => Some(
                     svg()
                         .path("icons/workbook.svg")
                         .size(px(14.))
@@ -5359,15 +5380,15 @@ impl Workspace {
                         .text_color(rgb(theme::MUTED))
                         .into_any_element(),
                 ),
-                Owner::Session { .. } if small => {
+                (_, Owner::Session { .. }) if small => {
                     Some(div().child(ottospace_core::talk::monogram(&self.model.space_title(&of))).into_any_element())
                 }
-                Owner::Home => {
+                (Glyph::Home, _) => {
                     let ink = if on { theme::TEXT } else { theme::MUTED };
                     let house = svg().path(HOME_ICON).size(px(15.)).flex_none().text_color(rgb(ink));
                     Some(house.into_any_element())
                 }
-                Owner::Session { .. } => None,
+                _ => None,
             };
             let hide = (of != Owner::Home).then(|| {
                 div()
@@ -6020,13 +6041,8 @@ impl Render for Workspace {
         let keep_out = self.home.borrow().keep_out();
         // The modifiers down now light their caps in the list of an empty tab.
         let held = keycaps::held(window);
-        let home = self.model.home(&keep_out).map(|home| self.render_home(home, held, cx).into_any_element());
-        // An empty tab of a task, a session or a workbook: what goes in it.
-        let empty = (self.model.layout.is_none() && home.is_none()).then(|| {
-            let list = self.fill_list(held, cx);
-            div().size_full().flex().items_center().justify_center().child(list).into_any_element()
-        });
-        let home = home.or(empty);
+        // Home's screen, or an empty tab of a task, a session or a workbook: the floor and what goes in it.
+        let home = self.model.layout.is_none().then(|| self.render_home(self.model.home(&keep_out), held, cx));
         // The left column's width, and the drawer's: as dragged, or half the window when widened.
         let left = RAIL + if self.model.sidebar.is_some() { SECTION } else { 0. };
         let half = f32::from(window.viewport_size().width) / 2.;

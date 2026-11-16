@@ -84,7 +84,7 @@ pub struct Counts {
     pub done: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct Home<'a> {
     pub nodes: Vec<Node>,
     /// The first tasks that need the user, most urgent first.
