@@ -4,7 +4,8 @@
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
-use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+use objc2::rc::Retained;
+use objc2_app_kit::{NSApplicationActivationOptions, NSApplicationActivationPolicy, NSRunningApplication, NSWorkspace};
 use objc2_application_services::{AXError, AXIsProcessTrustedWithOptions, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{CFArray, CFBoolean, CFDictionary, CFRetained, CFString, CFType, CGPoint, CGRect, CGSize};
 
@@ -17,6 +18,20 @@ unsafe extern "C" {
 pub fn app_identity(pid: i32) -> (Option<String>, Option<String>) {
     let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else { return (None, None) };
     (app.bundleIdentifier().map(|id| id.to_string()), app.localizedName().map(|name| name.to_string()))
+}
+
+/// Every running app with a Dock icon but this process, windows or none: pid, bundle id, name.
+pub fn running() -> Vec<(i32, Option<String>, String)> {
+    let me = std::process::id() as i32;
+    let apps = NSWorkspace::sharedWorkspace().runningApplications();
+    let regular = |app: &Retained<NSRunningApplication>| {
+        app.activationPolicy() == NSApplicationActivationPolicy::Regular && !app.isTerminated()
+    };
+    let identity = |app: Retained<NSRunningApplication>| {
+        let name = app.localizedName()?.to_string();
+        Some((app.processIdentifier(), app.bundleIdentifier().map(|id| id.to_string()), name))
+    };
+    apps.into_iter().filter(regular).filter_map(identity).filter(|(pid, ..)| *pid != me).collect()
 }
 
 /// True if the app with this pid is the front app, asked of the app itself. `isActive` reads a
@@ -105,6 +120,12 @@ impl Window {
 
     pub fn pid(&self) -> i32 {
         self.pid
+    }
+
+    /// True if the window is in the Dock, minimised.
+    pub fn minimized(&self) -> bool {
+        let value = copy_attr(&self.element, "AXMinimized").and_then(|v| v.downcast::<CFBoolean>().ok());
+        value.is_some_and(|minimized| minimized.as_bool())
     }
 
     pub fn set_size(&self, mut size: CGSize) -> Result<(), AXError> {

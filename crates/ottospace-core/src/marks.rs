@@ -301,6 +301,17 @@ pub fn same_app(a: (Option<&str>, &str), b: (Option<&str>, &str)) -> bool {
     }
 }
 
+/// Why a wanted app's window stays out of its pane when no window of the app is on screen, or
+/// `None` to start it with `open` (which, for a running app, asks it for a window). `running`:
+/// its process runs (its window minimised, on another Space or closed, as Spotify's often is).
+pub fn without_window(name: &str, running: bool, launch: bool) -> Option<String> {
+    match (running, launch) {
+        (_, true) => None,
+        (true, false) => Some(format!("{name} is running with no window on this Space")),
+        (false, false) => Some(format!("{name} is not running")),
+    }
+}
+
 /// A key as a mark's letter: `a` to `z`, capitals as their letter.
 pub fn letter(c: char) -> Option<char> {
     c.is_ascii_alphabetic().then(|| c.to_ascii_lowercase())
@@ -2103,5 +2114,28 @@ mod tests {
         assert!(!settled(0, 60_000), "no window yet");
         assert!(!settled(2, SETTLE_MS - 1));
         assert!(settled(2, SETTLE_MS));
+    }
+
+    #[test]
+    fn a_recorded_app_is_the_running_one_by_bundle_else_by_name() {
+        let spotify = (Some("com.spotify.client"), "Spotify");
+        // As NSRunningApplication has it: bundle and localized name.
+        assert!(same_app(spotify, (Some("com.spotify.client"), "Spotify")));
+        // The bundle decides when both have one: a renamed or localized app is still the one.
+        assert!(same_app(spotify, (Some("com.spotify.client"), "Spotify Premium")));
+        assert!(!same_app(spotify, (Some("com.example.spotify"), "Spotify")));
+        // A bare executable has no bundle: by name, exactly.
+        assert!(same_app(spotify, (None, "Spotify")));
+        assert!(!same_app(spotify, (None, "Spotify Helper")));
+        assert!(same_app((None, "Spotify"), (Some("com.spotify.client"), "Spotify")));
+    }
+
+    #[test]
+    fn a_running_app_with_no_window_on_screen_is_not_called_not_running() {
+        let why = |running, launch| without_window("Spotify", running, launch);
+        assert_eq!(why(true, false).as_deref(), Some("Spotify is running with no window on this Space"));
+        assert_eq!(why(false, false).as_deref(), Some("Spotify is not running"));
+        // Asked to: `open` starts it, or asks the running app for its window.
+        assert_eq!((why(true, true), why(false, true)), (None, None));
     }
 }

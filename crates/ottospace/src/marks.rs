@@ -13,7 +13,7 @@ use ottospace_core::tasks::Moved;
 use ottospace_core::{Action, Axis, Kind, Origin, PaneId, theme};
 use ottospace_mac::{ax, capture, icon};
 
-use crate::{Hosted, Tooltip, Workspace, config, list_button, rect, running_apps, window_managed};
+use crate::{Hosted, Tooltip, Workspace, config, list_button, rect, window_managed};
 
 /// An app window the core asked for (`Effect::HostWindow`).
 #[derive(Clone)]
@@ -368,15 +368,26 @@ impl Workspace {
             let (bundle, _) = ax::app_identity(running.pid);
             marks::same_app(app, (bundle.as_deref(), &running.name))
         };
-        if let Some(running) = running_apps(self.hosting, self.host_only).into_iter().find(same) {
+        let only = |pid: i32| self.host_only.is_none_or(|only| only == pid);
+        // Apps with a window on screen; a test run's as the user's, with no stand-in by name.
+        if let Some(running) = capture::apps().into_iter().filter(|app| only(app.pid)).find(same) {
             return self.host_window_of(running.pid, &wanted, window, cx);
+        }
+        // Running, though none of its windows is on screen: minimised, on another Space, closed.
+        let pid = ax::running()
+            .into_iter()
+            .filter(|(pid, ..)| only(*pid))
+            .find_map(|(pid, bundle, name)| marks::same_app(app, (bundle.as_deref(), &name)).then_some(pid));
+        let shown = |pid: i32| ax::Window::standard_of(pid).iter().any(hostable);
+        if let Some(pid) = pid.filter(|pid| shown(*pid)) {
+            return self.host_window_of(pid, &wanted, window, cx);
+        }
+        // A restored pane waits for the user's "Open": no app is started at start by itself.
+        if let Some(why) = marks::without_window(&wanted.name, pid.is_some(), wanted.launch) {
+            return Err(why);
         }
         if self.host_only.is_some() {
             return Err("this test run may host only the app it started".into());
-        }
-        // A restored pane waits for the user's "Open": no app is started at start by itself.
-        if !wanted.launch {
-            return Err(format!("{} is not running", wanted.name));
         }
         // Where the system has it: nothing written in `marks.json` is ever run.
         let path = icon::installed(wanted.bundle.as_deref(), &wanted.name);
@@ -398,7 +409,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let main = ax::Window::main_id(pid);
-        let windows: Vec<ax::Window> = ax::Window::standard_of(pid).into_iter().filter(window_managed).collect();
+        let windows: Vec<ax::Window> = ax::Window::standard_of(pid).into_iter().filter(hostable).collect();
         let held = |id: u32| self.hosted.iter().find(|(_, hosted)| hosted.window_id == id).map(|(pane, _)| *pane);
         let fact = |window: &ax::Window| {
             let id = window.id()?;
@@ -569,4 +580,9 @@ impl Workspace {
         let list = list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows);
         self.bars.tracked("marks", list.children(hint), &self.list_scroll)
     }
+}
+
+/// A window that may go in a pane: one the rules let in, not minimised (its stream would draw nothing).
+fn hostable(window: &ax::Window) -> bool {
+    !window.minimized() && window_managed(window)
 }
