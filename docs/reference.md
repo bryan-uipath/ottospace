@@ -1248,6 +1248,8 @@ first brainstorm:
 
 [meeting-timeline.md](ai/meeting-timeline.md): the meeting timeline as built, how a call is detected, the network decision, and what the calendar reader does not follow.
 
+[transcripts.md](ai/transcripts.md): an app's audio transcribed on the Mac, live, started and stopped by the user alone. Not built.
+
 [repos.md](ai/repos.md): the Repos section: folding, the default folder's dot, and how + makes a worktree (the git it runs, what it refuses).
 
 [`docs/ai/backlog.md`](ai/backlog.md) is an older backlog. `docs/ideas/` holds the owner's own
