@@ -165,16 +165,39 @@ main checkout.
   user starts there (↵) works in the default unless its line names another (`>repo`, `/path`);
   so does each task that joins later, not the folder of the one in front. A workspace with no
   default: terminals start where they did, and a joining task shares the front one's folder.
+- **An agent that makes a worktree** (`agent_cwd`). The owner: "an agent could create a worktree
+  when starting a task - in that case, we'd want the workspace associated with that task to
+  connect to that worktree". The task's session says where its agent works: Claude Code writes a
+  `cwd` on each record (`What::Cwd`, the main loop's only: a sub-agent's file and a
+  `isSidechain` record say nothing of it); the shell passes the last one with the session's work
+  (`SessionWork { cwd }`, the system's alone: a client's is refused). A runner whose records do
+  not move with its agent is never followed (`Disk::cwd_moves`: Codex's `turn_context` `cwd` is
+  the client's per turn, and ottospace sets none). When the `cwd` is in another listed checkout
+  of the task's repository, the task works there (`Task::worktree`, kept in its file): its row,
+  the drawer's foot, a terminal opened in its workspace and an agent started afresh say and use
+  it. Its workspace's default follows from the task's old worktree only when the task is the
+  workspace's one task (the main checkout to the new worktree: "some cases the agent will use
+  the main checkout, and some cases it will create a worktree"); with others there it stays
+  ("like the subagent case"), and the task's row and strip tab name its own.
+- **Never a sub-agent's.** A `cwd` in `<repo>/.claude/worktrees/agent-*` (Claude Code's
+  isolated sub-agents; `subagent_path`) moves nothing, nor does one in another repository.
+- **Made a moment ago.** A `cwd` the list does not hold yet: the list is read again at once
+  (`Effect::ReadRepos`), then every `MOVE_RETRY_MS` (2 s) for `MOVE_WAIT_MS` (10 s), and the task
+  follows when it is there. A `cd` inside the checkout asks the same few times: the list is files
+  git wrote, read in a moment.
+- **Gone on with** (`--resume`): where the session started, as before, since Claude Code finds a
+  session by the folder it started in.
 - **Shown.** The state's `spaces[].worktree`. Where a workspace's tasks work in more than one
   worktree, each task's row says its worktree's name and its strip tab's hover too
   (`Model::worktree_label`, `tasks_bar` rows' `worktree`); else nothing is said.
 - **Who.** Only the user's act sets a default (a Repos click, their + made a worktree), or the
-  files read again: a client's click on a row with no workspace opens a terminal as `OpenRepo`
+  task's own agent moving (above), or the files read again: a client's click on a row with no workspace opens a terminal as `OpenRepo`
   does and sets none, and no request sets one.
 - Property rules: a terminal opened by a step that names no folder starts in its space's default;
   a task that joins a workspace with a default works there unless its line names another; no
-  step but the user's (`WorktreeAdded` counts, and `RestoreWorkbooks`) changes a workspace's
-  default.
+  step but the user's (`WorktreeAdded` counts, and `RestoreWorkbooks`), or one that follows an
+  agent's move (`SessionWork` not a client's, the list read again for it), changes a workspace's
+  default or a task's worktree; a sub-agent's worktree is never a task's.
 
 ## Earlier: a workspace's two links (replaced)
 

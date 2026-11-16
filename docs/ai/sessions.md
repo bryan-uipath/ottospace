@@ -109,6 +109,7 @@ guide must say so. `what_is_shown_as_written` in `tests/fixtures.rs` lists them 
 | Model (`ModelStep.model`, `ModelChange`, `SessionRef.model`) | `message.model` in a transcript, `turn_context.model` in a rollout | A name, with an optional `[1m]` at the end for Claude. Else the record's model is ignored |
 | Session id (`SessionRef.id`, `parent`) | Claude: the transcript's file name. Codex: `session_meta.id`, `parent_thread_id` | A name. Else the session is **not listed** (chosen over an opaque id: nothing could be matched to it) |
 | Directory (`SessionRef.cwd`, the report's `cwd`; `SessionRef.path`) | `cwd` in the session file; the file's own path | An absolute path of at most 1024 bytes with no control characters and no `..`. Else the session is not listed |
+| Where the main loop works now (`What::Cwd`, `Tally::cwd`) | Claude Code: `cwd` on each record of the session's own file, not an `isSidechain` one; emitted on its first and each change | As the directory. Codex: none (its `turn_context` `cwd` is the client's) |
 
 **Quoted.** One value is free text, and the only one: a session's **title**. It leaves the
 crate by `SessionReader::title` and nowhere else: not in `SessionRef`, an `Event`, a `Snapshot` or the
