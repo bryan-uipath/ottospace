@@ -8,7 +8,8 @@
 {"cmd":"key","keys":"f i x space t h e space z o o m","as":"user"}
 {"shot":"the-box-says"}
 {"cmd":"key","keys":"enter","as":"user"}
-{"cmd":"compose","text":">canvas-app review the pan"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"> c a n v a s space r e v i e w space t h e space p a n","as":"user"}
 {"cmd":"key","keys":"enter","as":"user"}
 {"cmd":"section","section":"tasks"}
 {"settle":700}
