@@ -814,7 +814,10 @@ fn a_directory_is_added_to_the_repos_list_and_removed_in_the_settings() {
         (vec!["app".into(), "web".into()], &json!(false))
     );
 
-    // A folder with no repository, and what is no folder: said in the status bar, nothing written.
+    // The settings' unknown key is an error: it stays over a warning until the user dismisses it.
+    assert!(add(&dir("plain"))["notice"].as_str().is_some_and(|n| n.starts_with("settings.json: colour")));
+    otto.dismiss_notice();
+    // A folder with no repository, and what is no folder: said in the notice bar, nothing written.
     let reply = add(&dir("plain"));
     assert_eq!(reply["notice"].as_str(), Some(format!("No repository in {}", dir("plain")).as_str()));
     let reply = add(&dir("code/app/.git/HEAD"));
@@ -834,8 +837,13 @@ fn a_directory_is_added_to_the_repos_list_and_removed_in_the_settings() {
     assert_eq!((names(&reply), file()), (vec!["app".to_string(), "web".into(), "zed".into()], added.clone()));
     // Each name is a row of the list too: app 0-1, web 2-3, zed 4-5.
     assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(5)));
-    // What the last try said is gone: the status bar is back to what it said at start.
-    assert!(reply["notice"].as_str().is_some_and(|notice| notice.starts_with("settings.json: colour")), "{reply}");
+    // What the last try said is gone: the notice bar is back to what it said at start.
+    // (Dismissed, unless the file that did not read as settings was read meanwhile.)
+    let line = reply["notice"].as_str();
+    assert!(line.is_none_or(|notice| notice.starts_with("settings.json: colour")), "{reply}");
+    if line.is_some() {
+        otto.dismiss_notice();
+    }
     // It is still listed when the list is read again.
     assert_eq!(names(&otto.call(json!({"cmd": "repos"}))), ["app", "web", "zed"]);
     // Listed already, as itself or through `code`: its row is selected and nothing is written.
@@ -1000,6 +1008,9 @@ fn a_repository_folds_and_the_users_plus_makes_a_worktree_there() {
 
     // The user's: a field in the repository's rows. A client's keys do not type in it.
     let open_field = || {
+        // Where it is now: a notice since moved the list down.
+        otto.mouse("move", at(rect(&otto.drawn()["repos_bar"][0]["header"]), 0.5, 0.5));
+        let frame = otto.control(&plus);
         otto.mouse("move", at(frame, 0.5, 0.5));
         let reply = otto.user_click(at(frame, 0.5, 0.5));
         assert_eq!(reply["state"]["mark_input"]["type"], "worktree", "{}", reply["state"]["mark_input"]);
@@ -4441,11 +4452,11 @@ fn a_hand_written_marks_file_is_checked_and_commands_in_it_are_never_typed() {
 
     let otto = Otto::launch_with("marks-file-1", &env);
     let start = otto.call(json!({"cmd": "state"}));
-    let notice = start["notice"].as_str().unwrap_or_default();
-    assert!(
-        notice.contains("settings.json: ") && notice.contains("marks.json: commands are not supported; ignored"),
-        "{notice}"
-    );
+    // One notice at a time: the settings' line, then, dismissed, what the marks file said.
+    assert!(start["notice"].as_str().is_some_and(|notice| notice.starts_with("settings.json: ")), "{start}");
+    let next = otto.dismiss_notice();
+    let notice = next["notice"].as_str().unwrap_or_default();
+    assert!(notice.contains("marks.json: commands are not supported; ignored"), "{notice}");
     // The app is not installed: the tab opens with the shell, and that pane empty, saying why.
     let partly = otto.wait_for("the missing app to be noticed", |o| {
         Some(mark_named(&o.call(json!({"cmd": "state"})), "review")).filter(|mark| mark["reason"].is_string())
@@ -4483,13 +4494,11 @@ fn a_hand_written_marks_file_is_checked_and_commands_in_it_are_never_typed() {
     let otto = Otto::launch_with("marks-file-2", &env);
     let state = otto.call(json!({"cmd": "split"}));
     assert_eq!(mark_names(&state), ["good"]);
-    let notice = state["notice"].as_str().unwrap_or_default();
-    for part in [
-        "settings.json: ",
-        "mark \"relative\": its directory is not an absolute path",
-        "mark \"escape\": ",
-        "not saved this run",
-    ] {
+    assert!(state["notice"].as_str().is_some_and(|notice| notice.starts_with("settings.json: ")), "{state}");
+    let next = otto.dismiss_notice();
+    let notice = next["notice"].as_str().unwrap_or_default();
+    for part in ["mark \"relative\": its directory is not an absolute path", "mark \"escape\": ", "not saved this run"]
+    {
         assert!(notice.contains(part), "{part}: {notice}");
     }
     otto.call(json!({"cmd": "mark_add", "pane": 1, "name": "new"}));
@@ -4744,6 +4753,13 @@ impl Otto {
         let event = |action: &str| json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "as": "user"});
         self.call(event("down"));
         self.call(event("up"))
+    }
+
+    /// The user's click on the notice bar's ×: the state after it, the next notice in its place.
+    fn dismiss_notice(&self) -> Value {
+        let close = rect(&self.drawn()["notice_bar"]["close"]);
+        self.user_click(at(close, 0.5, 0.5));
+        self.drawn()
     }
 
     /// Opens the Tasks section with 60 tasks in it: more than its list shows.
@@ -5476,15 +5492,18 @@ fn only_the_user_starts_a_capture() {
     let more = |t: &&Value| t["source"]["id"] == "draft:more";
     let frame = &labelled["sneak"]["targets"].as_array().unwrap().iter().find(more).expect("the button")["frame"];
     let f = |key: &str| frame[key].as_f64().unwrap();
-    let button = [f("x") + f("w") / 2.0, f("y") + f("h") / 2.0];
+    // The button, as low as the notice bar in `reply` puts it: the refusal's notice opens the bar.
+    let high = |reply: &Value| reply["notice_bar"]["height"].as_f64().unwrap_or(0.0);
+    let read_at = high(&labelled);
+    let button = |reply: &Value| [f("x") + f("w") / 2.0, f("y") + f("h") / 2.0 + high(reply) - read_at];
     let reply = otto.call(json!({"cmd": "key", "keys": letters(&labels["draft:more"])}));
     assert!(count(&reply) == 2 && refused(&reply), "{reply}");
     if reply["mode"] == "sneak" {
         otto.user_key("escape");
     }
-    let reply = otto.click(button, 1);
+    let reply = otto.click(button(&otto.drawn()), 1);
     assert!(count(&reply) == 2 && refused(&reply), "{}", reply["notice"]);
-    let reply = otto.user_click(button);
+    let reply = otto.user_click(button(&reply));
     assert_eq!(count(&reply), 3, "{}", reply["notice"]);
     let state = pictured(&otto);
 
@@ -5965,10 +5984,11 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     let otto = Otto::launch_with("workbook-2", &env);
     let listed = otto.call(json!({"cmd": "section", "section": "workbook"}));
     assert_eq!((names(&listed), &listed["workbooks"][0]["open"]), (vec!["dri".to_string()], &json!(false)));
-    let row = at(rect(&otto.drawn()["workbooks"][0]["row"]), 0.3, 0.3);
-    let refused = otto.click(row, 1);
+    // Where the row is now: the refusal's notice moves the list down.
+    let row = || at(rect(&otto.drawn()["workbooks"][0]["row"]), 0.3, 0.3);
+    let refused = otto.click(row(), 1);
     assert!(pane_ids(&refused).is_empty() && users(&refused), "{refused}");
-    let opened = otto.user_click(row);
+    let opened = otto.user_click(row());
     assert_eq!(
         (titles(&opened), &opened["state"]["active"], pane_ids(&opened)),
         (vec!["Tab 1".into(), "dri".to_string()], &json!(1), vec![1, 2])
@@ -5979,7 +5999,7 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     shell_is_in(&otto, 2, &two);
     // Its tab is open: the row selects it, and opens no second one.
     otto.call(json!({"cmd": "select_tab", "index": 0}));
-    let again = otto.user_click(row);
+    let again = otto.user_click(row());
     assert_eq!((titles(&again).len(), &again["state"]["active"], pane_ids(&again)), (2, &json!(1), vec![1, 2]));
 
     // Saving its tab again (⌘⇧S) updates the workbook and offers the old one back.
@@ -6237,6 +6257,15 @@ fn the_agent_chip_brings_a_closed_conversation_back() {
     assert!(drawn[1] >= tab[1] && drawn[1] + drawn[3] <= tab[1] + tab[3], "{drawn:?} on the tab row {tab:?}");
     assert!(drawn[0] >= tab[0] + tab[2], "{drawn:?} right of the tabs {tab:?}");
     assert_eq!(closed["tabs"], two["tabs"], "the tabs did not move");
+    // A notice moves the tab row down by the bar's height, and the chip with it.
+    std::fs::write(home.join("settings.json"), "{ not json").unwrap();
+    let barred = |o: &Otto| Some(o.drawn()).filter(|state| state["notice_bar"]["height"] == 28.0);
+    let lowered = otto.wait_for("the notice bar", barred);
+    let (chip, row) = (rect(&lowered["agent_chip"]["rect"]), rect(&lowered["tabs"][2]));
+    assert_eq!((chip[0], chip[1], row[1]), (drawn[0], drawn[1] + 28.0, tab[1] + 28.0), "{chip:?} on {row:?}");
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let mended = |o: &Otto| Some(o.drawn()).filter(|s| s["notice_bar"].is_null() && s["settings_errors"] == 0);
+    assert_eq!(rect(&otto.wait_for("the bar gone", mended)["agent_chip"]["rect"]), drawn);
     // Tabs to the row's end: the chip is its badge alone, still there to click.
     let short = (0..40).find_map(|_| Some(otto.user_key("cmd-t")).filter(|state| state["agent_chip"]["short"] == true));
     let short = short.expect("the row filled");
@@ -8811,4 +8840,110 @@ fn a_tasks_x_hides_it_and_its_row_brings_it_back() {
     otto.user_key("cmd-l");
     let keyed = otto.user_key("cmd-ctrl-w");
     assert_eq!(row(&keyed), [(json!(false), json!(false)), (json!(true), json!(false)), (json!(false), json!(true))]);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_notice_bar_splits_the_top_row_from_the_rest_and_only_the_user_dismisses_it() {
+    const RIGHT: &str = r#"{"repos": [], "restore_layout": false}"#;
+    const WRONG: &str = "{\n  \"repos\": [],\n  \"restore_layout\": false,\n}\n";
+    let home = user_folder("notice-bar", RIGHT);
+    let otto = Otto::launch_with("notice-bar", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let file = home.join("settings.json");
+    // The bar fully open at `level`, or gone (`None`): it grows and shrinks over a few frames.
+    let bar = |level: Option<&str>| {
+        let level = level.map(String::from);
+        let met = move |o: &Otto| {
+            let reply = o.drawn();
+            let open = reply["notice_bar"]["height"] == 28.0 && reply["notice_level"].as_str() == level.as_deref();
+            let gone = level.is_none() && reply["notice_bar"].is_null();
+            (open || gone).then_some(reply)
+        };
+        otto.wait_for("the notice bar", met)
+    };
+    let read = |errors: u64| {
+        otto.wait_for("the file read", |o| Some(o.drawn()).filter(|reply| reply["settings_errors"] == errors));
+    };
+    assert_eq!(bar(None)["notice"], Value::Null);
+
+    // A real error: a trailing comma. No terminal has the keyboard, so the user's Esc dismisses
+    // it; a client's does not.
+    std::fs::write(&file, WRONG).unwrap();
+    let shown = bar(Some("error"));
+    assert_eq!(shown["notice"], "settings.json:4:1 trailing comma");
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    assert_eq!(bar(Some("error"))["notice_bar"]["kind"], "settings_problem");
+    otto.user_key("escape");
+    let gone = bar(None);
+    assert_eq!((&gone["notice"], &gone["settings_errors"]), (&Value::Null, &json!(1)), "dismissed, not fixed");
+    // Fixed, then wrong again below: it is said again.
+    std::fs::write(&file, RIGHT).unwrap();
+    read(0);
+
+    // Two tabs, so the tab row is drawn; the second has a terminal.
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "split"}));
+    let before = bar(None);
+    let pane = before["state"]["focused"].to_string();
+    let tab = |reply: &Value| rect(reply["tabs"].as_array().unwrap().iter().find(|tab| !tab.is_null()).unwrap());
+    std::fs::write(&file, WRONG).unwrap();
+    let shown = bar(Some("error"));
+    let (drawn, at_rest) = (&shown["notice_bar"], rect(&shown["notice_bar"]["rect"]));
+    assert_eq!(
+        (&drawn["level"], &drawn["text"], &drawn["offer"]),
+        (&json!("error"), &shown["notice"], &json!("open_settings"))
+    );
+    // Full width, right under the top row (the strip left of it and the spaces), over the tab row.
+    let (strip, space, window) = (rect(&shown["strip"]), rect(&shown["space_rects"][0]), rect(&shown["window"]));
+    assert_eq!((at_rest[0], at_rest[2], at_rest[3]), (0.0, window[2], 28.0), "{at_rest:?} in {window:?}");
+    // The strip's own line is between them.
+    assert_eq!(at_rest[1], strip[1] + strip[3] + 1.0);
+    assert!(space[1] + space[3] <= at_rest[1], "the top row {space:?} is over the bar {at_rest:?}");
+    // The rest moved down by its height: it is pushed, not covered.
+    assert_eq!(tab(&shown)[1], tab(&before)[1] + 28.0);
+    assert!(tab(&shown)[1] >= at_rest[1] + at_rest[3]);
+    let (was, is) = (rect(&before["frames"][&pane]), rect(&shown["frames"][&pane]));
+    assert_eq!((is[1], is[3]), (was[1] + 28.0, was[3] - 28.0));
+
+    // A client cannot dismiss it: not by a click on ×, not by Esc. The user's Esc is the terminal's.
+    let close = at(rect(&drawn["close"]), 0.5, 0.5);
+    otto.click(close, 1);
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    otto.user_key("escape");
+    // Nor by its sneak label, nor does a client's label on the offer open the settings.
+    sneak_to(&otto, "notice:close");
+    assert_eq!(sneak_to(&otto, "notice:offer")["state"]["tabs"].as_array().map(Vec::len), Some(2));
+    assert_eq!(bar(Some("error"))["notice_bar"]["text"], shown["notice"]);
+    // The user's click on ×: the bar closes and the rest is back where it was.
+    otto.user_click(close);
+    let gone = bar(None);
+    assert_eq!((rect(&gone["frames"][&pane]), tab(&gone)), (was, tab(&before)));
+    // Fixed: nothing to say.
+    std::fs::write(&file, RIGHT).unwrap();
+    read(0);
+    assert_eq!(bar(None)["notice"], Value::Null);
+
+    // Information: a key that needs a restart. Nothing is offered beside it.
+    std::fs::write(&file, r#"{"repos": [], "restore_layout": false, "terminal": {"font_size": 15}}"#).unwrap();
+    let info = bar(Some("info"));
+    assert_eq!(
+        (&info["notice"], &info["notice_bar"]["offer"]),
+        (&json!("settings.json: restart to apply terminal"), &Value::Null)
+    );
+    // A warning takes its place: why the user's own move did nothing.
+    let plain = home.canonicalize().unwrap().to_string_lossy().into_owned();
+    otto.call(json!({"cmd": "repo_add", "path": plain}));
+    let warned = bar(Some("warning"));
+    assert_eq!(warned["notice"].as_str(), Some(format!("No repository in {plain}").as_str()));
+    // A client's failure does not take its place.
+    let failed = otto.raw(r#"{"cmd":"open_app","name":"Finder"}"#);
+    assert!(failed["error"].is_string(), "{failed}");
+    assert_eq!(bar(Some("warning"))["notice"], warned["notice"]);
+    // Dismissed, the information it covered shows again; an error covers both.
+    // By the user's own sneak label on ×.
+    let (_, labels) = sneak(&otto);
+    otto.user_key(&letters(&labels["notice:close"]));
+    assert_eq!(bar(Some("info"))["notice"], info["notice"]);
+    std::fs::write(&file, "{ not json").unwrap();
+    assert_eq!(bar(Some("error"))["notice_bar"]["kind"], "settings_problem");
 }

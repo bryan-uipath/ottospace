@@ -19,6 +19,7 @@ and `{TODAY+34200}` (09:30 today, local) are replaced in both. Lines starting wi
   {"drag":{"rect":"drawer.body"},"at":[0,0.5],"by":[150,0]}   the user's drag from a control or rect, by points
   {"until":"drawer.native.chats.1.transcript.cards","len":1}   wait on the state ("is", "exists")
   {"sleep_ms":700}            wait (motion while recording)
+  {"write":"home/settings.json","text":"{}"}   a file in the instance's own folder, as an editor saves it
   {"record":"start"}          with --record: what the recording covers (default: all of it)
   {"controls":true}           print the named controls on screen (for writing scenarios)
   {"print":"repos_bar"}       print a part of the state (for writing scenarios)
@@ -437,6 +438,12 @@ def run_scenario(binary, scenario, out, record=False):
                 inst.wait(f"{step['until']} ({json.dumps(step)})", met, timeout=step.get("timeout_ms", 20000) / 1000)
             elif "sleep_ms" in step:
                 time.sleep(step["sleep_ms"] / 1000)
+            elif "write" in step:
+                # Renamed into place, as an editor saves: the app never reads half a file.
+                path = os.path.join(inst.root, step["write"])
+                with open(path + ".new", "w") as f:
+                    f.write(step["text"])
+                os.replace(path + ".new", path)
             elif "record" in step:
                 if record and step["record"] == "start" and not recording:
                     recording = start_recording()

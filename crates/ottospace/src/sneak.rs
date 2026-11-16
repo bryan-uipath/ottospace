@@ -298,6 +298,12 @@ impl Workspace {
                 section.map(|(section, ..)| Action::ToggleSection { section: *section })
             }
             ("bar", "close") => Some(Action::CloseSidebar),
+            // The notice bar's × and its offer: the core takes both from the user alone.
+            ("notice", "close") => {
+                self.dismiss_notice(window, cx);
+                None
+            }
+            ("notice", "offer") => Some(Action::EditSettings),
             ("bar", "add") => {
                 if let Some(section) = self.model.sidebar {
                     self.bar_add(section, window, cx);
