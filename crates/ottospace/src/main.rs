@@ -576,7 +576,7 @@ actions!(
 // The picker for a pane below the focused one.
 actions!(ottospace, [PickPaneDown]);
 // The top row: the next or previous space, and hiding the selected one.
-actions!(ottospace, [NextSpace, PrevSpace, HideSpace]);
+actions!(ottospace, [NextSpace, PrevSpace, HideSpace, NextChat, PrevChat]);
 // Pane arrangement.
 actions!(
     ottospace,
@@ -653,6 +653,8 @@ fn keymap() -> Vec<KeyBinding> {
         // The top row: ⌘⌃1..⌘⌃9 select a space (`key_down`).
         KeyBinding::new("cmd-ctrl-]", NextSpace, None),
         KeyBinding::new("cmd-ctrl-[", PrevSpace, None),
+        KeyBinding::new("cmd-alt-]", NextChat, None),
+        KeyBinding::new("cmd-alt-[", PrevChat, None),
         KeyBinding::new("cmd-ctrl-w", HideSpace, None),
         KeyBinding::new("cmd-{", PrevTab, None),
         KeyBinding::new("ctrl-tab", NextTab, None),
@@ -5324,7 +5326,17 @@ impl Workspace {
             let count = self.model.space_tabs(&of).len();
             // A task's badge, a workbook's glyph; Workspace and a session's chat a dot.
             let lead = match &of {
-                Owner::Task { id } => self.task_badge(*id, 18.).map(IntoElement::into_any_element),
+                // Its tasks' badges, the most urgent first and on top of the next.
+                Owner::Task { .. } => {
+                    let tasks = self.model.space_tasks(&of);
+                    let badges: Vec<Div> = tasks.iter().take(5).filter_map(|id| self.task_badge(*id, 18.)).collect();
+                    // Each 11 points right of the one before; drawn last to first, so the first is on top.
+                    let width = 18. + 11. * badges.len().saturating_sub(1) as f32;
+                    let placed = badges.into_iter().enumerate().rev();
+                    let placed =
+                        placed.map(|(at, badge)| div().absolute().top_0().left(px(11. * at as f32)).child(badge));
+                    Some(div().relative().flex_none().w(px(width)).h(px(18.)).children(placed).into_any_element())
+                }
                 Owner::Workbook { .. } => Some(
                     svg()
                         .path("icons/workbook.svg")
@@ -6189,6 +6201,12 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &PrevSpace, window, cx| {
                 this.dispatch(Action::SpaceCycle { delta: -1 }, this.input, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextChat, window, cx| {
+                this.dispatch(Action::TalkCycle { delta: 1 }, this.input, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PrevChat, window, cx| {
+                this.dispatch(Action::TalkCycle { delta: -1 }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &HideSpace, window, cx| {
                 this.dispatch(Action::SpaceHide { index: None }, this.input, window, cx);

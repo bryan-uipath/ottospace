@@ -110,6 +110,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab of the selected task |
 | ⌘⌃1 … ⌘⌃9 | Select a space of the top row: the first, Workspace, then each open task and workspace. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
 | ⌘⌃] / ⌘⌃[ | Next / previous space of the top row |
+| ⌘⌥] / ⌘⌥[ | Next / previous conversation of this workspace (the drawer's strip) |
 | ⌘⌃W | Hide the selected task or workspace (Hide): it leaves the top row and nothing in it stops; its row in Tasks or Workspaces opens it again. Not the first space, Workspace |
 | ⌘⇧W | Close the tab and its panes |
 | ⌘⇧S | Save the tab on show into the [workspace](#workspaces) it is in; in the first space or a task's, as a new one. On a tab that came from one, or was saved into one: update its tab there |
@@ -157,8 +158,8 @@ beside the workspace. Over it: picks for where (the first listed repositories, "
 and who (the default agent, then each runner and its models), which set the line's `>repo` and
 `@agent`, and, unless ↵ would start the default agent in your home folder, a line that says what
 it will do: "↵ will start claude in app on main", or for a saved agent "↵ files it; nothing
-starts"; and, when ↵ would take the workspace you are in and there is something in it, "↵ makes
-this workspace the task's". Under the line, while the box is open, the tags it may hold, each mark in a small cap
+starts"; and, when ↵ would start it in the workspace you are in and there is something in it (a
+pane, a task), "↵ starts it in this workspace" ("↵ will start claude in app, in this workspace"). Under the line, while the box is open, the tags it may hold, each mark in a small cap
 (`[#] project`, `[>] repo`, … `[p1] priority`), dimmer once something is typed; a click on one
 types its mark at the cursor (spaced from the words beside it) and opens its dropdown, as the key
 would. At their right, what ↵ does when it is not "add": `[↵] completes` while it would take a
@@ -279,11 +280,18 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 6. **Spaces and the drawer.** Workspace, then each open task (and session, and workspace) is a
    space with its own tabs; one is selected, and the drawer is only ever on its agent: a task's
    chat, none for Workspace. Selecting starts nothing; a closed drawer stays closed. A task
-   started with ↵ in a workspace you made that has no task takes it: it becomes the task's
-   space where it is, with all its tabs (the box says "↵ makes this workspace the task's" when
-   there is something in it). A workspace you made stays listed, bound to the task, until the
-   task is dismissed; then it is its own again, with its tabs. From Workspace or a task's
-   space, the task gets a space of its own with one empty tab. ⇧↵ takes nothing. ⌘T makes a tab in the
+   started with ↵ is in the workspace you are in: one you made, or a task's. No space is made
+   and nothing moves (the box says "↵ starts it in this workspace" when there is something in
+   it). A workspace may hold several tasks: a later one works in the same folder unless its
+   line names another. One conversation is in front, the drawer's: with two tasks or more a
+   strip over it has a tab for each (its badge, the dot at its corner in its state's colour),
+   the front one wide with its title, and + for another task here. A click on a tab, ⌘⌥] / ⌘⌥[,
+   a task's row or ⌘⇧N puts a conversation in front; nothing but you does. The top row shows
+   the workspace's badges stacked, the most urgent first. A task dismissed (or one you mark
+   done) leaves the strip and the most urgent remaining is in front; the last one gone, a
+   workspace you made is its own again, with its tabs. From the first Workspace, the task gets
+   a space of its own with one empty tab. ⇧↵ files it for later, in no workspace: started from
+   its row, it gets its own. ⌘T makes a tab in the
    space on show. Drag a tab onto another space's tab or badge to move it there; Move Tab to…
    lists Workspace, the tasks and the workspaces. The top row's + makes a new, empty
    [workspace](#workspaces) after the selected space.

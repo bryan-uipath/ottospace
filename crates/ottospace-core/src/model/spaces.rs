@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Action, Effect, Envelope, Host, Model, Origin, Tab};
 use crate::talk::{Subject, Talk};
-use crate::tasks::TaskId;
+use crate::tasks::{State, TaskId};
 use crate::workbook::WorkbookId;
 
 /// Whose a space is.
@@ -29,16 +29,8 @@ pub enum Owner {
 }
 
 impl Owner {
-    /// The conversation the drawer is on while this space is selected.
-    pub fn subject(&self) -> Option<Subject> {
-        match self {
-            Owner::Task { id } => Some(Subject::Task(*id)),
-            Owner::Session { runner, id } => Some(Subject::Session { runner: runner.clone(), id: id.clone() }),
-            Owner::Workspace | Owner::Workbook { .. } => None,
-        }
-    }
-
-    /// The space a conversation's agent lives in.
+    /// A conversation's own space: a session's, or the one a task has when it is in no other
+    /// (`Model::task_space` says where a task is).
     pub fn of(subject: &Subject) -> Owner {
         match subject {
             Subject::Task(id) => Owner::Task { id: *id },
@@ -63,6 +55,20 @@ pub struct Space {
     /// The tab it showed last, by id: selecting the space shows that one.
     #[serde(skip)]
     pub(crate) last: Option<u32>,
+    /// The other tasks in a task's space: each started there by the user's ↵, in that order.
+    /// A task is in one space at most.
+    #[serde(skip)]
+    pub(crate) joined: Vec<TaskId>,
+    /// The task whose conversation is in front: the drawer's, the dial's, the chip's. `None`:
+    /// the space's own.
+    #[serde(skip)]
+    pub(crate) front: Option<TaskId>,
+}
+
+impl Space {
+    pub(crate) fn new(of: Owner) -> Self {
+        Space { of, hidden: false, last: None, joined: Vec::new(), front: None }
+    }
 }
 
 /// A space as the state shows it: its tabs by place in `tabs`.
@@ -72,12 +78,20 @@ pub struct SpaceRow {
     pub hidden: bool,
     pub selected: bool,
     pub tabs: Vec<usize>,
+    /// Its tasks, the most urgent first: needs you, running, later, on hold, done.
+    pub tasks: Vec<TaskId>,
+    /// The task whose conversation is in front, if it has a task.
+    pub front: Option<TaskId>,
+    /// The tabs of the drawer's strip while it is selected, in order. Empty: no strip.
+    pub strip: Vec<TaskId>,
 }
 
 /// Why a client's change of space waits: the user's keys are in the chat.
 pub const CHAT_TYPING: &str = "the user is typing in the chat";
 /// Why a client's Esc or close of the new-task box is refused: the user is writing in it.
 pub const BOX_TYPING: &str = "the user is writing a new task";
+/// Why a client may not say which of a workspace's conversations is in front.
+pub const FRONT_USERS: &str = "only the user says which conversation is in front";
 
 impl Model {
     /// The selected space: the one of the tab on show.
@@ -102,15 +116,102 @@ impl Model {
             hidden: space.hidden,
             selected: *self.space() == space.of,
             tabs: self.space_tabs(&space.of),
+            tasks: self.space_tasks(&space.of),
+            front: self.front(&space.of),
+            strip: self.strip(&space.of),
         };
         self.spaces.iter().map(row).collect()
+    }
+
+    /// The tasks in a space, in the order they came: its own, then each that joined it.
+    pub fn members(&self, of: &Owner) -> Vec<TaskId> {
+        let Owner::Task { id } = of else { return Vec::new() };
+        let joined = self.spaces.iter().find(|space| space.of == *of).map(|space| space.joined.clone());
+        std::iter::once(*id).chain(joined.unwrap_or_default()).filter(|id| self.tasks.live(*id).is_some()).collect()
+    }
+
+    /// How soon a task wants the user: needs you, running, later, on hold, done; then its
+    /// priority, then the older.
+    pub(crate) fn urgency(&self, id: TaskId) -> (u8, u8, TaskId) {
+        let task = self.tasks.get(id);
+        let group = task.and_then(|task| task.state.group()).map_or(u8::MAX, |group| group as u8);
+        (group, task.map_or(u8::MAX, |task| task.priority), id)
+    }
+
+    /// A space's tasks, the most urgent first: the badges of its item on the top row.
+    pub fn space_tasks(&self, of: &Owner) -> Vec<TaskId> {
+        let mut tasks = self.members(of);
+        tasks.sort_by_key(|id| self.urgency(*id));
+        tasks
+    }
+
+    /// The tabs of the drawer's strip: the space's tasks in the order they came, those done left
+    /// out but the one in front. Fewer than two: no strip.
+    pub fn strip(&self, of: &Owner) -> Vec<TaskId> {
+        let front = self.front(of);
+        let done = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| task.state == State::Done);
+        let tabs: Vec<TaskId> = self.members(of).into_iter().filter(|id| Some(*id) == front || !done(id)).collect();
+        if tabs.len() > 1 { tabs } else { Vec::new() }
+    }
+
+    /// The task in front in a space: the one set, while it is in it, else the space's own.
+    pub fn front(&self, of: &Owner) -> Option<TaskId> {
+        let members = self.members(of);
+        let set = self.spaces.iter().find(|space| space.of == *of).and_then(|space| space.front);
+        set.filter(|id| members.contains(id)).or(members.first().copied())
+    }
+
+    /// The space a task is in: the one it joined, else its own.
+    pub fn task_space(&self, task: TaskId) -> Owner {
+        let joined = self.spaces.iter().find(|space| space.joined.contains(&task));
+        joined.map_or(Owner::Task { id: task }, |space| space.of.clone())
+    }
+
+    /// The space a conversation is in.
+    pub fn subject_space(&self, subject: &Subject) -> Owner {
+        match subject {
+            Subject::Task(id) => self.task_space(*id),
+            Subject::Session { .. } => Owner::of(subject),
+        }
+    }
+
+    /// The conversation of a space: a session's own, a workspace's front task's. The drawer,
+    /// the dial and the agent chip are on the selected space's.
+    pub fn space_subject(&self, of: &Owner) -> Option<Subject> {
+        match of {
+            Owner::Session { runner, id } => Some(Subject::Session { runner: runner.clone(), id: id.clone() }),
+            _ => self.front(of).map(Subject::Task),
+        }
+    }
+
+    /// Puts a task in front in its space. The space is not selected by it.
+    pub(crate) fn set_front(&mut self, task: TaskId) {
+        let of = self.task_space(task);
+        if let Some(space) = self.spaces.iter_mut().find(|space| space.of == of) {
+            space.front = Some(task);
+        }
+    }
+
+    /// The next (positive) or previous conversation of the selected space's strip. It wraps.
+    pub(crate) fn cycle_front(&mut self, delta: i32) {
+        let strip = self.strip(self.space());
+        let Some(at) = self.front(self.space()).and_then(|front| strip.iter().position(|id| *id == front)) else {
+            return;
+        };
+        let to = (at as i64 + i64::from(delta)).rem_euclid(strip.len() as i64) as usize;
+        self.set_front(strip[to]);
     }
 
     /// A space's name: its task's title, its session's, its workbook's.
     pub fn space_title(&self, of: &Owner) -> String {
         match of {
             Owner::Workspace => "Workspace".into(),
-            Owner::Task { id } => self.tasks.get(*id).map(|task| task.title.clone()).unwrap_or_default(),
+            // Several tasks in a kept workspace: the workspace's name.
+            Owner::Task { id } => {
+                let book = self.workbooks.bound_to(*id).filter(|_| self.members(of).len() > 1);
+                let name = book.and_then(|book| self.workbooks.get(book)).map(|book| book.name.clone());
+                name.or(self.tasks.get(*id).map(|task| task.title.clone())).unwrap_or_default()
+            }
             Owner::Session { runner, id } => self.session_title(runner, id),
             Owner::Workbook { id } => self.workbooks.get(*id).map(|book| book.name.clone()).unwrap_or_default(),
         }
@@ -160,7 +261,7 @@ impl Model {
     pub(crate) fn add_space(&mut self, of: &Owner) {
         match self.spaces.iter_mut().find(|space| space.of == *of) {
             Some(space) => space.hidden = false,
-            None => self.spaces.push(Space { of: of.clone(), hidden: false, last: None }),
+            None => self.spaces.push(Space::new(of.clone())),
         }
     }
 
@@ -263,7 +364,7 @@ impl Model {
             Action::SpaceCycle { .. } => shown.len() > 1,
             Action::SpaceHide { index } => index.or(selected) == selected && *self.space() != Owner::Workspace,
             Action::SpaceOpen { space: of } => other(Some(of)),
-            Action::TaskGo { id } => id.is_none_or(|id| other(Some(&Owner::Task { id }))),
+            Action::TaskGo { id } => id.is_none_or(|id| other(Some(&self.task_space(id)))),
             Action::OpenRepo { .. } | Action::RepoClick { .. } => *self.space() != Owner::Workspace,
             // The selected space's last tab closed: the space goes.
             Action::CloseTab { index } => {
@@ -305,12 +406,11 @@ impl Model {
         self.spaces.retain(|space| space.of == Owner::Workspace || owners.contains(&space.of));
         for of in owners {
             if !self.spaces.iter().any(|space| space.of == of) {
-                self.spaces.push(Space { of, hidden: false, last: None });
+                self.spaces.push(Space::new(of));
             }
         }
         let workspace = self.spaces.iter().position(|space| space.of == Owner::Workspace);
-        let mut first =
-            workspace.map_or(Space { of: Owner::Workspace, hidden: false, last: None }, |at| self.spaces.remove(at));
+        let mut first = workspace.map_or(Space::new(Owner::Workspace), |at| self.spaces.remove(at));
         first.hidden = false;
         self.spaces.insert(0, first);
         if !self.tabs.iter().any(|tab| tab.space == Owner::Workspace) {
@@ -337,7 +437,7 @@ impl Model {
         if let Some(talk) = &self.talk {
             self.drawer_open = talk.open;
         }
-        let Some(subject) = self.space().subject() else {
+        let Some(subject) = self.space_subject(self.space()) else {
             self.talk = None;
             return;
         };
