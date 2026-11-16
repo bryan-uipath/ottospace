@@ -146,7 +146,7 @@ Key Counts forgets it.
 | Add files to the task | Drag them from Finder onto the box, ⌘O, or copy in Finder and ⌘V: each becomes a `/path` |
 | Run the agent in a folder | Type `~/`, `/` or (with a `>repo`) `./`, and take a folder from the dropdown: "runs in ~/notes/ ×" shows it. The path stays in the title |
 | Point the task at a tab, a pane, a mark or an app | `^name` in the line, or ⌥-click the tab or pane while the box is open |
-| A task's tabs | Its space, behind its badge on the bar. Starting a task opens it with one empty tab (or takes the Repos tab it was started from); ⌘T joins the space on show; drag a tab onto another space; palette: Move Tab to… |
+| A task's tabs | Its space, behind its badge on the bar. Starting a task (↵) in a workspace you made that has no task makes that workspace the task's, tabs and all; elsewhere it opens with one empty tab; ⌘T joins the space on show; drag a tab onto another space; palette: Move Tab to… |
 | The next task that needs me | ⌘⇧N: its space and chat |
 | See what needs me at a glance | A tab with no panes is the home screen: a list of what goes there (Open an app ⌘E, Terminal ⌘D: click a row or press its key; a task's empty tab has the same list), up to three tasks under Needs you, and a node for each of the first 12 listed tasks. Left to right is the project; within a project the older task is farther; the colour is the state. No node sits under the text, so a small window shows fewer. Hover a node for its title; click a node or a row to open its conversation |
 | See the inbox | Tasks on the rail: Needs you, Running, Later, Done (folded). Click a heading to fold it, or ⌘⌃E, move to it, ↵ or space |

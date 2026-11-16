@@ -1254,6 +1254,7 @@ function workbook(value: unknown, at: string): Workbook {
     tab: orNull(num)(o.tab, `${at}.tab`),
     tabs: list(tab)(o.tabs, `${at}.tabs`),
     unfolded: bool(o.unfolded, `${at}.unfolded`),
+    task: orNull(num)(o.task, `${at}.task`),
     row: orNull(rect)(o.row, `${at}.row`),
     buttons: {
       fold: orNull(rect)(buttons.fold, `${at}.buttons.fold`),
