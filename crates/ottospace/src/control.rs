@@ -607,13 +607,41 @@ pub struct Call {
 /// A request line: its request, and its top-level `pass` if it has one (any request may: `ctl`
 /// and the SDK attach it). A `pass` that is not 32 hex digits is an error, its text not repeated.
 fn parse(line: &str) -> Result<(Request, Option<Pass>), String> {
-    let mut value: serde_json::Value = serde_json::from_str(line).map_err(|err| err.to_string())?;
-    let Some(given) = value.as_object_mut().and_then(|fields| fields.remove("pass")) else {
-        // As before: from the text, so a key given twice is still an error.
+    let fields = match serde_json::from_str::<serde_json::Value>(line).map_err(|err| err.to_string())? {
+        serde_json::Value::Object(_) => Some(serde_json::from_str::<Fields>(line).map_err(|err| err.to_string())?.0),
+        _ => None,
+    };
+    let Some((given, fields)) = fields.and_then(|mut fields| Some((fields.remove("pass")?, fields))) else {
+        // As before: from the text.
         return Ok((serde_json::from_str(line).map_err(|err| err.to_string())?, None));
     };
     let pass = given.as_str().and_then(Pass::parse).ok_or("pass: 32 hex digits")?;
-    Ok((Request::deserialize(value).map_err(|err| err.to_string())?, Some(pass)))
+    Ok((Request::deserialize(serde_json::Value::Object(fields)).map_err(|err| err.to_string())?, Some(pass)))
+}
+
+/// A line's top-level fields, a key given twice refused: a `Value` lets the last win.
+struct Fields(serde_json::Map<String, serde_json::Value>);
+
+impl<'de> Deserialize<'de> for Fields {
+    fn deserialize<D: serde::Deserializer<'de>>(from: D) -> Result<Self, D::Error> {
+        struct Once;
+        impl<'de> serde::de::Visitor<'de> for Once {
+            type Value = Fields;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an object, each key once")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Fields, A::Error> {
+                let mut fields = serde_json::Map::new();
+                while let Some((key, value)) = map.next_entry::<String, serde_json::Value>()? {
+                    if fields.insert(key, value).is_some() {
+                        return Err(serde::de::Error::custom("a key given twice"));
+                    }
+                }
+                Ok(Fields(fields))
+            }
+        }
+        from.deserialize_map(Once)
+    }
 }
 
 /// `$OTTOSPACE_SOCKET`, else `ottospace.sock` in the per-user temp dir.
@@ -694,11 +722,11 @@ pub fn error(message: &str) -> String {
 }
 
 /// Client side: `request` with the caller's pass (`$OTTOSPACE_TASK_PASS`) attached, if it has one
-/// and the request names none. A line that is not a JSON object goes as it is.
+/// and the request names none. A line that is not a JSON object, or gives a key twice, goes as it is.
 pub fn with_pass(request: &str, pass: Option<&str>) -> String {
     let Some(pass) = pass.filter(|pass| !pass.is_empty()) else { return request.to_string() };
-    match serde_json::from_str::<serde_json::Value>(request) {
-        Ok(serde_json::Value::Object(mut fields)) if !fields.contains_key("pass") => {
+    match serde_json::from_str(request) {
+        Ok(Fields(mut fields)) if !fields.contains_key("pass") => {
             fields.insert("pass".into(), pass.into());
             serde_json::Value::Object(fields).to_string()
         }
@@ -742,8 +770,16 @@ mod tests {
         assert!(parse(&with_pass(r#"{"cmd":"split","extra":1}"#, Some(hex))).is_err());
         assert!(parse(r#"{"cmd":"split","axis":"sideways"}"#).is_err());
         assert!(parse(&with_pass(r#"{"cmd":"nope"}"#, Some(hex))).is_err());
-        // With no pass, a key given twice is refused, as it always was.
+        // A key given twice is refused, with a pass or without, and the pass is not repeated.
         assert!(parse(r#"{"cmd":"focus","pane":1,"pane":2}"#).is_err());
+        for twice in [
+            with_pass(r#"{"cmd":"focus","pane":1,"pane":2}"#, Some(hex)),
+            format!(r#"{{"cmd":"state","cmd":"quit","pass":"{hex}"}}"#),
+            format!(r#"{{"cmd":"state","pass":"{hex}","pass":"{hex}"}}"#),
+        ] {
+            let err = parse(&twice).err().expect(&twice);
+            assert!(!err.contains(hex), "{err}");
+        }
     }
 
     #[test]

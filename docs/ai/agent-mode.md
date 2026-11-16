@@ -62,8 +62,10 @@ A small script printed the variable and tried to connect.
   before its stdout ends. Compared in constant time against every live pass. The app drops a pass
   it inherited itself (a dev build started from an agent's shell).
 - **Not hidden from the agent's own output.** An agent that runs `env` puts its pass in its
-  transcript (in the state) and its session file. Harmless while (a) grants nothing; (b) must
-  either drop the live pass from tool output before the core sees it or not rest on it alone.
+  session file and, in the terminal view, on its screen: the state's `drawer.agents.<task>.lines`,
+  which any client reads (the native transcript in the state keeps no tool output). Harmless while
+  (a) grants nothing; (b) must either drop each live pass from those lines (`secrets::token` does
+  not catch lowercase hex) or not rest on the pass alone.
 - **On the wire.** A top-level `"pass"` on any request line, taken off before `Request` is parsed
   (`control::parse`): the closed set is unchanged; a line with no pass parses from its text, as
   before. Not 32 hex digits: an error that does not repeat
