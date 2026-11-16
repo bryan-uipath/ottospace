@@ -466,8 +466,7 @@ impl Workspace {
         let banner = div()
             .id("meeting-banner")
             .absolute()
-            // Under the notice bar, if one shows.
-            .top(px(crate::TOP_BAR + self.bar.height))
+            .top(px(crate::TOP_BAR))
             .left_0()
             .right_0()
             .h(px(32.))
