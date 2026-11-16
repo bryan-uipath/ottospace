@@ -36,6 +36,28 @@ if [ -n "$FAKE_SESSIONS" ]; then
   done
 fi
 [ -f "$FAKE_FIXTURES/start.jsonl" ] && replay start.jsonl
+# `$FAKE_CTL` set: once `ask-<n>` appears (n: this start's number), it sends that request with
+# `$FAKE_OTTOSPACE ctl` as its tool shell would (`ctl-own-<n>`), with a made-up pass
+# (`ctl-wrong-<n>`) and with none (`ctl-none-<n>`). A child in a group of its own, which outlives
+# it (its group is killed when it ends), sends it again once `go-<n>` appears (`ctl-after-<n>`).
+# Needs `perl` (macOS has it) for that group.
+# Each waits 30 s at most.
+if [ -n "$FAKE_CTL" ]; then
+  n=$(wc -l <"$FAKE_DIR/starts" | tr -d ' ')
+  await() { i=0; while [ ! -e "$FAKE_DIR/$1" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done; }
+  await "ask-$n"
+  # The pass itself, for the test to look for where it must never be (a dead one by then).
+  printf '%s\n' "$OTTOSPACE_TASK_PASS" >"$FAKE_DIR/pass-$n"
+  "$FAKE_OTTOSPACE" ctl "$FAKE_CTL" >"$FAKE_DIR/ctl-own-$n"
+  OTTOSPACE_TASK_PASS=0123456789abcdef0123456789abcdef "$FAKE_OTTOSPACE" ctl "$FAKE_CTL" >"$FAKE_DIR/ctl-wrong-$n"
+  env -u OTTOSPACE_TASK_PASS "$FAKE_OTTOSPACE" ctl "$FAKE_CTL" >"$FAKE_DIR/ctl-none-$n"
+  export n
+  # `apart-<n>`: in its own group, so out of reach of the kill of this one's when it ends.
+  perl -e 'setpgrp(0, 0); exec @ARGV' sh -c ': >"$FAKE_DIR/apart-$n"
+    i=0; while [ ! -e "$FAKE_DIR/go-$n" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+    "$FAKE_OTTOSPACE" ctl "$FAKE_CTL" >"$FAKE_DIR/ctl-after-$n"' </dev/null >/dev/null 2>&1 &
+  await "apart-$n"
+fi
 if [ -n "$FAKE_EXIT" ]; then
   [ -n "$FAKE_STDERR" ] && printf '%s\n' "$FAKE_STDERR" >&2
   exit "$FAKE_EXIT"
