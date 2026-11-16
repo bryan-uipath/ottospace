@@ -68,6 +68,12 @@ pub struct SavedSpace {
     /// Its tab shown last, by place in `tabs`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab: Option<usize>,
+    /// The other tasks in a task's space, in the order they joined it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<TaskId>,
+    /// The task in front there, when not its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front: Option<TaskId>,
 }
 
 /// The right drawer. Its conversation is never started again here: it is shown, to go on with.
@@ -264,7 +270,9 @@ impl Model {
                 Owner::Workbook { id } => ("workbook", None, Some(self.workbooks.get(*id)?.uid.clone())),
                 Owner::Session { .. } => return None,
             };
-            let saved = SavedSpace { kind: kind.into(), task, workbook, hidden: space.hidden, tab: None };
+            let tasks: Vec<TaskId> = space.joined.iter().copied().filter(|id| known(Some(*id)).is_some()).collect();
+            let front = self.front(&space.of).filter(|id| tasks.contains(id));
+            let saved = SavedSpace { kind: kind.into(), task, workbook, hidden: space.hidden, tab: None, tasks, front };
             Some((space.of.clone(), space.last, saved))
         };
         let mut spaces: Vec<(Owner, Option<u32>, SavedSpace)> = self.spaces.iter().filter_map(kept).collect();
@@ -449,8 +457,15 @@ impl Model {
             space.last = None;
         }
         for (of, saved) in owners.iter().zip(&layout.spaces) {
+            let live = |id: &TaskId| self.tasks.live(*id).is_some();
+            let joined: Vec<TaskId> = saved.tasks.iter().copied().filter(live).collect();
             if let Some(space) = self.spaces.iter_mut().find(|space| space.of == *of && *of != Owner::Workspace) {
                 space.hidden = saved.hidden;
+                // A task's space only; what is unsound of it (a task twice, one with a space
+                // of its own) goes at the step's end (`settle_joined`).
+                if of.task().is_some() {
+                    (space.joined, space.front) = (joined, saved.front);
+                }
             }
             let id = saved.tab.and_then(|at| built.get(at)).map(|(id, _)| *id);
             let id = id.filter(|id| self.tabs.iter().any(|tab| tab.id == *id && tab.space == *of));
@@ -473,7 +488,7 @@ impl Model {
         self.restore_dials(dials);
         // The selected space's conversation, shown to go on with: never started here.
         self.drawer_open = layout.drawer.open;
-        if let Some(subject) = self.space().subject() {
+        if let Some(subject) = self.space_subject(self.space()) {
             self.talk = Some(Talk { task: subject.clone(), open: layout.drawer.open, keys: false });
             // Once: the user may have opened it already this run.
             self.opened.retain(|opened| *opened != subject);

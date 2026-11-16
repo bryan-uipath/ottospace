@@ -117,8 +117,8 @@ pub struct Running {
 /// Why a socket client's request is refused under the quit question.
 pub const CONFIRM_UP: &str = "the quit question is up";
 /// What the new-task box says when ↵ would make the selected workspace the task's.
-pub const BINDS: &str = "↵ makes this workspace the task's";
-const BINDS_TOO: &str = ", and makes this workspace the task's";
+pub const BINDS: &str = "↵ starts it in this workspace";
+const BINDS_TOO: &str = ", in this workspace";
 /// Why a client may not link a tab to a task, or unlink it.
 pub const TABS_USERS: &str = "only the user says which space a tab is of";
 /// Why a client's Open Settings is refused.
@@ -1379,6 +1379,14 @@ pub enum Action {
     },
     /// Close the chat, or open it again on the same conversation.
     TalkToggle,
+    /// Put a task of the selected workspace in front: its tab of the drawer's strip. The user's alone.
+    TalkFront {
+        task: TaskId,
+    },
+    /// The next (positive) or previous conversation of the selected workspace. The user's alone.
+    TalkCycle {
+        delta: i32,
+    },
     /// The keyboard goes into the conversation, or back to the workspace.
     TalkKeys {
         on: bool,
@@ -1512,6 +1520,8 @@ impl Action {
                 | Action::SpaceSelect { .. }
                 | Action::SpaceClick { .. }
                 | Action::SpaceCycle { .. }
+                | Action::TalkFront { .. }
+                | Action::TalkCycle { .. }
                 | Action::SpaceHide { .. }
                 | Action::SpaceOpen { .. }
                 | Action::TabPlace { .. }
@@ -1649,6 +1659,8 @@ impl Action {
             | Action::SpaceSelect { .. }
             | Action::SpaceClick { .. }
             | Action::SpaceCycle { .. }
+            | Action::TalkFront { .. }
+            | Action::TalkCycle { .. }
             | Action::SpaceHide { .. }
             | Action::SpaceOpen { .. }
             | Action::TabPlace { .. }
@@ -1854,6 +1866,8 @@ impl Action {
             | Action::SpaceSelect { .. }
             | Action::SpaceClick { .. }
             | Action::SpaceCycle { .. }
+            | Action::TalkFront { .. }
+            | Action::TalkCycle { .. }
             | Action::SpaceHide { .. }
             | Action::SpaceOpen { .. }
             | Action::TabPlace { .. }
@@ -2398,6 +2412,13 @@ pub struct Model {
     /// The tabs a dismissed task had, linked again if the dismissal is taken back.
     #[serde(skip)]
     unlinked: Vec<(TaskId, Vec<u32>, Owner)>,
+    /// The space a dismissed task had joined (or its own, since another's): joined again if the
+    /// user takes the dismissal back.
+    #[serde(skip)]
+    left: Vec<(TaskId, Owner)>,
+    /// Each joined task and its space, as the last step left them.
+    #[serde(skip)]
+    joined_before: Vec<(TaskId, Owner)>,
     /// Rail section shown in the secondary bar. `None`: the bar is closed.
     pub sidebar: Option<Section>,
     /// The text in the new-task box, while it is open.
@@ -2730,9 +2751,11 @@ impl Default for Model {
             ending: Vec::new(),
             by_user: false,
             next_id: 0,
-            spaces: vec![Space { of: Owner::Workspace, hidden: false, last: None }],
+            spaces: vec![Space::new(Owner::Workspace)],
             drawer_open: false,
             unlinked: Vec::new(),
+            left: Vec::new(),
+            joined_before: Vec::new(),
             next_tab: 0,
             layout_seen: None,
             layout_kept: true,
@@ -2945,6 +2968,8 @@ impl Model {
             }
             // Which space a tab is of is the user's to say.
             Action::TabPlace { .. } => Some(TABS_USERS),
+            // So is which of a workspace's conversations is in front.
+            Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
             // A client changes no space under the user's keys in the chat, nor takes them.
             action if self.space_refusal(action, origin).is_some() => self.space_refusal(action, origin),
             action
@@ -3145,6 +3170,8 @@ impl Model {
             | Action::SpaceSelect { .. }
             | Action::SpaceClick { .. }
             | Action::SpaceCycle { .. }
+            | Action::TalkFront { .. }
+            | Action::TalkCycle { .. }
             | Action::SpaceHide { .. }
             | Action::SpaceOpen { .. }
             | Action::WorkbookNew { .. }
@@ -3183,6 +3210,7 @@ impl Model {
         }
         let (origin, line) = (sent.origin, self.compose_line().cloned());
         let states: Vec<(TaskId, State)> = self.tasks.list.iter().map(|task| (task.id, task.state)).collect();
+        let front_was = self.tab_task();
         let listed = self.sidebar.zip(self.list);
         let undo = matches!(sent.action, Action::TaskUndo | Action::ListUndo);
         // Where the keyboard was before the step: a tab change moves it out of the drawer.
@@ -3220,7 +3248,9 @@ impl Model {
         self.tasks.finished(&states, self.now);
         self.repo_unhold();
         // Only the user's own undo links a dismissed task's tabs again.
-        self.settle_tasks(undo && origin == Origin::User);
+        let was_done = |id: &TaskId| states.iter().any(|(task, state)| task == id && *state == State::Done);
+        let finished = front_was.filter(|id| origin == Origin::User && !was_done(id));
+        self.settle_tasks(undo && origin == Origin::User, finished);
         self.settle_spaces();
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
@@ -3410,6 +3440,8 @@ impl Model {
                 | Action::SpaceSelect { .. }
                 | Action::SpaceClick { .. }
                 | Action::SpaceCycle { .. }
+                | Action::TalkFront { .. }
+                | Action::TalkCycle { .. }
                 | Action::SpaceHide { .. }
                 | Action::SpaceOpen { .. }
                 | Action::CycleTab { .. }
@@ -3649,7 +3681,11 @@ impl Model {
             Action::TaskGo { id } => {
                 let task = id.map_or_else(|| self.tasks.next(), |id| self.tasks.get(id)).map(|task| task.id);
                 if let Some(id) = task {
-                    self.open_space(Owner::Task { id }, effects);
+                    self.open_space(self.task_space(id), effects);
+                    // Only the user says which conversation is in front there.
+                    if self.by_user {
+                        self.set_front(id);
+                    }
                 }
                 // What was captured for it comes up with it.
                 if let Some(id) = task.filter(|id| self.tab_task() == Some(*id)) {
@@ -3663,7 +3699,12 @@ impl Model {
                 }
             }
             Action::RepoClick { path, axis } => match self.repo_task(&path) {
-                Some(id) => self.open_space(Owner::Task { id }, effects),
+                Some(id) => {
+                    self.open_space(self.task_space(id), effects);
+                    if self.by_user {
+                        self.set_front(id);
+                    }
+                }
                 None => self.act(Action::OpenRepo { path, axis }, effects),
             },
             Action::OpenRepo { path, axis } => {
@@ -4285,7 +4326,9 @@ impl Model {
                 self.leave(effects);
                 // Workspace, the live tasks in their order, then the workbooks.
                 let tasks = matches!(action, Action::PaletteTasks).then(|| {
-                    let live = self.tasks.list.iter().filter(|task| !task.dismissed);
+                    // A task in another's workspace has no space of its own to move a tab to.
+                    let own = |task: &&Task| !task.dismissed && self.task_space(task.id).task() == Some(task.id);
+                    let live = self.tasks.list.iter().filter(own);
                     let live = live.map(|task| Owner::Task { id: task.id });
                     let books = self.workbooks.list.iter().map(|book| Owner::Workbook { id: book.id });
                     let all = std::iter::once(Owner::Workspace).chain(live).chain(books);
@@ -4929,6 +4972,12 @@ impl Model {
                     effects.push(Effect::StopAgent { task: id });
                 }
             }
+            Action::TalkFront { task } => {
+                if self.task_space(task) == *self.space() && self.members(self.space()).contains(&task) {
+                    self.set_front(task);
+                }
+            }
+            Action::TalkCycle { delta } => self.cycle_front(delta),
             Action::TalkToggle => {
                 if let Some(open) = self.talk.as_ref().map(|talk| !talk.open) {
                     self.talk_keys(open, effects);
@@ -5237,7 +5286,10 @@ impl Model {
         if self.compose_host() == Some(Host::Drawer) {
             self.put_compose_aside();
         }
-        self.open_space(Owner::of(&subject), effects);
+        self.open_space(self.subject_space(&subject), effects);
+        if let Subject::Task(id) = &subject {
+            self.set_front(*id);
+        }
         let keys = self.talk_live(&subject) || start.is_some();
         self.talk = Some(Talk { task: subject.clone(), open: true, keys });
         self.opened.retain(|seen| *seen != subject);
@@ -5594,6 +5646,12 @@ impl Model {
             return Some(Plan { agent, starts, dir: Some(folder.to_string()), branch: None });
         }
         let path = draft.repo.as_deref().and_then(|name| self.repo_named(name));
+        // None on the line: the folder of the workspace it would join.
+        let (repo, folder) = if path.is_none() { self.shared_place() } else { (None, None) };
+        if let Some(folder) = folder {
+            return Some(Plan { agent, starts, dir: Some(folder), branch: None });
+        }
+        let path = path.or(repo);
         let checkouts = self.repos.iter().flat_map(|repo| {
             let worktrees = repo.worktrees.iter().map(|w| (&w.path, &w.name, &w.branch));
             std::iter::once((&repo.path, &repo.name, &repo.branch)).chain(worktrees)
@@ -5966,7 +6024,8 @@ impl Model {
     /// undo of the dismissal takes back those of its tabs still open there; a task back by other
     /// means, such as a state report, gets none); a dismissed task's conversation leaves the
     /// rail and the drawer.
-    fn settle_tasks(&mut self, undone: bool) {
+    fn settle_tasks(&mut self, undone: bool, finished: Option<TaskId>) {
+        self.settle_joined(undone, finished);
         let tasks = &self.tasks;
         let gone = |id: &TaskId| tasks.live(*id).is_none();
         // A workspace its task was bound to takes its tabs back, in place on the row: unbound.
@@ -6036,7 +6095,7 @@ impl Model {
         // and a new task has no tab to go to.
         if open && self.by_user {
             if self.agent_start(&Subject::Task(id)).is_some() {
-                self.bind_space(id);
+                self.join_space(id);
             }
             self.talk_to(Subject::Task(id), true, effects);
         } else if open {
@@ -6049,31 +6108,59 @@ impl Model {
         self.tabs.iter().zip(self.tab_panes()).any(|(tab, panes)| tab.space == *of && !panes.is_empty())
     }
 
-    /// The workspace a task started now by the user's ↵ would take for its own: the selected
-    /// space's, if it is a kept workspace of no task.
-    pub fn binds(&self) -> Option<WorkbookId> {
-        let Owner::Workbook { id } = self.space() else { return None };
-        self.workbooks.get(*id).filter(|book| book.task.is_none()).map(|book| book.id)
+    /// The workspace a task started now by the user's ↵ would be in: the selected space, if it
+    /// is a kept workspace or a task's. Not the first "Workspace", nor a session's.
+    pub fn joins(&self) -> Option<Owner> {
+        let of = self.space();
+        let kept = |id: &WorkbookId| self.workbooks.get(*id).is_some_and(|book| book.task.is_none());
+        match of {
+            Owner::Workbook { id } if kept(id) => Some(of.clone()),
+            Owner::Task { .. } => Some(of.clone()),
+            _ => None,
+        }
     }
 
-    /// Whether ↵ in the new-task box would take a workspace that holds something: the box says so.
+    /// Whether ↵ in the new-task box would start the task in a workspace that holds something
+    /// (a pane, a task): the box says so.
     pub fn compose_binds(&self) -> bool {
         let starts = self.compose_plan().is_some_and(|plan| plan.starts);
-        starts && self.binds().is_some_and(|id| self.space_holds(&Owner::Workbook { id }))
+        starts && self.joins().is_some_and(|of| self.space_holds(&of) || !self.members(&of).is_empty())
     }
 
-    /// A task started in a workspace of no task takes it: the workspace is the task's space, in
-    /// place on the row, with all its tabs. No pane moves and nothing closes. It stays listed,
-    /// bound to the task (`Workbook::task`).
-    fn bind_space(&mut self, id: TaskId) {
-        let Some(book) = self.binds() else { return };
-        let (from, to) = (Owner::Workbook { id: book }, Owner::Task { id });
-        for tab in self.tabs.iter_mut().filter(|tab| tab.space == from) {
-            tab.space = to.clone();
+    /// The repository and folder a task started now with none of its own would share: those of
+    /// the task in front in the workspace it joins.
+    fn shared_place(&self) -> (Option<String>, Option<String>) {
+        let front = self.joins().and_then(|of| self.front(&of)).and_then(|id| self.tasks.get(id));
+        front.map_or((None, None), |task| (task.repo.clone(), task.folder.clone()))
+    }
+
+    /// A task started in a workspace is in it: no space is made, no pane moves, nothing closes,
+    /// and its conversation is in front. A kept workspace of no task becomes the task's space,
+    /// in place, and stays listed, bound to it (`Workbook::task`); a workspace that has tasks
+    /// takes one more, which works in the same folder unless its line said another.
+    fn join_space(&mut self, id: TaskId) {
+        match self.joins() {
+            Some(Owner::Workbook { id: book }) => {
+                let (from, to) = (Owner::Workbook { id: book }, Owner::Task { id });
+                for tab in self.tabs.iter_mut().filter(|tab| tab.space == from) {
+                    tab.space = to.clone();
+                }
+                self.workbooks.bind(book, Some(id));
+                Self::rename_space(&mut self.spaces, &from, to);
+                self.regroup();
+            }
+            Some(of) => {
+                let (repo, folder) = self.shared_place();
+                if let Some(task) = self.tasks.list.iter_mut().find(|task| task.id == id && task.dir().is_none()) {
+                    (task.repo, task.folder) = (repo, folder);
+                }
+                if let Some(space) = self.spaces.iter_mut().find(|space| space.of == of) {
+                    space.joined.push(id);
+                    space.front = Some(id);
+                }
+            }
+            None => {}
         }
-        self.workbooks.bind(book, Some(id));
-        Self::rename_space(&mut self.spaces, &from, to);
-        self.regroup();
     }
 
     /// A space on the row is another's from now on, in its place: its tabs were given over.
@@ -6083,6 +6170,82 @@ impl Model {
         }
         if let Some(space) = spaces.iter_mut().find(|space| space.of == *from) {
             space.of = to;
+        }
+    }
+
+    /// After every step, before a gone task's tabs are given back: each joined task is live,
+    /// in one space and has none of its own; a space whose own task is gone is the most urgent
+    /// remaining one's, in place, with its tabs; the front task is one of the space's. `undone`:
+    /// a task back by the user's undo joins again the space it left. `finished`: the front task
+    /// the user's step marked done gives way to the most urgent one not done.
+    fn settle_joined(&mut self, undone: bool, finished: Option<TaskId>) {
+        let live = |m: &Model, id: TaskId| m.tasks.live(id).is_some();
+        let owns = |m: &Model, id: TaskId| m.tabs.iter().any(|tab| tab.space == Owner::Task { id });
+        let mut seen: Vec<TaskId> = Vec::new();
+        for at in 0..self.spaces.len() {
+            let Owner::Task { id: own } = self.spaces[at].of.clone() else {
+                self.spaces[at].joined.clear();
+                continue;
+            };
+            let mut joined = std::mem::take(&mut self.spaces[at].joined);
+            joined.retain(|id| *id != own && live(self, *id) && !owns(self, *id) && !seen.contains(id));
+            joined.dedup();
+            seen.extend(&joined);
+            self.spaces[at].joined = joined;
+            if live(self, own) || self.spaces[at].joined.is_empty() {
+                continue;
+            }
+            // Its own task is gone and others remain: the space is the most urgent one's.
+            let front = self.spaces[at].front.filter(|id| self.spaces[at].joined.contains(id));
+            let heir = front.or(self.spaces[at].joined.iter().copied().min_by_key(|id| self.urgency(*id)));
+            let Some(heir) = heir else { continue };
+            let (from, to) = (Owner::Task { id: own }, Owner::Task { id: heir });
+            self.spaces.retain(|space| space.of != to);
+            let Some(space) = self.spaces.iter_mut().find(|space| space.of == from) else { continue };
+            space.of = to.clone();
+            space.joined.retain(|id| *id != heir);
+            for tab in self.tabs.iter_mut().filter(|tab| tab.space == from) {
+                tab.space = to.clone();
+            }
+            if let Some(book) = self.workbooks.bound_to(own) {
+                self.workbooks.bind(book, Some(heir));
+            }
+            self.left.iter_mut().filter(|(_, of)| *of == from).for_each(|(_, of)| *of = to.clone());
+            if self.tasks.get(own).is_some() {
+                self.left.push((own, to));
+            }
+            return self.settle_joined(undone, finished);
+        }
+        // A joined task dismissed is remembered with its space, for the user's undo.
+        let gone: Vec<(TaskId, Owner)> = self.joined_before.iter().filter(|(id, _)| !live(self, *id)).cloned().collect();
+        for (id, of) in gone {
+            if self.tasks.get(id).is_some() && !self.left.iter().any(|(left, _)| *left == id) {
+                self.left.push((id, of));
+            }
+        }
+        self.left.retain(|(id, of)| self.tasks.get(*id).is_some() && self.spaces.iter().any(|space| space.of == *of));
+        let tasks = &self.tasks;
+        let back: Vec<(TaskId, Owner)> = self.left.extract_if(.., |(id, _)| tasks.live(*id).is_some()).collect();
+        let back: Vec<(TaskId, Owner)> = back.into_iter().filter(|(id, _)| undone && !owns(self, *id)).collect();
+        for (id, of) in back {
+            let Some(space) = self.spaces.iter_mut().find(|space| space.of == of) else { continue };
+            if space.of != (Owner::Task { id }) && !space.joined.contains(&id) && !seen.contains(&id) {
+                space.joined.push(id);
+            }
+        }
+        self.joined_before = self.spaces.iter().flat_map(|s| s.joined.iter().map(|id| (*id, s.of.clone()))).collect();
+        // The front task is one of the space's.
+        for at in 0..self.spaces.len() {
+            let members = self.members(&self.spaces[at].of.clone());
+            self.spaces[at].front = self.spaces[at].front.filter(|id| members.contains(id));
+        }
+        let done = |m: &Model, id: TaskId| m.tasks.get(id).is_some_and(|task| task.state == State::Done);
+        if let Some(was) = finished.filter(|id| done(self, *id)) {
+            let of = self.task_space(was);
+            let rest = self.members(&of).into_iter().filter(|id| !done(self, *id));
+            if let Some(next) = rest.min_by_key(|id| self.urgency(*id)).filter(|_| self.front(&of) == Some(was)) {
+                self.set_front(next);
+            }
         }
     }
 
@@ -6580,9 +6743,9 @@ impl Model {
         end.or_else(later).unwrap_or(self.tabs.len())
     }
 
-    /// The task of the selected space, if it is a task's.
+    /// The task in front in the selected space, if it has one.
     pub fn tab_task(&self) -> Option<TaskId> {
-        self.space().task()
+        self.front(self.space())
     }
 
     /// Moves a tab into a space, or before a tab, taking that one's space. The tab on show stays
@@ -6595,7 +6758,10 @@ impl Model {
             // A task that is gone or dismissed takes no tab, nor a workbook not kept, nor a session
             // that has no space.
             TabAt::End(Owner::Session { .. }) if !self.spaces.iter().any(|s| TabAt::End(s.of.clone()) == at) => return,
-            TabAt::End(of) if self.owner_valid(of) => self.workbooks.space_of(of),
+            TabAt::End(of) if self.owner_valid(of) => match self.workbooks.space_of(of) {
+                Owner::Task { id } => self.task_space(id),
+                of => of,
+            },
             TabAt::End(_) => return,
             TabAt::Before(id) => match self.tabs.iter().find(|t| t.id == *id) {
                 Some(target) if target.id != self.tabs[from].id => target.space.clone(),
@@ -7497,6 +7663,8 @@ mod tests {
         Action::SpaceSelect { .. },
         Action::SpaceClick { .. },
         Action::SpaceCycle { .. },
+        Action::TalkFront { .. },
+        Action::TalkCycle { .. },
         Action::SpaceHide { .. },
         Action::SpaceOpen { .. },
         Action::SelectVisibleTab { .. },
@@ -7873,6 +8041,8 @@ mod tests {
             Action::SessionRead { runner: "claude".into(), id: String::new(), found: None },
             Action::TaskStop { id: Subject::Task(1) },
             Action::TalkToggle,
+            Action::TalkFront { task: 1 },
+            Action::TalkCycle { delta: 1 },
             Action::TalkKeys { on: true },
             Action::TalkResize { width: 400. },
             Action::TalkWide,
@@ -8086,6 +8256,7 @@ mod tests {
                     | Action::TalkStart
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
+                    Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::DialToggle => Some(chat::DIAL_USERS),
@@ -8876,7 +9047,7 @@ mod tests {
         term(&mut m);
         let before = (pane_tabs(&m), m.layout.clone(), m.focused, m.panes.clone());
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
-        assert_eq!((m.binds(), m.compose_plan_line().as_deref()), (None, Some("↵ will start claude in app")));
+        assert_eq!((m.joins(), m.compose_plan_line().as_deref()), (None, Some("↵ will start claude in app")));
         let effects = m.update(Action::ComposeEnter);
         assert!(matches!(effects[..], [Effect::StartAgent { .. }]), "{effects:?}");
         assert_eq!((m.tab_task(), m.mode(), m.tabs.len()), (Some(1), Mode::Talk, 2));
@@ -8888,13 +9059,12 @@ mod tests {
         m.update(Action::OpenCompose { text: "later".into() });
         m.update(Action::ComposeSubmit { open: false });
         assert_eq!((m.tab_task(), m.spaces().len()), (None, 2));
-        // Started from a task's space: a space of its own at the row's end.
+        // Started from a task's space: in it, in front; no space is made.
         m.update(Action::SpaceSelect { index: 1 });
         m.update(Action::OpenCompose { text: "third".into() });
-        assert!(!m.compose_binds());
+        assert!(m.compose_binds());
         m.update(Action::ComposeEnter);
-        assert_eq!((m.tab_task(), m.space_tabs(&task_space(1)).len(), m.layout.is_none()), (Some(3), 1, true));
-        assert_eq!(m.spaces().iter().map(|space| space.of.clone()).collect::<Vec<_>>()[2], task_space(3));
+        assert_eq!((m.tab_task(), m.members(&task_space(1)), m.spaces().len()), (Some(3), vec![1, 3], 2));
     }
 
     #[test]
@@ -8925,11 +9095,14 @@ mod tests {
         // A tab moved to the workspace goes to the task's space: it has no other.
         m.update(Action::TabPlace { tab: Some(1), at: TabAt::End(book.clone()) });
         assert_eq!((m.space_tabs(&task_space(1)).len(), m.spaces().iter().any(|space| space.of == book)), (3, false));
-        // A task started from it gets a space of its own: the workspace has its task.
+        // A task started from it is in it too, in front: no space is made. It goes again.
         m.update(Action::OpenCompose { text: "another".into() });
-        assert!(!m.compose_binds());
+        assert!(m.compose_binds());
         m.update(Action::ComposeEnter);
-        assert_eq!((m.tab_task(), m.spaces().len(), m.workbooks.bound_to(2)), (Some(2), 3, None));
+        assert_eq!((m.tab_task(), m.spaces().len(), m.members(&task_space(1))), (Some(2), 2, vec![1, 2]));
+        m.update(Action::AgentExited { task: Subject::Task(2) }.sent_by(Origin::System));
+        m.update(Action::RowDismiss { id: 2 });
+        assert_eq!((m.tab_task(), m.members(&task_space(1))), (Some(1), vec![1]));
         // The task dismissed: the workspace is unbound, where it was, with its tabs.
         m.update(Action::AgentExited { task: Subject::Task(1) }.sent_by(Origin::System));
         m.update(Action::RowDismiss { id: 1 });
@@ -8962,7 +9135,7 @@ mod tests {
         m.update(Action::WorkbookNew { uid: "9f3a61c2d4e5b708".into() });
         term(&mut m);
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
-        let said = "↵ will start claude in app, and makes this workspace the task's";
+        let said = "↵ will start claude in app, in this workspace";
         assert_eq!(m.compose_plan_line().as_deref(), Some(said));
         let effects = m.update(Action::ComposeEnter);
         let cwd = effects.iter().find_map(|effect| match effect {
@@ -9003,7 +9176,7 @@ mod tests {
         assert_eq!(m.workbooks.list[0].task, None);
         // The user's ↵: bound, with nothing said, since it takes nothing.
         m.update(Action::OpenCompose { text: "mine".into() });
-        assert_eq!((m.binds(), m.compose_binds()), (Some(1), false));
+        assert_eq!((m.joins(), m.compose_binds()), (Some(Owner::Workbook { id: 1 }), false));
         m.update(Action::ComposeEnter);
         let task = m.tasks.list.last().map(|task| task.id);
         assert_eq!((m.workbooks.list[0].task, m.tab_task(), m.spaces().len()), (task, task, 2));
@@ -12938,6 +13111,7 @@ mod tests {
                     | Action::TalkStart
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
+                    Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::DialToggle => Some(chat::DIAL_USERS),
