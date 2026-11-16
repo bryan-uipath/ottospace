@@ -859,7 +859,7 @@ the way.
   and `Today` on another day, from 7 days back to 7 on; its date's tooltip says when the feed was
   read. The section goes back to today when the day turns and at start; the band, the alerts and
   now's tick are always of today. The rail cell shows a steady amber dot while a meeting is 2
-  minutes off or runs, and a filled amber badge while its notice is up. In list mode (⌘⌃E)
+  minutes off or runs, and a filled amber badge while its notice stands (also under an error that covers it). In list mode (⌘⌃E)
   `j`/`k` move, ↵ joins, ← and → go a day back and on, `t` back to today; the View menu and the
   palette have the same (`Previous Day in Calendar`, `Next Day in Calendar`, `Today in
   Calendar`). The open Calendar is not kept in the restored layout: a build without the section
@@ -999,7 +999,7 @@ once under the system's Reduce Motion. A live app window in a bottom pane stops 
 - **One at a time**: the most pressing, and of those the newest. An error is not replaced by
   information; when it goes, what it covered shows.
 - **One line**: text too long is cut with an ellipsis, and the hover shows all of it. A settings
-  problem offers **Open settings**.
+  problem offers **Open settings**; a meeting with a link, **Join**.
 - **Dismiss**: × on the bar, or Esc when no mode and no terminal takes it. Only you dismiss a
   notice: a socket client cannot, and its failure never takes the place of what your own step
   said. A dismissed settings line comes back when it says something else.

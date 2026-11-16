@@ -7764,6 +7764,10 @@ fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
     // A client's click on Join opens nothing; on Dismiss, its Esc or its sneak labels, it
     // dismisses nothing.
     otto.click(centre(&banner["join"]), 1);
+    // A client's request that did nothing reads why: the meeting on the user's bar does not cover it.
+    let failed = otto.raw(r#"{"cmd":"open_app","name":"Finder"}"#);
+    let theirs = otto.drawn();
+    assert_eq!((&theirs["notice"], &theirs["notice_bar"]["kind"]), (&failed["error"], &json!("meeting")), "{failed}");
     otto.click(centre(&banner["dismiss"]), 1);
     otto.call(json!({"cmd": "key", "keys": "escape"}));
     sneak_to(&otto, "notice:offer");

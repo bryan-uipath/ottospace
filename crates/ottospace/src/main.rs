@@ -2909,7 +2909,8 @@ impl Workspace {
             // What the last step said (a client's refusal is here alone, never on the user's bar),
             // else what the notice bar says, or null. Not `error`: that key means the request failed.
             "notice": status.as_ref().map(Notice::public_text),
-            // Its level: `info` (a restart to ask for), `warning` (a move that did nothing) or `error`.
+            // Its level: `info` (a restart to ask for), `warning` (a move that did nothing),
+            // `meeting` (a meeting started: `notice` is "Meeting started") or `error`.
             "notice_level": status.as_ref().map(Notice::level),
             // The bar as drawn: its rect, and its height while it opens or closes. Null: no bar.
             "notice_bar": self.notice_snapshot(),
