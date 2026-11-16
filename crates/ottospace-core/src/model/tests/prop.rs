@@ -2777,10 +2777,13 @@ impl Run {
             ensure!(kept, "a mark's wait: {mark_input:?} before, {:?} after", m.mark_input);
         }
 
-        // An edit goes to the field that has the keyboard, or nowhere.
+        // An edit goes to the field that has the keyboard, or nowhere. With none it is a move
+        // of the user's like any other: an open field may close (the inspector's filter under
+        // the key reference), but nothing is typed in it.
         if matches!(action, Action::FieldEdit { .. }) && !field.0 {
             let now = m.open_field().map(|(_, field)| field.text().to_string());
-            ensure!(now == field.1, "an edit changed a field with no keyboard: {:?} to {now:?}", field.1);
+            let same = now.is_none() || now == field.1;
+            ensure!(same, "an edit changed a field with no keyboard: {:?} to {now:?}", field.1);
         }
         // The picker's rows change under the selection: it stays on its item while that is a row.
         if let (Action::SetInstalled { .. }, Some(chosen), Some(picker)) = (&action, &chosen, &m.picker) {
@@ -4865,6 +4868,30 @@ fn seed_2831_plus_takes_no_file_name_an_undo_may_bring_back() {
         Action::WorkbookRemove { workbook: 1, tab: None }.sent_by(Origin::User),
         Action::WorkbookNew { uid: uid() }.sent_by(Origin::User),
         Action::WorkbookUndo.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
+/// Seed 39158: the rule was wrong, not the model. A client's ⌘/ over the inspector's filter
+/// takes the keyboard; the user's edit then reaches no field and, as any move of theirs, ends
+/// the filter. The rule read the closed field as a changed one.
+#[test]
+fn an_edit_with_no_field_ends_the_inspectors_filter_and_types_nothing() {
+    let app = |window, title: &str, axis, beside| Action::Open {
+        kind: Kind::App { window, title: title.into(), bundle: None, name: "app".into() },
+        axis,
+        beside,
+    };
+    replay(&[
+        app(1, "w1", Axis::Right, None).into(),
+        split(Axis::Right, Kind::Terminal),
+        app(2, "w2", Axis::Down, Some(1)).into(),
+        app(3, "w3", Axis::Right, None).into(),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        Action::InspectorOpen { pane: 5, app: "Fixture".into() }.into(),
+        Action::InspectorFilter { on: true }.into(),
+        by(Origin::Socket, Action::ToggleKeys),
+        Action::FieldEdit { edit: Edit::Unmark }.into(),
     ])
     .unwrap();
 }
