@@ -1,4 +1,4 @@
-//! Draws the lattice: the home screen (the empty workspace) and the patch in an empty pane.
+//! Draws the lattice: the home screen, an empty tab's floor and the patch in an empty pane.
 //! Where tasks sit is the core's choice (`ottospace_core::home`); this file only draws.
 
 use std::cell::RefCell;
@@ -7,18 +7,21 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Bounds, Context, Div, EntityId, FontWeight, Hsla, Modifiers, Path, PathBuilder, Pixels, Point,
-    SharedString, Window, canvas, div, point, prelude::*, px, relative, rgb,
+    SharedString, Window, canvas, div, point, prelude::*, px, relative, rgb, svg,
 };
 use ottospace_core::home::{HOME, Home, NEAR, View};
+use ottospace_core::model::HOME as HOME_NAME;
 use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::{PaneId, Rect, theme};
 
-use crate::{Workspace, open_task, rect, task_tags_cell, task_title_cells};
+use crate::{HOME_ICON, Workspace, open_task, rect, task_tags_cell, task_title_cells};
 
 /// The patch of lattice in an empty pane: a nearer, smaller view of the same floor.
 const PATCH: View = View { cx: 0.5, horizon: 0.05, fx: 0.58, fy: 0.91, sin: 0.5, cos: 0.866, dist: 3.9, lo: -3, hi: 4 };
 /// Where the new-task box starts, as a part of the height.
 const BOX_TOP: f32 = 0.18;
+/// The room kept under an empty tab's key caps, so they sit above the floor.
+const FLOOR_ROOM: f32 = 160.;
 /// Lines are cut into pieces about this long, in points, so each can fade by itself.
 const PIECE: f32 = 24.;
 /// Half the side of a node's click target, and the room kept between a node and the text.
@@ -37,7 +40,11 @@ type Lines = Rc<Vec<(Path<Pixels>, Hsla)>>;
 pub struct Drawn {
     /// The home screen's area, the new-task box with its list, and the legend (empty: none).
     area: Bounds<Pixels>,
+    /// The heading drawn over the key caps: Home's name, none in an empty tab.
+    heading: Option<&'static str>,
     panel: Bounds<Pixels>,
+    /// An empty tab's key caps: apart from Home's, whose nodes keep clear of its own text.
+    bare: Bounds<Pixels>,
     legend: Bounds<Pixels>,
     /// Each node's click target.
     nodes: Vec<(TaskId, Bounds<Pixels>)>,
@@ -72,7 +79,7 @@ impl Drawn {
     pub fn snapshot(&self) -> serde_json::Value {
         let nodes: BTreeMap<TaskId, [f32; 4]> = self.nodes.iter().map(|(id, b)| (*id, rect(*b))).collect();
         serde_json::json!({
-            "area": rect(self.area), "panel": rect(self.panel), "nodes": nodes,
+            "area": rect(self.area), "panel": rect(self.panel), "nodes": nodes, "heading": self.heading,
             "lattice_builds": self.builds, "lattice_paints": self.paints,
         })
     }
@@ -273,11 +280,14 @@ pub fn empty_pane(hint: SharedString, pane: PaneId, drawn: &Shared) -> impl Into
 }
 
 impl Workspace {
-    /// The home screen: the lattice with a node for each listed task, what the workspace is
-    /// for with the tasks that need the user under it, and a legend. `held`: the modifiers down now.
-    pub(crate) fn render_home(&self, home: Home<'_>, held: Modifiers, cx: &mut Context<Self>) -> AnyElement {
+    /// The home screen: the lattice with a node for each listed task, its heading and key caps
+    /// with the tasks that need the user under them, and a legend. `None`: an empty tab of a
+    /// workspace, the lattice and the key caps only. `held`: the modifiers down now.
+    pub(crate) fn render_home(&self, home: Option<Home<'_>>, held: Modifiers, cx: &mut Context<Self>) -> AnyElement {
+        let on_home = home.is_some();
+        let home = home.unwrap_or_default();
         let (counts, view, drawn) = (home.counts, cx.entity_id(), &self.home);
-        let any = counts.total() > 0;
+        let any = on_home && counts.total() > 0;
         let muted = || div().text_xs().text_color(rgb(theme::MUTED));
         drawn.borrow_mut().nodes.clear();
 
@@ -330,7 +340,12 @@ impl Workspace {
             })
             .collect();
 
-        // What the workspace is for, and the two ways to fill it. New tasks are the drawer's.
+        // Home's house and name over the key caps; an empty tab's caps alone.
+        let heading = on_home.then(|| {
+            let house = svg().path(HOME_ICON).size(px(18.)).flex_none().text_color(rgb(theme::MUTED));
+            div().flex().items_center().gap_2().text_base().child(house).child(HOME_NAME)
+        });
+        drawn.borrow_mut().heading = heading.as_ref().map(|_| HOME_NAME);
         let line = div()
             .id("home-workspace")
             .occlude()
@@ -338,8 +353,7 @@ impl Workspace {
             .flex_col()
             .items_center()
             .gap_2()
-            .child(div().text_xs().text_color(rgb(theme::MUTED)).child("WORKSPACE"))
-            .child(div().text_base().child("Your windows, apps and terminals go here"))
+            .children(heading)
             .child(div().pt_2().child(self.fill_list(held, cx)));
 
         let rows: Vec<_> = (home.needs_you.iter().enumerate())
@@ -395,14 +409,21 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_3()
-            .child(measure(drawn, view, |drawn, bounds| std::mem::replace(&mut drawn.panel, bounds) != bounds))
+            .child(measure(drawn, view, move |drawn, bounds| {
+                let panel = if on_home { &mut drawn.panel } else { &mut drawn.bare };
+                std::mem::replace(panel, bounds) != bounds
+            }))
             .child(line)
             .children(needs_you)
             .child(under);
-        let panel =
-            div().absolute().top(relative(BOX_TOP)).left_0().w_full().px_4().flex().justify_center().child(text);
+        // Home's text near the top; an empty tab's caps just above the middle, the floor under them.
+        let panel = match on_home {
+            true => div().absolute().top(relative(BOX_TOP)).left_0().w_full(),
+            false => div().absolute().inset_0().pb(px(FLOOR_ROOM)).items_center(),
+        };
+        let panel = panel.px_4().flex().justify_center().child(text);
 
-        if !any {
+        if on_home && !any {
             drawn.borrow_mut().legend = Bounds::default();
         }
         let legend = any.then(|| {
@@ -435,13 +456,17 @@ impl Workspace {
             {
                 let drawn = drawn.clone();
                 move |bounds, _: &mut Window, cx: &mut App| {
-                    if std::mem::replace(&mut drawn.borrow_mut().area, bounds) != bounds {
+                    // Home's area only: Home's nodes keep clear of its text as parts of it.
+                    if on_home && std::mem::replace(&mut drawn.borrow_mut().area, bounds) != bounds {
                         cx.defer(move |cx| cx.notify(view));
                     }
                 }
             },
             move |bounds, _, window, _| {
-                let (panel, legend) = (shared.borrow().panel, shared.borrow().legend);
+                let drawn = shared.borrow();
+                let (panel, legend) =
+                    if on_home { (drawn.panel, drawn.legend) } else { (drawn.bare, Bounds::default()) };
+                drop(drawn);
                 // The lines go quiet behind the text (the box and its list, the legend), and in
                 // a haze just under the horizon, where they would run together.
                 let build = || {

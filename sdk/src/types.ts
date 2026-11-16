@@ -246,7 +246,12 @@ export interface SpaceRow {
   strip: TaskId[];
   /** Its default worktree (a listed checkout's path), where its new terminals and tasks start; null: none. Set by the user's click on a Repos row. */
   worktree: string | null;
+  /** What its item on the top row shows before its name. */
+  glyph: Glyph;
 }
+
+/** A top-row item's glyph: Home's house, a task's badges, the icon of the one app pane a workspace of no task holds alone (by the app's name), or the name alone. */
+export type Glyph = { kind: "home" } | { kind: "tasks" } | { kind: "app"; name: string } | { kind: "name" };
 
 /** The active tab's split tree. `ratio`: the share of the split that `a` (left or top) takes. */
 export type Layout = { leaf: PaneId } | { split: { axis: Axis; ratio: number; a: Layout; b: Layout } };
@@ -1105,6 +1110,8 @@ export interface HomeDrawn {
   panel: Rect;
   /** Each node's click target, by task id. */
   nodes: Record<string, Rect>;
+  /** The heading over the key caps: "Home" on Home, null in a workspace's empty tab. */
+  heading: string | null;
   /** How often lattice lines were built and painted. */
   lattice_builds: number;
   lattice_paints: number;
@@ -1260,6 +1267,8 @@ export interface Snapshot {
   marks: Mark[];
   /** The name of the mark just taken off, while the Marks section offers to put it back. */
   mark_removed: string | null;
+  /** Restored or rebuilt panes still empty: why, and where its "Open <App>" is drawn (null: none). */
+  unfilled: Array<{ pane: PaneId; why: string; open: Rect | null }>;
   /** The user's workspaces, by name. Only the user makes, saves, opens, renames or deletes one. */
   workbooks: Workbook[];
   /** What the Workspaces section offers to take back, while it offers. */
