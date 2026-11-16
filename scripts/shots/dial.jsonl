@@ -10,8 +10,7 @@
 {"click":"task:1","at":[0.3,0.3]}
 {"click":"talk:talk-start"}
 {"until":"drawer.native.chats.1.dial.level","is":"amber"}
-{"until":"drawer.native.chats.1.dial.animating","is":false}
-{"settle":300}
+{"settle":2000}
 {"shot":"failed"}
 {"click":"talk"}
 {"cmd":"key","keys":"r u n space t h e space t e s t s enter","as":"user"}
@@ -24,24 +23,22 @@
 {"cmd":"key","keys":"cmd-shift-l","as":"user"}
 {"click":"talk:chat-stop"}
 {"until":"drawer.native.chats.1.transcript.turn","is":null}
-{"until":"drawer.native.chats.1.dial.animating","is":false}
-{"settle":300}
+{"settle":2000}
 {"shot":"idle"}
 {"record":"start"}
 {"click":"talk"}
 {"cmd":"key","keys":"a n d space l i n t enter","as":"user"}
-{"until":"drawer.native.chats.1.dial.animating","is":true}
+{"until":"drawer.native.chats.1.dial.stations.1.lit","is":true}
 {"sleep_ms":1500}
 {"shot":"thinking"}
-{"until":"drawer.native.chats.1.dial.stations.2.running","is":1}
+{"until":"drawer.native.chats.1.dial.stations.2.lit","is":true}
 {"sleep_ms":1000}
 {"shot":"one-call"}
-{"until":"drawer.native.chats.1.dial.stations.3.running","is":1}
+{"until":"drawer.native.chats.1.dial.stations.3.lit","is":true}
 {"sleep_ms":1000}
 {"shot":"three-calls"}
 {"until":"drawer.native.chats.1.transcript.turn","is":null}
-{"until":"drawer.native.chats.1.dial.animating","is":false}
-{"sleep_ms":500}
+{"sleep_ms":2500}
 {"shot":"settled"}
 {"record":"stop"}
 {"cmd":"key","keys":"cmd-shift-l","as":"user"}
