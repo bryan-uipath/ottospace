@@ -33,7 +33,7 @@ running, and the rest of the design is not built: see the
 | A task's agent in the right drawer: ↵ in the new-task box, or Start agent in the drawer, starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. A click on a task only shows its conversation; Resume session goes on with one that ended. See [Flow of a task](#flow-of-a-task) | Works today |
 | Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a file edit's change as a diff card under its call, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls and edits, not what it says; "Watching · updates per message" in the header), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
 | New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do when it is not the default. A `/path` stays in the title the agent reads, and a folder taken from its dropdown is where the agent runs; `$skill` is stored and shown, nothing acts on it yet | Works today |
-| Home screen: a tab with no panes says what goes there (Open an app ⌘E, Terminal ⌘D), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. With nothing open at all, the drawer shows a new task by itself | Works today |
+| Home screen: a tab with no panes lists what goes there (Open an app ⌘E, Terminal ⌘D: each key a cap, as the keymap has it; a row's click does what its key does; a held ⌘ lights its caps), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. A task's or another workspace's empty tab shows the same list alone. With nothing open at all, the drawer shows a new task by itself | Works today |
 | Two rows of tabs: the top row holds the first space, Workspace, then each open task (its badge and title) and workspace; under it, the selected one's tabs, when it has more than one. One selection: the drawer shows the selected task's chat. × hides a task or a workspace (nothing stops); its row opens it again. + at the row's end makes a new, empty workspace. Short of room, the tasks not selected are their badges alone; shorter still, those that do not fit are a count (+3), and the selected one always shows. Drag a tab onto a task to move it there | Works today |
 | Tabs, each with its own split tree | Works today |
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
@@ -651,7 +651,7 @@ workspace.
   keeps none; only once you typed in it: a shell left at its prompt keeps none) and the command line of the program in front of its shell, if one runs. No window
   title, URL or document. A tab with nothing in it is not saved. What is saved is what opens
   again once its tabs are closed; a tab not saved comes back only with the [layout](#restoring-the-layout).
-- **Add a tab**: `Add tab` on a workspace's row, `a` on it in list mode, or File ▸ Add Tab to
+- **Add a tab**: `a` on a workspace's row in list mode, or File ▸ Add Tab to
   Workspace… (it opens the section in list mode: pick the row, `a`). **All tabs**: File ▸ Save All
   Tabs as Workspace saves every tab on the bar that has something in it, in bar order, as one new
   workspace (at most 32; with more it saves none and says so). A tab stands for one workspace's tab at most: added to another, it leaves the first.
@@ -677,10 +677,13 @@ workspace.
   marks its saved tabs with the workspace icon (hover: its name). A row with nothing saved says
   `no saved tabs`.
 - **Its tabs**: ▸ before a workspace of several saved tabs (space in list mode) lists them under it.
-  Each opens alone (click, ↵), and has `Rename` (its title, `r`) and `Remove` (`x`: out of the
+  Each opens alone (click, ↵), and its … has Rename (its title; `r` in list mode) and Remove (`x` in list mode: out of the
   workspace; the last one deletes the workspace).
-- **Rename, Delete**: the words on its row (hover it, or select it in list mode), or `r` and
-  `x` in list mode. Deleting leaves the open tabs alone; `Workspace deleted · Undo` shows for six
+- **The row**: a click anywhere on it opens the workspace, or selects it if it is open. The
+  pointer on it (or list mode's selection) shows one …: its menu has Rename and Delete.
+  In the menu ↓ ↑ move, ↵ takes the item the keys are on; Esc, any other key or a click
+  outside closes it. In list mode `r` and `x` rename and delete with no menu. Deleting leaves the open
+  tabs alone; `Workspace deleted · Undo` shows for six
   seconds (`u` in list mode).
 - Kept lines and commands can hold secrets a tool printed, or a token in a command line. They
   stay in your workspace files, plain text with escape sequences taken out, at most 64 KB a

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use std::collections::HashMap;
 
-use gpui::{App, Context, Div, Keymap, ParentElement, Styled, Window, div, px, rgb, rgba};
+use gpui::{App, Context, Div, Keymap, Keystroke, ParentElement, Styled, Window, div, px, rgb, rgba};
 use ottospace_core::commands::{ALL, Command};
 use ottospace_core::key_use::{self, Binding, KeyUse, Line, Reference, Unread};
 use ottospace_core::{Action, Origin, theme};
@@ -45,6 +45,12 @@ pub fn binding_of(action: &dyn gpui::Action) -> Option<Binding> {
     extras().into_iter().find_map(|(binding, of)| (of.name() == name).then_some(binding))
 }
 
+/// An action's first key in the keymap, as the menus show it. `None`: no key.
+pub fn first_stroke(keymap: &Keymap, action: &dyn gpui::Action) -> Option<Keystroke> {
+    let binding = keymap.bindings_for_action(action).next()?;
+    binding.keystrokes().first().map(|stroke| stroke.inner().clone())
+}
+
 /// A binding's keys as the key reference shows them, from the keymap: `⌘⌃←→↑↓`, `⌘] ⌘[`.
 /// `None`: it has no key in this run (an unset return key).
 pub fn keys_text(keymap: &Keymap, binding: Binding) -> Option<String> {
@@ -58,10 +64,8 @@ pub fn keys_text(keymap: &Keymap, binding: Binding) -> Option<String> {
     }
     let extra = extras().into_iter().filter(|(of, _)| *of == binding).map(|(_, action)| action);
     let actions = binding.commands().iter().map(|c| commands::action(*c)).chain(extra);
-    // Each action's first key, as the menus show it.
     let first = |action: Box<dyn gpui::Action>| {
-        let binding = keymap.bindings_for_action(action.as_ref()).next()?;
-        binding.keystrokes().first().map(|stroke| commands::key_parts(stroke.inner()))
+        first_stroke(keymap, action.as_ref()).map(|stroke| commands::key_parts(&stroke))
     };
     let strokes: Vec<(String, String)> = actions.filter_map(first).collect();
     let (mods, _) = strokes.first()?;

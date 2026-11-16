@@ -90,12 +90,12 @@ listed in the Workspaces section whether it is open or not. The first space of t
 | Make a new, empty one | + on the top row, or in the Workspaces section's header: "Workspace 2", one empty tab, selected. It never takes the tab on show |
 | Take it off the top row | Its ×, or ⌘⌃W. Nothing in it stops; it stays listed, and its row opens it again |
 | Save the tab on show | ⌘⇧S. In a workspace: into that one. Elsewhere: as a new one; type its name, ↵ |
-| Add the tab on show to one | `Add tab` on its row, or ⌘⌃E, then `a` on it |
+| Add the tab on show to one | ⌘⌃E, then `a` on its row. Or File ▸ Add Tab to Workspace… |
 | Save every tab on the bar as one | File ▸ Save All Tabs as Workspace |
 | Update a tab of it after changing it | ⌘⇧S again on that tab. Undo on the line at the top (six seconds) |
 | Open it | Workspaces, click it. Or ⌘⌃E, ↵. Its saved tabs open in order; one already open is kept. None saved: one empty tab |
-| See, open, rename or remove one of its tabs | ▸ on its row (⌘⌃E: space), then the tab's row: click, Rename, Remove |
-| Rename or delete it | Hover its row: Rename, Delete. Or ⌘⌃E, then `r`, `x`; `u` puts a deleted one back |
+| See, open, rename or remove one of its tabs | ▸ on its row (⌘⌃E: space), then the tab's row: click opens it; its … has Rename, Remove |
+| Rename or delete it | Point at its row: … opens a menu with Rename, Delete. Or ⌘⌃E, then `r`, `x`; `u` puts a deleted one back |
 
 A saved tab keeps the splits, each app, and each terminal's directory, last 500 lines and the command
 running in it. Opened, a terminal shows those lines above its prompt with the command typed on
@@ -147,7 +147,7 @@ Key Counts forgets it.
 | Point the task at a tab, a pane, a mark or an app | `^name` in the line, or ⌥-click the tab or pane while the box is open |
 | A task's tabs | Its space, behind its badge on the bar. Starting a task opens it with one empty tab (or takes the Repos tab it was started from); ⌘T joins the space on show; drag a tab onto another space; palette: Move Tab to… |
 | The next task that needs me | ⌘⇧N: its space and chat |
-| See what needs me at a glance | A tab with no panes is the home screen: what goes there (Open an app ⌘E, Terminal ⌘D), up to three tasks under Needs you, and a node for each of the first 12 listed tasks. Left to right is the project; within a project the older task is farther; the colour is the state. No node sits under the text, so a small window shows fewer. Hover a node for its title; click a node or a row to open its conversation |
+| See what needs me at a glance | A tab with no panes is the home screen: a list of what goes there (Open an app ⌘E, Terminal ⌘D: click a row or press its key; a task's empty tab has the same list), up to three tasks under Needs you, and a node for each of the first 12 listed tasks. Left to right is the project; within a project the older task is farther; the colour is the state. No node sits under the text, so a small window shows fewer. Hover a node for its title; click a node or a row to open its conversation |
 | See the inbox | Tasks on the rail: Needs you, Running, Later, Done (folded). Click a heading to fold it, or ⌘⌃E, move to it, ↵ or space |
 | See tasks by project | Project in the Tasks header (State goes back): a group a `#project` with a bar of its states, then "no project". Today's work is under the list |
 | See a task's time and tokens | Hover its row: started, agent time, workspace, tokens by model |

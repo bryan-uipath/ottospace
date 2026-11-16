@@ -77,6 +77,7 @@ mod give_back;
 mod home;
 mod inspector;
 mod key_use;
+mod keycaps;
 mod layout_file;
 mod markdown;
 mod marks;
@@ -86,6 +87,7 @@ mod progress;
 mod prs;
 mod record;
 mod repos;
+mod row_menu;
 mod running;
 #[cfg(test)]
 mod scratch;
@@ -810,9 +812,15 @@ struct Workspace {
     kept_marks: marks::Kept,
     /// The workbooks' files as last read and written.
     kept_workbooks: workbook::Kept,
+    /// The row of the bar the pointer is on, if it has a menu: its … shows.
+    row_hovered: Option<ottospace_core::list::ListRow>,
+    /// A key closed a row's menu: held on, it is not for what was under the menu.
+    row_menu_spent: bool,
     kept_layout: layout_file::Kept,
     /// `keys.json` as last read and written.
     kept_keys: key_use::Kept,
+    /// The modifiers the empty tab's list was last drawn with (`keycaps`): input, not model state.
+    caps_drawn: Cell<Modifiers>,
     /// Scroll position of the bar's list, so list mode can bring the selected row into view.
     list_scroll: ScrollHandle,
     /// The Calendar section's own: at the top when it opens and when its day changes. The frame
@@ -1080,6 +1088,7 @@ impl Workspace {
                             this.watch_settings(window, cx);
                         }
                         this.sync_sneak(window, cx);
+                        this.sync_row_menu(window, cx);
                         this.read_sneak_app(window, cx);
                         if tick % 4 == 0 {
                             this.check_peek(window, cx);
@@ -1237,8 +1246,11 @@ impl Workspace {
             stored: Vec::new(),
             kept_marks: marks::Kept::default(),
             kept_workbooks: workbook::Kept::default(),
+            row_hovered: None,
+            row_menu_spent: false,
             kept_layout: layout_file::Kept::default(),
             kept_keys: key_use::Kept::default(),
+            caps_drawn: Cell::default(),
             hosting,
             host_only,
             control,
@@ -2964,6 +2976,9 @@ impl Workspace {
             "workbooks": self.workbooks_json(),
             // What the Workbook section offers to take back (`deleted`, `updated`), or null.
             "workbook_offer": self.model.workbooks.offered(),
+            // A row's open menu (its …), or null: `workbook` and `tab` (whose row), `selected`
+            // (the item the keys are on), `items` (each `item`, `label`, `key` and `rect`).
+            "row_menu": self.row_menu_json(),
             // Each scroll area whose content does not fit, by its id (`tasks`, `repos`, `apps`,
             // `marks`, `picker`, `keys`, `terminal:<pane>`): its bar's `track` and `thumb` in
             // window points, and the bar's `opacity` (0 once it has faded).
@@ -3376,6 +3391,12 @@ impl Workspace {
             return;
         }
         self.sneak_spent = false;
+        // So for the key that closed a row's menu.
+        if self.row_menu_spent && event.is_held {
+            cx.stop_propagation();
+            return;
+        }
+        self.row_menu_spent = false;
         // The key reference takes the keyboard: Esc closes it, and no other key reaches the
         // terminal or the picker behind it. (⌘ shortcuts go to their bindings; the core ignores
         // pane actions while it is open, and ⌘/ closes it.)
@@ -3390,6 +3411,12 @@ impl Workspace {
                 self.bars.step("keys", step);
                 cx.notify();
             }
+            cx.stop_propagation();
+            return;
+        }
+        // A row's open menu takes the user's plain keys: its own, and any other closes it.
+        let plain = !(key.modifiers.platform || key.modifiers.control || key.modifiers.alt);
+        if plain && self.model.sneak.is_none() && self.row_menu_key(&key.key, window, cx) {
             cx.stop_propagation();
             return;
         }
@@ -5882,12 +5909,13 @@ impl Render for Workspace {
         // Only while the tab on show has no panes. Its lines are built once and kept: a frame
         // that moves nothing (a terminal printing in another tab) only paints them again.
         let keep_out = self.home.borrow().keep_out();
-        let home = self.model.home(&keep_out).map(|home| self.render_home(home, cx).into_any_element());
+        // The modifiers down now light their caps in the list of an empty tab.
+        let held = keycaps::held(window);
+        let home = self.model.home(&keep_out).map(|home| self.render_home(home, held, cx).into_any_element());
         // An empty tab of a task, a session or a workbook: what goes in it.
         let empty = (self.model.layout.is_none() && home.is_none()).then(|| {
-            let line = "An empty tab: ⌘E picks what goes in it, ⌘D opens a terminal";
-            let hint = div().text_sm().text_color(rgb(theme::MUTED)).child(line);
-            div().size_full().flex().items_center().justify_center().child(hint).into_any_element()
+            let list = self.fill_list(held, cx);
+            div().size_full().flex().items_center().justify_center().child(list).into_any_element()
         });
         let home = home.or(empty);
         // The left column's width, and the drawer's: as dragged, or half the window when widened.
@@ -5914,6 +5942,8 @@ impl Render for Workspace {
             .text_color(rgb(theme::TEXT))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
+            // A held modifier lights its caps in an empty tab's list.
+            .on_modifiers_changed(cx.listener(|this, _, window, cx| this.modifiers_changed(window, cx)))
             .map(|root| self.command_actions(root, cx))
             // On the root, so a selection drag keeps going over other panes.
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
@@ -5938,6 +5968,10 @@ impl Render for Workspace {
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                // A press outside a row's open menu closes it, and is no press on what is there.
+                if this.row_menu_press(event, window, cx) {
+                    return cx.stop_propagation();
+                }
                 // ⌥-click while the new-task box is open references what is under it, and
                 // does nothing else: the tab is not selected, the pane not focused.
                 if this.compose_point(event, window, cx) {
@@ -6219,6 +6253,7 @@ impl Render for Workspace {
             )
             .children(self.render_inspector_outline())
             // Over everything of ottospace's own. It is never on while an app's window is.
+            .children(self.render_row_menu(window, cx))
             .children(self.model.sneak.as_ref().map(sneak::labels))
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
             .children(self.model.palette.as_ref().map(|palette| self.render_palette(palette, cx)))
