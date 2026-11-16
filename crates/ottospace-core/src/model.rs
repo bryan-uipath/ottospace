@@ -5078,6 +5078,18 @@ impl Model {
         }
     }
 
+    /// The folder a conversation's agent would start in now (`agent_start`): a session gone on
+    /// with, where it started. `None`: nothing would start, or in no folder of its own (home).
+    pub fn agent_dir(&self, subject: &Subject) -> Option<String> {
+        self.agent_start(subject).and_then(|(_, cwd)| cwd)
+    }
+
+    /// The listed worktree (not a repository's own checkout) `dir` is in or below: the longest.
+    pub fn worktree_at(&self, dir: &str) -> Option<&str> {
+        let worktrees = self.repos.iter().flat_map(|repo| &repo.worktrees).map(|worktree| worktree.path.as_str());
+        worktrees.filter(|path| sessions::below(dir, path)).max_by_key(|path| path.len())
+    }
+
     /// What `TalkStart` would do for the conversation shown: `Some(true)` go on with its session,
     /// `Some(false)` start a new one (its task's prompt sent once), `None` nothing (its agent runs,
     /// or cannot be started from here: `talk_note` says why).
@@ -11224,6 +11236,27 @@ mod tests {
         m.update(Action::SetRepos { repos: Vec::new() });
         m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("a task as kept")], floor: 7 });
         assert_eq!(started(&mut m, Action::TaskTalk { id: 7 }), []);
+    }
+
+    /// Where an agent would start is what the drawer's foot says: a session gone on with, where
+    /// it started, not its repository; a new one, its task's folder; a worktree is known as one.
+    #[test]
+    fn the_folder_an_agent_would_start_in_is_its_sessions_or_its_tasks() {
+        let mut m = conversations();
+        let kept = format!(
+            r#"{{"id":7,"title":"app","state":"needs_you","priority":3,"repo":"/code/app","created":1,
+                "session":{{"runner":"claude","id":"{IDLE}","state":"needs_you"}}}}"#
+        );
+        m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("kept")], floor: 7 });
+        assert_eq!(m.agent_dir(&Subject::Task(7)).as_deref(), Some("/code/app/crates/core"));
+        m.update(Action::TaskFromLine { line: "zoom >app-2".into(), known: Default::default(), open: false });
+        assert_eq!(m.agent_dir(&Subject::Task(8)).as_deref(), Some("/code/app-2"));
+        m.update(Action::TaskFromLine { line: "no repository".into(), known: Default::default(), open: false });
+        assert_eq!(m.agent_dir(&Subject::Task(9)), None, "the home folder: the shell's to name");
+        let at = |dir: &str| m.worktree_at(dir);
+        assert_eq!((at("/code/app-2"), at("/code/app-2/src"), at("/code/app"), at("/code/app-22")), {
+            (Some("/code/app-2"), Some("/code/app-2"), None, None)
+        });
     }
 
     #[test]

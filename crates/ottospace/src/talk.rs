@@ -438,29 +438,37 @@ impl Workspace {
         let model = transcript.and_then(|t| t.model.clone()).or_else(|| agent.as_ref().map(|(model, _)| model.clone()));
         let mode = transcript.and_then(|t| t.mode.clone());
         let secs = agent.filter(|_| self.model.agent_runs(subject)).map(|(_, since)| since.elapsed().as_secs());
-        // Its process's folder, else the task's (`Task::dir`), else the home folder.
-        let ran = self.drawer.native.get(subject).and_then(|native| native.cwd.clone());
-        let ran = ran.or_else(|| self.drawer.agents.get(subject).and_then(|agent| agent.cwd.clone()));
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
-        let task = subject.task().and_then(|id| self.model.tasks.get(id));
-        let dir = task.and_then(|task| task.dir().cloned()).or_else(|| self.repo_of(subject));
-        let short = |dir: String| {
-            let rest = home.as_deref().and_then(|home| dir.strip_prefix(home));
-            let short = rest.filter(|rest| rest.is_empty() || rest.starts_with('/')).map(|rest| format!("~{rest}"));
-            short.unwrap_or(dir)
-        };
-        let folder = ran.or(dir).or_else(|| home.clone()).map(short);
+        let dir = self.agent_dir(subject);
         // Its task's own: its repository, else home.
-        let default = self.repo_of(subject).or_else(|| home.clone()).map(short);
-        talk::agent_line(model.as_deref(), mode.as_deref(), secs, folder.as_deref(), default.as_deref())
+        let default = self.repo_of(subject).or_else(|| home.clone());
+        let worktree = dir.as_deref().and_then(|dir| self.model.worktree_at(dir));
+        let place = talk::Place { dir: dir.as_deref(), default: default.as_deref(), home: home.as_deref(), worktree };
+        talk::agent_line(model.as_deref(), mode.as_deref(), secs, place)
     }
 
-    /// The drawer's foot: the agent's model, and a mode that lets it act unasked. Muted; a
-    /// mode that asks for nothing in the warning colour. Stays once the agent ended.
+    /// The folder `subject`'s agent runs in: its process's; not running, where the core would
+    /// start it (a session gone on with: where it started), else the task's, else the home folder.
+    fn agent_dir(&self, subject: &Subject) -> Option<String> {
+        let ran = self.drawer.native.get(subject).and_then(|native| native.cwd.clone());
+        let ran = ran.or_else(|| self.drawer.agents.get(subject).and_then(|agent| agent.cwd.clone()));
+        let task = subject.task().and_then(|id| self.model.tasks.get(id));
+        let dir = task.and_then(|task| task.dir().cloned()).or_else(|| self.repo_of(subject));
+        let home = || std::env::var("HOME").ok().filter(|home| !home.is_empty());
+        ran.or_else(|| self.model.agent_dir(subject)).or(dir).or_else(home)
+    }
+
+    /// The drawer's foot: the agent's model, a mode that lets it act unasked, and the folder it
+    /// runs in (whole on hover). Muted; a mode that asks for nothing in the warning colour.
+    /// Stays once the agent ended.
     fn agent_foot(&self, subject: &Subject) -> Option<Div> {
         let line = self.agent_line(subject);
         let color = if line.bypass { theme::SNEAK } else { theme::MUTED };
+        let tip = self.agent_dir(subject).map(|dir| gpui::SharedString::from(format!("The agent runs in {dir}")));
+        // Short by the core's cut (`talk::DIR_CHARS`): it fits the drawer at its default width.
         let foot = div().id("talk-foot").flex_none().px_3().pb_1().truncate().text_xs().text_color(rgb(color));
+        let foot =
+            foot.when_some(tip, |foot, tip| foot.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))));
         line.foot.map(|text| div().child(foot.child(text)))
     }
 

@@ -8060,13 +8060,20 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     let view = (&first["view"], &first["native"], &first["transcript"]["mode"]);
     assert_eq!(view, (&json!("native"), &json!(true), &json!("default")));
     // The header names no model, mode, time or folder (its task's own): the title's hover does;
-    // the drawer's foot says the model. A mode that asks is not at the foot.
+    // the drawer's foot says the model, then the folder its process runs in: the repository,
+    // long here, so cut in the middle. A mode that asks is not at the foot.
     let line = otto.call(json!({"cmd": "state"}))["drawer"]["line"].clone();
     assert_eq!((&line["folder"], &line["bypass"]), (&Value::Null, &json!(false)), "{line}");
     let foot = line["foot"].as_str().expect("the model at the foot");
-    assert!(!foot.contains("default") && !foot.contains('·'), "{line}");
+    let (_, folder) = foot.split_once(" · ").expect("the model, then the folder");
+    assert!(!foot.contains("default") && !folder.contains('·'), "{line}");
+    let whole = repos.join("app").canonicalize().unwrap().to_string_lossy().into_owned();
+    let (start, end) = folder.split_once('…').expect("a long folder is cut in the middle");
+    assert!(whole.starts_with(start) && whole.ends_with(end) && end.ends_with("/repos/app"), "{folder} of {whole}");
+    assert_eq!(folder.chars().count(), 28, "{folder}");
     let facts: Vec<&str> = line["facts"].as_array().unwrap().iter().filter_map(|f| f[0].as_str()).collect();
     assert_eq!(facts, ["Model", "Mode", "Running", "Folder"], "{line}");
+    assert_eq!(line["facts"][3][1], json!(whole), "{line}");
     // The reply's structure: a heading, a code block, a table; one web link and one file link
     // (the `javascript:` one is text). The script tag is a paragraph of text.
     let reply = &first["replies"][0];
