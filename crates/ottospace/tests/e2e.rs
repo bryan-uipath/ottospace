@@ -5641,9 +5641,7 @@ fn a_workspaces_row_opens_on_a_click_and_its_dots_rename_and_delete() {
     assert_eq!(names(&listed), ["Workspace 2", "Workspace 3"]);
     // At rest no row shows its …; the pointer on a row shows that row's, and no other word.
     let rest = otto.drawn();
-    let menus = |reply: &Value| {
-        [reply["workbooks"][0]["buttons"]["menu"].clone(), reply["workbooks"][1]["buttons"]["menu"].clone()]
-    };
+    let menus = |reply: &Value| [0, 1].map(|row| reply["workbooks"][row]["buttons"]["menu"].clone());
     assert_eq!(menus(&rest), [Value::Null, Value::Null], "{}", rest["workbooks"]);
     let body = |reply: &Value, row: usize| at(rect(&reply["workbooks"][row]["row"]), 0.3, 0.3);
     otto.mouse("move", body(&rest, 0));
@@ -5654,30 +5652,44 @@ fn a_workspaces_row_opens_on_a_click_and_its_dots_rename_and_delete() {
     let dots = at(rect(&menus(&hovered)[0]), 0.5, 0.5);
     // A client's click on it opens nothing.
     let refused = otto.click(dots, 1);
-    assert!(
-        refused["row_menu"].is_null() && refused["notice"].as_str().is_some_and(|why| why.contains("only the user"))
-    );
-    // The user's: Rename and Delete, each with its key, the keys on the first.
+    let users = |reply: &Value| reply["notice"].as_str().is_some_and(|why| why.contains("only the user"));
+    assert!(refused["row_menu"].is_null() && users(&refused), "{refused}");
+    // The user's: Rename and Delete. Opened by a click, the keys are on neither.
     otto.mouse("move", body(&rest, 0));
     let open = otto.user_click(dots);
-    let items = |reply: &Value| -> Vec<(String, String)> {
+    let items = |reply: &Value| -> Vec<String> {
         let items = reply["row_menu"]["items"].as_array().cloned().unwrap_or_default();
-        items
-            .iter()
-            .map(|i| (i["label"].as_str().unwrap().to_string(), i["key"].as_str().unwrap().to_string()))
-            .collect()
+        items.iter().map(|i| i["label"].as_str().unwrap().to_string()).collect()
     };
-    assert_eq!(items(&open), [("Rename".to_string(), "r".to_string()), ("Delete".to_string(), "x".to_string())]);
-    assert_eq!((&open["row_menu"]["workbook"], &open["row_menu"]["selected"]), (&json!(1), &json!(0)));
+    assert_eq!(items(&open), ["Rename", "Delete"]);
+    assert_eq!((&open["row_menu"]["workbook"], &open["row_menu"]["selected"]), (&json!(1), &Value::Null));
+    // Its … shows while the menu is open, and the menu hangs under it.
+    let open = otto.drawn();
+    let (dots_at, first) = (rect(&menus(&open)[0]), rect(&open["row_menu"]["items"][0]["rect"]));
+    let under = dots_at[1] + dots_at[3];
+    assert!(first[1] >= under && first[1] < under + 12., "the menu at {first:?}, its … at {dots_at:?}");
+    // A client's key is not the menu's, and its click outside neither closes the menu nor is
+    // lost: it reaches the row under it, which refuses a client.
+    let keyed = otto.call(json!({"cmd": "key", "keys": "x"}));
+    assert_eq!((&keyed["row_menu"]["workbook"], names(&keyed).len()), (&json!(1), 2), "{}", keyed["row_menu"]);
+    let theirs = otto.click(body(&rest, 1), 1);
+    assert!(theirs["row_menu"].is_object() && users(&theirs), "{}", theirs["notice"]);
+    // No letter takes an item: `x` closes the menu, and deletes nothing.
+    let closed = otto.user_key("x");
+    assert_eq!((&closed["row_menu"], names(&closed).len(), &closed["workbook_offer"]), (&Value::Null, 2, &Value::Null));
     // A click outside closes it, and is no click on what is under it.
+    otto.mouse("move", body(&rest, 0));
+    otto.user_click(dots);
     let outside = otto.user_click(body(&rest, 1));
     assert_eq!((&outside["row_menu"], selected(&outside)), (&Value::Null, json!({"kind": "workspace"})));
-    // Esc closes it; the arrows move in it; ↵ on Rename types the name in the row.
+    // Esc closes it. ↵ on no item takes none; the arrows move; ↵ on Rename types the name in the row.
     otto.mouse("move", body(&rest, 0));
     otto.user_click(dots);
     assert_eq!(otto.user_key("escape")["row_menu"], Value::Null);
     otto.mouse("move", body(&rest, 0));
     otto.user_click(dots);
+    assert_eq!(otto.user_key("enter")["row_menu"]["selected"], Value::Null);
+    assert_eq!(otto.user_key("down")["row_menu"]["selected"], 0);
     assert_eq!(otto.user_key("down")["row_menu"]["selected"], 1);
     assert_eq!(otto.user_key("up")["row_menu"]["selected"], 0);
     let typing = otto.user_key("enter");
@@ -5687,12 +5699,23 @@ fn a_workspaces_row_opens_on_a_click_and_its_dots_rename_and_delete() {
     let rows = otto.drawn();
     otto.mouse("move", body(&rows, 0));
     let shown = otto.call(json!({"cmd": "state"}));
-    let open = otto.user_click(at(rect(&shown["workbooks"][0]["buttons"]["menu"]), 0.5, 0.5));
+    otto.user_click(at(rect(&shown["workbooks"][0]["buttons"]["menu"]), 0.5, 0.5));
+    let open = otto.drawn();
     let deleted = otto.user_click(at(rect(&open["row_menu"]["items"][1]["rect"]), 0.5, 0.5));
-    assert_eq!(
-        (names(&deleted), &deleted["workbook_offer"], &deleted["row_menu"]),
-        (vec!["Workspace 3".to_string()], &json!("deleted"), &Value::Null)
-    );
+    assert_eq!((names(&deleted), &deleted["workbook_offer"]), (vec!["Workspace 3".to_string()], &json!("deleted")));
+    assert_eq!(deleted["row_menu"], Value::Null);
+    // The menu does not hang where its … was: the line that offers the undo runs out (six
+    // seconds), the row under it moves up, and the menu closes. A label opened it: the keys are
+    // on its first item.
+    otto.drawn();
+    let (_, labels) = sneak(&otto);
+    let open = otto.user_key(&letters(&labels["workbook-menu:2"]));
+    assert_eq!((&open["row_menu"]["workbook"], &open["row_menu"]["selected"]), (&json!(2), &json!(0)));
+    let moved = otto.wait_for("the undo line to go, and the menu with it", |otto| {
+        let state = otto.call(json!({"cmd": "state"}));
+        (state["workbook_offer"].is_null() && state["row_menu"].is_null()).then_some(state)
+    });
+    assert_eq!(names(&moved), ["Workspace 3"]);
     // A click on the body opens it: selected if it is on the row, back on the row if hidden.
     let rows = otto.drawn();
     assert_eq!(selected(&otto.user_click(body(&rows, 0))), json!({"kind": "workbook", "id": 2}));
@@ -5704,15 +5727,27 @@ fn a_workspaces_row_opens_on_a_click_and_its_dots_rename_and_delete() {
     // Sneak labels reach the … with no pointer on the row, and then the menu's items.
     otto.drawn();
     let (_, labels) = sneak(&otto);
-    let open = otto.user_key(&letters(&labels["workbook-menu:2"]));
-    assert_eq!(open["row_menu"]["workbook"], 2);
+    otto.user_key(&letters(&labels["workbook-menu:2"]));
     let (_, labels) = sneak(&otto);
     let renaming = otto.user_key(&letters(&labels["row-menu:0"]));
     assert_eq!((&renaming["row_menu"], &renaming["field"]["of"]), (&Value::Null, &json!("workbook")));
     otto.user_key("escape");
-    // List mode: the selected row shows its …, and X deletes as the menu's Delete does.
+    // ↵ held on Delete deletes once: its repeats are not for the list under the menu.
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
     let list = otto.user_key("cmd-ctrl-e");
     assert!(list["workbooks"][0]["buttons"]["menu"].is_array(), "{}", list["workbooks"]);
+    assert_eq!(names(&list).len(), 2);
+    let (_, labels) = sneak(&otto);
+    otto.user_key(&letters(&labels["workbook-menu:2"]));
+    otto.user_key("down");
+    let before = otto.user_key("enter");
+    assert_eq!((names(&before).len(), &before["row_menu"]), (1, &Value::Null));
+    let held = otto.call(json!({"cmd": "key", "keys": "enter", "as": "user", "repeat": true}));
+    assert_eq!((names(&held).len(), selected(&held)), (1, selected(&before)), "a held ↵ went on");
+    // List mode: X deletes the selected row, as before.
+    if otto.call(json!({"cmd": "state"}))["state"]["list"].is_null() {
+        otto.user_key("cmd-ctrl-e");
+    }
     assert!(names(&otto.user_key("x")).is_empty());
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
@@ -5906,8 +5941,8 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     );
     // The selected row shows its …: its menu's Rename types the name in the row.
     let dots = otto.drawn()["workbooks"][0]["buttons"]["menu"].clone();
-    assert_eq!(otto.user_click(at(rect(&dots), 0.5, 0.5))["row_menu"]["selected"], 0);
-    assert_eq!(otto.user_key("enter")["field"]["of"], "workbook");
+    assert_eq!(otto.user_click(at(rect(&dots), 0.5, 0.5))["row_menu"]["workbook"], 1);
+    assert_eq!(otto.user_key("down enter")["field"]["of"], "workbook");
     assert_eq!(names(&otto.user_key("escape")), ["ops"]);
     drop(otto);
 
@@ -5940,7 +5975,7 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     otto.user_key("cmd-ctrl-e");
     let dots = at(rect(&otto.drawn()["workbooks"][0]["buttons"]["menu"]), 0.5, 0.5);
     otto.user_click(dots);
-    assert!(names(&otto.user_key("x")).is_empty());
+    assert!(names(&otto.user_key("down down enter")).is_empty());
     let left: Vec<String> =
         workbook_files(&home).iter().filter_map(|path| std::fs::read_to_string(path).ok()).collect();
     assert_eq!(left, ["{ not a workbook", "mine"]);

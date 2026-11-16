@@ -22,7 +22,7 @@ pub struct Kept {
     pub notice: Option<String>,
 }
 
-/// A control's id for a tab of a workbook: `workbook-tab-open:3:1` is tab 1 of workbook 3.
+/// A control's id for a tab of a workbook: `workbook-tab-menu:3:1` is tab 1 of workbook 3.
 fn tab_control(name: &str, id: WorkbookId, at: usize) -> String {
     format!("{name}:{id}:{at}")
 }
@@ -160,8 +160,9 @@ impl Workspace {
         let tab = tab.filter(|_| control.starts_with("workbook-tab"));
         match control {
             "workbook-menu" | "workbook-tab-menu" => {
+                // By a label or a key: the keys are on its first item.
                 let row = tab.map_or(ListRow::Workbook(id), |at| ListRow::WorkbookTab(id, at));
-                self.row_menu_act(Action::RowMenu { row }, window, cx);
+                self.open_row_menu(row, true, window, cx);
             }
             "workbook-add" => {
                 let refused = self.model.workbook_add_refusal(id);
@@ -205,7 +206,7 @@ impl Workspace {
             let id = row.id;
             let mut value = serde_json::json!(row);
             value["row"] = serde_json::json!(drawn(format!("workbook:{id}")));
-            // `menu`: its …, null while it is not shown (no pointer on the row, not selected).
+            // `menu`: its …, null while it does not show (no pointer on the row, not selected, no menu open).
             let shown = |row: ListRow, control: String| drawn(control).filter(|_| self.dots_shown(&row));
             value["buttons"] = serde_json::json!({
                 "fold": drawn(format!("workbook-fold:{id}")),
@@ -237,10 +238,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Whether a row's … shows: the pointer is on the row, or list mode's selection is.
+    /// Whether a row's … shows: the pointer is on the row, list mode's selection is, or its
+    /// menu is open.
     fn dots_shown(&self, row: &ListRow) -> bool {
         let selected = self.model.list.and_then(|at| self.model.list_rows().into_iter().nth(at));
-        self.row_hovered.as_ref() == Some(row) || selected.as_ref() == Some(row)
+        let open = self.model.row_menu().is_some_and(|(menu, _)| menu.row == *row);
+        self.row_hovered.as_ref() == Some(row) || selected.as_ref() == Some(row) || open
     }
 
     /// The name being typed, or `name` cut to fit.
@@ -299,12 +302,7 @@ impl Workspace {
             let title = div().w_full().flex().items_center().gap_1().children(fold).child(name.flex_1().min_w_0());
             let title = title.child(dot(row.open));
             let summary = div().w_full().truncate().text_xs().text_color(rgb(theme::MUTED)).child(row.summary.clone());
-            let dots = self.row_dots(
-                format!("workbook-menu:{id}"),
-                ListRow::Workbook(id),
-                self.dots_shown(&ListRow::Workbook(id)),
-                cx,
-            );
+            let dots = self.row_dots(ListRow::Workbook(id), self.dots_shown(&ListRow::Workbook(id)), cx);
             let book = list_button(ElementId::Name(format!("workbook:{id}").into()), selected)
                 .relative()
                 .on_hover(cx.listener(move |this, over: &bool, _, cx| this.row_hover(ListRow::Workbook(id), *over, cx)))
@@ -314,7 +312,7 @@ impl Workspace {
                 .child(title)
                 .child(summary)
                 .child(self.controls.mark(format!("workbook:{id}")))
-                .when(!renaming, |d| d.child(dots))
+                .children(dots.filter(|_| !renaming))
                 .on_click(
                     cx.listener(move |this, _, window, cx| this.click_workbook("workbook", id, None, window, cx)),
                 );
@@ -327,8 +325,7 @@ impl Workspace {
                 index += 1;
                 let renaming = typing(id, Some(at));
                 let row = ListRow::WorkbookTab(id, at);
-                let dots =
-                    self.row_dots(tab_control("workbook-tab-menu", id, at), row.clone(), self.dots_shown(&row), cx);
+                let dots = self.row_dots(row.clone(), self.dots_shown(&row), cx);
                 let name = self.workbook_name(renaming, tab.title, cx);
                 let title = div().w_full().flex().items_center().gap_2().child(name.flex_1().min_w_0());
                 let summary = div().w_full().truncate().text_xs().text_color(rgb(theme::MUTED)).child(tab.summary);
@@ -345,7 +342,7 @@ impl Workspace {
                     .child(title.child(dot(tab.open)))
                     .child(summary)
                     .child(self.controls.mark(control))
-                    .when(!renaming, |d| d.child(dots))
+                    .children(dots.filter(|_| !renaming))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.click_workbook("workbook-tab", id, Some(at), window, cx)
                     }));

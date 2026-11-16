@@ -145,7 +145,8 @@ at once: the user asked for them.
 ▸ before a workbook of several tabs (space in list mode) lists its tabs under it, folded by
 default and not kept between runs. A tab's row opens it alone (click, ↵) and has `Rename` (its
 title, `r`) and `Remove` (`x`: out of the workbook, `Updated · Undo`; its last tab deletes the
-workbook). The row's words are now `Open`, `Add tab`, `Rename`, `Delete`.
+workbook). The row's words were `Open`, `Add tab`, `Rename`, `Delete`; since, a click on the
+row opens it and one … has a menu, Rename and Delete (`spaces.md`, "The row").
 
 **The tab bar.** A tab of a workbook shows the workbook icon; hovering the tab names the
 workbook. Its tabs are ordinary tabs otherwise: no scope hides the others.

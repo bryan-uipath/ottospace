@@ -811,8 +811,8 @@ struct Workspace {
     kept_workbooks: workbook::Kept,
     /// The row of the bar the pointer is on, if it has a menu: its … shows.
     row_hovered: Option<ottospace_core::list::ListRow>,
-    /// Where the … of the open row menu was when it opened: the menu hangs under it.
-    row_menu_at: Option<Bounds<Pixels>>,
+    /// A key closed a row's menu: held on, it is not for what was under the menu.
+    row_menu_spent: bool,
     kept_layout: layout_file::Kept,
     /// `keys.json` as last read and written.
     kept_keys: key_use::Kept,
@@ -1083,6 +1083,7 @@ impl Workspace {
                             this.watch_settings(window, cx);
                         }
                         this.sync_sneak(window, cx);
+                        this.sync_row_menu(window, cx);
                         this.read_sneak_app(window, cx);
                         if tick % 4 == 0 {
                             this.check_peek(window, cx);
@@ -1240,7 +1241,7 @@ impl Workspace {
             kept_marks: marks::Kept::default(),
             kept_workbooks: workbook::Kept::default(),
             row_hovered: None,
-            row_menu_at: None,
+            row_menu_spent: false,
             kept_layout: layout_file::Kept::default(),
             kept_keys: key_use::Kept::default(),
             hosting,
@@ -3375,6 +3376,12 @@ impl Workspace {
             return;
         }
         self.sneak_spent = false;
+        // So for the key that closed a row's menu.
+        if self.row_menu_spent && event.is_held {
+            cx.stop_propagation();
+            return;
+        }
+        self.row_menu_spent = false;
         // The key reference takes the keyboard: Esc closes it, and no other key reaches the
         // terminal or the picker behind it. (⌘ shortcuts go to their bindings; the core ignores
         // pane actions while it is open, and ⌘/ closes it.)
@@ -3392,7 +3399,7 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
-        // A row's open menu takes plain keys: its own, and any other closes it.
+        // A row's open menu takes the user's plain keys: its own, and any other closes it.
         let plain = !(key.modifiers.platform || key.modifiers.control || key.modifiers.alt);
         if plain && self.model.sneak.is_none() && self.row_menu_key(&key.key, window, cx) {
             cx.stop_propagation();
@@ -5943,6 +5950,10 @@ impl Render for Workspace {
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                // A press outside a row's open menu closes it, and is no press on what is there.
+                if this.row_menu_press(event, window, cx) {
+                    return cx.stop_propagation();
+                }
                 // ⌥-click while the new-task box is open references what is under it, and
                 // does nothing else: the tab is not selected, the pane not focused.
                 if this.compose_point(event, window, cx) {

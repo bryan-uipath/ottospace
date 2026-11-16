@@ -854,7 +854,7 @@ export interface WorkbookTab {
   /** It is open now: `tab` is that tab's `id`. */
   open: boolean;
   tab: number | null;
-  /** Where the Workspaces section drew its row (while unfolded), or null; `menu`: its …, while it shows (the pointer on the row, or list mode's selection). */
+  /** Where the Workspaces section drew its row (while unfolded), or null; `menu`: its …, while it shows (the pointer on the row, list mode's selection, or its menu open). */
   row: Rect | null;
   buttons: { menu: Rect | null };
 }
@@ -864,8 +864,9 @@ export interface RowMenu {
   /** The workspace whose row it is of; `tab`: that tab's row, by place. */
   workbook: number | null;
   tab: number | null;
-  selected: number;
-  items: { item: "rename" | "delete" | "remove"; label: string; key: string; rect: Rect | null }[];
+  /** The item the keys are on; null: none (a click opened it). */
+  selected: number | null;
+  items: { item: "rename" | "delete" | "remove"; label: string; rect: Rect | null }[];
 }
 
 /** A workspace of the user's (the user reads "workspace"; the state keeps `workbook`): a named set of saved tabs, none in a new one. No directory is listed: `panes` names kinds only. */
@@ -883,7 +884,7 @@ export interface Workbook {
   tabs: WorkbookTab[];
   /** Its tabs are listed under its row. */
   unfolded: boolean;
-  /** Where the Workspaces section drew its row, or null; `fold`: its ▸; `menu`: its …, while it shows (the pointer on the row, or list mode's selection). */
+  /** Where the Workspaces section drew its row, or null; `fold`: its ▸; `menu`: its …, while it shows (the pointer on the row, list mode's selection, or its menu open). */
   row: Rect | null;
   buttons: { fold: Rect | null; menu: Rect | null };
 }

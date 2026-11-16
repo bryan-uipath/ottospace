@@ -1252,12 +1252,12 @@ function rowMenu(value: unknown, at: string): RowMenu {
     const i = fields(value, at);
     const kind = i.item;
     if (kind !== "rename" && kind !== "delete" && kind !== "remove") throw wrong(`${at}.item`, "a menu item", kind);
-    return { item: kind, label: str(i.label, `${at}.label`), key: str(i.key, `${at}.key`), rect: orNull(rect)(i.rect, `${at}.rect`) };
+    return { item: kind, label: str(i.label, `${at}.label`), rect: orNull(rect)(i.rect, `${at}.rect`) };
   };
   return {
     workbook: orNull(num)(o.workbook, `${at}.workbook`),
     tab: orNull(num)(o.tab, `${at}.tab`),
-    selected: num(o.selected, `${at}.selected`),
+    selected: orNull(num)(o.selected, `${at}.selected`),
     items: list(item)(o.items, `${at}.items`),
   };
 }

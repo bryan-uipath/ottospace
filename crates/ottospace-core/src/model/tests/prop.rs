@@ -85,15 +85,6 @@ impl Gen<'_> {
     }
 
     /// A workbook as a file may hold it: sound or not, with keys this build does not know.
-    /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not.
-    fn menu_row(&mut self) -> ListRow {
-        match self.rng.below(4) {
-            0 => ListRow::Task(self.task()),
-            1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)),
-            _ => ListRow::Workbook(self.workbook()),
-        }
-    }
-
     fn kept_workbook(&mut self) -> Workbook {
         let panes = vec![self.record(1), self.record(2)];
         let split =
@@ -110,6 +101,21 @@ impl Gen<'_> {
             live: Vec::new(),
             extra: self.extra(),
         }
+    }
+
+    /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not.
+    fn menu_row(&mut self) -> ListRow {
+        match self.rng.below(4) {
+            0 => ListRow::Task(self.task()),
+            1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)),
+            _ => ListRow::Workbook(self.workbook()),
+        }
+    }
+
+    /// Where a menu's … is drawn: one of two places, or nowhere.
+    fn dots(&mut self) -> Option<Rect> {
+        let y = [150., 180.][self.rng.below(2)];
+        (self.rng.below(4) > 0).then_some(Rect { x: 280., y, w: 20., h: 16. })
     }
 
     /// A session's id as the shell makes one, or text that is none.
@@ -1130,7 +1136,8 @@ const MAKERS: &[Make] = &[
     |g| Action::WorkbookEdit { workbook: g.workbook(), tab: g.book_tab() },
     |g| Action::WorkbookRemove { workbook: g.workbook(), tab: g.book_tab() },
     |g| Action::WorkbookFold { workbook: g.workbook() },
-    |g| Action::RowMenu { row: g.menu_row() },
+    |g| Action::RowMenu { row: g.menu_row(), dots: g.dots(), keys: g.rng.coin() },
+    |g| Action::RowMenuDrawn { dots: g.dots() },
     |g| Action::RowMenuMove { delta: g.delta() },
     |g| Action::RowMenuChoose { index: g.rng.coin().then(|| g.rng.below(3)) },
     |_| Action::RowMenuClose,
@@ -1893,7 +1900,8 @@ fn check(m: &Model) -> Result<(), String> {
     // A row's menu is of a row the open section lists, on one of its items.
     if let Some((menu, items)) = m.row_menu() {
         ensure!(m.list_rows().contains(&menu.row), "a menu of {:?}, which is not listed", menu.row);
-        ensure!(menu.selected < items.len(), "a menu on item {} of {}", menu.selected, items.len());
+        let on = menu.selected.is_none_or(|at| at < items.len());
+        ensure!(on, "a menu on item {:?} of {}", menu.selected, items.len());
     }
     // Workbooks: each is one file, named by its id, that reads back as it was written.
     let books = &m.workbooks.list;
@@ -2373,6 +2381,9 @@ impl Run {
                 "{origin:?}'s {action:?} moved tab {id} from {was:?} to {now:?}"
             );
         }
+        // Nothing of another's takes the keyboard while the user's keys are in a row's menu.
+        let under_menu = menu_before.is_some() && origin != Origin::User && action.takes_keyboard();
+        ensure!(!under_menu || refused.is_some(), "{origin:?}'s {action:?} took the keyboard under a row's menu");
         // Only the user opens a row's menu or moves in it: another's step leaves it, or its row went.
         let menu_kept = m.row_menu.is_none() || m.row_menu == menu_before;
         ensure!(origin == Origin::User || menu_kept, "{origin:?}'s {action:?} opened or moved a row's menu");
@@ -3351,6 +3362,7 @@ fn code(sent: &Envelope) -> String {
         ("binding", "Binding"),
         ("space", "Owner"),
         ("row", "ListRow"),
+        ("dots", "Rect"),
         ("show", "Show"),
         ("step", "DayStep"),
     ];

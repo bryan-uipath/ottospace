@@ -668,12 +668,12 @@ workspace.
   marks its saved tabs with the workspace icon (hover: its name). A row with nothing saved says
   `no saved tabs`.
 - **Its tabs**: ▸ before a workspace of several saved tabs (space in list mode) lists them under it.
-  Each opens alone (click, ↵), and its … has Rename (its title, `r`) and Remove (`x`: out of the
+  Each opens alone (click, ↵), and its … has Rename (its title; `r` in list mode) and Remove (`x` in list mode: out of the
   workspace; the last one deletes the workspace).
 - **The row**: a click anywhere on it opens the workspace, or selects it if it is open. The
-  pointer on it (or list mode's selection) shows one …: its menu has Rename (`r`) and Delete
-  (`x`). In the menu ↓ ↑ move, ↵ takes the item, its letter takes it at once, Esc or a click
-  outside closes it. In list mode `r` and `x` do the same with no menu. Deleting leaves the open
+  pointer on it (or list mode's selection) shows one …: its menu has Rename and Delete.
+  In the menu ↓ ↑ move, ↵ takes the item the keys are on; Esc, any other key or a click
+  outside closes it. In list mode `r` and `x` rename and delete with no menu. Deleting leaves the open
   tabs alone; `Workspace deleted · Undo` shows for six
   seconds (`u` in list mode).
 - Kept lines and commands can hold secrets a tool printed, or a token in a command line. They

@@ -28,7 +28,7 @@ Built (stage 1):
   opened again it shows its saved tabs, or one empty tab.
 - **Saving** stays, and is never reached from +: ⌘⇧S saves the tab on show into the workspace
   whose space it is in (a tab of it already: updated in place), else as a new workspace of that
-  tab; `Add tab` on a row; Save All Tabs as Workspace. A tab made in a workspace is kept by
+  tab; `a` on a row in list mode or File ▸ Add Tab to Workspace…; Save All Tabs as Workspace. A tab made in a workspace is kept by
   session restore (`layout.json`) while its space is open or hidden, and in the workspace's own
   file only once saved.
 - **The first space, "Workspace"**, stays as it was: always first, never hidden, in no file and
@@ -41,10 +41,17 @@ The owner: "clicking the body should open it, and we should have an ellipsis on 
 us rename if we desire or delete". Built:
 
 - A click anywhere on a row opens the workspace (selects it if open). No words on hover.
-- The pointer on a row, or list mode's selection, shows one …. Its menu (`row_menu.rs`): Rename
-  (R), Delete (X); a tab's row: Rename, Remove. ↓ ↑ or j k move, ↵ takes, an item's letter takes
-  it at once, Esc, any other key or a click outside closes. Delete keeps its Undo. Sneak labels
-  reach the … and the items. The user's alone; any other move of the user's closes it.
+- The pointer on a row, or list mode's selection, shows one …. Its menu (`row_menu.rs`):
+  Rename, Delete; a tab's row: Rename, Remove. ↓ ↑ move, ↵ takes the item the keys are on (none
+  when a click opened it, the first when a key or a label did), Esc, any other key or a click
+  outside closes. No item has a letter: a key meant for what is behind a short-lived menu must
+  never delete (list mode keeps `r` and `x`). Delete keeps its Undo. Sneak labels reach the …
+  and the items. The user's alone; any other move of the user's closes it.
+- It holds the keyboard while open: nothing of a client's takes the keyboard under it
+  (`MENU_OPEN`), a client's keys and clicks go where they went before, and a key held past the
+  menu's end is not for what was under it.
+- It hangs under its … (over it at the window's foot). Its … drawn elsewhere (a row above came
+  or went, the window changed) closes it: it never hangs under another row.
 - `Add tab` left the row: `a` in list mode and File ▸ Add Tab to Workspace… do it.
 - The menu is one list of items per kind of row (`row_items`), drawn by one function: another
   row gets a menu by naming its items. No more than that.
