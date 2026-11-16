@@ -85,6 +85,7 @@ mod marks;
 mod menus;
 mod new_task;
 mod notice_bar;
+mod pass;
 mod progress;
 mod prs;
 mod record;
@@ -1571,9 +1572,9 @@ impl Workspace {
                     None => drop(ottospace_mac::meeting::open_url(url)),
                 },
                 Effect::OpenPr { .. } => {}
-                Effect::AddWorktree { repo, branch, path, root } => {
+                Effect::AddWorktree { repo, branch, path, root, fresh } => {
                     let done = self.worktrees.0.clone();
-                    worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), done);
+                    worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), *fresh, done);
                 }
                 Effect::Notice { text } => (self.error, self.refused) = (Some(text.clone()), Some(text.clone())),
                 Effect::NoticeDismissed { kind } => self.notice_dismissed(*kind),
@@ -1882,7 +1883,7 @@ impl Workspace {
         if !calls.is_empty() {
             self.check_marks(cx);
         }
-        for Call { request, reply } in calls {
+        for Call { request, reply, pass } in calls {
             if let Some(why) = control::test_refusal(&request, std::env::var_os("OTTOSPACE_E2E").is_some()) {
                 let _ = reply.send(control::error(why));
                 continue;
@@ -2262,7 +2263,8 @@ impl Workspace {
                     }
                 },
                 Request::TaskBrief { id, tab } => {
-                    let _ = reply.send(self.serve_brief(id, tab));
+                    let caller = self.caller(pass.as_ref());
+                    let _ = reply.send(self.serve_brief(id, caller, tab));
                     continue;
                 }
                 Request::Capture { pane, history } => {
@@ -3095,6 +3097,9 @@ impl Workspace {
         });
         // Restored or rebuilt panes still empty: `pane`, `why`, and where its "Open <App>" is drawn, or null.
         state["unfilled"] = unfilled.into();
+        // Where the box offers a choice of where the task works: `new` (a new worktree, the user's
+        // choice), the repository's name and the `branch` it would make; else null.
+        state["compose_worktree"] = serde_json::json!(self.model.compose_worktree());
         state
     }
 
@@ -4338,20 +4343,21 @@ impl Workspace {
     /// Worktrees git made, or did not: the list is read again; a made one opens, a failure is said.
     fn take_worktrees(&mut self, window: &Window, cx: &mut Context<Self>) {
         let made: Vec<worktree::Made> = self.worktrees.1.try_iter().collect();
-        for worktree::Made { repo, result } in made {
+        for worktree::Made { repo, asked, fresh, result } in made {
             let repos = repos::scan();
             match result {
                 // Made from a repository listed only as a worktree of another: not in the list to open.
                 Ok(path) if !repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == path)) => {
                     self.error = Some(format!("Made {path}: its repository is not listed"));
-                    self.dispatch(Action::SetRepos { repos }, Origin::System, window, cx);
+                    self.dispatch(Action::WorktreeFailed { asked, fresh, repos }, Origin::System, window, cx);
                 }
                 Ok(path) => {
-                    drop(self.dispatch(Action::WorktreeAdded { repo, path, repos }, Origin::System, window, cx))
+                    let made = Action::WorktreeAdded { repo, path, asked, fresh, repos };
+                    drop(self.dispatch(made, Origin::System, window, cx))
                 }
                 Err(why) => {
                     self.error = Some(why);
-                    self.dispatch(Action::SetRepos { repos }, Origin::System, window, cx);
+                    self.dispatch(Action::WorktreeFailed { asked, fresh, repos }, Origin::System, window, cx);
                 }
             }
             cx.notify();
@@ -5964,16 +5970,21 @@ fn mods(m: gpui::Modifiers) -> Mods {
 
 /// One line of `text`, cut with "…" where it does not fit. GPUI 0.2.2 keeps a text's first
 /// measure, which for a flex item has no width: laid over a box of the row's height, it has one.
-/// The box is as wide as the whole text, drawn clear, so it may shrink to fit as well as grow. A
-/// little wider: the cut adds up letters unkerned, so a text that just fits would lose its end.
+/// The box is as wide as the whole text, drawn clear, so it may shrink to fit as well as grow.
 pub(crate) fn cut_text(text: impl Into<SharedString>) -> Div {
-    let text = text.into();
-    let slack = 1. + 0.25 * text.chars().count() as f32;
-    // One line, as the cut shows: a line break would make the box taller.
-    let line: SharedString = if text.contains('\n') { text.replace('\n', " ").into() } else { text.clone() };
-    let room = div().pr(px(slack)).whitespace_nowrap().text_color(transparent_black()).child(line);
+    // One line, as the cut shows: a line break would make the box taller and hide what follows it.
+    let text: SharedString = text.into();
+    let text: SharedString = if text.contains('\n') { text.replace('\n', " ").into() } else { text };
+    // The clear copy a letter at a time, as the cut adds them up (unkerned): a text that fits is
+    // never cut (`ToTo`, emoji, accents). Past `EACH` letters, the rest in one piece: it is cut anyway.
+    const EACH: usize = 128;
+    let split = text.char_indices().nth(EACH).map_or(text.len(), |(at, _)| at);
+    let letters = text[..split].chars().map(|c| SharedString::from(c.to_string()));
+    let rest = (split < text.len()).then(|| SharedString::from(text[split..].to_string()));
+    // Opacity, not a clear colour: emoji are painted in theirs.
+    let room = div().flex().pr(px(1.)).whitespace_nowrap().opacity(0.).child("\u{200b}").children(letters);
     let over = div().absolute().inset_0().truncate().child(text);
-    div().relative().min_w_0().overflow_hidden().child(room).child(over)
+    div().relative().min_w_0().overflow_hidden().child(room.children(rest)).child(over)
 }
 
 /// A row of a secondary-bar list. A button at rest: its outline shows. Hover lifts it.
@@ -6495,7 +6506,9 @@ fn ctl(args: &[String]) -> ! {
         eprintln!("usage: ottospace ctl '{{\"cmd\":\"state\"}}'");
         std::process::exit(2);
     };
-    let reply = control::send(&control::path(), request).unwrap_or_else(|err| {
+    // An agent ottospace started for a task carries its pass: the reply knows whose it is.
+    let request = control::with_pass(request, std::env::var(pass::VAR).ok().as_deref());
+    let reply = control::send(&control::path(), &request).unwrap_or_else(|err| {
         eprintln!("no ottospace at {}: {err}", control::path().display());
         std::process::exit(1);
     });
@@ -6560,6 +6573,9 @@ fn main() {
     if args.get(1).is_some_and(|a| a == "ctl") {
         ctl(&args[2..]);
     }
+    // Started from a task agent's shell (a dev build): that pass is its, not for our children.
+    // SAFETY: no thread has started yet.
+    unsafe { std::env::remove_var(pass::VAR) };
     // Hidden while its output has no stable shape. Reads other programs' session files.
     if args.get(1).is_some_and(|a| a == "sessions") {
         sessions(args.get(2));

@@ -95,6 +95,12 @@ impl Driver {
         thread::spawn(move || read(stdout, &reading, &replies, &tx, (&tail, tailing), &exit, kill));
         Ok(Self { group, reaped, writes: Some(writes), protocol, events })
     }
+
+    /// True once the CLI has exited and been reaped: maybe before `Exited`, which waits for the end
+    /// of stdout, and a process it left in another group may hold that open.
+    pub fn reaped(&self) -> bool {
+        *lock(&self.reaped)
+    }
 }
 
 /// Waits for the CLI to exit, kills what it left in its group, then reaps it and gives its code.
