@@ -79,9 +79,11 @@ impl Workspace {
         let refused = self.error.is_some() && self.error == self.refused;
         let kind = if refused { Kind::Refused } else { Kind::Failed };
         let line = self.error.clone().map(|text| Notice { kind, text });
-        // A meeting is the user's to see: it does not cover why a client's step did nothing.
-        let mut all = self.notices(line.clone());
-        all.retain(|n| line.is_none() || n.kind != Kind::Meeting);
+        // A meeting does not cover a line the bar does not hold (why a client's step did nothing);
+        // over the bar's own line it stands, as on the bar.
+        let theirs = line.is_some() && line != self.held_now().said;
+        let mut all = self.notices(line);
+        all.retain(|n| !theirs || n.kind != Kind::Meeting);
         notice::shown(&all, &self.model.notice_hidden)
     }
 

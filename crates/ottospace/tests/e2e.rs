@@ -7761,6 +7761,12 @@ fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
     );
     std::fs::write(home.join("settings.json"), &settings).unwrap();
     otto.wait_for("the meeting back", |o| (o.drawn()["notice_bar"]["kind"] == "meeting").then_some(()));
+    // The user's own move that did nothing: the meeting stands over it, in the reply as on the bar.
+    let plain = home.canonicalize().unwrap().to_string_lossy().into_owned();
+    otto.call(json!({"cmd": "repo_add", "path": plain}));
+    let over = otto.drawn();
+    let said = (&over["notice"], &over["notice_level"], &over["notice_bar"]["kind"]);
+    assert_eq!(said, (&json!("Meeting started"), &json!("meeting"), &json!("meeting")), "{over}");
     // A client's click on Join opens nothing; on Dismiss, its Esc or its sneak labels, it
     // dismisses nothing.
     otto.click(centre(&banner["join"]), 1);
