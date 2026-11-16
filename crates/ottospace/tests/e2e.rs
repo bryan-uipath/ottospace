@@ -7356,7 +7356,7 @@ fn a_busy_day_puts_calls_in_lanes_over_blocks_coloured_by_kind_and_rule() {
     assert_eq!(count("lanes", json!(3)), 3, "{band}");
     assert!(blocks.iter().filter(|b| b["kind"] == "block").all(|b| b["lane"].is_null()), "{band}");
     // Rules by title, case ignored; the rest by kind and status.
-    let colours = [("teal", 2), ("pink", 3), ("away", 1), ("block", 3), ("meeting", 6)];
+    let colours = [("teal", 2), ("pink", 3), ("away", 1), ("focus", 2), ("block", 1), ("meeting", 6)];
     for (name, n) in colours {
         assert_eq!(count("color", json!(name)), n, "{name} in {band}");
     }
@@ -7373,6 +7373,59 @@ fn a_busy_day_puts_calls_in_lanes_over_blocks_coloured_by_kind_and_rule() {
     });
     assert!(otto.call(json!({"cmd": "state"}))["notice"].is_null(), "no restart asked");
     assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Daily standup"), "no title in the state");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_focus_block_has_its_own_colour_and_a_call_or_a_rule_keeps_its_own() {
+    let zoom = "LOCATION:https://example.zoom.us/j/123\r\n";
+    let home = calendar_folder(
+        "calendar-focus",
+        &feed(&[
+            ("a", "Focus time", -6_000, -2_400, ""),
+            ("b", "Focus sync", -5_400, -2_400, zoom), // ends with a: both leave the band together
+            ("c", "Lunch and learn", -1_800, -600, ""),
+            ("d", "Deep Work - parser", 600, 2_400, ""),
+            ("e", "Focusing workshop", 3_000, 4_200, ""),
+            ("f", "Focus: budget", 4_800, 6_000, ""),
+        ]),
+        None,
+    );
+    // The whole day, so every entry is on the band; one rule that names a focus block's title.
+    let settings = json!({
+        "calendar_ics": home.join("today.ics"), "calendar_workday": "00:00-24:00", "repos": [],
+        "calendar_colors": [{ "match": "budget", "color": "teal" }],
+    });
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let otto = Otto::launch_with("calendar-focus", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    calendar_read(&otto);
+    let band = otto.wait_for("the band drawn", |o| {
+        let b = o.call(json!({"cmd": "state"}))["calendar"]["band"].clone();
+        b["blocks"]
+            .as_array()
+            .is_some_and(|all| !all.is_empty() && all.iter().all(|b| b["rect"].is_array()))
+            .then_some(b)
+    });
+    // By start: each entry's kind, colour and focus flag. Near midnight the day holds only the
+    // first or the last of them, three at least: they start from 100 minutes ago to 80 on.
+    let mut blocks = band["blocks"].as_array().unwrap().clone();
+    blocks.sort_by_key(|b| b["start"].as_u64());
+    let seen: Vec<(&str, &str, bool)> = blocks
+        .iter()
+        .map(|b| (b["kind"].as_str().unwrap(), b["color"].as_str().unwrap(), b["focus"].as_bool().unwrap()))
+        .collect();
+    let all = [
+        ("block", "focus", true),   // Focus time
+        ("call", "meeting", false), // Focus sync, on Zoom
+        ("block", "block", false),  // Lunch and learn
+        ("block", "focus", true),   // Deep Work - parser
+        ("block", "block", false),  // Focusing workshop
+        ("block", "teal", true),    // Focus: budget, the user's rule
+    ];
+    assert!(seen.len() >= 3 && all.windows(seen.len()).any(|w| w == seen), "{band}");
+    assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Focus time"), "no title in the state");
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }

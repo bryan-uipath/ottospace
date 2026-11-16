@@ -110,6 +110,8 @@ pub const IDENTITY_NAMES: [&str; crate::tasks::COLOURS as usize] =
 pub const MEETING: u32 = SNEAK;
 /// A meeting with no call link: time held, drawn under the calls.
 pub const MEETING_BLOCK: u32 = MUTED;
+/// A focus block (`calendar::focus`): green, apart from a call's amber and a block's grey.
+pub const MEETING_FOCUS: u32 = PICK;
 /// Out of office.
 pub const MEETING_AWAY: u32 = 0x7c86a2;
 

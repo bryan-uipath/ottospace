@@ -1294,7 +1294,8 @@ export interface Snapshot {
      * (ms) at its ends and the workday's, the workday's two marks, now's tick, each block's times
      * and rect, and the status bar's rect. Blocks with no call link come first, drawn under the
      * calls, with no lane; a call's `lane` of `lanes` (0 the top), and `more` calls merged into it.
-     * `color`: a `calendar_colors` name, else `meeting`, `block` or `away`. `outside`: the markers
+     * `color`: a `calendar_colors` name, else `away`, `meeting`, `focus` or `block`. `focus`: a block
+     * whose title starts with Focus or Deep Work, whatever its colour. `outside`: the markers
      * of blocks wholly before (0) and after (1) the band.
      */
     band: {
@@ -1310,6 +1311,7 @@ export interface Snapshot {
         kind: "call" | "block";
         show: MeetingShow;
         color: string;
+        focus: boolean;
         lane: number | null;
         lanes: number | null;
         more: number;

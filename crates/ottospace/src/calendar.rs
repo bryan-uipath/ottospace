@@ -511,6 +511,7 @@ impl Workspace {
             Some(serde_json::json!({
                 "start": e.start, "end": e.end, "rect": drawn(Mark::BandBlock(n)),
                 "kind": calendar::kind(e).name(), "show": e.show.name(), "color": paint.name,
+                "focus": calendar::focus(e),
                 "lane": lane.map(|l| l.0), "lanes": lane.map(|l| l.1), "more": more,
             }))
         };
@@ -531,7 +532,7 @@ impl Workspace {
             "bars": layout.blocks.len() + layout.calls.len(),
             // The band above the status bar, in window points: its rect, the times at its ends and
             // the workday's (ms), the workday's marks, now's tick, each block's times and rect, kind,
-            // status, colour name and lane (blocks under the calls have none), and the markers of
+            // status, colour name, whether a focus block, and lane (blocks under the calls have none), and the markers of
             // blocks wholly before and after it (`outside`: counts and rects).
             "band": (calendar.on && calendar.span(0).1 > 0).then(|| serde_json::json!({
                 "rect": drawn(Mark::Band),
