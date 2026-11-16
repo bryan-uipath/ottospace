@@ -540,7 +540,7 @@ impl Workspace {
                 .items_center()
                 .gap_2()
                 .child(div().flex_none().w(px(34.)).text_xs().text_color(rgb(color)).child(tag))
-                .child(name.flex_1().overflow_hidden())
+                .child(name.flex_1().overflow_hidden().whitespace_nowrap())
                 .child(dot)
                 .child(letter)
                 .child(rename)

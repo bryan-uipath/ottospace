@@ -5945,7 +5945,9 @@ fn mods(m: gpui::Modifiers) -> Mods {
 pub(crate) fn cut_text(text: impl Into<SharedString>) -> Div {
     let text = text.into();
     let slack = 1. + 0.25 * text.chars().count() as f32;
-    let room = div().pr(px(slack)).whitespace_nowrap().text_color(transparent_black()).child(text.clone());
+    // One line, as the cut shows: a line break would make the box taller.
+    let line: SharedString = if text.contains('\n') { text.replace('\n', " ").into() } else { text.clone() };
+    let room = div().pr(px(slack)).whitespace_nowrap().text_color(transparent_black()).child(line);
     let over = div().absolute().inset_0().truncate().child(text);
     div().relative().min_w_0().overflow_hidden().child(room).child(over)
 }
