@@ -87,10 +87,11 @@ tab never saved with ⌘⇧S is gone), and a tab closed with ⌘⇧W.
   panes, terminals stay; hosted windows stay parked as for any tab not on show. Its row in Tasks
   (`TaskTalk`), `TaskGo`, its Workspaces row (`WorkbookOpen`) or `SpaceOpen` bring it back where
   it was. Selecting one of its tabs (`SelectTab`, a pane focused, a mark) shows it too.
-- **New task** (⌘N, ↵ in the box): the task's space is made at the row's end with one empty tab
-  and selected. One exception, in sight: started while a tab of the first space is on show that
-  holds a terminal in the task's folder (a tab opened from the Repos section), that tab moves
-  into the new space as its first (`Model::bind_tab`). Nothing else moves. Stage 3 replaces it.
+- **New task** (⌘N, ↵ in the box): started in a kept workspace of no task, the task takes that
+  workspace (below, "A task started in a workspace"). Else (from the first space, a task's, a
+  session's or a bound workspace's) its space is made at the row's end with one empty tab and
+  selected.
+- **A task gone** gives its tabs to the workspace it was bound to, else to the first space.
 - **Repos**: a click on a repository or worktree opens a terminal there in a tab of the first
   space of its own (the empty one on show, else a new one) and selects it. A row a live task
   works in carries that task's badge, and its click (`RepoClick`) selects the task's space
@@ -115,16 +116,50 @@ workspace with only a task or worktree, and a workspace with both".
   field. A click on a Repos row selects the workspace linked to that worktree, else makes one
   (a terminal there, named for the worktree while it has no task); it no longer opens a tab in
   the first space. Sessions stay a kind of their own.
-- **Stage 3: a task started inside a workspace binds it.** The user's ↵ in the new-task box
-  while a workspace with no task is selected: that workspace becomes the task's, in place, with
-  all its tabs (replaces `bind_tab`). A worktree's workspace gives the task its repository; a
-  `>repo` on the line that names another wins, and the task gets a new workspace. ⇧↵ (for
-  later), a client's `task_new`, and a task started from a task's or session's space bind
-  nothing. While binding would take a workspace that holds a pane, the box's line says so
-  ("↵ makes this workspace the task's").
-- Rules for the property test then: one workspace a task, one a worktree; binding moves no
-  pane and ends nothing; nothing but the user's act sets or clears a link on the space the user
-  is in.
+- With the worktree link: a worktree's workspace gives a task started in it its repository,
+  unless the line's `>repo` names another. A second task for a worktree whose workspace has a
+  task (decided by the owner: "my preference is a new worktree"): its workspace is made on a
+  new worktree of that repository, its branch from the task's title, said in the box before ↵.
+
+## A task started in a workspace (built)
+
+The owner: "if i have a workspace w/o an active task, and i'm focused in it, and I press
+command+n for a new task and specify the task - the active workspace should now be attached to
+the task (right now - a new task/workspace gets created for the task)".
+
+- **The user's ↵ in the new-task box** (the one that adds the task and starts its agent), while
+  the selected space is a workspace of no task: that workspace is the task's space from then
+  on (`Model::bind_space`). In place on the top row, with all its tabs and panes: no pane
+  moves, nothing closes, no space is made. The drawer shows the task's conversation there.
+  This replaces the one-tab exception (`bind_tab`).
+- **A kept workspace** (made with +, or saved) stays what it is: listed in Workspaces, its file
+  kept, now with `task` (`Workbook::task`, in its file). On the top row it shows as the task
+  (badge and title); its row in the section carries the task's badge and opens the task's
+  space (a saved tab of it that is closed is built there); ⌘⇧S there saves into it; a tab moved "to the workspace" goes to the task's space.
+  Deleted while bound, the task keeps the space and its tabs; the delete's Undo binds it again.
+  The task's space gone while bound (its last tab closed, or no layout restored): its row
+  opens it as its own again, with its saved tabs, unbound.
+- **The first "Workspace"** is not taken: a task started there gets a space of its own, as
+  before. (It becomes Home, which holds no tabs: the next change.) The one-tab exception is
+  gone with `bind_tab`: a Repos tab stays the first space's.
+- **Unbound when the task goes.** The task dismissed, or deleted: the workspace is its own
+  again, where it was on the row, with its tabs. The user's undo of the dismissal binds it
+  again. A task that is done but not dismissed keeps its space, as every task does.
+- **Nothing else binds.** ⇧↵ (for later; no agent), a line whose agent would not start, a
+  client's `task_new` (it never takes the user's workspace), a task started from the first
+  space, a task's, a session's or an already bound workspace's: a space of its own at the row's end.
+- **The box says so.** While ↵ would take a workspace that holds a pane: "↵ makes this workspace
+  the task's" (after the plan, when there is one: "↵ will start codex in app on main, and makes
+  this workspace the task's"). An empty workspace is bound with nothing said: nothing is taken.
+- `>repo` on the line is as before: the agent runs where the line says. Binding changes no folder.
+- **How it is modelled.** The smallest thing that gives the behaviour: the space changes kind
+  in place (`Owner::Workbook` → `Owner::Task`), and the kept workspace records the link
+  (`task`). So every rule about a task's space (drawer, hide,
+  restore) holds as it was. The end state is still one kind of space with two optional links
+  (above): then binding is only setting the field.
+- Property rules: one workspace a task, a live one; a bound workspace has no space of its own;
+  only the user's ↵ on a new task binds (or their undo of its dismissal, or files read again);
+  binding moves no pane and closes none.
 
 ## Open questions
 

@@ -109,6 +109,9 @@ Rules:
     key codes 0 to 50 (`a`, `7`, `/`; not `A`). A `cmd-` shortcut, by the flag alone, is pressed as
     without `repeat` while `key_repeating()` says held. `escape`, `backspace` and arrows answer
     "no key to hold down".
+- `OTTOSPACE_REDUCE_MOTION` (read only under `OTTOSPACE_E2E`) stands for the system's Reduce Motion
+  in the dial. The state's `counts.dial_frames` counts the frames the dial asked for because
+  something in it moves: none at rest.
 - A feature is done when both loops cover it. Extend `Request` and the state snapshot when a test
   needs to drive or read something new.
 

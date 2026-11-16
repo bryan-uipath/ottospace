@@ -237,12 +237,13 @@ impl Activity {
                 Station::You if is.asking.is_some() => None,
                 _ => calls.clone().map(|call| call.since).min(),
             };
-            let lit = calls.count() > 0
-                || (station == Station::Model && model_lit)
-                || (station == Station::You && is.asking.is_some());
+            let waits = (station == Station::Model && model_lit) || (station == Station::You && is.asking.is_some());
+            let running = (calls.count() as u32).max(u32::from(waits));
+            let lit = running > 0;
             let weight = if heaviest > 0. { (weights[station.at()] / heaviest) as f32 } else { 0. };
             let since = since.filter(|_| is.timed && lit).map(|since| now.saturating_sub(since));
-            Spot { station, calls: used.calls, failed: used.failed, failing: used.failing, lit, weight, for_ms: since }
+            let (calls, failed, failing) = (used.calls, used.failed, used.failing);
+            Spot { station, calls, failed, failing, lit, running, weight, for_ms: since }
         });
         let route = self.route.iter().filter(|(_, at)| now.saturating_sub(*at) < ROUTE_MS);
         let route = route.map(|(station, at)| Leg { station: *station, age_ms: now.saturating_sub(*at) }).collect();
@@ -394,6 +395,8 @@ pub struct Spot {
     pub failing: u32,
     /// A call there is in progress (Model: the model has the turn; You: a request waits).
     pub lit: bool,
+    /// How many are in progress there now: its dot is larger for more.
+    pub running: u32,
     /// Its use, decayed, against the heaviest's: 0 to 1. Not in the state: it changes with time.
     #[serde(skip)]
     pub weight: f32,
@@ -458,6 +461,11 @@ pub struct Dial {
 impl Dial {
     pub fn spot(&self, station: Station) -> Option<&Spot> {
         self.stations.iter().find(|spot| spot.station == station)
+    }
+
+    /// The model has the turn and no call runs, with times known: the centre's glyph turns.
+    pub fn thinking(&self) -> bool {
+        self.timed && self.spot(Station::Model).is_some_and(|spot| spot.lit)
     }
 }
 

@@ -30,6 +30,7 @@ pub mod links;
 pub mod list;
 pub mod marks;
 pub mod model;
+pub mod motion;
 pub mod notice;
 pub mod palette;
 pub mod progress;
