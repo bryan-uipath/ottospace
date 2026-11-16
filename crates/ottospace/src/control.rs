@@ -738,7 +738,8 @@ mod tests {
             let err = parse(bad).err().expect(bad);
             assert!(err.contains("32 hex digits") && !err.contains("hunter2"), "{err}");
         }
-        assert!(parse(&with_pass(r#"{"cmd":"state","extra":1}"#, Some(hex))).is_err());
+        assert!(parse(&with_pass(r#"{"cmd":"split","extra":1}"#, Some(hex))).is_err());
+        assert!(parse(r#"{"cmd":"split","axis":"sideways"}"#).is_err());
         assert!(parse(&with_pass(r#"{"cmd":"nope"}"#, Some(hex))).is_err());
     }
 

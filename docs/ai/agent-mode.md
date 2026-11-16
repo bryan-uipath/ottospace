@@ -52,6 +52,32 @@ A small script printed the variable and tried to connect.
   MCP server (the runner starts it outside the tool sandbox) that speaks to the socket with the
   task's pass; the requests of sections 3 and 5 become its tools. Decide this in stage (a).
 
+## Stage (a), as built (2026-11-16)
+
+- **The pass.** `crates/ottospace/src/pass.rs`: 16 bytes of `/dev/urandom`, hex, in
+  `OTTOSPACE_TASK_PASS`, minted in `start_native` and `start_agent` when the conversation is a
+  task's. Kept in the drawer's entry (`Native.pass`, `Agent.pass`), never serialized, `Debug` hidden.
+  Gone when the entry is (exit, Stop, the view switch), when a terminal agent's program ends, and on
+  `move_agent` (minted for one subject only). Compared in constant time against every live pass.
+- **On the wire.** A top-level `"pass"` on any request line, taken off before `Request` is parsed
+  (`control::parse`): the closed set is unchanged. Not 32 hex digits: an error that does not repeat
+  it. `ottospace ctl` and the SDK attach `$OTTOSPACE_TASK_PASS` to every request.
+- **The rule, in the core.** `Model::brief_task(id, Caller, tab)`: the id named, else the caller's
+  task, else as before (tab, on show, drawer). `Caller::Unknown` (a wrong or dead pass) gets an
+  error, never the task on show. No new `Action`: the core never sees a pass.
+- **Docs of the CLIs** (read, not run; summaries of code.claude.com and learn.chatgpt.com):
+  Claude Code's Bash inherits the CLI's environment, no name filter by default
+  (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` scrubs credentials "by name or value": unread whether a hex
+  pass is caught); its sandbox, off by default, blocks Unix sockets but those listed in
+  `sandbox.network.allowUnixSockets`. Codex: `shell_environment_policy.ignore_default_excludes`
+  is documented as default `true` now (KEY/SECRET/TOKEN names kept), `inherit = "core"` would
+  likely drop the pass, `set` adds one; sockets need
+  `permissions.<name>.network.unix_sockets.<path> = "allow"`. Both pass the environment on by
+  default, so no `RunnerSpec` field yet.
+- **The MCP route.** Not built: the pass is route-agnostic (an MCP server the runner starts
+  inherits the same variable and attaches it the same way). Lean: build it in (b), the first stage
+  whose requests a sandboxed tool shell needs. Owner's call.
+
 ## What exists today
 
 | Piece | Where | What it means here |

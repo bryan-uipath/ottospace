@@ -602,16 +602,26 @@ ottospace ctl '{"cmd":"task_brief","tab":3}'
 ```
 
 The user captures a pane with the capture key: its picture is frozen, they circle parts of it and
-type notes, and add a task. That task has a brief. A shell in one of the task's tabs has
-`OTTOSPACE_TASK` (the task's id), so an agent started there asks for its own:
+type notes, and add a task. That task has a brief. An agent ottospace started for a task (from its
+row or the drawer) asks for its own with no `id`: `ottospace ctl` and the SDK say whose the
+request is for it, from its environment. Never write that variable's value into a command.
+
+```sh
+ottospace ctl '{"cmd":"task_brief"}'
+```
+
+A shell in one of the task's tabs, and an agent you started there yourself, have
+`OTTOSPACE_TASK` (the task's id) instead:
 
 ```sh
 ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"
 ```
 
 `task_brief` replies `{"ok":true,"task":7,"dir":"..","path":"../brief.md","brief":{..}}`, not the
-state. Without `id` it is the task of the tab `tab` (`$OTTOSPACE_TAB`), else the task of the tab
-on show, else the task in the drawer. It fails with "has no materials" for a task nothing was captured for. `brief` holds:
+state. Without `id` it is the task of the agent asking, if ottospace started it; else the task
+of the tab `tab` (`$OTTOSPACE_TAB`), else the task of the tab on show, else the task in the
+drawer. An agent whose process has ended is refused ("no running agent's"): the user starts it
+again. It fails with "has no materials" for a task nothing was captured for. `brief` holds:
 
 - `ask`: the user's own words: `title`, `priority`, `project`, `repo`, `agent`, `paths`, `skills`.
   `title_generated` true: nobody typed the title (the task was filed from captures alone); it

@@ -175,6 +175,43 @@ test("every client method is in the fixture", async () => {
   assert.deepEqual(sent.toSorted(), methods.map(snake).toSorted());
 });
 
+test("an agent's pass rides on every request, and finds its task's brief", async () => {
+  const lines: string[] = [];
+  const transport: Transport = {
+    send: async (line) => {
+      lines.push(line);
+      return '{"ok":false,"error":"recorded"}';
+    },
+    close: () => {},
+  };
+  const client = new Client(transport, async () => transport);
+  const before = { pass: process.env.OTTOSPACE_TASK_PASS, task: process.env.OTTOSPACE_TASK };
+  const pass = "0123456789abcdef0123456789abcdef";
+  try {
+    process.env.OTTOSPACE_TASK_PASS = pass;
+    process.env.OTTOSPACE_TASK = "7";
+    await assert.rejects(client.state(), /recorded/);
+    // No id: the pass says whose; `$OTTOSPACE_TASK` is not sent for it.
+    await assert.rejects(client.taskBrief(), /recorded/);
+    await assert.rejects(client.taskBrief({ id: 2 }), /recorded/);
+    delete process.env.OTTOSPACE_TASK_PASS;
+    await assert.rejects(client.state(), /recorded/);
+    await assert.rejects(client.taskBrief(), /recorded/);
+  } finally {
+    for (const [name, value] of [["OTTOSPACE_TASK_PASS", before.pass], ["OTTOSPACE_TASK", before.task]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+  assert.deepEqual(lines.map((line) => JSON.parse(line)), [
+    { cmd: "state", pass },
+    { cmd: "task_brief", pass },
+    { cmd: "task_brief", id: 2, pass },
+    { cmd: "state" },
+    { cmd: "task_brief", id: 7 },
+  ]);
+});
+
 test("every Request variant in control.rs has a client method", () => {
   const source = readFileSync(CONTROL_RS, "utf8");
   const body = source.slice(source.indexOf("pub enum Request {"), source.indexOf("\n}\n", source.indexOf("pub enum Request {")));
