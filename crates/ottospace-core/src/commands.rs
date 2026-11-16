@@ -64,8 +64,9 @@ macro_rules! commands {
 
             /// The flag it is behind: off, it is not listed, nor is its menu item.
             pub fn feature(self) -> Option<Feature> {
-                match self.group() {
-                    Group::Marks => Some(Feature::Marks),
+                match (self, self.group()) {
+                    (_, Group::Marks) => Some(Feature::Marks),
+                    (Command::Transcribe, _) => Some(Feature::Transcripts),
                     _ => None,
                 }
             }
@@ -133,6 +134,7 @@ commands! {
     CalendarBack: "Previous Day in Calendar", View;
     CalendarForward: "Next Day in Calendar", View;
     CalendarToday: "Today in Calendar", View;
+    Transcribe: "Start or Stop Transcribing", View;
     AxOverlay: "Accessibility Overlay", Developer;
     AxInspector: "Accessibility Inspector", Developer;
     InspectorFilter: "Filter the Accessibility Inspector", Developer;
@@ -294,7 +296,8 @@ mod tests {
 
     #[test]
     fn word_starts_and_runs_rank_first() {
-        assert_eq!(names("tr")[0], "Terminal Right");
+        // "tr" runs in "Transcribing": a run beats two word starts.
+        assert_eq!(names("tri")[0], "Terminal Right");
         assert_eq!(names("acov")[0], "Accessibility Overlay");
         assert_eq!(names("next")[..2], ["Next Pane", "Next Tab"]);
         assert_eq!(names("quit")[0], "Quit ottospace");

@@ -1120,6 +1120,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 | --- | --- | --- | --- |
 | `marks` | Experimental | off | Marks: name a pane or a tab, and go back to it with a letter |
 | `apps_section` | Experimental | off | The Apps section: the Dock's apps, pins, Not running and All apps |
+| `transcripts` | Experimental | off | Transcripts (⌘⌃T): an app pane's audio as lines in the drawer. In progress: no audio source yet |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1129,6 +1130,11 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   `feature off: apps_section`. ⌘⌃E drives the rail's first section. Hosting apps in panes, the
   picker (⌘E, ⌘⇧E) and its installed apps, sneak labels in apps, peeks, restore and rescue all
   still work. The state's `apps_bar` is empty.
+- `transcripts` off: no `Transcribe` in a pane's header, no red dot on the top row, ⌘⌃T does
+  nothing, no Transcribe command or menu item, and the state's `listen` is null. Turning it off
+  ends a transcript that is on. On, it is not usable yet: no audio is captured in this build, so
+  `Transcribe` shows nowhere and ⌘⌃T says "no audio source yet" (design:
+  [transcripts.md](ai/transcripts.md)).
 
 ## Driving it from outside
 

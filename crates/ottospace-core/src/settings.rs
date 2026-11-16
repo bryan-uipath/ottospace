@@ -1192,7 +1192,7 @@ mod tests {
             wrong,
             [
                 "features: \"apps_section\" must be true or false",
-                "features: \"tabs\" is not a feature: the features are marks, apps_section"
+                "features: \"tabs\" is not a feature: the features are marks, apps_section, transcripts"
             ]
         );
         assert!(Settings::parse(r#"{"features": {"tabs": true}}"#).unwrap_err().contains("marks, apps_section"));
@@ -1202,7 +1202,8 @@ mod tests {
         let text = "{\n  \"tasks\": \"t\",\n  \"features\": {\"marks\": true}\n}\n";
         let set = with_feature(text, "apps_section", true).unwrap();
         assert!(set.starts_with("{\n  \"tasks\": \"t\",\n  \"features\": {"), "{set}");
-        assert_eq!(Settings::read(&set).0.features(), crate::features::Features::all());
+        let both = crate::features::Features::all().with(crate::features::Feature::Transcripts, false);
+        assert_eq!(Settings::read(&set).0.features(), both);
         assert_eq!(with_feature("", "marks", false).unwrap(), "{\n  \"features\": {\n    \"marks\": false\n  }\n}\n");
         assert!(with_feature(r#"{"features": true}"#, "marks", true).unwrap_err().contains("not an object"));
         // A retired flag only warns: the rest of the file still applies.
