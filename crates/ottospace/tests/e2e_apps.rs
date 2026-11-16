@@ -1783,11 +1783,10 @@ fn the_window_fills_its_display_an_apps_window_stops_at_the_dock_and_every_end_b
         let fit = &s["state"]["panes"][0]["fit"];
         format!("window {}, pane {}, app's window {}, misfit {fit}", s["window"], s["bounds"]["1"], s["hosted"]["1"])
     };
-    // ottospace in front, the Dock away: the app's picture goes down its pane as far as macOS
-    // lets the window grow (no taller than what the bars leave), not to the Dock's top, and no
-    // misfit is named.
+    // ottospace in front, the Dock away: the app's picture goes down to its pane's foot, not to
+    // the Dock's top, and no misfit is named.
     let crop = state()["crop"]["1"].as_f64().expect("the crop");
-    let covers = |pane: [f64; 4]| move |f: &[f64; 4]| f[3] - crop >= pane[3].min(visible[3] - crop) - 4.0;
+    let covers = |pane: [f64; 4]| move |f: &[f64; 4]| f[3] - crop >= pane[3] - 2.0;
     let filled = || {
         let s = state();
         let parked = rect(&s["hosted"]["1"]).filter(covers(body)).filter(|_| s["state"]["panes"][0]["fit"].is_null());

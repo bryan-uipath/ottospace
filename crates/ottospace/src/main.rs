@@ -355,6 +355,11 @@ impl Hosted {
         let _ = self.window.set_size(frame.size);
         let _ = self.window.set_position(frame.origin);
         (self.placed, self.placed_crop) = (rect, crop);
+        // Live shorter than parked (above the Dock while the window fills its display): the next
+        // park sizes it again.
+        if (rect.size, crop) != (self.parked_size, self.crop) {
+            self.parked_size = CGSize::ZERO;
+        }
     }
 
     /// Places the window over its pane and activates its app: entering, and a peek. The app may
