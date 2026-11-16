@@ -211,11 +211,17 @@ impl Workspace {
             return;
         }
         match config::save_apps(changes) {
-            Err(why) => self.error = Some(format!("{}{why}", Self::NOT_WRITTEN)),
-            Ok(()) if self.error.as_ref().is_some_and(|error| error.starts_with(Self::NOT_WRITTEN)) => {
-                self.error = None
+            Err(why) => self.broke(format!("{}{why}", Self::NOT_WRITTEN)),
+            Ok(()) => {
+                let not_written = |text: &str| text.starts_with(Self::NOT_WRITTEN);
+                if self.error.as_deref().is_some_and(not_written) {
+                    self.error = None;
+                }
+                // The bar may still hold it: a client's line can have taken `error` since.
+                if self.bar_line.said.as_ref().is_some_and(|said| not_written(&said.text)) {
+                    self.bar_line = Default::default();
+                }
             }
-            Ok(()) => {}
         }
     }
 
