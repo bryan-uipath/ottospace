@@ -2387,8 +2387,10 @@ impl Run {
         let filled_before = m.fill_display;
         let effects = m.update(sent);
         check(m)?;
-        // Only the user puts the window over the menu bar and the Dock; anyone's end of it tells the shell.
-        let fills = matches!(action, Action::FillDisplay) && origin == Origin::User;
+        // Only the user puts the window over the menu bar and the Dock, now or in the run whose
+        // layout the shell restores; anyone's end of it tells the shell.
+        let restores = matches!(action, Action::RestoreLayout { .. }) && origin == Origin::System;
+        let fills = matches!(action, Action::FillDisplay) && origin == Origin::User || restores;
         ensure!(fills || !m.fill_display || filled_before, "{origin:?}'s {action:?} filled the display");
         // A notice is said to the user: only their dismissal takes one off the bar, and only a
         // read of the settings (their line fixed or changed) puts one back. No input: one effect.

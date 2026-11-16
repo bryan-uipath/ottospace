@@ -9427,19 +9427,66 @@ fn the_notice_bar_sits_at_the_foot_moves_nothing_above_and_only_the_user_dismiss
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn only_the_users_key_fills_the_display_and_a_test_run_moves_no_window() {
+fn only_the_users_key_green_button_or_top_button_fills_the_display_and_a_test_run_moves_no_window() {
     let otto = Otto::launch("fill");
     let before = otto.call(json!({"cmd": "state"}));
     assert_eq!(before["state"]["fill_display"], false);
+    let fills = |reply: &Value, on: bool| {
+        assert_eq!((&reply["state"]["fill_display"], &reply["window"]), (&json!(on), &before["window"]), "{reply}");
+    };
     // A client's key does nothing: the window over the menu bar is the user's to ask for.
-    let refused = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-shift-f"}));
-    assert_eq!(refused["state"]["fill_display"], false, "{refused}");
-    // The user's turns it on, and again off. A test run's window stays where it is: it floats
-    // over the user's screen.
-    let on = otto.user_key("cmd-ctrl-shift-f");
-    assert_eq!((&on["state"]["fill_display"], &on["window"]), (&json!(true), &before["window"]));
-    let off = otto.user_key("cmd-ctrl-shift-f");
-    assert_eq!((&off["state"]["fill_display"], &off["window"]), (&json!(false), &before["window"]));
+    fills(&otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-f"})), false);
+    // ⌃⌘F, the user's, turns it on, and again off. A test run's window stays where it is: it
+    // floats over the user's screen.
+    fills(&otto.user_key("cmd-ctrl-f"), true);
+    fills(&otto.user_key("cmd-ctrl-f"), false);
+    // The green button: a zoom, turned into the same toggle, and the window is not zoomed.
+    otto.call(json!({"cmd": "zoom_press"}));
+    fills(
+        &otto.wait_for("the green button to fill", |o| {
+            Some(o.call(json!({"cmd": "state"}))).filter(|r| r["state"]["fill_display"] == true)
+        }),
+        true,
+    );
+    otto.call(json!({"cmd": "zoom_press"}));
+    fills(
+        &otto.wait_for("the green button to end it", |o| {
+            Some(o.call(json!({"cmd": "state"}))).filter(|r| r["state"]["fill_display"] == false)
+        }),
+        false,
+    );
+    // The top row's button, beside the splits: the user's click toggles; a client's does nothing.
+    let button = otto.control("top:fill");
+    assert!(button[0] > otto.control("top:split_down")[0], "after the splits: {button:?}");
+    fills(&otto.call(json!({"cmd": "mouse", "action": "down", "x": button[0] + 14., "y": button[1] + 11.})), false);
+    otto.call(json!({"cmd": "mouse", "action": "up", "x": button[0] + 14., "y": button[1] + 11.}));
+    fills(&otto.user_click(at(button, 0.5, 0.5)), true);
+    // Its sneak label is a client's here: refused. The user's ⌃⌘F ends it.
+    fills(&sneak_to(&otto, "top:fill"), true);
+    fills(&otto.user_key("cmd-ctrl-f"), false);
+    assert_eq!(otto.control("top:fill"), button, "the button stays where it was");
+}
+
+/// On at quit, on at the next start: kept in `layout.json` of the run's own `OTTOSPACE_HOME`.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_display_filled_at_quit_is_filled_again_at_start() {
+    let home = user_folder("fill-kept", r#"{"repos": []}"#);
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let run = |name: &str, toggle: bool| {
+        let mut otto = Otto::launch_with(name, &env);
+        let seen = otto.call(json!({"cmd": "state"}))["state"]["fill_display"].clone();
+        if toggle {
+            otto.user_key("cmd-ctrl-f");
+        }
+        otto.call(json!({"cmd": "quit"}));
+        exits(&mut otto);
+        seen
+    };
+    assert_eq!(run("fill-kept-1", true), false);
+    assert_eq!(run("fill-kept-2", true), true, "filled at quit: filled at start");
+    assert_eq!(run("fill-kept-3", false), false, "off at quit: off at start");
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// The top row as (kind, selected, its tabs' places), hidden spaces left out.

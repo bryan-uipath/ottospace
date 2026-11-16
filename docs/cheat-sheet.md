@@ -45,8 +45,7 @@ ottospace            # opens on the Repos list
 | Hide the task or workspace on show | ⌘⌃W, or its × on the top row. Its row in Tasks or Workspaces opens it again |
 | Close the tab and its panes | ⌘⇧W |
 | Save the tab into its workspace, else as a new one | ⌘⇧S |
-| Fill the screen | ⌘⌃F (again to restore) |
-| Fill the whole display, over the menu bar and Dock | ⌘⌃⇧F (again to restore) |
+| Fill the whole display, over the menu bar and Dock | ⌃⌘F, the green button, or the expand button at the top right (again to restore) |
 
 ## The bar on the left (Tasks, Calendar, Workspaces, Repos; Apps and Marks behind flags)
 

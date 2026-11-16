@@ -1762,7 +1762,7 @@ fn the_window_fills_its_display_an_apps_window_stops_at_the_dock_and_every_end_b
     wait_for("the canary window", || global_frame(&canary, 0));
     let mut otto = otto_for(&canary, "otto-fill", &[]);
     let state = || otto.call(json!({"cmd": "state"}));
-    let fill = || drop(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-shift-f", "as": "user"})));
+    let fill = || drop(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-f", "as": "user"})));
     // As another app sees the system: whether the bars are away, and what they leave when they show.
     let bars_hidden = |hidden: bool| (canary.call(json!({"cmd": "state"}))["bars_hidden"] == hidden).then_some(());
     let visible = rect(&canary.call(json!({"cmd": "state"}))["visible"]).expect("the visible frame");

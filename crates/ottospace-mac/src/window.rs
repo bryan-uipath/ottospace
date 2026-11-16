@@ -3,8 +3,11 @@
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use objc2::ffi::class_addMethod;
 use objc2::rc::Retained;
-use objc2::{AnyThread, MainThreadMarker};
+use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
+use objc2::{AnyThread, MainThreadMarker, sel};
+use objc2_foundation::NSRect;
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationPresentationOptions, NSEvent, NSEventModifierFlags,
     NSEventType, NSFloatingWindowLevel, NSImage, NSScreen, NSView, NSWindowCollectionBehavior,
@@ -204,6 +207,57 @@ pub unsafe fn zoom_instead_of_fullscreen(ns_view: *mut c_void) {
         window.setCollectionBehavior(
             behavior | NSWindowCollectionBehavior::FullScreenNone | NSWindowCollectionBehavior::FullScreenDisallowsTiling,
         );
+    }
+}
+
+/// Set by a zoom of the window (the green button, Window ▸ Zoom, a title bar double-click), taken by `take_zoom`.
+static ZOOM_ASKED: AtomicBool = AtomicBool::new(false);
+
+/// `windowShouldZoom:toFrame:`: no zoom; the shell fills the display instead.
+extern "C-unwind" fn should_zoom(_: &AnyObject, _: Sel, _: *mut AnyObject, _: NSRect) -> Bool {
+    ZOOM_ASKED.store(true, Ordering::SeqCst);
+    Bool::NO
+}
+
+/// Makes a zoom of the window ask the shell (`take_zoom`) instead of resizing it. GPUI's
+/// window is its own delegate and has no `windowShouldZoom:toFrame:`: it is added to the
+/// delegate's class. False: the delegate has one of its own, left alone, and zooms as before.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread.
+pub unsafe fn zoom_asks(ns_view: *mut c_void) -> bool {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    let Some(window) = view.window() else { return false };
+    let Some(delegate) = window.delegate() else { return false };
+    let sel = sel!(windowShouldZoom:toFrame:);
+    let object: &AnyObject = delegate.as_ref();
+    if object.class().responds_to(sel) {
+        return false;
+    }
+    // BOOL is `B` on arm64; the rect by value.
+    let types = c"B@:@{CGRect={CGPoint=dd}{CGSize=dd}}";
+    // SAFETY: `should_zoom` has the method's arguments and return, as `types` says.
+    let imp: Imp = unsafe { std::mem::transmute(should_zoom as extern "C-unwind" fn(_, _, _, _) -> _) };
+    let added = unsafe { class_addMethod(object.class() as *const AnyClass as *mut AnyClass, sel, imp, types.as_ptr()) };
+    // AppKit may note what its delegate answers when it is set: set again, it asks again.
+    window.setDelegate(None);
+    window.setDelegate(Some(&delegate));
+    added.as_bool()
+}
+
+/// True once after each zoom `zoom_asks` turned away.
+pub fn take_zoom() -> bool {
+    ZOOM_ASKED.swap(false, Ordering::SeqCst)
+}
+
+/// Zooms the window as a press of its green button does: through `windowShouldZoom:toFrame:`.
+///
+/// # Safety
+/// As `zoom_asks`.
+pub unsafe fn press_zoom(ns_view: *mut c_void) {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    if let Some(window) = view.window() {
+        window.performZoom(None);
     }
 }
 

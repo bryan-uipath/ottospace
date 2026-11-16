@@ -52,6 +52,9 @@ pub struct Layout {
     /// The Repos section's repositories folded under their name, by path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repos_folded: Vec<String>,
+    /// The window filled its display (`Action::FillDisplay`): it does again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fill: bool,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -353,9 +356,9 @@ impl Model {
         let listed = |path: &&String| folded_path(path) && self.repos.iter().any(|repo| repo.path == **path);
         let repos_folded = self.repos_folded.iter().filter(listed).take(MAX_FOLDED).cloned().collect();
         let home = *self.space() == Owner::Home;
-        let extra = Extra::new();
+        let (fill, extra) = (self.fill_display, Extra::new());
         let mut layout =
-            Layout { version: VERSION, selected, home, section, drawer, tabs, spaces, repos_folded, extra };
+            Layout { version: VERSION, selected, home, section, drawer, tabs, spaces, repos_folded, fill, extra };
         // What is written always reads back: the last histories go first, then the last tabs.
         while write(&layout).len() > MAX_FILE_BYTES {
             let held = layout.tabs.iter_mut().flat_map(|saved| saved.tab.panes.iter_mut()).rev();
@@ -391,11 +394,11 @@ impl Model {
 
     /// Builds the spaces of `layout` in row order, hidden ones hidden, and their tabs, each as a
     /// workbook's (`rebuild_tab`); then puts back the tab on show (or Home), each space's last,
-    /// the section, the drawer and what marks and workbooks stood for. A file with no spaces (an
-    /// older build's) puts a tab in its task's space, the others in the first. The first
-    /// space's tabs (an older build's: Home has none) are a kept workspace's, "Workspace", made
-    /// here if one of them holds a pane; a tab of no space (its task gone, its workbook not
-    /// kept, a session's) goes to the workspace selected last at the step's end (`settle_home`).
+    /// the section, the drawer, the window filling its display, and what marks and workbooks
+    /// stood for. A file with no spaces (an older build's) puts a tab in its task's space, the
+    /// others in the first. The first space's tabs (an older build's: Home has none) are a kept
+    /// workspace's, "Workspace", made here if one of them holds a pane; a tab of no space (its
+    /// task gone, its workbook not kept, a session's) goes to the workspace selected last at the step's end (`settle_home`).
     /// Terminals in a directory of `gone` start in `home`; each shows its history, its command
     /// typed and not run. App panes ask for their windows; `launch`: an app that is not running
     /// may be started. No conversation starts. Only into a fresh model, and only a sound file.
@@ -411,6 +414,11 @@ impl Model {
             return;
         }
         self.repos_folded.clone_from(&layout.repos_folded);
+        // The user's own choice of a run before: the shell fills again once its window is there.
+        if layout.fill {
+            self.fill_display = true;
+            effects.push(Effect::FillDisplay { on: true });
+        }
         let mut owners: Vec<Owner> = layout.spaces.iter().map(|saved| self.owner_of(saved)).collect();
         // The first space's tabs, by place: all of it that is named, and in a file with no
         // spaces every tab of no live task.

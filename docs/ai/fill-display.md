@@ -1,6 +1,9 @@
 # Fill the whole display: over the menu bar and the Dock
 
-⌘⌃⇧F, View ▸ Fill the Whole Display. Beside ⌘⌃F (zoom to the visible frame), not in its place.
+⌃⌘F (the Mac's Enter Full Screen key), View ▸ Fill the Whole Display, the window's green button,
+Window ▸ Zoom, a title bar double-click (when the system's setting is Zoom), and the expand
+button at the top row's right. There is no zoom to the visible frame any more: its key (⌘⌃F)
+and the green button now fill the display.
 Asked for as "pseudo full screen [that takes] up the full monitor space (over menu bar and dock)".
 
 ## What it does
@@ -13,6 +16,25 @@ Asked for as "pseudo full screen [that takes] up the full monitor space (over me
   front: its menu bar and the Dock come back, over ottospace's top row and bottom edge.
 - The window cannot go above them: hosted windows are other apps' normal-level windows and
   would be behind it.
+
+## The green button
+
+Native full screen is off (`FullScreenNone`), so the green button is a zoom button (+). Every
+zoom, the button, Window ▸ Zoom, a title bar double-click (GPUI's `titlebar_double_click` reads
+`AppleActionOnDoubleClick` and calls `zoom:`), goes through `zoom:`, which asks the window's
+delegate `windowShouldZoom:toFrame:`. GPUI 0.2.2's window (`GPUIWindow`) is its own delegate and
+has no such method, so `window::zoom_asks` adds one to that class with `class_addMethod` (no
+fork): it sets a flag and answers NO, so the window never zooms. The shell's 60 Hz tick takes the
+flag (`take_zoom`) and dispatches `FillDisplay` as `Origin::User`, as it does the return key.
+
+Safe because: `class_addMethod` adds only, and is skipped if the class already answers the
+selector (a later GPUI that adds one keeps its own, and the green button zooms as before); the
+added method only stores an atomic, so it never reenters GPUI while AppKit is in `zoom:`; the
+delegate is set again after, in case AppKit noted what it answers. It is ottospace's own window
+class in its own process; the canary and other apps are untouched. Who can zoom: a click, a menu
+item or a double-click (injected pointer events never double-click the title bar), or another
+process pressing the button through Accessibility, which could as well post ⌃⌘F. ottospace
+itself zooms only from Window ▸ Zoom, and in a test run from `zoom_press`.
 
 ## Measured
 
@@ -29,7 +51,7 @@ Frames are `[x, y, w, h]` from the display's top left.
 | Mode on, ottospace in front | `[0,0,1024,768]` | 5 | not on screen | `[319,75,702,666]` | parked, 702×667 |
 | In the app pane (canary in front) | `[0,0,1024,768]` | 0 | on screen | `[319,75,702,666]` | `[319,43,702,667]` |
 | Back in ottospace | `[0,0,1024,768]` | 5 | not on screen | `[319,75,702,666]` | parked, 702×667 |
-| ⌘⌃F while on | `[0,31,1004,679]` | 0 | on screen | `[319,75,682,577]` | parked, 682×609 |
+| Zoom (then ⌘⌃F) while on | `[0,31,1004,679]` | 0 | on screen | `[319,75,682,577]` | parked, 682×609 |
 | Mode off | `[-188,31,1024,677]` | 0 | on screen | `[319,75,702,575]` | parked, 702×607 |
 | Mode on, then `kill -9` | gone | 0 after 165 ms | on screen | | |
 
@@ -114,7 +136,7 @@ but is not replayed (`hosting::click` judges it against the live window).
   cost more. Insetting the layout while an app is in front moves every pane under the pointer
   at the click that enters the pane (a pane below a split moves up by its share of the Dock's
   height), and the click is replayed into a window that has moved. Keeping both strips free
-  always is today's ⌘⌃F with the bars hidden: no gain.
+  always is a zoom to the visible frame with the bars hidden: no gain.
 - **A live app's window stops at the Dock's top.** macOS enforces it; asking for it names no
   misfit. Parked, the window is as tall as macOS allows: the Dock is away while ottospace is in
   front, but no window is taller than the visible frame, so a tall pane keeps a smaller strip.
@@ -124,16 +146,18 @@ but is not replayed (`hosting::click` judges it against the live window).
 - **What it costs.** In an app pane the top row is under the app's menu bar, and other panes'
   last lines are under the Dock, until ottospace is in front again (the return key, or a click
   on it).
-- **Only the user turns it on** (`fill::USERS_ALONE`): a client's key or palette choice is
-  refused. Anyone may end it.
-- **Not kept across restarts.** The window's frame is not either.
+- **Only the user turns it on** (`fill::USERS_ALONE`): a client's key, click, sneak label or
+  palette choice is refused. Anyone may end it.
+- **Kept across restarts.** On at quit, `layout.json` says `"fill": true`, and the next start
+  fills again (`RestoreLayout`, once the window exists). The window's frame from before is not
+  kept: off after a restart, the window stays where macOS put it.
 
 ## How it ends
 
 | How | Bars | Window |
 |---|---|---|
-| ⌘⌃⇧F again | options to default | back where it was (`fill::back`), or centred if that place is gone |
-| ⌘⌃F, the green button, a drag, a display unplugged | the shell sees the frame is no longer the display's (`fill_holds`: on a bounds change, and every 500 ms for a display that changed under it) and ends the mode | stays where it now is |
+| ⌃⌘F, the green button or the top row's button again | options to default | back where it was (`fill::back`), or centred if that place is gone |
+| A drag, a display unplugged | the shell sees the frame is no longer the display's (`fill_holds`: on a bounds change, and every 500 ms for a display that changed under it) and ends the mode | stays where it now is |
 | Quit, a crash, `kill -9` | the options are the process's: gone with it (measured: 165 ms) | gone |
 | Sleep, lock, hide, another app in front | the options apply only while ottospace is in front | unchanged |
 
@@ -145,12 +169,12 @@ holds none.
 
 A headless runner has one virtual display, no camera housing, and nobody watching.
 
-1. **How the change looks.** Host an app, ⌘⌃⇧F, click into the app pane, then press the return
+1. **How the change looks.** Host an app, ⌃⌘F, click into the app pane, then press the return
    key. Watch the menu bar and the Dock slide in and out: is it tolerable, and does anything in
    ottospace move?
 2. **The top row under the menu bar.** In an app pane, is losing the top row until you are back
    in ottospace acceptable, or should the row move down while an app is in front?
-3. **Two displays.** ⌘⌃⇧F on one. Does the other keep its menu bar? Click a window on the other
+3. **Two displays.** ⌃⌘F on one. Does the other keep its menu bar? Click a window on the other
    display: do the bars return on the first? Drag ottospace to the other display: the mode
    should end.
 4. **Real apps.** A browser and an Electron app in a pane that reaches the bottom: does the

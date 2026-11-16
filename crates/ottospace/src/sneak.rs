@@ -421,6 +421,7 @@ impl Workspace {
                 self.undo_workbook(window, cx);
                 None
             }
+            ("top", "fill") => Some(Action::FillDisplay),
             ("top", _) => {
                 if let Some((.., axis, new_tab)) = SPLITS.iter().find(|(top, ..)| *top == name) {
                     self.top_button(*axis, *new_tab, window, cx);

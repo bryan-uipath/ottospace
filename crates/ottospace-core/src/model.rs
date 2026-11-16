@@ -1410,7 +1410,7 @@ pub enum Action {
     /// Collapse the shown conversation's dial to its marker, or open it again: kept per task.
     DialToggle,
     /// Put the window over its whole display, the menu bar and the Dock away while ottospace is in
-    /// front; again: back as it was. Only the user's. Not kept across restarts.
+    /// front; again: back as it was. Only the user's. Kept in `layout.json`: on at quit, on at start.
     FillDisplay,
     /// The shell saw the window leave the display's frame (dragged, zoomed, a display gone): the
     /// mode is over, the bars come back.

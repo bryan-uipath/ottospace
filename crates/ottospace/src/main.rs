@@ -395,6 +395,8 @@ impl AssetSource for Assets {
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
+            "icons/fill-expand.svg" => Some(include_bytes!("../assets/icons/fill-expand.svg")),
+            "icons/fill-collapse.svg" => Some(include_bytes!("../assets/icons/fill-collapse.svg")),
             "icons/dismiss.svg" => Some(include_bytes!("../assets/icons/dismiss.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             "icons/runner-claude.svg" => Some(include_bytes!("../assets/icons/runner-claude.svg")),
@@ -443,6 +445,8 @@ const TITLED_SPACE: f32 = 150.;
 const MAX_SPACE: f32 = 220.;
 /// Home's item on the top row: a house.
 const HOME_ICON: &str = "icons/home.svg";
+/// The top row's Fill the Whole Display button: off (arrows out), on (arrows in).
+const FILL_ICONS: [&str; 2] = ["icons/fill-expand.svg", "icons/fill-collapse.svg"];
 /// A space drawn as its badge alone, as Home always is: its icon.
 const BADGE_SPACE: f32 = 36.;
 const TRAFFIC_LIGHTS: f32 = 80.;
@@ -599,7 +603,7 @@ actions!(
         FocusDown,
         FocusNext,
         FocusPrev,
-        Zoom,
+        ZoomWindow,
         FillDisplay,
         NewTab,
         NextTab,
@@ -679,9 +683,8 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-alt-l", SwapRight, None),
         KeyBinding::new("cmd-shift-alt-k", SwapUp, None),
         KeyBinding::new("cmd-shift-alt-j", SwapDown, None),
-        // Fill the screen without leaving the Space (see `zoom_instead_of_fullscreen`).
-        KeyBinding::new("cmd-ctrl-f", Zoom, None),
-        KeyBinding::new("cmd-ctrl-shift-f", FillDisplay, None),
+        // The Mac's Enter Full Screen key, free: native full screen is off (`zoom_instead_of_fullscreen`).
+        KeyBinding::new("cmd-ctrl-f", FillDisplay, None),
         // Debug: outline the focused app pane's accessibility tree.
         KeyBinding::new("cmd-ctrl-a", AxOverlay, None),
         // Tabs. ⌘1..⌘9 select one (handled in `key_down`).
@@ -937,6 +940,8 @@ struct Workspace {
     hosting: bool,
     /// While the window fills its display.
     filled: Option<Filled>,
+    /// A zoom of the window (its green button) fills the display instead (`zoom_asks`).
+    zoom_asks: bool,
     /// Test runs: the pid of the one app that may be hosted.
     host_only: Option<i32>,
     control: Option<Receiver<Call>>,
@@ -1082,6 +1087,10 @@ impl Workspace {
                         this.poll_sessions(window, cx);
                         this.read_titles(cx);
                     }
+                    // The green button, Window ▸ Zoom or a title bar double-click: only the user's hand.
+                    if ottospace_mac::window::take_zoom() {
+                        this.dispatch(Action::FillDisplay, Origin::User, window, cx);
+                    }
                     if hotkey::take_press() {
                         this.key_used(Binding::ReturnKey);
                         this.return_to_ottospace(window, cx);
@@ -1185,11 +1194,14 @@ impl Workspace {
         .detach();
 
         // Native fullscreen would move ottospace to its own Space, where other apps' windows
-        // cannot follow. Make the green button zoom instead.
+        // cannot follow. Make the green button zoom instead, and the zoom fill the display.
+        let mut zoom_asks = false;
         if let Ok(handle) = HasWindowHandle::window_handle(window)
             && let RawWindowHandle::AppKit(appkit) = handle.as_raw()
         {
             unsafe { ottospace_mac::window::zoom_instead_of_fullscreen(appkit.ns_view.as_ptr()) };
+            // SAFETY: GPUI's own view, on the main thread.
+            zoom_asks = unsafe { ottospace_mac::window::zoom_asks(appkit.ns_view.as_ptr()) };
             // A run with hosting off never activates the app, so keep its window visible another
             // way. Not with hosting on: a floating ottospace would cover the live app window.
             if !hosting {
@@ -1334,6 +1346,7 @@ impl Workspace {
             caps_drawn: Cell::default(),
             hosting,
             filled: None,
+            zoom_asks,
             host_only,
             control,
             ax_overlay: None,
@@ -2378,6 +2391,16 @@ impl Workspace {
                     };
                     let _ = reply.send(answer);
                     continue;
+                }
+                // A test run only: the green button. The next tick takes the zoom it asks for.
+                Request::ZoomPress => {
+                    match ns_view(window).filter(|_| self.zoom_asks) {
+                        // SAFETY: GPUI's own view, on the main thread.
+                        Some(view) => unsafe { ottospace_mac::window::press_zoom(view) },
+                        // It would zoom the test's window over the user's screen.
+                        None => failure = Some("the window's zoom does not fill the display".into()),
+                    }
+                    None
                 }
                 Request::Trace => {
                     let _ = reply.send(serde_json::json!({ "ok": true, "trace": trace::jsonl() }).to_string());
@@ -5617,27 +5640,38 @@ impl Workspace {
             .child(self.render_top_buttons(cx))
     }
 
-    /// New tab and split buttons: a new empty tab, or the picker for that split.
+    /// New tab and split buttons: a new empty tab, or the picker for that split. Then Fill the
+    /// Whole Display, its arrows out while off and in while on.
     fn render_top_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div().flex_none().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
-            |(i, (name, icon, tip, axis, new_tab))| {
-                let (tip, axis, new_tab) = (*tip, *axis, *new_tab);
-                div()
-                    .id(("split", i))
-                    .w(px(28.))
-                    .h(px(22.))
-                    .rounded_md()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgb(theme::SELECTED)))
-                    .child(svg().path(*icon).size(px(16.)).text_color(rgb(theme::MUTED)))
-                    .child(self.controls.mark(format!("top:{name}")))
-                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-                    .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, new_tab, window, cx)))
-            },
-        ))
+        // Each the same: an icon, its sneak label, its tip.
+        let button = |id: ElementId, icon: &'static str, name: String, tip: &'static str| {
+            div()
+                .id(id)
+                .w(px(28.))
+                .h(px(22.))
+                .rounded_md()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(theme::SELECTED)))
+                .child(svg().path(icon).size(px(16.)).text_color(rgb(theme::MUTED)))
+                .child(self.controls.mark(format!("top:{name}")))
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
+        };
+        let splits = SPLITS.iter().enumerate().map(|(i, (name, icon, tip, axis, new_tab))| {
+            let (axis, new_tab) = (*axis, *new_tab);
+            button(("split", i).into(), icon, name.to_string(), tip)
+                .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, new_tab, window, cx)))
+        });
+        let on = self.model.fill_display;
+        let tip = if on { "Back from the whole display  ⌃⌘F" } else { "Fill the whole display  ⌃⌘F" };
+        let fill = button("fill-display".into(), FILL_ICONS[usize::from(on)], "fill".into(), tip).on_click(
+            cx.listener(|this, _, window, cx| {
+                this.dispatch(Action::FillDisplay, this.input, window, cx);
+            }),
+        );
+        div().flex_none().ml_auto().mr_2().flex().gap_1().children(splits).child(fill)
     }
 
     /// The second row: the selected space's tabs, only while it has more than one. The one on
@@ -6316,7 +6350,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FocusPrev, window, cx| {
                 this.dispatch(Action::FocusCycle { delta: -1 }, this.input, window, cx);
             }))
-            .on_action(cx.listener(|_, _: &Zoom, window, _| window.zoom_window()))
+            // As the green button: `zoom_asks` turns it into Fill the Whole Display.
+            .on_action(cx.listener(|_, _: &ZoomWindow, window, _| window.zoom_window()))
             .on_action(cx.listener(|this, _: &FillDisplay, window, cx| {
                 this.dispatch(Action::FillDisplay, this.input, window, cx);
             }))
@@ -6797,7 +6832,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 7] = [
+        const TESTS_ONLY: [&str; 8] = [
             "capture_start",
             "repo_add",
             "inspector_fixture",
@@ -6805,6 +6840,7 @@ mod tests {
             "calendar_call",
             "record_start",
             "record_stop",
+            "zoom_press",
         ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
         for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {
@@ -6831,7 +6867,7 @@ mod tests {
     #[test]
     fn every_rail_icon_is_embedded() {
         let icons = SECTIONS.iter().map(|(_, icon, _)| *icon).chain(SPLITS.iter().map(|(_, icon, ..)| *icon));
-        for path in icons.chain([HOME_ICON]) {
+        for path in icons.chain([HOME_ICON]).chain(FILL_ICONS) {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }
     }

@@ -116,4 +116,24 @@ mod tests {
         assert_eq!(m.update(Action::FillEnded.sent_by(Origin::System)), [Effect::FillDisplay { on: false }]);
         assert!(!m.fill_display);
     }
+
+    #[test]
+    fn a_window_that_filled_its_display_at_quit_fills_it_again() {
+        use crate::layout_file::{parse, write};
+        let mut m = Model::default();
+        m.update(Action::FillDisplay);
+        let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
+        assert!(file.fill);
+        let restore = |file| Action::RestoreLayout { layout: Box::new(file), gone: vec![], home: None, launch: false };
+        let mut fresh = Model::default();
+        let effects = fresh.update(restore(file).sent_by(Origin::System));
+        assert!(fresh.fill_display && effects.contains(&Effect::FillDisplay { on: true }), "{effects:?}");
+        // Off at quit: nothing written, nothing filled.
+        m.update(Action::FillDisplay);
+        let text = write(&m.layout_file(&[], &[], 0));
+        assert!(!text.contains("fill"), "{text}");
+        let mut fresh = Model::default();
+        let effects = fresh.update(restore(parse(&text).unwrap()).sent_by(Origin::System));
+        assert!(!fresh.fill_display && !effects.contains(&Effect::FillDisplay { on: true }));
+    }
 }

@@ -63,7 +63,6 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
             items: [
                 item("Drive the Bar with the Keyboard", ListMode),
                 item("Label the Controls", SneakMode),
-                item("Fill the Screen", Zoom),
                 item("Fill the Whole Display", FillDisplay),
                 item("Command Palette…", commands::CommandPalette),
                 MenuItem::separator(),
@@ -146,6 +145,8 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 item("Bring All Windows Back", commands::BringBack),
             ],
         },
+        // Named "Window": AppKit lists the open windows in it.
+        Menu { name: "Window".into(), items: vec![item("Zoom", ZoomWindow)] },
         Menu {
             name: "Help".into(),
             items: vec![item("Keys", ShowKeys), item("Reset Key Counts", commands::ResetKeyCounts)],
