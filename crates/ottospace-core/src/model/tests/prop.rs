@@ -1431,7 +1431,8 @@ fn check(m: &Model) -> Result<(), String> {
     let owners: Vec<&Owner> = m.spaces.iter().map(|space| &space.of).collect();
     ensure!(owners.first() == Some(&&Owner::Workspace) && !m.spaces[0].hidden, "Workspace is not first: {owners:?}");
     ensure!(unique(&owners), "a space twice: {owners:?}");
-    let rank = |of: &Owner| owners.iter().position(|o| *o == of);
+    // Home's own tab is after all: a tab's place counts the workspaces' tabs alone.
+    let rank = |of: &Owner| owners.iter().position(|o| *o == of).map(|at| if at == 0 { usize::MAX } else { at });
     let ranks: Vec<Option<usize>> = m.tabs.iter().map(|tab| rank(&tab.space)).collect();
     ensure!(ranks.iter().all(Option::is_some), "a tab of a space not on the row: {ranks:?}");
     ensure!(ranks.is_sorted(), "a space's tabs are apart, or out of row order: {ranks:?}");
@@ -2638,10 +2639,15 @@ impl Run {
             ensure!(*before == now, "a draft's title or drawings changed, and not by the user: {before:?}");
         }
         ensure!(m.capture.is_none() || !m.compose_theirs, "a draft's title holds what a client wrote");
-        // Only a move to a tab changes the tab on show, or its closing.
+        // Only a move to a tab changes the tab on show, or its closing, or a pane put on Home:
+        // the tab made for it is on show.
         let tab_now = m.tabs[m.active].id;
+        let left_home = tab_before == HOME_TAB && !tabs_before.contains(&tab_now);
         ensure!(
-            tab_now == tab_before || !m.tabs.iter().any(|tab| tab.id == tab_before) || selects_tab(&action),
+            tab_now == tab_before
+                || !m.tabs.iter().any(|tab| tab.id == tab_before)
+                || selects_tab(&action)
+                || left_home,
             "{origin:?}'s {action:?} changed the tab on show from {tab_before} to {tab_now}"
         );
         // Starting, going on with, adopting or clicking a conversation closes no tab, and makes at

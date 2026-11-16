@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::marks::{self, Extra, RecordKind, TabRecord, Target};
-use crate::model::{Effect, Kind, Model, Owner, PaneId, Section, Space};
+use crate::model::{Effect, HOME_TAB, Kind, Model, Owner, PaneId, Section, Space};
 use crate::talk::{self, Talk};
 use crate::tasks::TaskId;
 use crate::workbook::{self, History};
@@ -33,6 +33,9 @@ pub struct Layout {
     /// The tab on show, by its place in `tabs`.
     #[serde(default)]
     pub selected: Option<usize>,
+    /// Home was on show: no tab of `tabs` is.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub home: bool,
     /// The left section that was open.
     #[serde(default)]
     pub section: Option<Section>,
@@ -42,7 +45,8 @@ pub struct Layout {
     #[serde(default)]
     pub tabs: Vec<SavedTab>,
     /// The top row in order, hidden spaces too. None in an older build's file: its tabs go by
-    /// their `task`, the others to Workspace.
+    /// their `task`, the others to the first space. The first, `workspace`, is Home: it has no
+    /// tab. An older build's had: read, they are a kept workspace's, "Workspace".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spaces: Vec<SavedSpace>,
     /// The Repos section's repositories folded under their name, by path.
@@ -52,8 +56,9 @@ pub struct Layout {
     pub extra: Extra,
 }
 
-/// A space of the top row. A `kind` this build does not know, or a task or workbook gone, is
-/// Workspace's: its tabs go there. A session's is not kept: its tabs are Workspace's.
+/// A space of the top row. Of a `kind` this build does not know, or a task or workbook gone, its
+/// tabs are of no space, as a session's, which is not kept: read, they go to the workspace
+/// selected last.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedSpace {
     /// `workspace`, `task` or `workbook`.
@@ -121,7 +126,7 @@ pub struct SavedTab {
     /// the editor on `settings.json` again. A mark, not a command: the shell builds the command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<u32>,
-    /// Its space, by place in `spaces`.
+    /// Its space, by place in `spaces`. None: a session's, which is not kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<usize>,
 }
@@ -262,7 +267,7 @@ impl Model {
         // An editor's screen is not history: the Settings pane keeps none.
         let histories: Vec<(PaneId, History)> =
             histories.into_iter().filter(|(pane, _)| Some(*pane) != self.settings_pane).collect();
-        // The row as kept. A session's space is not: its tabs are Workspace's, the first.
+        // The row as kept. A session's space is not: its tabs name none.
         let kept = |space: &Space| {
             let (kind, task, workbook) = match &space.of {
                 Owner::Workspace => ("workspace", None, None),
@@ -277,11 +282,12 @@ impl Model {
         };
         let mut spaces: Vec<(Owner, Option<u32>, SavedSpace)> = self.spaces.iter().filter_map(kept).collect();
         let (mut records, mut links, mut selected) = (Vec::new(), Vec::new(), None);
-        for (index, tab) in self.tabs.iter().enumerate().take(MAX_TABS) {
+        // Home's own tab is not kept: it is always there.
+        for (index, tab) in self.tabs.iter().enumerate().filter(|(_, tab)| tab.id != HOME_TAB).take(MAX_TABS) {
             let Some(mut record) = self.tab_record(index, cwds, &histories) else { continue };
-            let space = spaces.iter().position(|(of, ..)| *of == tab.space).unwrap_or(0);
+            let space = spaces.iter().position(|(of, ..)| *of == tab.space);
             // An older build reads a tab's task from the record.
-            record.task = known(spaces.get(space).and_then(|(of, ..)| of.task()));
+            record.task = known(space.and_then(|at| spaces[at].0.task()));
             // A pane the file would not read back is kept as what it can be: no directory, or empty.
             for pane in record.panes.iter_mut().filter(|pane| pane.unsound().is_some()) {
                 pane.cwd = None;
@@ -319,11 +325,12 @@ impl Model {
             }
             marked.truncate(MAX_LINKS);
             let settings = self.settings_pane.and_then(new_id);
-            if let Some((_, last, saved)) = spaces.get_mut(space).filter(|(_, last, _)| *last == Some(tab.id)) {
+            let last = space.and_then(|at| spaces.get_mut(at)).filter(|(_, last, _)| *last == Some(tab.id));
+            if let Some((_, last, saved)) = last {
                 (saved.tab, *last) = (Some(records.len()), None);
             }
             records.push(record);
-            links.push((book, marked, settings, Some(space)));
+            links.push((book, marked, settings, space));
         }
         workbook::fit_history(&mut records);
         let tabs = records.into_iter().zip(links);
@@ -345,8 +352,9 @@ impl Model {
         // Of listed repositories only: one gone from the list takes its fold with it.
         let listed = |path: &&String| folded_path(path) && self.repos.iter().any(|repo| repo.path == **path);
         let repos_folded = self.repos_folded.iter().filter(listed).take(MAX_FOLDED).cloned().collect();
-        let mut layout =
-            Layout { version: VERSION, selected, section, drawer, tabs, spaces, repos_folded, extra: Extra::new() };
+        let home = *self.space() == Owner::Workspace;
+        let extra = Extra::new();
+        let mut layout = Layout { version: VERSION, selected, home, section, drawer, tabs, spaces, repos_folded, extra };
         // What is written always reads back: the last histories go first, then the last tabs.
         while write(&layout).len() > MAX_FILE_BYTES {
             let held = layout.tabs.iter_mut().flat_map(|saved| saved.tab.panes.iter_mut()).rev();
@@ -361,13 +369,14 @@ impl Model {
         layout
     }
 
-    /// True while the model is as it starts: one empty tab of Workspace. Only that is restored into.
+    /// True while the model is as it starts: Home alone. Only that is restored into.
     fn fresh(&self) -> bool {
         let empty = |tab: &crate::model::Tab| tab.space == Owner::Workspace && tab.layout.is_none();
         self.panes.is_empty() && self.layout.is_none() && self.tabs.iter().all(empty) && self.spaces.len() == 1
     }
 
-    /// Whose a kept space is now: Workspace's, if its task is gone or its workbook not kept.
+    /// Whose a kept space is now: no one's (`Owner::Workspace`), if its task is gone or its
+    /// workbook not kept.
     fn owner_of(&self, saved: &SavedSpace) -> Owner {
         let task = saved.task.filter(|id| saved.kind == "task" && self.tasks.live(*id).is_some());
         let book = saved.workbook.as_ref().filter(|_| saved.kind == "workbook");
@@ -380,13 +389,15 @@ impl Model {
     }
 
     /// Builds the spaces of `layout` in row order, hidden ones hidden, and their tabs, each as a
-    /// workbook's (`rebuild_tab`); then puts back the tab on show, each space's last, the
-    /// section, the drawer and what marks and workbooks stood for. A file with no spaces (an
-    /// older build's) puts a tab in its task's space, the others in Workspace; a tab whose task
-    /// is gone is Workspace's. Terminals in a directory of `gone` start in `home`; each shows
-    /// its history, its command typed and not run. App panes ask for their windows; `launch`:
-    /// an app that is not running may be started. No conversation starts. Only into a fresh
-    /// model, and only a sound file.
+    /// workbook's (`rebuild_tab`); then puts back the tab on show (or Home), each space's last,
+    /// the section, the drawer and what marks and workbooks stood for. A file with no spaces (an
+    /// older build's) puts a tab in its task's space, the others in the first. The first
+    /// space's tabs (an older build's: Home has none) are a kept workspace's, "Workspace", made
+    /// here if one of them holds a pane; a tab of no space (its task gone, its workbook not
+    /// kept, a session's) goes to the workspace selected last at the step's end (`settle_home`).
+    /// Terminals in a directory of `gone` start in `home`; each shows its history, its command
+    /// typed and not run. App panes ask for their windows; `launch`: an app that is not running
+    /// may be started. No conversation starts. Only into a fresh model, and only a sound file.
     pub(crate) fn layout_restore(
         &mut self,
         layout: Layout,
@@ -399,23 +410,36 @@ impl Model {
             return;
         }
         self.repos_folded.clone_from(&layout.repos_folded);
-        let owners: Vec<Owner> = layout.spaces.iter().map(|saved| self.owner_of(saved)).collect();
+        let mut owners: Vec<Owner> = layout.spaces.iter().map(|saved| self.owner_of(saved)).collect();
+        // The first space's tabs, by place: all of it that is named, and in a file with no
+        // spaces every tab of no live task.
+        let named = |saved: &SavedTab| saved.space.and_then(|at| layout.spaces.get(at));
+        let first = |saved: &SavedTab| match named(saved) {
+            Some(space) => space.kind == "workspace",
+            None => layout.spaces.is_empty() && saved.tab.task.is_none_or(|id| self.tasks.live(id).is_none()),
+        };
+        // They are a workspace's from now on, if there is anything in them.
+        let holds = |saved: &SavedTab| !saved.tab.shown().is_empty();
+        let upgraded = layout.tabs.iter().any(|saved| first(saved) && holds(saved));
+        let firsts: Vec<bool> = layout.tabs.iter().map(first).collect();
+        let upgraded = upgraded.then(|| self.stray_workspace(Some("Workspace".into())));
         let task_of = |model: &Model, saved: &SavedTab| {
             let task = saved.tab.task.filter(|id| model.tasks.live(*id).is_some());
             task.map_or(Owner::Workspace, |id| Owner::Task { id })
         };
-        let of_tab: Vec<Owner> = layout
-            .tabs
-            .iter()
-            .map(|saved| saved.space.and_then(|at| owners.get(at).cloned()).unwrap_or_else(|| task_of(self, saved)))
-            .collect();
-        if !layout.tabs.is_empty() {
-            // The empty tabs go: nothing may stand for them (a workbook saved from one), as on close.
-            for tab in std::mem::take(&mut self.tabs) {
-                self.marks.forget_tab(tab.id);
-                self.workbooks.forget_tab(tab.id);
+        let of_tab = |model: &Model, at: usize, saved: &SavedTab| match (&upgraded, firsts[at]) {
+            (Some(of), true) => of.clone(),
+            _ => saved.space.and_then(|at| owners.get(at).cloned()).unwrap_or_else(|| task_of(model, saved)),
+        };
+        let of_tab: Vec<Owner> = layout.tabs.iter().enumerate().map(|(at, saved)| of_tab(self, at, saved)).collect();
+        // Nothing may stand for Home's tab (a workbook saved from one, a mark), as on close.
+        self.marks.forget_tab(HOME_TAB);
+        self.workbooks.forget_tab(HOME_TAB);
+        // The upgraded workspace is where the first space was on the row.
+        for (owner, saved) in owners.iter_mut().zip(&layout.spaces) {
+            if let Some(of) = upgraded.as_ref().filter(|_| saved.kind == "workspace") {
+                *owner = of.clone();
             }
-            self.active = 0;
         }
         for of in &owners {
             self.add_space(of);
@@ -473,7 +497,13 @@ impl Model {
                 space.last = id;
             }
         }
-        self.restore_selected(layout.selected, &built, effects);
+        self.restore_selected(layout.selected.filter(|_| !layout.home), &built, effects);
+        // Home was on show; and it is, with nothing else to show.
+        if layout.home && let Some(at) = self.tabs.iter().position(|tab| tab.id == HOME_TAB) {
+            self.select_tab(at, effects);
+        }
+        // A tab of no space goes to the selected workspace.
+        self.last_space = Some(self.space().clone()).filter(|of| matches!(of, Owner::Task { .. } | Owner::Workbook { .. }));
         // A Calendar left open by a run that had a feed: none without one.
         // Not a section that is not on the rail: Calendar with no feed, one behind a flag that is off.
         self.sidebar = layout.section.filter(|s| self.sections().contains(s));

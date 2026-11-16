@@ -88,6 +88,8 @@ pub struct SpaceRow {
 
 /// The first item of the top row, and its screen.
 pub const HOME: &str = "Home";
+/// Home's one tab, always empty: no other tab has this id.
+pub const HOME_TAB: u32 = 0;
 /// Why a client's change of space waits: the user's keys are in the chat.
 pub const CHAT_TYPING: &str = "the user is typing in the chat";
 /// Why a client's Esc or close of the new-task box is refused: the user is writing in it.
@@ -338,9 +340,11 @@ impl Model {
         }
     }
 
-    /// A space's place on the row: the order tabs keep. One not on the row goes last.
+    /// A space's place on the row: the order tabs keep. One not on the row goes last, and
+    /// Home's own tab after all: a tab's place counts the workspaces' tabs alone.
     pub(crate) fn space_rank(&self, of: &Owner) -> usize {
-        self.spaces.iter().position(|space| space.of == *of).unwrap_or(usize::MAX)
+        let at = self.spaces.iter().position(|space| space.of == *of).unwrap_or(usize::MAX - 1);
+        if *of == Owner::Workspace { usize::MAX } else { at }
     }
 
     /// The tab to show instead of space `of`, hidden or left with no tab: its right neighbour's
@@ -396,9 +400,9 @@ impl Model {
         (origin != Origin::User && typing && self.changes_space(action)).then_some(CHAT_TYPING)
     }
 
-    /// After every step: Workspace first and shown, with a tab; each tab's space on the row, its
-    /// tabs side by side in row order; a space with no tab gone, as one whose workbook is; the
-    /// selected space shown, and the tab on show its last.
+    /// After every step: Home first and shown, with its one empty tab; each tab's space on the
+    /// row, its tabs side by side in row order (Home's last); a space with no tab gone, as one
+    /// whose workbook is; the selected space shown, and the tab on show its last.
     pub(crate) fn settle_spaces(&mut self, origin: Origin, new_tab: bool) {
         let gone: Vec<Owner> = self.spaces.iter().map(|s| s.of.clone()).filter(|of| !self.owner_valid(of)).collect();
         for tab in self.tabs.iter_mut().filter(|tab| gone.contains(&tab.space)) {
@@ -416,13 +420,6 @@ impl Model {
         let mut first = workspace.map_or(Space::new(Owner::Workspace), |at| self.spaces.remove(at));
         first.hidden = false;
         self.spaces.insert(0, first);
-        if !self.tabs.iter().any(|tab| tab.space == Owner::Workspace) {
-            self.next_tab += 1;
-            let title = HOME.to_string();
-            self.tabs.insert(0, Tab { id: self.next_tab, title, space: Owner::Workspace, layout: None, focused: None });
-            self.active += 1;
-        }
-        self.home_tab = self.tabs.iter().find(|tab| tab.space == Owner::Workspace).map(|tab| tab.id);
         self.regroup();
         let (of, id) = (self.tabs[self.active].space.clone(), self.tabs[self.active].id);
         // The workspace selected last: where a stray tab goes.
@@ -438,58 +435,74 @@ impl Model {
         }
     }
 
-    /// Home, the first space, holds no pane and one empty tab, its screen. After every step, what
-    /// else is there goes to a workspace: a pane put in Home's tab or a tab made there (the
-    /// user's: a NEW workspace; another's: the workspace selected last), and a stray tab whose
-    /// space went (a task dismissed, a workspace deleted, a session's after a restart): the
-    /// workspace selected last. One is made, kept like any other, if there is none. A stray tab
-    /// that holds nothing is closed. `new_tab`: the step asked for a tab.
+    /// Home, the first space, holds no pane and one empty tab, its screen (`HOME_TAB`). After
+    /// every step, what else is there goes to a workspace: a pane put in Home's tab, a tab
+    /// asked for there or a folder opened (the user's: a NEW workspace; another's: the workspace
+    /// selected last), and a stray tab whose space went (a task dismissed, a workspace deleted,
+    /// a session's after a restart): the workspace selected last. One is made, kept like any
+    /// other, if there is none. A stray tab that holds nothing is closed. `new_tab`: the step
+    /// asked for a tab.
     fn settle_home(&mut self, origin: Origin, new_tab: bool) {
         let hint = self.home_hint.take();
         let panes = self.tab_panes();
         let home: Vec<usize> = (0..self.tabs.len()).filter(|at| self.tabs[*at].space == Owner::Workspace).collect();
-        let holds = |at: &usize| !panes[*at].is_empty();
-        // The screen stays: Home's own tab while it is empty, else another empty one not on show.
-        let own = home.iter().copied().find(|at| Some(self.tabs[*at].id) == self.home_tab && !holds(at));
-        let asked = |at: &usize| *at == self.active && new_tab && home.len() > 1;
-        let kept = own.filter(|at| !asked(at)).or(home.iter().copied().find(|at| !holds(at) && !asked(at)));
-        let moves: Vec<u32> =
-            home.iter().filter(|at| holds(at) || asked(at)).map(|at| self.tabs[*at].id).collect();
-        let closes: Vec<u32> = home.iter().filter(|at| Some(**at) != kept).map(|at| self.tabs[*at].id).collect();
-        let closes: Vec<u32> = closes.into_iter().filter(|id| !moves.contains(id)).collect();
+        let own = |at: &usize| self.tabs[*at].id == HOME_TAB;
+        let (moves, closes): (Vec<usize>, Vec<usize>) =
+            home.iter().filter(|at| !own(at) || !panes[**at].is_empty()).partition(|at| !panes[**at].is_empty() || new_tab);
+        let filled = moves.iter().any(own);
         if !moves.is_empty() {
             // Made on Home by the user (its own tab filled, a tab asked for, a folder opened): a
             // new workspace. Anything else: the workspace selected last.
-            let made = moves.iter().any(|id| Some(*id) == self.home_tab) || new_tab || hint.is_some();
-            let last = self.last_space.clone().filter(|of| self.owner_valid(of) && self.spaces.iter().any(|s| s.of == *of));
-            let to = match last.filter(|_| !(made && origin == Origin::User)) {
+            let made = (filled || new_tab || hint.is_some()) && origin == Origin::User;
+            let open = |of: &Owner| self.owner_valid(of) && self.spaces.iter().any(|s| s.of == *of);
+            // Else the first workspace on the row, before one is made.
+            let kept = |space: &&Space| !space.hidden && matches!(space.of, Owner::Task { .. } | Owner::Workbook { .. });
+            let any = || self.spaces.iter().filter(|space| open(&space.of)).find(kept).map(|space| space.of.clone());
+            let last = self.last_space.clone().filter(open).or_else(any);
+            let to = match last.filter(|_| !made) {
                 Some(of) => of,
                 None => self.stray_workspace(hint),
             };
-            for tab in self.tabs.iter_mut().filter(|tab| moves.contains(&tab.id)) {
-                tab.space = to.clone();
-            }
+            let ids: Vec<u32> = moves.iter().map(|at| self.tabs[*at].id).collect();
             // A dismissal taken back finds its task's tabs where they went.
             for (_, tabs, home) in self.unlinked.iter_mut().filter(|(_, _, home)| *home == Owner::Workspace) {
-                if tabs.iter().any(|id| moves.contains(id)) {
+                if tabs.iter().any(|id| ids.contains(id)) {
                     *home = to.clone();
                 }
             }
+            for at in moves {
+                self.tabs[at].space = to.clone();
+                // Home's own tab left it: a tab like any other, with the next id and name.
+                if self.tabs[at].id == HOME_TAB {
+                    self.next_tab += 1;
+                    self.tabs[at].id = self.next_tab;
+                    if self.tabs[at].title == HOME {
+                        self.tabs[at].title = self.free_title();
+                    }
+                }
+            }
             self.add_space(&to);
+        }
+        let closes: Vec<u32> = closes.into_iter().map(|at| self.tabs[at].id).collect();
+        if !self.tabs.iter().any(|tab| tab.id == HOME_TAB) {
+            let tab = Tab { id: HOME_TAB, title: HOME.into(), space: Owner::Workspace, layout: None, focused: None };
+            self.tabs.push(tab);
         }
         for id in closes {
             let Some(at) = self.tabs.iter().position(|tab| tab.id == id) else { continue };
             if at == self.active {
                 // Empty: nothing is parked. Home's screen takes its place.
-                let to = self.tabs.iter().position(|tab| tab.space == Owner::Workspace && tab.id != id);
-                let Some(to) = to else { continue };
-                self.active = to;
+                self.active = self.tabs.iter().position(|tab| tab.id == HOME_TAB).unwrap_or(0);
             }
             self.tabs.remove(at);
             self.active -= usize::from(at < self.active);
             self.unlinked.iter_mut().for_each(|(_, ids, _)| ids.retain(|tab| *tab != id));
             self.marks.forget_tab(id);
             self.workbooks.forget_tab(id);
+        }
+        // Home alone: tab ids start again, as with the last tab closed.
+        if self.tabs.len() == 1 {
+            self.next_tab = 0;
         }
     }
 

@@ -2392,7 +2392,7 @@ pub enum TabAt {
 pub mod zones;
 
 pub mod spaces;
-pub use spaces::{Owner, Space};
+pub use spaces::{HOME, HOME_TAB, Owner, Space};
 
 pub mod chat;
 pub mod editor;
@@ -2428,9 +2428,6 @@ pub struct Model {
     /// user takes the dismissal back.
     #[serde(skip)]
     departed: Vec<(TaskId, Owner)>,
-    /// Home's own tab, by id: its screen. A pane put in it makes a workspace of it (`settle_home`).
-    #[serde(skip)]
-    pub(crate) home_tab: Option<u32>,
     /// The workspace selected last: where a stray tab goes.
     #[serde(skip)]
     pub(crate) last_space: Option<Owner>,
@@ -2781,7 +2778,6 @@ impl Default for Model {
             unlinked: Vec::new(),
             departed: Vec::new(),
             joined_before: Vec::new(),
-            home_tab: Some(1),
             last_space: None,
             home_hint: None,
             next_tab: 0,
@@ -2795,7 +2791,9 @@ impl Default for Model {
             editing: None,
             editor_note: None,
         };
-        model.push_tab();
+        // Home's own tab, on show.
+        let home = Tab { id: HOME_TAB, title: HOME.into(), space: Owner::Workspace, layout: None, focused: None };
+        model.tabs.push(home);
         model
     }
 }
@@ -3818,7 +3816,8 @@ impl Model {
             }
             Action::CloseTab { index } => {
                 let index = index.unwrap_or(self.active);
-                if index >= self.tabs.len() {
+                // Home's own tab stays.
+                if self.tabs.get(index).is_none_or(|tab| tab.id == spaces::HOME_TAB) {
                     return;
                 }
                 self.leave(effects);
