@@ -159,8 +159,10 @@ main checkout.
 - **Who.** Only the user's act sets a default (a Repos click, their + made a worktree), or the
   files read again: a client's click on a row with no workspace opens a terminal as `OpenRepo`
   does and sets none, and no request sets one.
-- Property rules: a space's default is a listed checkout or none; no step but the user's
-  (`WorktreeAdded` counts, and `RestoreWorkbooks`) changes a workspace's default.
+- Property rules: a terminal opened by a step that names no folder starts in its space's default;
+  a task that joins a workspace with a default works there unless its line names another; no
+  step but the user's (`WorktreeAdded` counts, and `RestoreWorkbooks`) changes a workspace's
+  default.
 
 ## Earlier: a workspace's two links (replaced)
 
