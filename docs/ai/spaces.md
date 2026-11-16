@@ -75,7 +75,7 @@ tab never saved with ⌘⇧S is gone), and a tab closed with ⌘⇧W.
   A space has at least one tab: closing its last tab closes the space (it stays in Tasks or
   Workspaces); the first space gets an empty tab instead.
 - **One selection.** The selected space is the tab on show's. Selecting a space shows the tab it
-  showed last. The drawer is only ever on the selected space's conversation: a task's or a
+  showed last. The drawer is only ever on the selected space's conversation: a task's (the one in front, with several) or a
   session's agent; none for a workspace. ⌘⇧L opens and closes the drawer; switching spaces keeps
   it open or closed. Closed on a conversation, with nothing else in the drawer's place, the
   **agent chip** (`Model::agent_chip`) is at the end of the tab row (the top row, for a space of
@@ -87,10 +87,10 @@ tab never saved with ⌘⇧S is gone), and a tab closed with ⌘⇧W.
   panes, terminals stay; hosted windows stay parked as for any tab not on show. Its row in Tasks
   (`TaskTalk`), `TaskGo`, its Workspaces row (`WorkbookOpen`) or `SpaceOpen` bring it back where
   it was. Selecting one of its tabs (`SelectTab`, a pane focused, a mark) shows it too.
-- **New task** (⌘N, ↵ in the box): started in a kept workspace of no task, the task takes that
-  workspace (below, "A task started in a workspace"). Else (from the first space, a task's, a
-  session's or a bound workspace's) its space is made at the row's end with one empty tab and
-  selected.
+- **New task** (⌘N, ↵ in the box): started in a kept workspace or a task's space, the task is
+  in that workspace (below, "A task started in a workspace", "Several tasks in one
+  workspace"). Else (from the first space or a session's) its space is made at the row's end
+  with one empty tab and selected.
 - **A task gone** gives its tabs to the workspace it was bound to, else to the first space.
 - **Repos**: a click on a repository or worktree opens a terminal there in a tab of the first
   space of its own (the empty one on show, else a new one) and selects it. A row a live task
@@ -117,9 +117,11 @@ workspace with only a task or worktree, and a workspace with both".
   (a terminal there, named for the worktree while it has no task); it no longer opens a tab in
   the first space. Sessions stay a kind of their own.
 - With the worktree link: a worktree's workspace gives a task started in it its repository,
-  unless the line's `>repo` names another. A second task for a worktree whose workspace has a
-  task (decided by the owner: "my preference is a new worktree"): its workspace is made on a
-  new worktree of that repository, its branch from the task's title, said in the box before ↵.
+  unless the line's `>repo` names another.
+- **Replaced by the owner** ("Several tasks in one workspace", below): a task belongs to one
+  workspace, a workspace holds none or more. A second task in a workspace joins it and shares
+  the checkout; "a new worktree for this task" becomes a pick in the new-task box, not the
+  default (not built: there is no worktree made from the box yet; it comes with the links).
 
 ## A task started in a workspace (built)
 
@@ -145,12 +147,13 @@ the task (right now - a new task/workspace gets created for the task)".
 - **Unbound when the task goes.** The task dismissed, or deleted: the workspace is its own
   again, where it was on the row, with its tabs. The user's undo of the dismissal binds it
   again. A task that is done but not dismissed keeps its space, as every task does.
+- **Since**: a workspace that has a task takes more (below, "Several tasks in one workspace").
 - **Nothing else binds.** ⇧↵ (for later; no agent), a line whose agent would not start, a
   client's `task_new` (it never takes the user's workspace), a task started from the first
-  space, a task's, a session's or an already bound workspace's: a space of its own at the row's end.
-- **The box says so.** While ↵ would take a workspace that holds a pane: "↵ makes this workspace
-  the task's" (after the plan, when there is one: "↵ will start codex in app on main, and makes
-  this workspace the task's"). An empty workspace is bound with nothing said: nothing is taken.
+  space or a session's: a space of its own at the row's end.
+- **The box says so.** While ↵ would start it in a workspace that holds a pane or a task: "↵
+  starts it in this workspace" (after the plan, when there is one: "↵ will start codex in app
+  on main, in this workspace"). An empty workspace is bound with nothing said.
 - `>repo` on the line is as before: the agent runs where the line says. Binding changes no folder.
 - **How it is modelled.** The smallest thing that gives the behaviour: the space changes kind
   in place (`Owner::Workbook` → `Owner::Task`), and the kept workspace records the link
@@ -160,6 +163,60 @@ the task (right now - a new task/workspace gets created for the task)".
 - Property rules: one workspace a task, a live one; a bound workspace has no space of its own;
   only the user's ↵ on a new task binds (or their undo of its dismissal, or files read again);
   binding moves no pane and closes none.
+
+## Several tasks in one workspace (built)
+
+The owner: "i'm also wondering if we actually want the ability to have multiple tasks in a
+workspace (a task is always associated with a workspace, but a workspace may have multiple
+tasks)"; "lets join the workspace and share the checkout"; "switching between them is enough
+right now"; "i'd expect < 5 so the ui should be suitable for that".
+
+- **↵ joins.** The user's ↵ in the new-task box, in a workspace made with + or in a task's
+  space, with or without tasks: the task is in that workspace. No space is made, no pane
+  moves, nothing closes; its conversation is in front. It works in the folder of the task
+  that was in front, unless its line names a repository or a folder. The box says "↵ starts
+  it in this workspace" (after the plan when there is one) while the workspace holds a pane or
+  a task. Not from the first "Workspace" (a space of its own, until Home) nor a session's.
+- **↵ on a row of the dropdown** takes the row: no task, nothing joined, and the box says
+  "↵ completes", not "starts it in this workspace". A click on a tag's cap joins nothing.
+- **⇧↵ (for later) joins nothing**: it has no agent and no conversation to put in front, so it
+  is listed in Tasks with no workspace; started later from its row, it gets its own. A
+  client's `task_new` joins nothing either: it never puts a task in the user's workspace.
+- **One conversation in front** a workspace (`Model::front`): the drawer's subject, the
+  dial's, the agent chip's, `tab_task`. Everything that spoke of "the selected space's
+  conversation" asks `Model::space_subject`; where a task lives is `Model::task_space`.
+- **Who changes the front**: the user alone. A new task they start (it), a tab of the strip
+  (`TalkFront`), ⌘⌥] / ⌘⌥[ (`TalkCycle`, around the strip), a task's row and ⌘⇧N (which
+  switches within and across workspaces). A client's `TalkFront`/`TalkCycle` is refused
+  (`FRONT_USERS`), and its `task_open` selects the workspace and leaves the front one.
+- **The front one gone**: dismissed or deleted by anyone, the most urgent remaining task is
+  in front (needs you, running, later, on hold, done; then priority, then the older). Marked
+  done by the user (in any workspace): the same, among those not done. Marked done by its agent's report: it
+  stays in front, since that is no act of the user's and a conversation is not taken from
+  under them; it leaves the strip once another is in front.
+- **The drawer's strip** (`Model::strip`, `talk_strip`): over the conversation, a tab a task
+  in the order they came, done ones left out. Each is the task's badge, whose corner dot is
+  its state's colour, so one that needs you is seen without opening it. The front tab is wide
+  and says its title, cut with …; the others are badges, the title on hover. + at its end
+  opens the new-task box here. Hidden with fewer than two tasks. Made for one to five: no
+  scrolling, no overflow menu; past that the others stay badges and the front one keeps 96
+  points for its title.
+- **The top row**: a workspace's item shows its tasks' badges stacked, the most urgent first
+  and on top (five at most), then its name: the kept workspace's name with several tasks,
+  the task's title with one, as before. Its summary state is its most urgent task's.
+- **How it is modelled.** A space of a task (`Owner::Task`, which a bound workspace's is)
+  lists the tasks that joined it (`Space::joined`) and the one in front (`Space::front`). A
+  task is in one space at most: joined to one, or its own. After every step (`settle_joined`):
+  a joined task is live, joined once and has no tab of its own; a space whose own task is gone
+  while others remain becomes the most urgent one's (the one in front, if it is one of them),
+  in place, with its tabs and its kept workspace's link; the last task gone, the workspace is
+  its own again with its tabs (as before). The user's undo of a dismissal puts the task back
+  in the workspace it left; not in front.
+- **Kept between runs**: `layout.json`, each space's `tasks` (joined, in order) and `front`.
+  A task of the file that is gone, listed twice or with a space of its own is left out.
+- Property rules: a task is in one space at most; the front task is one of the space's; no
+  step but the user's takes a task from the front while it is still there; only the user's ↵
+  on a new task (or their undo) joins a task to a workspace.
 
 ## Open questions
 

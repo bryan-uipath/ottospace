@@ -62,7 +62,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.list` | Null, or the index of the selected row of the open section: the secondary bar has the keyboard (`mode` is `list`, or `pick` while the picker is open over it) |
 | `state.panes` | Every pane of every tab: `id`, `kind`, `cwd` for a terminal opened by `open_repo`, and `fit` for an app pane whose window kept another size than the pane's: `wants` (`[width, height]` in points, the size the window kept) `hint` (what the pane header says, e.g. `needs 120 pt more width` or `fixed size 232×320`) and, only when a `fit` request would move nothing, `stuck`: `no_split` (the pane spans the tab on that axis) or `at_limit` (the splits are at their 10%). No `fit`: the window has the pane's size, or is less than 24 pt smaller (an app that snaps its size), or the layout changed and the pane has not been measured since (within a second). `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"...","bundle":"com.apple.Safari","name":"Safari"}` (`bundle` is left out for an app that has none) |
 | `state.tabs`, `state.active` | Every tab (`id`, `title`, and `space`: whose it is, as in `spaces`) and the index of the one showing. Requests take the index, not the `id` |
-| `spaces`, `badges` | The top row in order, hidden spaces too: each `of` (`{"kind":"workspace"}` first, `{"kind":"task","id":3}`, `{"kind":"session","runner":..,"id":..}`, `{"kind":"workbook","id":1}`), `hidden`, `selected` (exactly one: the tab on show's) and `tabs` (indexes into `state.tabs`, side by side). `badges`: each live task's two letters by id; a task's identity colour is `colour` on the task (an index into a palette of 8) |
+| `spaces`, `badges` | The top row in order, hidden spaces too: each `of` (`{"kind":"workspace"}` first, `{"kind":"task","id":3}`, `{"kind":"session","runner":..,"id":..}`, `{"kind":"workbook","id":1}`), `hidden`, `selected` (exactly one: the tab on show's) `tabs` (indexes into `state.tabs`, side by side), `tasks` (its tasks, the most urgent first; a workspace may hold several), `front` (the task whose conversation the drawer shows there, or null; only the user changes it) and `strip` (the tabs of the drawer's strip while it is selected; empty with fewer than two tasks). `badges`: each live task's two letters by id; a task's identity colour is `colour` on the task (an index into a palette of 8) |
 | `tab_panes` | Pane ids of each tab, in tab order |
 | `state.focused` | The pane that splits and keys act on |
 | `state.layout` | The active tab's split tree, or null: `{"leaf":3}` or `{"split":{"axis":"right","ratio":0.5,"a":..,"b":..}}`. `ratio` is the share of the split that `a` (the left or top side) takes |
@@ -253,7 +253,9 @@ with its git worktrees. `open_repo` opens a terminal whose shell starts in a rep
 worktree, in a tab of Workspace: the tab on show if it is Workspace's and empty (or its focused
 pane is), else a new one, selected, named for the repository. `path` must be a `path` from
 `state.repos`; any other path is refused. A task the user starts (their own ↵) while in a
-workspace they made that has no task takes that workspace, tabs and all, as its space; a task you add takes none.
+workspace (one they made, or a task's) is in that workspace: a workspace may hold several tasks, and
+one conversation is in front (`spaces[].front`). A task you add joins none, and no request says
+which conversation is in front: `task_open` selects a task's workspace and leaves the front one.
 
 Tasks (the inbox in the Tasks section):
 

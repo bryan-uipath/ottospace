@@ -66,6 +66,8 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::NextTab => Box::new(NextTab),
         Command::NextSpace => Box::new(NextSpace),
         Command::PrevSpace => Box::new(PrevSpace),
+        Command::NextChat => Box::new(NextChat),
+        Command::PrevChat => Box::new(PrevChat),
         Command::HideSpace => Box::new(HideSpace),
         Command::PrevTab => Box::new(PrevTab),
         Command::CloseTab => Box::new(CloseTab),

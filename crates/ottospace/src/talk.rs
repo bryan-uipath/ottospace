@@ -495,6 +495,61 @@ impl Workspace {
     }
 
     /// The conversation's header: state, title, Chat | Terminal, then what can be done.
+    /// The strip over the conversation: a tab for each task of the selected workspace, its badge
+    /// in its state's colour (the dot at its corner says "needs you" without opening it). The
+    /// one in front is wide and says its title; the others are their badges, the title on
+    /// hover. + starts a task here. None for a workspace of one task: `Model::strip`.
+    fn talk_strip(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let of = self.model.space().clone();
+        let (tabs, front) = (self.model.strip(&of), self.model.front(&of));
+        if tabs.is_empty() {
+            return None;
+        }
+        let tab = |id: TaskId| {
+            let (task, badge) = (self.model.tasks.get(id)?, self.task_badge(id, 18.)?);
+            let (on, title) = (Some(id) == front, gpui::SharedString::from(task.title.clone()));
+            let tip = title.clone();
+            let tab = div()
+                .id(("strip", id as usize))
+                .relative()
+                .h(px(26.))
+                .px_1p5()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .rounded_t_sm()
+                .child(badge.flex_none())
+                // Past five the others stay badges, and the front one keeps room for some of its title.
+                .when(on, |d| {
+                    d.flex_1().min_w(px(96.)).bg(rgb(theme::SELECTED)).text_xs().child(crate::cut_text(title).flex_1())
+                })
+                .when(!on, |d| d.flex_none().hover(|s| s.bg(rgb(theme::SELECTED))))
+                .child(self.controls.mark(format!("strip:{id}")))
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.dispatch(Action::TalkFront { task: id }, this.input, window, cx);
+                }));
+            Some(tab)
+        };
+        let tabs: Vec<Stateful<Div>> = tabs.into_iter().filter_map(tab).collect();
+        let new = div()
+            .id("strip-new")
+            .relative()
+            .flex_none()
+            .px_1p5()
+            .rounded_sm()
+            .text_color(rgb(theme::MUTED))
+            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+            .child("+")
+            .child(self.controls.mark("strip:new"))
+            .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New task in this workspace (⌘N)".into()))))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.dispatch(Action::OpenCompose { text: String::new() }, this.input, window, cx);
+            }));
+        let strip = div().flex_none().w_full().px_1().pt_1().flex().items_center().gap_0p5().overflow_hidden();
+        Some(strip.border_b_1().border_color(rgb(theme::BORDER)).children(tabs).child(new))
+    }
+
     fn talk_header(&self, subject: &Subject, cx: &mut Context<Self>) -> Option<Div> {
         let shown = match subject {
             Subject::Task(id) => Some(self.model.tasks.get(*id)?),
@@ -710,6 +765,7 @@ impl Workspace {
                     this.dispatch(Action::TalkKeys { on: true }, this.input, window, cx);
                 }),
             )
+            .children(self.talk_strip(cx))
             .child(header)
             .children(
                 self.model

@@ -5956,7 +5956,7 @@ fn a_task_started_in_a_workspace_makes_it_the_tasks_in_place() {
         // it was, with its tabs and panes, and the drawer is on the task.
         otto.user_key("cmd-n");
         let typed = otto.user_key("m i n e");
-        assert_eq!(typed["compose_plan_line"], "↵ makes this workspace the task's");
+        assert_eq!(typed["compose_plan_line"], "↵ starts it in this workspace");
         let bound = otto.user_key("enter");
         let task = bound["state"]["talk"]["task"].as_u64().expect("the drawer is on the new task");
         let its = json!({"kind": "task", "id": task});
@@ -6001,6 +6001,137 @@ fn a_task_started_in_a_workspace_makes_it_the_tasks_in_place() {
     let freed = otto.call(json!({"cmd": "task_dismiss", "id": task}));
     assert_eq!((&freed["workbooks"][0]["task"], &row(&freed)[1].0, row(&freed)[1].1.len()), (&Value::Null, &book, 2));
     assert_eq!((pane_ids(&freed).len(), row(&freed).len()), (panes, row(&again).len()));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// The owner: "a task is always associated with a workspace, but a workspace may have multiple
+/// tasks", "switching between them is enough right now". A second task started in a workspace
+/// joins it; the drawer's strip switches between them; a client changes none of it; kept between runs.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn several_tasks_share_a_workspace_and_the_drawers_strip_switches_between_them() {
+    let root = support::temp(&format!("ottospace-e2e-strip-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, sessions) = (root.join("bin"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    let settings =
+        json!({"repos": [], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("strip", &settings.to_string());
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    // The selected space: its tasks (most urgent first), the one in front, the strip's tabs.
+    let space = |reply: &Value| -> Value {
+        let spaces = reply["spaces"].as_array().cloned().unwrap_or_default();
+        spaces.iter().find(|s| s["selected"] == true).cloned().unwrap_or_default()
+    };
+    let shown =
+        |reply: &Value| reply["spaces"].as_array().map(|all| all.iter().filter(|s| s["hidden"] == false).count());
+    let (one, two) = {
+        let mut otto = Otto::launch_with("strip-1", &env);
+        otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+        let before = otto.user_key("cmd-d");
+        otto.user_key("cmd-n");
+        otto.user_key("o n e");
+        let first = otto.user_key("enter");
+        let one = first["state"]["talk"]["task"].as_u64().expect("the drawer is on the first task");
+        assert_eq!((&space(&first)["strip"], &space(&first)["front"]), (&json!([]), &json!(one)));
+        assert_eq!(otto.control_opt(&format!("strip:{one}")), None, "one task: no strip");
+        // A second task, started here: in the same space, in front; nothing moved.
+        otto.user_key("cmd-n");
+        let typed = otto.user_key("t w o");
+        assert_eq!(typed["compose_plan_line"], "↵ starts it in this workspace");
+        let second = otto.user_key("enter");
+        let two = second["state"]["talk"]["task"].as_u64().expect("the drawer is on the second task");
+        assert_ne!(one, two);
+        assert_eq!((shown(&second), pane_ids(&second)), (shown(&first), pane_ids(&before)));
+        assert_eq!(
+            (&space(&second)["of"], &space(&second)["strip"], &space(&second)["front"]),
+            (&json!({"kind": "task", "id": one}), &json!([one, two]), &json!(two))
+        );
+        assert_eq!(second["workbooks"][0]["task"], json!(one));
+        // The strip: a tab each, the front one wider; a click puts the other in front.
+        let (a, b) = (otto.control(&format!("strip:{one}")), otto.control(&format!("strip:{two}")));
+        assert!(b[2] > a[2] * 2. && a[0] < b[0], "the front tab is the wide one: {a:?} {b:?}");
+        let clicked = otto.user_click(at(a, 0.5, 0.5));
+        assert_eq!((&space(&clicked)["front"], &clicked["state"]["talk"]["task"]), (&json!(one), &json!(one)));
+        let (a, b) = (otto.control(&format!("strip:{one}")), otto.control(&format!("strip:{two}")));
+        assert!(a[2] > b[2] * 2., "{a:?} {b:?}");
+        // The keys: next and previous, around.
+        let next = otto.user_key("cmd-alt-]");
+        assert_eq!((&space(&next)["front"], &next["state"]["talk"]["task"]), (&json!(two), &json!(two)));
+        assert_eq!(space(&otto.user_key("cmd-alt-]"))["front"], json!(one));
+        assert_eq!(space(&otto.user_key("cmd-alt-["))["front"], json!(two));
+        // A client's task joins nothing, and its `task_open` puts no conversation in front.
+        otto.user_key("cmd-l");
+        otto.call(json!({"cmd": "task_new", "line": "theirs", "open": true}));
+        let theirs = otto.call(json!({"cmd": "task_open", "id": one}));
+        assert_eq!((&space(&theirs)["strip"], &space(&theirs)["front"]), (&json!([one, two]), &json!(two)));
+        // + on the strip: the new-task box, for a task here.
+        let boxed = otto.user_click(at(otto.control("strip:new"), 0.5, 0.5));
+        assert_eq!(boxed["state"]["compose"], "");
+        otto.user_key("escape");
+        otto.call(json!({"cmd": "quit"}));
+        otto.user_key("enter"); // their agents run: the quit question
+        exits(&mut otto);
+        (one, two)
+    };
+    // Another run: both tasks there, the same one in front. It dismissed, the other is; no strip.
+    let otto = Otto::launch_with("strip-2", &env);
+    let again = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&space(&again)["strip"], &space(&again)["front"]), (&json!([one, two]), &json!(two)));
+    let tabs = space(&again)["tabs"].clone();
+    let left = otto.call(json!({"cmd": "task_dismiss", "id": two}));
+    assert_eq!(
+        (&space(&left)["strip"], &space(&left)["front"], &space(&left)["tabs"]),
+        (&json!([]), &json!(one), &tabs)
+    );
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// The owner: "i'd expect < 5 so the ui should be suitable for that". Five tasks in a workspace:
+/// the strip is one line inside the drawer, four badges and the front tab with room for its title.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_strip_of_five_tasks_is_one_line_with_room_for_the_front_ones_title() {
+    let root = support::temp(&format!("ottospace-e2e-strip5-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, sessions) = (root.join("bin"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    let settings =
+        json!({"repos": [], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("strip5", &settings.to_string());
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("strip5", &env);
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.user_key("cmd-d");
+    let mut ids: Vec<u64> = Vec::new();
+    for title in [
+        "a l p h a",
+        "b r a v o",
+        "c h a r l i e",
+        "d e l t a",
+        "e c h o space o f space t h e space l o n g space t i t l e",
+    ] {
+        otto.user_key("cmd-n");
+        otto.user_key(title);
+        let started = otto.user_key("enter");
+        ids.push(started["state"]["talk"]["task"].as_u64().expect("the drawer is on the new task"));
+    }
+    let state = otto.call(json!({"cmd": "state"}));
+    let space = state["spaces"].as_array().unwrap().iter().find(|s| s["selected"] == true).cloned().unwrap();
+    assert_eq!((&space["strip"], &space["front"]), (&json!(ids), &json!(ids[4])));
+    let tabs: Vec<[f64; 4]> = ids.iter().map(|id| otto.control(&format!("strip:{id}"))).collect();
+    let (new, drawer) = (otto.control("strip:new"), otto.control("talk"));
+    // One line, left to right, + last, all inside the drawer.
+    for pair in tabs.windows(2) {
+        assert!(pair[0][1] == pair[1][1] && pair[0][0] + pair[0][2] <= pair[1][0] + 0.5, "{tabs:?}");
+    }
+    assert!(tabs[0][0] >= drawer[0] && new[0] + new[2] <= drawer[0] + drawer[2] + 0.5, "{tabs:?} {new:?} {drawer:?}");
+    assert!(new[0] >= tabs[4][0] + tabs[4][2] - 0.5, "{tabs:?} {new:?}");
+    // Four badges, and the front one with room for its title.
+    assert!(tabs[..4].iter().all(|tab| tab[2] < 40.), "{tabs:?}");
+    assert!(tabs[4][2] >= 96., "{tabs:?}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
