@@ -985,6 +985,22 @@ the rest down, and at once under the system's Reduce Motion.
   said. A dismissed settings line comes back when it says something else.
 - **How long**: as before. What a step did goes after 8 seconds; a settings problem stays until
   the file is right; a failure stays until the next one, or until dismissed.
+- **Whose**: the bar is yours. Why a step did nothing, and what it did, is an answer to the one
+  who took the step: your own shows on the bar; a socket client's (or a timer's) is in the
+  reply's `notice` alone, so a refused client opens no bar, moves nothing under the top row and
+  closes no menu of yours. What is wrong with the app itself shows whoever's step found it, and
+  a client's success clears only a client's line.
+
+| Kind | Level | About | Another sender's on the bar |
+|---|---|---|---|
+| `failed` | error | the app: a step of yours or a timer's that failed; of a client's, a shell or agent that did not start, `settings.json` not written, a window of yours it moved back on screen | yes, never over what your own step said |
+| `refused` | warning | the sender: why its step did nothing | no: the reply's `notice` |
+| `told` | information | the sender: what its step did | no |
+| `unsaved` | error | the app: a task, mark, workspace or layout not saved | yes |
+| `settings_problem`, `settings_retired`, `settings_restart` | error, warning, information | the app: `settings.json` | yes |
+| `start` | error | the app: found at start | yes |
+| `keys` | warning | the app: a global key not registered | yes |
+| `editor` | information | the app: your editor gave its text back | yes |
 
 A copy's "Copied 3 lines", the mode and the count of tasks that need you stay in the status bar.
 
