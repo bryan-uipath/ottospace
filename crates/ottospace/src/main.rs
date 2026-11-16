@@ -295,8 +295,7 @@ impl Hosted {
 
     /// Sizes the window to the pane (so the stream matches) and parks it on the off-screen sliver.
     /// With a `crop`, the window is that much taller and the stream shows only the part below it.
-    fn park(&mut self, scale: f64, crop: f64) {
-        let size = to_cg(self.bounds.get().size);
+    fn park(&mut self, size: CGSize, scale: f64, crop: f64) {
         // Only resize/reconfigure when the pane changed; redoing it on every park flickers.
         if size != self.parked_size || crop != self.crop {
             // Move first. Resized where it stood, macOS clamps the window to what fits above the
@@ -360,8 +359,8 @@ impl Hosted {
 
     /// Places the window over its pane and activates its app: entering, and a peek. The app may
     /// have resized its window since it was parked: a click is judged against what it covers now.
-    fn bring_up(&mut self, notice: f32, window: &Window, cx: &App) {
-        let rect = on_screen(self.bounds.get(), window, cx);
+    fn bring_up(&mut self, notice: f32, keep: Option<ottospace_core::ax::Frame>, window: &Window, cx: &App) {
+        let rect = pane_rect(self.bounds.get(), keep, window, cx);
         self.place(rect, self.crop_at(rect, top_limit(notice, window, cx)));
         self.window.raise();
         self.show(window.scale_factor() as f64);
@@ -412,6 +411,17 @@ const SKILL_STUB: &str = include_str!("../skill/SKILL.md");
 
 /// The return key's name (e.g. "F18") once it is registered. Unset: there is no return key.
 static RETURN_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The window while it fills its display, in Accessibility's coordinates.
+#[derive(Clone, Copy)]
+struct Filled {
+    /// Its frame before.
+    before: ottospace_core::ax::Frame,
+    /// The frame the mode gave it.
+    frame: ottospace_core::ax::Frame,
+    /// What the menu bar and the Dock leave of the display when they show.
+    visible: ottospace_core::ax::Frame,
+}
 
 /// Height of the top bar (the native title strip, so all of it drags the window), and the width
 /// it keeps clear on the left for the traffic lights.
@@ -912,8 +922,8 @@ struct Workspace {
     bar: notice_bar::Bar,
     /// False in e2e runs, which must never move the user's real windows.
     hosting: bool,
-    /// While the window fills its display: its frame before, and the display's.
-    filled: Option<(ottospace_core::ax::Frame, ottospace_core::ax::Frame)>,
+    /// While the window fills its display.
+    filled: Option<Filled>,
     /// Test runs: the pid of the one app that may be hosted.
     host_only: Option<i32>,
     control: Option<Receiver<Call>>,
@@ -981,6 +991,16 @@ impl Workspace {
     ) -> Self {
         let this = cx.weak_entity();
         let subscriptions = vec![
+            // Dragged, zoomed, or moved by the system (its display gone): it fills no display now.
+            cx.observe_window_bounds(window, |this, window, cx| {
+                // SAFETY: GPUI's own view, on the main thread.
+                let at = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::placement(view) });
+                if let (Some(filled), Some(at)) = (this.filled, at)
+                    && !fill::holds(at.window, filled.frame)
+                {
+                    this.dispatch(Action::FillEnded, Origin::System, window, cx);
+                }
+            }),
             // Clicking ottospace itself (title bar, empty space) raises it over the live window,
             // so hand that pane back to its stream. Ignore the activation that the swap click
             // itself delivers late (the race that used to bounce windows straight back).
@@ -1524,8 +1544,8 @@ impl Workspace {
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("park", serde_json::json!({ "pane": id, "window": hosted.window_id }));
                         let limit = top_limit(self.bar.height, window, cx);
-                        let crop = hosted.crop_at(on_screen(hosted.bounds.get(), window, cx), limit);
-                        hosted.park(window.scale_factor() as f64, crop);
+                        let rect = pane_rect(hosted.bounds.get(), self.filled.map(|f| f.visible), window, cx);
+                        hosted.park(rect.size, window.scale_factor() as f64, hosted.crop_at(rect, limit));
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
                         // bar shows no mode. If the user moved to a third app, leave them there.
@@ -1583,7 +1603,7 @@ impl Workspace {
                     }
                 }
                 Effect::Activate { id } => self.activate(id, window, cx),
-                Effect::FillDisplay { on } => self.fill_display(*on, window),
+                Effect::FillDisplay { on } => self.fill_display(*on, window, cx),
                 Effect::Run { command } => self.run_command(*command, window, cx),
                 Effect::PressApp { pane, path, role, at, .. } => self.press_app(*pane, path, role, *at, window, cx),
                 Effect::Peek(pane) => self.peek(*pane, window, cx),
@@ -1640,7 +1660,7 @@ impl Workspace {
                     self.went_live += 1;
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("unpark", serde_json::json!({ "pane": id, "window": hosted.window_id }));
-                        hosted.bring_up(self.bar.height, window, cx);
+                        hosted.bring_up(self.bar.height, self.filled.map(|f| f.visible), window, cx);
                     }
                 }
             }
@@ -3380,8 +3400,9 @@ impl Workspace {
         let live = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
         // Under the notice bar as it is in this frame: the windows follow it as it opens and closes.
         let limit = top_limit(self.bar.height, window, cx);
+        let keep = self.filled.map(|f| f.visible);
         for (id, hosted) in &mut self.hosted {
-            let rect = on_screen(hosted.bounds.get(), window, cx);
+            let rect = pane_rect(hosted.bounds.get(), keep, window, cx);
             if rect.size.width < 1.0 {
                 continue; // not laid out yet
             }
@@ -3392,7 +3413,7 @@ impl Workspace {
                     hosted.place(rect, crop);
                 }
             } else if hosted.parked_size != rect.size || hosted.crop != crop {
-                hosted.park(scale, crop);
+                hosted.park(rect.size, scale, crop);
             }
             // Only on a check: reading a window's size is a synchronous accessibility call.
             // An app that resized its own window: the preview and the click rule follow it.
@@ -4055,21 +4076,33 @@ impl Workspace {
 
     /// Carries out `Effect::FillDisplay`. A run with hosting off changes no window: its own
     /// floats over the user's screen.
-    fn fill_display(&mut self, on: bool, window: &Window) {
+    fn fill_display(&mut self, on: bool, window: &Window, cx: &mut Context<Self>) {
         let Some(view) = ns_view(window).filter(|_| self.hosting) else { return };
         // SAFETY: GPUI's own view, on the main thread.
         let Some(at) = (unsafe { ottospace_mac::window::placement(view) }) else { return };
-        if on {
-            // The bars first: a frame over a menu bar that shows may be refused.
-            ottospace_mac::window::hide_bars(true);
-            unsafe { ottospace_mac::window::set_frame(view, at.screen) };
-            self.filled = Some((at.window, at.screen));
-        } else if let Some((before, filled)) = self.filled.take() {
-            ottospace_mac::window::hide_bars(false);
-            let screens = recovery::screens();
-            let to = fill::back(at.window, filled, before, &screens.visible, screens.main);
-            unsafe { ottospace_mac::window::set_frame(view, to) };
-        }
+        ottospace_mac::window::hide_bars(on);
+        let (was, view) = (self.filled.take(), view as usize);
+        let to = match was {
+            _ if on => fill::frame(at.screen, at.safe_top),
+            Some(was) => {
+                let screens = recovery::screens();
+                fill::back(at.window, was.frame, was.before, &screens.visible, screens.main)
+            }
+            None => return,
+        };
+        // Read before the bars went: `visible` is what they leave when they show.
+        let filled = Filled { before: at.window, frame: to, visible: at.visible };
+        // Not in this update: GPUI drops the resize AppKit reports while the app is borrowed,
+        // and the layout keeps the old size (as its own `zoom_window` defers).
+        cx.spawn(async move |this, cx| {
+            // Turned off again in the meantime: the frame stays.
+            if this.update(cx, |this, _| this.model.fill_display == on).unwrap_or(false) {
+                // SAFETY: the window's own view, alive while its workspace is; the main thread.
+                unsafe { ottospace_mac::window::set_frame(view as *mut std::ffi::c_void, to) };
+                let _ = this.update(cx, |this, _| this.filled = on.then_some(filled));
+            }
+        })
+        .detach();
     }
 
     /// A click on a pane body. An app pane goes live, then the click is replayed so it lands in
@@ -5958,6 +5991,13 @@ fn title_bar(window: &ax::Window) -> f64 {
         toolbar: window.has_child("AXToolbar").unwrap_or(true),
     };
     titlebar::height(&facts) as f64
+}
+
+/// An app pane's content rect on screen, for its window: while the window fills its display
+/// (`keep`: what the bars leave), none of it under the Dock (`fill::within`).
+fn pane_rect(body: Bounds<Pixels>, keep: Option<ottospace_core::ax::Frame>, window: &Window, cx: &App) -> CGRect {
+    let rect = on_screen(body, window, cx);
+    keep.map_or(rect, |visible| recovery::to_rect(fill::within(recovery::to_frame(rect), visible)))
 }
 
 /// A pane body's rect (window-content coordinates) in global top-left screen coordinates.

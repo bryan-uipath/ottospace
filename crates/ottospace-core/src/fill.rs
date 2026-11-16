@@ -8,6 +8,21 @@ use crate::restore;
 /// Why a client's request to fill the display is refused.
 pub const USERS_ALONE: &str = "only the user puts the window over the menu bar and the Dock";
 
+/// The frame the mode gives the window: the whole display, less the strip its camera housing
+/// cuts into (`safe_top`; 0 with none). The menu bar is as tall as that strip, and stays in it.
+pub fn frame(display: Frame, safe_top: f64) -> Frame {
+    Frame::new(display.x, display.y + safe_top, display.w, display.h - safe_top)
+}
+
+/// The part of pane content `rect` an app's window takes while the mode is on: none of it below
+/// `visible` (what the bars leave when they show). macOS lets no window be resized into the
+/// Dock's strip, and the Dock comes back over it while the app is in front. A pane wholly in the
+/// strip keeps its rect.
+pub fn within(rect: Frame, visible: Frame) -> Frame {
+    let h = (visible.y + visible.h - rect.y).min(rect.h);
+    if h < 1.0 { rect } else { Frame { h, ..rect } }
+}
+
 /// True while the window still has the frame the mode gave it, to a point.
 pub fn holds(now: Frame, filled: Frame) -> bool {
     [now.x - filled.x, now.y - filled.y, now.w - filled.w, now.h - filled.h].iter().all(|d| d.abs() <= 1.0)
@@ -26,6 +41,23 @@ mod tests {
 
     const DISPLAY: Frame = Frame { x: 0., y: 0., w: 1920., h: 1080. };
     const VISIBLE: Frame = Frame { x: 0., y: 25., w: 1920., h: 975. };
+
+    #[test]
+    fn the_window_takes_the_whole_display_but_not_the_strip_beside_a_camera_housing() {
+        assert_eq!(frame(DISPLAY, 0.), DISPLAY);
+        assert_eq!(frame(Frame::new(0., 0., 1512., 982.), 38.), Frame::new(0., 38., 1512., 944.));
+    }
+
+    #[test]
+    fn an_apps_window_stops_at_the_docks_top() {
+        // Measured on the runner: a 1024×768 display, the menu bar 31, the Dock from 708.
+        let visible = Frame::new(0., 31., 1024., 677.);
+        assert_eq!(within(Frame::new(319., 75., 702., 666.), visible), Frame::new(319., 75., 702., 633.));
+        // Clear of the strip: as it is. Wholly in it: as it is, too.
+        let upper = Frame::new(319., 75., 702., 300.);
+        let strip = Frame::new(319., 720., 702., 20.);
+        assert_eq!((within(upper, visible), within(strip, visible)), (upper, strip));
+    }
 
     #[test]
     fn the_window_goes_back_where_it_was_unless_it_moved_or_its_place_is_gone() {

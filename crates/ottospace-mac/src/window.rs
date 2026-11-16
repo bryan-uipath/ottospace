@@ -302,6 +302,8 @@ pub struct Placement {
     pub screen: Frame,
     /// What the menu bar and the Dock leave of it, as they are now.
     pub visible: Frame,
+    /// How tall the strip is that the camera housing cuts into, at the screen's top. 0: none.
+    pub safe_top: f64,
 }
 
 /// # Safety
@@ -315,6 +317,7 @@ pub unsafe fn placement(ns_view: *mut c_void) -> Option<Placement> {
         window: flipped(window.frame(), mtm),
         screen: flipped(screen.frame(), mtm),
         visible: flipped(screen.visibleFrame(), mtm),
+        safe_top: screen.safeAreaInsets().top,
     })
 }
 
@@ -341,6 +344,13 @@ pub fn hide_bars(on: bool) {
     let hidden = NSApplicationPresentationOptions::AutoHideMenuBar | NSApplicationPresentationOptions::AutoHideDock;
     let options = if on { hidden } else { NSApplicationPresentationOptions::Default };
     NSApplication::sharedApplication(mtm).setPresentationOptions(options);
+}
+
+/// True while the app in front keeps the menu bar or the Dock away: the system's state, the
+/// same from any process. For the canary.
+pub fn bars_hidden() -> bool {
+    let Some(mtm) = MainThreadMarker::new() else { return false };
+    NSApplication::sharedApplication(mtm).currentSystemPresentationOptions() != NSApplicationPresentationOptions::Default
 }
 
 /// SPIKE (docs/ai/fill-display.md), to be removed: what AppKit says of the bars and screens, as JSON.

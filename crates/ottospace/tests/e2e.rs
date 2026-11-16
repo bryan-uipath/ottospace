@@ -9102,10 +9102,9 @@ fn only_the_users_key_fills_the_display_and_a_test_run_moves_no_window() {
     let otto = Otto::launch("fill");
     let before = otto.call(json!({"cmd": "state"}));
     assert_eq!(before["state"]["fill_display"], false);
-    // A client's key is refused: its window over the menu bar is the user's to ask for.
-    let refused = otto.raw(&json!({"cmd": "key", "keys": "cmd-ctrl-shift-f"}).to_string());
-    assert!(refused["error"].as_str().is_some_and(|e| e.contains("only the user puts the window")), "{refused}");
-    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["fill_display"], false);
+    // A client's key does nothing: the window over the menu bar is the user's to ask for.
+    let refused = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-shift-f"}));
+    assert_eq!(refused["state"]["fill_display"], false, "{refused}");
     // The user's turns it on, and again off. A test run's window stays where it is: it floats
     // over the user's screen.
     let on = otto.user_key("cmd-ctrl-shift-f");
