@@ -62,6 +62,18 @@ pane: what you open there gets its own workspace.
   just Home.
 - Property rules: Home holds no pane and only its own tab, after any step from any origin.
 
+### Home's screens (built)
+
+The owner, on the design canvas:
+
+- **Home's heading** is the house beside the word "Home"; no tagline.
+- **An empty tab** (a workspace's, a task's, a session's) is the lattice and three key caps
+  only: ⌘E Open an app, ⌘D Terminal, ⌘N New task. Home draws the same list (`fill_list`). A
+  row's click does what its key does, as the user: in a workspace ⌘N's ↵ starts the task there.
+- **The top row's glyph** is the core's (`Model::glyph`, in the state as `spaces[].glyph`): Home's
+  house; a task's space its badges; a workspace whose tabs hold one pane, an app's, that app's
+  icon (the pane header's); else the name (a workspace keeps its glyph beside it).
+
 ## The row in the Workspaces section
 
 The owner: "clicking the body should open it, and we should have an ellipsis on hover that lets
@@ -118,18 +130,53 @@ tab never saved with ⌘⇧S is gone), and a tab closed with ⌘⇧W.
   with one empty tab and selected.
 - **A task gone** gives its tabs to the workspace it was bound to, else to the workspace
   selected last (Home's rule, below).
-- **Repos**: a click on a repository or worktree opens a terminal there: in the empty tab on
-  show of a workspace, else in a new workspace named for the folder (the user's; a client's
-  goes to the workspace selected last, Home's rule below), and selects it. A row a live task
-  works in carries that task's badge, and its click (`RepoClick`) selects the task's space
-  instead (the latest started, if several); Terminal, on hover, opens the terminal anyway
-  (`OpenRepo`). Stage 2 changes the click.
+- **Repos**: a click on a repository or worktree (`RepoClick`) selects the workspace of that
+  checkout, else the user's makes one (below, "Worktrees"). A client's, with none: a terminal
+  there in the workspace selected last (Home's rule below). A row a live task works in carries
+  that task's badge; Terminal, on hover, opens a terminal there anyway (`OpenRepo`).
 - A tab changes space only by: the user's move (drag onto a space, Move Tab to…), a task
   started from it (above), its space gone (task dismissed or deleted, workspace deleted: the
   workspace selected last), the undo of a dismissal, a session adopted as a task (its space
   becomes the task's), or Home's rule (below). + moves none. The property test checks exactly this.
 
-## Next: a workspace's two links (not built)
+## Worktrees (built)
+
+The owner: "the model is workspace has tasks - and the tasks for a workspace can have different
+worktrees"; "the workspace _can_ carry a worktree (doesn't have to)"; "a terminal in the
+workspace starts in the default worktree makes sense". A repository's own folder counts as its
+main checkout.
+
+- **A task's worktree** (`Model::task_worktree`) is the listed checkout its folder is in (the
+  longest): the one place that says where its agent works. Its folder is its `/path` taken in
+  the box, else its `>repo`, else what it took from its workspace (below).
+- **A workspace's default worktree** (`Workbook::worktree`, in its file): optional. Only a kept
+  workspace has one. It counts while it is listed (`Model::space_worktree`): a worktree gone
+  from the list is no default, and comes back with it. A bound workspace keeps its own.
+- **Set by the user's Repos click.** A click on a checkout's row (`repo_click`): the workspace
+  whose default it is, else one that holds a live task working there (its task in front); of
+  several, the one selected last, then the first on the row. A kept workspace that is closed
+  opens, as its row would. None: a NEW kept workspace after the selected one (from Home: at the row's end), named for the
+  worktree's branch, else its folder (a repository's own folder: the repository's name), that
+  checkout its default, one tab with a terminal there, selected. From Home too; and the
+  Terminal word from Home (`OpenRepo`, Home's rule) gives the workspace it makes the default.
+  A worktree the user's + made (`WorktreeAdded`) opens as their click on its row would.
+- **What starts there.** A terminal opened in the workspace with no folder of its own (⌘D, a
+  split, a new tab's, the box's Terminal) starts in the default (`start_in_default`). A task the
+  user starts there (↵) works in the default unless its line names another (`>repo`, `/path`);
+  so does each task that joins later, not the folder of the one in front. A workspace with no
+  default: terminals start where they did, and a joining task shares the front one's folder.
+- **Shown.** The state's `spaces[].worktree`. Where a workspace's tasks work in more than one
+  worktree, each task's row says its worktree's name and its strip tab's hover too
+  (`Model::worktree_label`, `tasks_bar` rows' `worktree`); else nothing is said.
+- **Who.** Only the user's act sets a default (a Repos click, their + made a worktree), or the
+  files read again: a client's click on a row with no workspace opens a terminal as `OpenRepo`
+  does and sets none, and no request sets one.
+- Property rules: a terminal opened by a step that names no folder starts in its space's default;
+  a task that joins a workspace with a default works there unless its line names another; no
+  step but the user's (`WorktreeAdded` counts, and `RestoreWorkbooks`) changes a workspace's
+  default.
+
+## Earlier: a workspace's two links (replaced)
 
 The owner: "a workspace can be associated with: a single task; a single worktree. a task can be
 associated with a single workspace. a repository can be associated with a single task. so its
@@ -245,9 +292,8 @@ right now"; "i'd expect < 5 so the ui should be suitable for that".
 
 ## Open questions
 
-1. A second task for a worktree whose workspace already has a task. Not decided. Until it is:
-   the second task's workspace has the task link only; its agent still runs in that folder. One
-   function, one test, cheap to change.
+1. ~~A second task for a worktree whose workspace already has a task~~: decided, it joins
+   (above, "Several tasks in one workspace"), and may work in another worktree ("Worktrees").
 2. Should a tab made in a workspace be saved into its file without ⌘⇧S ("a workspace is what is
    open in it")? Today the file changes only when the user saves; session restore keeps the rest.
 3. ~~The first space~~: decided, Home (above).

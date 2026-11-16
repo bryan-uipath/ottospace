@@ -99,6 +99,7 @@ impl Gen<'_> {
             name: self.name(WORDS),
             tabs: (0..self.rng.below(3)).map(|_| tab.clone()).collect(),
             task: self.rng.one_in(3).then(|| self.task()),
+            worktree: self.rng.one_in(3).then(|| self.name(DIRS)),
             live: Vec::new(),
             extra: self.extra(),
         }
@@ -776,7 +777,8 @@ const MAKERS: &[Make] = &[
     |_| Action::KeysKnown,
     |g| {
         use crate::notice::Kind::*;
-        let kinds = [Failed, Refused, Unsaved, Told, SettingsProblem, SettingsRetired, SettingsRestart, Start, Keys];
+        let kinds =
+            [Failed, Refused, Unsaved, Told, SettingsProblem, SettingsRetired, SettingsRestart, Start, Keys, Meeting];
         let said = g.m.settings_line().filter(|_| g.rng.coin());
         Action::NoticeDismiss { notice: g.rng.pick(&kinds), text: said.unwrap_or_else(|| g.text()) }
     },
@@ -2303,6 +2305,11 @@ impl Run {
         // A draft with captures is filed under a name of its own when none was typed.
         let named = m.capture_title();
         let filing = filing.map(|line| (line.clone(), m.draft(line)));
+        // The default worktree of the workspace a task started now would join, and the box's folder.
+        let joins_default = m.joins().and_then(|of| m.space_worktree(&of).map(String::from));
+        let box_folder = m.compose_folder().map(String::from);
+        // Each pane's kind before: a terminal made now with no folder given starts in its space's default.
+        let kinds_before: Vec<(PaneId, Kind)> = m.panes.iter().map(|p| (p.id, p.kind.clone())).collect();
         // A row taken reads back as the tag it is, of that very name.
         let taken = match (&action, m.dropdown()) {
             (Action::ComposeAccept { index }, Some(menu)) => {
@@ -2358,6 +2365,10 @@ impl Run {
             m.workbooks.list.iter().map(|book| (book.uid.clone(), book.task)).collect()
         };
         let (bound_before, panes_before) = (bindings(m), (m.panes.clone(), tab_panes_by_id(m)));
+        let defaults = |m: &Model| -> Vec<(String, Option<String>)> {
+            m.workbooks.list.iter().map(|book| (book.uid.clone(), book.worktree.clone())).collect()
+        };
+        let defaults_before = defaults(m);
         let menu_before = m.row_menu.clone();
         let fronts_before: Vec<(Owner, TaskId)> =
             m.spaces().iter().filter_map(|space| Some((space.of.clone(), m.front(&space.of)?))).collect();
@@ -2623,6 +2634,17 @@ impl Run {
                 ensure!(now == panes_before, "{action:?} bound a workspace and moved or closed a pane");
             }
         }
+        // A workspace's default worktree is set only by the user's act (a Repos click, a worktree
+        // their + made), or the files read again; a new workspace of anyone else's has none.
+        let moved = |(uid, worktree): &(String, Option<String>)| {
+            let was = defaults_before.iter().find(|(known, _)| known == uid).map(|(_, was)| was);
+            was.map_or(worktree.is_some(), |was| was != worktree)
+        };
+        if defaults(m).iter().any(moved) {
+            let read = matches!(action, Action::RestoreWorkbooks { .. });
+            let made = matches!(action, Action::WorktreeAdded { .. });
+            ensure!(read || made || origin == Origin::User, "{origin:?}'s {action:?} changed a workspace's default");
+        }
         // + makes at most one workbook, of no tab, with a new empty tab on show in its space;
         // it records nothing in any other, and no tab there was changes space (above).
         if let Action::WorkbookNew { .. } = action {
@@ -2639,8 +2661,13 @@ impl Run {
             }
         }
         // A step that is not the user's makes a workspace only for a tab that had none to go
-        // to: one at most, with nothing saved, and no workspace there was is on the row.
-        if origin != Origin::User && !matches!(action, Action::RestoreWorkbooks { .. } | Action::RestoreLayout { .. }) {
+        // to: one at most, with nothing saved, and no workspace there was is on the row. A
+        // worktree made (`WorktreeAdded`) is the user's +, and opens as their click would.
+        let users = matches!(action, Action::WorktreeAdded { .. });
+        if origin != Origin::User
+            && !users
+            && !matches!(action, Action::RestoreWorkbooks { .. } | Action::RestoreLayout { .. })
+        {
             let made: Vec<&Workbook> =
                 m.workbooks.list.iter().filter(|book| !uids_before.contains(&book.uid)).collect();
             ensure!(made.len() <= 1, "{origin:?}'s {action:?} made {} workspaces", made.len());
@@ -2947,6 +2974,13 @@ impl Run {
                 );
                 ensure!(!filed[0].title_generated, "a title that was typed is marked as made up");
                 let task = filed[0];
+                // Started in a workspace with a default, naming no folder: it works there.
+                let joined =
+                    m.task_space(task.id) != Owner::Task { id: task.id } || m.workbooks.bound_to(task.id).is_some();
+                if let Some(default) = joins_default.as_ref().filter(|_| joined && box_folder.is_none()) {
+                    let named = draft.repo.as_deref().and_then(|name| m.repo_named(name)).is_some();
+                    ensure!(named || task.dir() == Some(default), "{task:?} joined a workspace of default {default:?}");
+                }
                 let repo = draft.repo.as_deref().and_then(|name| m.repo_named(name));
                 // A task that joined a workspace and named no repository shares the workspace's.
                 let shares = repo.is_none() && m.task_space(task.id) != Owner::Task { id: task.id };
@@ -2968,6 +3002,27 @@ impl Run {
             }
         }
 
+        // A terminal made now by a step that names no folder starts in its tab's space's default
+        // worktree, as listed now, or where terminals start (none).
+        let unnamed = matches!(
+            action,
+            Action::Split { .. }
+                | Action::Open { .. }
+                | Action::Fill { .. }
+                | Action::NewEmptyTab
+                | Action::PickerChoose { .. }
+        );
+        for pane in m.panes.iter().filter(|p| unnamed && p.kind == Kind::Terminal) {
+            if kinds_before.iter().any(|(id, kind)| *id == pane.id && *kind == Kind::Terminal) {
+                continue;
+            }
+            let tab = m.tab_of(pane.id).and_then(|id| m.tabs.iter().find(|tab| tab.id == id));
+            let default = tab.and_then(|tab| m.space_worktree(&tab.space));
+            ensure!(
+                pane.cwd.as_deref() == default,
+                "{action:?} started terminal {pane:?}, its space's default {default:?}"
+            );
+        }
         // The effects: each names what is there, and after them the shell holds what the model does.
         for effect in &effects {
             match effect {

@@ -9,7 +9,8 @@
 //! `{"cmd":"retitle","index":0,"title":"Private"}` gives a window another title.
 //! `{"cmd":"move","index":0,"to":[x,y]}` and `{"cmd":"recreate","index":0,"at":[x,y]}` put a
 //! window, or a new one in its place, anywhere, off screen too. `{"cmd":"hang","ms":8000}` makes
-//! the app too busy to answer Accessibility calls for that long.
+//! the app too busy to answer Accessibility calls for that long. `{"cmd":"minimize","index":0}`
+//! puts a window in the Dock: the app runs with none on screen.
 //!
 //! With `CANARY_BUTTON` set, the first window has a native button titled "Canary button" in
 //! its content: a control its accessibility tree names. Below it, a checkbox "Canary press"
@@ -62,6 +63,9 @@ enum Request {
     /// Blocks the main thread for `ms` after replying: an app too busy for Accessibility calls.
     Hang {
         ms: u64,
+    },
+    Minimize {
+        index: usize,
     },
     Quit,
 }
@@ -254,6 +258,12 @@ fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mu
                 if let Some(handle) = handle {
                     let _ = handle.update(cx, |_, window, _| window.remove_window());
                     open(windows, None, None, Some(at), cx);
+                }
+            }
+            Request::Minimize { index } => {
+                let handle = windows.borrow().get(index).copied();
+                if let Some(handle) = handle {
+                    let _ = handle.update(cx, |_, window, _| window.minimize_window());
                 }
             }
             Request::Hang { ms } => {

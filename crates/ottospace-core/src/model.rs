@@ -1444,7 +1444,7 @@ pub enum Action {
         in_call: Option<bool>,
         at: u64,
     },
-    /// The meeting banner's Dismiss: no more alerts of that event. Only the user's.
+    /// The meeting notice's Dismiss (× on the notice bar): no more alerts of that event. Only the user's.
     CalendarDismiss {
         id: u64,
     },
@@ -2407,10 +2407,11 @@ pub enum TabAt {
 pub mod zones;
 
 pub mod spaces;
-pub use spaces::{HOME, HOME_TAB, Owner, Space};
+pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
 
 pub mod chat;
 pub mod editor;
+mod worktrees;
 
 #[derive(Debug, Serialize)]
 pub struct Model {
@@ -2450,7 +2451,7 @@ pub struct Model {
     pub(crate) last_spaces: Vec<Owner>,
     /// The name of the workspace this step's tab is to make, if it makes one: a folder's.
     #[serde(skip)]
-    pub(crate) home_hint: Option<String>,
+    pub(crate) home_hint: Option<(String, String)>,
     /// Each joined task and its space, as the last step left them.
     #[serde(skip)]
     joined_before: Vec<(TaskId, Owner)>,
@@ -3317,6 +3318,12 @@ impl Model {
             fronts_were.into_iter().filter(|id| origin == Origin::User && !was_done(id)).collect();
         self.settle_tasks(undo && origin == Origin::User, &finished);
         self.settle_spaces(origin, &home);
+        // A terminal opened now, wherever its tab went (Home's go to a workspace), starts in its space's default.
+        for effect in &effects {
+            if let Effect::Opened(pane) = effect {
+                self.start_in_default(*pane);
+            }
+        }
         self.settle_left();
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
@@ -3693,7 +3700,8 @@ impl Model {
                 self.repos = repos::arrange(repos);
                 self.repo_field_gone();
                 self.repos_folded.retain(|folded| *folded != repo);
-                self.act(Action::OpenRepo { path, axis: Axis::Right }, effects);
+                // The user's + made it: it opens as their click on its row would.
+                self.repo_click(path, Axis::Right, true, effects);
             }
             Action::RestoreTasks { tasks, floor } => {
                 self.tasks.restore(tasks, floor);
@@ -3765,15 +3773,7 @@ impl Model {
                     self.select_tab(at, effects);
                 }
             }
-            Action::RepoClick { path, axis } => match self.repo_task(&path) {
-                Some(id) => {
-                    self.open_space(self.task_space(id), effects);
-                    if self.by_user {
-                        self.set_front(id);
-                    }
-                }
-                None => self.act(Action::OpenRepo { path, axis }, effects),
-            },
+            Action::RepoClick { path, axis } => self.repo_click(path, axis, self.by_user, effects),
             Action::OpenRepo { path, axis } => {
                 // Only a listed path: the list is what the user sees and can choose from. Its
                 // terminal is in the tab on show if it is empty or its focused pane is, else in
@@ -3787,8 +3787,8 @@ impl Model {
                         self.push_tab_of(Owner::Home);
                     }
                     let named = self.layout.is_none() || self.tabs[self.active].title.starts_with("Tab ");
-                    // The workspace made for it, if one is, is named for the folder.
-                    self.home_hint = Some(name.clone());
+                    // The workspace made for it, if one is, is named for the folder; the user's has it as its default.
+                    self.home_hint = Some((name.clone(), path.clone()));
                     self.open_terminal_at(axis, Some(path), effects);
                     if let Some(tab) = self.tabs.get_mut(self.active).filter(|_| named) {
                         tab.title = name;
@@ -6278,10 +6278,14 @@ impl Model {
         starts && self.joins().is_some_and(|of| self.space_holds(&of) || !self.members(&of).is_empty())
     }
 
-    /// The repository and folder a task started now with none of its own would share: those of
-    /// the task in front in the workspace it joins.
+    /// The repository and folder a task started now with none of its own would share: the
+    /// default worktree of the workspace it joins, else those of the task in front there.
     fn shared_place(&self) -> (Option<String>, Option<String>) {
-        let front = self.joins().and_then(|of| self.front(&of)).and_then(|id| self.tasks.get(id));
+        let joins = self.joins();
+        if let Some(default) = joins.as_ref().and_then(|of| self.space_worktree(of)) {
+            return (Some(default.to_string()), None);
+        }
+        let front = joins.and_then(|of| self.front(&of)).and_then(|id| self.tasks.get(id));
         front.map_or((None, None), |task| (task.repo.clone(), task.folder.clone()))
     }
 
@@ -6290,6 +6294,10 @@ impl Model {
     /// in place, and stays listed, bound to it (`Workbook::task`); a workspace that has tasks
     /// takes one more, which works in the same folder unless its line said another.
     fn join_space(&mut self, id: TaskId) {
+        let (repo, folder) = self.shared_place();
+        if let Some(task) = self.tasks.list.iter_mut().find(|task| task.id == id && task.dir().is_none()) {
+            (task.repo, task.folder) = (repo, folder);
+        }
         match self.joins() {
             Some(Owner::Workbook { id: book }) => {
                 let (from, to) = (Owner::Workbook { id: book }, Owner::Task { id });
@@ -6301,10 +6309,6 @@ impl Model {
                 self.regroup();
             }
             Some(of) => {
-                let (repo, folder) = self.shared_place();
-                if let Some(task) = self.tasks.list.iter_mut().find(|task| task.id == id && task.dir().is_none()) {
-                    (task.repo, task.folder) = (repo, folder);
-                }
                 if let Some(space) = self.spaces.iter_mut().find(|space| space.of == of) {
                     space.joined.push(id);
                     space.front = Some(id);
@@ -6444,7 +6448,8 @@ impl Model {
     fn task_row(&self, task: &Task, group: tasks::Group, now: u64) -> TaskRow {
         let current = self.tab_task() == Some(task.id);
         let live = self.task_session(task).and_then(Found::doing);
-        TaskRow { live, id: task.id, group, current, fact: tasks::fact(task, group, now) }
+        let (fact, worktree) = (tasks::fact(task, group, now), self.worktree_label(task.id));
+        TaskRow { live, id: task.id, group, current, fact, worktree }
     }
 
     /// The Tasks section's State view as drawn: Needs you, Running, Later (captured and on hold),
@@ -7071,8 +7076,8 @@ impl Model {
         let settings = self.settings_file.read(text, written);
         // A dismissed line that is fixed, or says something else now, is dismissed no more.
         let line = self.settings_file.line();
-        let stale =
-            |n: &crate::notice::Notice| n.kind.offer().is_some() || n.kind == crate::notice::Kind::SettingsRestart;
+        use crate::notice::Kind::{SettingsProblem, SettingsRestart, SettingsRetired};
+        let stale = |n: &crate::notice::Notice| matches!(n.kind, SettingsProblem | SettingsRetired | SettingsRestart);
         self.notice_hidden.retain(|n| !stale(n) || Some(&n.text) == line.as_ref());
         let Some(settings) = settings else { return };
         self.act(Action::TasksView { view: settings.tasks_view.unwrap_or_default() }, effects);
@@ -7143,7 +7148,7 @@ impl Model {
 
     /// The live task working in `path`, the one started last (else filed last): what its row's click selects.
     pub fn repo_task(&self, path: &str) -> Option<TaskId> {
-        let there = self.tasks.list.iter().filter(|task| !task.dismissed && task.dir().is_some_and(|dir| dir == path));
+        let there = self.tasks.list.iter().filter(|task| !task.dismissed && self.task_worktree(task.id) == Some(path));
         there.max_by_key(|task| (task.started_at, task.created, task.id)).map(|task| task.id)
     }
 
@@ -7184,9 +7189,14 @@ impl Model {
 
     /// True if a live task in one of `repo`'s checkouts runs or needs the user.
     fn repo_busy(&self, repo: &Repo) -> bool {
-        let paths: Vec<&String> = std::iter::once(&repo.path).chain(repo.worktrees.iter().map(|w| &w.path)).collect();
+        let paths: Vec<&str> =
+            std::iter::once(repo.path.as_str()).chain(repo.worktrees.iter().map(|w| w.path.as_str())).collect();
         let busy = |task: &&Task| !task.dismissed && matches!(task.state, State::Running | State::NeedsYou);
-        self.tasks.list.iter().filter(busy).any(|task| task.dir().is_some_and(|dir| paths.contains(&dir)))
+        self.tasks
+            .list
+            .iter()
+            .filter(busy)
+            .any(|task| self.task_worktree(task.id).is_some_and(|dir| paths.contains(&dir)))
     }
 
     /// Whether `repo`'s rows are drawn folded under its name: the user folded them, and no task
@@ -9049,6 +9059,37 @@ mod tests {
     }
 
     #[test]
+    fn a_workspace_of_one_app_pane_shows_the_app_and_one_of_more_or_none_its_name() {
+        let mut m = Model::default();
+        let glyphs = |m: &Model| m.space_rows().into_iter().map(|row| row.glyph).collect::<Vec<_>>();
+        let slack = Glyph::App { name: "app".into() };
+        // The user's app on Home: a workspace of it alone shows the app.
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        assert_eq!((m.space(), glyphs(&m)), (&WORKSPACE, vec![Glyph::Home, slack.clone()]));
+        // An empty tab beside it holds nothing: still the app.
+        m.update(Action::NewTab);
+        assert_eq!(m.glyph(&WORKSPACE), slack);
+        // A terminal there, or an empty pane beside the app: two panes, the name.
+        term(&mut m);
+        assert_eq!(m.glyph(&WORKSPACE), Glyph::Name);
+        m.update(Action::SelectTab { index: 0 });
+        m.update(Action::CloseTab { index: Some(1) });
+        assert_eq!(m.glyph(&WORKSPACE), slack);
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        assert_eq!(m.glyph(&WORKSPACE), Glyph::Name);
+        // A workspace of no pane, or of a terminal alone: the name.
+        m.update(Action::WorkbookNew { uid: "u1".into() });
+        assert_eq!(m.glyph(m.space()), Glyph::Name);
+        term(&mut m);
+        assert_eq!(m.glyph(m.space()), Glyph::Name);
+        // A task's space shows its badges, an app alone in it too.
+        let id = add_task(&mut m, "fix the zoom", State::Running);
+        m.update(Action::SpaceOpen { space: task_space(id) });
+        m.update(Action::Open { kind: app(2), axis: Right, beside: None });
+        assert_eq!(m.glyph(&task_space(id)), Glyph::Tasks);
+    }
+
+    #[test]
     fn a_tasks_space_holds_its_tabs_and_a_new_tab_joins_the_selected_space() {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
@@ -9867,26 +9908,195 @@ mod tests {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
         let click = |path: &str| Action::RepoClick { path: path.into(), axis: Right };
-        // No task there: a terminal in a workspace of its own, named for the folder.
+        // No task there: a terminal in a workspace of its own, named for the folder, its default.
         m.update(click("/code/app-2"));
         assert_eq!((m.space(), m.pane(1).and_then(|p| p.cwd.as_deref())), (&WORKSPACE, Some("/code/app-2")));
-        assert_eq!(m.space_title(m.space()), "app-2");
-        // Two tasks there, one dismissed: the live one's space is selected, its agent not started.
-        for line in ["older >app-2", "newer >app-2"] {
+        assert_eq!((m.space_title(m.space()), m.space_worktree(m.space())), ("app-2".into(), Some("/code/app-2")));
+        // Two tasks in the repository, one dismissed: the live one's space is selected, its agent not started.
+        for line in ["older >app", "newer >app"] {
             m.update(Action::TaskFromLine { line: line.into(), known: Default::default(), open: false });
         }
         m.update(Action::TaskDismiss { id: 2 });
-        assert_eq!(m.repo_task("/code/app-2"), Some(1));
-        let effects = m.update(click("/code/app-2"));
+        assert_eq!(m.repo_task("/code/app"), Some(1));
+        let effects = m.update(click("/code/app"));
         assert!(!effects.iter().any(|e| matches!(e, Effect::StartAgent { .. })), "{effects:?}");
         assert_eq!((m.space(), m.panes.len()), (&task_space(1), 1));
         // Again from its hidden space: it comes back.
         m.update(Action::SpaceHide { index: None });
-        m.update(click("/code/app-2"));
+        m.update(click("/code/app"));
         assert_eq!(m.space(), &task_space(1));
         // The row's Terminal word: a terminal there anyway, in the task's empty tab.
-        m.update(Action::OpenRepo { path: "/code/app-2".into(), axis: Right });
+        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right });
         assert_eq!((m.space(), m.panes.len()), (&task_space(1), 2));
+        // The worktree's click: its workspace again, though a task works there too.
+        m.update(Action::TaskFromLine { line: "third >app-2".into(), known: Default::default(), open: false });
+        m.update(click("/code/app-2"));
+        assert_eq!((m.space(), m.panes.len()), (&WORKSPACE, 2));
+    }
+
+    /// The Repos list of `listed`, its worktree on branch `fix/login`, and a second repository.
+    fn branched() -> Vec<Repo> {
+        let mut repos = listed();
+        repos[0].worktrees[0].branch = Some("fix/login".into());
+        repos.push(Repo { name: "zed".into(), path: "/code/zed".into(), branch: None, worktrees: vec![] });
+        repos
+    }
+
+    /// The owner: a workspace "can carry a worktree (doesn't have to)". The user's click on a
+    /// checkout no workspace has makes one for it, named for its branch, a terminal there; the
+    /// click again selects it.
+    #[test]
+    fn a_repos_click_makes_a_workspace_of_that_worktree_and_selects_it_again() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: branched() });
+        let click = |path: &str| Action::RepoClick { path: path.into(), axis: Right };
+        m.update(click("/code/app-2"));
+        let made = (m.space().clone(), m.space_title(m.space()), m.space_worktree(m.space()).map(String::from));
+        assert_eq!(made, (WORKSPACE, "fix/login".into(), Some("/code/app-2".into())));
+        assert_eq!(m.pane(1).and_then(|p| p.cwd.as_deref()), Some("/code/app-2"));
+        assert_eq!(m.workbooks.list[0].worktree.as_deref(), Some("/code/app-2"), "kept in its file");
+        // Again, from Home: the same one; nothing is made or opened.
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(click("/code/app-2"));
+        assert_eq!((m.space(), m.workbooks.list.len(), m.panes.len()), (&WORKSPACE, 1, 1));
+        // From that workspace, a repository's own folder: a new one after it, named for the repository.
+        m.update(click("/code/app"));
+        let second = Owner::Workbook { id: 2 };
+        assert_eq!(
+            (m.space(), m.space_title(&second), m.space_worktree(&second)),
+            (&second, "app".into(), Some("/code/app"))
+        );
+        assert_eq!(m.shown_spaces().iter().map(|s| s.of.clone()).collect::<Vec<_>>(), [Owner::Home, WORKSPACE, second]);
+        // Hidden: it comes back. Closed and kept: it opens again, its default kept.
+        m.update(Action::SpaceHide { index: None });
+        m.update(click("/code/app"));
+        assert_eq!(m.space(), &Owner::Workbook { id: 2 });
+        // A client's click on a checkout of no workspace makes none and sets no default.
+        let theirs = m.update(click("/code/zed").sent_by(Origin::Socket));
+        assert!(theirs.iter().any(|e| matches!(e, Effect::Opened(_))), "{theirs:?}");
+        assert_eq!(m.workbooks.list.iter().filter(|book| book.worktree.as_deref() == Some("/code/zed")).count(), 0);
+        assert_eq!(m.workbooks.list.len(), 2);
+    }
+
+    /// Of several workspaces for a checkout, the one whose default it is, then the one
+    /// selected last; a task's space is chosen only when no default matches.
+    #[test]
+    fn a_repos_click_prefers_the_default_then_the_workspace_selected_last() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: branched() });
+        let click = |path: &str| Action::RepoClick { path: path.into(), axis: Right };
+        // A task of the worktree, started from Home: a space of its own.
+        m.update(Action::OpenCompose { text: "first >app-2".into() });
+        m.update(Action::ComposeEnter);
+        assert_eq!(m.repo_space("/code/app-2", true), Some((task_space(1), Some(1))));
+        // A workspace whose default it is wins over the task's space.
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::OpenRepo { path: "/code/app-2".into(), axis: Right });
+        assert_eq!(m.space_worktree(m.space()), Some("/code/app-2"), "made from Home: the user's has the default");
+        let mine = m.space().clone();
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(click("/code/app-2"));
+        assert_eq!(m.space(), &mine);
+        // Two tasks' spaces for the main checkout: the one selected last.
+        for line in ["a >app", "b >app"] {
+            m.update(Action::SpaceSelect { index: 0 });
+            m.update(Action::OpenCompose { text: line.into() });
+            m.update(Action::ComposeEnter);
+        }
+        m.update(Action::SpaceOpen { space: task_space(2) });
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(click("/code/app"));
+        assert_eq!(m.space(), &task_space(2));
+    }
+
+    /// The owner: "a terminal in the workspace starts in the default worktree makes sense". A
+    /// workspace of no default: where a terminal starts today.
+    #[test]
+    fn a_terminal_opened_in_a_workspace_starts_in_its_default_worktree() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: branched() });
+        m.update(Action::RepoClick { path: "/code/app-2".into(), axis: Right });
+        let cwd = |m: &Model| m.focused.and_then(|id| m.pane(id)).and_then(|p| p.cwd.clone());
+        term(&mut m);
+        assert_eq!(cwd(&m).as_deref(), Some("/code/app-2"));
+        m.update(Action::NewTab);
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        assert_eq!(cwd(&m).as_deref(), Some("/code/app-2"));
+        // A client's split there too: it is the workspace's terminal.
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal }.sent_by(Origin::Socket));
+        assert_eq!(cwd(&m).as_deref(), Some("/code/app-2"));
+        // Its worktree no longer listed: no default, and a terminal starts where it did before.
+        m.update(Action::SetRepos { repos: Vec::new() });
+        assert_eq!(m.space_worktree(m.space()), None);
+        term(&mut m);
+        assert_eq!(cwd(&m), None);
+        // An empty pane filled later: the default as listed then, not when the pane was made.
+        m.update(Action::SetRepos { repos: branched() });
+        m.update(Action::NewEmptyTab);
+        let empty = m.focused.unwrap_or_default();
+        assert_eq!(m.pane(empty).and_then(|p| p.cwd.clone()), None);
+        m.update(Action::SetRepos { repos: Vec::new() });
+        m.update(Action::Fill { pane: empty, kind: Kind::Terminal }.sent_by(Origin::System));
+        assert_eq!(m.pane(empty).and_then(|p| p.cwd.clone()), None);
+        m.update(Action::SetRepos { repos: branched() });
+        m.update(Action::NewEmptyTab);
+        let empty = m.focused.unwrap_or_default();
+        m.update(Action::Fill { pane: empty, kind: Kind::Terminal }.sent_by(Origin::System));
+        assert_eq!(m.pane(empty).and_then(|p| p.cwd.as_deref()), Some("/code/app-2"));
+        // A client's terminal on Home goes to the workspace selected last: in its default.
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal }.sent_by(Origin::Socket));
+        assert_eq!((m.space(), cwd(&m).as_deref()), (&WORKSPACE, Some("/code/app-2")));
+        // A workspace made with + has none.
+        m.update(Action::WorkbookNew { uid: "9f3a61c2d4e5b708".into() });
+        term(&mut m);
+        assert_eq!((m.space_worktree(m.space()), cwd(&m)), (None, None));
+    }
+
+    /// A task started in a workspace with a default starts there, unless its line names
+    /// another; a second one in a workspace of tasks too, not the first one's folder.
+    #[test]
+    fn a_task_started_in_a_workspace_starts_in_its_default_worktree() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: branched() });
+        m.update(Action::RepoClick { path: "/code/app-2".into(), axis: Right });
+        m.update(Action::OpenCompose { text: "first".into() });
+        assert_eq!(
+            m.compose_plan_line().as_deref(),
+            Some("↵ will start claude in app-2 on fix/login, in this workspace")
+        );
+        let cwd = |effects: &[Effect], id: TaskId| {
+            effects.iter().find_map(|effect| match effect {
+                Effect::StartAgent { task: Subject::Task(task), cwd, .. } if *task == id => cwd.clone(),
+                _ => None,
+            })
+        };
+        let effects = m.update(Action::ComposeEnter);
+        assert_eq!((cwd(&effects, 1).as_deref(), m.task_worktree(1)), (Some("/code/app-2"), Some("/code/app-2")));
+        // Bound to the task, the workspace keeps its default.
+        let of = task_space(1);
+        assert_eq!((m.space(), m.space_worktree(&of)), (&of, Some("/code/app-2")));
+        let effects = join(&mut m, "second >zed");
+        assert_eq!(cwd(&effects, 2).as_deref(), Some("/code/zed"));
+        let effects = join(&mut m, "third");
+        assert_eq!(cwd(&effects, 3).as_deref(), Some("/code/app-2"), "the default, not the task in front's");
+    }
+
+    /// Where a workspace's tasks work in different worktrees, each says which; else none does.
+    #[test]
+    fn a_tasks_worktree_is_named_only_where_its_workspaces_tasks_are_apart() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: branched() });
+        m.update(Action::RepoClick { path: "/code/app".into(), axis: Right });
+        join(&mut m, "first");
+        join(&mut m, "second");
+        assert_eq!((m.worktree_label(1), m.worktree_label(2)), (None, None));
+        join(&mut m, "third >app-2");
+        let labels: Vec<Option<String>> = (1..=3).map(|id| m.worktree_label(id)).collect();
+        assert_eq!(labels, [Some("app".into()), Some("app".into()), Some("app-2".into())]);
+        // A task in no workspace of others: none.
+        m.update(Action::TaskFromLine { line: "alone >zed".into(), known: Default::default(), open: false });
+        assert_eq!(m.worktree_label(4), None);
     }
 
     #[test]

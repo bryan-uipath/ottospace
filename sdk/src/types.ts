@@ -244,7 +244,14 @@ export interface SpaceRow {
   front: TaskId | null;
   /** The tabs of the drawer's strip while this space is selected, in the order the tasks came; empty with fewer than two. */
   strip: TaskId[];
+  /** Its default worktree (a listed checkout's path), where its new terminals and tasks start; null: none. Set by the user's click on a Repos row. */
+  worktree: string | null;
+  /** What its item on the top row shows before its name. */
+  glyph: Glyph;
 }
+
+/** A top-row item's glyph: Home's house, a task's badges, the icon of the one app pane a workspace of no task holds alone (by the app's name), or the name alone. */
+export type Glyph = { kind: "home" } | { kind: "tasks" } | { kind: "app"; name: string } | { kind: "name" };
 
 /** The active tab's split tree. `ratio`: the share of the split that `a` (left or top) takes. */
 export type Layout = { leaf: PaneId } | { split: { axis: Axis; ratio: number; a: Layout; b: Layout } };
@@ -567,6 +574,8 @@ export interface TaskRow {
   fact: string | null;
   /** What its session does now (`shell · cargo test`), while it works. */
   live: string | null;
+  /** The worktree it works in (`app-2`), while its workspace's tasks work in more than one; else null. */
+  worktree: string | null;
 }
 
 /** A project's tasks by state: its bar's segments, in this order. */
@@ -1101,6 +1110,8 @@ export interface HomeDrawn {
   panel: Rect;
   /** Each node's click target, by task id. */
   nodes: Record<string, Rect>;
+  /** The heading over the key caps: "Home" on Home, null in a workspace's empty tab. */
+  heading: string | null;
   /** How often lattice lines were built and painted. */
   lattice_builds: number;
   lattice_paints: number;
@@ -1113,22 +1124,23 @@ export interface AppEntry {
   icon: boolean;
 }
 
-/** A notice's level, least pressing first. */
-export type NoticeLevel = "info" | "warning" | "error";
+/** A notice's level, least pressing first: a meeting that started is over a warning, under an error. */
+export type NoticeLevel = "info" | "warning" | "meeting" | "error";
 
 /** The notice bar: one message, full width at the window's foot. */
 export interface NoticeBar {
-  /** What it is about: `failed`, `refused`, `unsaved`, `told`, `settings_problem`, `settings_retired`, `settings_restart`, `start`, `keys`, `editor`. */
+  /** What it is about: `failed`, `refused`, `unsaved`, `told`, `settings_problem`, `settings_retired`, `settings_restart`, `start`, `keys`, `editor`, `meeting`. */
   kind: string;
   level: NoticeLevel;
+  /** A meeting's is `Meeting started`: its title is never in the state. */
   text: string;
-  /** What it offers beside the text: `open_settings`, or null. */
+  /** What it offers beside the text: `open_settings`, `join` (a meeting's link), or null. */
   offer: string | null;
   offer_rect: Rect | null;
   /** Its ×. Only the user's click dismisses. */
   close: Rect | null;
   rect: Rect | null;
-  /** How much of it shows: less than 28 while it opens or closes. The rest of the window starts this much lower. */
+  /** How much of it shows: less than 28 while it opens or closes. The panes' feet are this much higher. */
   height: number;
 }
 
@@ -1256,6 +1268,8 @@ export interface Snapshot {
   marks: Mark[];
   /** The name of the mark just taken off, while the Marks section offers to put it back. */
   mark_removed: string | null;
+  /** Restored or rebuilt panes still empty: why, and where its "Open <App>" is drawn (null: none). */
+  unfilled: Array<{ pane: PaneId; why: string; open: Rect | null }>;
   /** The user's workspaces, by name. Only the user makes, saves, opens, renames or deletes one. */
   workbooks: Workbook[];
   /** What the Workspaces section offers to take back, while it offers. */
@@ -1308,8 +1322,8 @@ export interface Snapshot {
   };
   /**
    * The meeting timeline, if `calendar_ics` is set: counts, times (ms) and stages only. No title or
-   * place: every reply carries the state, and those are only in `calendar`'s own reply. `banner`: where its buttons are drawn,
-   * while a meeting runs and no call is on. `joins`: in a test run, links a Join opened.
+   * place: every reply carries the state, and those are only in `calendar`'s own reply. `banner`: while a meeting runs and no call is on,
+   * where its Join and Dismiss are on the notice bar (null while an error covers it). `joins`: in a test run, links a Join opened.
    */
   calendar: {
     on: boolean;
