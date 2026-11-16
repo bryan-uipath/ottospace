@@ -182,7 +182,7 @@ impl Workspace {
             .gap_2()
             .text_xs()
             .text_color(rgb(text))
-            .child(div().flex_none().child(shown.glyph()))
+            .child(glyph(&shown, background, text))
             .child(div().id("notice-text").min_w_0().truncate().child(shown.text.clone()).tooltip(tip))
             .children(offer)
             .child(div().flex_1())
@@ -211,4 +211,15 @@ impl Workspace {
             "height": self.bar.height,
         })
     }
+}
+
+/// The level's glyph. An error's `!` sits in a filled circle of the text's colour: no cross
+/// beside the text that could read as the × on the right.
+fn glyph(shown: &Notice, background: u32, text: u32) -> Div {
+    let glyph = div().flex_none().child(shown.glyph());
+    if shown.level() != notice::Level::Error {
+        return glyph;
+    }
+    let round = glyph.size(px(13.)).rounded_full().flex().items_center().justify_center();
+    round.bg(rgb(text)).text_color(rgb(background)).font_weight(gpui::FontWeight::BOLD)
 }

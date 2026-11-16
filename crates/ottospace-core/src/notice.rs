@@ -125,10 +125,11 @@ impl Notice {
         self.kind.level()
     }
 
-    /// A level glyph, so the level is not said by colour alone.
+    /// A level glyph, so the level is not said by colour alone. Never a cross: × is Dismiss.
+    /// An error's `!` is drawn in a filled circle (`round`).
     pub fn glyph(&self) -> &'static str {
         match self.level() {
-            Level::Error => "✕",
+            Level::Error => "!",
             Level::Warning => "▲",
             Level::Info => "ⓘ",
         }
@@ -220,6 +221,13 @@ mod tests {
         for (kind, level, offer, held) in table {
             assert_eq!((kind.level(), kind.offer(), kind.held()), (level, offer, held), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn no_levels_glyph_reads_as_the_dismissal() {
+        let kinds = [Kind::Failed, Kind::Refused, Kind::Told];
+        let glyphs: Vec<&str> = kinds.map(|kind| Notice { kind, text: String::new() }.glyph()).to_vec();
+        assert_eq!(glyphs, ["!", "▲", "ⓘ"]);
     }
 
     #[test]
