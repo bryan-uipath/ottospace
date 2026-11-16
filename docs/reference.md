@@ -21,7 +21,7 @@ running, and the rest of the design is not built: see the
 |---|---|
 | Split panes mixing terminals and real app windows | Works today |
 | Key bindings and a status bar showing the mode (`APP`, `PICK`…; none when normal) | Works today |
-| [Notice bar](#notice-bar): one app-level message, full width under the top row, red, amber or blue by level (error, warning, information) | Works today |
+| [Notice bar](#notice-bar): one app-level message, full width at the window's foot, red, amber or blue by level (error, warning, information) | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page (in a terminal a click beside the thumb is the terminal's). They follow the system's "Show scroll bars" setting | Works today |
@@ -995,8 +995,10 @@ is four spaces.
 
 What ottospace has to say about itself (a settings file it cannot read, a file not saved, a
 shell that did not start, why a move of yours did nothing, a key that needs a restart) shows in
-one bar, the window's width, between the top row and everything under it. It opens by pushing
-the rest down, and at once under the system's Reduce Motion.
+one bar, the window's width, at the window's foot: above the meeting timeline and the status
+bar. Nothing above it moves when it opens (the top row, the tabs, the sidebar and the panes' tops
+stay under the pointer): the content's foot rises by its height. It grows upwards, and is there at
+once under the system's Reduce Motion. A live app window in a bottom pane stops above it too.
 
 - **Level**: red for an error, amber for a warning (a move that did nothing, a retired setting, a
   global key not registered), blue for information. A glyph says the level too.
@@ -1011,7 +1013,7 @@ the rest down, and at once under the system's Reduce Motion.
   the file is right; a failure stays until the next one, or until dismissed.
 - **Whose**: the bar is yours. Why a step did nothing, and what it did, is an answer to the one
   who took the step: your own shows on the bar; a socket client's (or a timer's) is in the
-  reply's `notice` alone, so a refused client opens no bar, moves nothing under the top row and
+  reply's `notice` alone, so a refused client opens no bar, moves nothing of yours and
   closes no menu of yours. What is wrong with the app itself shows whoever's step found it, and
   a client's success clears only a client's line.
 
@@ -1254,6 +1256,8 @@ first brainstorm:
 [agent-runners.md](ai/agent-runners.md): a native (non-terminal) agent conversation: driving Claude Code and Codex in their structured modes, permission prompts, trust rules. Not wired in yet.
 
 [meeting-timeline.md](ai/meeting-timeline.md): the meeting timeline as built, how a call is detected, the network decision, and what the calendar reader does not follow.
+
+[transcripts.md](ai/transcripts.md): an app's audio transcribed on the Mac, live, started and stopped by the user alone. Not built.
 
 [repos.md](ai/repos.md): the Repos section: folding, the default folder's dot, and how + makes a worktree (the git it runs, what it refuses).
 

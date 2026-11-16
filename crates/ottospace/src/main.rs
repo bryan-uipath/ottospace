@@ -207,8 +207,6 @@ struct Hosted {
     preview: Rc<Cell<Bounds<Pixels>>>,
     /// Last pane content rect the live window was placed over, to re-place only on change.
     placed: CGRect,
-    /// The crop it was placed with: re-placed when the notice bar takes the room above it.
-    placed_crop: f64,
 }
 
 impl Hosted {
@@ -264,7 +262,6 @@ impl Hosted {
             refused: None,
             preview: Rc::default(),
             placed: CGRect::default(),
-            placed_crop: 0.,
         })
     }
 
@@ -354,14 +351,14 @@ impl Hosted {
         let frame = raised(rect, crop);
         let _ = self.window.set_size(frame.size);
         let _ = self.window.set_position(frame.origin);
-        (self.placed, self.placed_crop) = (rect, crop);
+        self.placed = rect;
     }
 
     /// Places the window over its pane and activates its app: entering, and a peek. The app may
     /// have resized its window since it was parked: a click is judged against what it covers now.
-    fn bring_up(&mut self, notice: f32, window: &Window, cx: &App) {
+    fn bring_up(&mut self, window: &Window, cx: &App) {
         let rect = on_screen(self.bounds.get(), window, cx);
-        self.place(rect, self.crop_at(rect, top_limit(notice, window, cx)));
+        self.place(rect, self.crop_at(rect, top_limit(window, cx)));
         self.window.raise();
         self.show(window.scale_factor() as f64);
     }
@@ -1530,8 +1527,7 @@ impl Workspace {
                     self.live_since = None;
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("park", serde_json::json!({ "pane": id, "window": hosted.window_id }));
-                        let limit = top_limit(self.bar.height, window, cx);
-                        let crop = hosted.crop_at(on_screen(hosted.bounds.get(), window, cx), limit);
+                        let crop = hosted.crop_at(on_screen(hosted.bounds.get(), window, cx), top_limit(window, cx));
                         hosted.park(window.scale_factor() as f64, crop);
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
@@ -1650,7 +1646,7 @@ impl Workspace {
                     self.went_live += 1;
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("unpark", serde_json::json!({ "pane": id, "window": hosted.window_id }));
-                        hosted.bring_up(self.bar.height, window, cx);
+                        hosted.bring_up(window, cx);
                     }
                 }
             }
@@ -3407,8 +3403,7 @@ impl Workspace {
         let scale = window.scale_factor() as f64;
         // A peeked window is kept over its pane as the live one is.
         let live = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
-        // Under the notice bar as it is in this frame: the windows follow it as it opens and closes.
-        let limit = top_limit(self.bar.height, window, cx);
+        let limit = top_limit(window, cx);
         for (id, hosted) in &mut self.hosted {
             let rect = on_screen(hosted.bounds.get(), window, cx);
             if rect.size.width < 1.0 {
@@ -3417,7 +3412,7 @@ impl Workspace {
             let crop = hosted.crop_at(rect, limit);
             if live == Some(*id) {
                 let drifted = check && hosted.window_frame().is_some_and(|f| f.origin != raised(rect, crop).origin);
-                if hosted.placed != rect || hosted.placed_crop != crop || drifted {
+                if hosted.placed != rect || drifted {
                     hosted.place(rect, crop);
                 }
             } else if hosted.parked_size != rect.size || hosted.crop != crop {
@@ -5951,11 +5946,9 @@ fn paint_corner_mask(bounds: Bounds<Pixels>, clip: Bounds<Pixels>, radius: f64, 
     });
 }
 
-/// Lowest global y a raised live window may reach: under ottospace's top bar and the notice
-/// bar, `notice` points of it showing (the height the layout's spacers have).
-fn top_limit(notice: f32, window: &Window, cx: &App) -> f64 {
-    let limit = px(notice::top_limit(TOP_BAR, notice));
-    on_screen(Bounds { origin: point(px(0.), limit), size: Size::default() }, window, cx).origin.y
+/// Lowest global y a raised live window may reach: the bottom of ottospace's top bar.
+fn top_limit(window: &Window, cx: &App) -> f64 {
+    on_screen(Bounds { origin: point(px(0.), px(TOP_BAR)), size: Size::default() }, window, cx).origin.y
 }
 
 /// The window frame for pane content `rect` with a title bar of `crop` above it.
@@ -6012,8 +6005,6 @@ impl Render for Workspace {
         self.dial_motion.borrow_mut().moving = false;
         self.bars.begin();
         self.move_notice_bar(window);
-        // The notice bar's room: everything under the top row starts this much lower.
-        let split = || div().h(px(self.bar.height)).flex_none();
         // The Repos list, the tabs and spaces, and ⌘/'s Known are noted again only while drawn.
         let drawn_anew = |mark: &Mark| {
             matches!(
@@ -6313,7 +6304,6 @@ impl Render for Workspace {
                             .flex_col()
                             .when(self.model.live.is_some(), |d| d.opacity(0.5))
                             .child(self.render_lights(cx))
-                            .child(split())
                             .child(
                                 div()
                                     .flex_1()
@@ -6333,7 +6323,6 @@ impl Render for Workspace {
                             .flex()
                             .flex_col()
                             .child(self.render_spaces(left, room, cx))
-                            .child(split())
                             .child(
                                 div()
                                     .flex_1()
@@ -6371,10 +6360,10 @@ impl Render for Workspace {
                     .child(zone_shadow(right_width, false))
                     // Highest, the title strip: its shadow falls on all three zones.
                     .child(title_shadow())
-                    // Over the zones' shadows and the title strip's: its own edges are shaded.
-                    .children(self.render_notice_bar(cx))
                     .children(self.render_meeting_banner(cx)),
             )
+            // The notice bar, at the foot: nothing above it moves when it opens, but the content's foot.
+            .children(self.render_notice_bar(cx))
             // The meeting timeline, directly above the status bar.
             .children(self.render_timeline())
             .child(self.render_status(cx))
