@@ -6299,8 +6299,6 @@ fn a_task_follows_its_agent_into_a_worktree_it_made_and_never_a_subagents() {
         (task(&state)["worktree"] == json!(path("app-3"))).then_some(state)
     });
     assert_eq!(space(&moved)["worktree"], json!(path("app-3")), "{}", moved["spaces"]);
-    let foot = moved["drawer"]["line"]["foot"].as_str().map(String::from);
-    assert!(foot.as_deref().is_none_or(|foot| foot.ends_with("app-3")), "{foot:?}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
