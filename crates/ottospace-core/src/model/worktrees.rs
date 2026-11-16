@@ -25,6 +25,31 @@ pub(crate) struct Moving {
     pub(crate) asked: u64,
 }
 
+/// A new task's worktree the box asked git for (`asked`, on `branch`), not made yet.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Making {
+    pub(crate) task: TaskId,
+    pub(crate) asked: String,
+    pub(crate) branch: String,
+}
+
+/// The new-task box's choice, while it offers one: the task works in its checkout, or (`new`)
+/// in a new worktree of `repo` (its name) on `branch`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct WorktreeChoice {
+    pub new: bool,
+    pub repo: String,
+    pub branch: String,
+}
+
+/// What ↵ asks for with the box's choice on: the worktree of the repository at `repo` on
+/// `branch`, inside `root`.
+pub(crate) struct NewWorktree {
+    repo: String,
+    branch: String,
+    root: String,
+}
+
 /// A repository's checkouts: its own folder, then its worktrees.
 fn paths(repo: &crate::repos::Repo) -> impl Iterator<Item = &str> {
     std::iter::once(repo.path.as_str()).chain(repo.worktrees.iter().map(|worktree| worktree.path.as_str()))
@@ -131,13 +156,90 @@ impl Model {
     /// The task works in `new` now. Its workspace's default follows it from `was` (its worktree
     /// until now) when it is the workspace's only task; with others there, it stays as it is.
     fn moved(&mut self, id: TaskId, was: &str, new: String) {
+        self.default_follows(id, was, &new);
+        if let Some(task) = self.tasks.list.iter_mut().find(|task| task.id == id) {
+            task.worktree = Some(new);
+        }
+    }
+
+    /// A task's workspace's default follows it from `was` to `new` when it is the workspace's
+    /// only task; with others there, it stays as it is.
+    fn default_follows(&mut self, id: TaskId, was: &str, new: &str) {
         let of = self.task_space(id);
         let book = self.space_book(&of).filter(|book| book.worktree.as_deref() == Some(was)).map(|book| book.id);
         if let Some(book) = book.filter(|_| self.members(&of) == [id]) {
-            self.workbooks.set_worktree(book, Some(new.clone()));
+            self.workbooks.set_worktree(book, Some(new.to_string()));
+        }
+    }
+
+    /// What ↵ in the new-task box would ask for with a new worktree: offered while the box is
+    /// the drawer's, the task would start an agent in a listed checkout (the line's `>repo`, else
+    /// the workspace's), not in a folder of its own, and there is a folder for worktrees.
+    pub(crate) fn box_worktree(&self) -> Option<NewWorktree> {
+        let root = self.repo_dirs.worktrees.clone()?;
+        if self.compose_host() != Some(super::Host::Drawer) || self.compose_folder().is_some() {
+            return None;
+        }
+        let draft = self.draft(self.compose_line()?);
+        let starts = self.compose_plan().is_some_and(|plan| plan.starts);
+        let named = draft.repo.as_deref().and_then(|name| self.repo_named(name));
+        let place = match named {
+            Some(path) => path,
+            None => match self.shared_place() {
+                (Some(repo), None) => repo,
+                _ => return None,
+            },
+        };
+        let repo = self.repos.iter().find(|repo| paths(repo).any(|path| path == place)).filter(|_| starts)?;
+        let taken = |branch: &str| {
+            let dir = crate::repos::worktree_dir(&root, &repo.path, &self.repos, branch);
+            let branches = repo.checkouts().into_iter().map(|checkout| checkout.branch);
+            branches.into_iter().any(|b| b == branch)
+                || self.repos.iter().any(|r| paths(r).any(|path| path == dir))
+                || self.making.iter().any(|making| making.asked == dir)
+        };
+        let branch = crate::repos::branch_for(&draft.title, taken);
+        Some(NewWorktree { repo: repo.path.clone(), branch, root })
+    }
+
+    /// The box's choice of where the task works, while it offers one (`box_worktree`).
+    pub fn compose_worktree(&self) -> Option<WorktreeChoice> {
+        let NewWorktree { repo, branch, .. } = self.box_worktree()?;
+        let repo = self.repos.iter().find(|r| r.path == repo).map_or(repo, |r| r.name.clone());
+        Some(WorktreeChoice { new: self.compose_worktree, repo, branch })
+    }
+
+    /// The user's ↵ with a new worktree chosen: the task is in its workspace and its
+    /// conversation in front, as any started there; git makes the worktree (`Effect::AddWorktree`)
+    /// and its agent starts there once it is (`worktree_made`). A saved agent: as without.
+    pub(crate) fn start_in_worktree(&mut self, id: TaskId, new: NewWorktree, effects: &mut Vec<Effect>) {
+        let subject = super::Subject::Task(id);
+        if self.agent_start(&subject).is_none() {
+            return self.start(id, true, effects);
+        }
+        self.join_space(id);
+        let NewWorktree { repo, branch, root } = new;
+        let path = crate::repos::worktree_dir(&root, &repo, &self.repos, &branch);
+        self.making.push(Making { task: id, asked: path.clone(), branch: branch.clone() });
+        effects.push(Effect::AddWorktree { repo, branch, path, root, fresh: true });
+        self.talk_to(subject, true, effects);
+    }
+
+    /// A new task's worktree is made at `path`: the task works there (and its workspace's
+    /// default with it, if it is its one task), and its agent starts, unless it went or runs.
+    pub(crate) fn worktree_made(&mut self, id: TaskId, path: String, effects: &mut Vec<Effect>) {
+        let Some(task) = self.tasks.live(id) else { return };
+        let (was, brief) = (task.dir().cloned(), task.materials_dir().map(str::to_string));
+        if let Some(was) = was.as_deref().and_then(|dir| self.checkout_at(dir)).map(String::from) {
+            self.default_follows(id, &was, &path);
         }
         if let Some(task) = self.tasks.list.iter_mut().find(|task| task.id == id) {
-            task.worktree = Some(new);
+            (task.repo, task.folder) = (Some(path), None);
+        }
+        let subject = super::Subject::Task(id);
+        let busy = self.talk_live(&subject) || self.starting.iter().any(|(of, _)| *of == subject);
+        if let Some(start) = self.agent_start(&subject).filter(|_| !busy) {
+            self.launch(subject, start, brief, effects);
         }
     }
 
