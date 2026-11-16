@@ -3041,7 +3041,10 @@ impl Model {
             }
             // The editor writes the user's settings: no client opens it. Only the shell reads the file.
             Action::EditSettings => Some(SETTINGS_USERS),
-            Action::SettingsRead { .. } if origin == Origin::Socket => Some("only ottospace reads settings.json"),
+            // The flags too: a client turning one off would end what it holds (a transcript).
+            Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
+                Some("only ottospace reads settings.json")
+            }
             // A workbook is the user's file, and opening one starts their apps.
             Action::SpaceOpen { space: Owner::Workbook { .. } }
             | Action::WorkbookSave { .. }
@@ -8609,7 +8612,7 @@ mod tests {
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     Action::Paste { .. } => Some(clip::USERS_ALONE),
                     Action::EditSettings => Some(SETTINGS_USERS),
-                    Action::SettingsRead { .. } if origin == Origin::Socket => {
+                    Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
@@ -14190,7 +14193,7 @@ mod tests {
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     Action::Paste { .. } => Some(clip::USERS_ALONE),
                     Action::EditSettings => Some(SETTINGS_USERS),
-                    Action::SettingsRead { .. } if origin == Origin::Socket => {
+                    Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),

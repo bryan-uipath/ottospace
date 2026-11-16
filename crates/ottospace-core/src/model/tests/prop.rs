@@ -4140,6 +4140,20 @@ fn a_clients_list_of_workspaces_is_refused() {
     .unwrap();
 }
 
+/// A client's flags turned transcripts off and ended the user's (seed 534 of the long run). Only
+/// ottospace reads the flags, from settings.json.
+#[test]
+fn a_clients_flags_are_refused() {
+    let app = Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() };
+    replay(&[
+        Action::Open { kind: app, axis: Axis::Right, beside: None }.into(),
+        by(Origin::System, Action::ListenFixture),
+        Action::ListenToggle { id: "t1".into(), at: 0 }.into(),
+        set_features(&["marks"]).sent_by(Origin::Socket),
+    ])
+    .unwrap();
+}
+
 /// A permission in the same batch as its agent's exit put a card up with no agent to answer it.
 #[test]
 fn a_permission_after_its_agent_exited_puts_up_no_card() {
