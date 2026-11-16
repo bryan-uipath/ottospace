@@ -106,6 +106,10 @@ fn claude_lists_sessions_started_in_a_directory_or_below() {
     assert_eq!(main.model, None, "listing does not read the end of the file");
     assert_eq!(claude.model(&main).as_deref(), Some("claude-fable-5-2"));
     assert_eq!((main.pid, main.busy), (Some(4242), Some(true)), "from sessions/4242.json");
+    // An older record of the same session (a process killed, its record left) hides no other.
+    let mut holders: Vec<(u32, Option<u64>)> = main.holders.iter().map(|h| (h.pid, h.recorded)).collect();
+    holders.sort();
+    assert_eq!(holders, [(4100, Some(1_794_474_060_000)), (4242, Some(1_794_474_120_000))]);
 
     let worktree = find(&claude, "/work/app/.claude/worktrees/fix", CLAUDE_WORKTREE);
     assert_eq!((worktree.pid, worktree.busy), (None, None));
@@ -866,6 +870,7 @@ fn a_tally_goes_on_from_its_cursor_and_starts_again_with_a_new_file() {
         model: None,
         pid: None,
         busy: None,
+        holders: Vec::new(),
         parent: None,
     };
     let claude = claude();

@@ -83,8 +83,10 @@ impl SessionReader for Codex {
             if dirs.iter().any(|dir| head.cwd.starts_with(dir)) {
                 let (runner, path, last_activity) = (RunnerId::Codex, path.clone(), Some(modified));
                 let Head { id, cwd, started, model, parent } = head;
-                let (pid, busy) = (None, None);
-                sessions.push(SessionRef { runner, id, cwd, path, started, last_activity, model, pid, busy, parent });
+                let (pid, busy, holders) = (None, None, Vec::new());
+                let session =
+                    SessionRef { runner, id, cwd, path, started, last_activity, model, pid, busy, holders, parent };
+                sessions.push(session);
             }
         }
         let rollouts = rollouts.into_iter().collect::<HashSet<_>>();
@@ -121,7 +123,20 @@ impl SessionReader for Codex {
             if head.parent.as_deref() == Some(session.id.as_str()) {
                 let Head { id, cwd, started, model, parent } = head;
                 let (runner, last_activity, pid, busy) = (RunnerId::Codex, Some(modified), None, None);
-                subs.push(SessionRef { runner, id, cwd, path, started, last_activity, model, pid, busy, parent });
+                let holders = Vec::new();
+                subs.push(SessionRef {
+                    runner,
+                    id,
+                    cwd,
+                    path,
+                    started,
+                    last_activity,
+                    model,
+                    pid,
+                    busy,
+                    holders,
+                    parent,
+                });
             }
         }
         subs.sort_by(|a, b| a.path.cmp(&b.path));

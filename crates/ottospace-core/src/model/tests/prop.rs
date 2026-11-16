@@ -1403,6 +1403,8 @@ fn check(m: &Model) -> Result<(), String> {
         // A watched transcript is read-only: no turn to stop.
         ensure!(t.live || t.turn.is_none(), "{subject:?} has a turn and no agent");
         ensure!(!chat.armed || t.turn.is_some(), "{subject:?} waits for a second Esc with no turn");
+        // Built from a file: another program's (read-only) or a task's past, never both, never live.
+        ensure!(!t.past || (!t.watched && !t.live && subject.task().is_some()), "{subject:?} is past and more");
     }
     // A stop asked for is of an agent that runs, until its process is gone.
     for subject in &m.ending {

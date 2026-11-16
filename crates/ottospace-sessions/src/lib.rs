@@ -45,6 +45,14 @@ pub fn config_dirs() -> ConfigDirs {
     ConfigDirs { claude, codex: set("CODEX_HOME").or(home.map(|home| home.join(".codex"))) }
 }
 
+/// A process a runner records for a session, and when it last wrote that record (Unix
+/// milliseconds): a process started later only has the pid again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Holder {
+    pub pid: u32,
+    pub recorded: Option<u64>,
+}
+
 /// One session on disk. Times are Unix milliseconds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionRef {
@@ -61,10 +69,14 @@ pub struct SessionRef {
     pub last_activity: Option<u64>,
     /// Set when listing knows it for free; else ask `SessionReader::model`.
     pub model: Option<String>,
-    /// The runner's process, when the runner records one. It may have exited: check before trusting.
+    /// The runner's process, when the runner records one: of several, the record written last.
+    /// It may have exited: check before trusting.
     pub pid: Option<u32>,
     /// The runner's own busy/idle flag, when it records one.
     pub busy: Option<bool>,
+    /// Every process the runner records for it: two programs may have one session, and a record
+    /// outlives a process that was killed.
+    pub holders: Vec<Holder>,
     /// The session that spawned this one, for a sub-agent's own session file.
     pub parent: Option<String>,
 }

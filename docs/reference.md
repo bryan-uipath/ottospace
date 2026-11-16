@@ -749,7 +749,11 @@ written a second after a change and at quit, readable by you alone.
   `Open <App>`. `restore_apps: true` starts it instead. Opening a workspace starts its apps: you
   asked for them; a start does not.
 - **The drawer** shows the task's conversation again, not running: Resume session in the drawer
-  goes on with its session. No agent starts by itself.
+  goes on with its session. No agent starts by itself. In Chat, what the session's file has of
+  before shows above the composer: its calls, its edits' diff cards, a line per message (the
+  words are in the file: Terminal shows them); ↵ on a message goes on with it. An agent ottospace
+  started ends when ottospace quits. "Live in another terminal" is said only when the file is
+  written after the start, or a live process has the session.
 - A tab whose task no longer exists comes back as a tab of no task, so nothing is lost.
 - A file that cannot be read is set aside as `layout.json.bad`, and ottospace starts empty and
   says so. A file a newer build wrote is left as it is and not written over. A pane of a kind

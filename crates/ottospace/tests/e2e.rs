@@ -8524,6 +8524,70 @@ fn a_message_right_after_stop_resumes_once_and_nothing_says_it_cannot() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A task's agent ran here and ottospace quit. On the same home again: its agent ended with the
+/// app, nothing says another terminal has its session, its file's past shows, and the user's
+/// message goes on with the same session (`--resume <id>`).
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_task_talked_to_before_a_restart_is_gone_on_with_after_it() {
+    let fixtures = [("turn1.jsonl", recorded("real-2.1.325-turn.jsonl"))];
+    // Left alone, the stand-in outlives its stdin by 8 s: only the quit's kill ends it sooner.
+    let (root, record, mut env) = native_setup("restart-resume", &fixtures, &[("FAKE_LINGER", "8")]);
+    env.push(("FAKE_SESSIONS".into(), root.join("sessions/claude").to_str().unwrap().into()));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let read = |file: &str| std::fs::read_to_string(record.join(file)).unwrap_or_default();
+    let starts = || read("starts").lines().count();
+    let mut otto = launch_env("restart-resume-1", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.wait_for("the reply", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["turn"].is_null() && chat["replies"].as_array()?.len() == 1).then_some(())
+    });
+    let argv = read("argv");
+    let session = argv.lines().skip_while(|a| *a != "--session-id").nth(1).expect("a session id").to_string();
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+    // Its agent ended with the app: no process of ours is left on the session.
+    let pid = read("pid").trim().to_string();
+    let alive = || Command::new("/bin/kill").args(["-0", &pid]).stderr(std::process::Stdio::null()).status();
+    let start = Instant::now();
+    while alive().is_ok_and(|status| status.success()) {
+        assert!(start.elapsed() < Duration::from_secs(5), "the agent outlived the app");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let otto = launch_env("restart-resume-2", &env);
+    let back = otto.wait_for("the task's conversation", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        (state["state"]["talk"]["task"] == 1 && state["state"]["talk"]["open"] == true).then_some(state)
+    });
+    assert_eq!((&back["drawer"]["note"], starts()), (&Value::Null, 1), "{}", back["drawer"]);
+    // What its file has of before (here one message), not as another terminal's: no read-only banner.
+    let past = otto.wait_for("its past", |o| {
+        let past = chat(o)["transcript"].clone();
+        (past["entries"].as_array()?.len() == 1).then_some(past)
+    });
+    assert_eq!((&past["watched"], &past["live"]), (&json!(false), &json!(false)), "{past}");
+    // A client's key resumes nothing; the user's message does, in the same session.
+    otto.call(json!({"cmd": "key", "keys": "x enter"}));
+    assert_eq!(starts(), 1, "a client's key started it");
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("s a y space h e l l o enter");
+    otto.wait_for("the resume, and the message", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        assert_eq!(state["drawer"]["note"], Value::Null, "nothing says it cannot");
+        (starts() == 2 && read("stdin").contains(r#""text":"say hello""#)).then_some(())
+    });
+    let argv = read("argv");
+    let resumed = argv.lines().skip_while(|a| *a != "--resume").nth(1);
+    assert_eq!(resumed, Some(session.as_str()), "{argv}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_stopped_agent_resumes_as_one_conversation() {

@@ -2594,6 +2594,9 @@ pub struct Model {
     /// Sessions whose agent in the drawer ended, and when (`now` then): its last writes were ours.
     #[serde(skip)]
     ended: Vec<(String, String, u64)>,
+    /// The sessions of the tasks read at start, and the first `now` after it (`settle_links`).
+    #[serde(skip)]
+    left: (Vec<(String, String)>, Option<u64>),
     /// The title of each session conversation opened this run, as it was when opened.
     #[serde(skip)]
     talk_titles: Vec<(String, String, String)>,
@@ -2731,6 +2734,7 @@ impl Default for Model {
             awaiting: Vec::new(),
             read_sessions: Vec::new(),
             ended: Vec::new(),
+            left: (Vec::new(), None),
             talk_titles: Vec::new(),
             models: agents::Models::default(),
             default_agent: None,
@@ -3612,6 +3616,7 @@ impl Model {
             }
             Action::RestoreTasks { tasks, floor } => {
                 self.tasks.restore(tasks, floor);
+                self.settle_links();
                 // A tab of a task that is not among them is a tab of no task: `update` unlinks it.
             }
             // Only the user links a tab to a task: a client's task gets none.
@@ -3645,6 +3650,7 @@ impl Model {
             Action::RowDismiss { id } => self.dismiss(id, Some(Moved::Dismissed), effects),
             Action::Tick { now } => {
                 self.now = now;
+                self.left.1.get_or_insert(now);
                 self.tasks.tick(now);
                 self.workbooks.tick(now);
                 self.undo_offer = self.undo_offer.filter(|offer| offer.until > now);
@@ -5176,6 +5182,25 @@ impl Model {
         self.read_sessions.iter().find(|(r, i, _)| (r.as_str(), i.as_str()) == (runner, id)).map(|(.., f)| f.as_ref())
     }
 
+    /// At start no agent of ours runs. A link kept as running is the last run's word: its task is
+    /// the user's to look at, and follows its session again. What such a session's file shows
+    /// from before this run is no work of now (`ours_at`); a process that holds it still counts.
+    fn settle_links(&mut self) {
+        let idle = |task: &&Task| !self.agent_runs(&Subject::Task(task.id));
+        let stale = |task: &&Task| task.session.as_ref().is_some_and(|l| l.state == Some(State::Running));
+        let links =
+            |task: &Task| Some((task.id, task.state == State::Running && !task.dismissed, task.session.clone()?));
+        let links: Vec<_> = self.tasks.list.iter().filter(idle).filter(stale).filter_map(links).collect();
+        self.left = (links.iter().map(|(.., link)| (link.runner.clone(), link.id.clone())).collect(), None);
+        for (id, ran, _) in links {
+            // Not a dismissed task's state: a state set would bring it back.
+            if ran {
+                self.tasks.set_state(id, State::NeedsYou);
+            }
+            self.tasks.followed(id, State::NeedsYou);
+        }
+    }
+
     /// True if what the session's file shows of its use is ours: its agent in the drawer ended
     /// lately, and it has not been written to since.
     fn ours(&self, session: &Found) -> bool {
@@ -5184,6 +5209,11 @@ impl Model {
 
     /// `ours`, of a session by runner and id whose file last changed at `last`.
     fn ours_at(&self, runner: &str, id: &str, last: Option<u64>) -> bool {
+        // A restored task's session, not written since this run began: our agent ended with the app.
+        let before = self.left.1.is_some_and(|began| last.is_none_or(|last| last <= began));
+        if before && self.left.0.iter().any(|(r, i)| (r.as_str(), i.as_str()) == (runner, id)) {
+            return true;
+        }
         self.ended.iter().any(|(r, i, at)| {
             let since = last.is_none_or(|last| last <= at + ENDED_GRACE_MS);
             (r.as_str(), i.as_str()) == (runner, id) && since && self.now.saturating_sub(*at) <= ENDED_MS
@@ -11291,6 +11321,80 @@ mod tests {
         m.update(Action::SetRepos { repos: Vec::new() });
         m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("a task as kept")], floor: 7 });
         assert_eq!(started(&mut m, Action::TaskTalk { id: 7 }), []);
+    }
+
+    /// A task whose agent ran in the drawer when ottospace quit: its link was kept as running,
+    /// its state as the stream left it. At the next start nothing of ours runs: it is gone on
+    /// with, unless its file is written after the start or a process holds it.
+    #[test]
+    fn a_task_whose_agent_ran_at_the_last_quit_is_gone_on_with_after_a_restart() {
+        use crate::transcript::{Event, Text};
+        const NOW: u64 = 9_000_000;
+        let restored = |state: &str, found: Found| {
+            let kept = format!(
+                r#"{{"id":7,"title":"app","state":"{state}","priority":3,"repo":"/code/app","created":1,
+                    "session":{{"runner":"claude","id":"{IDLE}","state":"running"}}}}"#
+            );
+            let mut m = Model::default();
+            m.update(Action::SetRepos { repos: listed() });
+            m.update(Action::ToggleSection { section: Section::Tasks });
+            m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("kept")], floor: 7 });
+            m.update(Action::Tick { now: NOW });
+            m.update(Action::SetSessions { found: vec![found], day: 0 });
+            m.update(Action::TaskTalk { id: 7 });
+            m
+        };
+        let states = |m: &Model| m.tasks.get(7).map(|task| (task.state, task.session.as_ref().and_then(|l| l.state)));
+        let free = Some((State::NeedsYou, Some(State::NeedsYou)));
+        let idle = Found { repo: "/code/app".into(), ..session("claude", IDLE, "/code/app/crates/core", false, 1_000) };
+        let resumes = [resumed(Subject::Task(7), "claude", IDLE, "/code/app/crates/core")];
+        // Quit between turns, or in one: the task is the user's to look at, and ↵ goes on with it.
+        for state in ["needs_you", "running"] {
+            let mut m = restored(state, idle.clone());
+            assert_eq!((states(&m), m.talk_note(), m.talk_resumes()), (free, None, Some(true)), "{state}");
+            assert_eq!(m.update(Action::TalkStart), resumes);
+        }
+        // Its file written a moment before the start (our agent's last words): no work of now.
+        let ours = Found { active: true, last_activity: Some(NOW - 1_000), ..idle.clone() };
+        let mut m = restored("needs_you", ours.clone());
+        assert_eq!((states(&m), m.talk_note()), (free, None));
+        assert_eq!(m.update(Action::TalkStart), resumes);
+        // Written since: another terminal is on it. The task follows it, and nothing starts.
+        let mut m = restored("needs_you", Found { last_activity: Some(NOW + 1), ..ours.clone() });
+        assert_eq!(states(&m), Some((State::Running, Some(State::Running))));
+        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        assert_eq!(m.update(Action::TalkStart), []);
+        // A live process holds it (an agent left over, another terminal): not gone on with.
+        let mut m = restored("needs_you", Found { held: true, ..ours });
+        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        assert_eq!(m.update(Action::TalkStart), []);
+        // A dismissed task stays dismissed and running; its link is no longer the last run's word.
+        let kept = format!(
+            r#"{{"id":7,"title":"app","state":"running","dismissed":true,"priority":3,"created":1,
+                "session":{{"runner":"claude","id":"{IDLE}","state":"running"}}}}"#
+        );
+        let mut m = Model::default();
+        m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("kept")], floor: 7 });
+        assert_eq!(states(&m), Some((State::Running, Some(State::NeedsYou))));
+        assert!(m.tasks.get(7).is_some_and(|task| task.dismissed));
+        // Its past is read from its file as a watched one's, and is the user's to go on with.
+        let mut m = restored("needs_you", idle);
+        let task = Subject::Task(7);
+        let target = (task.clone(), RunnerId::Claude, IDLE.to_string(), "/code/app/crates/core".to_string());
+        assert_eq!(m.watch_target(), Some(target));
+        let (id, tool, label) = ("a".to_string(), "Bash".to_string(), "git".to_string());
+        let station = crate::activity::Station::Shell;
+        let call = Event::ToolStart { id, sub: false, tool, station, label, detail: Text::default(), diff: None };
+        let events = vec![Event::WatchFromStart, Event::MessageElsewhere, call];
+        m.update(Action::AgentEvents { task: task.clone(), events, at: NOW }.sent_by(Origin::System));
+        let t = &m.chat(&task).expect("its past").transcript;
+        assert!(t.past && !t.watched && !t.live && t.items().len() == 2, "{t:?}");
+        assert_eq!((m.composer_button(), m.shown_draft_chat().is_some()), (Some(chat::Primary::Resume), true));
+        assert_eq!(m.update(Action::TalkStart), resumes);
+        m.update(Action::AgentStarted { task: task.clone(), session: None, at: NOW }.sent_by(Origin::System));
+        let t = &m.chat(&task).expect("the same").transcript;
+        assert!(t.live && !t.past && t.items().len() == 3, "its past stays above: {t:?}");
+        assert_eq!(m.watch_target(), None);
     }
 
     #[test]

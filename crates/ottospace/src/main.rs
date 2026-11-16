@@ -1006,6 +1006,10 @@ impl Workspace {
                 // The layout first, while its panes and terminals are all there.
                 this.store_layout(true);
                 this.store_key_use(true);
+                // Its agents end with it: none is left on a session, to hold it from the next run.
+                this.drawer.agents.values().for_each(|agent| agent.terminal.signal(libc::SIGHUP));
+                this.drawer.native.clear();
+                this.drawer.stopping.clear();
                 this.hosted.drain().for_each(|(_, hosted)| {
                     hosted.give_back();
                 });
