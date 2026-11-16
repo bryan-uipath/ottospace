@@ -4145,7 +4145,14 @@ fn a_task_that_makes_a_workspace_its_own_shares_its_default() {
     let tree = |name: &str, path: &str| Worktree { name: name.into(), path: path.into(), branch: None };
     let repo = Repo { name: "app".into(), path: "".into(), branch: None, worktrees: vec![tree("$", "/code/app-2")] };
     replay(&[
-        Action::WorktreeAdded { repo: "relative".into(), path: "/code/app-2".into(), repos: vec![repo] }.into(),
+        Action::WorktreeAdded {
+            repo: "relative".into(),
+            path: "/code/app-2".into(),
+            asked: "/code/app-2".into(),
+            fresh: false,
+            repos: vec![repo],
+        }
+        .into(),
         Action::OpenCompose { text: "fix #2048".into() }.into(),
         Action::ComposeSubmit { open: true }.into(),
     ])
