@@ -1429,11 +1429,6 @@ fn check(m: &Model) -> Result<(), String> {
     // The spaces: Workspace first and shown, each once; each tab of exactly one space on the row,
     // each space's tabs side by side in row order; no space without a tab; exactly one selected
     // (the tab on show's), shown; a task's space of a live task, a workbook's of one kept.
-    // A space's default worktree is a listed checkout, or none.
-    for space in &m.spaces {
-        let default = m.space_worktree(&space.of);
-        ensure!(default.is_none_or(|path| m.repo_listed(path)), "{:?}'s default {default:?} is not listed", space.of);
-    }
     let owners: Vec<&Owner> = m.spaces.iter().map(|space| &space.of).collect();
     ensure!(owners.first() == Some(&&Owner::Home) && !m.spaces[0].hidden, "Workspace is not first: {owners:?}");
     ensure!(unique(&owners), "a space twice: {owners:?}");
@@ -2303,6 +2298,11 @@ impl Run {
         // A draft with captures is filed under a name of its own when none was typed.
         let named = m.capture_title();
         let filing = filing.map(|line| (line.clone(), m.draft(line)));
+        // The default worktree of the workspace a task started now would join, and the box's folder.
+        let joins_default = m.joins().and_then(|of| m.space_worktree(&of).map(String::from));
+        let box_folder = m.compose_folder().map(String::from);
+        // Each pane's kind before: a terminal made now with no folder given starts in its space's default.
+        let kinds_before: Vec<(PaneId, Kind)> = m.panes.iter().map(|p| (p.id, p.kind.clone())).collect();
         // A row taken reads back as the tag it is, of that very name.
         let taken = match (&action, m.dropdown()) {
             (Action::ComposeAccept { index }, Some(menu)) => {
@@ -2961,6 +2961,13 @@ impl Run {
                 );
                 ensure!(!filed[0].title_generated, "a title that was typed is marked as made up");
                 let task = filed[0];
+                // Started in a workspace with a default, naming no folder: it works there.
+                let joined =
+                    m.task_space(task.id) != Owner::Task { id: task.id } || m.workbooks.bound_to(task.id).is_some();
+                if let Some(default) = joins_default.as_ref().filter(|_| joined && box_folder.is_none()) {
+                    let named = draft.repo.as_deref().and_then(|name| m.repo_named(name)).is_some();
+                    ensure!(named || task.dir() == Some(default), "{task:?} joined a workspace of default {default:?}");
+                }
                 let repo = draft.repo.as_deref().and_then(|name| m.repo_named(name));
                 // A task that joined a workspace and named no repository shares the workspace's.
                 let shares = repo.is_none() && m.task_space(task.id) != Owner::Task { id: task.id };
@@ -2982,6 +2989,27 @@ impl Run {
             }
         }
 
+        // A terminal made now by a step that names no folder starts in its tab's space's default
+        // worktree, as listed now, or where terminals start (none).
+        let unnamed = matches!(
+            action,
+            Action::Split { .. }
+                | Action::Open { .. }
+                | Action::Fill { .. }
+                | Action::NewEmptyTab
+                | Action::PickerChoose { .. }
+        );
+        for pane in m.panes.iter().filter(|p| unnamed && p.kind == Kind::Terminal) {
+            if kinds_before.iter().any(|(id, kind)| *id == pane.id && *kind == Kind::Terminal) {
+                continue;
+            }
+            let tab = m.tab_of(pane.id).and_then(|id| m.tabs.iter().find(|tab| tab.id == id));
+            let default = tab.and_then(|tab| m.space_worktree(&tab.space));
+            ensure!(
+                pane.cwd.as_deref() == default,
+                "{action:?} started terminal {pane:?}, its space's default {default:?}"
+            );
+        }
         // The effects: each names what is there, and after them the shell holds what the model does.
         for effect in &effects {
             match effect {

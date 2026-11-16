@@ -4713,6 +4713,7 @@ impl Model {
                 let empty = self.panes.iter_mut().find(|p| p.id == pane && p.kind == Kind::Empty);
                 if let Some(empty) = empty {
                     empty.kind = kind;
+                    self.start_in_default(pane);
                     effects.push(Effect::Opened(pane));
                 }
             }
@@ -9962,8 +9963,20 @@ mod tests {
         assert_eq!(m.space_worktree(m.space()), None);
         term(&mut m);
         assert_eq!(cwd(&m), None);
-        // A workspace made with + has none.
+        // An empty pane filled later: the default as listed then, not when the pane was made.
         m.update(Action::SetRepos { repos: branched() });
+        m.update(Action::NewEmptyTab);
+        let empty = m.focused.unwrap_or_default();
+        assert_eq!(m.pane(empty).and_then(|p| p.cwd.clone()), None);
+        m.update(Action::SetRepos { repos: Vec::new() });
+        m.update(Action::Fill { pane: empty, kind: Kind::Terminal }.sent_by(Origin::System));
+        assert_eq!(m.pane(empty).and_then(|p| p.cwd.clone()), None);
+        m.update(Action::SetRepos { repos: branched() });
+        m.update(Action::NewEmptyTab);
+        let empty = m.focused.unwrap_or_default();
+        m.update(Action::Fill { pane: empty, kind: Kind::Terminal }.sent_by(Origin::System));
+        assert_eq!(m.pane(empty).and_then(|p| p.cwd.as_deref()), Some("/code/app-2"));
+        // A workspace made with + has none.
         m.update(Action::WorkbookNew { uid: "9f3a61c2d4e5b708".into() });
         term(&mut m);
         assert_eq!((m.space_worktree(m.space()), cwd(&m)), (None, None));

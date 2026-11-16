@@ -40,10 +40,13 @@ impl Model {
         self.repo_listed(path).then_some(path)
     }
 
-    /// A new terminal pane with no folder of its own starts in its space's default worktree.
+    /// A pane that just became a terminal, with no folder of its own, starts in the default
+    /// worktree of its tab's space, as listed now.
     pub(crate) fn start_in_default(&mut self, pane: u32) {
-        let default = self.space_worktree(self.space()).map(String::from);
-        if let Some(opened) = self.panes.iter_mut().find(|p| p.id == pane && p.cwd.is_none()) {
+        let tab = self.tab_of(pane).and_then(|id| self.tabs.iter().find(|tab| tab.id == id));
+        let default = tab.and_then(|tab| self.space_worktree(&tab.space)).map(String::from);
+        let terminal = |p: &&mut super::Pane| p.id == pane && p.kind == super::Kind::Terminal && p.cwd.is_none();
+        if let Some(opened) = self.panes.iter_mut().find(terminal) {
             opened.cwd = default;
         }
     }
