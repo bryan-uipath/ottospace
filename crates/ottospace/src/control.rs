@@ -19,6 +19,8 @@ use ottospace_core::tasks::{Heading, State, TaskId};
 use ottospace_core::{Axis, Dir, PaneId, Section, Zone};
 use serde::Deserialize;
 
+use crate::pass::Pass;
+
 /// e.g. `{"cmd":"split","axis":"down"}`, `{"cmd":"type","text":"ls\r"}`, `{"cmd":"state"}`.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case", deny_unknown_fields)]
@@ -594,10 +596,23 @@ pub enum PaneKind {
     Empty,
 }
 
-/// A request waiting for the UI thread, and where its reply goes.
+/// A request waiting for the UI thread, where its reply goes, and the pass it carried (a task
+/// agent's `$OTTOSPACE_TASK_PASS`, `pass`).
 pub struct Call {
     pub request: Request,
     pub reply: Sender<String>,
+    pub pass: Option<Pass>,
+}
+
+/// A request line: its request, and its top-level `pass` if it has one (any request may: `ctl`
+/// and the SDK attach it). A `pass` that is not 32 hex digits is an error, its text not repeated.
+fn parse(line: &str) -> Result<(Request, Option<Pass>), String> {
+    let mut value: serde_json::Value = serde_json::from_str(line).map_err(|err| err.to_string())?;
+    let pass = match value.as_object_mut().and_then(|fields| fields.remove("pass")) {
+        None => None,
+        Some(given) => Some(given.as_str().and_then(Pass::parse).ok_or("pass: 32 hex digits")?),
+    };
+    Ok((Request::deserialize(value).map_err(|err| err.to_string())?, pass))
 }
 
 /// `$OTTOSPACE_SOCKET`, else `ottospace.sock` in the per-user temp dir.
@@ -649,12 +664,12 @@ fn bind(path: &Path) -> io::Result<UnixListener> {
 fn handle(stream: UnixStream, calls: Sender<Call>) {
     let Ok(mut out) = stream.try_clone() else { return };
     for line in BufReader::new(stream).lines().map_while(Result::ok) {
-        let reply = match serde_json::from_str(&line) {
-            Ok(request) => {
+        let reply = match parse(&line) {
+            Ok((request, pass)) => {
                 let (reply, answer) = channel();
                 let (cmd, received) = (crate::trace::name(&request), std::time::Instant::now());
                 crate::trace::record("request", serde_json::json!({ "cmd": cmd }));
-                if calls.send(Call { request, reply }).is_err() {
+                if calls.send(Call { request, reply, pass }).is_err() {
                     return;
                 }
                 let reply = answer.recv().unwrap_or_else(|_| error("ottospace is closing"));
@@ -665,7 +680,7 @@ fn handle(stream: UnixStream, calls: Sender<Call>) {
                 crate::trace::record("reply", fields);
                 reply
             }
-            Err(err) => error(&err.to_string()),
+            Err(err) => error(&err),
         };
         if writeln!(out, "{reply}").is_err() {
             return;
@@ -675,6 +690,19 @@ fn handle(stream: UnixStream, calls: Sender<Call>) {
 
 pub fn error(message: &str) -> String {
     serde_json::json!({ "ok": false, "error": message }).to_string()
+}
+
+/// Client side: `request` with the caller's pass (`$OTTOSPACE_TASK_PASS`) attached, if it has one
+/// and the request names none. A line that is not a JSON object goes as it is.
+pub fn with_pass(request: &str, pass: Option<&str>) -> String {
+    let Some(pass) = pass.filter(|pass| !pass.is_empty()) else { return request.to_string() };
+    match serde_json::from_str::<serde_json::Value>(request) {
+        Ok(serde_json::Value::Object(mut fields)) if !fields.contains_key("pass") => {
+            fields.insert("pass".into(), pass.into());
+            serde_json::Value::Object(fields).to_string()
+        }
+        _ => request.to_string(),
+    }
 }
 
 /// Client side: sends one request line, returns the reply line.
@@ -689,6 +717,30 @@ pub fn send(path: &Path, request: &str) -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pass_rides_on_any_request_and_never_reaches_the_request() {
+        let hex = "0123456789abcdef0123456789abcdef";
+        let line = with_pass(r#"{"cmd":"task_brief"}"#, Some(hex));
+        let (request, pass) = parse(&line).expect("parsed");
+        assert!(matches!(request, Request::TaskBrief { id: None, tab: None }));
+        assert!(pass.is_some_and(|pass| pass.hex() == hex));
+        // Any request carries one; none, no pass. One named already is kept.
+        assert!(matches!(parse(&with_pass(r#"{"cmd":"state"}"#, Some(hex))), Ok((Request::State, Some(_)))));
+        assert!(matches!(parse(r#"{"cmd":"state"}"#), Ok((Request::State, None))));
+        assert_eq!(with_pass(r#"{"cmd":"state"}"#, None), r#"{"cmd":"state"}"#);
+        assert_eq!(with_pass(r#"{"cmd":"state"}"#, Some("")), r#"{"cmd":"state"}"#);
+        let own = r#"{"cmd":"state","pass":"x"}"#;
+        assert_eq!(with_pass(own, Some(hex)), own);
+        assert_eq!(with_pass("not json", Some(hex)), "not json");
+        // A malformed pass is an error that does not repeat it; other mistakes are still caught.
+        for bad in [r#"{"cmd":"state","pass":"hunter2"}"#, r#"{"cmd":"state","pass":7}"#] {
+            let err = parse(bad).err().expect(bad);
+            assert!(err.contains("32 hex digits") && !err.contains("hunter2"), "{err}");
+        }
+        assert!(parse(&with_pass(r#"{"cmd":"state","extra":1}"#, Some(hex))).is_err());
+        assert!(parse(&with_pass(r#"{"cmd":"nope"}"#, Some(hex))).is_err());
+    }
 
     #[test]
     fn what_is_for_tests_answers_only_in_a_test_run() {

@@ -31,6 +31,8 @@ pub struct Agent {
     pub(crate) cwd: Option<String>,
     /// The core was told it ended.
     told: bool,
+    /// Its task's pass, while its program runs (`pass`): none for a session's agent, nor once it moved.
+    pass: Option<crate::pass::Pass>,
 }
 
 /// What a drag of the drawer's left edge carries.
@@ -145,17 +147,29 @@ impl Workspace {
             }
         };
         let Command { program: name, args } = command;
-        // The agent can ask for its task's brief over the socket, as in a task's own terminals.
-        let vars: Vec<(&str, String)> = task.map(|id| ("OTTOSPACE_TASK", id.to_string())).into_iter().collect();
+        // The agent can ask for its task's brief over the socket, as in a task's own terminals; its
+        // pass says the request is the agent's own.
+        let pass = task.map(|_| crate::pass::Pass::mint().ok_or("no random bytes for a pass")).transpose()?;
+        let mut vars: Vec<(&str, String)> = task.map(|id| ("OTTOSPACE_TASK", id.to_string())).into_iter().collect();
+        vars.extend(pass.as_ref().map(|pass| (crate::pass::VAR, pass.hex())));
         // No repository: the home folder, as the core says, not wherever ottospace was started.
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
         let cwd = cwd.or(home.as_deref());
         let terminal = Terminal::run(&program(name)?, &args, &vars, cwd).map_err(|err| format!("{name}: {err}"))?;
         let (given, cwd) = (session.clone(), cwd.map(str::to_string));
         let session = session.map(|(_, id)| id);
-        let agent = Agent { terminal, since: Instant::now(), model, told: false, session: given, cwd };
+        let agent = Agent { terminal, since: Instant::now(), model, told: false, session: given, cwd, pass };
         self.drawer.agents.insert(subject.clone(), agent);
         Ok(session)
+    }
+
+    /// Whose a request's pass is: a task's agent that runs, or nobody's. The pass of a stopped
+    /// one is gone with its entry (`stop_agent`), an ended terminal's with its `told`.
+    pub(crate) fn caller(&self, given: Option<&crate::pass::Pass>) -> ottospace_core::tasks::Caller {
+        let terminals = self.drawer.agents.iter().filter(|(_, agent)| !agent.terminal.exited());
+        let terminals = terminals.filter_map(|(subject, agent)| Some((agent.pass.as_ref()?, subject.task()?)));
+        let native = self.drawer.native.iter().filter_map(|(s, native)| Some((native.pass.as_ref()?, s.task()?)));
+        crate::pass::caller(given, terminals.chain(native))
     }
 
     /// `dir`, its links resolved, is in a listed repository or worktree, also resolved.
@@ -205,11 +219,13 @@ impl Workspace {
     }
 
     /// An adopted session's agent is its task's now: its terminal goes on under the task.
+    /// A pass was minted for its first subject only: it names no other.
     pub(crate) fn move_agent(&mut self, from: &Subject, to: &Subject) {
         if let Some(agent) = self.drawer.agents.remove(from) {
-            self.drawer.agents.insert(to.clone(), agent);
+            self.drawer.agents.insert(to.clone(), Agent { pass: None, ..agent });
         }
-        if let Some(native) = self.drawer.native.remove(from) {
+        if let Some(mut native) = self.drawer.native.remove(from) {
+            native.pass = None;
             self.drawer.native.insert(to.clone(), native);
         }
         if let Some(look) = self.drawer.looks.remove(from) {
@@ -250,6 +266,7 @@ impl Workspace {
             redraw |= agent.terminal.take_dirty();
             if agent.terminal.exited() && !agent.told {
                 agent.told = true;
+                agent.pass = None;
                 ended.push(subject.clone());
             }
         }

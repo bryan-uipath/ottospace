@@ -12,6 +12,18 @@ pub const MAX_ID: TaskId = 1_000_000_000;
 /// The longest title, in characters. It keeps a task's file small enough to read back.
 pub const MAX_TITLE: usize = 500;
 
+/// Who sent a socket request, by the pass it carried. The shell matches the pass; the core never
+/// sees one (`docs/ai/agent-mode.md`, "Who is asking").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Caller {
+    /// No pass: anyone, e.g. the user's own shell.
+    Anyone,
+    /// The pass of a live agent ottospace started for this task.
+    Task(TaskId),
+    /// A pass no live agent holds: wrong, or its process ended.
+    Unknown,
+}
+
 /// Where a task is in its life. See `quick-capture.md` for the full lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
