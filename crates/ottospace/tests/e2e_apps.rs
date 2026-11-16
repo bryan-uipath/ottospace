@@ -1161,9 +1161,12 @@ fn a_workbook_hosts_its_apps_window_again_beside_its_terminal() {
         panes.iter().filter_map(|pane| pane["kind"]["type"].as_str().map(str::to_string)).collect()
     };
 
-    // The app's window beside a terminal, saved by the user's key under the tab's name.
-    otto.call(json!({"cmd": "open_app", "name": CANARY}));
-    otto.call(json!({"cmd": "split"}));
+    // The app's window beside a terminal, saved by the user's key under the tab's name. The
+    // workspace made for the app alone shows the app on the top row; with the terminal, its name.
+    let alone = otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    assert_eq!(alone["spaces"][1]["glyph"], json!({"kind": "app", "name": CANARY}), "{}", alone["spaces"]);
+    let beside = otto.call(json!({"cmd": "split"}));
+    assert_eq!(beside["spaces"][1]["glyph"], json!({"kind": "name"}));
     user_key("cmd-shift-s");
     let saved = user_key("enter");
     let book = &saved["workbooks"][0];
