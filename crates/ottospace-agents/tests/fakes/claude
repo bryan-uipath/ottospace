@@ -9,7 +9,9 @@
 # `$FAKE_SESSIONS` set: a new session (`--session-id <id>`) writes its file there, as the real CLI
 # does under `projects/<cwd as a slug>/`, so it can be resumed; `--resume <id>` replays
 # `resume.jsonl` first, if there is one (what a resume prints before it reads stdin).
+# Its process id goes to `pid`: a test asks whether it outlived what started it.
 printf '%s\n' "$@" >"$FAKE_DIR/argv"
+echo $$ >"$FAKE_DIR/pid"
 echo start >>"$FAKE_DIR/starts"
 replay() { grep -v '"_fixture"' "$FAKE_FIXTURES/$1"; }
 if [ -n "$FAKE_SESSIONS" ]; then

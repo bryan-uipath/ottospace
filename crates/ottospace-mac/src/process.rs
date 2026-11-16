@@ -94,6 +94,21 @@ pub fn alive(pid: i32) -> bool {
     pid > 0 && (unsafe { kill(pid, 0) } == 0 || std::io::Error::last_os_error().raw_os_error() == Some(1)) // EPERM
 }
 
+/// `PROC_PIDTBSDINFO` and the size of its `struct proc_bsdinfo` (`<sys/proc_info.h>`):
+/// `pbi_start_tvsec` and `pbi_start_tvusec`, two `u64`, are its last 16 bytes.
+const BSD_INFO: c_int = 3;
+const BSD_INFO_SIZE: usize = 136;
+
+/// When process `pid` started, in milliseconds since 1970. `None`: it is gone, or another user's.
+pub fn started(pid: i32) -> Option<u64> {
+    let mut info = [0u8; BSD_INFO_SIZE];
+    // SAFETY: the buffer is as large as the size passed; the kernel writes no more.
+    let read = unsafe { proc_pidinfo(pid, BSD_INFO, 0, info.as_mut_ptr().cast(), BSD_INFO_SIZE as c_int) };
+    let part = |at: usize| info.get(at..at + 8).and_then(|bytes| bytes.try_into().ok()).map(u64::from_ne_bytes);
+    let (secs, micros) = (part(BSD_INFO_SIZE - 16)?, part(BSD_INFO_SIZE - 8)?);
+    (pid > 0 && read == BSD_INFO_SIZE as c_int).then(|| secs.saturating_mul(1000).saturating_add(micros / 1000))
+}
+
 /// The parent of process `pid`. `None`: it is gone.
 pub fn parent(pid: i32) -> Option<i32> {
     short_info(pid).map(|info| info.parent as i32)
@@ -205,6 +220,11 @@ mod tests {
         assert!(children(own).contains(&pid), "{:?}", children(own));
         assert_eq!(name(pid).as_deref(), Some("sleep"));
         assert_eq!(args(pid), Some(vec!["/bin/sleep".to_string(), "30".to_string()]));
+        // It started just now, after this process; one that is gone started never.
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let (began, ours) = (started(pid).expect("its start"), started(own).expect("our start"));
+        assert!(ours <= began && began <= now && now - began < 10_000, "{ours} {began} {now}");
+        assert_eq!(started(i32::MAX), None);
         // An empty first argument (`exec -a ""`): nothing, not the environment.
         let mut empty = std::process::Command::new("/bin/sh").args(["-c", "exec -a '' /bin/sleep 30"]).spawn().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(200));
