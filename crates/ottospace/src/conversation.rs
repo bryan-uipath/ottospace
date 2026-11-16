@@ -293,7 +293,7 @@ impl Workspace {
             }
         };
         if let Err(err) = native.driver.send(input) {
-            self.error = Some(format!("claude: {err}"));
+            self.broke(format!("claude: {err}"));
         }
     }
 
