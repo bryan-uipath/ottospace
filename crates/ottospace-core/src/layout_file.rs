@@ -423,6 +423,10 @@ impl Model {
         let upgraded = layout.tabs.iter().any(|saved| first(saved) && holds(saved));
         let firsts: Vec<bool> = layout.tabs.iter().map(first).collect();
         let upgraded = upgraded.then(|| self.stray_workspace(Some("Workspace".into())));
+        // Where the first space was on the row: after Home.
+        if let Some(of) = &upgraded {
+            self.spaces.insert(1, Space::new(of.clone()));
+        }
         let task_of = |model: &Model, saved: &SavedTab| {
             let task = saved.tab.task.filter(|id| model.tasks.live(*id).is_some());
             task.map_or(Owner::Workspace, |id| Owner::Task { id })
@@ -503,7 +507,8 @@ impl Model {
             self.select_tab(at, effects);
         }
         // A tab of no space goes to the selected workspace.
-        self.last_space = Some(self.space().clone()).filter(|of| matches!(of, Owner::Task { .. } | Owner::Workbook { .. }));
+        self.last_spaces = vec![self.space().clone()];
+        self.last_spaces.retain(|of| matches!(of, Owner::Task { .. } | Owner::Workbook { .. }));
         // A Calendar left open by a run that had a feed: none without one.
         // Not a section that is not on the rail: Calendar with no feed, one behind a flag that is off.
         self.sidebar = layout.section.filter(|s| self.sections().contains(s));
@@ -603,6 +608,7 @@ mod tests {
     use crate::model::{Action, Origin, Tab};
     use crate::talk::Subject;
     use crate::tasks::{Assign, State};
+    use crate::workbook::valid_uid as valid;
 
     fn task(m: &mut Model, title: &str) {
         let assign = Assign::default();
@@ -617,8 +623,8 @@ mod tests {
         Action::RestoreLayout { layout: Box::new(layout), gone: Vec::new(), home: None, launch: false }
     }
 
-    /// Two tabs of Workspace with splits, a task's space of one tab, selected, the drawer on its
-    /// chat, the Tasks section.
+    /// Two tabs of a workspace ("Workspace 2", made from Home) with splits, a task's space of
+    /// one tab, selected, the drawer on its chat, the Tasks section.
     fn workspace() -> Model {
         let mut m = Model::default();
         task(&mut m, "fix zoom");
@@ -636,10 +642,11 @@ mod tests {
         m
     }
 
-    /// A fresh model with `m`'s tasks, and the file of `m` restored into it.
+    /// A fresh model with `m`'s tasks and workspaces, and the file of `m` restored into it.
     fn restored(m: &Model, file: Layout, gone: &[&str], launch: bool) -> (Model, Vec<Effect>) {
         let mut fresh = Model::default();
         fresh.update(Action::RestoreTasks { tasks: m.tasks.list.clone(), floor: 9 }.sent_by(Origin::System));
+        fresh.update(Action::RestoreWorkbooks { workbooks: m.workbooks.list.clone() }.sent_by(Origin::System));
         let gone = gone.iter().map(|dir| dir.to_string()).collect();
         let restore = Action::RestoreLayout { layout: Box::new(file), gone, home: Some("/Users/me".into()), launch };
         let effects = fresh.update(restore.sent_by(Origin::System));
@@ -650,19 +657,99 @@ mod tests {
         m.tabs.iter().map(|tab: &Tab| (tab.title.clone(), tab.space.clone())).collect()
     }
 
+    /// `layout.json` as the build before Home wrote it: its first space, "Workspace", held tabs.
+    const BEFORE_HOME: &str = include_str!("fixtures/layout-before-home.json");
+
+    fn row(m: &Model) -> Vec<(String, Vec<usize>)> {
+        m.space_rows().into_iter().map(|row| (m.space_title(&row.of), row.tabs)).collect()
+    }
+
     #[test]
-    fn an_older_files_tabs_go_to_their_tasks_spaces_and_the_rest_to_workspace_first() {
+    fn an_older_files_first_space_is_a_kept_workspace_named_workspace_and_nothing_is_lost() {
+        let mut m = Model::default();
+        task(&mut m, "fix zoom");
+        let file = parse(BEFORE_HOME).unwrap();
+        let (r, effects) = restored(&m, file.clone(), &[], false);
+        // Its tabs, the empty one too, are a workspace's, where the first space was; Home holds none.
+        let home = ("Home".to_string(), vec![3]);
+        assert_eq!(row(&r), [home, ("Workspace".into(), vec![0, 1]), ("fix zoom".into(), vec![2])]);
+        let book = &r.workbooks.list[0];
+        assert_eq!((book.name.as_str(), book.tabs.len(), valid(&book.uid)), ("Workspace", 0, true));
+        // Selected, as it was, with its tab, its split and its terminals.
+        assert_eq!((r.space(), r.tabs[r.active].title.as_str()), (&Owner::Workbook { id: book.id }, "notes"));
+        assert!(matches!(&r.layout, Some(Node::Split { ratio, .. }) if (ratio - 0.4).abs() < 0.01), "{:?}", r.layout);
+        assert_eq!((r.panes.len(), r.pane(1).and_then(|pane| pane.cwd.as_deref())), (3, Some("/code/app")));
+        assert_eq!(effects.iter().filter(|effect| matches!(effect, Effect::Opened(_))).count(), 3);
+        assert_eq!((r.tab_panes()[3].len(), r.sidebar), (0, Some(Section::Tasks)));
+        // Written again, it names the workspace; read again, the same: no second one is made.
+        let again = parse(&write(&r.layout_file(&[], &[], 0))).unwrap();
+        let kinds: Vec<&str> = again.spaces.iter().map(|space| space.kind.as_str()).collect();
+        assert_eq!((kinds, again.tabs.len(), again.home), (vec!["workspace", "workbook", "task"], 3, false));
+        let (twice, _) = restored(&r, again, &[], false);
+        assert_eq!((row(&twice), twice.workbooks.list.len()), (row(&r), 1));
+        // The task's tab was on show: it is, and the workspace is there beside it.
+        let (r, _) = restored(&m, Layout { selected: Some(2), ..file.clone() }, &[], false);
+        assert_eq!((r.space(), r.spaces().len()), (&Owner::Task { id: 1 }, 3));
+        // A name taken: the next free one, as + names one.
+        let mut named = Model::default();
+        named.update(Action::WorkbookNew { uid: "00000000000000a1".into() });
+        named.workbooks.list[0].name = "Workspace".into();
+        let (r, _) = restored(&named, file, &[], false);
+        assert_eq!(r.workbooks.list.iter().map(|book| book.name.as_str()).collect::<Vec<_>>(), ["Workspace", "Workspace 2"]);
+    }
+
+    #[test]
+    fn an_older_files_empty_first_space_is_just_home() {
+        let mut file = parse(BEFORE_HOME).unwrap();
+        file.tabs.remove(0);
+        (file.spaces[0].tab, file.spaces[1].tab, file.selected) = (Some(0), Some(1), Some(0));
+        let mut m = Model::default();
+        task(&mut m, "fix zoom");
+        let (r, _) = restored(&m, file.clone(), &[], false);
+        // The empty tab was on show: Home is. No workspace is made for nothing.
+        assert_eq!(row(&r), [("Home".to_string(), vec![1]), ("fix zoom".into(), vec![0])]);
+        assert_eq!((r.space(), r.workbooks.list.len(), r.home(&[]).is_some()), (&Owner::Workspace, 0, true));
+        // No tab at all: Home alone.
+        let (r, _) = restored(&Model::default(), Layout { tabs: Vec::new(), spaces: Vec::new(), ..file }, &[], false);
+        assert_eq!((r.tabs.len(), r.spaces().len(), r.workbooks.list.len()), (1, 1, 0));
+    }
+
+    #[test]
+    fn home_on_show_comes_back_and_a_tab_of_no_space_goes_to_the_workspace_selected_last() {
+        let mut m = workspace();
+        m.update(Action::SpaceSelect { index: 0 });
+        assert_eq!(m.space(), &Owner::Workspace);
+        let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
+        assert_eq!((file.home, file.selected, file.tabs.len()), (true, None, 3));
+        let (r, _) = restored(&m, file.clone(), &[], false);
+        assert_eq!((r.space(), r.tabs.len(), r.layout.is_none()), (&Owner::Workspace, 4, true));
+        assert_eq!(write(&r.layout_file(&[], &[], 0)), write(&file));
+        // The task gone: its tab is the selected workspace's, and no workspace is made for it.
+        let mut gone = Model::default();
+        gone.update(Action::RestoreWorkbooks { workbooks: m.workbooks.list.clone() }.sent_by(Origin::System));
+        gone.update(restore(Layout { home: false, selected: Some(0), ..file.clone() }).sent_by(Origin::System));
+        assert_eq!(row(&gone), [("Home".to_string(), vec![3]), ("Workspace 2".into(), vec![0, 1, 2])]);
+        // Home on show and no workspace left either: one is made, kept like any other.
+        let mut none = Model::default();
+        none.update(restore(file).sent_by(Origin::System));
+        assert_eq!(row(&none), [("Home".to_string(), vec![3]), ("Workspace 2".into(), vec![0, 1, 2])]);
+        assert_eq!((none.workbooks.list.len(), none.tab_panes()[3].len()), (1, 0));
+    }
+
+    #[test]
+    fn an_older_files_tabs_go_to_their_tasks_spaces_and_the_rest_to_a_workspace_first() {
         let mut m = Model::default();
         task(&mut m, "one");
         task(&mut m, "two");
         let mut file = Model::default().layout_file(&[], &[], 0);
-        let tab = |title: &str, task| SavedTab {
+        let pane = crate::marks::PaneRecord { id: 1, kind: RecordKind::Terminal, cwd: None, extra: Extra::new() };
+        let tab = |title: &str, task, panes: Vec<crate::marks::PaneRecord>| SavedTab {
             tab: TabRecord {
                 title: title.into(),
                 task,
                 focused: None,
-                layout: None,
-                panes: Vec::new(),
+                layout: panes.first().map(|pane| Node::Leaf(pane.id)),
+                panes,
                 extra: Extra::new(),
             },
             workbook: None,
@@ -670,14 +757,20 @@ mod tests {
             settings: None,
             space: None,
         };
-        file.tabs = vec![tab("b", Some(2)), tab("c", Some(1)), tab("d", Some(2)), tab("a", None), tab("e", Some(7))];
-        (file.spaces, file.selected) = (Vec::new(), Some(2));
+        let none = Vec::new;
+        file.tabs = vec![
+            tab("b", Some(2), none()),
+            tab("c", Some(1), none()),
+            tab("d", Some(2), none()),
+            tab("a", None, vec![pane]),
+            tab("e", Some(7), none()),
+        ];
+        (file.spaces, file.selected, file.home) = (Vec::new(), Some(2), false);
         let (r, _) = restored(&m, file, &[], false);
         let order: Vec<&str> = r.tabs.iter().map(|tab| tab.title.as_str()).collect();
-        assert_eq!((order, r.tabs[r.active].title.as_str()), (vec!["a", "e", "b", "d", "c"], "d"));
-        let row: Vec<(Owner, Vec<usize>)> = r.space_rows().into_iter().map(|row| (row.of, row.tabs)).collect();
-        let (one, two) = (Owner::Task { id: 1 }, Owner::Task { id: 2 });
-        assert_eq!(row, [(Owner::Workspace, vec![0, 1]), (two, vec![2, 3]), (one, vec![4])]);
+        assert_eq!((order, r.tabs[r.active].title.as_str()), (vec!["a", "e", "b", "d", "c", "Home"], "d"));
+        let spaces = [("Home", vec![5]), ("Workspace", vec![0, 1]), ("two", vec![2, 3]), ("one", vec![4])];
+        assert_eq!(row(&r), spaces.map(|(name, tabs)| (name.to_string(), tabs)));
     }
 
     #[test]
@@ -691,14 +784,14 @@ mod tests {
         let of = Owner::Task { id: 1 };
         assert_eq!((m.members(&of), m.front(&of)), (vec![1, 2, 3], Some(2)));
         let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
-        assert_eq!((&file.spaces[1].tasks, file.spaces[1].front), (&vec![2, 3], Some(2)));
+        assert_eq!((&file.spaces[2].tasks, file.spaces[2].front), (&vec![2, 3], Some(2)));
         let (r, _) = restored(&m, file.clone(), &[], false);
         assert_eq!((r.members(&of), r.front(&of), r.tab_task()), (vec![1, 2, 3], Some(2), Some(2)));
         assert_eq!(r.talk.as_ref().map(|talk| &talk.task), Some(&Subject::Task(2)));
         assert_eq!(write(&r.layout_file(&[], &[], 0)), write(&file));
         // A task of the file that is gone, or in two spaces, is left out.
         let mut odd = file;
-        odd.spaces[1].tasks = vec![3, 2, 3, 8, 1, 2];
+        odd.spaces[2].tasks = vec![3, 2, 3, 8, 1, 2];
         let (r, _) = restored(&m, odd, &[], false);
         assert_eq!((r.members(&of), r.front(&of)), (vec![1, 3, 2], Some(2)));
     }
@@ -708,23 +801,25 @@ mod tests {
         let mut m = workspace();
         m.update(Action::NewTab); // the task's second tab
         m.update(Action::SelectTab { index: 2 });
-        m.update(Action::SpaceSelect { index: 0 });
-        m.update(Action::SpaceHide { index: Some(1) });
+        m.update(Action::SpaceSelect { index: 1 });
+        m.update(Action::SpaceHide { index: Some(2) });
         let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
         let kinds: Vec<(&str, bool, Option<usize>)> =
             file.spaces.iter().map(|space| (space.kind.as_str(), space.hidden, space.tab)).collect();
-        assert_eq!(kinds, [("workspace", false, Some(1)), ("task", true, Some(2))]);
+        // Home, which has no tab, the workspace and the task's space.
+        assert_eq!(kinds, [("workspace", false, None), ("workbook", false, Some(1)), ("task", true, Some(2))]);
         let (mut r, _) = restored(&m, file.clone(), &[], false);
         assert_eq!(write(&r.layout_file(&[], &[], 0)), write(&file));
-        assert_eq!((r.shown_spaces().len(), r.talk.is_none()), (1, true));
+        assert_eq!((r.shown_spaces().len(), r.talk.is_none()), (2, true));
         // Opened again, it shows the tab it showed last, its chat as the drawer was.
         r.update(Action::TaskTalk { id: 1 });
         assert_eq!((r.active, r.talk.as_ref().map(|talk| talk.open)), (2, Some(true)));
-        // A space of a kind this build does not know, or a task gone: its tabs are Workspace's.
+        // A space of a kind this build does not know, or a task gone: its tabs are the
+        // selected workspace's, but the one that holds nothing: it is closed.
         let mut odd = file;
-        odd.spaces[1].kind = "garden".into();
+        odd.spaces[2].kind = "garden".into();
         let (r, _) = restored(&m, odd, &[], false);
-        assert_eq!((r.spaces().len(), r.tabs.len()), (1, 4));
+        assert_eq!((r.spaces().len(), r.tabs.len(), r.space_tabs(&Owner::Workbook { id: 1 }).len()), (2, 4, 3));
     }
 
     #[test]
@@ -735,11 +830,10 @@ mod tests {
         assert_eq!((file.tabs.len(), file.selected, file.section), (3, Some(2), Some(Section::Tasks)));
         assert_eq!(file.drawer.task, Some(1));
         let (r, effects) = restored(&m, file, &[], false);
-        // Workspace's tabs first, then the task's space.
-        let tab = |title: &str, of| (title.to_string(), of);
-        let bar =
-            [tab("Tab 1", Owner::Workspace), tab("Tab 2", Owner::Workspace), tab("fix zoom", Owner::Task { id: 1 })];
-        assert_eq!(titles(&r), bar);
+        // The workspace's tabs first, then the task's space; Home's own tab after all.
+        let (tab, book) = (|title: &str, of| (title.to_string(), of), Owner::Workbook { id: 1 });
+        let task = tab("fix zoom", Owner::Task { id: 1 });
+        assert_eq!(titles(&r), [tab("Tab 1", book.clone()), tab("Tab 2", book), task, tab("Home", Owner::Workspace)]);
         assert_eq!((r.tab_task(), r.active, r.sidebar), (Some(1), 2, Some(Section::Tasks)));
         assert_eq!(write(&r.layout_file(&[], &[], 0)), write(&m.layout_file(&cwds, &[], 0)));
         // The split's ratio, and each terminal's directory.
@@ -827,8 +921,10 @@ mod tests {
         let file = m.layout_file(&[], &[], 0);
         let mut fresh = Model::default();
         fresh.update(restore(file.clone()).sent_by(Origin::System));
-        assert_eq!(fresh.tabs.iter().filter(|tab| tab.space != Owner::Workspace).count(), 0);
-        assert_eq!((fresh.tabs.len(), fresh.talk.is_none()), (3, true));
+        // Nor of a workspace that is not kept: all three are one new workspace's.
+        assert_eq!(fresh.tabs.iter().filter(|tab| tab.space.task().is_some()).count(), 0);
+        assert_eq!(fresh.space_tabs(&Owner::Workbook { id: 1 }).len(), 3);
+        assert_eq!((fresh.tabs.len(), fresh.talk.is_none()), (4, true));
         // Not over a workspace in use, nor from a client.
         let mut used = workspace();
         let before = titles(&used);
@@ -846,8 +942,8 @@ mod tests {
         m.update(Action::SelectTab { index: 1 });
         let file = m.layout_file(&[], &[], 0);
         let (r, _) = restored(&m, file, &[], false);
-        assert_eq!((r.tabs.len(), r.tabs.iter().any(|tab| tab.space == Owner::Task { id: 2 })), (3, false));
-        assert_eq!((r.tabs[r.active].title.as_str(), &r.tabs[r.active].space), ("Tab 2", &Owner::Workspace));
+        assert_eq!((r.tabs.len(), r.tabs.iter().any(|tab| tab.space == Owner::Task { id: 2 })), (4, false));
+        assert_eq!((r.tabs[r.active].title.as_str(), &r.tabs[r.active].space), ("Tab 2", &Owner::Workbook { id: 1 }));
     }
 
     /// ⌘T's tab (one empty pane) and the open section come back as they were.
@@ -949,10 +1045,10 @@ mod tests {
         let again = r.settings_pane.unwrap_or_default();
         assert!(effects.contains(&Effect::EditSettings { pane: again }) && effects.contains(&Effect::Opened(again)));
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::History { .. })), "{effects:?}");
-        assert_eq!(r.tabs.iter().map(|tab| tab.title.as_str()).collect::<Vec<_>>(), ["Tab 1", "Settings"]);
+        assert_eq!(r.tabs.iter().map(|tab| tab.title.as_str()).collect::<Vec<_>>(), ["Tab 1", "Settings", "Home"]);
         // ⌘, brings it forward: no second one.
         r.update(Action::SelectTab { index: 0 });
-        assert_eq!((r.update(Action::EditSettings), r.tabs.len(), r.active), (vec![], 2, 1));
+        assert_eq!((r.update(Action::EditSettings), r.tabs.len(), r.active), (vec![], 3, 1));
         // A client restores nothing, and opens none.
         let mut fresh = Model::default();
         assert!(fresh.update(restore(read).sent_by(Origin::Socket)).is_empty());

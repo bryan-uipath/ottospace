@@ -209,7 +209,7 @@ impl Model {
     /// A space's name: its task's title, its session's, its workbook's.
     pub fn space_title(&self, of: &Owner) -> String {
         match of {
-            Owner::Workspace => "Workspace".into(),
+            Owner::Workspace => HOME.into(),
             // Several tasks in a kept workspace: the workspace's name.
             Owner::Task { id } => {
                 let book = self.workbooks.bound_to(*id).filter(|_| self.members(of).len() > 1);
@@ -423,8 +423,9 @@ impl Model {
         self.regroup();
         let (of, id) = (self.tabs[self.active].space.clone(), self.tabs[self.active].id);
         // The workspace selected last: where a stray tab goes.
+        self.last_spaces.retain(|last| *last != of && self.spaces.iter().any(|space| space.of == *last));
         if matches!(of, Owner::Task { .. } | Owner::Workbook { .. }) {
-            self.last_space = Some(of.clone());
+            self.last_spaces.push(of.clone());
         }
         let tabs: Vec<(Owner, u32)> = self.tabs.iter().map(|tab| (tab.space.clone(), tab.id)).collect();
         for space in &mut self.spaces {
@@ -454,11 +455,11 @@ impl Model {
             // Made on Home by the user (its own tab filled, a tab asked for, a folder opened): a
             // new workspace. Anything else: the workspace selected last.
             let made = (filled || new_tab || hint.is_some()) && origin == Origin::User;
-            let open = |of: &Owner| self.owner_valid(of) && self.spaces.iter().any(|s| s.of == *of);
+            let open = |of: &&Owner| self.owner_valid(of) && self.spaces.iter().any(|s| s.of == **of);
             // Else the first workspace on the row, before one is made.
             let kept = |space: &&Space| !space.hidden && matches!(space.of, Owner::Task { .. } | Owner::Workbook { .. });
-            let any = || self.spaces.iter().filter(|space| open(&space.of)).find(kept).map(|space| space.of.clone());
-            let last = self.last_space.clone().filter(open).or_else(any);
+            let any = || self.spaces.iter().filter(|space| open(&&space.of)).find(kept).map(|space| space.of.clone());
+            let last = self.last_spaces.iter().rfind(open).cloned().or_else(any);
             let to = match last.filter(|_| !made) {
                 Some(of) => of,
                 None => self.stray_workspace(hint),

@@ -2428,9 +2428,9 @@ pub struct Model {
     /// user takes the dismissal back.
     #[serde(skip)]
     departed: Vec<(TaskId, Owner)>,
-    /// The workspace selected last: where a stray tab goes.
+    /// The workspaces selected, the last one last, each once: where a stray tab goes.
     #[serde(skip)]
-    pub(crate) last_space: Option<Owner>,
+    pub(crate) last_spaces: Vec<Owner>,
     /// The name of the workspace this step's tab is to make, if it makes one: a folder's.
     #[serde(skip)]
     pub(crate) home_hint: Option<String>,
@@ -2778,7 +2778,7 @@ impl Default for Model {
             unlinked: Vec::new(),
             departed: Vec::new(),
             joined_before: Vec::new(),
-            last_space: None,
+            last_spaces: Vec::new(),
             home_hint: None,
             next_tab: 0,
             layout_seen: None,
@@ -6839,10 +6839,6 @@ impl Model {
         self.focused = Some(id);
         effects.push(Effect::Opened(id));
         id
-    }
-
-    pub(crate) fn push_tab(&mut self) {
-        self.push_tab_of(Owner::Workspace);
     }
 
     /// The lowest "Tab n" no tab has: closing "Tab 5" and opening one gives "Tab 5" again.
