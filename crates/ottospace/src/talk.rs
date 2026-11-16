@@ -461,15 +461,15 @@ impl Workspace {
     /// The drawer's foot: the agent's model, a mode that lets it act unasked, and the folder it
     /// runs in (whole on hover). Muted; a mode that asks for nothing in the warning colour.
     /// Stays once the agent ended.
-    fn agent_foot(&self, subject: &Subject) -> Option<Div> {
+    fn agent_foot(&self, subject: &Subject, width: f32) -> Option<Div> {
         let line = self.agent_line(subject);
         let color = if line.bypass { theme::SNEAK } else { theme::MUTED };
         let tip = self.agent_dir(subject).map(|dir| gpui::SharedString::from(format!("The agent runs in {dir}")));
-        // Short by the core's cut (`talk::DIR_CHARS`): it fits the drawer at its default width.
-        let foot = div().id("talk-foot").flex_none().px_3().pb_1().truncate().text_xs().text_color(rgb(color));
+        let foot = div().id("talk-foot").flex_none().px_3().pb_1().text_xs().text_color(rgb(color));
         let foot =
             foot.when_some(tip, |foot, tip| foot.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))));
-        line.foot.map(|text| div().child(foot.child(text)))
+        // The drawer's width less the foot's padding: `cut_text` needs a width of its own here.
+        line.foot.map(|text| div().child(foot.child(crate::cut_text(text).w(px(width - 24.)))))
     }
 
     /// The conversation's header: state, title, Chat | Terminal, then what can be done.
@@ -696,7 +696,7 @@ impl Workspace {
             )
             .children(dial)
             .child(body)
-            .children(self.agent_foot(&talk.task));
+            .children(self.agent_foot(&talk.task, width));
         Some(drawer.into_any_element())
     }
 
