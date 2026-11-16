@@ -1,7 +1,8 @@
 # Repos: folding, the default folder, new worktrees
 
-The Repos section lists each repository's name over its checkouts. Clicks on a row are as
-`docs/ai/spaces.md` says (a task's row selects the task; else a terminal in a Workspace tab).
+The Repos section lists each repository's name over its checkouts. A click on a row selects the
+workspace of that checkout, else makes one with it as its default worktree: `docs/ai/spaces.md`,
+"Worktrees".
 
 ## The model (core: `repos.rs`, `model.rs`)
 
@@ -44,8 +45,8 @@ The Repos section lists each repository's name over its checkouts. Clicks on a r
    - only a remote has it (exactly one remote; `git for-each-ref --format=%(refname) refs/remotes/*/<branch>`):
      `git worktree add --track -b <branch> -- <folder> <remote>/<branch>`
    - neither: `git worktree add -b <branch> -- <folder> HEAD`
-5. Made: the list is read again and the worktree opens as its row's click would
-   (`WorktreeAdded`, `Origin::System`). Not made: git's message, cleaned and cut to 200
+5. Made: the list is read again and the worktree opens as the user's click on its row would
+   (`WorktreeAdded`, `Origin::System`): a new workspace of it. Not made: git's message, cleaned and cut to 200
    characters, in the status bar; an empty `<repo>` folder made in step 4 goes; anything git
    left is left, and said.
 

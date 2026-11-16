@@ -6158,6 +6158,105 @@ fn several_tasks_share_a_workspace_and_the_drawers_strip_switches_between_them()
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The owner: "the workspace _can_ carry a worktree", "a terminal in the workspace starts in the
+/// default worktree". The user's click on a worktree's row makes a workspace for it, selected
+/// again by the next click; its terminals and tasks start there; a task whose line names another
+/// checkout works there, and the rows say which.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_repos_click_makes_a_workspace_of_its_worktree_where_terminals_and_tasks_start() {
+    let root = support::temp(&format!("ottospace-e2e-default-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    fake_repo(&repos.join("app"));
+    let repos = repos.canonicalize().unwrap();
+    fake_worktree(&repos, "app", "app-2", "fix/zoom");
+    let path = |name: &str| repos.join(name).to_string_lossy().into_owned();
+    let settings = json!({"repos": [repos], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("default", &settings.to_string());
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("default", &env);
+    let space = |reply: &Value| -> Value {
+        let spaces = reply["spaces"].as_array().cloned().unwrap_or_default();
+        spaces.iter().find(|s| s["selected"] == true).cloned().unwrap_or_default()
+    };
+    let focused_cwd = |reply: &Value| {
+        let id = reply["state"]["focused"].clone();
+        let panes = reply["state"]["panes"].as_array().cloned().unwrap_or_default();
+        panes.iter().find(|p| p["id"] == id).map(|p| p["cwd"].clone()).unwrap_or_default()
+    };
+    let pwd = |otto: &Otto, pane: &Value, dir: &str| {
+        otto.call(json!({"cmd": "type", "pane": pane, "text": "pwd\r"}));
+        let pattern = format!("^{}$", regex::escape(dir));
+        otto.call(json!({"cmd": "wait", "pane": pane, "pattern": pattern, "timeout_ms": 40000}));
+    };
+
+    // The worktree's row: a new workspace named for its branch, its default, a terminal there.
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    let row = format!("repo:{}", path("app-2"));
+    let opened = otto.user_click(at(otto.control(&row), 0.5, 0.5));
+    assert_eq!(
+        (&space(&opened)["of"], &space(&opened)["worktree"]),
+        (&json!({"kind": "workbook", "id": 1}), &json!(path("app-2")))
+    );
+    assert_eq!(opened["workbooks"][0]["name"], "fix/zoom", "{}", opened["workbooks"]);
+    assert_eq!(focused_cwd(&opened), json!(path("app-2")));
+    pwd(&otto, &opened["state"]["focused"], &path("app-2"));
+    // ⌘D there: the new terminal starts in the default worktree too.
+    let split = otto.user_key("cmd-d");
+    assert_eq!(focused_cwd(&split), json!(path("app-2")));
+    pwd(&otto, &split["state"]["focused"], &path("app-2"));
+    // From Home, the row again: the same workspace, nothing made.
+    otto.user_key("cmd-ctrl-1");
+    let again = otto.user_click(at(otto.control(&row), 0.5, 0.5));
+    assert_eq!((&space(&again)["of"], again["workbooks"].as_array().map(Vec::len)), (&space(&opened)["of"], Some(1)));
+    assert_eq!(pane_ids(&again), pane_ids(&split));
+
+    // A task started there: its agent in the default worktree.
+    otto.user_key("cmd-n");
+    let typed = otto.user_key("o n e");
+    assert_eq!(typed["compose_plan_line"], "↵ will start claude in app-2 on fix/zoom, in this workspace");
+    otto.user_key("enter");
+    let started = |dir: String| {
+        let bin = bin.clone();
+        move |_: &Otto| agent_argv(&bin, "claude").filter(|argv| argv.first() == Some(&dir)).map(|_| ())
+    };
+    otto.wait_for("the first agent, in the worktree", started(path("app-2")));
+    // A second, for the repository's own folder: its agent there, and each row names its worktree.
+    std::fs::remove_file(bin.join("claude.argv")).unwrap();
+    otto.user_key("cmd-n");
+    otto.user_key("> a p p space t w o");
+    otto.user_key("enter");
+    otto.wait_for("the second agent, in the repository", started(path("app")));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let rows = otto.call(json!({"cmd": "state"}))["tasks_bar"]["sections"].clone();
+    let named: Vec<(Value, Value)> = rows
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|section| section["rows"].as_array().cloned().unwrap_or_default())
+        .map(|row| (row["id"].clone(), row["worktree"].clone()))
+        .collect();
+    assert_eq!(named.len(), 2, "{rows}");
+    assert!(named.contains(&(json!(1), json!("app-2"))) && named.contains(&(json!(2), json!("app"))), "{named:?}");
+    // The repository's row: the workspace that holds a task working there; the default is kept.
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    otto.user_key("cmd-ctrl-1");
+    let main = otto.user_click(at(otto.control(&format!("repo:{}", path("app"))), 0.5, 0.5));
+    assert_eq!((&space(&main)["of"], &space(&main)["front"]), (&json!({"kind": "task", "id": 1}), &json!(2)));
+    assert_eq!(space(&main)["worktree"], json!(path("app-2")));
+    // Kept in its file.
+    let files: Vec<String> = std::fs::read_dir(home.join("workbooks"))
+        .unwrap()
+        .flatten()
+        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+        .collect();
+    assert!(files.iter().any(|file| file.contains(&format!("\"worktree\": {}", json!(path("app-2"))))), "{files:?}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The owner: "i'd expect < 5 so the ui should be suitable for that". Five tasks in a workspace:
 /// the strip is one line inside the drawer, four badges and the front tab with room for its title.
 #[test]
