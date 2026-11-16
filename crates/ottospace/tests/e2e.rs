@@ -5492,18 +5492,15 @@ fn only_the_user_starts_a_capture() {
     let more = |t: &&Value| t["source"]["id"] == "draft:more";
     let frame = &labelled["sneak"]["targets"].as_array().unwrap().iter().find(more).expect("the button")["frame"];
     let f = |key: &str| frame[key].as_f64().unwrap();
-    // The button, as low as the notice bar in `reply` puts it: the refusal's notice opens the bar.
-    let high = |reply: &Value| reply["notice_bar"]["height"].as_f64().unwrap_or(0.0);
-    let read_at = high(&labelled);
-    let button = |reply: &Value| [f("x") + f("w") / 2.0, f("y") + f("h") / 2.0 + high(reply) - read_at];
+    let button = [f("x") + f("w") / 2.0, f("y") + f("h") / 2.0];
     let reply = otto.call(json!({"cmd": "key", "keys": letters(&labels["draft:more"])}));
     assert!(count(&reply) == 2 && refused(&reply), "{reply}");
     if reply["mode"] == "sneak" {
         otto.user_key("escape");
     }
-    let reply = otto.click(button(&otto.drawn()), 1);
+    let reply = otto.click(button, 1);
     assert!(count(&reply) == 2 && refused(&reply), "{}", reply["notice"]);
-    let reply = otto.user_click(button(&reply));
+    let reply = otto.user_click(button);
     assert_eq!(count(&reply), 3, "{}", reply["notice"]);
     let state = pictured(&otto);
 
@@ -6090,11 +6087,10 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     let otto = Otto::launch_with("workbook-2", &env);
     let listed = otto.call(json!({"cmd": "section", "section": "workbook"}));
     assert_eq!((names(&listed), &listed["workbooks"][0]["open"]), (vec!["dri".to_string()], &json!(false)));
-    // Where the row is now: the refusal's notice moves the list down.
-    let row = || at(rect(&otto.drawn()["workbooks"][0]["row"]), 0.3, 0.3);
-    let refused = otto.click(row(), 1);
+    let row = at(rect(&otto.drawn()["workbooks"][0]["row"]), 0.3, 0.3);
+    let refused = otto.click(row, 1);
     assert!(pane_ids(&refused).is_empty() && users(&refused), "{refused}");
-    let opened = otto.user_click(row());
+    let opened = otto.user_click(row);
     assert_eq!(
         (titles(&opened), &opened["state"]["active"], pane_ids(&opened)),
         (vec!["Tab 1".into(), "dri".to_string()], &json!(1), vec![1, 2])
@@ -6105,7 +6101,7 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     shell_is_in(&otto, 2, &two);
     // Its tab is open: the row selects it, and opens no second one.
     otto.call(json!({"cmd": "select_tab", "index": 0}));
-    let again = otto.user_click(row());
+    let again = otto.user_click(row);
     assert_eq!((titles(&again).len(), &again["state"]["active"], pane_ids(&again)), (2, &json!(1), vec![1, 2]));
 
     // Saving its tab again (⌘⇧S) updates the workbook and offers the old one back.
@@ -8238,6 +8234,7 @@ fn dial_fixtures() -> Vec<(&'static str, String)> {
         call("e", "Edit", json!({"file_path": "/made/up/src/auth.rs", "old_string": "a", "new_string": "b"})),
         result("e", false),
         call("c", "Bash", json!({"command": "cargo test"})),
+        call("d", "Bash", json!({"command": "cargo clippy"})),
         said(184_000),
     ];
     vec![("turn1.jsonl", turn1.join("\n")), ("turn2.jsonl", turn2.join("\n"))]
@@ -8275,12 +8272,23 @@ fn the_dial_counts_calls_by_station_and_keeps_the_users_collapse() {
     // Counts and stations only: no command, path or host.
     let said = first.to_string();
     assert!(!said.contains("cargo") && !said.contains("auth.rs") && !said.contains("example.com"), "{said}");
+    // At rest nothing in it moves: once its dots have settled, no frame is asked for.
+    let frames = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["dial_frames"].as_u64().unwrap();
+    otto.wait_for("the dial at rest", |o| (dial(o)["animating"] == false).then_some(()));
+    let rest = frames(&otto);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!((frames(&otto), dial(&otto)["animating"].clone()), (rest, json!(false)), "no frames at rest");
 
     // The user's next message: the red dot goes; Shell is lit while its call runs; the ring is red.
     otto.user_click(at(otto.control("talk"), 0.5, 0.5));
     otto.user_key("g o enter");
     let second = otto.wait_for("the second turn's call", |o| Some(dial(o)).filter(|d| d["level"] == "red"));
-    assert_eq!(spot(&second, "shell"), (json!(2), json!(0), json!(true)), "{second}");
+    assert_eq!(spot(&second, "shell"), (json!(3), json!(0), json!(true)), "{second}");
+    // Two calls run there: its dot is the larger for it, and pulses, a frame after a frame.
+    let shell = second["stations"].as_array().unwrap().iter().find(|s| s["station"] == "shell").cloned().unwrap();
+    assert_eq!((&shell["running"], &second["animating"]), (&json!(2), &json!(true)), "{second}");
+    let moving = frames(&otto);
+    otto.wait_for("frames while a call runs", |o| (frames(o) > moving + 5).then_some(()));
     assert_eq!((&second["pulse"], &second["failed"], &second["lit"]), (&json!("running"), &json!(false), &json!(true)));
     assert_eq!(second["context"], json!(0.92));
 
@@ -8296,6 +8304,10 @@ fn the_dial_counts_calls_by_station_and_keeps_the_users_collapse() {
     // ⌘⇧A, the palette's Toggle Agent Dial, does the same.
     otto.user_key("cmd-shift-a");
     assert_eq!(dial(&otto)["collapsed"], true);
+    // Collapsed, nothing moves though the calls run on.
+    let collapsed = frames(&otto);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!((frames(&otto), dial(&otto)["animating"].clone()), (collapsed, json!(false)), "none collapsed");
 
     // The user stops it (a running task is not gone on with from another run).
     otto.user_key("cmd-p");
@@ -8320,6 +8332,30 @@ fn the_dial_counts_calls_by_station_and_keeps_the_users_collapse() {
     assert_eq!(resumed["collapsed"], true, "{resumed}");
     again.control("talk:dial-marker");
     drop(again);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// With Reduce Motion (a test run's `OTTOSPACE_REDUCE_MOTION`) a lit station is its colour and
+/// size alone: no frame is asked for while its calls run.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_dial_holds_still_with_reduce_motion() {
+    let (root, _record, env) = native_setup("dial-calm", &dial_fixtures(), &[("OTTOSPACE_REDUCE_MOTION", "1")]);
+    let otto = launch_env("dial-calm", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let dial = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"]["dial"].clone();
+    otto.start_task(1);
+    otto.wait_for("the first turn's end", |o| Some(dial(o)).filter(|d| d["level"] == "amber"));
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("g o enter");
+    let working = otto.wait_for("the second turn's calls", |o| Some(dial(o)).filter(|d| d["level"] == "red"));
+    assert_eq!((&working["lit"], &working["animating"]), (&json!(true), &json!(false)), "{working}");
+    std::thread::sleep(Duration::from_millis(300));
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(state["counts"]["dial_frames"], 0, "lit, and still");
+    drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -8963,7 +8999,8 @@ fn the_notice_bar_splits_the_top_row_from_the_rest_and_only_the_user_dismisses_i
         let level = level.map(String::from);
         let met = move |o: &Otto| {
             let reply = o.drawn();
-            let open = reply["notice_bar"]["height"] == 28.0 && reply["notice_level"].as_str() == level.as_deref();
+            let (drawn, said) = (&reply["notice_bar"], level.as_deref());
+            let open = drawn["height"] == 28.0 && drawn["level"].as_str() == said;
             let gone = level.is_none() && reply["notice_bar"].is_null();
             (open || gone).then_some(reply)
         };
@@ -9043,10 +9080,12 @@ fn the_notice_bar_splits_the_top_row_from_the_rest_and_only_the_user_dismisses_i
     otto.call(json!({"cmd": "repo_add", "path": plain}));
     let warned = bar(Some("warning"));
     assert_eq!(warned["notice"].as_str(), Some(format!("No repository in {plain}").as_str()));
-    // A client's failure does not take its place.
+    // A client's failure does not take its place: the client reads its own in `notice`.
     let failed = otto.raw(r#"{"cmd":"open_app","name":"Finder"}"#);
     assert!(failed["error"].is_string(), "{failed}");
-    assert_eq!(bar(Some("warning"))["notice"], warned["notice"]);
+    let stands = bar(Some("warning"));
+    assert_eq!(stands["notice_bar"]["text"], warned["notice"]);
+    assert_eq!(stands["notice"], failed["error"]);
     // Dismissed, the information it covered shows again; an error covers both.
     // By the user's own sneak label on ×.
     let (_, labels) = sneak(&otto);
@@ -9054,4 +9093,14 @@ fn the_notice_bar_splits_the_top_row_from_the_rest_and_only_the_user_dismisses_i
     assert_eq!(bar(Some("info"))["notice"], info["notice"]);
     std::fs::write(&file, "{ not json").unwrap();
     assert_eq!(bar(Some("error"))["notice_bar"]["kind"], "settings_problem");
+
+    // With nothing on the bar, a client's request that did nothing is answered in its reply
+    // alone: no bar opens, and nothing under the top row moves.
+    std::fs::write(&file, RIGHT).unwrap();
+    read(0);
+    let rest = bar(None);
+    let failed = otto.raw(r#"{"cmd":"open_app","name":"Finder"}"#);
+    let after = otto.drawn();
+    assert_eq!((&after["notice"], &after["notice_bar"]), (&failed["error"], &Value::Null));
+    assert_eq!((rect(&after["frames"][&pane]), tab(&after)), (rect(&rest["frames"][&pane]), tab(&rest)));
 }

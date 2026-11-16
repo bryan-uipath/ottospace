@@ -1,5 +1,6 @@
 # The agent dial over a native chat: a turn of calls (one failing, a hook), the next turn with
-# Shell lit and the context red, idle, ended (collapsed to its marker), narrow, and a watched
+# Shell lit and the context red, idle, a third turn in motion (the model thinking, a call at Files,
+# two there and one at Shell, settled: what --record films), ended (collapsed to its marker), narrow, and a watched
 # session. The conversation closed while it works and while it waits: the agent chip, on the top
 # row and, with a second tab, at the end of the tab row. The stand-in `claude` replays dial/fixtures and writes the watched session's file.
 {"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
@@ -9,7 +10,7 @@
 {"click":"task:1","at":[0.3,0.3]}
 {"click":"talk:talk-start"}
 {"until":"drawer.native.chats.1.dial.level","is":"amber"}
-{"settle":300}
+{"settle":2000}
 {"shot":"failed"}
 {"click":"talk"}
 {"cmd":"key","keys":"r u n space t h e space t e s t s enter","as":"user"}
@@ -22,8 +23,24 @@
 {"cmd":"key","keys":"cmd-shift-l","as":"user"}
 {"click":"talk:chat-stop"}
 {"until":"drawer.native.chats.1.transcript.turn","is":null}
-{"settle":300}
+{"settle":2000}
 {"shot":"idle"}
+{"record":"start"}
+{"click":"talk"}
+{"cmd":"key","keys":"a n d space l i n t enter","as":"user"}
+{"until":"drawer.native.chats.1.dial.stations.1.lit","is":true}
+{"sleep_ms":1500}
+{"shot":"thinking"}
+{"until":"drawer.native.chats.1.dial.stations.2.lit","is":true}
+{"sleep_ms":1000}
+{"shot":"one-call"}
+{"until":"drawer.native.chats.1.dial.stations.3.lit","is":true}
+{"sleep_ms":1000}
+{"shot":"three-calls"}
+{"until":"drawer.native.chats.1.transcript.turn","is":null}
+{"sleep_ms":2500}
+{"shot":"settled"}
+{"record":"stop"}
 {"cmd":"key","keys":"cmd-shift-l","as":"user"}
 {"cmd":"key","keys":"cmd-t","as":"user"}
 {"settle":300}

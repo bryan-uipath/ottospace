@@ -16,13 +16,28 @@ pub enum Level {
     Error,
 }
 
-/// What a notice is about: each kind of app-level message, classified once (`level`).
+/// What a notice is about: each kind of app-level message, classified once (`level`, `about`).
+///
+/// An answer to its sender is on the bar only when the user's own step said it: a client's or a
+/// timer's is in the reply's `notice`, and moves nothing. The app's state shows whoever's step
+/// found it (`on_bar`).
+///
+/// | Kind | Level | About | Another sender's on the bar |
+/// |---|---|---|---|
+/// | `failed` | error | the app: a step of the user's or a timer's that failed; of a client's, a shell or agent not started, a file not written, a window of the user's it moved | yes, never over the user's (`replaces`) |
+/// | `refused` | warning | the sender: why its step did nothing | no |
+/// | `unsaved` | error | the app | yes |
+/// | `told` | info | the sender: what its step did | no |
+/// | `settings_problem`, `settings_retired`, `settings_restart` | error, warning, info | the app | yes |
+/// | `start` | error | the app | yes |
+/// | `keys` | warning | the app | yes |
+/// | `editor` | info | the app | yes |
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     /// A step that failed: a shell or agent that did not start, a file not written.
     Failed,
-    /// Why a move of the user's did nothing (`Effect::Notice`).
+    /// Why a step did nothing: the core's reason (`Effect::Notice`), or the shell's to a client.
     Refused,
     /// A task, mark, workbook or layout that could not be saved.
     Unsaved,
@@ -51,6 +66,14 @@ impl Kind {
         }
     }
 
+    /// Whom it is for: an answer is its sender's, the app's state is everyone's.
+    pub fn about(self) -> About {
+        match self {
+            Kind::Refused | Kind::Told => About::Sender,
+            _ => About::App,
+        }
+    }
+
     /// The one action the bar offers beside the text.
     pub fn offer(self) -> Option<Offer> {
         match self {
@@ -65,6 +88,15 @@ impl Kind {
     pub fn held(self) -> bool {
         !matches!(self, Kind::SettingsProblem | Kind::SettingsRetired | Kind::SettingsRestart | Kind::Start)
     }
+}
+
+/// Whom a notice is for (`Kind::about`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum About {
+    /// An answer to the one whose step it was: why it did nothing, or what it did.
+    Sender,
+    /// The app's state: a file not read or not saved, a shell or agent that did not start.
+    App,
 }
 
 /// An action a notice offers.
@@ -118,6 +150,40 @@ pub fn replaces(by: Origin, shown_by: Option<Origin>) -> bool {
     !(by == Origin::Socket && shown_by == Some(Origin::User))
 }
 
+/// Whether what a step of `by` said shows on the user's bar. An answer shows to the user alone:
+/// a client's refusal is in its reply's `notice`, and moves nothing of the user's.
+pub fn on_bar(kind: Kind, by: Origin) -> bool {
+    by == Origin::User || kind.about() == About::App
+}
+
+/// The kind of a step's line. `refused`: the core's own reason (`Effect::Notice`). `broke`: the
+/// app's failure (a shell or agent not started, a file not written). A client's is otherwise
+/// its answer: the shell's reason why its request did nothing.
+pub fn said(refused: bool, broke: bool, by: Origin) -> Kind {
+    if refused || (by == Origin::Socket && !broke) { Kind::Refused } else { Kind::Failed }
+}
+
+/// The bar's slot for a step's line: what it says, and whose step said it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Held {
+    pub said: Option<Notice>,
+    pub by: Option<Origin>,
+}
+
+impl Held {
+    /// The slot after a step of `by` left `now` as its line (`None`: it cleared the line). An
+    /// answer to another sender is not taken, nor a client's line over the user's; a client
+    /// clears only a client's line, so its success closes no bar it did not open.
+    pub fn after(&self, now: Option<Notice>, by: Origin) -> Held {
+        let held_by = self.by.filter(|_| self.said.is_some());
+        let takes = match &now {
+            Some(notice) => on_bar(notice.kind, by) && replaces(by, held_by),
+            None => by != Origin::Socket || held_by.is_none_or(|held_by| held_by == by),
+        };
+        if takes { Held { said: now, by: Some(by) } } else { self.clone() }
+    }
+}
+
 /// The lowest a raised live window's title bar may reach, from the window's top: under the top
 /// row (`top_bar` high) and the notice bar, as much of it as shows (`shown`). The bar is never covered.
 pub fn top_limit(top_bar: f32, shown: f32) -> f32 {
@@ -160,6 +226,75 @@ mod tests {
         for (kind, level, offer, held) in table {
             assert_eq!((kind.level(), kind.offer(), kind.held()), (level, offer, held), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn an_answer_shows_to_the_user_alone_and_the_apps_state_to_everyone() {
+        use Kind::*;
+        use Origin::*;
+        let all = [Failed, Refused, Unsaved, Told, SettingsProblem, SettingsRetired, SettingsRestart, Start, Keys];
+        for kind in all.into_iter().chain([Editor]) {
+            let answer = matches!(kind, Refused | Told);
+            assert_eq!(kind.about() == About::Sender, answer, "{kind:?}");
+            // The user's own always shows; anyone else's only when it is about the app.
+            assert_eq!((on_bar(kind, User), on_bar(kind, Socket), on_bar(kind, System)), (true, !answer, !answer));
+        }
+    }
+
+    #[test]
+    fn what_a_clients_step_says_is_its_answer_unless_the_app_broke() {
+        use Origin::*;
+        // (the core's reason, marked as broken, the sender) -> the kind
+        for (refused, broke, by, kind) in [
+            (true, false, User, Kind::Refused),
+            (false, false, User, Kind::Failed),
+            (false, true, User, Kind::Failed),
+            (false, false, System, Kind::Failed),
+            (true, false, System, Kind::Refused),
+            (false, false, Socket, Kind::Refused),
+            (true, false, Socket, Kind::Refused),
+            (false, true, Socket, Kind::Failed),
+        ] {
+            assert_eq!(said(refused, broke, by), kind, "{refused} {broke} {by:?}");
+        }
+        // So a client's refusal never reaches the bar, and a shell it could not start does.
+        assert!(!on_bar(said(false, false, Socket), Socket));
+        assert!(on_bar(said(false, true, Socket), Socket));
+    }
+
+    #[test]
+    fn a_refusal_of_another_sender_leaves_the_bar_as_it_was() {
+        use Origin::*;
+        let line = |kind, text: &str| Some(Notice { kind, text: text.into() });
+        let held = |said: &Option<Notice>, by| Held { said: said.clone(), by: Some(by) };
+        let (refused, failed) =
+            (line(Kind::Refused, "only the user renames a workspace"), line(Kind::Failed, "no shell"));
+        let users = line(Kind::Refused, "No repository in /tmp");
+        // An empty bar stays empty, and so closed: nothing under the top row moves.
+        for by in [Socket, System] {
+            assert_eq!(Held::default().after(refused.clone(), by), Held::default(), "{by:?}");
+        }
+        // What stands, whoever said it, is neither covered nor cleared by the refusal.
+        for stands in [held(&users, User), held(&failed, System), held(&failed, Socket)] {
+            assert_eq!(stands.after(refused.clone(), Socket), stands);
+            assert_eq!(stands.after(refused.clone(), System), stands);
+        }
+        // The user's own refusal shows, also over a client's failure.
+        assert_eq!(Held::default().after(users.clone(), User), held(&users, User));
+        assert_eq!(held(&failed, Socket).after(users.clone(), User), held(&users, User));
+        // The app's failure shows whoever's step found it, but a client's never over the user's.
+        assert_eq!(Held::default().after(failed.clone(), Socket), held(&failed, Socket));
+        assert_eq!(held(&failed, System).after(failed.clone(), Socket), held(&failed, Socket));
+        assert_eq!(held(&users, User).after(failed.clone(), Socket), held(&users, User));
+        assert_eq!(held(&users, User).after(failed.clone(), System), held(&failed, System));
+        // Nor does a client's step clear the user's or the system's: only a client's.
+        assert_eq!(held(&users, User).after(None, Socket), held(&users, User));
+        assert_eq!(held(&failed, System).after(None, Socket), held(&failed, System));
+        assert_eq!(held(&failed, Socket).after(None, Socket), held(&None, Socket));
+        assert_eq!(held(&failed, Socket).after(None, System), held(&None, System));
+        assert_eq!(held(&users, User).after(None, User), held(&None, User));
+        // The user's line once cleared, a client's failure shows.
+        assert_eq!(held(&None, User).after(failed.clone(), Socket), held(&failed, Socket));
     }
 
     #[test]
