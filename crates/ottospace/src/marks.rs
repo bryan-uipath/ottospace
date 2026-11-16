@@ -13,7 +13,7 @@ use ottospace_core::tasks::Moved;
 use ottospace_core::{Action, Axis, Kind, Origin, PaneId, theme};
 use ottospace_mac::{ax, capture, icon};
 
-use crate::{Hosted, Tooltip, Workspace, config, list_button, rect, running_apps, window_managed};
+use crate::{Hosted, Tooltip, Workspace, config, list_button, rect, window_managed};
 
 /// An app window the core asked for (`Effect::HostWindow`).
 #[derive(Clone)]
@@ -368,7 +368,9 @@ impl Workspace {
             let (bundle, _) = ax::app_identity(running.pid);
             marks::same_app(app, (bundle.as_deref(), &running.name))
         };
-        if let Some(running) = running_apps(self.hosting, self.host_only).into_iter().find(same) {
+        let only = |pid: i32| self.host_only.is_none_or(|only| only == pid);
+        // Apps with a window on screen; a test run's as the user's, with no stand-in by name.
+        if let Some(running) = capture::apps().into_iter().filter(|app| only(app.pid)).find(same) {
             return self.host_window_of(running.pid, &wanted, window, cx);
         }
         if self.host_only.is_some() {

@@ -1230,6 +1230,70 @@ fn a_restored_layout_hosts_its_running_apps_window_again_beside_its_terminal() {
 
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_restored_pane_whose_app_runs_with_its_window_minimised_says_so_and_the_users_open_hosts_it() {
+    let home = support::temp(&format!("otto-apps-minimised-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("make the folder");
+    let home_str = home.to_str().expect("a plain path");
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-minimised", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let pid = canary.child.id() as i32;
+    let env = [("OTTOSPACE_HOME", home_str), ("OTTOSPACE_SHELL", "/bin/sh")];
+    let kinds = |state: &Value| -> Vec<String> {
+        let panes = state["state"]["panes"].as_array().cloned().unwrap_or_default();
+        panes.iter().filter_map(|pane| pane["kind"]["type"].as_str().map(str::to_string)).collect()
+    };
+    let hosted = |state: &Value| state["hosted"].as_object().map(|h| h.len());
+    let quit = |mut otto: Proc| {
+        otto.call(json!({"cmd": "quit"}));
+        wait_exit(&mut otto, "quit");
+    };
+
+    // The app's window beside a terminal, kept at quit; the next start hosts it again.
+    let otto = otto_for(&canary, "otto-minimised-1", &env);
+    otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    otto.call(json!({"cmd": "split"}));
+    quit(otto);
+    let otto = otto_for(&canary, "otto-minimised-2", &env);
+    let built = wait_for("the window in its pane", || {
+        Some(otto.call(json!({"cmd": "state"}))).filter(|s| kinds(s) == ["app", "terminal"] && hosted(s) == Some(1))
+    });
+    assert_eq!((&built["unfilled"], &built["notice"]), (&json!([]), &Value::Null));
+    quit(otto);
+
+    // Its window goes to the Dock: the app runs, with no window on screen (as Spotify often does).
+    canary.call(json!({"cmd": "minimize", "index": 0}));
+    wait_for("the window in the Dock", || {
+        let windows = ottospace_mac::ax::Window::standard_of(pid);
+        (!windows.is_empty() && windows.iter().all(|w| w.minimized())).then_some(())
+    });
+
+    // The next start says so in the pane, not "not running", and raises no bar: nobody asked.
+    let otto = otto_for(&canary, "otto-minimised-3", &env);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let why = format!("{CANARY} is running with no window on this Space");
+    let waiting = wait_or(
+        "the pane to say why",
+        || state().to_string(),
+        || Some(state()).filter(|s| s["unfilled"][0]["why"] == json!(why) && rect(&s["unfilled"][0]["open"]).is_some()),
+    );
+    assert_eq!((&waiting["notice"], hosted(&waiting)), (&Value::Null, Some(0)), "{waiting}");
+
+    // A window again, and the user's "Open" hosts it in that pane.
+    canary.call(json!({"cmd": "open_window"}));
+    let [x, y] = middle(rect(&waiting["unfilled"][0]["open"]).expect("the Open button"));
+    for action in ["down", "up"] {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": x, "y": y, "as": "user"}));
+    }
+    let filled = wait_or(
+        "the window in the pane",
+        || state().to_string(),
+        || Some(state()).filter(|s| kinds(s) == ["app", "terminal"] && hosted(s) == Some(1)),
+    );
+    assert_eq!((&filled["unfilled"], &filled["notice"]), (&json!([]), &Value::Null), "{filled}");
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
 fn the_inspector_reads_a_hosted_canary_window_and_counts_its_roles() {
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary", "CANARY_SOCKET", &[]);
     wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
