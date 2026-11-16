@@ -2788,10 +2788,9 @@ fn the_new_task_dropdown_finishes_the_tag_at_the_cursor() {
     // ⌘N opens the box in the drawer, beside the workspace.
     otto.call(json!({"cmd": "split"}));
     assert_eq!(key("cmd-n")["compose_host"], "drawer");
-    // A bare mark lists what there is and highlights nothing; a letter narrows, and
-    // highlights the first row; ↓ ↑ move.
+    // A bare mark lists what there is and highlights the first row; a letter narrows; ↓ ↑ move.
     otto.call(json!({"cmd": "key", "keys": "f i x space"}));
-    assert_eq!(menu(&key("#")), (list(&["canvas", "cables"]), None));
+    assert_eq!(menu(&key("#")), (list(&["canvas", "cables"]), Some(0)));
     let reply = key("c a");
     assert_eq!(menu(&reply), (list(&["canvas", "cables"]), Some(0)));
     let row = &reply["compose_menu"]["rows"][0];
@@ -2803,7 +2802,7 @@ fn the_new_task_dropdown_finishes_the_tag_at_the_cursor() {
     let reply = key("tab");
     assert_eq!((field(&reply).0.as_str(), &reply["compose_menu"]), ("fix #canvas ", &Value::Null));
     // ↵ on a highlighted row takes it too, and adds no task.
-    assert_eq!(menu(&key(">")), (list(&["flow-app"]), None));
+    assert_eq!(menu(&key(">")), (list(&["flow-app"]), Some(0)));
     let reply = key("f enter");
     assert_eq!(
         (field(&reply).0.as_str(), reply["mode"].as_str(), reply["state"]["tasks"]["list"].as_array().map(Vec::len)),
@@ -2852,6 +2851,34 @@ fn the_new_task_dropdown_finishes_the_tag_at_the_cursor() {
         (Some("see ./src/export/a.md"), &json!(["./src/export/a.md"]))
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_users_enter_with_the_dropdown_open_completes_the_tag_and_starts_nothing() {
+    let root = compose_fixture("enter");
+    let otto = Otto::launch_with("enter", &[("OTTOSPACE_REPOS", root.to_str().unwrap())]);
+    let user = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys, "as": "user"}));
+    let tasks = |reply: &Value| reply["state"]["tasks"]["list"].as_array().map(Vec::len);
+    otto.call(json!({"cmd": "split"}));
+    assert_eq!(user("cmd-n")["compose_host"], "drawer");
+    // A bare `>`: its first row is highlighted, and ↵ takes it. No task, the box stays.
+    assert_eq!(menu(&user("f i x space i t space >")), (vec!["flow-app".to_string()], Some(0)));
+    let reply = user("enter");
+    assert_eq!(
+        (field(&reply).0.as_str(), reply["mode"].as_str(), tasks(&reply)),
+        ("fix it >flow-app ", Some("compose"), Some(0))
+    );
+    // The tags stay under the line; a cap types its mark, and its dropdown opens.
+    assert!(reply["compose_hint"].as_str().is_some_and(|hint| hint.starts_with("#project")));
+    let reply = otto.user_click(at(rect(&reply["compose_tags"][">"]), 0.5, 0.5));
+    assert_eq!(
+        (field(&reply).0.as_str(), menu(&reply)),
+        ("fix it >flow-app >", (vec!["flow-app".to_string()], Some(0)))
+    );
+    // The name spelled out: nothing to finish, so ↵ adds the task.
+    let reply = user("f l o w - a p p enter");
+    assert_eq!((&reply["compose_host"], tasks(&reply)), (&Value::Null, Some(1)), "{}", field(&reply).0);
 }
 
 #[test]
@@ -2976,14 +3003,14 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
     let task = &reply["state"]["tasks"]["list"][1];
     assert_eq!((&task["paths"], &task["resolved"]), (&json!([shot, outside]), &json!([shot, outside])));
 
-    // `^` names what is open: the tab, the terminal pane. ↓ ↵ takes the first.
+    // `^` names what is open: the tab, the terminal pane. ↵ takes the first, highlighted.
     otto.call(json!({"cmd": "compose", "text": "compare ^"}));
     let reply = otto.call(json!({"cmd": "state"}));
     let kinds: Vec<&str> =
         reply["compose_menu"]["rows"].as_array().unwrap().iter().filter_map(|r| r["kind"].as_str()).collect();
-    assert_eq!((kinds, menu(&reply).1), (vec!["tab", "pane"], None));
+    assert_eq!((kinds, menu(&reply).1), (vec!["tab", "pane"], Some(0)));
     let pane_name = reply["compose_menu"]["rows"][1]["name"].as_str().unwrap().to_string();
-    assert_eq!(field(&key("down enter")).0, r"compare ^Tab\ 1 ");
+    assert_eq!(field(&key("enter")).0, r"compare ^Tab\ 1 ");
     // ⌥ over the pane behind the box outlines it; an ⌥-click puts its reference in the line.
     // The box stays open, and the pane is not clicked.
     let frame = rect(&otto.drawn()["frames"]["1"]);
@@ -3038,11 +3065,9 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     });
     let plan = json!({"agent": "codex", "starts": true, "dir": null, "branch": null});
     assert_eq!(reply["compose_plan"], plan);
-    // Not the default agent: the drawer says what ↵ does. Something typed: no tag hint.
-    assert_eq!(
-        (&reply["compose_plan_line"], &reply["compose_hint"]),
-        (&json!("↵ will start codex in your home folder"), &Value::Null)
-    );
+    // Not the default agent: the drawer says what ↵ does. Something typed: the tag hint stays.
+    assert_eq!(reply["compose_plan_line"], json!("↵ will start codex in your home folder"));
+    assert!(reply["compose_hint"].as_str().is_some_and(|hint| hint.starts_with("#project")));
     // Typing goes into it; ⇧↵ files the task for later and the box closes. A task is open now:
     // the drawer goes.
     key("cmd-a t i d y space # x");

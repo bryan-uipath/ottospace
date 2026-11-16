@@ -1193,7 +1193,7 @@ export interface Snapshot {
   compose_plan: { agent: string; starts: boolean; dir: string | null; branch: string | null } | null;
   /** The line the drawer draws over the box: null when ↵ does the default (default agent, home folder) or the box is closed. */
   compose_plan_line: string | null;
-  /** The tag hint under the box's line: only while the line is empty. */
+  /** The tag hint under the box's line, while the box is open. */
   compose_hint: string | null;
   /** The drawer's one-click picks: repository names and agent names. */
   compose_picks: { wheres: string[]; whos: string[] };
@@ -1202,6 +1202,8 @@ export interface Snapshot {
   compose_menu: ComposeMenu | null;
   /** Where `compose_menu` was drawn, or null without one. */
   compose_menu_bounds: Rect | null;
+  /** Where each tag's cap under the box was drawn, by its key (`#`, `>`, `p1`); a click on one types its mark. Null with the box closed. */
+  compose_tags: Record<string, Rect> | null;
   /** The folder taken from a path's dropdown that the task's agent will run in, as the line has it (`~/notes/`), or null. */
   compose_folder: string | null;
   /** The tab or pane an ⌥-click would reference in the new-task box, while ⌥ is held over it. */

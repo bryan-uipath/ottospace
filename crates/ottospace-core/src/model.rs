@@ -10,7 +10,7 @@ use crate::capture::{self, Content, Facts, Tool};
 use crate::capture_model::Collection;
 use crate::clip::{self, Clip};
 use crate::commands::{self, Command, FeatureChoice, Palette, TaskChoice};
-use crate::complete::{self, Candidate, Dropdown, Row};
+use crate::complete::{self, Candidate, Dropdown, Enter, Row};
 use crate::compose::{self, Draft};
 use crate::edit::{Edit, Field, Motion};
 use crate::features::{Feature, Features};
@@ -218,8 +218,13 @@ struct Taken {
 /// How many repositories the drawer offers as picks.
 pub const PICKS: usize = 4;
 
-/// What a line in the new-task box may hold, shown while it is empty.
+/// What a line in the new-task box may hold, shown under it while the box is open.
 pub const TAG_HINT: &str = "#project · >repo · @agent · /path · $skill · ^open · p1–p9";
+
+/// The same, as the shell draws it: each key's cap and its word. A one-character key is a mark
+/// a click types (`ComposeTag`).
+pub const TAG_KEYS: [(&str, &str); 7] =
+    [("#", "project"), (">", "repo"), ("@", "agent"), ("/", "path"), ("$", "skill"), ("^", "open"), ("p1", "priority")];
 
 /// The new-task line's one-click picks: repository names (WHERE) and agent names (WHO).
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -783,6 +788,11 @@ pub enum Action {
     },
     /// The × on the box's folder: the task's agent will not run there. The path stays in the line.
     ComposeFolderClear,
+    /// A click on a tag's cap under the box: its mark goes in at the cursor, as typed, with a
+    /// space before it inside a word, so its dropdown opens. Only a mark of `TAG_KEYS`.
+    ComposeTag {
+        mark: char,
+    },
     /// Files or folders dropped on the box, picked or pasted: each goes in at the cursor as a
     /// `/path` word. `home`: the user's folder, so paths inside it are written `~/..`.
     ComposeAttach {
@@ -1634,6 +1644,7 @@ impl Action {
             | Action::ComposeMove { .. }
             | Action::ComposeAccept { .. }
             | Action::ComposeFolderClear
+            | Action::ComposeTag { .. }
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
             | Action::ComposePick { .. }
@@ -1919,6 +1930,7 @@ impl Action {
             | Action::ComposeMove { .. }
             | Action::ComposeAccept { .. }
             | Action::ComposeFolderClear
+            | Action::ComposeTag { .. }
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
             | Action::ComposePick { .. }
@@ -3044,6 +3056,7 @@ impl Model {
             | Action::ComposeMove { .. }
             | Action::ComposeAccept { .. }
             | Action::ComposeFolderClear
+            | Action::ComposeTag { .. }
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
             | Action::ComposePick { .. }
@@ -3309,9 +3322,8 @@ impl Model {
         // alone while a box or a mode holds the keyboard: the view must not change under what
         // the user is doing. Not a refusal: the task is filed all the same.
         // ↵ with no row to take is "add and start".
-        let takes = || self.dropdown().and_then(|menu| menu.selected).is_some_and(|row| self.changes(row));
         let action = match action {
-            Action::ComposeEnter if !takes() => Action::ComposeSubmit { open: true },
+            Action::ComposeEnter if self.enter() == Enter::Add => Action::ComposeSubmit { open: true },
             action => action,
         };
         let action = match action {
@@ -3960,13 +3972,12 @@ impl Model {
                 }
             }
             Action::ComposeSubmit { open } => {
-                // ↵ on a highlighted row takes the row, unless the word is that name already
-                // or the name has no room: then there is nothing to take, and ↵ adds. ⌘↵ always adds.
-                if let Some(row) =
-                    self.dropdown().and_then(|menu| menu.selected).filter(|row| !open && self.changes(*row))
-                {
-                    self.accept(row);
-                    return;
+                // ⇧↵ takes a row as ↵ does (`enter`). ⌘↵ always adds.
+                match self.enter() {
+                    _ if open => {}
+                    Enter::Take(row) => return self.accept(row),
+                    Enter::Wait => return,
+                    Enter::Add => {}
                 }
                 let line = self.compose_line().cloned().unwrap_or_default();
                 // A draft with captures needs no title typed: key, circle, ↵.
@@ -3982,6 +3993,20 @@ impl Model {
             // Not while the box is hidden under the key reference: nothing changes a line unseen.
             Action::ComposeAttach { .. } | Action::ComposeRef { .. } | Action::ComposePick { .. }
                 if !self.composing() => {}
+            Action::ComposeTag { .. } if !self.composing() => {}
+            Action::ComposeTag { mark } if TAG_KEYS.iter().any(|(key, _)| key.chars().eq([mark])) => {
+                // Spaced from the words either side: `fix|bug` becomes `fix >|bug`, so taking a
+                // row replaces no word of the user's.
+                let Some(field) = &mut self.compose else { return };
+                let (before, after) = (&field.text()[..field.cursor()], &field.text()[field.cursor()..]);
+                let lead = before.chars().last().is_some_and(|c| !c.is_whitespace());
+                let trail = after.chars().next().is_some_and(|c| !c.is_whitespace());
+                field.apply(Edit::Insert(format!("{}{mark}{}", if lead { " " } else { "" }, if trail { " " } else { "" })));
+                if trail {
+                    field.apply(Edit::Move { to: Motion::Left, select: false });
+                }
+            }
+            Action::ComposeTag { .. } => {}
             Action::ComposePick { mark, name } => self.compose_pick(mark, name),
             Action::ComposeAttach { paths, home, unreadable } => {
                 // A name the line cannot hold (a line break in it) or one too long to keep
@@ -4776,7 +4801,7 @@ impl Model {
                 }
             }
             Action::ComposeEnter => {
-                if let Some(row) = self.dropdown().and_then(|menu| menu.selected) {
+                if let Enter::Take(row) = self.enter() {
                     self.accept(row);
                 }
             }
@@ -5619,9 +5644,10 @@ impl Model {
         Some(format!("↵ will start {} {place}", plan.agent))
     }
 
-    /// The tags a line may hold, said only while the box's line is empty: the dropdown teaches the rest.
+    /// The tags a line may hold, said while the box is open: also once tags are typed, when the
+    /// others are wanted most. The dropdown teaches the rest.
     pub fn compose_hint(&self) -> Option<&'static str> {
-        self.compose_line().filter(|line| line.is_empty()).map(|_| TAG_HINT)
+        self.compose_line().map(|_| TAG_HINT)
     }
 
     /// The folder the shell lists next, as typed (`~/`, `./src/`): that of the path at the
@@ -5742,7 +5768,7 @@ impl Model {
         // The row the user moved to, wherever it now is; one that is gone moves nothing.
         let moved = self.menu.moved.as_ref().filter(|_| same_word);
         let moved = moved.and_then(|name| rows.iter().position(|row| row.name == *name));
-        let selected = complete::selected(moved, name, rows.len()).filter(|_| !stale);
+        let selected = complete::selected(moved, name, mark == '/', &rows).filter(|_| !stale);
         Some(Dropdown { mark, typed: typed.clone(), start, rows, selected, note, stale })
     }
 
@@ -5789,6 +5815,19 @@ impl Model {
         let (Some((word, text)), Some(field)) = (self.taking(index), &self.compose) else { return false };
         let (typed, taken) = (&field.text()[word], text.trim_end());
         typed != taken && Some(typed) != taken.strip_suffix('/')
+    }
+
+    /// What ↵ does: while the dropdown shows rows it never adds a half-typed tag. It takes the
+    /// highlighted row, unless the word is that name already (then there is nothing to finish).
+    pub fn enter(&self) -> Enter {
+        match self.dropdown() {
+            Some(menu) if menu.stale && !menu.rows.is_empty() => Enter::Wait,
+            // A name with no room is taken too: `accept` says so, and the line stays.
+            Some(Dropdown { selected: Some(row), .. }) if self.taking(row).is_none() || self.changes(row) => {
+                Enter::Take(row)
+            }
+            _ => Enter::Add,
+        }
     }
 
     /// Takes row `index` of the dropdown: its name replaces the whole word under the cursor,
@@ -7424,6 +7463,7 @@ mod tests {
         Action::ComposeMove { .. },
         Action::ComposeAccept { .. },
         Action::ComposeFolderClear,
+        Action::ComposeTag { .. },
         Action::ComposeAttach { .. },
         Action::ComposeRef { .. },
         Action::ComposePick { .. },
@@ -7672,6 +7712,7 @@ mod tests {
             Action::ComposeMove { delta: 1 },
             Action::ComposeAccept { index: 0 },
             Action::ComposeFolderClear,
+            Action::ComposeTag { mark: '>' },
             Action::ComposeAttach { paths: Vec::new(), home: None, unreadable: 0 },
             Action::ComposeRef { target: Pointed::Tab(1) },
             Action::ComposePick { mark: '>', name: None },
@@ -9475,11 +9516,11 @@ mod tests {
         assert_eq!((shown(&m), m.field().map(|(_, f)| f.cursor())), (None, Some(0)));
         m.update(Action::ComposeMove { delta: 1 });
         // A bare mark lists what there is, the project with the most tasks first, and
-        // highlights nothing: ↵ would still add the task.
+        // highlights the first: ↵ would take it.
         keys(&mut m, " #");
         let all = vec!["canvas".to_string(), "Cables".into(), "flow-canvas".into()];
-        assert_eq!(shown(&m), Some(('#', all, None, None)));
-        // A letter narrows and highlights the first row. Matches at the start come first.
+        assert_eq!(shown(&m), Some(('#', all, Some(0), None)));
+        // A letter narrows. Matches at the start come first.
         keys(&mut m, "ca");
         let rows = m.dropdown().unwrap().rows;
         assert_eq!(shown(&m), Some(('#', vec!["canvas".into(), "Cables".into(), "flow-canvas".into()], Some(0), None)));
@@ -9555,14 +9596,11 @@ mod tests {
         assert_eq!(m.dropdown().and_then(|menu| menu.selected), Some(0));
         m.update(Action::ComposeSubmit { open: false });
         assert_eq!((m.mode(), m.tasks.list[4].project.as_deref()), (Mode::Normal, Some("canvas")));
-        // A bare mark, or a name nobody has: nothing is highlighted. ↵ adds.
-        for text in ["fix #", "fix #brand-new", "fix @nobody"] {
+        // A name nobody has: no rows, nothing is highlighted. ↵ adds.
+        for text in ["fix #brand-new", "fix @nobody"] {
             m.update(Action::OpenCompose { text: text.into() });
             let note = m.dropdown().and_then(|menu| menu.note);
-            assert_eq!(
-                note.as_deref(),
-                Some(if text.ends_with('w') { "new project" } else { "no match" }).filter(|_| text != "fix #")
-            );
+            assert_eq!(note.as_deref(), Some(if text.ends_with('w') { "new project" } else { "no match" }));
             m.update(Action::ComposeSubmit { open: false });
             assert_eq!(m.mode(), Mode::Normal, "{text}");
         }
@@ -9637,7 +9675,8 @@ mod tests {
         let menu = m.dropdown().unwrap();
         assert_eq!((menu.stale, menu.selected, offered(&m)), (true, None, vec!["/src/export/".to_string()]));
         m.update(Action::ComposeComplete);
-        assert_eq!(line(&m), "see /src/export/");
+        m.update(Action::ComposeEnter);
+        assert_eq!((line(&m), m.enter()), ("see /src/export/", Enter::Wait), "↵ waits: it adds no half-read path");
         // Its entries arrive; nothing of a name is typed, so none is highlighted.
         read(&mut m, "/src/export/", &["/src/export/My Notes/", "/src/export/a.rs"]);
         assert_eq!((offered(&m).len(), m.dropdown().unwrap().selected), (2, None));
@@ -9924,8 +9963,8 @@ mod tests {
         assert_eq!(line(&m), "do #Cables fix the bug");
         m.update(Action::CloseCompose);
 
-        // A line with no room for the name: the row is not taken in part. Tab says so and
-        // leaves the line; ↵ adds the task with what is typed.
+        // A line with no room for the name: the row is not taken in part. Tab and ↵ say so and
+        // leave the line; after Esc ↵ adds the task with what is typed.
         let full = format!("{} #ca", "x".repeat(MAX_TITLE - 4));
         m.update(Action::OpenCompose { text: full.clone() });
         assert_eq!(
@@ -9940,6 +9979,12 @@ mod tests {
         m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::End, select: false } });
         assert_eq!(m.compose_note(), None);
         let before = m.tasks.list.len();
+        m.update(Action::ComposeSubmit { open: false });
+        assert_eq!(
+            (line(&m), m.compose_note(), m.tasks.list.len()),
+            (full.as_str(), Some("no room in the line for that name"), before)
+        );
+        m.update(Action::ComposeEscape);
         m.update(Action::ComposeSubmit { open: false });
         let task = m.tasks.list.last().unwrap();
         assert_eq!((m.tasks.list.len(), task.project.as_deref(), m.mode()), (before + 1, Some("ca"), Mode::Normal));
@@ -10150,15 +10195,24 @@ mod tests {
     }
 
     #[test]
-    fn the_box_says_its_plan_only_off_the_default_and_its_tags_only_on_an_empty_line() {
+    fn the_box_says_its_plan_only_off_the_default_and_its_tags_while_open() {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
         assert_eq!((m.compose_plan_line(), m.compose_hint()), (None, None), "closed");
         m.update(Action::OpenCompose { text: String::new() });
         assert_eq!((m.compose_plan_line(), m.compose_hint()), (None, Some(TAG_HINT)));
-        // Typing hides the hint; the default agent in the home folder says nothing.
+        // Typing, and a row taken, keep the hint; the default agent in the home folder says nothing.
+        keys(&mut m, "fix zoom >");
+        m.update(Action::ComposeComplete);
+        assert_eq!(
+            (line(&m), m.compose_plan_line().is_some(), m.compose_hint()),
+            ("fix zoom >app ", true, Some(TAG_HINT))
+        );
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
         keys(&mut m, "fix zoom");
-        assert_eq!((m.compose_plan_line(), m.compose_hint()), (None, None));
+        assert_eq!((m.compose_plan_line(), m.compose_hint()), (None, Some(TAG_HINT)));
+        // Each key of the hint is in its text.
+        assert!(TAG_KEYS.iter().all(|(key, word)| TAG_HINT.contains(&format!("{key}{word}")) || *key == "p1"));
         m.update(Action::ComposePick { mark: '@', name: Some("claude".into()) });
         assert_eq!(m.compose_plan_line(), None, "the default, named");
         m.update(Action::ComposePick { mark: '>', name: Some("app".into()) });
@@ -11666,6 +11720,84 @@ mod tests {
         m.update(theirs.sent_by(Origin::Socket));
         assert_eq!(m.update(Action::ComposeEnter.sent_by(Origin::Socket)), []);
         assert_eq!((m.tasks.list.len(), m.tab_task(), m.agent_runs(&Subject::Task(6))), (6, Some(5), false));
+    }
+
+    #[test]
+    fn a_tags_cap_types_its_mark_spaced_from_the_words_and_opens_its_dropdown() {
+        let mut m = composing();
+        let at = |m: &Model| (line(m).to_string(), m.field().map(|(_, f)| f.cursor()), m.dropdown().map(|d| d.mark));
+        m.update(Action::ComposeTag { mark: '>' });
+        assert_eq!(at(&m), (">".into(), Some(1), Some('>')));
+        m.update(Action::ComposeEnter);
+        keys(&mut m, "fixbug");
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::WordLeft, select: false } });
+        for _ in 0..3 {
+            m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Right, select: false } });
+        }
+        // Inside a word: a space either side, the cursor after the mark.
+        m.update(Action::ComposeTag { mark: '#' });
+        assert_eq!(at(&m), (">app fix # bug".into(), Some(10), Some('#')));
+        // No priority cap types, nor any other character.
+        for mark in ['p', 'x', '1'] {
+            m.update(Action::ComposeTag { mark });
+        }
+        assert_eq!(line(&m), ">app fix # bug");
+    }
+
+    #[test]
+    fn enter_with_rows_on_show_takes_one_and_never_files_a_half_typed_tag() {
+        // (line, what ↵ and ⇧↵ make of it: the line a row gives, or `None`: the task is added.)
+        let cases = [
+            ("fix it >", Some("fix it >app ")),
+            ("fix #", Some("fix #canvas ")),
+            ("fix @", Some("fix @claude ")),
+            ("fix $", Some("fix $deploy ")),
+            ("fix >ap", Some("fix >app ")),
+            ("fix #CANVAS", Some("fix #canvas ")),
+            // Spelled out: nothing to finish. No rows: nothing to take.
+            ("fix >app", None),
+            ("fix #brand-new", None),
+            ("fix @nobody", None),
+        ];
+        for (text, taken) in cases {
+            for enter in [Action::ComposeEnter, Action::ComposeSubmit { open: false }] {
+                let mut m = composing();
+                keys(&mut m, text);
+                let rows = m.dropdown().is_some_and(|menu| !menu.rows.is_empty());
+                assert_eq!(
+                    m.dropdown().is_some_and(|menu| menu.selected.is_some()),
+                    rows,
+                    "{text}: a row is highlighted"
+                );
+                m.update(enter.clone());
+                let after = (m.compose_line().map(String::as_str), m.tasks.list.len());
+                assert_eq!(after, (taken, if taken.is_some() { 4 } else { 5 }), "{text} {enter:?}");
+            }
+        }
+        // ↑ from the first row goes to the last: a row stays highlighted.
+        let mut m = composing();
+        keys(&mut m, "fix >");
+        m.update(Action::ComposeMove { delta: -1 });
+        assert_eq!(m.dropdown().and_then(|menu| menu.selected), Some(1));
+        // A name spelled out is highlighted over a longer one: ↵ adds it as typed.
+        let repo =
+            |name: &str| Repo { name: name.into(), path: format!("/code/{name}"), branch: None, worktrees: vec![] };
+        m.update(Action::SetRepos { repos: vec![repo("apple"), repo("app")] });
+        keys(&mut m, "app");
+        assert_eq!(
+            (offered(&m), m.dropdown().and_then(|menu| menu.selected)),
+            (vec!["app".into(), "apple".into()], Some(0))
+        );
+        // Chosen with ↓, the longer one is taken.
+        m.update(Action::ComposeMove { delta: 1 });
+        m.update(Action::ComposeEnter);
+        assert_eq!(line(&m), "fix >apple ");
+        // Esc, then ↵: the line as typed.
+        keys(&mut m, ">ap");
+        m.update(Action::ComposeEscape);
+        let before = m.tasks.list.len();
+        m.update(Action::ComposeEnter);
+        assert_eq!((m.compose_line(), m.tasks.list.len()), (None, before + 1));
     }
 
     #[test]
