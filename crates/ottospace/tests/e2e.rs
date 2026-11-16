@@ -10365,12 +10365,14 @@ impl Otto {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_drawer_shows_it_hears_speech_then_sound_then_nothing_and_no_reply_says_so() {
-    let fixture = r#"{"after_ms":100,"level":0.3}
-{"after_ms":100,"from":"them","text":"made","final":false}
-{"after_ms":300,"from":"them","text":"made-up words","final":true}
-{"after_ms":100,"level":0.2}
-{"after_ms":600000,"from":"them","text":"never heard","final":true}
-"#;
+    // Words for 6 s, so a slow first look still finds them; one level, then quiet.
+    let words = (0..20).map(|n| format!(r#"{{"after_ms":300,"from":"them","text":"made-up {n}","final":false}}"#));
+    let fixture = std::iter::once(r#"{"after_ms":100,"level":0.3}"#.to_string())
+        .chain(words)
+        .chain([r#"{"after_ms":600000,"from":"them","text":"never heard","final":true}"#.to_string()])
+        .collect::<Vec<_>>()
+        .join("\n");
+    let fixture = fixture.as_str();
     let otto = listen_otto_with("hearing", fixture, r#"{"repos": [], "restore_layout": false}"#);
     otto.call(json!({"cmd": "split"}));
     otto.user_key("cmd-ctrl-t");
