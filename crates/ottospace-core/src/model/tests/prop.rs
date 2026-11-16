@@ -350,6 +350,12 @@ impl Gen<'_> {
         (0..self.rng.below(3)).map(|_| pr(self)).collect()
     }
 
+    /// A worktree the box asked for and git has not made yet, else any path.
+    fn asked(&mut self) -> String {
+        let real: Vec<String> = self.m.making.iter().map(|making| making.asked.clone()).collect();
+        self.one_of(&real, Self::repo_path)
+    }
+
     fn repo_path(&mut self) -> String {
         let real: Vec<String> = self.m.repo_names().map(|(_, path)| path.to_string()).collect();
         self.one_of(&real, |g| g.name(DIRS))
@@ -806,7 +812,14 @@ const MAKERS: &[Make] = &[
     |g| Action::RepoClick { path: g.repo_path(), axis: g.axis() },
     |g| Action::RepoFold { path: g.repo_path(), fold: g.rng.pick(&[None, Some(true), Some(false)]) },
     |g| Action::WorktreeEdit { repo: g.repo_path() },
-    |g| Action::WorktreeAdded { repo: g.repo_path(), path: g.repo_path(), repos: g.repos() },
+    |g| Action::WorktreeAdded {
+        repo: g.repo_path(),
+        path: g.repo_path(),
+        asked: g.asked(),
+        fresh: g.rng.pick(&[true, false]),
+        repos: g.repos(),
+    },
+    |g| Action::WorktreeFailed { asked: g.asked(), fresh: g.rng.pick(&[true, false]), repos: g.repos() },
     |g| {
         let branches = g.m.repos.iter().flat_map(|r| r.checkouts()).map(|c| crate::prs::Branch {
             path: c.path,
@@ -873,6 +886,7 @@ const MAKERS: &[Make] = &[
     |g| Action::ComposeMove { delta: g.delta() },
     |g| Action::ComposeAccept { index: g.index(4) },
     |_| Action::ComposeFolderClear,
+    |g| Action::ComposeWorktree { new: g.rng.pick(&[None, Some(true), Some(false)]) },
     // Every mark a cap types, and one no cap does.
     |g| Action::ComposeTag { mark: g.rng.pick(&['#', '>', '@', '/', '$', '^', 'p']) },
     |g| {
@@ -1957,6 +1971,10 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(unique(&uids) && uids.iter().all(|uid| workbook::valid_uid(uid)), "workbook file names {uids:?}");
     let names: Vec<&str> = books.iter().map(|book| book.name.as_str()).collect();
     ensure!(unique(&names) && names.iter().all(named), "workbook names {names:?}");
+    // A task whose worktree is being made has no agent yet: it starts once git made it.
+    for making in &m.making {
+        ensure!(!m.agent_runs(&Subject::Task(making.task)), "task {} started before its worktree", making.task);
+    }
     // Every task is in one space at most: a joined one is live, joined once, and has no space
     // of its own; only a task's space is joined; the task in front is one of the space's.
     let joined: Vec<TaskId> = m.spaces().iter().flat_map(|space| space.joined.clone()).collect();
@@ -2263,6 +2281,7 @@ impl Run {
         let refused = m.refusal(&action, origin).map(|_| format!("{m:?}"));
         let (why, bar_before) = (m.refusal(&action, origin), bar(m, &self.held));
         let awaiting = m.awaiting.clone();
+        let making_before = m.making.clone();
         let switching = m.switching.clone();
         let chats_before = m.chats.clone();
         let drafts: Vec<(Subject, String)> =
@@ -2615,8 +2634,17 @@ impl Run {
         // Only the user's ↵ on a new task binds a workspace (or an undo of its dismissal, or the
         // files read again); and binding moves no pane, closes none and ends nothing.
         let bound_now = bindings(m);
+        // Its task gone, a task that had joined its space is its heir: the link goes with the space.
+        let heir = |was: &Option<TaskId>, task: &Option<TaskId>| {
+            let gone = was.is_some_and(|was| m.tasks.live(was).is_none());
+            let joined = |(of, id): &(Owner, TaskId)| {
+                was.is_some_and(|was| *of == Owner::Task { id: was }) && Some(*id) == *task
+            };
+            gone && joined_before.iter().any(joined)
+        };
         let newly = |(uid, task): &(String, Option<TaskId>)| {
-            task.is_some() && bound_before.iter().find(|(was, _)| was == uid).is_none_or(|(_, was)| was != task)
+            let was = bound_before.iter().find(|(was, _)| was == uid);
+            task.is_some() && was.is_none_or(|(_, was)| was != task && !heir(was, task))
         };
         if bound_now.iter().any(newly) {
             let read = matches!(action, Action::RestoreWorkbooks { .. });
@@ -2655,6 +2683,20 @@ impl Run {
                 read || made || follows || origin == Origin::User,
                 "{origin:?}'s {action:?} changed a workspace's default"
             );
+            // A new task's worktree made: only its workspace of that one task, to that worktree.
+            let waited = match &action {
+                Action::WorktreeAdded { asked, path, fresh: true, .. } => {
+                    making_before.iter().find(|w| w.asked == *asked).map(|w| (w.task, path.clone()))
+                }
+                _ => None,
+            };
+            if let Some((task, path)) = waited {
+                for book in m.workbooks.list.iter().filter(|book| moved(&(book.uid.clone(), book.worktree.clone()))) {
+                    let of = m.workbooks.space_of(&Owner::Workbook { id: book.id });
+                    let ok = m.members(&of) == [task] && book.worktree.as_ref() == Some(&path);
+                    ensure!(ok, "the worktree of task {task} moved the default of {:?}", book.name);
+                }
+            }
             // Followed: only a workspace's whose one task moved, to where that task works now.
             if follows && !read && !made && origin != Origin::User {
                 for book in m.workbooks.list.iter().filter(|book| moved(&(book.uid.clone(), book.worktree.clone()))) {
@@ -3175,7 +3217,14 @@ impl Run {
                     // So does the end of an agent the user stopped to switch its view.
                     let switched = switching.contains(subject) && matches!(action, Action::AgentExited { .. });
                     let resumes = matches!(start, agents::Start::Resume { .. });
-                    ensure!(user || ((asked || switched) && resumes), "{origin:?} started an agent for {subject:?}");
+                    // And the worktree the user's ↵ asked for, made: the task they started starts there.
+                    let made = matches!(&action, Action::WorktreeAdded { asked: at, fresh: true, .. }
+                        if making_before.iter().any(|w| Subject::Task(w.task) == *subject && w.asked == *at));
+                    let made = made && !resumes && origin == Origin::System;
+                    ensure!(
+                        user || made || ((asked || switched) && resumes),
+                        "{origin:?} started an agent for {subject:?}"
+                    );
                     ensure!(!gone(subject) && m.agent_runs(subject), "an agent starts for nothing: {subject:?}");
                     // A session no task owns is gone on with only where it started, in a listed
                     // checkout, and only if nothing has it: not at work, held by no process.
@@ -3265,9 +3314,14 @@ impl Run {
                     ensure!(changes.len() == 1 && changes.iter().all(named), "not one directory: {changes:?}");
                     ensure!(m.repo_dirs.dirs.len() <= MAX_DIRS, "more directories than the settings may name");
                 }
-                // A worktree is the user's own ↵ in its field: a branch git takes, in a folder of `root`.
-                Effect::AddWorktree { repo, branch, path, root } => {
-                    ensure!(user && matches!(action, Action::MarkSubmit), "{origin:?}'s {action:?} made a worktree");
+                // A worktree is the user's own ↵ in its field, or on a new task with the box's choice
+                // (a new branch, and the task waits for it): a branch git takes, in a folder of `root`.
+                Effect::AddWorktree { repo, branch, path, root, fresh } => {
+                    let field = !fresh && matches!(action, Action::MarkSubmit);
+                    let boxed = *fresh
+                        && matches!(action, Action::ComposeSubmit { open: true } | Action::ComposeEnter)
+                        && m.making.iter().any(|w| w.asked == *path && !task_ids.contains(&w.task));
+                    ensure!(user && (field || boxed), "{origin:?}'s {action:?} made a worktree");
                     ensure!(crate::repos::check_branch(branch).is_ok(), "a worktree on {branch:?}");
                     ensure!(m.repos.iter().any(|r| r.path == *repo), "a worktree of {repo:?}, not listed");
                     let rest = path.strip_prefix(root.as_str()).and_then(|rest| rest.strip_prefix('/'));
@@ -4091,7 +4145,14 @@ fn a_task_that_makes_a_workspace_its_own_shares_its_default() {
     let tree = |name: &str, path: &str| Worktree { name: name.into(), path: path.into(), branch: None };
     let repo = Repo { name: "app".into(), path: "".into(), branch: None, worktrees: vec![tree("$", "/code/app-2")] };
     replay(&[
-        Action::WorktreeAdded { repo: "relative".into(), path: "/code/app-2".into(), repos: vec![repo] }.into(),
+        Action::WorktreeAdded {
+            repo: "relative".into(),
+            path: "/code/app-2".into(),
+            asked: "/code/app-2".into(),
+            fresh: false,
+            repos: vec![repo],
+        }
+        .into(),
         Action::OpenCompose { text: "fix #2048".into() }.into(),
         Action::ComposeSubmit { open: true }.into(),
     ])
@@ -5124,6 +5185,21 @@ fn an_edit_with_no_field_ends_the_inspectors_filter_and_types_nothing() {
         Action::InspectorFilter { on: true }.into(),
         by(Origin::Socket, Action::ToggleKeys),
         Action::FieldEdit { edit: Edit::Unmark }.into(),
+    ])
+    .unwrap();
+}
+
+/// Seed 1088: a client's tasks read again without a workspace's own task; a task that had joined
+/// it is its heir and takes its kept workspace's link, as built ("Several tasks in one
+/// workspace"). The rule took that for a new binding: the rule was wrong.
+#[test]
+fn seed_1088_a_workspaces_heir_takes_its_link() {
+    let line = |line: &str| Action::TaskFromLine { line: line.into(), known: Known::default(), open: true };
+    replay(&[
+        Action::Open { kind: slack(9), axis: Axis::Right, beside: None }.into(),
+        line("first").into(),
+        line("second").into(),
+        by(Origin::Socket, restore_tasks(r#"[{"id":2,"title":"second","state":"parked","priority":3}]"#, 0)),
     ])
     .unwrap();
 }
