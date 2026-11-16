@@ -422,9 +422,8 @@ const MIN_SPACE: f32 = 72.;
 /// What a space wants with its title: past the row's room for that many, the others are badges.
 const TITLED_SPACE: f32 = 150.;
 const MAX_SPACE: f32 = 220.;
-/// A space drawn as its badge alone, and Workspace with its name.
+/// A space drawn as its badge alone, as Home always is: its icon.
 const BADGE_SPACE: f32 = 36.;
-const NAMED_WORKSPACE: f32 = 96.;
 const TRAFFIC_LIGHTS: f32 = 80.;
 /// The narrowest a tab shrinks to when the strip is full: a few letters of its title and its ×.
 const MIN_TAB: f32 = 80.;
@@ -576,7 +575,7 @@ actions!(
 // The picker for a pane below the focused one.
 actions!(ottospace, [PickPaneDown]);
 // The top row: the next or previous space, and hiding the selected one.
-actions!(ottospace, [NextSpace, PrevSpace, HideSpace, NextChat, PrevChat]);
+actions!(ottospace, [NextSpace, PrevSpace, HideSpace, GoHome, NextChat, PrevChat]);
 // Pane arrangement.
 actions!(
     ottospace,
@@ -5293,15 +5292,14 @@ impl Workspace {
     fn render_spaces(&self, left: f32, room: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self.model.space().clone();
         let shown = self.model.shown_spaces();
-        // Short of room, a space not selected is its badge alone, its title on hover. Shorter
-        // still, Workspace too, and the badges that do not fit after the selected one give way to
-        // a count: the selected space always shows.
-        let compact = shown.len() as f32 * TITLED_SPACE > room;
-        let tight = compact && room < NAMED_WORKSPACE + TITLED_SPACE + BADGE_SPACE;
-        let workspace = if tight { BADGE_SPACE } else { NAMED_WORKSPACE };
+        // Home is its icon alone, always. Short of room, a space not selected is its badge
+        // alone, its title on hover. Shorter still, the badges that do not fit after the selected
+        // one give way to a count: the selected space always shows.
+        let compact = BADGE_SPACE + shown.len().saturating_sub(1) as f32 * TITLED_SPACE > room;
+        let tight = compact && room < 2. * BADGE_SPACE + TITLED_SPACE;
         let selected_width = if tight { MIN_SPACE } else { TITLED_SPACE };
         let others = shown.iter().filter(|space| space.of != selected && space.of != Owner::Home).count();
-        let fits = |n: usize| workspace + selected_width + n as f32 * BADGE_SPACE <= room;
+        let fits = |n: usize| BADGE_SPACE + selected_width + n as f32 * BADGE_SPACE <= room;
         let badges =
             if !compact || fits(others) { others } else { (0..others).rev().find(|n| fits(n + 1)).unwrap_or(0) };
         let mut room_for = badges;
@@ -5320,11 +5318,11 @@ impl Workspace {
         let spaces = shown.into_iter().map(|(place, space)| {
             let of = space.of.clone();
             let on = of == selected;
-            let small = compact && !on && (of != Owner::Home || tight);
+            let small = of == Owner::Home || (compact && !on);
             let tip: SharedString = self.model.space_title(&of).into();
             let colour = self.space_colour(&of);
             let count = self.model.space_tabs(&of).len();
-            // A task's badge, a workbook's glyph; Workspace and a session's chat a dot.
+            // Home's house, a task's badge, a workbook's glyph; a session's chat none.
             let lead = match &of {
                 // Its tasks' badges, the most urgent first and on top of the next.
                 Owner::Task { .. } => {
@@ -5348,8 +5346,12 @@ impl Workspace {
                 Owner::Session { .. } if small => {
                     Some(div().child(ottospace_core::talk::monogram(&self.model.space_title(&of))).into_any_element())
                 }
-                Owner::Home if small => Some(div().child("W").into_any_element()),
-                Owner::Home | Owner::Session { .. } => None,
+                Owner::Home => {
+                    let ink = if on { theme::TEXT } else { theme::MUTED };
+                    let house = svg().path("icons/home.svg").size(px(15.)).flex_none().text_color(rgb(ink));
+                    Some(house.into_any_element())
+                }
+                Owner::Session { .. } => None,
             };
             let hide = (of != Owner::Home).then(|| {
                 div()
@@ -5375,10 +5377,10 @@ impl Workspace {
                 .group("space")
                 .relative()
                 .h_full()
-                // Workspace and the selected space keep their names; the others give way first.
+                // The selected space keeps its name; the others give way first.
                 .when(!small, |d| d.min_w(px(MIN_SPACE)).max_w(px(MAX_SPACE)).flex_shrink())
-                .when(of == Owner::Home, |d| d.flex_none())
-                .when(on && compact, |d| d.min_w(px(selected_width)))
+                .when(of == Owner::Home, |d| d.pr_3())
+                .when(on && compact && !small, |d| d.min_w(px(selected_width)))
                 .when(small, |d| d.flex_none().tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))))
                 .overflow_hidden()
                 .pl_3()
@@ -6210,6 +6212,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &HideSpace, window, cx| {
                 this.dispatch(Action::SpaceHide { index: None }, this.input, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GoHome, window, cx| {
+                this.dispatch(Action::SpaceSelect { index: 0 }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.dispatch(Action::CycleTab { delta: 1 }, this.input, window, cx);

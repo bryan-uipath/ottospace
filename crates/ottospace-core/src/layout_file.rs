@@ -882,7 +882,7 @@ mod tests {
         let history = History { lines: vec!["built".into()], command: Some("npm run dev".into()), saved: 1 };
         let file = m.layout_file(&[(1, "/gone".into())], &[(1, history)], 500);
         let (r, effects) = restored(&m, file, &["/gone"], false);
-        // Workspace's tabs come first: its first terminal is pane 1.
+        // The workspace's tabs come first: its first terminal is pane 1.
         assert_eq!(r.pane(1).and_then(|pane| pane.cwd.as_deref()), Some("/Users/me"));
         let at = effects.iter().position(|effect| *effect == Effect::Opened(1)).unwrap();
         let shown = effects[at..].iter().find_map(|effect| match effect {

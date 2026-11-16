@@ -805,7 +805,8 @@ impl Model {
         self.workbooks.entry_of(tab.id).map(|(id, at)| (id, Some(at))).or(space)
     }
 
-    /// The lowest "Workspace n" from 2 that no workbook has: "Workspace" is the first space's.
+    /// The lowest "Workspace n" from 2 that no workbook has: "Workspace" is the one an older
+    /// layout's first space became.
     fn free_name(&self) -> String {
         // Nor the name of one whose delete may still be taken back: it comes back under it.
         let books = self.workbooks.list.iter().chain(self.workbooks.deleted());

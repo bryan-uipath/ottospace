@@ -488,8 +488,8 @@ pub enum Action {
         new_tab: bool,
         items: Vec<PickItem>,
     },
-    /// A new, empty tab. It becomes the active tab. The user's is of the selected space; a
-    /// client's of Workspace.
+    /// A new, empty tab. It becomes the active tab. The user's is of the selected space (on
+    /// Home: of a new workspace); a client's of the workspace selected last.
     NewTab,
     /// ⌘T: a new tab holding one empty pane, shown. No picker: ⌘E picks what goes in it.
     NewEmptyTab,
@@ -513,7 +513,7 @@ pub enum Action {
         delta: i32,
     },
     /// Take a space (default: the selected one; `index` on the top row) off the row. Nothing in
-    /// it ends. Workspace stays.
+    /// it ends. Home stays.
     SpaceHide {
         index: Option<usize>,
     },
@@ -3803,7 +3803,8 @@ impl Model {
                 }
             }
             Action::NewTab => {
-                // The user's joins the selected space; a client's, Workspace.
+                // The user's joins the selected space; a client's is no space's: `settle_home`
+                // gives it to the workspace selected last.
                 let of = if self.by_user { self.space().clone() } else { Owner::Home };
                 self.leave(effects);
                 self.park_active();
@@ -3857,22 +3858,12 @@ impl Model {
                     self.unpark_active();
                     return;
                 }
-                // Its right neighbour in its space takes its place, else the left one. Workspace
-                // left with none gets an empty tab.
+                // Its right neighbour in its space takes its place, else the left one; its space
+                // left with none, the space beside it: Home is always there.
                 let left = self.space_tabs(&tab.space);
                 let next = left.iter().copied().find(|at| *at >= index).or(left.last().copied());
-                match next.or(after.filter(|_| tab.space != Owner::Home)) {
-                    Some(next) => {
-                        self.active = next;
-                        self.unpark_active();
-                    }
-                    None => {
-                        if self.tabs.is_empty() {
-                            self.next_tab = 0;
-                        }
-                        self.push_tab_of(Owner::Home);
-                    }
-                }
+                self.active = next.or(after).unwrap_or(0);
+                self.unpark_active();
             }
             Action::Focus { pane } => self.focus(pane, effects),
             Action::FocusDir { dir } => {
@@ -6150,7 +6141,8 @@ impl Model {
         }
     }
 
-    /// After every step: a tab of a task that is gone or dismissed is Workspace's (the user's
+    /// After every step: a tab of a task that is gone or dismissed is of the workspace the
+    /// task was bound to, else of none, which `settle_home` gives a workspace (the user's
     /// undo of the dismissal takes back those of its tabs still open there; a task back by other
     /// means, such as a state report, gets none); a dismissed task's conversation leaves the
     /// rail and the drawer.
@@ -6182,7 +6174,8 @@ impl Model {
         self.unlinked.retain(|(id, ..)| tasks.get(*id).is_some());
         let back: Vec<(TaskId, Vec<u32>, Owner)> = self.unlinked.extract_if(.., |(id, ..)| !gone(id)).collect();
         for (id, ids, home) in back.into_iter().filter(|_| undone) {
-            // Its workspace deleted since: its tabs went to the first space.
+            // Its workspace deleted since: its tabs went to another (`settle_home`), which is
+            // their home by now. Never Home.
             let home = if self.owner_valid(&home) { home } else { Owner::Home };
             for tab in self.tabs.iter_mut().filter(|tab| ids.contains(&tab.id) && tab.space == home) {
                 tab.space = Owner::Task { id };
@@ -7027,8 +7020,8 @@ impl Model {
         Some(format!("pane {id} cannot be fitted: {}", stuck.why()))
     }
 
-    /// Open Settings: the pane opened for it, if its terminal is still there, else a new tab of
-    /// Workspace, "Settings", whose terminal runs the editor.
+    /// Open Settings: the pane opened for it, if its terminal is still there, else a new tab,
+    /// "Settings", whose terminal runs the editor: the selected workspace's (`settle_home`).
     fn edit_settings(&mut self, effects: &mut Vec<Effect>) {
         let open = self.settings_pane.filter(|id| self.pane(*id).is_some_and(|p| p.kind == Kind::Terminal));
         if let Some(id) = open {

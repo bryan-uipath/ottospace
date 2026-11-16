@@ -1004,7 +1004,8 @@ impl Model {
             }
             Target::Pane(_) => {}
             Target::Tab(record) => {
-                // A task's tab goes to its space, while the task is live; else to Workspace.
+                // A task's tab goes to its space, while the task is live; else to no space:
+                // `settle_home` gives it a workspace.
                 let task = record.task.filter(|task| self.tasks.live(*task).is_some());
                 let of = task.map_or(Owner::Home, |id| self.task_space(id));
                 let tab = self.rebuild_tab(record, of, effects);

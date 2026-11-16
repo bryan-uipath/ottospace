@@ -109,6 +109,7 @@ commands! {
     NextChat: "Next Conversation in This Workspace", Tabs;
     PrevChat: "Previous Conversation in This Workspace", Tabs;
     HideSpace: "Hide", Tabs;
+    GoHome: "Go to Home", Tabs;
     CapturePane: "Capture the Pane", Tasks;
     TalkFocus: "Type in the Conversation", Tasks;
     EditMessage: "Edit Message in Editor", Tasks;
