@@ -13,6 +13,7 @@ use crate::features::{self, Feature, Features};
 use crate::fuzz::{self, Rng};
 use crate::ics::Show;
 use crate::layout_file;
+use crate::listen::Heard;
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
 use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
@@ -1279,14 +1280,15 @@ const MAKERS: &[Make] = &[
     |g| Action::ListenBegan { id: g.listen_id(), at: g.time() },
     |g| Action::ListenFailed { id: g.listen_id(), why: g.text() },
     |g| {
-        let text = if g.rng.coin() { format!("{HEARD} {}", g.text()) } else { HEARD.into() };
-        Action::ListenHeard {
-            id: g.listen_id(),
-            from: g.rng.pick(&[crate::listen::Speaker::Them, crate::listen::Speaker::Me]),
-            start_ms: g.rng.pick(&[0, 500, u64::MAX]),
-            text,
-            is_final: g.rng.coin(),
-        }
+        let lines = (0..g.rng.pick(&[0, 1, 3]))
+            .map(|_| Heard {
+                from: g.rng.pick(&[crate::listen::Speaker::Them, crate::listen::Speaker::Me]),
+                start_ms: g.rng.pick(&[0, 500, u64::MAX]),
+                text: if g.rng.coin() { format!("{HEARD} {}", g.text()) } else { HEARD.into() },
+                is_final: g.rng.coin(),
+            })
+            .collect();
+        Action::ListenHeard { id: g.listen_id(), lines }
     },
     |g| Action::ListenEnded {
         id: g.listen_id(),
@@ -3131,6 +3133,29 @@ impl Run {
                     ensure!(listen_before.as_ref() == Some(id), "{action:?} closed {id:?}, not on");
                     ensure!(origin != Origin::Socket, "a client's {action:?} ended {id:?}")
                 }
+                // The file of the transcript that was on, or of the one just started: made with its
+                // streams, closed with them, and between, final lines and pauses only.
+                Effect::ListenWrite { id, records } => {
+                    let on = m.listen.on.as_ref().map(|on| &on.id);
+                    ensure!(listen_before.as_ref() == Some(id) || on == Some(id), "{action:?} wrote to {id:?}, not on");
+                    let opens =
+                        effects.iter().any(|e| matches!(e, Effect::ListenOpen { id: opened, .. } if opened == id));
+                    let closes = effects.contains(&Effect::ListenClose { id: id.clone() });
+                    for record in records {
+                        match record {
+                            crate::listen::Record::Begin(_) => {
+                                ensure!(opens, "{action:?} began a file with no streams")
+                            }
+                            crate::listen::Record::End { .. } | crate::listen::Record::Failed => {
+                                ensure!(closes, "{action:?} ended a file with its streams on")
+                            }
+                            crate::listen::Record::Line { text, .. } => {
+                                ensure!(!text.is_empty(), "an empty line written")
+                            }
+                            crate::listen::Record::Paused { .. } => {}
+                        }
+                    }
+                }
                 Effect::ListenPauseStreams { id } | Effect::ListenResumeStreams { id } => {
                     let users = origin == Origin::User;
                     ensure!(users && listen_before.as_ref() == Some(id), "{origin:?}'s {action:?} paused or resumed")
@@ -3779,6 +3804,7 @@ fn code(sent: &Envelope) -> String {
         "Check",
         "Branch",
         "Login",
+        "Heard",
         "Named",
         "Task",
         "Assign",

@@ -247,14 +247,17 @@ Actions:
 | `ListenExplained` | User only | The first-use explanation's `Start` (§7): its effect writes `transcripts_explained` |
 | `ListenPause { at }`, `ListenResume { at }`, `ListenStop { at }` | User only | |
 | `ListenBegan { id, at }` | System | The streams run (or the shell's error: `ListenFailed { id, why }`, a notice, status back to off) |
-| `ListenHeard { id, from: Speaker, start_ms, end_ms, text, final }` | System | `Speaker::Them` or `Me`; times in the audio's clock from start. A volatile line replaces the last volatile of its speaker; a final one appends and clears it |
+| `ListenHeard { id, lines: [Heard { from: Speaker, start_ms, text, final }] }` | System | A batch, on the shell's fixed tick (below), empty or not. `Speaker::Them` or `Me`; times in the audio's clock from start. A volatile line replaces the last volatile of its speaker; a final one appends and clears it |
 | `ListenEnded { id, why: AppQuit \| StreamFailed, at }` | System | Always allowed. The core's own ends (meeting over, pane closed, flag off) are effects of the actions above, not actions |
 | `ListenAvailable { on }` | System | The OS has the recognizer (macOS 26) |
 | `ListenFixture` | System | Sent only in a test run with `OTTOSPACE_LISTEN_FIXTURE`: the core then accepts a terminal pane as a source (a test run hosts no window). A unit test holds that without it a terminal pane is refused |
 
 Effects: `ListenOpen { id, source, mic, locale }` (the shell starts SCK and the shim),
-`ListenPauseStreams`, `ListenResumeStreams`, `ListenClose { id }`, `ListenWrite { id, line }`
-(a final line or a pause/end record to the file).
+`ListenPauseStreams`, `ListenResumeStreams`, `ListenClose { id }`, `ListenWrite { id, records }`
+(built: `Begin` with the header's facts before `ListenOpen`; each final line on the wall clock; a
+pause when it ends; `End { at }`, or `Failed` for one whose streams never ran, whose file then
+goes). Every batch makes one `ListenWrite`, empty or not: the trace, which a client can read,
+names effects, and must not say when someone spoke either.
 
 The core keeps: the rules, each app's meeting episode and whether the user stopped in it, and the
 one `Listen` (id, source, mic, how it started (`user` or `auto`), status `starting | on | paused`,
@@ -272,6 +275,9 @@ gets its SDK method and fixture line.
 moves both, and says when someone speaks. Slice 2, before real audio: the shell holds heard lines
 and dispatches them on a fixed tick while one is on (an empty batch too), so both rise at a
 constant rate; an e2e test checks `seq` rises the same with and without a fixture line.
+Built: every 250 ms (`BATCH` in the shell's `listen.rs`), from the streams' start to the end, paused or
+not; the clock in the header redraws on the same tick. The e2e test measured 10 `seq` and 8 frames
+in 2 s, both while 20 lines came and with none.
 
 The shell: SCK streams on their queue, samples to the shim, the shim's callbacks to the UI thread
 as `ListenHeard` (`System`), the file writes on a writer thread, the indicator and the drawer drawn

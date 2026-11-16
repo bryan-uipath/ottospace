@@ -81,6 +81,7 @@ mod key_use;
 mod keycaps;
 mod layout_file;
 mod listen;
+mod listen_file;
 mod markdown;
 mod marks;
 mod menus;
@@ -908,6 +909,8 @@ struct Workspace {
     timeline: calendar::Timeline,
     /// What a transcript's streams hear: in a test run, its fixture being replayed.
     listen_feed: Option<listen::Feed>,
+    /// The file of the transcript on, if one is kept.
+    listen_file: Option<listen::File>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -1011,6 +1014,8 @@ impl Workspace {
                 // The layout first, while its panes and terminals are all there.
                 this.store_layout(true);
                 this.store_key_use(true);
+                // A transcript's file gets its end now: lines were written as they came.
+                this.listen_quit();
                 // Its agents end with it: none is left on a session, to hold it from the next run.
                 this.drawer.agents.values().for_each(|agent| agent.terminal.signal(libc::SIGHUP));
                 this.drawer.native.clear();
@@ -1301,6 +1306,7 @@ impl Workspace {
             ax_overlay: None,
             timeline: calendar::Timeline::start(),
             listen_feed: None,
+            listen_file: None,
             focus,
             _subscriptions: subscriptions,
         };
@@ -1584,7 +1590,8 @@ impl Workspace {
                     worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), done);
                 }
                 Effect::Notice { text } => (self.error, self.refused) = (Some(text.clone()), Some(text.clone())),
-                Effect::ListenOpen { .. }
+                Effect::ListenWrite { .. }
+                | Effect::ListenOpen { .. }
                 | Effect::ListenPauseStreams { .. }
                 | Effect::ListenResumeStreams { .. }
                 | Effect::ListenClose { .. } => self.listen_effect(effect, window, cx),
