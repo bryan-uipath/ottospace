@@ -16,7 +16,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     focus: "nothing",
     state: {
       panes: [],
-      tabs: [{ id: 1, title: "Tab 1", space: { kind: "workspace" } }],
+      tabs: [{ id: 1, title: "Tab 1", space: { kind: "workbook", id: 1 } }],
       active: 0,
       layout: null,
       focused: null,
@@ -126,7 +126,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     scrollbars: {},
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
     spaces: [
-      { of: { kind: "workspace" }, hidden: false, selected: true, tabs: [0], tasks: [], front: null, strip: [] },
+      { of: { kind: "home" }, hidden: false, selected: false, tabs: [], tasks: [], front: null, strip: [] },
+      { of: { kind: "workbook", id: 1 }, hidden: false, selected: true, tabs: [0], tasks: [], front: null, strip: [] },
       { of: { kind: "task", id: 1 }, hidden: true, selected: false, tabs: [1], tasks: [1], front: 1, strip: [] },
     ],
     badges: { "1": "FL" },
