@@ -1477,6 +1477,11 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(paused == on.paused_at.is_some(), "{:?} with a pause at {:?}", on.status, on.paused_at);
     }
     ensure!(!m.listen.shown || m.listen.on.is_some(), "the drawer on no transcript");
+    // A grey mark of a lost stream is of a pane that is there, with none on, the flag on.
+    if let Some(lost) = m.listen.lost {
+        ensure!(m.pane(lost).is_some() && m.listen.on.is_none(), "a lost mark on {lost} with {:?}", m.listen.on);
+        ensure!(m.features.on(Feature::Transcripts), "a lost mark with the flag off");
+    }
     ensure!(!m.listen.shown || !m.listen_hidden(), "the transcript over what has the keyboard in the drawer");
     // Tabs, their trees and the panes.
     ensure!(!m.tabs.is_empty(), "no tabs");

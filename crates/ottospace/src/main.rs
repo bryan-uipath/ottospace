@@ -82,6 +82,7 @@ mod keycaps;
 mod layout_file;
 mod listen;
 mod listen_file;
+mod listen_meter;
 mod markdown;
 mod marks;
 mod menus;
@@ -911,6 +912,8 @@ struct Workspace {
     listen_feed: Option<listen::Feed>,
     /// The file of the transcript on, if one is kept.
     listen_file: Option<listen::File>,
+    /// What the transcript on hears now, for the meter and its label alone.
+    listen_meter: Option<listen_meter::Meter>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -1307,6 +1310,7 @@ impl Workspace {
             timeline: calendar::Timeline::start(),
             listen_feed: None,
             listen_file: None,
+            listen_meter: None,
             focus,
             _subscriptions: subscriptions,
         };

@@ -164,6 +164,9 @@ pub struct Listening {
     pub shown: bool,
     /// A test run's fixture is the source (`ListenFixture`): a terminal pane may be heard.
     pub fixture: bool,
+    /// The pane whose transcript stopped because its sound stopped coming: its header shows a grey
+    /// dot until the user's Stop (its ×), a new start or the pane's close. Not in the state.
+    pub lost: Option<PaneId>,
 }
 
 /// `listen` in the state: status, source, mic and times. Never the text, a line count or when
@@ -202,6 +205,7 @@ impl Listening {
         let (paused_total, paused_at, run_from) = (0, None, 0);
         let (rows, volatile) = (VecDeque::new(), Vec::new());
         let status = Status::Starting;
+        self.lost = None;
         self.on =
             Some(Listen { id, source, mic, status, started: at, paused_total, paused_at, run_from, rows, volatile });
         self.shown = true;

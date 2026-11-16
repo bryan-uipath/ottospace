@@ -74,8 +74,11 @@ impl Model {
                     effects.push(Effect::ListenResumeStreams { id: on.id.clone() });
                 }
             }
+            // With none on, the user's Stop (the grey dot's ×) puts the lost mark away.
             Action::ListenStop { at } => {
-                self.listen_end(None, Some(at), effects);
+                if !self.listen_end(None, Some(at), effects) {
+                    self.listen.lost = None;
+                }
             }
             // The top row's mark: the drawer on the transcript, in its pane's tab.
             Action::ListenShow { on: true } => {
@@ -104,8 +107,11 @@ impl Model {
             Action::ListenFailed { id, .. } => {
                 self.listen_end(Some(&id), None, effects);
             }
-            Action::ListenEnded { id, at, .. } => {
-                self.listen_end(Some(&id), Some(at), effects);
+            Action::ListenEnded { id, why, at } => {
+                let pane = self.listen.pane().filter(|_| self.listen.on.as_ref().is_some_and(|on| on.id == id));
+                if self.listen_end(Some(&id), Some(at), effects) && why == listen::Ended::StreamFailed {
+                    self.listen.lost = pane;
+                }
             }
             _ => {}
         }
@@ -325,6 +331,36 @@ mod tests {
         let failed = Action::ListenFailed { id: "t2".into(), why: "no audio source in a test run".into() };
         assert_eq!(m.update(failed.sent_by(Origin::System)), ended("t2", Record::Failed));
         assert!(m.listen.on.is_none());
+    }
+
+    #[test]
+    fn a_lost_stream_leaves_a_grey_mark_until_the_user_puts_it_away() {
+        let mut m = model();
+        m.update(start(2));
+        m.update(Action::ListenBegan { id: "t2".into(), at: 1_000 }.sent_by(Origin::System));
+        let lost = Action::ListenEnded { id: "t2".into(), why: Ended::StreamFailed, at: 5_000 };
+        m.update(lost.sent_by(Origin::System));
+        assert_eq!((m.listen.on.is_none(), m.listen.lost), (true, Some(2)));
+        // Not in the state: the reply says only that none is on.
+        assert_eq!(serde_json::to_value(&m).unwrap()["listen"], serde_json::Value::Null);
+        // A client's Stop does not put it away; the user's does, and ends nothing.
+        m.update(Action::ListenStop { at: 6_000 }.sent_by(Origin::Socket));
+        assert_eq!(m.listen.lost, Some(2));
+        assert!(m.update(Action::ListenStop { at: 6_000 }).is_empty());
+        assert_eq!(m.listen.lost, None);
+        // A new start puts it away too, and the app quitting leaves none.
+        m.update(start(2));
+        m.update(Action::ListenBegan { id: "t2".into(), at: 1_000 }.sent_by(Origin::System));
+        m.update(Action::ListenEnded { id: "t2".into(), why: Ended::StreamFailed, at: 5_000 }.sent_by(Origin::System));
+        m.update(Action::ListenStart { source: Source::Pane(1), mic: false, id: "t3".into(), at: 7_000 });
+        assert_eq!(m.listen.lost, None);
+        m.update(Action::ListenEnded { id: "t3".into(), why: Ended::AppQuit, at: 8_000 }.sent_by(Origin::System));
+        assert_eq!(m.listen.lost, None);
+        // Its pane closed: it goes with it.
+        m.update(start(2));
+        m.update(Action::ListenEnded { id: "t2".into(), why: Ended::StreamFailed, at: 5_000 }.sent_by(Origin::System));
+        m.update(Action::Close { pane: Some(2) });
+        assert_eq!(m.listen.lost, None);
     }
 
     #[test]
