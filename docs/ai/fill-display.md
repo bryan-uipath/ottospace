@@ -20,21 +20,23 @@ Asked for as "pseudo full screen [that takes] up the full monitor space (over me
 ## The green button
 
 Native full screen is off (`FullScreenNone`), so the green button is a zoom button (+). Every
-zoom, the button, Window ▸ Zoom, a title bar double-click (GPUI's `titlebar_double_click` reads
-`AppleActionOnDoubleClick` and calls `zoom:`), goes through `zoom:`, which asks the window's
-delegate `windowShouldZoom:toFrame:`. GPUI 0.2.2's window (`GPUIWindow`) is its own delegate and
-has no such method, so `window::zoom_asks` adds one to that class with `class_addMethod` (no
-fork): it sets a flag and answers NO, so the window never zooms. The shell's 60 Hz tick takes the
-flag (`take_zoom`) and dispatches `FillDisplay` as `Origin::User`, as it does the return key.
+zoom goes through `zoom:`: the button's `performZoom:`, a menu item, GPUI's `zoom_window` and its
+`titlebar_double_click` (which reads `AppleActionOnDoubleClick`). GPUI 0.2.2's window class
+(`GPUIWindow`, an NSWindow subclass) has no `zoom:` of its own, so `window::zoom_asks` adds one
+with `class_addMethod` (no fork): it sets a flag and does not call NSWindow's, so the window never
+zooms. The shell's 60 Hz tick takes the flag (`take_zoom`) and dispatches `FillDisplay` as
+`Origin::User`, as it does the return key.
 
-Safe because: `class_addMethod` adds only, and is skipped if the class already answers the
-selector (a later GPUI that adds one keeps its own, and the green button zooms as before); the
-added method only stores an atomic, so it never reenters GPUI while AppKit is in `zoom:`; the
-delegate is set again after, in case AppKit noted what it answers. It is ottospace's own window
-class in its own process; the canary and other apps are untouched. Who can zoom: a click, a menu
-item or a double-click (injected pointer events never double-click the title bar), or another
-process pressing the button through Accessibility, which could as well post ⌃⌘F. ottospace
-itself zooms only from Window ▸ Zoom, and in a test run from `zoom_press`.
+First tried: the delegate's `windowShouldZoom:toFrame:` (GPUI's window is its own delegate). It
+worked locally, but on the CI runner `zoom:` resized the test window without asking it.
+
+Safe because: `class_addMethod` adds only, and refuses if the class defines `zoom:` itself (a
+later GPUI that does keeps its own, and the green button zooms as before); the method only
+stores an atomic, so it never reenters GPUI while AppKit is in `zoom:`. It is ottospace's own
+window class in its own process; the canary and other apps are untouched. Who can zoom: a click,
+a menu item or a double-click (injected pointer events never double-click the title bar), or
+another process pressing the button through Accessibility, which could as well post ⌃⌘F.
+ottospace itself zooms only from Window ▸ Zoom, and in a test run from `zoom_press`.
 
 ## Measured
 
