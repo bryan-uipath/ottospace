@@ -30,7 +30,9 @@ test("state: the typed snapshot is the whole reply", async () => {
     assert.equal(start.mode, "normal");
     assert.deepEqual(start.state.panes, []);
     assert.deepEqual(start.state.tabs, [{ id: 1, title: "Tab 1", space: { kind: "workspace" } }]);
-    assert.deepEqual(start.spaces, [{ of: { kind: "workspace" }, hidden: false, selected: true, tabs: [0] }]);
+    assert.deepEqual(start.spaces, [
+      { of: { kind: "workspace" }, hidden: false, selected: true, tabs: [0], tasks: [], front: null, strip: [] },
+    ]);
     assert.equal(start.notice, null);
     // No pane: the home screen, with nothing on it yet.
     assert.deepEqual(start.home?.nodes, []);
