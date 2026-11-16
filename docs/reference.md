@@ -52,7 +52,7 @@ running, and the rest of the design is not built: see the
 | Workspaces: + on the top row or in the Workspaces section makes a new, empty one, listed there and kept between runs. ⌘⇧S saves a tab into one (its splits, each terminal's directory, each app), to open again from the section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | Tabs and layout come back after quitting: every tab (with its task and workspace), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
-| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
+| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; a soft pulse as one comes near; a meeting notice on the notice bar, a notification and a sound when one has started and you are in no call | Works today |
 
 ### Roadmap: designed, not built
 
@@ -819,8 +819,9 @@ the way.
   Accessibility, Display) the colour steps up instead, with no movement. Nothing else in
   ottospace pulses.
 - **At the start**, if you are in no call, or still in an earlier one (on from 10 minutes before,
-  or the meeting before, running over): a banner under the title strip (`Meeting started`, the
-  title, how long ago it started, **Join** if the meeting has an `https:` link, **Dismiss**), which stays until
+  or the meeting before, running over): a meeting notice on the [notice bar](#notice-bar) at the
+  window's foot (◷, indigo: `Meeting:` the title and how long ago it started, **Join** if the meeting
+  has an `https:` link, × to dismiss; over a warning or information, under an error), which stays until
   you dismiss it, join, a call starts or the meeting ends; and a system notification with the
   alert sound, so you see it when ottospace is behind other windows. Once more 2 minutes later
   if you have not joined; never a third time. Only in a meeting's first 10 minutes: one you
@@ -862,7 +863,7 @@ the way.
   and `Today` on another day, from 7 days back to 7 on; its date's tooltip says when the feed was
   read. The section goes back to today when the day turns and at start; the band, the alerts and
   now's tick are always of today. The rail cell shows a steady amber dot while a meeting is 2
-  minutes off or runs, and a filled amber badge while the banner is up. In list mode (⌘⌃E)
+  minutes off or runs, and a filled amber badge while its notice stands (also under an error that covers it). In list mode (⌘⌃E)
   `j`/`k` move, ↵ joins, ← and → go a day back and on, `t` back to today; the View menu and the
   palette have the same (`Previous Day in Calendar`, `Next Day in Calendar`, `Today in
   Calendar`). The open Calendar is not kept in the restored layout: a build without the section
@@ -996,11 +997,13 @@ stay under the pointer): the content's foot rises by its height. It grows upward
 once under the system's Reduce Motion. A live app window in a bottom pane stops above it too.
 
 - **Level**: red for an error, amber for a warning (a move that did nothing, a retired setting, a
-  global key not registered), blue for information. A glyph says the level too.
+  global key not registered), blue for information, and amber on indigo for a meeting that started
+  (`meeting`: over a warning, under an error). A glyph says the level too: `!` in a circle, `▲`,
+  `ⓘ`, `◷`. The state says a meeting's notice as `Meeting started`, never its title.
 - **One at a time**: the most pressing, and of those the newest. An error is not replaced by
   information; when it goes, what it covered shows.
 - **One line**: text too long is cut with an ellipsis, and the hover shows all of it. A settings
-  problem offers **Open settings**.
+  problem offers **Open settings**; a meeting with a link, **Join**.
 - **Dismiss**: × on the bar, or Esc when no mode and no terminal takes it. Only you dismiss a
   notice: a socket client cannot, and its failure never takes the place of what your own step
   said. A dismissed settings line comes back when it says something else.
@@ -1022,6 +1025,7 @@ once under the system's Reduce Motion. A live app window in a bottom pane stops 
 | `start` | error | the app: found at start | yes |
 | `keys` | warning | the app: a global key not registered | yes |
 | `editor` | information | the app: your editor gave its text back | yes |
+| `meeting` | meeting | the app: a meeting started and you are in no call; × is its Dismiss, Join its link | yes; its title never in the state |
 
 A copy's "Copied 3 lines", the mode and the count of tasks that need you stay in the status bar.
 
@@ -1095,7 +1099,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 | `calendar_ics` | The [meeting timeline](#meeting-timeline)'s calendar feed: an `https://` link (to a host on the internet, not an address or `localhost`) or a file's path (`/…` or `~/…`). Never shown: a private feed's link holds a secret | none: no timeline |
 | `calendar_workday` | The workday the timeline's band spans: `"HH:MM-HH:MM"`, local 24-hour time, the start at least an hour before the end (`"06:00-22:00"`; `24:00` ends the day). `calendar_window_hours`, from before, is retired: the status bar asks to remove it, and the rest applies | `"09:00-17:00"` |
 | `calendar_refresh_minutes` | How often the feed is read again, at least 1 | `5` |
-| `calendar_notify` | A meeting that starts while you are in no call, or in another call, shows the banner, a notification and a sound | `true` |
+| `calendar_notify` | A meeting that starts while you are in no call, or in another call, shows a meeting notice on the notice bar, a notification and a sound | `true` |
 | `calendar_notify_for` | Which meetings alert: `all`, or only those with a Zoom, Meet or Teams `links` | `all` |
 | `calendar_email` | Your address among a meeting's attendees in the feed: a meeting you declined is left out. Kept on this machine, never shown. A feed with no attendees (Outlook's published calendars) cannot say who declined: use `calendar_hide_free` | none: nothing is left out |
 | `calendar_hide_free` | Leave out entries that keep the time free (Outlook's FREE, `TRANSP:TRANSPARENT`): the band, the section, the alerts and the `calendar` request | `false` |

@@ -7781,15 +7781,53 @@ fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
     otto.call(json!({"cmd": "calendar_call", "in_call": true}));
     std::thread::sleep(Duration::from_millis(1_200));
     assert_eq!(calendar(&otto)["alerts"], 0);
-    // In no call: both running meetings alert, and the banner shows the later one.
+    // In no call: both running meetings alert, and the notice bar shows the later one, at the
+    // foot: Join its offer, × its Dismiss. Its title is drawn, never in the state.
     otto.call(json!({"cmd": "calendar_call", "in_call": false}));
     let banner = otto.wait_for("the banner", |o| {
         let c = calendar(o);
         (c["alerts"] == 2 && c["banner"]["join"].is_array()).then(|| c["banner"].clone())
     });
-    // A client's click on Join opens nothing; on Dismiss it dismisses nothing.
+    let shown = otto.drawn();
+    let bar = &shown["notice_bar"];
+    let said = (&bar["kind"], &bar["level"], &bar["text"], &bar["offer"]);
+    assert_eq!(said, (&json!("meeting"), &json!("meeting"), &json!("Meeting started"), &json!("join")), "{bar}");
+    assert_eq!((&banner["join"], &banner["dismiss"]), (&bar["offer_rect"], &bar["close"]));
+    // At the foot, right above the timeline's band (the band's top line is its border).
+    let band = rect(&shown["calendar"]["band"]["rect"]);
+    assert!((rect(&bar["rect"])[1] + 28.0 - band[1]).abs() <= 1.0, "above the band {band:?}: {bar}");
+    let state = shown.to_string();
+    assert!(!state.contains("Design review") && !state.contains("example.zoom.us"), "{state}");
+    // An error outranks it; mended, the meeting is back.
+    let settings = std::fs::read_to_string(home.join("settings.json")).unwrap();
+    std::fs::write(home.join("settings.json"), "{ not json").unwrap();
+    let covered = otto.wait_for("the error over it", |o| {
+        let s = o.drawn();
+        (s["notice_bar"]["level"] == "error" && s["notice_bar"]["height"] == 28.0).then_some(s)
+    });
+    assert_eq!(
+        (&covered["calendar"]["banner"]["join"], covered["calendar"]["alerts"].as_u64()),
+        (&Value::Null, Some(2))
+    );
+    std::fs::write(home.join("settings.json"), &settings).unwrap();
+    otto.wait_for("the meeting back", |o| (o.drawn()["notice_bar"]["kind"] == "meeting").then_some(()));
+    // The user's own move that did nothing: the meeting stands over it, in the reply as on the bar.
+    let plain = home.canonicalize().unwrap().to_string_lossy().into_owned();
+    otto.call(json!({"cmd": "repo_add", "path": plain}));
+    let over = otto.drawn();
+    let said = (&over["notice"], &over["notice_level"], &over["notice_bar"]["kind"]);
+    assert_eq!(said, (&json!("Meeting started"), &json!("meeting"), &json!("meeting")), "{over}");
+    // A client's click on Join opens nothing; on Dismiss, its Esc or its sneak labels, it
+    // dismisses nothing.
     otto.click(centre(&banner["join"]), 1);
+    // A client's request that did nothing reads why: the meeting on the user's bar does not cover it.
+    let failed = otto.raw(r#"{"cmd":"open_app","name":"Finder"}"#);
+    let theirs = otto.drawn();
+    assert_eq!((&theirs["notice"], &theirs["notice_bar"]["kind"]), (&failed["error"], &json!("meeting")), "{failed}");
     otto.click(centre(&banner["dismiss"]), 1);
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    sneak_to(&otto, "notice:offer");
+    sneak_to(&otto, "notice:close");
     let after = calendar(&otto);
     assert_eq!((&after["joins"], after["banner"].is_object()), (&json!(0), true), "{after}");
     // The user's Join opens the link (counted in a test run) and ends that banner; the other
