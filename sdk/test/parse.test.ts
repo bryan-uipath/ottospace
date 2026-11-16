@@ -57,6 +57,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     titles: {},
     tabs: [],
     space_rects: [],
+    agent_chip: null,
     strip: [0, 0, 316, 28],
     bar_header: null,
     drag: null,
@@ -134,7 +135,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
         marks: [[6, 869.5, 1, 5], [1394, 869.5, 1, 5]], now: [659.5, 868, 1.5, 8],
         blocks: [{
           start: 1794560400000, end: 1794562200000, rect: [179.5, 869.5, 86.75, 5],
-          kind: "call", show: "tentative", color: "teal", lane: 0, lanes: 3, more: 0,
+          kind: "call", show: "tentative", color: "teal", focus: false, lane: 0, lanes: 3, more: 0,
         }],
         outside: [{ count: 1, rect: [1, 870.5, 4, 4] }, { count: 0, rect: null }], status_bar: [0, 877, 1400, 23],
       },

@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Action, Effect, Host, Model, Origin, Tab};
+use super::{Action, Effect, Envelope, Host, Model, Origin, Tab};
 use crate::talk::{Subject, Talk};
 use crate::tasks::TaskId;
 use crate::workbook::WorkbookId;
@@ -200,6 +200,15 @@ impl Model {
         }
     }
 
+    /// A click on a space of the top row. The user's on the selected one, its conversation
+    /// closed, opens it, as ⌘⇧L does; any other click only selects.
+    pub(crate) fn space_click(&self, sent: Envelope) -> Envelope {
+        let Action::SpaceClick { index } = sent.action else { return sent };
+        let opens = sent.origin == Origin::User && self.agent_chip().is_some_and(|chip| chip.space == index);
+        let action = if opens { Action::TalkToggle } else { Action::SpaceSelect { index } };
+        action.sent_by(sent.origin)
+    }
+
     /// The next (positive) or previous space on the row. It wraps.
     pub(crate) fn cycle_space(&mut self, delta: i32, effects: &mut Vec<Effect>) {
         let shown = self.shown_spaces();
@@ -248,7 +257,9 @@ impl Model {
         let other = |of: Option<&Owner>| of.is_some_and(|of| of != self.space());
         match action {
             Action::SelectTab { index } => other(self.tabs.get(*index).map(|tab| &tab.space)),
-            Action::SpaceSelect { index } => other(shown.get(*index).map(|space| &space.of)),
+            Action::SpaceSelect { index } | Action::SpaceClick { index } => {
+                other(shown.get(*index).map(|space| &space.of))
+            }
             Action::SpaceCycle { .. } => shown.len() > 1,
             Action::SpaceHide { index } => index.or(selected) == selected && *self.space() != Owner::Workspace,
             Action::SpaceOpen { space: of } => other(Some(of)),

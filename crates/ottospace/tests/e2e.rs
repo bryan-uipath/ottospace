@@ -5938,6 +5938,88 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// A conversation closed is not lost: the agent chip at the row's end says what its agent does,
+/// and the user's click on it, or on the selected space, opens it again. A client's click opens
+/// nothing. Nothing moves when the chip comes or goes.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_agent_chip_brings_a_closed_conversation_back() {
+    let root = support::temp(&format!("ottospace-e2e-chip-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    fake_repo(&repos.join("app"));
+    let settings = json!({"repos": [repos], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("chip", &settings.to_string());
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("chip", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
+    // Workspace has no conversation: no chip.
+    let workspace = otto.call(json!({"cmd": "section", "section": "tasks"}));
+    assert_eq!(workspace["agent_chip"], Value::Null, "{workspace}");
+    otto.start_task(1);
+    let open = otto.wait_for("the agent at work", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        (state["state"]["tasks"]["list"][0]["state"] == "running").then_some(state)
+    });
+    assert_eq!((&open["state"]["talk"]["open"], &open["agent_chip"]), (&json!(true), &Value::Null), "open: no chip");
+
+    // Closed by the user: the chip, with what the agent does. One tab, so no second row: it
+    // is on the top row, right of the spaces.
+    let closed = otto.user_key("cmd-shift-l");
+    let chip = closed["agent_chip"].clone();
+    let said = json!([chip["task"], chip["space"], chip["state"], chip["line"], chip["short"]]);
+    assert_eq!(said, json!([1, 1, "running", "Working", false]), "{chip}");
+    let (drawn, space) = (rect(&chip["rect"]), rect(&closed["space_rects"][1]));
+    assert!(drawn[1] >= space[1] && drawn[1] + drawn[3] <= space[1] + space[3], "{drawn:?} on the top row {space:?}");
+    assert!(drawn[0] >= space[0] + space[2], "{drawn:?} right of the spaces {space:?}");
+    assert!(otto.control_opt("agent-chip").is_some(), "sneak mode labels it");
+    // A client's click is not the user's: on the chip or on the selected space, nothing opens.
+    for point in [centre(&chip["rect"]), at(space, 0.5, 0.5)] {
+        let theirs = otto.click(point, 1);
+        assert_eq!((&theirs["state"]["talk"]["open"], &theirs["mode"]), (&json!(false), &json!("normal")), "{theirs}");
+    }
+    // The user's click on the chip: the conversation, with the keyboard, as ⌘⇧L. The chip goes.
+    let opened = otto.user_click(centre(&chip["rect"]));
+    let shown = (&opened["state"]["talk"]["open"], &opened["mode"], &opened["agent_chip"]);
+    assert_eq!(shown, (&json!(true), &json!("talk"), &Value::Null), "{opened}");
+    assert!(opened["drawer"]["body"].is_array());
+    // Closed again: the user's click on the selected space opens it too.
+    assert_eq!(otto.user_key("cmd-shift-l")["agent_chip"]["line"], "Working");
+    let opened = otto.user_click(at(space, 0.5, 0.5));
+    assert_eq!((&opened["state"]["talk"]["open"], &opened["mode"]), (&json!(true), &json!("talk")), "{opened}");
+
+    // A second tab: the chip is at the end of the tab row, and the tabs are where they were
+    // with the conversation open.
+    let two = otto.user_key("cmd-t");
+    assert_eq!((&two["spaces"][1]["tabs"], &two["agent_chip"]), (&json!([1, 2]), &Value::Null), "{two}");
+    let closed = otto.user_key("cmd-shift-l");
+    let (drawn, tab) = (rect(&closed["agent_chip"]["rect"]), rect(&closed["tabs"][2]));
+    assert_eq!(closed["agent_chip"]["short"], false);
+    assert!(drawn[1] >= tab[1] && drawn[1] + drawn[3] <= tab[1] + tab[3], "{drawn:?} on the tab row {tab:?}");
+    assert!(drawn[0] >= tab[0] + tab[2], "{drawn:?} right of the tabs {tab:?}");
+    assert_eq!(closed["tabs"], two["tabs"], "the tabs did not move");
+    // Tabs to the row's end: the chip is its badge alone, still there to click.
+    let short = (0..40).find_map(|_| Some(otto.user_key("cmd-t")).filter(|state| state["agent_chip"]["short"] == true));
+    let short = short.expect("the row filled");
+    let badge = rect(&short["agent_chip"]["rect"]);
+    assert!(badge[2] < drawn[2] && badge[0] + badge[2] <= drawn[0] + drawn[2] + 1., "{badge:?} {drawn:?}");
+    // More tabs than the row holds: the badge stays at its end, over them, and the tabs fit
+    // as with no chip.
+    let full = (0..8).map(|_| otto.user_key("cmd-t")).last().expect("a reply");
+    assert_eq!(rect(&full["agent_chip"]["rect"]), badge, "{}", full["agent_chip"]);
+    let opened = otto.user_click(centre(&full["agent_chip"]["rect"]));
+    assert_eq!(opened["state"]["talk"]["open"], true, "{opened}");
+
+    // Workspace: no conversation, no chip, whatever the drawer was.
+    otto.user_key("cmd-shift-l");
+    assert_eq!(otto.user_key("cmd-ctrl-1")["agent_chip"], Value::Null);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_new_task_opens_its_space_and_takes_the_repos_tab_it_was_started_from() {
@@ -7278,7 +7360,7 @@ fn a_busy_day_puts_calls_in_lanes_over_blocks_coloured_by_kind_and_rule() {
     assert_eq!(count("lanes", json!(3)), 3, "{band}");
     assert!(blocks.iter().filter(|b| b["kind"] == "block").all(|b| b["lane"].is_null()), "{band}");
     // Rules by title, case ignored; the rest by kind and status.
-    let colours = [("teal", 2), ("pink", 3), ("away", 1), ("block", 3), ("meeting", 6)];
+    let colours = [("teal", 2), ("pink", 3), ("away", 1), ("focus", 2), ("block", 1), ("meeting", 6)];
     for (name, n) in colours {
         assert_eq!(count("color", json!(name)), n, "{name} in {band}");
     }
@@ -7295,6 +7377,59 @@ fn a_busy_day_puts_calls_in_lanes_over_blocks_coloured_by_kind_and_rule() {
     });
     assert!(otto.call(json!({"cmd": "state"}))["notice"].is_null(), "no restart asked");
     assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Daily standup"), "no title in the state");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_focus_block_has_its_own_colour_and_a_call_or_a_rule_keeps_its_own() {
+    let zoom = "LOCATION:https://example.zoom.us/j/123\r\n";
+    let home = calendar_folder(
+        "calendar-focus",
+        &feed(&[
+            ("a", "Focus time", -6_000, -2_400, ""),
+            ("b", "Focus sync", -5_400, -2_400, zoom), // ends with a: both leave the band together
+            ("c", "Lunch and learn", -1_800, -600, ""),
+            ("d", "Deep Work - parser", 600, 2_400, ""),
+            ("e", "Focusing workshop", 3_000, 4_200, ""),
+            ("f", "Focus: budget", 4_800, 6_000, ""),
+        ]),
+        None,
+    );
+    // The whole day, so every entry is on the band; one rule that names a focus block's title.
+    let settings = json!({
+        "calendar_ics": home.join("today.ics"), "calendar_workday": "00:00-24:00", "repos": [],
+        "calendar_colors": [{ "match": "budget", "color": "teal" }],
+    });
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let otto = Otto::launch_with("calendar-focus", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    calendar_read(&otto);
+    let band = otto.wait_for("the band drawn", |o| {
+        let b = o.call(json!({"cmd": "state"}))["calendar"]["band"].clone();
+        b["blocks"]
+            .as_array()
+            .is_some_and(|all| !all.is_empty() && all.iter().all(|b| b["rect"].is_array()))
+            .then_some(b)
+    });
+    // By start: each entry's kind, colour and focus flag. Near midnight the day holds only the
+    // first or the last of them, three at least: they start from 100 minutes ago to 80 on.
+    let mut blocks = band["blocks"].as_array().unwrap().clone();
+    blocks.sort_by_key(|b| b["start"].as_u64());
+    let seen: Vec<(&str, &str, bool)> = blocks
+        .iter()
+        .map(|b| (b["kind"].as_str().unwrap(), b["color"].as_str().unwrap(), b["focus"].as_bool().unwrap()))
+        .collect();
+    let all = [
+        ("block", "focus", true),   // Focus time
+        ("call", "meeting", false), // Focus sync, on Zoom
+        ("block", "block", false),  // Lunch and learn
+        ("block", "focus", true),   // Deep Work - parser
+        ("block", "block", false),  // Focusing workshop
+        ("block", "teal", true),    // Focus: budget, the user's rule
+    ];
+    assert!(seen.len() >= 3 && all.windows(seen.len()).any(|w| w == seen), "{band}");
+    assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Focus time"), "no title in the state");
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
