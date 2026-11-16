@@ -2615,8 +2615,17 @@ impl Run {
         // Only the user's ↵ on a new task binds a workspace (or an undo of its dismissal, or the
         // files read again); and binding moves no pane, closes none and ends nothing.
         let bound_now = bindings(m);
+        // Its task gone, a task that had joined its space is its heir: the link goes with the space.
+        let heir = |was: &Option<TaskId>, task: &Option<TaskId>| {
+            let gone = was.is_some_and(|was| m.tasks.live(was).is_none());
+            let joined = |(of, id): &(Owner, TaskId)| {
+                was.is_some_and(|was| *of == Owner::Task { id: was }) && Some(*id) == *task
+            };
+            gone && joined_before.iter().any(joined)
+        };
         let newly = |(uid, task): &(String, Option<TaskId>)| {
-            task.is_some() && bound_before.iter().find(|(was, _)| was == uid).is_none_or(|(_, was)| was != task)
+            let was = bound_before.iter().find(|(was, _)| was == uid);
+            task.is_some() && was.is_none_or(|(_, was)| was != task && !heir(was, task))
         };
         if bound_now.iter().any(newly) {
             let read = matches!(action, Action::RestoreWorkbooks { .. });
@@ -5154,6 +5163,58 @@ fn seed_356_a_task_that_takes_over_a_workspace_works_in_its_default() {
         Action::OpenCompose { text: "#SS>y\u{202e}abc >İa\u{300}\u{301}\u{302}\\ #2048".into() }.sent_by(Origin::User),
         Action::ComposeRef { target: Pointed::Tab(3) }.sent_by(Origin::System),
         Action::ComposeSubmit { open: true }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
+/// Seed 1088: a client's tasks read again without a workspace's own task; a task that had joined
+/// it is its heir and takes its kept workspace's link, as built ("Several tasks in one
+/// workspace"). The rule took that for a new binding: the rule was wrong.
+#[test]
+fn seed_1088_a_workspaces_heir_takes_its_link() {
+    let line = |line: &str| Action::TaskFromLine { line: line.into(), known: Known::default(), open: true };
+    replay(&[
+        Action::Open { kind: slack(9), axis: Axis::Right, beside: None }.into(),
+        line("first").into(),
+        line("second").into(),
+        by(Origin::Socket, restore_tasks(r#"[{"id":2,"title":"second","state":"parked","priority":3}]"#, 0)),
+    ])
+    .unwrap();
+}
+
+/// A capture's ↵ starts task 2 in task 1's workspace; dismissing task 1 leaves task 2 its heir,
+/// with the link. The same rule took that for a new binding.
+#[test]
+fn a_dismissed_tasks_heir_takes_its_link() {
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::CaptureStart {
+            pane: None,
+            draft: "d1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![],
+            images: true,
+        }
+        .sent_by(Origin::User),
+        Action::TaskFromLine {
+            line: "#canvas flicker ../..e\u{301}İ>y p0 @~/>/p@".into(),
+            known: Known {
+                names: Names {
+                    agents: vec!["codex-gpt-6-astra".into(), "claude".into(), "codex-gpt-6-astra".into()],
+                    skills: vec!["\u{feff}".into(), "code-review".into(), "a\u{7f}".into()],
+                },
+                paths: vec![PathFound {
+                    typed: "../..e\u{301}İ>y".into(),
+                    resolved: "/code/app../..e\u{301}İ>y".into(),
+                }],
+                entries: vec!["/src/".into()],
+            },
+            open: true,
+        }
+        .sent_by(Origin::User),
+        Action::AgentExited { task: Subject::Task(1) }.sent_by(Origin::System),
+        Action::ComposeEnter.sent_by(Origin::User),
+        Action::TaskDismiss { id: 1 }.sent_by(Origin::System),
     ])
     .unwrap();
 }
