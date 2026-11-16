@@ -198,6 +198,7 @@ fn watched(event: &ottospace_sessions::Event) -> Vec<Event> {
         What::SubAgentEnd { id } => vec![Event::ToolEnd { id: id.clone(), failed: false }],
         What::Compaction { .. } => vec![Event::Compaction],
         What::ModelChange { to, .. } => vec![Event::Started { session: None, model: Some(to.clone()), mode: None }],
+        What::Cwd { .. } => Vec::new(),
     }
 }
 

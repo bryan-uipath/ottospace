@@ -60,7 +60,8 @@ enum Ask {
 pub enum Read {
     Found(Vec<Found>),
     Seen(Vec<Seen>),
-    Work(Vec<Work>),
+    /// Each with the folder its records last said the agent works in.
+    Work(Vec<(Work, Option<String>)>),
 }
 
 /// The most bytes of one session read in one round. A long transcript is caught up over several.
@@ -369,7 +370,7 @@ fn works(
     files: &HashMap<Key, PathBuf>,
     tallies: &mut HashMap<Key, (tally::Reader, Clock, Vec<u64>)>,
     day: u64,
-) -> Vec<Work> {
+) -> Vec<(Work, Option<String>)> {
     tallies.retain(|key, _| keys.iter().any(|(runner, id, _)| (runner, id) == (&key.0, &key.1)));
     let mut out = Vec::new();
     for (runner_name, id, repo) in keys {
@@ -414,14 +415,15 @@ fn works(
             output: usage.output,
             cached: usage.cached,
         });
-        out.push(Work {
+        let work = Work {
             runner: runner_name.clone(),
             session: id.clone(),
             clock: *clock,
             tokens: tokens.collect(),
             context: tally.context,
             window: tally.window,
-        });
+        };
+        out.push((work, tally.cwd.as_ref().map(|cwd| cwd.to_string_lossy().into_owned())));
     }
     out
 }

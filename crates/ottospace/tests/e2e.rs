@@ -6257,6 +6257,99 @@ fn a_repos_click_makes_a_workspace_of_its_worktree_where_terminals_and_tasks_sta
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// A stand-in `claude` whose session says it moves: it starts where it is run, its sub-agent's
+/// worktree (`<repo>/.claude/worktrees/agent-x`, made and listed) is written in its records, then,
+/// once `<root>/go` is there, it makes the worktree `<repos>/app-3` as git lays one out and works
+/// in `app-3/src`: the list has not read that worktree yet.
+fn moving_claude(bin: &Path, sessions: &Path, root: &Path, repo: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let script = r#"#!/bin/sh
+{ printf '%s\0' "$PWD"; for a in "$@"; do printf '%s\0' "$a"; done; } > '$BIN/claude.argv'
+[ "$1" = "--session-id" ] || exec cat
+id="$2"; folder="$SESSIONS/claude/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"; mkdir -p "$folder"
+says() { printf '{"type":"user","sessionId":"%s","cwd":"%s","isSidechain":%s,"message":{"content":"go"}}\n' "$id" "$1" "$2" >> "$folder/$id.jsonl"; }
+worktree() { mkdir -p "$REPO/.git/worktrees/$1" "$2/src"; printf 'ref: refs/heads/%s\n' "$3" > "$REPO/.git/worktrees/$1/HEAD"
+  printf '%s/.git\n' "$2" > "$REPO/.git/worktrees/$1/gitdir"; printf 'gitdir: %s\n' "$REPO/.git/worktrees/$1" > "$2/.git"; }
+says "$(pwd -P)" false
+worktree agent-x "$REPO/.claude/worktrees/agent-x" agent-x
+says "$REPO/.claude/worktrees/agent-x/src" false
+echo 'fake claude ready'
+while [ ! -f "$ROOT/go" ]; do sleep 0.2; done
+worktree app-3 "$ROOT/repos/app-3" fix/three
+says "$ROOT/repos/app-3/src" false
+exec cat
+"#;
+    let script = script
+        .replace("$BIN", &bin.to_string_lossy())
+        .replace("$SESSIONS", &sessions.to_string_lossy())
+        .replace("$REPO", &repo.to_string_lossy())
+        .replace("$ROOT", &root.to_string_lossy());
+    std::fs::write(bin.join("claude"), script).unwrap();
+    std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// The owner: "an agent could create a worktree when starting a task - in that case, we'd want
+/// the workspace associated with that task to connect to that worktree"; "good call on
+/// differentiating the subagent worktrees". The task's session says its agent works in a
+/// sub-agent's worktree: nothing moves. Then in a worktree it just made, not listed yet: the list
+/// is read again, and the task and its workspace of one task work there.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_task_follows_its_agent_into_a_worktree_it_made_and_never_a_subagents() {
+    let root = support::temp(&format!("ottospace-e2e-moves-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    fake_repo(&repos.join("app"));
+    let (root, repos) = (root.canonicalize().unwrap(), repos.canonicalize().unwrap());
+    let app = repos.join("app");
+    moving_claude(&bin, &sessions, &root, &app);
+    let path = |name: &str| repos.join(name).to_string_lossy().into_owned();
+    let settings = json!({"repos": [repos], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("moves", &settings.to_string());
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("moves", &env);
+    let space = |reply: &Value| -> Value {
+        let spaces = reply["spaces"].as_array().cloned().unwrap_or_default();
+        spaces.iter().find(|s| s["selected"] == true).cloned().unwrap_or_default()
+    };
+    let task = |reply: &Value| reply["state"]["tasks"]["list"][0].clone();
+
+    // The repository's row: its workspace; a task started there works in it.
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    otto.user_click(at(otto.control(&format!("repo:{}", path("app"))), 0.5, 0.5));
+    otto.user_key("cmd-n");
+    otto.user_key("o n e");
+    otto.user_key("enter");
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    // Its session read (its work is kept): the sub-agent's worktree is listed, and is not the task's.
+    let read = otto.wait_for("the session read", |o: &Otto| {
+        let state = o.call(json!({"cmd": "repos"}));
+        let listed = state["state"]["repos"][0]["worktrees"].as_array().is_some_and(|w| !w.is_empty());
+        (listed && task(&state)["work"].as_array().is_some_and(|w| !w.is_empty())).then_some(state)
+    });
+    let sub = app.join(".claude/worktrees/agent-x").to_string_lossy().into_owned();
+    assert_eq!(read["state"]["repos"][0]["worktrees"][0]["path"], json!(sub), "{}", read["state"]["repos"]);
+    std::thread::sleep(Duration::from_secs(6)); // a round after it, as well
+    let still = otto.call(json!({"cmd": "state"}));
+    assert_eq!(
+        (&task(&still)["worktree"], &space(&still)["worktree"]),
+        (&Value::Null, &json!(path("app"))),
+        "{}",
+        task(&still)
+    );
+
+    // Its own worktree, made a moment ago: the task and its workspace (its one task) move there.
+    std::fs::write(root.join("go"), "").unwrap();
+    let moved = otto.wait_for("the task in the new worktree", |o: &Otto| {
+        let state = o.call(json!({"cmd": "state"}));
+        (task(&state)["worktree"] == json!(path("app-3"))).then_some(state)
+    });
+    assert_eq!(space(&moved)["worktree"], json!(path("app-3")), "{}", moved["spaces"]);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The owner: "i'd expect < 5 so the ui should be suitable for that". Five tasks in a workspace:
 /// the strip is one line inside the drawer, four badges and the front tab with room for its title.
 #[test]

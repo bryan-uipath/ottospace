@@ -273,6 +273,10 @@ pub struct Task {
     /// agent runs there, not in `repo`. See `dir`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
+    /// The worktree its agent moved into, as its session said: where it works since. `None`:
+    /// the checkout of `dir` (`Model::task_worktree`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
     /// Who works it, from an `@name`. Stored and shown; nothing acts on it yet.
     #[serde(default)]
     pub agent: Option<String>,
@@ -526,6 +530,9 @@ impl Tasks {
             task.materials.retain(kept);
             task.materials.dedup();
             task.folder = task.folder.take().filter(|path| folder_fits(path));
+            // A sub-agent's worktree is never the task's.
+            let sub = |path: &String| crate::model::subagent_path(path);
+            task.worktree = task.worktree.take().filter(|path| folder_fits(path) && !sub(path));
         }
         self.next_id = tasks.last().map_or(0, |task| task.id).max(floor.min(MAX_ID));
         // A task from before colours, or with one out of range, is given one, oldest first.
@@ -552,6 +559,7 @@ impl Tasks {
             project,
             repo,
             folder: None,
+            worktree: None,
             agent,
             paths,
             resolved,
@@ -953,6 +961,7 @@ mod tests {
             project: None,
             repo: None,
             folder: None,
+            worktree: None,
             agent: None,
             paths: Vec::new(),
             resolved: Vec::new(),
