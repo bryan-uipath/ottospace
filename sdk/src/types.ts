@@ -1255,6 +1255,8 @@ export interface Snapshot {
   marks: Mark[];
   /** The name of the mark just taken off, while the Marks section offers to put it back. */
   mark_removed: string | null;
+  /** Restored or rebuilt panes still empty: why, and where its "Open <App>" is drawn (null: none). */
+  unfilled: Array<{ pane: PaneId; why: string; open: Rect | null }>;
   /** The user's workspaces, by name. Only the user makes, saves, opens, renames or deletes one. */
   workbooks: Workbook[];
   /** What the Workspaces section offers to take back, while it offers. */
