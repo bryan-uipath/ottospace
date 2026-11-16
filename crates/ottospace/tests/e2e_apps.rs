@@ -1281,6 +1281,9 @@ fn a_restored_pane_whose_app_runs_with_its_window_minimised_says_so_and_the_user
 
     // A window again, and the user's "Open" hosts it in that pane.
     canary.call(json!({"cmd": "open_window"}));
+    wait_for("a window out of the Dock", || {
+        ottospace_mac::ax::Window::standard_of(pid).iter().any(|w| !w.minimized()).then_some(())
+    });
     let [x, y] = middle(rect(&waiting["unfilled"][0]["open"]).expect("the Open button"));
     for action in ["down", "up"] {
         otto.call(json!({"cmd": "mouse", "action": action, "x": x, "y": y, "as": "user"}));

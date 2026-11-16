@@ -378,7 +378,7 @@ impl Workspace {
             .into_iter()
             .filter(|(pid, ..)| only(*pid))
             .find_map(|(pid, bundle, name)| marks::same_app(app, (bundle.as_deref(), &name)).then_some(pid));
-        let shown = |pid: i32| ax::Window::standard_of(pid).iter().any(|window| !window.minimized());
+        let shown = |pid: i32| ax::Window::standard_of(pid).iter().any(|w| !w.minimized() && window_managed(w));
         if let Some(pid) = pid.filter(|pid| shown(*pid)) {
             return self.host_window_of(pid, &wanted, window, cx);
         }
