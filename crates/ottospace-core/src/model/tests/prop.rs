@@ -4690,3 +4690,18 @@ fn seed_1392_a_branch_typed_under_a_marks_wait_is_its_own_wait() {
     ])
     .unwrap();
 }
+
+/// Seed 2831: + was given the file name of a workspace just deleted, whose delete could still be
+/// taken back; the undo then put a second workspace under that file name.
+#[test]
+fn seed_2831_plus_takes_no_file_name_an_undo_may_bring_back() {
+    let uid = || "00000000000000a3".to_string();
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::WorkbookSave { uid: uid(), cwds: vec![], histories: vec![] }.sent_by(Origin::User),
+        Action::WorkbookRemove { workbook: 1, tab: None }.sent_by(Origin::User),
+        Action::WorkbookNew { uid: uid() }.sent_by(Origin::User),
+        Action::WorkbookUndo.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
