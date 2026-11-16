@@ -132,7 +132,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
 | ⌘⌥1 … ⌘⌥9 | Go to one of the first nine marks, in the order of the Marks section |
 | ⌘⌃E | List mode: the bar (Tasks, Calendar while a feed is set, Apps, Workspaces, Repos, Marks; Apps and Marks only while their [flags](#features) are on) takes the keyboard, on the open section, or Apps if none is (with Apps off, the first). On a workspace ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; in Repos so is a repository's name: ↵ or space folds or unfolds it, ← folds the selected row's repository and → unfolds it, `a` makes a worktree of it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); in Calendar ← and → go a day back and on, `t` to today; Esc or ⌘⌃E leaves |
-| ⌘; or ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the drawer's buttons and picks, the top row's spaces and their ×, the home screen's buttons, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. The focused app pane's elements get labels too, in orange (APP mode's colour), always two letters or more so one stray key presses nothing in another app: those its accessibility tree says can be pressed (`AXPress`) or typed in (text fields), enabled, at least 4 points each way where the pane shows them, the innermost of nested ones, at most 150 (nearest the pane's top left). Their labels start with the letters ottospace's own leave free, 19 two-letter labels to each such letter (e.g. `ta`, `ts`, `td`); the first letter only narrows. Only when those letters run out do they go under a × label's first letter, or take three letters. They appear once the app's tree is read, a moment after ottospace's own, and follow it while the mode is on (read again each second); the status bar says how many, e.g. `12 controls in Calculator`. An orange label presses that element (`AXPress`) and the pane stays parked; a text field's label focuses the field and gives the app the keyboard, so you type there. Before it presses, ottospace finds the element again and checks it is the same (role, enabled, place in its window within 2 points); if not, nothing is pressed and the status bar says the control moved. Sneak sets no value, opens no menu and scrolls nothing in the app, and only your own typed letter presses: a socket client's letter of an orange label is refused. Apps that build their accessibility tree only on request (Electron, Chrome's pages, Spotify) show few elements, and get few labels: ottospace does not switch their fuller mode on. Entering an app pane raises its window, as a click on the pane does |
+| ⌘; or ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the drawer's buttons and picks, the top row's spaces and their ×, the home screen's buttons, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. On a small control (an icon, a ×, a tab, a row, a header: under three labels wide or high) the label sits beside it, touching its edge, and the control gets a thin outline in the label's colour; above or below first, or at the side in a column such as the rail. It stays in the window and in the control's own scroll area or pane, and covers no other small control and no other label; with no room beside it, it takes the control's freest corner. A pane's label stays in its middle. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. The focused app pane's elements get labels too, in orange (APP mode's colour), always two letters or more so one stray key presses nothing in another app: those its accessibility tree says can be pressed (`AXPress`) or typed in (text fields), enabled, at least 4 points each way where the pane shows them, the innermost of nested ones, at most 150 (nearest the pane's top left). They are placed as ottospace's own are, inside the pane, around ottospace's labels. Their labels start with the letters ottospace's own leave free, 19 two-letter labels to each such letter (e.g. `ta`, `ts`, `td`); the first letter only narrows. Only when those letters run out do they go under a × label's first letter, or take three letters. They appear once the app's tree is read, a moment after ottospace's own, and follow it while the mode is on (read again each second); the status bar says how many, e.g. `12 controls in Calculator`. An orange label presses that element (`AXPress`) and the pane stays parked; a text field's label focuses the field and gives the app the keyboard, so you type there. Before it presses, ottospace finds the element again and checks it is the same (role, enabled, place in its window within 2 points); if not, nothing is pressed and the status bar says the control moved. Sneak sets no value, opens no menu and scrolls nothing in the app, and only your own typed letter presses: a socket client's letter of an orange label is refused. Apps that build their accessibility tree only on request (Electron, Chrome's pages, Spotify) show few elements, and get few labels: ottospace does not switch their fuller mode on. Entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
 **Text fields.** The new-task box's line and the picker's filter are the same field, with the
@@ -159,7 +159,11 @@ and who (the default agent, then each runner and its models), which set the line
 `@agent`, and, unless ↵ would start the default agent in your home folder, a line that says what
 it will do: "↵ will start claude in app on main", or for a saved agent "↵ files it; nothing
 starts"; and, when ↵ would take the workspace you are in and there is something in it, "↵ makes
-this workspace the task's". Under the line, while it is empty, the tags it may hold; the dropdown teaches the rest.
+this workspace the task's". Under the line, while the box is open, the tags it may hold, each mark in a small cap
+(`[#] project`, `[>] repo`, … `[p1] priority`), dimmer once something is typed; a click on one
+types its mark at the cursor (spaced from the words beside it) and opens its dropdown, as the key
+would. At their right, what ↵ does when it is not "add": `[↵] completes` while it would take a
+row, else `[⇧] [↵] later`. The dropdown teaches the rest.
 
 The box is beside the rest of the window, not over it, and your pointer works there as without
 it. A click that only changes the bar (a rail icon, the bar's ×, a fold, a row's button) leaves
@@ -172,8 +176,8 @@ a click that would put it aside waits too.
 
 | Key | Action |
 |---|---|
-| ↵ | Takes the dropdown's highlighted row. With no row highlighted, or when the word is that name already, adds the task and starts its agent: the drawer becomes its conversation |
-| ⇧↵ | Adds the task for later: the box closes, nothing starts |
+| ↵ | While the dropdown shows rows, takes the highlighted one: it never adds a half-typed tag. Adds the task and starts its agent (the drawer becomes its conversation) when there is nothing to finish: no dropdown, no rows ("no match", "new project"), the word that row's name already, or a folder's end (`~/notes/`). While a folder's rows are read again it waits. Esc first adds the line as typed |
+| ⇧↵ | Adds the task for later: the box closes, nothing starts. With the dropdown open, as ↵: it takes the row first |
 | ⌘↵ | Adds the task and starts it, whatever is highlighted |
 | Tab | Takes the highlighted row, or the first |
 | ↑ / ↓ or ⌃P / ⌃N | Move over the dropdown's rows. With no dropdown: to the line's start or end |
@@ -184,9 +188,10 @@ a click that would put it aside waits too.
 - **The dropdown** opens when the cursor is in a tag: up to 8 names for it, with what each is
   and a word of detail. Names that start with what is typed come first, then those where a
   word of the name does (`flow-app` for `ap`), then those that have its letters in order. The
-  letters matched are drawn stronger. A bare mark (`#`) lists what there is and highlights
-  nothing; once a letter of the name is typed the first row is highlighted. Typing narrows it;
-  a click on a row takes it.
+  letters matched are drawn stronger. A row is always highlighted, so what ↵ takes shows: the
+  first, or the one the word spells out (`app` over `app-2`), or the one ↑/↓ moved to (they
+  wrap). A bare mark (`#`) lists what there is, the first highlighted. Only at a folder's end
+  (`~/notes/`) is none: the path is whole. Typing narrows it; a click on a row takes it.
 - **Taking a row** replaces the whole word under the cursor with the name and a space. A
   folder takes no space: the dropdown stays open on what is inside it. A space typed at
   the end of a name that is one of the rows takes that row, spelled as it is kept; inside a
@@ -259,9 +264,14 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    permission mode, how long the agent has run and its folder), the folder itself only when it
    is not the task's repository; Brief (when it has captures); Stop ends the agent (in the terminal view; drawn natively, "Stop the Agent" in the palette or the menu);
    × (⌘⇧L) closes the chat and the agent goes on. ⌘L moves the keyboard in
-   and out. At its foot, muted, the model in short, and a permission mode that lets the agent
-   act without asking (`auto`, `accept edits`; `bypass` in the warning colour): `haiku-5.5 ·
-   auto`. It stays once the agent ended. Under the header of a native conversation, its
+   and out. At its foot, muted, the model in short, a permission mode that lets the agent
+   act without asking (`auto`, `accept edits`; `bypass` in the warning colour), and, at the
+   right, the folder its process runs in: `haiku-5.5 · auto` and `~/code/app`. The folder is
+   from home (`~`), or a worktree's from its folder name (`fix-login/crates`); a long one has
+   `…` in its middle, and the hover has all of it; in a narrow drawer the model and mode are
+   cut first. Before the agent starts: where it would start (a session gone on with: where it
+   started). A folder that is gone (a worktree removed) starts no agent: the notice bar says
+   so. It stays once the agent ended. Under the header of a native conversation, its
    [dial](#the-agent-dial). Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
 5. **Dismissing.** A dismissed task leaves the top row and the drawer (the drawer shows
@@ -745,7 +755,11 @@ written a second after a change and at quit, readable by you alone.
   `Open <App>`. `restore_apps: true` starts it instead. Opening a workspace starts its apps: you
   asked for them; a start does not.
 - **The drawer** shows the task's conversation again, not running: Resume session in the drawer
-  goes on with its session. No agent starts by itself.
+  goes on with its session. No agent starts by itself. In Chat, what the session's file has of
+  before shows above the composer: its calls, its edits' diff cards, a line per message (the
+  words are in the file: Terminal shows them); ↵ on a message goes on with it. An agent ottospace
+  started ends when ottospace quits. "Live in another terminal" is said only when the file is
+  written after the start, or a live process has the session.
 - A tab whose task no longer exists comes back as a tab of no task, so nothing is lost.
 - A file that cannot be read is set aside as `layout.json.bad`, and ottospace starts empty and
   says so. A file a newer build wrote is left as it is and not written over. A pane of a kind

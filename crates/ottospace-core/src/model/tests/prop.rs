@@ -464,6 +464,7 @@ impl Gen<'_> {
                 1 | 2 => Source::Own { id: format!("c{i}") },
                 _ => Source::Own { id: g.name(CONTROLS) },
             },
+            clip: None,
         };
         (0..n).map(|i| target(self, i)).collect()
     }
@@ -862,6 +863,8 @@ const MAKERS: &[Make] = &[
     |g| Action::ComposeMove { delta: g.delta() },
     |g| Action::ComposeAccept { index: g.index(4) },
     |_| Action::ComposeFolderClear,
+    // Every mark a cap types, and one no cap does.
+    |g| Action::ComposeTag { mark: g.rng.pick(&['#', '>', '@', '/', '$', '^', 'p']) },
     |g| {
         // Paths of every kind: a space, a narrow no-break space, a backslash, a line break,
         // one too long, one that is no path.
@@ -1403,6 +1406,8 @@ fn check(m: &Model) -> Result<(), String> {
         // A watched transcript is read-only: no turn to stop.
         ensure!(t.live || t.turn.is_none(), "{subject:?} has a turn and no agent");
         ensure!(!chat.armed || t.turn.is_some(), "{subject:?} waits for a second Esc with no turn");
+        // Built from a file: another program's (read-only) or a task's past, never both, never live.
+        ensure!(!t.past || (!t.watched && !t.live && subject.task().is_some()), "{subject:?} is past and more");
     }
     // A stop asked for is of an agent that runs, until its process is gone.
     for subject in &m.ending {
@@ -1624,6 +1629,9 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(rows <= complete::MAX_ROWS, "the dropdown has {rows} rows");
         ensure!(menu.selected.is_none_or(|at| at < rows), "the dropdown highlights row {:?} of {rows}", menu.selected);
         ensure!(!menu.rows.is_empty() || menu.note.is_some(), "a dropdown with no row and nothing to say");
+        // What ↵ takes is on show: a row is highlighted, but while rows are read or at a folder's end.
+        let whole = menu.mark == '/' && (menu.stale || menu.typed == "~" || menu.typed.ends_with('/'));
+        ensure!(rows == 0 || whole || menu.selected.is_some(), "rows on show and none highlighted: {menu:?}");
         let names: Vec<&String> = menu.rows.iter().map(|row| &row.name).collect();
         ensure!(unique(&names), "a name is on the dropdown twice: {names:?}");
         let line = m.compose_line().map(String::as_str).unwrap_or_default();
@@ -1702,6 +1710,11 @@ fn check(m: &Model) -> Result<(), String> {
         // Each app label names one element.
         let sources: Vec<String> = apps.iter().map(|t| format!("{:?}", t.target.source)).collect();
         ensure!(unique(&sources), "two labels on one element");
+        // Every label is drawn where its targets now place it (`{:?}`: a NaN frame is never `==`).
+        let mut again = sneak.targets.clone();
+        crate::sneak_place::place(&mut again);
+        let placed = sneak.targets.iter().all(|t| t.pill.is_some());
+        ensure!(placed && format!("{again:?}") == format!("{:?}", sneak.targets), "a pill is stale or missing");
         let covered = boxed || m.keys || m.live.is_some() || m.visual.is_some() || m.mark_input.is_some();
         ensure!(!covered && !m.ax_overlay && m.confirm.is_none(), "sneak mode is on under something else");
         let _ = sneak.visible().count();
@@ -2244,9 +2257,12 @@ impl Run {
         let chosen = m.picker.as_ref().and_then(|picker| picker.matches().get(picker.selected).copied().cloned());
         let field = (m.field().is_some(), m.open_field().map(|(_, field)| field.text().to_string()));
         let task_ids: Vec<TaskId> = m.tasks.list.iter().map(|task| task.id).collect();
-        // ↵ on a highlighted row that would change the line takes the row: it files nothing.
-        let takes = match (&action, m.dropdown().and_then(|menu| menu.selected)) {
-            (Action::ComposeSubmit { open: false } | Action::ComposeEnter, Some(row)) => m.changes(row),
+        // ↵ or ⇧↵ while the dropdown shows rows files nothing: no half-typed tag starts an agent.
+        // Unless the word is whole: its row spelled out, or a folder's end (none highlighted).
+        let takes = match (&action, m.dropdown().filter(|menu| !menu.rows.is_empty())) {
+            (Action::ComposeSubmit { open: false } | Action::ComposeEnter, Some(menu)) => {
+                !menu.selected.map_or(!menu.stale, |row| m.taking(row).is_some() && !m.changes(row))
+            }
             _ => false,
         };
         // While the bar asks before discarding, ↵ is the answer: it files nothing.
@@ -2775,10 +2791,13 @@ impl Run {
             ensure!(kept, "a mark's wait: {mark_input:?} before, {:?} after", m.mark_input);
         }
 
-        // An edit goes to the field that has the keyboard, or nowhere.
+        // An edit goes to the field that has the keyboard, or nowhere. With none it is a move
+        // of the user's like any other: an open field may close (the inspector's filter under
+        // the key reference), but nothing is typed in it.
         if matches!(action, Action::FieldEdit { .. }) && !field.0 {
             let now = m.open_field().map(|(_, field)| field.text().to_string());
-            ensure!(now == field.1, "an edit changed a field with no keyboard: {:?} to {now:?}", field.1);
+            let same = now.is_none() || now == field.1;
+            ensure!(same, "an edit changed a field with no keyboard: {:?} to {now:?}", field.1);
         }
         // The picker's rows change under the selection: it stays on its item while that is a row.
         if let (Action::SetInstalled { .. }, Some(chosen), Some(picker)) = (&action, &chosen, &m.picker) {
@@ -3941,8 +3960,11 @@ fn back_from_the_rail_under_the_inspector_shows_the_conversation() {
 /// user's next letter pressed an element they never saw labelled. (Found by review.)
 #[test]
 fn an_app_label_drawn_after_the_first_letter_is_not_pressed_by_the_second() {
-    let own =
-        |id: &str, x: f64| Target { frame: Frame { x, y: 0., w: 20., h: 20. }, source: Source::Own { id: id.into() } };
+    let own = |id: &str, x: f64| Target {
+        frame: Frame { x, y: 0., w: 20., h: 20. },
+        source: Source::Own { id: id.into() },
+        clip: None,
+    };
     // 17 controls take one letter each; the ×'s two-letter label starts with the 18th, `o`.
     let mut targets: Vec<Target> = (0..17).map(|i| own(&format!("c{i}"), i as f64 * 30.)).collect();
     targets.push(own("close:1", 600.));
@@ -3969,7 +3991,8 @@ fn an_app_label_drawn_after_the_first_letter_is_not_pressed_by_the_second() {
 /// An app's control had a one-letter label (`s`): one stray key pressed it. (Found by review.)
 #[test]
 fn one_key_never_presses_in_an_app() {
-    let own = Target { frame: Frame { x: 0., y: 0., w: 20., h: 20. }, source: Source::Own { id: "c0".into() } };
+    let own =
+        Target { frame: Frame { x: 0., y: 0., w: 20., h: 20. }, source: Source::Own { id: "c0".into() }, clip: None };
     let button = crate::ax::Node {
         role: "AXButton".into(),
         actions: vec!["AXPress".into()],
@@ -4865,6 +4888,30 @@ fn seed_2831_plus_takes_no_file_name_an_undo_may_bring_back() {
         Action::WorkbookRemove { workbook: 1, tab: None }.sent_by(Origin::User),
         Action::WorkbookNew { uid: uid() }.sent_by(Origin::User),
         Action::WorkbookUndo.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
+/// Seed 39158: the rule was wrong, not the model. A client's ⌘/ over the inspector's filter
+/// takes the keyboard; the user's edit then reaches no field and, as any move of theirs, ends
+/// the filter. The rule read the closed field as a changed one.
+#[test]
+fn an_edit_with_no_field_ends_the_inspectors_filter_and_types_nothing() {
+    let app = |window, title: &str, axis, beside| Action::Open {
+        kind: Kind::App { window, title: title.into(), bundle: None, name: "app".into() },
+        axis,
+        beside,
+    };
+    replay(&[
+        app(1, "w1", Axis::Right, None).into(),
+        split(Axis::Right, Kind::Terminal),
+        app(2, "w2", Axis::Down, Some(1)).into(),
+        app(3, "w3", Axis::Right, None).into(),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        Action::InspectorOpen { pane: 5, app: "Fixture".into() }.into(),
+        Action::InspectorFilter { on: true }.into(),
+        by(Origin::Socket, Action::ToggleKeys),
+        Action::FieldEdit { edit: Edit::Unmark }.into(),
     ])
     .unwrap();
 }

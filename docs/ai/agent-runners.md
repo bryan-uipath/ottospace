@@ -134,6 +134,52 @@ after a restart, and sub-agents' own calls. The live stream is the source for th
 ottospace runs the process. One rule: a live session's view folds stream events; on reopen it
 folds the file, then follows the stream.
 
+### After a restart: whose session is it
+
+The bug (2026-11-15): after quitting and reopening, every task talked to before said "its
+session is live in another terminal: go on with it there", for good. Cause: a task's link keeps
+the state it last took from its session (`Link.state`), and `agent_start` refuses a link that
+says `running`. `AgentStarted` sets it to `running`; only `AgentExited` sets it back. While the
+agent runs the stream moves the task's own state (`chat_state`) and leaves the link. A quit
+sends no `AgentExited`, so the task file kept `"state":"needs_you"` with
+`"session":{"state":"running"}`. At the next start that read as "at work elsewhere", and since
+the link no longer matched the task's state, `sessions::follow` never corrected it. No process
+held anything.
+
+What says a session is in use, and what is believed after a restart:
+
+| Signal | Source | After a restart |
+|---|---|---|
+| `Link.state == running` | the task file: the last run's word | not believed: `RestoreTasks` sets it (and a task still `running`) to needs-you (`Model::settle_links`); the task follows its session again |
+| `Found.active` | the session file changed in the last 30 s | for a link kept as running: a file not written since this run began is no work of now (`Model::ours_at`, `left`): our agent's last words. Written after: at work elsewhere. Any other link: as before (a session adopted from another terminal, written just before the start, is at work) |
+| `Found.held` | a `sessions/<pid>.json` of it names a live process (Claude Code only; `claude -p` writes one too: Probes, 4) | believed, unless that process started more than a minute after the record was last written (`sessions::holds`): a pid used again by another program. Every record of a session is read (`SessionRef.holders`): one of a killed process hides no live one |
+
+The cases:
+
+- **ottospace quit and its agent ended.** Every quit ends its agents first (`on_app_quit`): a
+  native one's process group is killed (as Stop does), a terminal one is hung up on. On
+  restart: not live. The drawer shows what the session's file has (`Model::watch_target`, a
+  task's past: calls, diff cards, a line per message, never its words; `Transcript.past`, not
+  read-only), the composer offers Resume, and a message goes on with `--resume <id>`.
+- **ottospace died (crash, `kill -9`) and its agent lives on.** Its stdin closed with us: the
+  CLI ends by itself, at once when idle, after its turn otherwise. While it lives it holds the
+  session and may write to it: the refusal stands, as for any holder, and is gone with the
+  process. ottospace keeps no record of the pids it started, so it never signals a process
+  after a restart: a pid alone does not say the process is ours. Not built: a record of our
+  agents (pid and start time) to stop one left over.
+- **Another terminal runs `claude --resume <id>`.** Held (its record, its live process) or
+  written since the start: the refusal stands, the session is watched, Take over once idle.
+  The note does not say which terminal: `Found` has `held`, not the pid. Not built.
+- **A killed agent's record.** `SIGKILL` leaves `sessions/<pid>.json` behind. The pid is gone
+  (not held); once another program has it, its start time is after the record (not held).
+- **Stopped, then quit within 30 s.** The link says needs-you, so the file's last writes read
+  as work for what is left of the 30 s: the refusal shows, and goes by itself. Not fixed: the
+  core does not keep, across a restart, which agents ended lately.
+
+Known gap, as before: Codex records no process. A Codex session at work elsewhere that wrote
+nothing since ottospace started reads idle for its first 30 s; `codex resume` then joins it
+through its daemon or is refused by the thread's lock (Probes, 1), it does not branch.
+
 ## One description per runner (`ottospace-core::runner`)
 
 The runners are a closed enum, `RunnerId { Claude, Codex }`, and each has one `RunnerSpec`: a

@@ -136,7 +136,11 @@ mod tests {
     #[test]
     fn no_peek_under_sneak_mode_or_the_palette() {
         let mut m = hosted();
-        let pane = Target { frame: Frame { x: 0., y: 0., w: 9., h: 9. }, source: Source::Own { id: "pane:1".into() } };
+        let pane = Target {
+            frame: Frame { x: 0., y: 0., w: 9., h: 9. },
+            source: Source::Own { id: "pane:1".into() },
+            clip: None,
+        };
         m.update(Action::Sneak { targets: vec![pane] });
         // As the wheel over a terminal, a scroll ends no mode: the labels stay up.
         assert_eq!((m.update(wheel(0)), m.mode()), (vec![], Mode::Sneak));

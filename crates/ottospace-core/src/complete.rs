@@ -27,6 +27,17 @@ pub struct Row {
     pub matched: Vec<usize>,
 }
 
+/// What ↵ (and ⇧↵) does in the new-task box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Enter {
+    /// Takes the highlighted row: the dropdown shows rows, and it would change the word.
+    Take(usize),
+    /// Nothing: the rows on show are being read again, and none can be taken.
+    Wait,
+    /// Adds the task: no rows, the word spelled out, or a folder's end.
+    Add,
+}
+
 /// The dropdown as drawn and as the state gives it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Dropdown {
@@ -38,7 +49,8 @@ pub struct Dropdown {
     #[serde(skip)]
     pub start: usize,
     pub rows: Vec<Row>,
-    /// The highlighted row: ↵ and Tab take it. `None`: ↵ adds the task.
+    /// The highlighted row: ↵ and Tab take it. `None` (a folder's end, or rows being read): ↵
+    /// takes nothing.
     pub selected: Option<usize>,
     /// What the dropdown says under its rows: `no match`, `new project` with none; `… 12 more`
     /// past the last of a folder's.
@@ -96,12 +108,17 @@ pub fn rows(typed: &str, candidates: Vec<Candidate>) -> Vec<Row> {
     ranked.into_iter().take(MAX_ROWS).map(|(_, row)| row).collect()
 }
 
-/// The highlighted row. One the user moved to stays (within the rows there are). Else the
-/// first, but only once a letter of the name is typed: a bare `#` highlights nothing, so ↵
-/// still adds the task.
-pub fn selected(moved: Option<usize>, typed: &str, rows: usize) -> Option<usize> {
-    let first = (!typed.is_empty()).then_some(0);
-    moved.or(first).filter(|_| rows > 0).map(|at| at.min(rows - 1))
+/// The highlighted row, so ↵ always shows what it takes. One the user moved to stays (within the
+/// rows there are); else the row `name` spells out, whatever the case (`app` over `apple`); else
+/// the first. None at a folder's end (`~/notes/`: `path`, `name` empty): the path is whole.
+pub fn selected(moved: Option<usize>, name: &str, path: bool, rows: &[Row]) -> Option<usize> {
+    let spells = |row: &Row| {
+        let last = if path { row.name.trim_end_matches('/').rsplit('/').next().unwrap_or("") } else { &row.name };
+        last.to_lowercase() == name.to_lowercase()
+    };
+    let spelled = rows.iter().position(spells);
+    let first = (!path || !name.is_empty()).then_some(0);
+    moved.or(spelled).or(first).filter(|_| !rows.is_empty()).map(|at| at.min(rows.len() - 1))
 }
 
 /// The row a move of `delta` lands on, from the highlighted one; it wraps. From none, down is
@@ -156,9 +173,21 @@ mod tests {
     }
 
     #[test]
-    fn the_first_row_is_highlighted_only_once_a_letter_is_typed() {
-        assert_eq!((selected(None, "", 3), selected(None, "a", 3), selected(None, "a", 0)), (None, Some(0), None));
-        assert_eq!((selected(Some(5), "", 3), selected(Some(1), "a", 3)), (Some(2), Some(1)));
+    fn a_row_is_highlighted_unless_a_folder_is_whole() {
+        let rows = |list: &[&str]| -> Vec<Row> {
+            let row =
+                |name: &&str| Row { name: name.to_string(), kind: "repo", detail: String::new(), matched: vec![] };
+            list.iter().map(row).collect()
+        };
+        let three = rows(&["apple", "App", "zap"]);
+        assert_eq!((selected(None, "", false, &three), selected(None, "a", false, &[])), (Some(0), None));
+        // Spelled out, whatever the case: that row, over one ranked before it.
+        assert_eq!((selected(None, "app", false, &three), selected(None, "ap", false, &three)), (Some(1), Some(0)));
+        assert_eq!((selected(Some(5), "", false, &three), selected(Some(2), "app", false, &three)), (Some(2), Some(2)));
+        // A folder's end highlights nothing; a folder named without its last `/` is spelled out.
+        let paths = rows(&["~/notes/a.md", "~/notes/archive/"]);
+        assert_eq!((selected(None, "", true, &paths), selected(None, "archive", true, &paths)), (None, Some(1)));
+        assert_eq!(selected(None, "a", true, &paths), Some(0));
         // ↓ from nothing is the first row, ↑ the last; both wrap.
         assert_eq!(
             (moved(None, 1, 3), moved(None, -1, 3), moved(Some(2), 1, 3), moved(Some(0), -1, 3)),

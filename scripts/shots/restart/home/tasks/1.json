@@ -1,0 +1,1 @@
+{"id": 1, "title": "fix the login loop", "state": "needs_you", "priority": 3, "repo": "{ROOT}/repos/app", "created": 1794800000000, "started_at": 1794800001000, "session": {"runner": "claude", "id": "8f14e45f-ceea-467f-a8d3-0242ac130009", "state": "running"}, "colour": 0}

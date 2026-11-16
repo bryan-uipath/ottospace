@@ -728,9 +728,6 @@ enum Filing {
     Task { title: String, priority: u8, state: State, tab: Option<u32>, assign: Assign },
 }
 
-/// What the new-task box's keys do: in the box and where the Tasks section says how to add a task.
-const KEYS_HINT: &str = "⇧↵ later";
-
 /// A heading's name in a control's id and on the socket: `needs_you`, `open`, ...
 fn heading_name(heading: Heading) -> String {
     serde_json::json!(heading).as_str().unwrap_or_default().to_string()
@@ -1044,6 +1041,10 @@ impl Workspace {
                 // The layout first, while its panes and terminals are all there.
                 this.store_layout(true);
                 this.store_key_use(true);
+                // Its agents end with it: none is left on a session, to hold it from the next run.
+                this.drawer.agents.values().for_each(|agent| agent.terminal.signal(libc::SIGHUP));
+                this.drawer.native.clear();
+                this.drawer.stopping.clear();
                 this.hosted.drain().for_each(|(_, hosted)| {
                     hosted.give_back();
                 });
@@ -2969,7 +2970,7 @@ impl Workspace {
             // What ↵ in the box would do (`agent`, `starts`, `dir`, `branch`), or null; and the
             // drawer's picks: repository names (`wheres`) and agent names (`whos`).
             "compose_plan": self.model.compose_plan(),
-            // The plan's line over the box, null when it is the default; the tag hint, null once typed.
+            // The plan's line over the box, null when it is the default; the tag hint, while the box is open.
             "compose_plan_line": self.model.compose_plan_line(),
             "compose_hint": self.model.compose_hint(),
             "compose_picks": self.model.compose_picks(),
@@ -2980,6 +2981,12 @@ impl Workspace {
             "compose_menu": self.model.dropdown(),
             // Where that dropdown was drawn, or null without one.
             "compose_menu_bounds": self.model.dropdown().map(|_| rect(self.field.borrow().menu)),
+            // Where each tag's cap under the box was drawn, by its key (`#`, `>`, `p1`), or null
+            // with the box closed. A click on one types its mark.
+            "compose_tags": self.model.compose.as_ref().map(|_| {
+                let at = |key: &str| self.controls.bounds(&format!("compose:tag:{key}")).map(|b| (key.to_string(), rect(b)));
+                ottospace_core::model::TAG_KEYS.iter().filter_map(|(key, _)| at(key)).collect::<BTreeMap<_, _>>()
+            }),
             // The folder taken from a path's dropdown that the task's agent will run in, as the
             // line has it (`~/notes/`), or null.
             "compose_folder": self.model.compose_folder(),

@@ -14,9 +14,10 @@ use gpui::{
     AnyElement, Bounds, BoxShadow, Context, Div, FontWeight, Hsla, IntoElement, KeyDownEvent, Keystroke, Pixels,
     Window, black, canvas, div, point, prelude::*, px, rgb,
 };
-use ottospace_core::ax::{Frame, Source, Target};
+use ottospace_core::ax::{Frame, Labelled, Source, Target};
 use ottospace_core::marks::Field;
 use ottospace_core::sneak::{Sneak, SneakKey, sneak_key};
+use ottospace_core::sneak_place;
 use ottospace_core::{Action, Axis, Origin, PaneId, theme};
 
 use crate::{SECTIONS, SPLITS, Workspace, control};
@@ -72,8 +73,8 @@ pub fn chip() -> Div {
 struct Painted {
     /// Counts frames, so a caller can wait for the next one.
     frame: u64,
-    /// Each control's id and the part of it that shows, in window points.
-    controls: BTreeMap<String, Bounds<Pixels>>,
+    /// Each control's id, the part of it that shows and what its scroll area shows, in window points.
+    controls: BTreeMap<String, (Bounds<Pixels>, Bounds<Pixels>)>,
 }
 
 /// ottospace's own controls as the last frame drew them: what sneak mode puts labels on.
@@ -94,9 +95,10 @@ impl Controls {
         let (painted, id) = (self.0.clone(), id.into());
         let note = move |bounds: Bounds<Pixels>, window: &mut Window, _: &mut gpui::App| {
             // Only the part that shows: a row scrolled out of its list gets no label.
-            let shown = bounds.intersect(&window.content_mask().bounds);
+            let clip = window.content_mask().bounds;
+            let shown = bounds.intersect(&clip);
             if shown.size.width > px(1.) && shown.size.height > px(1.) {
-                painted.borrow_mut().controls.insert(id, shown);
+                painted.borrow_mut().controls.insert(id, (shown, clip));
             }
         };
         canvas(note, |_, _, _, _| {}).absolute().top_0().left_0().size_full().into_any_element()
@@ -104,7 +106,7 @@ impl Controls {
 
     /// Where the control `id` was last drawn, if it was.
     pub fn bounds(&self, id: &str) -> Option<Bounds<Pixels>> {
-        self.0.borrow().controls.get(id).copied()
+        self.0.borrow().controls.get(id).map(|(shown, _)| *shown)
     }
 
     fn frame(&self) -> u64 {
@@ -116,44 +118,44 @@ impl Controls {
     }
 
     fn targets(&self) -> Vec<Target> {
-        let target = |(id, bounds): (&String, &Bounds<Pixels>)| Target {
-            frame: frame(*bounds),
+        let target = |(id, (shown, clip)): (&String, &(Bounds<Pixels>, Bounds<Pixels>))| Target {
+            frame: frame(*shown),
             source: Source::Own { id: id.clone() },
+            clip: Some(frame(*clip)),
         };
         self.0.borrow().controls.iter().map(target).collect()
     }
 }
 
-/// The label pills: typed letters dimmed, labels the letters rule out not drawn.
+/// The label pills where the core placed them (`sneak_place`): typed letters dimmed, labels the
+/// letters rule out not drawn. A pill beside its control, not on it, outlines the control.
 pub fn labels(sneak: &Sneak) -> impl IntoElement + use<> {
     let dim = Hsla::from(rgb(theme::BACKGROUND)).opacity(0.35);
-    let pills = sneak.visible().map(|t| {
-        let f = t.target.frame;
+    let rect = |f: Frame| div().absolute().left(px(f.x as f32)).top(px(f.y as f32)).w(px(f.w as f32)).h(px(f.h as f32));
+    // A label in another app is tinted as APP mode is: the press goes to that app.
+    let tint =
+        |t: &Labelled| rgb(if matches!(t.target.source, Source::App { .. }) { theme::APP } else { theme::SNEAK });
+    let outlines = sneak
+        .visible()
+        .filter(|t| t.pill.is_some_and(|p| !p.intersects(&t.target.frame)))
+        .map(|t| rect(t.target.frame).rounded_sm().border_1().border_color(Hsla::from(tint(t)).opacity(0.6)));
+    let pills = sneak.visible().filter_map(|t| {
         let (typed, rest) = t.label.split_at(sneak.typed.len().min(t.label.len()));
-        // A label in another app is tinted as APP mode is: the press goes to that app.
-        let app = matches!(t.target.source, Source::App { .. });
-        let pill = chip()
-            .when(app, |pill| pill.bg(rgb(theme::APP)))
+        let chip = chip()
+            .bg(tint(t))
+            .size_full()
+            // Less padding than the overlay's chip: the core's width holds the letters.
+            .px(px(2.))
             .flex()
-            .line_height(px(15.))
+            .justify_center()
+            .line_height(px(sneak_place::PILL_H as f32))
             .font_weight(FontWeight::BOLD)
             .child(div().text_color(dim).child(typed.to_uppercase()))
             .child(rest.to_uppercase());
-        // A pane's label sits in its middle, a small control's on it, a row's or bar's at its left.
-        let body = matches!(&t.target.source, Source::Own { id } if id.starts_with("pane:"));
-        div()
-            .absolute()
-            .left(px(f.x as f32))
-            .top(px(f.y as f32))
-            .w(px(f.w as f32))
-            .h(px(f.h as f32))
-            .flex()
-            .items_center()
-            .when(body || f.w <= 40., |d| d.justify_center())
-            .when(!body && f.w > 40., |d| d.pl(px(2.)))
-            .child(pill)
+        // At the core's rect and size, so what the state says is what shows.
+        Some(rect(t.pill?).child(chip))
     });
-    div().absolute().top_0().left_0().size_full().children(pills)
+    div().absolute().top_0().left_0().size_full().children(outlines).children(pills)
 }
 
 impl Workspace {

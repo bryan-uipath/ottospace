@@ -98,6 +98,7 @@ import type {
   ClosedApp,
   Sneak,
   SneakApp,
+  SneakTarget,
   KeyReference,
   Snapshot,
   Station,
@@ -1389,10 +1390,14 @@ function axTarget(value: unknown, at: string): AxTarget {
   };
 }
 
+function sneakTarget(value: unknown, at: string): SneakTarget {
+  return { ...axTarget(value, at), pill: frame(fields(value, at).pill, `${at}.pill`) };
+}
+
 function sneak(value: unknown, at: string): Sneak {
   const o = fields(value, at);
   return {
-    targets: list(axTarget)(o.targets, `${at}.targets`),
+    targets: list(sneakTarget)(o.targets, `${at}.targets`),
     typed: str(o.typed, `${at}.typed`),
     app: orNull(sneakApp)(o.app, `${at}.app`),
   };
@@ -1553,6 +1558,7 @@ export function snapshot(value: unknown): Snapshot {
     welcome: bool(o.welcome, "welcome"),
     compose_menu: orNull(composeMenu)(o.compose_menu, "compose_menu"),
     compose_menu_bounds: orNull(rect)(o.compose_menu_bounds, "compose_menu_bounds"),
+    compose_tags: orNull(map(rect))(o.compose_tags, "compose_tags"),
     compose_folder: orNull(str)(o.compose_folder, "compose_folder"),
     compose_pointing: orNull(rect)(o.compose_pointing, "compose_pointing"),
     compose_note: orNull(str)(o.compose_note, "compose_note"),

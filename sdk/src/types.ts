@@ -1037,11 +1037,16 @@ export interface AxTarget {
 
 /** Sneak mode's labels: ottospace's own controls (`own`), and the focused app pane's elements (`app`). */
 export interface Sneak {
-  targets: AxTarget[];
+  targets: SneakTarget[];
   /** The letters typed so far: labels that start with them are on show. */
   typed: string;
   /** Once the app pane's tree was read: labels on its elements now, and how many could have one. */
   app: SneakApp | null;
+}
+
+export interface SneakTarget extends AxTarget {
+  /** Where the label is drawn: beside a small control, touching it; inside a large one. */
+  pill: Frame;
 }
 
 export interface SneakApp {
@@ -1199,7 +1204,7 @@ export interface Snapshot {
   compose_plan: { agent: string; starts: boolean; dir: string | null; branch: string | null } | null;
   /** The line the drawer draws over the box: null when ↵ does the default (default agent, home folder) or the box is closed. */
   compose_plan_line: string | null;
-  /** The tag hint under the box's line: only while the line is empty. */
+  /** The tag hint under the box's line, while the box is open. */
   compose_hint: string | null;
   /** The drawer's one-click picks: repository names and agent names. */
   compose_picks: { wheres: string[]; whos: string[] };
@@ -1208,6 +1213,8 @@ export interface Snapshot {
   compose_menu: ComposeMenu | null;
   /** Where `compose_menu` was drawn, or null without one. */
   compose_menu_bounds: Rect | null;
+  /** Where each tag's cap under the box was drawn, by its key (`#`, `>`, `p1`); a click on one types its mark. Null with the box closed. */
+  compose_tags: Record<string, Rect> | null;
   /** The folder taken from a path's dropdown that the task's agent will run in, as the line has it (`~/notes/`), or null. */
   compose_folder: string | null;
   /** The tab or pane an ⌥-click would reference in the new-task box, while ⌥ is held over it. */
@@ -1283,8 +1290,9 @@ export interface Snapshot {
      */
     native: { chats: Record<string, NativeChat>; opened: ("web" | "file")[] };
     /**
-     * Of the conversation the drawer is on: `foot`, the line at its foot (the model in short, and
-     * a mode that lets the agent act unasked: `haiku-5.5 · auto`), `bypass` (that mode asks for
+     * Of the conversation the drawer is on: `foot`, the line at its foot (the model in short, a
+     * mode that lets the agent act unasked and the folder it runs in, in short:
+     * `haiku-5.5 · auto · ~/code/app`), `bypass` (that mode asks for
      * nothing), `folder` (in the header only when not its task's own) and `facts`, the title's
      * hover as [name, value] pairs. `model` and `mode` are untrusted labels.
      */

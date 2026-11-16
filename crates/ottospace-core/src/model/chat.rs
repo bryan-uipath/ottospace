@@ -335,7 +335,8 @@ impl Model {
     /// The session to watch: the open drawer's conversation, when its agent does not run here,
     /// its session is at work or held elsewhere, and its runner's file can be followed live
     /// (`attach.watch`). The shell reads that file and sends what it says (`AgentEvents`):
-    /// a read-only transcript of labels, never the text.
+    /// a read-only transcript of labels, never the text. Or a task's session nothing has, with
+    /// none of it here (a restart since its agent ran): its past, read the same way, to go on with.
     pub fn watch_target(&self) -> Option<(Subject, RunnerId, String, String)> {
         let subject = self.talk.as_ref().filter(|talk| talk.open)?.task.clone();
         let runner = self.runner_of(&subject)?;
@@ -343,8 +344,20 @@ impl Model {
             return None;
         }
         let (name, id) = self.session_of(&subject)?;
-        let found = self.facts(&name, &id).flatten()?;
-        self.in_use(found).then(|| (subject, runner, id, found.cwd.clone()))
+        if let Some(found) = self.facts(&name, &id).flatten().filter(|found| self.in_use(found)) {
+            return Some((subject, runner, id, found.cwd.clone()));
+        }
+        let unread = self.chat(&subject).is_none_or(|chat| chat.transcript.past);
+        let native = self.talk_view(&subject) == View::Native && !self.talk_live(&subject);
+        let (start, cwd) = self.agent_start(&subject).filter(|_| subject.task().is_some() && unread && native)?;
+        matches!(start, agents::Start::Resume { .. }).then_some((subject, runner, id, cwd?))
+    }
+
+    /// True if the session the drawer follows from its file (`watch_target`) is another
+    /// program's now: read-only. Else it is a task's past, the user's to go on with.
+    fn watched_elsewhere(&self, subject: &Subject) -> bool {
+        let found = self.session_of(subject).and_then(|(runner, id)| self.facts(&runner, &id).flatten());
+        found.is_some_and(|found| self.in_use(found))
     }
 
     /// True if the watched session may be taken over here now: idle, and its runner can go on
@@ -474,8 +487,9 @@ impl Model {
                     }
                     self.chats.push(Chat::new(subject.clone()));
                 }
+                let elsewhere = self.watched_elsewhere(&subject);
                 let Some(chat) = self.chat_mut(&subject) else { return };
-                chat.transcript.watched = true;
+                (chat.transcript.watched, chat.transcript.past) = (elsewhere, !elsewhere);
                 for event in events.into_iter().filter(Event::shows_when_watched) {
                     chat.transcript.fold(event, at);
                 }

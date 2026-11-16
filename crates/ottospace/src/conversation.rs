@@ -1496,6 +1496,7 @@ fn notice_text(notice: &Notice) -> String {
             "Session resumed. Earlier turns are in its file: Terminal shows them.".into()
         }
         Notice::MessageElsewhere => "A message, in the other terminal.".into(),
+        Notice::MessageBefore => "A message. Its words are in the session's file: Terminal shows them.".into(),
         Notice::Ended { by_user: true, .. } => "Stopped.".into(),
         Notice::Ended { code, signal, replied, .. } => {
             let how = how(*code, *signal).map_or(String::new(), |how| format!(" ({how})"));
