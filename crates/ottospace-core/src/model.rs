@@ -3252,6 +3252,7 @@ impl Model {
         let finished = front_was.filter(|id| origin == Origin::User && !was_done(id));
         self.settle_tasks(undo && origin == Origin::User, finished);
         self.settle_spaces();
+        self.settle_left();
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
         self.settle_row_menu();
@@ -6173,6 +6174,14 @@ impl Model {
         }
     }
 
+    /// What is remembered of joined tasks is of spaces there are: again once the row is settled,
+    /// since a space left with no tab goes with the tasks that joined it.
+    fn settle_left(&mut self) {
+        let spaces = &self.spaces;
+        self.left.retain(|(_, of)| spaces.iter().any(|space| space.of == *of));
+        self.joined_before = spaces.iter().flat_map(|s| s.joined.iter().map(|id| (*id, s.of.clone()))).collect();
+    }
+
     /// After every step, before a gone task's tabs are given back: each joined task is live,
     /// in one space and has none of its own; a space whose own task is gone is the most urgent
     /// remaining one's, in place, with its tabs; the front task is one of the space's. `undone`:
@@ -6234,7 +6243,7 @@ impl Model {
                 space.joined.push(id);
             }
         }
-        self.joined_before = self.spaces.iter().flat_map(|s| s.joined.iter().map(|id| (*id, s.of.clone()))).collect();
+        self.settle_left();
         // The front task is one of the space's.
         for at in 0..self.spaces.len() {
             let members = self.members(&self.spaces[at].of.clone());
@@ -9272,6 +9281,21 @@ mod tests {
         let book = Owner::Workbook { id: 1 };
         assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (book, false, vec![1, 2])]);
         assert_eq!((pane_tabs(&m), m.workbooks.list[0].task), (tabs, None));
+    }
+
+    /// Seed 5332: a space left with no tab went, and what was remembered of the tasks that had
+    /// joined it went a step later, under a client's refused request.
+    #[test]
+    fn a_space_gone_with_its_last_tab_leaves_nothing_for_a_later_step_to_settle() {
+        let mut m = workspace_of_one_task();
+        join(&mut m, "second");
+        m.update(Action::CloseTab { index: None });
+        m.update(Action::CloseTab { index: None });
+        // Each has a space of its own from now on, when opened.
+        assert_eq!((m.spaces().len(), m.task_space(2)), (1, task_space(2)));
+        let before = format!("{m:?}");
+        assert_eq!(m.update(Action::TalkFront { task: 1 }.sent_by(Origin::Socket)), []);
+        assert_eq!(format!("{m:?}"), before);
     }
 
     /// `>repo` on the line is as before: the agent runs where the line says.
