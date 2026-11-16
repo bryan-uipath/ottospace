@@ -456,7 +456,8 @@ impl Workspace {
             {
                 let drawn = drawn.clone();
                 move |bounds, _: &mut Window, cx: &mut App| {
-                    if std::mem::replace(&mut drawn.borrow_mut().area, bounds) != bounds {
+                    // Home's area only: Home's nodes keep clear of its text as parts of it.
+                    if on_home && std::mem::replace(&mut drawn.borrow_mut().area, bounds) != bounds {
                         cx.defer(move |cx| cx.notify(view));
                     }
                 }
