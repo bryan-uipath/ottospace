@@ -20,3 +20,11 @@
 {"click":"strip:1"}
 {"settle":500}
 {"shot":"the-first-in-front"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"u p d a t e space t h e space d o c s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"p r o f i l e space t h e space s l o w space s t a r t space o n space a space c o l d space c a c h e","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"settle":700}
+{"shot":"five-tasks"}

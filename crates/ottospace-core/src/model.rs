@@ -2427,7 +2427,7 @@ pub struct Model {
     /// The space a dismissed task had joined (or its own, since another's): joined again if the
     /// user takes the dismissal back.
     #[serde(skip)]
-    left: Vec<(TaskId, Owner)>,
+    departed: Vec<(TaskId, Owner)>,
     /// Each joined task and its space, as the last step left them.
     #[serde(skip)]
     joined_before: Vec<(TaskId, Owner)>,
@@ -2770,7 +2770,7 @@ impl Default for Model {
             spaces: vec![Space::new(Owner::Workspace)],
             drawer_open: false,
             unlinked: Vec::new(),
-            left: Vec::new(),
+            departed: Vec::new(),
             joined_before: Vec::new(),
             next_tab: 0,
             layout_seen: None,
@@ -6208,7 +6208,8 @@ impl Model {
     /// Whether ↵ in the new-task box would start the task in a workspace that holds something
     /// (a pane, a task): the box says so.
     pub fn compose_binds(&self) -> bool {
-        let starts = self.compose_plan().is_some_and(|plan| plan.starts);
+        // While ↵ would take a row of the dropdown it starts nothing: the box says that instead.
+        let starts = !self.enter_completes() && self.compose_plan().is_some_and(|plan| plan.starts);
         starts && self.joins().is_some_and(|of| self.space_holds(&of) || !self.members(&of).is_empty())
     }
 
@@ -6262,7 +6263,7 @@ impl Model {
     /// since a space left with no tab goes with the tasks that joined it.
     fn settle_left(&mut self) {
         let spaces = &self.spaces;
-        self.left.retain(|(_, of)| spaces.iter().any(|space| space.of == *of));
+        self.departed.retain(|(_, of)| spaces.iter().any(|space| space.of == *of));
         self.joined_before = spaces.iter().flat_map(|s| s.joined.iter().map(|id| (*id, s.of.clone()))).collect();
     }
 
@@ -6308,9 +6309,9 @@ impl Model {
             if let Some(book) = self.workbooks.bound_to(own) {
                 self.workbooks.bind(book, Some(heir));
             }
-            self.left.iter_mut().filter(|(_, of)| *of == from).for_each(|(_, of)| *of = to.clone());
+            self.departed.iter_mut().filter(|(_, of)| *of == from).for_each(|(_, of)| *of = to.clone());
             if self.tasks.get(own).is_some() {
-                self.left.push((own, to));
+                self.departed.push((own, to));
             }
             return self.settle_joined(undone, finished);
         }
@@ -6318,13 +6319,14 @@ impl Model {
         let gone: Vec<(TaskId, Owner)> =
             self.joined_before.iter().filter(|(id, _)| !live(self, *id)).cloned().collect();
         for (id, of) in gone {
-            if self.tasks.get(id).is_some() && !self.left.iter().any(|(left, _)| *left == id) {
-                self.left.push((id, of));
+            if self.tasks.get(id).is_some() && !self.departed.iter().any(|(left, _)| *left == id) {
+                self.departed.push((id, of));
             }
         }
-        self.left.retain(|(id, of)| self.tasks.get(*id).is_some() && self.spaces.iter().any(|space| space.of == *of));
+        self.departed
+            .retain(|(id, of)| self.tasks.get(*id).is_some() && self.spaces.iter().any(|space| space.of == *of));
         let tasks = &self.tasks;
-        let back: Vec<(TaskId, Owner)> = self.left.extract_if(.., |(id, _)| tasks.live(*id).is_some()).collect();
+        let back: Vec<(TaskId, Owner)> = self.departed.extract_if(.., |(id, _)| tasks.live(*id).is_some()).collect();
         let back: Vec<(TaskId, Owner)> = back.into_iter().filter(|(id, _)| undone && !owns(self, *id)).collect();
         for (id, of) in back {
             let Some(space) = self.spaces.iter_mut().find(|space| space.of == of) else { continue };
@@ -9378,6 +9380,78 @@ mod tests {
         let book = Owner::Workbook { id: 1 };
         assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (book, false, vec![1, 2])]);
         assert_eq!((pane_tabs(&m), m.workbooks.list[0].task), (tabs, None));
+    }
+
+    /// With #178: ↵ while the dropdown shows rows takes a row. It adds no task and joins nothing;
+    /// nor does a click on a tag's cap. The next ↵, the line complete, does.
+    #[test]
+    fn enter_on_a_row_of_the_dropdown_and_a_tags_cap_join_nothing() {
+        let mut m = workspace_of_one_task();
+        let of = task_space(1);
+        m.update(Action::OpenCompose { text: String::new() });
+        keys(&mut m, "second >ap");
+        // "↵ completes" wins: the line does not say it starts here yet.
+        assert!(m.enter_completes());
+        assert_eq!((m.compose_binds(), m.compose_plan_line().as_deref()), (false, Some("↵ will start claude in app")));
+        m.update(Action::ComposeEnter);
+        assert_eq!((m.tasks.list.len(), m.members(&of), m.front(&of), m.composing()), (1, vec![1], Some(1), true));
+        m.update(Action::ComposeTag { mark: '#' });
+        assert_eq!((m.tasks.list.len(), m.members(&of), m.composing()), (1, vec![1], true));
+        m.update(Action::ComposeEscape);
+        assert!(!m.enter_completes() && m.compose_binds(), "{:?}", m.compose_line());
+        m.update(Action::ComposeEnter);
+        assert_eq!((m.tasks.list.len(), m.members(&of), m.front(&of)), (2, vec![1, 2], Some(2)));
+    }
+
+    /// With #176: after a restart the tasks' links kept as running are reset and their sessions
+    /// gone on with. No task leaves its workspace by it, the front one stays, and each resumes.
+    #[test]
+    fn after_a_restart_a_workspaces_tasks_stay_and_each_ones_session_is_gone_on_with() {
+        const NOW: u64 = 9_000_000;
+        let mut m = workspace_of_one_task();
+        join(&mut m, "second");
+        join(&mut m, "third");
+        m.update(Action::TalkFront { task: 2 });
+        let layout = crate::layout_file::parse(&crate::layout_file::write(&m.layout_file(&[], &[], 0))).unwrap();
+        let ids = [(1, IDLE), (2, HELD), (3, BUSY)];
+        let kept = |task: &Task| {
+            let id = ids.iter().find(|(id, _)| *id == task.id).map(|(_, session)| *session).unwrap();
+            let mut value = serde_json::to_value(task).unwrap();
+            value["state"] = "running".into();
+            value["session"] = serde_json::json!({"runner": "claude", "id": id, "state": "running"});
+            serde_json::from_value::<Task>(value).expect("a kept task")
+        };
+        let mut r = Model::default();
+        r.update(Action::SetRepos { repos: listed() });
+        // As at start: the tasks, then the workspaces, then the layout.
+        r.update(
+            Action::RestoreTasks { tasks: m.tasks.list.iter().map(kept).collect(), floor: 3 }.sent_by(Origin::System),
+        );
+        r.update(Action::RestoreWorkbooks { workbooks: m.workbooks.list.clone() }.sent_by(Origin::System));
+        let restore = Action::RestoreLayout { layout: Box::new(layout), gone: vec![], home: None, launch: false };
+        r.update(restore.sent_by(Origin::System));
+        r.update(Action::Tick { now: NOW }.sent_by(Origin::System));
+        let found = ids.iter().map(|(_, id)| session("claude", id, "/code/app", false, 1_000)).collect();
+        r.update(Action::SetSessions { found, day: 0 }.sent_by(Origin::System));
+        let of = task_space(1);
+        let states: Vec<State> = r.tasks.list.iter().map(|task| task.state).collect();
+        assert_eq!(states, [State::NeedsYou; 3]);
+        assert_eq!(
+            (r.space(), r.members(&of), r.front(&of), r.strip(&of)),
+            (&of, vec![1, 2, 3], Some(2), vec![1, 2, 3])
+        );
+        assert_eq!(r.workbooks.bound_to(1), Some(1));
+        // The front one's ↵ goes on with its session; so does each other's, once in front.
+        for (id, session) in [(2, HELD), (3, BUSY), (1, IDLE)] {
+            r.update(Action::TalkFront { task: id });
+            assert_eq!(r.talk.as_ref().map(|talk| &talk.task), Some(&Subject::Task(id)));
+            assert_eq!(
+                r.update(Action::TalkStart),
+                [resumed(Subject::Task(id), "claude", session, "/code/app")],
+                "{id}"
+            );
+        }
+        assert_eq!((r.members(&of), r.spaces().len()), (vec![1, 2, 3], 2));
     }
 
     /// Seed 5332: a space left with no tab went, and what was remembered of the tasks that had

@@ -6063,6 +6063,53 @@ fn several_tasks_share_a_workspace_and_the_drawers_strip_switches_between_them()
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The owner: "i'd expect < 5 so the ui should be suitable for that". Five tasks in a workspace:
+/// the strip is one line inside the drawer, four badges and the front tab with room for its title.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_strip_of_five_tasks_is_one_line_with_room_for_the_front_ones_title() {
+    let root = support::temp(&format!("ottospace-e2e-strip5-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, sessions) = (root.join("bin"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    let settings =
+        json!({"repos": [], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("strip5", &settings.to_string());
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("strip5", &env);
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.user_key("cmd-d");
+    let mut ids: Vec<u64> = Vec::new();
+    for title in [
+        "a l p h a",
+        "b r a v o",
+        "c h a r l i e",
+        "d e l t a",
+        "e c h o space o f space t h e space l o n g space t i t l e",
+    ] {
+        otto.user_key("cmd-n");
+        otto.user_key(title);
+        let started = otto.user_key("enter");
+        ids.push(started["state"]["talk"]["task"].as_u64().expect("the drawer is on the new task"));
+    }
+    let state = otto.call(json!({"cmd": "state"}));
+    let space = state["spaces"].as_array().unwrap().iter().find(|s| s["selected"] == true).cloned().unwrap();
+    assert_eq!((&space["strip"], &space["front"]), (&json!(ids), &json!(ids[4])));
+    let tabs: Vec<[f64; 4]> = ids.iter().map(|id| otto.control(&format!("strip:{id}"))).collect();
+    let (new, drawer) = (otto.control("strip:new"), otto.control("talk"));
+    // One line, left to right, + last, all inside the drawer.
+    for pair in tabs.windows(2) {
+        assert!(pair[0][1] == pair[1][1] && pair[0][0] + pair[0][2] <= pair[1][0] + 0.5, "{tabs:?}");
+    }
+    assert!(tabs[0][0] >= drawer[0] && new[0] + new[2] <= drawer[0] + drawer[2] + 0.5, "{tabs:?} {new:?} {drawer:?}");
+    assert!(new[0] >= tabs[4][0] + tabs[4][2] - 0.5, "{tabs:?} {new:?}");
+    // Four badges, and the front one with room for its title.
+    assert!(tabs[..4].iter().all(|tab| tab[2] < 40.), "{tabs:?}");
+    assert!(tabs[4][2] >= 96., "{tabs:?}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// A workspace keeps what is open in it: made with +, a terminal in a folder, closed with × and
 /// opened from the list; and closed, then after a restart, opened from the list again.
 #[test]
