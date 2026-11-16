@@ -1286,7 +1286,7 @@ impl Workspace {
     pub(crate) fn chats_snapshot(&self) -> serde_json::Value {
         // The conversations of the spaces on the row, hidden ones too, and the drawer's.
         // Every conversation of a space: a session's, each task of a workspace.
-        let of = |space: &Space| -> Vec<Subject> {
+        let of = |space: &ottospace_core::model::Space| -> Vec<Subject> {
             let tasks = self.model.members(&space.of).into_iter().map(Subject::Task);
             let own = self.model.space_subject(&space.of).filter(|subject| subject.task().is_none());
             tasks.chain(own).collect()

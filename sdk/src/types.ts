@@ -236,6 +236,12 @@ export interface SpaceRow {
   hidden: boolean;
   selected: boolean;
   tabs: number[];
+  /** Its tasks, the most urgent first (needs you, running, later, on hold, done): the badges of its item on the top row. A workspace may hold several. */
+  tasks: TaskId[];
+  /** The task whose conversation is in front there (the drawer's, the dial's, the agent chip's), or null: it has no task. Only the user changes it. */
+  front: TaskId | null;
+  /** The tabs of the drawer's strip while this space is selected, in the order the tasks came; empty with fewer than two. */
+  strip: TaskId[];
 }
 
 /** The active tab's split tree. `ratio`: the share of the split that `a` (left or top) takes. */

@@ -82,6 +82,8 @@ pub struct SpaceRow {
     pub tasks: Vec<TaskId>,
     /// The task whose conversation is in front, if it has a task.
     pub front: Option<TaskId>,
+    /// The tabs of the drawer's strip while it is selected, in order. Empty: no strip.
+    pub strip: Vec<TaskId>,
 }
 
 /// Why a client's change of space waits: the user's keys are in the chat.
@@ -116,6 +118,7 @@ impl Model {
             tabs: self.space_tabs(&space.of),
             tasks: self.space_tasks(&space.of),
             front: self.front(&space.of),
+            strip: self.strip(&space.of),
         };
         self.spaces.iter().map(row).collect()
     }
