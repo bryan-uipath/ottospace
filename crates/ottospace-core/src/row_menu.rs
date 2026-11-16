@@ -77,11 +77,13 @@ impl Model {
         self.row_menu = (!open && listed).then_some(RowMenu { row, selected: keys.then_some(0), dots });
     }
 
-    /// The … of the open menu as last drawn. Elsewhere than when it opened (a row above came or
-    /// went, the window changed), or not drawn: the menu closes, rather than hang under another row.
+    /// The … of the open menu as last drawn. Elsewhere than it was (a row or a notice above came
+    /// or went, the window changed): the menu goes with it, never left under another row. Not
+    /// drawn any more: the menu closes.
     pub(crate) fn row_menu_drawn(&mut self, dots: Option<Rect>) {
-        if self.row_menu.as_ref().is_some_and(|menu| menu.dots != dots) {
-            self.row_menu = None;
+        match (&mut self.row_menu, dots) {
+            (Some(menu), Some(at)) => menu.dots = Some(at),
+            _ => self.row_menu = None,
         }
     }
 
@@ -267,16 +269,16 @@ mod tests {
     /// Review: the menu was drawn where its … had been. A line above the rows went (the offer to
     /// undo a delete ran out), the rows moved up, and the menu hung under another row's ….
     #[test]
-    fn the_menu_closes_when_its_dots_are_drawn_elsewhere_or_not_at_all() {
+    fn the_menu_follows_its_dots_and_closes_when_they_are_not_drawn() {
         let drawn = |dots: Option<Rect>| Action::RowMenuDrawn { dots }.sent_by(Origin::System);
         // Drawn where they were: it stays.
         let mut m = opened();
         m.update(drawn(DOTS));
         assert!(m.row_menu().is_some());
-        // The rows moved up a line: closed, and ↵ after it takes nothing.
-        m.update(drawn(DOTS.map(|at| Rect { y: at.y - 30., ..at })));
-        m.update(menu_key("enter"));
-        assert_eq!((m.row_menu(), names(&m), m.mark_input.is_none()), (None, vec!["Workspace 2"], true));
+        // The rows moved up a line: the menu goes with its …, still of its own row.
+        let moved = DOTS.map(|at| Rect { y: at.y - 30., ..at });
+        m.update(drawn(moved));
+        assert_eq!(m.row_menu().map(|(menu, _)| (menu.row.clone(), menu.dots)), Some((ListRow::Workbook(1), moved)));
         // Not drawn any more: closed.
         let mut m = opened();
         m.update(drawn(None));

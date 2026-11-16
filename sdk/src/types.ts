@@ -884,6 +884,8 @@ export interface Workbook {
   tabs: WorkbookTab[];
   /** Its tabs are listed under its row. */
   unfolded: boolean;
+  /** The task it is bound to (started in it by the user's ↵): its space on the top row is that task's, until the task is dismissed. Null: none. */
+  task: number | null;
   /** Where the Workspaces section drew its row, or null; `fold`: its ▸; `menu`: its …, while it shows (the pointer on the row, list mode's selection, or its menu open). */
   row: Rect | null;
   buttons: { fold: Rect | null; menu: Rect | null };

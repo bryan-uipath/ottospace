@@ -77,8 +77,8 @@ impl Workspace {
         self.dispatch(action, self.input, window, cx);
     }
 
-    /// Tells the core where the open menu's … is painted now: moved or gone, the menu closes
-    /// rather than hang under another row. Every tick, and before a key or a press is the menu's.
+    /// Tells the core where the open menu's … is painted now: the menu goes with it (a notice
+    /// above the rows came or went), and closes if it is gone. It never hangs under another row. Every tick, and before a key or a press is the menu's.
     pub(crate) fn sync_row_menu(&mut self, window: &Window, cx: &mut Context<Self>) {
         // A row gone from under the pointer (deleted, folded away) is hovered no more.
         let listed = self.model.list_rows();

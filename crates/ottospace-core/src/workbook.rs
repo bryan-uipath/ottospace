@@ -7,7 +7,7 @@ use crate::edit::{Edit, Field};
 use crate::layout::Node;
 use crate::marks::{self, Extra, MAX_NAME, MarkInput, Need, PaneRecord, RecordKind, TabRecord};
 use crate::model::{Effect, Kind, Model, Owner, PaneId, Section, Space, Tab};
-use crate::tasks::NOTICE_MS;
+use crate::tasks::{NOTICE_MS, TaskId};
 
 pub type WorkbookId = u32;
 
@@ -241,6 +241,10 @@ pub struct Workbook {
     pub name: String,
     /// Its tabs, in the order they open.
     pub tabs: Vec<TabRecord>,
+    /// The task it is bound to: started in it by the user's ↵, the workspace is that task's
+    /// space until the task is dismissed or gone. One workspace a task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<TaskId>,
     /// The id of each tab's open tab, this run, by place in `tabs`. Shorter than `tabs`: the rest are closed.
     #[serde(skip)]
     pub live: Vec<Option<u32>>,
@@ -289,7 +293,7 @@ fn sized(book: &Workbook) -> Result<(), String> {
 
 impl Workbook {
     fn new(uid: String, name: String, tabs: Vec<TabRecord>) -> Self {
-        Workbook { id: 0, version: VERSION, uid, name, tabs, live: Vec::new(), extra: Extra::new() }
+        Workbook { id: 0, version: VERSION, uid, name, tabs, task: None, live: Vec::new(), extra: Extra::new() }
     }
 
     /// What is wrong with it as read from disk, if anything.
@@ -412,6 +416,8 @@ pub struct WorkbookRow {
     pub tabs: Vec<RowTab>,
     /// Its tabs are listed under it. Only a workbook of more than one tab unfolds.
     pub unfolded: bool,
+    /// The task it is bound to: its space on the top row is that task's.
+    pub task: Option<TaskId>,
 }
 
 /// The workbooks, by name: a folder of files has no order of its own.
@@ -454,6 +460,34 @@ impl Workbooks {
 
     fn sort(&mut self) {
         self.list.sort_by_key(|book| book.name.to_lowercase());
+    }
+
+    /// The workbook bound to task `task`.
+    pub fn bound_to(&self, task: TaskId) -> Option<WorkbookId> {
+        self.list.iter().find(|book| book.task == Some(task)).map(|book| book.id)
+    }
+
+    /// Binds a workbook to a task, or (`None`) unbinds it.
+    pub(crate) fn bind(&mut self, id: WorkbookId, task: Option<TaskId>) {
+        if let Some(book) = self.get_mut(id) {
+            book.task = task;
+        }
+    }
+
+    /// Unbinds each workbook for which `loose` says so, of its id and its task.
+    pub(crate) fn unbind_where(&mut self, loose: impl Fn(WorkbookId, TaskId) -> bool) {
+        for book in &mut self.list {
+            book.task = book.task.filter(|task| !loose(book.id, *task));
+        }
+    }
+
+    /// The space a workbook's tabs are of: its own, or its task's while it is bound to one.
+    pub(crate) fn space_of(&self, of: &Owner) -> Owner {
+        let task = match of {
+            Owner::Workbook { id } => self.get(*id).and_then(|book| book.task),
+            _ => None,
+        };
+        task.map_or(of.clone(), |id| Owner::Task { id })
     }
 
     /// A closed tab is no workbook's any more: a later tab may get its id. Also a tab saved
@@ -546,8 +580,10 @@ impl Model {
             let summary = if held { format!("{summary} · history") } else { summary };
             let tab = tabs.iter().find_map(|tab| tab.tab);
             let (id, name, unfolded) = (book.id, book.name.clone(), self.workbooks.unfolded(book.id));
-            let shown = self.spaces.iter().any(|space| space.of == Owner::Workbook { id } && !space.hidden);
-            WorkbookRow { id, name, panes, summary, open: tab.is_some() || shown, tab, tabs, unfolded }
+            let of = self.workbooks.space_of(&Owner::Workbook { id });
+            let shown = self.spaces.iter().any(|space| space.of == of && !space.hidden);
+            let task = book.task;
+            WorkbookRow { id, name, panes, summary, open: tab.is_some() || shown, tab, tabs, unfolded, task }
         };
         self.workbooks.list.iter().map(row).collect()
     }
@@ -748,8 +784,10 @@ impl Model {
     /// Where a save of `tab` goes: its tab of the workbook it stands for, else a new tab (`None`)
     /// of the workbook whose space it is in. Neither: a new workbook.
     fn workbook_to_save(&self, tab: &Tab) -> Option<(WorkbookId, Option<usize>)> {
+        // A workspace bound to a task: the task's space is its.
         let space = match &tab.space {
             Owner::Workbook { id } => Some((*id, None)),
+            Owner::Task { id } => self.workbooks.bound_to(*id).map(|book| (book, None)),
             _ => None,
         };
         self.workbooks.entry_of(tab.id).map(|(id, at)| (id, Some(at))).or(space)
@@ -870,6 +908,11 @@ impl Model {
         effects: &mut Vec<Effect>,
     ) {
         let Some(book) = self.workbooks.get(id).cloned() else { return };
+        // Bound to a task: its space is that task's.
+        if let Some(task) = book.task {
+            self.list = None;
+            return self.open_space(Owner::Task { id: task }, effects);
+        }
         let places: Vec<usize> = match tab {
             Some(at) if at < book.tabs.len() => vec![at],
             Some(_) => return,
@@ -1055,6 +1098,8 @@ impl Model {
             let mut live: Vec<Option<u32>> = was.map(|old| old.live.clone()).unwrap_or_default();
             live.truncate(book.tabs.len());
             (book.id, book.live) = (was.map_or(0, |old| old.id), live.into_iter().map(|l| l.filter(open)).collect());
+            // One workspace a task: the first read keeps it.
+            book.task = book.task.filter(|task| self.workbooks.bound_to(*task).is_none());
             self.workbooks.add(book);
         }
         let list = &self.workbooks.list;
