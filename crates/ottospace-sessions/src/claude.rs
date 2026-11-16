@@ -290,6 +290,13 @@ fn record_events(record: &Value, sub: bool, cursor: &mut Cursor, events: &mut Ve
     }
     let at = jsonl::time_of(record);
     let mut emit = |what| events.push(Event { at, what });
+    // Where the main loop works: each record says. A sub-agent's file says its own.
+    if let Some(cwd) =
+        record["cwd"].as_str().and_then(recorded_cwd).filter(|cwd| !sub && cursor.cwd.as_ref() != Some(cwd))
+    {
+        cursor.cwd = Some(cwd.clone());
+        emit(What::Cwd { cwd });
+    }
     match record["type"].as_str() {
         Some("user") => user(record, cursor, &mut emit),
         Some("assistant") => assistant(record, cursor, &mut emit),

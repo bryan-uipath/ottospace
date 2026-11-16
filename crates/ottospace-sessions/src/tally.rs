@@ -19,6 +19,8 @@ pub struct Tally {
     /// Tokens in the context window after the main loop's last request, and the window, when known.
     pub context: Option<u64>,
     pub window: Option<u64>,
+    /// The folder the main loop last recorded working in.
+    pub cwd: Option<PathBuf>,
 }
 
 impl Tally {
@@ -27,6 +29,9 @@ impl Tally {
         // After a compaction the context holds what it says, as `Snapshot` has it.
         if let (What::Compaction { tokens_after: Some(after) }, false) = (&event.what, sub) {
             self.context = Some(*after);
+        }
+        if let (What::Cwd { cwd }, false) = (&event.what, sub) {
+            self.cwd = Some(cwd.clone());
         }
         let What::ModelStep { model, usage: Some(usage), window } = &event.what else { return };
         let name = model.clone().unwrap_or_else(|| UNKNOWN.to_string());
