@@ -5133,30 +5133,27 @@ fn an_edit_with_no_field_ends_the_inspectors_filter_and_types_nothing() {
 /// workspace's place only to a task that joined a task's. Bound to it, it joined: the rule was wrong.
 #[test]
 fn seed_356_a_task_that_takes_over_a_workspace_works_in_its_default() {
-    let canvas = Worktree { name: "canvas".into(), path: "/tmp".into(), branch: None };
     replay(&[
         Action::Open {
             kind: Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() },
             axis: Axis::Right,
-            beside: None,
+            beside: Some(1),
         }
-        .into(),
-        Action::NewTab.into(),
-        by(
-            Origin::Socket,
-            Action::SetRepos {
-                repos: vec![Repo {
-                    name: "app".into(),
-                    path: "/code/app".into(),
-                    branch: None,
-                    worktrees: vec![canvas],
-                }],
-            },
-        ),
-        Action::RepoClick { path: "/tmp".into(), axis: Axis::Right }.into(),
-        Action::OpenCompose { text: "#SS>y\u{202e}abc >İa\u{300}\u{301}\u{302}\\ #2048".into() }.into(),
-        by(Origin::System, Action::ComposeRef { target: Pointed::Tab(3) }),
-        Action::ComposeSubmit { open: true }.into(),
+        .sent_by(Origin::User),
+        Action::NewTab.sent_by(Origin::User),
+        Action::SetRepos {
+            repos: vec![Repo {
+                name: "2048".into(),
+                path: "ß.İ".into(),
+                branch: None,
+                worktrees: vec![Worktree { name: "canvas".into(), path: "/tmp".into(), branch: None }],
+            }],
+        }
+        .sent_by(Origin::Socket),
+        Action::RepoClick { path: "/tmp".into(), axis: Axis::Down }.sent_by(Origin::User),
+        Action::OpenCompose { text: "#SS>y\u{202e}abc >İa\u{300}\u{301}\u{302}\\ #2048".into() }.sent_by(Origin::User),
+        Action::ComposeRef { target: Pointed::Tab(3) }.sent_by(Origin::System),
+        Action::ComposeSubmit { open: true }.sent_by(Origin::User),
     ])
     .unwrap();
 }
