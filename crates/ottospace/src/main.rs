@@ -2908,7 +2908,7 @@ impl Workspace {
             "cell": [f32::from(self.cell.width), f32::from(self.cell.height)],
             // What the last step said (a client's refusal is here alone, never on the user's bar),
             // else what the notice bar says, or null. Not `error`: that key means the request failed.
-            "notice": status.as_ref().map(|notice| &notice.text),
+            "notice": status.as_ref().map(Notice::public_text),
             // Its level: `info` (a restart to ask for), `warning` (a move that did nothing) or `error`.
             "notice_level": status.as_ref().map(Notice::level),
             // The bar as drawn: its rect, and its height while it opens or closes. Null: no bar.
@@ -6354,8 +6354,7 @@ impl Render for Workspace {
                     .child(zone_shadow(left, true))
                     .child(zone_shadow(right_width, false))
                     // Highest, the title strip: its shadow falls on all three zones.
-                    .child(title_shadow())
-                    .children(self.render_meeting_banner(cx)),
+                    .child(title_shadow()),
             )
             // The notice bar, at the foot: nothing above it moves when it opens, but the content's foot.
             .children(self.render_notice_bar(cx))

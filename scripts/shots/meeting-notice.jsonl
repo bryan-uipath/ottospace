@@ -1,0 +1,8 @@
+# A meeting that started 2 minutes ago, with a link, and no call on: its notice (made up).
+{"cmd":"split"}
+{"cmd":"wait","pattern":"^\\$"}
+{"until":"calendar.updated"}
+{"cmd":"calendar_call","in_call":false}
+{"until":"calendar.banner"}
+{"settle":500}
+{"shot":"started"}

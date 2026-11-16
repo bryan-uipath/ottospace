@@ -40,10 +40,12 @@ pub const SELECTION: u32 = 0x155e75;
 pub const SNEAK: u32 = 0xffb900;
 
 /// The notice bar by level, `(background, text)`: apollo-ui's future-dark semantic tokens
-/// `--color-{error,warning,info}-background` and `--color-{error,warning,info}-text`.
+/// `--color-{error,warning,info}-background` and `--color-{error,warning,info}-text`. A meeting:
+/// the band's meeting amber on indigo (Tailwind indigo-950), apart from a warning's brown.
 pub fn notice(level: crate::notice::Level) -> (u32, u32) {
     match level {
         crate::notice::Level::Error => (0x460809, ERROR),
+        crate::notice::Level::Meeting => (0x1e1a4d, MEETING),
         crate::notice::Level::Warning => (0x461901, SNEAK),
         crate::notice::Level::Info => (0x053345, 0x00d3f2),
     }
