@@ -423,6 +423,8 @@ struct Filled {
     visible: ottospace_core::ax::Frame,
     /// The window has been given `frame`: until then it is not looked at (`fill_holds`).
     set: bool,
+    /// Where the window was as the mode was turned off, before the bars came back.
+    left: Option<ottospace_core::ax::Frame>,
 }
 
 /// Height of the top bar (the native title strip, so all of it drags the window), and the width
@@ -4100,13 +4102,17 @@ impl Workspace {
         }
         // SAFETY: GPUI's own view, on the main thread.
         let at = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::placement(view) });
+        // Read first too: AppKit may push the window under a menu bar that comes back.
+        if let (false, Some(filled)) = (on, &mut self.filled) {
+            filled.left = at.as_ref().map(|at| at.window);
+        }
         // The bars before anything that can fail: nothing leaves them away. `at` was read first:
         // `visible` is what they leave while they show.
         ottospace_mac::window::hide_bars(on);
         // Kept from a turn before whose frame is still to come: its `before` is the true one.
         if let (true, None, Some(at)) = (on, self.filled, at) {
             let frame = fill::frame(at.screen, at.safe_top);
-            self.filled = Some(Filled { before: at.window, frame, visible: at.visible, set: false });
+            self.filled = Some(Filled { before: at.window, frame, visible: at.visible, set: false, left: None });
         }
         let Some(view) = ns_view(window).map(|view| view as usize) else { return };
         // Not in this update: GPUI drops the resize AppKit reports while the app is borrowed,
@@ -4120,7 +4126,8 @@ impl Workspace {
             // SAFETY: the window's own view, alive while its workspace is; the main thread.
             if let Some(at) = unsafe { ottospace_mac::window::placement(view) } {
                 let screens = recovery::screens();
-                let back = || fill::back(at.window, filled.frame, filled.before, &screens.visible, screens.main);
+                let now = filled.left.unwrap_or(at.window);
+                let back = || fill::back(now, filled.frame, filled.before, &screens.visible, screens.main);
                 unsafe { ottospace_mac::window::set_frame(view, if on { filled.frame } else { back() }) };
             }
             let _ = this.update(cx, |this, cx| {

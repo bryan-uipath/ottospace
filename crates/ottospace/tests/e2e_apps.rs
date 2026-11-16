@@ -1812,7 +1812,9 @@ fn the_window_fills_its_display_an_apps_window_stops_at_the_dock_and_every_end_b
 
     // Off: the window where it was, the bars as the system has them.
     fill();
-    wait_for("the window back where it was", || window().filter(at(before)));
+    let held =
+        || format!("the window is at {:?}, it was at {before:?}; {}", window(), state()["state"]["fill_display"]);
+    wait_or("the window back where it was", held, || window().filter(at(before)));
     wait_for("the bars back", || bars_hidden(false));
     assert_eq!(state()["state"]["fill_display"], false);
 
