@@ -5528,14 +5528,15 @@ impl Workspace {
             .children(more)
             .child(new_space)
             .children(chip)
-            .children(self.render_listen_mark(cx))
             .child(self.render_top_buttons(cx))
     }
 
     /// New tab and split buttons: a new empty tab, or the picker for that split.
     fn render_top_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div().flex_none().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
-            |(i, (name, icon, tip, axis, new_tab))| {
+        // A transcript's mark first, at the row's right end.
+        let listen = self.render_listen_mark(cx);
+        div().flex_none().ml_auto().mr_2().flex().items_center().gap_1().children(listen).children(
+            SPLITS.iter().enumerate().map(|(i, (name, icon, tip, axis, new_tab))| {
                 let (tip, axis, new_tab) = (*tip, *axis, *new_tab);
                 div()
                     .id(("split", i))
@@ -5551,8 +5552,8 @@ impl Workspace {
                     .child(self.controls.mark(format!("top:{name}")))
                     .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
                     .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, new_tab, window, cx)))
-            },
-        ))
+            }),
+        )
     }
 
     /// The second row: the selected space's tabs, only while it has more than one. The one on
