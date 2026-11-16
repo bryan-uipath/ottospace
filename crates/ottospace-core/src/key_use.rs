@@ -299,7 +299,11 @@ impl Group {
     fn notes(self) -> &'static [(&'static str, &'static str)] {
         match self {
             Group::Panes => &[("Drag a header", "Split, swap, move")],
-            Group::Text => &[("⇧PgUp ⇧PgDn", "Scroll a page"), ("⌃G", "Compose in your editor")],
+            Group::Text => &[
+                ("⇧PgUp ⇧PgDn", "Scroll a page"),
+                ("⌃G", "Compose in your editor"),
+                ("⌥⌘N", "New task: this checkout or a new worktree"),
+            ],
             Group::List => &[
                 ("J K ↓ ↑", "Move"),
                 ("↵ ⇧↵", "Open / open below"),

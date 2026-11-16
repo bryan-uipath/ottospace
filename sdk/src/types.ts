@@ -1229,6 +1229,8 @@ export interface Snapshot {
   compose_hint: string | null;
   /** The drawer's one-click picks: repository names and agent names. */
   compose_picks: { wheres: string[]; whos: string[] };
+  /** Where the box offers a choice of where the task works: in its checkout, or (`new`, the user's choice) a new worktree of the repository `repo` on `branch`. Null where there is no repository to make one of. */
+  compose_worktree: { new: boolean; repo: string; branch: string } | null;
   /** Nothing is open yet (no pane, task or conversation): the drawer shows the new task by itself. */
   welcome: boolean;
   compose_menu: ComposeMenu | null;

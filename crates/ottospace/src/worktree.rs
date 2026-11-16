@@ -18,26 +18,36 @@ const MAX_OUTPUT: u64 = 64 * 1024;
 /// What a try came to: the worktree's folder, resolved, or why there is none (for the status bar).
 pub struct Made {
     pub repo: String,
+    /// The folder asked for, as asked (`result` has it resolved).
+    pub asked: String,
+    /// As asked: a new task's.
+    pub fresh: bool,
     pub result: Result<String, String>,
 }
 
 /// Starts the worktree of the repository at `repo` on `branch` at `path`, inside `root`. Its end
 /// comes on `done`.
-pub fn start(repo: String, branch: String, path: String, root: String, done: mpsc::Sender<Made>) {
+/// `fresh`: a new task's, on a branch no local or remote ref has (else nothing is made).
+pub fn start(repo: String, branch: String, path: String, root: String, fresh: bool, done: mpsc::Sender<Made>) {
     std::thread::spawn(move || {
-        let made = add(Path::new(&repo), &branch, Path::new(&path), Path::new(&root));
+        let made = add(Path::new(&repo), &branch, Path::new(&path), Path::new(&root), fresh);
         let result = made.map(|target| target.to_string_lossy().into_owned());
-        let _ = done.send(Made { repo, result });
+        let _ = done.send(Made { repo, asked: path, fresh, result });
     });
 }
 
 /// Makes the worktree: a local branch is checked out; one only a remote has (`origin/feat`, of one
 /// remote) is made to track it; any other name is a new branch from the repository's HEAD.
-fn add(repo: &Path, branch: &str, path: &Path, root: &Path) -> Result<PathBuf, String> {
-    let (target, made) = target(path, root)?;
+/// `fresh`: only the last; a name any ref has is refused, so no one's code is checked out.
+fn add(repo: &Path, branch: &str, path: &Path, root: &Path, fresh: bool) -> Result<PathBuf, String> {
     let local = format!("refs/heads/{branch}");
     let exists = git(repo, &["rev-parse", "--verify", "--quiet", &local])?.0;
-    let remote = if exists { None } else { remote_branch(repo, branch) };
+    if fresh && (exists || !remote_refs(repo, branch)?.is_empty()) {
+        return Err(format!("A branch {branch} is there already: no worktree made"));
+    }
+    let (target, made) = target(path, root)?;
+    // Fresh: never a remote's, even one fetched since the check; `-b` refuses a local one made since.
+    let remote = if exists || fresh { None } else { remote_branch(repo, branch) };
     let target = target.as_os_str();
     let args: Vec<&OsStr> = match (exists, &remote) {
         (true, _) => {
@@ -70,15 +80,22 @@ fn add(repo: &Path, branch: &str, path: &Path, root: &Path) -> Result<PathBuf, S
     Err(said)
 }
 
-/// The one remote's branch of that name (`origin/feat/map`), if exactly one remote has it.
-fn remote_branch(repo: &Path, branch: &str) -> Option<String> {
+/// The remotes' branches of that name (`origin/feat/map`, from `refs/remotes/*/<branch>`).
+fn remote_refs(repo: &Path, branch: &str) -> Result<Vec<String>, String> {
     let pattern = format!("refs/remotes/*/{branch}");
     let mut command = crate::child::git(repo);
     command.args(["for-each-ref", "--format=%(refname)", &pattern]);
-    let said = crate::child::run(command, TIMEOUT, MAX_OUTPUT).ok().filter(|said| said.ok)?;
-    let refs: Vec<&str> = said.out.lines().filter_map(|line| line.strip_prefix("refs/remotes/")).collect();
-    match refs[..] {
-        [one] => Some(one.to_string()),
+    let said = crate::child::run(command, TIMEOUT, MAX_OUTPUT)?;
+    if !said.ok {
+        return Err(git_said(&said.err));
+    }
+    Ok(said.out.lines().filter_map(|line| line.strip_prefix("refs/remotes/")).map(String::from).collect())
+}
+
+/// The one remote's branch of that name (`origin/feat/map`), if exactly one remote has it.
+fn remote_branch(repo: &Path, branch: &str) -> Option<String> {
+    match &remote_refs(repo, branch).ok()?[..] {
+        [one] => Some(one.clone()),
         _ => None,
     }
 }
@@ -187,26 +204,48 @@ mod tests {
         git_in(&repo, &["branch", "feat/map"]);
         let root = scratch.join("worktrees");
         let head = |dir: &Path| fs::read_to_string(dir.join(".git")).is_ok();
-        add(&repo, "fix/zoom", &root.join("app/fix-zoom"), &root).unwrap();
-        add(&repo, "feat/map", &root.join("app/feat-map"), &root).unwrap();
+        add(&repo, "fix/zoom", &root.join("app/fix-zoom"), &root, false).unwrap();
+        add(&repo, "feat/map", &root.join("app/feat-map"), &root, false).unwrap();
         assert!(head(&root.join("app/fix-zoom")) && head(&root.join("app/feat-map")));
         // Checked out already: git's own words, and nothing is left behind.
-        let err = add(&repo, "feat/map", &root.join("app/again"), &root).unwrap_err();
+        let err = add(&repo, "feat/map", &root.join("app/again"), &root, false).unwrap_err();
         assert!(err.starts_with("git: ") && err.contains("feat/map"), "{err}");
         assert!(!root.join("app/again").exists());
         // A branch only the remote has: tracked, not made anew from HEAD.
         let clone = scratch.join("clone");
         git_in(&scratch, &["clone", "-q", repo.to_str().unwrap(), clone.to_str().unwrap()]);
-        add(&clone, "feat/map", &root.join("clone/feat-map"), &root).unwrap();
+        add(&clone, "feat/map", &root.join("clone/feat-map"), &root, false).unwrap();
         let mut tracks = Command::new("git");
         tracks.arg("-C").arg(root.join("clone/feat-map")).args(["rev-parse", "--abbrev-ref", "@{u}"]);
         assert_eq!(String::from_utf8_lossy(&tracks.output().unwrap().stdout).trim(), "origin/feat/map");
         // A worktrees folder that is a checkout itself is not put into.
-        let err = add(&repo, "x", &scratch.join("app/x"), &scratch).unwrap_err();
+        let err = add(&repo, "x", &scratch.join("app/x"), &scratch, false).unwrap_err();
         assert!(err.ends_with("set worktrees_dir to a folder of its own"), "{err}");
         // Not a repository: said, and the empty folder made for it goes.
-        let err = add(&scratch.join("none"), "x", &root.join("none/x"), &root).unwrap_err();
+        let err = add(&scratch.join("none"), "x", &root.join("none/x"), &root, false).unwrap_err();
         assert!(err.starts_with("git"), "{err}");
         assert!(!root.join("none").exists());
+    }
+
+    /// A new task's worktree is always a new branch from HEAD: a name a local branch or any
+    /// remote has is refused, and nothing is made, so no one's code is checked out for its agent.
+    #[test]
+    fn a_fresh_worktree_takes_no_branch_any_ref_has() {
+        let scratch = Scratch::dir(&format!("ottospace-worktree-fresh-{}", std::process::id()));
+        let repo = scratch.join("app");
+        repository(&repo);
+        git_in(&repo, &["branch", "mine"]);
+        // A remote's ref, as a fetch would leave it: no network.
+        git_in(&repo, &["update-ref", "refs/remotes/fork/theirs", "HEAD"]);
+        let root = scratch.join("worktrees");
+        for branch in ["mine", "theirs"] {
+            let err = add(&repo, branch, &root.join(format!("app/{branch}")), &root, true).unwrap_err();
+            assert_eq!(err, format!("A branch {branch} is there already: no worktree made"));
+            assert!(!root.join("app").exists(), "nothing made for {branch}");
+        }
+        let made = add(&repo, "new-task", &root.join("app/new-task"), &root, true).unwrap();
+        let mut branch = Command::new("git");
+        branch.arg("-C").arg(&made).args(["rev-parse", "--abbrev-ref", "HEAD"]);
+        assert_eq!(String::from_utf8_lossy(&branch.output().unwrap().stdout).trim(), "new-task");
     }
 }
