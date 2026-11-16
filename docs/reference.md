@@ -259,11 +259,13 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    is not the task's repository; Brief (when it has captures); Stop ends the agent (in the terminal view; drawn natively, "Stop the Agent" in the palette or the menu);
    × (⌘⇧L) closes the chat and the agent goes on. ⌘L moves the keyboard in
    and out. At its foot, muted, the model in short, a permission mode that lets the agent
-   act without asking (`auto`, `accept edits`; `bypass` in the warning colour), and the folder
-   its process runs in: `haiku-5.5 · auto · ~/code/app`. The folder is from home (`~`), or a
-   worktree's from its folder name (`fix-login/crates`); a long one has `…` in its middle, and
-   the hover has all of it. Before the agent starts: where it would start (a session gone on
-   with: where it started). It stays once the agent ended. Under the header of a native conversation, its
+   act without asking (`auto`, `accept edits`; `bypass` in the warning colour), and, at the
+   right, the folder its process runs in: `haiku-5.5 · auto` and `~/code/app`. The folder is
+   from home (`~`), or a worktree's from its folder name (`fix-login/crates`); a long one has
+   `…` in its middle, and the hover has all of it; in a narrow drawer the model and mode are
+   cut first. Before the agent starts: where it would start (a session gone on with: where it
+   started). A folder that is gone (a worktree removed) starts no agent: the notice bar says
+   so. It stays once the agent ended. Under the header of a native conversation, its
    [dial](#the-agent-dial). Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
 5. **Dismissing.** A dismissed task leaves the top row and the drawer (the drawer shows

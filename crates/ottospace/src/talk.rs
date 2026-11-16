@@ -96,6 +96,15 @@ pub fn key(subject: &Subject) -> String {
     }
 }
 
+/// The folder an agent is to start in is there. One that is gone (a worktree removed, still
+/// listed) starts nothing: else the agent would run in another folder than the one shown.
+fn folder_there(cwd: Option<&str>) -> Result<(), String> {
+    match cwd.filter(|dir| !std::path::Path::new(dir).is_dir()) {
+        Some(dir) => Err(format!("{dir} is gone: nothing was started")),
+        None => Ok(()),
+    }
+}
+
 impl Workspace {
     /// Starts a conversation's agent: the command comes from the core's fixed table, with a new
     /// session's id. Returns that id, if the runner takes one, or why nothing started.
@@ -106,6 +115,7 @@ impl Workspace {
         cwd: Option<&str>,
         brief: Option<&str>,
     ) -> Result<Option<String>, String> {
+        folder_there(cwd)?;
         let task = subject.task();
         let brief =
             brief.zip(task).and_then(|(dir, task)| collect::task_dir(task, dir)).map(|dir| dir.join("brief.md"));
@@ -464,12 +474,24 @@ impl Workspace {
     fn agent_foot(&self, subject: &Subject, width: f32) -> Option<Div> {
         let line = self.agent_line(subject);
         let color = if line.bypass { theme::SNEAK } else { theme::MUTED };
-        let tip = self.agent_dir(subject).map(|dir| gpui::SharedString::from(format!("The agent runs in {dir}")));
-        let foot = div().id("talk-foot").flex_none().px_3().pb_1().text_xs().text_color(rgb(color));
-        let foot =
-            foot.when_some(tip, |foot, tip| foot.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))));
-        // The drawer's width less the foot's padding: `cut_text` needs a width of its own here.
-        line.foot.map(|text| div().child(foot.child(crate::cut_text(text).w(px(width - 24.)))))
+        let dir = self.agent_dir(subject);
+        let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
+        let worktree = dir.as_deref().and_then(|dir| self.model.worktree_at(dir));
+        let short = dir.as_deref().map(|dir| talk::short_dir(dir, home.as_deref(), worktree));
+        let tip = dir.map(|dir| gpui::SharedString::from(format!("The agent runs in {dir}")));
+        // The drawer's width less the foot's padding: `cut_text` needs a width to cut in.
+        let foot = div().id("talk-foot").flex_none().flex().gap_2().px_3().pb_1().w(px(width)).text_xs();
+        let foot = foot
+            .text_color(rgb(color))
+            .when_some(tip, |foot, tip| foot.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))));
+        let text = line.foot?;
+        // The folder whole, at the right: in a narrow drawer the model and mode are cut first.
+        let (rest, folder) = match short.filter(|short| text.ends_with(short.as_str())) {
+            Some(short) => (text[..text.len() - short.len()].trim_end_matches(" · ").to_string(), Some(short)),
+            None => (text, None),
+        };
+        let folder = folder.map(|folder| div().flex_none().child(folder));
+        Some(div().child(foot.child(crate::cut_text(rest).flex_1()).children(folder)))
     }
 
     /// The conversation's header: state, title, Chat | Terminal, then what can be done.
@@ -817,6 +839,17 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_agent_starts_only_in_a_folder_that_is_there() {
+        let gone = crate::scratch::Scratch::dir(&format!("ottospace-gone-{}", std::process::id()));
+        let path = AsRef::<std::path::Path>::as_ref(&gone).to_string_lossy().into_owned();
+        // No folder of its own (the home folder), or one that is there: it starts.
+        assert_eq!((folder_there(None), folder_there(Some(&path))), (Ok(()), Ok(())));
+        // Gone (a worktree removed, still listed): nothing starts in another folder in its place.
+        let missing = format!("{path}/removed");
+        assert_eq!(folder_there(Some(&missing)), Err(format!("{missing} is gone: nothing was started")));
+    }
 
     #[test]
     fn a_new_session_id_is_a_version_4_uuid() {
