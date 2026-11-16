@@ -207,9 +207,7 @@ fn state(windows: &Windows, cx: &mut App) -> String {
             let active = window.is_window_active();
             // `frame`: as Accessibility has it, global, so a test can tell whether it is on a screen.
             let global = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::frame(view) });
-            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "wheel": canary.wheel, "bounds": frame, "frame": global, "active": active,
-                // SPIKE (docs/ai/fill-display.md), to be removed.
-                "fill_probe": ns_view(window).and_then(|view| serde_json::from_str::<serde_json::Value>(&unsafe { ottospace_mac::window::fill_probe(view) }).ok()) })
+            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "wheel": canary.wheel, "bounds": frame, "frame": global, "active": active })
         });
         entry.map(|entry| open_windows.push(entry)).is_ok()
     });

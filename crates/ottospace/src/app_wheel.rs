@@ -54,11 +54,12 @@ impl Workspace {
     /// `Effect::Peek`: the window goes over its pane as on entering, its app activated (it cannot
     /// be shown above ottospace otherwise).
     pub(crate) fn peek(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
+        let keep = self.bars_leave();
         let Some(hosted) = self.hosted.get_mut(&pane) else { return };
         crate::trace::record("peek", serde_json::json!({ "pane": pane, "window": hosted.window_id }));
         // An inactive app's window stays under the active app's (AXRaise alone, or ottospace's
         // window ordered below it, left it there on CI): the app is activated, as on entering.
-        hosted.bring_up(self.bar.height, self.filled.map(|f| f.visible), window, cx);
+        hosted.bring_up(self.bar.height, keep, window, cx);
         self.wheel.peeks += 1;
         self.wheel.since = Some(Instant::now());
     }

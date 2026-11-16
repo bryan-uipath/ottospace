@@ -288,8 +288,7 @@ pub unsafe fn frame(ns_view: *mut c_void) -> Option<[f64; 4]> {
     Some([f.origin.x, height - f.origin.y - f.size.height, f.size.width, f.size.height])
 }
 
-/// An AppKit rect (from the main screen's bottom left) in Accessibility's coordinates, and back:
-/// the flip is its own inverse.
+/// An AppKit rect (from the main screen's bottom left) in Accessibility's coordinates.
 fn flipped(r: objc2_foundation::NSRect, mtm: MainThreadMarker) -> Frame {
     let height = NSScreen::screens(mtm).firstObject().map_or(0.0, |s| s.frame().size.height);
     Frame::new(r.origin.x, height - r.origin.y - r.size.height, r.size.width, r.size.height)
@@ -330,10 +329,10 @@ pub unsafe fn set_frame(ns_view: *mut c_void, frame: Frame) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     let view = unsafe { &*(ns_view as *const NSView) };
     if let Some(window) = view.window() {
-        let rect = objc2_foundation::NSRect::new(NSPoint::new(frame.x, frame.y), objc2_foundation::NSSize::new(frame.w, frame.h));
-        let to = flipped(rect, mtm);
-        let rect = objc2_foundation::NSRect::new(NSPoint::new(to.x, to.y), objc2_foundation::NSSize::new(to.w, to.h));
-        window.setFrame_display(rect, true);
+        // AppKit measures from the main screen's bottom left.
+        let height = NSScreen::screens(mtm).firstObject().map_or(0.0, |s| s.frame().size.height);
+        let origin = NSPoint::new(frame.x, height - frame.y - frame.h);
+        window.setFrame_display(objc2_foundation::NSRect::new(origin, objc2_foundation::NSSize::new(frame.w, frame.h)), true);
     }
 }
 
@@ -351,47 +350,6 @@ pub fn hide_bars(on: bool) {
 pub fn bars_hidden() -> bool {
     let Some(mtm) = MainThreadMarker::new() else { return false };
     NSApplication::sharedApplication(mtm).currentSystemPresentationOptions() != NSApplicationPresentationOptions::Default
-}
-
-/// SPIKE (docs/ai/fill-display.md), to be removed: what AppKit says of the bars and screens, as JSON.
-///
-/// # Safety
-/// As `placement`.
-pub unsafe fn fill_probe(ns_view: *mut c_void) -> String {
-    use objc2::msg_send;
-    let Some(mtm) = MainThreadMarker::new() else { return "null".into() };
-    let view = unsafe { &*(ns_view as *const NSView) };
-    let app = NSApplication::sharedApplication(mtm);
-    let f = |r: Frame| format!("[{},{},{},{}]", r.x, r.y, r.w, r.h);
-    let screens: Vec<String> = NSScreen::screens(mtm)
-        .iter()
-        .map(|s| {
-            let insets = s.safeAreaInsets();
-            let (left, right) = (s.auxiliaryTopLeftArea(), s.auxiliaryTopRightArea());
-            format!(
-                r#"{{"frame":{},"visible":{},"safe":[{},{},{},{}],"aux_left":{},"aux_right":{}}}"#,
-                f(flipped(s.frame(), mtm)),
-                f(flipped(s.visibleFrame(), mtm)),
-                insets.top,
-                insets.left,
-                insets.bottom,
-                insets.right,
-                f(Frame::new(left.origin.x, left.origin.y, left.size.width, left.size.height)),
-                f(Frame::new(right.origin.x, right.origin.y, right.size.width, right.size.height)),
-            )
-        })
-        .collect();
-    let menu_bar: bool = unsafe { msg_send![objc2::class!(NSMenu), menuBarVisible] };
-    let window = view.window().map_or("null".into(), |w| f(flipped(w.frame(), mtm)));
-    format!(
-        r#"{{"active":{},"options":{},"system":{},"menu_bar_visible":{},"window":{},"screens":[{}]}}"#,
-        app.isActive(),
-        app.presentationOptions().0,
-        app.currentSystemPresentationOptions().0,
-        menu_bar,
-        window,
-        screens.join(",")
-    )
 }
 
 /// A native checkbox of the canary's: a press (a click or `AXPress`) turns it on or off.

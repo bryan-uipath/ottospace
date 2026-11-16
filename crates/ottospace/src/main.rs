@@ -421,6 +421,8 @@ struct Filled {
     frame: ottospace_core::ax::Frame,
     /// What the menu bar and the Dock leave of the display when they show.
     visible: ottospace_core::ax::Frame,
+    /// The window has been given `frame`: until then it is not looked at (`fill_holds`).
+    set: bool,
 }
 
 /// Height of the top bar (the native title strip, so all of it drags the window), and the width
@@ -991,16 +993,7 @@ impl Workspace {
     ) -> Self {
         let this = cx.weak_entity();
         let subscriptions = vec![
-            // Dragged, zoomed, or moved by the system (its display gone): it fills no display now.
-            cx.observe_window_bounds(window, |this, window, cx| {
-                // SAFETY: GPUI's own view, on the main thread.
-                let at = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::placement(view) });
-                if let (Some(filled), Some(at)) = (this.filled, at)
-                    && !fill::holds(at.window, filled.frame)
-                {
-                    this.dispatch(Action::FillEnded, Origin::System, window, cx);
-                }
-            }),
+            cx.observe_window_bounds(window, Self::fill_holds),
             // Clicking ottospace itself (title bar, empty space) raises it over the live window,
             // so hand that pane back to its stream. Ignore the activation that the swap click
             // itself delivers late (the race that used to bounce windows straight back).
@@ -1115,6 +1108,10 @@ impl Workspace {
                         // before the panes were drawn again after the last change: until then
                         // the sizes are those of the layout before it.
                         let drawn = this.renders > this.dispatched_at;
+                        // A display that changed moves no window: looked at, not told.
+                        if tick % 30 == 15 {
+                            this.fill_holds(window, cx);
+                        }
                         for (pane, content, outer, kept) in this.sync_layout(window, cx, tick % 30 == 15) {
                             if drawn && this.model.wants_changed(pane, content, outer, kept) {
                                 let wants = Action::PaneWants { pane, content, outer, window: kept };
@@ -1541,10 +1538,11 @@ impl Workspace {
                 }
                 Effect::Parked(id) => {
                     self.live_since = None;
+                    let keep = self.bars_leave();
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("park", serde_json::json!({ "pane": id, "window": hosted.window_id }));
                         let limit = top_limit(self.bar.height, window, cx);
-                        let rect = pane_rect(hosted.bounds.get(), self.filled.map(|f| f.visible), window, cx);
+                        let rect = pane_rect(hosted.bounds.get(), keep, window, cx);
                         hosted.park(rect.size, window.scale_factor() as f64, hosted.crop_at(rect, limit));
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
@@ -1658,9 +1656,10 @@ impl Workspace {
                 Effect::Live(id) => {
                     self.live_since = Some(Instant::now());
                     self.went_live += 1;
+                    let keep = self.bars_leave();
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("unpark", serde_json::json!({ "pane": id, "window": hosted.window_id }));
-                        hosted.bring_up(self.bar.height, self.filled.map(|f| f.visible), window, cx);
+                        hosted.bring_up(self.bar.height, keep, window, cx);
                     }
                 }
             }
@@ -2896,10 +2895,6 @@ impl Workspace {
             "tab_panes": self.model.tab_panes(),
             // ottospace's own window frame, so a test can turn pane bounds into screen positions.
             "window": frame,
-            // SPIKE (docs/ai/fill-display.md), to be removed.
-            "fill_probe": std::env::var_os("OTTOSPACE_FILL_PROBE").and_then(|_| ns_view(window)).and_then(|view| {
-                serde_json::from_str::<serde_json::Value>(&unsafe { ottospace_mac::window::fill_probe(view) }).ok()
-            }),
             // Whether that window has the keyboard: a user's wheel over a parked app pane peeks only then.
             "window_active": window.is_window_active(),
             // Where parked windows go, so a test can tell "parked" from "moved somewhere".
@@ -3400,7 +3395,7 @@ impl Workspace {
         let live = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
         // Under the notice bar as it is in this frame: the windows follow it as it opens and closes.
         let limit = top_limit(self.bar.height, window, cx);
-        let keep = self.filled.map(|f| f.visible);
+        let keep = self.bars_leave();
         for (id, hosted) in &mut self.hosted {
             let rect = pane_rect(hosted.bounds.get(), keep, window, cx);
             if rect.size.width < 1.0 {
@@ -4077,32 +4072,58 @@ impl Workspace {
     /// Carries out `Effect::FillDisplay`. A run with hosting off changes no window: its own
     /// floats over the user's screen.
     fn fill_display(&mut self, on: bool, window: &Window, cx: &mut Context<Self>) {
-        let Some(view) = ns_view(window).filter(|_| self.hosting) else { return };
+        if !self.hosting {
+            return;
+        }
         // SAFETY: GPUI's own view, on the main thread.
-        let Some(at) = (unsafe { ottospace_mac::window::placement(view) }) else { return };
+        let at = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::placement(view) });
+        // The bars before anything that can fail: nothing leaves them away. `at` was read first:
+        // `visible` is what they leave while they show.
         ottospace_mac::window::hide_bars(on);
-        let (was, view) = (self.filled.take(), view as usize);
-        let to = match was {
-            _ if on => fill::frame(at.screen, at.safe_top),
-            Some(was) => {
-                let screens = recovery::screens();
-                fill::back(at.window, was.frame, was.before, &screens.visible, screens.main)
-            }
-            None => return,
-        };
-        // Read before the bars went: `visible` is what they leave when they show.
-        let filled = Filled { before: at.window, frame: to, visible: at.visible };
+        // Kept from a turn before whose frame is still to come: its `before` is the true one.
+        if let (true, None, Some(at)) = (on, self.filled, at) {
+            let frame = fill::frame(at.screen, at.safe_top);
+            self.filled = Some(Filled { before: at.window, frame, visible: at.visible, set: false });
+        }
+        let Some(view) = ns_view(window).map(|view| view as usize) else { return };
         // Not in this update: GPUI drops the resize AppKit reports while the app is borrowed,
-        // and the layout keeps the old size (as its own `zoom_window` defers).
+        // and the layout keeps the old size (as its own `zoom_window` defers). By then the mode
+        // may have turned again: the frame is the one the model asks for now.
         cx.spawn(async move |this, cx| {
-            // Turned off again in the meantime: the frame stays.
-            if this.update(cx, |this, _| this.model.fill_display == on).unwrap_or(false) {
-                // SAFETY: the window's own view, alive while its workspace is; the main thread.
-                unsafe { ottospace_mac::window::set_frame(view as *mut std::ffi::c_void, to) };
-                let _ = this.update(cx, |this, _| this.filled = on.then_some(filled));
+            let Ok((on, Some(filled))) = this.update(cx, |this, _| (this.model.fill_display, this.filled)) else {
+                return;
+            };
+            let view = view as *mut std::ffi::c_void;
+            // SAFETY: the window's own view, alive while its workspace is; the main thread.
+            if let Some(at) = unsafe { ottospace_mac::window::placement(view) } {
+                let screens = recovery::screens();
+                let back = || fill::back(at.window, filled.frame, filled.before, &screens.visible, screens.main);
+                unsafe { ottospace_mac::window::set_frame(view, if on { filled.frame } else { back() }) };
             }
+            let _ = this.update(cx, |this, cx| {
+                this.filled = this.filled.filter(|_| on).map(|filled| Filled { set: true, ..filled });
+                cx.notify();
+            });
         })
         .detach();
+    }
+
+    /// Ends the mode when the window no longer has its display's frame: dragged, zoomed, moved
+    /// by the system, or the display changed under it.
+    fn fill_holds(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.filled.is_some_and(|filled| filled.set) || !self.model.fill_display {
+            return;
+        }
+        // SAFETY: GPUI's own view, on the main thread.
+        let at = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::placement(view) });
+        if at.is_some_and(|at| !fill::holds(at.window, fill::frame(at.screen, at.safe_top))) {
+            self.dispatch(Action::FillEnded, Origin::System, window, cx);
+        }
+    }
+
+    /// While the window fills its display: what the menu bar and the Dock leave when they show.
+    fn bars_leave(&self) -> Option<ottospace_core::ax::Frame> {
+        self.filled.filter(|_| self.model.fill_display).map(|filled| filled.visible)
     }
 
     /// A click on a pane body. An app pane goes live, then the click is replayed so it lands in

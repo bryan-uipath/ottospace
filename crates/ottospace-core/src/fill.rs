@@ -29,9 +29,10 @@ pub fn holds(now: Frame, filled: Frame) -> bool {
 }
 
 /// Where the window goes when the mode ends. Moved since (dragged, zoomed, its display gone): it
-/// stays at `now`. Else back to `before`, or centred on `main` if the user could not reach it there.
+/// stays at `now`. Else back to `before`. Either way centred on `main`, no larger than it, if
+/// the user could not reach it there.
 pub fn back(now: Frame, filled: Frame, before: Frame, screens: &[Frame], main: Frame) -> Frame {
-    if holds(now, filled) { restore::destination(before, screens, main) } else { now }
+    restore::destination(if holds(now, filled) { before } else { now }, screens, main)
 }
 
 #[cfg(test)]
@@ -70,6 +71,8 @@ mod tests {
         // Its old place was on a display since unplugged: the middle of the main screen.
         let gone = Frame::new(2500., 100., 1400., 900.);
         assert_eq!(back(DISPLAY, DISPLAY, gone, &[VISIBLE], VISIBLE), Frame::new(260., 62.5, 1400., 900.));
+        // Moved by the system off its unplugged display, still as large: no larger than the screen left.
+        assert_eq!(back(Frame::new(0., -400., 2560., 1440.), gone, before, &[VISIBLE], VISIBLE), VISIBLE);
     }
 
     #[test]
