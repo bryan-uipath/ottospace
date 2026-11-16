@@ -3662,7 +3662,7 @@ impl Model {
             Action::Split { axis, kind } => {
                 self.leave(effects);
                 let id = self.add(kind, self.focused, axis);
-                                effects.push(Effect::Opened(id));
+                effects.push(Effect::Opened(id));
             }
             Action::Open { kind, axis, beside } => drop(self.open(kind, axis, beside, effects)),
             Action::SetRepos { repos } => {
@@ -10002,6 +10002,10 @@ mod tests {
         let empty = m.focused.unwrap_or_default();
         m.update(Action::Fill { pane: empty, kind: Kind::Terminal }.sent_by(Origin::System));
         assert_eq!(m.pane(empty).and_then(|p| p.cwd.as_deref()), Some("/code/app-2"));
+        // A client's terminal on Home goes to the workspace selected last: in its default.
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal }.sent_by(Origin::Socket));
+        assert_eq!((m.space(), cwd(&m).as_deref()), (&WORKSPACE, Some("/code/app-2")));
         // A workspace made with + has none.
         m.update(Action::WorkbookNew { uid: "9f3a61c2d4e5b708".into() });
         term(&mut m);
