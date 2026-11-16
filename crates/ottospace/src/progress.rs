@@ -49,7 +49,7 @@ pub(crate) fn frame(title: String, color: u32, state: String) -> Div {
 /// A named fact of a hover card: `Started  3h ago`.
 pub(crate) fn fact(name: &'static str, value: String) -> Div {
     let name = div().w(px(72.)).text_color(rgb(theme::MUTED)).child(name);
-    div().flex().gap_2().text_xs().child(name).child(div().min_w_0().truncate().child(value))
+    div().flex().gap_2().text_xs().child(name).child(crate::cut_text(value))
 }
 
 /// A meeting's hover card, on the band and on a Calendar row: its title, a dot in its colour and
@@ -100,7 +100,7 @@ impl Render for CardView {
             div()
                 .flex()
                 .text_xs()
-                .child(div().flex_1().min_w_0().truncate().child(name))
+                .child(crate::cut_text(name).flex_1())
                 .child(cell(count(row.input)))
                 .child(cell(count(row.output)))
         });
@@ -275,7 +275,7 @@ impl Workspace {
                     .hover(|s| s.text_color(rgb(theme::TEXT)))
                     .when(selected, |d| d.pb_0p5().rounded_md().bg(rgb(theme::SELECTED)))
                     .child(div().w(px(8.)).child(if group.folded { "▸" } else { "▾" }))
-                    .child(div().flex_1().min_w_0().truncate().child(name))
+                    .child(crate::cut_text(name).flex_1())
                     .child(
                         div()
                             .id(gpui::ElementId::Name(format!("project-bar:{key}").into()))

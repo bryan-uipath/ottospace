@@ -1,0 +1,27 @@
+# Long names, cut with "…" where they do not fit: Tasks rows, an Elsewhere session, the top row,
+# and a pane's header (a terminal in a folder with a long name).
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"Rework the zoom and pan gestures on the canvas so trackpads and mice agree #canvas p1"}
+{"cmd":"task_new","line":"Approve the retry plan for the payments webhook before the Thursday freeze #minter"}
+{"cmd":"task_new","line":"Write the socket guide for agents, with an example of every request and its reply #docs"}
+{"cmd":"task_new","line":"Short one"}
+{"cmd":"task_set_state","id":1,"state":"needs_you"}
+{"cmd":"task_set_state","id":3,"state":"running"}
+{"cmd":"section","section":"tasks"}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"tasks"}
+{"until":"sessions_bar.total"}
+{"cmd":"task_group","heading":"sessions"}
+{"until":"sessions_bar.rows.0"}
+{"shot":"elsewhere"}
+{"cmd":"open_space","space":{"kind":"task","id":2}}
+{"click":"top:new_workspace"}
+{"cmd":"split"}
+{"cmd":"split","axis":"right"}
+{"cmd":"split","axis":"right"}
+{"settle":1000}
+{"cmd":"wait","pattern":"\\$"}
+{"cmd":"type","text":"mkdir -p {ROOT}/deploy-logs-of-the-staging-cluster-in-the-west-region && cd {ROOT}/deploy-logs-of-the-staging-cluster-in-the-west-region && clear\r"}
+{"settle":800}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"workspace"}

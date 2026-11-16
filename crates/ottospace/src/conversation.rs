@@ -850,7 +850,7 @@ impl Workspace {
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .child(path)
-                .children(to.map(|to| div().min_w_0().truncate().child(to)))
+                .children(to.map(crate::cut_text))
                 .children(what.or(file.all.then_some("every occurrence")).map(|what| div().flex_none().child(what)))
                 .child(div().flex_1())
                 .child(div().flex_none().text_color(rgb(theme::PICK)).child(format!("+{}", file.added)))
@@ -1089,12 +1089,9 @@ impl Workspace {
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .child(crate::home::dot(theme::task(ottospace_core::tasks::Group::Running)))
-                .child(div().flex_1().min_w_0().truncate().child(format!(
-                    "Working · {} · {}:{:02}",
-                    clean(&doing),
-                    secs / 60,
-                    secs % 60
-                ))),
+                .child(
+                    crate::cut_text(format!("Working · {} · {}:{:02}", clean(&doing), secs / 60, secs % 60)).flex_1(),
+                ),
         )
     }
 
@@ -1186,7 +1183,7 @@ impl Workspace {
                         .gap_2()
                         .text_sm()
                         .child(div().font_weight(FontWeight::SEMIBOLD).child(format!("Allow {}?", card.tool)))
-                        .child(div().flex_1().truncate().text_color(rgb(theme::MUTED)).child(card.label.clone()))
+                        .child(crate::cut_text(card.label.clone()).flex_1().text_color(rgb(theme::MUTED)))
                         .children((queued > 0).then(|| muted(format!("{queued} more waiting")))),
                 )
                 .child(body)

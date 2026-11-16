@@ -4668,7 +4668,7 @@ impl Workspace {
             .relative()
             .child(div().h(px(20.)).flex().items_center().child(home::dot(color)))
             // The title may be text a model wrote: drawn as it is, on one line.
-            .child(div().flex_1().min_w_0().truncate().child(row.title().to_string()))
+            .child(cut_text(row.title().to_string()).flex_1())
             .child(div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(row.runner.clone()))
             .child(actions)
             .child(self.controls.mark(format!("session:{key}")))
@@ -4995,8 +4995,7 @@ impl Workspace {
         };
         // The window kept another size than the pane's: say so. In a narrow header the words
         // give way first: they shrink and are cut with an ellipsis.
-        let hint =
-            pane.fit.as_ref().map(|fit| div().min_w_0().truncate().text_color(rgb(theme::SNEAK)).child(fit.label()));
+        let hint = pane.fit.as_ref().map(|fit| cut_text(fit.label()).text_color(rgb(theme::SNEAK)));
         // And offer to fit the pane to it, unless a fit would move nothing (the hint says why).
         let word = pane.fit.as_ref().filter(|fit| fit.stuck.is_none()).map(|_| {
             div()
@@ -5069,7 +5068,7 @@ impl Workspace {
                     .overflow_hidden()
                     .items_center()
                     .children(icon.map(|icon| img(icon).size(px(14.)).flex_none()))
-                    .child(div().min_w_0().truncate().child(title))
+                    .child(cut_text(title))
                     .children(marked.map(|sign| div().flex_none().text_color(rgb(theme::MARK)).child(sign))),
             )
             .child(self.controls.mark(format!("header:{id}")))
@@ -5441,7 +5440,7 @@ impl Workspace {
                 .hover(|s| s.text_color(rgb(theme::TEXT)))
                 .child(mark(&self.marks, Mark::Space(place)))
                 .children(lead)
-                .children((!small).then(|| div().flex_1().min_w_0().truncate().child(self.model.space_title(&of))))
+                .children((!small).then(|| cut_text(self.model.space_title(&of)).flex_1()))
                 .children(
                     (count > 1 && !small)
                         .then(|| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(count.to_string())),
@@ -5615,7 +5614,7 @@ impl Workspace {
                             AnyView::from(cx.new(|_| Tooltip(format!("Workspace: {book}").into())))
                         })
                     })
-                    .child(div().flex_1().min_w_0().truncate().child(tab.title.clone()))
+                    .child(cut_text(tab.title.clone()).flex_1())
                     .child(self.controls.mark(format!("tab:{}", tab.id)))
                     .child(
                         div()
@@ -5713,7 +5712,7 @@ impl Workspace {
             .when(!mode.is_empty(), |d| {
                 d.child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
             })
-            .child(div().min_w_0().truncate().child(hint))
+            .child(cut_text(hint))
             // Pushes what follows to the right (an auto margin there closed the gaps on the left).
             // Its hover names the build.
             .child(div().id("status-space").flex_1().h_full().tooltip(|_, cx| {
@@ -5767,7 +5766,7 @@ fn terminal_title(cwd: Option<&str>, program: Option<&str>, home: Option<&str>) 
 fn task_title_cells(task: &Task) -> impl Iterator<Item = Div> {
     // Only P1 is said: the other priorities are on the card.
     let priority = (task.priority == 1).then(|| div().flex_none().text_xs().text_color(rgb(theme::ERROR)).child("P1"));
-    priority.into_iter().chain([div().flex_1().min_w_0().truncate().child(task.title.clone())])
+    priority.into_iter().chain([cut_text(task.title.clone()).flex_1()])
 }
 
 /// A task's tags as a cell at the end of its row, no wider than `width`. No tags: no cell.
@@ -5898,9 +5897,14 @@ fn mods(m: gpui::Modifiers) -> Mods {
 
 /// One line of `text`, cut with "…" where it does not fit. GPUI 0.2.2 keeps a text's first
 /// measure, which for a flex item has no width: laid over a box of the row's height, it has one.
+/// The box is as wide as the whole text, drawn clear, so it may shrink to fit as well as grow. A
+/// little wider: the cut adds up letters unkerned, so a text that just fits would lose its end.
 pub(crate) fn cut_text(text: impl Into<SharedString>) -> Div {
-    let over = div().absolute().inset_0().truncate().child(text.into());
-    div().relative().min_w_0().child("\u{200b}").child(over)
+    let text = text.into();
+    let slack = 1. + 0.25 * text.chars().count() as f32;
+    let room = div().pr(px(slack)).whitespace_nowrap().text_color(transparent_black()).child(text.clone());
+    let over = div().absolute().inset_0().truncate().child(text);
+    div().relative().min_w_0().overflow_hidden().child(room).child(over)
 }
 
 /// A row of a secondary-bar list. A button at rest: its outline shows. Hover lifts it.
