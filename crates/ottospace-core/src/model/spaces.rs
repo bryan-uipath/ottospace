@@ -94,6 +94,8 @@ pub(crate) struct HomeStep {
     pub(crate) on_show: bool,
     /// The tabs there were, by id.
     pub(crate) tabs: Vec<u32>,
+    /// It is not the user's, and their keys are in the chat or the new-task box.
+    pub(crate) typing: bool,
 }
 
 /// The first item of the top row, and its screen.
@@ -462,6 +464,8 @@ impl Model {
         let (moves, closes): (Vec<usize>, Vec<usize>) =
             home.iter().filter(|at| !own(at) || !panes[**at].is_empty()).partition(|at| !panes[**at].is_empty() || new_tab);
         let filled = moves.iter().any(own);
+        // Another's pane on Home under the user's typing: Home stays on show.
+        let stays = filled && step.typing && self.tabs[self.active].id == HOME_TAB;
         if !moves.is_empty() {
             let new = moves.iter().any(|at| !step.tabs.contains(&self.tabs[*at].id));
             let made = origin == Origin::User && (hint.is_some() || (step.on_show && (filled || new)));
@@ -498,6 +502,10 @@ impl Model {
         if !self.tabs.iter().any(|tab| tab.id == HOME_TAB) {
             let tab = Tab { id: HOME_TAB, title: HOME.into(), space: Owner::Workspace, layout: None, focused: None };
             self.tabs.push(tab);
+        }
+        if stays {
+            self.park_active();
+            self.active = self.tabs.len() - 1;
         }
         for id in closes {
             let Some(at) = self.tabs.iter().position(|tab| tab.id == id) else { continue };

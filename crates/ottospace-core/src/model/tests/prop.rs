@@ -1436,6 +1436,12 @@ fn check(m: &Model) -> Result<(), String> {
     let ranks: Vec<Option<usize>> = m.tabs.iter().map(|tab| rank(&tab.space)).collect();
     ensure!(ranks.iter().all(Option::is_some), "a tab of a space not on the row: {ranks:?}");
     ensure!(ranks.is_sorted(), "a space's tabs are apart, or out of row order: {ranks:?}");
+    // Home never owns a pane: its one tab is empty, and no other tab is Home's.
+    let home: Vec<(u32, usize)> = (m.tabs.iter().zip(m.tab_panes()))
+        .filter(|(tab, _)| tab.space == Owner::Workspace)
+        .map(|(tab, panes)| (tab.id, panes.len()))
+        .collect();
+    ensure!(home == [(HOME_TAB, 0)], "Home's tabs and their panes are {home:?}");
     for space in &m.spaces {
         let tabs = m.space_tabs(&space.of);
         ensure!(!tabs.is_empty(), "space {:?} has no tab", space.of);
@@ -2341,6 +2347,7 @@ impl Run {
         let hides = matches!(action, Action::SpaceHide { .. });
         let owners_before: Vec<(u32, Owner)> = m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect();
         let books_before: Vec<String> = m.workbooks.list.iter().map(workbook::write).collect();
+        let uids_before: Vec<String> = m.workbooks.list.iter().map(|book| book.uid.clone()).collect();
         let bindings = |m: &Model| -> Vec<(String, Option<TaskId>)> {
             m.workbooks.list.iter().map(|book| (book.uid.clone(), book.task)).collect()
         };
@@ -2517,7 +2524,7 @@ impl Run {
             "{origin:?}'s {action:?} took the new-task box from the user"
         );
         // A tab changes space only by a move of the user's, a task started from it, its space
-        // gone (Workspace's then), an undo of a dismissal, or a session made a task.
+        // gone, an undo of a dismissal, or a session made a task.
         for (id, was) in &owners_before {
             let Some(now) = m.tabs.iter().find(|tab| tab.id == *id).map(|tab| &tab.space) else { continue };
             if now == was {
@@ -2530,20 +2537,14 @@ impl Run {
                 && matches!(was, Owner::Workbook { .. })
                 && matches!(now, Owner::Task { id } if !task_ids.contains(id))
                 && matches!(action, Action::ComposeSubmit { .. } | Action::ComposeEnter | Action::TaskFromLine { .. });
-            // Its task gone, a tab is the first space's, or the workspace's the task was bound to.
-            let gone = matches!(now, Owner::Workspace | Owner::Workbook { .. }) && !m.owner_valid(was);
-            let undone = matches!(action, Action::TaskUndo | Action::ListUndo)
-                && matches!(was, Owner::Workspace | Owner::Workbook { .. });
+            // Its space gone (a task, a workspace), a tab is the workspace's the task was bound
+            // to, else the workspace selected last's. Never Home's (`check`).
+            let gone = matches!(now, Owner::Task { .. } | Owner::Workbook { .. }) && !m.owner_valid(was);
+            let undone = matches!(action, Action::TaskUndo | Action::ListUndo);
             let adopted =
                 matches!((was, now, &action), (Owner::Session { .. }, Owner::Task { .. }, Action::SessionAdopt { .. }));
-            // Opening a workbook gathers its tabs from Workspace.
-            let gathered = *was == Owner::Workspace
-                && matches!(now, Owner::Workbook { .. } | Owner::Task { .. })
-                && matches!(action, Action::WorkbookOpen { .. } | Action::SpaceOpen { .. } | Action::ListChoose { .. });
-            // Its space's own task gone and others in it: the space is the most urgent one's.
-            let inherited = matches!((was, now), (Owner::Task { .. }, Owner::Task { .. })) && !m.owner_valid(was);
             ensure!(
-                moved || bound || gone || undone || adopted || gathered || inherited,
+                moved || bound || gone || undone || adopted,
                 "{origin:?}'s {action:?} moved tab {id} from {was:?} to {now:?}"
             );
         }
@@ -2623,6 +2624,22 @@ impl Run {
                 ensure!(made, "{origin:?}'s + made workbook {:?} with {} tabs", book.name, book.tabs.len());
                 let shown = *m.space() == Owner::Workbook { id: book.id } && m.layout.is_none();
                 ensure!(shown && !tabs_before.contains(&m.tabs[m.active].id), "+ did not show a new empty tab");
+            }
+        }
+        // A step that is not the user's makes a workspace only for a tab that had none to go
+        // to: one at most, with nothing saved, and no workspace there was is on the row.
+        if origin != Origin::User && !matches!(action, Action::RestoreWorkbooks { .. } | Action::RestoreLayout { .. }) {
+            let made: Vec<&Workbook> = m.workbooks.list.iter().filter(|book| !uids_before.contains(&book.uid)).collect();
+            ensure!(made.len() <= 1, "{origin:?}'s {action:?} made {} workspaces", made.len());
+            for book in made {
+                let of = Owner::Workbook { id: book.id };
+                let held = !m.space_tabs(&of).is_empty() && book.tabs.is_empty();
+                ensure!(held, "{origin:?}'s {action:?} made workspace {:?} for no tab", book.name);
+                let other = |space: &&Space| {
+                    space.of != of && !space.hidden && matches!(space.of, Owner::Task { .. } | Owner::Workbook { .. })
+                };
+                let was = m.spaces.iter().filter(other).find(|space| spaces_before.contains(&space.of));
+                ensure!(was.is_none(), "{origin:?}'s {action:?} made a workspace beside {:?}", was.map(|s| &s.of));
             }
         }
         check_zones(m)?;
@@ -3864,7 +3881,7 @@ fn every_start_is_in_its_mode() {
         run.m
     };
     let (splits, tasks, hosted, marks) = (model(1), model(2), model(3), model(4));
-    assert_eq!((splits.tabs.len(), splits.panes.len()), (2, 6));
+    assert_eq!((splits.tabs.len(), splits.panes.len()), (3, 6));
     assert_eq!((tasks.tasks.list.len(), tasks.sessions_bar().count, tasks.sidebar), (3, 2, Some(Section::Tasks)));
     assert!(hosted.pane(1).is_some_and(|pane| pane.fit.is_some()));
     assert_eq!((marks.marks.list.len(), marks.marks.unfilled().len(), marks.marks.removed().is_some()), (3, 1, true));
@@ -4198,7 +4215,7 @@ fn a_mark_is_bound_only_to_a_pane_of_its_kind() {
 }
 
 /// A tab mark that was removed kept its tab's id; the tab closed; `MarkUndo` put back a mark of
-/// a tab that was gone. With one tab it was worse: the empty tab that took its place has its id.
+/// a tab that was gone. With one tab it was worse: the tab made next has its id.
 #[test]
 fn a_removed_mark_put_back_does_not_stand_for_a_tab_closed_since() {
     let steps = [
@@ -4206,6 +4223,7 @@ fn a_removed_mark_put_back_does_not_stand_for_a_tab_closed_since() {
         mark(MarkOf::Tab(None), 'a', "u1").into(),
         by(Origin::Socket, Action::MarkRemove { mark: MarkRef::Place(0) }),
         by(Origin::System, Action::CloseTab { index: None }),
+        Action::NewTab.into(),
         Action::MarkUndo.into(),
     ];
     replay(&[vec![Action::NewTab.into()], steps.to_vec()].concat()).unwrap();

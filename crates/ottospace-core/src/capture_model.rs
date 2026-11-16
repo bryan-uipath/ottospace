@@ -695,7 +695,8 @@ mod tests {
         m.update(Action::BriefClose);
         m.update(Action::BriefShow { id: 1 });
         assert_eq!(m.brief, Some(1));
-        m.update(Action::TabPlace { tab: None, at: crate::model::TabAt::End(crate::model::Owner::Workspace) });
+        // To the workspace it came from: Home takes no tab.
+        m.update(Action::TabPlace { tab: None, at: crate::model::TabAt::End(crate::model::Owner::Workbook { id: 1 }) });
         assert_eq!(m.brief, None);
         m.update(Action::BriefShow { id: 1 });
         assert_eq!(m.brief, None, "its tabs are not on show");

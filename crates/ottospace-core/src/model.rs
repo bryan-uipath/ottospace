@@ -3251,16 +3251,18 @@ impl Model {
         let fronts_were: Vec<TaskId> = self.spaces.iter().filter_map(|space| self.front(&space.of)).collect();
         let listed = self.sidebar.zip(self.list);
         let undo = matches!(sent.action, Action::TaskUndo | Action::ListUndo);
+        // Where the keyboard was before the step: a tab change moves it out of the drawer.
+        // A capture draft's title is in the bar, not the drawer.
+        let boxed = self.composing() && self.compose_host() == Some(Host::Drawer);
+        let drawer_keys = self.talk.as_ref().is_some_and(|talk| talk.open && talk.keys) || boxed;
         // Home before the step: what the user makes there is a new workspace's (`settle_home`).
         let home = spaces::HomeStep {
             new_tab: matches!(sent.action, Action::NewTab | Action::NewEmptyTab),
             on_show: *self.space() == Owner::Workspace,
             tabs: self.tabs.iter().map(|tab| tab.id).collect(),
+            typing: origin != Origin::User
+                && (self.talk.as_ref().is_some_and(|talk| talk.keys) || self.composing()),
         };
-        // Where the keyboard was before the step: a tab change moves it out of the drawer.
-        // A capture draft's title is in the bar, not the drawer.
-        let boxed = self.composing() && self.compose_host() == Some(Host::Drawer);
-        let drawer_keys = self.talk.as_ref().is_some_and(|talk| talk.open && talk.keys) || boxed;
         // A count of keys is no input: it ends no mode and changes nothing on show.
         if let Some(uses) = self.key_use_step(&sent) {
             if self.refusal(&sent.action, origin).is_none() {
@@ -9746,7 +9748,7 @@ mod tests {
         m.update(Action::ToggleKeys);
         for action in [toggle(), open()] {
             m.update(action);
-            assert_eq!((m.sidebar, m.tabs.len(), line(&m)), (None, 1, "mine"));
+            assert_eq!((m.sidebar, m.tabs.len(), line(&m)), (None, 2, "mine"));
         }
         // A follow-up that comes later (a pressed field's app, a launched app's window) is the
         // system's: it waits, and the line stays where it is. So does a branch's field with no folder.
@@ -9766,13 +9768,13 @@ mod tests {
         assert_eq!((m.notice_hidden.len(), line(&m), cursor(&m), m.mode()), (1, "mine", Some(3), Mode::Compose));
         assert_eq!(m.waits_for(&Action::EditSettings, Origin::User), None);
         m.update(Action::EditSettings);
-        assert_eq!((m.tabs.len(), m.settings_pane.is_some(), line(&m), m.mode()), (2, true, "<closed>", Mode::Normal));
+        assert_eq!((m.tabs.len(), m.settings_pane.is_some(), line(&m), m.mode()), (3, true, "<closed>", Mode::Normal));
         m.update(Action::OpenCompose { text: String::new() });
         assert_eq!((line(&m), cursor(&m)), ("mine", Some(3)));
         // The top row's + makes a workspace as a space pick does: the line is put aside.
         let mut m = boxed();
         m.update(Action::WorkbookNew { uid: "00000000000000a1".into() });
-        assert_eq!((line(&m), m.tabs.len()), ("<closed>", 2));
+        assert_eq!((line(&m), m.tabs.len()), ("<closed>", 3));
         m.update(Action::OpenCompose { text: String::new() });
         assert_eq!(line(&m), "mine");
         // A click on the selected space, its conversation closed under the box: the line is put
@@ -9801,7 +9803,7 @@ mod tests {
         assert_eq!((m.edits_compose(), m.waits_for(&open(), Origin::User)), (true, Some(WHY)));
         m.update(open());
         m.update(toggle());
-        assert_eq!((m.tabs.len(), m.sidebar, m.edits_compose(), line(&m)), (1, Some(Section::Repos), true, "mine"));
+        assert_eq!((m.tabs.len(), m.sidebar, m.edits_compose(), line(&m)), (2, Some(Section::Repos), true, "mine"));
     }
 
     #[test]
@@ -9858,7 +9860,7 @@ mod tests {
         // The keyboard in the drawer: a client's change of space waits; a tab change in the space does not.
         started(&mut m, Action::TaskTalk { id: a }); // starts it: the keyboard goes in
         assert_eq!(m.mode(), Mode::Talk);
-        let theirs = Action::SpaceSelect { index: 1 };
+        let theirs = Action::SpaceSelect { index: 2 };
         assert_eq!(m.refusal(&theirs, Origin::Socket), Some(spaces::CHAT_TYPING));
         assert_eq!(m.refusal(&Action::SelectTab { index: 0 }, Origin::Socket), Some(spaces::CHAT_TYPING));
         assert_eq!(m.refusal(&Action::SelectTab { index: m.active }, Origin::Socket), None);
@@ -12077,7 +12079,7 @@ mod tests {
         m.update(Action::ToggleGroup { heading: Heading::Sessions }); // folded at first
         m.update(Action::SetRepos { repos: listed() });
         term(&mut m); // pane 1, opened nowhere in particular
-        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right }); // pane 2, in /code/app, its own tab
+        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right }); // pane 2, in /code/app, its own workspace
         let click = |m: &mut Model, id: &str| m.update(Action::SessionClick { runner: "claude".into(), id: id.into() });
         m.update(Action::SetSessions {
             found: vec![
@@ -12100,9 +12102,9 @@ mod tests {
         let there = Subject::Session { runner: "claude".into(), id: "there".into() };
         assert_eq!((m.list, m.panes.len(), m.tasks.list.len()), (None, 2, 0));
         assert_eq!(m.talk.as_ref().map(|talk| &talk.task), Some(&there));
-        // Its space is selected; Workspace's panes are on show again once it is.
+        // Its space is selected; the workspace's panes are on show again once it is.
         assert_eq!(m.space(), &Owner::Session { runner: "claude".into(), id: "there".into() });
-        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::SpaceSelect { index: 2 });
         // A click on one row, then on another: the selection is on the one clicked last.
         m.update(Action::SetSessions {
             found: vec![
@@ -12134,7 +12136,7 @@ mod tests {
         m.update(Action::SetSessions { found: found(), day: 0 });
         m.update(Action::SessionHide { runner: "codex".into(), id: "hidden".into() });
         m.update(Action::SessionAdopt { runner: "codex".into(), id: "adopted".into() });
-        m.update(Action::SpaceSelect { index: 1 });
+        m.update(Action::SpaceSelect { index: 2 });
         let panes = |m: &Model| m.sessions_bar().rows.iter().map(|row| (row.id.clone(), row.pane)).collect::<Vec<_>>();
         assert_eq!(panes(&m), [("here".to_string(), Some(2)), ("past".to_string(), None)], "an idle one is in no pane");
         // The picker, the new-task box, the key reference and visual mode keep the focus where it
@@ -12387,8 +12389,8 @@ mod tests {
         assert_eq!(m.update(Action::ListChoose { axis: Right }), [], "↵ shows it, starting nothing");
         let effects = m.update(Action::TalkStart);
         assert!(matches!(effects[..], [Effect::StartAgent { task: Subject::Task(1), .. }]), "{effects:?}");
-        // Each task shown has its space: Workspace's tab, and one for each of the four.
-        assert_eq!((m.talk.as_ref().and_then(|talk| talk.task.task()), m.list, m.tabs.len()), (Some(1), None, 5));
+        // Each task shown has its space: the workspace's tab, one for each of the four, and Home's.
+        assert_eq!((m.talk.as_ref().and_then(|talk| talk.task.task()), m.list, m.tabs.len()), (Some(1), None, 6));
         m.update(Action::TalkResize { width: 9e9 });
         m.update(Action::TalkWide);
         assert_eq!((m.talk_width, m.talk_wide), (talk::MAX_WIDTH, true));
@@ -13183,16 +13185,16 @@ mod tests {
         // The live window is parked before its pane leaves the tab on show.
         assert_eq!(m.update(Action::MovePane { pane: None, tab: 1 }), [Effect::Parked(1)]);
         assert_eq!((m.active, m.focused, m.live), (1, Some(1), None));
-        assert_eq!(m.tab_panes(), [vec![2], vec![3, 1]]);
+        assert_eq!(m.tab_panes(), [vec![2], vec![3, 1], vec![]]);
         // Its own tab, or a place with no tab: nothing happens.
         m.update(Action::MovePane { pane: None, tab: 1 });
         m.update(Action::MovePane { pane: None, tab: 7 });
-        assert_eq!(m.tab_panes(), [vec![2], vec![3, 1]]);
+        assert_eq!(m.tab_panes(), [vec![2], vec![3, 1], vec![]]);
         // A named pane in a background tab comes to the tab on show. The tab it leaves keeps
         // its place on the bar, empty, as when its last pane is closed.
         m.update(Action::MovePane { pane: Some(2), tab: 1 });
-        assert_eq!((m.tabs.len(), m.active, m.focused), (2, 1, Some(2)));
-        assert_eq!(m.tab_panes(), [vec![], vec![3, 1, 2]]);
+        assert_eq!((m.tabs.len(), m.active, m.focused), (3, 1, Some(2)));
+        assert_eq!(m.tab_panes(), [vec![], vec![3, 1, 2], vec![]]);
         m.update(Action::SelectTab { index: 0 });
         assert_eq!((m.layout.is_none(), m.focused), (true, None));
         // A pane that arrives beside a live app takes focus, so the app gives the keyboard back.
@@ -13256,7 +13258,7 @@ mod tests {
         term(&mut m);
         // An edge of the empty pane 1: 3 lands beside it. It is not put into it, as `Open` would.
         m.update(Action::DropPane { source: 3, target: 1, zone: Zone::Bottom });
-        assert_eq!(m.tab_panes(), [vec![1, 3, 2], vec![]]);
+        assert_eq!(m.tab_panes(), [vec![1, 3, 2], vec![], vec![]]);
         assert_eq!((m.pane(1).map(|p| &p.kind), m.focused), (Some(&Kind::Empty), Some(3)));
         // The centre: the empty pane trades places like any other, and can be the one dragged.
         m.update(Action::DropPane { source: 2, target: 1, zone: Zone::Center });
@@ -13266,25 +13268,30 @@ mod tests {
     }
 
     #[test]
-    fn a_drop_leaves_the_home_screen_and_a_tab_it_empties_shows_it() {
+    fn a_drop_leaves_an_empty_tab_and_a_tab_it_empties_is_empty_and_none_is_home() {
         let mut m = Model::default();
         term(&mut m);
         term(&mut m);
         m.update(Action::NewTab);
-        // The tab on show has no panes: the home screen. A drop between panes of the other tab
-        // (the socket can name them) brings that tab forward.
-        assert!(m.home(&[]).is_some());
+        // The tab on show has no panes. A drop between panes of the other tab (the socket can
+        // name them) brings that tab forward.
+        assert!(m.layout.is_none() && m.home(&[]).is_none());
         m.update(Action::DropPane { source: 2, target: 1, zone: Zone::Top });
-        assert_eq!((m.active, m.focused, m.home(&[]).is_none()), (0, Some(2), true));
+        assert_eq!((m.active, m.focused, m.layout.is_some()), (0, Some(2), true));
         // The only pane of a tab dropped in another tab: the view follows the pane, and the tab
-        // it left is the home screen when it is shown again.
+        // it left is empty when it is shown again: the workspace's, not Home.
         m.update(Action::SelectTab { index: 1 });
         term(&mut m);
         m.update(Action::DropPane { source: 3, target: 1, zone: Zone::Right });
-        assert_eq!((m.tab_panes(), m.active), (vec![vec![2, 1, 3], vec![]], 0));
-        assert!(m.home(&[]).is_none());
+        assert_eq!((m.tab_panes(), m.active), (vec![vec![2, 1, 3], vec![], vec![]], 0));
+        assert!(m.layout.is_some());
         m.update(Action::SelectTab { index: 1 });
-        assert!(m.home(&[]).is_some());
+        assert!(m.layout.is_none() && m.home(&[]).is_none() && m.space() == &WORKSPACE);
+        // A pane moved to Home's own tab (the socket can name its place) is not Home's: a tab
+        // of the workspace selected last.
+        m.update(Action::MovePane { pane: Some(3), tab: 2 });
+        assert_eq!((m.tab_panes(), m.active), (vec![vec![2, 1], vec![], vec![3], vec![]], 2));
+        assert_eq!((m.space(), m.space_tabs(&Owner::Workspace)), (&WORKSPACE, vec![3]));
     }
 
     #[test]
@@ -13314,14 +13321,14 @@ mod tests {
         m.update(Action::Focus { pane: 1 });
         m.update(Action::SelectTab { index: 1 });
         m.update(Action::DropPane { source: 1, target: 3, zone: Zone::Center });
-        assert_eq!(m.tab_panes(), [vec![3, 2], vec![1]]);
+        assert_eq!(m.tab_panes(), [vec![3, 2], vec![1], vec![]]);
         assert_eq!((m.active, m.focused), (1, Some(1)));
         m.update(Action::SelectTab { index: 0 });
         assert_eq!(m.focused, Some(3));
         // 1 lands beside 2 in the tab on show; the tab it left is empty and stays.
         m.update(Action::DropPane { source: 1, target: 2, zone: Zone::Left });
-        assert_eq!(m.tab_panes(), [vec![3, 1, 2], vec![]]);
-        assert_eq!((m.active, m.focused, m.tabs.len()), (0, Some(1), 2));
+        assert_eq!(m.tab_panes(), [vec![3, 1, 2], vec![], vec![]]);
+        assert_eq!((m.active, m.focused, m.tabs.len()), (0, Some(1), 3));
     }
 
     #[test]
@@ -13340,9 +13347,9 @@ mod tests {
         term(&mut m);
         m.update(Action::NewTab);
         term(&mut m);
-        // Place 0 on the bar is Workspace's first tab: Workspace comes first.
+        // Place 0 on the bar is the workspace's first tab: it comes first on the row.
         m.update(Action::MovePane { pane: None, tab: 0 });
-        assert_eq!(m.tab_panes(), [vec![1, 3], vec![2], vec![]]);
+        assert_eq!(m.tab_panes(), [vec![1, 3], vec![2], vec![], vec![]]);
         assert_eq!((m.active, m.tab_task()), (0, None));
     }
 
@@ -13366,10 +13373,10 @@ mod tests {
         m.update(Action::OpenPicker { axis: Right, new_tab: true, items: vec![PickItem::Terminal] });
         // Closing the picker makes no tab.
         m.update(Action::ClosePicker);
-        assert_eq!(m.tabs.len(), 1);
+        assert_eq!(m.tabs.len(), 2);
         m.update(Action::OpenPicker { axis: Right, new_tab: true, items: vec![PickItem::Terminal] });
         assert_eq!(m.update(Action::PickerChoose { index: None }), [Effect::Opened(2)]);
-        assert_eq!((m.tabs.len(), m.active, m.layout.as_ref().unwrap().leaves()), (2, 1, vec![2]));
+        assert_eq!((m.tabs.len(), m.active, m.layout.as_ref().unwrap().leaves()), (3, 1, vec![2]));
     }
 
     #[test]
@@ -13380,7 +13387,7 @@ mod tests {
         term(&mut m);
         assert_eq!(m.update(Action::Enter { pane: 1 }), [Effect::Live(1)]);
         assert_eq!((m.active, m.focused, m.live), (0, Some(1), Some(1)));
-        assert_eq!(m.tab_panes(), [vec![1], vec![2]]);
+        assert_eq!(m.tab_panes(), [vec![1], vec![2], vec![]]);
         // Active tab or background tab: each pane names its own tab.
         assert_eq!((m.tab_of(1), m.tab_of(2), m.tab_of(9)), (Some(m.tabs[0].id), Some(m.tabs[1].id), None));
     }
@@ -13394,7 +13401,7 @@ mod tests {
         let effects = m.update(Action::PickerChoose { index: None });
         assert_eq!(effects, [Effect::HostApp { name: "Slack".into(), axis: Right, new_tab: true }]);
         // No tab yet: if hosting fails, nothing is left behind.
-        assert_eq!(m.tabs.len(), 1);
+        assert_eq!(m.tabs.len(), 2);
     }
 
     #[test]
@@ -13437,7 +13444,7 @@ mod tests {
         ] {
             assert_eq!(m.update(action), []);
         }
-        assert_eq!((ids(&m), m.tabs.len(), m.picker.is_none()), (vec![1], 1, true));
+        assert_eq!((ids(&m), m.tabs.len(), m.picker.is_none()), (vec![1], 2, true));
     }
 
     #[test]
@@ -13474,7 +13481,7 @@ mod tests {
         ] {
             assert_eq!(m.update(action), []);
         }
-        assert_eq!((m.focused, m.picker.is_none(), m.tabs.len()), (Some(2), true, 1));
+        assert_eq!((m.focused, m.picker.is_none(), m.tabs.len()), (Some(2), true, 2));
         assert_eq!(m.update(Action::ToggleVisual), [Effect::Visual { pane: 2, on: false }]);
         assert_eq!(m.mode(), Mode::Normal);
         assert_eq!(m.update(Action::LeaveVisual), []);
@@ -13646,7 +13653,7 @@ mod tests {
         for no in [Action::QuitCancel, Action::Close { pane: None }, Action::ToggleKeys, Action::NewTab] {
             m.update(ask());
             assert_eq!(m.update(no.clone()), [], "{no:?}");
-            assert_eq!((m.mode(), ids(&m), m.keys, m.tabs.len()), (Mode::Normal, vec![1, 2], false, 1), "{no:?}");
+            assert_eq!((m.mode(), ids(&m), m.keys, m.tabs.len()), (Mode::Normal, vec![1, 2], false, 2), "{no:?}");
         }
         // What the user did not do leaves the question up: time passes, a shell exits.
         m.update(ask());

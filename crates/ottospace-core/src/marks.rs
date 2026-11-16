@@ -1567,15 +1567,15 @@ mod tests {
         assert_eq!((cwd(new_left), cwd(new_app), cwd(new_below)), (Some("/work/app"), None, Some("/work/notes")));
         assert_eq!(m.pane(new_app).map(|p| &p.kind), Some(&Kind::Empty), "empty until its window is hosted");
         assert_eq!((m.tabs[m.active].title.as_str(), m.focused), ("Tab 1", Some(new_left)));
-        assert_eq!(m.tabs.len(), 2, "a new tab beside the one that was there");
+        assert_eq!((m.tabs.len(), m.space()), (2, &Owner::Workbook { id: 1 }), "a new tab, in a workspace made for it");
         // The shell fills the pane, wherever the user is by then.
         m.update(Action::NewTab);
         let filled = m.update(Action::Fill { pane: new_app, kind: slack(9, "general") }.sent_by(Origin::System));
-        assert_eq!((filled, m.active), (vec![Effect::Opened(new_app)], 2));
+        assert_eq!((filled, m.active), (vec![Effect::Opened(new_app)], 1));
         assert_eq!(m.update(Action::Fill { pane: new_app, kind: slack(10, "x") }.sent_by(Origin::System)), []);
         // Open now: going again selects the tab, and builds nothing.
         let effects = m.update(Action::MarkGo { mark: MarkRef::Name("work".into()), axis: Right });
-        assert_eq!((effects, m.active, m.panes.len()), (vec![], 1, 3));
+        assert_eq!((effects, m.active, m.panes.len()), (vec![], 0, 3));
         assert!(m.mark_rows()[0].open);
         // Closed: it is built again.
         m.update(Action::CloseTab { index: None });
@@ -1597,7 +1597,7 @@ mod tests {
         m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
         open(&mut m, Kind::Terminal);
         mark(&mut m, MarkOf::Tab(None), &[]);
-        m.update(Action::SelectTab { index: 0 });
+        m.update(Action::SpaceSelect { index: 0 });
         assert_eq!(m.tab_task(), None);
         // Open in the background: going there shows its tab, the task's.
         go(&mut m, "fix zoom");
@@ -2017,7 +2017,7 @@ mod tests {
             axis: Right,
             launch: true,
         };
-        assert_eq!((effects, m.active), (vec![Effect::Opened(c), host], 1));
+        assert_eq!((effects, m.active), (vec![Effect::Opened(c), host], 0));
         assert_eq!(m.pane(c).map(|p| (&p.kind, p.cwd.as_deref())), Some((&Kind::Terminal, Some("/gone/notes"))));
         // The shell could not host the window: the pane says why, until it is filled or closed.
         m.update(Action::Unfilled { pane: b, why: "Slack has no window yet".into() }.sent_by(Origin::System));
@@ -2025,7 +2025,7 @@ mod tests {
         m.update(Action::Fill { pane: b, kind: slack(9, "general") }.sent_by(Origin::System));
         assert_eq!((empty(&m), m.mark_rows()[0].reason.clone()), (vec![], None));
         // With nothing of it to open, a closed tab's mark is unavailable.
-        m.update(Action::CloseTab { index: Some(1) });
+        m.update(Action::CloseTab { index: Some(0) });
         m.update(Action::MarksChecked { missing: [missing, vec![Need::Dir("/work/app".into())]].concat() });
         let row = m.mark_rows().remove(0);
         assert_eq!((row.available, row.reason.as_deref()), (false, Some("its directory is gone: /work/app")));
