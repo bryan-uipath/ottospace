@@ -1031,11 +1031,16 @@ export interface AxTarget {
 
 /** Sneak mode's labels: ottospace's own controls (`own`), and the focused app pane's elements (`app`). */
 export interface Sneak {
-  targets: AxTarget[];
+  targets: SneakTarget[];
   /** The letters typed so far: labels that start with them are on show. */
   typed: string;
   /** Once the app pane's tree was read: labels on its elements now, and how many could have one. */
   app: SneakApp | null;
+}
+
+export interface SneakTarget extends AxTarget {
+  /** Where the label is drawn: beside a small control, touching it; inside a large one. */
+  pill: Frame;
 }
 
 export interface SneakApp {

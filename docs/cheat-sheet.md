@@ -58,7 +58,7 @@ ottospace            # opens on the Repos list
 | Fold a repository | Its chevron, or ← / → in list mode |
 | A worktree's pull request | Its `#number` at the row's end: muted draft, ✓ ready, amber waiting, red failing. Hover for checks, review and merge; click opens it (via `gh`, `repos_prs`) |
 | Close the bar | × in its header |
-| Click anything without the mouse | ⌘; or ⌘⌃G: every control gets a letter label (a × gets two), and so do the buttons and text fields of the focused app pane, in orange, two letters or more. Type it · ⌫ takes a letter back · Esc or a wrong letter leaves. An orange label presses that button in the app, or puts you in its text field |
+| Click anything without the mouse | ⌘; or ⌘⌃G: every control gets a letter label (a × gets two), beside a small control and outlining it, and so do the buttons and text fields of the focused app pane, in orange, two letters or more. Type it · ⌫ takes a letter back · Esc or a wrong letter leaves. An orange label presses that button in the app, or puts you in its text field |
 
 ## Apps
 

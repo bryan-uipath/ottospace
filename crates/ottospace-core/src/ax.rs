@@ -19,14 +19,14 @@ impl Frame {
         Self { x, y, w, h }
     }
 
-    pub(crate) fn intersects(&self, other: &Frame) -> bool {
+    pub fn intersects(&self, other: &Frame) -> bool {
         self.x < other.x + other.w
             && other.x < self.x + self.w
             && self.y < other.y + other.h
             && other.y < self.y + self.h
     }
 
-    fn clip(&self, to: &Frame) -> Frame {
+    pub(crate) fn clip(&self, to: &Frame) -> Frame {
         let (x, y) = (self.x.max(to.x), self.y.max(to.y));
         let (r, b) = ((self.x + self.w).min(to.x + to.w), (self.y + self.h).min(to.y + to.h));
         Frame { x, y, w: (r - x).max(0.0), h: (b - y).max(0.0) }
@@ -198,6 +198,9 @@ pub enum Source {
 pub struct Target {
     pub frame: Frame,
     pub source: Source,
+    /// Where a sneak label for it may be drawn: what its scroll area or pane shows. None: anywhere.
+    #[serde(skip)]
+    pub clip: Option<Frame>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -205,6 +208,9 @@ pub struct Labelled {
     pub label: String,
     #[serde(flatten)]
     pub target: Target,
+    /// Sneak mode's only: where the label is drawn (`sneak::place`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pill: Option<Frame>,
 }
 
 /// A hosted window's interactive nodes as targets. `window` is its frame (global) when read;
@@ -220,7 +226,8 @@ pub fn app_targets(pane: PaneId, root: &Node, window: Frame, crop: f64, content:
             let g = f.node.frame?;
             let frame = on_pane(g, window, crop, content)?;
             let at = Frame { x: g.x - window.x, y: g.y - window.y, ..g };
-            Some(Target { frame, source: Source::App { pane, path: f.path, role: f.node.role.clone(), at } })
+            let source = Source::App { pane, path: f.path, role: f.node.role.clone(), at };
+            Some(Target { frame, source, clip: None })
         })
         .collect()
 }
@@ -229,10 +236,15 @@ pub fn app_targets(pane: PaneId, root: &Node, window: Frame, crop: f64, content:
 /// what shows (the pane, and no more than the window), so a partly scrolled-out control is
 /// placed where it shows. None: it does not show.
 pub fn on_pane(g: Frame, window: Frame, crop: f64, content: Frame) -> Option<Frame> {
+    let shown = shown(window, crop, content);
     let window = Frame { y: window.y + crop, h: window.h - crop, ..window };
-    let shown = Frame { w: content.w.min(window.w), h: content.h.min(window.h), ..content };
     let frame = Frame { x: content.x + g.x - window.x, y: content.y + g.y - window.y, ..g };
     frame.intersects(&shown).then(|| frame.clip(&shown))
+}
+
+/// The part of the pane `content` that shows the window: no more than the window, below `crop`.
+pub fn shown(window: Frame, crop: f64, content: Frame) -> Frame {
+    Frame { w: content.w.min(window.w), h: content.h.min(window.h - crop), ..content }
 }
 
 /// Top to bottom, then left to right.
@@ -246,7 +258,7 @@ pub fn reading_order(targets: &mut [Target]) {
 pub fn assign(mut targets: Vec<Target>, alphabet: &str) -> Vec<Labelled> {
     reading_order(&mut targets);
     let labels = labels(targets.len(), alphabet);
-    targets.into_iter().zip(labels).map(|(target, label)| Labelled { label, target }).collect()
+    targets.into_iter().zip(labels).map(|(target, label)| Labelled { label, target, pill: None }).collect()
 }
 
 #[cfg(test)]
@@ -346,6 +358,7 @@ mod tests {
         Target {
             frame: Frame { x: frame[0], y: frame[1], w: frame[2], h: frame[3] },
             source: Source::Own { id: id.into() },
+            clip: None,
         }
     }
 
@@ -539,14 +552,17 @@ mod tests {
         let targets = vec![
             Labelled {
                 label: "a".into(),
-                target: Target { frame: Frame { x: 10., y: 20., w: 30., h: 12. }, source: app },
+                target: Target { frame: Frame { x: 10., y: 20., w: 30., h: 12. }, source: app, clip: None },
+                pill: None,
             },
             Labelled {
                 label: "s".into(),
                 target: Target {
                     frame: Frame { x: 0., y: 40., w: 48., h: 48. },
                     source: Source::Own { id: "rail:apps".into() },
+                    clip: None,
                 },
+                pill: None,
             },
         ];
         assert_eq!(serde_json::to_value(&targets).unwrap(), fixture["targets"]);

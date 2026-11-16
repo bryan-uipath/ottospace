@@ -486,7 +486,7 @@ mod tests {
 
     fn controls() -> Vec<Target> {
         let frame = Frame { x: 0.0, y: 0.0, w: 20.0, h: 20.0 };
-        vec![Target { frame, source: Own::Own { id: "rail:apps".into() } }]
+        vec![Target { frame, source: Own::Own { id: "rail:apps".into() }, clip: None }]
     }
 
     #[test]

@@ -45,6 +45,7 @@ pub mod sessions;
 pub mod settings;
 pub mod sneak;
 pub mod sneak_apps;
+pub mod sneak_place;
 pub mod talk;
 pub mod tasks;
 pub mod terminal;
