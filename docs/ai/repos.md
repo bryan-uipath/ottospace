@@ -50,6 +50,11 @@ workspace of that checkout, else makes one with it as its default worktree: `doc
    characters, in the status bar; an empty `<repo>` folder made in step 4 goes; anything git
    left is left, and said.
 
+The new-task box makes one too (`docs/ai/spaces.md`, "A new worktree from the box"): the same
+folder and checks, `fresh` (only `git worktree add -b <branch> -- <folder> HEAD`; a branch any
+local or remote ref has is refused, nothing made), and `WorktreeAdded`/`WorktreeFailed` carry the
+folder as asked, so the core finds the task that waits for it.
+
 ## Pull requests (`prs.rs` in the core and the shell; `SetPrs`, `PrOpen`, `Effect::OpenPr`)
 
 - **When**: only while the Repos section is open (`prs::due`): a repository is read every 5

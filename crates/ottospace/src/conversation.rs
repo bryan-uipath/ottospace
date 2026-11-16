@@ -44,6 +44,8 @@ pub struct Native {
     /// to see, once it ends, whether its session was written (`session_missing`).
     pub session: Option<(ottospace_core::runner::RunnerId, String)>,
     pub cwd: Option<String>,
+    /// Its task's pass, while it runs (`pass`): none for a session's agent, nor once it moved.
+    pub(crate) pass: Option<crate::pass::Pass>,
 }
 
 /// What the drawer keeps of a conversation's look, not its state: where it is scrolled, the
@@ -250,8 +252,13 @@ impl Workspace {
         if let Some(dir) = dir {
             command.current_dir(dir);
         }
+        let pass = subject.task().map(|_| crate::pass::Pass::mint().ok_or("no random bytes for a pass")).transpose()?;
         if let Some(task) = subject.task() {
             command.env("OTTOSPACE_TASK", task.to_string());
+        }
+        // Its own, for its tool shells' `ottospace ctl`: the user's shells in the task's tab have none.
+        if let Some(pass) = &pass {
+            command.env(crate::pass::VAR, pass.hex());
         }
         // An empty key is no key: passed on, the CLI could take it for one and fail.
         if std::env::var_os("ANTHROPIC_API_KEY").is_some_and(|key| key.is_empty()) {
@@ -265,7 +272,7 @@ impl Workspace {
         let model = model.unwrap_or_else(|| name.into());
         let given = session.clone().map(|id| (runner, id));
         let (tickets, since, cwd) = (Vec::new(), Instant::now(), dir.map(str::to_string));
-        let native = Native { driver, tickets, next: 0, since, model, session: given, cwd };
+        let native = Native { driver, tickets, next: 0, since, model, session: given, cwd, pass };
         self.drawer.native.insert(subject.clone(), native);
         Ok(session)
     }
@@ -1337,6 +1344,11 @@ pub enum NativeInput {
 }
 
 impl Native {
+    /// Its process has exited.
+    pub(crate) fn reaped(&self) -> bool {
+        self.driver.reaped()
+    }
+
     /// A request's whole payload, for "Show all".
     fn full(&self, ticket: u64) -> Option<String> {
         self.tickets.iter().find(|(n, _)| *n == ticket).map(|(_, t)| t.full().text().to_string())

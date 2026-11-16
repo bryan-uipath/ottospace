@@ -87,6 +87,7 @@ mod marks;
 mod menus;
 mod new_task;
 mod notice_bar;
+mod pass;
 mod progress;
 mod prs;
 mod record;
@@ -1585,9 +1586,9 @@ impl Workspace {
                     None => drop(ottospace_mac::meeting::open_url(url)),
                 },
                 Effect::OpenPr { .. } => {}
-                Effect::AddWorktree { repo, branch, path, root } => {
+                Effect::AddWorktree { repo, branch, path, root, fresh } => {
                     let done = self.worktrees.0.clone();
-                    worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), done);
+                    worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), *fresh, done);
                 }
                 Effect::Notice { text } => (self.error, self.refused) = (Some(text.clone()), Some(text.clone())),
                 Effect::ListenWrite { .. }
@@ -1901,7 +1902,7 @@ impl Workspace {
         if !calls.is_empty() {
             self.check_marks(cx);
         }
-        for Call { request, reply } in calls {
+        for Call { request, reply, pass } in calls {
             if let Some(why) = control::test_refusal(&request, std::env::var_os("OTTOSPACE_E2E").is_some()) {
                 let _ = reply.send(control::error(why));
                 continue;
@@ -2281,7 +2282,8 @@ impl Workspace {
                     }
                 },
                 Request::TaskBrief { id, tab } => {
-                    let _ = reply.send(self.serve_brief(id, tab));
+                    let caller = self.caller(pass.as_ref());
+                    let _ = reply.send(self.serve_brief(id, caller, tab));
                     continue;
                 }
                 Request::Capture { pane, history } => {
@@ -3130,6 +3132,9 @@ impl Workspace {
         });
         // Restored or rebuilt panes still empty: `pane`, `why`, and where its "Open <App>" is drawn, or null.
         state["unfilled"] = unfilled.into();
+        // Where the box offers a choice of where the task works: `new` (a new worktree, the user's
+        // choice), the repository's name and the `branch` it would make; else null.
+        state["compose_worktree"] = serde_json::json!(self.model.compose_worktree());
         state
     }
 
@@ -4373,20 +4378,21 @@ impl Workspace {
     /// Worktrees git made, or did not: the list is read again; a made one opens, a failure is said.
     fn take_worktrees(&mut self, window: &Window, cx: &mut Context<Self>) {
         let made: Vec<worktree::Made> = self.worktrees.1.try_iter().collect();
-        for worktree::Made { repo, result } in made {
+        for worktree::Made { repo, asked, fresh, result } in made {
             let repos = repos::scan();
             match result {
                 // Made from a repository listed only as a worktree of another: not in the list to open.
                 Ok(path) if !repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == path)) => {
                     self.error = Some(format!("Made {path}: its repository is not listed"));
-                    self.dispatch(Action::SetRepos { repos }, Origin::System, window, cx);
+                    self.dispatch(Action::WorktreeFailed { asked, fresh, repos }, Origin::System, window, cx);
                 }
                 Ok(path) => {
-                    drop(self.dispatch(Action::WorktreeAdded { repo, path, repos }, Origin::System, window, cx))
+                    let made = Action::WorktreeAdded { repo, path, asked, fresh, repos };
+                    drop(self.dispatch(made, Origin::System, window, cx))
                 }
                 Err(why) => {
                     self.error = Some(why);
-                    self.dispatch(Action::SetRepos { repos }, Origin::System, window, cx);
+                    self.dispatch(Action::WorktreeFailed { asked, fresh, repos }, Origin::System, window, cx);
                 }
             }
             cx.notify();
@@ -6469,7 +6475,9 @@ fn ctl(args: &[String]) -> ! {
         eprintln!("usage: ottospace ctl '{{\"cmd\":\"state\"}}'");
         std::process::exit(2);
     };
-    let reply = control::send(&control::path(), request).unwrap_or_else(|err| {
+    // An agent ottospace started for a task carries its pass: the reply knows whose it is.
+    let request = control::with_pass(request, std::env::var(pass::VAR).ok().as_deref());
+    let reply = control::send(&control::path(), &request).unwrap_or_else(|err| {
         eprintln!("no ottospace at {}: {err}", control::path().display());
         std::process::exit(1);
     });
@@ -6534,6 +6542,9 @@ fn main() {
     if args.get(1).is_some_and(|a| a == "ctl") {
         ctl(&args[2..]);
     }
+    // Started from a task agent's shell (a dev build): that pass is its, not for our children.
+    // SAFETY: no thread has started yet.
+    unsafe { std::env::remove_var(pass::VAR) };
     // Hidden while its output has no stable shape. Reads other programs' session files.
     if args.get(1).is_some_and(|a| a == "sessions") {
         sessions(args.get(2));

@@ -133,6 +133,7 @@ Key Counts forgets it.
 | I want to | Do |
 |---|---|
 | Start a task | ⌘N, type a line, ↵: its agent starts in the drawer on the right, beside your workspace. The + on the Tasks bar or the top row opens the same box; its picks set where and who |
+| Start a task in a new worktree | ⌘N in a repository's workspace, type a line, ⌥⌘N (or `new worktree`), ↵: git makes a branch named for the task and its agent starts there. A name taken: the notice says so and the task waits in the checkout |
 | Add a task for later | ⌘N, type a line, ⇧↵ |
 | Use the bar while writing a task | Click as usual: a rail icon or a fold leaves the box as it is; a click that goes elsewhere (a tab, a pane, a repository) puts the line aside until the next ⌘N |
 | Write a message in your editor | ⌃G in the composer or the new-task box: `$VISUAL`/`$EDITOR` opens in the drawer on the text. Save and quit puts it back (not sent; ↵ sends); quit with an error keeps it as it was. A permission card meanwhile shows under the editor: click it to answer, ⌃G back |
