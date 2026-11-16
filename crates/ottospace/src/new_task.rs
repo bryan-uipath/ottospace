@@ -319,9 +319,9 @@ impl Workspace {
         let muted = |text: &'static str| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
         // What ↵ does when it is not "add": it finishes the tag. Else the one key a text box does not have.
         let keys: &[&'static str] = match self.model.enter() {
-            Enter::Take(_) => &["↵", "completes"],
             Enter::Wait => &[],
-            Enter::Add => &["⇧", "↵", "later"],
+            _ if self.model.enter_completes() => &["↵", "completes"],
+            _ => &["⇧", "↵", "later"],
         };
         // As wide whatever it says: the tags beside it wrap the same, and the line above stays put.
         let caps = keys.split_last().map(|(word, caps)| {

@@ -5842,6 +5842,12 @@ impl Model {
         }
     }
 
+    /// Whether ↵ will finish the tag: it takes a row, and the name has room. With no room ↵ only
+    /// says so, and the box's hint does not promise it.
+    pub fn enter_completes(&self) -> bool {
+        matches!(self.enter(), Enter::Take(row) if self.taking(row).is_some())
+    }
+
     /// Takes row `index` of the dropdown: its name replaces the whole word under the cursor,
     /// with a space after it, and nothing past that word. A folder takes no space: the
     /// dropdown stays, on what is in it. A name the line has no room for is not taken in
@@ -10146,6 +10152,7 @@ mod tests {
         m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::End, select: false } });
         assert_eq!(m.compose_note(), None);
         let before = m.tasks.list.len();
+        assert_eq!((m.enter(), m.enter_completes()), (Enter::Take(0), false), "the hint does not say ↵ completes");
         m.update(Action::ComposeSubmit { open: false });
         assert_eq!(
             (line(&m), m.compose_note(), m.tasks.list.len()),
@@ -11961,6 +11968,7 @@ mod tests {
         // ↑ from the first row goes to the last: a row stays highlighted.
         let mut m = composing();
         keys(&mut m, "fix >");
+        assert!(m.enter_completes());
         m.update(Action::ComposeMove { delta: -1 });
         assert_eq!(m.dropdown().and_then(|menu| menu.selected), Some(1));
         // A name spelled out is highlighted over a longer one: ↵ adds it as typed.
