@@ -9363,7 +9363,8 @@ fn the_notice_bar_splits_the_top_row_from_the_rest_and_only_the_user_dismisses_i
 /// The top row as (kind, selected, its tabs' places), hidden spaces left out.
 fn top_row(reply: &Value) -> Vec<(String, bool, Value)> {
     let spaces = reply["spaces"].as_array().cloned().unwrap_or_default();
-    let space = |s: &Value| (s["of"]["kind"].as_str().unwrap_or("").to_string(), s["selected"] == true, s["tabs"].clone());
+    let space =
+        |s: &Value| (s["of"]["kind"].as_str().unwrap_or("").to_string(), s["selected"] == true, s["tabs"].clone());
     spaces.iter().filter(|s| s["hidden"] == false).map(space).collect()
 }
 
@@ -9380,9 +9381,13 @@ fn workspace_names(reply: &Value) -> Vec<String> {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_terminal_opened_on_home_is_in_a_new_workspace_and_home_holds_none() {
     let otto = Otto::launch("home-makes");
-    let (home, book) = (|on: bool| ("home".to_string(), on, json!([])), |on: bool, tabs: Value| ("workbook".to_string(), on, tabs));
+    let (home, book) =
+        (|on: bool| ("home".to_string(), on, json!([])), |on: bool, tabs: Value| ("workbook".to_string(), on, tabs));
     let start = otto.call(json!({"cmd": "state"}));
-    assert_eq!((top_row(&start), &start["state"]["tabs"], &start["state"]["active"]), (vec![home(true)], &json!([]), &Value::Null));
+    assert_eq!(
+        (top_row(&start), &start["state"]["tabs"], &start["state"]["active"]),
+        (vec![home(true)], &json!([]), &Value::Null)
+    );
     assert!(start["home"].is_object() && workspace_names(&start).is_empty(), "{start}");
     // Home is its icon alone, with no ×: drawn, labelled for sneak mode, narrower than a named space.
     let drawn = otto.drawn();
@@ -9391,8 +9396,14 @@ fn a_terminal_opened_on_home_is_in_a_new_workspace_and_home_holds_none() {
     assert_eq!(otto.control("space:0"), icon.map(f64::from));
     // ⌘D: a terminal, in a workspace made for it, named as + names one, selected.
     let made = otto.user_key("cmd-d");
-    assert_eq!((top_row(&made), workspace_names(&made)), (vec![home(false), book(true, json!([0]))], vec!["Workspace 2".to_string()]));
-    assert_eq!((pane_ids(&made), &made["state"]["active"], &made["state"]["tabs"][0]["title"]), (vec![1], &json!(0), &json!("Tab 1")));
+    assert_eq!(
+        (top_row(&made), workspace_names(&made)),
+        (vec![home(false), book(true, json!([0]))], vec!["Workspace 2".to_string()])
+    );
+    assert_eq!(
+        (pane_ids(&made), &made["state"]["active"], &made["state"]["tabs"][0]["title"]),
+        (vec![1], &json!(0), &json!("Tab 1"))
+    );
     assert!(made["home"].is_null(), "a workspace is on show: {made}");
     // Its × takes it off the row: Home is on show, the terminal goes on, and it stays listed.
     let hidden = otto.user_key("cmd-ctrl-w");
@@ -9428,13 +9439,22 @@ fn a_clients_split_on_home_goes_to_the_workspace_selected_last_or_makes_one() {
     let book = json!({"kind": "workbook", "id": 1});
     // No workspace yet: one is made, kept like any other, and selected.
     let first = otto.call(json!({"cmd": "split"}));
-    assert_eq!((workspace_names(&first), kinds(&first), pane_ids(&first)), (vec!["Workspace 2".to_string()], vec![book.clone()], vec![1]));
+    assert_eq!(
+        (workspace_names(&first), kinds(&first), pane_ids(&first)),
+        (vec!["Workspace 2".to_string()], vec![book.clone()], vec![1])
+    );
     assert_eq!(top_row(&first).iter().map(|space| space.1).collect::<Vec<_>>(), [false, true]);
     // From Home again: a tab of that workspace, and no second workspace.
     assert!(otto.call(json!({"cmd": "select_space", "index": 0}))["home"].is_object());
     let again = otto.call(json!({"cmd": "split"}));
-    assert_eq!((workspace_names(&again).len(), kinds(&again), pane_ids(&again)), (1, vec![book.clone(), book.clone()], vec![1, 2]));
-    assert_eq!((&again["state"]["active"], &again["state"]["focused"], &again["home"]), (&json!(1), &json!(2), &Value::Null));
+    assert_eq!(
+        (workspace_names(&again).len(), kinds(&again), pane_ids(&again)),
+        (1, vec![book.clone(), book.clone()], vec![1, 2])
+    );
+    assert_eq!(
+        (&again["state"]["active"], &again["state"]["focused"], &again["home"]),
+        (&json!(1), &json!(2), &Value::Null)
+    );
     // A new tab the same; Home's own tab is no place on the bar.
     otto.call(json!({"cmd": "select_space", "index": 0}));
     let tab = otto.call(json!({"cmd": "new_tab"}));
@@ -9469,8 +9489,15 @@ fn an_older_layouts_first_workspace_becomes_a_kept_workspace_and_an_empty_one_ju
     };
     let upgraded = |reply: &Value| {
         let row = top_row(reply);
-        assert_eq!(row, [("home".to_string(), false, json!([])), ("workbook".to_string(), true, json!([0, 1]))], "{reply}");
-        assert_eq!((workspace_names(reply), titles(reply)), (vec!["Workspace".to_string()], vec![json!("notes"), json!("Tab 2")]));
+        assert_eq!(
+            row,
+            [("home".to_string(), false, json!([])), ("workbook".to_string(), true, json!([0, 1]))],
+            "{reply}"
+        );
+        assert_eq!(
+            (workspace_names(reply), titles(reply)),
+            (vec!["Workspace".to_string()], vec![json!("notes"), json!("Tab 2")])
+        );
         assert_eq!((pane_ids(reply), &reply["state"]["active"], &reply["home"]), (vec![1], &json!(0), &Value::Null));
     };
     {
@@ -9532,8 +9559,14 @@ fn a_task_started_on_home_gets_its_own_workspace() {
     // and Home holds none.
     let row = top_row(&started);
     let kinds: Vec<&str> = row.iter().map(|space| space.0.as_str()).collect();
-    assert_eq!((kinds, row[2].1, &row[2].2, &row[0].2), (vec!["home", "workbook", "task"], true, &json!([1]), &json!([])));
-    assert_eq!((&started["spaces"][2]["of"]["id"], pane_ids(&started), &started["home"]), (&json!(task), vec![1], &Value::Null));
+    assert_eq!(
+        (kinds, row[2].1, &row[2].2, &row[0].2),
+        (vec!["home", "workbook", "task"], true, &json!([1]), &json!([]))
+    );
+    assert_eq!(
+        (&started["spaces"][2]["of"]["id"], pane_ids(&started), &started["home"]),
+        (&json!(task), vec![1], &Value::Null)
+    );
     assert_eq!(started["workbooks"][0]["task"], Value::Null, "the workspace is not the task's");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
