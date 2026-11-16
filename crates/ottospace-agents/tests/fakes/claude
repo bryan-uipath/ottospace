@@ -13,7 +13,16 @@
 printf '%s\n' "$@" >"$FAKE_DIR/argv"
 echo $$ >"$FAKE_DIR/pid"
 echo start >>"$FAKE_DIR/starts"
-replay() { grep -v '"_fixture"' "$FAKE_FIXTURES/$1"; }
+# A fixture line `{"_sleep":1.5}` is a pause of that many seconds, not a reply: calls that overlap.
+replay() {
+  while IFS= read -r reply || [ -n "$reply" ]; do
+    case "$reply" in
+      *'"_fixture"'*) ;;
+      *'"_sleep"'*) sleep "$(printf '%s' "$reply" | tr -cd '0-9.')" ;;
+      *) printf '%s\n' "$reply" ;;
+    esac
+  done <"$FAKE_FIXTURES/$1"
+}
 if [ -n "$FAKE_SESSIONS" ]; then
   prev=
   for arg in "$@"; do

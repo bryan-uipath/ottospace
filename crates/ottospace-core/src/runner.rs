@@ -47,6 +47,8 @@ pub struct RunnerSpec {
     pub display: &'static str,
     /// One character for its kind, at the centre of its conversation's dial.
     pub glyph: &'static str,
+    /// The same as a picture (an asset's path): what the dial turns while the model thinks.
+    pub icon: &'static str,
     /// The models offered when the settings name none, as its CLI takes them.
     pub models: &'static [&'static str],
     /// Its model ids start with its name, so a tag is the id itself: `claude-opus-5-5`.
@@ -161,6 +163,7 @@ const CLAUDE: RunnerSpec = RunnerSpec {
     name: "claude",
     display: "Claude Code",
     glyph: "✳",
+    icon: "icons/runner-claude.svg",
     models: &["claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
     ids_named: true,
     terminal: Terminal {
@@ -186,6 +189,7 @@ const CODEX: RunnerSpec = RunnerSpec {
     name: "codex",
     display: "Codex",
     glyph: "◇",
+    icon: "icons/runner-codex.svg",
     models: &["gpt-6-astra"],
     ids_named: false,
     terminal: Terminal {

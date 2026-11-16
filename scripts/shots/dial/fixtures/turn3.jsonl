@@ -1,0 +1,15 @@
+{"_sleep": 3}
+{"type": "assistant", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_use", "id": "toolu_r3", "name": "Read", "input": {"file_path": "{ROOT}/repos/app/src/auth.rs"}}]}}
+{"_sleep": 2}
+{"type": "assistant", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_use", "id": "toolu_g3", "name": "Grep", "input": {"pattern": "made_up"}}]}}
+{"_sleep": 2}
+{"type": "assistant", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_use", "id": "toolu_b3", "name": "Bash", "input": {"command": "cargo clippy"}}]}}
+{"_sleep": 2}
+{"type": "user", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_g3", "content": "ok", "is_error": false}]}}
+{"_sleep": 1}
+{"type": "user", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_r3", "content": "ok", "is_error": false}]}}
+{"_sleep": 1.5}
+{"type": "user", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_b3", "content": "ok", "is_error": false}]}}
+{"_sleep": 2.5}
+{"type": "assistant", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003", "parent_tool_use_id": null, "message": {"content": [{"type": "text", "text": "Clean: no lints."}], "usage": {"input_tokens": 188000, "output_tokens": 0}}}
+{"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.01, "modelUsage": {"claude-opus-5-5": {"contextWindow": 200000}}}
