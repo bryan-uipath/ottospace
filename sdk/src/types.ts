@@ -244,7 +244,12 @@ export interface SpaceRow {
   front: TaskId | null;
   /** The tabs of the drawer's strip while this space is selected, in the order the tasks came; empty with fewer than two. */
   strip: TaskId[];
+  /** What its item on the top row shows before its name. */
+  glyph: Glyph;
 }
+
+/** A top-row item's glyph: Home's house, a task's badges, the icon of the one app pane a workspace of no task holds alone (by the app's name), or the name alone. */
+export type Glyph = { kind: "home" } | { kind: "tasks" } | { kind: "app"; name: string } | { kind: "name" };
 
 /** The active tab's split tree. `ratio`: the share of the split that `a` (left or top) takes. */
 export type Layout = { leaf: PaneId } | { split: { axis: Axis; ratio: number; a: Layout; b: Layout } };
@@ -1099,6 +1104,8 @@ export interface HomeDrawn {
   panel: Rect;
   /** Each node's click target, by task id. */
   nodes: Record<string, Rect>;
+  /** The heading over the key caps: "Home" on Home, null in a workspace's empty tab. */
+  heading: string | null;
   /** How often lattice lines were built and painted. */
   lattice_builds: number;
   lattice_paints: number;
