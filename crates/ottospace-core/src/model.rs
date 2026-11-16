@@ -3260,8 +3260,7 @@ impl Model {
             new_tab: matches!(sent.action, Action::NewTab | Action::NewEmptyTab),
             on_show: *self.space() == Owner::Home,
             tabs: self.tabs.iter().map(|tab| tab.id).collect(),
-            typing: origin != Origin::User
-                && (self.talk.as_ref().is_some_and(|talk| talk.keys) || self.composing()),
+            typing: origin != Origin::User && (self.talk.as_ref().is_some_and(|talk| talk.keys) || self.composing()),
         };
         // A count of keys is no input: it ends no mode and changes nothing on show.
         if let Some(uses) = self.key_use_step(&sent) {
@@ -9056,6 +9055,21 @@ mod tests {
     }
 
     #[test]
+    fn a_clients_pane_on_home_makes_a_workspace_once_while_one_is_kept() {
+        let mut m = Model::default();
+        let split = || Action::Split { axis: Right, kind: Kind::Terminal }.sent_by(Origin::Socket);
+        m.update(split());
+        assert_eq!((m.space(), m.workbooks.list.len()), (&WORKSPACE, 1));
+        // Its tab closed, the workspace is off the row but kept: the next pane goes back there.
+        for _ in 0..3 {
+            m.update(Action::CloseTab { index: None }.sent_by(Origin::Socket));
+            assert_eq!(m.space(), &Owner::Home);
+            m.update(split());
+            assert_eq!((m.space(), m.workbooks.list.len()), (&WORKSPACE, 1));
+        }
+    }
+
+    #[test]
     fn a_tab_moves_between_spaces_by_the_user_alone() {
         let mut m = Model::in_workspace();
         let (a, b) = (add_task(&mut m, "a", State::Running), add_task(&mut m, "b", State::Running));
@@ -9285,15 +9299,19 @@ mod tests {
         // The workspace deleted while bound: the task keeps the space and its tabs; put back, bound.
         m.update(Action::WorkbookRemove { workbook: 1, tab: None });
         let names = |m: &Model| listed(m).into_iter().map(|row| row.0).collect::<Vec<_>>();
-        assert_eq!((m.space_tabs(&task_space(1)).len(), m.panes.len(), names(&m)), (3, 3, vec!["Workspace 3".to_string()]));
+        assert_eq!(
+            (m.space_tabs(&task_space(1)).len(), m.panes.len(), names(&m)),
+            (3, 3, vec!["Workspace 3".to_string()])
+        );
         m.update(Action::WorkbookUndo);
         assert_eq!((m.space_tabs(&task_space(1)).len(), listed(&m)[0].1), (3, Some(1)));
         // Dismissed, its workspace deleted, the dismissal taken back: the tabs are the task's.
-        // Meanwhile they are a workspace's made for them, never Home's.
+        // Meanwhile they are "Workspace 3"'s, selected before and still kept: never Home's, and
+        // no workspace is made while one is kept.
         m.update(Action::RowDismiss { id: 1 });
         m.update(Action::WorkbookRemove { workbook: 1, tab: None });
-        let made = Owner::Workbook { id: 3 };
-        assert_eq!((m.space_tabs(&made).len(), m.space_tabs(&Owner::Home).len(), names(&m).len()), (3, 1, 2));
+        let made = Owner::Workbook { id: 2 };
+        assert_eq!((m.space_tabs(&made).len(), m.space_tabs(&Owner::Home).len(), names(&m).len()), (3, 1, 1));
         m.update(Action::TaskUndo);
         assert_eq!((m.space_tabs(&task_space(1)).len(), m.space_tabs(&made).len(), m.panes.len()), (3, 0, 3));
     }

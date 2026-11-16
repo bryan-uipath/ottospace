@@ -367,6 +367,9 @@ struct Offer {
     change: Change,
     before: Workbook,
     until: u64,
+    /// Deleted: the tabs that were in its space, and the workspace made for them, if one was.
+    tabs: Vec<u32>,
+    made: Option<WorkbookId>,
 }
 
 /// A pane of a workbook's tab, as the state lists it.
@@ -462,6 +465,15 @@ impl Workbooks {
 
     fn sort(&mut self) {
         self.list.sort_by_key(|book| book.name.to_lowercase());
+    }
+
+    /// The workspace `made` took tabs `ids` of no space: if they are the deleted one's, its undo
+    /// takes them back and `made` with them.
+    pub(crate) fn note_made(&mut self, ids: &[u32], made: WorkbookId) {
+        let offer = self.offer.as_mut().filter(|offer| offer.change == Change::Deleted);
+        if let Some(offer) = offer.filter(|offer| offer.tabs.iter().any(|tab| ids.contains(tab))) {
+            offer.made = Some(made);
+        }
     }
 
     /// The workbook bound to task `task`.
@@ -790,7 +802,7 @@ impl Model {
         if let Some(book) = self.workbooks.get_mut(id) {
             *book = after;
         }
-        self.workbooks.offer = Some(Offer { change: Change::Updated, before, until });
+        self.workbooks.offer = Some(Offer { change: Change::Updated, before, until, tabs: Vec::new(), made: None });
     }
 
     /// Where a save of `tab` goes: its tab of the workbook it stands for, else a new tab (`None`)
@@ -1060,11 +1072,14 @@ impl Model {
                 if place < book.live.len() {
                     book.live.remove(place);
                 }
-                self.workbooks.offer = Some(Offer { change: Change::Updated, before, until });
+                self.workbooks.offer =
+                    Some(Offer { change: Change::Updated, before, until, tabs: Vec::new(), made: None });
             }
             _ => {
                 let before = self.workbooks.list.remove(at);
-                self.workbooks.offer = Some(Offer { change: Change::Deleted, before, until });
+                let of = Owner::Workbook { id };
+                let tabs = self.space_tabs(&of).into_iter().map(|at| self.tabs[at].id).collect();
+                self.workbooks.offer = Some(Offer { change: Change::Deleted, before, until, tabs, made: None });
             }
         }
         // The name being typed is of a workbook or a tab that is gone, or has moved.
@@ -1087,14 +1102,28 @@ impl Model {
     /// Takes the last delete or update back. A name given since stays. A tab it stood for that
     /// is closed, or stands for another workbook's tab now, is not its tab again.
     pub(crate) fn workbook_undo(&mut self) {
-        let Some(Offer { change, mut before, .. }) = self.workbooks.offer.take() else { return };
+        let Some(Offer { change, mut before, tabs, made, .. }) = self.workbooks.offer.take() else { return };
         let id = before.id;
         let claimed = |tab: u32| self.workbooks.list.iter().any(|book| book.id != id && book.place_of(tab).is_some());
         let keep = |tab: &u32| self.tabs.iter().any(|open| open.id == *tab) && !claimed(*tab);
         let live: Vec<Option<u32>> = before.live.iter().map(|live| live.filter(keep)).collect();
         before.live = live;
         match change {
-            Change::Deleted => drop(self.workbooks.add(before)),
+            Change::Deleted => {
+                self.workbooks.add(before);
+                // Its tabs come back into its space; the workspace made for them goes, if they
+                // were all it held.
+                for tab in self.tabs.iter_mut().filter(|tab| tabs.contains(&tab.id)) {
+                    tab.space = Owner::Workbook { id };
+                }
+                let held = |of: &Owner| self.tabs.iter().any(|tab| tab.space == *of);
+                let made = made.filter(|made| !held(&Owner::Workbook { id: *made }));
+                if let Some(at) = made.and_then(|made| self.workbooks.list.iter().position(|book| book.id == made)) {
+                    if self.workbooks.list[at].tabs.is_empty() {
+                        self.workbooks.list.remove(at);
+                    }
+                }
+            }
             Change::Updated => {
                 if let Some(book) = self.workbooks.get_mut(id) {
                     (book.tabs, book.live) = (before.tabs, before.live);
@@ -1508,16 +1537,17 @@ mod tests {
     }
 
     #[test]
-    fn deleting_offers_the_workbook_back_and_leaves_its_tab_open_in_a_workspace_made_for_it() {
+    fn deleting_offers_the_workbook_back_and_its_undo_takes_its_tab_back_from_the_workspace_made_for_it() {
         let mut m = saved();
         m.update(Action::WorkbookRemove { workbook: 1, tab: None });
         // No other workspace to take its tab: one is made, under a name the undo does not need.
         assert_eq!((names(&m), m.mode(), m.tabs.len()), (vec!["Workspace 3"], Mode::Normal, 2));
         assert_eq!((m.space(), m.focused, m.panes.len()), (&Owner::Workbook { id: 2 }, Some(3), 3));
         assert_eq!((m.workbooks.offered(), m.workbook_of_tab()), (Some(Change::Deleted), None));
+        // Taken back: its tab is in its space again, and the workspace made for it is gone.
         m.update(Action::WorkbookUndo);
-        let back = (vec!["Workspace 2", "Workspace 3"], Some(1), None);
-        assert_eq!((names(&m), m.workbook_of_tab(), m.workbooks.offered()), back);
+        let back = (vec!["Workspace 2"], Some(1), None, &Owner::Workbook { id: 1 });
+        assert_eq!((names(&m), m.workbook_of_tab(), m.workbooks.offered(), m.space()), back);
         // Put back after its tab closed, it stands for no tab: a later tab may get that id.
         m.update(Action::WorkbookRemove { workbook: 1, tab: None });
         m.update(Action::CloseTab { index: None });
@@ -1647,7 +1677,8 @@ mod tests {
         assert_eq!(m.mode(), Mode::Mark);
         // Its file gone, with its tab open: a workspace is made for the tab, with nothing saved.
         m.update(Action::RestoreWorkbooks { workbooks: vec![] }.sent_by(Origin::System));
-        let made: Vec<(&str, usize)> = m.workbooks.list.iter().map(|book| (book.name.as_str(), book.tabs.len())).collect();
+        let made: Vec<(&str, usize)> =
+            m.workbooks.list.iter().map(|book| (book.name.as_str(), book.tabs.len())).collect();
         assert_eq!((m.mode(), made, m.panes.len()), (Mode::Normal, vec![("Workspace 2", 0)], 3));
     }
 
@@ -2022,7 +2053,10 @@ mod tests {
         m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
         let histories = vec![(1, history(&["a", "export API_TOKEN=s3cr3t", "b"], Some("psql postgres://u:pw@db")))];
         m.update(Action::WorkbookSave { uid: UID.into(), cwds: vec![], histories });
-        assert_eq!(m.workbook_saved_note().as_deref(), Some("Saved \"Workspace 2\": 1 tab, 3 lines of history, 0 commands"));
+        assert_eq!(
+            m.workbook_saved_note().as_deref(),
+            Some("Saved \"Workspace 2\": 1 tab, 3 lines of history, 0 commands")
+        );
         assert_eq!(m.workbook_rows()[0].summary, "1 terminal · history");
         // The secret is hidden in the line, and a command holding one is not kept at all.
         let text = write(&m.workbooks.list[0]);
@@ -2034,7 +2068,10 @@ mod tests {
             cwds: vec![],
             histories: vec![(1, history(&[], Some("k9s")))],
         });
-        assert_eq!(m.workbook_saved_note().as_deref(), Some("Saved \"Workspace 2\": 1 tab, 0 lines of history, 1 command"));
+        assert_eq!(
+            m.workbook_saved_note().as_deref(),
+            Some("Saved \"Workspace 2\": 1 tab, 0 lines of history, 1 command")
+        );
     }
 
     #[test]

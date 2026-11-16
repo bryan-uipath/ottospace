@@ -1,5 +1,4 @@
 # A workspace's row in the Workspaces section: at rest, the pointer on it (its …), and its menu.
-{"cmd":"split"}
 {"click":"top:new_workspace"}
 {"cmd":"key","keys":"cmd-d","as":"user"}
 {"cmd":"key","keys":"cmd-shift-s","as":"user"}

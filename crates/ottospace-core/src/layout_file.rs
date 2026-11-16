@@ -354,7 +354,8 @@ impl Model {
         let repos_folded = self.repos_folded.iter().filter(listed).take(MAX_FOLDED).cloned().collect();
         let home = *self.space() == Owner::Home;
         let extra = Extra::new();
-        let mut layout = Layout { version: VERSION, selected, home, section, drawer, tabs, spaces, repos_folded, extra };
+        let mut layout =
+            Layout { version: VERSION, selected, home, section, drawer, tabs, spaces, repos_folded, extra };
         // What is written always reads back: the last histories go first, then the last tabs.
         while write(&layout).len() > MAX_FILE_BYTES {
             let held = layout.tabs.iter_mut().flat_map(|saved| saved.tab.panes.iter_mut()).rev();
@@ -503,7 +504,9 @@ impl Model {
         }
         self.restore_selected(layout.selected.filter(|_| !layout.home), &built, effects);
         // Home was on show; and it is, with nothing else to show.
-        if layout.home && let Some(at) = self.tabs.iter().position(|tab| tab.id == HOME_TAB) {
+        if layout.home
+            && let Some(at) = self.tabs.iter().position(|tab| tab.id == HOME_TAB)
+        {
             self.select_tab(at, effects);
         }
         // A tab of no space goes to the selected workspace.
@@ -695,7 +698,10 @@ mod tests {
         named.update(Action::WorkbookNew { uid: "00000000000000a1".into() });
         named.workbooks.list[0].name = "Workspace".into();
         let (r, _) = restored(&named, file, &[], false);
-        assert_eq!(r.workbooks.list.iter().map(|book| book.name.as_str()).collect::<Vec<_>>(), ["Workspace", "Workspace 2"]);
+        assert_eq!(
+            r.workbooks.list.iter().map(|book| book.name.as_str()).collect::<Vec<_>>(),
+            ["Workspace", "Workspace 2"]
+        );
     }
 
     #[test]

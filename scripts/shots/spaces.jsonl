@@ -1,5 +1,6 @@
-# The top row: a task of one tab (no second row), one of three, Workspace, a workbook's space,
-# a task hidden then opened again from its row with the drawer open, and many spaces clipping.
+# The top row: Home (a house), a task of one tab (no second row), one of three, Home on show, the
+# workspace made for the first pane, a task hidden then opened again from its row with the
+# drawer open, and many spaces clipping.
 {"cmd":"split"}
 {"cmd":"task_new","line":"Fix the login loop #auth p1"}
 {"cmd":"task_new","line":"Plan the week #notes"}
@@ -12,16 +13,12 @@
 {"cmd":"split"}
 {"shot":"multi-tab-task"}
 {"click":"space:0"}
-{"shot":"workspace"}
-{"cmd":"key","keys":"cmd-shift-s","as":"user"}
-{"cmd":"key","keys":"enter","as":"user"}
-{"cmd":"new_tab"}
-{"cmd":"close_tab","index":0}
-{"click":"workbook:1","at":[0.3,0.3]}
+{"shot":"home"}
+{"click":"space:1"}
 {"cmd":"section","section":"workbook"}
 {"shot":"workbook"}
-{"click":"space:1"}
-{"click":"space-hide:1"}
+{"click":"space:2"}
+{"click":"space-hide:2"}
 {"shot":"hidden"}
 {"cmd":"section","section":"tasks"}
 {"click":"task:1","at":[0.3,0.3]}

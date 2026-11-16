@@ -251,7 +251,7 @@ repositories in the directories named by `$OTTOSPACE_REPOS`, else by `repos` in 
 `~/.ottospace/settings.json` (default `~/code` and `~/notes`), each
 with its git worktrees. `open_repo` opens a terminal whose shell starts in a repository or
 worktree: in the tab on show if it is empty (or its focused pane is), else in a new tab of the
-workspace the user selected last, selected, named for the repository; with no workspace open, one
+workspace the user selected last, selected, named for the repository; with no workspace kept, one
 is made for it, named for the repository. `path` must be a `path` from
 `state.repos`; any other path is refused. A task the user starts (their own ↵) while in a
 workspace (one they made, or a task's) is in that workspace: a workspace may hold several tasks, and
@@ -550,7 +550,7 @@ tab that space showed last; `select_tab` takes an index in `state.tabs` and sele
 `cycle_tab` stays in the selected space. `hide_space` takes a space off the row: its tabs, panes,
 terminals and agent go on, and `open_space` (or the user's row in Tasks or Workspaces) brings it back
 where it was. `new_tab` or `split` from you while Home is selected is the workspace's the user
-selected last; one is made if there is none (named "Workspace 2", "Workspace 3", kept like any
+selected last; one is made if none is kept (named "Workspace 2", "Workspace 3", kept like any
 other). `select_space` 0 is Home. While the user types in the chat (`mode` `talk`),
 a request that would select another space, take the keyboard, open the list or close the drawer
 fails with `the user is typing in the chat`, and nothing else you send moves their keys. While the

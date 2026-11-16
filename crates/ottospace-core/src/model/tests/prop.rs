@@ -2524,7 +2524,7 @@ impl Run {
             "{origin:?}'s {action:?} took the new-task box from the user"
         );
         // A tab changes space only by a move of the user's, a task started from it, its space
-        // gone, an undo of a dismissal, or a session made a task.
+        // gone, an undo of a dismissal or a workspace's delete, or a session made a task.
         for (id, was) in &owners_before {
             let Some(now) = m.tabs.iter().find(|tab| tab.id == *id).map(|tab| &tab.space) else { continue };
             if now == was {
@@ -2540,7 +2540,7 @@ impl Run {
             // Its space gone (a task, a workspace), a tab is the workspace's the task was bound
             // to, else the workspace selected last's. Never Home's (`check`).
             let gone = matches!(now, Owner::Task { .. } | Owner::Workbook { .. }) && !m.owner_valid(was);
-            let undone = matches!(action, Action::TaskUndo | Action::ListUndo);
+            let undone = matches!(action, Action::TaskUndo | Action::ListUndo | Action::WorkbookUndo);
             let adopted =
                 matches!((was, now, &action), (Owner::Session { .. }, Owner::Task { .. }, Action::SessionAdopt { .. }));
             ensure!(
@@ -2629,7 +2629,8 @@ impl Run {
         // A step that is not the user's makes a workspace only for a tab that had none to go
         // to: one at most, with nothing saved, and no workspace there was is on the row.
         if origin != Origin::User && !matches!(action, Action::RestoreWorkbooks { .. } | Action::RestoreLayout { .. }) {
-            let made: Vec<&Workbook> = m.workbooks.list.iter().filter(|book| !uids_before.contains(&book.uid)).collect();
+            let made: Vec<&Workbook> =
+                m.workbooks.list.iter().filter(|book| !uids_before.contains(&book.uid)).collect();
             ensure!(made.len() <= 1, "{origin:?}'s {action:?} made {} workspaces", made.len());
             for book in made {
                 let of = Owner::Workbook { id: book.id };

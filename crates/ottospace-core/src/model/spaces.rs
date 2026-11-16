@@ -443,7 +443,8 @@ impl Model {
         self.regroup();
         let (of, id) = (self.tabs[self.active].space.clone(), self.tabs[self.active].id);
         // The workspace selected last: where a stray tab goes.
-        self.last_spaces.retain(|last| *last != of && self.spaces.iter().any(|space| space.of == *last));
+        let before = std::mem::take(&mut self.last_spaces);
+        self.last_spaces = before.into_iter().filter(|last| *last != of && self.owner_valid(last)).collect();
         if matches!(of, Owner::Task { .. } | Owner::Workbook { .. }) {
             self.last_spaces.push(of.clone());
         }
@@ -469,8 +470,10 @@ impl Model {
         let panes = self.tab_panes();
         let home: Vec<usize> = (0..self.tabs.len()).filter(|at| self.tabs[*at].space == Owner::Home).collect();
         let own = |at: &usize| self.tabs[*at].id == HOME_TAB;
-        let (moves, closes): (Vec<usize>, Vec<usize>) =
-            home.iter().filter(|at| !own(at) || !panes[**at].is_empty()).partition(|at| !panes[**at].is_empty() || new_tab);
+        let (moves, closes): (Vec<usize>, Vec<usize>) = home
+            .iter()
+            .filter(|at| !own(at) || !panes[**at].is_empty())
+            .partition(|at| !panes[**at].is_empty() || new_tab);
         let filled = moves.iter().any(own);
         // Another's pane on Home under the user's typing: Home stays on show.
         let stays = filled && step.typing && self.tabs[self.active].id == HOME_TAB;
@@ -479,14 +482,23 @@ impl Model {
             let made = origin == Origin::User && (hint.is_some() || (step.on_show && (filled || new)));
             let open = |of: &&Owner| self.owner_valid(of) && self.spaces.iter().any(|s| s.of == **of);
             // Else the first workspace on the row, before one is made.
-            let kept = |space: &&Space| !space.hidden && matches!(space.of, Owner::Task { .. } | Owner::Workbook { .. });
+            let kept =
+                |space: &&Space| !space.hidden && matches!(space.of, Owner::Task { .. } | Owner::Workbook { .. });
             let any = || self.spaces.iter().filter(|space| open(&&space.of)).find(kept).map(|space| space.of.clone());
-            let last = self.last_spaces.iter().rfind(open).cloned().or_else(any);
+            // Then the last one still kept, though closed: no file is made while one is.
+            let kept_last = || self.last_spaces.iter().rfind(|of| self.owner_valid(of)).cloned();
+            let last = self.last_spaces.iter().rfind(open).cloned().or_else(any).or_else(kept_last);
+            let ids: Vec<u32> = moves.iter().map(|at| self.tabs[*at].id).collect();
             let to = match last.filter(|_| !made) {
                 Some(of) => of,
-                None => self.stray_workspace(hint),
+                None => {
+                    let to = self.stray_workspace(hint);
+                    if let Owner::Workbook { id } = to {
+                        self.workbooks.note_made(&ids, id);
+                    }
+                    to
+                }
             };
-            let ids: Vec<u32> = moves.iter().map(|at| self.tabs[*at].id).collect();
             // A dismissal taken back finds its task's tabs where they went.
             for (_, tabs, home) in &mut self.unlinked {
                 if tabs.iter().any(|id| ids.contains(id)) {

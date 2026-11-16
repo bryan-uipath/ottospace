@@ -170,7 +170,7 @@ pub struct FeatureChoice {
     pub on: bool,
 }
 
-/// A space the tab may move to: Workspace, a task's or a workbook's.
+/// A space the tab may move to: a task's or a workbook's.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TaskChoice {
     pub to: Owner,
