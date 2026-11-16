@@ -158,7 +158,11 @@ and who (the default agent, then each runner and its models), which set the line
 `@agent`, and, unless ↵ would start the default agent in your home folder, a line that says what
 it will do: "↵ will start claude in app on main", or for a saved agent "↵ files it; nothing
 starts"; and, when ↵ would take the workspace you are in and there is something in it, "↵ makes
-this workspace the task's". Under the line, while it is empty, the tags it may hold; the dropdown teaches the rest.
+this workspace the task's". Under the line, while the box is open, the tags it may hold, each mark in a small cap
+(`[#] project`, `[>] repo`, … `[p1] priority`), dimmer once something is typed; a click on one
+types its mark at the cursor (spaced from the words beside it) and opens its dropdown, as the key
+would. At their right, what ↵ does when it is not "add": `[↵] completes` while it would take a
+row, else `[⇧] [↵] later`. The dropdown teaches the rest.
 
 The box is beside the rest of the window, not over it, and your pointer works there as without
 it. A click that only changes the bar (a rail icon, the bar's ×, a fold, a row's button) leaves
@@ -171,8 +175,8 @@ a click that would put it aside waits too.
 
 | Key | Action |
 |---|---|
-| ↵ | Takes the dropdown's highlighted row. With no row highlighted, or when the word is that name already, adds the task and starts its agent: the drawer becomes its conversation |
-| ⇧↵ | Adds the task for later: the box closes, nothing starts |
+| ↵ | While the dropdown shows rows, takes the highlighted one: it never adds a half-typed tag. Adds the task and starts its agent (the drawer becomes its conversation) when there is nothing to finish: no dropdown, no rows ("no match", "new project"), the word that row's name already, or a folder's end (`~/notes/`). While a folder's rows are read again it waits. Esc first adds the line as typed |
+| ⇧↵ | Adds the task for later: the box closes, nothing starts. With the dropdown open, as ↵: it takes the row first |
 | ⌘↵ | Adds the task and starts it, whatever is highlighted |
 | Tab | Takes the highlighted row, or the first |
 | ↑ / ↓ or ⌃P / ⌃N | Move over the dropdown's rows. With no dropdown: to the line's start or end |
@@ -183,9 +187,10 @@ a click that would put it aside waits too.
 - **The dropdown** opens when the cursor is in a tag: up to 8 names for it, with what each is
   and a word of detail. Names that start with what is typed come first, then those where a
   word of the name does (`flow-app` for `ap`), then those that have its letters in order. The
-  letters matched are drawn stronger. A bare mark (`#`) lists what there is and highlights
-  nothing; once a letter of the name is typed the first row is highlighted. Typing narrows it;
-  a click on a row takes it.
+  letters matched are drawn stronger. A row is always highlighted, so what ↵ takes shows: the
+  first, or the one the word spells out (`app` over `app-2`), or the one ↑/↓ moved to (they
+  wrap). A bare mark (`#`) lists what there is, the first highlighted. Only at a folder's end
+  (`~/notes/`) is none: the path is whole. Typing narrows it; a click on a row takes it.
 - **Taking a row** replaces the whole word under the cursor with the name and a space. A
   folder takes no space: the dropdown stays open on what is inside it. A space typed at
   the end of a name that is one of the rows takes that row, spelled as it is kept; inside a
@@ -749,7 +754,11 @@ written a second after a change and at quit, readable by you alone.
   `Open <App>`. `restore_apps: true` starts it instead. Opening a workspace starts its apps: you
   asked for them; a start does not.
 - **The drawer** shows the task's conversation again, not running: Resume session in the drawer
-  goes on with its session. No agent starts by itself.
+  goes on with its session. No agent starts by itself. In Chat, what the session's file has of
+  before shows above the composer: its calls, its edits' diff cards, a line per message (the
+  words are in the file: Terminal shows them); ↵ on a message goes on with it. An agent ottospace
+  started ends when ottospace quits. "Live in another terminal" is said only when the file is
+  written after the start, or a live process has the session.
 - A tab whose task no longer exists comes back as a tab of no task, so nothing is lost.
 - A file that cannot be read is set aside as `layout.json.bad`, and ottospace starts empty and
   says so. A file a newer build wrote is left as it is and not written over. A pane of a kind

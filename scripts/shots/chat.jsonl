@@ -10,6 +10,10 @@
 {"click":"talk:talk-start"}
 {"until":"drawer.native.chats.1.transcript.cards","len":1}
 {"shot":"permission"}
+# The drawer at its narrowest: the foot keeps the folder whole. Then as wide as before.
+{"drag":{"rect":"drawer.body"},"at":[0,0.5],"by":[200,0]}
+{"shot":"narrow"}
+{"drag":{"rect":"drawer.body"},"at":[0,0.5],"by":[-160,0]}
 {"cmd":"key","keys":"cmd-shift-l","as":"user"}
 {"settle":300}
 {"shot":"closed-needs-you"}

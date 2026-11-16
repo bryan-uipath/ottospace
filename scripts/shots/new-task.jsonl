@@ -1,4 +1,4 @@
-# The new-task box: empty, being typed in, and with a folder the agent will run in.
+# The new-task box: empty, being typed in, with a folder the agent will run in, and a bare mark.
 {"env":{"OTTOSPACE_PATH_HOME":"{ROOT}/user"}}
 {"cmd":"split","kind":"empty"}
 {"cmd":"compose"}
@@ -12,3 +12,9 @@
 {"cmd":"key","keys":"tab","as":"user"}
 {"until":"compose_folder","is":"~/notes/2026/"}
 {"shot":"folder"}
+# A bare `>`: its first row is highlighted, and ↵ completes it.
+{"cmd":"key","keys":"escape escape","as":"user"}
+{"cmd":"compose","text":"fix it "}
+{"cmd":"key","keys":">","as":"user"}
+{"until":"compose_menu.rows.0"}
+{"shot":"bare-mark"}

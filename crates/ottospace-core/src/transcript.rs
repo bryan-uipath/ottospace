@@ -251,6 +251,8 @@ pub enum Notice {
     },
     /// A message was sent in the terminal that runs the watched session.
     MessageElsewhere,
+    /// A message of before, as its session's file has it (`Transcript::past`).
+    MessageBefore,
     /// Its process ended. `replied`: anything came back from it since it started; `details`:
     /// its stderr's end can be shown.
     /// `by_user`: the user stopped it; no error, a quiet divider.
@@ -368,6 +370,9 @@ pub struct Transcript {
     pub live: bool,
     /// Built from a session another program runs (`Model::watch_target`): read-only.
     pub watched: bool,
+    /// Built from the file of a session nothing has (a restart since its agent ran): its calls
+    /// and edits, to go on with. Not read-only.
+    pub past: bool,
     /// Something came back from its process since it started: a turn, text, a call, a request.
     pub replied: bool,
     /// Lines not understood, by kind, in the order first seen: at most `MAX_KINDS` kinds.
@@ -449,13 +454,15 @@ impl Transcript {
     fn is(&self) -> Is<'_> {
         let asking = self.cards.front().map(|card| card.label.as_str());
         let (live, watched, turn) = (self.live, self.watched && !self.live, self.turn.is_some());
-        Is { live, watched, turn, asking, context: self.context, window: self.window, timed: !watched }
+        // A file's records came all at once: no clock says when its calls ran.
+        let timed = !watched && (live || !self.past);
+        Is { live, watched, turn, asking, context: self.context, window: self.window, timed }
     }
 
     /// A process for this conversation started (again). A resume with its earlier turns on show
     /// is one quiet divider, in place of the end just before it: one conversation, not two.
     pub fn started(&mut self, resumed: bool) {
-        (self.live, self.watched, self.replied, self.stopping) = (true, false, false, false);
+        (self.live, self.watched, self.past, self.replied, self.stopping) = (true, false, false, false, false);
         // Calls a watched file never ended are not this process's.
         self.activity.settle(None, 0);
         if !resumed {
@@ -576,7 +583,7 @@ impl Transcript {
             }
             Event::Usage { context, window, cost_micro_usd } => {
                 // A watched model request: its file says no more of it. Live, its replies and calls say it.
-                if context.is_some() && self.watched {
+                if context.is_some() && (self.watched || self.past) {
                     self.activity.step(at);
                 }
                 self.context = context.or(self.context);
@@ -627,7 +634,9 @@ impl Transcript {
                 }
             }
             // Only a watched transcript is rebuilt; a live one is the stream's.
-            Event::WatchFromStart if !self.live => *self = Transcript { watched: true, ..Transcript::default() },
+            Event::WatchFromStart if !self.live => {
+                *self = Transcript { watched: !self.past, past: self.past, ..Transcript::default() }
+            }
             Event::WatchFromStart => {}
             Event::Hook => self.activity.hook(at),
             Event::MessageElsewhere => {
@@ -635,7 +644,7 @@ impl Transcript {
                 self.activity.settle(None, at);
                 self.activity.message(at);
                 self.settle();
-                self.push(Entry::Notice(Notice::MessageElsewhere));
+                self.push(Entry::Notice(if self.past { Notice::MessageBefore } else { Notice::MessageElsewhere }));
             }
         }
     }
