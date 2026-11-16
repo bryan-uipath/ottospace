@@ -1,0 +1,14 @@
+# A task started in a workspace of no task: the box says ↵ will take it, then the workspace is
+# the task's, where it was on the top row, with its tabs; its row in Workspaces carries the badge.
+{"cmd":"split"}
+{"click":"top:new_workspace"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"key","keys":"cmd-t","as":"user"}
+{"cmd":"section","section":"workbook"}
+{"shot":"a-workspace"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"f i x space t h e space l o g i n space l o o p","as":"user"}
+{"shot":"the-box-says"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"settle":700}
+{"shot":"the-tasks"}

@@ -98,6 +98,7 @@ impl Gen<'_> {
             uid: self.rng.pick(BOOK_UIDS).to_string(),
             name: self.name(WORDS),
             tabs: (0..self.rng.below(3)).map(|_| tab.clone()).collect(),
+            task: self.rng.one_in(3).then(|| self.task()),
             live: Vec::new(),
             extra: self.extra(),
         }
@@ -1921,6 +1922,14 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(unique(&uids) && uids.iter().all(|uid| workbook::valid_uid(uid)), "workbook file names {uids:?}");
     let names: Vec<&str> = books.iter().map(|book| book.name.as_str()).collect();
     ensure!(unique(&names) && names.iter().all(named), "workbook names {names:?}");
+    // One workspace a task, a live one; and a bound workspace has no space of its own.
+    let bound: Vec<TaskId> = books.iter().filter_map(|book| book.task).collect();
+    ensure!(unique(&bound), "two workspaces bound to one task: {bound:?}");
+    ensure!(bound.iter().all(|id| m.tasks.live(*id).is_some()), "a workspace bound to a task that is gone: {bound:?}");
+    for book in books.iter().filter(|book| book.task.is_some()) {
+        let own = m.tabs.iter().any(|tab| tab.space == Owner::Workbook { id: book.id });
+        ensure!(!own, "workspace {:?} is bound to a task and has a space of its own", book.name);
+    }
     let lives: Vec<u32> = books.iter().flat_map(|book| book.live.iter().flatten().copied()).collect();
     ensure!(unique(&lives) && lives.iter().all(|tab| tab_ids.contains(tab)), "workbooks stand for tabs {lives:?}");
     for book in books {
@@ -1941,6 +1950,12 @@ fn check(m: &Model) -> Result<(), String> {
         "panes {waiting:?} wait to be filled; not each is one empty pane"
     );
     Ok(())
+}
+
+/// Each tab that holds a pane, by id, with its panes: where every pane is.
+fn tab_panes_by_id(m: &Model) -> Vec<(u32, Vec<PaneId>)> {
+    let held = m.tabs.iter().zip(m.tab_panes()).filter(|(_, panes)| !panes.is_empty());
+    held.map(|(tab, panes)| (tab.id, panes)).collect()
 }
 
 /// The keyboard is on one place there is: a pane on show, a row of the list, a rail's cell.
@@ -2273,6 +2288,10 @@ impl Run {
         let hides = matches!(action, Action::SpaceHide { .. });
         let owners_before: Vec<(u32, Owner)> = m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect();
         let books_before: Vec<String> = m.workbooks.list.iter().map(workbook::write).collect();
+        let bindings = |m: &Model| -> Vec<(String, Option<TaskId>)> {
+            m.workbooks.list.iter().map(|book| (book.uid.clone(), book.task)).collect()
+        };
+        let (bound_before, panes_before) = (bindings(m), (m.panes.clone(), tab_panes_by_id(m)));
         let menu_before = m.row_menu.clone();
         let typing_to = m.talk.clone().filter(|talk| talk.keys && origin != Origin::User);
         // A click on a space that is not the user's opens no conversation.
@@ -2447,17 +2466,20 @@ impl Run {
             }
             let moved =
                 origin == Origin::User && matches!(action, Action::TabPlace { .. } | Action::PaletteChoose { .. });
+            // A task started by the user's ↵ takes the workspace it was started in.
             let bound = origin == Origin::User
-                && *was == Owner::Workspace
+                && matches!(was, Owner::Workbook { .. })
                 && matches!(now, Owner::Task { id } if !task_ids.contains(id))
                 && matches!(action, Action::ComposeSubmit { .. } | Action::ComposeEnter | Action::TaskFromLine { .. });
-            let gone = *now == Owner::Workspace && !m.owner_valid(was);
-            let undone = matches!(action, Action::TaskUndo | Action::ListUndo) && *was == Owner::Workspace;
+            // Its task gone, a tab is the first space's, or the workspace's the task was bound to.
+            let gone = matches!(now, Owner::Workspace | Owner::Workbook { .. }) && !m.owner_valid(was);
+            let undone = matches!(action, Action::TaskUndo | Action::ListUndo)
+                && matches!(was, Owner::Workspace | Owner::Workbook { .. });
             let adopted =
                 matches!((was, now, &action), (Owner::Session { .. }, Owner::Task { .. }, Action::SessionAdopt { .. }));
             // Opening a workbook gathers its tabs from Workspace.
             let gathered = *was == Owner::Workspace
-                && matches!(now, Owner::Workbook { .. })
+                && matches!(now, Owner::Workbook { .. } | Owner::Task { .. })
                 && matches!(action, Action::WorkbookOpen { .. } | Action::SpaceOpen { .. } | Action::ListChoose { .. });
             ensure!(
                 moved || bound || gone || undone || adopted || gathered,
@@ -2470,6 +2492,29 @@ impl Run {
         // Only the user opens a row's menu or moves in it: another's step leaves it, or its row went.
         let menu_kept = m.row_menu.is_none() || m.row_menu == menu_before;
         ensure!(origin == Origin::User || menu_kept, "{origin:?}'s {action:?} opened or moved a row's menu");
+        // Only the user's ↵ on a new task binds a workspace (or an undo of its dismissal, or the
+        // files read again); and binding moves no pane, closes none and ends nothing.
+        let bound_now = bindings(m);
+        let newly = |(uid, task): &(String, Option<TaskId>)| {
+            task.is_some() && bound_before.iter().find(|(was, _)| was == uid).is_none_or(|(_, was)| was != task)
+        };
+        if bound_now.iter().any(newly) {
+            let read = matches!(action, Action::RestoreWorkbooks { .. });
+            // ⇧↵ (`open: false`) binds nothing.
+            let starts = matches!(
+                action,
+                Action::ComposeSubmit { open: true } | Action::ComposeEnter | Action::TaskFromLine { open: true, .. }
+            );
+            let undone = matches!(action, Action::TaskUndo | Action::ListUndo | Action::WorkbookUndo);
+            ensure!(
+                read || (origin == Origin::User && (starts || undone)),
+                "{origin:?}'s {action:?} bound a workspace"
+            );
+            if starts {
+                let now = (m.panes.clone(), tab_panes_by_id(m));
+                ensure!(now == panes_before, "{action:?} bound a workspace and moved or closed a pane");
+            }
+        }
         // + makes at most one workbook, of no tab, with a new empty tab on show in its space;
         // it records nothing in any other, and no tab there was changes space (above).
         if let Action::WorkbookNew { .. } = action {

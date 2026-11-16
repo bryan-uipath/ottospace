@@ -157,7 +157,8 @@ beside the workspace. Over it: picks for where (the first listed repositories, "
 and who (the default agent, then each runner and its models), which set the line's `>repo` and
 `@agent`, and, unless ↵ would start the default agent in your home folder, a line that says what
 it will do: "↵ will start claude in app on main", or for a saved agent "↵ files it; nothing
-starts". Under the line, while it is empty, the tags it may hold; the dropdown teaches the rest.
+starts"; and, when ↵ would take the workspace you are in and there is something in it, "↵ makes
+this workspace the task's". Under the line, while it is empty, the tags it may hold; the dropdown teaches the rest.
 
 The box is beside the rest of the window, not over it, and your pointer works there as without
 it. A click that only changes the bar (a rail icon, the bar's ×, a fold, a row's button) leaves
@@ -268,8 +269,11 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 6. **Spaces and the drawer.** Workspace, then each open task (and session, and workspace) is a
    space with its own tabs; one is selected, and the drawer is only ever on its agent: a task's
    chat, none for Workspace. Selecting starts nothing; a closed drawer stays closed. A task
-   started (↵ in the box, or its row clicked) opens its space with one empty tab; started from a
-   Workspace tab a Repos row opened for its folder, that tab moves into it. ⌘T makes a tab in the
+   started with ↵ in a workspace you made that has no task takes it: it becomes the task's
+   space where it is, with all its tabs (the box says "↵ makes this workspace the task's" when
+   there is something in it). A workspace you made stays listed, bound to the task, until the
+   task is dismissed; then it is its own again, with its tabs. From Workspace or a task's
+   space, the task gets a space of its own with one empty tab. ⇧↵ takes nothing. ⌘T makes a tab in the
    space on show. Drag a tab onto another space's tab or badge to move it there; Move Tab to…
    lists Workspace, the tasks and the workspaces. The top row's + makes a new, empty
    [workspace](#workspaces) after the selected space.
