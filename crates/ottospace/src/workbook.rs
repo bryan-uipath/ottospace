@@ -277,11 +277,16 @@ impl Workspace {
             let dot = div().flex_none().size(px(8.)).rounded_full();
             if open { dot.bg(rgb(theme::PICK)) } else { dot.border_1().border_color(rgb(theme::BORDER_STRONG)) }
         };
-        // What it holds, muted at the row's end, its first part (`3 tabs` of `3 tabs · 2 terminals`):
-        // all of it on hover. Gone while the ⋯ shows in its place, or the name is typed.
-        let meta = |summary: &str, hidden: bool| {
-            let short = summary.split(" · ").next().unwrap_or_default().to_string();
-            (!hidden).then(|| crate::row_meta(short))
+        // What it holds, muted at the row's end, its first part (`3 tabs` of `3 tabs · 2 terminals`),
+        // cut: an app list has no ` · `. All of it on hover. While the ⋯ shows, room for it, so the
+        // name does not run under it; none while the name is typed.
+        let meta = |summary: &str, shown: bool, renaming: bool| match (renaming, shown) {
+            (true, _) => None,
+            (false, true) => Some(div().flex_none().w(px(14.))),
+            (false, false) => {
+                let short = summary.split(" · ").next().unwrap_or_default().to_string();
+                Some(crate::cut_text(short).max_w(px(96.)).text_xs().text_color(rgb(theme::MUTED)))
+            }
         };
         let tip = |summary: String| {
             move |_: &mut gpui::Window, cx: &mut gpui::App| {
@@ -326,7 +331,7 @@ impl Workspace {
                 .children(fold)
                 .child(lead)
                 .child(name.flex_1().min_w_0())
-                .children(meta(&row.summary, shown || renaming))
+                .children(meta(&row.summary, shown, renaming))
                 .child(self.controls.mark(format!("workbook:{id}")))
                 .children(dots.filter(|_| !renaming))
                 .on_click(
@@ -354,7 +359,7 @@ impl Workspace {
                     .ml_4()
                     .child(dot(tab.open))
                     .child(name.flex_1().min_w_0())
-                    .children(meta(&tab.summary, shown || renaming))
+                    .children(meta(&tab.summary, shown, renaming))
                     .child(self.controls.mark(control))
                     .children(dots.filter(|_| !renaming))
                     .on_click(cx.listener(move |this, _, window, cx| {
