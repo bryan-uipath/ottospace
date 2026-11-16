@@ -681,6 +681,11 @@ function composePicks(value: unknown, at: string): Snapshot["compose_picks"] {
   return { wheres: list(str)(o.wheres, `${at}.wheres`), whos: list(str)(o.whos, `${at}.whos`) };
 }
 
+function composeWorktree(value: unknown, at: string): Snapshot["compose_worktree"] & object {
+  const o = fields(value, at);
+  return { new: bool(o.new, `${at}.new`), repo: str(o.repo, `${at}.repo`), branch: str(o.branch, `${at}.branch`) };
+}
+
 function noticeLevel(value: unknown, at: string): NoticeLevel {
   if (value === "info" || value === "warning" || value === "meeting" || value === "error") return value;
   throw new Error(`${at}: not a level: ${JSON.stringify(value)}`);
@@ -1577,6 +1582,7 @@ export function snapshot(value: unknown): Snapshot {
     compose_plan_line: orNull(str)(o.compose_plan_line, "compose_plan_line"),
     compose_hint: orNull(str)(o.compose_hint, "compose_hint"),
     compose_picks: composePicks(o.compose_picks, "compose_picks"),
+    compose_worktree: orNull(composeWorktree)(o.compose_worktree, "compose_worktree"),
     welcome: bool(o.welcome, "welcome"),
     compose_menu: orNull(composeMenu)(o.compose_menu, "compose_menu"),
     compose_menu_bounds: orNull(rect)(o.compose_menu_bounds, "compose_menu_bounds"),
