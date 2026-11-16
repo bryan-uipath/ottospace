@@ -16,7 +16,18 @@ pub enum Level {
     Error,
 }
 
-/// What a notice is about: each kind of app-level message, classified once (`level`).
+/// What a notice is about: each kind of app-level message, classified once (`level`, `about`).
+///
+/// | Kind | Level | About | On the bar when a client's or the system's step says it |
+/// |---|---|---|---|
+/// | `failed` | error | the app | yes (a client's never over the user's: `replaces`) |
+/// | `refused` | warning | the sender | no: the reply's `notice` only |
+/// | `unsaved` | error | the app | yes |
+/// | `told` | info | the sender | no |
+/// | `settings_problem`, `settings_retired`, `settings_restart` | error, warning, info | the app | yes |
+/// | `start` | error | the app | yes |
+/// | `keys` | warning | the app | yes |
+/// | `editor` | info | the app | yes |
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -51,6 +62,14 @@ impl Kind {
         }
     }
 
+    /// Whom it is for: an answer is its sender's, the app's state is everyone's.
+    pub fn about(self) -> About {
+        match self {
+            Kind::Refused | Kind::Told => About::Sender,
+            _ => About::App,
+        }
+    }
+
     /// The one action the bar offers beside the text.
     pub fn offer(self) -> Option<Offer> {
         match self {
@@ -65,6 +84,15 @@ impl Kind {
     pub fn held(self) -> bool {
         !matches!(self, Kind::SettingsProblem | Kind::SettingsRetired | Kind::SettingsRestart | Kind::Start)
     }
+}
+
+/// Whom a notice is for (`Kind::about`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum About {
+    /// An answer to the one whose step it was: why it did nothing, or what it did.
+    Sender,
+    /// The app's state: a file not read or not saved, a shell or agent that did not start.
+    App,
 }
 
 /// An action a notice offers.
@@ -118,6 +146,18 @@ pub fn replaces(by: Origin, shown_by: Option<Origin>) -> bool {
     !(by == Origin::Socket && shown_by == Some(Origin::User))
 }
 
+/// Whether what a step of `by` said shows on the user's bar. An answer shows to the user alone:
+/// a client's refusal is in its reply's `notice`, and moves nothing of the user's.
+pub fn on_bar(kind: Kind, by: Origin) -> bool {
+    by == Origin::User || kind.about() == About::App
+}
+
+/// The kind of what a step said in passing. `refused`: the core's own reason (`Effect::Notice`).
+/// `broke`: the app's failure (a shell or agent not started). A client's is otherwise its answer.
+pub fn said(refused: bool, broke: bool, by: Origin) -> Kind {
+    if refused || (by == Origin::Socket && !broke) { Kind::Refused } else { Kind::Failed }
+}
+
 /// The lowest a raised live window's title bar may reach, from the window's top: under the top
 /// row (`top_bar` high) and the notice bar, as much of it as shows (`shown`). The bar is never covered.
 pub fn top_limit(top_bar: f32, shown: f32) -> f32 {
@@ -160,6 +200,39 @@ mod tests {
         for (kind, level, offer, held) in table {
             assert_eq!((kind.level(), kind.offer(), kind.held()), (level, offer, held), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn an_answer_shows_to_the_user_alone_and_the_apps_state_to_everyone() {
+        use Kind::*;
+        use Origin::*;
+        let all = [Failed, Refused, Unsaved, Told, SettingsProblem, SettingsRetired, SettingsRestart, Start, Keys];
+        for kind in all.into_iter().chain([Editor]) {
+            let answer = matches!(kind, Refused | Told);
+            assert_eq!(kind.about() == About::Sender, answer, "{kind:?}");
+            // The user's own always shows; anyone else's only when it is about the app.
+            assert_eq!((on_bar(kind, User), on_bar(kind, Socket), on_bar(kind, System)), (true, !answer, !answer));
+        }
+    }
+
+    #[test]
+    fn what_a_clients_step_says_is_its_answer_unless_the_app_broke() {
+        use Origin::*;
+        // (the core's reason, marked as broken, the sender) -> the kind
+        for (refused, broke, by, kind) in [
+            (true, false, User, Kind::Refused),
+            (false, false, User, Kind::Failed),
+            (false, true, User, Kind::Failed),
+            (false, false, System, Kind::Failed),
+            (false, false, Socket, Kind::Refused),
+            (true, false, Socket, Kind::Refused),
+            (false, true, Socket, Kind::Failed),
+        ] {
+            assert_eq!(said(refused, broke, by), kind, "{refused} {broke} {by:?}");
+        }
+        // So a client's refusal never reaches the bar, and a shell it could not start does.
+        assert!(!on_bar(said(false, false, Socket), Socket));
+        assert!(on_bar(said(false, true, Socket), Socket));
     }
 
     #[test]
