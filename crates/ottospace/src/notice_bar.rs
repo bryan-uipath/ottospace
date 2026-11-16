@@ -39,18 +39,11 @@ impl Default for Bar {
 }
 
 impl Workspace {
-    /// Every notice there is to show, newest and most pressing first: the last step that
-    /// failed, what is not saved, what a step did, the settings' line, a problem found at
+    /// Every notice there is to show, newest and most pressing first: `line` (the last step
+    /// that failed), what is not saved, what a step did, the settings' line, a problem found at
     /// start, a key not registered, the editor's note.
-    fn notices(&self) -> Vec<Notice> {
+    fn notices(&self, line: Option<Notice>) -> Vec<Notice> {
         let said = |kind: Kind, text: Option<String>| text.map(|text| Notice { kind, text });
-        // Mid-request, before `swap_origin` settles it: a client's failure over the user's is not said.
-        let (was, by) = &self.error_was;
-        let covered = self.error != *was && was.is_some() && !notice::replaces(self.input, *by);
-        let error = if covered { was } else { &self.error };
-        // Why a move did nothing (`Effect::Notice`) is a warning; any other failure an error.
-        let refused = error.is_some() && *error == self.refused;
-        let failed = if refused { Kind::Refused } else { Kind::Failed };
         let unsaved = self.unsaved.clone().or(self.kept_marks.unsaved.clone()).or(self.kept_workbooks.unsaved.clone());
         let unsaved = unsaved.or(self.kept_layout.unsaved.clone());
         let told = self.told.as_ref().filter(|(_, at)| at.elapsed() < TOLD_FOR).map(|(text, _)| text.clone());
@@ -59,7 +52,7 @@ impl Workspace {
         let start: Vec<String> = start.into_iter().flatten().cloned().collect();
         let start = (!start.is_empty()).then(|| start.join(" · "));
         let all = [
-            said(failed, error.clone()),
+            line,
             said(Kind::Unsaved, unsaved),
             said(Kind::Told, told),
             said(self.model.settings_kind(), self.model.settings_line()),
@@ -70,15 +63,28 @@ impl Workspace {
         all.into_iter().flatten().collect()
     }
 
-    /// The notice the bar shows, if any.
+    /// The notice the bar shows, if any. Of the last step's line, what the bar holds: a
+    /// client's answer is not on it, also mid-request, before `swap_origin` settles it.
     pub(crate) fn notice_shown(&self) -> Option<Notice> {
-        notice::shown(&self.notices(), &self.model.notice_hidden)
+        notice::shown(&self.notices(self.held_now().said), &self.model.notice_hidden)
+    }
+
+    /// The reply's `notice`: as the bar's, but with the last step's line whoever's it was, so
+    /// a client reads why its own request did nothing.
+    pub(crate) fn notice_replied(&self) -> Option<Notice> {
+        // Why a move did nothing (`Effect::Notice`) is a warning; any other failure an error.
+        let refused = self.error.is_some() && self.error == self.refused;
+        let kind = if refused { Kind::Refused } else { Kind::Failed };
+        let line = self.error.clone().map(|text| Notice { kind, text });
+        notice::shown(&self.notices(line), &self.model.notice_hidden)
     }
 
     /// The user dismissed a notice of `kind`: the slot that held it is empty.
     pub(crate) fn notice_dismissed(&mut self, kind: Kind) {
         match kind {
-            Kind::Failed | Kind::Refused => self.error = None,
+            Kind::Failed | Kind::Refused => {
+                (self.error, self.error_seen, self.bar_line) = (None, (None, None), notice::Held::default());
+            }
             Kind::Told => self.told = None,
             // Said again by the next save that fails.
             Kind::Unsaved => {
