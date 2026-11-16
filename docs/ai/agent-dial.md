@@ -67,7 +67,7 @@ shown dial's moving parts, view state the shell keeps (`dial::DialMotion`), neve
   overshoot) toward `dot(spot)`: 1.2 unused, 2.2 used, 3.5 lit, +0.7 for each further call
   running there, to four. A higher target adds a kick of 28 pt/s. Steps of at most 4 ms; a gap
   over 250 ms (a hidden window), or a number that is not one, lands on the target.
-- A lit dot pulses (1.2 s) when its times are known and it is not You (a request may wait for
+- A lit dot pulses (1.2 s) when its times are known and You is not lit (a request may wait for
   hours). The glyph turns (2.4 s a turn) while `Dial::thinking`: flat, its width the angle's
   cosine, mirrored and dimmer from behind; after, it goes on to the front and stops.
 - `Motion::step` says whether another frame is wanted: something pulses, turns, or a spring is

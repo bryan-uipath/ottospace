@@ -113,10 +113,10 @@ pub fn facing(angle: f32) -> (f32, f32) {
 }
 
 /// This station's dot pulses: a call runs there or the model thinks, with times known. Not
-/// while a request waits for the person (it may wait for hours), nor in a watched session (a
-/// call its file never ended stays lit).
-pub fn pulsing(spot: &Spot, timed: bool) -> bool {
-    timed && spot.lit && spot.station != Station::You
+/// while You is lit (a request or a question may wait for hours: neither You nor the call
+/// asked about), nor in a watched session (a call its file never ended stays lit).
+pub fn pulsing(spot: &Spot, dial: &Dial) -> bool {
+    dial.timed && spot.lit && !dial.spot(Station::You).is_some_and(|you| you.lit)
 }
 
 /// The shown dial's moving parts.
@@ -154,7 +154,7 @@ impl Motion {
         }
         let thinking = dial.thinking();
         self.angle = spin(self.angle, thinking, dt_ms);
-        let pulses = dial.stations.iter().any(|spot| pulsing(spot, dial.timed));
+        let pulses = dial.stations.iter().any(|spot| pulsing(spot, dial));
         let on = if dt_ms.is_finite() { self.pulse_ms + dt_ms.max(0.) } else { 0. };
         self.pulse_ms = if pulses { on.rem_euclid(PULSE_MS) } else { 0. };
         self.moving = pulses || thinking || self.angle != 0. || self.dots.iter().any(|dot| !dot.settled());
@@ -332,11 +332,16 @@ mod tests {
         let watched = Is { watched: true, ..Is::default() };
         let mut b = Activity::default();
         b.message(0);
-        for is in [asking, watched.clone()] {
+        for is in [asking.clone(), watched.clone()] {
             let dial = b.dial(1_000, &is);
             let mut motion = Motion::rest(&dial);
             assert!(!motion.step(&dial, 16., false), "{is:?}");
         }
+        // The call asked about is lit as long: it does not pulse either.
+        let waiting = a.dial(2_000, &asking);
+        assert_eq!(waiting.spot(Station::Files).map(|spot| spot.lit), Some(true));
+        let mut motion = Motion::rest(&waiting);
+        assert!(!motion.step(&waiting, 16., false));
         let mut motion = Motion::rest(&b.dial(1_000, &watched));
         b.start("w", Station::Network, "example.com", 1_000);
         let dial = b.dial(2_000, &watched);

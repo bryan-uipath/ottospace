@@ -113,10 +113,12 @@ impl DialMotion {
     }
 }
 
-/// No motion: the system's Reduce Motion, or a test run that asks for it.
+/// No motion: the system's Reduce Motion. A test run's is `OTTOSPACE_REDUCE_MOTION`, never the machine's.
 fn calm() -> bool {
-    let asked = std::env::var_os("OTTOSPACE_E2E").and(std::env::var_os("OTTOSPACE_REDUCE_MOTION"));
-    asked.is_some() || ottospace_mac::meeting::reduce_motion()
+    match std::env::var_os("OTTOSPACE_E2E") {
+        Some(_) => std::env::var_os("OTTOSPACE_REDUCE_MOTION").is_some(),
+        None => ottospace_mac::meeting::reduce_motion(),
+    }
 }
 
 /// Paints the dial in `bounds`, its dots as `parts` has them. `calm`: no fading or pulse,
@@ -157,7 +159,7 @@ fn paint_dial(dial: &Dial, parts: &Motion, bounds: Bounds<Pixels>, calm: bool, w
         match (spot.lit, spot.calls) {
             (true, _) => {
                 // A call in progress blinks and swells, with a halo that widens as it fades.
-                let beat = (!calm && motion::pulsing(spot, dial.timed)).then(|| parts.pulse());
+                let beat = (!calm && motion::pulsing(spot, dial)).then(|| parts.pulse());
                 if let Some(beat) = beat {
                     disc(window, p, r + 1.5 + 3. * beat, hue.opacity(0.28 * (1. - beat)));
                 }

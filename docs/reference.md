@@ -412,7 +412,8 @@ A native conversation has a dial under its header: where its agent's calls go, a
   counting less (half after ten minutes). A station is lit while a call there runs (Model while
   the model has the turn, You while a request waits), with two arcs for its time: the inner fills
   in a minute, the outer in ten. A red dot: a call there failed since your last message.
-  Each has its name beside it, brighter while lit. A lit station's dot pulses, and is larger for
+  Each has its name beside it, brighter while lit. A lit station's dot pulses (not while a
+  request waits for you), and is larger for
   each further call running there at once (up to four): it springs to its size, with a kick
   when a call starts, and settles back when one ends.
 - **Dashes**: the route of the last calls, fading out over a minute.
