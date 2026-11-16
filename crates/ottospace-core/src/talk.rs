@@ -4,6 +4,7 @@
 
 use serde::Serialize;
 
+use crate::activity::Pulse;
 use crate::tasks::TaskId;
 
 /// The drawer's width in points when nobody has dragged it, and the least and most it takes.
@@ -39,6 +40,42 @@ pub struct Talk {
     pub open: bool,
     /// The keyboard is in it: keys go to the agent, as in an app pane they go to the app.
     pub keys: bool,
+}
+
+/// The agent chip at the tab row's end: the selected space's conversation while it is closed.
+/// A click on it opens the conversation (`Action::SpaceClick` on its space).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Chip {
+    pub task: Subject,
+    /// Its space's place on the top row.
+    pub space: usize,
+    /// As its dial's centre; `needs_you` also while it waits and its task is under Needs you.
+    pub state: Pulse,
+    /// `Working · cargo test`, `Needs you · git push`, `Idle`, `Ended`, `Failed`. The part
+    /// after the dot is the agent's: an untrusted label.
+    pub line: String,
+}
+
+/// The most characters of a call's label in the chip's line.
+pub const CHIP_LABEL: usize = 60;
+
+/// The chip's line: the state's word, then what it waits on, cleaned and cut.
+pub fn chip_line(state: Pulse, label: Option<&str>) -> String {
+    let word = match state {
+        Pulse::Running => "Working",
+        Pulse::NeedsYou => "Needs you",
+        Pulse::Idle => "Idle",
+        Pulse::Ended => "Ended",
+        Pulse::Error => "Failed",
+    };
+    // Cut before it is cleaned, and after: a label may be long.
+    let label = label.map(|label| label.chars().take(4 * CHIP_LABEL).collect::<String>());
+    let label = label.map(|label| crate::transcript::clean(&label).replace('\n', " "));
+    let label: Option<String> = label.map(|label| label.trim().chars().take(CHIP_LABEL).collect());
+    match label.filter(|label| !label.is_empty()) {
+        Some(label) if matches!(state, Pulse::Running | Pulse::NeedsYou) => format!("{word} · {label}"),
+        _ => word.to_string(),
+    }
 }
 
 /// How many sessions' reads are kept, the last first.

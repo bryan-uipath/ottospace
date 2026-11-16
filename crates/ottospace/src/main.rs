@@ -773,6 +773,8 @@ struct Workspace {
     home: home::Shared,
     /// ottospace's own controls as last painted: what sneak mode labels.
     controls: sneak::Controls,
+    /// Where the agent chip's line was last painted; none while it is the badge alone.
+    chip_line: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The key that ended sneak mode is still down: its repeats are typed nowhere.
     sneak_spent: bool,
     /// Reads of the focused app pane's tree while sneak mode is on.
@@ -1191,6 +1193,7 @@ impl Workspace {
             frame_start: Rc::default(),
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
+            chip_line: Rc::default(),
             sneak_spent: false,
             sneak_reads: sneak_apps::Reads::default(),
             wheel: app_wheel::Wheel::default(),
@@ -2803,6 +2806,8 @@ impl Workspace {
             "tabs": tabs,
             // Each space of the top row, by its place there.
             "space_rects": spaces,
+            // The agent chip, or null: the selected space's conversation while it is closed.
+            "agent_chip": self.chip_snapshot(),
             // The left column's title strip, and the open section's header (null: none open).
             "strip": marks.get(&Mark::Strip).copied().map(rect),
             "bar_header": marks.get(&Mark::BarHeader).copied().map(rect),
@@ -5305,7 +5310,7 @@ impl Workspace {
                     this.dispatch(Action::TabPlace { tab: Some(dragged.0), at }, this.input, window, cx);
                 }))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.dispatch(Action::SpaceSelect { index: place }, this.input, window, cx);
+                    this.dispatch(Action::SpaceClick { index: place }, this.input, window, cx);
                 }))
         });
         // The spaces left off for room: their count; a click goes on to the next space.
@@ -5327,6 +5332,11 @@ impl Workspace {
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.dispatch(Action::SpaceCycle { delta: 1 }, this.input, window, cx);
                 }))
+        });
+        // With one tab there is no second row: the agent chip is here, in room kept for its badge.
+        let reserve = self.chip_reserve();
+        let chip = self.agent_chip(TOP_BAR, cx).filter(|_| reserve > 0.).map(|(badge, whole)| {
+            div().relative().flex_1().min_w(px(reserve)).h_full().flex().child(badge).child(whole)
         });
         let new_space = div()
             .id("new-workspace")
@@ -5369,6 +5379,7 @@ impl Workspace {
             .child(div().flex_shrink().min_w_0().h_full().flex().overflow_hidden().children(spaces))
             .children(more)
             .child(new_space)
+            .children(chip)
             .child(self.render_top_buttons(cx))
     }
 
@@ -5404,6 +5415,7 @@ impl Workspace {
             return None;
         }
         let colour = self.space_colour(&of);
+        let chip = self.agent_chip(SPACE_TABS, cx);
         let tabs =
             places.into_iter().filter_map(|place| Some((place, self.model.tabs.get(place)?))).map(|(place, tab)| {
                 let (active, id) = (place == self.model.active, tab.id);
@@ -5487,7 +5499,10 @@ impl Workspace {
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .overflow_hidden()
-                .children(tabs),
+                .children(tabs)
+                // The agent chip, in the room the tabs leave: its badge over the row's end.
+                .relative()
+                .children(chip.into_iter().flat_map(|(badge, whole)| [badge, whole])),
         )
     }
 
@@ -5848,6 +5863,7 @@ impl Render for Workspace {
             self.frames.entry(pane.id).or_default();
         }
         self.controls.begin();
+        self.chip_line.set(None);
         self.bars.begin();
         // The Repos list, the tabs and spaces, and ⌘/'s Known are noted again only while drawn.
         let drawn_anew = |mark: &Mark| {
@@ -5886,10 +5902,10 @@ impl Render for Workspace {
         let right = self.render_inspector(drawer, cx);
         let right = right.or_else(|| self.render_draft(cx)).or_else(|| self.render_drawer(drawer, cx));
         let right_width = if right.is_some() { drawer } else { 0. };
-        // The top row's room for its spaces: over the centre and the drawer, less the lights, the +
-        // and the buttons.
+        // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
+        // the buttons and the agent chip's badge.
         let centre = f32::from(window.viewport_size().width) - left;
-        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140.;
+        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve();
         div()
             .size_full()
             .flex()

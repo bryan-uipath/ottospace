@@ -1,6 +1,7 @@
 # The agent dial over a native chat: a turn of calls (one failing, a hook), the next turn with
 # Shell lit and the context red, idle, ended (collapsed to its marker), narrow, and a watched
-# session. The stand-in `claude` replays dial/fixtures and writes the watched session's file.
+# session. The conversation closed while it works and while it waits: the agent chip, on the top
+# row and, with a second tab, at the end of the tab row. The stand-in `claude` replays dial/fixtures and writes the watched session's file.
 {"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
 {"cmd":"split","kind":"empty"}
 {"cmd":"task_new","line":"fix the login loop >app"}
@@ -15,10 +16,20 @@
 {"until":"drawer.native.chats.1.dial.level","is":"red"}
 {"settle":1500}
 {"shot":"running"}
+{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"settle":300}
+{"shot":"closed-working"}
+{"cmd":"key","keys":"cmd-shift-l","as":"user"}
 {"click":"talk:chat-stop"}
 {"until":"drawer.native.chats.1.transcript.turn","is":null}
 {"settle":300}
 {"shot":"idle"}
+{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"cmd":"key","keys":"cmd-t","as":"user"}
+{"settle":300}
+{"shot":"closed-tabs"}
+{"cmd":"key","keys":"cmd-shift-w","as":"user"}
+{"cmd":"key","keys":"cmd-shift-l","as":"user"}
 {"cmd":"key","keys":"cmd-p","as":"user"}
 {"cmd":"key","keys":"s t o p space t h e space a g e n t","as":"user"}
 {"cmd":"key","keys":"enter","as":"user"}
