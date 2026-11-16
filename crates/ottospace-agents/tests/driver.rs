@@ -221,6 +221,30 @@ fn what_the_cli_started_ends_with_it() {
     }
 }
 
+/// The CLI's exit is known when it is reaped, though a process it left in a group of its own
+/// still holds stdout open, so `Exited` waits.
+#[test]
+fn the_cli_is_known_gone_before_its_stdout_closes() {
+    let dir = record_dir("reaped");
+    let mut command = Command::new("/bin/sh");
+    // The child writes its pid once in its own group; the CLI exits only then, or its group's
+    // kill would take the child first.
+    let script = r#"perl -e 'setpgrp(0, 0); open(F, ">", "$ENV{FAKE_DIR}/pid.new"); print F "$$\n"; close F;
+        rename("$ENV{FAKE_DIR}/pid.new", "$ENV{FAKE_DIR}/pid"); exec @ARGV' sleep 1000 </dev/null &
+        while [ ! -e "$FAKE_DIR/pid" ]; do sleep 0.01; done; exit 0"#;
+    command.args(["-c", script]).env("FAKE_DIR", &*dir);
+    let driver = Driver::spawn(command, Claude::new()).unwrap();
+    let mut waited = 0;
+    while !driver.reaped() && waited < 500 {
+        std::thread::sleep(Duration::from_millis(10));
+        waited += 1;
+    }
+    let pid = std::fs::read_to_string(dir.join("pid")).unwrap().trim().to_string();
+    let exited = driver.events().try_iter().any(|event| matches!(event, Event::Exited { .. }));
+    let _ = Command::new("/bin/kill").args(["-9", &pid]).status();
+    assert!(driver.reaped() && !exited, "reaped after {waited} waits, Exited {exited}");
+}
+
 /// The CLI has no controlling terminal, even when ottospace was started from one: an
 /// interactive login shell before it cannot take that terminal (`zsh -i` would).
 #[test]
