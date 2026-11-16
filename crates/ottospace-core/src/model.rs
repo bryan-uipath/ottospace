@@ -5149,19 +5149,18 @@ impl Model {
     }
 
     /// At start no agent of ours runs. A link kept as running is the last run's word: its task is
-    /// the user's to look at, and follows its session again. What the restored tasks' files show
-    /// from before this run is no work of now (`ours_at`); a process that holds one still counts.
+    /// the user's to look at, and follows its session again. What such a session's file shows
+    /// from before this run is no work of now (`ours_at`); a process that holds it still counts.
     fn settle_links(&mut self) {
         let idle = |task: &&Task| !self.agent_runs(&Subject::Task(task.id));
-        let links = |task: &Task| Some((task.id, task.state, task.dismissed, task.session.clone()?));
-        let links: Vec<_> = self.tasks.list.iter().filter(idle).filter_map(links).collect();
+        let stale = |task: &&Task| task.session.as_ref().is_some_and(|l| l.state == Some(State::Running));
+        let links =
+            |task: &Task| Some((task.id, task.state == State::Running && !task.dismissed, task.session.clone()?));
+        let links: Vec<_> = self.tasks.list.iter().filter(idle).filter(stale).filter_map(links).collect();
         self.left = (links.iter().map(|(.., link)| (link.runner.clone(), link.id.clone())).collect(), None);
-        for (id, state, dismissed, link) in links {
-            // A dismissed task is left as it is: a state set would bring it back.
-            if link.state != Some(State::Running) || dismissed {
-                continue;
-            }
-            if state == State::Running {
+        for (id, ran, _) in links {
+            // Not a dismissed task's state: a state set would bring it back.
+            if ran {
                 self.tasks.set_state(id, State::NeedsYou);
             }
             self.tasks.followed(id, State::NeedsYou);
@@ -11141,6 +11140,15 @@ mod tests {
         let mut m = restored("needs_you", Found { held: true, ..ours });
         assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
         assert_eq!(m.update(Action::TalkStart), []);
+        // A dismissed task stays dismissed and running; its link is no longer the last run's word.
+        let kept = format!(
+            r#"{{"id":7,"title":"app","state":"running","dismissed":true,"priority":3,"created":1,
+                "session":{{"runner":"claude","id":"{IDLE}","state":"running"}}}}"#
+        );
+        let mut m = Model::default();
+        m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("kept")], floor: 7 });
+        assert_eq!(states(&m), Some((State::Running, Some(State::NeedsYou))));
+        assert!(m.tasks.get(7).is_some_and(|task| task.dismissed));
         // Its past is read from its file as a watched one's, and is the user's to go on with.
         let mut m = restored("needs_you", idle);
         let task = Subject::Task(7);

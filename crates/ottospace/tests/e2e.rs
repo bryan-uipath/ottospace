@@ -8362,7 +8362,8 @@ fn a_message_right_after_stop_resumes_once_and_nothing_says_it_cannot() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_task_talked_to_before_a_restart_is_gone_on_with_after_it() {
     let fixtures = [("turn1.jsonl", recorded("real-2.1.325-turn.jsonl"))];
-    let (root, record, mut env) = native_setup("restart-resume", &fixtures, &[]);
+    // Left alone, the stand-in outlives its stdin by 8 s: only the quit's kill ends it sooner.
+    let (root, record, mut env) = native_setup("restart-resume", &fixtures, &[("FAKE_LINGER", "8")]);
     env.push(("FAKE_SESSIONS".into(), root.join("sessions/claude").to_str().unwrap().into()));
     let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
     let read = |file: &str| std::fs::read_to_string(record.join(file)).unwrap_or_default();
@@ -8403,6 +8404,7 @@ fn a_task_talked_to_before_a_restart_is_gone_on_with_after_it() {
     assert_eq!((&past["watched"], &past["live"]), (&json!(false), &json!(false)), "{past}");
     // A client's key resumes nothing; the user's message does, in the same session.
     otto.call(json!({"cmd": "key", "keys": "x enter"}));
+    assert_eq!(starts(), 1, "a client's key started it");
     otto.user_click(at(otto.control("talk"), 0.5, 0.5));
     otto.user_key("s a y space h e l l o enter");
     otto.wait_for("the resume, and the message", |o| {

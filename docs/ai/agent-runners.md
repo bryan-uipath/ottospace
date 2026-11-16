@@ -151,8 +151,8 @@ What says a session is in use, and what is believed after a restart:
 | Signal | Source | After a restart |
 |---|---|---|
 | `Link.state == running` | the task file: the last run's word | not believed: `RestoreTasks` sets it (and a task still `running`) to needs-you (`Model::settle_links`); the task follows its session again |
-| `Found.active` | the session file changed in the last 30 s | a restored task's file not written since this run began is no work of now (`Model::ours_at`, `left`): our agent's last words. Written after: at work elsewhere |
-| `Found.held` | a `sessions/<pid>.json` of it names a live process (Claude Code only) | believed, if that process started before the record was last written (`sessions::holds`): a pid used again by another program started after. Every record of a session is read (`SessionRef.holders`): one of a killed process hides no live one |
+| `Found.active` | the session file changed in the last 30 s | for a link kept as running: a file not written since this run began is no work of now (`Model::ours_at`, `left`): our agent's last words. Written after: at work elsewhere. Any other link: as before (a session adopted from another terminal, written just before the start, is at work) |
+| `Found.held` | a `sessions/<pid>.json` of it names a live process (Claude Code only; `claude -p` writes one too: Probes, 4) | believed, unless that process started more than a minute after the record was last written (`sessions::holds`): a pid used again by another program. Every record of a session is read (`SessionRef.holders`): one of a killed process hides no live one |
 
 The cases:
 
@@ -172,6 +172,9 @@ The cases:
   The note does not say which terminal: `Found` has `held`, not the pid. Not built.
 - **A killed agent's record.** `SIGKILL` leaves `sessions/<pid>.json` behind. The pid is gone
   (not held); once another program has it, its start time is after the record (not held).
+- **Stopped, then quit within 30 s.** The link says needs-you, so the file's last writes read
+  as work for what is left of the 30 s: the refusal shows, and goes by itself. Not fixed: the
+  core does not keep, across a restart, which agents ended lately.
 
 Known gap, as before: Codex records no process. A Codex session at work elsewhere that wrote
 nothing since ottospace started reads idle for its first 30 s; `codex resume` then joins it

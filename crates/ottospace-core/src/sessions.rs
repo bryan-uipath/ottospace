@@ -44,14 +44,17 @@ pub const ENDED_GRACE_MS: u64 = 2_000;
 /// A listing asked for before our agent ended may still record its process: two rounds.
 pub const ENDED_HELD_MS: u64 = 10_000;
 
-/// A process and the record that names it may differ by this much: clocks round.
-const HOLDER_SLACK_MS: u64 = 1_000;
+/// A process may read as started this long after its record was written and still be its
+/// writer: the clock may have been set back in between. Wrongly held is the safe mistake.
+const HOLDER_SLACK_MS: u64 = 60_000;
 
 /// True if a live process may be the one that wrote a runner's record of it: it started
 /// (`started`) no later than the record was last written (`recorded`). One started after has the
-/// pid of a process that is gone, whose record was left. A time not known: believed.
+/// pid of a process that is gone, whose record was left. A time not known, or not in
+/// milliseconds since 1970 (before 2001): believed.
 pub fn holds(started: Option<u64>, recorded: Option<u64>) -> bool {
-    !started.zip(recorded).is_some_and(|(started, recorded)| started > recorded + HOLDER_SLACK_MS)
+    let recorded = recorded.filter(|at| *at >= 1_000_000_000_000);
+    !started.zip(recorded).is_some_and(|(started, recorded)| started > recorded.saturating_add(HOLDER_SLACK_MS))
 }
 
 /// An adopted session's file, as the shell last saw it while the Tasks section was closed: no
@@ -414,12 +417,15 @@ mod tests {
 
     #[test]
     fn a_process_started_after_its_record_was_written_only_has_the_pid_again() {
-        // Started before its record's last write: the holder. A second's rounding is no reuse.
-        assert!(holds(Some(1_000), Some(50_000)) && holds(Some(50_500), Some(50_000)));
-        // Started after: another program with the pid of one that is gone.
-        assert!(!holds(Some(60_000), Some(50_000)));
-        // A time not known (another user's process, an older record): believed.
-        assert!(holds(None, Some(50_000)) && holds(Some(60_000), None) && holds(None, None));
+        const AT: u64 = 1_794_474_000_000;
+        // Started before its record's last write: the holder. So is one a clock set back makes
+        // look half a minute younger than its record.
+        assert!(holds(Some(AT - 5_000), Some(AT)) && holds(Some(AT + 30_000), Some(AT)));
+        // Started well after: another program with the pid of one that is gone.
+        assert!(!holds(Some(AT + 61_000), Some(AT)));
+        // A time not known (another user's process, an older record), or in seconds: believed.
+        assert!(holds(None, Some(AT)) && holds(Some(AT), None) && holds(None, None));
+        assert!(holds(Some(AT), Some(AT / 1000)) && holds(Some(1), Some(u64::MAX)));
     }
 
     #[test]

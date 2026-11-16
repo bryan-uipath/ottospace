@@ -43,4 +43,6 @@ while IFS= read -r line; do
   esac
 done
 echo "fake claude: stdin closed" >&2
+# `$FAKE_LINGER` set: it lives that many seconds more, as a CLI that ends its turn first.
+[ -n "$FAKE_LINGER" ] && sleep "$FAKE_LINGER"
 exit 3
