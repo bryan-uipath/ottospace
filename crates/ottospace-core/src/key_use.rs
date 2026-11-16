@@ -50,6 +50,8 @@ pub enum Binding {
     VisualMode,
     ListMode,
     SneakMode,
+    /// `zoom` before ⌃⌘F filled the display: its counts are kept.
+    #[serde(alias = "zoom")]
     FillDisplay,
     Palette,
     ShowKeys,
@@ -601,6 +603,14 @@ mod tests {
         assert_eq!(KeyUse::parse(r#"{"version":2,"keys":{}}"#), Err(Unread::Newer(2)));
         assert_eq!(KeyUse::parse(r#"{"version":2,"keys":[]}"#), Err(Unread::Newer(2)));
         assert!(matches!(KeyUse::parse(&" ".repeat(MAX_FILE_BYTES + 1)), Err(Unread::Bad(_))));
+    }
+
+    /// ⌃⌘F was `zoom` before it filled the display: an older file's counts are its.
+    #[test]
+    fn an_older_files_zoom_reads_as_fill_display() {
+        let uses = KeyUse::parse(r#"{"version":1,"keys":{"zoom":{"score":3,"at":5,"known":true}}}"#).expect("reads");
+        assert_eq!(uses.0.get(&Binding::FillDisplay), Some(&Use { score: 3., at: 5, known: true }));
+        assert!(uses.write().contains("\"fill_display\""), "{}", uses.write());
     }
 
     /// The user's own keys count, and a count ends no mode; nobody else counts or resets.
