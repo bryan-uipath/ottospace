@@ -157,6 +157,12 @@ pub fn on_bar(kind: Kind, by: Origin) -> bool {
     by == Origin::User || kind.about() == About::App
 }
 
+/// Whether a window that could not be hosted goes on the bar. `in_pane`: a pane waits for it
+/// and says why. A step of the system's (a layout restored at start) leaves it to that pane.
+pub fn unhosted_on_bar(by: Origin, in_pane: bool) -> bool {
+    !(by == Origin::System && in_pane)
+}
+
 /// The kind of a step's line. `refused`: the core's own reason (`Effect::Notice`). `broke`: the
 /// app's failure (a shell or agent not started, a file not written). A client's is otherwise
 /// its answer: the shell's reason why its request did nothing.
@@ -241,6 +247,16 @@ mod tests {
             // The user's own always shows; anyone else's only when it is about the app.
             assert_eq!((on_bar(kind, User), on_bar(kind, Socket), on_bar(kind, System)), (true, !answer, !answer));
         }
+    }
+
+    #[test]
+    fn a_restored_pane_that_waits_for_its_window_raises_no_bar() {
+        use Origin::*;
+        // A layout restored at start: its pane says "Spotify is not running"; the bar does not.
+        assert!(!unhosted_on_bar(System, true));
+        // The user's "Open", a client's request, a window with no pane to wait in: on the bar.
+        assert!(unhosted_on_bar(User, true) && unhosted_on_bar(Socket, true));
+        assert!(unhosted_on_bar(System, false));
     }
 
     #[test]

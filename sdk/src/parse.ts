@@ -1610,6 +1610,11 @@ export function snapshot(value: unknown): Snapshot {
     listen_rects: orNull(map(rect))(o.listen_rects, "listen_rects"),
     marks: list(mark)(o.marks, "marks"),
     mark_removed: orNull(str)(o.mark_removed, "mark_removed"),
+    unfilled: list((value, at) => {
+      const empty = fields(value, at);
+      const open = orNull(rect)(empty.open, `${at}.open`);
+      return { pane: num(empty.pane, `${at}.pane`), why: str(empty.why, `${at}.why`), open };
+    })(o.unfilled, "unfilled"),
     workbooks: list(workbook)(o.workbooks, "workbooks"),
     workbook_offer: orNull(workbookOffer)(o.workbook_offer, "workbook_offer"),
     row_menu: orNull(rowMenu)(o.row_menu, "row_menu"),

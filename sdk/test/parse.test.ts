@@ -123,6 +123,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     listen_rects: null,
     marks: [],
     mark_removed: null,
+    unfilled: [],
     workbooks: [],
     workbook_offer: null,
     row_menu: null,
