@@ -83,7 +83,7 @@ impl Workspace {
     pub(crate) fn notice_dismissed(&mut self, kind: Kind) {
         match kind {
             Kind::Failed | Kind::Refused => {
-                (self.error, self.error_seen, self.bar_line) = (None, None, notice::Held::default());
+                (self.error, self.error_seen, self.bar_line) = (None, (None, None), notice::Held::default());
             }
             Kind::Told => self.told = None,
             // Said again by the next save that fails.

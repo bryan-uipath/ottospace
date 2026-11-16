@@ -888,8 +888,9 @@ struct Workspace {
     broke: Option<String>,
     /// What the bar holds of `error` (`swap_origin`): a client's answer is not on it.
     bar_line: notice::Held,
-    /// `error` as `bar_line` last saw it.
-    error_seen: Option<String>,
+    /// `error` as `bar_line` last saw it, and where its text was: the same words said again
+    /// are a new line (a new `String`), e.g. the user's refusal after a client's same one.
+    error_seen: (Option<String>, Option<usize>),
     /// The notice bar's height as it opens and closes.
     bar: notice_bar::Bar,
     /// False in e2e runs, which must never move the user's real windows.
@@ -1264,7 +1265,7 @@ impl Workspace {
             refused: None,
             broke: None,
             bar_line: notice::Held::default(),
-            error_seen: None,
+            error_seen: (None, None),
             bar: notice_bar::Bar::default(),
             notice,
             settings_looked: settings_read,
@@ -1313,14 +1314,14 @@ impl Workspace {
     fn swap_origin(&mut self, origin: Origin) -> Origin {
         // What was said since the last swap was the step of the sender now left.
         self.bar_line = self.held_now();
-        self.error_seen.clone_from(&self.error);
+        self.error_seen = (self.error.clone(), self.error_at());
         std::mem::replace(&mut self.input, origin)
     }
 
     /// What the bar holds of `error`, with what the sender's step has said since the last swap:
     /// a client's answer is its reply's alone, and its failure never over the user's (`Held::after`).
     pub(crate) fn held_now(&self) -> notice::Held {
-        if self.error == self.error_seen {
+        if (&self.error, self.error_at()) == (&self.error_seen.0, self.error_seen.1) {
             return self.bar_line.clone();
         }
         let is = |mark: &Option<String>| self.error.is_some() && self.error == *mark;
@@ -1328,8 +1329,13 @@ impl Workspace {
         self.bar_line.after(self.error.clone().map(|text| Notice { kind, text }), self.input)
     }
 
-    /// The app's own failure (a shell or agent not started, a file not written): on the bar
-    /// whoever's step found it.
+    /// Where `error`'s text is kept.
+    fn error_at(&self) -> Option<usize> {
+        self.error.as_ref().map(|error| error.as_ptr() as usize)
+    }
+
+    /// The app's own failure (a shell or agent not started, a file not written, a window of
+    /// the user's moved): on the bar whoever's step found it.
     pub(crate) fn broke(&mut self, why: String) {
         (self.error, self.broke) = (Some(why.clone()), Some(why));
     }
@@ -3092,8 +3098,7 @@ impl Workspace {
                 let _ = hosted.window.set_position(display::parking_spot());
             }
             if hosted.off_screen {
-                self.error =
-                    Some(format!("{}'s window was off screen: it goes back to the middle of the screen", hosted.app));
+                self.broke(format!("{}'s window was off screen: it goes back to the middle of the screen", hosted.app));
             }
             trace::record("host", serde_json::json!({ "pane": id, "window": hosted.window_id }));
             self.cells.insert(*id, hosted.bounds.clone());

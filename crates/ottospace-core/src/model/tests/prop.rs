@@ -2591,6 +2591,23 @@ impl Run {
                 bar(m, &self.held)
             );
         }
+        // What the shell says beside the core, every few steps: the app's failure, or a line
+        // cleared, by whoever's step it was. A client's never covers or clears the user's, and
+        // clears no timer's; any other failure of the app shows.
+        let (stood, by) = (self.held.clone(), origin);
+        let failed = crate::notice::Notice { kind: crate::notice::said(false, true, by), text: "no shell".into() };
+        let now = match self.steps.len() % 5 {
+            0 => Some(Some(failed)),
+            1 => Some(None),
+            _ => None,
+        };
+        if let Some(now) = now {
+            self.held = stood.after(now.clone(), by);
+            let theirs = |of| stood.said.is_some() && stood.by == Some(of);
+            let kept = by == Origin::Socket && (theirs(Origin::User) || (now.is_none() && theirs(Origin::System)));
+            let wanted = if kept { &stood.said } else { &now };
+            ensure!(self.held.said == *wanted, "{by:?}'s line {now:?} over {stood:?} left {:?}", self.held);
+        }
         let user = origin == Origin::User;
         // Only the shell's runner reports what an agent said.
         let reports = matches!(action, Action::AgentEvents { .. }) && origin != Origin::System;

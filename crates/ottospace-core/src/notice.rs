@@ -24,7 +24,7 @@ pub enum Level {
 ///
 /// | Kind | Level | About | Another sender's on the bar |
 /// |---|---|---|---|
-/// | `failed` | error | the app: a shell or agent not started, a file not written | yes, never over the user's (`replaces`) |
+/// | `failed` | error | the app: a step of the user's or a timer's that failed; of a client's, a shell or agent not started, a file not written, a window of the user's it moved | yes, never over the user's (`replaces`) |
 /// | `refused` | warning | the sender: why its step did nothing | no |
 /// | `unsaved` | error | the app | yes |
 /// | `told` | info | the sender: what its step did | no |
@@ -172,11 +172,15 @@ pub struct Held {
 
 impl Held {
     /// The slot after a step of `by` left `now` as its line (`None`: it cleared the line). An
-    /// answer to another sender is not taken, nor a client's line or clearing over the user's.
+    /// answer to another sender is not taken, nor a client's line over the user's; a client
+    /// clears only a client's line, so its success closes no bar it did not open.
     pub fn after(&self, now: Option<Notice>, by: Origin) -> Held {
         let held_by = self.by.filter(|_| self.said.is_some());
-        let shows = now.as_ref().is_none_or(|notice| on_bar(notice.kind, by));
-        if shows && replaces(by, held_by) { Held { said: now, by: Some(by) } } else { self.clone() }
+        let takes = match &now {
+            Some(notice) => on_bar(notice.kind, by) && replaces(by, held_by),
+            None => by != Origin::Socket || held_by.is_none_or(|held_by| held_by == by),
+        };
+        if takes { Held { said: now, by: Some(by) } } else { self.clone() }
     }
 }
 
@@ -283,10 +287,11 @@ mod tests {
         assert_eq!(held(&failed, System).after(failed.clone(), Socket), held(&failed, Socket));
         assert_eq!(held(&users, User).after(failed.clone(), Socket), held(&users, User));
         assert_eq!(held(&users, User).after(failed.clone(), System), held(&failed, System));
-        // Nor does a client's step clear the user's; its own and the system's it may.
+        // Nor does a client's step clear the user's or the system's: only a client's.
         assert_eq!(held(&users, User).after(None, Socket), held(&users, User));
+        assert_eq!(held(&failed, System).after(None, Socket), held(&failed, System));
         assert_eq!(held(&failed, Socket).after(None, Socket), held(&None, Socket));
-        assert_eq!(held(&failed, System).after(None, Socket), held(&None, Socket));
+        assert_eq!(held(&failed, Socket).after(None, System), held(&None, System));
         assert_eq!(held(&users, User).after(None, User), held(&None, User));
         // The user's line once cleared, a client's failure shows.
         assert_eq!(held(&None, User).after(failed.clone(), Socket), held(&failed, Socket));
