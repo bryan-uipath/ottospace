@@ -1778,10 +1778,25 @@ fn the_window_fills_its_display_an_apps_window_stops_at_the_dock_and_every_end_b
     wait_for("the window to fill its display", || window().filter(at(display)));
     wait_for("the bars to go", || bars_hidden(true));
     let body = wait_for("the layout to follow", || rect(&state()["bounds"]["1"]).filter(|b| b[3] > small[3] + 20.0));
+    let frames = || {
+        let s = state();
+        format!("window {}, pane {}, app's window {}", s["window"], s["bounds"]["1"], s["hosted"]["1"])
+    };
+    // ottospace in front, the Dock away: the app's picture goes down its pane as far as macOS
+    // lets the window grow (no taller than what the bars leave), not to the Dock's top.
+    let crop = state()["crop"]["1"].as_f64().expect("the crop");
+    let covers = |pane: [f64; 4]| move |f: &[f64; 4]| f[3] - crop >= pane[3].min(visible[3] - crop) - 4.0;
+    let filled = || {
+        let parked = rect(&state()["hosted"]["1"]).filter(covers(body));
+        parked.filter(|_| window().as_ref().is_some_and(at(display)))
+    };
+    let parked = wait_or("the app's picture to fill its pane", frames, filled);
+    std::thread::sleep(Duration::from_millis(1200));
+    report(&format!("fill, ottospace in front, 1.2 s on: {}", frames()));
+    assert!(filled().is_some(), "after a second: {}", frames());
 
     // In the app: its bars come back over ottospace's edges, and ottospace's window stays. The
     // app's window covers its pane down to the Dock's top, no further, and is not named a misfit.
-    let crop = state()["crop"]["1"].as_f64().expect("the crop");
     let bottom = (display[1] + body[1] + body[3]).min(visible[1] + visible[3]);
     let fits = |f: &[f64; 4]| (f[1] + f[3] - bottom).abs() <= 4.0;
     assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
@@ -1795,6 +1810,7 @@ fn the_window_fills_its_display_an_apps_window_stops_at_the_dock_and_every_end_b
     wait_for("the bars to come back for the app", || bars_hidden(false));
     // Past a check of the window's size (every 500 ms).
     std::thread::sleep(Duration::from_millis(1200));
+    report(&format!("fill, in the app pane: {}", frames()));
     let now = state();
     assert_eq!(
         (&now["state"]["panes"][0]["fit"], &now["state"]["fill_display"]),
@@ -1803,12 +1819,31 @@ fn the_window_fills_its_display_an_apps_window_stops_at_the_dock_and_every_end_b
     );
     assert_eq!(rect(&now["window"]).filter(at(display)).is_some(), true, "ottospace's window moved: {}", now["window"]);
     assert_eq!(rect(&now["bounds"]["1"]), Some(body), "the layout moved under the app");
-    // Parked again at the same size: the window is not resized each time.
+    // Back in ottospace: parked as before, the picture to the pane's foot again.
     assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
     bring_forward(otto.child.id(), "ottospace");
     wait_for("the bars to go again", || bars_hidden(true));
-    let parked = wait_for("the window to park", || rect(&state()["hosted"]["1"]).filter(|f| !close(f[0], live[0])));
-    assert!(close(parked[2], live[2]) && close(parked[3], live[3]), "parked {parked:?}, live {live:?}");
+    let again =
+        wait_or("the window to park", frames, || rect(&state()["hosted"]["1"]).filter(|f| !close(f[0], live[0])));
+    assert!(close(again[2], parked[2]) && close(again[3], parked[3]), "parked {again:?}, first {parked:?}");
+    std::thread::sleep(Duration::from_millis(1200));
+    report(&format!("fill, back in ottospace: {}", frames()));
+    assert!(filled().is_some(), "back in ottospace: {}", frames());
+
+    // The pane resized (a split beside it, then closed): the window keeps the display's frame.
+    otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
+    let narrow =
+        wait_or("the pane to narrow", frames, || rect(&state()["bounds"]["1"]).filter(|b| b[2] < body[2] - 20.0));
+    wait_or("the narrow pane's picture to its foot", frames, || {
+        rect(&state()["hosted"]["1"]).filter(|f| close(f[2], narrow[2]) && covers(narrow)(f))
+    });
+    assert!(window().as_ref().is_some_and(at(display)), "split: {}", frames());
+    otto.call(json!({"cmd": "close"}));
+    wait_or("the pane to widen", frames, || rect(&state()["bounds"]["1"]).filter(|b| close(b[2], body[2])));
+    wait_or("the picture to fill its pane again", frames, filled);
+    std::thread::sleep(Duration::from_millis(1200));
+    report(&format!("fill, after the split closed: {}", frames()));
+    assert!(filled().is_some(), "after the split closed: {}", frames());
 
     // Off: the window where it was, the bars as the system has them.
     fill();
