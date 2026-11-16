@@ -96,7 +96,8 @@ feed (Outlook's published ICS) has no attendees, descriptions or categories, but
   end's bottom, its cards on hover; only calls widen the band.
 - **Colour** (`calendar::paint`, one function for the band and the section): a call in
   `theme::MEETING` (the amber meetings have had since the first build), a block
-  `theme::MEETING_BLOCK` (muted), away `theme::MEETING_AWAY` (slate). Strength: tentative 0.55,
+  `theme::MEETING_BLOCK` (muted), away `theme::MEETING_AWAY` (slate), a focus block green
+  (below). Strength: tentative 0.55,
   free 0.3; past 0.35, far 0.75, the pulse up to 1, running 1; a block drawn at 0.35 of that.
   `calendar_colors`, read live (`SetCalendar`), gives the hue by title: plain text, case ignored,
   first match. No regex: titles are other people's text, and a pattern of the user's run over
@@ -107,6 +108,27 @@ feed (Outlook's published ICS) has no attendees, descriptions or categories, but
 - **Edge**: a hairline along the band's top in `theme::BORDER`, as the status bar's own. A
   variant that also tinted the workday's span (`theme::RAISED`) was captured for Bryan to choose;
   not shipped.
+
+## Focus blocks
+
+Bryan, 2026-11-15: "anything that starts with Focus or Deep Work _and_ has no meeting link. for
+now, lets just do distinct color on band, but maybe we could have an automatic focus mode later".
+His feed has no attendees, so "only me in it" cannot be read: the title and no link stand in.
+
+- **Rule** (`calendar::focus`, pure): a block (no Zoom, Meet or Teams link, `kind`'s notion; a
+  document's link changes nothing) whose title, leading space and case ignored, starts with the
+  word `Focus` or the words `Deep Work` (any space between them). The prefix ends at a word's
+  end: `Focus`, `Focus: writing`, `Deep work - API` are; `Focusing`, `Focus2`, `Refocus`,
+  `Deepwork`, `Deep workshop` and a `Focus sync` on Zoom are not.
+- **Colour** (`calendar::paint`): `theme::MEETING_FOCUS`, the theme's green (`PICK`): no other
+  kind on the band has it, and it is far from a call's amber and a block's grey. Order: a
+  `calendar_colors` rule that matches the title (the user's is more specific), then away's
+  slate, then focus, then call or block. Tentative, free and past lighten it as any entry.
+  Still a block: under the calls, no lane, never widens the band. The section's row takes the
+  same colour. No setting, no label; alerts are as for any block.
+- **State**: each band block's `focus` (true under a rule's colour too) and `color: "focus"`. No
+  title. The `calendar` request is unchanged: it gives the title and `has_call_link`.
+- **Later**: an automatic focus mode could key off `calendar::focus` of the entry that runs.
 
 ## The Calendar section
 

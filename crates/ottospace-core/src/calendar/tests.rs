@@ -309,6 +309,43 @@ fn a_cards_facts_name_the_place_without_links_the_link_the_status_and_the_calls_
 }
 
 #[test]
+fn a_focus_block_starts_with_focus_or_deep_work_and_has_no_call_link() {
+    // (title, a focus block when it has no call link)
+    let table = [
+        ("Focus", true),
+        ("Focus time", true),
+        ("focus: writing", true),
+        ("FOCUS - api", true),
+        ("  Focus time", true),
+        ("Focus/admin", true),
+        ("Deep Work", true),
+        ("Deep work - API", true),
+        ("deep  work: parser", true),
+        ("Focusing", false),
+        ("Focused review", false),
+        ("Focus2", false),
+        ("Refocus", false),
+        ("Unfocused sync", false),
+        ("Time to focus", false),
+        ("Deepwork", false),
+        ("Deep", false),
+        ("Deep workshop", false),
+        ("Deep dive", false),
+        ("Design review", false),
+        ("", false),
+    ];
+    for (title, is) in table {
+        let titled = |e: Event| Event { title: title.into(), ..e };
+        assert_eq!(focus(&titled(block(1, NINE, 30))), is, "{title:?}");
+        // The same title on a call is a call.
+        assert!(!focus(&titled(event(1, NINE, 30))), "{title:?} with a Zoom link");
+    }
+    // A link that is no call's (a document's) leaves it a block, as on the band.
+    let doc = Event { title: "Focus time".into(), link: Some("https://example.com/doc".into()), ..block(1, NINE, 30) };
+    assert!(focus(&doc) && kind(&doc) == Kind::Block);
+}
+
+#[test]
 fn colours_by_kind_and_by_rule_and_strength_by_status_and_stage() {
     use crate::theme;
     let rules = vec![ColorRule::new("1:1", "teal").unwrap(), ColorRule::new("SYNC", "pink").unwrap()];
@@ -316,7 +353,9 @@ fn colours_by_kind_and_by_rule_and_strength_by_status_and_stage() {
     let call = event(1, NINE, 30);
     let away = Event { show: Show::Away, ..block(2, NINE, 30) };
     // (what, event, stage, colour, name, strength)
-    let table: [(&str, Event, Stage, u32, &str, f32); 10] = [
+    let focus = titled("Focus time", block(3, NINE, 30));
+    let lit = |show: Show| Event { show, ..focus.clone() };
+    let table: [(&str, Event, Stage, u32, &str, f32); 16] = [
         ("a call", call.clone(), Stage::Running, theme::MEETING, "meeting", 1.),
         ("a block", block(1, NINE, 30), Stage::Running, theme::MEETING_BLOCK, "block", 1.),
         ("away", away.clone(), Stage::Running, theme::MEETING_AWAY, "away", 1.),
@@ -335,6 +374,14 @@ fn colours_by_kind_and_by_rule_and_strength_by_status_and_stage() {
             "pink",
             0.55,
         ),
+        // A focus block: its own hue, lit by status and stage as any block.
+        ("focus", focus.clone(), Stage::Running, theme::MEETING_FOCUS, "focus", 1.),
+        ("focus, tentative", lit(Show::Tentative), Stage::Far, theme::MEETING_FOCUS, "focus", 0.55 * 0.75),
+        ("focus, free", lit(Show::Free), Stage::Running, theme::MEETING_FOCUS, "focus", 0.3),
+        ("focus, away", lit(Show::Away), Stage::Running, theme::MEETING_AWAY, "away", 1.),
+        ("focus with a call link", titled("Focus time", call.clone()), Stage::Running, theme::MEETING, "meeting", 1.),
+        // The user's rule is more specific than the built-in colour.
+        ("a rule over focus", titled("Focus: 1:1 prep", focus.clone()), Stage::Running, theme::IDENTITY[7], "teal", 1.),
     ];
     for (what, e, stage, color, name, alpha) in table {
         let p = paint(&e, stage, 0., &rules);
