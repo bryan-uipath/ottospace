@@ -1118,7 +1118,7 @@ export interface AppEntry {
 /** A notice's level, least pressing first. */
 export type NoticeLevel = "info" | "warning" | "error";
 
-/** The notice bar: one message, full width under the top row. */
+/** The notice bar: one message, full width at the window's foot. */
 export interface NoticeBar {
   /** What it is about: `failed`, `refused`, `unsaved`, `told`, `settings_problem`, `settings_retired`, `settings_restart`, `start`, `keys`, `editor`. */
   kind: string;
