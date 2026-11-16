@@ -1,4 +1,4 @@
-# The notice bar: information, a warning and an error, each opening between the top row and the rest.
+# The notice bar: information, a warning and an error, each opening at the window's foot.
 {"cmd":"split"}
 {"cmd":"wait","pattern":"^\\$"}
 {"cmd":"type","text":"clear && echo notices\r"}
