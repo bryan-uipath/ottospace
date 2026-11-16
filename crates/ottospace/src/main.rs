@@ -1598,7 +1598,7 @@ impl Workspace {
                         if let Some(pane) = into {
                             self.model.update(Action::Unfilled { pane, why: why.clone() }.sent_by(Origin::System));
                         }
-                        if !unhosted.contains(&why) {
+                        if !unhosted.contains(&why) && notice::unhosted_on_bar(self.input, into.is_some()) {
                             unhosted.push(why);
                         }
                     }
@@ -2861,7 +2861,19 @@ impl Workspace {
         }
         let mut tab_panes = self.model.tab_panes();
         tab_panes.truncate(bar);
-        serde_json::json!({
+        let unfilled: Vec<serde_json::Value> = self
+            .model
+            .marks
+            .unfilled()
+            .iter()
+            .map(|empty| {
+                serde_json::json!({
+                    "pane": empty.pane, "why": empty.why,
+                    "open": self.controls.bounds(&format!("unfilled-open:{}", empty.pane)).map(rect),
+                })
+            })
+            .collect();
+        let mut state = serde_json::json!({
             "ok": true,
             "mode": self.model.mode(),
             // Where the keyboard is: a pane, the list, a rail's cell, the drawer.
@@ -3074,7 +3086,10 @@ impl Workspace {
                 "number": self.renders, "seq": self.seq, "drawn": self.drawn_seq, "waited_ms": 0,
                 "window": ns_view(window).map(|view| unsafe { ottospace_mac::window::number(view) }),
             },
-        })
+        });
+        // Restored or rebuilt panes still empty: `pane`, `why`, and where its "Open <App>" is drawn, or null.
+        state["unfilled"] = unfilled.into();
+        state
     }
 
     /// The hosted window behind `pane`, if it is an app pane.
