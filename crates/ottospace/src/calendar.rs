@@ -1,6 +1,6 @@
 //! The meeting timeline's shell: reads the calendar feed off the main thread, draws the band
-//! and the banner, looks whether a call is on, and alerts. The decisions are the core's
-//! (`ottospace_core::calendar`).
+//! (a started meeting is a notice on the notice bar: `notice_bar`), looks whether a call is
+//! on, and alerts. The decisions are the core's (`ottospace_core::calendar`).
 //!
 //! The feed is ottospace's only network access: `/usr/bin/curl`, `https:` only, its link on curl's
 //! standard input (not in its arguments), never in a log, the state or an error.
@@ -436,59 +436,6 @@ impl Workspace {
         Some(band.child(out).into_any_element())
     }
 
-    /// Across the top, under the title strip, while a meeting runs and no call is on:
-    /// its title, how long ago it started, Join (an `https:` link only) and Dismiss.
-    pub(crate) fn render_meeting_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (id, line, link) = self.model.calendar.banner_line(now_ms())?;
-        let button = |control: String, label: &'static str| {
-            div()
-                .id(gpui::ElementId::Name(control.clone().into()))
-                .relative()
-                .px_2()
-                .py_0p5()
-                .rounded_sm()
-                .cursor_pointer()
-                .text_color(rgb(theme::TEXT))
-                .bg(rgb(theme::SELECTED))
-                .hover(|s| s.bg(rgb(theme::BORDER_STRONG)))
-                .child(label)
-                .child(self.controls.mark(control))
-        };
-        let join = link.then(|| {
-            button(format!("meeting-join:{id}"), "Join").on_click(cx.listener(move |this, _, window, cx| {
-                this.dispatch(Action::CalendarJoin { id }, this.input, window, cx);
-            }))
-        });
-        let dismiss =
-            button(format!("meeting-dismiss:{id}"), "Dismiss").on_click(cx.listener(move |this, _, window, cx| {
-                this.dispatch(Action::CalendarDismiss { id }, this.input, window, cx);
-            }));
-        let banner = div()
-            .id("meeting-banner")
-            .absolute()
-            .top(px(crate::TOP_BAR))
-            .left_0()
-            .right_0()
-            .h(px(32.))
-            .px_3()
-            .flex()
-            .items_center()
-            .gap_2()
-            .bg(rgb(theme::RAISED))
-            .border_b_1()
-            .border_l_4()
-            .border_color(rgb(theme::SNEAK))
-            .text_xs()
-            .child(div().flex_none().text_color(rgb(theme::SNEAK)).child("Meeting started"))
-            .child(div().min_w_0().truncate().text_color(rgb(theme::TEXT)).child(line))
-            .child(div().flex_1())
-            .children(join)
-            .child(dismiss)
-            // A click here is no click on the panes beneath.
-            .occlude();
-        Some(banner.into_any_element())
-    }
-
     /// What the state says of the timeline: counts, times and stages, never a title or a place,
     /// and where the banner's buttons are. Every reply carries the state: titles are only in the
     /// `calendar` request's own reply (`calendar_reply`).
@@ -498,6 +445,7 @@ impl Workspace {
         let today: Vec<&Event> = calendar.today().collect();
         let next = calendar.next(now);
         let banner = calendar.banner(now).map(|e| e.id);
+        let controls = self.meeting_controls();
         let at = |control: String| self.controls.bounds(&control).map(crate::rect);
         let layout = calendar.band(self.timeline.workday, now, &zone_offset);
         let band = layout.band;
@@ -546,10 +494,8 @@ impl Workspace {
                 ],
                 "status_bar": drawn(Mark::Status),
             })),
-            "banner": banner.map(|id| serde_json::json!({
-                "join": at(format!("meeting-join:{id}")),
-                "dismiss": at(format!("meeting-dismiss:{id}")),
-            })),
+            // The meeting on the notice bar: where its Join and × are (null: not drawn).
+            "banner": banner.map(|_| serde_json::json!({ "join": controls.0, "dismiss": controls.1 })),
             "alerts": calendar.given,
             // The Calendar section: its day (0 today, -1 yesterday) and that day's local midnight,
             // how many rows, the rail cell's mark, where the day's controls are (`today` while on

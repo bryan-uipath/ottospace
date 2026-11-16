@@ -1122,22 +1122,23 @@ export interface AppEntry {
   icon: boolean;
 }
 
-/** A notice's level, least pressing first. */
-export type NoticeLevel = "info" | "warning" | "error";
+/** A notice's level, least pressing first: a meeting that started is over a warning, under an error. */
+export type NoticeLevel = "info" | "warning" | "meeting" | "error";
 
 /** The notice bar: one message, full width at the window's foot. */
 export interface NoticeBar {
-  /** What it is about: `failed`, `refused`, `unsaved`, `told`, `settings_problem`, `settings_retired`, `settings_restart`, `start`, `keys`, `editor`. */
+  /** What it is about: `failed`, `refused`, `unsaved`, `told`, `settings_problem`, `settings_retired`, `settings_restart`, `start`, `keys`, `editor`, `meeting`. */
   kind: string;
   level: NoticeLevel;
+  /** A meeting's is `Meeting started`: its title is never in the state. */
   text: string;
-  /** What it offers beside the text: `open_settings`, or null. */
+  /** What it offers beside the text: `open_settings`, `join` (a meeting's link), or null. */
   offer: string | null;
   offer_rect: Rect | null;
   /** Its ×. Only the user's click dismisses. */
   close: Rect | null;
   rect: Rect | null;
-  /** How much of it shows: less than 28 while it opens or closes. The rest of the window starts this much lower. */
+  /** How much of it shows: less than 28 while it opens or closes. The panes' feet are this much higher. */
   height: number;
 }
 
@@ -1319,8 +1320,8 @@ export interface Snapshot {
   };
   /**
    * The meeting timeline, if `calendar_ics` is set: counts, times (ms) and stages only. No title or
-   * place: every reply carries the state, and those are only in `calendar`'s own reply. `banner`: where its buttons are drawn,
-   * while a meeting runs and no call is on. `joins`: in a test run, links a Join opened.
+   * place: every reply carries the state, and those are only in `calendar`'s own reply. `banner`: while a meeting runs and no call is on,
+   * where its Join and Dismiss are on the notice bar (null while an error covers it). `joins`: in a test run, links a Join opened.
    */
   calendar: {
     on: boolean;

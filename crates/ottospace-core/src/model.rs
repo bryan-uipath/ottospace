@@ -1438,7 +1438,7 @@ pub enum Action {
         in_call: Option<bool>,
         at: u64,
     },
-    /// The meeting banner's Dismiss: no more alerts of that event. Only the user's.
+    /// The meeting notice's Dismiss (× on the notice bar): no more alerts of that event. Only the user's.
     CalendarDismiss {
         id: u64,
     },
@@ -7048,8 +7048,8 @@ impl Model {
         let settings = self.settings_file.read(text, written);
         // A dismissed line that is fixed, or says something else now, is dismissed no more.
         let line = self.settings_file.line();
-        let stale =
-            |n: &crate::notice::Notice| n.kind.offer().is_some() || n.kind == crate::notice::Kind::SettingsRestart;
+        use crate::notice::Kind::{SettingsProblem, SettingsRestart, SettingsRetired};
+        let stale = |n: &crate::notice::Notice| matches!(n.kind, SettingsProblem | SettingsRetired | SettingsRestart);
         self.notice_hidden.retain(|n| !stale(n) || Some(&n.text) == line.as_ref());
         let Some(settings) = settings else { return };
         self.act(Action::TasksView { view: settings.tasks_view.unwrap_or_default() }, effects);

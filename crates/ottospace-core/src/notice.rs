@@ -6,13 +6,17 @@ use crate::model::Origin;
 
 /// Why a client's dismissal does nothing.
 pub const USERS_ALONE: &str = "only the user dismisses a notice";
+/// A meeting's notice in the state: its title is other people's text, and every reply carries the state.
+pub const MEETING: &str = "Meeting started";
 
-/// How pressing a notice is, least first: the bar's colour, and what may replace what.
+/// How pressing a notice is, least first: the bar's colour, and what may replace what. A
+/// meeting that started is time-critical: over a warning, under an error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Level {
     Info,
     Warning,
+    Meeting,
     Error,
 }
 
@@ -32,6 +36,7 @@ pub enum Level {
 /// | `start` | error | the app | yes |
 /// | `keys` | warning | the app | yes |
 /// | `editor` | info | the app | yes |
+/// | `meeting` | meeting | the app: a meeting started and no call is on (`Calendar::banner`) | yes |
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -55,6 +60,8 @@ pub enum Kind {
     Keys,
     /// The user's editor gave its text back.
     Editor,
+    /// A meeting started and no call is on. Its title is drawn, never in the state (`MEETING`).
+    Meeting,
 }
 
 impl Kind {
@@ -63,6 +70,7 @@ impl Kind {
             Kind::Failed | Kind::Unsaved | Kind::SettingsProblem | Kind::Start => Level::Error,
             Kind::Refused | Kind::SettingsRetired | Kind::Keys => Level::Warning,
             Kind::Told | Kind::SettingsRestart | Kind::Editor => Level::Info,
+            Kind::Meeting => Level::Meeting,
         }
     }
 
@@ -78,13 +86,16 @@ impl Kind {
     pub fn offer(self) -> Option<Offer> {
         match self {
             Kind::SettingsProblem | Kind::SettingsRetired => Some(Offer::OpenSettings),
+            // Only a meeting with an `https:` link: the shell asks the calendar.
+            Kind::Meeting => Some(Offer::Join),
             _ => None,
         }
     }
 
     /// It is held in a slot, emptied on a dismissal: said again, it shows again. The others (the
     /// settings' line, what was found at start) stay as they are until fixed, so the core
-    /// remembers them as dismissed (`Model::notice_hidden`).
+    /// remembers them as dismissed (`Model::notice_hidden`). A meeting is held by the calendar:
+    /// its × is `CalendarDismiss`.
     pub fn held(self) -> bool {
         !matches!(self, Kind::SettingsProblem | Kind::SettingsRetired | Kind::SettingsRestart | Kind::Start)
     }
@@ -104,12 +115,15 @@ pub enum About {
 #[serde(rename_all = "snake_case")]
 pub enum Offer {
     OpenSettings,
+    /// The meeting's link: opened only on the user's click (`CalendarJoin`).
+    Join,
 }
 
 impl Offer {
     pub fn label(self) -> &'static str {
         match self {
             Offer::OpenSettings => "Open settings",
+            Offer::Join => "Join",
         }
     }
 }
@@ -126,12 +140,21 @@ impl Notice {
     }
 
     /// A level glyph, so the level is not said by colour alone. Never a cross: × is Dismiss.
-    /// An error's `!` is drawn in a filled circle (`round`).
+    /// An error's `!` is drawn in a filled circle (`notice_bar::glyph`).
     pub fn glyph(&self) -> &'static str {
         match self.level() {
             Level::Error => "!",
+            Level::Meeting => "◷",
             Level::Warning => "▲",
             Level::Info => "ⓘ",
+        }
+    }
+
+    /// What the state says of it: a meeting's title is never there.
+    pub fn public_text(&self) -> &str {
+        match self.kind {
+            Kind::Meeting => MEETING,
+            _ => &self.text,
         }
     }
 }
@@ -223,6 +246,7 @@ mod tests {
             (Start, Level::Error, None, false),
             (Keys, Level::Warning, None, true),
             (Editor, Level::Info, None, true),
+            (Meeting, Level::Meeting, Some(Offer::Join), true),
         ];
         for (kind, level, offer, held) in table {
             assert_eq!((kind.level(), kind.offer(), kind.held()), (level, offer, held), "{kind:?}");
@@ -231,9 +255,9 @@ mod tests {
 
     #[test]
     fn no_levels_glyph_reads_as_the_dismissal() {
-        let kinds = [Kind::Failed, Kind::Refused, Kind::Told];
+        let kinds = [Kind::Failed, Kind::Meeting, Kind::Refused, Kind::Told];
         let glyphs: Vec<&str> = kinds.map(|kind| Notice { kind, text: String::new() }.glyph()).to_vec();
-        assert_eq!(glyphs, ["!", "▲", "ⓘ"]);
+        assert_eq!(glyphs, ["!", "◷", "▲", "ⓘ"]);
     }
 
     #[test]
@@ -241,7 +265,7 @@ mod tests {
         use Kind::*;
         use Origin::*;
         let all = [Failed, Refused, Unsaved, Told, SettingsProblem, SettingsRetired, SettingsRestart, Start, Keys];
-        for kind in all.into_iter().chain([Editor]) {
+        for kind in all.into_iter().chain([Editor, Meeting]) {
             let answer = matches!(kind, Refused | Told);
             assert_eq!(kind.about() == About::Sender, answer, "{kind:?}");
             // The user's own always shows; anyone else's only when it is about the app.
@@ -333,6 +357,19 @@ mod tests {
         );
         assert_eq!(shown(&[settings.clone(), told.clone()], std::slice::from_ref(&settings)), Some(told));
         assert_eq!(shown(&[notice(Kind::SettingsProblem, "3:4")], &[settings]).unwrap().text, "3:4");
+    }
+
+    #[test]
+    fn a_meeting_outranks_a_warning_not_an_error_and_its_title_is_never_in_the_state() {
+        let notice = |kind, text: &str| Notice { kind, text: text.into() };
+        let meeting = notice(Kind::Meeting, "Design review · started 1m ago");
+        let (refused, told) = (notice(Kind::Refused, "No repository in /tmp"), notice(Kind::Told, "Made app-fix"));
+        let failed = notice(Kind::Failed, "terminal: no shell");
+        assert_eq!(shown(&[refused.clone(), told.clone(), meeting.clone()], &[]), Some(meeting.clone()));
+        assert_eq!(shown(&[meeting.clone(), failed.clone()], &[]), Some(failed.clone()));
+        assert_eq!((meeting.public_text(), failed.public_text()), (MEETING, "terminal: no shell"));
+        // Held by the calendar: a dismissal through the bar is `CalendarDismiss`, never remembered here.
+        assert!(Kind::Meeting.held());
     }
 
     #[test]

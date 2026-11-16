@@ -681,7 +681,7 @@ function composePicks(value: unknown, at: string): Snapshot["compose_picks"] {
 }
 
 function noticeLevel(value: unknown, at: string): NoticeLevel {
-  if (value === "info" || value === "warning" || value === "error") return value;
+  if (value === "info" || value === "warning" || value === "meeting" || value === "error") return value;
   throw new Error(`${at}: not a level: ${JSON.stringify(value)}`);
 }
 
