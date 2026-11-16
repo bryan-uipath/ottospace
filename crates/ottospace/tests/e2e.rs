@@ -9359,3 +9359,183 @@ fn the_notice_bar_splits_the_top_row_from_the_rest_and_only_the_user_dismisses_i
     assert_eq!((&after["notice"], &after["notice_bar"]), (&failed["error"], &Value::Null));
     assert_eq!((rect(&after["frames"][&pane]), tab(&after)), (rect(&rest["frames"][&pane]), tab(&rest)));
 }
+
+/// The top row as (kind, selected, its tabs' places), hidden spaces left out.
+fn top_row(reply: &Value) -> Vec<(String, bool, Value)> {
+    let spaces = reply["spaces"].as_array().cloned().unwrap_or_default();
+    let space = |s: &Value| (s["of"]["kind"].as_str().unwrap_or("").to_string(), s["selected"] == true, s["tabs"].clone());
+    spaces.iter().filter(|s| s["hidden"] == false).map(space).collect()
+}
+
+/// The kept workspaces' names, as the Workspaces section lists them.
+fn workspace_names(reply: &Value) -> Vec<String> {
+    let rows = reply["workbooks"].as_array().cloned().unwrap_or_default();
+    rows.iter().filter_map(|row| row["name"].as_str().map(str::to_string)).collect()
+}
+
+/// The owner: "as soon we create a app/terminal it should create a new workspace … when we did
+/// it from the home tab". Home is first on the row, holds no tab and no pane, and is where the
+/// user is when the last workspace closes.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_terminal_opened_on_home_is_in_a_new_workspace_and_home_holds_none() {
+    let otto = Otto::launch("home-makes");
+    let (home, book) = (|on: bool| ("home".to_string(), on, json!([])), |on: bool, tabs: Value| ("workbook".to_string(), on, tabs));
+    let start = otto.call(json!({"cmd": "state"}));
+    assert_eq!((top_row(&start), &start["state"]["tabs"], &start["state"]["active"]), (vec![home(true)], &json!([]), &Value::Null));
+    assert!(start["home"].is_object() && workspace_names(&start).is_empty(), "{start}");
+    // Home is its icon alone, with no ×: drawn, labelled for sneak mode, narrower than a named space.
+    let drawn = otto.drawn();
+    let icon = rect(&drawn["space_rects"][0]);
+    assert!(icon[2] > 20. && icon[2] < 60., "an icon's width: {icon:?}");
+    assert_eq!(otto.control("space:0"), icon.map(f64::from));
+    // ⌘D: a terminal, in a workspace made for it, named as + names one, selected.
+    let made = otto.user_key("cmd-d");
+    assert_eq!((top_row(&made), workspace_names(&made)), (vec![home(false), book(true, json!([0]))], vec!["Workspace 2".to_string()]));
+    assert_eq!((pane_ids(&made), &made["state"]["active"], &made["state"]["tabs"][0]["title"]), (vec![1], &json!(0), &json!("Tab 1")));
+    assert!(made["home"].is_null(), "a workspace is on show: {made}");
+    // Its × takes it off the row: Home is on show, the terminal goes on, and it stays listed.
+    let hidden = otto.user_key("cmd-ctrl-w");
+    assert_eq!((top_row(&hidden), pane_ids(&hidden), workspace_names(&hidden).len()), (vec![home(true)], vec![1], 1));
+    assert!(hidden["home"].is_object() && hidden["state"]["active"].is_null(), "{hidden}");
+    // Home stays, whatever is asked: its × is not there, and ⌘⌃W on it hides nothing.
+    assert_eq!(top_row(&otto.user_key("cmd-ctrl-w")), vec![home(true)]);
+    // Again from Home: another workspace, under the lowest free name.
+    let second = otto.user_key("cmd-d");
+    assert_eq!(workspace_names(&second), ["Workspace 2", "Workspace 3"]);
+    assert_eq!((top_row(&second), pane_ids(&second)), (vec![home(false), book(true, json!([1]))], vec![1, 2]));
+    // Its last tab closed: the workspace leaves the row, and Home is on show again.
+    let closed = otto.call(json!({"cmd": "close_tab"}));
+    assert_eq!((top_row(&closed), pane_ids(&closed)), (vec![home(true)], vec![1]));
+    assert!(closed["home"].is_object(), "{closed}");
+    // ⌘T on Home: a workspace with one empty tab; ⌘⌃1 is Home.
+    let tab = otto.user_key("cmd-t");
+    assert_eq!((top_row(&tab).len(), &tab["state"]["layout"], workspace_names(&tab).len()), (2, &Value::Null, 3));
+    assert!(tab["home"].is_null(), "an empty workspace is not Home: {tab}");
+    let back = otto.user_key("cmd-ctrl-1");
+    assert!(back["home"].is_object() && top_row(&back)[0].1, "{back}");
+}
+
+/// A client's pane or tab while Home is selected is not Home's: the workspace selected last
+/// takes it, and one is made only when there is none.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_clients_split_on_home_goes_to_the_workspace_selected_last_or_makes_one() {
+    let otto = Otto::launch("home-clients");
+    let kinds = |reply: &Value| -> Vec<Value> {
+        reply["state"]["tabs"].as_array().unwrap().iter().map(|tab| tab["space"].clone()).collect()
+    };
+    let book = json!({"kind": "workbook", "id": 1});
+    // No workspace yet: one is made, kept like any other, and selected.
+    let first = otto.call(json!({"cmd": "split"}));
+    assert_eq!((workspace_names(&first), kinds(&first), pane_ids(&first)), (vec!["Workspace 2".to_string()], vec![book.clone()], vec![1]));
+    assert_eq!(top_row(&first).iter().map(|space| space.1).collect::<Vec<_>>(), [false, true]);
+    // From Home again: a tab of that workspace, and no second workspace.
+    assert!(otto.call(json!({"cmd": "select_space", "index": 0}))["home"].is_object());
+    let again = otto.call(json!({"cmd": "split"}));
+    assert_eq!((workspace_names(&again).len(), kinds(&again), pane_ids(&again)), (1, vec![book.clone(), book.clone()], vec![1, 2]));
+    assert_eq!((&again["state"]["active"], &again["state"]["focused"], &again["home"]), (&json!(1), &json!(2), &Value::Null));
+    // A new tab the same; Home's own tab is no place on the bar.
+    otto.call(json!({"cmd": "select_space", "index": 0}));
+    let tab = otto.call(json!({"cmd": "new_tab"}));
+    assert_eq!((workspace_names(&tab).len(), kinds(&tab).len(), &tab["state"]["active"]), (1, 3, &json!(2)));
+    assert_eq!(otto.raw(r#"{"cmd":"select_tab","index":3}"#)["ok"], false);
+    assert_eq!(otto.raw(r#"{"cmd":"move_pane","pane":1,"tab":3}"#)["ok"], false);
+    // The workspace hidden: it is still the one selected last, and comes back with the pane.
+    otto.call(json!({"cmd": "hide_space", "index": 1}));
+    let shown = otto.call(json!({"cmd": "split"}));
+    assert_eq!((workspace_names(&shown).len(), top_row(&shown).len(), pane_ids(&shown)), (1, 2, vec![1, 2, 3]));
+}
+
+/// `layout.json` as the build before Home wrote it: the first space, "Workspace", held tabs.
+const LAYOUT_BEFORE_HOME: &str = r#"{"version": 1, "selected": 0, "section": null,
+  "drawer": {"task": null, "open": false, "width": 480.0, "wide": false},
+  "tabs": [
+    {"title": "notes", "focused": 1, "layout": {"leaf": 1}, "panes": [{"id": 1, "kind": {"type": "terminal"}}], "space": 0},
+    {"title": "Tab 2", "layout": null, "panes": [], "space": 0}
+  ],
+  "spaces": [{"kind": "workspace", "tab": 0}]}"#;
+
+/// Upgrade with nothing lost: the first Workspace's tabs are an ordinary kept workspace named
+/// "Workspace", selected as it was; an empty first Workspace is just Home.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn an_older_layouts_first_workspace_becomes_a_kept_workspace_and_an_empty_one_just_home() {
+    let home = user_folder("before-home", r#"{"repos": []}"#);
+    std::fs::write(home.join("layout.json"), LAYOUT_BEFORE_HOME).unwrap();
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let titles = |reply: &Value| -> Vec<Value> {
+        reply["state"]["tabs"].as_array().unwrap().iter().map(|tab| tab["title"].clone()).collect()
+    };
+    let upgraded = |reply: &Value| {
+        let row = top_row(reply);
+        assert_eq!(row, [("home".to_string(), false, json!([])), ("workbook".to_string(), true, json!([0, 1]))], "{reply}");
+        assert_eq!((workspace_names(reply), titles(reply)), (vec!["Workspace".to_string()], vec![json!("notes"), json!("Tab 2")]));
+        assert_eq!((pane_ids(reply), &reply["state"]["active"], &reply["home"]), (vec![1], &json!(0), &Value::Null));
+    };
+    {
+        let mut otto = Otto::launch_with("before-home-1", &env);
+        let first = otto.call(json!({"cmd": "state"}));
+        upgraded(&first);
+        // Its terminal runs: the tab came back whole.
+        otto.call(json!({"cmd": "type", "pane": 1, "text": "echo up-$((6*7))\r"}));
+        otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^up-42$", "timeout_ms": 40000}));
+        otto.wait_for("the workspace's file", |_| (workbook_files(&home).len() == 1).then_some(()));
+        otto.call(json!({"cmd": "quit"}));
+        exits(&mut otto);
+    }
+    // The next run reads what this build wrote: the same workspace, and no second one.
+    {
+        let mut otto = Otto::launch_with("before-home-2", &env);
+        upgraded(&otto.call(json!({"cmd": "state"})));
+        assert_eq!(workbook_files(&home).len(), 1);
+        otto.call(json!({"cmd": "quit"}));
+        exits(&mut otto);
+    }
+    let _ = std::fs::remove_dir_all(&home);
+    // An empty first Workspace: Home alone, and no workspace is made for nothing.
+    let home = user_folder("before-home-empty", r#"{"repos": []}"#);
+    let empty = LAYOUT_BEFORE_HOME.replace(r#"{"title": "notes", "focused": 1, "layout": {"leaf": 1}, "panes": [{"id": 1, "kind": {"type": "terminal"}}], "space": 0},"#, "");
+    assert_ne!(empty, LAYOUT_BEFORE_HOME);
+    std::fs::write(home.join("layout.json"), empty).unwrap();
+    let otto = Otto::launch_with("before-home-3", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let alone = otto.call(json!({"cmd": "state"}));
+    assert_eq!((top_row(&alone), &alone["state"]["tabs"]), (vec![("home".to_string(), true, json!([]))], &json!([])));
+    assert!(alone["home"].is_object() && workbook_files(&home).is_empty(), "{alone}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// ⌘N on Home: the task gets a workspace of its own. In a workspace it joins (another test).
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_task_started_on_home_gets_its_own_workspace() {
+    let root = support::temp(&format!("ottospace-e2e-home-task-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, sessions) = (root.join("bin"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    let settings =
+        json!({"repos": [], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("home-task", &settings.to_string());
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("home-task", &env);
+    // A workspace with a terminal, then Home again.
+    otto.user_key("cmd-d");
+    let on_home = otto.user_key("cmd-ctrl-1");
+    assert!(on_home["home"].is_object(), "{on_home}");
+    otto.user_key("cmd-n");
+    let typed = otto.user_key("m i n e");
+    assert_eq!(typed["compose_plan_line"], Value::Null, "it joins no workspace: {typed}");
+    let started = otto.user_key("enter");
+    let task = started["state"]["talk"]["task"].as_u64().expect("the drawer is on the new task");
+    // Its own space at the row's end, selected, with one empty tab; the workspace keeps its tab
+    // and Home holds none.
+    let row = top_row(&started);
+    let kinds: Vec<&str> = row.iter().map(|space| space.0.as_str()).collect();
+    assert_eq!((kinds, row[2].1, &row[2].2, &row[0].2), (vec!["home", "workbook", "task"], true, &json!([1]), &json!([])));
+    assert_eq!((&started["spaces"][2]["of"]["id"], pane_ids(&started), &started["home"]), (&json!(task), vec![1], &Value::Null));
+    assert_eq!(started["workbooks"][0]["task"], Value::Null, "the workspace is not the task's");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
