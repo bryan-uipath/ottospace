@@ -2401,7 +2401,9 @@ pub use spaces::{HOME, HOME_TAB, Owner, Space};
 pub mod chat;
 pub mod editor;
 mod worktrees;
-pub use worktrees::{MOVE_RETRY_MS, MOVE_WAIT_MS, subagent_path};
+pub(crate) use worktrees::subagent_path;
+#[cfg(test)]
+use worktrees::{MOVE_RETRY_MS, MOVE_WAIT_MS};
 
 #[derive(Debug, Serialize)]
 pub struct Model {

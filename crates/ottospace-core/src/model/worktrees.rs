@@ -12,8 +12,8 @@ use crate::workbook::Workbook;
 
 /// How often a folder an agent moved into, that the Repos list does not hold yet, is looked for
 /// again (ms), and for how long: a worktree made a moment ago may not be read yet.
-pub const MOVE_RETRY_MS: u64 = 2_000;
-pub const MOVE_WAIT_MS: u64 = 10_000;
+pub(crate) const MOVE_RETRY_MS: u64 = 2_000;
+pub(crate) const MOVE_WAIT_MS: u64 = 10_000;
 
 /// A folder a task's agent said it works in, not yet a listed checkout of its repository.
 #[derive(Clone, Debug, PartialEq)]
@@ -32,7 +32,7 @@ fn paths(repo: &crate::repos::Repo) -> impl Iterator<Item = &str> {
 
 /// True if `path` is in a worktree an agent's sub-agent made: Claude Code's
 /// `<repo>/.claude/worktrees/agent-<id>`. Such a move is never the task's.
-pub fn subagent_path(path: &str) -> bool {
+pub(crate) fn subagent_path(path: &str) -> bool {
     let parts: Vec<&str> = path.split('/').collect();
     parts.windows(3).any(|w| w[0] == ".claude" && w[1] == "worktrees" && w[2].starts_with("agent-"))
 }
