@@ -20,6 +20,8 @@ pub struct Made {
     pub repo: String,
     /// The folder asked for, as asked (`result` has it resolved).
     pub asked: String,
+    /// As asked: a new task's.
+    pub fresh: bool,
     pub result: Result<String, String>,
 }
 
@@ -30,7 +32,7 @@ pub fn start(repo: String, branch: String, path: String, root: String, fresh: bo
     std::thread::spawn(move || {
         let made = add(Path::new(&repo), &branch, Path::new(&path), Path::new(&root), fresh);
         let result = made.map(|target| target.to_string_lossy().into_owned());
-        let _ = done.send(Made { repo, asked: path, result });
+        let _ = done.send(Made { repo, asked: path, fresh, result });
     });
 }
 
@@ -40,11 +42,12 @@ pub fn start(repo: String, branch: String, path: String, root: String, fresh: bo
 fn add(repo: &Path, branch: &str, path: &Path, root: &Path, fresh: bool) -> Result<PathBuf, String> {
     let local = format!("refs/heads/{branch}");
     let exists = git(repo, &["rev-parse", "--verify", "--quiet", &local])?.0;
-    if fresh && (exists || any_remote_branch(repo, branch)?) {
+    if fresh && (exists || !remote_refs(repo, branch)?.is_empty()) {
         return Err(format!("A branch {branch} is there already: no worktree made"));
     }
     let (target, made) = target(path, root)?;
-    let remote = if exists { None } else { remote_branch(repo, branch) };
+    // Fresh: never a remote's, even one fetched since the check; `-b` refuses a local one made since.
+    let remote = if exists || fresh { None } else { remote_branch(repo, branch) };
     let target = target.as_os_str();
     let args: Vec<&OsStr> = match (exists, &remote) {
         (true, _) => {
@@ -77,25 +80,22 @@ fn add(repo: &Path, branch: &str, path: &Path, root: &Path, fresh: bool) -> Resu
     Err(said)
 }
 
-/// True if any remote has a branch of that name (`refs/remotes/*/<branch>`).
-fn any_remote_branch(repo: &Path, branch: &str) -> Result<bool, String> {
+/// The remotes' branches of that name (`origin/feat/map`, from `refs/remotes/*/<branch>`).
+fn remote_refs(repo: &Path, branch: &str) -> Result<Vec<String>, String> {
     let pattern = format!("refs/remotes/*/{branch}");
-    let (ok, out) = git(repo, &["for-each-ref", "--format=%(refname)", &pattern])?;
-    if !ok {
-        return Err(git_said(&out));
+    let mut command = crate::child::git(repo);
+    command.args(["for-each-ref", "--format=%(refname)", &pattern]);
+    let said = crate::child::run(command, TIMEOUT, MAX_OUTPUT)?;
+    if !said.ok {
+        return Err(git_said(&said.err));
     }
-    Ok(!out.trim().is_empty())
+    Ok(said.out.lines().filter_map(|line| line.strip_prefix("refs/remotes/")).map(String::from).collect())
 }
 
 /// The one remote's branch of that name (`origin/feat/map`), if exactly one remote has it.
 fn remote_branch(repo: &Path, branch: &str) -> Option<String> {
-    let pattern = format!("refs/remotes/*/{branch}");
-    let mut command = crate::child::git(repo);
-    command.args(["for-each-ref", "--format=%(refname)", &pattern]);
-    let said = crate::child::run(command, TIMEOUT, MAX_OUTPUT).ok().filter(|said| said.ok)?;
-    let refs: Vec<&str> = said.out.lines().filter_map(|line| line.strip_prefix("refs/remotes/")).collect();
-    match refs[..] {
-        [one] => Some(one.to_string()),
+    match &remote_refs(repo, branch).ok()?[..] {
+        [one] => Some(one.clone()),
         _ => None,
     }
 }

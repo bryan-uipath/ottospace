@@ -812,8 +812,14 @@ const MAKERS: &[Make] = &[
     |g| Action::RepoClick { path: g.repo_path(), axis: g.axis() },
     |g| Action::RepoFold { path: g.repo_path(), fold: g.rng.pick(&[None, Some(true), Some(false)]) },
     |g| Action::WorktreeEdit { repo: g.repo_path() },
-    |g| Action::WorktreeAdded { repo: g.repo_path(), path: g.repo_path(), asked: g.asked(), repos: g.repos() },
-    |g| Action::WorktreeFailed { asked: g.asked(), repos: g.repos() },
+    |g| Action::WorktreeAdded {
+        repo: g.repo_path(),
+        path: g.repo_path(),
+        asked: g.asked(),
+        fresh: g.rng.pick(&[true, false]),
+        repos: g.repos(),
+    },
+    |g| Action::WorktreeFailed { asked: g.asked(), fresh: g.rng.pick(&[true, false]), repos: g.repos() },
     |g| {
         let branches = g.m.repos.iter().flat_map(|r| r.checkouts()).map(|c| crate::prs::Branch {
             path: c.path,
@@ -2679,7 +2685,7 @@ impl Run {
             );
             // A new task's worktree made: only its workspace of that one task, to that worktree.
             let waited = match &action {
-                Action::WorktreeAdded { asked, path, .. } => {
+                Action::WorktreeAdded { asked, path, fresh: true, .. } => {
                     making_before.iter().find(|w| w.asked == *asked).map(|w| (w.task, path.clone()))
                 }
                 _ => None,
@@ -3211,7 +3217,7 @@ impl Run {
                     let switched = switching.contains(subject) && matches!(action, Action::AgentExited { .. });
                     let resumes = matches!(start, agents::Start::Resume { .. });
                     // And the worktree the user's ↵ asked for, made: the task they started starts there.
-                    let made = matches!(&action, Action::WorktreeAdded { asked: at, .. }
+                    let made = matches!(&action, Action::WorktreeAdded { asked: at, fresh: true, .. }
                         if making_before.iter().any(|w| Subject::Task(w.task) == *subject && w.asked == *at));
                     let made = made && !resumes && origin == Origin::System;
                     ensure!(

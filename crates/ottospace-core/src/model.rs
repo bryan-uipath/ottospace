@@ -673,18 +673,20 @@ pub enum Action {
         repo: String,
     },
     /// The shell made the worktree at `path` of the repository at `repo`: `repos` as read after.
-    /// `asked`: the path `Effect::AddWorktree` named. A new task's (the box's choice): its agent
+    /// `asked`, `fresh`: as `Effect::AddWorktree` named them. A new task's (`fresh`): its agent
     /// starts there. Else it opens as its row's click would. A failure is the shell's to say.
     WorktreeAdded {
         repo: String,
         path: String,
         asked: String,
+        fresh: bool,
         repos: Vec<Repo>,
     },
     /// The shell could not make the worktree `Effect::AddWorktree` asked for at `asked` (it said
-    /// why): `repos` as read after. A new task's waits, unstarted, in its checkout.
+    /// why): `repos` as read after. A new task's (`fresh`) waits, unstarted, in its checkout.
     WorktreeFailed {
         asked: String,
+        fresh: bool,
         repos: Vec<Repo>,
     },
     /// The open pull requests of the repository at `repo`, as gh last told them, and its checkouts'
@@ -3724,12 +3726,13 @@ impl Model {
                     effects.push(Effect::OpenPr { url: url.to_string() });
                 }
             }
-            Action::WorktreeAdded { repo, path, asked, repos } => {
+            Action::WorktreeAdded { repo, path, asked, fresh, repos } => {
                 self.repos = repos::arrange(repos);
                 self.repo_field_gone();
                 self.follow_moves();
                 self.repos_folded.retain(|folded| *folded != repo);
-                match self.making.iter().position(|making| making.asked == asked) {
+                // Only a fresh answer is a task's: a + made at the same folder is not.
+                match self.making.iter().position(|making| fresh && making.asked == asked) {
                     // The box's choice: the task works there, and its agent starts.
                     Some(at) => {
                         let making = self.making.remove(at);
@@ -3739,12 +3742,12 @@ impl Model {
                     None => self.repo_click(path, Axis::Right, true, effects),
                 }
             }
-            Action::WorktreeFailed { asked, repos } => {
+            Action::WorktreeFailed { asked, fresh, repos } => {
                 self.repos = repos::arrange(repos);
                 self.repo_field_gone();
                 self.follow_moves();
                 // A new task's waits in its checkout, unstarted: its Start is the user's.
-                self.making.retain(|making| making.asked != asked);
+                self.making.retain(|making| !fresh || making.asked != asked);
             }
             Action::RestoreTasks { tasks, floor } => {
                 self.tasks.restore(tasks, floor);
@@ -8140,8 +8143,8 @@ mod tests {
             Action::RepoClick { path: text(), axis: Right },
             Action::RepoFold { path: text(), fold: None },
             Action::WorktreeEdit { repo: text() },
-            Action::WorktreeAdded { repo: text(), path: text(), asked: text(), repos: Vec::new() },
-            Action::WorktreeFailed { asked: text(), repos: Vec::new() },
+            Action::WorktreeAdded { repo: text(), path: text(), asked: text(), fresh: true, repos: Vec::new() },
+            Action::WorktreeFailed { asked: text(), fresh: true, repos: Vec::new() },
             Action::SetPrs { repo: text(), prs: Vec::new(), branches: Vec::new() },
             Action::PrOpen { path: text() },
             Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
@@ -10217,6 +10220,7 @@ mod tests {
             repo: "/code/app".into(),
             path: path.into(),
             asked: path.into(),
+            fresh: true,
             repos: repos.to_vec(),
         };
         let effects = m.update(made(&path, &repos).sent_by(Origin::System));
@@ -10236,7 +10240,20 @@ mod tests {
         m.update(Action::OpenCompose { text: "deploy".into() });
         m.update(Action::ComposeWorktree { new: Some(true) });
         m.update(Action::ComposeEnter);
-        let failed = Action::WorktreeFailed { asked: format!("{root}/app/deploy"), repos: repos.clone() };
+        let deploy = format!("{root}/app/deploy");
+        // A + answer at the same folder is not the task's: it still waits.
+        let theirs = |fresh| Action::WorktreeFailed { asked: deploy.clone(), fresh, repos: repos.clone() };
+        let plus = Action::WorktreeAdded {
+            repo: "/code/app".into(),
+            path: deploy.clone(),
+            asked: deploy.clone(),
+            fresh: false,
+            repos: repos.clone(),
+        };
+        assert_eq!(started_in(&m.update(plus.sent_by(Origin::System)), 3), None);
+        m.update(theirs(false).sent_by(Origin::System));
+        assert_eq!(m.talk_note().as_deref(), Some("making its worktree deploy…"));
+        let failed = theirs(true);
         assert_eq!(m.refusal(&failed, Origin::Socket), Some(repos::USERS_ALONE));
         assert_eq!(m.update(failed.sent_by(Origin::System)), []);
         assert_eq!((m.talk_note(), m.talk_resumes()), (None, Some(false)));
@@ -13443,7 +13460,13 @@ mod tests {
         // Made: the list as read again, and a terminal there in a workspace named for it.
         let mut repos = listed();
         repos[0].worktrees.push(repos::Worktree { name: "fix-zoom".into(), path: path.into(), branch: None });
-        let made = Action::WorktreeAdded { repo: "/code/app".into(), path: path.into(), asked: path.into(), repos };
+        let made = Action::WorktreeAdded {
+            repo: "/code/app".into(),
+            path: path.into(),
+            asked: path.into(),
+            fresh: false,
+            repos,
+        };
         assert_eq!(m.refusal(&made, Origin::Socket), Some(repos::USERS_ALONE));
         assert_eq!(m.update(made.sent_by(Origin::System)), [Effect::Opened(1)]);
         assert_eq!((m.pane(1).and_then(|p| p.cwd.as_deref()), m.space()), (Some(path), &WORKSPACE));

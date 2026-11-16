@@ -4340,21 +4340,21 @@ impl Workspace {
     /// Worktrees git made, or did not: the list is read again; a made one opens, a failure is said.
     fn take_worktrees(&mut self, window: &Window, cx: &mut Context<Self>) {
         let made: Vec<worktree::Made> = self.worktrees.1.try_iter().collect();
-        for worktree::Made { repo, asked, result } in made {
+        for worktree::Made { repo, asked, fresh, result } in made {
             let repos = repos::scan();
             match result {
                 // Made from a repository listed only as a worktree of another: not in the list to open.
                 Ok(path) if !repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == path)) => {
                     self.error = Some(format!("Made {path}: its repository is not listed"));
-                    self.dispatch(Action::WorktreeFailed { asked, repos }, Origin::System, window, cx);
+                    self.dispatch(Action::WorktreeFailed { asked, fresh, repos }, Origin::System, window, cx);
                 }
                 Ok(path) => {
-                    let made = Action::WorktreeAdded { repo, path, asked, repos };
+                    let made = Action::WorktreeAdded { repo, path, asked, fresh, repos };
                     drop(self.dispatch(made, Origin::System, window, cx))
                 }
                 Err(why) => {
                     self.error = Some(why);
-                    self.dispatch(Action::WorktreeFailed { asked, repos }, Origin::System, window, cx);
+                    self.dispatch(Action::WorktreeFailed { asked, fresh, repos }, Origin::System, window, cx);
                 }
             }
             cx.notify();
