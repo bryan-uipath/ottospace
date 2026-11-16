@@ -11,6 +11,8 @@ fn item(name: &'static str, action: impl Action) -> MenuItem {
 /// The menu bar. A feature that is off has no item: Marks' go with `marks`.
 pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
     let marks = features.on(ottospace_core::features::Feature::Marks);
+    let transcripts = features.on(ottospace_core::features::Feature::Transcripts);
+    let transcribe = [MenuItem::separator(), item("Start or Stop Transcribing", listen::Transcribe)];
     let mark_tab = [MenuItem::separator(), item("Mark Tab", MarkTab), item("Go to Mark…", MarkJump)];
     vec![
         Menu {
@@ -72,6 +74,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
             ]
             .into_iter()
             .chain(mark_tab.into_iter().filter(|_| marks))
+            .chain(transcribe.into_iter().filter(|_| transcripts))
             .chain([MenuItem::separator(), item("Next Tab", NextTab), item("Previous Tab", PrevTab)])
             .chain([
                 MenuItem::separator(),

@@ -430,6 +430,12 @@ pub enum Request {
     },
     /// For tests: stops the recording. The reply is `{"ok":true,"frames":42}`, not the state.
     RecordStop,
+    /// For tests (`test_refusal`): the transcript on ends as the shell says when its app quits or
+    /// its stream fails (`"why"`: `app_quit` or `stream_failed`). Never for an agent: no client
+    /// ends a transcript.
+    ListenEnd {
+        why: ottospace_core::listen::Ended,
+    },
     /// The user's meetings of `day` (`today`, the default, `tomorrow` or `YYYY-MM-DD`) and the
     /// `days` (1 to 7) from it, busy and free time: `{"ok":true,"configured":true,"meetings":[..],..}`,
     /// not the state. Only what the app holds (today and the next 7 days), never a fetch. Titles
@@ -539,6 +545,7 @@ pub enum Modifier {
 /// `repo_add`: it writes the user's settings, as only the user's own choice in the folder picker does.
 /// `sneak_app_tree`: it would choose what sneak mode labels in another app. `calendar_call`: it
 /// would raise or silence the user's meeting alert. `record_start`: it would film the window.
+/// `listen_end`: it would end the user's transcript.
 pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
     match request {
         _ if e2e => None,
@@ -566,6 +573,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         Request::RecordStart { .. } | Request::RecordStop => {
             Some("record_start and record_stop are for tests (OTTOSPACE_E2E): scripts/shot films its own instance")
         }
+        Request::ListenEnd { .. } => {
+            Some("listen_end is for tests (OTTOSPACE_E2E): only the user, the app or its sound ends a transcript")
+        }
         _ => None,
     }
 }
@@ -579,6 +589,7 @@ pub fn feature_refusal(request: &Request, features: &Features) -> Option<&'stati
         | Request::MarkGo { .. }
         | Request::MarkRemove { .. }
         | Request::MarkRename { .. } => Feature::Marks,
+        Request::ListenEnd { .. } => Feature::Transcripts,
         Request::Section { section } => section.feature()?,
         _ => return None,
     };

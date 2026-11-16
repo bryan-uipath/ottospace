@@ -10,6 +10,8 @@ import type {
   NoticeLevel,
   AppEntry,
   Feature,
+  Listen,
+  ListenLine,
   CalendarReply,
   Meeting,
   TimeSpan,
@@ -1061,7 +1063,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 }
 
 function feature(value: unknown, at: string): Feature {
-  if (value === "marks" || value === "apps_section") return value;
+  if (value === "marks" || value === "apps_section" || value === "transcripts") return value;
   throw wrong(at, "a feature", value);
 }
 
@@ -1327,6 +1329,31 @@ function model(value: unknown, at: string): Model {
     talk_wide: bool(o.talk_wide, `${at}.talk_wide`),
     agents: list(subject)(o.agents, `${at}.agents`),
     features: list(feature)(o.features, `${at}.features`),
+    listen: orNull(listen)(o.listen, `${at}.listen`),
+  };
+}
+
+function listen(value: unknown, at: string): Listen {
+  const o = fields(value, at);
+  const source = fields(o.source, `${at}.source`);
+  return {
+    status: oneOf(["starting", "on", "paused"] as const, "a transcript's status")(o.status, `${at}.status`),
+    source: { pane: num(source.pane, `${at}.source.pane`) },
+    mic: bool(o.mic, `${at}.mic`),
+    auto: bool(o.auto, `${at}.auto`),
+    started_ms: num(o.started_ms, `${at}.started_ms`),
+    paused_ms: num(o.paused_ms, `${at}.paused_ms`),
+    paused_at_ms: orNull(num)(o.paused_at_ms, `${at}.paused_at_ms`),
+  };
+}
+
+function listenLine(value: unknown, at: string): ListenLine {
+  const o = fields(value, at);
+  if (o.paused_ms !== undefined) return { paused_ms: num(o.paused_ms, `${at}.paused_ms`) };
+  return {
+    from: oneOf(["them", "me"] as const, "a speaker")(o.from, `${at}.from`),
+    final: bool(o.final, `${at}.final`),
+    text: str(o.text, `${at}.text`),
   };
 }
 
@@ -1579,6 +1606,8 @@ export function snapshot(value: unknown): Snapshot {
     app_presses: orNull(list(appPress))(o.app_presses, "app_presses"),
     keys_known: orNull(list(str))(o.keys_known, "keys_known"),
     key_reference: orNull(keyReference)(o.key_reference, "key_reference"),
+    listen_lines: orNull(list(listenLine))(o.listen_lines, "listen_lines"),
+    listen_rects: orNull(map(rect))(o.listen_rects, "listen_rects"),
     marks: list(mark)(o.marks, "marks"),
     mark_removed: orNull(str)(o.mark_removed, "mark_removed"),
     workbooks: list(workbook)(o.workbooks, "workbooks"),

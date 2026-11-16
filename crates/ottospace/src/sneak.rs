@@ -109,6 +109,17 @@ impl Controls {
         self.0.borrow().controls.get(id).map(|(shown, _)| *shown)
     }
 
+    /// Each control drawn whose id starts with `prefix`, and where.
+    pub fn drawn_with(&self, prefix: &str) -> BTreeMap<String, Bounds<Pixels>> {
+        let painted = self.0.borrow();
+        painted
+            .controls
+            .iter()
+            .filter(|(id, _)| id.starts_with(prefix))
+            .map(|(id, (shown, _))| (id.clone(), *shown))
+            .collect()
+    }
+
     fn frame(&self) -> u64 {
         self.0.borrow().frame
     }
@@ -291,7 +302,7 @@ impl Workspace {
         }
         let (kind, name) = id.split_once(':').unwrap_or((id, ""));
         let number = name.parse::<u32>().ok();
-        if self.activate_drawer(kind, name, window, cx) {
+        if self.activate_drawer(kind, name, window, cx) || self.click_listen(kind, name, window, cx) {
             return;
         }
         let action = match (kind, name) {

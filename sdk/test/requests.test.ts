@@ -120,6 +120,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.calendarCall({ in_call: false }),
   (c) => c.recordStart({ dir: "/tmp/rec" }),
   (c) => c.recordStop(),
+  (c) => c.listenEnd({ why: "app_quit" }),
   (c) => c.calendar({ day: "tomorrow", days: 2 }),
   (c) => c.calendar({ day: "yesterday" }),
   (c) => c.marks(),

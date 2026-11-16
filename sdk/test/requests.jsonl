@@ -71,6 +71,7 @@
 {"cmd":"calendar_call","in_call":false}
 {"cmd":"record_start","dir":"/tmp/rec"}
 {"cmd":"record_stop"}
+{"cmd":"listen_end","why":"app_quit"}
 {"cmd":"calendar","day":"tomorrow","days":2}
 {"cmd":"calendar","day":"yesterday"}
 {"cmd":"marks"}
