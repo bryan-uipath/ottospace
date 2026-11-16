@@ -987,7 +987,8 @@ fn a_mark_hosts_its_canary_window_again_and_of_two_windows_the_one_with_its_titl
     otto.call(json!({"cmd": "mark_go", "name": "both"}));
     let built = wait_for("both windows in the tab's panes", || Some(state()).filter(|s| titled(s).len() == 2));
     assert_eq!(titled(&built), [(5, "Canary 2".to_string()), (6, "Canary 1".to_string())]);
-    assert_eq!(built["tab_panes"], json!([[], [5, 6]]), "{}", built["state"]["tabs"]);
+    // Home keeps no tab: the built one is a workspace's.
+    assert_eq!(built["tab_panes"], json!([[5, 6]]), "{}", built["state"]["tabs"]);
     assert_eq!(built["hosted"].as_object().map(|h| h.len()), Some(2));
     // The pane marks are of the same windows, under their new ids.
     assert_eq!((&mark(&built, "two")["pane"], &mark(&built, "one")["pane"]), (&json!(5), &json!(6)));
@@ -1117,9 +1118,9 @@ fn a_hosted_window_is_captured_with_the_part_of_its_tree_under_the_circle() {
     // The way back to the app is still offered, and takes it.
     assert_eq!(state()["state"]["back_to"], 1);
 
-    // The window takes a title the rules say to leave alone: it is not captured again. (The task
-    // started in its own space: back to Workspace, where the pane is.)
-    key("cmd-ctrl-1");
+    // The window takes a title the rules say to leave alone: it is not captured again. (Back to
+    // the pane's space, after Home: the workspace made for the app.)
+    key("cmd-ctrl-2");
     canary.call(json!({"cmd": "retitle", "index": 0, "title": "Private notes"}));
     let refused = wait_for("the capture to be refused", || {
         let mut stream = UnixStream::connect(&otto.socket).ok()?;

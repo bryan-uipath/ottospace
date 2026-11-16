@@ -224,9 +224,9 @@ export interface Tab {
   space: Owner;
 }
 
-/** Whose a space of the top row is: Workspace (always first), a task's, a session's that is no task's, a workspace of the user's (`workbook`: the name it had). */
+/** Whose a space of the top row is: Home (always first; it holds no tab and no pane), a task's, a session's that is no task's, a workspace of the user's (`workbook`: the name it had). */
 export type Owner =
-  | { kind: "workspace" }
+  | { kind: "home" }
   | { kind: "task"; id: TaskId }
   | { kind: "session"; runner: string; id: string }
   | { kind: "workbook"; id: number };
@@ -698,7 +698,7 @@ export interface Palette {
   query: string;
   /** An index into `palette_rows`. */
   selected: number;
-  /** Move Tab to…: the spaces it lists (Workspace, the live tasks, the user's workspaces), in order; null while it lists commands. */
+  /** Move Tab to…: the spaces it lists (the live tasks, the user's workspaces), in order; null while it lists commands. */
   tasks: PaletteTask[] | null;
   /** Features…: the flags it lists, each with whether it is on; null while it lists commands. */
   features: PaletteFeature[] | null;
@@ -926,9 +926,10 @@ export interface Mark {
 export interface Model {
   /** Panes of every tab. */
   panes: Pane[];
+  /** The tabs of the workspaces. Home has none. */
   tabs: Tab[];
-  /** Index into `tabs`. */
-  active: number;
+  /** Index into `tabs`; null while Home is on show. */
+  active: number | null;
   layout: Layout | null;
   focused: PaneId | null;
   /** The app pane that has the keyboard. */
@@ -1277,7 +1278,7 @@ export interface Snapshot {
     brief: { task: TaskId; dir: string | null } | null;
   };
   /** The right drawer: where its conversation is drawn, each agent by task id (a session's: `<runner>:<id>`), and why no agent runs for the conversation on show. */
-  /** The top row's spaces in order, hidden ones too: Workspace first. */
+  /** The top row's spaces in order, hidden ones too: Home first, with no tabs. */
   spaces: SpaceRow[];
   /** Each live task's badge letters, by task id: the same on the bar, its panes, its row and the rail. */
   badges: Record<string, string>;

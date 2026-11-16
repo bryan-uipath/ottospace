@@ -42,7 +42,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.hideSpace(),
   (c) => c.hideSpace({ index: 1 }),
   (c) => c.openSpace({ space: { kind: "task", id: 1 } }),
-  (c) => c.openSpace({ space: { kind: "workspace" } }),
+  (c) => c.openSpace({ space: { kind: "home" } }),
   (c) => c.closeTab({ index: 1 }),
   (c) => c.pickerQuery({ query: "term" }),
   (c) => c.pickerMove({ delta: 1 }),

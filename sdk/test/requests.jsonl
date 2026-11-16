@@ -23,7 +23,7 @@
 {"cmd":"hide_space"}
 {"cmd":"hide_space","index":1}
 {"cmd":"open_space","space":{"kind":"task","id":1}}
-{"cmd":"open_space","space":{"kind":"workspace"}}
+{"cmd":"open_space","space":{"kind":"home"}}
 {"cmd":"close_tab","index":1}
 {"cmd":"picker_query","query":"term"}
 {"cmd":"picker_move","delta":1}

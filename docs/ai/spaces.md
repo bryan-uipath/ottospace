@@ -33,9 +33,34 @@ Built (stage 1):
   tab; `a` on a row in list mode or File ▸ Add Tab to Workspace…; Save All Tabs as Workspace. A tab made in a workspace is kept by
   session restore (`layout.json`) while its space is open or hidden, and in the workspace's own
   file only once saved.
-- **The first space, "Workspace"**, stays as it was: always first, never hidden, in no file and
-  not in the section. It is the home of tabs that are of nothing (below). Folding it into the
-  list did not fall out naturally: it has no file and cannot be deleted.
+- **Home** replaced the first space, "Workspace" (below, "Home").
+
+## Home (built)
+
+The owner: Home is the first item of the top row, a house with no word and no ×. It never holds a
+pane: what you open there gets its own workspace.
+
+- **Home** (`Owner::Home`) is always first and never hidden, in no file and not in the section.
+  ⌘⌃1, "Go to Home" in the palette and the View menu select it. It holds one fixed empty tab of
+  its own (`HOME_TAB`), its screen: the home screen (tasks that need you, the nodes, the key
+  caps). The state leaves that tab out of `tabs` and says `active: null` there.
+- **The user's act on Home makes a workspace.** A pane put there, ⌘T, a Repos click: a NEW kept
+  workspace, selected, named as + names one ("Workspace 2"), or for the folder a Repos click
+  opened. Listed and kept like one made with +.
+- **⌘N on Home**: the task gets a space of its own, as before. In a workspace it joins.
+- **Anything else goes to the workspace selected last**: a client's pane or tab, a stray tab (its
+  task dismissed, its workspace deleted, a session's after a restart), a tab of no space read
+  from `layout.json`. Else the first workspace on the row; else the last selected that is still
+  kept, though closed (it comes back on the row); else one is made. So a client makes a
+  workspace file only while none is kept. A stray tab that holds nothing is closed.
+- Under the user's typing (chat or new-task box) a client's pane on Home leaves Home on show.
+- **How it is modelled**: `Model::settle_home` (`model/spaces.rs`), after every step, moves
+  what is in Home to a workspace by the rules above; `last_spaces` is the selection history.
+  The undo of a dismissal finds its tabs where they went (`unlinked` follows them).
+- **Upgrade**: an older `layout.json` whose first space held a pane: its tabs become a kept
+  workspace named "Workspace", where the first space was on the row. One of empty tabs only is
+  just Home.
+- Property rules: Home holds no pane and only its own tab, after any step from any origin.
 
 ## The row in the Workspaces section
 
@@ -68,12 +93,12 @@ tab never saved with ⌘⇧S is gone), and a tab closed with ⌘⇧W.
 
 ## The model (core: `model/spaces.rs`)
 
-- A **space** is one of: **Workspace** (the first), an open **task**, a **session** the user
+- A **space** is one of: **Home** (the first), an open **task**, a **session** the user
   opened from Other sessions that is no task, an open **workspace** (`Owner::Workbook`).
   `Model::spaces` is the row in order, hidden ones too.
 - Every tab is of exactly one space (`Tab::space`); a space's tabs sit side by side in row order.
   A space has at least one tab: closing its last tab closes the space (it stays in Tasks or
-  Workspaces); the first space gets an empty tab instead.
+  Workspaces). Home keeps its one empty tab.
 - **One selection.** The selected space is the tab on show's. Selecting a space shows the tab it
   showed last. The drawer is only ever on the selected space's conversation: a task's (the one in front, with several) or a
   session's agent; none for a workspace. ⌘⇧L opens and closes the drawer; switching spaces keeps
@@ -89,19 +114,20 @@ tab never saved with ⌘⇧S is gone), and a tab closed with ⌘⇧W.
   it was. Selecting one of its tabs (`SelectTab`, a pane focused, a mark) shows it too.
 - **New task** (⌘N, ↵ in the box): started in a kept workspace or a task's space, the task is
   in that workspace (below, "A task started in a workspace", "Several tasks in one
-  workspace"). Else (from the first space or a session's) its space is made at the row's end
+  workspace"). Else (from Home or a session's) its space is made at the row's end
   with one empty tab and selected.
-- **A task gone** gives its tabs to the workspace it was bound to, else to the first space.
-- **Repos**: a click on a repository or worktree opens a terminal there in a tab of the first
-  space of its own (the empty one on show, else a new one) and selects it. A row a live task
+- **A task gone** gives its tabs to the workspace it was bound to, else to the workspace
+  selected last (Home's rule, below).
+- **Repos**: a click on a repository or worktree opens a terminal there: in the empty tab on
+  show of a workspace, else in a new workspace named for the folder (the user's; a client's
+  goes to the workspace selected last, Home's rule below), and selects it. A row a live task
   works in carries that task's badge, and its click (`RepoClick`) selects the task's space
   instead (the latest started, if several); Terminal, on hover, opens the terminal anyway
   (`OpenRepo`). Stage 2 changes the click.
 - A tab changes space only by: the user's move (drag onto a space, Move Tab to…), a task
   started from it (above), its space gone (task dismissed or deleted, workspace deleted: the
-  first space's), the undo of a dismissal, a session adopted as a task (its space becomes the
-  task's), or its workspace opened (a tab of it in the first space joins the workspace's space).
-  + moves none. The property test checks exactly this.
+  workspace selected last), the undo of a dismissal, a session adopted as a task (its space
+  becomes the task's), or Home's rule (below). + moves none. The property test checks exactly this.
 
 ## Next: a workspace's two links (not built)
 
@@ -115,7 +141,7 @@ workspace with only a task or worktree, and a workspace with both".
   task's space is then a workspace with its task set, not another kind: binding is setting a
   field. A click on a Repos row selects the workspace linked to that worktree, else makes one
   (a terminal there, named for the worktree while it has no task); it no longer opens a tab in
-  the first space. Sessions stay a kind of their own.
+  a new workspace. Sessions stay a kind of their own.
 - With the worktree link: a worktree's workspace gives a task started in it its repository,
   unless the line's `>repo` names another.
 - **Replaced by the owner** ("Several tasks in one workspace", below): a task belongs to one
@@ -141,9 +167,8 @@ the task (right now - a new task/workspace gets created for the task)".
   Deleted while bound, the task keeps the space and its tabs; the delete's Undo binds it again.
   The task's space gone while bound (its last tab closed, or no layout restored): its row
   opens it as its own again, with its saved tabs, unbound.
-- **The first "Workspace"** is not taken: a task started there gets a space of its own, as
-  before. (It becomes Home, which holds no tabs: the next change.) The one-tab exception is
-  gone with `bind_tab`: a Repos tab stays the first space's.
+- **Home** is not taken: a task started there gets a space of its own. The one-tab exception
+  is gone with `bind_tab`.
 - **Unbound when the task goes.** The task dismissed, or deleted: the workspace is its own
   again, where it was on the row, with its tabs. The user's undo of the dismissal binds it
   again. A task that is done but not dismissed keeps its space, as every task does.
@@ -176,7 +201,7 @@ right now"; "i'd expect < 5 so the ui should be suitable for that".
   moves, nothing closes; its conversation is in front. It works in the folder of the task
   that was in front, unless its line names a repository or a folder. The box says "↵ starts
   it in this workspace" (after the plan when there is one) while the workspace holds a pane or
-  a task. Not from the first "Workspace" (a space of its own, until Home) nor a session's.
+  a task. Not from Home (a space of its own) nor a session's.
 - **↵ on a row of the dropdown** takes the row: no task, nothing joined, and the box says
   "↵ completes", not "starts it in this workspace". A click on a tag's cap joins nothing.
 - **⇧↵ (for later) joins nothing**: it has no agent and no conversation to put in front, so it
@@ -225,8 +250,7 @@ right now"; "i'd expect < 5 so the ui should be suitable for that".
    function, one test, cheap to change.
 2. Should a tab made in a workspace be saved into its file without ⌘⇧S ("a workspace is what is
    open in it")? Today the file changes only when the user saves; session restore keeps the rest.
-3. The first space: keep it apart, or make it an ordinary first workspace once links exist
-   (strays then go to the workspace selected last)?
+3. ~~The first space~~: decided, Home (above).
 
 ## Who may do what
 
@@ -239,23 +263,24 @@ tab on show where it was and the keys in the chat (`Model::keep_shown`). The new
 writing is not closed or filed by a client (`BOX_TYPING`). The property test checks both for
 every action of a client or the system. Moving a tab between spaces is the user's alone
 (`TABS_USERS`), so is making a workspace (it writes their file) and opening one (it starts their
-apps): no request was added for +, and a test clicks it as the user. A client's new tab is the
-first space's.
+apps): no request was added for +, and a test clicks it as the user. A client's new tab, or its
+pane on Home, goes to the workspace selected last (Home, above).
 
 ## Kept between runs (`layout.json`, version 1)
 
-`spaces`: each `kind` (`workspace`: the first space; `task`; `workbook` by uid), `hidden`, `tab`
-(its last tab, by place); each tab's `space` (place in `spaces`), and still its `task`, so an
-older build reads it. A file with no `spaces` (an older build's) puts a tab with a live task in
-that task's space, the rest in the first space. An unknown `kind`, a task gone or a workspace not
-kept: the first space's. A session's space is not kept: its tabs come back in the first space. A
+`spaces`: each `kind` (`workspace`: Home, which keeps no tab; `task`; `workbook` by uid),
+`hidden`, `tab` (its last tab, by place); each tab's `space` (place in `spaces`), and still its
+`task`, so an older build reads it; `home`, if Home was on show. A file with no `spaces` (an
+older build's) puts a tab with a live task in that task's space, the rest in the first space,
+which becomes "Workspace" (Home, above). An unknown `kind`, a task gone or a workspace not kept,
+a session's space (not kept): its tabs go to the workspace selected last. A
 workspace made with + is a file with no tabs (`workbooks/<id>.json`): a build before this one
 counts such a file as unread and leaves it alone.
 
 ## Opening and saving a workspace
 
-Opening one builds its closed tabs into its space and selects it; its tabs open in the first
-space (one saved from there) come into its space too, and one of a task's stays the task's. One
+Opening one builds its closed tabs into its space and selects it; a tab of it open in another
+space stays there. One
 with no saved tab opens its space as it is, else with one empty tab. Saving a tab (⌘⇧S) or all
 tabs leaves the tabs where they are. Save All Tabs saves the selected space's tabs as one new
 workspace.

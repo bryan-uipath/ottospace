@@ -121,7 +121,9 @@ impl Model {
 
     /// The tabs on the bar and what the panes of the one on show hold, given what the shell read.
     fn open_now(&self, facts: &[Facts]) -> Open {
-        let tabs = self.tabs.iter().map(|tab| tab.title.clone()).collect();
+        // Home's own tab is no tab on the bar.
+        let tabs = self.tabs.iter().filter(|tab| tab.id != crate::model::HOME_TAB).map(|tab| tab.title.clone());
+        let tabs = tabs.collect();
         let panes = self.shown().into_iter().filter_map(|id| self.source_of(self.pane(id)?, facts)).collect();
         Open { tabs, panes }
     }
@@ -693,7 +695,8 @@ mod tests {
         m.update(Action::BriefClose);
         m.update(Action::BriefShow { id: 1 });
         assert_eq!(m.brief, Some(1));
-        m.update(Action::TabPlace { tab: None, at: crate::model::TabAt::End(crate::model::Owner::Workspace) });
+        // To the workspace it came from: Home takes no tab.
+        m.update(Action::TabPlace { tab: None, at: crate::model::TabAt::End(crate::model::Owner::Workbook { id: 1 }) });
         assert_eq!(m.brief, None);
         m.update(Action::BriefShow { id: 1 });
         assert_eq!(m.brief, None, "its tabs are not on show");

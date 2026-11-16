@@ -404,8 +404,8 @@ function tab(value: unknown, at: string): Tab {
 function owner(value: unknown, at: string): Owner {
   const o = fields(value, at);
   switch (o.kind) {
-    case "workspace":
-      return { kind: "workspace" };
+    case "home":
+      return { kind: "home" };
     case "task":
       return { kind: "task", id: num(o.id, `${at}.id`) };
     case "session":
@@ -1295,7 +1295,7 @@ function model(value: unknown, at: string): Model {
   return {
     panes: list(pane)(o.panes, `${at}.panes`),
     tabs: list(tab)(o.tabs, `${at}.tabs`),
-    active: num(o.active, `${at}.active`),
+    active: orNull(num)(o.active, `${at}.active`),
     layout: orNull(layout)(o.layout, `${at}.layout`),
     focused: orNull(num)(o.focused, `${at}.focused`),
     live: orNull(num)(o.live, `${at}.live`),

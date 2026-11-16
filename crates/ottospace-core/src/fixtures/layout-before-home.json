@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "selected": 0,
+  "section": "tasks",
+  "drawer": {
+    "task": null,
+    "open": false,
+    "width": 480.0,
+    "wide": false
+  },
+  "tabs": [
+    {
+      "title": "notes",
+      "focused": 2,
+      "layout": {
+        "split": {
+          "axis": "down",
+          "ratio": 0.4,
+          "a": {
+            "leaf": 1
+          },
+          "b": {
+            "leaf": 2
+          }
+        }
+      },
+      "panes": [
+        {
+          "id": 1,
+          "kind": {
+            "type": "terminal"
+          },
+          "cwd": "/code/app"
+        },
+        {
+          "id": 2,
+          "kind": {
+            "type": "terminal"
+          }
+        }
+      ],
+      "space": 0
+    },
+    {
+      "title": "Tab 2",
+      "layout": null,
+      "panes": [],
+      "space": 0
+    },
+    {
+      "title": "fix zoom",
+      "task": 1,
+      "focused": 1,
+      "layout": {
+        "leaf": 1
+      },
+      "panes": [
+        {
+          "id": 1,
+          "kind": {
+            "type": "terminal"
+          }
+        }
+      ],
+      "space": 1
+    }
+  ],
+  "spaces": [
+    {
+      "kind": "workspace",
+      "tab": 0
+    },
+    {
+      "kind": "task",
+      "task": 1,
+      "tab": 2
+    }
+  ]
+}

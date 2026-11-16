@@ -353,7 +353,7 @@ mod tests {
         let mut m = Model::default();
         m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
         m.update(Action::WorkbookNew { uid: UID.into() });
-        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::SpaceSelect { index: 1 });
         m.update(Action::ToggleSection { section: Section::Workbook });
         m.update(Action::ToggleVisual);
         assert!(m.visual.is_some());
