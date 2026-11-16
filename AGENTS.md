@@ -104,7 +104,7 @@ Rules:
   - `record_start` (`"dir"`) and `record_stop`: ScreenCaptureKit films ottospace's own window
     into `dir`, a raw BGRA file a change and `frames.jsonl` (`record.rs`), for
     `scripts/shot --record`. Outside a test run no client films the window.
-  - `zoom_press`: the window's green button, pressed as the user would (`performZoom:`). The zoom
+  - `zoom_press`: the window's green button, pressed as the user would (`zoom:`). The zoom
     fills the display instead (`ottospace_mac::window::zoom_asks`); refused if that hook is not in,
     so it never zooms the test's window. Outside a test run only the user's hand fills the display.
   - `"repeat":true` on `key`: each key as one still held down. A key that types is a real repeat

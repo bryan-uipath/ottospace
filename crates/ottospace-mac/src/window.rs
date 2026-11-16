@@ -250,15 +250,17 @@ pub fn take_zoom() -> bool {
     ZOOM_ASKED.swap(false, Ordering::SeqCst)
 }
 
-/// Zooms the window as a press of its green button does: through `windowShouldZoom:toFrame:`.
+/// Zooms the window as its green button does (`zoom:`, through `windowShouldZoom:toFrame:`).
+/// True if the zoom asked, as `take_zoom` will say.
 ///
 /// # Safety
 /// As `zoom_asks`.
-pub unsafe fn press_zoom(ns_view: *mut c_void) {
+pub unsafe fn press_zoom(ns_view: *mut c_void) -> bool {
     let view = unsafe { &*(ns_view as *const NSView) };
     if let Some(window) = view.window() {
-        window.performZoom(None);
+        window.zoom(None);
     }
+    ZOOM_ASKED.load(Ordering::SeqCst)
 }
 
 /// Keeps a test run's window drawn wherever the user is: above ordinary windows, and on every
