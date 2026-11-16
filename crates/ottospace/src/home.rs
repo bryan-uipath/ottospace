@@ -20,6 +20,8 @@ use crate::{HOME_ICON, Workspace, open_task, rect, task_tags_cell, task_title_ce
 const PATCH: View = View { cx: 0.5, horizon: 0.05, fx: 0.58, fy: 0.91, sin: 0.5, cos: 0.866, dist: 3.9, lo: -3, hi: 4 };
 /// Where the new-task box starts, as a part of the height.
 const BOX_TOP: f32 = 0.18;
+/// The room kept under an empty tab's key caps, so they sit above the floor.
+const FLOOR_ROOM: f32 = 160.;
 /// Lines are cut into pieces about this long, in points, so each can fade by itself.
 const PIECE: f32 = 24.;
 /// Half the side of a node's click target, and the room kept between a node and the text.
@@ -414,8 +416,12 @@ impl Workspace {
             .child(line)
             .children(needs_you)
             .child(under);
-        let panel =
-            div().absolute().top(relative(BOX_TOP)).left_0().w_full().px_4().flex().justify_center().child(text);
+        // Home's text near the top; an empty tab's caps just above the middle, the floor under them.
+        let panel = match on_home {
+            true => div().absolute().top(relative(BOX_TOP)).left_0().w_full(),
+            false => div().absolute().inset_0().pb(px(FLOOR_ROOM)).items_center(),
+        };
+        let panel = panel.px_4().flex().justify_center().child(text);
 
         if on_home && !any {
             drawn.borrow_mut().legend = Bounds::default();
