@@ -439,9 +439,11 @@ impl Workbooks {
         self.list.iter_mut().find(|book| book.id == id)
     }
 
-    /// `name`, or `name 2`, `name 3`: no two workbooks share a name.
+    /// `name`, or `name 2`, `name 3`: no two workbooks share a name, nor one the name of a
+    /// workbook an undo may bring back.
     fn unique_name(&self, name: &str, but: Option<WorkbookId>) -> String {
-        let taken = |name: &str| self.list.iter().any(|book| Some(book.id) != but && book.name == name);
+        let books = || self.list.iter().chain(self.deleted());
+        let taken = |name: &str| books().any(|book| Some(book.id) != but && book.name == name);
         marks::unique_name(name, "workspace", taken)
     }
 
@@ -488,6 +490,16 @@ impl Workbooks {
             _ => None,
         };
         task.map_or(of.clone(), |id| Owner::Task { id })
+    }
+
+    /// The workbook whose delete may still be taken back.
+    fn deleted(&self) -> Option<&Workbook> {
+        self.offer.as_ref().filter(|offer| offer.change == Change::Deleted).map(|offer| &offer.before)
+    }
+
+    /// Whether a file name is one's: a listed workbook's, or one's that an undo may bring back.
+    fn holds(&self, uid: &str) -> bool {
+        self.list.iter().chain(self.deleted()).any(|book| book.uid == uid)
     }
 
     /// A closed tab is no workbook's any more: a later tab may get its id. Also a tab saved
@@ -795,14 +807,17 @@ impl Model {
 
     /// The lowest "Workspace n" from 2 that no workbook has: "Workspace" is the first space's.
     fn free_name(&self) -> String {
-        let taken = |n: &u32| self.workbooks.list.iter().any(|book| book.name == format!("Workspace {n}"));
+        // Nor the name of one whose delete may still be taken back: it comes back under it.
+        let books = self.workbooks.list.iter().chain(self.workbooks.deleted());
+        let names: Vec<&str> = books.map(|book| book.name.as_str()).collect();
+        let taken = |n: &u32| names.contains(&format!("Workspace {n}").as_str());
         format!("Workspace {}", (2..).find(|n| !taken(n)).unwrap_or(2))
     }
 
     /// +: a new workbook of no tab, its space after the selected one with one empty tab,
     /// selected. Nothing of the tab on show is taken or recorded.
     pub(crate) fn workbook_make(&mut self, uid: String, effects: &mut Vec<Effect>) {
-        if !valid_uid(&uid) || self.workbooks.list.iter().any(|book| book.uid == uid) {
+        if !valid_uid(&uid) || self.workbooks.holds(&uid) {
             return;
         }
         let id = self.workbooks.add(Workbook::new(uid, self.free_name(), Vec::new()));
@@ -858,7 +873,7 @@ impl Model {
         tabs: Vec<(u32, TabRecord)>,
         effects: &mut Vec<Effect>,
     ) -> Option<WorkbookId> {
-        if !valid_uid(&uid) || self.workbooks.list.iter().any(|book| book.uid == uid) {
+        if !valid_uid(&uid) || self.workbooks.holds(&uid) {
             return None;
         }
         let live = tabs.iter().map(|(tab, _)| Some(*tab)).collect();
@@ -1339,8 +1354,10 @@ mod tests {
         assert!(m.workbooks.list.iter().all(|book| book.tabs.is_empty() && book.live.is_empty()));
         m.update(Action::SpaceSelect { index: 0 });
         assert_eq!((m.tabs[0].id, m.layout.clone(), m.panes.clone()), before);
-        // The lowest number free; a file's name used again, or one that is no file name: nothing.
+        // The lowest number free, once the delete can no longer be taken back; a file's name used
+        // again, or one that is no file name: nothing.
         m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        m.update(Action::Tick { now: NOTICE_MS + 1 }.sent_by(Origin::System));
         m.update(Action::WorkbookNew { uid: UID.into() });
         m.update(Action::WorkbookNew { uid: UID.into() });
         m.update(Action::WorkbookNew { uid: "../x".into() });
@@ -1391,6 +1408,47 @@ mod tests {
         m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
         save(&mut m, UID_2, &[]);
         assert_eq!(kept(&m), [("Workspace 2".into(), 2)]);
+    }
+
+    /// Seed 2831, and what a user does with no clash of file names: delete "Workspace 2", +,
+    /// undo. Two workspaces of one name, or of one file.
+    #[test]
+    fn plus_takes_neither_the_name_nor_the_file_of_a_workspace_an_undo_may_bring_back() {
+        let mut m = Model::default();
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        // Its file name again: nothing, while the delete can be taken back. So for a save.
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        save(&mut m, UID, &[]);
+        assert!(names(&m).is_empty());
+        // Another: it skips the name of the deleted one, which comes back under its own.
+        m.update(Action::WorkbookNew { uid: UID_2.into() });
+        assert_eq!(names(&m), ["Workspace 3"]);
+        m.update(Action::WorkbookUndo);
+        assert_eq!(names(&m), ["Workspace 2", "Workspace 3"]);
+        let uids: Vec<&str> = m.workbooks.list.iter().map(|book| book.uid.as_str()).collect();
+        assert_eq!(uids, [UID, UID_2]);
+        // The offer run out, the name and the file name are free again.
+        m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        m.update(Action::Tick { now: NOTICE_MS + 1 }.sent_by(Origin::System));
+        assert_eq!(m.workbooks.offered(), None);
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        assert_eq!(names(&m), ["Workspace 2", "Workspace 3"]);
+    }
+
+    /// A rename does not take it either: the deleted one comes back under its own name.
+    #[test]
+    fn a_rename_takes_no_name_an_undo_may_bring_back() {
+        let mut m = Model::default();
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::WorkbookNew { uid: UID_2.into() });
+        m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        m.workbook_rename(2, None, "Workspace 2");
+        assert_eq!(names(&m), ["Workspace 2 2"]);
+        m.update(Action::WorkbookUndo);
+        assert_eq!(names(&m), ["Workspace 2", "Workspace 2 2"]);
     }
 
     #[test]

@@ -20,7 +20,9 @@ Built (stage 1):
 - **+ makes a new one** (`WorkbookNew`): the top row's + and the section's + (and the empty
   section's "New workspace"). Named "Workspace 2", "Workspace 3": the lowest number no
   workspace has. Its space goes after the selected one with one empty tab, selected. It takes
-  and records no tab: its file has no tabs until one is saved into it. Twice makes two. The
+  and records no tab: its file has no tabs until one is saved into it. Twice makes two. While
+  a delete can still be taken back, + takes neither that workspace's name nor its file name:
+  the undo brings it back as it was. The
   user's alone, as saving is: it writes a file.
 - **New task** is ⌘N and the Tasks section's +. The top row's + no longer opens the box.
 - **× keeps it listed.** Hiding a workspace takes it off the row with its tabs and panes as they

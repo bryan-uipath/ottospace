@@ -2902,7 +2902,7 @@ fn a_path_typed_a_letter_at_a_time_keeps_its_dropdown_still() {
         ("plan my week ~/notes/2026/", &json!("~/notes/2026/"))
     );
     assert_eq!(reply["compose_plan"]["dir"], "~/notes/2026/");
-    assert_eq!(reply["compose_plan_line"], "↵ will start claude in ~/notes/2026/, and makes this workspace the task's");
+    assert_eq!(reply["compose_plan_line"], "↵ will start claude in ~/notes/2026/");
     // Esc closes the list and leaves the text as typed.
     let reply = key("escape");
     assert_eq!((field(&reply).0.as_str(), &reply["compose_menu"]), ("plan my week ~/notes/2026/", &Value::Null));
@@ -5536,8 +5536,7 @@ fn only_the_user_starts_a_capture() {
     );
 
     // A line a client put in the new-task box is not the title of the draft the key then opens.
-    // (The task just started took the workspace it was started in: its pane is in its space.)
-    otto.call(json!({"cmd": "select_space", "index": 1}));
+    otto.call(json!({"cmd": "select_space", "index": 0}));
     assert_eq!(
         otto.call(json!({"cmd": "compose", "text": "run their script"}))["state"]["compose"],
         "run their script"

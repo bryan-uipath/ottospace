@@ -6042,61 +6042,35 @@ impl Model {
         }
     }
 
-    /// The tab that holds the Settings pane, by id: it is the first space's, whatever is bound.
-    fn settings_tab(&self) -> Option<u32> {
-        let pane = self.settings_pane?;
-        let held = self.tab_panes().into_iter().position(|panes| panes.contains(&pane))?;
-        self.tabs.get(held).map(|tab| tab.id)
-    }
-
     /// Whether a space holds anything: a pane in any of its tabs.
     fn space_holds(&self, of: &Owner) -> bool {
         self.tabs.iter().zip(self.tab_panes()).any(|(tab, panes)| tab.space == *of && !panes.is_empty())
     }
 
-    /// The space a task started now by the user's ↵ would take for its own: the selected one, if
-    /// it is a workspace of no task. The first "Workspace" only while it holds a pane (else the
-    /// task gets a space at the row's end, as ever), and never from its Settings tab.
-    pub fn binds(&self) -> Option<Owner> {
-        let of = self.space();
-        match of {
-            Owner::Workbook { id } => self.workbooks.get(*id).filter(|book| book.task.is_none()).map(|_| of.clone()),
-            Owner::Workspace => {
-                let settings = self.settings_tab() == Some(self.tabs[self.active].id);
-                (!settings && self.space_holds(of)).then(|| of.clone())
-            }
-            _ => None,
-        }
+    /// The workspace a task started now by the user's ↵ would take for its own: the selected
+    /// space's, if it is a kept workspace of no task.
+    pub fn binds(&self) -> Option<WorkbookId> {
+        let Owner::Workbook { id } = self.space() else { return None };
+        self.workbooks.get(*id).filter(|book| book.task.is_none()).map(|book| book.id)
     }
 
     /// Whether ↵ in the new-task box would take a workspace that holds something: the box says so.
     pub fn compose_binds(&self) -> bool {
         let starts = self.compose_plan().is_some_and(|plan| plan.starts);
-        starts && self.binds().is_some_and(|of| self.space_holds(&of))
+        starts && self.binds().is_some_and(|id| self.space_holds(&Owner::Workbook { id }))
     }
 
     /// A task started in a workspace of no task takes it: the workspace is the task's space, in
-    /// place on the row, with all its tabs. No pane moves and nothing closes. A kept workspace
-    /// stays listed, bound to the task (`Workbook::task`); the first "Workspace" leaves its
-    /// Settings tab behind and gets an empty tab if it has none left.
+    /// place on the row, with all its tabs. No pane moves and nothing closes. It stays listed,
+    /// bound to the task (`Workbook::task`).
     fn bind_space(&mut self, id: TaskId) {
-        let Some(from) = self.binds() else { return };
-        let (to, settings) = (Owner::Task { id }, self.settings_tab());
-        for tab in self.tabs.iter_mut().filter(|tab| tab.space == from && Some(tab.id) != settings) {
+        let Some(book) = self.binds() else { return };
+        let (from, to) = (Owner::Workbook { id: book }, Owner::Task { id });
+        for tab in self.tabs.iter_mut().filter(|tab| tab.space == from) {
             tab.space = to.clone();
         }
-        match from {
-            Owner::Workbook { id: book } => {
-                self.workbooks.bind(book, Some(id));
-                Self::rename_space(&mut self.spaces, &from, to);
-            }
-            // The first space stays first: the task's is next to it.
-            _ => {
-                let at = self.spaces.iter().position(|space| space.of == from).map_or(0, |at| at + 1);
-                let last = self.spaces.iter().find(|space| space.of == from).and_then(|space| space.last);
-                self.spaces.insert(at, Space { of: to, hidden: false, last });
-            }
-        }
+        self.workbooks.bind(book, Some(id));
+        Self::rename_space(&mut self.spaces, &from, to);
         self.regroup();
     }
 
@@ -8891,70 +8865,34 @@ mod tests {
         m.tabs.iter().zip(m.tab_panes()).map(|(tab, panes)| (tab.id, panes)).collect()
     }
 
-    /// The owner: "if i have a workspace w/o an active task, and i'm focused in it, and I press
-    /// command+n for a new task ... the active workspace should now be attached to the task".
+    /// The first "Workspace" is not taken: a task started there gets a space of its own.
     #[test]
-    fn a_task_started_in_the_first_workspace_takes_its_tabs_in_place_and_nothing_moves() {
+    fn a_task_started_in_the_first_workspace_gets_its_own_space_and_nothing_the_user_had_moves() {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right });
         term(&mut m);
-        term(&mut m);
-        m.update(Action::NewTab);
-        term(&mut m);
-        let before = (pane_tabs(&m), m.tabs[m.active].id, m.layout.clone(), m.focused, m.panes.clone());
-        // The box says what ↵ will take, with whatever else it says.
+        let before = (pane_tabs(&m), m.layout.clone(), m.focused, m.panes.clone());
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
-        assert!(m.compose_binds());
-        let said = "↵ will start claude in app, and makes this workspace the task's";
-        assert_eq!(m.compose_plan_line().as_deref(), Some(said));
+        assert_eq!((m.binds(), m.compose_plan_line().as_deref()), (None, Some("↵ will start claude in app")));
         let effects = m.update(Action::ComposeEnter);
         assert!(matches!(effects[..], [Effect::StartAgent { .. }]), "{effects:?}");
-        // Its tabs are the task's, next to a first space left with one empty tab; the tab on
-        // show is still on show, and no pane moved or closed. The drawer is on the task.
-        assert_eq!((m.tab_task(), m.mode()), (Some(1), Mode::Talk));
-        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (task_space(1), false, vec![1, 2])]);
-        let after = (pane_tabs(&m)[1..].to_vec(), m.tabs[m.active].id, m.layout.clone(), m.focused, m.panes.clone());
-        assert_eq!(after, before);
-        assert_eq!(m.talk.as_ref().map(|talk| (&talk.task, talk.open)), Some((&Subject::Task(1), true)));
-        // Filed for later (⇧↵), or a client's: nothing is taken.
+        assert_eq!((m.tab_task(), m.mode(), m.tabs.len()), (Some(1), Mode::Talk, 2));
+        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (task_space(1), false, vec![1])]);
+        // Workspace's tab is as it was.
         m.update(Action::SpaceSelect { index: 0 });
-        term(&mut m);
+        assert_eq!((pane_tabs(&m)[..1].to_vec(), m.layout.clone(), m.focused, m.panes.clone()), before);
+        // Filed for later: no space.
         m.update(Action::OpenCompose { text: "later".into() });
         m.update(Action::ComposeSubmit { open: false });
-        m.update(
-            Action::TaskFromLine { line: "theirs".into(), known: Default::default(), open: true }
-                .sent_by(Origin::Socket),
-        );
-        assert_eq!((m.space(), m.spaces().len(), m.tasks.list.len()), (&Owner::Workspace, 2, 3));
-        // Started from a task's space: a space of its own at the row's end, as ever.
+        assert_eq!((m.tab_task(), m.spaces().len()), (None, 2));
+        // Started from a task's space: a space of its own at the row's end.
         m.update(Action::SpaceSelect { index: 1 });
         m.update(Action::OpenCompose { text: "third".into() });
         assert!(!m.compose_binds());
         m.update(Action::ComposeEnter);
-        assert_eq!((m.tab_task(), m.space_tabs(&task_space(1)).len(), m.layout.is_none()), (Some(4), 2, true));
-        assert_eq!(m.spaces().iter().map(|space| space.of.clone()).collect::<Vec<_>>()[2], task_space(4));
-    }
-
-    #[test]
-    fn an_empty_first_workspace_and_its_settings_tab_are_not_taken() {
-        // Nothing in it: the task gets a space at the row's end, and the box says nothing of it.
-        let mut m = Model::default();
-        m.update(Action::OpenCompose { text: "fix zoom".into() });
-        assert_eq!((m.binds(), m.compose_plan_line()), (None, None));
-        m.update(Action::ComposeEnter);
-        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (task_space(1), false, vec![1])]);
-        assert_eq!(m.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>(), [1, 2]);
-        // From the Settings tab: nothing is taken either.
-        m.update(Action::SpaceSelect { index: 0 });
-        m.update(Action::EditSettings);
-        assert_eq!(m.binds(), None);
-        // From another tab of it: its tabs go, the Settings tab stays the first space's.
-        m.update(Action::NewTab);
-        term(&mut m);
-        m.update(Action::OpenCompose { text: "second".into() });
-        m.update(Action::ComposeEnter);
-        let settings = m.tabs.iter().find(|tab| tab.title == "Settings").map(|tab| &tab.space);
-        assert_eq!((settings, m.tab_task(), m.space_tabs(&task_space(2)).len()), (Some(&Owner::Workspace), Some(2), 2));
+        assert_eq!((m.tab_task(), m.space_tabs(&task_space(1)).len(), m.layout.is_none()), (Some(3), 1, true));
+        assert_eq!(m.spaces().iter().map(|space| space.of.clone()).collect::<Vec<_>>()[2], task_space(3));
     }
 
     #[test]
@@ -9003,6 +8941,24 @@ mod tests {
         );
     }
 
+    /// `>repo` on the line is as before: the agent runs where the line says.
+    #[test]
+    fn a_task_bound_to_a_workspace_runs_where_its_line_says() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::WorkbookNew { uid: "9f3a61c2d4e5b708".into() });
+        term(&mut m);
+        m.update(Action::OpenCompose { text: "fix zoom >app".into() });
+        let said = "↵ will start claude in app, and makes this workspace the task's";
+        assert_eq!(m.compose_plan_line().as_deref(), Some(said));
+        let effects = m.update(Action::ComposeEnter);
+        let cwd = effects.iter().find_map(|effect| match effect {
+            Effect::StartAgent { cwd, .. } => Some(cwd.clone()),
+            _ => None,
+        });
+        assert_eq!((cwd, m.workbooks.list[0].task, m.space()), (Some(Some("/code/app".into())), Some(1), &task_space(1)));
+    }
+
     #[test]
     fn an_empty_kept_workspace_binds_with_no_line_and_a_client_never_binds_one() {
         const UID: &str = "9f3a61c2d4e5b708";
@@ -9031,7 +8987,7 @@ mod tests {
         assert_eq!(m.workbooks.list[0].task, None);
         // The user's ↵: bound, with nothing said, since it takes nothing.
         m.update(Action::OpenCompose { text: "mine".into() });
-        assert_eq!((m.binds(), m.compose_binds()), (Some(Owner::Workbook { id: 1 }), false));
+        assert_eq!((m.binds(), m.compose_binds()), (Some(1), false));
         m.update(Action::ComposeEnter);
         let task = m.tasks.list.last().map(|task| task.id);
         assert_eq!((m.workbooks.list[0].task, m.tab_task(), m.spaces().len()), (task, task, 2));
@@ -9935,8 +9891,7 @@ mod tests {
         keys(&mut m, " folder");
         // ↵ will start the agent there; the path stays in the title as typed.
         assert_eq!(m.compose_plan().and_then(|plan| plan.dir).as_deref(), Some("~/notes/"));
-        let said = "↵ will start claude in ~/notes/, and makes this workspace the task's";
-        assert_eq!(m.compose_plan_line().as_deref(), Some(said));
+        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ will start claude in ~/notes/"));
         // ↵ at once, before the shell read the line again: the folder is where its listing was.
         m.update(Action::ComposeSubmit { open: false });
         let task = m.tasks.list.last().unwrap();
