@@ -144,6 +144,8 @@ pub fn labels(sneak: &Sneak) -> impl IntoElement + use<> {
         let chip = chip()
             .bg(tint(t))
             .size_full()
+            // Less padding than the overlay's chip: the core's width holds the letters.
+            .px(px(2.))
             .flex()
             .justify_center()
             .line_height(px(sneak_place::PILL_H as f32))

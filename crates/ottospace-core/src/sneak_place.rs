@@ -7,15 +7,18 @@ use crate::ax::{Frame, Labelled, Source};
 /// A pill's height in points. Its width is padding and a letter's advance each: the shell draws it
 /// this size, so what the state says is what shows.
 pub const PILL_H: f64 = 15.;
-const PILL_PAD: f64 = 8.;
-const PILL_LETTER: f64 = 8.;
+const PILL_PAD: f64 = 6.;
+/// The widest letter, `W`, bold at 12 points, with room.
+const PILL_LETTER: f64 = 12.;
 /// A target is large when it is this many pills wide and this many high: a label inside it leaves
 /// most of it seen. Anything smaller (a 28-point row, a tab, a rail icon) is small.
 const ROOM: f64 = 3.;
 /// Rounding the shell's points may add.
 const EPS: f64 = 0.5;
 /// How far a pill may reach over a neighbouring control's edge: its padding, not its glyph.
-const GRAZE: f64 = 2.;
+const GRAZE: f64 = 1.;
+/// In the last resort, covering a pill costs this much more than covering a control.
+const PILL_COST: f64 = 1000.;
 
 /// The pill of `label`: width, height.
 pub fn pill_size(label: &str) -> (f64, f64) {
@@ -92,11 +95,12 @@ fn holds(a: &Frame, b: &Frame) -> bool {
 }
 
 /// Sets each label's `pill`: ottospace's own first, then an app pane's around them, so an app's
-/// labels arriving never move ottospace's. In each, large targets first, at their old spot; then
-/// each small one in reading order: the first spot beside it (`beside`) inside its clip that covers
-/// no other small target (for ottospace's own, no other of its own), no pill placed before, and no more than a third of one
-/// holding it (a header round its ×); if none is free, the corner inside it that covers the least of them. The same labels
-/// always get the same rects.
+/// labels arriving never move ottospace's. In each, large targets first, at their old spot (a
+/// corner if a pill is there); then each small one in reading order: the first spot beside it
+/// (`beside`) inside its clip that covers no other small target (for ottospace's own, no other of
+/// its own), no pill placed before, and no more than a third of one holding it (a header round its
+/// ×); if none is free, the corner inside it that covers the least, pills above all. The same
+/// labels always get the same rects.
 pub fn place(labels: &mut [Labelled]) {
     let size: Vec<(f64, f64)> = labels.iter().map(|l| pill_size(&l.label)).collect();
     let small: Vec<bool> = labels.iter().map(|l| is_small(&l.target.frame, &l.label)).collect();
@@ -106,9 +110,13 @@ pub fn place(labels: &mut [Labelled]) {
     let mut pills: Vec<Option<Frame>> = vec![None; labels.len()];
     for i in order {
         let (t, clip) = (labels[i].target.frame, labels[i].target.clip);
+        let placed: Vec<Frame> = pills.iter().flatten().copied().collect();
+        let on_pills = |r: &Frame| placed.iter().map(|b| overlap(r, b)).sum::<f64>();
         if !small[i] {
             let body = matches!(&labels[i].target.source, Source::Own { id } if id.starts_with("pane:"));
-            pills[i] = Some(inside(&t, size[i], body));
+            // Today's spot, or if a pill is there (an app's column over its pane's middle), a corner.
+            let spots = std::iter::once(inside(&t, size[i], body)).chain(corners(&t, size[i]));
+            pills[i] = spots.min_by(|a, b| on_pills(a).total_cmp(&on_pills(b)));
             continue;
         }
         let kin =
@@ -118,19 +126,16 @@ pub fn place(labels: &mut [Labelled]) {
         // A control's edge padding may take a sliver (`GRAZE`) of a pill; another pill none.
         let g = GRAZE;
         let grazes = |r: &Frame, b: &Frame| Frame::new(r.x + g, r.y + g, r.w - 2. * g, r.h - 2. * g).intersects(b);
-        let placed: Vec<Frame> = pills.iter().flatten().copied().collect();
-        let cost = |r: &Frame| {
-            let controls = kin.iter().filter(|b| grazes(r, b)).map(|b| overlap(r, b));
-            controls.chain(placed.iter().map(|b| overlap(r, b))).sum::<f64>()
-        };
+        let cost = |r: &Frame| kin.iter().filter(|b| grazes(r, b)).map(|b| overlap(r, b)).sum::<f64>() + on_pills(r);
         let fits = |r: &Frame| clip.is_none_or(|c| within(r, &c));
         // A spot may reach into what holds the target (a pane's header round its ×) by a third
         // of the pill at most: deeper, it would cover the holder's own text.
         let (w, h) = size[i];
         let shallow = |r: &Frame| holders.iter().all(|o| overlap(r, o) <= w * h / 3. + EPS);
         let free = beside(&t, size[i], in_column).into_iter().find(|r| fits(r) && shallow(r) && cost(r) == 0.);
+        let last = |r: &Frame| cost(r) + PILL_COST * on_pills(r);
         let corner =
-            || corners(&t, size[i]).map(|r| clamp(r, clip)).into_iter().min_by(|a, b| cost(a).total_cmp(&cost(b)));
+            || corners(&t, size[i]).map(|r| clamp(r, clip)).into_iter().min_by(|a, b| last(a).total_cmp(&last(b)));
         pills[i] = free.or_else(corner);
     }
     for (l, pill) in labels.iter_mut().zip(pills) {
@@ -158,21 +163,21 @@ mod tests {
 
     #[test]
     fn small_means_under_three_pills_either_way() {
-        // A one-letter pill is 16 × 15: large from 48 × 45.
+        // A one-letter pill is 18 × 15: large from 54 × 45.
         let cases = [
             ([28., 22.], true),    // a top-row button
             ([56., 40.], true),    // a rail icon
             ([241., 28.], true),   // a row of text
             ([540., 27.], true),   // a pane's header
             ([16., 19.], true),    // a ×
-            ([48., 45.], false),   // just large
+            ([54., 45.], false),   // just large
             ([536., 772.], false), // a pane
         ];
         for ([w, h], small) in cases {
             assert_eq!(is_small(&Frame::new(0., 0., w, h), "a"), small, "{w} × {h}");
         }
         // A longer label needs a wider target.
-        assert!(is_small(&Frame::new(0., 0., 60., 60.), "ab") && !is_small(&Frame::new(0., 0., 72., 60.), "ab"));
+        assert!(is_small(&Frame::new(0., 0., 80., 60.), "ab") && !is_small(&Frame::new(0., 0., 90., 60.), "ab"));
     }
 
     /// Each case: targets as (label, [x, y, w, h]), and where each label goes.
@@ -180,14 +185,14 @@ mod tests {
     fn a_small_targets_label_sits_beside_it() {
         let cases: &[(&str, &[(&str, [f64; 4])], &[[f64; 2]])] = &[
             // Free all round: above, centred on it.
-            ("alone", &[("a", [100., 100., 20., 20.])], &[[102., 85.]]),
+            ("alone", &[("a", [100., 100., 20., 20.])], &[[101., 85.]]),
             // At the window's top: below.
-            ("top row", &[("a", [1300., 8.5, 28., 22.])], &[[1306., 30.5]]),
+            ("top row", &[("a", [1300., 8.5, 28., 22.])], &[[1305., 30.5]]),
             // Top-row buttons 4 apart: each below its own, in a line.
             (
                 "buttons in a row",
                 &[("a", [1300., 8.5, 28., 22.]), ("s", [1332., 8.5, 28., 22.]), ("d", [1364., 8.5, 28., 22.])],
-                &[[1306., 30.5], [1338., 30.5], [1370., 30.5]],
+                &[[1305., 30.5], [1337., 30.5], [1369., 30.5]],
             ),
             // A column touching the window's left: above and below are its neighbours, left is
             // off the window. Right, centred down.
@@ -199,7 +204,7 @@ mod tests {
             // A wide row: above, at its left end.
             ("row", &[("a", [65., 120., 241., 28.])], &[[65., 105.]]),
             // A two-letter pill over a 16-point ×: centred on it.
-            ("×", &[("pa", [376., 45., 16., 19.])], &[[372., 30.]]),
+            ("×", &[("pa", [376., 45., 16., 19.])], &[[369., 30.]]),
             // A header goes above itself; a large target below keeps today's spot: at its left,
             // centred down.
             ("large", &[("r", [317., 71., 540., 27.]), ("i", [319., 101., 536., 772.])], &[[317., 56.], [321., 479.5]]),
@@ -216,11 +221,11 @@ mod tests {
         // A tab holds its ×: the × does not block the tab's spot, and the tab's pill blocks the ×'s.
         let got = placed(vec![at("tab:1", "j", [316., 40., 80., 29.]), at("tab-close:1", "pa", [376., 45., 16., 19.])]);
         assert_eq!([got[0].x, got[0].y], [316., 25.], "above the tab, at its left");
-        assert_eq!([got[1].x, got[1].y], [372., 30.], "above the ×");
+        assert_eq!([got[1].x, got[1].y], [369., 30.], "above the ×");
         assert!(!got[0].intersects(&got[1]));
         // A pane's body keeps its middle.
         let got = placed(vec![at("pane:1", "i", [319., 101., 536., 772.])]);
-        assert_eq!([got[0].x, got[0].y], [579., 479.5]);
+        assert_eq!([got[0].x, got[0].y], [578., 479.5]);
     }
 
     #[test]
@@ -243,7 +248,8 @@ mod tests {
     fn an_app_panes_labels_stay_in_the_pane_and_go_round_ottospaces() {
         // A tab over a pane's header: the header's label goes under it, into the pane.
         let own = || vec![at("tab:1", "a", [320., 40., 80., 29.]), at("header:1", "s", [320., 70., 500., 29.])];
-        // A button at the pane's top left, under that label: above would leave the pane, below is free.
+        // A button at the pane's top left, under that label: above would leave the pane, below and
+        // left cross its left edge. Right, clear of the header's label.
         let pane = Frame::new(320., 99., 500., 400.);
         let source = Source::App { pane: 1, path: vec![0], role: "AXButton".into(), at: Frame::default() };
         let target = Target { frame: Frame::new(322., 100., 20., 20.), source, clip: Some(pane) };
@@ -251,10 +257,20 @@ mod tests {
         labels.push(Labelled { label: "ta".into(), target, pill: None });
         place(&mut labels);
         let pills: Vec<Frame> = labels.iter().map(|l| l.pill.unwrap_or_default()).collect();
-        assert_eq!(([pills[1].x, pills[1].y], [pills[2].x, pills[2].y]), ([320., 99.], [320., 120.]));
+        assert_eq!(([pills[1].x, pills[1].y], [pills[2].x, pills[2].y]), ([320., 99.], [342., 102.5]));
         assert!(within(&pills[2], &pane) && !pills[2].intersects(&pills[1]));
         // ottospace's own labels never move for an app's: the same alone.
         assert_eq!(placed(own()), pills[..2]);
+    }
+
+    #[test]
+    fn a_large_targets_label_moves_off_a_pill_there() {
+        // An app pane's own label in its middle, and an app's column holding that middle: a corner.
+        let mut column = at("c", "ta", [290., 0., 310., 400.]);
+        column.target.source = Source::App { pane: 1, path: vec![0], role: "AXGroup".into(), at: Frame::default() };
+        let got = placed(vec![at("pane:1", "a", [0., 0., 600., 400.]), column]);
+        assert_eq!([got[1].x, got[1].y], [290., 0.]);
+        assert!(!got[0].intersects(&got[1]));
     }
 
     #[test]
@@ -262,7 +278,7 @@ mod tests {
         // The top row's last button, and a × 1 point under its spot below: still below.
         let got =
             placed(vec![at("top", "a", [1364., 8.5, 28., 22.]), at("notice:close", "sd", [1368., 44.5, 20., 19.])]);
-        assert_eq!([got[0].x, got[0].y], [1370., 30.5]);
+        assert_eq!([got[0].x, got[0].y], [1369., 30.5]);
     }
 
     #[test]
