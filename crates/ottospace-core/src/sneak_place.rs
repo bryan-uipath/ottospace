@@ -16,7 +16,8 @@ const ROOM: f64 = 3.;
 /// Rounding the shell's points may add.
 const EPS: f64 = 0.5;
 /// How far a pill may reach over a neighbouring control's edge: its padding, not its glyph.
-const GRAZE: f64 = 1.;
+/// e.g. the notice bar's × 2 points into the spot below the top row's last button.
+const GRAZE: f64 = 2.5;
 /// In the last resort, covering a pill costs this much more than covering a control.
 const PILL_COST: f64 = 1000.;
 
@@ -275,10 +276,9 @@ mod tests {
 
     #[test]
     fn a_pill_may_graze_a_neighbours_padding() {
-        // The top row's last button, and a × 1 point under its spot below: still below.
-        let got =
-            placed(vec![at("top", "a", [1364., 8.5, 28., 22.]), at("notice:close", "sd", [1368., 44.5, 20., 19.])]);
-        assert_eq!([got[0].x, got[0].y], [1369., 30.5]);
+        // The top row's last button, and the notice bar's × 2 points into its spot below (as in CI): still below.
+        let got = placed(vec![at("top", "a", [988., 9., 28., 22.]), at("notice:close", "sd", [992., 44., 20., 20.])]);
+        assert_eq!([got[0].x, got[0].y], [993., 31.]);
     }
 
     #[test]
