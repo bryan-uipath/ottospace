@@ -5844,7 +5844,7 @@ pub(crate) fn inner_shade(top: bool, depth: f32) -> Div {
 /// the list, so list mode still scrolls to it; it covers the list's `gap` above it.
 pub(crate) fn in_well(row: impl IntoElement, first: bool, last: bool, gap: f32) -> Div {
     const PAD: f32 = 8.; // the list's padding (`p_2`)
-    const RIM: f32 = 5.; // the well's own room at its top and bottom
+    const RIM: f32 = 6.; // the well's own room at its top and bottom, as deep as its shadows
     div()
         .flex_none()
         .relative()
@@ -5855,8 +5855,8 @@ pub(crate) fn in_well(row: impl IntoElement, first: bool, last: bool, gap: f32) 
         .when(first, |d| d.pt(px(RIM)))
         .when(last, |d| d.pb(px(RIM)))
         .child(row)
-        .when(first, |d| d.child(inner_shade(true, 7.)))
-        .when(last, |d| d.child(inner_shade(false, 7.)))
+        .when(first, |d| d.child(inner_shade(true, RIM)))
+        .when(last, |d| d.child(inner_shade(false, RIM)))
 }
 
 /// `rows` of an open group, each in its well (`in_well`).
