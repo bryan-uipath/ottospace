@@ -41,6 +41,8 @@ pub struct Drawn {
     /// The heading drawn over the key caps: Home's name, none in an empty tab.
     heading: Option<&'static str>,
     panel: Bounds<Pixels>,
+    /// An empty tab's key caps: apart from Home's, whose nodes keep clear of its own text.
+    bare: Bounds<Pixels>,
     legend: Bounds<Pixels>,
     /// Each node's click target.
     nodes: Vec<(TaskId, Bounds<Pixels>)>,
@@ -405,14 +407,17 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_3()
-            .child(measure(drawn, view, |drawn, bounds| std::mem::replace(&mut drawn.panel, bounds) != bounds))
+            .child(measure(drawn, view, move |drawn, bounds| {
+                let panel = if on_home { &mut drawn.panel } else { &mut drawn.bare };
+                std::mem::replace(panel, bounds) != bounds
+            }))
             .child(line)
             .children(needs_you)
             .child(under);
         let panel =
             div().absolute().top(relative(BOX_TOP)).left_0().w_full().px_4().flex().justify_center().child(text);
 
-        if !any {
+        if on_home && !any {
             drawn.borrow_mut().legend = Bounds::default();
         }
         let legend = any.then(|| {
@@ -451,7 +456,10 @@ impl Workspace {
                 }
             },
             move |bounds, _, window, _| {
-                let (panel, legend) = (shared.borrow().panel, shared.borrow().legend);
+                let drawn = shared.borrow();
+                let (panel, legend) =
+                    if on_home { (drawn.panel, drawn.legend) } else { (drawn.bare, Bounds::default()) };
+                drop(drawn);
                 // The lines go quiet behind the text (the box and its list, the legend), and in
                 // a haze just under the horizon, where they would run together.
                 let build = || {
