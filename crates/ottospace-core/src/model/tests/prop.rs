@@ -1467,6 +1467,7 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(paused == on.paused_at.is_some(), "{:?} with a pause at {:?}", on.status, on.paused_at);
     }
     ensure!(!m.listen.shown || m.listen.on.is_some(), "the drawer on no transcript");
+    ensure!(!m.listen.shown || !m.listen_hidden(), "the transcript over what has the keyboard in the drawer");
     // Tabs, their trees and the panes.
     ensure!(!m.tabs.is_empty(), "no tabs");
     ensure!(m.active < m.tabs.len(), "tab {} is on show, of {}", m.active, m.tabs.len());
@@ -3022,8 +3023,10 @@ impl Run {
                     let on = m.listen.on.as_ref().map(|on| &on.id);
                     ensure!(on == Some(id) && listen_before.is_none(), "{origin:?}'s {action:?} opened {id:?}");
                 }
+                // Ended by the user, the shell or a flag: never by a client.
                 Effect::ListenClose { id } => {
-                    ensure!(listen_before.as_ref() == Some(id), "{action:?} closed {id:?}, not on")
+                    ensure!(listen_before.as_ref() == Some(id), "{action:?} closed {id:?}, not on");
+                    ensure!(origin != Origin::Socket, "a client's {action:?} ended {id:?}")
                 }
                 Effect::ListenPauseStreams { id } | Effect::ListenResumeStreams { id } => {
                     let users = origin == Origin::User;

@@ -55,6 +55,12 @@ fn read_fixture(path: &str) -> Result<VecDeque<Said>, String> {
     lines.map(|line| serde_json::from_str(line).map_err(|why| format!("the fixture: {why}"))).collect()
 }
 
+/// A transcript's id: its start time and a count, so two in one millisecond differ.
+fn new_id(at: u64) -> String {
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    format!("t{at}-{}", COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+}
+
 /// A small button of the indicator: `Pause`, `Stop`, `×`.
 fn button(id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> {
     div()
@@ -78,13 +84,13 @@ impl Workspace {
     /// ⌘⌃T, from the key, the menu or the palette.
     pub(crate) fn transcribe_key(&mut self, window: &Window, cx: &mut Context<Self>) {
         let at = now_ms();
-        self.dispatch(Action::ListenToggle { id: format!("t{at}"), at }, self.input, window, cx);
+        self.dispatch(Action::ListenToggle { id: new_id(at), at }, self.input, window, cx);
     }
 
     /// `Transcribe` in a pane's header.
     fn listen_start(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
         let (source, at) = (listen::Source::Pane(pane), now_ms());
-        self.dispatch(Action::ListenStart { source, mic: false, id: format!("t{at}"), at }, self.input, window, cx);
+        self.dispatch(Action::ListenStart { source, mic: false, id: new_id(at), at }, self.input, window, cx);
     }
 
     /// A click of the indicator's (or its sneak label): `start`, `pause`, `resume`, `stop`, `top`
@@ -229,7 +235,8 @@ impl Workspace {
             .child(dot(paused))
             .child(div().flex_none().text_color(rgb(theme::RECORDING)).child(format!("{word} {}", self.listen_clock())))
             .child(self.controls.mark("listen-header"))
-            .child(self.listen_button(toggle, label, "header", cx))
+            // No pause before the streams run: there is nothing to stop yet.
+            .when(on.status != Status::Starting, |d| d.child(self.listen_button(toggle, label, "header", cx)))
             .child(self.listen_button("listen-stop", "Stop", "header", cx));
         Some(row.into_any_element())
     }
@@ -311,7 +318,7 @@ impl Workspace {
                 source.filter(|s| !s.is_empty()).unwrap_or_else(|| "pane".into()),
                 self.listen_clock()
             )))
-            .child(self.listen_button(toggle, label, "view", cx).text_xs())
+            .when(on.status != Status::Starting, |d| d.child(self.listen_button(toggle, label, "view", cx).text_xs()))
             .child(self.listen_button("listen-stop", "Stop", "view", cx).text_xs())
             .child(self.listen_button("listen-close", "×", "view", cx));
         let speaker = |from: Speaker| match from {

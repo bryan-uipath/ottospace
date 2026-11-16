@@ -5081,6 +5081,8 @@ impl Workspace {
                     .children(marked.map(|sign| div().flex_none().text_color(rgb(theme::MARK)).child(sign))),
             )
             .child(self.controls.mark(format!("header:{id}")))
+            // A transcript's indicator never shrinks: it shows while one is on.
+            .children(self.listen_header(id, cx))
             // `fit` and × never shrink, so they stay in the header however narrow the pane.
             .child(
                 // The task of its tab: the same badge as on the bar.
@@ -5090,7 +5092,6 @@ impl Workspace {
                     .gap_2()
                     .items_center()
                     .children(clip)
-                    .children(self.listen_header(id, cx))
                     .children(hint)
                     .children(word)
                     .children(strip)

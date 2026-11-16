@@ -3420,6 +3420,7 @@ impl Model {
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
         self.settle_row_menu();
+        self.settle_listen();
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
         if self.list.is_none() && listed.is_some() {
             self.list_kept = zones::KeptRow(listed);

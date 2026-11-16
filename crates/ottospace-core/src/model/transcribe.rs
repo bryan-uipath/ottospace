@@ -24,6 +24,18 @@ impl Model {
             && self.listen_refusal(Some(pane)).is_none()
     }
 
+    /// The drawer shows the transcript only while nothing that takes keys is in it: the new-task
+    /// box, the conversation with the keyboard and the editor take it back, so no key goes unseen.
+    pub(super) fn listen_hidden(&self) -> bool {
+        self.compose.is_some() || self.talk.as_ref().is_some_and(|talk| talk.keys) || self.editing.is_some()
+    }
+
+    pub(super) fn settle_listen(&mut self) {
+        if self.listen_hidden() {
+            self.listen.shown = false;
+        }
+    }
+
     /// Whether the close would take the pane being transcribed.
     pub(super) fn closes_listened(&self, action: &Action) -> bool {
         let Some(source) = self.listen.pane() else { return false };
@@ -287,6 +299,17 @@ mod tests {
         m.update(Action::ListenShow { on: true });
         assert!(m.listen.shown && m.active != tab);
         assert!(m.layout.as_ref().is_some_and(|l| l.leaves().contains(&2)));
+    }
+
+    #[test]
+    fn what_takes_keys_in_the_drawer_takes_it_from_the_transcript() {
+        let mut m = model();
+        m.update(start(2));
+        m.update(Action::OpenCompose { text: String::new() });
+        assert!(!m.listen.shown, "the new-task box is not typed in unseen");
+        m.update(Action::CloseCompose);
+        m.update(Action::ListenShow { on: true });
+        assert!(m.listen.shown);
     }
 
     #[test]
