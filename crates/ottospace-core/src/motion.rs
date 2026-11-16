@@ -128,13 +128,16 @@ pub struct Motion {
     pub angle: f32,
     /// How far into the pulse: 0 while nothing pulses.
     pub pulse_ms: f32,
+    /// The last step wanted another frame. After rest the clock starts at the change: the
+    /// time since the last frame drawn (a second, an hour) is not travel.
+    pub moving: bool,
 }
 
 impl Motion {
     /// `dial` at rest: every dot at its size, nothing turning.
     pub fn rest(dial: &Dial) -> Motion {
         let size = |i: usize| dial.stations.get(i).map_or(DOT_UNUSED, dot);
-        Motion { dots: std::array::from_fn(|i| Spring::rest(size(i))), angle: 0., pulse_ms: 0. }
+        Motion { dots: std::array::from_fn(|i| Spring::rest(size(i))), angle: 0., pulse_ms: 0., moving: false }
     }
 
     /// `dt_ms` later, toward `dial`. True while something moves: the next frame is wanted.
@@ -144,6 +147,7 @@ impl Motion {
             *self = Motion::rest(dial);
             return false;
         }
+        let dt_ms = if self.moving { dt_ms } else { 0. };
         for (spring, spot) in self.dots.iter_mut().zip(&dial.stations) {
             spring.aim(dot(spot));
             spring.step(dt_ms);
@@ -153,7 +157,8 @@ impl Motion {
         let pulses = dial.stations.iter().any(|spot| pulsing(spot, dial.timed));
         let on = if dt_ms.is_finite() { self.pulse_ms + dt_ms.max(0.) } else { 0. };
         self.pulse_ms = if pulses { on.rem_euclid(PULSE_MS) } else { 0. };
-        pulses || thinking || self.angle != 0. || self.dots.iter().any(|dot| !dot.settled())
+        self.moving = pulses || thinking || self.angle != 0. || self.dots.iter().any(|dot| !dot.settled());
+        self.moving
     }
 
     /// A lit dot's pulse now, 0 to 1.
@@ -314,7 +319,12 @@ mod tests {
         assert_eq!(motion, Motion::rest(&working), "at its sizes at once");
         assert_eq!(motion.dots[2].at, DOT_LIT);
         // A long gap (another space, a hidden window): there at once, then only the pulse.
-        let mut motion = Motion::rest(&a.dial(0, &live(false)));
+        // A call that starts after a still hour: the clock starts there, its dot travels.
+        let mut motion = Motion::rest(&Activity::default().dial(0, &live(false)));
+        assert!(motion.step(&working, 3_600_000., false));
+        assert_eq!((motion.dots[2].at, motion.dots[2].to), (DOT_UNUSED, DOT_LIT));
+        assert!(motion.step(&working, 16., false) && motion.dots[2].at > DOT_UNUSED);
+        // Mid-travel, a long gap (a hidden window): there at once, then only the pulse.
         assert!(motion.step(&working, 5_000., false));
         assert!(motion.dots.iter().all(|dot| *dot == Spring::rest(dot.to)));
         // A request waits: You is lit, larger, and still. So is a watched session's call.

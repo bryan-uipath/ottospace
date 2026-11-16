@@ -10,6 +10,7 @@
 {"click":"task:1","at":[0.3,0.3]}
 {"click":"talk:talk-start"}
 {"until":"drawer.native.chats.1.dial.level","is":"amber"}
+{"until":"drawer.native.chats.1.dial.animating","is":false}
 {"settle":300}
 {"shot":"failed"}
 {"click":"talk"}
@@ -23,6 +24,7 @@
 {"cmd":"key","keys":"cmd-shift-l","as":"user"}
 {"click":"talk:chat-stop"}
 {"until":"drawer.native.chats.1.transcript.turn","is":null}
+{"until":"drawer.native.chats.1.dial.animating","is":false}
 {"settle":300}
 {"shot":"idle"}
 {"record":"start"}

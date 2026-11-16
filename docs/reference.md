@@ -404,13 +404,17 @@ a space with one tab has no tab row, so it sits on the top row, left of the spli
 A native conversation has a dial under its header: where its agent's calls go, at a glance.
 
 - **Centre**: the agent's kind (✳ Claude Code), coloured by its state: running, needs you, idle,
-  ended, or an error (a failed turn, an end you did not ask for) until your next message.
+  ended, or an error (a failed turn, an end you did not ask for) until your next message. It
+  turns about its upright axis while the model thinks (it has the turn and no call runs).
 - **Ring**: the context used (tokens in the context over the window); amber from 70%, red from 90%.
 - **Stations**, clockwise from the top: You, Model, Files, Shell, Network, Browser, Agents,
   Skills, Memory, Hooks, Tools (any other tool). A spoke is heavier for more use, the older uses
   counting less (half after ten minutes). A station is lit while a call there runs (Model while
   the model has the turn, You while a request waits), with two arcs for its time: the inner fills
   in a minute, the outer in ten. A red dot: a call there failed since your last message.
+  Each has its name beside it, brighter while lit. A lit station's dot pulses, and is larger for
+  each further call running there at once (up to four): it springs to its size, with a kick
+  when a call starts, and settles back when one ends.
 - **Dashes**: the route of the last calls, fading out over a minute.
 - Beside it, when the drawer is wide enough: what it does now (`Shell · cargo test · 0:14`), or
   the last thing and when; the context used (`62% of context`); turns and how long.
@@ -419,10 +423,13 @@ A native conversation has a dial under its header: where its agent's calls go, a
   badge (the ring, a white dot while a call runs, a red one for a failure); a click on the marker
   opens it. It is open while the agent runs and collapsed once it ended, unless you left it the
   other way: that is kept per task, with the layout.
-- A watched session's dial steps a message at a time, with no time arcs. With Reduce motion on,
-  nothing fades: the route shows until it expires.
-- The state reply has its stations, counts, what is lit, the context used and `collapsed`, never
-  a command, path or label. Design: [docs/ai/agent-dial.md](ai/agent-dial.md).
+- A watched session's dial steps a message at a time, with no time arcs: its dots spring to
+  their sizes, nothing pulses or turns. With Reduce motion on, nothing fades or moves: the route
+  shows until it expires, and a lit station is its colour and its larger size.
+- It is drawn frame by frame only while something in it moves; at rest, collapsed or not on
+  screen, never.
+- The state reply has its stations, counts, what is lit (and how many calls run there), the
+  context used, `collapsed` and `animating`, never a command, path or label. Design: [docs/ai/agent-dial.md](ai/agent-dial.md).
 
 ## Accessibility inspector
 

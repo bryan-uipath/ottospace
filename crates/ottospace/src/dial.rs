@@ -1,11 +1,10 @@
 //! The agent dial over a native conversation: what the core's `activity::Dial` says, drawn. The
-//! 96-point dial and its lines under the header, or the 18-point marker beside the badge when
+//! dial (its stations' words around it) and its lines under the header, or the 18-point marker beside the badge when
 //! collapsed. Paths are built each paint (a few dozen segments); the app draws again on a change,
 //! on a slow tick while a station is lit or the route fades, and frame by frame only while
 //! something in the open dial moves (`motion::Motion`). See `docs/ai/agent-dial.md`.
 
 use std::f32::consts::{PI, TAU};
-
 use std::time::Instant;
 
 use gpui::{

@@ -1,6 +1,6 @@
 # The agent dial
 
-The MEDIUM (96 pt) and SMALL (18 pt) sizes of the "Agent activity (radial)" mock, as a section
+The MEDIUM (96 pt, in a face of 180 by 120 with its stations' words) and SMALL (18 pt) sizes of the "Agent activity (radial)" mock, as a section
 of each native conversation under its header. LARGE (a pane) is not built.
 
 ## The model
@@ -57,3 +57,23 @@ Differences from the mock: an MCP server that is not a browser or memory one goe
 `crates/ottospace/src/dial.rs`: paths and quads in one canvas, built each paint. The app paints
 on a change, and on a 1 s tick only while a station is lit or the route fades (`dial_moves`).
 Reduce motion: the route keeps one opacity until it expires. Below 360 pt the lines are hidden.
+
+## Motion
+
+`ottospace-core::motion`, pure: the shell passes the ms since its last frame. `Motion` is the
+shown dial's moving parts, view state the shell keeps (`dial::DialMotion`), never the model's.
+
+- Each station's dot radius is a `Spring` (stiffness 180, damping 16: ratio 0.6, about 10%
+  overshoot) toward `dot(spot)`: 1.2 unused, 2.2 used, 3.5 lit, +0.7 for each further call
+  running there, to four. A higher target adds a kick of 28 pt/s. Steps of at most 4 ms; a gap
+  over 250 ms (a hidden window), or a number that is not one, lands on the target.
+- A lit dot pulses (1.2 s) when its times are known and it is not You (a request may wait for
+  hours). The glyph turns (2.4 s a turn) while `Dial::thinking`: flat, its width the angle's
+  cosine, mirrored and dimmer from behind; after, it goes on to the front and stops.
+- `Motion::step` says whether another frame is wanted: something pulses, turns, or a spring is
+  not settled. Only then does the canvas ask for an animation frame. After rest the clock
+  starts at the change. The step is in `dial_section`: a dial collapsed or not drawn is not
+  stepped. Reduce motion: `Motion::rest`, never a frame.
+- The state: `dial.animating`, each station's `running`, `counts.dial_frames`.
+- The words: all eleven fit the open dial at every drawer width (the face is 180 by 120, the
+  drawer at least 320); the marker has none.
