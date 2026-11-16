@@ -862,6 +862,8 @@ const MAKERS: &[Make] = &[
     |g| Action::ComposeMove { delta: g.delta() },
     |g| Action::ComposeAccept { index: g.index(4) },
     |_| Action::ComposeFolderClear,
+    // Every mark a cap types, and one no cap does.
+    |g| Action::ComposeTag { mark: g.rng.pick(&['#', '>', '@', '/', '$', '^', 'p']) },
     |g| {
         // Paths of every kind: a space, a narrow no-break space, a backslash, a line break,
         // one too long, one that is no path.
@@ -1622,6 +1624,9 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(rows <= complete::MAX_ROWS, "the dropdown has {rows} rows");
         ensure!(menu.selected.is_none_or(|at| at < rows), "the dropdown highlights row {:?} of {rows}", menu.selected);
         ensure!(!menu.rows.is_empty() || menu.note.is_some(), "a dropdown with no row and nothing to say");
+        // What ↵ takes is on show: a row is highlighted, but while rows are read or at a folder's end.
+        let whole = menu.mark == '/' && (menu.stale || menu.typed == "~" || menu.typed.ends_with('/'));
+        ensure!(rows == 0 || whole || menu.selected.is_some(), "rows on show and none highlighted: {menu:?}");
         let names: Vec<&String> = menu.rows.iter().map(|row| &row.name).collect();
         ensure!(unique(&names), "a name is on the dropdown twice: {names:?}");
         let line = m.compose_line().map(String::as_str).unwrap_or_default();
@@ -2240,9 +2245,12 @@ impl Run {
         let chosen = m.picker.as_ref().and_then(|picker| picker.matches().get(picker.selected).copied().cloned());
         let field = (m.field().is_some(), m.open_field().map(|(_, field)| field.text().to_string()));
         let task_ids: Vec<TaskId> = m.tasks.list.iter().map(|task| task.id).collect();
-        // ↵ on a highlighted row that would change the line takes the row: it files nothing.
-        let takes = match (&action, m.dropdown().and_then(|menu| menu.selected)) {
-            (Action::ComposeSubmit { open: false } | Action::ComposeEnter, Some(row)) => m.changes(row),
+        // ↵ or ⇧↵ while the dropdown shows rows files nothing: no half-typed tag starts an agent.
+        // Unless the word is whole: its row spelled out, or a folder's end (none highlighted).
+        let takes = match (&action, m.dropdown().filter(|menu| !menu.rows.is_empty())) {
+            (Action::ComposeSubmit { open: false } | Action::ComposeEnter, Some(menu)) => {
+                !menu.selected.map_or(!menu.stale, |row| m.taking(row).is_some() && !m.changes(row))
+            }
             _ => false,
         };
         // While the bar asks before discarding, ↵ is the answer: it files nothing.

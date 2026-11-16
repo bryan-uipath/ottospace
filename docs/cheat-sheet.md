@@ -142,7 +142,7 @@ Key Counts forgets it.
 | Point at something for a task ("this message", "this error") | ⌃⌥⌘Space, from any app: the pane in use freezes as a picture and a draft opens on the right. Drag to circle, ⇧-drag a box, ⌥-drag a line, click to type a note. ↵, type what you want, ↵ starts it (⇧↵ for later). Esc leaves the picture; Esc in the title cancels the draft. The task keeps the pictures and the text under what you circled as its brief: [Capture](reference.md#capture) |
 | Capture a second pane into the same draft | While drawing, click the other pane. Or press ⌃⌥⌘Space again |
 | Give an agent a task's brief | In a terminal of the task: `ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"` |
-| Tag the task | In that line: `#project` · `>repo` · `@agent` · `/path` · `$skill` · `^reference` · `p1` … `p9`. A dropdown finishes the tag at the cursor: ↑↓ move, ↵ or Tab takes a row, Esc closes it. [All tags](reference.md#tags) |
+| Tag the task | In that line: `#project` · `>repo` · `@agent` · `/path` · `$skill` · `^reference` · `p1` … `p9`. A dropdown finishes the tag at the cursor: ↑↓ move, ↵ or Tab takes the highlighted row (↵ never starts a half-typed tag), Esc closes it. A tag's cap under the line types its mark. [All tags](reference.md#tags) |
 | Add files to the task | Drag them from Finder onto the box, ⌘O, or copy in Finder and ⌘V: each becomes a `/path` |
 | Run the agent in a folder | Type `~/`, `/` or (with a `>repo`) `./`, and take a folder from the dropdown: "runs in ~/notes/ ×" shows it. The path stays in the title |
 | Point the task at a tab, a pane, a mark or an app | `^name` in the line, or ⌥-click the tab or pane while the box is open |
