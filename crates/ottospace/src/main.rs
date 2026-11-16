@@ -1602,7 +1602,7 @@ impl Workspace {
                         if let Some(pane) = into {
                             self.model.update(Action::Unfilled { pane, why: why.clone() }.sent_by(Origin::System));
                         }
-                        if !unhosted.contains(&why) {
+                        if !unhosted.contains(&why) && notice::unhosted_on_bar(self.input, into.is_some()) {
                             unhosted.push(why);
                         }
                     }

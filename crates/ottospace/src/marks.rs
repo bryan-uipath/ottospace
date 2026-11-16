@@ -373,9 +373,18 @@ impl Workspace {
         if let Some(running) = capture::apps().into_iter().filter(|app| only(app.pid)).find(same) {
             return self.host_window_of(running.pid, &wanted, window, cx);
         }
+        // Running, though none of its windows is on screen: minimised, on another Space, closed.
+        let pid = ax::running()
+            .into_iter()
+            .filter(|(pid, ..)| only(*pid))
+            .find_map(|(pid, bundle, name)| marks::same_app(app, (bundle.as_deref(), &name)).then_some(pid));
+        let shown = |pid: i32| ax::Window::standard_of(pid).iter().any(|window| !window.minimized());
+        if let Some(pid) = pid.filter(|pid| shown(*pid)) {
+            return self.host_window_of(pid, &wanted, window, cx);
+        }
         // A restored pane waits for the user's "Open": no app is started at start by itself.
-        if !wanted.launch {
-            return Err(format!("{} is not running", wanted.name));
+        if let Some(why) = marks::without_window(&wanted.name, pid.is_some(), wanted.launch) {
+            return Err(why);
         }
         if self.host_only.is_some() {
             return Err("this test run may host only the app it started".into());
@@ -400,7 +409,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let main = ax::Window::main_id(pid);
-        let windows: Vec<ax::Window> = ax::Window::standard_of(pid).into_iter().filter(window_managed).collect();
+        // A minimised window stays in the Dock: its stream would draw nothing.
+        let hostable = |window: &ax::Window| !window.minimized() && window_managed(window);
+        let windows: Vec<ax::Window> = ax::Window::standard_of(pid).into_iter().filter(hostable).collect();
         let held = |id: u32| self.hosted.iter().find(|(_, hosted)| hosted.window_id == id).map(|(pane, _)| *pane);
         let fact = |window: &ax::Window| {
             let id = window.id()?;
