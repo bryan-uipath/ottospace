@@ -227,17 +227,26 @@ impl Workspace {
         let paused = on.status == Status::Paused;
         let word = if paused { "Paused" } else { "Transcribing" };
         let (toggle, label) = if paused { ("listen-resume", "Resume") } else { ("listen-pause", "Pause") };
+        // In a narrow header it gives way before ×: the words first, then Pause, then Stop. The top
+        // row's mark and the drawer still show it.
         let row = div()
             .flex()
-            .flex_none()
+            .min_w_0()
+            .overflow_hidden()
             .items_center()
             .gap_1()
             .child(dot(paused))
-            .child(div().flex_none().text_color(rgb(theme::RECORDING)).child(format!("{word} {}", self.listen_clock())))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(theme::RECORDING))
+                    .child(format!("{word} {}", self.listen_clock())),
+            )
             .child(self.controls.mark("listen-header"))
+            .child(self.listen_button("listen-stop", "Stop", "header", cx))
             // No pause before the streams run: there is nothing to stop yet.
-            .when(on.status != Status::Starting, |d| d.child(self.listen_button(toggle, label, "header", cx)))
-            .child(self.listen_button("listen-stop", "Stop", "header", cx));
+            .when(on.status != Status::Starting, |d| d.child(self.listen_button(toggle, label, "header", cx)));
         Some(row.into_any_element())
     }
 
