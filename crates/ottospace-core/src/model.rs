@@ -2428,6 +2428,15 @@ pub struct Model {
     /// user takes the dismissal back.
     #[serde(skip)]
     departed: Vec<(TaskId, Owner)>,
+    /// Home's own tab, by id: its screen. A pane put in it makes a workspace of it (`settle_home`).
+    #[serde(skip)]
+    pub(crate) home_tab: Option<u32>,
+    /// The workspace selected last: where a stray tab goes.
+    #[serde(skip)]
+    pub(crate) last_space: Option<Owner>,
+    /// The name of the workspace this step's tab is to make, if it makes one: a folder's.
+    #[serde(skip)]
+    pub(crate) home_hint: Option<String>,
     /// Each joined task and its space, as the last step left them.
     #[serde(skip)]
     joined_before: Vec<(TaskId, Owner)>,
@@ -2772,6 +2781,9 @@ impl Default for Model {
             unlinked: Vec::new(),
             departed: Vec::new(),
             joined_before: Vec::new(),
+            home_tab: Some(1),
+            last_space: None,
+            home_hint: None,
             next_tab: 0,
             layout_seen: None,
             layout_kept: true,
@@ -3230,6 +3242,7 @@ impl Model {
         let fronts_were: Vec<TaskId> = self.spaces.iter().filter_map(|space| self.front(&space.of)).collect();
         let listed = self.sidebar.zip(self.list);
         let undo = matches!(sent.action, Action::TaskUndo | Action::ListUndo);
+        let new_tab = matches!(sent.action, Action::NewTab | Action::NewEmptyTab);
         // Where the keyboard was before the step: a tab change moves it out of the drawer.
         // A capture draft's title is in the bar, not the drawer.
         let boxed = self.composing() && self.compose_host() == Some(Host::Drawer);
@@ -3269,7 +3282,7 @@ impl Model {
         let finished: Vec<TaskId> =
             fronts_were.into_iter().filter(|id| origin == Origin::User && !was_done(id)).collect();
         self.settle_tasks(undo && origin == Origin::User, &finished);
-        self.settle_spaces();
+        self.settle_spaces(origin, new_tab);
         self.settle_left();
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
@@ -3740,6 +3753,8 @@ impl Model {
                         self.push_tab_of(Owner::Workspace);
                     }
                     let named = self.layout.is_none() || self.tabs[self.active].title.starts_with("Tab ");
+                    // Home holds no pane: the tab makes a workspace named for the folder.
+                    self.home_hint = Some(name.clone());
                     self.open_terminal_at(axis, Some(path), effects);
                     if let Some(tab) = self.tabs.get_mut(self.active).filter(|_| named) {
                         tab.title = name;
