@@ -32,6 +32,7 @@ use ottospace_core::clip::{self, Verb};
 use ottospace_core::compose;
 use ottospace_core::edit::{self, Edit};
 use ottospace_core::features::Feature;
+use ottospace_core::fill;
 use ottospace_core::hosted::{self as hosting, Click};
 use ottospace_core::key_use::{Binding, Line};
 use ottospace_core::keys::{self, FilterKey, Mods};
@@ -569,8 +570,24 @@ pub(crate) fn rect(b: Bounds<Pixels>) -> [f32; 4] {
 actions!(
     ottospace,
     [
-        SplitRight, SplitDown, PickPane, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown, FocusNext, FocusPrev,
-        Zoom, NewTab, NextTab, PrevTab, CloseTab, ShowKeys, AxOverlay
+        SplitRight,
+        SplitDown,
+        PickPane,
+        ClosePane,
+        FocusLeft,
+        FocusRight,
+        FocusUp,
+        FocusDown,
+        FocusNext,
+        FocusPrev,
+        Zoom,
+        FillDisplay,
+        NewTab,
+        NextTab,
+        PrevTab,
+        CloseTab,
+        ShowKeys,
+        AxOverlay
     ]
 );
 // The picker for a pane below the focused one.
@@ -645,6 +662,7 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-alt-j", SwapDown, None),
         // Fill the screen without leaving the Space (see `zoom_instead_of_fullscreen`).
         KeyBinding::new("cmd-ctrl-f", Zoom, None),
+        KeyBinding::new("cmd-ctrl-shift-f", FillDisplay, None),
         // Debug: outline the focused app pane's accessibility tree.
         KeyBinding::new("cmd-ctrl-a", AxOverlay, None),
         // Tabs. ⌘1..⌘9 select one (handled in `key_down`).
@@ -894,6 +912,8 @@ struct Workspace {
     bar: notice_bar::Bar,
     /// False in e2e runs, which must never move the user's real windows.
     hosting: bool,
+    /// While the window fills its display: its frame before, and the display's.
+    filled: Option<(ottospace_core::ax::Frame, ottospace_core::ax::Frame)>,
     /// Test runs: the pid of the one app that may be hosted.
     host_only: Option<i32>,
     control: Option<Receiver<Call>>,
@@ -1279,6 +1299,7 @@ impl Workspace {
             kept_keys: key_use::Kept::default(),
             caps_drawn: Cell::default(),
             hosting,
+            filled: None,
             host_only,
             control,
             ax_overlay: None,
@@ -1562,6 +1583,7 @@ impl Workspace {
                     }
                 }
                 Effect::Activate { id } => self.activate(id, window, cx),
+                Effect::FillDisplay { on } => self.fill_display(*on, window),
                 Effect::Run { command } => self.run_command(*command, window, cx),
                 Effect::PressApp { pane, path, role, at, .. } => self.press_app(*pane, path, role, *at, window, cx),
                 Effect::Peek(pane) => self.peek(*pane, window, cx),
@@ -2854,6 +2876,10 @@ impl Workspace {
             "tab_panes": self.model.tab_panes(),
             // ottospace's own window frame, so a test can turn pane bounds into screen positions.
             "window": frame,
+            // SPIKE (docs/ai/fill-display.md), to be removed.
+            "fill_probe": std::env::var_os("OTTOSPACE_FILL_PROBE").and_then(|_| ns_view(window)).and_then(|view| {
+                serde_json::from_str::<serde_json::Value>(&unsafe { ottospace_mac::window::fill_probe(view) }).ok()
+            }),
             // Whether that window has the keyboard: a user's wheel over a parked app pane peeks only then.
             "window_active": window.is_window_active(),
             // Where parked windows go, so a test can tell "parked" from "moved somewhere".
@@ -4025,6 +4051,25 @@ impl Workspace {
             .child(self.render_field("type to filter", cx));
         let panel = self.list_panel(panel, header, "picker", rows, "No match");
         dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel)
+    }
+
+    /// Carries out `Effect::FillDisplay`. A run with hosting off changes no window: its own
+    /// floats over the user's screen.
+    fn fill_display(&mut self, on: bool, window: &Window) {
+        let Some(view) = ns_view(window).filter(|_| self.hosting) else { return };
+        // SAFETY: GPUI's own view, on the main thread.
+        let Some(at) = (unsafe { ottospace_mac::window::placement(view) }) else { return };
+        if on {
+            // The bars first: a frame over a menu bar that shows may be refused.
+            ottospace_mac::window::hide_bars(true);
+            unsafe { ottospace_mac::window::set_frame(view, at.screen) };
+            self.filled = Some((at.window, at.screen));
+        } else if let Some((before, filled)) = self.filled.take() {
+            ottospace_mac::window::hide_bars(false);
+            let screens = recovery::screens();
+            let to = fill::back(at.window, filled, before, &screens.visible, screens.main);
+            unsafe { ottospace_mac::window::set_frame(view, to) };
+        }
     }
 
     /// A click on a pane body. An app pane goes live, then the click is replayed so it lands in
@@ -6140,6 +6185,9 @@ impl Render for Workspace {
                 this.dispatch(Action::FocusCycle { delta: -1 }, this.input, window, cx);
             }))
             .on_action(cx.listener(|_, _: &Zoom, window, _| window.zoom_window()))
+            .on_action(cx.listener(|this, _: &FillDisplay, window, cx| {
+                this.dispatch(Action::FillDisplay, this.input, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &Quit, window, cx| this.ask_quit(window, cx)))
             .on_action(cx.listener(|this, _: &ShowKeys, window, cx| {
                 this.dispatch(Action::ToggleKeys, this.input, window, cx);

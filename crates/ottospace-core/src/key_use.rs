@@ -50,6 +50,7 @@ pub enum Binding {
     ListMode,
     SneakMode,
     Zoom,
+    FillDisplay,
     Palette,
     ShowKeys,
     EditSettings,
@@ -94,6 +95,7 @@ pub const ALL: &[Binding] = &[
     Binding::ListMode,
     Binding::SneakMode,
     Binding::Zoom,
+    Binding::FillDisplay,
     Binding::Palette,
     Binding::ShowKeys,
     Binding::EditSettings,
@@ -135,6 +137,7 @@ impl Binding {
             Binding::ListMode => &[C::ListMode],
             Binding::SneakMode => &[C::SneakMode],
             Binding::Zoom => &[C::Zoom],
+            Binding::FillDisplay => &[C::FillDisplay],
             Binding::ShowKeys => &[C::ShowKeys],
             Binding::EditSettings => &[C::EditSettings],
             Binding::Hide => &[C::Hide],
@@ -186,7 +189,14 @@ impl Binding {
             B::NewTask | B::NextTask | B::TalkFocus | B::TalkToggle | B::DialToggle | B::CaptureKey => Group::Tasks,
             B::Copy | B::Paste => Group::Text,
             B::VisualMode | B::ListMode | B::SneakMode => Group::Modes,
-            B::Palette | B::ShowKeys | B::EditSettings | B::Zoom | B::ReturnKey | B::Hide | B::Quit => Group::App,
+            B::Palette
+            | B::ShowKeys
+            | B::EditSettings
+            | B::Zoom
+            | B::FillDisplay
+            | B::ReturnKey
+            | B::Hide
+            | B::Quit => Group::App,
         }
     }
 
@@ -231,6 +241,7 @@ impl Binding {
             B::ShowKeys => "This list",
             B::EditSettings => "Settings",
             B::Zoom => "Fill the screen",
+            B::FillDisplay => "Fill the display, over the menu bar and Dock",
             B::ReturnKey => "Back here, from any app",
             B::Hide => "Hide",
             B::Quit => "Quit",

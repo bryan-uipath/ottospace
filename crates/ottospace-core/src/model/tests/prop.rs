@@ -1226,6 +1226,8 @@ const MAKERS: &[Make] = &[
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
     |_| Action::TalkWide,
     |_| Action::DialToggle,
+    |_| Action::FillDisplay,
+    |_| Action::FillEnded,
     |g| {
         let colors = g.rng.coin().then(|| ColorRule { text: g.text().to_lowercase(), color: 1 });
         let (on, notify, links_only, hide_free) = (g.rng.coin(), g.rng.coin(), g.rng.coin(), g.rng.coin());
@@ -2156,6 +2158,8 @@ struct Shell {
     /// The window up for a scroll.
     peek: Option<PaneId>,
     visual: Option<PaneId>,
+    /// Its window fills the display.
+    filled: bool,
     /// What it keeps of the draft in the bar: (the draft, the capture's number).
     kept: Vec<(String, u32)>,
 }
@@ -2316,8 +2320,12 @@ impl Run {
         let beside = (m.compose_modal() && m.mode() == Mode::Compose && !m.keys && gated.is_none())
             .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty() && !m.compose_theirs)));
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
+        let filled_before = m.fill_display;
         let effects = m.update(sent);
         check(m)?;
+        // Only the user puts the window over the menu bar and the Dock; anyone's end of it tells the shell.
+        let fills = matches!(action, Action::FillDisplay) && origin == Origin::User;
+        ensure!(fills || !m.fill_display || filled_before, "{origin:?}'s {action:?} filled the display");
         // A notice is said to the user: only their dismissal takes one off the bar, and only a
         // read of the settings (their line fixed or changed) puts one back. No input: one effect.
         let dismisses = matches!(action, Action::NoticeDismiss { .. });
@@ -2903,6 +2911,7 @@ impl Run {
                     let empty = |pane: PaneId| m.pane(pane).is_some_and(|p| p.kind == Kind::Empty);
                     ensure!(into.is_none_or(empty), "a window is hosted into {into:?}, no empty pane");
                 }
+                Effect::FillDisplay { on } => self.shell.filled = *on,
                 Effect::Activate { id } => {
                     let own = format!("{:?}", Source::Own { id: id.clone() });
                     ensure!(labelled.contains(&own), "a control with no label is activated: {id:?}");
@@ -3125,6 +3134,7 @@ impl Run {
             !self.shell.panes.iter().any(|pane| gone(&pane)),
             "the shell holds a pane the model closed without a word"
         );
+        ensure!(self.shell.filled == m.fill_display, "the shell's window fills the display: {}", self.shell.filled);
         ensure!(self.shell.live == m.live, "the shell's live pane is {:?}; the model's {:?}", self.shell.live, m.live);
         let peek = m.peek.as_ref().map(|peek| peek.pane);
         ensure!(self.shell.peek == peek, "the shell's peek is {:?}; the model's {peek:?}", self.shell.peek);

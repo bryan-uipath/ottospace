@@ -64,6 +64,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 item("Drive the Bar with the Keyboard", ListMode),
                 item("Label the Controls", SneakMode),
                 item("Fill the Screen", Zoom),
+                item("Fill the Whole Display", FillDisplay),
                 item("Command Palette…", commands::CommandPalette),
                 MenuItem::separator(),
                 item("Previous Day in Calendar", commands::CalendarBack),

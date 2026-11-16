@@ -89,6 +89,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::SneakMode => Box::new(SneakMode),
         Command::VisualMode => Box::new(VisualMode),
         Command::Zoom => Box::new(Zoom),
+        Command::FillDisplay => Box::new(FillDisplay),
         Command::ShowKeys => Box::new(ShowKeys),
         Command::ResetKeyCounts => Box::new(ResetKeyCounts),
         Command::AxOverlay => Box::new(AxOverlay),

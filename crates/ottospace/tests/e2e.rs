@@ -9095,3 +9095,21 @@ fn the_notice_bar_splits_the_top_row_from_the_rest_and_only_the_user_dismisses_i
     std::fs::write(&file, "{ not json").unwrap();
     assert_eq!(bar(Some("error"))["notice_bar"]["kind"], "settings_problem");
 }
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn only_the_users_key_fills_the_display_and_a_test_run_moves_no_window() {
+    let otto = Otto::launch("fill");
+    let before = otto.call(json!({"cmd": "state"}));
+    assert_eq!(before["state"]["fill_display"], false);
+    // A client's key is refused: its window over the menu bar is the user's to ask for.
+    let refused = otto.raw(&json!({"cmd": "key", "keys": "cmd-ctrl-shift-f"}).to_string());
+    assert!(refused["error"].as_str().is_some_and(|e| e.contains("only the user puts the window")), "{refused}");
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["fill_display"], false);
+    // The user's turns it on, and again off. A test run's window stays where it is: it floats
+    // over the user's screen.
+    let on = otto.user_key("cmd-ctrl-shift-f");
+    assert_eq!((&on["state"]["fill_display"], &on["window"]), (&json!(true), &before["window"]));
+    let off = otto.user_key("cmd-ctrl-shift-f");
+    assert_eq!((&off["state"]["fill_display"], &off["window"]), (&json!(false), &before["window"]));
+}

@@ -927,6 +927,8 @@ export interface Model {
   focused: PaneId | null;
   /** The app pane that has the keyboard. */
   live: PaneId | null;
+  /** The window fills its display, over the menu bar and the Dock: only the user turns it on. */
+  fill_display: boolean;
   sidebar: Section | null;
   /** The text in the new-task box while it is open. */
   compose: string | null;

@@ -6,12 +6,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use objc2::rc::Retained;
 use objc2::{AnyThread, MainThreadMarker};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventModifierFlags, NSEventType, NSFloatingWindowLevel,
-    NSImage, NSScreen, NSView, NSWindowCollectionBehavior,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationPresentationOptions, NSEvent, NSEventModifierFlags,
+    NSEventType, NSFloatingWindowLevel, NSImage, NSScreen, NSView, NSWindowCollectionBehavior,
 };
 use objc2_core_foundation::CGPoint;
 use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags, CGScrollEventUnit};
 use objc2_foundation::NSPoint;
+use ottospace_core::ax::Frame;
 
 /// One pointer event for `send_mouse`. `x`, `y`: points from the top-left of the view.
 #[derive(Clone, Copy, Debug)]
@@ -285,6 +286,102 @@ pub unsafe fn frame(ns_view: *mut c_void) -> Option<[f64; 4]> {
     let height = NSScreen::screens(mtm).firstObject().map_or(0.0, |s| s.frame().size.height);
     let f = view.window()?.frame();
     Some([f.origin.x, height - f.origin.y - f.size.height, f.size.width, f.size.height])
+}
+
+/// An AppKit rect (from the main screen's bottom left) in Accessibility's coordinates, and back:
+/// the flip is its own inverse.
+fn flipped(r: objc2_foundation::NSRect, mtm: MainThreadMarker) -> Frame {
+    let height = NSScreen::screens(mtm).firstObject().map_or(0.0, |s| s.frame().size.height);
+    Frame::new(r.origin.x, height - r.origin.y - r.size.height, r.size.width, r.size.height)
+}
+
+/// Where the view's window is, in Accessibility's coordinates.
+pub struct Placement {
+    pub window: Frame,
+    /// The whole of the screen the window is on.
+    pub screen: Frame,
+    /// What the menu bar and the Dock leave of it, as they are now.
+    pub visible: Frame,
+}
+
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread.
+pub unsafe fn placement(ns_view: *mut c_void) -> Option<Placement> {
+    let mtm = MainThreadMarker::new()?;
+    let view = unsafe { &*(ns_view as *const NSView) };
+    let window = view.window()?;
+    let screen = window.screen()?;
+    Some(Placement {
+        window: flipped(window.frame(), mtm),
+        screen: flipped(screen.frame(), mtm),
+        visible: flipped(screen.visibleFrame(), mtm),
+    })
+}
+
+/// Moves and sizes the view's window to `frame` (Accessibility's coordinates). Unconstrained:
+/// over the menu bar if asked.
+///
+/// # Safety
+/// As `placement`.
+pub unsafe fn set_frame(ns_view: *mut c_void, frame: Frame) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let view = unsafe { &*(ns_view as *const NSView) };
+    if let Some(window) = view.window() {
+        let rect = objc2_foundation::NSRect::new(NSPoint::new(frame.x, frame.y), objc2_foundation::NSSize::new(frame.w, frame.h));
+        let to = flipped(rect, mtm);
+        let rect = objc2_foundation::NSRect::new(NSPoint::new(to.x, to.y), objc2_foundation::NSSize::new(to.w, to.h));
+        window.setFrame_display(rect, true);
+    }
+}
+
+/// While this app is the one in front, the menu bar and the Dock stay away until the pointer
+/// reaches their edge. `false`: as the system has them. Ends with the process.
+pub fn hide_bars(on: bool) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let hidden = NSApplicationPresentationOptions::AutoHideMenuBar | NSApplicationPresentationOptions::AutoHideDock;
+    let options = if on { hidden } else { NSApplicationPresentationOptions::Default };
+    NSApplication::sharedApplication(mtm).setPresentationOptions(options);
+}
+
+/// SPIKE (docs/ai/fill-display.md), to be removed: what AppKit says of the bars and screens, as JSON.
+///
+/// # Safety
+/// As `placement`.
+pub unsafe fn fill_probe(ns_view: *mut c_void) -> String {
+    use objc2::msg_send;
+    let Some(mtm) = MainThreadMarker::new() else { return "null".into() };
+    let view = unsafe { &*(ns_view as *const NSView) };
+    let app = NSApplication::sharedApplication(mtm);
+    let f = |r: Frame| format!("[{},{},{},{}]", r.x, r.y, r.w, r.h);
+    let screens: Vec<String> = NSScreen::screens(mtm)
+        .iter()
+        .map(|s| {
+            let insets = s.safeAreaInsets();
+            let (left, right) = (s.auxiliaryTopLeftArea(), s.auxiliaryTopRightArea());
+            format!(
+                r#"{{"frame":{},"visible":{},"safe":[{},{},{},{}],"aux_left":{},"aux_right":{}}}"#,
+                f(flipped(s.frame(), mtm)),
+                f(flipped(s.visibleFrame(), mtm)),
+                insets.top,
+                insets.left,
+                insets.bottom,
+                insets.right,
+                f(Frame::new(left.origin.x, left.origin.y, left.size.width, left.size.height)),
+                f(Frame::new(right.origin.x, right.origin.y, right.size.width, right.size.height)),
+            )
+        })
+        .collect();
+    let menu_bar: bool = unsafe { msg_send![objc2::class!(NSMenu), menuBarVisible] };
+    let window = view.window().map_or("null".into(), |w| f(flipped(w.frame(), mtm)));
+    format!(
+        r#"{{"active":{},"options":{},"system":{},"menu_bar_visible":{},"window":{},"screens":[{}]}}"#,
+        app.isActive(),
+        app.presentationOptions().0,
+        app.currentSystemPresentationOptions().0,
+        menu_bar,
+        window,
+        screens.join(",")
+    )
 }
 
 /// A native checkbox of the canary's: a press (a click or `AXPress`) turns it on or off.
