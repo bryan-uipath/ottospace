@@ -77,6 +77,31 @@ Positions are left out; sizes are in points.
   and four system dialogs appear. `zoom-meeting.md` guessed this; it is confirmed.
 - **Only standard windows can be hosted** today, so while sharing there is one hostable window.
 
+### Second reading (2026-11-16): identifiers and a third window
+
+Read once or twice by hand during a meeting, structure only (System Events; nothing moved or
+pressed). Two displays, both 3840 × 2160; every window below was on the main one.
+
+| Window title | Subrole | Size | `AXIdentifier` | What it is |
+|---|---|---|---|---|
+| `Zoom Workplace` | `AXStandardWindow` | 759 × 650 | none | Zoom's home window (chat, calendar, search), open beside the meeting. Its account button reads `… In a Zoom Meeting …` |
+| `Zoom Meeting` | `AXStandardWindow` | 911 to 1083 × about 935 | `zm.meeting.window.main` | The main meeting window: tiles, toolbar, chat panel |
+| `Zoom Meeting` | `AXStandardWindow` | 804 to 818 × about 935 | none | The **share viewer**, there while someone else shares: one `AXUnknown` element (the shared screen, described `<name>'s screen`), `View`, security, window buttons |
+| `zoom annotation entrypoint` | `AXSystemDialog` | 56 × 56 | none | The annotate button over the share viewer |
+
+- **The main meeting window has a fixed identifier**, `zm.meeting.window.main`; no other window
+  has one. A rule (a slot, "in a meeting") should match on it rather than on title or size.
+- **The second `Zoom Meeting` window is the share viewer**, not video on the other display (the
+  first reading's guess): it sat on the same display as the main one and held the shared screen.
+- **The home window stays open during a meeting** and is a standard window too, so "host the
+  app's standard windows" picks up three. Its title tells it apart.
+- **Toolbar buttons carry identifiers** in the main window: `audio`, `video`, `leave`,
+  `participant`, `chat`, `share`, `react`, `more`, and `MeetingTopBarInfoButton` (the meeting's
+  title). Their descriptions change with state (`Mute my audio` / `Unmute my audio`); the
+  identifiers do not. The other buttons have none.
+- The transcription button (`Open transcription popup, Transcription is on`) shows only while
+  the host has transcription on.
+
 ### Windows to leave alone
 
 Bryan, 2026-11-12: the share window and the floating toolbar are things "we would want to
@@ -144,8 +169,9 @@ The participant count is not in this toolbar's descriptions.
 1. A popped-out participants panel (its window's title and subrole), and how host, co-host and
    guest are written in the rows.
 2. Whether a parked Zoom window keeps rendering video.
-3. Minimum sizes of the two `Zoom Meeting` windows.
+3. Minimum sizes of the `Zoom Meeting` windows.
 4. Waiting room, breakout rooms, a webinar, a one-to-one call (the tiles may differ).
-5. Whether the second `Zoom Meeting` window exists with one display.
+5. Whether the share viewer is a separate window on one display, and whether it stays when
+   the share ends.
 6. How long a full read takes on a large meeting. Here each window's read took well under a
    second, with at most a few hundred elements.
