@@ -1,0 +1,30 @@
+# Several tasks in one workspace: each ↵ in ⌘N joins it. The drawer's strip has a tab a task
+# (the front one wide, with its title), the top row their badges stacked.
+{"click":"top:new_workspace"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"f i x space t h e space l o g i n space l o o p","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"settle":500}
+{"shot":"one-task"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"w r i t e space t h e space m i g r a t i o n","as":"user"}
+{"shot":"the-box-says"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"r e v i e w space t h e space c h a n g e l o g","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"task_set_state","id":1,"state":"needs_you"}
+{"settle":700}
+{"shot":"three-tasks"}
+{"click":"strip:1"}
+{"settle":500}
+{"shot":"the-first-in-front"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"u p d a t e space t h e space d o c s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"p r o f i l e space t h e space s l o w space s t a r t space o n space a space c o l d space c a c h e","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"settle":700}
+{"shot":"five-tasks"}

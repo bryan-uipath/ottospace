@@ -78,6 +78,8 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 MenuItem::separator(),
                 item("Next Tab Group", NextSpace),
                 item("Previous Tab Group", PrevSpace),
+                item("Next Conversation in This Workspace", NextChat),
+                item("Previous Conversation in This Workspace", PrevChat),
                 item("Hide", HideSpace),
             ])
             .collect(),

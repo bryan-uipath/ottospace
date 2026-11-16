@@ -822,7 +822,7 @@ impl Model {
         }
         let id = self.workbooks.add(Workbook::new(uid, self.free_name(), Vec::new()));
         let after = self.spaces.iter().position(|space| space.of == *self.space());
-        let space = Space { of: Owner::Workbook { id }, hidden: false, last: None };
+        let space = Space::new(Owner::Workbook { id });
         self.spaces.insert(after.map_or(self.spaces.len(), |at| at + 1), space);
         self.list = None;
         self.open_space(Owner::Workbook { id }, effects);

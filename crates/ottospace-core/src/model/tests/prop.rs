@@ -851,6 +851,8 @@ const MAKERS: &[Make] = &[
     |g| Action::SpaceSelect { index: g.index(g.m.shown_spaces().len()) },
     |g| Action::SpaceClick { index: g.index(g.m.shown_spaces().len()) },
     |g| Action::SpaceCycle { delta: g.delta() },
+    |g| Action::TalkFront { task: g.task() },
+    |g| Action::TalkCycle { delta: g.delta() },
     |g| Action::SpaceHide { index: g.rng.coin().then(|| g.index(g.m.shown_spaces().len())) },
     |g| Action::SpaceOpen { space: g.owner() },
     |g| Action::SelectVisibleTab { index: g.index(g.m.tabs.len()) },
@@ -1305,6 +1307,8 @@ fn selects_tab(action: &Action) -> bool {
             | Action::SpaceSelect { .. }
             | Action::SpaceClick { .. }
             | Action::SpaceCycle { .. }
+            | Action::TalkFront { .. }
+            | Action::TalkCycle { .. }
             | Action::SpaceHide { .. }
             | Action::SpaceOpen { .. }
             | Action::WorkbookNew { .. }
@@ -1444,7 +1448,7 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(selected.len() == 1 && !selected[0].hidden, "the selected space is hidden or not one: {selected:?}");
     // One selection: the drawer is only ever on the selected space's conversation.
     ensure!(
-        m.talk.as_ref().is_none_or(|talk| Some(&talk.task) == m.space().subject().as_ref()),
+        m.talk.as_ref().is_none_or(|talk| Some(&talk.task) == m.space_subject(m.space()).as_ref()),
         "the drawer is on {:?}, the selected space is {:?}",
         m.talk,
         m.space()
@@ -1456,7 +1460,7 @@ fn check(m: &Model) -> Result<(), String> {
     let busy = busy || m.brief.is_some() || m.inspector.is_some();
     let chip = m.agent_chip();
     ensure!(
-        chip.is_some() == (m.space().subject().is_some() && !busy),
+        chip.is_some() == (m.space_subject(m.space()).is_some() && !busy),
         "the agent chip is {chip:?}: the selected space is {:?}, the drawer {:?}",
         m.space(),
         m.talk
@@ -1464,7 +1468,7 @@ fn check(m: &Model) -> Result<(), String> {
     if let Some(chip) = &chip {
         let its = m.shown_spaces().get(chip.space).map(|space| &space.of);
         ensure!(
-            Some(&chip.task) == m.space().subject().as_ref(),
+            Some(&chip.task) == m.space_subject(m.space()).as_ref(),
             "the agent chip is not the selected space's: {chip:?}"
         );
         ensure!(
@@ -1937,6 +1941,24 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(unique(&uids) && uids.iter().all(|uid| workbook::valid_uid(uid)), "workbook file names {uids:?}");
     let names: Vec<&str> = books.iter().map(|book| book.name.as_str()).collect();
     ensure!(unique(&names) && names.iter().all(named), "workbook names {names:?}");
+    // Every task is in one space at most: a joined one is live, joined once, and has no space
+    // of its own; only a task's space is joined; the task in front is one of the space's.
+    let joined: Vec<TaskId> = m.spaces().iter().flat_map(|space| space.joined.clone()).collect();
+    ensure!(unique(&joined), "a task joined two spaces: {joined:?}");
+    for space in m.spaces() {
+        let own = space.of.task();
+        ensure!(own.is_some() || space.joined.is_empty(), "{:?} is no task's and has tasks", space.of);
+        for id in &space.joined {
+            ensure!(m.tasks.live(*id).is_some() && Some(*id) != own, "task {id} joined {:?}", space.of);
+            let tabs = m.tabs.iter().any(|tab| tab.space == Owner::Task { id: *id });
+            ensure!(!tabs, "task {id} is in {:?} and has a space of its own", space.of);
+            ensure!(m.task_space(*id) == space.of, "task {id} is in {:?}, not where it is said", space.of);
+        }
+        let members = m.members(&space.of);
+        ensure!(space.front.is_none_or(|id| members.contains(&id)), "{:?}: front {:?}", space.of, space.front);
+        ensure!(m.front(&space.of).is_none_or(|id| members.contains(&id)), "{:?}: its front is not its", space.of);
+        ensure!(m.front(&space.of).is_some() == !members.is_empty(), "{:?}: tasks and no front", space.of);
+    }
     // One workspace a task, a live one; and a bound workspace has no space of its own.
     let bound: Vec<TaskId> = books.iter().filter_map(|book| book.task).collect();
     ensure!(unique(&bound), "two workspaces bound to one task: {bound:?}");
@@ -2314,6 +2336,8 @@ impl Run {
                 | Action::SpaceSelect { .. }
                 | Action::SpaceClick { .. }
                 | Action::SpaceCycle { .. }
+                | Action::TalkFront { .. }
+                | Action::TalkCycle { .. }
                 | Action::SpaceHide { .. }
                 | Action::SpaceOpen { .. }
         );
@@ -2325,6 +2349,10 @@ impl Run {
         };
         let (bound_before, panes_before) = (bindings(m), (m.panes.clone(), tab_panes_by_id(m)));
         let menu_before = m.row_menu.clone();
+        let fronts_before: Vec<(Owner, TaskId)> =
+            m.spaces().iter().filter_map(|space| Some((space.of.clone(), m.front(&space.of)?))).collect();
+        let joined_before: Vec<(Owner, TaskId)> =
+            m.spaces().iter().flat_map(|space| space.joined.iter().map(|id| (space.of.clone(), *id))).collect();
         let typing_to = m.talk.clone().filter(|talk| talk.keys && origin != Origin::User);
         // A click on a space that is not the user's opens no conversation.
         let clicked = matches!(action, Action::SpaceClick { .. }) && origin != Origin::User;
@@ -2410,6 +2438,8 @@ impl Run {
                     | Action::SpaceSelect { .. }
                     | Action::SpaceClick { .. }
                     | Action::SpaceCycle { .. }
+                    | Action::TalkFront { .. }
+                    | Action::TalkCycle { .. }
                     | Action::SpaceHide { .. }
                     | Action::SpaceOpen { .. }
                     | Action::WorkbookNew { .. }
@@ -2517,8 +2547,10 @@ impl Run {
             let gathered = *was == Owner::Workspace
                 && matches!(now, Owner::Workbook { .. } | Owner::Task { .. })
                 && matches!(action, Action::WorkbookOpen { .. } | Action::SpaceOpen { .. } | Action::ListChoose { .. });
+            // Its space's own task gone and others in it: the space is the most urgent one's.
+            let inherited = matches!((was, now), (Owner::Task { .. }, Owner::Task { .. })) && !m.owner_valid(was);
             ensure!(
-                moved || bound || gone || undone || adopted || gathered,
+                moved || bound || gone || undone || adopted || gathered || inherited,
                 "{origin:?}'s {action:?} moved tab {id} from {was:?} to {now:?}"
             );
         }
@@ -2528,6 +2560,40 @@ impl Run {
         // Only the user opens a row's menu or moves in it: another's step leaves it, or its row went.
         let menu_kept = m.row_menu.is_none() || m.row_menu == menu_before;
         ensure!(origin == Origin::User || menu_kept, "{origin:?}'s {action:?} opened or moved a row's menu");
+        // Only the user says which conversation is in front: after another's step, a task that
+        // was in front and is still there to be, is. And only the user's ↵ on a new task (or
+        // their undo of its dismissal) puts a task in a workspace that has one.
+        if origin != Origin::User && !matches!(action, Action::RestoreLayout { .. }) {
+            let on_row = |of: &Owner| m.spaces().iter().any(|space| space.of == *of);
+            for (was, id) in fronts_before.iter().filter(|(_, id)| m.tasks.live(*id).is_some()) {
+                // The space it was in front of, or the one that space became (its own task gone).
+                let of = if on_row(was) { was.clone() } else { m.task_space(*id) };
+                let front = m.front(&of);
+                ensure!(!on_row(&of) || front == Some(*id), "{origin:?}'s {action:?} took task {id} from the front");
+            }
+            // Nor does a task leave a workspace by another's step, but with the workspace:
+            // its tabs gone, or its own task gone and this one its heir.
+            for (was, id) in joined_before.iter().filter(|(_, id)| m.tasks.live(*id).is_some()) {
+                let stays = m.task_space(*id) == *was || !on_row(was);
+                ensure!(stays, "{origin:?}'s {action:?} took task {id} out of {was:?}");
+            }
+        }
+        let joined_now: Vec<TaskId> = m.spaces().iter().flat_map(|space| space.joined.clone()).collect();
+        if joined_now.iter().any(|id| !joined_before.iter().any(|(_, was)| was == id)) {
+            let starts = matches!(
+                action,
+                Action::ComposeSubmit { open: true } | Action::ComposeEnter | Action::TaskFromLine { open: true, .. }
+            );
+            let undone = matches!(action, Action::TaskUndo | Action::ListUndo);
+            ensure!(
+                origin == Origin::User && (starts || undone),
+                "{origin:?}'s {action:?} joined a task to a workspace"
+            );
+            if starts {
+                let now = (m.panes.clone(), tab_panes_by_id(m));
+                ensure!(now == panes_before, "{action:?} joined a task to a workspace and moved or closed a pane");
+            }
+        }
         // Only the user's ↵ on a new task binds a workspace (or an undo of its dismissal, or the
         // files read again); and binding moves no pane, closes none and ends nothing.
         let bound_now = bindings(m);
@@ -2854,6 +2920,9 @@ impl Run {
                 ensure!(!filed[0].title_generated, "a title that was typed is marked as made up");
                 let task = filed[0];
                 let repo = draft.repo.as_deref().and_then(|name| m.repo_named(name));
+                // A task that joined a workspace and named no repository shares the workspace's.
+                let shares = repo.is_none() && m.task_space(task.id) != Owner::Task { id: task.id };
+                let repo = if shares { task.repo.clone() } else { repo };
                 let read = (&draft.title, draft.priority.unwrap_or(3), &draft.project, &repo, &draft.agent);
                 ensure!(
                     (&task.title, task.priority, &task.project, &task.repo, &task.agent) == read,

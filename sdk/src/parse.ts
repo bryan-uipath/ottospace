@@ -719,6 +719,9 @@ function spaceRow(value: unknown, at: string): SpaceRow {
     hidden: bool(o.hidden, `${at}.hidden`),
     selected: bool(o.selected, `${at}.selected`),
     tabs: list(num)(o.tabs, `${at}.tabs`),
+    tasks: list(num)(o.tasks, `${at}.tasks`),
+    front: orNull(num)(o.front, `${at}.front`),
+    strip: list(num)(o.strip, `${at}.strip`),
   };
 }
 

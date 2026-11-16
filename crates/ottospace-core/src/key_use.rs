@@ -40,6 +40,7 @@ pub enum Binding {
     DialToggle,
     SpaceNumber,
     NextSpace,
+    NextChat,
     HideSpace,
     MarkPane,
     MarkJump,
@@ -85,6 +86,7 @@ pub const ALL: &[Binding] = &[
     Binding::DialToggle,
     Binding::SpaceNumber,
     Binding::NextSpace,
+    Binding::NextChat,
     Binding::HideSpace,
     Binding::MarkPane,
     Binding::MarkJump,
@@ -130,6 +132,7 @@ impl Binding {
             Binding::TalkToggle => &[C::TalkToggle],
             Binding::DialToggle => &[C::DialToggle],
             Binding::NextSpace => &[C::NextSpace, C::PrevSpace],
+            Binding::NextChat => &[C::NextChat, C::PrevChat],
             Binding::HideSpace => &[C::HideSpace],
             Binding::MarkPane => &[C::MarkPane, C::MarkTab],
             Binding::MarkJump => &[C::MarkJump],
@@ -177,6 +180,7 @@ impl Binding {
             | B::MoveToTab => Group::Panes,
             B::SpaceNumber
             | B::NextSpace
+            | B::NextChat
             | B::HideSpace
             | B::NewTab
             | B::TabNumber
@@ -230,6 +234,7 @@ impl Binding {
             B::DialToggle => "Open / close agent dial",
             B::SpaceNumber => "Go to tab group",
             B::NextSpace => "Next / previous group",
+            B::NextChat => "Next / previous conversation here",
             B::HideSpace => "Hide tab group",
             B::CaptureKey => "Capture, from any app",
             B::Copy => "Copy",
