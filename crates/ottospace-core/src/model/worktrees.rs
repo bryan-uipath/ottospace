@@ -5,23 +5,157 @@
 use super::{Effect, Model, Space};
 use crate::layout::Axis;
 use crate::model::spaces::Owner;
+use crate::runner::RunnerId;
 use crate::sessions;
 use crate::tasks::TaskId;
 use crate::workbook::Workbook;
 
+/// How often a folder an agent moved into, that the Repos list does not hold yet, is looked for
+/// again (ms), and for how long: a worktree made a moment ago may not be read yet.
+pub(crate) const MOVE_RETRY_MS: u64 = 2_000;
+pub(crate) const MOVE_WAIT_MS: u64 = 10_000;
+
+/// A folder a task's agent said it works in, not yet a listed checkout of its repository.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Moving {
+    pub(crate) task: TaskId,
+    pub(crate) cwd: String,
+    /// When it was said, and when the list was last asked for again (ms).
+    pub(crate) since: u64,
+    pub(crate) asked: u64,
+}
+
+/// A repository's checkouts: its own folder, then its worktrees.
+fn paths(repo: &crate::repos::Repo) -> impl Iterator<Item = &str> {
+    std::iter::once(repo.path.as_str()).chain(repo.worktrees.iter().map(|worktree| worktree.path.as_str()))
+}
+
+/// True if `path` is in a worktree an agent's sub-agent made: Claude Code's
+/// `<repo>/.claude/worktrees/agent-<id>`. Such a move is never the task's.
+pub(crate) fn subagent_path(path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    parts.windows(3).any(|w| w[0] == ".claude" && w[1] == "worktrees" && w[2].starts_with("agent-"))
+}
+
 impl Model {
     /// The listed checkout `dir` is in or below: a repository's own folder or a worktree, the longest.
     pub fn checkout_at(&self, dir: &str) -> Option<&str> {
-        let paths = self.repos.iter().flat_map(|repo| {
-            std::iter::once(repo.path.as_str()).chain(repo.worktrees.iter().map(|worktree| worktree.path.as_str()))
-        });
-        paths.filter(|path| sessions::below(dir, path)).max_by_key(|path| path.len())
+        let all = self.repos.iter().flat_map(paths);
+        all.filter(|path| sessions::below(dir, path)).max_by_key(|path| path.len())
     }
 
-    /// The worktree a task's agent works in: the listed checkout of its folder. `None`: none
-    /// (the home folder, or a folder outside the list).
+    /// The worktree a task's agent works in: the one it moved into, while listed (`task_moved`),
+    /// else the listed checkout of its folder. `None`: none (the home folder, or a folder outside
+    /// the list).
     pub fn task_worktree(&self, id: TaskId) -> Option<&str> {
-        self.checkout_at(self.tasks.get(id)?.dir()?)
+        self.task_moved(id).or_else(|| self.checkout_at(self.tasks.get(id)?.dir()?))
+    }
+
+    /// The listed worktree a task's agent moved into, if it did: where it works and starts now.
+    pub fn task_moved(&self, id: TaskId) -> Option<&str> {
+        let path = self.tasks.get(id)?.worktree.as_deref()?;
+        self.repo_listed(path).then_some(path)
+    }
+
+    /// The checkouts of the repository that has `checkout` among its own.
+    fn sibling_checkouts(&self, checkout: &str) -> Vec<&str> {
+        let repo = self.repos.iter().find(|repo| paths(repo).any(|path| path == checkout));
+        repo.map(|repo| paths(repo).collect()).unwrap_or_default()
+    }
+
+    /// A task's session said where its agent works now (`SessionWork`, the system's reading of
+    /// it): in another checkout of its repository, the task works there from now on. Not for a
+    /// runner whose records do not move with the agent, nor into a sub-agent's worktree. A folder
+    /// the list does not hold yet: the list is read again (`Effect::ReadRepos`), a while.
+    pub(crate) fn agent_cwd(&mut self, runner: &str, session: &str, cwd: String, effects: &mut Vec<Effect>) {
+        if !RunnerId::named(runner).is_some_and(|runner| runner.spec().disk.cwd_moves) {
+            return;
+        }
+        let of = |task: &crate::tasks::Task| {
+            task.session.as_ref().is_some_and(|link| link.runner == runner && link.id == session)
+        };
+        let Some(id) = self.tasks.list.iter().find(|task| of(task)).map(|task| task.id) else { return };
+        // Said again (each read says the last one): nothing new.
+        if self.agent_cwds.iter().any(|(task, seen)| *task == id && *seen == cwd) {
+            return;
+        }
+        self.agent_cwds.retain(|(task, _)| *task != id);
+        self.agent_cwds.push((id, cwd.clone()));
+        self.moving.retain(|moving| moving.task != id);
+        if subagent_path(&cwd) {
+            return;
+        }
+        let now = self.now;
+        self.moving.push(Moving { task: id, cwd, since: now, asked: now });
+        if !self.follow_moves() {
+            effects.push(Effect::ReadRepos);
+        }
+    }
+
+    /// Each folder an agent moved into that is now a listed checkout of its task's repository:
+    /// the task works there. True if none waits for the list. One that does stays, a task's
+    /// last: any later read of the list (the user's + too) may find it.
+    pub(crate) fn follow_moves(&mut self) -> bool {
+        let moving = std::mem::take(&mut self.moving);
+        let mut waits = false;
+        for moving in moving {
+            let Some(task) = self.tasks.get(moving.task) else { continue };
+            // The worktree it moved into last, though no longer listed: what its workspace may still name.
+            let stored = task.worktree.clone();
+            let Some(current) = self.task_worktree(moving.task).map(String::from) else {
+                self.moving.push(moving);
+                continue;
+            };
+            let siblings = self.sibling_checkouts(&current);
+            let at = siblings.into_iter().filter(|path| sessions::below(&moving.cwd, path)).max_by_key(|p| p.len());
+            let at = at.map(String::from);
+            let gone = stored.as_ref().filter(|stored| **stored != current);
+            match at {
+                Some(new) if new != current => self.moved(moving.task, stored.as_deref().unwrap_or(&current), new),
+                // Back in the checkout it works in, after its last one went: that one is forgotten.
+                Some(new) if gone.is_some() && new == moving.cwd => {
+                    let was = gone.cloned().unwrap_or_default();
+                    self.moved(moving.task, &was, new)
+                }
+                // In its own checkout: a `cd`, unless it is a new worktree there not listed yet.
+                Some(same) if same == moving.cwd => {}
+                _ => {
+                    waits = true;
+                    self.moving.push(moving)
+                }
+            }
+        }
+        !waits
+    }
+
+    /// The task works in `new` now. Its workspace's default follows it from `was` (its worktree
+    /// until now) when it is the workspace's only task; with others there, it stays as it is.
+    fn moved(&mut self, id: TaskId, was: &str, new: String) {
+        let of = self.task_space(id);
+        let book = self.space_book(&of).filter(|book| book.worktree.as_deref() == Some(was)).map(|book| book.id);
+        if let Some(book) = book.filter(|_| self.members(&of) == [id]) {
+            self.workbooks.set_worktree(book, Some(new.clone()));
+        }
+        if let Some(task) = self.tasks.list.iter_mut().find(|task| task.id == id) {
+            task.worktree = Some(new);
+        }
+    }
+
+    /// A while after a move into a folder not listed yet: the list is read again, until it is
+    /// there or the wait is over (then only a read for another reason finds it).
+    pub(crate) fn retry_moves(&mut self, effects: &mut Vec<Effect>) {
+        let now = self.now;
+        let waiting = |moving: &&mut Moving| now.saturating_sub(moving.since) <= MOVE_WAIT_MS;
+        let due =
+            self.moving.iter_mut().filter(waiting).filter(|moving| now.saturating_sub(moving.asked) >= MOVE_RETRY_MS);
+        let mut ask = false;
+        for moving in due {
+            moving.asked = now;
+            ask = true;
+        }
+        if ask {
+            effects.push(Effect::ReadRepos);
+        }
     }
 
     /// The kept workspace of a space: its own, or the one bound to its task.

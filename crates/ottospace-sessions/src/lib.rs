@@ -104,6 +104,8 @@ pub struct Cursor {
     refined: BTreeMap<String, Refined>,
     /// Edit calls carry their change (`What::ToolStart.diff`).
     edits: bool,
+    /// The folder the main loop last recorded working in (`What::Cwd`).
+    cwd: Option<PathBuf>,
 }
 
 impl Cursor {
@@ -184,6 +186,11 @@ pub enum What {
     ModelChange {
         from: String,
         to: String,
+    },
+    /// The folder the main loop works in, as its records say: its first, then each change (a
+    /// `cd`, a worktree entered). Only a runner whose records carry it (`Disk::cwd_moves`).
+    Cwd {
+        cwd: PathBuf,
     },
 }
 

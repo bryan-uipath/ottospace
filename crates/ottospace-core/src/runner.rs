@@ -122,6 +122,9 @@ pub struct Disk {
     pub held: bool,
     /// A session's file records the folder it started in.
     pub cwd: bool,
+    /// Its records say where the agent works now, and the agent itself moves it (a `cd`, a
+    /// worktree it entered): a task follows its agent into a worktree it made.
+    pub cwd_moves: bool,
 }
 
 /// What can be done with a session started elsewhere. Stated even where the answer is no, so the
@@ -173,8 +176,8 @@ const CLAUDE: RunnerSpec = RunnerSpec {
         resume: "--resume",
     },
     structured: Structured { status: Status::Verified, answers: &[Reply::AllowOnce, Reply::Deny], interrupt: true },
-    // `sessions/<pid>.json` names the process; the file's records carry `cwd`.
-    disk: Disk { held: true, cwd: true },
+    // `sessions/<pid>.json` names the process; each record carries the `cwd` the agent is in.
+    disk: Disk { held: true, cwd: true, cwd_moves: true },
     attach: Attach {
         watch: Support::Yes,
         take_over_when_idle: Support::Yes,
@@ -199,8 +202,9 @@ const CODEX: RunnerSpec = RunnerSpec {
         resume: "resume",
     },
     structured: Structured { status: Status::Experimental, answers: &[Reply::AllowOnce, Reply::Deny], interrupt: true },
-    // No process is recorded; `session_meta` carries `cwd`.
-    disk: Disk { held: false, cwd: true },
+    // No process is recorded; `session_meta` carries `cwd`. A `turn_context`'s `cwd` is the
+    // client's choice for the turn, never the agent's: ottospace sets none, so it never moves.
+    disk: Disk { held: false, cwd: true, cwd_moves: false },
     attach: Attach {
         // Probe 2026-11-13: the rollout grows per item; a call's start is on disk before it ends.
         watch: Support::Yes,
@@ -254,6 +258,7 @@ mod tests {
         table += &row("interrupt", &|spec| spec.structured.interrupt.to_string());
         table += &row("held (live holder on disk)", &|spec| spec.disk.held.to_string());
         table += &row("cwd on disk", &|spec| spec.disk.cwd.to_string());
+        table += &row("cwd moves with the agent", &|spec| spec.disk.cwd_moves.to_string());
         table += &row("watch", &|spec| format!("{:?}", spec.attach.watch));
         table += &row("take over when idle", &|spec| format!("{:?}", spec.attach.take_over_when_idle));
         table += &row("attach live", &|spec| format!("{:?}", spec.attach.attach_live));

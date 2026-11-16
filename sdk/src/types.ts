@@ -270,6 +270,8 @@ export interface Task {
   repo: string | null;
   /** The folder the user took from the new-task box's dropdown: its agent runs there, not in `repo`. Absent: none. */
   folder?: string;
+  /** The worktree its agent moved into, as its session said (a sub-agent's never): it works there since. Absent: the checkout of its folder. */
+  worktree?: string;
   /** Who works it: `claude`, `codex`, or a saved agent's name. */
   agent: string | null;
   /** Paths the task is about, as typed. */

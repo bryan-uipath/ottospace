@@ -264,7 +264,8 @@ fn a_truncated_or_replaced_file_restarts_the_cursor() {
     fs::write(&path, format!("{}\n", lines[3])).unwrap();
     let batch = claude.read(&session, first.cursor.clone(), ALL).unwrap();
     assert!(batch.restarted);
-    assert_eq!(batch.events.iter().map(|e| &e.what).collect::<Vec<_>>(), [&What::UserMessage]);
+    let cwd = What::Cwd { cwd: "/work/app".into() };
+    assert_eq!(batch.events.iter().map(|e| &e.what).collect::<Vec<_>>(), [&cwd, &What::UserMessage]);
     assert_eq!(batch.cursor.offset(), lines[3].len() as u64 + 1);
     let fresh = claude.read(&session, Cursor::default(), ALL).unwrap();
     assert_eq!(batch.cursor, fresh.cursor, "no state of the old file survives");
@@ -279,6 +280,34 @@ fn a_truncated_or_replaced_file_restarts_the_cursor() {
 
     let same = claude.read(&session, batch.cursor, ALL).unwrap();
     assert!(!same.restarted && same.events.is_empty());
+}
+
+/// Where the main loop works, as its records say: the first, then each change. A sub-agent's
+/// record in the parent's file (`isSidechain`) says nothing of it.
+#[test]
+fn claude_says_where_its_main_loop_moves() {
+    let claude = claude();
+    let original = find(&claude, "/work/app", CLAUDE_MAIN);
+    let dir = temp("moves");
+    let path = dir.join("session.jsonl");
+    let record = |cwd: &str, side: bool| {
+        format!(r#"{{"type":"user","cwd":"{cwd}","isSidechain":{side},"message":{{"content":"go"}}}}"#)
+    };
+    let lines = [
+        record("/work/app", false),
+        record("/work/app", false),
+        record("/work/app/.claude/worktrees/agent-x", true),
+        record("/work/app-3/src", false),
+    ];
+    fs::write(&path, lines.join("\n") + "\n").unwrap();
+    let session = SessionRef { path, ..original };
+    let read = claude.read(&session, Cursor::default(), ALL).unwrap();
+    let moves: Vec<&What> = read.events.iter().map(|e| &e.what).filter(|w| matches!(w, What::Cwd { .. })).collect();
+    let at = |cwd: &str| What::Cwd { cwd: cwd.into() };
+    assert_eq!(moves, [&at("/work/app"), &at("/work/app-3/src")]);
+    let mut tally = ottospace_sessions::tally::Reader::default();
+    tally.advance(&claude, &session, ALL).unwrap();
+    assert_eq!(tally.tally.cwd.as_deref(), Some(std::path::Path::new("/work/app-3/src")));
 }
 
 #[test]

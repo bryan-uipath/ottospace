@@ -304,6 +304,9 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    workspace's new terminals (⌘D, a split, a new tab's) and new tasks start in its default
    worktree, unless the task's line names another (`>repo`, `/path`); where a workspace's tasks
    work in different worktrees, each task's row and its strip tab's hover name its worktree. A
+   Claude Code task whose agent moves into another worktree of its repository (one it made; never
+   a sub-agent's `.claude/worktrees/agent-*`) works there from then on, and so does its
+   workspace's default when it is the workspace's one task. A
    row a live task works in carries its badge (Terminal, on hover, opens a terminal anyway).
    See `docs/ai/spaces.md`. A
    repository's + (on its name, under the pointer) asks for a branch: a local one is checked out, one only a remote has is
