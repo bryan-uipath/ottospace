@@ -16,6 +16,42 @@ This is the "separate trust decision" that `CLAUDE.md` (Control socket),
 [sneak-apps.md](sneak-apps.md) ("What is not allowed", lines 82-88) leave open. Its answer: the
 user grants it per pane, to one task, and every use shows.
 
+## Decided by the owner (2026-11-16)
+
+These override the leans below where they differ.
+
+- **Two levels**: See, then See and act.
+- **The default level is Act, changeable in settings** ("let's have 'act' as the default but be able
+  to be tweaked in configuration"): a setting, e.g. `agent_mode: "act" | "see" | "off"`, is the level
+  a new app pane starts at; the per-pane control still changes one pane. Sections 1 and 8 read "Off
+  (default)": read them as "the setting's level". The grant is still only to the task bound to that
+  pane's workspace, and a workspace with no task grants nothing.
+- **Off also closes today's open read** of app panes (`ax_tree`), section 4.
+- **The control** is one dropdown with a robot glyph (section 1).
+
+## Probes with the real CLIs (2026-11-16)
+
+Run in an empty folder against a throwaway unix socket (mode 0600, under `$TMPDIR`), never the app's.
+A small script printed the variable and tried to connect.
+
+| Runner | Variable `OTTOSPACE_TASK_TOKEN` in the tool shell | Connect to the socket |
+|---|---|---|
+| Claude Code 2.1.325, `-p`, the user's settings (no sandbox) | kept | works |
+| Claude Code, sandbox on | kept | **refused** (`Operation not permitted`) |
+| Claude Code, sandbox on, `sandbox.network.allowUnixSockets: [<socket>]` | kept | works |
+| Codex 0.166.0, `codex sandbox -- …` (its seatbelt, no model call) | kept (this path skips the shell environment policy) | **refused** |
+| Codex 0.166.0, `codex exec` | not tested: the workspace is out of credits | not tested |
+
+- **The name.** Codex's binary carries a default exclude list for the tool shell's environment with
+  `*KEY*` and `*TOKEN*`, and a setting `ignore_default_excludes`; whether the list applies by default
+  in this version is not verified. Do not depend on it: name the variable without `KEY`, `TOKEN` or
+  `SECRET` (e.g. `OTTOSPACE_TASK_PASS`).
+- **The socket.** A sandboxed tool shell cannot reach it on either runner. For Claude the start
+  command can allow that one socket (verified above). For Codex an equivalent is not known. So the
+  tool shell calling `ottospace ctl` cannot be the only route. Sturdier: ottospace gives the agent an
+  MCP server (the runner starts it outside the tool sandbox) that speaks to the socket with the
+  task's pass; the requests of sections 3 and 5 become its tools. Decide this in stage (a).
+
 ## What exists today
 
 | Piece | Where | What it means here |
