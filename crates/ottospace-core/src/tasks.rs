@@ -109,6 +109,8 @@ pub struct TaskRow {
     pub current: bool,
     /// The one fact at its right (`fact`).
     pub fact: Option<String>,
+    /// The worktree it works in, while its workspace's tasks work in more than one (`app-2`).
+    pub worktree: Option<String>,
 }
 
 /// The one fact a row shows at its right, by its group: how long it has run (since its agent
@@ -406,7 +408,7 @@ pub struct Assign {
 pub const MAX_RESOLVED: usize = 1024;
 
 /// A folder an agent may run in: an absolute path, with no control character, not too long.
-fn folder_fits(path: &str) -> bool {
+pub(crate) fn folder_fits(path: &str) -> bool {
     path.starts_with('/') && path.chars().count() <= MAX_RESOLVED && !path.chars().any(char::is_control)
 }
 

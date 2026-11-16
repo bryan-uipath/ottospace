@@ -1,0 +1,19 @@
+# A worktree's Repos row: a workspace of its own, named for its branch, that worktree its default.
+# Two tasks there, one in the repository's own folder: the strip's tab and the task rows say which.
+{"cmd":"section","section":"repos"}
+{"until":"repos_bar.2"}
+{"click":"repo:{ROOT}/repos/canvas-app-2"}
+{"shot":"opened"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"f i x space t h e space z o o m","as":"user"}
+{"shot":"the-box-says"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"> c a n v a s space r e v i e w space t h e space p a n","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"section","section":"tasks"}
+{"settle":700}
+{"shot":"two-worktrees"}
+{"hover":"strip:1"}
+{"settle":1500}
+{"shot":"strip-hover"}

@@ -87,6 +87,8 @@ pub struct SpaceRow {
     pub front: Option<TaskId>,
     /// The tabs of the drawer's strip while it is selected, in order. Empty: no strip.
     pub strip: Vec<TaskId>,
+    /// Its default worktree, while listed: where its new terminals and tasks start.
+    pub worktree: Option<String>,
     /// What its item on the top row shows before its name.
     pub glyph: Glyph,
 }
@@ -159,6 +161,7 @@ impl Model {
             tasks: self.space_tasks(&space.of),
             front: self.front(&space.of),
             strip: self.strip(&space.of),
+            worktree: self.space_worktree(&space.of).map(String::from),
             glyph: self.glyph(&space.of),
         };
         self.spaces.iter().map(row).collect()
@@ -535,9 +538,13 @@ impl Model {
             let to = match last.filter(|_| !made) {
                 Some(of) => of,
                 None => {
-                    let to = self.stray_workspace(hint);
+                    let to = self.stray_workspace(hint.as_ref().map(|(name, _)| name.clone()));
                     if let Owner::Workbook { id } = to {
                         self.workbooks.note_made(&ids, id);
+                        // The user's, for a folder of the Repos list: it is its default.
+                        if made {
+                            self.workbooks.set_worktree(id, hint.map(|(_, path)| path));
+                        }
                     }
                     to
                 }
