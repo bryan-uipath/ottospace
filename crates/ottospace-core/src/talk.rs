@@ -130,7 +130,8 @@ pub fn width(asked: f32) -> f32 {
 /// its header only when it is not the default, and the facts of the title's hover.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct AgentLine {
-    /// At the drawer's foot: the model in short and a mode that lets it act unasked, `haiku-5.5 · auto`.
+    /// At the drawer's foot: the model in short, a mode that lets it act unasked and the folder
+    /// it runs in, in short (`short_dir`): `haiku-5.5 · auto · ~/code/app`.
     pub foot: Option<String>,
     /// That mode asks for nothing at all (`bypassPermissions`): the foot is drawn as a warning.
     pub bypass: bool,
@@ -144,26 +145,64 @@ pub struct AgentLine {
 /// shows. `default`, `plan` and `dontAsk` ask or refuse: they are in the hover only.
 const UNASKED: [(&str, &str); 3] = [("acceptEdits", "accept edits"), ("auto", "auto"), ("bypassPermissions", "bypass")];
 
+/// Where an agent runs, as paths: `dir` its process's folder (or where it would start),
+/// `default` its task's own (its repository, else home), `home` the home folder, `worktree` the
+/// listed worktree `dir` is in, if any.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Place<'a> {
+    pub dir: Option<&'a str>,
+    pub default: Option<&'a str>,
+    pub home: Option<&'a str>,
+    pub worktree: Option<&'a str>,
+}
+
+/// The longest folder at the drawer's foot, in characters.
+pub const DIR_CHARS: usize = 28;
+
+/// `dir` at or below `root`: what follows `root` (`""`, `/src`).
+fn below<'a>(dir: &'a str, root: &str) -> Option<&'a str> {
+    let rest = dir.strip_prefix(root.trim_end_matches('/')).filter(|_| !root.is_empty())?;
+    Some(rest).filter(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// `dir` with the home folder as `~`: `~/code/app`.
+fn tilde(dir: &str, home: Option<&str>) -> String {
+    home.and_then(|home| below(dir, home)).map_or_else(|| dir.to_string(), |rest| format!("~{rest}"))
+}
+
+/// A folder for the drawer's foot. In a listed worktree: from the worktree's folder name on
+/// (`fix-login`, `fix-login/crates`). Else with the home folder as `~`. Longer than
+/// `DIR_CHARS`: its middle is `…`, e.g. `~/code/a-long…/crates/core`.
+pub fn short_dir(dir: &str, home: Option<&str>, worktree: Option<&str>) -> String {
+    use unicode_segmentation::UnicodeSegmentation;
+    let name = |root: &'_ str| root.trim_end_matches('/').rsplit('/').next().unwrap_or_default().to_string();
+    let inside = worktree.and_then(|root| Some(format!("{}{}", name(root), below(dir, root)?)));
+    let text = inside.filter(|text| !text.is_empty()).unwrap_or_else(|| tilde(dir, home));
+    let letters: Vec<&str> = text.graphemes(true).collect();
+    if letters.len() <= DIR_CHARS {
+        return text;
+    }
+    let head = (DIR_CHARS - 1) / 2;
+    let tail = letters.len() - (DIR_CHARS - 1 - head);
+    format!("{}…{}", letters[..head].concat(), letters[tail..].concat())
+}
+
 /// The drawer's agent line. `model`: the one the CLI reported, else the one it was started
 /// with (an id or a runner's name); `mode` as the CLI reported it; `secs` how long it has run,
-/// while it runs; `folder` where it runs (or would), `default` its task's own.
-pub fn agent_line(
-    model: Option<&str>,
-    mode: Option<&str>,
-    secs: Option<u64>,
-    folder: Option<&str>,
-    default: Option<&str>,
-) -> AgentLine {
+/// while it runs; `place` where it runs (or would).
+pub fn agent_line(model: Option<&str>, mode: Option<&str>, secs: Option<u64>, place: Place) -> AgentLine {
     let model = model.and_then(crate::sessions::short_model);
     let unasked = mode.and_then(|mode| UNASKED.iter().find(|(name, _)| *name == mode)).map(|(_, word)| *word);
-    let foot = [model.as_deref(), unasked].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+    let short = place.dir.map(|dir| short_dir(dir, place.home, place.worktree));
+    let foot = [model.as_deref(), unasked, short.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
     let elapsed = secs.map(|s| if s < 3600 { format!("{}:{:02}", s / 60, s % 60) } else { format!("{}h", s / 3600) });
+    let folder = place.dir.map(|dir| tilde(dir, place.home));
     let facts = [("Model", model.clone()), ("Mode", mode.map(str::to_string)), ("Running", elapsed)];
-    let facts = facts.into_iter().chain([("Folder", folder.map(str::to_string))]);
+    let facts = facts.into_iter().chain([("Folder", folder.clone())]);
     AgentLine {
         foot: Some(foot).filter(|foot| !foot.is_empty()),
         bypass: mode == Some("bypassPermissions"),
-        folder: folder.filter(|folder| Some(*folder) != default).map(str::to_string),
+        folder: folder.filter(|_| place.dir != place.default),
         facts: facts.filter_map(|(name, value)| Some((name, value?))).collect(),
     }
 }
@@ -174,16 +213,25 @@ mod tests {
 
     #[test]
     fn the_drawer_says_its_model_at_its_foot_and_the_rest_on_hover() {
-        // The model in short; a mode that asks is the hover's alone; the task's own folder too.
-        let line =
-            agent_line(Some("claude-haiku-5-5"), Some("default"), Some(20), Some("~/code/app"), Some("~/code/app"));
-        assert_eq!((line.foot.as_deref(), line.bypass, line.folder.as_deref()), (Some("haiku-5.5"), false, None));
+        let home = Some("/Users/me");
+        let app = Place { dir: Some("/Users/me/code/app"), default: Some("/Users/me/code/app"), home, worktree: None };
+        // The model in short, then the folder; a mode that asks is the hover's alone; the task's
+        // own folder is not in the header.
+        let line = agent_line(Some("claude-haiku-5-5"), Some("default"), Some(20), app);
+        let foot = (line.foot.as_deref(), line.bypass, line.folder.as_deref());
+        assert_eq!(foot, (Some("haiku-5.5 · ~/code/app"), false, None));
         let facts = [("Model", "haiku-5.5"), ("Mode", "default"), ("Running", "0:20"), ("Folder", "~/code/app")];
         assert_eq!(line.facts, facts.map(|(n, v)| (n, v.to_string())));
-        // A mode that acts unasked stays in sight; bypass as a warning. Another folder is shown.
-        let line = agent_line(Some("claude-opus-5-5"), Some("auto"), None, Some("~/notes"), Some("~/code/app"));
-        assert_eq!((line.foot.as_deref(), line.folder.as_deref()), (Some("opus-5.5 · auto"), Some("~/notes")));
-        let foot = |mode| agent_line(Some("claude"), Some(mode), None, None, None);
+        // A mode that acts unasked stays in sight; bypass as a warning. Another folder: the header's too.
+        let notes = Place { dir: Some("/Users/me/notes"), ..app };
+        let line = agent_line(Some("claude-opus-5-5"), Some("auto"), None, notes);
+        assert_eq!(
+            (line.foot.as_deref(), line.folder.as_deref()),
+            (Some("opus-5.5 · auto · ~/notes"), Some("~/notes"))
+        );
+        // Not started yet, no model known: where it would run is said all the same.
+        assert_eq!(agent_line(None, None, None, app).foot.as_deref(), Some("~/code/app"));
+        let foot = |mode| agent_line(Some("claude"), Some(mode), None, Place::default());
         assert_eq!(foot("acceptEdits").foot.as_deref(), Some("claude · accept edits"));
         assert_eq!(
             (foot("bypassPermissions").foot.as_deref(), foot("bypassPermissions").bypass),
@@ -191,9 +239,35 @@ mod tests {
         );
         assert_eq!((foot("plan").foot.as_deref(), foot("dontAsk").foot.as_deref()), (Some("claude"), Some("claude")));
         // Ended, nothing known but what it was started with: still said. An hour on: in hours.
-        let line = agent_line(None, None, Some(7300), None, None);
+        let line = agent_line(None, None, Some(7300), Place::default());
         assert_eq!((line.foot, line.facts), (None, vec![("Running", "2h".to_string())]));
-        assert_eq!(agent_line(Some("not a model"), None, None, None, None).foot, None);
+        assert_eq!(agent_line(Some("not a model"), None, None, Place::default()).foot, None);
+    }
+
+    #[test]
+    fn a_folder_is_said_from_home_or_its_worktree_and_cut_in_the_middle() {
+        let home = Some("/Users/me");
+        // Under home: `~`. Home itself. Outside it, or with no home known: as it is.
+        assert_eq!(short_dir("/Users/me/code/app", home, None), "~/code/app");
+        assert_eq!(short_dir("/Users/me", home, None), "~");
+        assert_eq!(short_dir("/Users/meg/app", home, None), "/Users/meg/app");
+        assert_eq!(short_dir("/srv/app", None, None), "/srv/app");
+        assert_eq!(short_dir("/srv/app", Some(""), Some("")), "/srv/app");
+        // A worktree: its folder's name, and what is below it. A worktree it is not in: no matter.
+        let worktree = Some("/Users/me/.ottospace/worktrees/app/fix-login");
+        assert_eq!(short_dir("/Users/me/.ottospace/worktrees/app/fix-login", home, worktree), "fix-login");
+        assert_eq!(
+            short_dir("/Users/me/.ottospace/worktrees/app/fix-login/crates", home, worktree),
+            "fix-login/crates"
+        );
+        assert_eq!(short_dir("/Users/me/code/app", home, worktree), "~/code/app");
+        // Long: the middle is cut, start and end stay, `DIR_CHARS` in all. Whole letters only.
+        let long = short_dir("/Users/me/code/a-very-long-repository-name/crates/core", home, None);
+        assert_eq!(long, "~/code/a-very…me/crates/core");
+        assert_eq!(long.chars().count(), DIR_CHARS);
+        let accents = format!("/srv/{}", "e\u{301}".repeat(40));
+        let cut = short_dir(&accents, None, None);
+        assert!(cut.starts_with("/srv/e\u{301}") && cut.ends_with("e\u{301}") && cut.contains('…'), "{cut}");
     }
 
     #[test]
