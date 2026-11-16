@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Action, Effect, Envelope, Host, Model, Origin, Tab};
+use super::{Action, Effect, Envelope, Host, Kind, Model, Origin, Tab};
 use crate::talk::{Subject, Talk};
 use crate::tasks::{State, TaskId};
 use crate::workbook::WorkbookId;
@@ -87,6 +87,22 @@ pub struct SpaceRow {
     pub front: Option<TaskId>,
     /// The tabs of the drawer's strip while it is selected, in order. Empty: no strip.
     pub strip: Vec<TaskId>,
+    /// What its item on the top row shows before its name.
+    pub glyph: Glyph,
+}
+
+/// What a space's item on the top row shows before its name (`Model::glyph`).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Glyph {
+    /// Home's house.
+    Home,
+    /// Its tasks' badges.
+    Tasks,
+    /// A workspace of no task holding one app pane and nothing else: that app's icon, by name.
+    App { name: String },
+    /// Its name alone: a workspace's glyph, a session's monogram while small.
+    Name,
 }
 
 /// What `settle_home` asks of the step: how it began.
@@ -143,6 +159,7 @@ impl Model {
             tasks: self.space_tasks(&space.of),
             front: self.front(&space.of),
             strip: self.strip(&space.of),
+            glyph: self.glyph(&space.of),
         };
         self.spaces.iter().map(row).collect()
     }
@@ -160,6 +177,24 @@ impl Model {
         let task = self.tasks.get(id);
         let group = task.and_then(|task| task.state.group()).map_or(u8::MAX, |group| group as u8);
         (group, task.map_or(u8::MAX, |task| task.priority), id)
+    }
+
+    /// What a space's item on the top row shows: a workspace whose tabs hold one pane, an
+    /// app's, shows that app (Slack alone: Slack's icon); with tasks, their badges.
+    pub fn glyph(&self, of: &Owner) -> Glyph {
+        match of {
+            Owner::Home => Glyph::Home,
+            Owner::Task { .. } => Glyph::Tasks,
+            Owner::Session { .. } => Glyph::Name,
+            Owner::Workbook { .. } => {
+                let panes = self.tab_panes();
+                let leaves: Vec<_> = self.space_tabs(of).into_iter().flat_map(|at| panes[at].clone()).collect();
+                match (leaves.as_slice(), leaves.first().and_then(|id| self.pane(*id)).map(|p| &p.kind)) {
+                    ([_], Some(Kind::App { name, .. })) => Glyph::App { name: name.clone() },
+                    _ => Glyph::Name,
+                }
+            }
+        }
     }
 
     /// A space's tasks, the most urgent first: the badges of its item on the top row.

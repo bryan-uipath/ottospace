@@ -1,0 +1,7 @@
+# Home's heading over its key caps; an empty workspace's floor and key caps. (A workspace of one
+# app pane needs a hosted window, which a test run has none of: e2e-apps covers its glyph.)
+{"cmd":"task_new","line":"Fix the login loop #auth p1"}
+{"cmd":"task_set_state","id":1,"state":"needs_you"}
+{"shot":"home"}
+{"click":"top:new_workspace"}
+{"shot":"empty-workspace"}

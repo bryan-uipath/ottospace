@@ -62,6 +62,18 @@ pane: what you open there gets its own workspace.
   just Home.
 - Property rules: Home holds no pane and only its own tab, after any step from any origin.
 
+### Home's screens (built)
+
+The owner, on the design canvas:
+
+- **Home's heading** is the house beside the word "Home"; no tagline.
+- **An empty tab** (a workspace's, a task's, a session's) is the lattice and three key caps
+  only: ⌘E Open an app, ⌘D Terminal, ⌘N New task. Home draws the same list (`fill_list`). A
+  row's click does what its key does, as the user: in a workspace ⌘N's ↵ starts the task there.
+- **The top row's glyph** is the core's (`Model::glyph`, in the state as `spaces[].glyph`): Home's
+  house; a task's space its badges; a workspace whose tabs hold one pane, an app's, that app's
+  icon (the pane header's); else the name (a workspace keeps its glyph beside it).
+
 ## The row in the Workspaces section
 
 The owner: "clicking the body should open it, and we should have an ellipsis on hover that lets

@@ -2392,7 +2392,7 @@ pub enum TabAt {
 pub mod zones;
 
 pub mod spaces;
-pub use spaces::{HOME, HOME_TAB, Owner, Space};
+pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
 
 pub mod chat;
 pub mod editor;
@@ -9013,6 +9013,37 @@ mod tests {
         let add = Action::TaskAdd { title: title.into(), priority: 1, state, tab: None, assign: Assign::default() };
         m.update(add.sent_by(Origin::Socket));
         m.tasks.list.last().map(|task| task.id).unwrap_or_default()
+    }
+
+    #[test]
+    fn a_workspace_of_one_app_pane_shows_the_app_and_one_of_more_or_none_its_name() {
+        let mut m = Model::default();
+        let glyphs = |m: &Model| m.space_rows().into_iter().map(|row| row.glyph).collect::<Vec<_>>();
+        let slack = Glyph::App { name: "app".into() };
+        // The user's app on Home: a workspace of it alone shows the app.
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        assert_eq!((m.space(), glyphs(&m)), (&WORKSPACE, vec![Glyph::Home, slack.clone()]));
+        // An empty tab beside it holds nothing: still the app.
+        m.update(Action::NewTab);
+        assert_eq!(m.glyph(&WORKSPACE), slack);
+        // A terminal there, or an empty pane beside the app: two panes, the name.
+        term(&mut m);
+        assert_eq!(m.glyph(&WORKSPACE), Glyph::Name);
+        m.update(Action::SelectTab { index: 0 });
+        m.update(Action::CloseTab { index: Some(1) });
+        assert_eq!(m.glyph(&WORKSPACE), slack);
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        assert_eq!(m.glyph(&WORKSPACE), Glyph::Name);
+        // A workspace of no pane, or of a terminal alone: the name.
+        m.update(Action::WorkbookNew { uid: "u1".into() });
+        assert_eq!(m.glyph(m.space()), Glyph::Name);
+        term(&mut m);
+        assert_eq!(m.glyph(m.space()), Glyph::Name);
+        // A task's space shows its badges, an app alone in it too.
+        let id = add_task(&mut m, "fix the zoom", State::Running);
+        m.update(Action::SpaceOpen { space: task_space(id) });
+        m.update(Action::Open { kind: app(2), axis: Right, beside: None });
+        assert_eq!(m.glyph(&task_space(id)), Glyph::Tasks);
     }
 
     #[test]

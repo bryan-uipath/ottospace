@@ -108,7 +108,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     sessions_bar: { count: 0, total: 0, range: "today", collapsed: true, rows: [], enabled: false, reads: 0, slow_reads: 0 },
     repos_bar: [],
     home: { nodes: [], needs_you: [], counts: { needs_you: 0, running: 0, captured: 0, on_hold: 0, done: 0 } },
-    home_drawn: { area: [0, 30, 1400, 846], panel: [80, 300, 520, 120], nodes: {}, lattice_builds: 1, lattice_paints: 2 },
+    home_drawn: { area: [0, 30, 1400, 846], panel: [80, 300, 520, 120], nodes: {}, heading: "Home", lattice_builds: 1, lattice_paints: 2 },
     closed_apps: [],
     apps_bar: { not_running: [], more: 0, more_open: false, all_count: 0, all_open: false, all: [], filter: "", filtering: false, undo: null },
     apps: [],
@@ -127,9 +127,9 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     scrollbars: {},
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
     spaces: [
-      { of: { kind: "home" }, hidden: false, selected: false, tabs: [], tasks: [], front: null, strip: [] },
-      { of: { kind: "workbook", id: 1 }, hidden: false, selected: true, tabs: [0], tasks: [], front: null, strip: [] },
-      { of: { kind: "task", id: 1 }, hidden: true, selected: false, tabs: [1], tasks: [1], front: 1, strip: [] },
+      { of: { kind: "home" }, hidden: false, selected: false, tabs: [], tasks: [], front: null, strip: [], glyph: { kind: "home" } },
+      { of: { kind: "workbook", id: 1 }, hidden: false, selected: true, tabs: [0], tasks: [], front: null, strip: [], glyph: { kind: "app", name: "Notes" } },
+      { of: { kind: "task", id: 1 }, hidden: true, selected: false, tabs: [1], tasks: [1], front: 1, strip: [], glyph: { kind: "tasks" } },
     ],
     badges: { "1": "FL" },
     calendar: {

@@ -1737,6 +1737,56 @@ fn an_empty_tab_lists_what_fills_it_and_a_row_does_what_its_key_does() {
     assert_eq!(otto.user_click(at(app, 0.5, 0.5))["mode"], "pick");
 }
 
+/// The owner's design: Home's heading is its house and name; an empty workspace is the floor
+/// and three key caps, Open an app, Terminal, New task, whose ⌘N row starts a task there.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn an_empty_workspace_shows_three_key_caps_and_its_new_task_row_starts_a_task_in_it() {
+    let root = support::temp(&format!("ottospace-e2e-empty-workspace-{}", std::process::id()));
+    let (bin, sessions) = (root.join("bin"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    let settings =
+        json!({"repos": [], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("empty-workspace", &settings.to_string());
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("empty-workspace", &env);
+    // Three rows in a column, in this order.
+    let rows = |o: &Otto| {
+        let [app, terminal, task] = ["home:open_app", "home:terminal", "home:new_task"].map(|id| o.control(id));
+        let column = app[0] == terminal[0] && terminal[0] == task[0];
+        assert!(column && app[1] < terminal[1] && terminal[1] < task[1], "a list: {app:?} {terminal:?} {task:?}");
+        task
+    };
+    let heading = |o: &Otto| o.call(json!({"cmd": "state"}))["home_drawn"]["heading"].clone();
+    assert_eq!(otto.wait_for("Home drawn", |o| Some(heading(o)).filter(|h| !h.is_null())), "Home");
+    rows(&otto);
+
+    // A workspace made with +: no heading and no home screen, its glyph its name.
+    let made = otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    let book = json!({"kind": "workbook", "id": 1});
+    assert_eq!((&made["spaces"][1]["of"], &made["spaces"][1]["selected"]), (&book, &json!(true)), "{}", made["spaces"]);
+    assert_eq!(
+        (&made["home"], &made["state"]["layout"], &made["spaces"][1]["glyph"]),
+        (&Value::Null, &Value::Null, &json!({"kind": "name"}))
+    );
+    assert_eq!(heading(&otto), Value::Null);
+    // Its ⌘N row opens the box, as ⌘N does; ↵ starts the task in this workspace.
+    let opened = otto.user_click(at(rows(&otto), 0.5, 0.5));
+    assert!(opened["state"]["compose"].is_string(), "the box: {}", opened["state"]["compose"]);
+    otto.user_key("m i n e");
+    let started = otto.user_key("enter");
+    let task = started["state"]["talk"]["task"].as_u64().expect("the drawer is on the new task");
+    let spaces = started["spaces"].as_array().cloned().unwrap_or_default();
+    let shown: Vec<&Value> = spaces.iter().filter(|s| s["hidden"] == false).map(|s| &s["of"]).collect();
+    assert_eq!(shown, [&json!({"kind": "home"}), &json!({"kind": "task", "id": task})], "{}", started["spaces"]);
+    assert_eq!(
+        (&started["workbooks"][0]["task"], &started["spaces"][1]["glyph"]),
+        (&json!(task), &json!({"kind": "tasks"}))
+    );
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// A fresh folder to pass as `OTTOSPACE_HOME`, with `settings` as its `settings.json`.
 fn user_folder(name: &str, settings: &str) -> PathBuf {
     let home = support::temp(&format!("ottospace-e2e-home-{name}-{}", std::process::id()));
