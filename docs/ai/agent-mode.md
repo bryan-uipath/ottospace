@@ -58,9 +58,15 @@ A small script printed the variable and tried to connect.
   `OTTOSPACE_TASK_PASS`, minted in `start_native` and `start_agent` when the conversation is a
   task's. Kept in the drawer's entry (`Native.pass`, `Agent.pass`), never serialized, `Debug` hidden.
   Gone when the entry is (exit, Stop, the view switch), when a terminal agent's program ends, and on
-  `move_agent` (minted for one subject only). Compared in constant time against every live pass.
+  `move_agent` (minted for one subject only); a native agent's as soon as its process is reaped,
+  before its stdout ends. Compared in constant time against every live pass. The app drops a pass
+  it inherited itself (a dev build started from an agent's shell).
+- **Not hidden from the agent's own output.** An agent that runs `env` puts its pass in its
+  transcript (in the state) and its session file. Harmless while (a) grants nothing; (b) must
+  either drop the live pass from tool output before the core sees it or not rest on it alone.
 - **On the wire.** A top-level `"pass"` on any request line, taken off before `Request` is parsed
-  (`control::parse`): the closed set is unchanged. Not 32 hex digits: an error that does not repeat
+  (`control::parse`): the closed set is unchanged; a line with no pass parses from its text, as
+  before. Not 32 hex digits: an error that does not repeat
   it. `ottospace ctl` and the SDK attach `$OTTOSPACE_TASK_PASS` to every request.
 - **The rule, in the core.** `Model::brief_task(id, Caller, tab)`: the id named, else the caller's
   task, else as before (tab, on show, drawer). `Caller::Unknown` (a wrong or dead pass) gets an

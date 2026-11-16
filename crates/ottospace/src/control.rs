@@ -608,11 +608,12 @@ pub struct Call {
 /// and the SDK attach it). A `pass` that is not 32 hex digits is an error, its text not repeated.
 fn parse(line: &str) -> Result<(Request, Option<Pass>), String> {
     let mut value: serde_json::Value = serde_json::from_str(line).map_err(|err| err.to_string())?;
-    let pass = match value.as_object_mut().and_then(|fields| fields.remove("pass")) {
-        None => None,
-        Some(given) => Some(given.as_str().and_then(Pass::parse).ok_or("pass: 32 hex digits")?),
+    let Some(given) = value.as_object_mut().and_then(|fields| fields.remove("pass")) else {
+        // As before: from the text, so a key given twice is still an error.
+        return Ok((serde_json::from_str(line).map_err(|err| err.to_string())?, None));
     };
-    Ok((Request::deserialize(value).map_err(|err| err.to_string())?, pass))
+    let pass = given.as_str().and_then(Pass::parse).ok_or("pass: 32 hex digits")?;
+    Ok((Request::deserialize(value).map_err(|err| err.to_string())?, Some(pass)))
 }
 
 /// `$OTTOSPACE_SOCKET`, else `ottospace.sock` in the per-user temp dir.
@@ -741,6 +742,8 @@ mod tests {
         assert!(parse(&with_pass(r#"{"cmd":"split","extra":1}"#, Some(hex))).is_err());
         assert!(parse(r#"{"cmd":"split","axis":"sideways"}"#).is_err());
         assert!(parse(&with_pass(r#"{"cmd":"nope"}"#, Some(hex))).is_err());
+        // With no pass, a key given twice is refused, as it always was.
+        assert!(parse(r#"{"cmd":"focus","pane":1,"pane":2}"#).is_err());
     }
 
     #[test]

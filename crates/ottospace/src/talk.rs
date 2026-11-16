@@ -164,11 +164,13 @@ impl Workspace {
     }
 
     /// Whose a request's pass is: a task's agent that runs, or nobody's. The pass of a stopped
-    /// one is gone with its entry (`stop_agent`), an ended terminal's with its `told`.
+    /// one is gone with its entry (`stop_agent`), an ended terminal's with its `told`; a native
+    /// one's process gone is enough, before its stdout ends.
     pub(crate) fn caller(&self, given: Option<&crate::pass::Pass>) -> ottospace_core::tasks::Caller {
         let terminals = self.drawer.agents.iter().filter(|(_, agent)| !agent.terminal.exited());
         let terminals = terminals.filter_map(|(subject, agent)| Some((agent.pass.as_ref()?, subject.task()?)));
-        let native = self.drawer.native.iter().filter_map(|(s, native)| Some((native.pass.as_ref()?, s.task()?)));
+        let native = self.drawer.native.iter().filter(|(_, native)| !native.reaped());
+        let native = native.filter_map(|(subject, native)| Some((native.pass.as_ref()?, subject.task()?)));
         crate::pass::caller(given, terminals.chain(native))
     }
 

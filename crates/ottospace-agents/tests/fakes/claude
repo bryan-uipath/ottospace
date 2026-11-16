@@ -46,6 +46,8 @@ if [ -n "$FAKE_CTL" ]; then
   n=$(wc -l <"$FAKE_DIR/starts" | tr -d ' ')
   await() { i=0; while [ ! -e "$FAKE_DIR/$1" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done; }
   await "ask-$n"
+  # The pass itself, for the test to look for where it must never be (a dead one by then).
+  printf '%s\n' "$OTTOSPACE_TASK_PASS" >"$FAKE_DIR/pass-$n"
   "$FAKE_OTTOSPACE" ctl "$FAKE_CTL" >"$FAKE_DIR/ctl-own-$n"
   OTTOSPACE_TASK_PASS=0123456789abcdef0123456789abcdef "$FAKE_OTTOSPACE" ctl "$FAKE_CTL" >"$FAKE_DIR/ctl-wrong-$n"
   env -u OTTOSPACE_TASK_PASS "$FAKE_OTTOSPACE" ctl "$FAKE_CTL" >"$FAKE_DIR/ctl-none-$n"

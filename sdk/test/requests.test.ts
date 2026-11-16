@@ -145,7 +145,14 @@ async function record(): Promise<string[]> {
     close: () => {},
   };
   const client = new Client(transport, async () => transport);
-  for (const call of CALLS) await assert.rejects(call(client), /recorded/);
+  // Run by a task's agent: its pass would be in the fixture, and committed.
+  const pass = process.env.OTTOSPACE_TASK_PASS;
+  delete process.env.OTTOSPACE_TASK_PASS;
+  try {
+    for (const call of CALLS) await assert.rejects(call(client), /recorded/);
+  } finally {
+    if (pass !== undefined) process.env.OTTOSPACE_TASK_PASS = pass;
+  }
   return lines;
 }
 

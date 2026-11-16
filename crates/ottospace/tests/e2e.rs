@@ -8754,9 +8754,12 @@ fn a_task_agents_pass_finds_its_task_until_it_ends() {
     assert_eq!(reply(&otto, "ctl-wrong-1"), stale);
     let none = json!({"ok": false, "error": "task 1 has no materials: nothing was captured for it"});
     assert_eq!(reply(&otto, "ctl-none-1"), none, "no pass: the task on show, as before");
-    // The pass is in no reply's state, nor the state's environment.
+    // The pass is in no state reply, nor the trace.
+    let pass = file("pass-1").expect("the fake wrote its pass").trim().to_string();
+    assert_eq!(pass.len(), 32, "a pass in the agent's environment");
     let state = otto.call(json!({"cmd": "state"})).to_string();
-    assert!(!state.contains("OTTOSPACE_TASK_PASS") && !state.contains("\"pass\""), "{state}");
+    let trace = otto.call(json!({"cmd": "trace"})).to_string();
+    assert!(!state.contains(&pass) && !trace.contains(&pass), "the pass leaked");
     // It ended (`FAKE_EXIT`): the child it left asks with a dead pass.
     otto.wait_for("the end", |o| (chat(o)["transcript"]["live"] == false).then_some(()));
     // Started again: a new process, a new pass. The old child's is still dead while it runs.

@@ -6486,6 +6486,9 @@ fn main() {
     if args.get(1).is_some_and(|a| a == "ctl") {
         ctl(&args[2..]);
     }
+    // Started from a task agent's shell (a dev build): that pass is its, not for our children.
+    // SAFETY: no thread has started yet.
+    unsafe { std::env::remove_var(pass::VAR) };
     // Hidden while its output has no stable shape. Reads other programs' session files.
     if args.get(1).is_some_and(|a| a == "sessions") {
         sessions(args.get(2));

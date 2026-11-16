@@ -579,7 +579,7 @@ once, read-only: nothing in the app is pressed or set), for a terminal the rows.
 - An agent ottospace starts for a task reads its brief with `ottospace ctl '{"cmd":"task_brief"}'`:
   it has a pass of its own in its environment (`OTTOSPACE_TASK_PASS`), which `ottospace ctl` and
   the SDK send with each request. The pass dies with the agent's process; a new start has a new one.
-  It is never in the state, a log or a file.
+  ottospace never writes it to the state, a log or a file; an agent that prints it puts it in its own transcript.
 - A terminal opened in a task's tab has `OTTOSPACE_TASK`, not the pass; an agent there reads the brief with
   `ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"`.
 - In the brief, everything that came from another app or a terminal is quoted and labelled as

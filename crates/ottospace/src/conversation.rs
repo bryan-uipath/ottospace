@@ -1343,6 +1343,11 @@ pub enum NativeInput {
 }
 
 impl Native {
+    /// Its process has exited.
+    pub(crate) fn reaped(&self) -> bool {
+        self.driver.reaped()
+    }
+
     /// A request's whole payload, for "Show all".
     fn full(&self, ticket: u64) -> Option<String> {
         self.tickets.iter().find(|(n, _)| *n == ticket).map(|(_, t)| t.full().text().to_string())
