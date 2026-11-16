@@ -6574,6 +6574,14 @@ fn the_agent_chip_brings_a_closed_conversation_back() {
     assert!(drawn[1] >= tab[1] && drawn[1] + drawn[3] <= tab[1] + tab[3], "{drawn:?} on the tab row {tab:?}");
     assert!(drawn[0] >= tab[0] + tab[2], "{drawn:?} right of the tabs {tab:?}");
     assert_eq!(closed["tabs"], two["tabs"], "the tabs did not move");
+    // A notice opens at the window's foot: the tab row and the chip stay where they are.
+    std::fs::write(home.join("settings.json"), "{ not json").unwrap();
+    let barred = |o: &Otto| Some(o.drawn()).filter(|state| state["notice_bar"]["height"] == 28.0);
+    let noticed = otto.wait_for("the notice bar", barred);
+    assert_eq!((rect(&noticed["agent_chip"]["rect"]), rect(&noticed["tabs"][2])), (drawn, tab));
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let mended = |o: &Otto| Some(o.drawn()).filter(|s| s["notice_bar"].is_null() && s["settings_errors"] == 0);
+    otto.wait_for("the bar gone", mended);
     // Tabs to the row's end: the chip is its badge alone, still there to click.
     let short = (0..40).find_map(|_| Some(otto.user_key("cmd-t")).filter(|state| state["agent_chip"]["short"] == true));
     let short = short.expect("the row filled");
