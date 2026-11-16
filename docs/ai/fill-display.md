@@ -54,9 +54,10 @@ The five questions:
 5. **Does hosting break?** One thing did, and is handled. An app's window cannot be resized
    into the Dock's strip, nor be taller than the visible frame: asked for 702×698 over a pane
    that reached under the Dock, the canary's window came out 666 tall the first time (the header
-   said `fixed size 702×634`) and 679 the next (14 pt under the Dock). So while the mode is on an
-   app pane asks its window for no more than what lies above the Dock (`fill::within`): 702×667
-   parked and live, no misfit named, and the pane's last 31 pt show its background. `top_limit`
+   said `fixed size 702×634`) and 679 the next (14 pt under the Dock). So while the mode is on a
+   live app pane asks its window for no more than what lies above the Dock (`fill::app_rect`),
+   and the pane's last 33 pt show its background, under the Dock. Parked, it asks for as much as
+   macOS allows (see "Bug: an empty strip where the Dock was" below). `top_limit`
    and the title-bar crop are unchanged (the raised window's top, 43, is below the 30 pt bar),
    parking is unchanged, and the recovery path does not involve the mode.
 
@@ -74,6 +75,38 @@ frame was no longer the display's, so it counted as moved by the user and stayed
 not measured; the likeliest is AppKit keeping the window under the menu bar that comes back.
 Where the window was is now read before the bars return, and the test for it passes.
 
+## Bug: an empty strip where the Dock was
+
+Reported on the first build: "initially 'full' down to the dock but then reserved space for the
+dock". ottospace's window was not the cause: CI read `[0,0,1024,768]`, the display's frame,
+before and after the fix, a second after turning it on, in the app pane, back in ottospace and
+after a split beside the pane. The parked app window was. It was sized as the live one
+(`fill::within`), so while ottospace was in front and the Dock away its picture stopped at the
+Dock's top and the pane's foot was empty: the layout grew to the display, the picture only to
+the Dock.
+
+Fix: `fill::app_rect`. Only a live (or peeked) window stops at the Dock's top, where the Dock is
+back over the pane anyway. A parked one is as tall as macOS lets it be. That is not the whole
+pane: asked for 702×700 parked (off screen), the canary's window came out 679 tall, the height
+of the visible frame as an app sees it with the Dock showing. So a parked window asks for no
+more than that (ottospace's own reading, 677, taken before the bars go), and no misfit is named.
+
+| CI, ottospace in front, the Dock away | Pane 1 | Canary's window, parked | Empty at the pane's foot |
+|---|---|---|---|
+| Before | `[319,75,702,666]` | 702×667: 633 under a 34 pt crop | 33 pt (the Dock's height) |
+| Asked for the whole pane | `[319,75,702,666]` | 702×679: 645 | 21 pt |
+| After | `[319,75,702,666]` | asks 702×677: 643 (the test holds it to 641 or more, no misfit) | 23 pt |
+
+What is left empty is the pane's height plus its title bar less the visible frame's height: on
+the runner 33 pt became 23. It is never more than the Dock's height, and it is none for a pane no
+taller than an app's window can be (a split below, or the Dock set to hide).
+
+The two sizes now differ, so `Hosted::place` makes the next park size the window again (the
+review found the parked window kept the live height after one enter and leave). Costs: the app
+re-lays out its last few points on each enter and leave of a pane that reaches the Dock's
+strip, and a click in the part of the picture the live window will not cover enters the pane
+but is not replayed (`hosting::click` judges it against the live window).
+
 ## What was chosen, and why
 
 - **The bars overlay; nothing is inset.** While an app is in front its menu bar covers
@@ -82,8 +115,9 @@ Where the window was is now read before the bars return, and the test for it pas
   at the click that enters the pane (a pane below a split moves up by its share of the Dock's
   height), and the click is replayed into a window that has moved. Keeping both strips free
   always is today's ⌘⌃F with the bars hidden: no gain.
-- **An app's window stops at the Dock's top.** macOS enforces it; asking for it makes it the
-  same size parked and live, with nothing named a misfit.
+- **A live app's window stops at the Dock's top.** macOS enforces it; asking for it names no
+  misfit. Parked, the window is as tall as macOS allows: the Dock is away while ottospace is in
+  front, but no window is taller than the visible frame, so a tall pane keeps a smaller strip.
 - **What it gains.** Terminals and ottospace's own chrome: the whole display while ottospace
   is in front (91 pt more on the runner). An app pane: the menu bar's height, and no more at
   the bottom unless the Dock is set to hide in System Settings.
@@ -122,7 +156,7 @@ A headless runner has one virtual display, no camera housing, and nobody watchin
 4. **Real apps.** A browser and an Electron app in a pane that reaches the bottom: does the
    window stop cleanly at the Dock's top, with no `fixed size` in the pane's header?
 5. **Dock at the side** (only if you use it so): does an app's window at that edge sit under
-   the Dock? `fill::within` only keeps windows above a Dock at the bottom.
+   the Dock? `fill::app_rect` only keeps windows above a Dock at the bottom.
 6. **A camera housing** (a MacBook's own display): the window should start below the strip, and
    the menu bar return into it.
 7. **A Dock resized, moved or set to hide while the mode is on** is not seen: turn the mode off
