@@ -5322,12 +5322,13 @@ impl Workspace {
                 // Its tasks' badges, the most urgent first and on top of the next.
                 Owner::Task { .. } => {
                     let tasks = self.model.space_tasks(&of);
-                    let badges = tasks.iter().take(5).rev().filter_map(|id| self.task_badge(*id, 18.));
-                    let badges: Vec<Div> = badges.collect();
-                    let last = badges.len().saturating_sub(1);
-                    let stack =
-                        badges.into_iter().enumerate().map(|(at, badge)| badge.when(at < last, |d| d.ml(px(-7.))));
-                    Some(div().flex().flex_row_reverse().flex_none().items_center().children(stack).into_any_element())
+                    let badges: Vec<Div> = tasks.iter().take(5).filter_map(|id| self.task_badge(*id, 18.)).collect();
+                    // Each 11 points right of the one before; drawn last to first, so the first is on top.
+                    let width = 18. + 11. * badges.len().saturating_sub(1) as f32;
+                    let placed = badges.into_iter().enumerate().rev();
+                    let placed =
+                        placed.map(|(at, badge)| div().absolute().top_0().left(px(11. * at as f32)).child(badge));
+                    Some(div().relative().flex_none().w(px(width)).h(px(18.)).children(placed).into_any_element())
                 }
                 Owner::Workbook { .. } => Some(
                     svg()
