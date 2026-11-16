@@ -93,28 +93,46 @@ impl Model {
     }
 
     /// Each folder an agent moved into that is now a listed checkout of its task's repository:
-    /// the task works there. True if none waits for the list.
+    /// the task works there. True if none waits for the list. One that does stays, a task's
+    /// last: any later read of the list (the user's + too) may find it.
     pub(crate) fn follow_moves(&mut self) -> bool {
         let moving = std::mem::take(&mut self.moving);
+        let mut waits = false;
         for moving in moving {
-            let Some(current) = self.task_worktree(moving.task).map(String::from) else { continue };
+            let Some(task) = self.tasks.get(moving.task) else { continue };
+            // The worktree it moved into last, though no longer listed: what its workspace may still name.
+            let stored = task.worktree.clone();
+            let Some(current) = self.task_worktree(moving.task).map(String::from) else {
+                self.moving.push(moving);
+                continue;
+            };
             let siblings = self.sibling_checkouts(&current);
             let at = siblings.into_iter().filter(|path| sessions::below(&moving.cwd, path)).max_by_key(|p| p.len());
-            match at.map(String::from) {
-                Some(new) if new != current => self.moved(moving.task, &current, new),
+            let at = at.map(String::from);
+            let gone = stored.as_ref().filter(|stored| **stored != current);
+            match at {
+                Some(new) if new != current => self.moved(moving.task, stored.as_deref().unwrap_or(&current), new),
+                // Back in the checkout it works in, after its last one went: that one is forgotten.
+                Some(new) if gone.is_some() && new == moving.cwd => {
+                    let was = gone.cloned().unwrap_or_default();
+                    self.moved(moving.task, &was, new)
+                }
                 // In its own checkout: a `cd`, unless it is a new worktree there not listed yet.
                 Some(same) if same == moving.cwd => {}
-                _ => self.moving.push(moving),
+                _ => {
+                    waits = true;
+                    self.moving.push(moving)
+                }
             }
         }
-        self.moving.is_empty()
+        !waits
     }
 
-    /// The task works in `new` now. Its workspace's default follows it from `current` when it is
-    /// the workspace's only task; with others there, the workspace stays as it is.
-    fn moved(&mut self, id: TaskId, current: &str, new: String) {
+    /// The task works in `new` now. Its workspace's default follows it from `was` (its worktree
+    /// until now) when it is the workspace's only task; with others there, it stays as it is.
+    fn moved(&mut self, id: TaskId, was: &str, new: String) {
         let of = self.task_space(id);
-        let book = self.space_book(&of).filter(|book| book.worktree.as_deref() == Some(current)).map(|book| book.id);
+        let book = self.space_book(&of).filter(|book| book.worktree.as_deref() == Some(was)).map(|book| book.id);
         if let Some(book) = book.filter(|_| self.members(&of) == [id]) {
             self.workbooks.set_worktree(book, Some(new.clone()));
         }
@@ -124,11 +142,12 @@ impl Model {
     }
 
     /// A while after a move into a folder not listed yet: the list is read again, until it is
-    /// there or the wait is over.
+    /// there or the wait is over (then only a read for another reason finds it).
     pub(crate) fn retry_moves(&mut self, effects: &mut Vec<Effect>) {
         let now = self.now;
-        self.moving.retain(|moving| now.saturating_sub(moving.since) <= MOVE_WAIT_MS);
-        let due = self.moving.iter_mut().filter(|moving| now.saturating_sub(moving.asked) >= MOVE_RETRY_MS);
+        let waiting = |moving: &&mut Moving| now.saturating_sub(moving.since) <= MOVE_WAIT_MS;
+        let due =
+            self.moving.iter_mut().filter(waiting).filter(|moving| now.saturating_sub(moving.asked) >= MOVE_RETRY_MS);
         let mut ask = false;
         for moving in due {
             moving.asked = now;

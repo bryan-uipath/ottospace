@@ -10138,6 +10138,26 @@ mod tests {
         });
         assert_eq!(asks.count() as u64, MOVE_WAIT_MS / MOVE_RETRY_MS);
         assert_eq!(m.task_worktree(1), Some(fresh));
+        // Listed later, by a read for another reason (the user's +): it still follows.
+        let mut repos = branched();
+        repos[0].worktrees.push(repos::Worktree { name: "app-9".into(), path: "/code/app-9".into(), branch: None });
+        m.update(Action::SetRepos { repos }.sent_by(Origin::System));
+        assert_eq!(m.task_worktree(1), Some("/code/app-9"));
+    }
+
+    /// The worktree a task moved into is removed, and its agent is back in the repository's own
+    /// folder: the task and its workspace of one task work there, not in the one that went.
+    #[test]
+    fn back_from_a_worktree_that_went_the_task_and_its_workspace_forget_it() {
+        let mut m = one_task_in_app("claude");
+        agent_in(&mut m, "claude", "/code/app-2");
+        let mut repos = branched();
+        repos[0].worktrees.clear();
+        m.update(Action::SetRepos { repos }.sent_by(Origin::System));
+        agent_in(&mut m, "claude", "/code/app");
+        let of = task_space(1);
+        assert_eq!(m.tasks.get(1).and_then(|task| task.worktree.as_deref()), Some("/code/app"));
+        assert_eq!(m.workbooks.list[0].worktree.as_deref(), Some("/code/app"), "{:?}", m.space_worktree(&of));
     }
 
     /// The owner: with several tasks in a workspace, one that moves "like the subagent case": the

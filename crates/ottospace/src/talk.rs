@@ -465,9 +465,9 @@ impl Workspace {
         let task = subject.task().and_then(|id| self.model.tasks.get(id));
         let dir = task.and_then(|task| task.dir().cloned()).or_else(|| self.repo_of(subject));
         let home = || std::env::var("HOME").ok().filter(|home| !home.is_empty());
-        // Its agent moved into another worktree: it works there now, wherever it started.
+        // Not running, its agent moved into another worktree: it works there now, wherever it started.
         let moved = subject.task().and_then(|id| self.model.task_moved(id)).map(String::from);
-        moved.or(ran).or_else(|| self.model.agent_dir(subject)).or(dir).or_else(home)
+        ran.or(moved).or_else(|| self.model.agent_dir(subject)).or(dir).or_else(home)
     }
 
     /// The drawer's foot: the agent's model, a mode that lets it act unasked, and the folder it

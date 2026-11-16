@@ -316,7 +316,9 @@ impl Gen<'_> {
 
     fn repos(&mut self) -> Vec<Repo> {
         let branch = |g: &mut Self| g.rng.maybe(|rng| rng.pick(&["main", "fix/zoom"]).to_string());
-        let worktree = |g: &mut Self| Worktree { name: g.name(REPOS), path: g.name(DIRS), branch: branch(g) };
+        // A sub-agent's worktree may be listed too.
+        let path = |g: &mut Self| if g.rng.one_in(3) { g.name(CWDS) } else { g.name(DIRS) };
+        let worktree = |g: &mut Self| Worktree { name: g.name(REPOS), path: path(g), branch: branch(g) };
         let repo = |g: &mut Self| Repo {
             name: g.name(REPOS),
             path: g.name(DIRS),
@@ -2652,6 +2654,16 @@ impl Run {
                 read || made || follows || origin == Origin::User,
                 "{origin:?}'s {action:?} changed a workspace's default"
             );
+            // Followed: only a workspace's whose one task moved, to where that task works now.
+            if follows && !read && !made && origin != Origin::User {
+                for book in m.workbooks.list.iter().filter(|book| moved(&(book.uid.clone(), book.worktree.clone()))) {
+                    let of = m.workbooks.space_of(&Owner::Workbook { id: book.id });
+                    let members = m.members(&of);
+                    let one = members.len() == 1
+                        && m.tasks.get(members[0]).and_then(|t| t.worktree.as_ref()) == book.worktree.as_ref();
+                    ensure!(one, "{action:?} moved the default of {:?} with tasks {members:?}", book.name);
+                }
+            }
         }
         // A task's worktree moves only with its agent: the system's reading of its session (or the
         // list read again for a folder it said), or the tasks read again.
@@ -3278,8 +3290,13 @@ impl Run {
                 }
                 // The list is read again only for a folder an agent's session moved into, and a while after.
                 Effect::ReadRepos => {
-                    let reads = matches!(action, Action::SessionWork { cwd: Some(_), .. } | Action::Tick { .. });
-                    ensure!(reads && origin != Origin::Socket, "{origin:?}'s {action:?} asked for the Repos list");
+                    // A tick is anyone's: the retry is for the folder the session said.
+                    let reads = match action {
+                        Action::SessionWork { cwd: Some(_), .. } => origin != Origin::Socket,
+                        Action::Tick { .. } => true,
+                        _ => false,
+                    };
+                    ensure!(reads, "{origin:?}'s {action:?} asked for the Repos list");
                 }
                 // Only the user starts fresh; after that the layout is never told to the shell.
                 Effect::ForgetLayout => {
