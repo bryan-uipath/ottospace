@@ -90,12 +90,12 @@ listed in the Workspaces section whether it is open or not. The first space of t
 | Make a new, empty one | + on the top row, or in the Workspaces section's header: "Workspace 2", one empty tab, selected. It never takes the tab on show |
 | Take it off the top row | Its ×, or ⌘⌃W. Nothing in it stops; it stays listed, and its row opens it again |
 | Save the tab on show | ⌘⇧S. In a workspace: into that one. Elsewhere: as a new one; type its name, ↵ |
-| Add the tab on show to one | `Add tab` on its row, or ⌘⌃E, then `a` on it |
+| Add the tab on show to one | ⌘⌃E, then `a` on its row. Or File ▸ Add Tab to Workspace… |
 | Save every tab on the bar as one | File ▸ Save All Tabs as Workspace |
 | Update a tab of it after changing it | ⌘⇧S again on that tab. Undo on the line at the top (six seconds) |
 | Open it | Workspaces, click it. Or ⌘⌃E, ↵. Its saved tabs open in order; one already open is kept. None saved: one empty tab |
-| See, open, rename or remove one of its tabs | ▸ on its row (⌘⌃E: space), then the tab's row: click, Rename, Remove |
-| Rename or delete it | Hover its row: Rename, Delete. Or ⌘⌃E, then `r`, `x`; `u` puts a deleted one back |
+| See, open, rename or remove one of its tabs | ▸ on its row (⌘⌃E: space), then the tab's row: click opens it; its … has Rename, Remove |
+| Rename or delete it | Point at its row: … opens a menu with Rename, Delete. Or ⌘⌃E, then `r`, `x`; `u` puts a deleted one back |
 
 A saved tab keeps the splits, each app, and each terminal's directory, last 500 lines and the command
 running in it. Opened, a terminal shows those lines above its prompt with the command typed on

@@ -1245,6 +1245,27 @@ pub enum Action {
     },
     /// Take the last delete or update of a workbook back.
     WorkbookUndo,
+    /// … on a row of the bar: its menu (`row_menu`). On the row whose menu is open: close it.
+    /// `dots`: where the … is drawn. `keys`: a key or a label opened it, so the keys are on its
+    /// first item; a click's are on none.
+    RowMenu {
+        row: ListRow,
+        dots: Option<Rect>,
+        keys: bool,
+    },
+    /// Where the … of the open menu is drawn now, as the shell saw it. Moved or gone: the menu closes.
+    RowMenuDrawn {
+        dots: Option<Rect>,
+    },
+    /// Down (positive) or up the open menu. It wraps.
+    RowMenuMove {
+        delta: i32,
+    },
+    /// Take an item of the open menu (default: the one the keys are on).
+    RowMenuChoose {
+        index: Option<usize>,
+    },
+    RowMenuClose,
     /// What the settings say of agents, read at start: each runner's models (`agent_models`)
     /// and the agent a task with no `@agent` starts with (`default_agent`).
     SetAgents {
@@ -1719,6 +1740,11 @@ impl Action {
             | Action::WorkbookOpen { .. }
             | Action::WorkbookRemove { .. }
             | Action::WorkbookFold { .. }
+            | Action::RowMenu { .. }
+            | Action::RowMenuDrawn { .. }
+            | Action::RowMenuMove { .. }
+            | Action::RowMenuChoose { .. }
+            | Action::RowMenuClose
             | Action::WorkbookUndo => false,
             | Action::SetAgents { .. }
             | Action::ComposeEnter
@@ -1957,6 +1983,11 @@ impl Action {
             | Action::WorkbookEdit { .. }
             | Action::WorkbookRemove { .. }
             | Action::WorkbookFold { .. }
+            | Action::RowMenu { .. }
+            | Action::RowMenuDrawn { .. }
+            | Action::RowMenuMove { .. }
+            | Action::RowMenuChoose { .. }
+            | Action::RowMenuClose
             | Action::WorkbookUndo
             | Action::SetAgents { .. }
             | Action::AgentEvents { .. }
@@ -2495,6 +2526,9 @@ pub struct Model {
     /// The workbooks. Not in the state as they are kept: `workbook_rows` is what it shows.
     #[serde(skip)]
     pub workbooks: Workbooks,
+    /// The menu of a row of the bar, while it is open.
+    #[serde(skip)]
+    pub(crate) row_menu: Option<crate::row_menu::RowMenu>,
     /// What a mark waits for, while one has the keyboard. Also a workbook's name being typed.
     pub mark_input: Option<MarkInput>,
     /// The draft in the right bar, while there is one: `compose` is its title.
@@ -2650,6 +2684,7 @@ impl Default for Model {
             sneak: None,
             marks: Marks::default(),
             workbooks: Workbooks::default(),
+            row_menu: None,
             mark_input: None,
             capture: None,
             back_to: None,
@@ -2761,7 +2796,8 @@ impl Model {
         let boxed = boxed || self.palette.is_some() || self.inspector.as_ref().is_some_and(|i| i.filtering);
         // The Apps section's filter is a text field with the keyboard, as the picker's is.
         let filtering = self.app_lists.filtering;
-        boxed || filtering || self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some()
+        let menu = self.row_menu.is_some();
+        boxed || filtering || menu || self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some()
     }
 
     /// Why an action does nothing because of who sent it. Only the user may take the keyboard
@@ -2813,7 +2849,13 @@ impl Model {
             | Action::WorkbookOpen { .. }
             | Action::WorkbookEdit { .. }
             | Action::WorkbookRemove { .. }
+            | Action::RowMenu { .. }
+            | Action::RowMenuMove { .. }
+            | Action::RowMenuChoose { .. }
+            | Action::RowMenuClose
             | Action::WorkbookUndo => Some(workbook::USERS_ALONE),
+            // Only the shell says where the menu's … is drawn.
+            Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
             Action::ListChoose { .. } | Action::ListDismiss | Action::ListUndo | Action::ListMarkEdit { .. }
                 if self.sidebar == Some(Section::Workbook) =>
             {
@@ -2923,6 +2965,8 @@ impl Model {
                 Some(zones::RAILS_USERS)
             }
             action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
+            // The user's keys are in a row's menu: nothing of another's takes the keyboard under it.
+            action if self.row_menu.is_some() && action.takes_keyboard() => Some(crate::row_menu::MENU_OPEN),
             // A capture hands over a pane's picture and its text: no client's request, key or
             // label asks for one. Sneak mode and the quit question say their own reason first.
             Action::CaptureStart { .. } if self.confirm.is_none() => Some(capture::USERS_ALONE),
@@ -3142,6 +3186,7 @@ impl Model {
         self.settle_spaces();
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
+        self.settle_row_menu();
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
         if self.list.is_none() && listed.is_some() {
             self.list_kept = zones::KeptRow(listed);
@@ -3197,6 +3242,18 @@ impl Model {
         let own_mark = own_mark || (renaming && matches!(action, Action::FieldEdit { .. }));
         if user && !own_mark {
             self.mark_input = None;
+        }
+        // A row's menu closes on the user's other moves; sneak mode's labels reach its items.
+        let own_menu = matches!(
+            action,
+            Action::RowMenu { .. }
+                | Action::RowMenuDrawn { .. }
+                | Action::RowMenuMove { .. }
+                | Action::RowMenuChoose { .. }
+                | Action::RowMenuClose
+        );
+        if user && !own && !own_menu {
+            self.row_menu = None;
         }
         // The inspector's filter gives the keyboard back on the user's other moves.
         // ← and → leave it by the zones (`zones`), which know it had the keyboard.
@@ -4562,6 +4619,11 @@ impl Model {
             Action::WorkbookEdit { workbook, tab } => self.workbook_edit(workbook, tab),
             Action::WorkbookRemove { workbook, tab } => self.workbook_remove(workbook, tab),
             Action::WorkbookFold { workbook } => self.workbook_fold(workbook),
+            Action::RowMenu { row, dots, keys } => self.row_menu_open(row, dots, keys),
+            Action::RowMenuDrawn { dots } => self.row_menu_drawn(dots),
+            Action::RowMenuMove { delta } => self.row_menu_move(delta),
+            Action::RowMenuChoose { index } => self.row_menu_choose(index),
+            Action::RowMenuClose => self.row_menu = None,
             Action::WorkbookUndo => self.workbook_undo(),
             Action::ListReorder { delta } => match self.selected_mark() {
                 // The selection goes with the mark.
@@ -7479,6 +7541,11 @@ mod tests {
         Action::EditorKeys { .. },
         Action::EditorDone { .. },
         Action::WorkbookFold { .. },
+        Action::RowMenu { .. },
+        Action::RowMenuDrawn { .. },
+        Action::RowMenuMove { .. },
+        Action::RowMenuChoose { .. },
+        Action::RowMenuClose,
         Action::SetFeatures { .. }
     );
 
@@ -7690,6 +7757,11 @@ mod tests {
             Action::WorkbookEdit { workbook: 1, tab: None },
             Action::WorkbookRemove { workbook: 1, tab: None },
             Action::WorkbookFold { workbook: 1 },
+            Action::RowMenu { row: ListRow::Workbook(1), dots: None, keys: true },
+            Action::RowMenuDrawn { dots: None },
+            Action::RowMenuMove { delta: 1 },
+            Action::RowMenuChoose { index: None },
+            Action::RowMenuClose,
             Action::WorkbookUndo,
             Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: None, shows: View::Native },
             Action::TaskTalk { id: 1 },
@@ -7767,6 +7839,10 @@ mod tests {
                 | Action::WorkbookEdit { .. }
                 | Action::WorkbookRemove { .. }
                 | Action::WorkbookUndo
+                | Action::RowMenu { .. }
+                | Action::RowMenuMove { .. }
+                | Action::RowMenuChoose { .. }
+                | Action::RowMenuClose
                 | Action::SpaceOpen { space: Owner::Workbook { .. } }
         )
     }
@@ -7904,6 +7980,7 @@ mod tests {
                     Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(crate::repos::USERS_ALONE),
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
+                    Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -12637,6 +12714,7 @@ mod tests {
                     Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(crate::repos::USERS_ALONE),
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
+                    Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");

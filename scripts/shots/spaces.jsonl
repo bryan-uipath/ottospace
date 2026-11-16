@@ -17,7 +17,7 @@
 {"cmd":"key","keys":"enter","as":"user"}
 {"cmd":"new_tab"}
 {"cmd":"close_tab","index":0}
-{"click":"workbook-open:1"}
+{"click":"workbook:1","at":[0.3,0.3]}
 {"cmd":"section","section":"workbook"}
 {"shot":"workbook"}
 {"click":"space:1"}

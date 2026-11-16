@@ -120,6 +120,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     mark_removed: null,
     workbooks: [],
     workbook_offer: null,
+    row_menu: null,
     scrollbars: {},
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
     spaces: [
