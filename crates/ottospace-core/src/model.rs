@@ -6415,7 +6415,8 @@ impl Model {
     fn task_row(&self, task: &Task, group: tasks::Group, now: u64) -> TaskRow {
         let current = self.tab_task() == Some(task.id);
         let live = self.task_session(task).and_then(Found::doing);
-        TaskRow { live, id: task.id, group, current, fact: tasks::fact(task, group, now) }
+        let (fact, worktree) = (tasks::fact(task, group, now), self.worktree_label(task.id));
+        TaskRow { live, id: task.id, group, current, fact, worktree }
     }
 
     /// The Tasks section's State view as drawn: Needs you, Running, Later (captured and on hold),

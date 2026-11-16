@@ -87,6 +87,8 @@ pub struct SpaceRow {
     pub front: Option<TaskId>,
     /// The tabs of the drawer's strip while it is selected, in order. Empty: no strip.
     pub strip: Vec<TaskId>,
+    /// Its default worktree, while listed: where its new terminals and tasks start.
+    pub worktree: Option<String>,
 }
 
 /// What `settle_home` asks of the step: how it began.
@@ -143,6 +145,7 @@ impl Model {
             tasks: self.space_tasks(&space.of),
             front: self.front(&space.of),
             strip: self.strip(&space.of),
+            worktree: self.space_worktree(&space.of).map(String::from),
         };
         self.spaces.iter().map(row).collect()
     }

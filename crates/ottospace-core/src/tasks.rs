@@ -97,6 +97,8 @@ pub struct TaskRow {
     pub current: bool,
     /// The one fact at its right (`fact`).
     pub fact: Option<String>,
+    /// The worktree it works in, while its workspace's tasks work in more than one (`app-2`).
+    pub worktree: Option<String>,
 }
 
 /// The one fact a row shows at its right, by its group: how long it has run (since its agent

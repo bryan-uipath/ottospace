@@ -244,6 +244,8 @@ export interface SpaceRow {
   front: TaskId | null;
   /** The tabs of the drawer's strip while this space is selected, in the order the tasks came; empty with fewer than two. */
   strip: TaskId[];
+  /** Its default worktree (a listed checkout's path), where its new terminals and tasks start; null: none. Set by the user's click on a Repos row. */
+  worktree: string | null;
 }
 
 /** The active tab's split tree. `ratio`: the share of the split that `a` (left or top) takes. */
@@ -567,6 +569,8 @@ export interface TaskRow {
   fact: string | null;
   /** What its session does now (`shell · cargo test`), while it works. */
   live: string | null;
+  /** The worktree it works in (`app-2`), while its workspace's tasks work in more than one; else null. */
+  worktree: string | null;
 }
 
 /** A project's tasks by state: its bar's segments, in this order. */

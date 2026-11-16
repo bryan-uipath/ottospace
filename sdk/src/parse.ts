@@ -341,6 +341,7 @@ function taskRow(value: unknown, at: string): TaskRow {
     current: bool(o.current, `${at}.current`),
     fact: orNull(str)(o.fact, `${at}.fact`),
     live: orNull(str)(o.live, `${at}.live`),
+    worktree: orNull(str)(o.worktree, `${at}.worktree`),
   };
 }
 
@@ -722,6 +723,7 @@ function spaceRow(value: unknown, at: string): SpaceRow {
     tasks: list(num)(o.tasks, `${at}.tasks`),
     front: orNull(num)(o.front, `${at}.front`),
     strip: list(num)(o.strip, `${at}.strip`),
+    worktree: orNull(str)(o.worktree, `${at}.worktree`),
   };
 }
 

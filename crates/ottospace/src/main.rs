@@ -4755,6 +4755,7 @@ impl Workspace {
                             .gap_2()
                             .when(row.current, |d| d.font_weight(FontWeight::SEMIBOLD))
                             .children(task_title_cells(task))
+                            .children(row.worktree.clone().map(|name| muted().flex_none().child(name)))
                             .children(row.fact.clone().map(|fact| muted().flex_none().child(fact))),
                     )
                     .children(row.live.clone().map(|live| muted().h(px(18.)).truncate().child(live))),
