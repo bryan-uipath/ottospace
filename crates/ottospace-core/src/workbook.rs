@@ -814,13 +814,13 @@ impl Model {
         format!("Workspace {}", (2..).find(|n| !taken(n)).unwrap_or(2))
     }
 
-    /// A workspace for tabs that may not be Home's, kept like any other: named `name` if no
-    /// other is (a folder's, "Workspace" for an older layout's first space), else as + names
-    /// one. Its file's name is made from the clock and a count: no other workbook's.
+    /// A workspace for tabs that may not be Home's, kept like any other: named `name` (a
+    /// folder's, "Workspace" for an older layout's first space), numbered if another has it,
+    /// else as + names one. Its file's name is made from the clock and a count: no other
+    /// workbook's.
     pub(crate) fn stray_workspace(&mut self, name: Option<String>) -> Owner {
-        let free = |name: &String| !self.workbooks.list.iter().chain(self.workbooks.deleted()).any(|b| b.name == *name);
-        let name = name.map(|name| marks::clean(&name)).filter(|name| !name.is_empty() && free(name));
-        let name = name.unwrap_or_else(|| self.free_name());
+        let name = name.map(|name| marks::clean(&name)).filter(|name| !name.is_empty());
+        let name = name.map_or_else(|| self.free_name(), |name| self.workbooks.unique_name(&name, None));
         let uid = (0u64..).map(|n| format!("{:012x}{:04x}", self.now & 0xffff_ffff_ffff, n & 0xffff));
         let uid = uid.take(0x1_0000).find(|uid| !self.workbooks.holds(uid)).unwrap_or_default();
         let id = self.workbooks.add(Workbook::new(uid, name, Vec::new()));

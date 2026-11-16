@@ -86,6 +86,16 @@ pub struct SpaceRow {
     pub strip: Vec<TaskId>,
 }
 
+/// What `settle_home` asks of the step: how it began.
+pub(crate) struct HomeStep {
+    /// The step asked for a tab.
+    pub(crate) new_tab: bool,
+    /// Home was on show.
+    pub(crate) on_show: bool,
+    /// The tabs there were, by id.
+    pub(crate) tabs: Vec<u32>,
+}
+
 /// The first item of the top row, and its screen.
 pub const HOME: &str = "Home";
 /// Home's one tab, always empty: no other tab has this id.
@@ -403,12 +413,12 @@ impl Model {
     /// After every step: Home first and shown, with its one empty tab; each tab's space on the
     /// row, its tabs side by side in row order (Home's last); a space with no tab gone, as one
     /// whose workbook is; the selected space shown, and the tab on show its last.
-    pub(crate) fn settle_spaces(&mut self, origin: Origin, new_tab: bool) {
+    pub(crate) fn settle_spaces(&mut self, origin: Origin, step: &HomeStep) {
         let gone: Vec<Owner> = self.spaces.iter().map(|s| s.of.clone()).filter(|of| !self.owner_valid(of)).collect();
         for tab in self.tabs.iter_mut().filter(|tab| gone.contains(&tab.space)) {
             tab.space = Owner::Workspace;
         }
-        self.settle_home(origin, new_tab);
+        self.settle_home(origin, step);
         let owners: Vec<Owner> = self.tabs.iter().map(|tab| tab.space.clone()).collect();
         self.spaces.retain(|space| space.of == Owner::Workspace || owners.contains(&space.of));
         for of in owners {
@@ -437,13 +447,14 @@ impl Model {
     }
 
     /// Home, the first space, holds no pane and one empty tab, its screen (`HOME_TAB`). After
-    /// every step, what else is there goes to a workspace: a pane put in Home's tab, a tab
-    /// asked for there or a folder opened (the user's: a NEW workspace; another's: the workspace
-    /// selected last), and a stray tab whose space went (a task dismissed, a workspace deleted,
-    /// a session's after a restart): the workspace selected last. One is made, kept like any
-    /// other, if there is none. A stray tab that holds nothing is closed. `new_tab`: the step
-    /// asked for a tab.
-    fn settle_home(&mut self, origin: Origin, new_tab: bool) {
+    /// every step, what else is there goes to a workspace. What the user made from Home (a
+    /// pane put in its tab, a tab asked for or built), and a folder they opened: a NEW
+    /// workspace. Anything else (another's pane or tab; a stray tab whose space went: a task
+    /// dismissed, a workspace deleted, a session's after a restart): the workspace selected
+    /// last, else the first on the row. One is made, kept like any other, if there is none. A
+    /// stray tab that holds nothing is closed.
+    fn settle_home(&mut self, origin: Origin, step: &HomeStep) {
+        let new_tab = step.new_tab;
         let hint = self.home_hint.take();
         let panes = self.tab_panes();
         let home: Vec<usize> = (0..self.tabs.len()).filter(|at| self.tabs[*at].space == Owner::Workspace).collect();
@@ -452,9 +463,8 @@ impl Model {
             home.iter().filter(|at| !own(at) || !panes[**at].is_empty()).partition(|at| !panes[**at].is_empty() || new_tab);
         let filled = moves.iter().any(own);
         if !moves.is_empty() {
-            // Made on Home by the user (its own tab filled, a tab asked for, a folder opened): a
-            // new workspace. Anything else: the workspace selected last.
-            let made = (filled || new_tab || hint.is_some()) && origin == Origin::User;
+            let new = moves.iter().any(|at| !step.tabs.contains(&self.tabs[*at].id));
+            let made = origin == Origin::User && (hint.is_some() || (step.on_show && (filled || new)));
             let open = |of: &&Owner| self.owner_valid(of) && self.spaces.iter().any(|s| s.of == **of);
             // Else the first workspace on the row, before one is made.
             let kept = |space: &&Space| !space.hidden && matches!(space.of, Owner::Task { .. } | Owner::Workbook { .. });
@@ -466,7 +476,7 @@ impl Model {
             };
             let ids: Vec<u32> = moves.iter().map(|at| self.tabs[*at].id).collect();
             // A dismissal taken back finds its task's tabs where they went.
-            for (_, tabs, home) in self.unlinked.iter_mut().filter(|(_, _, home)| *home == Owner::Workspace) {
+            for (_, tabs, home) in &mut self.unlinked {
                 if tabs.iter().any(|id| ids.contains(id)) {
                     *home = to.clone();
                 }

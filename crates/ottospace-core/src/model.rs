@@ -2798,6 +2798,17 @@ impl Default for Model {
     }
 }
 
+#[cfg(test)]
+impl Model {
+    /// A model whose user left Home: a workspace ("Workspace 2", `Owner::Workbook { id: 1 }`)
+    /// on show with one empty tab, "Tab 1" (id 1). For tests that are not about Home.
+    pub(crate) fn in_workspace() -> Model {
+        let mut model = Model::default();
+        model.update(Action::NewTab);
+        model
+    }
+}
+
 /// A task's title as a tab's: at most 24 characters.
 pub(crate) fn short_title(title: &str) -> String {
     match title.char_indices().nth(24) {
@@ -3240,7 +3251,12 @@ impl Model {
         let fronts_were: Vec<TaskId> = self.spaces.iter().filter_map(|space| self.front(&space.of)).collect();
         let listed = self.sidebar.zip(self.list);
         let undo = matches!(sent.action, Action::TaskUndo | Action::ListUndo);
-        let new_tab = matches!(sent.action, Action::NewTab | Action::NewEmptyTab);
+        // Home before the step: what the user makes there is a new workspace's (`settle_home`).
+        let home = spaces::HomeStep {
+            new_tab: matches!(sent.action, Action::NewTab | Action::NewEmptyTab),
+            on_show: *self.space() == Owner::Workspace,
+            tabs: self.tabs.iter().map(|tab| tab.id).collect(),
+        };
         // Where the keyboard was before the step: a tab change moves it out of the drawer.
         // A capture draft's title is in the bar, not the drawer.
         let boxed = self.composing() && self.compose_host() == Some(Host::Drawer);
@@ -3280,7 +3296,7 @@ impl Model {
         let finished: Vec<TaskId> =
             fronts_were.into_iter().filter(|id| origin == Origin::User && !was_done(id)).collect();
         self.settle_tasks(undo && origin == Origin::User, &finished);
-        self.settle_spaces(origin, new_tab);
+        self.settle_spaces(origin, &home);
         self.settle_left();
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
@@ -3740,18 +3756,18 @@ impl Model {
             },
             Action::OpenRepo { path, axis } => {
                 // Only a listed path: the list is what the user sees and can choose from. Its
-                // terminal is in a tab of Workspace of its own: the one on show if it is empty or
-                // its focused pane is, else a new one.
+                // terminal is in the tab on show if it is empty or its focused pane is, else in
+                // a tab of its own, which Home does not keep: a workspace's (`settle_home`).
                 if let Some(name) = self.repo_name(&path) {
                     let empty = self.focused.and_then(|id| self.pane(id)).is_some_and(|p| p.kind == Kind::Empty);
-                    if *self.space() != Owner::Workspace || (self.layout.is_some() && !empty) {
+                    if self.layout.is_some() && !empty {
                         self.leave(effects);
                         self.leave_visual(effects);
                         self.park_active();
                         self.push_tab_of(Owner::Workspace);
                     }
                     let named = self.layout.is_none() || self.tabs[self.active].title.starts_with("Tab ");
-                    // Home holds no pane: the tab makes a workspace named for the folder.
+                    // The workspace made for it, if one is, is named for the folder.
                     self.home_hint = Some(name.clone());
                     self.open_terminal_at(axis, Some(path), effects);
                     if let Some(tab) = self.tabs.get_mut(self.active).filter(|_| named) {
@@ -4379,14 +4395,14 @@ impl Model {
             Action::PaletteOpen | Action::PaletteTasks | Action::PaletteFeatures => {
                 self.palette_over_talk = self.talk.as_ref().is_some_and(|talk| talk.keys);
                 self.leave(effects);
-                // Workspace, the live tasks in their order, then the workbooks.
+                // The live tasks in their order, then the workbooks. Not Home: it holds no tab.
                 let tasks = matches!(action, Action::PaletteTasks).then(|| {
                     // A task in another's workspace has no space of its own to move a tab to.
                     let own = |task: &&Task| !task.dismissed && self.task_space(task.id).task() == Some(task.id);
                     let live = self.tasks.list.iter().filter(own);
                     let live = live.map(|task| Owner::Task { id: task.id });
                     let books = self.workbooks.list.iter().map(|book| Owner::Workbook { id: book.id });
-                    let all = std::iter::once(Owner::Workspace).chain(live).chain(books);
+                    let all = live.chain(books);
                     all.map(|to| TaskChoice { title: self.space_title(&to), to }).collect()
                 });
                 let features = matches!(action, Action::PaletteFeatures).then(|| {
@@ -5595,7 +5611,8 @@ impl Model {
         };
         let mut found: Vec<(Ref, String)> = Vec::new();
         let panes = self.tab_panes();
-        for (tab, inside) in self.tabs.iter().zip(&panes) {
+        // Home's own tab is no tab to name.
+        for (tab, inside) in self.tabs.iter().zip(&panes).filter(|(tab, _)| tab.id != HOME_TAB) {
             let detail = format!("tab · {} pane{}", inside.len(), if inside.len() == 1 { "" } else { "s" });
             let title = Some(tab.title.clone());
             found.push((Ref { id: Some(tab.id), title, ..blank(RefKind::Tab, &tab.title) }, detail));
@@ -6880,7 +6897,8 @@ impl Model {
         };
         let of = match &at {
             // A task that is gone or dismissed takes no tab, nor a workbook not kept, nor a session
-            // that has no space.
+            // that has no space, nor Home.
+            TabAt::End(Owner::Workspace) => return,
             TabAt::End(Owner::Session { .. }) if !self.spaces.iter().any(|s| TabAt::End(s.of.clone()) == at) => return,
             TabAt::End(of) if self.owner_valid(of) => match self.workbooks.space_of(of) {
                 Owner::Task { id } => self.task_space(id),
@@ -6888,10 +6906,14 @@ impl Model {
             },
             TabAt::End(_) => return,
             TabAt::Before(id) => match self.tabs.iter().find(|t| t.id == *id) {
-                Some(target) if target.id != self.tabs[from].id => target.space.clone(),
+                Some(target) if target.id != self.tabs[from].id && target.id != HOME_TAB => target.space.clone(),
                 _ => return,
             },
         };
+        // Home's own tab stays Home's.
+        if self.tabs[from].id == HOME_TAB {
+            return;
+        }
         let shown = self.tabs[self.active].id;
         let mut moved = self.tabs.remove(from);
         moved.space = of.clone();
@@ -8446,10 +8468,10 @@ mod tests {
     /// under the pill that was on tab 2's ×. Those letters must not close anything.
     #[test]
     fn a_label_never_reaches_a_control_that_is_no_longer_drawn_or_the_one_that_took_its_place() {
-        let mut m = Model::default();
+        let mut m = Model::in_workspace();
         m.update(Action::NewTab);
         m.update(Action::NewTab);
-        assert_eq!(m.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(m.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [1, 2, 3, HOME_TAB]);
         m.update(Action::Sneak { targets: tab_bar(&[1, 2, 3]) });
         let second = label_of(&m, "tab-close:2").expect("a label on tab 2's ×");
         let third = label_of(&m, "tab-close:3").expect("a label on tab 3's ×");
@@ -8457,7 +8479,7 @@ mod tests {
 
         // News: the mode stays on, and tab 2 is closed.
         m.update(Action::CloseTab { index: Some(1) }.sent_by(Origin::Socket));
-        assert_eq!((m.mode(), m.tabs.len()), (Mode::Sneak, 2));
+        assert_eq!((m.mode(), m.tabs.len()), (Mode::Sneak, 3));
         // The next frame draws tabs 1 and 3: tab 3 where tab 2 was.
         m.update(Action::SneakDrawn { targets: tab_bar(&[1, 3]) }.sent_by(Origin::System));
         assert_eq!(label_of(&m, "tab-close:2"), None, "not drawn: no label");
@@ -8467,7 +8489,7 @@ mod tests {
 
         // The letters that were on tab 2's × name nothing now: no tab closes, hidden or shown.
         assert_eq!(m.update(Action::SneakType { text: second }), []);
-        assert_eq!((m.mode(), m.tabs.len()), (Mode::Normal, 2));
+        assert_eq!((m.mode(), m.tabs.len()), (Mode::Normal, 3));
         // A label is only ever of a control in the last frame reported.
         m.update(Action::Sneak { targets: tab_bar(&[1, 3]) });
         let third = label_of(&m, "tab-close:3").unwrap();
@@ -8540,7 +8562,7 @@ mod tests {
     }
 
     #[test]
-    fn the_home_screen_shows_while_the_tab_on_show_has_no_panes() {
+    fn the_home_screen_shows_on_home_and_not_in_a_workspaces_empty_tab() {
         let mut m = Model::default();
         m.update(Action::TaskAdd {
             title: "ask".into(),
@@ -8552,12 +8574,13 @@ mod tests {
         let home = m.home(&[]).expect("no panes: the home screen");
         assert_eq!((home.nodes.len(), home.needs_you.len()), (1, 1));
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
-        assert!(m.home(&[]).is_none(), "a pane takes its place");
-        // A new tab has no pane yet: the home screen again.
+        assert!(m.home(&[]).is_none(), "a pane makes a workspace, which is on show");
+        // A workspace's new tab has no pane yet, and is not Home.
         m.update(Action::NewTab);
-        assert!(m.home(&[]).is_some());
-        m.update(Action::SelectTab { index: 0 });
-        assert!(m.home(&[]).is_none());
+        assert!(m.home(&[]).is_none() && m.layout.is_none());
+        // Home is, with no pane ever.
+        m.update(Action::SpaceSelect { index: 0 });
+        assert!(m.home(&[]).is_some() && m.tab_panes()[m.active].is_empty());
     }
 
     #[test]
@@ -8897,7 +8920,7 @@ mod tests {
         let mut m = Model::default();
         m.update(Action::Split { axis: Right, kind: Kind::Terminal });
         let effects = m.update(Action::NewEmptyTab.sent_by(Origin::User));
-        assert_eq!((m.tabs.len(), m.active, m.tabs[1].title.as_str()), (2, 1, "Tab 2"));
+        assert_eq!((m.tabs.len(), m.active, m.tabs[1].title.as_str()), (3, 1, "Tab 2"));
         assert_eq!((m.layout.as_ref().map(Node::leaves), m.focused), (Some(vec![2]), Some(2)));
         assert_eq!(
             (m.pane(2).map(|p| p.kind.clone()), m.mode(), m.picker.is_none()),
@@ -8915,20 +8938,20 @@ mod tests {
             assert_eq!(m.refusal(&Action::EditSettings, origin), Some(SETTINGS_USERS));
             assert_eq!(m.update(Action::EditSettings.sent_by(origin)), []);
         }
-        assert_eq!(m.tabs.len(), 1);
-        // The user's: a tab of Workspace, its terminal running the editor.
+        assert_eq!(m.tabs.len(), 2);
+        // The user's: a tab of the selected workspace, its terminal running the editor.
         assert_eq!(m.update(Action::EditSettings), [Effect::Opened(2), Effect::EditSettings { pane: 2 }]);
         let settings = (m.tabs.len(), m.active, m.tabs[1].title.as_str(), &m.tabs[1].space);
-        assert_eq!(settings, (2, 1, "Settings", &Owner::Workspace));
+        assert_eq!(settings, (3, 1, "Settings", &WORKSPACE));
         // Again, from another tab: that tab and its pane come forward, nothing opens.
         m.update(Action::SelectTab { index: 0 });
         assert_eq!(m.update(Action::EditSettings), []);
-        assert_eq!((m.tabs.len(), m.active, m.focused), (2, 1, Some(2)));
+        assert_eq!((m.tabs.len(), m.active, m.focused), (3, 1, Some(2)));
         // Its editor quit and the pane closed: the next opens another.
         m.update(Action::Close { pane: Some(2) }.sent_by(Origin::System));
         let effects = m.update(Action::EditSettings);
         assert_eq!(effects, [Effect::Opened(3), Effect::EditSettings { pane: 3 }]);
-        assert_eq!(m.tabs.last().map(|tab| tab.title.as_str()), Some("Settings"));
+        assert_eq!(tab_titles(&m).last(), Some(&"Settings"));
     }
 
     #[test]
@@ -8962,7 +8985,7 @@ mod tests {
 
     #[test]
     fn a_new_tab_takes_the_lowest_free_number() {
-        let mut m = Model::default();
+        let mut m = Model::in_workspace();
         m.update(Action::NewTab);
         m.update(Action::NewTab);
         assert_eq!(tab_titles(&m), ["Tab 1", "Tab 2", "Tab 3"]);
@@ -8975,9 +8998,13 @@ mod tests {
         assert_eq!(ids.len(), m.tabs.len());
     }
 
+    /// The titles of the tabs on the bar: not Home's own tab, which is after them all.
     fn tab_titles(m: &Model) -> Vec<&str> {
-        m.tabs.iter().map(|tab| tab.title.as_str()).collect()
+        m.tabs.iter().filter(|tab| tab.id != HOME_TAB).map(|tab| tab.title.as_str()).collect()
     }
+
+    /// The workspace `Model::in_workspace` starts in, and the one a first pane on Home makes.
+    const WORKSPACE: Owner = Owner::Workbook { id: 1 };
 
     /// The top row as owners, hidden ones marked, with their tabs' places.
     fn row(m: &Model) -> Vec<(Owner, bool, Vec<usize>)> {
@@ -8998,49 +9025,50 @@ mod tests {
     fn a_tasks_space_holds_its_tabs_and_a_new_tab_joins_the_selected_space() {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
-        term(&mut m); // pane 1, in Workspace
+        term(&mut m); // pane 1, in the workspace made for it
         for line in ["fix the zoom flicker on the canvas when zooming #canvas >app-2", "ask Ana about the retry plan"] {
             m.update(Action::TaskFromLine { line: line.into(), known: Default::default(), open: false });
         }
         let at_start = (m.space(), tab_titles(&m), row(&m));
-        assert_eq!(at_start, (&Owner::Workspace, vec!["Tab 1"], vec![(Owner::Workspace, false, vec![0])]));
+        let home = |tabs| (Owner::Workspace, false, tabs);
+        assert_eq!(at_start, (&WORKSPACE, vec!["Tab 1"], vec![home(vec![1]), (WORKSPACE, false, vec![0])]));
         // Opened, a task's space is made at the row's end: one empty tab, named for its repository.
         assert_eq!(m.update(Action::SpaceOpen { space: task_space(1) }), []);
         assert_eq!((m.space(), tab_titles(&m), m.layout.is_none()), (&task_space(1), vec!["Tab 1", "app-2"], true));
-        // The user's new tab joins the selected space, a client's Workspace.
+        // The user's new tab joins the selected space, and so does a client's: Home takes none.
         m.update(Action::NewTab);
-        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (task_space(1), false, vec![1, 2])]);
+        assert_eq!(row(&m), [home(vec![3]), (WORKSPACE, false, vec![0]), (task_space(1), false, vec![1, 2])]);
         m.update(Action::NewTab.sent_by(Origin::Socket));
-        assert_eq!((m.active, m.space()), (1, &Owner::Workspace));
-        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0, 1]), (task_space(1), false, vec![2, 3])]);
+        assert_eq!((m.active, m.space()), (3, &task_space(1)));
+        assert_eq!(row(&m), [home(vec![4]), (WORKSPACE, false, vec![0]), (task_space(1), false, vec![1, 2, 3])]);
         // ⌘1… (and ⌘⇧⌥1…) count the selected space's tabs only.
-        assert_eq!((m.visible_tab(1), m.visible_tab(2)), (Some(1), None));
+        assert_eq!((m.visible_tab(1), m.visible_tab(3)), (Some(2), None));
         // Cycling stays in the space; a space shows the tab it showed last.
         m.update(Action::CycleTab { delta: 1 });
         m.update(Action::CycleTab { delta: 1 });
-        assert_eq!(m.active, 1);
+        assert_eq!(m.active, 2);
         m.update(Action::SpaceSelect { index: 1 });
         m.update(Action::CycleTab { delta: -1 });
-        assert_eq!(m.active, 2);
+        assert_eq!(m.active, 0);
         m.update(Action::SpaceSelect { index: 0 });
-        m.update(Action::SpaceSelect { index: 1 });
+        m.update(Action::SpaceSelect { index: 2 });
         assert_eq!(m.active, 2);
         // Going to a task opens its space; a task there is not opens none.
         m.update(Action::TaskGo { id: Some(2) });
-        assert_eq!((m.space(), m.tabs.len()), (&task_space(2), 5));
+        assert_eq!((m.space(), m.tabs.len()), (&task_space(2), 6));
         m.update(Action::TaskGo { id: Some(9) });
         assert_eq!(m.space(), &task_space(2));
     }
 
     #[test]
     fn a_tab_moves_between_spaces_by_the_user_alone() {
-        let mut m = Model::default();
+        let mut m = Model::in_workspace();
         let (a, b) = (add_task(&mut m, "a", State::Running), add_task(&mut m, "b", State::Running));
         m.update(Action::SpaceOpen { space: task_space(a) }); // tab 2
         m.update(Action::SpaceOpen { space: task_space(b) }); // tab 3
-        m.update(Action::SpaceSelect { index: 0 });
-        m.update(Action::NewTab); // tab 4, Workspace's
-        let ids = |m: &Model| m.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>();
+        m.update(Action::SpaceSelect { index: 1 });
+        m.update(Action::NewTab); // tab 4, the workspace's
+        let ids = |m: &Model| m.tabs.iter().filter(|tab| tab.id != HOME_TAB).map(|tab| tab.id).collect::<Vec<_>>();
         assert_eq!(ids(&m), [1, 4, 2, 3]);
         // Onto another space's tab: it takes that space, before it. The tab on show stays on show,
         // its new space selected.
@@ -9048,19 +9076,24 @@ mod tests {
         assert_eq!((ids(&m), m.tabs[m.active].id, m.space()), (vec![1, 4, 2, 3], 4, &task_space(a)));
         // Onto a space: the end of its tabs. A space left with none goes.
         m.update(Action::TabPlace { tab: Some(2), at: TabAt::End(task_space(b)) });
+        // Home takes no tab.
         m.update(Action::TabPlace { tab: Some(4), at: TabAt::End(Owner::Workspace) });
-        assert_eq!((ids(&m), m.space()), (vec![1, 4, 3, 2], &Owner::Workspace));
-        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0, 1]), (task_space(b), false, vec![2, 3])]);
+        m.update(Action::TabPlace { tab: Some(4), at: TabAt::Before(HOME_TAB) });
+        assert_eq!((ids(&m), m.space()), (vec![1, 4, 3, 2], &task_space(a)));
+        m.update(Action::TabPlace { tab: Some(4), at: TabAt::End(WORKSPACE) });
+        assert_eq!((ids(&m), m.space()), (vec![1, 4, 3, 2], &WORKSPACE));
+        let home = (Owner::Workspace, false, vec![4]);
+        assert_eq!(row(&m), [home, (WORKSPACE, false, vec![0, 1]), (task_space(b), false, vec![2, 3])]);
         // A client moves nothing, and a dismissed task takes no tab.
         let theirs = Action::TabPlace { tab: Some(1), at: TabAt::End(task_space(a)) };
         assert_eq!(m.refusal(&theirs, Origin::Socket), Some(TABS_USERS));
         m.update(Action::TaskDismiss { id: a }.sent_by(Origin::Socket));
         m.update(theirs.sent_by(Origin::User));
-        assert_eq!(m.tabs.iter().find(|tab| tab.id == 1).map(|tab| &tab.space), Some(&Owner::Workspace));
+        assert_eq!(m.tabs.iter().find(|tab| tab.id == 1).map(|tab| &tab.space), Some(&WORKSPACE));
     }
 
     #[test]
-    fn move_tab_to_lists_workspace_the_live_tasks_and_the_workbooks_and_moves_the_tab_on_show() {
+    fn move_tab_to_lists_the_live_tasks_and_the_workbooks_and_moves_the_tab_on_show() {
         let mut m = Model::default();
         let (a, b, gone) = (
             add_task(&mut m, "fix login", State::Running),
@@ -9068,17 +9101,17 @@ mod tests {
             add_task(&mut m, "old", State::Running),
         );
         m.update(Action::TaskDismiss { id: gone });
-        m.update(Action::SpaceOpen { space: task_space(a) }); // tab 2, on show
+        m.update(Action::SpaceOpen { space: task_space(a) }); // tab 1, on show
         let titles = |m: &Model| -> Vec<String> {
             let palette = m.palette.as_ref().map(|p| p.task_matches().into_iter().map(|c| c.title.clone()).collect());
             palette.unwrap_or_default()
         };
-        // A client opens nothing; the user's lists Workspace, then the live tasks in order.
+        // A client opens nothing; the user's lists the live tasks in order. Not Home: it takes no tab.
         assert!(m.update(Action::PaletteTasks.sent_by(Origin::Socket)).is_empty());
         assert!(m.palette.is_none());
         m.update(Action::PaletteTasks);
         let listed = (m.mode(), titles(&m));
-        assert_eq!(listed, (Mode::Palette, vec!["Workspace".into(), "fix login".into(), "docs".into()]));
+        assert_eq!(listed, (Mode::Palette, vec!["fix login".into(), "docs".into()]));
         assert!(m.palette.as_ref().is_some_and(|p| p.matches().is_empty()));
         // Typing narrows it; a client chooses nothing.
         m.update(Action::FieldEdit { edit: Edit::Insert("doc".into()) });
@@ -9087,7 +9120,7 @@ mod tests {
         assert_eq!(m.tab_task(), Some(a));
         // The user's ↵: the tab on show moves to that task's space, still on show. `a`'s is gone.
         m.update(Action::PaletteChoose { index: None });
-        assert_eq!((m.palette.is_none(), m.tabs[m.active].id, m.tab_task()), (true, 2, Some(b)));
+        assert_eq!((m.palette.is_none(), m.tabs[m.active].id, m.tab_task()), (true, 1, Some(b)));
         assert_eq!(m.spaces().len(), 2);
         // Nothing matched: it stays open.
         m.update(Action::PaletteTasks);
@@ -9098,10 +9131,16 @@ mod tests {
         m.update(Action::ClosePalette);
         m.update(Action::PaletteTasks);
         m.update(Action::TaskDismiss { id: a }.sent_by(Origin::Socket));
-        m.update(Action::PaletteChoose { index: Some(1) });
-        assert_eq!((titles(&m), m.tab_task()), (vec!["Workspace".into(), "docs".into()], Some(b)));
         m.update(Action::PaletteChoose { index: Some(0) });
-        assert_eq!((m.space(), m.tabs.len()), (&Owner::Workspace, 2));
+        assert_eq!((titles(&m), m.tab_task()), (vec!["docs".into()], Some(b)));
+        // A kept workspace is listed after the tasks, and takes the tab.
+        m.update(Action::ClosePalette);
+        m.update(Action::WorkbookNew { uid: "9f3a61c2d4e5b708".into() });
+        m.update(Action::SpaceSelect { index: 1 });
+        m.update(Action::PaletteTasks);
+        assert_eq!(titles(&m), ["docs", "Workspace 2"]);
+        m.update(Action::PaletteChoose { index: Some(1) });
+        assert_eq!((m.space(), m.tabs[m.active].id, m.spaces().len()), (&WORKSPACE, 1, 2));
     }
 
     #[test]
@@ -9113,12 +9152,12 @@ mod tests {
         // Not the more urgent one that is only running.
         m.update(Action::TaskGo { id: None });
         let drawer = |m: &Model| m.talk.as_ref().filter(|t| t.open).and_then(|t| t.task.task());
-        assert_eq!((drawer(&m), m.tab_task(), m.tabs.len()), (Some(waits), Some(waits), 2));
+        assert_eq!((drawer(&m), m.tab_task(), m.tabs.len()), (Some(waits), Some(waits), 3));
         // A client's opens its space, the drawer as it was.
         m.update(Action::TalkToggle);
-        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::SpaceSelect { index: 1 });
         m.update(Action::TaskGo { id: None }.sent_by(Origin::Socket));
-        assert_eq!((drawer(&m), m.tab_task(), m.tabs.len()), (None, Some(waits), 2));
+        assert_eq!((drawer(&m), m.tab_task(), m.tabs.len()), (None, Some(waits), 3));
     }
 
     #[test]
@@ -9134,29 +9173,33 @@ mod tests {
             assign: Assign::default(),
         };
         m.update(add.sent_by(Origin::Socket));
-        assert_eq!((&m.tabs[0].space, m.tasks.list.len(), m.spaces().len()), (&Owner::Workspace, 1, 1));
+        assert_eq!((&m.tabs[0].space, m.tasks.list.len(), m.spaces().len()), (&WORKSPACE, 1, 2));
     }
 
     #[test]
-    fn closing_a_spaces_last_tab_closes_the_space_and_workspace_keeps_one() {
+    fn closing_a_spaces_last_tab_closes_the_space_and_the_last_one_leaves_home() {
         let mut m = Model::default();
         term(&mut m);
         let (a, b) = (add_task(&mut m, "a", State::Running), add_task(&mut m, "b", State::Running));
         m.update(Action::SpaceOpen { space: task_space(a) });
         m.update(Action::NewTab);
         m.update(Action::SpaceOpen { space: task_space(b) });
-        m.update(Action::SpaceSelect { index: 1 });
+        m.update(Action::SpaceSelect { index: 2 });
         // Within its space, its right neighbour takes its place, else the left one.
         m.update(Action::CloseTab { index: None });
         assert_eq!((m.tab_task(), tab_titles(&m)), (Some(a), vec!["Tab 1", "a", "b"]));
         // The last tab of a space: the space goes, its right neighbour on the row is selected.
         m.update(Action::CloseTab { index: None });
-        assert_eq!((m.tab_task(), m.spaces().len(), m.tasks.get(a).is_some()), (Some(b), 2, true));
-        // The row's last space: its left one. Workspace's last tab: an empty one in its place.
+        assert_eq!((m.tab_task(), m.spaces().len(), m.tasks.get(a).is_some()), (Some(b), 3, true));
+        // The row's last space: its left one. The last workspace's last tab: Home, which keeps
+        // its own tab whatever is closed. The workspace is still listed.
         m.update(Action::CloseTab { index: None });
-        assert_eq!((m.space(), m.spaces().len()), (&Owner::Workspace, 1));
+        assert_eq!((m.space(), m.spaces().len()), (&WORKSPACE, 2));
         m.update(Action::CloseTab { index: None });
         assert_eq!((m.tabs.len(), m.panes.len(), m.space()), (1, 0, &Owner::Workspace));
+        m.update(Action::CloseTab { index: None });
+        m.update(Action::CloseTab { index: Some(0) }.sent_by(Origin::Socket));
+        assert_eq!((m.tabs[0].id, m.tabs.len(), m.workbooks.list.len()), (HOME_TAB, 1, 1));
     }
 
     /// Every pane's tab, by the tab's id: what binding must leave as it is.
@@ -9164,53 +9207,54 @@ mod tests {
         m.tabs.iter().zip(m.tab_panes()).map(|(tab, panes)| (tab.id, panes)).collect()
     }
 
-    /// The first "Workspace" is not taken: a task started there gets a space of its own.
+    /// Home is not taken, and holds no tab: a task started there gets a space of its own.
     #[test]
-    fn a_task_started_in_the_first_workspace_gets_its_own_space_and_nothing_the_user_had_moves() {
+    fn a_task_started_on_home_gets_its_own_space_and_nothing_the_user_had_moves() {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
         m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right });
         term(&mut m);
-        let before = (pane_tabs(&m), m.layout.clone(), m.focused, m.panes.clone());
+        let before = (pane_tabs(&m)[..1].to_vec(), m.layout.clone(), m.focused, m.panes.clone());
+        m.update(Action::SpaceSelect { index: 0 });
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
         assert_eq!((m.joins(), m.compose_plan_line().as_deref()), (None, Some("↵ will start claude in app")));
         let effects = m.update(Action::ComposeEnter);
         assert!(matches!(effects[..], [Effect::StartAgent { .. }]), "{effects:?}");
-        assert_eq!((m.tab_task(), m.mode(), m.tabs.len()), (Some(1), Mode::Talk, 2));
-        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (task_space(1), false, vec![1])]);
-        // Workspace's tab is as it was.
-        m.update(Action::SpaceSelect { index: 0 });
+        assert_eq!((m.tab_task(), m.mode(), m.tabs.len()), (Some(1), Mode::Talk, 3));
+        let (home, app) = ((Owner::Workspace, false, vec![2]), (WORKSPACE, false, vec![0]));
+        assert_eq!(row(&m), [home, app, (task_space(1), false, vec![1])]);
+        // The workspace's tab is as it was.
+        m.update(Action::SpaceSelect { index: 1 });
         assert_eq!((pane_tabs(&m)[..1].to_vec(), m.layout.clone(), m.focused, m.panes.clone()), before);
         // Filed for later: no space.
         m.update(Action::OpenCompose { text: "later".into() });
         m.update(Action::ComposeSubmit { open: false });
-        assert_eq!((m.tab_task(), m.spaces().len()), (None, 2));
+        assert_eq!((m.tab_task(), m.spaces().len()), (None, 3));
         // Started from a task's space: in it, in front; no space is made.
-        m.update(Action::SpaceSelect { index: 1 });
+        m.update(Action::SpaceSelect { index: 2 });
         m.update(Action::OpenCompose { text: "third".into() });
         assert!(m.compose_binds());
         m.update(Action::ComposeEnter);
-        assert_eq!((m.tab_task(), m.members(&task_space(1)), m.spaces().len()), (Some(3), vec![1, 3], 2));
+        assert_eq!((m.tab_task(), m.members(&task_space(1)), m.spaces().len()), (Some(3), vec![1, 3], 3));
     }
 
     #[test]
     fn a_kept_workspace_is_bound_to_the_task_started_in_it_and_unbound_when_the_task_goes() {
         const UID: &str = "9f3a61c2d4e5b708";
         let mut m = Model::default();
-        term(&mut m);
         m.update(Action::WorkbookNew { uid: UID.into() });
         term(&mut m);
         m.update(Action::NewTab);
         term(&mut m);
-        let book = Owner::Workbook { id: 1 };
+        let (book, home) = (Owner::Workbook { id: 1 }, (Owner::Workspace, false, vec![2]));
         let before = (pane_tabs(&m), m.tabs[m.active].id, m.layout.clone(), m.panes.clone());
-        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (book.clone(), false, vec![1, 2])]);
+        assert_eq!(row(&m), [home.clone(), (book.clone(), false, vec![0, 1])]);
         m.update(Action::OpenCompose { text: "fix zoom".into() });
         assert_eq!(m.compose_plan_line().as_deref(), Some(BINDS));
         m.update(Action::ComposeEnter);
         // The workspace is the task's space: where it was on the row, with all its tabs. It is
         // still listed, bound to the task, and its row opens the task's space.
-        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (task_space(1), false, vec![1, 2])]);
+        assert_eq!(row(&m), [home, (task_space(1), false, vec![0, 1])]);
         assert_eq!((pane_tabs(&m), m.tabs[m.active].id, m.layout.clone(), m.panes.clone()), before);
         let listed =
             |m: &Model| m.workbook_rows().iter().map(|row| (row.name.clone(), row.task, row.open)).collect::<Vec<_>>();
@@ -9218,8 +9262,11 @@ mod tests {
         m.update(Action::SpaceSelect { index: 0 });
         m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
         assert_eq!((m.space(), m.spaces().len()), (&task_space(1), 2));
-        // A tab moved to the workspace goes to the task's space: it has no other.
-        m.update(Action::TabPlace { tab: Some(1), at: TabAt::End(book.clone()) });
+        // A tab of another workspace ("Workspace 3", made for a terminal on Home) moved to the
+        // workspace goes to the task's space: it has no other.
+        m.update(Action::SpaceSelect { index: 0 });
+        term(&mut m);
+        m.update(Action::TabPlace { tab: Some(3), at: TabAt::End(book.clone()) });
         assert_eq!((m.space_tabs(&task_space(1)).len(), m.spaces().iter().any(|space| space.of == book)), (3, false));
         // A task started from it is in it too, in front: no space is made. It goes again.
         m.update(Action::OpenCompose { text: "another".into() });
@@ -9242,15 +9289,18 @@ mod tests {
         );
         // The workspace deleted while bound: the task keeps the space and its tabs; put back, bound.
         m.update(Action::WorkbookRemove { workbook: 1, tab: None });
-        assert_eq!((m.space_tabs(&task_space(1)).len(), m.panes.len(), listed(&m).len()), (3, 3, 0));
+        let names = |m: &Model| listed(m).into_iter().map(|row| row.0).collect::<Vec<_>>();
+        assert_eq!((m.space_tabs(&task_space(1)).len(), m.panes.len(), names(&m)), (3, 3, vec!["Workspace 3".to_string()]));
         m.update(Action::WorkbookUndo);
         assert_eq!((m.space_tabs(&task_space(1)).len(), listed(&m)[0].1), (3, Some(1)));
         // Dismissed, its workspace deleted, the dismissal taken back: the tabs are the task's.
+        // Meanwhile they are a workspace's made for them, never Home's.
         m.update(Action::RowDismiss { id: 1 });
         m.update(Action::WorkbookRemove { workbook: 1, tab: None });
-        assert_eq!(m.space_tabs(&Owner::Workspace).len(), 4);
+        let made = Owner::Workbook { id: 3 };
+        assert_eq!((m.space_tabs(&made).len(), m.space_tabs(&Owner::Workspace).len(), names(&m).len()), (3, 1, 2));
         m.update(Action::TaskUndo);
-        assert_eq!((m.space_tabs(&task_space(1)).len(), m.space_tabs(&Owner::Workspace).len()), (3, 1));
+        assert_eq!((m.space_tabs(&task_space(1)).len(), m.space_tabs(&made).len(), m.panes.len()), (3, 0, 3));
     }
 
     /// A model with a kept workspace of two tabs and a task `first >app` started in it.
@@ -9390,7 +9440,7 @@ mod tests {
         exited(&mut m, 1);
         m.update(Action::RowDismiss { id: 1 });
         let heir = task_space(3);
-        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (heir.clone(), false, vec![1, 2])]);
+        assert_eq!(row(&m), [(Owner::Workspace, false, vec![2]), (heir.clone(), false, vec![0, 1])]);
         assert_eq!((pane_tabs(&m), m.members(&heir), m.workbooks.bound_to(3)), (tabs.clone(), vec![3], Some(1)));
         // Taken back: in it again, as one of its tasks.
         m.update(Action::TaskUndo);
@@ -9400,7 +9450,7 @@ mod tests {
         m.update(Action::RowDismiss { id: 1 });
         m.update(Action::RowDismiss { id: 3 });
         let book = Owner::Workbook { id: 1 };
-        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (book, false, vec![1, 2])]);
+        assert_eq!(row(&m), [(Owner::Workspace, false, vec![2]), (book, false, vec![0, 1])]);
         assert_eq!((pane_tabs(&m), m.workbooks.list[0].task), (tabs, None));
     }
 
@@ -9679,7 +9729,7 @@ mod tests {
         }
         let mut m = boxed();
         m.update(open());
-        assert_eq!((m.tabs.len(), m.pane(2).and_then(|p| p.cwd.as_deref())), (2, Some("/code/app")));
+        assert_eq!((m.tabs.len(), m.pane(2).and_then(|p| p.cwd.as_deref())), (3, Some("/code/app")));
         // A field in a row takes the keyboard the same way: a new worktree's branch.
         let mut m = boxed();
         let dirs = repos::RepoDirs { worktrees: Some("/wt".into()), ..Default::default() };
@@ -9691,7 +9741,7 @@ mod tests {
         for action in [Action::Split { axis: Right, kind: Kind::Terminal }, Action::NewTab, Action::FocusList] {
             assert_eq!(m.waits_for(&action, Origin::User), Some(WHY), "{action:?}");
             m.update(action);
-            assert_eq!((m.panes.len(), m.tabs.len(), line(&m), m.mode()), (1, 1, "mine", Mode::Compose));
+            assert_eq!((m.panes.len(), m.tabs.len(), line(&m), m.mode()), (1, 2, "mine", Mode::Compose));
         }
         m.update(Action::ToggleKeys);
         for action in [toggle(), open()] {
@@ -9759,9 +9809,10 @@ mod tests {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
         let click = |path: &str| Action::RepoClick { path: path.into(), axis: Right };
-        // No task there: a terminal in a Workspace tab of its own.
+        // No task there: a terminal in a workspace of its own, named for the folder.
         m.update(click("/code/app-2"));
-        assert_eq!((m.space(), m.pane(1).and_then(|p| p.cwd.as_deref())), (&Owner::Workspace, Some("/code/app-2")));
+        assert_eq!((m.space(), m.pane(1).and_then(|p| p.cwd.as_deref())), (&WORKSPACE, Some("/code/app-2")));
+        assert_eq!(m.space_title(m.space()), "app-2");
         // Two tasks there, one dismissed: the live one's space is selected, its agent not started.
         for line in ["older >app-2", "newer >app-2"] {
             m.update(Action::TaskFromLine { line: line.into(), known: Default::default(), open: false });
@@ -9775,9 +9826,9 @@ mod tests {
         m.update(Action::SpaceHide { index: None });
         m.update(click("/code/app-2"));
         assert_eq!(m.space(), &task_space(1));
-        // The row's Terminal word: a terminal there anyway, in Workspace.
+        // The row's Terminal word: a terminal there anyway, in the task's empty tab.
         m.update(Action::OpenRepo { path: "/code/app-2".into(), axis: Right });
-        assert_eq!((m.space(), m.panes.len()), (&Owner::Workspace, 2));
+        assert_eq!((m.space(), m.panes.len()), (&task_space(1), 2));
     }
 
     #[test]
@@ -9791,16 +9842,18 @@ mod tests {
         let shown = |m: &Model| m.talk.as_ref().filter(|t| t.open).and_then(|t| t.task.task());
         assert_eq!((shown(&m), m.tab_task()), (Some(a), Some(a)));
         // Another space, the drawer open: it shows that one's, starting nothing.
-        assert_eq!(m.update(Action::SpaceSelect { index: 1 }), []);
+        assert_eq!(m.update(Action::SpaceSelect { index: 2 }), []);
         assert_eq!((shown(&m), m.agent_runs(&Subject::Task(b))), (Some(b), false));
-        // Workspace: no chat. Back: the drawer opens as it was.
+        // A workspace of no task, and Home: no chat. Back: the drawer opens as it was.
+        m.update(Action::SpaceSelect { index: 1 });
+        assert!(m.talk.is_none());
         m.update(Action::SpaceSelect { index: 0 });
         assert!(m.talk.is_none());
-        m.update(Action::SpaceSelect { index: 2 });
+        m.update(Action::SpaceSelect { index: 3 });
         assert_eq!(shown(&m), Some(a));
         // Closed: it stays closed.
         m.update(Action::TalkToggle);
-        m.update(Action::SpaceSelect { index: 1 });
+        m.update(Action::SpaceSelect { index: 2 });
         assert_eq!((shown(&m), m.talk.as_ref().map(|t| t.task.clone())), (None, Some(Subject::Task(b))));
         // The keyboard in the drawer: a client's change of space waits; a tab change in the space does not.
         started(&mut m, Action::TaskTalk { id: a }); // starts it: the keyboard goes in
@@ -9825,28 +9878,28 @@ mod tests {
         m.update(Action::NewTab);
         term(&mut m);
         m.update(Action::SpaceOpen { space: task_space(b) });
-        m.update(Action::SpaceSelect { index: 1 });
+        m.update(Action::SpaceSelect { index: 2 });
         let panes = m.panes.clone();
         // Hidden: off the row, its right neighbour selected; its tabs, panes and agent stay.
         assert_eq!(m.update(Action::SpaceHide { index: None }), []);
-        assert_eq!((m.tab_task(), m.shown_spaces().len(), m.tabs.len()), (Some(b), 2, 4));
+        assert_eq!((m.tab_task(), m.shown_spaces().len(), m.tabs.len()), (Some(b), 3, 5));
         assert_eq!((m.panes.clone(), m.agent_runs(&Subject::Task(a))), (panes, true));
-        assert_eq!(row(&m)[1], (task_space(a), true, vec![1, 2]));
+        assert_eq!(row(&m)[2], (task_space(a), true, vec![1, 2]));
         // Selecting counts the row's spaces alone; cycling skips the hidden one.
-        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::SpaceSelect { index: 1 });
         m.update(Action::SpaceCycle { delta: 1 });
         assert_eq!(m.tab_task(), Some(b));
-        // Workspace stays.
+        // Home stays.
         m.update(Action::SpaceHide { index: Some(0) });
         assert!(!m.spaces()[0].hidden);
         // Its row opens it again where it was, on the tab it showed last; its chat is there.
         m.update(Action::TaskTalk { id: a });
-        assert_eq!((m.space(), row(&m)[1].1, m.active, m.tabs.len()), (&task_space(a), false, 2, 4));
+        assert_eq!((m.space(), row(&m)[2].1, m.active, m.tabs.len()), (&task_space(a), false, 2, 5));
         assert_eq!(m.talk.as_ref().map(|t| (&t.task, t.open)), Some((&Subject::Task(a), true)));
         // A tab of a hidden space selected by its place shows it again too.
         m.update(Action::SpaceHide { index: None });
         m.update(Action::SelectTab { index: 1 });
-        assert_eq!((m.space(), row(&m)[1].1), (&task_space(a), false));
+        assert_eq!((m.space(), row(&m)[2].1), (&task_space(a), false));
     }
 
     #[test]
@@ -9859,9 +9912,12 @@ mod tests {
         m.update(Action::AgentExited { task: Subject::Task(b) }.sent_by(Origin::System));
         started(&mut m, Action::TaskTalk { id: a });
         m.update(Action::AgentExited { task: Subject::Task(a) }.sent_by(Origin::System));
-        // Dismissed: off the row, the drawer shows nothing, its tab is Workspace's.
+        // Dismissed: off the row and out of the drawer. Its tab, still on show, is the
+        // workspace selected last's: b's, whose conversation the drawer is on.
         m.update(Action::RowDismiss { id: a });
-        assert_eq!((m.talk.is_none(), m.space(), m.spaces().len()), (true, &Owner::Workspace, 2));
+        let talks = m.talk.as_ref().map(|talk| talk.task.clone());
+        assert_eq!((talks, m.space(), m.spaces().len()), (Some(Subject::Task(b)), &task_space(b), 2));
+        assert_eq!((m.space_tabs(&Owner::Workspace).len(), m.panes.len(), m.focused), (1, 1, Some(1)));
         // Taken back: its tab is its space's again.
         m.update(Action::TaskUndo);
         assert_eq!((m.tab_task(), m.spaces().len()), (Some(a), 3));
@@ -9874,14 +9930,14 @@ mod tests {
         let a = add_task(&mut m, "a", State::Captured);
         m.update(Action::TabPlace { tab: None, at: TabAt::End(task_space(a)) });
         m.update(Action::TaskDismiss { id: a });
-        // Back by a state report: its tab stays the user's, in Workspace.
+        // Back by a state report: its tab stays the user's, in the workspace made for it.
         m.update(Action::TaskSetState { id: a, state: State::NeedsYou }.sent_by(Origin::Socket));
         assert_eq!((m.tasks.live(a).is_some(), m.tab_task()), (true, None));
         // Dismissed, every tab closed, a new tab with the same id: undo links nothing.
         m.update(Action::TabPlace { tab: None, at: TabAt::End(task_space(a)) });
         m.update(Action::TaskDismiss { id: a });
         m.update(Action::CloseTab { index: None });
-        m.update(Action::CloseTab { index: None });
+        m.update(Action::NewTab);
         assert_eq!(m.tabs[0].id, 1, "the id is used again");
         m.update(Action::TaskUndo);
         assert_eq!((m.tasks.live(a).is_some(), m.tab_task()), (true, None));
@@ -9908,7 +9964,7 @@ mod tests {
         m.update(Action::RowDismiss { id: a });
         assert_eq!(m.update(Action::QuitConfirm), [Effect::StopAgent { task: Subject::Task(a) }]);
         m.update(Action::AgentExited { task: Subject::Task(a) }.sent_by(Origin::System));
-        assert_eq!((m.tasks.get(a).map(|t| t.dismissed), m.spaces().len(), m.confirm.is_none()), (Some(true), 1, true));
+        assert_eq!((m.tasks.get(a).map(|t| t.dismissed), m.spaces().len(), m.confirm.is_none()), (Some(true), 2, true));
     }
 
     #[test]
@@ -10447,7 +10503,7 @@ mod tests {
         keys(&mut m, " folder");
         // ↵ will start the agent there; the path stays in the title as typed.
         assert_eq!(m.compose_plan().and_then(|plan| plan.dir).as_deref(), Some("~/notes/"));
-        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ will start claude in ~/notes/"));
+        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ will start claude in ~/notes/, in this workspace"));
         // ↵ at once, before the shell read the line again: the folder is where its listing was.
         m.update(Action::ComposeSubmit { open: false });
         let task = m.tasks.list.last().unwrap();
@@ -12078,7 +12134,7 @@ mod tests {
         m.update(Action::SetSessions { found: found(), day: 0 });
         m.update(Action::SessionHide { runner: "codex".into(), id: "hidden".into() });
         m.update(Action::SessionAdopt { runner: "codex".into(), id: "adopted".into() });
-        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::SpaceSelect { index: 1 });
         let panes = |m: &Model| m.sessions_bar().rows.iter().map(|row| (row.id.clone(), row.pane)).collect::<Vec<_>>();
         assert_eq!(panes(&m), [("here".to_string(), Some(2)), ("past".to_string(), None)], "an idle one is in no pane");
         // The picker, the new-task box, the key reference and visual mode keep the focus where it
@@ -12252,7 +12308,7 @@ mod tests {
         assert_eq!(started(&mut m, Action::TaskTalk { id: 1 }), [asked(1, codex, Some("/code/app"))]);
         assert_eq!(m.talk.clone(), Some(Talk { task: Subject::Task(1), open: true, keys: true }));
         // Its space opens, with one empty tab.
-        assert_eq!((m.mode(), m.tab_task(), m.tabs.len()), (Mode::Talk, Some(1), 2));
+        assert_eq!((m.mode(), m.tab_task(), m.tabs.len()), (Mode::Talk, Some(1), 3));
         // Started: the task runs. Codex names its own session, so there is none to follow.
         system(&mut m, Action::AgentStarted { task: Subject::Task(1), session: Some(UUID.into()), at: 0 });
         let task = m.tasks.get(1).unwrap();
@@ -12771,13 +12827,14 @@ mod tests {
             root: "/home/.ottospace/worktrees".into(),
         };
         assert_eq!((m.update(Action::MarkSubmit), &m.mark_input), (vec![asked], &None));
-        // Made: the list as read again, and a terminal there in a Workspace tab of its own.
+        // Made: the list as read again, and a terminal there in a workspace named for it.
         let mut repos = listed();
         repos[0].worktrees.push(repos::Worktree { name: "fix-zoom".into(), path: path.into(), branch: None });
         let made = Action::WorktreeAdded { repo: "/code/app".into(), path: path.into(), repos };
         assert_eq!(m.refusal(&made, Origin::Socket), Some(repos::USERS_ALONE));
         assert_eq!(m.update(made.sent_by(Origin::System)), [Effect::Opened(1)]);
-        assert_eq!((m.pane(1).and_then(|p| p.cwd.as_deref()), m.space()), (Some(path), &Owner::Workspace));
+        assert_eq!((m.pane(1).and_then(|p| p.cwd.as_deref()), m.space()), (Some(path), &WORKSPACE));
+        assert_eq!(m.space_title(m.space()), "fix-zoom");
     }
 
     #[test]
@@ -12841,15 +12898,23 @@ mod tests {
         let pane = m.pane(1).unwrap();
         assert_eq!((&pane.kind, pane.cwd.as_deref()), (&Kind::Terminal, Some("/code/app-2")));
         assert_eq!(m.tabs[0].title, "app-2");
-        // A second repo: a tab of Workspace of its own, named for it.
+        // Its workspace is named for it too.
+        let spaces = |m: &Model| m.spaces().iter().map(|space| m.space_title(&space.of)).collect::<Vec<_>>();
+        assert_eq!(spaces(&m), ["Home", "app-2"]);
+        // A second repo: a workspace of its own, named for it.
         assert_eq!(m.update(Action::OpenRepo { path: "/code/app".into(), axis: Down }), [Effect::Opened(2)]);
         assert_eq!((m.pane(2).unwrap().cwd.as_deref(), tab_titles(&m)), (Some("/code/app"), vec!["app-2", "app"]));
-        assert_eq!((m.active, m.tab_panes()), (1, vec![vec![1], vec![2]]));
-        // From a task's space too: Workspace is selected, with the new tab.
+        assert_eq!((m.active, m.tab_panes()), (1, vec![vec![1], vec![2], vec![]]));
+        assert_eq!(spaces(&m), ["Home", "app-2", "app"]);
+        // From a task's space, its tab in use: a workspace too, selected; the name is numbered.
         let a = add_task(&mut m, "a", State::Captured);
         m.update(Action::SpaceOpen { space: task_space(a) });
+        term(&mut m);
         m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right });
-        assert_eq!((m.space(), m.active, m.tabs.len()), (&Owner::Workspace, 2, 4));
+        assert_eq!((m.space_title(m.space()), m.active, m.tabs.len()), ("app 2".to_string(), 3, 5));
+        // A client's is the workspace selected last's: it makes none while there is one.
+        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right }.sent_by(Origin::Socket));
+        assert_eq!((m.space_title(m.space()), m.active, m.workbooks.list.len()), ("app 2".to_string(), 4, 3));
     }
 
     #[test]
@@ -12896,7 +12961,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_a_tab_closes_its_panes_and_keeps_one_tab() {
+    fn closing_a_tab_closes_its_panes_and_the_last_one_shows_home() {
         let mut m = Model::default();
         term(&mut m);
         m.update(Action::NewTab);
@@ -12905,11 +12970,11 @@ mod tests {
         // Close the background tab: the active tab is untouched.
         let effects = m.update(Action::CloseTab { index: Some(0) });
         assert_eq!(effects, [Effect::Closed(Pane { id: 1, kind: Kind::Terminal, cwd: None, fit: None })]);
-        assert_eq!((m.tabs.len(), m.active, m.focused), (1, 0, Some(3)));
-        // Close the last tab: its panes go, an empty tab remains.
+        assert_eq!((m.tabs.len(), m.active, m.focused), (2, 0, Some(3)));
+        // Close the last tab: its panes go, and Home is on show.
         assert_eq!(m.update(Action::CloseTab { index: None }).len(), 2);
         assert_eq!((m.tabs.len(), m.panes.len(), m.layout.is_none()), (1, 0, true));
-        assert_eq!(m.tabs[0].title, "Tab 1");
+        assert_eq!((m.tabs[0].id, m.space()), (HOME_TAB, &Owner::Workspace));
     }
 
     #[test]
