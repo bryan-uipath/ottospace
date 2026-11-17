@@ -492,7 +492,7 @@ impl Workspace {
                 true => {
                     div().flex_1().min_w_0().flex().text_color(rgb(theme::MARK)).child(self.render_field("name", cx))
                 }
-                false => div().when(!row.available, |d| d.text_color(rgb(theme::MUTED))).child(row.name.clone()),
+                false => crate::cut_text(row.name.clone()).when(!row.available, |d| d.text_color(rgb(theme::MUTED))),
             };
             let letter = match (lettering, row.key) {
                 (true, _) => "?".to_string(),
@@ -540,7 +540,7 @@ impl Workspace {
                 .items_center()
                 .gap_2()
                 .child(div().flex_none().w(px(34.)).text_xs().text_color(rgb(color)).child(tag))
-                .child(name.flex_1().min_w_0().truncate())
+                .child(name.flex_1().overflow_hidden().whitespace_nowrap())
                 .child(dot)
                 .child(letter)
                 .child(rename)

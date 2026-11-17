@@ -209,9 +209,8 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(text))
             .child(glyph(&shown, background, text))
-            .child(div().id("notice-text").min_w_0().truncate().child(shown.text.clone()).tooltip(tip))
+            .child(crate::cut_text(shown.text.clone()).flex_1().id("notice-text").tooltip(tip))
             .children(offer)
-            .child(div().flex_1())
             .child(close);
         let bar = recessed(line, DEPTH).flex_none().w_full().h(px(self.bar.height));
         Some(bar.bg(rgb(background)).child(mark(&self.marks, Mark::Notice)))
