@@ -6217,8 +6217,14 @@ fn list_button(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
 fn window_managed(window: &ax::Window) -> bool {
     let (bundle, name) = ax::app_identity(window.pid());
     let (title, subrole) = (window.title().unwrap_or_default(), window.subrole().unwrap_or_default());
-    let facts =
-        Facts { app: name.as_deref().unwrap_or_default(), bundle: bundle.as_deref(), title: &title, subrole: &subrole };
+    let identifier = window.identifier();
+    let facts = Facts {
+        app: name.as_deref().unwrap_or_default(),
+        bundle: bundle.as_deref(),
+        title: &title,
+        subrole: &subrole,
+        identifier: identifier.as_deref(),
+    };
     rules::manages(&config::live().windows, &facts)
 }
 
