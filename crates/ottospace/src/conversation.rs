@@ -252,13 +252,13 @@ impl Workspace {
         if let Some(dir) = dir {
             command.current_dir(dir);
         }
-        let pass = subject.task().map(|_| crate::pass::Live::mint().ok_or("no random bytes for a pass")).transpose()?;
+        let pass = subject.task().map(|_| crate::pass::Live::mint()).transpose()?;
         if let Some(task) = subject.task() {
             command.env("OTTOSPACE_TASK", task.to_string());
         }
         // Its own, for its tool shells' `ottospace ctl`: the user's shells in the task's tab have none.
         if let Some(pass) = &pass {
-            command.env(crate::pass::VAR, pass.hex());
+            command.env(crate::pass::VAR, pass.file());
         }
         // An empty key is no key: passed on, the CLI could take it for one and fail.
         if std::env::var_os("ANTHROPIC_API_KEY").is_some_and(|key| key.is_empty()) {

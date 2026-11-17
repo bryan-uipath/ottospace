@@ -9136,12 +9136,14 @@ fn a_task_agents_pass_in_its_terminal_finds_its_task_until_it_ends() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A live pass is hidden wherever a client reads text. An agent that says its pass (as `env`
-/// would) shows `[hidden]` in the state, in either view; a pane that prints it shows it so in a
+/// An agent's `env` shows its pass file's path, never the pass. A live pass is hidden wherever a
+/// client reads text, as defence in depth. An agent that prints its pass (`cat` of the file)
+/// shows `[hidden]` in the state, in either view; a pane that prints it shows it so in a
 /// capture and a wait, which cannot match the pass either. Nor is it in the trace.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_live_pass_is_hidden_from_every_client() {
+    use std::os::unix::fs::PermissionsExt;
     for view in ["terminal", "native"] {
         let name = format!("pass-hidden-{view}");
         let (root, record, env) = native_setup(&name, &[], &[("FAKE_SAY_PASS", "1")]);
@@ -9159,6 +9161,16 @@ fn a_live_pass_is_hidden_from_every_client() {
             std::fs::read_to_string(&file).ok().filter(|text| text.ends_with('\n')).map(|text| text.trim().to_string())
         });
         assert_eq!(pass.len(), 32);
+        // `env` shows the path of its pass file, never the pass: 0600, in a 0700 folder beside the
+        // socket. The same user can read it, as `ps -E` reads an environment: the accepted boundary.
+        let said = std::fs::read_to_string(record.join("env")).unwrap();
+        let path = said.trim().strip_prefix("OTTOSPACE_TASK_PASS_FILE=").expect(&said).to_string();
+        assert!(!said.contains(&pass), "{said}");
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let folder = Path::new(&path).parent().unwrap();
+        assert_eq!((mode(Path::new(&path)), mode(folder)), (0o600, 0o700));
+        assert_eq!(folder.extension().and_then(|e| e.to_str()), Some("passes"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), pass);
         let shows = |text: &str, what: &str| {
             assert!(
                 !text.contains(&pass) && !text.contains(&pass.to_uppercase()),
@@ -9192,6 +9204,7 @@ fn a_live_pass_is_hidden_from_every_client() {
         shows(&otto.call(json!({"cmd": "state"})).to_string(), "the state");
         shows(&otto.call(json!({"cmd": "trace"})).to_string(), "the trace");
         drop(otto);
+        assert!(!folder.exists(), "the pass files go with the app");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

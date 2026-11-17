@@ -615,7 +615,7 @@ pub enum PaneKind {
 }
 
 /// A request waiting for the UI thread, where its reply goes, and the pass it carried (a task
-/// agent's `$OTTOSPACE_TASK_PASS`, `pass`).
+/// agent's, from the file `$OTTOSPACE_TASK_PASS_FILE` names: `pass`).
 pub struct Call {
     pub request: Request,
     pub reply: Sender<String>,
@@ -741,7 +741,7 @@ pub fn error(message: &str) -> String {
     serde_json::json!({ "ok": false, "error": message }).to_string()
 }
 
-/// Client side: `request` with the caller's pass (`$OTTOSPACE_TASK_PASS`) attached, if it has one
+/// Client side: `request` with the caller's pass (`pass::from_env`) attached, if it has one
 /// and the request names none. A line that is not a JSON object, or gives a key twice, goes as it is.
 pub fn with_pass(request: &str, pass: Option<&str>) -> String {
     let Some(pass) = pass.filter(|pass| !pass.is_empty()) else { return request.to_string() };

@@ -601,9 +601,11 @@ once, read-only: nothing in the app is pressed or set), for a terminal the rows.
   `brief.json`, and for each capture `1.png`, `1.annotated.png`, `1.json`. They are never in the
   tasks folder. A cancelled draft leaves nothing.
 - An agent ottospace starts for a task reads its brief with `ottospace ctl '{"cmd":"task_brief"}'`:
-  it has a pass of its own in its environment (`OTTOSPACE_TASK_PASS`), which `ottospace ctl` and
-  the SDK send with each request. The pass dies with the agent's process; a new start has a new one.
-  ottospace never writes it to the state, a log or a file; an agent that prints it puts it in its own transcript.
+  it has a pass of its own, in a file whose path its environment holds (`OTTOSPACE_TASK_PASS_FILE`;
+  the file is 0600, in a 0700 folder beside the control socket), which `ottospace ctl` and the SDK
+  read and send with each request. `env` shows the path, never the pass. The pass and its file die
+  with the agent's process; a new start has a new one. ottospace never writes it to the state or a
+  log, and a pass printed anyway reads `[hidden]` in every reply.
 - A terminal opened in a task's tab has `OTTOSPACE_TASK`, not the pass; an agent there reads the brief with
   `ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"`.
 - In the brief, everything that came from another app or a terminal is quoted and labelled as

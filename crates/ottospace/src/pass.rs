@@ -1,49 +1,109 @@
-//! A task agent's pass: 16 random bytes minted when ottospace starts the agent, in its
-//! environment only. A socket request that carries it is that task's (`docs/ai/agent-mode.md`,
-//! "Who is asking"). A secret: never in the state, a trace, a log or a file; no `Serialize`, and
-//! its `Debug` hides it.
+//! A task agent's pass: 16 random bytes minted when ottospace starts the agent. A socket request
+//! that carries it is that task's (`docs/ai/agent-mode.md`, "Who is asking"). The agent's
+//! environment has the path of a file that holds it (`VAR`), not the pass: an agent that runs
+//! `env` prints a path, which grants nothing a same-user process could not read already. The file
+//! is 0600 in a 0700 folder ottospace makes beside its socket, one per process, gone when the
+//! pass is. A secret: never in the state, a trace or a log; no `Serialize`, and its `Debug` hides
+//! it. Its text is also hidden from what clients read (`hide`), should an agent print the file.
 
 use std::borrow::Cow;
-use std::io::Read;
+use std::io::{Read, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use ottospace_core::tasks::{Caller, TaskId};
 
-/// The variable it travels in. No `KEY`, `TOKEN` or `SECRET` in the name: Codex's tool shell
-/// may drop such names (agent-mode.md, "Probes").
-pub(crate) const VAR: &str = "OTTOSPACE_TASK_PASS";
+/// The variable the file's path travels in. No `KEY`, `TOKEN` or `SECRET` in the name: Codex's
+/// tool shell may drop such names (agent-mode.md, "Probes").
+pub(crate) const VAR: &str = "OTTOSPACE_TASK_PASS_FILE";
+
+/// What a client sends when its file is gone (its agent ended): a pass never minted, so the
+/// request is refused as a dead pass's, never answered as one with no pass.
+const GONE: &str = "00000000000000000000000000000000";
 
 pub(crate) struct Pass([u8; 16]);
 
-/// A minted pass, live while held: its text is hidden (`hide`) from what clients read until it
-/// is dropped, which revokes it.
-pub(crate) struct Live(Pass);
+/// A minted pass, live while held: its file is there, and its text is hidden (`hide`) from what
+/// clients read, until it is dropped, which revokes it.
+pub(crate) struct Live {
+    pass: Pass,
+    file: PathBuf,
+}
 
 /// The live passes' hex, for `hide`. Only `Live` adds and removes.
 static LIVE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// The folder pass files go in: beside the control socket, so a test run's is in its own folder.
+pub(crate) fn folder() -> PathBuf {
+    crate::control::path().with_extension("passes")
+}
+
+/// At start: the folder, 0700, emptied of a run before's files (it ended without dropping them).
+/// Only files are removed; a link or anything else at the folder's place makes no folder.
+pub(crate) fn sweep(dir: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(meta) if meta.is_dir() => std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?,
+        Ok(_) => return Err(std::io::Error::other("the pass folder's place holds something else")),
+        Err(_) => std::fs::DirBuilder::new().mode(0o700).create(dir)?,
+    }
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        if entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    Ok(())
+}
+
 impl Live {
-    /// From the OS's random source, as session ids are. `None`: no random bytes.
-    pub(crate) fn mint() -> Option<Self> {
+    /// From the OS's random source, as session ids are, with its file in `folder()`.
+    pub(crate) fn mint() -> Result<Self, String> {
+        Self::mint_in(&folder())
+    }
+
+    /// With its file in `dir`, which `sweep` made.
+    pub(crate) fn mint_in(dir: &Path) -> Result<Self, String> {
+        // The folder itself, never a link to elsewhere.
+        if !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
+            return Err("no folder for the pass's file".into());
+        }
         let mut bytes = [0u8; 16];
-        std::fs::File::open("/dev/urandom").and_then(|mut source| source.read_exact(&mut bytes)).ok()?;
+        let random = std::fs::File::open("/dev/urandom").and_then(|mut source| source.read_exact(&mut bytes));
+        // All zeros is `GONE`'s: never a live pass.
+        if random.is_err() || bytes == [0; 16] {
+            return Err("no random bytes for a pass".into());
+        }
         let pass = Pass(bytes);
+        static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let file = dir.join(format!("pass-{}-{n}", std::process::id()));
+        // A new file, never one that is there (or a link): 0600 from its first byte.
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&file)
+            .and_then(|mut out| out.write_all(pass.hex().as_bytes()));
+        written.map_err(|err| format!("the pass's file: {err}"))?;
         LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(pass.hex());
-        Some(Self(pass))
+        Ok(Self { pass, file })
     }
 
     pub(crate) fn pass(&self) -> &Pass {
-        &self.0
+        &self.pass
     }
 
-    pub(crate) fn hex(&self) -> String {
-        self.0.hex()
+    /// Its file's path: what the agent's environment holds.
+    pub(crate) fn file(&self) -> &Path {
+        &self.file
     }
 }
 
 impl Drop for Live {
     fn drop(&mut self) {
-        let hex = self.0.hex();
+        let _ = std::fs::remove_file(&self.file);
+        let hex = self.pass.hex();
         let mut live = LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(at) = live.iter().position(|one| *one == hex) {
             live.swap_remove(at);
@@ -55,6 +115,15 @@ impl std::fmt::Debug for Live {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Live(..)")
     }
+}
+
+/// Client side (`ottospace ctl`): the pass of the file `$OTTOSPACE_TASK_PASS_FILE` names. None:
+/// no variable. A file gone or unreadable: `GONE`, refused as a dead pass.
+pub(crate) fn from_env() -> Option<String> {
+    let path = std::env::var_os(VAR).filter(|path| !path.is_empty())?;
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let text = text.trim();
+    Some(if Pass::parse(text).is_some() { text.to_string() } else { GONE.to_string() })
 }
 
 /// What a live pass reads as wherever a client could read it.
@@ -218,13 +287,56 @@ pub(crate) fn caller<'a>(given: Option<&Pass>, live: impl IntoIterator<Item = (&
     found.map_or(Caller::Unknown, Caller::Task)
 }
 
+/// Tests only: a folder for pass files, as `sweep` makes it, gone when the test ends.
+#[cfg(test)]
+pub(crate) fn minted_dir(name: &str) -> crate::scratch::Scratch {
+    let dir = crate::scratch::Scratch::path(&format!("ottospace-test-{name}-{}", std::process::id()));
+    sweep(dir.as_ref()).unwrap();
+    dir
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The file holds the pass, 0600 in a 0700 folder, and goes with it; `ottospace ctl` reads it,
+    /// and a file gone reads as a pass never minted: refused as dead, not taken for no pass.
+    #[test]
+    fn a_pass_lives_in_its_own_file_until_it_is_dropped() {
+        let dir = minted_dir("pass-file");
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let live = Live::mint_in(dir.as_ref()).unwrap();
+        let file = live.file().to_path_buf();
+        assert_eq!((mode(dir.as_ref()), mode(&file)), (0o700, 0o600));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), live.pass().hex());
+        assert!(!file.to_string_lossy().contains(&live.pass().hex()), "the path says nothing of the pass");
+        let read = |path: &Path| {
+            // SAFETY: this test alone sets the variable, and reads it back at once.
+            unsafe { std::env::set_var(VAR, path) };
+            let read = from_env();
+            unsafe { std::env::remove_var(VAR) };
+            read
+        };
+        assert_eq!(read(&file), Some(live.pass().hex()));
+        drop(live);
+        assert!(!file.exists());
+        assert_eq!(read(&file).as_deref(), Some(GONE));
+        assert!(Pass::parse(GONE).is_some(), "GONE parses, so it is refused as a dead pass");
+        assert_eq!(from_env(), None, "no variable: no pass");
+        // A run before's files are swept at start; a link at the folder's place is refused.
+        std::fs::write(dir.as_ref().join("pass-1-0"), "old").unwrap();
+        sweep(dir.as_ref()).unwrap();
+        assert_eq!(std::fs::read_dir(dir.as_ref()).unwrap().count(), 0);
+        let link = minted_dir("pass-link");
+        std::fs::remove_dir(link.as_ref()).unwrap();
+        std::os::unix::fs::symlink(dir.as_ref(), link.as_ref()).unwrap();
+        assert!(sweep(link.as_ref()).is_err());
+    }
+
     #[test]
     fn a_pass_is_random_hidden_and_names_only_its_own_task() {
-        let (one, two) = (Live::mint().expect("random bytes"), Live::mint().expect("random bytes"));
+        let dir = minted_dir("one-pass");
+        let (one, two) = (Live::mint_in(dir.as_ref()).unwrap(), Live::mint_in(dir.as_ref()).unwrap());
         assert_eq!(format!("{one:?}"), "Live(..)");
         let (one, two) = (one.pass(), two.pass());
         assert!(!one.matches(two), "two mints, two passes");
@@ -252,8 +364,9 @@ mod tests {
 
     #[test]
     fn a_live_pass_is_hidden_in_any_case_and_across_rows_until_dropped() {
-        let live = Live::mint().expect("random bytes");
-        let hex = live.hex();
+        let dir = minted_dir("hidden-pass");
+        let live = Live::mint_in(dir.as_ref()).unwrap();
+        let hex = live.pass().hex();
         let text = format!("OTTOSPACE_TASK_PASS={hex}\nagain {} done", hex.to_uppercase());
         assert_eq!(hide(&text), "OTTOSPACE_TASK_PASS=[hidden]\nagain [hidden] done");
         assert!(matches!(hide("nothing here, nothing at all, not one"), Cow::Borrowed(_)));
@@ -294,8 +407,9 @@ mod tests {
         assert_eq!(merged(vec![0..10, 5..8, 8..20, 30..40]), [0..20, 30..40]);
         assert_eq!(merged(vec![0..40, 10..20]), [0..40]);
         // Two live passes touching in the text: neither shows a part.
-        let (one, two) = (Live::mint().expect("random bytes"), Live::mint().expect("random bytes"));
-        let (one, two) = (one.hex(), two.hex());
+        let dir = minted_dir("two-passes");
+        let (one, two) = (Live::mint_in(dir.as_ref()).unwrap(), Live::mint_in(dir.as_ref()).unwrap());
+        let (one, two) = (one.pass().hex(), two.pass().hex());
         // Side by side: one range, one word.
         let text = format!("{one}{two} {two}{one}");
         assert_eq!(hide(&text), "[hidden] [hidden]");

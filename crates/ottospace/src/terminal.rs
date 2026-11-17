@@ -649,14 +649,17 @@ impl Screen {
 }
 
 /// Rows searched past each edge of what is read, beyond a wrapped line's own: a pass a program
-/// broke over rows itself (a TUI, a narrow pane) is seen whole across the edge. 32 digits fill 3
-/// rows of a pane 11 columns wide.
-const PAST_EDGE: i32 = 3;
+/// broke over rows itself (a TUI, a narrow pane) is seen whole across the edge. As many rows as
+/// 32 digits fill at the pane's width, and one more; 3 at least.
+fn past_edge<T>(term: &Term<T>) -> i32 {
+    (32usize.div_ceil(term.columns().max(1)) + 1).max(3) as i32
+}
 
-/// The rows a read from `top` to `bottom` searches: the lines its edges cut, and `PAST_EDGE` more.
+/// The rows a read from `top` to `bottom` searches: the lines its edges cut, and `past_edge` more.
 fn searched<T>(term: &Term<T>, top: Line, bottom: Line) -> (Line, Line) {
-    let from = line_start(term, Line((top.0 - PAST_EDGE).max(term.topmost_line().0)));
-    let to = line_end(term, Line((bottom.0 + PAST_EDGE).min(term.bottommost_line().0)));
+    let past = past_edge(term);
+    let from = line_start(term, Line((top.0 - past).max(term.topmost_line().0)));
+    let to = line_end(term, Line((bottom.0 + past).min(term.bottommost_line().0)));
     (from, to)
 }
 
@@ -921,8 +924,9 @@ mod tests {
     /// of the screen or the history. Its line is searched whole, wherever the edge cuts it.
     #[test]
     fn a_live_pass_the_screens_edge_cuts_shows_no_digit() {
-        let live = crate::pass::Live::mint().expect("random bytes");
-        let hex = live.hex();
+        let dir = crate::pass::minted_dir("edge-cuts");
+        let live = crate::pass::Live::mint_in(dir.as_ref()).unwrap();
+        let hex = live.pass().hex();
         // 20 wide: "PASS=" and 15 digits on one row, 17 on the next; then 3 rows under it.
         let mut term = term(20, 3, &format!("PASS={hex}\r\none\r\ntwo\r\nend"));
         let digits = |text: &str| hex.as_bytes().windows(4).any(|w| text.contains(std::str::from_utf8(w).unwrap()));
@@ -949,6 +953,11 @@ mod tests {
         let mut short = super::tests::term(40, 2, &format!("PASS={}\r\n{}\r\none\r\ntwo", &hex[..16], &hex[16..]));
         short.scroll_display(GridScroll::Delta(1));
         assert_eq!(lines_of(&short), ["", "one"], "the top edge between its halves");
+        // 4 wide, the program's own breaks: eight rows of 4 digits, the top edge on the last one.
+        let rows: Vec<&str> = (0..8).map(|n| &hex[n * 4..n * 4 + 4]).collect();
+        let mut narrow = super::tests::term(4, 2, &format!("{}\r\none\r\ntwo", rows.join("\r\n")));
+        narrow.scroll_display(GridScroll::Delta(1));
+        assert_eq!(lines_of(&narrow), ["", "one"], "all eight rows searched, though the edge cuts them");
         // Gone, the pass shows again: it grants nothing.
         drop(live);
         assert_eq!(lines_of(&short)[0], &hex[16..]);
