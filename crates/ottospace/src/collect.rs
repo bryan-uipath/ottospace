@@ -354,7 +354,9 @@ impl Workspace {
                 let pane = crate::to_cg(hosted.bounds.get().size);
                 let expected = hosted.latest.expected.load(Relaxed);
                 let frame = hosted.frame().map(|frame| (frame.get_width() as u64) << 32 | frame.get_height() as u64);
-                hosted.parked_size == pane && frame == Some(expected)
+                // `seen` 0: the stream has sent nothing since it was stopped while live.
+                let fresh = hosted.latest.seen.load(Relaxed) != 0;
+                hosted.parked_size == pane && frame == Some(expected) && fresh
             });
             (drawn && framed) || waited >= SETTLE_MOST
         };

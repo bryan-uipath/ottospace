@@ -193,6 +193,9 @@ struct Hosted {
     off_screen: bool,
     latest: Arc<Latest>,
     stream: SCStream,
+    /// The stream is stopped while the window is live: a captured window loses quick clicks
+    /// (Finder misses double-clicks).
+    paused: bool,
     pid: i32,
     /// Window corner radius in points, for masking the stream's black corners.
     radius: f64,
@@ -266,6 +269,7 @@ impl Hosted {
             window,
             original,
             latest,
+            paused: false,
             stream,
             pid,
             radius,
@@ -333,6 +337,11 @@ impl Hosted {
         let pane = to_cg(self.bounds.get().size);
         let frame = self.window_frame().filter(|_| pane.width >= 1.0)?;
         let content = CGSize::new(frame.size.width, frame.size.height - self.crop);
+        // No stream to configure while live: `resume` comes before the next park.
+        if self.paused {
+            self.content = content;
+            return Some(content);
+        }
         let shown = CGSize::new(pane.width.min(content.width), pane.height.min(content.height));
         let asked = (shown, self.crop);
         if asked == (self.shown, self.shown_crop) {
@@ -385,6 +394,26 @@ impl Hosted {
         self.place(pane_rect(rect, keep, true, crop), crop);
         self.window.raise();
         self.show(window.scale_factor() as f64);
+    }
+
+    /// Stops the stream while the window is live: the real window is on screen, and a captured
+    /// one loses quick clicks. The frame held says it is old (`seen` 0) until `resume`.
+    fn pause(&mut self) {
+        if !self.paused {
+            let _ = self.stream.stop_capture();
+            self.latest.seen.store(0, Relaxed);
+            self.paused = true;
+        }
+    }
+
+    /// Starts the stream again, as the window parks.
+    fn resume(&mut self) {
+        if self.paused {
+            self.paused = false;
+            if let Err(err) = self.stream.start_capture() {
+                eprintln!("window {}: the stream did not start again: {err:?}", self.window_id);
+            }
+        }
     }
 
     /// The crop for this window with its pane content at `rect`; see `titlebar::crop`.
@@ -1688,6 +1717,7 @@ impl Workspace {
                         let limit = top_limit(window, cx);
                         let rect = on_screen(hosted.bounds.get(), window, cx);
                         let crop = hosted.crop_at(rect, limit);
+                        hosted.resume();
                         hosted.park(pane_rect(rect, keep, false, crop).size, window.scale_factor() as f64, crop);
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
@@ -1814,6 +1844,7 @@ impl Workspace {
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("unpark", serde_json::json!({ "pane": id, "window": hosted.window_id }));
                         hosted.bring_up(keep, window, cx);
+                        hosted.pause();
                     }
                 }
             }
