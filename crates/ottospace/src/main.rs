@@ -218,7 +218,14 @@ struct Hosted {
 }
 
 impl Hosted {
+    /// Every way a window is hosted: a failure goes in the log, by the window's number only (why
+    /// may be ScreenCaptureKit's text, which the log cannot vouch for).
     fn new(target: capture::Target) -> Result<Self, String> {
+        let id = target.id;
+        Self::start(target).inspect_err(|_| event_log::event("host_failed", serde_json::json!({ "window": id })))
+    }
+
+    fn start(target: capture::Target) -> Result<Self, String> {
         let capture::Target { window, sc_window, id } = target;
         let found = window.frame().ok_or("could not read window frame")?;
         // Found parked or off screen (left so by a crash, or a window the app re-made where the
@@ -3473,11 +3480,7 @@ impl Workspace {
             self.dispatch(Action::Focus { pane }, self.follow_up(), window, cx);
             return Ok(());
         }
-        let id = target.id;
-        // Its number only: why may be ScreenCaptureKit's text, which the log cannot vouch for.
-        let hosted = Hosted::new(target).inspect_err(|_| {
-            event_log::event("host_failed", serde_json::json!({ "window": id }));
-        })?;
+        let hosted = Hosted::new(target)?;
         // The window is in hand, so the tab will not be left empty.
         if new_tab {
             self.dispatch(Action::NewTab, self.input, window, cx);
@@ -7107,9 +7110,9 @@ fn main() {
     event_log::arm();
     trace::record("start", serde_json::json!({ "pid": std::process::id(), "hosting": hosting }));
     let (version, commit) = (env!("CARGO_PKG_VERSION"), option_env!("OTTOSPACE_COMMIT"));
-    let mut start = serde_json::json!({ "pid": std::process::id(), "version": version, "commit": commit });
-    start["hosting"] = serde_json::json!(hosting);
-    start["displays"] = displays();
+    let start = serde_json::json!({
+        "pid": std::process::id(), "version": version, "commit": commit, "hosting": hosting, "displays": displays()
+    });
     event_log::event("start", start);
     let control = control::serve().map_err(|err| eprintln!("control socket off: {err}")).ok();
     // The socket is this run's: so is the folder of its agents' pass files beside it.

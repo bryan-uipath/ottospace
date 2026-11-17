@@ -9,11 +9,14 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write as _};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ottospace_core::calendar::reply::rfc3339;
+use ottospace_core::ics::Table;
 use serde_json::{Value, json};
 
 use crate::config;
@@ -138,24 +141,20 @@ fn line(now: i64, offset: i64, event: &str, fields: Value) -> String {
 
 /// `2026-11-16T17:51:03-08:00`.
 fn local_time(now: i64, offset: i64) -> String {
-    const DAY: i64 = 86_400;
-    let offset = offset.clamp(-DAY + 1, DAY - 1);
-    let t = now + offset;
-    let (y, m, d) = ottospace_core::ics::civil(t.div_euclid(DAY));
-    let (s, o) = (t.rem_euclid(DAY), offset.abs());
-    let sign = if offset < 0 { '-' } else { '+' };
-    let (hour, minute, second) = (s / 3600, s / 60 % 60, s % 60);
-    format!("{y:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}{sign}{:02}:{:02}", o / 3600, o / 60 % 60)
+    rfc3339(u64::try_from(now).unwrap_or(0) * 1000, &Table::fixed(offset))
 }
 
 /// Appends `line` to `dir/log`, turning a full file over first. Never through a link, nor into
-/// anything but a plain file (a pipe would hang). One at a time: a panic's thread and the main
-/// one could both turn a full file over, and the second would lose the first's `log.1`.
+/// anything but a plain file (a pipe would hang). One at a time, across threads and processes (a
+/// lock on the folder): two that turn a full file over at once would lose the first's `log.1`.
 fn append(dir: &Path, line: &str) -> io::Result<()> {
-    static ONE: Mutex<()> = Mutex::new(());
-    let _one = ONE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if !dir.is_dir() {
         fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    }
+    // Held until it closes, as this returns.
+    let lock = fs::File::open(dir)?;
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(io::Error::last_os_error());
     }
     let path = dir.join(NAME);
     if fs::symlink_metadata(&path).is_ok_and(|meta| meta.len() >= LIMIT) {
@@ -164,8 +163,10 @@ fn append(dir: &Path, line: &str) -> io::Result<()> {
     }
     let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
     let mut file = fs::OpenOptions::new().append(true).create(true).mode(0o600).custom_flags(flags).open(&path)?;
-    if !file.metadata()?.is_file() {
-        return Err(io::Error::other("not a plain file"));
+    // A hard link would have another file chmodded and written.
+    let meta = file.metadata()?;
+    if !meta.is_file() || meta.nlink() != 1 {
+        return Err(io::Error::other("not a plain file of its own"));
     }
     // Private whatever made it.
     file.set_permissions(fs::Permissions::from_mode(0o600))?;
@@ -174,21 +175,11 @@ fn append(dir: &Path, line: &str) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
+    use crate::scratch::Scratch;
 
-    /// A folder of the test's own, removed when it ends.
-    struct Temp(PathBuf);
-
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn temp(name: &str) -> Temp {
-        Temp(std::env::temp_dir().join(format!("ottospace-test-event-log-{name}-{}", std::process::id())))
+    fn temp(name: &str) -> Scratch {
+        Scratch::path(&format!("ottospace-test-event-log-{name}-{}", std::process::id()))
     }
 
     #[test]
@@ -202,22 +193,22 @@ mod tests {
     #[test]
     fn the_file_is_private_appended_and_turned_over_when_full() {
         let dir = temp("turn");
-        append(&dir.0, "one").unwrap();
-        append(&dir.0, "two").unwrap();
-        let path = dir.0.join(NAME);
+        append(&dir, "one").unwrap();
+        append(&dir, "two").unwrap();
+        let path = dir.join(NAME);
         assert_eq!(fs::read_to_string(&path).unwrap(), "one\ntwo\n");
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         // Full: it becomes `log.1`, and the next line starts a new file.
         fs::write(&path, vec![b'x'; LIMIT as usize]).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-        append(&dir.0, "three").unwrap();
+        append(&dir, "three").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "three\n");
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
-        assert_eq!(fs::metadata(dir.0.join(OLD)).unwrap().len(), LIMIT);
+        assert_eq!(fs::metadata(dir.join(OLD)).unwrap().len(), LIMIT);
         // Full again: the oldest goes.
         fs::write(&path, vec![b'y'; LIMIT as usize]).unwrap();
-        append(&dir.0, "four").unwrap();
-        assert_eq!(fs::read(dir.0.join(OLD)).unwrap()[0], b'y');
+        append(&dir, "four").unwrap();
+        assert_eq!(fs::read(dir.join(OLD)).unwrap()[0], b'y');
         assert_eq!(fs::read_to_string(&path).unwrap(), "four\n");
     }
 
@@ -291,9 +282,9 @@ mod tests {
         // A warning outside it is not an event at all.
         assert_eq!(record(log::Level::Warn, &format!("{home}/code/app/src/lib.rs"), pass), None);
         for (event, fields) in events {
-            write(event, fields, Some(&dir.0));
+            write(event, fields, Some(&*dir));
         }
-        let text = fs::read_to_string(dir.0.join(NAME)).unwrap();
+        let text = fs::read_to_string(dir.join(NAME)).unwrap();
         assert_eq!(text.lines().count(), 13, "{text}");
         // `at` is each line's time, never overwritten by a field.
         assert!(
@@ -311,23 +302,36 @@ mod tests {
     }
 
     #[test]
+    fn the_log_is_never_written_through_a_hard_link() {
+        let dir = temp("hard");
+        fs::create_dir_all(&dir).unwrap();
+        let elsewhere = dir.join("elsewhere");
+        fs::write(&elsewhere, "").unwrap();
+        fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::hard_link(&elsewhere, dir.join(NAME)).unwrap();
+        assert!(append(&dir, "one").is_err());
+        assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "");
+        assert_eq!(fs::metadata(&elsewhere).unwrap().permissions().mode() & 0o777, 0o644);
+    }
+
+    #[test]
     fn the_log_is_never_written_into_a_pipe() {
         let dir = temp("pipe");
-        fs::create_dir_all(&dir.0).unwrap();
-        let path = std::ffi::CString::new(dir.0.join(NAME).to_str().unwrap()).unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        let path = std::ffi::CString::new(dir.join(NAME).to_str().unwrap()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
         // Returns at once, with no reader at the other end.
-        assert!(append(&dir.0, "one").is_err());
+        assert!(append(&dir, "one").is_err());
     }
 
     #[test]
     fn the_log_is_never_written_through_a_link() {
         let dir = temp("link");
-        fs::create_dir_all(&dir.0).unwrap();
-        let elsewhere = dir.0.join("elsewhere");
+        fs::create_dir_all(&dir).unwrap();
+        let elsewhere = dir.join("elsewhere");
         fs::write(&elsewhere, "").unwrap();
-        std::os::unix::fs::symlink(&elsewhere, dir.0.join(NAME)).unwrap();
-        assert!(append(&dir.0, "one").is_err());
+        std::os::unix::fs::symlink(&elsewhere, dir.join(NAME)).unwrap();
+        assert!(append(&dir, "one").is_err());
         assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "");
     }
 }
