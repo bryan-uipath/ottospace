@@ -1710,6 +1710,14 @@ mod tests {
         assert_eq!(m.agent.level(pane), Level::Off);
         m.update(accept);
         assert_eq!((m.agent.level(pane), m.agent.offers.len()), (Level::See, 0));
+        // The mark keeps the level the user has now: one picked since is offered, Off is not.
+        let mut pane = pane;
+        for (level, offered) in [(Level::Act, Some(Kept { level: Level::Act, task: 1 })), (Level::Off, None)] {
+            m.update(Action::AgentLevel { pane: Some(pane), level });
+            pane = rebuilt(&mut m);
+            m.update(Action::Fill { pane, kind: slack(9, "general") });
+            assert_eq!(m.agent.offers.get(&pane).copied(), offered, "{level:?}");
+        }
     }
 
     #[test]

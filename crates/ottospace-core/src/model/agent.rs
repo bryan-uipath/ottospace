@@ -120,6 +120,28 @@ impl Model {
         }
     }
 
+    /// A tab mark of `pane`'s tab keeps the level the user has for it now: one picked since is
+    /// offered back, one reset to Off is not. Its pane by place, while the tab has as many as the mark.
+    fn mark_level(&mut self, pane: PaneId) {
+        let Some(at) = self.tabs.iter().position(|tab| Some(tab.id) == self.tab_of(pane)) else { return };
+        let (tab, leaves) = (self.tabs[at].id, self.tab_panes().swap_remove(at));
+        let Some(place) = leaves.iter().position(|id| *id == pane) else { return };
+        let kept = self.agent.kept(pane).and_then(|kept| serde_json::to_value(kept).ok());
+        for mark in self.marks.list.iter_mut().filter(|mark| mark.live == Some(tab)) {
+            let crate::marks::Target::Tab(record) = &mut mark.target else { continue };
+            if record.panes.len() != leaves.len() {
+                continue;
+            }
+            let Some(kept_pane) = record.panes.get_mut(place) else { continue };
+            if matches!(kept_pane.kind, crate::marks::RecordKind::App { .. }) {
+                match &kept {
+                    Some(kept) => drop(kept_pane.extra.insert(agent_mode::KEY.into(), kept.clone())),
+                    None => drop(kept_pane.extra.remove(agent_mode::KEY)),
+                }
+            }
+        }
+    }
+
     /// The panes `panes` rebuilt from `record` (in `shown` order): each empty app pane whose record
     /// keeps a level, for a task still there, waits for its window, to offer it (`offer_back`).
     pub(crate) fn wait_for_kept(&mut self, panes: &[PaneId], record: &crate::marks::TabRecord) {
@@ -230,6 +252,7 @@ impl Model {
             *grant = Grant { level: kept.level, task: Some(kept.task) };
             self.agent.chosen.insert(pane);
         }
+        self.mark_level(pane);
     }
 
     /// The user's level for a pane. Where no task works it grants nothing: the status bar says so.
@@ -243,6 +266,7 @@ impl Model {
                 grant.level = level;
                 self.agent.chosen.insert(pane);
                 self.agent.offers.remove(&pane);
+                self.mark_level(pane);
             }
             _ => effects.push(Effect::Notice { text: agent_mode::NO_TASK.into() }),
         }
