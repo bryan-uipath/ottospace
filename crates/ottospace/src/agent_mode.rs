@@ -59,6 +59,11 @@ fn robot_control(pane: PaneId) -> String {
     format!("agent:{pane}")
 }
 
+/// The control id of a restored pane's offer.
+fn offer_control(pane: PaneId) -> String {
+    format!("agent-offer:{pane}")
+}
+
 fn item_control(index: usize) -> String {
     format!("agent-item:{index}")
 }
@@ -110,7 +115,27 @@ impl Workspace {
             // The press must not reach the header: an unsteady click would start a drag.
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, window, cx| this.agent_open(Some(pane), false, window, cx)));
-        Some(robot.into_any_element())
+        // A level kept from a run before is only offered: the user's click gives it.
+        let offer = self.model.agent.offers.get(&pane).map(|kept| {
+            let task = self.model.tasks.get(kept.task).map(|task| task.title.lines().next().unwrap_or_default());
+            let task: String = task.unwrap_or_default().chars().take(40).collect();
+            let text = format!("Restore {} for {task}?", kept.level.label());
+            div()
+                .id(("agent-offer", pane as usize))
+                .flex_none()
+                .px_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_color(rgb(self::colour(kept.level)))
+                .hover(|s| s.bg(rgb(theme::SELECTED)))
+                .child(text)
+                .child(self.controls.mark(offer_control(pane)))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.agent_send(Action::AgentOfferAccept { pane }, window, cx)
+                }))
+        });
+        Some(div().flex().items_center().gap_1().child(robot).children(offer).into_any_element())
     }
 
     /// Whether the pane is at See and act: its border in the act colour, seen from across the screen.
@@ -163,12 +188,14 @@ impl Workspace {
         true
     }
 
-    /// A sneak label (or a click) on the robot (`agent:<pane>`) or a menu item (`agent-item:<n>`).
+    /// A sneak label (or a click) on the robot (`agent:<pane>`), a menu item (`agent-item:<n>`) or
+    /// an offer (`agent-offer:<pane>`).
     /// False: not one of these.
     pub(crate) fn click_agent(&mut self, kind: &str, name: &str, window: &Window, cx: &mut Context<Self>) -> bool {
         match (kind, name.parse::<usize>()) {
             ("agent", Ok(pane)) => self.agent_open(Some(pane as PaneId), true, window, cx),
             ("agent-item", Ok(index)) => self.agent_send(Action::AgentMenuChoose { index: Some(index) }, window, cx),
+            ("agent-offer", Ok(pane)) => self.agent_send(Action::AgentOfferAccept { pane: pane as PaneId }, window, cx),
             _ => return false,
         }
         true

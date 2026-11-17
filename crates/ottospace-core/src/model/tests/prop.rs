@@ -1326,6 +1326,7 @@ const MAKERS: &[Make] = &[
     |g| Action::AgentMenuMove { delta: g.delta() },
     |g| Action::AgentMenuChoose { index: g.rng.coin().then(|| g.rng.below(4)) },
     |_| Action::AgentMenuClose,
+    |g| Action::AgentOfferAccept { pane: g.app_pane() },
     |g| Action::AppUsed {
         task: g.task(),
         pane: g.app_pane(),
@@ -1487,6 +1488,8 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(m.agent.chosen.iter().all(|pane| known.contains(pane)), "a pick {:?} of no app pane", m.agent.chosen);
         let empty = |pane: &PaneId| m.pane(*pane).is_some_and(|pane| pane.kind == Kind::Empty);
         ensure!(m.agent.restored.keys().all(empty), "a kept level waits on a pane that is not empty");
+        let off = |pane: &PaneId| m.agent.level(*pane) == crate::agent_mode::Level::Off && known.contains(pane);
+        ensure!(m.agent.offers.keys().all(off), "an offer on a pane above Off, or on no app pane");
     }
     if !m.features.on(Feature::AppsSection) {
         ensure!(!shown(Section::Apps), "the Apps section with it off");
@@ -2541,14 +2544,17 @@ impl Run {
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
         let filled_before = m.fill_display;
-        let (grants_before, waiting_before) = (m.agent.panes.clone(), m.agent.restored.clone());
+        let grants_before = m.agent.panes.clone();
         let (default, last_before) = (m.agent.default, m.agent.last.clone());
         let effects = m.update(sent);
         check(m)?;
         // A level rises only by the user's own choice. A pane kept by its task keeps its level but
         // for the user's; a pane new to it starts at the default, or Off.
-        let users_level =
-            origin == Origin::User && matches!(action, Action::AgentLevel { .. } | Action::AgentMenuChoose { .. });
+        let users_level = origin == Origin::User
+            && matches!(
+                action,
+                Action::AgentLevel { .. } | Action::AgentMenuChoose { .. } | Action::AgentOfferAccept { .. }
+            );
         for (pane, grant) in &m.agent.panes {
             use crate::agent_mode::Level::Off;
             match grants_before.get(pane) {
@@ -2556,17 +2562,16 @@ impl Run {
                     users_level || grant.level == was.level,
                     "{origin:?}'s {action:?} moved pane {pane} from {was:?} to {grant:?}"
                 ),
-                Some(was) => ensure!(grant.level == Off, "pane {pane} carried {was:?} to {grant:?}"),
+                // The user's click on an offer gives its task, which may not be the one in front.
+                Some(was) => ensure!(
+                    grant.level == Off || (users_level && matches!(action, Action::AgentOfferAccept { .. })),
+                    "pane {pane} carried {was:?} to {grant:?}"
+                ),
                 None => ensure!(
                     grant.level == Off
                         || (m.agent.by_user.get(pane) == Some(&true)
-                            && (grant.level == default || grant.level == m.agent.default))
-                        || (origin != Origin::Socket
-                            && waiting_before.get(pane).is_some_and(|waiting| {
-                                (Some(waiting.kept.task), waiting.kept.level) == (grant.task, grant.level)
-                            })),
-                    "new pane {pane} at {grant:?}, the default {default:?}: only one the user filled, or one \
-                     restored with the user's pick, starts above Off"
+                            && (grant.level == default || grant.level == m.agent.default)),
+                    "new pane {pane} at {grant:?}, the default {default:?}: only one the user filled starts above Off"
                 ),
             }
         }

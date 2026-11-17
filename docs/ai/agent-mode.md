@@ -116,14 +116,20 @@ A small script printed the variable and tried to connect.
   workspace by a drag or Move Tab, the task done, dismissed or unbound) is Off, for the task there
   now. A pane in no task's workspace is Off for none and grants nothing; one where a task comes
   later stays Off. Over a restart only a level the user picked is kept: `layout.json` keeps it
-  on the pane's record (`"agent_mode": {"level", "task"}`, `AgentMode::kept`), and the restored
-  pane gets it back when a window of the same app fills it, from no client, while that task
-  works there; else Off. The default is never kept, and a reset to Off forgets the pick.
+  on the pane's record (`"agent_mode": {"level", "task"}`, `AgentMode::kept`). **A persisted grant
+  is an offer, not a grant**: agents run as the same user and can write `layout.json`, so a level
+  read back never takes effect by itself (a security review, MEDIUM). Every restored pane starts
+  at Off; once a window of the same app fills it, from no client, while that task works there,
+  its header offers "Restore See and act for <task>?" (`AgentMode.offers`), and only the user's
+  click gives it (`AgentOfferAccept`, refused from `Socket` and `System`). A task gone, another
+  app's window or a client's fill: no offer. The user's own level on the pane ends the offer.
+  The default is never kept, and a reset to Off forgets the pick. No HMAC or Keychain: with
+  this rule the file grants nothing.
 - **The default is the user's act only.** `agent_mode` in the settings (default `act`) is the level of
   a new app pane only where the user's own act put its window there (their pick, drag or click:
   `AgentMode.by_user`, recorded from the origin of the step that first made it an app pane,
   whatever the flag). One a client opened (`open_app`) or filled, the system adopted, or a restore
-  rebuilt (but for the user's own pick, above) starts at Off: an agent that opens Mail in its own workspace cannot read it. A security
+  rebuilt starts at Off (a restore may only offer the user's own pick, above): an agent that opens Mail in its own workspace cannot read it. A security
   review (HIGH) found the first build gave the default to every pane.
 - **Only the user sets a level.** `AgentLevel`, `AgentMenu`, `AgentMenuMove`, `AgentMenuChoose` and
   `AgentMenuClose` are refused from `Socket` and `System` (`agent_mode::USERS_ALONE`); `AppUsed` is

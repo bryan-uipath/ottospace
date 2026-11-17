@@ -16,6 +16,8 @@ pub const USERS_ALONE: &str = "only the user lets a task see an app";
 pub const SHELLS_ALONE: &str = "only ottospace records what a task did in an app";
 /// ⌘⌃V, the palette or a level with focus on no app pane.
 pub const FOCUS_APP: &str = "focus an app pane to set what its task may do there";
+/// Why a kept level is not given: the offer is gone (the level changed, the task left).
+pub const NO_OFFER: &str = "nothing to restore on this pane";
 /// What the menu says on a pane whose workspace no task works in: it grants nothing.
 pub const NO_TASK: &str = "No task works in this workspace";
 /// What See and act grants in this build: what See does. Presses come in stage (c).
@@ -133,14 +135,18 @@ pub struct AgentMode {
     /// Restored panes waiting for their window, with the level the user picked in a run before.
     #[serde(skip)]
     pub restored: BTreeMap<PaneId, Waiting>,
+    /// Restored panes, at Off, whose header offers the level kept for them: only the user's
+    /// click gives it (`AgentOfferAccept`). The file could be anyone's of the same user.
+    #[serde(skip)]
+    pub offers: BTreeMap<PaneId, Kept>,
 }
 
 impl Default for AgentMode {
     fn default() -> Self {
         // The owner's choice (2026-11-16): Act, changeable in the settings.
         let (panes, last, by_user) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
-        let (chosen, restored) = (BTreeSet::new(), BTreeMap::new());
-        Self { panes, default: Level::Act, menu: None, last, by_user, chosen, restored }
+        let (chosen, restored, offers) = (BTreeSet::new(), BTreeMap::new(), BTreeMap::new());
+        Self { panes, default: Level::Act, menu: None, last, by_user, chosen, restored, offers }
     }
 }
 
@@ -151,10 +157,10 @@ impl AgentMode {
     }
 
     /// What `layout.json` keeps of `pane`: a level above Off the user picked, for its task, or one
-    /// still waiting for its window.
+    /// read back that waits for its window or is still offered.
     pub fn kept(&self, pane: PaneId) -> Option<Kept> {
-        if let Some(waiting) = self.restored.get(&pane) {
-            return Some(waiting.kept);
+        if let Some(kept) = self.restored.get(&pane).map(|waiting| waiting.kept).or(self.offers.get(&pane).copied()) {
+            return Some(kept);
         }
         let grant = self.panes.get(&pane).filter(|grant| grant.level > Level::Off && self.chosen.contains(&pane))?;
         Some(Kept { level: grant.level, task: grant.task? })

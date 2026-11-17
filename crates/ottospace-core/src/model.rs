@@ -1556,6 +1556,12 @@ pub enum Action {
         index: Option<usize>,
     },
     AgentMenuClose,
+    /// The user's click on a restored pane's offer: the level they picked in a run before, kept
+    /// in `layout.json`, given again. Read back, it is only an offer: a file the same user's
+    /// agent could write grants nothing by itself.
+    AgentOfferAccept {
+        pane: PaneId,
+    },
     /// The shell's: it served (`refused`: none) or refused a task's read or look of an app pane.
     AppUsed {
         task: TaskId,
@@ -1941,6 +1947,7 @@ impl Action {
             | Action::AgentMenuMove { .. }
             | Action::AgentMenuChoose { .. }
             | Action::AgentMenuClose
+            | Action::AgentOfferAccept { .. }
             | Action::AppUsed { .. } => false,
         }
     }
@@ -1983,6 +1990,7 @@ impl Action {
             | Action::AgentMenuMove { .. }
             | Action::AgentMenuChoose { .. }
             | Action::AgentMenuClose
+            | Action::AgentOfferAccept { .. }
             | Action::AppUsed { .. } => Some(Feature::AgentMode),
             // Shared with workbooks (a name typed, a row's letter), or data a restore reads.
             Action::MarkType { .. }
@@ -3141,6 +3149,7 @@ impl Model {
             | Action::AgentMenuMove { .. }
             | Action::AgentMenuChoose { .. }
             | Action::AgentMenuClose
+            | Action::AgentOfferAccept { .. }
                 if origin != Origin::User =>
             {
                 Some(crate::agent_mode::USERS_ALONE)
@@ -5417,6 +5426,7 @@ impl Model {
             | Action::AgentMenuMove { .. }
             | Action::AgentMenuChoose { .. }
             | Action::AgentMenuClose
+            | Action::AgentOfferAccept { .. }
             | Action::AppUsed { .. }) => self.agent_act(action, effects),
         }
     }
@@ -8366,6 +8376,7 @@ mod tests {
         Action::AgentMenuMove { .. },
         Action::AgentMenuChoose { .. },
         Action::AgentMenuClose,
+        Action::AgentOfferAccept { .. },
         Action::AppUsed { .. }
     );
 
@@ -8644,6 +8655,7 @@ mod tests {
             Action::AgentMenuMove { delta: 1 },
             Action::AgentMenuChoose { index: None },
             Action::AgentMenuClose,
+            Action::AgentOfferAccept { pane: 1 },
             Action::AppUsed { task: 1, pane: 1, what: crate::agent_mode::AppUse::Read, refused: None, at: 0 },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
@@ -8696,6 +8708,7 @@ mod tests {
             | Action::AgentMenuMove { .. }
             | Action::AgentMenuChoose { .. }
             | Action::AgentMenuClose
+            | Action::AgentOfferAccept { .. }
                 if origin != Origin::User =>
             {
                 Some(crate::agent_mode::USERS_ALONE)

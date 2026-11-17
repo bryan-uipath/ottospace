@@ -3,7 +3,7 @@
 //! send each action is `Model::refusal`.
 
 use super::{Action, Effect, Kind, Model, Origin, PaneId, STALE_PASS};
-use crate::agent_mode::{self, AppUse, Grant, Level, Menu};
+use crate::agent_mode::{self, AppUse, Grant, Kept, Level, Menu};
 use crate::features::Feature;
 use crate::tasks::{Caller, State, TaskId};
 use crate::transcript::Notice;
@@ -31,8 +31,9 @@ impl Model {
     /// longer works there (it moved to another workspace, the task ended, was dismissed or unbound)
     /// is Off, for the task now there: a grant is never carried to a task the user did not give it
     /// to. A closed pane's goes. Over a restart only a level the user picked is kept
-    /// (`AgentMode::kept`): a restored pane gets it back when the same app's window fills it, from
-    /// no client, while that task works there; else it is Off. Grants are kept, and kept true,
+    /// (`AgentMode::kept`), and read back it is only an offer: a restored pane is Off, and its
+    /// header offers the level once the same app's window fills it, from no client, while that
+    /// task works there; the user's click gives it (`AgentOfferAccept`). Grants are kept, and kept true,
     /// while the flag is off.
     pub(super) fn settle_agent(&mut self, origin: Origin) {
         let apps: Vec<PaneId> = self
@@ -65,14 +66,12 @@ impl Model {
                         self.agent.chosen.remove(&id);
                         Grant { level: Level::Off, task: front }
                     }
-                    None => match self.kept_back(id, origin, &working) {
-                        Some(grant) => grant,
-                        None => {
-                            let users = self.agent.by_user.get(&id).copied().unwrap_or(false);
-                            let level = if front.is_some() && users { self.agent.default } else { Level::Off };
-                            Grant { level, task: front }
-                        }
-                    },
+                    None => {
+                        self.offer_back(id, origin, &working);
+                        let users = self.agent.by_user.get(&id).copied().unwrap_or(false);
+                        let level = if front.is_some() && users { self.agent.default } else { Level::Off };
+                        Grant { level, task: front }
+                    }
                 };
                 panes.insert(id, grant);
             }
@@ -80,6 +79,13 @@ impl Model {
         // The menu is for the task it showed: its pane gone, or given to another task, it closes.
         let before = std::mem::replace(&mut self.agent.panes, panes);
         self.agent.chosen.retain(|pane| self.agent.panes.contains_key(pane));
+        // An offer stands while its pane is at Off, for a task that still works there.
+        let stands = |model: &Model, pane: &PaneId, kept: &Kept| {
+            model.agent.panes.get(pane).is_some_and(|grant| grant.level == Level::Off)
+                && model.pane_tasks(*pane).contains(&kept.task)
+        };
+        let offers = std::mem::take(&mut self.agent.offers);
+        self.agent.offers = offers.into_iter().filter(|(pane, kept)| stands(self, pane, kept)).collect();
         // A kept level waits only while its pane does: empty, for its window.
         let waits = |model: &Model, pane: &PaneId| model.pane(*pane).is_some_and(|pane| pane.kind == Kind::Empty);
         let restored = std::mem::take(&mut self.agent.restored);
@@ -92,21 +98,20 @@ impl Model {
         }
     }
 
-    /// A restored pane's level the user picked in a run before, taken once its window is there:
-    /// only for a window of the same app, filled by no client, while its task works there.
-    fn kept_back(&mut self, pane: PaneId, origin: Origin, working: &[TaskId]) -> Option<Grant> {
-        let waiting = self.agent.restored.remove(&pane)?;
+    /// A restored pane's level the user picked in a run before, once its window is there: offered,
+    /// never given (the file is the same user's, so an agent's too). Only for a window of the same
+    /// app, filled by no client, while its task works there.
+    fn offer_back(&mut self, pane: PaneId, origin: Origin, working: &[TaskId]) {
+        let Some(waiting) = self.agent.restored.remove(&pane) else { return };
         let same = match self.pane(pane).map(|pane| &pane.kind) {
             Some(Kind::App { bundle, name, .. }) => {
                 crate::marks::same_app((bundle.as_deref(), name), (waiting.bundle.as_deref(), &waiting.name))
             }
             _ => false,
         };
-        if !same || origin == Origin::Socket || !working.contains(&waiting.kept.task) {
-            return None;
+        if same && origin != Origin::Socket && working.contains(&waiting.kept.task) {
+            self.agent.offers.insert(pane, waiting.kept);
         }
-        self.agent.chosen.insert(pane);
-        Some(Grant { level: waiting.kept.level, task: Some(waiting.kept.task) })
     }
 
     /// Who may read `pane` for `caller`, and as which task: the pane is an app pane, its grant is to
@@ -172,8 +177,20 @@ impl Model {
                 self.agent_level(Some(menu.pane), level, effects);
             }
             Action::AgentMenuClose => self.agent.menu = None,
+            Action::AgentOfferAccept { pane } => self.agent_offer_accept(pane, effects),
             Action::AppUsed { task, pane, what, refused, at } => self.app_used(task, pane, what, refused, at),
             _ => {}
+        }
+    }
+
+    /// The user's click on a restored pane's offer: the level kept for it, for its task.
+    fn agent_offer_accept(&mut self, pane: PaneId, effects: &mut Vec<Effect>) {
+        let Some(kept) = self.agent.offers.remove(&pane) else {
+            return effects.push(Effect::Notice { text: agent_mode::NO_OFFER.into() });
+        };
+        if let Some(grant) = self.agent.panes.get_mut(&pane) {
+            *grant = Grant { level: kept.level, task: Some(kept.task) };
+            self.agent.chosen.insert(pane);
         }
     }
 
@@ -187,6 +204,7 @@ impl Model {
             Some(grant) if grant.task.is_some() => {
                 grant.level = level;
                 self.agent.chosen.insert(pane);
+                self.agent.offers.remove(&pane);
             }
             _ => effects.push(Effect::Notice { text: agent_mode::NO_TASK.into() }),
         }
