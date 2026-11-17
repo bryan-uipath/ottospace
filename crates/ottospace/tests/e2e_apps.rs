@@ -2289,6 +2289,22 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
     let double_click = |icon: [f64; 4]| click_at(icon[0] + icon[2] / 2.0, icon[1] + icon[3] / 2.0, true);
 
     let original = wait_for("its frame", frame);
+    // A blank spot of its icon view, low on the right.
+    let blank = |f: [f64; 4]| (f[0] + f[2] - 60.0, f[1] + f[3] - 60.0);
+    // Not hosted, where it opened, then moved by accessibility to where its pane will be.
+    bring_forward(pid as u32, "Finder");
+    let (bx, by) = blank(original);
+    report(&format!("finder, not hosted: lost releases {:?}", lost_releases(bx, by)));
+    let moved = |at: (f64, f64)| {
+        let w = ottospace_mac::ax::Window::find(pid, finder_window).expect("the window");
+        let _ = w.set_position(objc2_core_foundation::CGPoint::new(at.0, at.1));
+    };
+    moved((131.0, 102.0));
+    let there = wait_for("the window moved", || frame().filter(|f| close(f[0], 131.0)));
+    let (bx, by) = blank(there);
+    report(&format!("finder, moved, not hosted: lost releases {:?}", lost_releases(bx, by)));
+    moved((original[0], original[1]));
+    wait_for("the window back", || frame().filter(|f| close(f[0], original[0])));
 
     let pid_text = pid.to_string();
     let env = [("OTTOSPACE_E2E", "1"), ("OTTOSPACE_HOST_ONLY", pid_text.as_str()), ("OTTOSPACE_RETURN_KEY", "f19")];
@@ -2322,8 +2338,6 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
     let live = wait_or("the window over its pane", seen, || frame().filter(|f| !close(f[0], spot[0])));
     std::thread::sleep(Duration::from_millis(800));
     report(&format!("finder, live: {}", seen()));
-    // A blank spot of its icon view, low on the right.
-    let blank = |f: [f64; 4]| (f[0] + f[2] - 60.0, f[1] + f[3] - 60.0);
     let (bx, by) = blank(live);
     report(&format!("finder, hosted: lost releases {:?}; {}", lost_releases(bx, by), seen()));
 
