@@ -20,22 +20,32 @@ pub struct Worktree {
     pub branch: Option<String>,
 }
 
-/// How many directories the settings may name through the Repos section's +.
+/// How many repositories the settings' `repos` may name.
 pub const MAX_DIRS: usize = 64;
 
-/// A directory repositories are looked for in: `text` as the settings name it (`~/code`), and
-/// `path` resolved (`/Users/me/code`).
+/// An entry of the settings' `repos`: `text` as the settings name it (`~/code/app`), `path`
+/// resolved (`/Users/me/code/app`). A repository, or (kept from the old settings, which named
+/// folders to look in) a folder of repositories: a group, drawn folded. Pinned ones come first.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RepoDir {
     pub text: String,
     pub path: String,
+    #[serde(default)]
+    pub pinned: bool,
 }
 
-/// Where the Repos list is read from.
+impl RepoDir {
+    pub fn new(text: &str, path: &str) -> RepoDir {
+        RepoDir { text: text.into(), path: path.into(), pinned: false }
+    }
+}
+
+/// The Repos list's entries, in the user's order: pinned ones first.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct RepoDirs {
     pub dirs: Vec<RepoDir>,
-    /// `OTTOSPACE_REPOS` names them, not the settings: none is added or removed.
+    /// `OTTOSPACE_REPOS` names them, not the settings: none is added, removed or moved, and a
+    /// folder of repositories lists them flat, with no group.
     pub fixed: bool,
     /// Where a new worktree goes (`worktrees_dir`, absolute). `None`: none is made, e.g. a test
     /// run with no folder of its own. Not in the state.
@@ -46,42 +56,66 @@ pub struct RepoDirs {
 const FIXED: &str = "OTTOSPACE_REPOS names the repositories: the settings are not read";
 
 impl RepoDirs {
-    /// Why `dir` (resolved), where `found` repositories are, cannot be added. `Ok(false)`: it is
-    /// listed already, as a directory of the settings or (`listed`) through one.
-    pub fn may_add(&self, dir: &str, found: usize, listed: bool) -> Result<bool, String> {
+    /// Pinned entries first, each part in its order; an entry named twice, once (the first).
+    /// Every change to the list keeps it so.
+    pub fn settle(&mut self) {
+        let mut seen: Vec<String> = Vec::new();
+        self.dirs.retain(|dir| {
+            let first = !seen.contains(&dir.path);
+            seen.push(dir.path.clone());
+            first
+        });
+        self.dirs.sort_by_key(|dir| !dir.pinned);
+    }
+
+    /// Why `dir` (resolved) cannot be added. `repo`: it is a repository's own folder (a linked
+    /// worktree's is not). `Ok(false)`: listed already, as an entry of its own or (`listed`) as a
+    /// worktree of one. A repository listed only through a group is added: it leaves the group.
+    pub fn may_add(&self, dir: &str, repo: bool, listed: bool) -> Result<bool, String> {
         match () {
             _ if !dir.starts_with('/') => Err(format!("Not a directory: {dir}")),
-            _ if found == 0 => Err(format!("No repository in {dir}")),
             _ if listed || self.dirs.iter().any(|d| d.path == dir) => Ok(false),
+            _ if !repo => Err(format!("Not a repository: {dir}")),
             _ if self.fixed => Err(FIXED.into()),
-            _ if self.dirs.len() >= MAX_DIRS => Err(format!("The settings name {MAX_DIRS} directories already")),
+            _ if self.dirs.len() >= MAX_DIRS => Err(format!("Repos lists {MAX_DIRS} repositories already")),
             _ => Ok(true),
         }
     }
 
-    /// The directory to take off the settings so the repository at `path` is no longer listed.
-    /// `Err`: why none is. One that holds other repositories too is the user's to remove. A
-    /// repository's path is absolute: an entry the settings could not resolve (`""`) is no
-    /// repository's, and is not removed in its name.
+    /// The entry to take off the settings so the repository or group at `path` is no longer
+    /// listed. `Err`: why none is. A repository's path is absolute: an entry the settings could
+    /// not resolve (`""`) is no repository's, and is not removed in its name.
     pub fn to_remove(&self, path: &str) -> Result<RepoDir, String> {
-        // A directory with no text in the settings cannot be named in a change to them.
+        // An entry with no text in the settings cannot be named in a change to them.
         match (self.dirs.iter().find(|d| d.path == path && !d.text.is_empty()), self.holder(path)) {
             _ if self.fixed => Err(FIXED.into()),
             _ if !path.starts_with('/') => Err(format!("Not a directory: {path}")),
             (Some(dir), _) => Ok(dir.clone()),
-            (None, Some(holder)) => Err(format!(
-                "{} is listed through {}: take that directory out of `repos` in settings.json",
-                name_of(path),
-                holder.text
-            )),
-            (None, None) => Err(format!("{} is not listed by the settings", name_of(path))),
+            (None, Some(holder)) => {
+                Err(format!("{} is listed in the folder {}: remove that from Repos", name_of(path), holder.text))
+            }
+            (None, None) => Err(format!("{} is not in Repos", name_of(path))),
         }
     }
 
-    /// The directory that lists `path` as one of the repositories it holds: its parent.
+    /// The entry that holds `path` as one of the repositories found in it: its parent.
     pub fn holder(&self, path: &str) -> Option<&RepoDir> {
         let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
         self.dirs.iter().find(|d| d.path == parent)
+    }
+
+    /// The place in the list of the repository at `path`: its own entry, else the group that holds
+    /// it. `None`: no entry lists it.
+    pub fn place(&self, path: &str) -> Option<usize> {
+        let own = self.dirs.iter().position(|d| d.path == path);
+        own.or_else(|| self.dirs.iter().position(|d| Some(d) == self.holder(path)))
+    }
+
+    /// The group the repository at `path` is drawn in: the folder entry that holds it, when it is
+    /// not an entry of its own. None while `OTTOSPACE_REPOS` names the list: it is flat.
+    pub fn group_of(&self, path: &str) -> Option<&RepoDir> {
+        let own = self.dirs.iter().any(|d| d.path == path);
+        self.holder(path).filter(|_| !own && !self.fixed)
     }
 }
 
@@ -224,11 +258,11 @@ pub fn name_of(path: &str) -> String {
     path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_string()
 }
 
-/// The list as shown: repositories by name, each one's worktrees by name. A directory that is a
-/// worktree of a listed repository is not listed again as a repository, and a repository found
-/// twice (overlapping places to look) is listed once. Paths must be in one form: the shell
-/// resolves them before they get here.
-pub fn arrange(found: Vec<Repo>) -> Vec<Repo> {
+/// The list as shown: in the order of the entries (`dirs`), the repositories a group holds by
+/// name. One no entry names goes last, by name. A directory that is a worktree of a listed
+/// repository is not listed again as a repository, and a repository found twice is listed once.
+/// Paths must be in one form: the shell resolves them before they get here.
+pub fn arrange(found: Vec<Repo>, dirs: &RepoDirs) -> Vec<Repo> {
     let linked: Vec<String> = found.iter().flat_map(|r| r.worktrees.iter().map(|w| w.path.clone())).collect();
     let mut repos: Vec<Repo> = Vec::new();
     for mut repo in found {
@@ -238,7 +272,8 @@ pub fn arrange(found: Vec<Repo>) -> Vec<Repo> {
         repo.worktrees.sort_by(|a, b| a.name.cmp(&b.name));
         repos.push(repo);
     }
-    repos.sort_by(|a, b| (a.name.to_lowercase(), &a.path).cmp(&(b.name.to_lowercase(), &b.path)));
+    let key = |r: &Repo| (dirs.place(&r.path).unwrap_or(usize::MAX), r.name.to_lowercase(), r.path.clone());
+    repos.sort_by_cached_key(key);
     repos
 }
 
@@ -272,7 +307,8 @@ mod tests {
     #[test]
     fn a_worktree_is_listed_under_its_repository_only() {
         // `app-2` was found twice: as a directory with a `.git` file, and as a worktree of `app`.
-        let arranged = arrange(vec![repo("zed", &[]), repo("app-2", &[]), repo("App", &["app-3", "app-2"])]);
+        let none = RepoDirs::default();
+        let arranged = arrange(vec![repo("zed", &[]), repo("app-2", &[]), repo("App", &["app-3", "app-2"])], &none);
         let names: Vec<&str> = arranged.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["App", "zed"]);
         let worktrees: Vec<&str> = arranged[0].worktrees.iter().map(|w| w.name.as_str()).collect();
@@ -363,41 +399,62 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_is_added_once_and_only_one_listed_as_itself_is_removed() {
-        let dir = |text: &str, path: &str| RepoDir { text: text.into(), path: path.into() };
+    fn a_repository_is_added_once_and_only_one_listed_as_itself_is_removed() {
+        let dir = RepoDir::new;
         let mut dirs = RepoDirs {
             dirs: vec![dir("~/code", "/home/code"), dir("/work/app", "/work/app")],
             fixed: false,
             worktrees: None,
         };
-        assert_eq!(dirs.may_add("/tmp/new", 2, false), Ok(true));
-        assert_eq!(dirs.may_add("/tmp/empty", 0, false), Err("No repository in /tmp/empty".into()));
-        // Listed already: a directory of the settings, or a repository found through one.
+        assert_eq!(dirs.may_add("/tmp/new", true, false), Ok(true));
+        // Opt-in: a folder that is not a repository's own is refused, even one that holds some.
+        assert_eq!(dirs.may_add("/tmp/folder", false, false), Err("Not a repository: /tmp/folder".into()));
+        // Listed already: an entry, or a worktree of one. One found only through a group is added.
         assert_eq!(
-            (dirs.may_add("/home/code", 3, false), dirs.may_add("/home/code/app", 1, true)),
+            (dirs.may_add("/home/code", false, false), dirs.may_add("/w/app-2", true, true)),
             (Ok(false), Ok(false))
         );
+        assert_eq!(dirs.may_add("/home/code/app", true, false), Ok(true));
         assert_eq!(dirs.to_remove("/work/app"), Ok(dir("/work/app", "/work/app")));
-        let through = "app is listed through ~/code: take that directory out of `repos` in settings.json";
+        let through = "app is listed in the folder ~/code: remove that from Repos";
         assert_eq!(dirs.to_remove("/home/code/app"), Err(through.into()));
-        assert_eq!(dirs.to_remove("/else/app"), Err("app is not listed by the settings".into()));
+        assert_eq!(dirs.to_remove("/else/app"), Err("app is not in Repos".into()));
         // An entry that did not resolve (`"repos": [""]`) is no repository's: not removed for one.
         let unresolved = RepoDirs { dirs: vec![dir("", "")], fixed: false, worktrees: None };
         assert_eq!(unresolved.to_remove(""), Err("Not a directory: ".into()));
         // No more than the settings may hold; and none while the environment names them.
         dirs.dirs = (0..MAX_DIRS).map(|n| dir(&format!("/d{n}"), &format!("/d{n}"))).collect();
-        assert_eq!(dirs.may_add("/tmp/new", 1, false), Err("The settings name 64 directories already".into()));
+        assert_eq!(dirs.may_add("/tmp/new", true, false), Err("Repos lists 64 repositories already".into()));
         dirs.fixed = true;
         assert_eq!(dirs.to_remove("/d1"), Err(FIXED.into()));
         dirs.dirs.clear();
-        assert_eq!(dirs.may_add("/tmp/new", 1, false), Err(FIXED.into()));
+        assert_eq!(dirs.may_add("/tmp/new", true, false), Err(FIXED.into()));
+    }
+
+    #[test]
+    fn the_list_keeps_the_entries_order_pinned_first_and_a_groups_repositories_by_name() {
+        let at = |path: &str| Repo { path: path.into(), ..repo(&name_of(path), &[]) };
+        let pinned = RepoDir { pinned: true, ..RepoDir::new("/w/zed", "/w/zed") };
+        let mut dirs = RepoDirs {
+            dirs: vec![RepoDir::new("/w/web", "/w/web"), RepoDir::new("~/old", "/old"), pinned],
+            ..RepoDirs::default()
+        };
+        dirs.settle();
+        let found = vec![at("/old/b"), at("/w/web"), at("/stray"), at("/old/A"), at("/w/zed")];
+        let paths = |repos: Vec<Repo>| repos.into_iter().map(|r| r.path).collect::<Vec<_>>();
+        assert_eq!(paths(arrange(found.clone(), &dirs)), ["/w/zed", "/w/web", "/old/A", "/old/b", "/stray"]);
+        // `/old` is a group of two; a repository of its own is in none. Flat while the env names them.
+        let groups = |dirs: &RepoDirs| found.iter().map(|r| dirs.group_of(&r.path).is_some()).collect::<Vec<_>>();
+        assert_eq!(groups(&dirs), [true, false, false, true, false]);
+        dirs.fixed = true;
+        assert_eq!(groups(&dirs), [false; 5]);
     }
 
     #[test]
     fn a_repository_found_twice_is_listed_once() {
         // Overlapping places to look find `/code/app` twice; `/work/app` is another repository of that name.
         let other = Repo { path: "/work/app".into(), ..repo("app", &[]) };
-        let arranged = arrange(vec![repo("app", &[]), other, repo("app", &[])]);
+        let arranged = arrange(vec![repo("app", &[]), other, repo("app", &[])], &RepoDirs::default());
         let paths: Vec<&str> = arranged.iter().map(|r| r.path.as_str()).collect();
         assert_eq!(paths, ["/code/app", "/work/app"]);
     }

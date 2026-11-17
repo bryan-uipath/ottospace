@@ -323,6 +323,10 @@ impl Workspace {
                 }
                 None
             }
+            ("repos-empty", "add") => {
+                self.bar_add(ottospace_core::Section::Repos, window, cx);
+                None
+            }
             ("repo-remove", _) => {
                 self.remove_repo(name, window, cx);
                 None

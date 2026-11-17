@@ -1027,7 +1027,7 @@ function repoDirs(value: unknown, at: string): RepoDirs {
   const o = fields(value, at);
   const dir = (value: unknown, at: string) => {
     const d = fields(value, at);
-    return { text: str(d.text, `${at}.text`), path: str(d.path, `${at}.path`) };
+    return { text: str(d.text, `${at}.text`), path: str(d.path, `${at}.path`), pinned: bool(d.pinned, `${at}.pinned`) };
   };
   return { dirs: list(dir)(o.dirs, `${at}.dirs`), fixed: bool(o.fixed, `${at}.fixed`) };
 }
@@ -1332,6 +1332,7 @@ function model(value: unknown, at: string): Model {
     rail_focus: orNull(railFocus)(o.rail_focus, `${at}.rail_focus`),
     repos: list(repo)(o.repos, `${at}.repos`),
     repo_dirs: repoDirs(o.repo_dirs, `${at}.repo_dirs`),
+    repos_open: list(str)(o.repos_open, `${at}.repos_open`),
     tasks: { list: list(task)(fields(o.tasks, `${at}.tasks`).list, `${at}.tasks.list`) },
     collapsed: list(heading)(o.collapsed, `${at}.collapsed`),
     tasks_view: tasksView(o.tasks_view, `${at}.tasks_view`),

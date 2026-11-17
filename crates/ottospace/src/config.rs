@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::{fs, io};
 
 use ottospace_core::repos::{RepoDir, RepoDirs};
-use ottospace_core::settings::{DEFAULT_REPOS, ListChange, Settings, expand_home, with_changes};
+use ottospace_core::settings::{ListChange, Settings, expand_home, with_changes, with_repos};
 use ottospace_core::tasks::Task;
 use ottospace_sessions::ConfigDirs;
 
@@ -96,26 +96,28 @@ pub fn settings_file() -> Result<PathBuf, String> {
     Ok(file)
 }
 
-/// Where repositories are looked for: `$OTTOSPACE_REPOS` (directories, `:` between them), else
-/// the settings' `repos` as the Repos section last changed them, else `~/code` and `~/notes`.
-/// Each as named and resolved (links, `..`) now: a link may point elsewhere since the start.
+/// The Repos list's entries: `$OTTOSPACE_REPOS` (directories, `:` between them, listed flat),
+/// else the settings' `repos` as the Repos section last changed them; none by default. Each as
+/// named and resolved (links, `..`) now: a link may point elsewhere since the start.
 pub fn repo_dirs() -> RepoDirs {
-    let resolved = |text: String, path: PathBuf| {
+    let resolved = |text: String, path: PathBuf, pinned: bool| {
         let path = path.canonicalize().unwrap_or(path).to_string_lossy().into_owned();
-        RepoDir { text, path }
+        RepoDir { text, path, pinned }
     };
     if let Some(list) = std::env::var_os("OTTOSPACE_REPOS") {
         let named = std::env::split_paths(&list).filter(|p| !p.as_os_str().is_empty());
-        let dirs = named.map(|p| resolved(p.to_string_lossy().into_owned(), p)).collect();
+        let dirs = named.map(|p| resolved(p.to_string_lossy().into_owned(), p, false)).collect();
         return RepoDirs { dirs, fixed: true, worktrees: worktrees_dir() };
     }
     let changed = NAMED.lock().ok().and_then(|named| named.clone());
-    let settings = || get().settings.repos.clone().unwrap_or_else(|| DEFAULT_REPOS.map(String::from).to_vec());
-    let dirs = changed.unwrap_or_else(settings).into_iter().map(|text| {
+    let settings = || get().settings.repos.iter().map(|entry| (entry.path().to_string(), entry.pinned())).collect();
+    let dirs = changed.unwrap_or_else(settings).into_iter().map(|(text, pinned)| {
         let path = PathBuf::from(expand_home(&text, &user_home()));
-        resolved(text, path)
+        resolved(text, path, pinned)
     });
-    RepoDirs { dirs: dirs.collect(), fixed: false, worktrees: worktrees_dir() }
+    let mut dirs = RepoDirs { dirs: dirs.collect(), fixed: false, worktrees: worktrees_dir() };
+    dirs.settle();
+    dirs
 }
 
 /// Where the Repos section's + makes worktrees: `worktrees_dir` (`~` expanded), else `worktrees` in
@@ -136,18 +138,18 @@ pub fn transcripts_dir() -> Option<PathBuf> {
     Some(named.unwrap_or_else(|| home.join("transcripts")))
 }
 
-/// The settings' `repos` as the Repos section last changed them, by name.
-static NAMED: Mutex<Option<Vec<String>>> = Mutex::new(None);
+/// The settings' `repos` as the Repos section last changed them: each entry as named, and pinned.
+static NAMED: Mutex<Option<Vec<(String, bool)>>> = Mutex::new(None);
 
-/// Where repositories are looked for now, on any thread.
+/// Where repositories are looked for now, on any thread: each entry's folder.
 pub fn repo_roots() -> Vec<PathBuf> {
     repo_dirs().dirs.into_iter().map(|dir| PathBuf::from(dir.path)).collect()
 }
 
-/// The model's directories changed: later reads of the list look there.
+/// The model's entries changed: later reads of the list look there.
 pub fn set_repo_roots(dirs: &RepoDirs) {
     if let Ok(mut named) = NAMED.lock() {
-        *named = Some(dirs.dirs.iter().map(|dir| dir.text.clone()).collect());
+        *named = Some(dirs.dirs.iter().map(|dir| (dir.text.clone(), dir.pinned)).collect());
     }
 }
 
@@ -298,13 +300,19 @@ pub fn save_task(task: &Task) -> io::Result<()> {
     write_whole(&dir, &format!("{}.json", task.id), &text)
 }
 
-/// Makes `changes` to `apps`, `apps_hidden` and `repos` in `settings.json`, as the file is now: read
+/// Makes `changes` to `apps` and `apps_hidden` in `settings.json`, as the file is now: read
 /// again here, so an entry written since the start (by hand, by another ottospace) stays.
 /// Nothing is written in a test run that named no folder, or if the file would not change.
 /// `Err`: the file could not be read as settings, a list in it is not a list of names, or it
 /// is a link to nowhere. It is left as it is.
 pub fn save_apps(changes: &[ListChange]) -> Result<(), String> {
     save_settings(|text| with_changes(text, changes))
+}
+
+/// Writes the Repos list's entries, in order, as `repos` in `settings.json`, as `save_apps`
+/// changes its lists. A `repos` that is not a list of entries is left as it is.
+pub fn save_repos(dirs: &[RepoDir]) -> Result<(), String> {
+    save_settings(|text| with_repos(text, dirs))
 }
 
 /// Sets one key of `settings.json` to `value`, as `save_apps` changes its lists.
