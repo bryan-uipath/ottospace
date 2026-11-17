@@ -162,7 +162,7 @@ impl Workspace {
             "workbook-menu" | "workbook-tab-menu" => {
                 // By a label or a key: the keys are on its first item.
                 let row = tab.map_or(ListRow::Workbook(id), |at| ListRow::WorkbookTab(id, at));
-                self.open_row_menu(row, true, window, cx);
+                self.open_row_menu(row.into(), true, window, cx);
             }
             "workbook-add" => {
                 let refused = self.model.workbook_add_refusal(id);
@@ -242,7 +242,10 @@ impl Workspace {
     /// menu is open.
     fn dots_shown(&self, row: &ListRow) -> bool {
         let selected = self.model.list.and_then(|at| self.model.list_rows().into_iter().nth(at));
-        let open = self.model.row_menu().is_some_and(|(menu, _)| menu.row == *row);
+        let open = self
+            .model
+            .row_menu()
+            .is_some_and(|(menu, _)| menu.row == ottospace_core::row_menu::MenuOf::Row(row.clone()));
         self.row_hovered.as_ref() == Some(row) || selected.as_ref() == Some(row) || open
     }
 

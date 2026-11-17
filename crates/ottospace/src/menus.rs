@@ -12,7 +12,11 @@ fn item(name: &'static str, action: impl Action) -> MenuItem {
 pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
     let marks = features.on(ottospace_core::features::Feature::Marks);
     let transcripts = features.on(ottospace_core::features::Feature::Transcripts);
-    let transcribe = [MenuItem::separator(), item("Start or Stop Transcribing", listen::Transcribe)];
+    let transcribe = [
+        MenuItem::separator(),
+        item("Start or Stop Transcribing", listen::Transcribe),
+        item("Pause or Resume Transcribing", listen::PauseTranscribing),
+    ];
     let mark_tab = [MenuItem::separator(), item("Mark Tab", MarkTab), item("Go to Mark…", MarkJump)];
     vec![
         Menu {

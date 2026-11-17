@@ -6488,6 +6488,12 @@ impl Render for Workspace {
                 true => this.transcribe_key(window, cx),
                 false => cx.propagate(),
             }))
+            .on_action(cx.listener(
+                |this, _: &listen::PauseTranscribing, window, cx| match this.on(Feature::Transcripts) {
+                    true => this.pause_key(window, cx),
+                    false => cx.propagate(),
+                },
+            ))
             .on_action(cx.listener(|this, _: &CapturePane, window, cx| {
                 this.error = this.capture_pane(None, this.input, window, cx).err();
                 cx.notify();

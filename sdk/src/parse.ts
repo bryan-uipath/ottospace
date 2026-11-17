@@ -1300,12 +1300,15 @@ function rowMenu(value: unknown, at: string): RowMenu {
   const item = (value: unknown, at: string): RowMenu["items"][number] => {
     const i = fields(value, at);
     const kind = i.item;
-    if (kind !== "rename" && kind !== "delete" && kind !== "remove") throw wrong(`${at}.item`, "a menu item", kind);
-    return { item: kind, label: str(i.label, `${at}.label`), rect: orNull(rect)(i.rect, `${at}.rect`) };
+    const kinds = ["rename", "delete", "remove", "pause", "resume"] as const;
+    const known = kinds.find((k) => k === kind);
+    if (known === undefined) throw wrong(`${at}.item`, "a menu item", kind);
+    return { item: known, label: str(i.label, `${at}.label`), rect: orNull(rect)(i.rect, `${at}.rect`) };
   };
   return {
     workbook: orNull(num)(o.workbook, `${at}.workbook`),
     tab: orNull(num)(o.tab, `${at}.tab`),
+    transcript: bool(o.transcript, `${at}.transcript`),
     selected: orNull(num)(o.selected, `${at}.selected`),
     items: list(item)(o.items, `${at}.items`),
   };

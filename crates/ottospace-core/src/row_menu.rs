@@ -2,13 +2,14 @@
 //! at a time, the user's alone; any other move of the user's closes it, and so does its … moving
 //! (the list under it changed). It holds the keyboard: ↓ ↑ move, ↵ takes, any other key closes.
 //! No item has a letter: a key meant for what is behind the menu must never delete.
-//! Today a workspace's row and its tabs' rows have one; another row gets one by naming its
-//! items in `row_items`.
+//! Today a workspace's row and its tabs' rows have one, and so has the drawer's transcript
+//! header (its ⋯: Pause or Resume); another row gets one by naming its items in `row_items`.
 
 use serde::Serialize;
 
 use crate::layout::Rect;
 use crate::list::ListRow;
+use crate::listen::Status;
 use crate::model::{Action, Model};
 
 /// Why a client's request that takes the keyboard waits: the user's keys are in a row's menu.
@@ -22,6 +23,9 @@ pub enum Item {
     Delete,
     /// A tab out of its workspace.
     Remove,
+    /// The transcript on: its streams stop, or start again.
+    Pause,
+    Resume,
 }
 
 impl Item {
@@ -30,7 +34,22 @@ impl Item {
             Item::Rename => "Rename",
             Item::Delete => "Delete",
             Item::Remove => "Remove",
+            Item::Pause => "Pause",
+            Item::Resume => "Resume",
         }
+    }
+}
+
+/// Whose menu it is: a row of the bar's, or the drawer's transcript header's.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MenuOf {
+    Row(ListRow),
+    Transcript,
+}
+
+impl From<ListRow> for MenuOf {
+    fn from(row: ListRow) -> Self {
+        MenuOf::Row(row)
     }
 }
 
@@ -38,7 +57,7 @@ impl Item {
 /// opened it), and where its … was drawn when it opened.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RowMenu {
-    pub row: ListRow,
+    pub row: MenuOf,
     pub selected: Option<usize>,
     pub dots: Option<Rect>,
 }
@@ -66,14 +85,36 @@ pub fn menu_key(key: &str) -> Action {
 impl Model {
     /// The open menu and its items.
     pub fn row_menu(&self) -> Option<(&RowMenu, &'static [Item])> {
-        self.row_menu.as_ref().map(|menu| (menu, row_items(&menu.row)))
+        self.row_menu.as_ref().map(|menu| (menu, self.menu_items(&menu.row)))
+    }
+
+    /// What a menu offers now: a row's by its kind; the transcript's Pause while it runs, Resume
+    /// while paused, none while it starts or with none shown.
+    pub fn menu_items(&self, of: &MenuOf) -> &'static [Item] {
+        match of {
+            MenuOf::Row(row) => row_items(row),
+            MenuOf::Transcript => match self.listen.on.as_ref().filter(|_| self.listen.shown).map(|on| on.status) {
+                Some(Status::On) => &[Item::Pause],
+                Some(Status::Paused) => &[Item::Resume],
+                _ => &[],
+            },
+        }
+    }
+
+    /// Whether `of`'s menu can be open: its row is listed, or the transcript is shown; and it offers something.
+    fn menu_there(&self, of: &MenuOf) -> bool {
+        let there = match of {
+            MenuOf::Row(row) => self.list_rows().contains(row),
+            MenuOf::Transcript => true,
+        };
+        there && !self.menu_items(of).is_empty()
     }
 
     /// … on a row: its menu, the keys on its first item if a key opened it. On the row whose
     /// menu is open: closed. `dots`: where the … is drawn.
-    pub(crate) fn row_menu_open(&mut self, row: ListRow, dots: Option<Rect>, keys: bool) {
+    pub(crate) fn row_menu_open(&mut self, row: MenuOf, dots: Option<Rect>, keys: bool) {
         let open = self.row_menu.take().is_some_and(|menu| menu.row == row);
-        let listed = self.list_rows().contains(&row) && !row_items(&row).is_empty();
+        let listed = self.menu_there(&row);
         self.row_menu = (!open && listed).then_some(RowMenu { row, selected: keys.then_some(0), dots });
     }
 
@@ -87,8 +128,10 @@ impl Model {
 
     /// ↓ or ↑: from no item, the first or the last. It wraps.
     pub(crate) fn row_menu_move(&mut self, delta: i32) {
-        if let Some(menu) = &mut self.row_menu {
-            let count = row_items(&menu.row).len() as i64;
+        let count = self.row_menu().map_or(0, |(_, items)| items.len() as i64);
+        if let Some(menu) = &mut self.row_menu
+            && count > 0
+        {
             let from = menu.selected.map_or(if delta > 0 { -1 } else { count }, |at| at as i64);
             menu.selected = Some((from + i64::from(delta)).rem_euclid(count) as usize);
         }
@@ -99,20 +142,23 @@ impl Model {
     pub fn row_menu_action(&self, index: Option<usize>) -> Option<Action> {
         let (menu, items) = self.row_menu()?;
         let item = items.get(index.or(menu.selected)?)?;
-        let (workbook, tab) = match menu.row {
-            ListRow::Workbook(id) => (id, None),
-            ListRow::WorkbookTab(id, at) => (id, Some(at)),
+        let at = self.now;
+        let (workbook, tab) = match (&menu.row, item) {
+            (_, Item::Pause) => return Some(Action::ListenPause { at }),
+            (_, Item::Resume) => return Some(Action::ListenResume { at }),
+            (MenuOf::Row(ListRow::Workbook(id)), _) => (*id, None),
+            (MenuOf::Row(ListRow::WorkbookTab(id, at)), _) => (*id, Some(*at)),
             _ => return None,
         };
         Some(match item {
             Item::Rename => Action::WorkbookEdit { workbook, tab },
-            Item::Delete | Item::Remove => Action::WorkbookRemove { workbook, tab },
+            _ => Action::WorkbookRemove { workbook, tab },
         })
     }
 
     /// Takes an item: the menu closes, and the row is renamed (its name typed in place) or
     /// deleted. ↵ with the keys on no item: nothing, the menu stays.
-    pub(crate) fn row_menu_choose(&mut self, index: Option<usize>) {
+    pub(crate) fn row_menu_choose(&mut self, index: Option<usize>, effects: &mut Vec<crate::model::Effect>) {
         let Some(action) = self.row_menu_action(index) else {
             // An item there is not closes it; ↵ on none leaves it.
             self.row_menu = self.row_menu.take().filter(|_| index.is_none());
@@ -122,13 +168,15 @@ impl Model {
         match action {
             Action::WorkbookEdit { workbook, tab } => self.workbook_edit(workbook, tab),
             Action::WorkbookRemove { workbook, tab } => self.workbook_remove(workbook, tab),
+            action @ (Action::ListenPause { .. } | Action::ListenResume { .. }) => self.listen_act(action, effects),
             _ => {}
         }
     }
 
-    /// After every step: the menu is of a row the open section lists.
+    /// After every step: the menu is of a row the open section lists, or of the transcript shown,
+    /// and offers something.
     pub(crate) fn settle_row_menu(&mut self) {
-        if self.row_menu.as_ref().is_some_and(|menu| !self.list_rows().contains(&menu.row)) {
+        if self.row_menu.as_ref().is_some_and(|menu| !self.menu_there(&menu.row)) {
             self.row_menu = None;
         }
     }
@@ -159,7 +207,7 @@ mod tests {
     }
 
     fn open(row: ListRow, keys: bool) -> Action {
-        Action::RowMenu { row, dots: DOTS, keys }
+        Action::RowMenu { row: row.into(), dots: DOTS, keys }
     }
 
     /// `listed`, the menu of its row open by a key: the keys on Rename.
