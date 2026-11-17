@@ -2249,14 +2249,6 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
     };
     let double_click = |icon: [f64; 4]| click_at(icon[0] + icon[2] / 2.0, icon[1] + icon[3] / 2.0, true);
 
-    // The control: not hosted, a double-click on a folder opens it; back again with ⌘[.
-    bring_forward(pid as u32, "Finder");
-    let icon = wait_for("the first folder's icon", || icon_of(&first));
-    double_click(icon);
-    let control = || format!("title {:?}, icon {icon:?}, window {:?}, front {:?}", title(), frame(), front_app());
-    wait_or("the control double-click to open its folder", control, || (title()? == first).then_some(()));
-    press("keystroke \"[\" using command down");
-    wait_for("the window back at the folder", || (title()? == outer).then_some(()));
     let original = wait_for("its frame", frame);
 
     let pid_text = pid.to_string();
@@ -2272,15 +2264,17 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
     let seen = || {
         format!(
             "front {:?}; window {finder_window} at {:?}; above it (number, pid, layer) {:?}, ottospace is pid \
-             {otto_pid}; Finder's main window {:?}; mode {}",
+             {otto_pid}; Finder's main window {:?}, focused {:?}; mode {}",
             front_app(),
             frame(),
-            windows_above(finder_window as u32),
+            windows_above(finder_window),
             ottospace_mac::ax::Window::main_id(pid),
+            ottospace_mac::ax::Window::focused_id(pid),
             state()["mode"],
         )
     };
 
+    report(&format!("finder, parked: {}", seen()));
     // The user's way in: a real click on the parked pane makes it live.
     bring_forward(otto.child.id(), "ottospace");
     let at = on_picture(&otto);
@@ -2307,4 +2301,13 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
     // Quit: the window goes back where it was.
     otto.call(json!({"cmd": "quit"}));
     wait_for("the Finder window back", || frame().filter(|f| (0..4).all(|i| close(f[i], original[i]))));
+    drop(otto);
+    // The control: given back, a double-click on a folder opens it.
+    bring_forward(pid as u32, "Finder");
+    press("keystroke \"[\" using command down");
+    wait_for("the window back at the folder", || (title()? == outer).then_some(()));
+    let icon = wait_for("the first folder's icon", || icon_of(&first));
+    double_click(icon);
+    let control = || format!("title {:?}, icon {icon:?}, window {:?}, front {:?}", title(), frame(), front_app());
+    wait_or("the control double-click to open its folder", control, || (title()? == first).then_some(()));
 }
