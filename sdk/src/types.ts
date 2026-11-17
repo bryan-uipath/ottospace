@@ -1151,12 +1151,12 @@ export type NoticeLevel = "info" | "warning" | "meeting" | "error";
 
 /** The notice bar: one message, full width at the window's foot. */
 export interface NoticeBar {
-  /** What it is about: `failed`, `refused`, `unsaved`, `told`, `settings_problem`, `settings_retired`, `settings_restart`, `start`, `keys`, `editor`, `meeting`. */
+  /** What it is about: `failed`, `refused`, `unsaved`, `told`, `settings_problem`, `settings_retired`, `settings_restart`, `start`, `keys`, `editor`, `meeting`, `undo`. */
   kind: string;
   level: NoticeLevel;
   /** A meeting's is `Meeting started`: its title is never in the state. */
   text: string;
-  /** What it offers beside the text: `open_settings`, `join` (a meeting's link), or null. */
+  /** What it offers beside the text: `open_settings`, `join` (a meeting's link), `undo` (a workspace deleted or updated), or null. */
   offer: string | null;
   offer_rect: Rect | null;
   /** Its ×. Only the user's click dismisses. */
@@ -1301,7 +1301,7 @@ export interface Snapshot {
   unfilled: Array<{ pane: PaneId; why: string; open: Rect | null }>;
   /** The user's workspaces, by name. Only the user makes, saves, opens, renames or deletes one. */
   workbooks: Workbook[];
-  /** What the Workspaces section offers to take back, while it offers. */
+  /** What the notice bar offers to take back (`kind` `undo`), while it offers. */
   workbook_offer: "deleted" | "updated" | null;
   /** The open menu of a row of the bar, or null. */
   row_menu: RowMenu | null;

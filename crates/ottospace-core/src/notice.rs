@@ -36,6 +36,7 @@ pub enum Level {
 /// | `start` | error | the app | yes |
 /// | `keys` | warning | the app | yes |
 /// | `editor` | info | the app | yes |
+/// | `undo` | info | the sender: a workspace deleted or updated (a tab saved again, added or removed), offered back (`Workbooks::notice`) | no |
 /// | `meeting` | meeting | the app: a meeting started and no call is on (`Calendar::banner`) | yes |
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -62,6 +63,8 @@ pub enum Kind {
     Editor,
     /// A meeting started and no call is on. Its title is drawn, never in the state (`MEETING`).
     Meeting,
+    /// The user's change that may be taken back for a few seconds: a workspace deleted or updated.
+    Undo,
 }
 
 impl Kind {
@@ -69,7 +72,7 @@ impl Kind {
         match self {
             Kind::Failed | Kind::Unsaved | Kind::SettingsProblem | Kind::Start => Level::Error,
             Kind::Refused | Kind::SettingsRetired | Kind::Keys => Level::Warning,
-            Kind::Told | Kind::SettingsRestart | Kind::Editor => Level::Info,
+            Kind::Told | Kind::SettingsRestart | Kind::Editor | Kind::Undo => Level::Info,
             Kind::Meeting => Level::Meeting,
         }
     }
@@ -77,7 +80,7 @@ impl Kind {
     /// Whom it is for: an answer is its sender's, the app's state is everyone's.
     pub fn about(self) -> About {
         match self {
-            Kind::Refused | Kind::Told => About::Sender,
+            Kind::Refused | Kind::Told | Kind::Undo => About::Sender,
             _ => About::App,
         }
     }
@@ -88,6 +91,8 @@ impl Kind {
             Kind::SettingsProblem | Kind::SettingsRetired => Some(Offer::OpenSettings),
             // Only a meeting with an `https:` link: the shell asks the calendar.
             Kind::Meeting => Some(Offer::Join),
+            // Taken only from the user's click: a client's is refused (`WorkbookUndo`).
+            Kind::Undo => Some(Offer::Undo),
             _ => None,
         }
     }
@@ -117,6 +122,7 @@ pub enum Offer {
     OpenSettings,
     /// The meeting's link: opened only on the user's click (`CalendarJoin`).
     Join,
+    Undo,
 }
 
 impl Offer {
@@ -124,6 +130,7 @@ impl Offer {
         match self {
             Offer::OpenSettings => "Open settings",
             Offer::Join => "Join",
+            Offer::Undo => "Undo",
         }
     }
 }
@@ -247,6 +254,7 @@ mod tests {
             (Keys, Level::Warning, None, true),
             (Editor, Level::Info, None, true),
             (Meeting, Level::Meeting, Some(Offer::Join), true),
+            (Undo, Level::Info, Some(Offer::Undo), true),
         ];
         for (kind, level, offer, held) in table {
             assert_eq!((kind.level(), kind.offer(), kind.held()), (level, offer, held), "{kind:?}");
@@ -265,8 +273,8 @@ mod tests {
         use Kind::*;
         use Origin::*;
         let all = [Failed, Refused, Unsaved, Told, SettingsProblem, SettingsRetired, SettingsRestart, Start, Keys];
-        for kind in all.into_iter().chain([Editor, Meeting]) {
-            let answer = matches!(kind, Refused | Told);
+        for kind in all.into_iter().chain([Editor, Meeting, Undo]) {
+            let answer = matches!(kind, Refused | Told | Undo);
             assert_eq!(kind.about() == About::Sender, answer, "{kind:?}");
             // The user's own always shows; anyone else's only when it is about the app.
             assert_eq!((on_bar(kind, User), on_bar(kind, Socket), on_bar(kind, System)), (true, !answer, !answer));
