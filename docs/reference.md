@@ -111,7 +111,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab of the selected task |
 | ⌘⌃1 … ⌘⌃9 | Select a space of the top row: the first, Home, then each open task and workspace. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
 | ⌘⌃] / ⌘⌃[ | Next / previous space of the top row |
-| ⌘⌥] / ⌘⌥[ | Next / previous conversation of this workspace (the drawer's strip) |
+| ⌘⌥] / ⌘⌥[ | Next / previous item of the drawer's rail: the transcript on, then this workspace's tasks |
 | ⌘⌃W | Hide the selected task or workspace (Hide): it leaves the top row and nothing in it stops; its row in Tasks or Workspaces opens it again. Not Home |
 | ⌘⇧W | Close the tab and its panes |
 | ⌘⇧S | Save the tab on show into the [workspace](#workspaces) it is in; in a task's space, as a new one. On a tab that came from one, or was saved into one: update its tab there |
@@ -300,12 +300,15 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    started with ↵ is in the workspace you are in: one you made, or a task's. No space is made
    and nothing moves (the box says "↵ starts it in this workspace" when there is something in
    it). A workspace may hold several tasks: a later one works in the same folder unless its
-   line names another. One conversation is in front, the drawer's: with two tasks or more a
-   strip over it has a tab for each (its badge, the dot at its corner in its state's colour),
-   the front one wide with its title, and + for another task here. A click on a tab, ⌘⌥] / ⌘⌥[,
-   a task's row or ⌘⇧N puts a conversation in front; nothing but you does. The top row shows
-   the workspace's badges stacked, the most urgent first. A task dismissed (or one you mark
-   done) leaves the strip and the most urgent remaining is in front; the last one gone, a
+   line names another. One conversation is in front, the drawer's. With two items or more (the
+   workspace's tasks, and a transcript while one runs) the drawer has a rail at its right edge:
+   the running transcript first (its waveform, a red dot while it records), then the tasks, the
+   most urgent first (each its badge, the dot at its corner in its state's colour), and + for
+   another task here. The selected item is lifted with an accent edge. A click on an item,
+   ⌘⌥] / ⌘⌥[, list mode (→ past the drawer, ↑ ↓, ↵), a task's row or ⌘⇧N switches it; nothing
+   but you does. The transcript, stopped, leaves it; with one item left the rail goes. The top
+   row shows the workspace's badges stacked, the most urgent first. A task dismissed (or one you
+   mark done) leaves the rail and the most urgent remaining is in front; the last one gone, a
    workspace you made is its own again, with its tabs. From Home, the task gets
    a space of its own with one empty tab. ⇧↵ files it for later, in no workspace: started from
    its row, it gets its own. ⌘T makes a tab in the
@@ -318,7 +321,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    own folder: for the repository), that checkout its default worktree, a terminal there. A
    workspace's new terminals (⌘D, a split, a new tab's) and new tasks start in its default
    worktree, unless the task's line names another (`>repo`, `/path`); where a workspace's tasks
-   work in different worktrees, each task's row and its strip tab's hover name its worktree. A
+   work in different worktrees, each task's row and its rail item's hover name its worktree. A
    Claude Code task whose agent moves into another worktree of its repository (one it made; never
    a sub-agent's `.claude/worktrees/agent-*`) works there from then on, and so does its
    workspace's default when it is the workspace's one task. A

@@ -59,6 +59,7 @@ import type {
   Work,
   Focus,
   RailFocus,
+  RailItem,
   Home,
   Glyph,
   HomeDrawn,
@@ -233,12 +234,33 @@ function focus(value: unknown, at: string): Focus {
   const o = fields(value, at);
   if (o.pane !== undefined) return { pane: num(o.pane, `${at}.pane`) };
   if (o.list !== undefined) return { list: num(o.list, `${at}.list`) };
+  if (o.drawer_rail !== undefined) return { drawer_rail: railItem(o.drawer_rail, `${at}.drawer_rail`) };
   return { rail: section(o.rail, `${at}.rail`) };
+}
+
+function railItem(value: unknown, at: string): RailItem {
+  const o = fields(value, at);
+  if (o.kind === "transcript") return { kind: "transcript" };
+  if (o.kind === "task") return { kind: "task", id: num(o.id, `${at}.id`) };
+  throw wrong(`${at}.kind`, "transcript or task", o.kind);
 }
 
 function railFocus(value: unknown, at: string): RailFocus {
   const o = fields(value, at);
+  if (o.right !== undefined) return { right: railItem(o.right, `${at}.right`) };
   return { left: section(o.left, `${at}.left`) };
+}
+
+function railRow(value: unknown, at: string): Snapshot["drawer"]["rail"][number] {
+  const o = fields(value, at);
+  const kind = o.kind;
+  if (kind !== "transcript" && kind !== "task") throw wrong(`${at}.kind`, "transcript or task", kind);
+  return {
+    kind,
+    id: orNull(num)(o.id, `${at}.id`),
+    selected: bool(o.selected, `${at}.selected`),
+    rect: orNull(rect)(o.rect, `${at}.rect`),
+  };
 }
 
 function heading(value: unknown, at: string): Heading {
@@ -742,7 +764,6 @@ function spaceRow(value: unknown, at: string): SpaceRow {
     tabs: list(num)(o.tabs, `${at}.tabs`),
     tasks: list(num)(o.tasks, `${at}.tasks`),
     front: orNull(num)(o.front, `${at}.front`),
-    strip: list(num)(o.strip, `${at}.strip`),
     worktree: orNull(str)(o.worktree, `${at}.worktree`),
     glyph: glyph(o.glyph, `${at}.glyph`),
   };
@@ -901,6 +922,7 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
   };
   return {
     body: orNull(rect)(o.body, `${at}.body`),
+    rail: list(railRow)(o.rail, `${at}.rail`),
     width: num(o.width, `${at}.width`),
     agents: map(agent)(o.agents, `${at}.agents`),
     native: native(o.native, `${at}.native`),

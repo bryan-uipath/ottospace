@@ -1,0 +1,29 @@
+# The drawer's rail: none with one item; a transcript and a task: the rail, the transcript on
+# top; several tasks and the transcript: tasks by urgency, the one selected lifted. Made-up
+# tasks; the fixture's lines stand in for the sound.
+{"env":{"OTTOSPACE_FEATURES":"transcripts","OTTOSPACE_LISTEN_FIXTURE":"{ROOT}/fixture.jsonl"}}
+{"click":"top:new_workspace"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"f i x space t h e space l o g i n space l o o p","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"task_set_state","id":1,"state":"needs_you"}
+{"settle":700}
+{"shot":"one-task"}
+{"click":"listen-start:1"}
+{"until":"listen_lines","len":6}
+{"click":"drawer-rail:transcript"}
+{"settle":300}
+{"shot":"transcribing"}
+{"click":"drawer-rail:1"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"r e v i e w space t h e space e x p o r t space p r","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"w h a t space a p p space a m space i space u s i n g","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"task_set_state","id":2,"state":"running"}
+{"cmd":"task_set_state","id":3,"state":"captured"}
+{"click":"drawer-rail:2"}
+{"settle":700}
+{"shot":"several"}
