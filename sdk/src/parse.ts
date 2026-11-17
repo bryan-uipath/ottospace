@@ -1325,6 +1325,7 @@ function model(value: unknown, at: string): Model {
     layout: orNull(layout)(o.layout, `${at}.layout`),
     focused: orNull(num)(o.focused, `${at}.focused`),
     live: orNull(num)(o.live, `${at}.live`),
+    fill_display: bool(o.fill_display, `${at}.fill_display`),
     sidebar: orNull(section)(o.sidebar, `${at}.sidebar`),
     compose: orNull(str)(o.compose, `${at}.compose`),
     list: orNull(num)(o.list, `${at}.list`),

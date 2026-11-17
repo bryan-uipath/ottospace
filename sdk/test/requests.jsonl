@@ -72,6 +72,7 @@
 {"cmd":"record_start","dir":"/tmp/rec"}
 {"cmd":"record_stop"}
 {"cmd":"listen_end","why":"app_quit"}
+{"cmd":"zoom_press"}
 {"cmd":"calendar","day":"tomorrow","days":2}
 {"cmd":"calendar","day":"yesterday"}
 {"cmd":"marks"}

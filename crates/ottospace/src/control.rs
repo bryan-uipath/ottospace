@@ -438,6 +438,9 @@ pub enum Request {
     ListenEnd {
         why: ottospace_core::listen::Ended,
     },
+    /// For tests (`test_refusal`): the window's green button, pressed as the user would: a zoom,
+    /// which fills the display instead. Refused outside a test run: only the user's hand fills it.
+    ZoomPress,
     /// The user's meetings of `day` (`today`, the default, `tomorrow` or `YYYY-MM-DD`) and the
     /// `days` (1 to 7) from it, busy and free time: `{"ok":true,"configured":true,"meetings":[..],..}`,
     /// not the state. Only what the app holds (today and the next 7 days), never a fetch. Titles
@@ -548,6 +551,7 @@ pub enum Modifier {
 /// `sneak_app_tree`: it would choose what sneak mode labels in another app. `calendar_call`: it
 /// would raise or silence the user's meeting alert. `record_start`: it would film the window.
 /// `listen_end`: it would end the user's transcript.
+/// `zoom_press`: it would put the window over the menu bar and the Dock as the user.
 pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
     match request {
         _ if e2e => None,
@@ -577,6 +581,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         }
         Request::ListenEnd { .. } => {
             Some("listen_end is for tests (OTTOSPACE_E2E): only the user, the app or its sound ends a transcript")
+        }
+        Request::ZoomPress => {
+            Some("zoom_press is for tests (OTTOSPACE_E2E): only the user's green button fills the display")
         }
         _ => None,
     }
@@ -833,6 +840,10 @@ mod tests {
         let capture = parse(r#"{"cmd":"capture_start","pane":1}"#);
         assert!(test_refusal(&capture, false).expect("refused").contains("only the user"));
         assert_eq!(test_refusal(&capture, true), None);
+        // Nor the green button: it fills the display as the user.
+        let zoom = parse(r#"{"cmd":"zoom_press"}"#);
+        assert!(test_refusal(&zoom, false).expect("refused").contains("only the user"));
+        assert_eq!(test_refusal(&zoom, true), None);
         // Nor the inspector: only the user opens it, on a window they host.
         let tree =
             r#"{"root":{"role":"AXWindow"},"count":1,"truncated":{"depth":false,"nodes":false,"timeout":false}}"#;

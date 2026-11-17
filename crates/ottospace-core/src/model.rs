@@ -1431,6 +1431,12 @@ pub enum Action {
     TalkWide,
     /// Collapse the shown conversation's dial to its marker, or open it again: kept per task.
     DialToggle,
+    /// Put the window over its whole display, the menu bar and the Dock away while ottospace is in
+    /// front; again: back as it was. Only the user's. Kept in `layout.json`: on at quit, on at start.
+    FillDisplay,
+    /// The shell saw the window leave the display's frame (dragged, zoomed, a display gone): the
+    /// mode is over, the bars come back.
+    FillEnded,
     /// Start the shown conversation's agent, or go on with its session: the drawer's Resume
     /// session (Start agent), Take over, ↵ in an ended composer. Selecting a conversation (its
     /// row, its rail cell, its tab) never starts one. Only the user's.
@@ -1870,6 +1876,8 @@ impl Action {
             | Action::TalkResize { .. }
             | Action::TalkWide
             | Action::DialToggle
+            | Action::FillDisplay
+            | Action::FillEnded
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
             | Action::CallSeen { .. }
@@ -2152,6 +2160,8 @@ impl Action {
             | Action::TalkResize { .. }
             | Action::TalkWide
             | Action::DialToggle
+            | Action::FillDisplay
+            | Action::FillEnded
             | Action::TalkStart
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
@@ -2367,6 +2377,11 @@ pub enum Effect {
     Activate {
         id: String,
     },
+    /// `on`: the window to its display's whole frame, the menu bar and the Dock away while
+    /// ottospace is in front. Off: the bars as the system has them, the window back (`fill::back`).
+    FillDisplay {
+        on: bool,
+    },
     /// The user typed a label in a hosted app: press the element at `path` in `pane`'s window
     /// (`focus`: focus the text field, then `Enter` the pane as the user), if it is still the one
     /// labelled (`sneak_apps::check` against `role` and `at`). Only ever for the user's own letters.
@@ -2551,6 +2566,8 @@ pub struct Model {
     /// itself. Not an entry: the mode stays as it was.
     #[serde(skip)]
     pub peek: Option<crate::app_wheel::Peek>,
+    /// The window fills its display, over the menu bar and the Dock (`Action::FillDisplay`).
+    pub fill_display: bool,
     /// The top row, hidden spaces too, in order. In the state it is `spaces` (`space_rows`).
     #[serde(skip)]
     pub(crate) spaces: Vec<Space>,
@@ -2841,6 +2858,7 @@ impl Default for Model {
             focused: None,
             live: None,
             peek: None,
+            fill_display: false,
             sidebar: None,
             compose: None,
             list: None,
@@ -3224,6 +3242,7 @@ impl Model {
             | Action::TalkView { .. } => Some(chat::USERS_ALONE),
             // How the user keeps their drawer, and the layout file that keeps it.
             Action::DialToggle => Some(chat::DIAL_USERS),
+            Action::FillDisplay => Some(crate::fill::USERS_ALONE),
             // The editor writes what ↵ will send, and has the keyboard: only the user opens it or
             // moves to it; only the shell says what it saved.
             Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
@@ -5275,6 +5294,15 @@ impl Model {
             Action::TalkResize { width } => self.talk_width = talk::width(width),
             Action::TalkWide => self.talk_wide = !self.talk_wide,
             Action::DialToggle => self.dial_toggle(),
+            Action::FillDisplay => {
+                self.fill_display = !self.fill_display;
+                effects.push(Effect::FillDisplay { on: self.fill_display });
+            }
+            Action::FillEnded => {
+                if std::mem::take(&mut self.fill_display) {
+                    effects.push(Effect::FillDisplay { on: false });
+                }
+            }
             Action::SetCalendar { on, notify, links_only, hide_free, colors } => {
                 (self.calendar.on, self.calendar.notify, self.calendar.links_only) = (on, notify, links_only);
                 self.calendar.options(hide_free, colors);
@@ -8225,6 +8253,8 @@ mod tests {
         Action::TalkResize { .. },
         Action::TalkWide,
         Action::DialToggle,
+        Action::FillDisplay,
+        Action::FillEnded,
         Action::TalkStart,
         Action::SetCalendar { .. },
         Action::CalendarRead { .. },
@@ -8498,6 +8528,8 @@ mod tests {
             Action::TalkResize { width: 400. },
             Action::TalkWide,
             Action::DialToggle,
+            Action::FillDisplay,
+            Action::FillEnded,
             Action::TalkStart,
             Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() },
             Action::CalendarRead { events: None, days: [0; calendar::DAYS], at: 0, held_from: 0 },
@@ -8746,6 +8778,7 @@ mod tests {
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::DialToggle => Some(chat::DIAL_USERS),
+                    Action::FillDisplay => Some(crate::fill::USERS_ALONE),
                     Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
@@ -14641,6 +14674,7 @@ mod tests {
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::DialToggle => Some(chat::DIAL_USERS),
+                    Action::FillDisplay => Some(crate::fill::USERS_ALONE),
                     Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
