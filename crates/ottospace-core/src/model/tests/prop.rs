@@ -17,8 +17,8 @@ use crate::listen::Heard;
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
 use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
+use crate::row_menu::MenuOf;
 use crate::sessions::{Link, Seen};
-use crate::settings::ListChange;
 use crate::sneak_apps;
 use crate::transcript::{Event as Said, Outcome, Text, View};
 use crate::workbook::{self, History, Workbook, WorkbookId};
@@ -112,12 +112,13 @@ impl Gen<'_> {
         }
     }
 
-    /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not.
-    fn menu_row(&mut self) -> ListRow {
-        match self.rng.below(4) {
-            0 => ListRow::Task(self.task()),
-            1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)),
-            _ => ListRow::Workbook(self.workbook()),
+    /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not; or the transcript's header.
+    fn menu_row(&mut self) -> MenuOf {
+        match self.rng.below(5) {
+            0 => ListRow::Task(self.task()).into(),
+            1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)).into(),
+            2 => MenuOf::Transcript,
+            _ => ListRow::Workbook(self.workbook()).into(),
         }
     }
 
@@ -339,8 +340,10 @@ impl Gen<'_> {
     }
 
     fn repo_dirs(&mut self) -> RepoDirs {
-        let dir = |g: &mut Self| g.name(DIRS);
-        let dirs = (0..self.rng.below(3)).map(|_| dir(self)).map(|path| RepoDir { text: path.clone(), path }).collect();
+        // `/code`: a folder of repositories, from the old settings: a group.
+        let dir = |g: &mut Self| if g.rng.one_in(4) { "/code".to_string() } else { g.name(DIRS) };
+        let entry = |g: &mut Self| RepoDir { pinned: g.rng.one_in(3), ..RepoDir::new(&dir(g), "") };
+        let dirs = (0..self.rng.below(4)).map(|_| entry(self)).map(|d| RepoDir { path: d.text.clone(), ..d }).collect();
         RepoDirs { dirs, fixed: self.rng.below(4) == 0, worktrees: self.rng.coin().then(|| "/w".into()) }
     }
 
@@ -1432,6 +1435,13 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 }
 
 fn check(m: &Model) -> Result<(), String> {
+    // The Repos list: each entry once, pinned ones first; the repositories in its order.
+    let dirs = &m.repo_dirs.dirs;
+    let once = dirs.iter().enumerate().all(|(i, d)| dirs[..i].iter().all(|e| e.path != d.path));
+    ensure!(once && dirs.is_sorted_by_key(|d| !d.pinned), "the Repos entries: {dirs:?}");
+    let places: Vec<usize> = m.repos.iter().map(|r| m.repo_dirs.place(&r.path).unwrap_or(usize::MAX)).collect();
+    ensure!(places.is_sorted(), "the repositories are out of the list's order: {places:?}");
+    ensure!(m.repos_open.iter().all(|open| dirs.iter().any(|d| d.path == *open)), "an open group with no entry");
     // A dismissed notice is kept only of a kind that stays until fixed, one of each.
     let kinds: Vec<crate::notice::Kind> = m.notice_hidden.iter().map(|n| n.kind).collect();
     let once = kinds.iter().enumerate().all(|(i, kind)| !kind.held() && !kinds[..i].contains(kind));
@@ -1558,10 +1568,10 @@ fn check(m: &Model) -> Result<(), String> {
         m.space()
     );
     // The agent chip is there exactly while the selected space has a conversation and nothing
-    // is in the drawer's place: no conversation open, new task, draft, brief or inspector. It
-    // is that conversation's, and names its space's place on the row.
+    // is in the drawer's place: no conversation open, new task, draft, brief, inspector or
+    // transcript. It is that conversation's, and names its space's place on the row.
     let busy = m.talk.as_ref().is_some_and(|talk| talk.open) || m.compose.is_some() || m.capture.is_some();
-    let busy = busy || m.brief.is_some() || m.inspector.is_some();
+    let busy = busy || m.brief.is_some() || m.inspector.is_some() || m.listen.shown;
     let chip = m.agent_chip();
     ensure!(
         chip.is_some() == (m.space_subject(m.space()).is_some() && !busy),
@@ -2033,7 +2043,11 @@ fn check(m: &Model) -> Result<(), String> {
 
     // A row's menu is of a row the open section lists, on one of its items.
     if let Some((menu, items)) = m.row_menu() {
-        ensure!(m.list_rows().contains(&menu.row), "a menu of {:?}, which is not listed", menu.row);
+        let listed = match &menu.row {
+            MenuOf::Row(row) => m.list_rows().contains(row),
+            MenuOf::Transcript => m.listen.shown && !items.is_empty(),
+        };
+        ensure!(listed, "a menu of {:?}, which is not listed", menu.row);
         let on = menu.selected.is_none_or(|at| at < items.len());
         ensure!(on, "a menu on item {:?} of {}", menu.selected, items.len());
     }
@@ -3445,11 +3459,14 @@ impl Run {
                         "a change names no list or no app: {changes:?}"
                     );
                 }
-                Effect::SaveRepos { changes } => {
-                    ensure!(user && !m.repo_dirs.fixed, "{origin:?} wrote the settings: {changes:?}");
-                    let named = |change: &ListChange| change.key == "repos" && !change.text.is_empty();
-                    ensure!(changes.len() == 1 && changes.iter().all(named), "not one directory: {changes:?}");
-                    ensure!(m.repo_dirs.dirs.len() <= MAX_DIRS, "more directories than the settings may name");
+                Effect::SaveRepos { dirs } => {
+                    // Only the user adds, removes, moves or pins: what is written is what the list holds.
+                    ensure!(user && !m.repo_dirs.fixed, "{origin:?} wrote the settings: {dirs:?}");
+                    let acts =
+                        matches!(action, Action::RepoAdd { .. } | Action::RepoRemove { .. } | Action::QuitConfirm);
+                    ensure!(acts, "{action:?} wrote the Repos list");
+                    ensure!(*dirs == m.repo_dirs.dirs, "written {dirs:?}, held {:?}", m.repo_dirs.dirs);
+                    ensure!(dirs.len() <= MAX_DIRS, "more repositories than the settings may name");
                 }
                 // A worktree is the user's own ↵ in its field, or on a new task with the box's choice
                 // (a new branch, and the task waits for it): a branch git takes, in a folder of `root`.
@@ -4487,10 +4504,8 @@ fn one_key_never_presses_in_an_app() {
 #[test]
 fn a_directory_with_no_text_is_not_removed() {
     replay(&[
-        Action::SetRepoDirs {
-            dirs: RepoDirs { dirs: vec![RepoDir { text: "".into(), path: "".into() }], fixed: false, worktrees: None },
-        }
-        .sent_by(Origin::Socket),
+        Action::SetRepoDirs { dirs: RepoDirs { dirs: vec![RepoDir::new("", "")], fixed: false, worktrees: None } }
+            .sent_by(Origin::Socket),
         Action::RepoRemove { path: "".into() }.sent_by(Origin::User),
     ])
     .unwrap();
@@ -5019,10 +5034,7 @@ fn a_repository_is_never_removed_by_a_path_that_is_no_directory() {
     replay(&[
         Action::SetRepoDirs {
             dirs: RepoDirs {
-                dirs: vec![
-                    RepoDir { text: "".into(), path: "".into() },
-                    RepoDir { text: "  S'".into(), path: "  S'".into() },
-                ],
+                dirs: vec![RepoDir::new("", ""), RepoDir::new("  S'", "  S'")],
                 fixed: false,
                 worktrees: None,
             },

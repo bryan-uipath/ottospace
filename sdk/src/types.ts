@@ -530,6 +530,8 @@ export interface SessionsBar {
 export interface ReposGroup {
   name: string;
   path: string;
+  /** The folder entry it is drawn under (older settings), or null: an entry of its own. */
+  group: string | null;
   /** Where the heading was laid out, scrolled out of view or not. Null while the section is not drawn. */
   header: Rect | null;
   /** Its checkouts are folded under its name: not drawn, not rows of list mode. */
@@ -665,9 +667,10 @@ export interface Repo extends Worktree {
 
 /** Where the Repos list is read from. */
 export interface RepoDirs {
-  /** Each directory as the settings name it (`~/code`) and resolved (`/Users/me/code`). */
-  dirs: { text: string; path: string }[];
-  /** True while `OTTOSPACE_REPOS` names them: none is added or removed. */
+  /** The Repos list's entries, in the user's order, pinned ones first: each as the settings name it
+   * (`~/code/app`) and resolved (`/Users/me/code/app`). A folder of repositories (old settings) is a group. */
+  dirs: { text: string; path: string; pinned: boolean }[];
+  /** True while `OTTOSPACE_REPOS` names them: none is added, removed or moved, and the list is flat. */
   fixed: boolean;
 }
 
@@ -878,14 +881,16 @@ export interface WorkbookTab {
   buttons: { menu: Rect | null };
 }
 
-/** The open menu of a row of the bar (its …): whose row, the item the keys are on, and its items. Only the user opens one or chooses from it. */
+/** The open menu of a row of the bar (its …), or of the drawer's transcript header (its ⋯): whose, the item the keys are on, and its items. Only the user opens one or chooses from it. */
 export interface RowMenu {
   /** The workspace whose row it is of; `tab`: that tab's row, by place. */
   workbook: number | null;
   tab: number | null;
+  /** The transcript header's: Pause, or Resume while paused. */
+  transcript: boolean;
   /** The item the keys are on; null: none (a click opened it). */
   selected: number | null;
-  items: { item: "rename" | "delete" | "remove"; label: string; rect: Rect | null }[];
+  items: { item: "rename" | "delete" | "remove" | "pause" | "resume"; label: string; rect: Rect | null }[];
 }
 
 /** A workspace of the user's (the user reads "workspace"; the state keeps `workbook`): a named set of saved tabs, none in a new one. No directory is listed: `panes` names kinds only. */
@@ -956,6 +961,8 @@ export interface Model {
   rail_focus: RailFocus | null;
   repos: Repo[];
   repo_dirs: RepoDirs;
+  /** Groups of the Repos list (folders of repositories) the user unfolded, by path. */
+  repos_open: string[];
   tasks: { list: Task[] };
   /** Headings of the Tasks section that are folded. */
   collapsed: Heading[];
@@ -1291,7 +1298,7 @@ export interface Snapshot {
   /** Test runs only: the transcript drawer's rows, the volatile lines last. Else null. */
   listen_lines: ListenLine[] | null;
   /** Test runs only: where a transcript's controls were drawn, by id (`listen-start:3`,
-   * `listen-header`, `listen-stop:header`, `listen-top:`, `listen-view`). Else null. */
+   * `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-top:`, `listen-view`). Else null. */
   listen_rects: Record<string, Rect> | null;
   /** The marks, in the user's order. */
   marks: Mark[];
