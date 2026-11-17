@@ -273,15 +273,15 @@ def stats(values):
     return {"median": statistics.median(values), "p90": p90, "runs": [round(v, 1) for v in values]}
 
 
-def bench(sides, args, scratch):
-    """`sides`: {name: binary}. Each measure runs every side in turn, alternating which goes first."""
+def startups(sides, args, scratch, raw, templates):
+    """One round of every startup measure into `raw`. Each runs every side in turn, alternating
+    which goes first."""
     names = list(sides)
-    raw = {name: {"warm": [], "cold": [], "sessions": [], "sessions_read": []} for name in names}
     order = lambda i: names if i % 2 == 0 else names[::-1]
 
     say("startup, warm ...")
     for name in names:
-        startup(sides[name])  # unmeasured: the binary's first launch
+        startup(sides[name])  # unmeasured: the binary's first launch (in a round)
     for i in range(args.runs):
         for name in order(i):
             raw[name]["warm"].append(startup(sides[name])["ms"])
@@ -297,11 +297,6 @@ def bench(sides, args, scratch):
             shutil.rmtree(fresh)
 
     say("startup, with sessions ...")
-    # A fixture a side, its layout saved by that side's own build.
-    templates = {}
-    for name in names:
-        templates[name] = make_fixture(os.path.join(scratch, f"fixture-{name}"))
-        prime(sides[name], templates[name])
     for i in range(args.runs):
         for name in order(i):
             home = os.path.join(scratch, f"home-{name}-{i}")
@@ -311,17 +306,35 @@ def bench(sides, args, scratch):
             raw[name]["sessions_read"].append(row["sessions_ms"])
             shutil.rmtree(home)
 
+
+def startup_stats(r):
+    return {
+        "startup_warm_ms": stats(r["warm"]),
+        "startup_cold_ms": stats(r["cold"]),
+        "startup_sessions_ms": stats(r["sessions"]),
+        "sessions_read_ms": stats(r["sessions_read"]),
+    }
+
+
+def bench(sides, args, scratch):
+    """`sides`: {name: binary}. Returns each side's numbers."""
+    names = list(sides)
+    raw = {name: {"warm": [], "cold": [], "sessions": [], "sessions_read": []} for name in names}
+    # A fixture a side, its layout saved by that side's own build.
+    templates = {}
+    for name in names:
+        templates[name] = make_fixture(os.path.join(scratch, f"fixture-{name}"))
+        prime(sides[name], templates[name])
+    startups(sides, args, scratch, raw, templates)
+    # A hosted runner's launches vary 3x: a startup past a threshold runs a second round, and
+    # fails only if it is still past it over both rounds' launches.
+    if len(names) == 2 and regressions(*(startup_stats(raw[n]) for n in names), startup_only=True):
+        say("a startup is past a threshold: a second round, to confirm ...")
+        startups(sides, args, scratch, raw, templates)
     result = {}
     for name in names:
         say(f"memory and CPU, {name} ({IDLE_S + STREAM_S + 20} s) ...")
-        r = raw[name]
-        result[name] = {
-            "startup_warm_ms": stats(r["warm"]),
-            "startup_cold_ms": stats(r["cold"]),
-            "startup_sessions_ms": stats(r["sessions"]),
-            "sessions_read_ms": stats(r["sessions_read"]),
-            **{k: round(v, 2) for k, v in long_run(sides[name]).items()},
-        }
+        result[name] = {**startup_stats(raw[name]), **{k: round(v, 2) for k, v in long_run(sides[name]).items()}}
     return result
 
 
@@ -356,9 +369,11 @@ def cell(side, key):
     return f"{v:.1f}" if isinstance(v, float) else str(v)
 
 
-def regressions(before, after):
+def regressions(before, after, startup_only=False):
     found = []
     for key, rel, rise, floor in THRESHOLDS:
+        if startup_only and not key.startswith("startup_"):
+            continue
         b, a = value(before, key), value(after, key)
         if a > floor and a - b > rise and (rel is None or b <= 0 or (a - b) / b > rel):
             found.append(f"{key}: {b:.1f} → {a:.1f}")
@@ -367,7 +382,9 @@ def regressions(before, after):
 
 def table(result, meta):
     names = list(result)
-    lines = [f"Build: {meta['profile']}. Startups: median / p90 of {meta['runs']} runs (cold: {meta['cold_runs']}).", ""]
+    first = result[names[0]]
+    runs, cold = len(first["startup_warm_ms"]["runs"]), len(first["startup_cold_ms"]["runs"])
+    lines = [f"Build: {meta['profile']}. Startups: median / p90 of {runs} runs (cold: {cold}).", ""]
     if len(names) == 1:
         lines += ["| | value |", "|---|---|"]
         lines += [f"| {label} | {cell(result[names[0]], key)} |" for key, label in ROWS]

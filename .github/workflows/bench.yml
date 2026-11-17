@@ -68,7 +68,8 @@ jobs:
             set -- --bin "$RUNNER_TEMP/ottospace-after"
           fi
           status=0
-          scripts/bench "$@" --out "$RUNNER_TEMP/bench" || status=$?
+          # A hosted runner's launches vary 3x (345 to 1090 ms): more of them than the default 10 and 5.
+          scripts/bench "$@" --runs 20 --cold-runs 10 --out "$RUNNER_TEMP/bench" || status=$?
           { echo "## Bench"; echo; cat "$RUNNER_TEMP/bench/bench.md" 2>/dev/null || echo "No results: see the log."; } \
             >> "$GITHUB_STEP_SUMMARY"
           exit "$status"

@@ -180,10 +180,15 @@ Memory and CPU come from `proc_pid_rusage` of the app's own pid, never its termi
 
 Thresholds (`THRESHOLDS` in the script), past which `--compare` exits 1 and CI's job is red: a
 startup median +20% and +50 ms, RSS +25% and +10 MB, idle CPU above 2% of a core and a point more
-than the base. Both sides run on one machine, alternating, so drift falls on both; two runs of
-`main` against itself differed by at most 4% on startup medians, 7% (13 MB) on RSS with 8 terminals, 0.2 points of idle CPU. A red bench
-is not a required check: whoever merges says in the pull request whether the regression is real
-and accepted.
+than the base. A startup past its threshold runs a second round of launches and fails only if it
+is still past it over both. Exit 2: the bench itself failed (a build, a timeout), not a regression.
+
+Noise. Both sides run on one machine, alternating, so drift falls on both. On an M-series Mac, two
+runs of `main` against itself differed by at most 4% on startup medians, 7% (13 MB) on RSS with 8
+terminals and 0.2 points of idle CPU. A hosted runner is far noisier: one launch takes 345 to 1090
+ms, and a run of identical code once came out +20% on warm startup. So CI launches 20 (cold: 10)
+times a round. A red bench is not a required check: whoever merges says in the pull request
+whether the regression is real and accepted.
 
 ## Crates
 
