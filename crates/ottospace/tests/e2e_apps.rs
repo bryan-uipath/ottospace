@@ -2420,3 +2420,80 @@ fn a_hosted_canary_window_takes_the_users_clicks() {
     assert_eq!(state()["mode"], "app", "the clicks stayed in the app");
     otto.call(json!({"cmd": "quit"}));
 }
+
+/// A global point in the middle of pane `pane`'s picture, once its stream shows.
+fn picture_of(otto: &Proc, pane: u64) -> [f64; 2] {
+    let state = || otto.call(json!({"cmd": "state"}));
+    let key = pane.to_string();
+    let shown = wait_for("a frame of its stream", || rect(&state()["shown"][&key]).filter(|s| s[2] > 100.0));
+    let window = rect(&state()["window"]).expect("ottospace window frame");
+    [window[0] + shown[0] + shown[2] / 2.0, window[1] + shown[1] + shown[3] / 2.0]
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn clicks_reach_hosted_windows_as_the_user_switches_between_their_panes() {
+    // Two canary windows in two panes. Each round: a click on a parked pane's picture (replayed
+    // into its window), then a click on the live window itself; then the other pane.
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-switch", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || global_frame(&canary, 0));
+    let otto = otto_for(&canary, "otto-switch", &[]);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let spot = host_and_park(&otto);
+    canary.call(json!({"cmd": "open_window"}));
+    wait_for("the second window's pane", || (state()["tab_panes"] == json!([[1, 2]])).then_some(()));
+    let clicks = |i: usize| canary.call(json!({"cmd": "state"}))["windows"][i]["clicks"].as_array().map_or(0, Vec::len);
+    // Waits up to 2 s for window `i` to have more clicks than `before`.
+    let reached = |i: usize, before: usize| {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(2) {
+            if clicks(i) > before {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    };
+    let rounds = std::env::var("OTTOSPACE_E2E_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(6);
+    let (mut replays, mut directs, mut tries) = (0, 0, 0);
+    let mut missed = Vec::new();
+    for round in 0..rounds {
+        for (pane, index) in [(1u64, 0usize), (2, 1)] {
+            tries += 1;
+            // ottospace in front, the pane parked: the user's way back to a pane.
+            bring_forward(otto.child.id(), "ottospace");
+            let at = picture_of(&otto, pane);
+            let before = clicks(index);
+            click_at(at[0], at[1], false);
+            let went = wait_or(
+                "the pane to go live",
+                || format!("{}", state()["state"]),
+                || (state()["state"]["live"] == pane).then_some(()),
+            );
+            let _ = went;
+            if reached(index, before) {
+                replays += 1;
+            } else {
+                missed.push(format!("round {round} pane {pane}: replay; front {:?}", front_app()));
+            }
+            // The live window, clicked where the user clicks next: its own content.
+            let live =
+                wait_for("the window over its pane", || global_frame(&canary, index).filter(|f| !close(f[0], spot[0])));
+            std::thread::sleep(Duration::from_millis(300));
+            let before = clicks(index);
+            click_at(live[0] + live[2] / 2.0, live[1] + live[3] - 40.0, false);
+            if reached(index, before) {
+                directs += 1;
+            } else {
+                missed.push(format!(
+                    "round {round} pane {pane}: direct at {live:?}; front {:?}; mode {}",
+                    front_app(),
+                    state()["mode"]
+                ));
+            }
+        }
+    }
+    report(&format!("switching: replayed {replays}/{tries}, direct {directs}/{tries}; missed {missed:?}"));
+    assert!(missed.is_empty(), "{missed:?}");
+    otto.call(json!({"cmd": "quit"}));
+}
