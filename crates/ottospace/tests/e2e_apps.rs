@@ -2466,8 +2466,11 @@ fn clicks_reach_hosted_windows_as_the_user_switches_between_their_panes() {
     for round in 0..rounds {
         for (pane, index) in [(1u64, 0usize), (2, 1)] {
             tries += 1;
-            // ottospace in front, the pane parked: the user's way back to a pane.
-            bring_forward(otto.child.id(), "ottospace");
+            // The first from ottospace in front; the others straight from the other pane's live
+            // window, as the user goes from one app to the next.
+            if tries == 1 {
+                bring_forward(otto.child.id(), "ottospace");
+            }
             let at = picture_of(&otto, pane);
             let before = clicks(index);
             click_at(at[0], at[1], false);
