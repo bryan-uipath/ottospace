@@ -39,20 +39,28 @@ pub(crate) fn folder() -> PathBuf {
     crate::control::path().with_extension("passes")
 }
 
-/// At start: the folder, 0700, emptied of a run before's files (it ended without dropping them).
-/// Only files are removed; a link or anything else at the folder's place makes no folder.
-pub(crate) fn sweep(dir: &Path) -> std::io::Result<()> {
-    match std::fs::symlink_metadata(dir) {
-        Ok(meta) if meta.is_dir() => std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?,
-        Ok(_) => return Err(std::io::Error::other("the pass folder's place holds something else")),
-        Err(_) => std::fs::DirBuilder::new().mode(0o700).create(dir)?,
+/// At start: a run before's files (it ended without dropping them) go, and so does the folder.
+/// Only files are removed, and only from a folder: a link at its place is left alone.
+pub(crate) fn sweep(dir: &Path) {
+    if !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
+        return;
     }
-    for entry in std::fs::read_dir(dir)?.flatten() {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         if entry.file_type().is_ok_and(|kind| kind.is_file()) {
             let _ = std::fs::remove_file(entry.path());
         }
     }
-    Ok(())
+    let _ = std::fs::remove_dir(dir);
+}
+
+/// The folder for pass files, 0700: made with the first pass, gone with the last (`Live::drop`).
+/// A link or anything else at its place makes no folder.
+fn ready(dir: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(meta) if meta.is_dir() => std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)),
+        Ok(_) => Err(std::io::Error::other("the pass folder's place holds something else")),
+        Err(_) => std::fs::DirBuilder::new().mode(0o700).create(dir),
+    }
 }
 
 impl Live {
@@ -61,12 +69,10 @@ impl Live {
         Self::mint_in(&folder())
     }
 
-    /// With its file in `dir`, which `sweep` made.
+    /// With its file in `dir`, made if it is not there.
     pub(crate) fn mint_in(dir: &Path) -> Result<Self, String> {
         // The folder itself, never a link to elsewhere.
-        if !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
-            return Err("no folder for the pass's file".into());
-        }
+        ready(dir).map_err(|err| format!("no folder for the pass's file: {err}"))?;
         let mut bytes = [0u8; 16];
         let random = std::fs::File::open("/dev/urandom").and_then(|mut source| source.read_exact(&mut bytes));
         // All zeros is `GONE`'s: never a live pass.
@@ -107,6 +113,10 @@ impl Drop for Live {
         let mut live = LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(at) = live.iter().position(|one| *one == hex) {
             live.swap_remove(at);
+        }
+        // The last one: its folder goes too, if nothing else is in it.
+        if let Some(dir) = self.file.parent().filter(|_| live.is_empty()) {
+            let _ = std::fs::remove_dir(dir);
         }
     }
 }
@@ -152,12 +162,12 @@ fn found(text: &str) -> Vec<std::ops::Range<usize>> {
     merged(found)
 }
 
-/// Sorted ranges, those that overlap or touch made one.
+/// Sorted ranges, those that overlap made one. Two that only touch (two passes side by side) stay two.
 fn merged(sorted: Vec<std::ops::Range<usize>>) -> Vec<std::ops::Range<usize>> {
     let mut out: Vec<std::ops::Range<usize>> = Vec::with_capacity(sorted.len());
     for range in sorted {
         match out.last_mut() {
-            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            Some(last) if range.start < last.end => last.end = last.end.max(range.end),
             _ => out.push(range),
         }
     }
@@ -291,7 +301,7 @@ pub(crate) fn caller<'a>(given: Option<&Pass>, live: impl IntoIterator<Item = (&
 #[cfg(test)]
 pub(crate) fn minted_dir(name: &str) -> crate::scratch::Scratch {
     let dir = crate::scratch::Scratch::path(&format!("ottospace-test-{name}-{}", std::process::id()));
-    sweep(dir.as_ref()).unwrap();
+    ready(dir.as_ref()).unwrap();
     dir
 }
 
@@ -323,14 +333,19 @@ mod tests {
         assert_eq!(read(&file).as_deref(), Some(GONE));
         assert!(Pass::parse(GONE).is_some(), "GONE parses, so it is refused as a dead pass");
         assert_eq!(from_env(), None, "no variable: no pass");
-        // A run before's files are swept at start; a link at the folder's place is refused.
+        // A run before's files are swept at start, the folder with them; a link at the folder's
+        // place makes no folder, and is left alone.
+        ready(dir.as_ref()).unwrap();
         std::fs::write(dir.as_ref().join("pass-1-0"), "old").unwrap();
-        sweep(dir.as_ref()).unwrap();
-        assert_eq!(std::fs::read_dir(dir.as_ref()).unwrap().count(), 0);
+        sweep(dir.as_ref());
+        assert!(!dir.as_ref().exists());
         let link = minted_dir("pass-link");
         std::fs::remove_dir(link.as_ref()).unwrap();
+        ready(dir.as_ref()).unwrap();
         std::os::unix::fs::symlink(dir.as_ref(), link.as_ref()).unwrap();
-        assert!(sweep(link.as_ref()).is_err());
+        assert!(Live::mint_in(link.as_ref()).is_err());
+        sweep(link.as_ref());
+        assert!(dir.as_ref().exists(), "a link's target is not swept");
     }
 
     #[test]
@@ -404,14 +419,14 @@ mod tests {
     #[test]
     fn ranges_that_overlap_are_one_in_either_order() {
         assert_eq!(merged(vec![0..32, 20..40]), [0..40]);
-        assert_eq!(merged(vec![0..10, 5..8, 8..20, 30..40]), [0..20, 30..40]);
+        assert_eq!(merged(vec![0..10, 5..8, 9..20, 30..40]), [0..20, 30..40]);
+        assert_eq!(merged(vec![0..10, 10..20]), [0..10, 10..20], "touching: two");
         assert_eq!(merged(vec![0..40, 10..20]), [0..40]);
-        // Two live passes touching in the text: neither shows a part.
+        // Two live passes side by side in the text: both hidden, each its own word.
         let dir = minted_dir("two-passes");
         let (one, two) = (Live::mint_in(dir.as_ref()).unwrap(), Live::mint_in(dir.as_ref()).unwrap());
         let (one, two) = (one.pass().hex(), two.pass().hex());
-        // Side by side: one range, one word.
         let text = format!("{one}{two} {two}{one}");
-        assert_eq!(hide(&text), "[hidden] [hidden]");
+        assert_eq!(hide(&text), "[hidden][hidden] [hidden][hidden]");
     }
 }

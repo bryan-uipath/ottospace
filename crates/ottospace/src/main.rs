@@ -6847,10 +6847,8 @@ fn main() {
     trace::record("start", serde_json::json!({ "pid": std::process::id(), "hosting": hosting }));
     let control = control::serve().map_err(|err| eprintln!("control socket off: {err}")).ok();
     // The socket is this run's: so is the folder of its agents' pass files beside it.
-    if control.is_some()
-        && let Err(err) = pass::sweep(&pass::folder())
-    {
-        eprintln!("no pass folder, task agents will not start: {err}");
+    if control.is_some() {
+        pass::sweep(&pass::folder());
     }
     // For `osi`: which program the running app is.
     running::write();

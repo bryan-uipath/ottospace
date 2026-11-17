@@ -152,7 +152,9 @@ impl Drop for Otto {
         support::exiting(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
-        // A killed app removes nothing: its socket, the lock beside it, a trace it dumped.
+        // A killed app removes nothing: its socket, the lock beside it, a trace it dumped, the
+        // folder of its agents' pass files.
+        let _ = std::fs::remove_dir_all(self.socket.with_extension("passes"));
         for end in ["sock", "lock", "trace.jsonl"] {
             let _ = std::fs::remove_file(self.socket.with_extension(end));
         }
@@ -9204,7 +9206,6 @@ fn a_live_pass_is_hidden_from_every_client() {
         shows(&otto.call(json!({"cmd": "state"})).to_string(), "the state");
         shows(&otto.call(json!({"cmd": "trace"})).to_string(), "the trace");
         drop(otto);
-        assert!(!folder.exists(), "the pass files go with the app");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
