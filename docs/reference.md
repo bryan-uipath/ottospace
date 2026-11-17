@@ -467,17 +467,17 @@ A native conversation has a dial under its header: where its agent's calls go, a
   request waits for you), and is larger for
   each further call running there at once (up to four): it springs to its size, with a kick
   when a call starts, and settles back when one ends.
-- **Dashes**: the route of the last calls, fading out over a minute.
-- Beside it, when the drawer is wide enough: what it does now (`Shell · cargo test · 0:14`), or
-  the last thing and when; the context used (`62% of context`); turns and how long.
-- Hover a station for its name and counts, the ring for the tokens.
+- **Timer**: under the centre's picture, the running call's time, or the model's (`0:14`).
+- The dial is centred; under it, when the drawer is wide enough: what it does now
+  (`Shell · cargo test`), or the last thing and when; turns and how long.
+- Hover a station for its name and counts, the ring for the context used and the tokens.
 - A click on it (or ⌘⇧A, or Toggle Agent Dial) collapses it to an 18-point marker beside the
   badge (the ring, a white dot while a call runs, a red one for a failure); a click on the marker
   opens it. It is open while the agent runs and collapsed once it ended, unless you left it the
   other way: that is kept per task, with the layout.
 - A watched session's dial steps a message at a time, with no time arcs: its dots spring to
-  their sizes, nothing pulses or turns. With Reduce motion on, nothing fades or moves: the route
-  shows until it expires, and a lit station is its colour and its larger size.
+  their sizes, nothing pulses or turns. With Reduce motion on, nothing moves: a lit station is its
+  colour and its larger size.
 - It is drawn frame by frame only while something in it moves; at rest, collapsed or not on
   screen, never.
 - The state reply has its stations, counts, what is lit (and how many calls run there), the
