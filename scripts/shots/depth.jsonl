@@ -1,0 +1,21 @@
+# What sits below: the top row's spaces but the selected one, the tab row's tabs but the one on
+# show, and the open workspace's saved tabs in the Workspaces section, in a well.
+{"cmd":"task_new","line":"Fix the login loop #auth p1"}
+{"click":"top:new_workspace"}
+{"cmd":"split"}
+{"cmd":"key","keys":"cmd-shift-s","as":"user"}
+{"cmd":"key","keys":"cmd-t","as":"user"}
+{"cmd":"split"}
+{"cmd":"key","keys":"cmd-shift-s","as":"user"}
+{"cmd":"key","keys":"cmd-t","as":"user"}
+{"cmd":"split"}
+{"cmd":"key","keys":"cmd-shift-s","as":"user"}
+{"settle":300}
+{"click":"top:new_workspace"}
+{"click":"space:1"}
+{"cmd":"select_tab","index":1}
+{"settle":500}
+{"click":"workbook-fold:1"}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"settle":800}
+{"shot":"rows"}
