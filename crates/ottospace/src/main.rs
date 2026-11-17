@@ -1186,8 +1186,9 @@ impl Workspace {
                             this.host_launched(window, cx);
                             this.refresh_inspector(window, cx);
                             // A snoozed task returns when its time comes, and the offer to undo goes.
+                            // A dispatch also carries out what a tick with no window held.
                             let now = now_ms();
-                            if this.model.due(now) {
+                            if this.model.due(now) || !this.held_effects.is_empty() {
                                 this.dispatch(Action::Tick { now }, Origin::System, window, cx);
                                 cx.notify();
                             }

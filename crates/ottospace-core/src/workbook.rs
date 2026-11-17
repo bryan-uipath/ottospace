@@ -615,9 +615,11 @@ impl Workbooks {
         }
     }
 
-    /// True if the offer's time is up at `now`.
+    /// True if the offer's time is up at `now`, or a closed temporary workspace's (its offer
+    /// may have been taken by another since).
     pub(crate) fn due(&self, now: u64) -> bool {
-        self.offer.as_ref().is_some_and(|offer| offer.until <= now)
+        let closed = self.list.iter().any(|book| book.closing.is_some_and(|until| until <= now));
+        closed || self.offer.as_ref().is_some_and(|offer| offer.until <= now)
     }
 
     pub(crate) fn tick(&mut self, now: u64) {
@@ -2220,6 +2222,21 @@ mod tests {
         assert_eq!((m.live, m.panes.len(), m.workbooks.list.len()), (Some(2), 1, 1));
         let closed: Vec<&Effect> = effects.iter().filter(|e| !matches!(e, Effect::Closed(p) if p.id == 1)).collect();
         assert!(closed.iter().all(|e| !matches!(e, Effect::Parked(_) | Effect::Closed(_))), "{effects:?}");
+    }
+
+    /// Review: A closed, then B closed and its Undo taken: no offer left, so the shell's timer
+    /// never asked for the tick that ends A. Its own time is due.
+    #[test]
+    fn a_closed_workspace_whose_offer_another_took_is_still_due() {
+        let mut m = Model::default();
+        for uid in [UID, UID_2] {
+            m.update(Action::WorkbookNew { uid: uid.into() });
+            m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+            m.update(Action::SpaceHide { index: None });
+        }
+        m.update(Action::WorkbookUndo);
+        assert_eq!((m.workbooks.offered(), m.workbooks.closing(1)), (None, true));
+        assert_eq!((m.due(NOTICE_MS - 1), m.due(NOTICE_MS)), (false, true));
     }
 
     /// A tab of a temporary workspace being closed selected again (a mark, a client's
