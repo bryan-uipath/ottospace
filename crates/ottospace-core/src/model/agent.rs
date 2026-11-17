@@ -108,6 +108,34 @@ impl Model {
         }
     }
 
+    /// The level the user picked for each app pane of `record`, and for which task, on its pane
+    /// (`agent_mode::KEY`); no other. Read back (a restart, a tab mark) it is only offered (`wait_for_kept`).
+    pub(crate) fn keep_levels(&self, record: &mut crate::marks::TabRecord) {
+        for pane in &mut record.panes {
+            pane.extra.remove(agent_mode::KEY);
+            let kept = self.agent.kept(pane.id).filter(|_| matches!(pane.kind, crate::marks::RecordKind::App { .. }));
+            if let Some(kept) = kept.and_then(|kept| serde_json::to_value(kept).ok()) {
+                pane.extra.insert(agent_mode::KEY.into(), kept);
+            }
+        }
+    }
+
+    /// The panes `panes` rebuilt from `record` (in `shown` order): each empty app pane whose record
+    /// keeps a level, for a task still there, waits for its window, to offer it (`offer_back`).
+    pub(crate) fn wait_for_kept(&mut self, panes: &[PaneId], record: &crate::marks::TabRecord) {
+        for (pane, kept) in panes.iter().zip(record.shown()) {
+            let picked = kept.extra.get(agent_mode::KEY).cloned();
+            let picked = picked.and_then(|value| serde_json::from_value::<Kept>(value).ok());
+            if let (Some(picked), crate::marks::RecordKind::App { bundle, name, .. }) = (picked, &kept.kind)
+                && self.tasks.live(picked.task).is_some()
+                && self.pane(*pane).is_some_and(|open| open.kind == Kind::Empty)
+            {
+                let waiting = agent_mode::Waiting { kept: picked, bundle: bundle.clone(), name: name.clone() };
+                self.agent.restored.insert(*pane, waiting);
+            }
+        }
+    }
+
     /// A restored pane's level the user picked in a run before, once its window is there: offered,
     /// never given (the file is the same user's, so an agent's too). Only for a window of the same
     /// app, filled by no client, while its task works there.

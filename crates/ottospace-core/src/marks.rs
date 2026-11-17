@@ -878,7 +878,9 @@ impl Model {
                     return Err("a tab with nothing in it has nothing to mark".into());
                 }
                 let (title, task, layout) = (kept_title(&tab.title, 256), tab.space.task(), layout.clone());
-                let record = TabRecord { title: title.clone(), task, focused, layout, panes, extra: Extra::new() };
+                let mut record = TabRecord { title: title.clone(), task, focused, layout, panes, extra: Extra::new() };
+                // A level the user picked: going to the mark may only offer it back.
+                self.keep_levels(&mut record);
                 if let Some(wrong) = record.unsound() {
                     return Err(format!("tab {} cannot be marked: {wrong}", tab.id));
                 }
@@ -1028,7 +1030,10 @@ impl Model {
                 // `settle_home` gives it a workspace.
                 let task = record.task.filter(|task| self.tasks.live(*task).is_some());
                 let of = task.map_or(Owner::Home, |id| self.task_space(id));
+                let base = self.next_id;
                 let tab = self.rebuild_tab(record, of, effects);
+                let panes: Vec<PaneId> = (base + 1..).take(record.shown().len()).collect();
+                self.wait_for_kept(&panes, record);
                 self.marks.bind(id, tab);
             }
         }
@@ -1667,6 +1672,44 @@ mod tests {
         m.update(Action::Fill { pane, kind: slack(8, "general") });
         assert_eq!((m.agent.level(pane), m.tab_task()), (Level::Off, Some(1)));
         assert!(m.agent.from_record.is_empty(), "filled: no longer waiting");
+        assert!(m.agent.offers.is_empty(), "the default is never kept: nothing to offer");
+    }
+
+    /// A level the user picked is kept on a tab mark's record and, rebuilt, only offered, as a
+    /// restore's is: Off until the user's click; a client's fill or click gives nothing.
+    #[test]
+    fn a_tab_marks_app_pane_offers_back_the_level_the_user_picked() {
+        use crate::agent_mode::{Kept, Level, USERS_ALONE};
+        let mut m = Model::default();
+        let assign = Default::default();
+        m.update(Action::TaskAdd { title: "fix zoom".into(), priority: 3, state: State::Running, tab: None, assign });
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
+        let picked = open(&mut m, slack(7, "general"));
+        m.update(Action::AgentLevel { pane: Some(picked), level: Level::See });
+        mark(&mut m, MarkOf::Tab(None), &[]);
+        let rebuilt = |m: &mut Model| {
+            m.update(Action::CloseTab { index: None });
+            let into = go(m, "fix zoom").iter().find_map(|effect| match effect {
+                Effect::HostWindow { into: Some(pane), .. } => Some(*pane),
+                _ => None,
+            });
+            into.expect("the app pane waits for its window")
+        };
+        // A client's fill: no offer.
+        let pane = rebuilt(&mut m);
+        m.update(Action::Fill { pane, kind: slack(8, "general") }.sent_by(Origin::Socket));
+        assert_eq!((m.agent.level(pane), m.agent.offers.len()), (Level::Off, 0));
+        // The user's fill: Off, with the offer, which only the user's click takes.
+        let pane = rebuilt(&mut m);
+        m.update(Action::Fill { pane, kind: slack(9, "general") });
+        assert_eq!(m.agent.level(pane), Level::Off);
+        assert_eq!(m.agent.offers.get(&pane), Some(&Kept { level: Level::See, task: 1 }));
+        let accept = Action::AgentOfferAccept { pane };
+        assert_eq!(m.refusal(&accept, Origin::Socket), Some(USERS_ALONE));
+        m.update(accept.clone().sent_by(Origin::Socket));
+        assert_eq!(m.agent.level(pane), Level::Off);
+        m.update(accept);
+        assert_eq!((m.agent.level(pane), m.agent.offers.len()), (Level::See, 0));
     }
 
     #[test]

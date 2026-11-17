@@ -140,8 +140,9 @@ A small script printed the variable and tried to connect.
   a new app pane only where the user's own act put its window there (their pick, drag or click:
   `AgentMode.by_user`, recorded from the origin of the step that first made it an app pane,
   whatever the flag). One a client opened (`open_app`) or filled, the system adopted, or a record
-  rebuilt (a restore, a tab mark: `AgentMode.from_record`, a same-user file) starts at Off (a restore may only offer the user's own pick, above; a restored pane with
-  a kept level starts at Off even when the user's pick fills it): an agent that opens Mail in its own workspace cannot read it. A security
+  rebuilt (a restore, a tab mark: `AgentMode.from_record`, a same-user file) starts at Off (a restore or a tab mark may only offer the user's own pick, above; a rebuilt pane with
+  a kept level starts at Off even when the user's pick fills it). A tab mark keeps the level the user picked when it was made
+  (`Model::keep_levels`, as `layout.json` does), and going to it offers it back the same way (`wait_for_kept`): an agent that opens Mail in its own workspace cannot read it. A security
   review (HIGH) found the first build gave the default to every pane.
 - **Only the user sets a level.** `AgentLevel`, `AgentMenu`, `AgentMenuMove`, `AgentMenuChoose` and
   `AgentMenuClose` are refused from `Socket` and `System` (`agent_mode::USERS_ALONE`); `AppUsed` is
