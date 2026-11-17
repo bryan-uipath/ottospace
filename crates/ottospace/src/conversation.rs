@@ -312,6 +312,10 @@ impl Workspace {
         let mut ended = Vec::new();
         let mut details = Vec::new();
         for (subject, native) in &mut self.drawer.native {
+            // Its process gone, its pass goes: the file too, and the pass is no longer hidden.
+            if native.reaped() {
+                native.pass = None;
+            }
             let mut events = Vec::new();
             while let Ok(said) = native.driver.events().try_recv() {
                 let mut kept = false;

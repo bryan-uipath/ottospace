@@ -754,8 +754,16 @@ fn rows_of<T>(term: &Term<T>, from: Line, to: Line) -> Vec<(String, bool)> {
         let row = &term.grid()[Line(line)];
         let spacer = Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER;
         let cells = (0..term.columns()).map(|col| &row[Column(col)]).filter(|cell| !cell.flags.intersects(spacer));
-        let mut text: String =
-            cells.map(|cell| if cell.c == '\t' || cell.flags.contains(Flags::HIDDEN) { ' ' } else { cell.c }).collect();
+        let mut text = String::new();
+        for cell in cells {
+            if cell.c == '\t' || cell.flags.contains(Flags::HIDDEN) {
+                text.push(' ');
+            } else {
+                // Its zero-width characters too (a combining accent, an emoji's joiner).
+                text.push(cell.c);
+                text.extend(cell.zerowidth().into_iter().flatten());
+            }
+        }
         let wraps = wraps(term, Line(line));
         if !wraps {
             text.truncate(text.trim_end().len());
@@ -766,14 +774,15 @@ fn rows_of<T>(term: &Term<T>, from: Line, to: Line) -> Vec<(String, bool)> {
 }
 
 /// Rows read from the top of a full history: what was dropped above may have cut a pass, so a
-/// run of 8 or more hex digits starting the first row is hidden, whatever its digits (a rule on
-/// any digits says nothing of a pass's).
-fn cut_history<T>(term: &Term<T>, from: Line, mut rows: Vec<(String, bool)>) -> Vec<(String, bool)> {
+/// run of 8 or more hex digits starting there is hidden, whatever its digits
+/// (`pass::hide_digits_at_top`: a rule on any digits says nothing of a pass's).
+fn cut_history<T>(term: &Term<T>, from: Line, rows: Vec<(String, bool)>) -> Vec<(String, bool)> {
     let full = term.grid().history_size() >= Config::default().scrolling_history;
-    if let Some((first, _)) = rows.first_mut().filter(|_| full && from == term.topmost_line()) {
-        *first = crate::pass::hide_digits_at_start(first);
+    if !full || from != term.topmost_line() {
+        return rows;
     }
-    rows
+    let (text, wraps): (Vec<String>, Vec<bool>) = rows.into_iter().unzip();
+    crate::pass::hide_digits_at_top(text).into_iter().zip(wraps).collect()
 }
 
 impl Terminal {
@@ -1020,6 +1029,14 @@ mod tests {
         // Gone, the pass shows again: it grants nothing.
         drop(live);
         assert_eq!(lines_of(&short)[0], &hex[16..]);
+    }
+
+    /// What clients read keeps a cell's zero-width characters: a combining accent, a joiner.
+    #[test]
+    fn zero_width_characters_are_read_with_their_cell() {
+        let term = term(20, 2, "cafe\u{301} a\u{200d}b");
+        assert_eq!(lines_of(&term)[0], "cafe\u{301} a\u{200d}b");
+        assert_eq!(text_of(&term, false), "cafe\u{301} a\u{200d}b");
     }
 
     #[test]
