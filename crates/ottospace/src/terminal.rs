@@ -658,9 +658,9 @@ impl Screen {
 const MOST_PAST: i32 = 256;
 
 /// The last row searched past `edge`, going `step` (-1 up, 1 down): rows until they hold 32
-/// characters other than spaces, and one more. A pass the edge cuts is then searched whole
-/// however few columns its rows use (a narrow pane, a TUI's indent or column). To the grid's end
-/// at most.
+/// characters other than a row's edges (`pass::edge`: a box's borders count none), and one more.
+/// A pass the edge cuts is then searched whole however few columns its rows use (a narrow pane, a
+/// TUI's indent or column, a narrow box). To the grid's end at most.
 fn past<T>(term: &Term<T>, edge: Line, step: i32) -> Line {
     let (top, bottom) = (term.topmost_line(), term.bottommost_line());
     let (mut line, mut held) = (edge, 0);
@@ -673,8 +673,10 @@ fn past<T>(term: &Term<T>, edge: Line, step: i32) -> Line {
         if held >= 32 {
             break;
         }
-        held +=
-            rows_of(term, line, line).iter().map(|(row, _)| row.chars().filter(|c| *c != ' ').count()).sum::<usize>();
+        held += rows_of(term, line, line)
+            .iter()
+            .map(|(row, _)| row.chars().filter(|c| !crate::pass::edge(*c)).count())
+            .sum::<usize>();
     }
     line
 }
@@ -778,7 +780,8 @@ fn rows_of<T>(term: &Term<T>, from: Line, to: Line) -> Vec<(String, bool)> {
 /// (`pass::hide_digits_at_top`: a rule on any digits says nothing of a pass's).
 fn cut_history<T>(term: &Term<T>, from: Line, rows: Vec<(String, bool)>) -> Vec<(String, bool)> {
     let full = term.grid().history_size() >= Config::default().scrolling_history;
-    if !full || from != term.topmost_line() {
+    // No pass live: nothing to hide (e.g. a commit hash at the top of a user's saved history).
+    if !full || from != term.topmost_line() || !crate::pass::any_live() {
         return rows;
     }
     let (text, wraps): (Vec<String>, Vec<bool>) = rows.into_iter().unzip();
@@ -1012,6 +1015,13 @@ mod tests {
         column.scroll_display(GridScroll::Delta(8));
         let head = format!("{indent}[hidden]");
         assert_eq!(lines_of(&column), [head.as_str(), ""], "its head on show, the bottom edge cutting the rest");
+        // In a box 6 wide, 2 digits a row: its borders do not shrink the rows searched.
+        let boxed: Vec<String> =
+            rows.iter().flat_map(|row| [&row[..2], &row[2..]]).map(|d| format!("\u{2502} {d} \u{2502}")).collect();
+        let mut boxed = super::tests::term(6, 2, &format!("{}\r\none", boxed.join("\r\n")));
+        assert_eq!(lines_of(&boxed), ["\u{2502}  \u{2502}", "one"], "the tail row of a boxed pass");
+        boxed.scroll_display(GridScroll::Delta(1));
+        assert_eq!(lines_of(&boxed), ["\u{2502}  \u{2502}", "\u{2502}  \u{2502}"]);
         // A selection of part of it, here the 16 digits on the top row, reads `[hidden]` in the
         // state; one of other rows reads as it is.
         assert_eq!(drag(&mut short, at(0, 0), past(0, 15)).as_deref(), Some(&hex[16..]));

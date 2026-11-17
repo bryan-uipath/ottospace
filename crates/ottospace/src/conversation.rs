@@ -88,6 +88,8 @@ impl Stopping {
             terminal.signal(libc::SIGHUP);
         }
         if let Some(native) = &mut native {
+            // Stopped, its pass goes now: its file too, though its stdout may stay open.
+            native.pass = None;
             let _ = native.driver.kill();
         }
         Self { terminal, native, since: Instant::now() }

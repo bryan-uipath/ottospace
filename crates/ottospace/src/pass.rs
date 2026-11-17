@@ -144,20 +144,36 @@ fn live() -> Vec<String> {
     LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
 }
 
+/// Whether any pass is live: else nothing is hidden, not even `hide_digits_at_top`'s digits.
+pub(crate) fn any_live() -> bool {
+    !LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty()
+}
+
 /// Where a whole live pass is in `text`, in either case: byte ranges, sorted, merged where they
 /// overlap. Only whole passes: what is hidden then never says whether a part of one was guessed.
 fn found(text: &str) -> Vec<std::ops::Range<usize>> {
     if text.len() < 32 {
         return Vec::new();
     }
-    let live = live();
+    found_among(text, &live())
+}
+
+/// `found`, among the passes `live`.
+fn found_among(text: &str, live: &[String]) -> Vec<std::ops::Range<usize>> {
     if live.is_empty() {
         return Vec::new();
     }
     // ASCII lower case keeps every byte where it was: a match's range is the original's.
     let lower = text.to_ascii_lowercase();
-    let mut found: Vec<_> =
-        live.iter().flat_map(|hex| lower.match_indices(hex.as_str())).map(|(at, hex)| at..at + hex.len()).collect();
+    // Every start, overlapping ones too: `match_indices` skips one that begins inside another.
+    let mut found = Vec::new();
+    for hex in live {
+        let mut from = 0;
+        while let Some(at) = lower[from..].find(hex.as_str()) {
+            found.push(from + at..from + at + hex.len());
+            from += at + 1;
+        }
+    }
     found.sort_by_key(|range| range.start);
     merged(found)
 }
@@ -274,7 +290,7 @@ pub(crate) fn hide_digits_at_top(mut rows: Vec<String>) -> Vec<String> {
 
 /// What may stand at a row's edges around a pass the program printed whole: spaces, and the
 /// borders of a box drawn round it (an approval prompt's), U+2500 to U+257F.
-fn edge(c: char) -> bool {
+pub(crate) fn edge(c: char) -> bool {
     c == ' ' || ('\u{2500}'..='\u{257f}').contains(&c)
 }
 
@@ -461,5 +477,8 @@ mod tests {
         let (one, two) = (one.pass().hex(), two.pass().hex());
         let text = format!("{one}{two} {two}{one}");
         assert_eq!(hide(&text), "[hidden][hidden] [hidden][hidden]");
+        // One that begins inside another (this pass's first digit is its last): one range.
+        let hex = "a0123456789abcdef0123456789abcda".to_string();
+        assert_eq!(found_among(&format!("{hex}{}", &hex[1..]), &[hex]), [0..63]);
     }
 }

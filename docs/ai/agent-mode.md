@@ -82,9 +82,9 @@ A small script printed the variable and tried to connect.
   rows as one text, each row's edges left out: spaces and box borders, U+2500 to U+257F (a pass
   wrapped, broken by the program's own line breaks or cursor moves, on the alternate screen, in an
   approval prompt's box), with the lines the screen's edges cut and
-  rows past each edge until they hold 32 characters other than spaces, plus one (a narrow pane,
+  rows past each edge until they hold 32 characters other than spaces and box borders, plus one (a narrow pane,
   or a TUI's indent, uses few columns a row; at most 256 rows); and the
-  first row of a full history (10,000 lines: what was dropped above may have cut a pass) loses a
+  first row of a full history (10,000 lines: what was dropped above may have cut a pass), while a pass is live, loses a
   leading run of 8 or more hex digits whatever they are (its indent left out, going on over rows
   the run fills), a rule no digit of a pass decides. A
   `wait` cannot match a pass. Not hidden: a terminal's picture (a user-started capture's PNG), the
