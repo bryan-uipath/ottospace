@@ -10727,10 +10727,11 @@ fn the_log_says_the_start_the_displays_and_the_quit() {
     otto.call(json!({"cmd": "quit"}));
     exits(&mut otto);
     let events = events();
-    // Start first and quit last; between them the change once, and the window's display at least
-    // once (a slow machine's stall may come too: not what this test is about).
+    // Start first, then the change once, the window's display at least once and the quit (a slow
+    // machine's stall, or GPUI's warning as the window closes, may come too: not what this is about).
     let names: Vec<&str> = events.iter().filter_map(|e| e["ev"].as_str()).collect();
-    assert_eq!((names.first(), names.last()), (Some(&"start"), Some(&"quit")), "{names:?}");
+    assert_eq!(names.first(), Some(&"start"), "{names:?}");
+    assert!(names.contains(&"quit"), "{names:?}");
     let count = |ev: &str| names.iter().filter(|name| **name == ev).count();
     assert_eq!(count("displays"), 1, "{names:?}");
     assert!(count("window_display") >= 1, "{names:?}");

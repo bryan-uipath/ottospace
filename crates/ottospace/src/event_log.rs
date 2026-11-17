@@ -6,6 +6,7 @@
 //! Each line also goes to the unified log (`ottospace_mac::oslog`), outside a test run.
 //! A test run writes the file only in the folder it names (`OTTOSPACE_HOME`).
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write as _};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -41,8 +42,8 @@ fn write(event: &str, fields: Value, home: Option<&Path>) {
 
 /// Every panic, where it happened (`crate/src/file.rs:line`) and on which thread; never its
 /// message, which may carry any text. And GPUI's own errors and warnings from its macOS layer
-/// (`log_err`), which went nowhere: where, and for its window and display link (fixed words and
-/// a code, e.g. "could not create display link, code: -6661") the first line said.
+/// (`log_err`), which went nowhere: where, and what it said only when that is fixed words and a
+/// code ("could not create display link, code: -6661").
 pub(crate) fn arm() {
     let before = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -58,14 +59,27 @@ pub(crate) fn arm() {
 }
 
 /// The part of a source path from its crate's folder: `/Users/me/.cargo/registry/src/../gpui-0.2.2/src/window.rs`
-/// gives `gpui-0.2.2/src/window.rs`. No user's name, no folder of theirs.
-fn short(file: &str) -> &str {
-    let Some(src) = file.rfind("/src/") else { return file.rsplit('/').next().unwrap_or(file) };
-    file[..src].rfind('/').map_or(file, |start| &file[start + 1..])
+/// gives `gpui-0.2.2/src/window.rs`. Below `home` first, so `~/src/app/out/gen.rs` is `gen.rs`, not `me/src/..`.
+fn short<'a>(file: &'a str, home: &str) -> &'a str {
+    let home = home.trim_end_matches('/');
+    let file = file.strip_prefix(home).filter(|rest| !home.is_empty() && rest.starts_with('/')).unwrap_or(file);
+    let name = file.rsplit('/').next().unwrap_or(file);
+    let Some(src) = file.rfind("/src/") else { return name };
+    file[..src].rfind('/').map_or(name, |start| &file[start + 1..])
 }
 
 fn panic_fields(at: Option<(&str, u32)>, thread: Option<&str>) -> Value {
-    json!({ "src": at.map(|(file, line)| format!("{}:{line}", short(file))), "thread": thread })
+    let src = at.map(|(file, line)| format!("{}:{line}", short(file, &config::user_home())));
+    json!({ "src": src, "thread": thread })
+}
+
+/// GPUI's words when they are fixed words and a code ("could not create display link, code: -6661"):
+/// never text a newer GPUI might format into a message.
+fn fixed(text: &str) -> Option<&str> {
+    let first = text.lines().next()?;
+    let (words, code) = first.split_once(", code: ")?;
+    let plain = words.len() <= 60 && words.chars().all(|c| c.is_ascii_lowercase() || c == ' ');
+    (plain && code.parse::<i64>().is_ok()).then_some(first)
 }
 
 /// A `gpui` event's fields for a record from GPUI's macOS layer; `None` for any other record.
@@ -74,13 +88,17 @@ fn gpui_fields(record: &log::Record) -> Option<Value> {
     if record.level() > log::Level::Warn || !(file.contains("/gpui-") && file.contains("/src/platform/mac/")) {
         return None;
     }
-    let at = format!("{}:{}", short(file), record.line().unwrap_or(0));
-    // Words only from these two: their errors are GPUI's own fixed text and a code.
-    let said = (file.ends_with("/window.rs") || file.ends_with("/display_link.rs")).then(|| {
-        let text = record.args().to_string();
-        text.lines().next().unwrap_or_default().chars().take(120).collect::<String>()
-    });
+    let at = format!("{}:{}", short(file, &config::user_home()), record.line().unwrap_or(0));
+    let said = fixed(&record.args().to_string()).map(String::from);
     Some(json!({ "level": record.level().as_str(), "src": at, "said": said }))
+}
+
+/// Counts a record from `src`: `Some(n)` at its 1st, 2nd, 4th, 8th.. time, so one that comes every
+/// frame does not fill the log.
+fn nth(seen: &mut BTreeMap<String, u64>, src: &str) -> Option<u64> {
+    let n = seen.entry(src.to_string()).or_default();
+    *n += 1;
+    n.is_power_of_two().then_some(*n)
 }
 
 /// GPUI's records from its macOS layer, as `gpui` events.
@@ -92,7 +110,12 @@ impl log::Log for Gpui {
     }
 
     fn log(&self, record: &log::Record) {
-        if let Some(fields) = gpui_fields(record) {
+        static SEEN: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
+        let Some(mut fields) = gpui_fields(record) else { return };
+        let mut seen = SEEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(n) = nth(&mut seen, fields["src"].as_str().unwrap_or_default()) {
+            drop(seen);
+            fields["n"] = json!(n);
             event("gpui", fields);
         }
     }
@@ -201,10 +224,20 @@ mod tests {
     #[test]
     fn a_path_keeps_its_crate_and_never_the_folders_above() {
         let gpui = "/Users/me/.cargo/registry/src/index.crates.io-1949/gpui-0.2.2/src/platform/mac/window.rs";
-        assert_eq!(short(gpui), "gpui-0.2.2/src/platform/mac/window.rs");
-        assert_eq!(short("crates/ottospace/src/main.rs"), "ottospace/src/main.rs");
-        assert_eq!(short("/rustc/abc/library/core/src/option.rs"), "core/src/option.rs");
-        assert_eq!(short("/Users/me/build.rs"), "build.rs");
+        assert_eq!(short(gpui, "/Users/me"), "gpui-0.2.2/src/platform/mac/window.rs");
+        assert_eq!(short("crates/ottospace/src/main.rs", "/Users/me"), "ottospace/src/main.rs");
+        assert_eq!(short("/rustc/abc/library/core/src/option.rs", "/Users/me"), "core/src/option.rs");
+        assert_eq!(short("/Users/me/build.rs", "/Users/me"), "build.rs");
+        // A build script's output in a repository under `~/src`.
+        assert_eq!(short("/Users/me/src/app/target/debug/build/x-1/out/gen.rs", "/Users/me/"), "gen.rs");
+    }
+
+    #[test]
+    fn gpui_is_heard_at_its_first_second_fourth_time() {
+        let mut seen = BTreeMap::new();
+        let heard: Vec<u64> = (0..9).filter_map(|_| nth(&mut seen, "a.rs:1")).collect();
+        assert_eq!(heard, [1, 2, 4, 8]);
+        assert_eq!(nth(&mut seen, "b.rs:1"), Some(1));
     }
 
     /// Every kind of event, fed what could leak (a pass, a title, the home path), as the app builds
@@ -240,7 +273,8 @@ mod tests {
             ("give_back_failed", json!({ "window": 77 })),
             ("quit", json!({ "hosted": 1 })),
             ("panic", panic_fields(Some((&main, 12)), Some("main"))),
-            // The first line only, at most 120 characters.
+            ("panic", panic_fields(Some((&format!("{home}/src/app/target/debug/build/x-1/out/gen.rs"), 3)), None)),
+            // The first line only.
             (
                 "gpui",
                 gpui("display_link.rs", &format!("could not create display link, code: -6661\n{pass} {title}"))
@@ -251,7 +285,7 @@ mod tests {
                 gpui("window.rs", &format!("could not start display link, code: -6660 {}", "x".repeat(200) + pass))
                     .unwrap(),
             ),
-            // No words from anywhere else in GPUI's macOS layer.
+            // No words but fixed ones and a code.
             ("gpui", gpui("text_system.rs", &format!("font {title} for {home}")).unwrap()),
         ];
         // A warning outside it is not an event at all.
@@ -260,13 +294,14 @@ mod tests {
             write(event, fields, Some(&dir.0));
         }
         let text = fs::read_to_string(dir.0.join(NAME)).unwrap();
-        assert_eq!(text.lines().count(), 12, "{text}");
+        assert_eq!(text.lines().count(), 13, "{text}");
         // `at` is each line's time, never overwritten by a field.
         assert!(
             text.lines().all(|line| serde_json::from_str::<Value>(line).unwrap()["at"].as_str().unwrap().len() == 25)
         );
         assert!(!home.is_empty());
-        for forbidden in [pass, title, &home, "Caused by", "/Users/"] {
+        let user = home.rsplit('/').next().unwrap_or_default();
+        for forbidden in [pass, title, &home, user, "Caused by", "/Users/", "xxx"] {
             assert!(!text.contains(forbidden), "{forbidden:?} in\n{text}");
         }
         assert!(text.contains(r#""src":"ottospace/src/main.rs:12""#), "{text}");
