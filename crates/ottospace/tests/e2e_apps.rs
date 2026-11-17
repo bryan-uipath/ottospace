@@ -1190,7 +1190,9 @@ fn a_workbook_hosts_its_apps_window_again_beside_its_terminal() {
         wait_for("the window in the workbook's pane", || Some(state()).filter(|s| kinds(s) == ["app", "terminal"]));
     assert_eq!(built["hosted"].as_object().map(|h| h.len()), Some(1), "{}", built["state"]["panes"]);
     assert_eq!(built["state"]["panes"][0]["kind"]["title"], "Canary 1");
-    assert_eq!((&built["workbooks"][0]["open"], &built["notice"]), (&json!(true), &Value::Null));
+    // The save's note may still show: information now, no longer an error.
+    let note = built["notice"].as_str().unwrap_or("Saved ");
+    assert!(built["workbooks"][0]["open"] == json!(true) && note.starts_with("Saved "), "{}", built["notice"]);
 }
 
 #[test]
