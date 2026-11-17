@@ -2,13 +2,15 @@
 //! Not `transcript`: that is an agent conversation's. Only the user starts, pauses, resumes or
 //! stops one; only the shell reports what was heard. The text is never in the state.
 //!
-//! Slice 1: a pane is the source and the test fixture's lines are the sound. No audio, no file.
+//! A pane is the source. Each final line is kept in a Markdown file as it comes (`file`).
 
 use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
 use crate::model::PaneId;
+
+pub mod file;
 
 /// Why a start, pause, resume or stop of anyone's but the user's is refused.
 pub const USERS_ALONE: &str = "only the user starts or stops a transcript";
@@ -79,6 +81,33 @@ impl Ended {
     }
 }
 
+/// A line the shell heard, `start_ms` into this run of the streams. The shell hands them over in
+/// batches on a fixed tick, so when a client's reply moves says nothing of when someone spoke.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Heard {
+    pub from: Speaker,
+    #[serde(default)]
+    pub start_ms: u64,
+    pub text: String,
+    #[serde(rename = "final", default)]
+    pub is_final: bool,
+}
+
+/// What goes into a transcript's file, in order (`file` writes each).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Record {
+    /// The file is made: its header says `Ended: still transcribing`.
+    Begin(file::Head),
+    /// A final line, heard at `at` (ms since 1970).
+    Line { from: Speaker, at: u64, text: String },
+    /// A pause of `ms` that began at `at`.
+    Paused { at: u64, ms: u64 },
+    /// It ended at `at`: the header is written again with the end.
+    End { at: u64 },
+    /// It never began: the streams did not start. The file, with no line, goes.
+    Failed,
+}
+
 /// A row of the drawer's view.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -124,6 +153,21 @@ impl Listen {
     /// The lines still being heard, in the order they began.
     pub fn volatile(&self) -> impl Iterator<Item = &(Speaker, String)> {
         self.volatile.iter()
+    }
+
+    /// The lines still being heard kept as they stand, at `at`: a pause or an end cuts them off,
+    /// and the recogniser's best guess is worth more than nothing. Their records for the file.
+    pub fn settle(&mut self, at: u64) -> Vec<Record> {
+        let into = self.elapsed(at);
+        let records = std::mem::take(&mut self.volatile).into_iter().map(|(from, text)| {
+            self.rows.push_back(Row::Heard { from, at: into, text: text.clone() });
+            Record::Line { from, at, text }
+        });
+        let records: Vec<Record> = records.collect();
+        while self.rows.len() > RING {
+            self.rows.pop_front();
+        }
+        records
     }
 }
 
@@ -193,37 +237,42 @@ impl Listening {
     }
 
     /// A line heard, `start_ms` into this run. A volatile one replaces its speaker's last; a
-    /// final one is kept and clears it. Nothing is heard while paused.
-    pub fn heard(&mut self, id: &str, from: Speaker, start_ms: u64, text: &str, is_final: bool) {
-        let Some(on) = self.of(id).filter(|on| on.status != Status::Paused) else { return };
+    /// final one is kept and clears it, and is the file's next line. Nothing is heard while paused.
+    pub fn heard(&mut self, id: &str, from: Speaker, start_ms: u64, text: &str, is_final: bool) -> Option<Record> {
+        let on = self.of(id).filter(|on| on.status != Status::Paused)?;
         let text = crate::capture::plain(text, MAX_LINE);
         on.volatile.retain(|(speaker, _)| *speaker != from);
         if !is_final {
             if !text.is_empty() {
                 on.volatile.push((from, text));
             }
-            return;
+            return None;
         }
         if text.is_empty() {
-            return;
+            return None;
         }
-        on.rows.push_back(Row::Heard { from, at: on.run_from.saturating_add(start_ms), text });
+        let at = on.run_from.saturating_add(start_ms);
+        // On the wall clock: the start, the pauses before this run, and the time into it.
+        let wall = on.started.saturating_add(on.paused_total).saturating_add(at);
+        on.rows.push_back(Row::Heard { from, at, text: text.clone() });
         while on.rows.len() > RING {
             on.rows.pop_front();
         }
+        Some(Record::Line { from, at: wall, text })
     }
 
-    /// True if it paused: the streams stop.
-    pub fn pause(&mut self, at: u64) -> bool {
-        let Some(on) = self.on.as_mut().filter(|on| on.status == Status::On) else { return false };
-        (on.status, on.paused_at) = (Status::Paused, Some(at.max(on.started)));
-        on.volatile.clear();
-        true
+    /// The lines it cut off, if it paused: the streams stop.
+    pub fn pause(&mut self, at: u64) -> Option<Vec<Record>> {
+        let on = self.on.as_mut().filter(|on| on.status == Status::On)?;
+        let at = at.max(on.started);
+        let cut = on.settle(at);
+        (on.status, on.paused_at) = (Status::Paused, Some(at));
+        Some(cut)
     }
 
-    /// True if it resumed: new streams, counting from 0, start where the transcript is.
-    pub fn resume(&mut self, at: u64) -> bool {
-        let Some(on) = self.on.as_mut().filter(|on| on.status == Status::Paused) else { return false };
+    /// The pause, if it resumed: new streams, counting from 0, start where the transcript is.
+    pub fn resume(&mut self, at: u64) -> Option<Record> {
+        let on = self.on.as_mut().filter(|on| on.status == Status::Paused)?;
         let since = on.paused_at.take().unwrap_or(at);
         let ms = at.saturating_sub(since);
         on.paused_total = on.paused_total.saturating_add(ms);
@@ -233,15 +282,16 @@ impl Listening {
         while on.rows.len() > RING {
             on.rows.pop_front();
         }
-        true
+        Some(Record::Paused { at: since, ms })
     }
 
-    /// Ends the one on (of `id`, if given): its id, for the shell to close its streams.
-    pub fn end(&mut self, id: Option<&str>) -> Option<String> {
+    /// Ends the one on (of `id`, if given): the one that ended, for the shell to close its
+    /// streams and its file.
+    pub fn end(&mut self, id: Option<&str>) -> Option<Listen> {
         let ends = self.on.as_ref().is_some_and(|on| id.is_none_or(|id| on.id == id));
         let on = self.on.take_if(|_| ends)?;
         self.shown = false;
-        Some(on.id)
+        Some(on)
     }
 
     /// The pane being heard, if one is.
@@ -286,7 +336,7 @@ mod tests {
         assert_eq!(l.start(Source::Pane(2), false, "t2".into(), 2_000), Err(ONE_AT_A_TIME));
         assert_eq!(l.pane(), Some(1));
         assert_eq!(l.end(Some("t2")), None, "another's end ends nothing");
-        assert_eq!(l.end(None).as_deref(), Some("t1"));
+        assert_eq!(l.end(None).map(|on| on.id).as_deref(), Some("t1"));
         assert!(l.on.is_none() && !l.shown);
     }
 
@@ -298,8 +348,10 @@ mod tests {
         l.heard("t1", Speaker::Them, 0, "hello th", false);
         let volatile: Vec<_> = l.on.as_ref().unwrap().volatile().cloned().collect();
         assert_eq!(volatile, [(Speaker::Me, "yes".into()), (Speaker::Them, "hello th".into())]);
-        l.heard("t1", Speaker::Them, 200, "hello there", true);
+        let record = l.heard("t1", Speaker::Them, 200, "hello there", true);
         assert_eq!(l.on.as_ref().unwrap().volatile().count(), 1, "the final clears only its speaker's");
+        // The file's line: on the wall clock, 700 ms after the start at 1 s.
+        assert_eq!(record, Some(Record::Line { from: Speaker::Them, at: 1_700, text: "hello there".into() }));
         // Into the transcript: the streams began 500 ms after the start.
         assert_eq!(texts(&l), ["700 hello there"]);
         // Another's id, or a line with nothing that shows, keeps nothing.
@@ -320,13 +372,18 @@ mod tests {
     fn a_pause_hears_nothing_and_the_next_run_counts_on() {
         let mut l = on();
         l.heard("t1", Speaker::Them, 1_000, "before", true);
-        assert!(l.pause(5_000) && !l.pause(6_000));
+        l.heard("t1", Speaker::Them, 1_200, "cut o", false);
+        // The line being heard is kept as it stands: on the wall clock at the pause.
+        let cut = Record::Line { from: Speaker::Them, at: 5_000, text: "cut o".into() };
+        assert_eq!((l.pause(5_000), l.pause(6_000)), (Some(vec![cut]), None));
         assert_eq!(l.on.as_ref().unwrap().elapsed(9_000), 4_000, "the clock stops while paused");
         l.heard("t1", Speaker::Them, 0, "while paused", true);
-        assert!(l.resume(65_000) && !l.resume(66_000));
-        // The new run counts from 0, at 4 s into the transcript.
-        l.heard("t1", Speaker::Them, 1_000, "after", true);
-        assert_eq!(texts(&l), ["1500 before", "paused 60000", "5000 after"]);
+        assert_eq!(l.resume(65_000), Some(Record::Paused { at: 5_000, ms: 60_000 }));
+        assert_eq!(l.resume(66_000), None);
+        // The new run counts from 0, at 4 s into the transcript; on the wall clock, 1 s after the resume.
+        let record = l.heard("t1", Speaker::Them, 1_000, "after", true);
+        assert_eq!(record, Some(Record::Line { from: Speaker::Them, at: 66_000, text: "after".into() }));
+        assert_eq!(texts(&l), ["1500 before", "4000 cut o", "paused 60000", "5000 after"]);
         let on = l.on.as_ref().unwrap();
         assert_eq!((on.paused_total, on.elapsed(70_000)), (60_000, 9_000));
     }

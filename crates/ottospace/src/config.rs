@@ -127,6 +127,15 @@ fn worktrees_dir() -> Option<String> {
     dir.is_absolute().then(|| dir.to_string_lossy().into_owned())
 }
 
+/// Where transcripts are kept: `transcripts_dir` (`~` expanded), else `transcripts` in the
+/// ottospace folder; a relative path is inside it. `None` in a test run with no folder of its own:
+/// it writes none.
+pub fn transcripts_dir() -> Option<PathBuf> {
+    let home = get().home.as_ref()?;
+    let named = live().transcripts_dir.as_ref().map(|dir| home.join(expand_home(dir, &user_home())));
+    Some(named.unwrap_or_else(|| home.join("transcripts")))
+}
+
 /// The settings' `repos` as the Repos section last changed them, by name.
 static NAMED: Mutex<Option<Vec<String>>> = Mutex::new(None);
 

@@ -42,6 +42,10 @@ pub struct Settings {
     /// beside the settings file (`~/.ottospace/worktrees`).
     #[serde(default)]
     pub worktrees_dir: Option<String>,
+    /// Where transcripts are kept, one Markdown file each (`listen::file`). Default: `transcripts`
+    /// beside the settings file (`~/.ottospace/transcripts`).
+    #[serde(default)]
+    pub transcripts_dir: Option<String>,
     /// Each worktree's open pull request, read with `gh`: `auto`, `on` or `off`. See `prs::Setting`.
     #[serde(default)]
     pub repos_prs: Option<crate::prs::Setting>,
@@ -526,6 +530,7 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         // Read each time they are used.
         windows: _,
         worktrees_dir: _,
+        transcripts_dir: _,
         repos_prs: _,
         apps,
         apps_hidden,

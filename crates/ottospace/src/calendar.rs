@@ -522,7 +522,7 @@ impl Workspace {
 }
 
 /// The local zone's offset at `ms`, seconds east of UTC.
-fn zone_offset(ms: u64) -> i64 {
+pub(crate) fn zone_offset(ms: u64) -> i64 {
     ottospace_mac::time::utc_offset((ms / 1_000) as i64)
 }
 

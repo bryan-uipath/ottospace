@@ -1520,13 +1520,11 @@ pub enum Action {
         id: String,
         why: String,
     },
-    /// The shell's: a line heard, `start_ms` into this run of the streams.
+    /// The shell's: the lines heard since its last tick, empty or not. A fixed tick, so a reply's
+    /// `seq` moves the same whether someone spoke or not.
     ListenHeard {
         id: String,
-        from: listen::Speaker,
-        start_ms: u64,
-        text: String,
-        is_final: bool,
+        lines: Vec<listen::Heard>,
     },
     /// The shell's: the source's app quit or the stream failed.
     ListenEnded {
@@ -2344,6 +2342,12 @@ pub enum Effect {
     /// It ended: stop its streams for good.
     ListenClose {
         id: String,
+    },
+    /// Write to the file of transcript `id`, in order: one per heard batch, even with none, so the
+    /// effects say nothing of when someone spoke.
+    ListenWrite {
+        id: String,
+        records: Vec<listen::Record>,
     },
     /// The user dismissed the notice of `kind`: a slot the shell holds it in is emptied.
     NoticeDismissed {
@@ -5343,7 +5347,7 @@ impl Model {
     fn set_features(&mut self, features: Features, effects: &mut Vec<Effect>) {
         self.features = features;
         if !self.features.on(Feature::Transcripts) {
-            self.listen_end(None, effects);
+            self.listen_end(None, None, effects);
         }
         let sections = self.sections();
         if self.sidebar.is_some_and(|section| !sections.contains(&section)) {
@@ -7688,7 +7692,7 @@ impl Model {
         }
         // The pane being transcribed is gone: so is its transcript.
         if self.listen.pane() == Some(id) {
-            self.listen_end(None, effects);
+            self.listen_end(None, None, effects);
         }
         effects.push(Effect::Closed(closed));
     }
@@ -8540,7 +8544,7 @@ mod tests {
             Action::ListenFixture,
             Action::ListenBegan { id: text(), at: 0 },
             Action::ListenFailed { id: text(), why: text() },
-            Action::ListenHeard { id: text(), from: listen::Speaker::Them, start_ms: 0, text: text(), is_final: true },
+            Action::ListenHeard { id: text(), lines: Vec::new() },
             Action::ListenEnded { id: text(), why: listen::Ended::AppQuit, at: 0 },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();

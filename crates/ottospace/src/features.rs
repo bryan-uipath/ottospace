@@ -53,7 +53,8 @@ impl Workspace {
     }
 
     fn set_features(&mut self, features: Features, cx: &mut App) {
-        self.model.update(Action::SetFeatures { features }.sent_by(Origin::System));
+        let effects = self.model.update(Action::SetFeatures { features }.sent_by(Origin::System));
+        self.listen_ended(&effects);
         cx.set_menus(menus::app_menus(&self.model.features));
     }
 
