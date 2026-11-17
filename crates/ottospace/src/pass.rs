@@ -112,24 +112,58 @@ pub(crate) fn hide(text: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// A grid's rows, each with whether it wraps into the next, with every live pass hidden: a
-/// line that wraps is searched as one. Its first row shows `HIDDEN`, its rest on later rows
-/// goes. The caller gives every row of a line it shows a part of (`Terminal::lines`), so no
-/// pass is cut at the edge of what was searched.
-pub(crate) fn hide_rows(rows: Vec<(String, bool)>) -> Vec<String> {
+/// A grid's rows with every live pass hidden, also one printed across rows: wrapped, broken by
+/// the program's own line breaks or cursor moves, on the alternate screen. The rows are searched
+/// as one text, each row's leading spaces left out of it (a continuation indented). A pass's
+/// first row shows `HIDDEN`; its rest, on that row and later ones, goes. Whole passes only: no
+/// part of one decides what is hidden. The caller gives rows past the edges of what it shows
+/// (`terminal::lines_of`), so a pass the edge cuts is searched whole.
+pub(crate) fn hide_rows(rows: Vec<String>) -> Vec<String> {
     if live().is_empty() {
-        return rows.into_iter().map(|(row, _)| row).collect();
+        return rows;
     }
-    let mut out = Vec::with_capacity(rows.len());
-    let mut line: Vec<String> = Vec::new();
-    for (row, wraps) in rows {
-        line.push(row);
-        if !wraps {
-            out.extend(hide_line(std::mem::take(&mut line)));
+    // The searched text, and where each row starts in it: (its first byte there, the leading
+    // bytes left out).
+    let (mut joined, mut starts) = (String::new(), Vec::with_capacity(rows.len()));
+    for (n, row) in rows.iter().enumerate() {
+        let skip = if n == 0 { 0 } else { row.len() - row.trim_start().len() };
+        starts.push((joined.len(), skip));
+        joined.push_str(&row[skip..]);
+    }
+    let found = found(&joined);
+    if found.is_empty() {
+        return rows;
+    }
+    // A byte of `joined`, as (row, byte in the row).
+    let place = |at: usize| {
+        let n = starts.partition_point(|(start, _)| *start <= at) - 1;
+        (n, starts[n].1 + at - starts[n].0)
+    };
+    // Per row: the bytes hidden, and where a pass's `HIDDEN` goes.
+    let mut gone: Vec<Vec<bool>> = rows.iter().map(|row| vec![false; row.len()]).collect();
+    let mut marks: Vec<(usize, usize)> = Vec::new();
+    for range in found {
+        marks.push(place(range.start));
+        for at in range {
+            let (n, at) = place(at);
+            gone[n][at] = true;
         }
     }
-    out.extend(hide_line(line));
-    out
+    rows.iter()
+        .enumerate()
+        .map(|(n, row)| {
+            let mut out = String::with_capacity(row.len());
+            for (at, c) in row.char_indices() {
+                if marks.contains(&(n, at)) {
+                    out.push_str(HIDDEN);
+                }
+                if !gone[n][at] {
+                    out.push(c);
+                }
+            }
+            out
+        })
+        .collect()
 }
 
 /// `text` with a run of 8 or more hex digits at its start as `HIDDEN`, whatever the digits: for
@@ -138,31 +172,6 @@ pub(crate) fn hide_rows(rows: Vec<(String, bool)>) -> Vec<String> {
 pub(crate) fn hide_digits_at_start(text: &str) -> String {
     let run = text.bytes().take_while(u8::is_ascii_hexdigit).count();
     if run < 8 { text.to_string() } else { format!("{HIDDEN}{}", &text[run..]) }
-}
-
-/// The rows of one line, as `hide_rows` says.
-fn hide_line(rows: Vec<String>) -> Vec<String> {
-    let joined = rows.concat();
-    let found = found(&joined);
-    if found.is_empty() {
-        return rows;
-    }
-    let mut at = 0;
-    rows.into_iter()
-        .map(|row| {
-            let mut out = String::with_capacity(row.len());
-            for (i, c) in row.char_indices() {
-                let i = at + i;
-                match found.iter().find(|range| range.contains(&i)) {
-                    Some(range) if range.start == i => out.push_str(HIDDEN),
-                    Some(_) => {}
-                    None => out.push(c),
-                }
-            }
-            at += row.len();
-            out
-        })
-        .collect()
 }
 
 impl Pass {
@@ -248,16 +257,15 @@ mod tests {
         let text = format!("OTTOSPACE_TASK_PASS={hex}\nagain {} done", hex.to_uppercase());
         assert_eq!(hide(&text), "OTTOSPACE_TASK_PASS=[hidden]\nagain [hidden] done");
         assert!(matches!(hide("nothing here, nothing at all, not one"), Cow::Borrowed(_)));
-        // Wrapped from one row to the next, as a narrow screen shows it; the rows around kept.
-        let row = |text: &str, wraps: bool| (text.to_string(), wraps);
+        // Across rows, as a narrow screen wraps it; the rows around kept.
+        let row = |text: &str| text.to_string();
         let pass = format!("PASS={}", &hex[..10]);
-        let rows = vec![row("$ env", false), row(&pass, true), row(&hex[10..], false), row("$", false)];
+        let rows = vec![row("$ env"), row(&pass), row(&hex[10..]), row("$")];
         assert_eq!(hide_rows(rows), ["$ env", "PASS=[hidden]", "", "$"]);
-        assert_eq!(hide_rows(vec![row(&format!("é {hex} é"), false)]), ["é [hidden] é"]);
-        // Rows that do not wrap are lines apart: a pass is not made of the end of one and the
-        // start of the next.
-        let rows = vec![row(&hex[..10], false), row(&hex[10..], false)];
-        assert_eq!(hide_rows(rows), [&hex[..10], &hex[10..]]);
+        assert_eq!(hide_rows(vec![row(&format!("é {hex} é"))]), ["é [hidden] é"]);
+        // Broken by the program itself, indented, over three rows (a TUI, a narrow pane): one pass.
+        let rows = vec![row(&format!("key: {}", &hex[..10])), row(&format!("     {}", &hex[10..20])), row(&hex[20..])];
+        assert_eq!(hide_rows(rows), ["key: [hidden]", "     ", ""]);
         // Only whole passes: what a client typed hides the same whether a part of it is right or
         // wrong, at the end of the text, its start or within. No oracle, one digit at a time.
         let wrong = "0123456789abcdef0123456789abcdef";
@@ -265,7 +273,7 @@ mod tests {
             for (part, other) in [(&hex[..n], &wrong[..n]), (&hex[32 - n..], &wrong[32 - n..])] {
                 for text in [format!("$ echo {part}"), format!("{part} $"), format!("a {part} b")] {
                     assert_eq!(hide(&text), text);
-                    assert_eq!(hide_rows(vec![row(&text, false)]), [text.as_str()]);
+                    assert_eq!(hide_rows(vec![row(&text)]), [text.as_str()]);
                 }
                 assert_eq!(hide(other), other);
             }

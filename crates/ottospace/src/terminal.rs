@@ -648,23 +648,34 @@ impl Screen {
     }
 }
 
-/// `Terminal::lines`: the rows on show. The lines its edges cut are searched whole.
+/// Rows searched past each edge of what is read, beyond a wrapped line's own: a pass a program
+/// broke over rows itself (a TUI, a narrow pane) is seen whole across the edge. 32 digits fill 3
+/// rows of a pane 11 columns wide.
+const PAST_EDGE: i32 = 3;
+
+/// The rows a read from `top` to `bottom` searches: the lines its edges cut, and `PAST_EDGE` more.
+fn searched<T>(term: &Term<T>, top: Line, bottom: Line) -> (Line, Line) {
+    let from = line_start(term, Line((top.0 - PAST_EDGE).max(term.topmost_line().0)));
+    let to = line_end(term, Line((bottom.0 + PAST_EDGE).min(term.bottommost_line().0)));
+    (from, to)
+}
+
+/// `Terminal::lines`: the rows on show, a live pass hidden in the rows around them too.
 fn lines_of<T>(term: &Term<T>) -> Vec<String> {
     let offset = term.grid().display_offset() as i32;
     let top = Line(-offset);
     let bottom = Line(term.screen_lines() as i32 - 1 - offset);
-    let from = line_start(term, top);
-    let rows = crate::pass::hide_rows(cut_history(term, from, rows_of(term, from, line_end(term, bottom))));
-    let shown = rows.into_iter().skip((top.0 - from.0) as usize).take(term.screen_lines());
+    let (from, to) = searched(term, top, bottom);
+    let rows = cut_history(term, from, rows_of(term, from, to)).into_iter().map(|(row, _)| row).collect();
+    let shown = crate::pass::hide_rows(rows).into_iter().skip((top.0 - from.0) as usize).take(term.screen_lines());
     shown.map(|row| row.trim_end().to_string()).collect()
 }
 
-/// `Terminal::text`. The line the screen's top cuts is searched whole.
+/// `Terminal::text`, a live pass hidden also in the rows above the screen's top.
 fn text_of<T>(term: &Term<T>, history: bool) -> String {
     let top = if history { term.topmost_line() } else { Line(0) };
-    let from = line_start(term, top);
-    let rows = cut_history(term, from, rows_of(term, from, term.bottommost_line()));
-    let wraps: Vec<bool> = rows.iter().map(|(_, wraps)| *wraps).collect();
+    let (from, to) = searched(term, top, term.bottommost_line());
+    let (rows, wraps): (Vec<String>, Vec<bool>) = cut_history(term, from, rows_of(term, from, to)).into_iter().unzip();
     let skip = (top.0 - from.0) as usize;
     let mut text = String::new();
     for (row, wraps) in crate::pass::hide_rows(rows).into_iter().zip(wraps).skip(skip) {
@@ -924,9 +935,23 @@ mod tests {
         term.scroll_display(GridScroll::Delta(1));
         assert_eq!(lines_of(&term), ["PASS=[hidden]", "", "one"]);
         assert!(text_of(&term, true).starts_with("PASS=[hidden]\none"), "{}", text_of(&term, true));
+        // Broken by the program's own line break, then by a cursor move on the alternate screen
+        // (a TUI): no wrap flag, one pass still. The screen's edge between the halves too.
+        for opening in ["", "\x1b[?1049h"] {
+            let split = format!("{opening}PASS={}\r\n{}\r\nend", &hex[..16], &hex[16..]);
+            let mut term = super::tests::term(40, 3, &split);
+            assert_eq!(lines_of(&term), ["PASS=[hidden]", "", "end"], "{opening:?}");
+            assert!(!digits(&text_of(&term, true)));
+            let moved = format!("\x1b[2J\x1b[1;1HPASS={}\x1b[2;3H{}", &hex[..20], &hex[20..]);
+            print(&mut term, &moved);
+            assert!(!lines_of(&term).iter().any(|row| digits(row)), "{:?}", lines_of(&term));
+        }
+        let mut short = super::tests::term(40, 2, &format!("PASS={}\r\n{}\r\none\r\ntwo", &hex[..16], &hex[16..]));
+        short.scroll_display(GridScroll::Delta(1));
+        assert_eq!(lines_of(&short), ["", "one"], "the top edge between its halves");
         // Gone, the pass shows again: it grants nothing.
         drop(live);
-        assert_eq!(lines_of(&term)[0], format!("PASS={}", &hex[..15]));
+        assert_eq!(lines_of(&short)[0], &hex[16..]);
     }
 
     #[test]

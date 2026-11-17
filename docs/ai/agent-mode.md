@@ -67,9 +67,10 @@ A small script printed the variable and tried to connect.
   either case: in every terminal's `lines` and `text` (so `capture`, `wait`'s match, a saved
   history), in every socket reply as a last step (session reads, transcripts, errors), and in the
   trace. Only whole passes are matched: hiding a part would be an oracle (a client types a guess
-  into a terminal and reads whether it was hidden, a digit at a time). So a terminal searches the
-  whole lines its screen's edges cut (rows that wrap, scrolled or not), not only the rows on show;
-  and the first row of a full history (10,000 lines, what was dropped above may have cut a pass)
+  into a terminal and reads whether it was hidden, a digit at a time). So a terminal searches its rows
+  as one text, each row's leading spaces left out (a pass wrapped, broken by the program's own line
+  breaks or cursor moves, on the alternate screen), with the lines the screen's edges cut and 3
+  rows past each edge, not only the rows on show; and the first row of a full history (10,000 lines, what was dropped above may have cut a pass)
   loses a leading run of 8 or more hex digits whatever they are, a rule no digit of a pass decides.
   A `wait` cannot match a pass. Not hidden: a terminal's picture (a user-started capture's PNG),
   the user's own ⌘C, a pass printed in pieces, the head of one whose output is still arriving
