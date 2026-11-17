@@ -141,10 +141,11 @@ impl Workspace {
         Some(div().flex().items_center().gap_1().child(robot).children(offer).into_any_element())
     }
 
-    /// Whether the pane is at See and act: its border in the act colour, seen from across the screen.
-    pub(crate) fn agent_acts(&self, pane: PaneId) -> bool {
-        let acts = |grant: &ottospace_core::agent_mode::Grant| grant.task.is_some() && grant.level == Level::Act;
-        self.on(Feature::AgentMode) && self.model.agent.panes.get(&pane).is_some_and(acts)
+    /// The colour of the pane's header line where a task may use it: See's blue, See and act's
+    /// amber. None at Off, with no task, or with the flag off.
+    pub(crate) fn agent_header_line(&self, pane: PaneId) -> Option<u32> {
+        let grant = self.model.agent.panes.get(&pane).filter(|_| self.on(Feature::AgentMode))?;
+        (grant.task.is_some() && grant.level != Level::Off).then(|| colour(grant.level))
     }
 
     /// Opens (or shuts) the menu of `pane`, default the focused one. `keys`: by a key or a label.

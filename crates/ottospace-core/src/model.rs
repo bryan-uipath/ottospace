@@ -147,6 +147,9 @@ pub struct Confirm {
     /// Not the quit question: "Unlist this repository?" for the one at this path, which a live
     /// task works in. Nothing on disk changes either way.
     pub unlist: Option<String>,
+    /// Not the quit question: "Close this workspace?" for this temporary one, whose terminals
+    /// in `running` would end once its Undo runs out.
+    pub close: Option<WorkbookId>,
 }
 
 impl Confirm {
@@ -173,6 +176,9 @@ impl Confirm {
         }
         if self.unlist.is_some() {
             return "Unlist this repository?".into();
+        }
+        if self.close.is_some() {
+            return "Close this workspace?".into();
         }
         if let Some(ask) = self.paste {
             return ask.title();
@@ -531,6 +537,12 @@ pub enum Action {
     /// it ends. Home stays.
     SpaceHide {
         index: Option<usize>,
+    },
+    /// The user's × or ⌘⌃W: `SpaceHide`, but a temporary workspace whose terminals run something
+    /// (`running`, as for `QuitAsked`) is asked about first. Anyone else's: `SpaceHide`.
+    SpaceHideAsked {
+        index: Option<usize>,
+        running: Vec<Running>,
     },
     /// Open a space and select it: made with one empty tab if it has none, shown where it was if
     /// hidden. A task's that is gone or dismissed, or a workbook that is not kept: nothing.
@@ -1296,7 +1308,12 @@ pub enum Action {
     WorkbookFold {
         workbook: WorkbookId,
     },
-    /// Take the last delete or update of a workbook back.
+    /// Keep a temporary workspace: its file is written, and closing it no longer discards it.
+    /// The user's alone.
+    WorkbookKeep {
+        workbook: WorkbookId,
+    },
+    /// Take the last delete or update of a workbook back, or a temporary one's close.
     WorkbookUndo,
     /// … on a row of the bar: its menu (`row_menu`). On the row whose menu is open: close it.
     /// `dots`: where the … is drawn. `keys`: a key or a label opened it, so the keys are on its
@@ -1745,6 +1762,7 @@ impl Action {
                 | Action::TalkCycle { .. }
                 | Action::RailSelect { .. }
                 | Action::SpaceHide { .. }
+                | Action::SpaceHideAsked { .. }
                 | Action::SpaceOpen { .. }
                 | Action::TabPlace { .. }
                 | Action::CycleTab { .. }
@@ -1790,6 +1808,7 @@ impl Action {
             // The Apps section's filter is a text field: typing in it takes the keyboard.
             | Action::AppsFilter { on: true }
             | Action::QuitAsked { .. }
+            | Action::SpaceHideAsked { .. }
             | Action::MarkPrefix
             | Action::MarkEdit { .. }
             | Action::ListMarkEdit { .. }
@@ -1989,6 +2008,7 @@ impl Action {
             | Action::WorkbookOpen { .. }
             | Action::WorkbookRemove { .. }
             | Action::WorkbookFold { .. }
+            | Action::WorkbookKeep { .. }
             | Action::RowMenu { .. }
             | Action::RowMenuDrawn { .. }
             | Action::RowMenuMove { .. }
@@ -2164,6 +2184,7 @@ impl Action {
             | Action::TalkCycle { .. }
             | Action::RailSelect { .. }
             | Action::SpaceHide { .. }
+            | Action::SpaceHideAsked { .. }
             | Action::SpaceOpen { .. }
             | Action::TabPlace { .. }
             | Action::SelectTab { .. }
@@ -2306,6 +2327,7 @@ impl Action {
             | Action::WorkbookEdit { .. }
             | Action::WorkbookRemove { .. }
             | Action::WorkbookFold { .. }
+            | Action::WorkbookKeep { .. }
             | Action::RowMenu { .. }
             | Action::RowMenuDrawn { .. }
             | Action::RowMenuMove { .. }
@@ -3405,6 +3427,7 @@ impl Model {
             | Action::WorkbookOpen { .. }
             | Action::WorkbookEdit { .. }
             | Action::WorkbookRemove { .. }
+            | Action::WorkbookKeep { .. }
             | Action::RowMenu { .. }
             | Action::RowMenuMove { .. }
             | Action::RowMenuChoose { .. }
@@ -3466,6 +3489,12 @@ impl Model {
                 if self.confirm.as_ref().is_some_and(|confirm| confirm.unlist.is_some()) =>
             {
                 Some(apps::USERS_ALONE)
+            }
+            // So is "Close this workspace?": only the user closes a temporary one.
+            Action::QuitConfirm | Action::QuitCancel
+                if self.confirm.as_ref().is_some_and(|confirm| confirm.close.is_some()) =>
+            {
+                Some(workbook::USERS_ALONE)
             }
             // "Stop its agent and dismiss?" is the user's to answer yes to.
             Action::QuitConfirm | Action::QuitCancel
@@ -3693,6 +3722,7 @@ impl Model {
             | Action::TalkCycle { .. }
             | Action::RailSelect { .. }
             | Action::SpaceHide { .. }
+            | Action::SpaceHideAsked { .. }
             | Action::SpaceOpen { .. }
             | Action::WorkbookNew { .. }
             | Action::OpenRepo { .. }
@@ -3766,6 +3796,7 @@ impl Model {
                 self.notice_hidden.retain(|hidden| hidden.kind != *kind);
                 self.notice_hidden.push(crate::notice::Notice { kind: *kind, text: text.clone() });
             }
+            // A closed temporary workspace whose offer ended goes at the next `Tick`: only time ends one.
             return vec![Effect::NoticeDismissed { kind: *kind }];
         }
         let mut effects = self.step(sent);
@@ -3983,6 +4014,7 @@ impl Model {
                 | Action::TalkCycle { .. }
                 | Action::RailSelect { .. }
                 | Action::SpaceHide { .. }
+                | Action::SpaceHideAsked { .. }
                 | Action::SpaceOpen { .. }
                 | Action::CycleTab { .. }
                 | Action::CloseSidebar
@@ -4045,7 +4077,15 @@ impl Model {
         // While the user types in the drawer, no one else moves what their keys go to.
         let typing = !user && (self.talk.as_ref().is_some_and(|talk| talk.keys) || self.composing());
         let shown = typing.then(|| (self.tabs[self.active].id, self.talk.clone()));
+        // A client's × is a hide: only the user is asked, and closes one.
+        let action = match action {
+            Action::SpaceHideAsked { index, .. } if !user => Action::SpaceHide { index },
+            action => action,
+        };
+        let (temporary, tick) = (self.temporary_shown(), matches!(action, Action::Tick { .. }));
         self.act(action, &mut effects);
+        // A temporary workspace the user took off the row closes; one whose Undo ran out goes.
+        self.settle_closing(user, tick, &temporary, &mut effects);
         if let Some((id, talk)) = shown {
             self.keep_shown(id, &mut effects);
             // A pane opened, focused or closed beside the user, a row selected, takes no keys from
@@ -4111,6 +4151,8 @@ impl Model {
                 None if let Some(ask) = confirm.paste => panes.iter().any(|p| p.id == ask.pane),
                 // "Unlist this repository?" goes once it is not listed.
                 None if let Some(path) = &confirm.unlist => self.repos.iter().any(|r| r.path == *path),
+                // "Close this workspace?" goes once nothing in it runs, or it is not on the row to close.
+                None if let Some(id) = confirm.close => !confirm.running.is_empty() && self.closable(id),
                 None => !confirm.running.is_empty() || discards || !self.agents.is_empty() || self.editing.is_some(),
             };
             if !asks {
@@ -4154,7 +4196,7 @@ impl Model {
             // A repository a live task works in: asked first (the trash is one hover away).
             Action::RepoRemove { path } if self.repo_worked_in(&path) && self.repo_dirs.to_remove(&path).is_ok() => {
                 self.leave(effects);
-                self.confirm = Some(Confirm { running: Vec::new(), dismiss: None, paste: None, unlist: Some(path) });
+                self.confirm = Some(Confirm { running: Vec::new(), dismiss: None, paste: None, unlist: Some(path), close: None });
             }
             Action::RepoRemove { path } => self.repo_remove(&path, effects),
             Action::RepoFold { path, fold } => self.repo_fold(&path, fold),
@@ -4338,6 +4380,7 @@ impl Model {
             Action::SpaceSelect { index } | Action::SpaceClick { index } => self.select_space(index, effects),
             Action::SpaceCycle { delta } => self.cycle_space(delta, effects),
             Action::SpaceHide { index } => self.hide_space(index, effects),
+            Action::SpaceHideAsked { index, running } => self.hide_space_asked(index, running, effects),
             Action::SpaceOpen { space: Owner::Workbook { id } } => {
                 self.workbook_open(id, None, self.home.clone(), effects)
             }
@@ -4924,7 +4967,7 @@ impl Model {
                     let own = |task: &&Task| !task.dismissed && self.task_space(task.id).task() == Some(task.id);
                     let live = self.tasks.list.iter().filter(own);
                     let live = live.map(|task| Owner::Task { id: task.id });
-                    let books = self.workbooks.list.iter().map(|book| Owner::Workbook { id: book.id });
+                    let books = self.workbooks.listed().map(|book| Owner::Workbook { id: book.id });
                     let all = live.chain(books);
                     all.map(|to| TaskChoice { title: self.space_title(&to), to }).collect()
                 });
@@ -5179,7 +5222,7 @@ impl Model {
             Action::QuitAsked { running } => {
                 // The question is ottospace's own UI: a live window would cover it.
                 self.leave(effects);
-                self.confirm = Some(Confirm { running, dismiss: None, paste: None, unlist: None });
+                self.confirm = Some(Confirm { running, dismiss: None, paste: None, unlist: None, close: None });
             }
             // Yes to "Paste 4 lines?": into its pane, if that is still a terminal.
             Action::QuitConfirm if let Some(ask) = self.confirm.as_ref().and_then(|confirm| confirm.paste) => {
@@ -5195,6 +5238,7 @@ impl Model {
                             dismiss: None,
                             paste: Some(clip::PasteAsk { pane, amount }),
                             unlist: None,
+                            close: None,
                         })
                     }
                     false => self.pasted(pane, amount, effects),
@@ -5215,6 +5259,14 @@ impl Model {
                 self.confirm = None;
                 self.repo_remove(&path, effects);
             }
+            // Yes to "Close this workspace?": closed as by its ×, its Undo offered.
+            Action::QuitConfirm if let Some(id) = self.confirm.as_ref().and_then(|confirm| confirm.close) => {
+                self.confirm = None;
+                let at = self.shown_spaces().iter().position(|space| space.of == Owner::Workbook { id });
+                if let Some(at) = at {
+                    self.hide_space(Some(at), effects);
+                }
+            }
             Action::QuitConfirm if self.confirm.is_some() => effects.push(Effect::Quit),
             Action::QuitConfirm | Action::QuitCancel => {}
             Action::Quit => effects.push(Effect::Quit),
@@ -5226,7 +5278,7 @@ impl Model {
             Action::MarkUndo => self.mark_undo(),
             Action::ListUndo if self.sidebar == Some(Section::Marks) => self.mark_undo(),
             Action::ListUndo if self.sidebar == Some(Section::Apps) => self.apps_undo(effects),
-            Action::ListUndo if self.sidebar == Some(Section::Workbook) => self.workbook_undo(),
+            Action::ListUndo if self.sidebar == Some(Section::Workbook) => self.workbook_undo(effects),
             Action::ListUndo => self.tasks.undo(),
             Action::MarkRemove { mark } => {
                 if let Some(id) = self.marks.find(&mark) {
@@ -5294,12 +5346,13 @@ impl Model {
             Action::WorkbookEdit { workbook, tab } => self.workbook_edit(workbook, tab),
             Action::WorkbookRemove { workbook, tab } => self.workbook_remove(workbook, tab),
             Action::WorkbookFold { workbook } => self.workbook_fold(workbook),
+            Action::WorkbookKeep { workbook } => self.workbook_keep(workbook),
             Action::RowMenu { row, dots, keys } => self.row_menu_open(row, dots, keys),
             Action::RowMenuDrawn { dots } => self.row_menu_drawn(dots),
             Action::RowMenuMove { delta } => self.row_menu_move(delta),
             Action::RowMenuChoose { index } => self.row_menu_choose(index, effects),
             Action::RowMenuClose => self.row_menu = None,
-            Action::WorkbookUndo => self.workbook_undo(),
+            Action::WorkbookUndo => self.workbook_undo(effects),
             Action::ListReorder { delta } => match self.selected_mark() {
                 // The selection goes with the mark.
                 Some(id) => {
@@ -6747,7 +6800,8 @@ impl Model {
         if self.agent_runs(&Subject::Task(id)) && self.tasks.live(id).is_some() {
             // The question is ottospace's own UI: a live window would cover it.
             self.leave(effects);
-            self.confirm = Some(Confirm { running: Vec::new(), dismiss: Some(id), paste: None, unlist: None });
+            self.confirm =
+                Some(Confirm { running: Vec::new(), dismiss: Some(id), paste: None, unlist: None, close: None });
             return;
         }
         match moved {
@@ -7385,7 +7439,7 @@ impl Model {
             // Each workbook, and the tabs of an unfolded one under it.
             Some(Section::Workbook) => {
                 let mut rows = Vec::new();
-                for book in &self.workbooks.list {
+                for book in self.workbooks.listed() {
                     rows.push(ListRow::Workbook(book.id));
                     if self.workbooks.unfolded(book.id) {
                         rows.extend((0..book.tabs.len()).map(|at| ListRow::WorkbookTab(book.id, at)));
@@ -8082,6 +8136,22 @@ impl Model {
         }
     }
 
+    /// Closes tab `index`, not on show, with its panes; what is on show stays as it is: no app
+    /// parked, no mode ended. A closed temporary workspace's tabs, once its Undo runs out.
+    pub(crate) fn close_background_tab(&mut self, index: usize, effects: &mut Vec<Effect>) {
+        if index == self.active || self.tabs.get(index).is_none_or(|tab| tab.id == spaces::HOME_TAB) {
+            return;
+        }
+        let tab = self.tabs.remove(index);
+        self.unlinked.iter_mut().for_each(|(_, ids, _)| ids.retain(|id| *id != tab.id));
+        self.marks.forget_tab(tab.id);
+        self.workbooks.forget_tab(tab.id);
+        for id in tab.layout.as_ref().map(Node::leaves).unwrap_or_default() {
+            self.close_pane(id, effects);
+        }
+        self.active -= usize::from(index < self.active);
+    }
+
     /// Removes a pane from whichever tab holds it.
     fn close_pane(&mut self, id: PaneId, effects: &mut Vec<Effect>) {
         let Some(i) = self.panes.iter().position(|p| p.id == id) else { return };
@@ -8523,6 +8593,7 @@ mod tests {
         Action::TalkCycle { .. },
         Action::RailSelect { .. },
         Action::SpaceHide { .. },
+        Action::SpaceHideAsked { .. },
         Action::SpaceOpen { .. },
         Action::SelectVisibleTab { .. },
         Action::Tick { .. },
@@ -8670,6 +8741,7 @@ mod tests {
         Action::EditorKeys { .. },
         Action::EditorDone { .. },
         Action::WorkbookFold { .. },
+        Action::WorkbookKeep { .. },
         Action::RowMenu { .. },
         Action::RowMenuDrawn { .. },
         Action::RowMenuMove { .. },
@@ -8806,6 +8878,7 @@ mod tests {
             Action::SpaceClick { index: 0 },
             Action::SpaceCycle { delta: 1 },
             Action::SpaceHide { index: None },
+            Action::SpaceHideAsked { index: None, running: Vec::new() },
             Action::SpaceOpen { space: Owner::Task { id: 1 } },
             Action::SelectVisibleTab { index: 0 },
             Action::Tick { now: 0 },
@@ -8920,6 +8993,7 @@ mod tests {
             Action::WorkbookEdit { workbook: 1, tab: None },
             Action::WorkbookRemove { workbook: 1, tab: None },
             Action::WorkbookFold { workbook: 1 },
+            Action::WorkbookKeep { workbook: 1 },
             Action::RowMenu { row: ListRow::Workbook(1).into(), dots: None, keys: true },
             Action::RowMenuDrawn { dots: None },
             Action::RowMenuMove { delta: 1 },
@@ -9102,6 +9176,7 @@ mod tests {
                 | Action::WorkbookOpen { .. }
                 | Action::WorkbookEdit { .. }
                 | Action::WorkbookRemove { .. }
+                | Action::WorkbookKeep { .. }
                 | Action::WorkbookUndo
                 | Action::RowMenu { .. }
                 | Action::RowMenuMove { .. }
@@ -10315,6 +10390,8 @@ mod tests {
         // workspace goes to the task's space: it has no other.
         m.update(Action::SpaceSelect { index: 0 });
         term(&mut m);
+        // Kept: emptied by the move, a temporary one would close.
+        m.update(Action::WorkbookKeep { workbook: 2 });
         m.update(Action::TabPlace { tab: Some(3), at: TabAt::End(book.clone()) });
         assert_eq!((m.space_tabs(&task_space(1)).len(), m.spaces().iter().any(|space| space.of == book)), (3, false));
         // A task started from it is in it too, in front: no space is made. It goes again.
@@ -11435,6 +11512,24 @@ mod tests {
         // Taken back: its tab is its space's again.
         m.update(Action::TaskUndo);
         assert_eq!((m.tab_task(), m.spaces().len()), (Some(a), 3));
+    }
+
+    /// Review: a dismissed task's tab in a temporary workspace made for it, that workspace closed,
+    /// then the dismissal undone: the task was bound to the closing workspace, kept and closing.
+    #[test]
+    fn a_dismissal_undone_binds_no_closing_workspace_and_keeps_its_tab() {
+        let mut m = Model::default();
+        term(&mut m);
+        let a = add_task(&mut m, "a", State::Captured);
+        m.update(Action::TabPlace { tab: None, at: TabAt::End(task_space(a)) });
+        m.update(Action::TaskDismiss { id: a });
+        let Owner::Workbook { id } = m.space().clone() else { panic!("{:?}", m.space()) };
+        m.update(Action::SpaceHide { index: None });
+        assert!(m.workbooks.closing(id));
+        m.update(Action::TaskUndo);
+        assert_eq!((m.workbooks.bound_to(a), m.workbooks.is_kept(id)), (None, false));
+        m.update(Action::Tick { now: NOTICE_MS + 1 }.sent_by(Origin::System));
+        assert_eq!((m.panes.len(), m.tabs.iter().filter(|tab| tab.space == task_space(a)).count()), (1, 1));
     }
 
     #[test]
@@ -15117,7 +15212,7 @@ mod tests {
         assert_eq!(m.mode(), Mode::Confirm);
         assert_eq!(
             m.confirm,
-            Some(Confirm { running: vec![running(1, "sleep")], dismiss: None, paste: None, unlist: None })
+            Some(Confirm { running: vec![running(1, "sleep")], dismiss: None, paste: None, unlist: None, close: None })
         );
         assert_eq!(m.update(Action::QuitConfirm), [Effect::Quit]);
     }
@@ -15264,7 +15359,7 @@ mod tests {
         m.update(Action::Close { pane: Some(1) });
         assert_eq!(
             m.confirm,
-            Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None, unlist: None })
+            Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None, unlist: None, close: None })
         );
         // Nothing left to ask about: no question, and no quit either.
         let effects = m.update(Action::Close { pane: Some(2) });
@@ -15406,7 +15501,7 @@ mod tests {
         m.update(Action::Close { pane: Some(1) }.sent_by(Origin::System));
         assert_eq!(
             m.confirm,
-            Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None, unlist: None })
+            Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None, unlist: None, close: None })
         );
         // A client may not take the keyboard from under it, nor ask again as the user's yes.
         for taking in [Action::ToggleKeys, Action::Enter { pane: 2 }, ask.clone()] {
@@ -15444,6 +15539,7 @@ mod tests {
             dismiss: None,
             paste: None,
             unlist: None,
+            close: None,
         };
         assert_eq!((one.title().as_str(), one.lines()), ("1 terminal is running", vec!["pane 4".to_string()]));
         let job = Confirm {
@@ -15451,6 +15547,7 @@ mod tests {
             dismiss: None,
             paste: None,
             unlist: None,
+            close: None,
         };
         assert_eq!(job.lines(), ["pane 2 · sleep (background)"]);
         let seven = Confirm {
@@ -15458,6 +15555,7 @@ mod tests {
             dismiss: None,
             paste: None,
             unlist: None,
+            close: None,
         };
         assert_eq!(seven.title(), "7 terminals are running");
         let lines = seven.lines();

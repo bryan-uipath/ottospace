@@ -49,7 +49,7 @@ running, and the rest of the design is not built: see the
 | [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today, behind the `marks` [flag](#features), off by default |
 | Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the drawer; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`), and its agent is told the brief's path. Kept in `~/.ottospace/materials` | Works today |
-| Workspaces: + on the top row or in the Workspaces section makes a new, empty one, listed there and kept between runs. ⌘⇧S saves a tab into one (its splits, each terminal's directory, each app), to open again from the section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
+| Workspaces: + on the top row or in the Workspaces section makes a new, empty one, listed there; temporary (its name muted) until it gets a task, a repository, a name or Keep, and then kept between runs. ⌘⇧S saves a tab into one (its splits, each terminal's directory, each app), to open again from the section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | Tabs and layout come back after quitting: every tab (with its task and workspace), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
 | [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; a soft pulse as one comes near; a meeting notice on the notice bar, a notification and a sound when one has started and you are in no call | Works today |
@@ -467,17 +467,17 @@ A native conversation has a dial under its header: where its agent's calls go, a
   request waits for you), and is larger for
   each further call running there at once (up to four): it springs to its size, with a kick
   when a call starts, and settles back when one ends.
-- **Dashes**: the route of the last calls, fading out over a minute.
-- Beside it, when the drawer is wide enough: what it does now (`Shell · cargo test · 0:14`), or
-  the last thing and when; the context used (`62% of context`); turns and how long.
-- Hover a station for its name and counts, the ring for the tokens.
+- **Timer**: under the centre's picture, the running call's time, or the model's (`0:14`).
+- The dial is centred; under it, when the drawer is wide enough: what it does now
+  (`Shell · cargo test`), or the last thing and when; turns and how long.
+- Hover a station for its name and counts, the ring for the context used and the tokens.
 - A click on it (or ⌘⇧A, or Toggle Agent Dial) collapses it to an 18-point marker beside the
   badge (the ring, a white dot while a call runs, a red one for a failure); a click on the marker
   opens it. It is open while the agent runs and collapsed once it ended, unless you left it the
   other way: that is kept per task, with the layout.
 - A watched session's dial steps a message at a time, with no time arcs: its dots spring to
-  their sizes, nothing pulses or turns. With Reduce motion on, nothing fades or moves: the route
-  shows until it expires, and a lit station is its colour and its larger size.
+  their sizes, nothing pulses or turns. With Reduce motion on, nothing moves: a lit station is its
+  colour and its larger size.
 - It is drawn frame by frame only while something in it moves; at rest, collapsed or not on
   screen, never.
 - The state reply has its stations, counts, what is lit (and how many calls run there), the
@@ -706,10 +706,24 @@ workspace.
 
 - **New**: + on the top row, + in the Workspaces section's header, or `New workspace` in the
   empty section. Each makes a new, empty workspace, "Workspace 2", "Workspace 3" (the lowest
-  number free): its space goes after the selected one on the top row, with one empty tab,
+  number no listed workspace has): its space goes after the selected one on the top row, with one empty tab,
   selected, ready for ⌘E or ⌘D. It never takes or records the tab on show.
-- **Close**: × on its space (⌘⌃W) takes it off the top row. Nothing in it stops, it stays
-  listed, and its row opens it again as it was. With its last tab closed it leaves the row too.
+- **Temporary or kept**: a new workspace (from +, or what you opened on Home) is temporary: its
+  name is muted on the top row and in the section, and its tip says "Temporary: closes without
+  saving · ⋯ Keep". It has no file. It is kept from the moment it has a task (↵ on a new task in
+  it), a repository (a Repos click made it, or set its worktree), a name you gave it, a tab saved
+  into it (⌘⇧S), or Keep (its row's …, the … on its item on the top row, File ▸ Keep Workspace,
+  the palette). A kept one never
+  turns temporary again. Workspaces saved before this are kept.
+- **Close**: × on its space (⌘⌃W) takes it off the top row. A kept one: nothing in it stops, it
+  stays listed, and its row opens it again as it was. With its last tab closed it leaves the row
+  too. A temporary one closed (×, ⌘⌃W, its last tab closed or moved away) leaves the list at
+  once: `Workspace closed` shows on the [notice bar](#notice-bar) for six seconds with Undo,
+  which brings it back on the row as it was; its terminals and apps run until then, and close
+  when the offer ends (× ends it at once). If a terminal in it runs a program, × and ⌘⌃W ask
+  first, as ⌘Q does ("Close this workspace?": ↵ closes, Esc keeps it). A temporary workspace open when you quit comes back
+  with the [layout](#restoring-the-layout); once closed it never does. Only your own acts keep or close one:
+  a client's `hide_space` or `close_tab` leaves it listed.
 - **Save**: ⌘⇧S, or File ▸ Save Tab as Workspace. In a workspace, the tab on show is saved into
   it; in the first space or a task's, as a new workspace of that tab. It records
   the tab's splits and their sizes, and each app pane's app (bundle id and name); for each
@@ -746,7 +760,8 @@ workspace.
   Each opens alone (click, ↵), and its … has Rename (its title; `r` in list mode) and Remove (`x` in list mode: out of the
   workspace; the last one deletes the workspace).
 - **The row**: a click anywhere on it opens the workspace, or selects it if it is open. The
-  pointer on it (or list mode's selection) shows one …: its menu has Rename and Delete.
+  pointer on it (or list mode's selection) shows one …: its menu has Rename and Delete, and Keep
+  on a temporary one.
   In the menu ↓ ↑ move, ↵ takes the item the keys are on; Esc, any other key or a click
   outside closes it. In list mode `r` and `x` rename and delete with no menu. Deleting leaves the open
   tabs alone; `Workspace deleted` shows on the [notice bar](#notice-bar) for six seconds, with
@@ -1193,8 +1208,8 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   the grants are kept as they are (turning it on again raises none), and every read of an app pane by a client (`app_read`,
   `app_look`, `ax_tree`) answers `feature off: agent_mode` (design: [agent-mode.md](ai/agent-mode.md)).
   On: an app pane's header has a robot with its level (`Off`, `See`, `Act`, a caret), dimmed where
-  no task works; See in the app's blue with the task's tip, See and act in amber with the pane's
-  border. Only the task the pane is granted to (its agent's pass) may `app_read` its tree or
+  no task works; See in the app's blue with the task's tip, See and act in amber; the pane's
+  header line in the level's colour. Only the task the pane is granted to (its agent's pass) may `app_read` its tree or
   `app_look` at its picture (a PNG at most 1600 px, 0600, in `materials/agent-<pid>-<task>-<word>/`,
   the last 10 kept, gone when the level goes below See and at the next start), at See or more, one read and one look a second; `ax_tree` is
   `app_read`'s older name. Every use and refusal is a row in that task's conversation and a spoke

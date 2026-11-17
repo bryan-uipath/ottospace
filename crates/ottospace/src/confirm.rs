@@ -3,7 +3,7 @@
 use gpui::{Context, Keystroke, Window, div, prelude::*, px, relative, rgb};
 use ottospace_core::clip::PasteAsk;
 use ottospace_core::keys::Mods;
-use ottospace_core::model::{Confirm, Running};
+use ottospace_core::model::{Confirm, Owner, Running};
 use ottospace_core::{Action, Origin, theme};
 
 use crate::{Workspace, dialog};
@@ -12,11 +12,7 @@ impl Workspace {
     /// ⌘Q, Quit in the menu or the window's close button: the core quits, or asks if a terminal
     /// runs something.
     pub fn ask_quit(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let running = |pane: &ottospace_core::Pane| {
-            let work = self.terminals.get(&pane.id)?.running()?;
-            Some(Running { pane: pane.id, program: work.program, background: work.background })
-        };
-        let running = self.model.panes.iter().filter_map(running).collect();
+        let running = self.running();
         self.dispatch(Action::QuitAsked { running }, self.input, window, cx);
         // Asked from the menu while minimised or behind: the question must be seen. Not in a
         // test run, which never comes forward.
@@ -24,6 +20,22 @@ impl Workspace {
             cx.activate(true);
             window.activate_window();
         }
+    }
+
+    /// The terminals with a program in front of their shell, or a job of it, now.
+    fn running(&self) -> Vec<Running> {
+        let running = |pane: &ottospace_core::Pane| {
+            let work = self.terminals.get(&pane.id)?.running()?;
+            Some(Running { pane: pane.id, program: work.program, background: work.background })
+        };
+        self.model.panes.iter().filter_map(running).collect()
+    }
+
+    /// × or ⌘⌃W on the space at `index` (default: the selected one): the core asks first if it
+    /// is a temporary workspace whose terminals run something.
+    pub fn hide_space(&mut self, index: Option<usize>, window: &Window, cx: &mut Context<Self>) {
+        let running = self.running();
+        self.dispatch(Action::SpaceHideAsked { index, running }, self.input, window, cx);
     }
 
     /// What `key` from `origin` answers the question with, as the core says (`Confirm::answer`).
@@ -115,6 +127,30 @@ impl Workspace {
                         .child("A task works in it. It leaves the Repos list; nothing on disk changes."),
                 )
                 .child(dialog::hint("↵ unlist · esc cancel"));
+            return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(panel);
+        }
+        // "Close this workspace?": which, and the terminals that end once its Undo runs out.
+        if let Some(id) = confirm.close {
+            let name = self.model.space_title(&Owner::Workbook { id });
+            let lines = confirm.lines().into_iter().map(|line| div().child(line));
+            let panel = dialog::floating(320.)
+                .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(format!("Close {name}?")))
+                .child(
+                    div()
+                        .p_3()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .text_xs()
+                        .text_color(rgb(theme::MUTED))
+                        .child("It is not kept. Once its Undo runs out, closing ends these:")
+                        .children(lines),
+                )
+                .child(dialog::hint("↵ close · esc cancel"));
             return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
                 .flex()
                 .items_center()

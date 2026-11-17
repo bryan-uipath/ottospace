@@ -1,0 +1,7 @@
+# × on a temporary workspace whose terminal runs a program: "Close this workspace?", as ⌘Q asks.
+{"click":"top:new_workspace"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"type","text":"sh -c 'echo go; exec sleep 60'\r"}
+{"cmd":"wait","pattern":"^go$","timeout_ms":30000}
+{"click":"space-hide:1"}
+{"shot":"asks"}
