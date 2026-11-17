@@ -836,6 +836,8 @@ struct Workspace {
     /// Frames that stopped coming (`stall`), and how often GPUI was kicked to draw again.
     stall: stall::Stall,
     redraws: u64,
+    /// A terminal's or hosted window's output asked for a frame not drawn yet: a stall too.
+    output: bool,
     /// What the home screen last drew, and the lattice lines kept between frames.
     home: home::Shared,
     /// ottospace's own controls as last painted: what sneak mode labels.
@@ -1221,6 +1223,7 @@ impl Workspace {
                     });
                     this.take_snapshots(window, cx);
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
+                        this.output = true;
                         cx.notify();
                     }
                     this.watch_frames(window);
@@ -1333,6 +1336,7 @@ impl Workspace {
             frame_start: Rc::default(),
             stall: stall::Stall::new(),
             redraws: 0,
+            output: false,
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
             chip_line: Rc::default(),
@@ -1970,7 +1974,7 @@ impl Workspace {
             self.stall.displays_changed(now);
             trace::record("displays", serde_json::json!({ "count": display::all().len() }));
         }
-        let wants = self.seq > self.drawn_seq || !self.settling.is_empty();
+        let wants = self.seq > self.drawn_seq || !self.settling.is_empty() || self.output;
         // SAFETY: GPUI's own view, on the main thread.
         let shown = ns_view(window).is_some_and(|view| unsafe { ottospace_mac::window::visible(view) });
         match self.stall.check(now, self.renders, wants, shown) {
@@ -3693,6 +3697,7 @@ impl Workspace {
             self.dispatch(Action::Close { pane: Some(id) }, Origin::System, window, cx);
         }
         if redraw {
+            self.output = true;
             cx.notify();
         }
     }
@@ -6401,6 +6406,7 @@ impl Render for Workspace {
         *self.badges.borrow_mut() = self.model.badges();
         // This frame draws every action so far: the replies held for it can go (`settle`).
         self.drawn_seq = self.seq;
+        self.output = false;
         self.frame_start.set(Some(Instant::now()));
         for pane in &self.model.panes {
             self.cells.entry(pane.id).or_default();
