@@ -4,6 +4,33 @@ The Repos section lists each repository's name over its checkouts. A click on a 
 workspace of that checkout, else makes one with it as its default worktree: `docs/ai/spaces.md`,
 "Worktrees".
 
+## The list: opt-in (`RepoAdd`, `RepoRemove`, `Effect::SaveRepos`)
+
+- **Only what the user added.** `repos` in the settings is the list, in its order: a path, or
+  `{"path": …, "pinned": true}` (`settings::RepoEntry`). No default: a new user sees an empty
+  section with "+ Add a repository". `~/code` and `~/notes` are looked in no more.
+- **Adding** (the user's alone; the core refuses `RepoAdd` from anyone else; `repo_add` on the
+  socket only under `OTTOSPACE_E2E`): the section's + (folder picker), a folder dropped on the
+  section, or "Add Folder to Repos" (palette, File menu: the focused terminal's folder, else the
+  tab's task's). The shell resolves the folder (links, `..`), then the repository it is in
+  (`repos::repository_of`: the nearest `.git` up; a linked worktree's is its main repository's).
+  The core takes only a repository's own folder (`RepoDirs::may_add`): anything else says "Not a
+  repository: …", nothing written. It goes at the end; one listed already is selected.
+- **Writing**: the whole list, in order (`Effect::SaveRepos { dirs }`, `settings::with_repos`),
+  into the file as it is now; a `repos` that is not a list of entries is left alone and the
+  status bar says so. Only `RepoAdd`, `RepoRemove` (and the confirm that follows it) write it.
+- **Migration** (nothing is rewritten): an old entry that is a repository is an entry. One that
+  is a folder of repositories (the old "root") is kept as a **group**: one row, `~/clients/ · 12`,
+  folded until the user unfolds it (`repos_open`, not kept), its repositories by name under it,
+  its trash removes the entry whole. One of them added by itself becomes an entry and leaves the
+  group. The old invisible default is not migrated: it was never in the file.
+- **Order**: `arrange` sorts by the entry's place (`RepoDirs::place`), a group's repositories by
+  name; reads of the disk (`SetRepos`) never change it.
+- `OTTOSPACE_REPOS` (tests, scripts): fixed, flat (a folder there lists its repositories with no
+  group), nothing added, removed or moved.
+- `open_repo` from a client: unchanged, only a path in `state.repos` (a group's repositories
+  included, folded or not).
+
 ## The model (core: `repos.rs`, `model.rs`)
 
 - **A repository's name is a list row** (`ListRow::RepoHead`): ↵ or space on it folds or
@@ -88,7 +115,7 @@ folder as asked, so the core finds the task that waits for it.
 ## Never done
 
 - No worktree is removed: that deletes a folder, and was not asked for.
-- The trash on a name stops listing the repository (`RepoRemove`): it changes `settings.json`,
+- The trash on a name (or a group's) stops listing the repository (`RepoRemove`): it changes `settings.json`,
   never anything on disk. While a live task works in one of its checkouts it asks first (the shared
   confirm, `Confirm::unlist`, the user's to answer); after, the status bar says, as information,
   "Unlisted <name> · nothing on disk changed" (`Effect::Told`).

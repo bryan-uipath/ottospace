@@ -83,6 +83,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::SaveWorkbook => Box::new(SaveWorkbook),
         Command::AddTabToWorkbook => Box::new(AddTabToWorkbook),
         Command::SaveAllWorkbook => Box::new(SaveAllWorkbook),
+        Command::AddToRepos => Box::new(AddToRepos),
         Command::StartFresh => Box::new(StartFresh),
         Command::Features => Box::new(features::ShowFeatures),
         Command::MarkPane => Box::new(MarkPane),

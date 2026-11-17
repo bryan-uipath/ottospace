@@ -40,6 +40,8 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 item("Add Tab to Workspace…", AddTabToWorkbook),
                 item("Save All Tabs as Workspace", SaveAllWorkbook),
                 MenuItem::separator(),
+                item("Add Folder to Repos", AddToRepos),
+                MenuItem::separator(),
                 item("Start Fresh", StartFresh),
                 MenuItem::separator(),
                 item("Close Pane", ClosePane),
