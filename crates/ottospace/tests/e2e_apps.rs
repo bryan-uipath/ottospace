@@ -660,6 +660,7 @@ fn a_window_that_refuses_the_pane_size_is_shown_unscaled_at_the_pane_top_left() 
     let windows = || canary.call(json!({"cmd": "state"}))["windows"].clone();
     let frame = |index: usize| rect(&windows()[index]["bounds"]);
     wait_for("the canary window", || frame(0));
+    let home = splitting_home("size");
     let otto = Proc::launch(
         env!("CARGO_BIN_EXE_ottospace"),
         "otto-size",
@@ -668,6 +669,7 @@ fn a_window_that_refuses_the_pane_size_is_shown_unscaled_at_the_pane_top_left() 
             ("OTTOSPACE_E2E", "1"),
             ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
             ("OTTOSPACE_RETURN_KEY", "f19"),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
         ],
     );
     let state = || otto.call(json!({"cmd": "state"}));
@@ -827,6 +829,7 @@ fn a_window_that_refuses_the_pane_size_is_shown_unscaled_at_the_pane_top_left() 
 fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-fit", "CANARY_SOCKET", &[]);
     wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let home = splitting_home("fit");
     let otto = Proc::launch(
         env!("CARGO_BIN_EXE_ottospace"),
         "otto-fit",
@@ -835,6 +838,7 @@ fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
             ("OTTOSPACE_E2E", "1"),
             ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
             ("OTTOSPACE_RETURN_KEY", "f19"),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
         ],
     );
     let state = || otto.call(json!({"cmd": "state"}));
@@ -1396,6 +1400,15 @@ fn otto_for(canary: &Proc, name: &str, env: &[(&str, &str)]) -> Proc {
     let mut all = vec![("OTTOSPACE_E2E", "1"), ("OTTOSPACE_HOST_ONLY", pid.as_str()), ("OTTOSPACE_RETURN_KEY", "f19")];
     all.extend_from_slice(env);
     Proc::launch(env!("CARGO_BIN_EXE_ottospace"), name, "OTTOSPACE_SOCKET", &all)
+}
+
+/// A home of the test's own whose one rule splits every new canary window, however small.
+fn splitting_home(name: &str) -> PathBuf {
+    let home = support::temp(&format!("otto-apps-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("make the folder");
+    let settings = json!({"windows": [{"app": CANARY, "do": "split"}]});
+    std::fs::write(home.join("settings.json"), settings.to_string()).expect("write settings");
+    home
 }
 
 /// Hosts the canary's first window and waits for it to park. Returns the parking spot.
