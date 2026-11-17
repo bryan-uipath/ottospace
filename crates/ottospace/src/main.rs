@@ -2979,7 +2979,7 @@ impl Workspace {
                     // Lines scrolled back from the bottom, and lines of history kept.
                     "display_offset": display_offset, "history": history,
                     // What ⌘C would copy.
-                    "selection": t.selected(),
+                    "selection": t.selected_shown(),
                     // Its first and last cell as [line, column], line 0 the top of the screen and
                     // negative in history.
                     "selection_range": t.selection_range(),
@@ -6811,6 +6811,9 @@ fn main() {
     // Started from a task agent's shell (a dev build): that pass is its, not for our children.
     // SAFETY: no thread has started yet.
     unsafe { std::env::remove_var(pass::VAR) };
+    // The variable that held the pass itself before it moved to a file (an older build's agent).
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("OTTOSPACE_TASK_PASS") };
     // Hidden while its output has no stable shape. Reads other programs' session files.
     if args.get(1).is_some_and(|a| a == "sessions") {
         sessions(args.get(2));

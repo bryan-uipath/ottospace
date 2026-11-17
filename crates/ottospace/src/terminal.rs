@@ -443,6 +443,11 @@ impl Terminal {
         selected_text(&self.term.lock())
     }
 
+    /// What ⌘C would copy, for a client: `[hidden]` if a row it takes holds a live pass's cell.
+    pub fn selected_shown(&self) -> Option<String> {
+        selected_shown(&self.term.lock())
+    }
+
     /// The selection's first and last cell as (line, column), line 0 the top of the screen and
     /// negative in history.
     pub fn selection_range(&self) -> Option<[(i32, usize); 2]> {
@@ -689,6 +694,20 @@ fn text_of<T>(term: &Term<T>, history: bool) -> String {
     }
     text.truncate(text.trim_end().len());
     text
+}
+
+/// `Terminal::selected_shown`. Whole rows decide, by `lines_of`'s search: what a part of a pass
+/// would hide never does, so a selection says nothing of a guess (e.g. 31 digits of 32).
+fn selected_shown<T>(term: &Term<T>) -> Option<String> {
+    let text = selected_text(term)?;
+    let range = term.selection.as_ref()?.to_range(term)?;
+    let (from, to) = searched(term, range.start.line, range.end.line);
+    let rows = rows_of(term, from, to);
+    let raw: Vec<String> = rows.iter().map(|(row, _)| row.clone()).collect();
+    let shown = crate::pass::hide_rows(cut_history(term, from, rows).into_iter().map(|(row, _)| row).collect());
+    let (skip, take) = ((range.start.line.0 - from.0) as usize, (range.end.line.0 - range.start.line.0 + 1) as usize);
+    let touched = raw.iter().zip(&shown).skip(skip).take(take).any(|(raw, shown)| raw != shown);
+    Some(if touched { crate::pass::HIDDEN.to_string() } else { text })
 }
 
 /// Whether grid row `line` wraps into the next.
@@ -958,6 +977,12 @@ mod tests {
         let mut narrow = super::tests::term(4, 2, &format!("{}\r\none\r\ntwo", rows.join("\r\n")));
         narrow.scroll_display(GridScroll::Delta(1));
         assert_eq!(lines_of(&narrow), ["", "one"], "all eight rows searched, though the edge cuts them");
+        // A selection of part of it, here the 16 digits on the top row, reads `[hidden]` in the
+        // state; one of other rows reads as it is.
+        assert_eq!(drag(&mut short, at(0, 0), past(0, 15)).as_deref(), Some(&hex[16..]));
+        assert_eq!(selected_shown(&short).as_deref(), Some(crate::pass::HIDDEN));
+        drag(&mut short, at(1, 0), past(1, 2));
+        assert_eq!(selected_shown(&short).as_deref(), Some("one"));
         // Gone, the pass shows again: it grants nothing.
         drop(live);
         assert_eq!(lines_of(&short)[0], &hex[16..]);
