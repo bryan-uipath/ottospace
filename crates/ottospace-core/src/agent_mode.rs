@@ -3,7 +3,7 @@
 //! stage (c), none yet). Only the user sets a level; a task's agent asks with its pass, which
 //! the shell turns into a `Caller` before the core decides (`Model::app_access`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -78,6 +78,24 @@ impl AppUse {
     }
 }
 
+/// The key of an app pane's record in `layout.json` that keeps a level the user picked.
+pub const KEY: &str = "agent_mode";
+
+/// A level the user picked, as `layout.json` keeps it: for which task.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Kept {
+    pub level: Level,
+    pub task: TaskId,
+}
+
+/// A restored pane's kept level, waiting for its window: given only to a window of the same app.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Waiting {
+    pub kept: Kept,
+    pub bundle: Option<String>,
+    pub name: String,
+}
+
 /// One app pane's level, and the task it was given to: the front task of the pane's workspace
 /// when the pane came, or when the user set it. `None`: no task works there, and it grants nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -108,13 +126,21 @@ pub struct AgentMode {
     /// opened or filled, the system adopted or a restore rebuilt starts at Off.
     #[serde(skip)]
     pub by_user: BTreeMap<PaneId, bool>,
+    /// The panes whose level the user picked (or a restore gave back what they picked): only
+    /// those are kept over a restart. A reset to Off forgets the pick.
+    #[serde(skip)]
+    pub chosen: BTreeSet<PaneId>,
+    /// Restored panes waiting for their window, with the level the user picked in a run before.
+    #[serde(skip)]
+    pub restored: BTreeMap<PaneId, Waiting>,
 }
 
 impl Default for AgentMode {
     fn default() -> Self {
         // The owner's choice (2026-11-16): Act, changeable in the settings.
         let (panes, last, by_user) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
-        Self { panes, default: Level::Act, menu: None, last, by_user }
+        let (chosen, restored) = (BTreeSet::new(), BTreeMap::new());
+        Self { panes, default: Level::Act, menu: None, last, by_user, chosen, restored }
     }
 }
 
@@ -122,6 +148,16 @@ impl AgentMode {
     /// The level of `pane`: Off for one with no grant.
     pub fn level(&self, pane: PaneId) -> Level {
         self.panes.get(&pane).map_or(Level::Off, |grant| grant.level)
+    }
+
+    /// What `layout.json` keeps of `pane`: a level above Off the user picked, for its task, or one
+    /// still waiting for its window.
+    pub fn kept(&self, pane: PaneId) -> Option<Kept> {
+        if let Some(waiting) = self.restored.get(&pane) {
+            return Some(waiting.kept);
+        }
+        let grant = self.panes.get(&pane).filter(|grant| grant.level > Level::Off && self.chosen.contains(&pane))?;
+        Some(Kept { level: grant.level, task: grant.task? })
     }
 }
 

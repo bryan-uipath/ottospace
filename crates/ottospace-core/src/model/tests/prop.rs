@@ -1483,6 +1483,10 @@ fn check(m: &Model) -> Result<(), String> {
             );
         }
         ensure!(m.agent.menu.is_none_or(|menu| known.contains(&menu.pane)), "the agent menu on no app pane");
+        // A pick is kept only for a pane with a grant; a restored one waits only in an empty pane.
+        ensure!(m.agent.chosen.iter().all(|pane| known.contains(pane)), "a pick {:?} of no app pane", m.agent.chosen);
+        let empty = |pane: &PaneId| m.pane(*pane).is_some_and(|pane| pane.kind == Kind::Empty);
+        ensure!(m.agent.restored.keys().all(empty), "a kept level waits on a pane that is not empty");
     }
     if !m.features.on(Feature::AppsSection) {
         ensure!(!shown(Section::Apps), "the Apps section with it off");
@@ -2537,7 +2541,7 @@ impl Run {
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
         let filled_before = m.fill_display;
-        let grants_before = m.agent.panes.clone();
+        let (grants_before, waiting_before) = (m.agent.panes.clone(), m.agent.restored.clone());
         let (default, last_before) = (m.agent.default, m.agent.last.clone());
         let effects = m.update(sent);
         check(m)?;
@@ -2556,8 +2560,13 @@ impl Run {
                 None => ensure!(
                     grant.level == Off
                         || (m.agent.by_user.get(pane) == Some(&true)
-                            && (grant.level == default || grant.level == m.agent.default)),
-                    "new pane {pane} at {grant:?}, the default {default:?}: only one the user filled starts above Off"
+                            && (grant.level == default || grant.level == m.agent.default))
+                        || (origin != Origin::Socket
+                            && waiting_before.get(pane).is_some_and(|waiting| {
+                                (Some(waiting.kept.task), waiting.kept.level) == (grant.task, grant.level)
+                            })),
+                    "new pane {pane} at {grant:?}, the default {default:?}: only one the user filled, or one \
+                     restored with the user's pick, starts above Off"
                 ),
             }
         }

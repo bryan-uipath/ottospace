@@ -30,8 +30,10 @@ impl Model {
     /// level: a client that opens Mail in its task's workspace cannot read it. One whose task no
     /// longer works there (it moved to another workspace, the task ended, was dismissed or unbound)
     /// is Off, for the task now there: a grant is never carried to a task the user did not give it
-    /// to. A closed pane's goes. Grants are not kept over a restart: a restored pane is Off. They
-    /// are kept, and kept true, while the flag is off.
+    /// to. A closed pane's goes. Over a restart only a level the user picked is kept
+    /// (`AgentMode::kept`): a restored pane gets it back when the same app's window fills it, from
+    /// no client, while that task works there; else it is Off. Grants are kept, and kept true,
+    /// while the flag is off.
     pub(super) fn settle_agent(&mut self, origin: Origin) {
         let apps: Vec<PaneId> = self
             .tab_panes()
@@ -59,24 +61,52 @@ impl Model {
                 let front = working.first().copied();
                 let grant = match self.agent.panes.get(&id) {
                     Some(grant) if grant.task.is_some_and(|task| working.contains(&task)) => *grant,
-                    Some(_) => Grant { level: Level::Off, task: front },
-                    None => {
-                        let users = self.agent.by_user.get(&id).copied().unwrap_or(false);
-                        let level = if front.is_some() && users { self.agent.default } else { Level::Off };
-                        Grant { level, task: front }
+                    Some(_) => {
+                        self.agent.chosen.remove(&id);
+                        Grant { level: Level::Off, task: front }
                     }
+                    None => match self.kept_back(id, origin, &working) {
+                        Some(grant) => grant,
+                        None => {
+                            let users = self.agent.by_user.get(&id).copied().unwrap_or(false);
+                            let level = if front.is_some() && users { self.agent.default } else { Level::Off };
+                            Grant { level, task: front }
+                        }
+                    },
                 };
                 panes.insert(id, grant);
             }
         }
         // The menu is for the task it showed: its pane gone, or given to another task, it closes.
         let before = std::mem::replace(&mut self.agent.panes, panes);
+        self.agent.chosen.retain(|pane| self.agent.panes.contains_key(pane));
+        // A kept level waits only while its pane does: empty, for its window.
+        let waits = |model: &Model, pane: &PaneId| model.pane(*pane).is_some_and(|pane| pane.kind == Kind::Empty);
+        let restored = std::mem::take(&mut self.agent.restored);
+        self.agent.restored = restored.into_iter().filter(|(pane, _)| waits(self, pane)).collect();
         let panes = &self.agent.panes;
         self.agent.last.retain(|pane, _| panes.contains_key(pane));
         let moved = |pane: &PaneId| panes.get(pane).map(|grant| grant.task) != before.get(pane).map(|grant| grant.task);
         if self.agent.menu.is_some_and(|menu| moved(&menu.pane) || !panes.contains_key(&menu.pane)) {
             self.agent.menu = None;
         }
+    }
+
+    /// A restored pane's level the user picked in a run before, taken once its window is there:
+    /// only for a window of the same app, filled by no client, while its task works there.
+    fn kept_back(&mut self, pane: PaneId, origin: Origin, working: &[TaskId]) -> Option<Grant> {
+        let waiting = self.agent.restored.remove(&pane)?;
+        let same = match self.pane(pane).map(|pane| &pane.kind) {
+            Some(Kind::App { bundle, name, .. }) => {
+                crate::marks::same_app((bundle.as_deref(), name), (waiting.bundle.as_deref(), &waiting.name))
+            }
+            _ => false,
+        };
+        if !same || origin == Origin::Socket || !working.contains(&waiting.kept.task) {
+            return None;
+        }
+        self.agent.chosen.insert(pane);
+        Some(Grant { level: waiting.kept.level, task: Some(waiting.kept.task) })
     }
 
     /// Who may read `pane` for `caller`, and as which task: the pane is an app pane, its grant is to
@@ -154,7 +184,10 @@ impl Model {
             return effects.push(Effect::Notice { text: agent_mode::FOCUS_APP.into() });
         };
         match self.agent.panes.get_mut(&pane) {
-            Some(grant) if grant.task.is_some() => grant.level = level,
+            Some(grant) if grant.task.is_some() => {
+                grant.level = level;
+                self.agent.chosen.insert(pane);
+            }
             _ => effects.push(Effect::Notice { text: agent_mode::NO_TASK.into() }),
         }
     }

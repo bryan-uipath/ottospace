@@ -301,6 +301,14 @@ impl Model {
             if record.unsound().is_some() {
                 continue;
             }
+            // A level the user picked for an app pane, and for which task; no other.
+            for pane in &mut record.panes {
+                pane.extra.remove(crate::agent_mode::KEY);
+                let kept = self.agent.kept(pane.id).filter(|_| matches!(pane.kind, RecordKind::App { .. }));
+                if let Some(kept) = kept.and_then(|kept| serde_json::to_value(kept).ok()) {
+                    pane.extra.insert(crate::agent_mode::KEY.into(), kept);
+                }
+            }
             // Panes by their place in reading order, from 1: the file says nothing of this run's ids.
             let ids: Vec<(u32, PaneId)> = record.panes.iter().zip(1..).map(|(pane, new)| (pane.id, new)).collect();
             let new_id = |old: u32| ids.iter().find(|(from, _)| *from == old).map(|(_, to)| *to);
@@ -475,6 +483,16 @@ impl Model {
             // As a workbook's: each terminal that started shows its history, typed command and all.
             let panes: Vec<PaneId> = (base + 1..).take(record.shown().len()).collect();
             for (pane, kept) in panes.iter().zip(record.shown()) {
+                // A level the user picked, for a task still there: it waits for the window.
+                let picked = kept.extra.get(crate::agent_mode::KEY).cloned();
+                let picked = picked.and_then(|value| serde_json::from_value::<crate::agent_mode::Kept>(value).ok());
+                if let (Some(kept), RecordKind::App { bundle, name, .. }) = (picked, &kept.kind)
+                    && self.tasks.live(kept.task).is_some()
+                    && self.pane(*pane).is_some_and(|open| open.kind == Kind::Empty)
+                {
+                    let waiting = crate::agent_mode::Waiting { kept, bundle: bundle.clone(), name: name.clone() };
+                    self.agent.restored.insert(*pane, waiting);
+                }
                 let started = self.pane(*pane).is_some_and(|open| open.kind == Kind::Terminal);
                 // The Settings tab's terminal: the editor again, once, with no history. Its title
                 // is the one kept ("Settings").
@@ -992,6 +1010,69 @@ mod tests {
         fresh.update(restore(file).sent_by(Origin::System));
         let open: Vec<(bool, Option<PaneId>)> = fresh.mark_rows().iter().map(|row| (row.open, row.pane)).collect();
         assert_eq!(open, [(true, None), (true, Some(2))]);
+    }
+
+    /// Over a restart only a level the user picked comes back, for its task: when the same app's
+    /// window fills its pane, from no client. The default's pane, another app's window: Off.
+    #[test]
+    fn only_a_level_the_user_picked_comes_back_and_only_to_its_apps_window() {
+        use crate::agent_mode::{KEY, Level};
+        let mut m = Model::default();
+        task(&mut m, "fix zoom");
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
+        let app = |window, name: &str| Kind::App { window, title: String::new(), bundle: None, name: name.into() };
+        m.update(Action::Open { kind: app(1, "Mail"), axis: Right, beside: None });
+        m.update(Action::Open { kind: app(2, "Slack"), axis: Right, beside: None });
+        let slack = m.focused.unwrap_or_default();
+        m.update(Action::AgentLevel { pane: Some(slack), level: Level::See });
+        assert_eq!(m.agent.level(1), Level::Act, "the default, not picked");
+        let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
+        let kept = |file: &Layout| -> Vec<(String, serde_json::Value)> {
+            let panes = file.tabs.iter().flat_map(|saved| saved.tab.panes.iter());
+            let name = |pane: &marks::PaneRecord| match &pane.kind {
+                RecordKind::App { name, .. } => name.clone(),
+                _ => String::new(),
+            };
+            panes.filter_map(|pane| Some((name(pane), pane.extra.get(KEY)?.clone()))).collect()
+        };
+        assert_eq!(kept(&file), [("Slack".to_string(), serde_json::json!({ "level": "see", "task": 1 }))]);
+        let waiting = |effects: &[Effect]| -> Vec<(String, PaneId)> {
+            let into = effects.iter().filter_map(|effect| match effect {
+                Effect::HostWindow { name, into: Some(pane), .. } => Some((name.clone(), *pane)),
+                _ => None,
+            });
+            into.collect()
+        };
+        let (mut r, effects) = restored(&m, file.clone(), &[], false);
+        let panes = waiting(&effects);
+        let pane = |name: &str| panes.iter().find(|(n, _)| n == name).map(|(_, pane)| *pane).unwrap_or_default();
+        // Written again before the windows come, the pick is still kept.
+        assert_eq!(kept(&r.layout_file(&[], &[], 0)), kept(&file));
+        // The system fills them: Slack's pick comes back, Mail's default does not.
+        for (name, window) in [("Slack", 12), ("Mail", 11)] {
+            r.update(Action::Fill { pane: pane(name), kind: app(window, name) }.sent_by(Origin::System));
+        }
+        let grant = |r: &Model, pane| r.agent.panes.get(&pane).map(|grant| (grant.level, grant.task));
+        assert_eq!(grant(&r, pane("Slack")), Some((Level::See, Some(1))));
+        assert_eq!(grant(&r, pane("Mail")), Some((Level::Off, Some(1))));
+        assert_eq!(kept(&r.layout_file(&[], &[], 0)), kept(&file), "kept again, as picked");
+        // Another app's window in the waiting pane, or a client's fill: Off, and the pick is gone.
+        for (kind, origin) in [(app(13, "Notes"), Origin::System), (app(14, "Slack"), Origin::Socket)] {
+            let (mut r, effects) = restored(&m, file.clone(), &[], false);
+            let slack = waiting(&effects).into_iter().find(|(n, _)| n == "Slack").map(|(_, pane)| pane);
+            let slack = slack.unwrap_or_default();
+            r.update(Action::Fill { pane: slack, kind }.sent_by(origin));
+            assert_eq!(grant(&r, slack), Some((Level::Off, Some(1))), "{origin:?}");
+            assert_eq!(kept(&r.layout_file(&[], &[], 0)), []);
+        }
+        // Moved to another task's workspace, the pick goes with the reset to Off.
+        task(&mut m, "plan");
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 2 } });
+        let to = m.active;
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
+        m.update(Action::MovePane { pane: Some(slack), tab: to });
+        assert_eq!(m.agent.level(slack), Level::Off);
+        assert_eq!(kept(&m.layout_file(&[], &[], 0)), []);
     }
 
     #[test]
