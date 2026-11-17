@@ -729,6 +729,8 @@ fn handle(stream: UnixStream, calls: Sender<Call>) {
             }
             Err(err) => error(&err),
         };
+        // Whatever text it carries (a screen, a transcript, a session read): no live pass.
+        let reply = crate::pass::hide(&reply);
         if writeln!(out, "{reply}").is_err() {
             return;
         }

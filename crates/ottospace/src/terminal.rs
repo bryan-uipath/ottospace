@@ -596,7 +596,8 @@ impl Terminal {
         let (start, end) = (Point::new(top, Column(0)), Point::new(term.bottommost_line(), term.last_column()));
         let mut text = term.bounds_to_string(start, end);
         text.truncate(text.trim_end().len());
-        text
+        // Every client's read of it, and its saved history: a live pass shows as `[hidden]`.
+        crate::pass::hide(&text).into_owned()
     }
 
     pub fn screen(&self) -> Screen {
@@ -639,10 +640,10 @@ impl Terminal {
 }
 
 impl Screen {
-    /// The rows as plain text, trailing spaces removed.
+    /// The rows as plain text, trailing spaces removed, a live pass as `[hidden]`.
     pub fn lines(&self) -> Vec<String> {
         let text = |row: &Vec<Span>| row.iter().map(|s| s.text.as_str()).collect::<String>().trim_end().to_string();
-        self.rows.iter().map(text).collect()
+        crate::pass::hide_rows(self.rows.iter().map(text).collect())
     }
 
     /// The rows as a picture of a pane `size` points large, `scale` pixels a point: a PNG.

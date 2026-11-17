@@ -61,11 +61,14 @@ A small script printed the variable and tried to connect.
   `move_agent` (minted for one subject only); a native agent's as soon as its process is reaped,
   before its stdout ends. Compared in constant time against every live pass. The app drops a pass
   it inherited itself (a dev build started from an agent's shell).
-- **Not hidden from the agent's own output.** An agent that runs `env` puts its pass in its
-  session file and, in the terminal view, on its screen: the state's `drawer.agents.<task>.lines`,
-  which any client reads (the native transcript in the state keeps no tool output). Harmless while
-  (a) grants nothing; (b) must either drop each live pass from those lines (`secrets::token` does
-  not catch lowercase hex) or not rest on the pass alone.
+- **Hidden from what clients read (before (b)).** An agent that runs `env` puts its pass in its
+  session file and, in the terminal view, on its screen: the state's `drawer.agents.<task>.lines`.
+  Each live pass (`pass::Live`, registered while held, gone when dropped) reads `[hidden]`, in
+  either case: in every terminal's `lines` (searched across wrapped rows) and `text` (so `capture`,
+  `wait`'s match, a saved history), in every socket reply as a last step (session reads,
+  transcripts, errors), and in the trace. A `wait` cannot match a pass: no oracle for it. Not
+  hidden: a terminal's picture (a user-started capture's PNG), the user's own ⌘C, and a pass
+  printed in pieces. A dead pass shows again: it grants nothing.
 - **On the wire.** A top-level `"pass"` on any request line, taken off before `Request` is parsed
   (`control::parse`): the closed set is unchanged; a line with no pass parses from its text, as
   before. Not 32 hex digits: an error that does not repeat

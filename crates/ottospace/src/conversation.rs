@@ -45,7 +45,7 @@ pub struct Native {
     pub session: Option<(ottospace_core::runner::RunnerId, String)>,
     pub cwd: Option<String>,
     /// Its task's pass, while it runs (`pass`): none for a session's agent, nor once it moved.
-    pub(crate) pass: Option<crate::pass::Pass>,
+    pub(crate) pass: Option<crate::pass::Live>,
 }
 
 /// What the drawer keeps of a conversation's look, not its state: where it is scrolled, the
@@ -252,7 +252,7 @@ impl Workspace {
         if let Some(dir) = dir {
             command.current_dir(dir);
         }
-        let pass = subject.task().map(|_| crate::pass::Pass::mint().ok_or("no random bytes for a pass")).transpose()?;
+        let pass = subject.task().map(|_| crate::pass::Live::mint().ok_or("no random bytes for a pass")).transpose()?;
         if let Some(task) = subject.task() {
             command.env("OTTOSPACE_TASK", task.to_string());
         }

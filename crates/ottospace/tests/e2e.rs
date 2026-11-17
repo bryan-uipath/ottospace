@@ -9136,6 +9136,66 @@ fn a_task_agents_pass_in_its_terminal_finds_its_task_until_it_ends() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A live pass is hidden wherever a client reads text. An agent that says its pass (as `env`
+/// would) shows `[hidden]` in the state, in either view; a pane that prints it shows it so in a
+/// capture and a wait, which cannot match the pass either. Nor is it in the trace.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_live_pass_is_hidden_from_every_client() {
+    for view in ["terminal", "native"] {
+        let name = format!("pass-hidden-{view}");
+        let (root, record, env) = native_setup(&name, &[], &[("FAKE_SAY_PASS", "1")]);
+        let settings = root.join("home/settings.json");
+        let mut written: Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        written["conversation_view"] = json!(view);
+        std::fs::write(&settings, written.to_string()).unwrap();
+        let otto = launch_env(&name, &env);
+        otto.call(json!({"cmd": "split"}));
+        otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+        otto.call(json!({"cmd": "section", "section": "tasks"}));
+        otto.start_task(1);
+        let file = record.join("pass");
+        let pass = otto.wait_for("its pass", |_| {
+            std::fs::read_to_string(&file).ok().filter(|text| text.ends_with('\n')).map(|text| text.trim().to_string())
+        });
+        assert_eq!(pass.len(), 32);
+        let shows = |text: &str, what: &str| {
+            assert!(
+                !text.contains(&pass) && !text.contains(&pass.to_uppercase()),
+                "{view}: the pass in {what}: {text}"
+            );
+        };
+        // Said twice. The terminal view's screen is in the state: hidden twice. The native
+        // transcript in the state keeps sizes, not text.
+        let state = otto.wait_for("the pass said", |o| {
+            let state = o.call(json!({"cmd": "state"}));
+            let said = match view {
+                "terminal" => state.to_string().matches("[hidden]").count() >= 2,
+                _ => state["drawer"]["native"]["chats"]["1"]["transcript"]["entries"][1]["kind"] == "assistant",
+            };
+            said.then(|| state.to_string())
+        });
+        shows(&state, "the state");
+        // A pane that prints it.
+        let path = file.to_str().unwrap();
+        let typed = format!("cat '{path}'; tr a-f A-F < '{path}'; echo end-$((6*7))\r");
+        otto.call(json!({"cmd": "type", "pane": 1, "text": typed}));
+        otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^end-42$", "timeout_ms": 40000}));
+        let capture = otto.call(json!({"cmd": "capture", "pane": 1, "history": true}));
+        assert_eq!(capture["text"].as_str().unwrap().lines().filter(|line| *line == "[hidden]").count(), 2);
+        shows(&capture.to_string(), "a capture");
+        // A wait matches what shows, never the pass: no oracle for it.
+        let guess = otto.raw(r#"{"cmd":"wait","pane":1,"pattern":"^[0-9a-fA-F]{32}$","timeout_ms":300}"#);
+        assert_eq!(guess["ok"], false, "{guess}");
+        let found = otto.call(json!({"cmd": "wait", "pane": 1, "pattern": r"^\[hidden\]$", "timeout_ms": 1000}));
+        assert_eq!(found["line"], "[hidden]");
+        shows(&otto.call(json!({"cmd": "state"})).to_string(), "the state");
+        shows(&otto.call(json!({"cmd": "trace"})).to_string(), "the trace");
+        drop(otto);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
 /// The recorded 2.1.325 turn is read whole ("ok", once); once its agent is stopped, the
 /// composer still takes the user's words, and ↵ starts it again and sends them.
 #[test]
