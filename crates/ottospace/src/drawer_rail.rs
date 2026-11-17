@@ -23,18 +23,10 @@ fn control(item: RailItem) -> String {
 }
 
 impl Workspace {
-    /// Whether the drawer shows something the rail switches between: the transcript, or a
-    /// task's conversation (not the new-task box, the brief beside the tabs or the inspector).
-    fn railed(&self) -> bool {
-        let talk = self.model.talk.as_ref().is_some_and(|talk| talk.open);
-        let boxed = self.model.compose.is_some() || self.model.welcome();
-        !self.model.rail().is_empty() && (self.model.listen.shown || (talk && !boxed))
-    }
-
     /// The drawer, `width` wide, with its rail at the right edge when it has one: the transcript
     /// or the conversation in what is left of the width.
     pub(crate) fn render_railed_drawer(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.railed() {
+        if !self.model.rail_drawn() {
             return self.render_listen_view(width, cx).or_else(|| self.render_drawer(width, cx));
         }
         let inner = (width - WIDTH).max(0.);

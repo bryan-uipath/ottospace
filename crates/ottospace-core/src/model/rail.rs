@@ -51,6 +51,15 @@ impl Model {
         shown.filter(|item| rail.contains(item))
     }
 
+    /// Whether the rail is drawn: it has items, and the drawer shows the transcript or a
+    /// conversation, not the new-task box, a capture's draft or the inspector in its place.
+    pub fn rail_drawn(&self) -> bool {
+        let talk = self.talk.as_ref().is_some_and(|talk| talk.open);
+        let boxed = self.compose.is_some() || self.welcome();
+        let elsewhere = self.inspector.is_some() || self.capture.is_some();
+        !elsewhere && !self.rail().is_empty() && (self.listen.shown || (talk && !boxed))
+    }
+
     /// The user's choice of an item: the drawer shows it, open. The transcript is shown here,
     /// in this space's drawer (its source pane's tab is not brought up); a task is put in front.
     /// An item not on the rail: nothing.
@@ -174,10 +183,18 @@ mod tests {
                 assert_eq!(m.rail_selected(), before, "{action:?} {origin:?}");
             }
         }
-        // Nor does a client's ⌘⇧L put the transcript away.
+        // Nor does a client's ⌘⇧L or its keys into the conversation put the transcript away, the
+        // conversation open behind it or closed (review: closed, the toggle gave it the keys).
         m.update(Action::RailSelect { item: RailItem::Transcript });
-        m.update(Action::TalkToggle.sent_by(Origin::Socket));
-        assert_eq!(m.rail_selected(), Some(RailItem::Transcript));
+        for closed in [false, true] {
+            if let Some(talk) = &mut m.talk {
+                talk.open = !closed;
+            }
+            for theirs in [Action::TalkToggle, Action::TalkKeys { on: true }] {
+                m.update(theirs.clone().sent_by(Origin::Socket));
+                assert_eq!(m.rail_selected(), Some(RailItem::Transcript), "{theirs:?} closed: {closed}");
+            }
+        }
         // An item not on the rail: nothing.
         m.update(Action::RailSelect { item: task(9) });
         assert_eq!(m.rail_selected(), Some(RailItem::Transcript));
@@ -203,6 +220,14 @@ mod tests {
         assert!(m.refusal(&Action::ListMove { delta: 1 }, Origin::Socket).is_some());
         m.update(Action::FocusDir { dir: Dir::Left });
         assert_eq!(m.focus_target(), Target::Pane(1));
+        // Review: → from the inspector put the keys on a rail it hides. Not drawn, not reached.
+        m.update(Action::InspectorOpen { pane: 1, app: "Notes".into() });
+        assert!(!m.rail_drawn());
+        m.update(Action::FocusDir { dir: Dir::Right });
+        m.update(Action::FocusDir { dir: Dir::Right });
+        assert!(!matches!(m.focus_target(), Target::DrawerRail(_)), "{:?}", m.focus_target());
+        m.update(Action::InspectorClose);
+        m.update(Action::Focus { pane: 1 });
         // Its item gone (the transcript stopped, the rail with it): the keys leave it.
         m.update(Action::RailSelect { item: RailItem::Transcript });
         m.update(Action::FocusDir { dir: Dir::Right });

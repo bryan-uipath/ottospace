@@ -1411,7 +1411,7 @@ pub enum Action {
     },
     /// Close the chat, or open it again on the same conversation.
     TalkToggle,
-    /// Put a task of the selected workspace in front: its tab of the drawer's strip. The user's alone.
+    /// Put a task of the selected workspace in front (its row, or the drawer's rail). The user's alone.
     TalkFront {
         task: TaskId,
     },
@@ -3077,6 +3077,8 @@ impl Model {
             Action::NoticeDismiss { .. } => Some(crate::notice::USERS_ALONE),
             // So does a scroll in another app.
             Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
+            // Nor puts the transcript the user has in the drawer away, or the keys over it.
+            Action::TalkToggle | Action::TalkKeys { on: true } if self.listen.shown => Some(rail::RAIL_USERS),
             // Only the user starts, pauses, resumes or stops a transcript; only the shell reports
             // what it heard. A client's key, click or label is the client's.
             Action::ListenStart { .. }
@@ -9853,7 +9855,7 @@ mod tests {
             (m.members(&of), m.front(&of), m.task_space(4), m.task_space(5)),
             (vec![1, 2, 3], Some(3), task_space(4), task_space(5))
         );
-        // A workspace of one task has no strip.
+        // A workspace of one task has no rail.
         assert_eq!(rail_tasks(&workspace_of_one_task()), Vec::<TaskId>::new());
     }
 
@@ -9863,7 +9865,7 @@ mod tests {
         join(&mut m, "second");
         join(&mut m, "third");
         let of = task_space(1);
-        // The strip's tab, and the keys: next and previous, around.
+        // The rail, and the keys: next and previous, around.
         m.update(Action::TalkFront { task: 1 });
         assert_eq!((m.front(&of), m.talk.as_ref().map(|talk| &talk.task)), (Some(1), Some(&Subject::Task(1))));
         m.update(Action::TalkCycle { delta: -1 });
@@ -9908,7 +9910,7 @@ mod tests {
         m.update(state(2, State::Running));
         assert_eq!((m.space_tasks(&of), m.front(&of)), (vec![1, 2, 3], Some(3)));
         // An agent's report of done takes no conversation from under the user; the user's own
-        // done gives way to the most urgent one that is not. Done, it leaves the strip.
+        // done gives way to the most urgent one that is not. Done, it leaves the rail.
         m.update(state(3, State::Done));
         assert_eq!((m.front(&of), rail_tasks(&m)), (Some(3), vec![1, 2, 3]));
         m.update(Action::TalkFront { task: 2 });

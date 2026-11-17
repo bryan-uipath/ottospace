@@ -2119,7 +2119,7 @@ fn check_zones(m: &Model) -> Result<(), String> {
         ensure!(m.list.is_none() && m.mode() == Mode::List, "a rail and {:?} have the keyboard", m.mode());
     }
     if let Some(crate::model::zones::RailFocus::Right(item)) = m.rail_focus {
-        ensure!(m.rail().contains(&item), "the keyboard on {item:?}, not on the drawer's rail");
+        ensure!(m.rail().contains(&item) && m.rail_drawn(), "the keyboard on {item:?}, not on a drawn rail");
     }
     // The drawer's rail: two items or none; the transcript first while one is on, then the tasks
     // by urgency, each once; the transcript selected while it is shown.
@@ -2716,13 +2716,14 @@ impl Run {
         let menu_kept = m.row_menu.is_none() || m.row_menu == menu_before;
         ensure!(origin == Origin::User || menu_kept, "{origin:?}'s {action:?} opened or moved a row's menu");
         // Only the user changes what the drawer's rail has selected: after another's step in the
-        // same space, an item still on the rail stays selected, unless what takes keys took the
-        // drawer from the transcript (`listen_hidden`).
+        // same space, an item still on the rail stays selected, unless a new-task box or the
+        // editor took the drawer from the transcript.
         if let (of, Some(item)) = &rail_before
             && origin != Origin::User
             && m.space() == of
             && m.rail().contains(item)
-            && !m.listen_hidden()
+            && m.compose.is_none()
+            && m.editing.is_none()
         {
             ensure!(m.rail_selected() == Some(*item), "{origin:?}'s {action:?} moved the rail from {item:?}");
         }
