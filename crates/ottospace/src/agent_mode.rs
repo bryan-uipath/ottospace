@@ -8,6 +8,7 @@ use std::sync::mpsc::Sender;
 
 use gpui::{AnyElement, AnyView, Context, MouseDownEvent, Window, actions, div, prelude::*, px, rgb, svg};
 use ottospace_core::agent_mode::{self, AppUse, Level, menu_key};
+use ottospace_core::features::Feature;
 use ottospace_core::tasks::{Caller, TaskId};
 use ottospace_core::{Action, Origin, PaneId, theme};
 
@@ -90,7 +91,8 @@ impl Workspace {
     /// The robot in an app pane's header: the glyph, the level's word and a caret, in the level's
     /// colour; dimmed where no task works. None with the flag off, and on any other pane.
     pub(crate) fn agent_header(&self, pane: PaneId, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let grant = self.model.agent.panes.get(&pane).copied()?;
+        // Grants are kept while the flag is off; the robot is not drawn.
+        let grant = self.model.agent.panes.get(&pane).copied().filter(|_| self.on(Feature::AgentMode))?;
         let colour = if grant.task.is_some() { colour(grant.level) } else { theme::BORDER_STRONG };
         let open = self.model.agent.menu.is_some_and(|menu| menu.pane == pane);
         let tip = tip(grant.level, grant.task);
@@ -140,7 +142,8 @@ impl Workspace {
 
     /// Whether the pane is at See and act: its border in the act colour, seen from across the screen.
     pub(crate) fn agent_acts(&self, pane: PaneId) -> bool {
-        self.model.agent.panes.get(&pane).is_some_and(|grant| grant.task.is_some() && grant.level == Level::Act)
+        let acts = |grant: &ottospace_core::agent_mode::Grant| grant.task.is_some() && grant.level == Level::Act;
+        self.on(Feature::AgentMode) && self.model.agent.panes.get(&pane).is_some_and(acts)
     }
 
     /// Opens (or shuts) the menu of `pane`, default the focused one. `keys`: by a key or a label.
@@ -317,7 +320,7 @@ impl Workspace {
     /// Still granted to `task` at See or more, the flag on: an answer read before an Off is dropped.
     fn still_sees(&self, pane: PaneId, task: TaskId) -> bool {
         let granted = |grant: &ottospace_core::agent_mode::Grant| grant.task == Some(task) && grant.level >= Level::See;
-        self.on(ottospace_core::features::Feature::AgentMode) && self.model.agent.panes.get(&pane).is_some_and(granted)
+        self.on(Feature::AgentMode) && self.model.agent.panes.get(&pane).is_some_and(granted)
     }
 
     fn serve_read(

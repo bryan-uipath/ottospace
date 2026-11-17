@@ -9487,6 +9487,9 @@ fn agent_mode_brings_a_kept_level_back_only_as_an_offer_the_user_takes() {
     let (mail, notes) = (waiting[0].min(waiting[1]), waiting[0].max(waiting[1]));
     assert_eq!(panes(&again), json!({}));
     let pass = pass_of(&again);
+    // Room for the panes' headers: the Tasks section and the chat closed.
+    again.call(json!({"cmd": "section", "section": "tasks"}));
+    again.user_key("cmd-shift-l");
     let offer = |o: &Otto, pane: u64| o.control_opt(&format!("agent-offer:{pane}"));
     // A client's fill of Notes, the same app: Off, and no offer.
     again.call(json!({"cmd": "focus", "pane": notes}));
