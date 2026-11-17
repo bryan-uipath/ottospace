@@ -93,17 +93,32 @@ fn one_line(text: &str) -> String {
     clean(text).replace('\n', "\\n")
 }
 
-/// The host of a URL, without a user name or port: `https://me@example.com:8/a` → `example.com`.
-/// `None`: not a URL with a host.
+/// The host of an `http(s)` URL whose authority is plain: ASCII letters, digits, `.` and `-`, an
+/// optional port, or `[` an IPv6 address `]`. `https://docs.example.com:8/a` → `docs.example.com`.
+/// `None` for anything a browser could read another way (a user name, `\`, `%`, non-ASCII): the
+/// row then shows the URL as written, never a guessed host.
 fn host(url: &str) -> Option<&str> {
-    let (_, rest) = url.split_once("://")?;
+    let (scheme, rest) = url.split_once("://")?;
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return None;
+    }
     let authority = rest.split(['/', '?', '#']).next()?;
-    let host = authority.rsplit('@').next()?;
-    let host = match host.strip_prefix('[') {
-        Some(v6) => v6.split(']').next()?,
-        None => host.split(':').next()?,
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(v6) => {
+            let (address, port) = v6.split_once(']')?;
+            let plain = !address.is_empty() && address.chars().all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.'));
+            (plain.then_some(address)?, port)
+        }
+        None => {
+            let at = authority.find(':').unwrap_or(authority.len());
+            let host = &authority[..at];
+            let plain = host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'));
+            (plain.then_some(host)?, &authority[at..])
+        }
     };
-    (!host.is_empty()).then_some(host)
+    let port = port.strip_prefix(':').unwrap_or(port);
+    let numeric = port.chars().all(|c| c.is_ascii_digit());
+    (!host.is_empty() && !host.starts_with(['.', '-']) && numeric).then_some(host)
 }
 
 impl Gist {
@@ -244,9 +259,27 @@ mod tests {
 
     #[test]
     fn the_web_shows_a_fetchs_host_and_a_searchs_query() {
-        assert_eq!(shows("WebFetch", json!({"url": "https://me:pw@docs.example.com:8443/a?k=v"})), "docs.example.com");
-        assert_eq!(shows("WebFetch", json!({"url": "http://[::1]:80/"})), "::1");
-        assert_eq!(shows("WebFetch", json!({"url": "not a url"})), "not a url", "as written, as text");
+        let fetch = |url: &str| shows("WebFetch", json!({ "url": url }));
+        assert_eq!(fetch("https://docs.example.com:8443/a?k=v"), "docs.example.com");
+        assert_eq!(fetch("http://good.com.evil.com/"), "good.com.evil.com", "the whole host");
+        assert_eq!(fetch("https://evil.com#@good.com"), "evil.com", "a fragment is not the host");
+        assert_eq!(fetch("https://evil.com?@good.com"), "evil.com");
+        assert_eq!(fetch("https://xn--bcher-kva.de/"), "xn--bcher-kva.de");
+        assert_eq!(fetch("http://[::1]:80/"), "::1");
+        // Anything a browser could read another way: the URL as written, never a guessed host.
+        for url in [
+            "https://good.com\\@evil.com/",
+            "https://good.com@evil.com/",
+            "https://me:pw@docs.example.com/",
+            "https://bücher.de/",
+            "https://good.com%2eevil.com/",
+            "https://good.com:80@evil.com/",
+            "https://[::1@evil.com]/",
+            "javascript://good.com/%0aalert(1)",
+            "not a url",
+        ] {
+            assert_eq!(fetch(url), url, "{url}");
+        }
         assert_eq!(shows("WebSearch", json!({"query": "rust  gpui\ntext"})), "rust gpui text");
     }
 
