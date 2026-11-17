@@ -3001,10 +3001,14 @@ impl Run {
             |e: &Effect| matches!(e, Effect::StartAgent { .. } | Effect::ReadSession { .. } | Effect::AgentSend { .. });
         ensure!(!selects || !effects.iter().any(acts), "{origin:?}'s {action:?} started an agent: {effects:?}");
         ensure!(!selects || m.chats == chats_before, "{origin:?}'s {action:?} changed a transcript");
-        // A dial moves only on what its agent did, a message sent, or its process starting or ending.
+        // A dial moves only on what its agent did (an app it read too), a message sent, or its process starting or ending.
         let moves = matches!(
             action,
-            Action::AgentEvents { .. } | Action::TalkSend | Action::AgentStarted { .. } | Action::AgentExited { .. }
+            Action::AgentEvents { .. }
+                | Action::AppUsed { .. }
+                | Action::TalkSend
+                | Action::AgentStarted { .. }
+                | Action::AgentExited { .. }
         );
         for chat in m.chats.iter().filter(|_| !moves) {
             let was = chats_before.iter().find(|was| was.subject == chat.subject);
@@ -4820,6 +4824,30 @@ fn by(origin: Origin, action: Action) -> Envelope {
 
 fn split(axis: Axis, kind: Kind) -> Envelope {
     Action::Split { axis, kind }.into()
+}
+
+/// A task's read of an app pane lights the dial's Apps station (`app_used`): the check let only
+/// the agent's events move a dial (seed 501).
+#[test]
+fn an_app_read_moves_the_dial() {
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        Action::CaptureStart {
+            pane: None,
+            draft: "d1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![],
+            images: true,
+        }
+        .into(),
+        Action::ComposeSubmit { open: true }.into(),
+        by(Origin::System, Action::AgentStarted { task: Subject::Task(1), session: Some("--resume".into()), at: 66 }),
+        by(
+            Origin::System,
+            Action::AppUsed { task: 1, pane: 4, what: AppUse::Read, refused: Some("".into()), at: 6002 },
+        ),
+    ])
+    .unwrap();
 }
 
 /// A workbook's slot comes back waiting, as an empty pane does: the shell hears of it when it is
