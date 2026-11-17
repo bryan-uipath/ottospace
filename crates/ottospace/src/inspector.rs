@@ -335,7 +335,7 @@ impl Workspace {
                     })),
             )
             .child(div().flex_none().text_color(rgb(theme::PRIMARY)).child(row.role))
-            .child(div().flex_1().min_w_0().truncate().text_color(rgb(theme::MUTED)).child(row.text))
+            .child(crate::cut_text(row.text).flex_1().text_color(rgb(theme::MUTED)))
             .when(row.pressable, |d| d.child(flag("press")))
             .when(row.settable, |d| d.child(flag("set")))
             .when(row.focused, |d| d.child(flag("focus")))

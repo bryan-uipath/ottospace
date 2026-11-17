@@ -9,7 +9,7 @@ use ottospace_core::model::Section;
 use ottospace_core::workbook::{self, History, WorkbookId, WorkbookRow};
 use ottospace_core::{Action, Origin, PaneId, theme};
 
-use crate::{Workspace, config, list_button, marks, now_ms, rect};
+use crate::{Workspace, config, marks, now_ms, rect};
 
 /// What the workbooks folder and this run last said, kept between frames.
 #[derive(Default)]
@@ -251,7 +251,7 @@ impl Workspace {
         match renaming {
             // The name being typed: the text field.
             true => div().flex().text_color(rgb(theme::MARK)).child(self.render_field("name", cx)),
-            false => div().truncate().child(name),
+            false => crate::cut_text(name),
         }
     }
 
@@ -272,8 +272,27 @@ impl Workspace {
             line.child("No workspaces yet —").child(new)
         });
         let typing = |id: WorkbookId, at: Option<usize>| matches!(&self.model.mark_input, Some(MarkInput::Workbook { workbook, tab, .. }) if *workbook == id && *tab == at);
-        // A dot while it is open.
-        let dot = |open: bool| div().flex_none().size(px(6.)).rounded_full().when(open, |d| d.bg(rgb(theme::PICK)));
+        // The leading mark: filled while it is open, a ring when it is not.
+        let dot = |open: bool| {
+            let dot = div().flex_none().size(px(8.)).rounded_full();
+            if open { dot.bg(rgb(theme::PICK)) } else { dot.border_1().border_color(rgb(theme::BORDER_STRONG)) }
+        };
+        // What it holds, muted at the row's end, its first part (`3 tabs` of `3 tabs · 2 terminals`),
+        // cut: an app list has no ` · `. All of it on hover. While the ⋯ shows, room for it, so the
+        // name does not run under it; none while the name is typed.
+        let meta = |summary: &str, shown: bool, renaming: bool| match (renaming, shown) {
+            (true, _) => None,
+            (false, true) => Some(div().flex_none().w(px(14.))),
+            (false, false) => {
+                let short = summary.split(" · ").next().unwrap_or_default().to_string();
+                Some(crate::cut_text(short).max_w(px(96.)).text_xs().text_color(rgb(theme::MUTED)))
+            }
+        };
+        let tip = |summary: String| {
+            move |_: &mut gpui::Window, cx: &mut gpui::App| {
+                gpui::AnyView::from(cx.new(|_| crate::Tooltip(summary.clone().into())))
+            }
+        };
         let mut children = Vec::new();
         let mut index = 0;
         for row in rows {
@@ -299,23 +318,20 @@ impl Workspace {
                     }))
             });
             let name = self.workbook_name(renaming, row.name.clone(), cx);
-            let title = div().w_full().flex().items_center().gap_1().children(fold).child(name.flex_1().min_w_0());
             // Bound to a task: the task's badge, where the dot is.
-            let badge = row.task.and_then(|task| self.task_badge(task, 16.));
-            let title = match badge {
-                Some(badge) => title.child(badge.flex_none()),
-                None => title.child(dot(row.open)),
+            let lead = match row.task.and_then(|task| self.task_badge(task, 16.)) {
+                Some(badge) => badge.flex_none(),
+                None => dot(row.open),
             };
-            let summary = div().w_full().truncate().text_xs().text_color(rgb(theme::MUTED)).child(row.summary.clone());
-            let dots = self.row_dots(ListRow::Workbook(id), self.dots_shown(&ListRow::Workbook(id)), cx);
-            let book = list_button(ElementId::Name(format!("workbook:{id}").into()), selected)
-                .relative()
+            let shown = self.dots_shown(&ListRow::Workbook(id));
+            let dots = self.row_dots(ListRow::Workbook(id), shown, cx);
+            let book = crate::sidebar_row(ElementId::Name(format!("workbook:{id}").into()), selected)
+                .tooltip(tip(row.summary.clone()))
                 .on_hover(cx.listener(move |this, over: &bool, _, cx| this.row_hover(ListRow::Workbook(id), *over, cx)))
-                .flex_col()
-                .items_start()
-                .gap_0p5()
-                .child(title)
-                .child(summary)
+                .children(fold)
+                .child(lead)
+                .child(name.flex_1().min_w_0())
+                .children(meta(&row.summary, shown, renaming))
                 .child(self.controls.mark(format!("workbook:{id}")))
                 .children(dots.filter(|_| !renaming))
                 .on_click(
@@ -325,34 +341,33 @@ impl Workspace {
             if !row.unfolded {
                 continue;
             }
+            let mut tabs = Vec::new();
             for (at, tab) in row.tabs.into_iter().enumerate() {
                 let selected = self.model.list == Some(index);
                 index += 1;
                 let renaming = typing(id, Some(at));
                 let row = ListRow::WorkbookTab(id, at);
-                let dots = self.row_dots(row.clone(), self.dots_shown(&row), cx);
+                let shown = self.dots_shown(&row);
+                let dots = self.row_dots(row.clone(), shown, cx);
                 let name = self.workbook_name(renaming, tab.title, cx);
-                let title = div().w_full().flex().items_center().gap_2().child(name.flex_1().min_w_0());
-                let summary = div().w_full().truncate().text_xs().text_color(rgb(theme::MUTED)).child(tab.summary);
                 let control = tab_control("workbook-tab", id, at);
-                let tab_row = list_button(ElementId::Name(control.clone().into()), selected)
-                    .relative()
+                let tab_row = crate::sidebar_row(ElementId::Name(control.clone().into()), selected)
+                    .tooltip(tip(tab.summary.clone()))
                     .on_hover(cx.listener(move |this, over: &bool, _, cx| {
                         this.row_hover(ListRow::WorkbookTab(id, at), *over, cx)
                     }))
                     .ml_4()
-                    .flex_col()
-                    .items_start()
-                    .gap_0p5()
-                    .child(title.child(dot(tab.open)))
-                    .child(summary)
+                    .child(dot(tab.open))
+                    .child(name.flex_1().min_w_0())
+                    .children(meta(&tab.summary, shown, renaming))
                     .child(self.controls.mark(control))
                     .children(dots.filter(|_| !renaming))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.click_workbook("workbook-tab", id, Some(at), window, cx)
                     }));
-                children.push(tab_row.into_any_element());
+                tabs.push(tab_row.into_any_element());
             }
+            children.extend(crate::well(tabs, 4.));
         }
         // After a delete or an update, a line at the top offers to take it back, as Tasks does.
         let notice = self.model.workbooks.offered().map(|change| {

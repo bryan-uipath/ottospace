@@ -1,0 +1,1 @@
+{"repos": ["{ROOT}/repos"], "sessions": true, "session_dirs": {"claude": [], "codex": "{ROOT}/codex"}, "restore_layout": false}

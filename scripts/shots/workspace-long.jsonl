@@ -1,0 +1,9 @@
+# Workspace rows with a long name and an app-only summary: at rest, and the pointer on each (its …).
+{"cmd":"section","section":"workbook"}
+{"until":"workbooks","len":2}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"at-rest"}
+{"hover":"workbook:1","at":[0.3,0.5]}
+{"shot":"hover-long"}
+{"hover":"workbook:2","at":[0.3,0.5]}
+{"shot":"hover-apps"}
