@@ -6079,16 +6079,22 @@ pub(crate) fn recessed(inner: impl IntoElement, depth: f32) -> Div {
 /// The shadow cast into a box from its top (`top`) or bottom edge, `depth` points deep: the box
 /// sits below its edge. It takes no room and no clicks; the box is `relative`.
 pub(crate) fn inner_shade(top: bool, depth: f32) -> Div {
-    let (dark, clear) = (black().opacity(0.6), black().opacity(0.));
+    shade(top, depth, 0.6)
+}
+
+/// `inner_shade`, `strength` its darkest opacity: a well's is softer.
+fn shade(top: bool, depth: f32, strength: f32) -> Div {
+    let (dark, clear) = (black().opacity(strength), black().opacity(0.));
     let (from, to) = if top { (dark, clear) } else { (clear, dark) };
     let shade = gpui::linear_gradient(180., gpui::linear_color_stop(from, 0.), gpui::linear_color_stop(to, 1.));
     let edge = div().absolute().left_0().right_0().h(px(depth)).bg(shade);
     if top { edge.top_0() } else { edge.bottom_0() }
 }
 
-/// A row of an open sidebar group, in the group's well: darker than the section and across its
-/// padding, a shadow at the well's top (`first`) and bottom (`last`). Each row stays a child of
-/// the list, so list mode still scrolls to it; it covers the list's `gap` above it.
+/// A row of an open sidebar group, in the group's well: a little darker than the section (`WELL`)
+/// and across its padding, a soft shadow at the well's top (`first`) and bottom (`last`). Each row
+/// stays a child of the list, so list mode still scrolls to it; it covers the list's `gap` above it.
+/// Not Calendar's rows: they sit level, as Workspaces' do, a list of the day, not an opened-up group.
 pub(crate) fn in_well(row: impl IntoElement, first: bool, last: bool, gap: f32) -> Div {
     const PAD: f32 = 8.; // the list's padding (`p_2`)
     const RIM: f32 = 6.; // the well's own room at its top and bottom, as deep as its shadows
@@ -6097,13 +6103,13 @@ pub(crate) fn in_well(row: impl IntoElement, first: bool, last: bool, gap: f32) 
         .relative()
         .mx(px(-PAD))
         .px(px(PAD))
-        .bg(rgb(theme::BACKGROUND))
+        .bg(rgb(theme::WELL))
         .when(!first, |d| d.mt(px(-gap)).pt(px(gap)))
         .when(first, |d| d.pt(px(RIM)))
         .when(last, |d| d.pb(px(RIM)))
         .child(row)
-        .when(first, |d| d.child(inner_shade(true, RIM)))
-        .when(last, |d| d.child(inner_shade(false, RIM)))
+        .when(first, |d| d.child(shade(true, RIM, 0.35)))
+        .when(last, |d| d.child(shade(false, RIM, 0.35)))
 }
 
 /// `rows` of an open group, each in its well (`in_well`).
