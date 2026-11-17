@@ -493,7 +493,11 @@ impl Workspace {
                     .text_color(rgb(colour))
                     .child(bars(self.listen_level()))
                     .child(hearing.label())
-                    .child(self.controls.mark(format!("listen-hearing:{}", hearing.id())))
+                    // Named by what it hears only in a test run: every mark is a sneak target, and
+                    // sneak mode's state goes to every client.
+                    .when(std::env::var_os("OTTOSPACE_E2E").is_some(), |d| {
+                        d.child(self.controls.mark(format!("listen-hearing:{}", hearing.id())))
+                    })
             }))
             .when(on.status != Status::Starting, |d| d.child(self.listen_button(toggle, label, "view", cx).text_xs()))
             .child(self.listen_button("listen-stop", "Stop", "view", cx).text_xs())
