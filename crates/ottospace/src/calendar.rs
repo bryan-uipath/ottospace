@@ -832,8 +832,8 @@ impl Workspace {
         });
         let running = stage == Stage::Running;
         let tint = div().absolute().inset_0().rounded_md().bg(rgb(paint.color));
-        // At rest barely there (at most 5%), so a list of meetings stays calm; the one that runs, clearly more.
-        let tint = tint.opacity(if running { 0.22 } else { 0.05 * paint.alpha.max(0.4) });
+        // At rest faint (3 to 5%), so a list of meetings stays calm; the one that runs, clearly more.
+        let tint = tint.opacity(if running { 0.22 } else { 0.05 * paint.alpha.max(0.6) });
         let fact = calendar.row_fact(event, now);
         // Now's colour, as the band's tick: a bar at the edge of the meeting that runs, where a
         // Tasks row marks the task on show.
