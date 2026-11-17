@@ -1,10 +1,11 @@
-//! The drawer's right rail in the shell: a narrow column at the drawer's right edge, an item for
-//! the running transcript and for each task of the workspace, and + for a new task here. Which
-//! items, their order and which is selected are the core's (`ottospace_core::model::rail`).
+//! The drawer's right rail in the shell: a narrow column at the drawer's right edge. On top an
+//! item for each task of the workspace and + for a new task here; at the foot, below a divider,
+//! the transcript, idle or recording. Which items, their order and which is selected are the
+//! core's (`ottospace_core::model::rail`).
 
 use gpui::{AnyElement, AnyView, Context, Div, ElementId, Stateful, Window, div, prelude::*, px, rgb, svg};
 use ottospace_core::listen::Status;
-use ottospace_core::model::rail::RailItem;
+use ottospace_core::model::rail::{RailItem, RailSection};
 use ottospace_core::model::zones::RailFocus;
 use ottospace_core::{Action, theme};
 
@@ -34,7 +35,7 @@ impl Workspace {
         Some(div().flex_none().h_full().flex().child(body).child(self.drawer_rail(cx)).into_any_element())
     }
 
-    /// The column: the transcript, a divider, the tasks, +.
+    /// The column: the tasks, +; at the foot a divider, then the transcript.
     fn drawer_rail(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let selected = self.model.rail_selected();
         let keyed = match self.model.rail_focus {
@@ -55,12 +56,14 @@ impl Workspace {
             .bg(rgb(theme::BACKGROUND))
             .border_l_1()
             .border_color(rgb(theme::BORDER));
-        for (at, item) in items.iter().copied().enumerate() {
-            let Some(face) = self.rail_face(item, selected == Some(item)) else { continue };
-            column = column.child(self.rail_item(item, face, selected == Some(item), keyed == Some(item), cx));
-            if item == RailItem::Transcript && at + 1 < items.len() {
-                column = column.child(div().w(px(20.)).h(px(1.)).my(px(2.)).bg(rgb(theme::BORDER)));
-            }
+        let item = |item: RailItem| {
+            let face = self.rail_face(item)?;
+            Some(self.rail_item(item, face, selected == Some(item), keyed == Some(item), cx))
+        };
+        let (top, foot): (Vec<RailItem>, Vec<RailItem>) =
+            items.iter().partition(|it| it.section() == RailSection::Workspace);
+        for it in top {
+            column = column.children(item(it));
         }
         let new = div()
             .id("drawer-rail-new")
@@ -78,17 +81,26 @@ impl Workspace {
             .child(self.controls.mark("drawer-rail:new"))
             .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New task in this workspace (⌘N)".into()))))
             .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)));
-        column.child(new).child(self.controls.mark("drawer-rail"))
+        column = column.child(new);
+        if !foot.is_empty() {
+            let divider = div().w(px(20.)).h(px(1.)).my(px(2.)).bg(rgb(theme::BORDER));
+            column = column.child(div().flex_1()).child(divider);
+            for it in foot {
+                column = column.children(item(it));
+            }
+        }
+        column.pb_2().child(self.controls.mark("drawer-rail"))
     }
 
-    /// What an item shows, and its hover: the transcript's waveform (in the accent while
-    /// selected) with a red dot while it records; a task's badge, whose dot is its state's colour.
-    fn rail_face(&self, item: RailItem, selected: bool) -> Option<(AnyElement, gpui::SharedString)> {
+    /// What an item shows, and its hover: the transcript's waveform, grey while idle, in the
+    /// accent while one is on, with a red dot while it records; a task's badge, whose dot is its
+    /// state's colour.
+    fn rail_face(&self, item: RailItem) -> Option<(AnyElement, gpui::SharedString)> {
         match item {
             RailItem::Transcript => {
-                let on = self.model.listen.on.as_ref()?;
-                let recording = on.status == Status::On;
-                let colour = if selected { theme::PRIMARY } else { theme::MUTED };
+                let status = self.model.listen.on.as_ref().map(|on| on.status);
+                let recording = status == Some(Status::On);
+                let colour = if status.is_some() { theme::PRIMARY } else { theme::MUTED };
                 let wave = svg().path("icons/waveform.svg").size(px(18.)).text_color(rgb(colour));
                 let dot = div()
                     .absolute()
@@ -106,7 +118,12 @@ impl Workspace {
                     .justify_center()
                     .child(wave)
                     .when(recording, |d| d.child(dot));
-                let tip = if recording { "The transcript, recording" } else { "The transcript, paused" };
+                let tip = match status {
+                    None => "Transcript: not listening",
+                    Some(Status::On) => "Transcript: recording",
+                    Some(Status::Paused) => "Transcript: paused",
+                    Some(Status::Starting) => "Transcript: starting",
+                };
                 Some((face.into_any_element(), tip.into()))
             }
             RailItem::Task { id } => {
@@ -127,7 +144,7 @@ impl Workspace {
         (face, tip): (AnyElement, gpui::SharedString),
         selected: bool,
         keyed: bool,
-        cx: &mut Context<Self>,
+        cx: &Context<Self>,
     ) -> Stateful<Div> {
         let edge = div().absolute().left_0().top(px(6.)).bottom(px(6.)).w(px(2.)).rounded_sm().bg(rgb(theme::PRIMARY));
         div()
@@ -180,7 +197,8 @@ impl Workspace {
     }
 
     /// The rail as the state shows it: each item's `kind`, `id` (a task's, else null),
-    /// `selected` and where it was drawn (null: not drawn). Empty: no rail. Never a transcript's text.
+    /// `section` (`workspace` on top, `everywhere` below the divider), `selected` and where it
+    /// was drawn (null: not drawn). Empty: no rail. Never a transcript's text.
     pub(crate) fn rail_json(&self) -> serde_json::Value {
         let selected = self.model.rail_selected();
         let row = |item: RailItem| {
@@ -189,7 +207,8 @@ impl Workspace {
                 RailItem::Task { id } => ("task", Some(id)),
             };
             let drawn = self.controls.bounds(&control(item)).map(rect);
-            serde_json::json!({"kind": kind, "id": id, "selected": selected == Some(item), "rect": drawn})
+            let section = item.section();
+            serde_json::json!({"kind": kind, "id": id, "section": section, "selected": selected == Some(item), "rect": drawn})
         };
         serde_json::Value::Array(self.model.rail().into_iter().map(row).collect())
     }

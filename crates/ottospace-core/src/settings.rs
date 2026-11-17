@@ -25,6 +25,11 @@ pub struct PinnedRepo {
     pub pinned: bool,
 }
 
+/// `null` read as an empty list, as `repos: null` was before it became a list of entries.
+fn null_is_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<RepoEntry>, D::Error> {
+    Option::<Vec<RepoEntry>>::deserialize(d).map(Option::unwrap_or_default)
+}
+
 impl RepoEntry {
     pub fn path(&self) -> &str {
         match self {
@@ -62,8 +67,8 @@ pub struct Settings {
     pub terminal: Terminal,
     /// The repositories the Repos section lists, in its order: added by the user (none by
     /// default). An entry is a path, or `{ "path": …, "pinned": true }`. One that is a folder of
-    /// repositories (from when this named folders to look in) lists them as one group.
-    #[serde(default)]
+    /// repositories (from when this named folders to look in) lists them as one group. `null`: none.
+    #[serde(default, deserialize_with = "null_is_empty")]
     pub repos: Vec<RepoEntry>,
     /// The directory tasks are kept in. Default: `tasks` beside the settings file.
     #[serde(default)]
@@ -708,7 +713,7 @@ pub fn with_repos(text: &str, dirs: &[crate::repos::RepoDir]) -> Result<String, 
 
 /// The settings file's `repos` as it is now (none: no key). `Err`: as `with_repos`'s.
 pub fn repos_of(text: &str) -> Result<Vec<RepoEntry>, String> {
-    let Some(now) = object(text)?.remove("repos") else { return Ok(Vec::new()) };
+    let Some(now) = object(text)?.remove("repos").filter(|now| !now.is_null()) else { return Ok(Vec::new()) };
     serde_json::from_value(now).map_err(|_| {
         "`repos` is not a list of repositories: [\"~/code/app\", {\"path\": \"~/code/web\", \"pinned\": true}]"
             .to_string()
@@ -1234,6 +1239,10 @@ mod tests {
         assert_eq!(now.iter().map(|e| (e.path(), e.pinned())).collect::<Vec<_>>(), [("/a", false), ("/b", true)]);
         assert_eq!(repos_of("{}"), Ok(vec![]));
         assert!(repos_of(r#"{"repos": "~/code"}"#).is_err());
+        // `null` is no repository, not a mistake, and is written over.
+        assert_eq!(Settings::read(r#"{"repos": null}"#), (Settings::default(), vec![]));
+        assert_eq!(repos_of(r#"{"repos": null}"#), Ok(vec![]));
+        assert_eq!(with_repos(r#"{"repos": null}"#, &dirs[1..]).unwrap(), r#"{"repos": ["~/work"]}"#);
     }
 
     #[test]

@@ -1005,6 +1005,8 @@ struct Workspace {
     listen_meter: Option<listen_meter::Meter>,
     /// The transcript whose speech model the system is downloading, for its label.
     listen_downloading: Option<String>,
+    /// Today's files of `transcripts_dir` as last handed to the core, and the one open read-only.
+    listen_past: listen::Past,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -1170,6 +1172,9 @@ impl Workspace {
                         this.read_titles(cx);
                     }
                     this.listen_menu_bar(window, cx);
+                    if tick % 60 == 0 {
+                        this.listen_read_past(window, cx);
+                    }
                     // The green button, Window ▸ Zoom or a title bar double-click: only the user's hand.
                     if ottospace_mac::window::take_zoom() {
                         this.dispatch(Action::FillDisplay, Origin::User, window, cx);
@@ -1455,6 +1460,7 @@ impl Workspace {
             listen_ending: Vec::new(),
             listen_meter: None,
             listen_downloading: None,
+            listen_past: listen::Past::default(),
             focus,
             _subscriptions: subscriptions,
         };
@@ -4391,13 +4397,17 @@ impl Workspace {
     }
 
     /// The picker dropdown, under the split buttons. A click outside it closes it.
-    fn render_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> AnyElement {
+        if picker.transcribe {
+            return self.render_sound_picker(picker, cx);
+        }
         let selected = picker.selected;
         let rows = picker.matches().into_iter().enumerate().map(|(i, item)| {
             let (tag, color) = match item {
                 PickItem::Terminal => ("TERM", theme::PRIMARY),
                 PickItem::App { .. } => ("APP", theme::APP),
                 PickItem::Closed { .. } => ("APP", theme::MUTED),
+                PickItem::Sound { .. } => ("APP", theme::APP),
             };
             dialog::filter_row(("pick", i), i == selected)
                 .child(match item {
@@ -4434,7 +4444,60 @@ impl Workspace {
             .child(div().text_color(rgb(theme::PICK)).child(title))
             .child(self.render_field("type to filter", cx));
         let panel = self.list_panel(panel, header, "picker", rows, "No match");
-        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel)
+        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel).into_any_element()
+    }
+
+    /// The transcript's picker ("Transcribe a window…"), in ⌘E's style: each app that can play
+    /// sound and its windows, the one playing now first and marked. A pick hears that app.
+    fn render_sound_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> AnyElement {
+        let selected = picker.selected;
+        let rows = picker.matches().into_iter().enumerate().filter_map(|(i, item)| {
+            let PickItem::Sound { name, window, playing, .. } = item else { return None };
+            let icon = match self.icons.contains_key(name) {
+                true => div().w(px(28.)).flex_none().child(self.app_icon(name)),
+                false => div().w(px(28.)).flex_none(),
+            };
+            let label = match window {
+                Some(window) => format!("{name} · {window}"),
+                None => name.clone(),
+            };
+            let now = playing.then(|| {
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(rgb(theme::RECORDING))
+                    .child(div().size(px(6.)).rounded_full().bg(rgb(theme::RECORDING)))
+                    .child("sound now")
+            });
+            let row = dialog::filter_row(("pick", i), i == selected)
+                .child(icon)
+                .child(div().flex_1().min_w_0().truncate().child(label))
+                .children(now)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.dispatch(Action::PickerChoose { index: Some(i) }, this.input, window, cx);
+                }));
+            Some(row.into_any_element())
+        });
+        let rows: Vec<AnyElement> = rows.collect();
+        let panel = dialog::floating(360.).absolute().top(px(TOP_BAR + 6.)).right(px(8.)).max_h(px(420.));
+        let header = div()
+            .h(px(34.))
+            .text_xs()
+            .child(div().text_color(rgb(theme::PICK)).child("Listen to…"))
+            .child(self.render_field("type to filter", cx));
+        let foot = div()
+            .px_3()
+            .py_2()
+            .border_t_1()
+            .border_color(rgb(theme::BORDER))
+            .text_xs()
+            .text_color(rgb(theme::MUTED))
+            .child("↵ listen · Esc cancel · needn't be in a pane");
+        let panel = self.list_panel(panel, header, "picker", rows, "No app to listen to").child(foot);
+        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel).into_any_element()
     }
 
     /// Carries out `Effect::FillDisplay`. A run with hosting off changes no window: its own
@@ -5872,8 +5935,15 @@ impl Workspace {
             })
             .collect();
         let more = others - badges;
+        let dot = self.model.listen_dot();
+        // The heard pane's space left off for room: the count carries its dot.
+        let dot_in_more = matches!(&dot, Some(ottospace_core::listen::Dot::Space(of))
+            if !shown.iter().any(|(_, space)| space.of == *of));
         let spaces = shown.into_iter().map(|(place, space)| {
             let of = space.of.clone();
+            // The pane being heard is in this space, off show: a red dot at its corner.
+            let heard = (dot == Some(ottospace_core::listen::Dot::Space(of.clone())))
+                .then(|| self.off_show_dot(format!("listen-dot:space:{place}"), cx).top(px(5.)).left(px(3.)));
             let on = of == selected;
             let small = of == Owner::Home || (compact && !on);
             // A temporary workspace's name is muted; its tip says it closes without saving.
@@ -6004,6 +6074,7 @@ impl Workspace {
                 })
                 .hover(|s| s.text_color(rgb(theme::TEXT)))
                 .child(mark(&self.marks, Mark::Space(place)))
+                .children(heard)
                 .children(lead)
                 .children((!small).then(|| {
                     let name = cut_text(title).flex_1();
@@ -6030,6 +6101,10 @@ impl Workspace {
         let more = (more > 0).then(|| {
             div()
                 .id("more-spaces")
+                .relative()
+                .when(dot_in_more, |d| {
+                    d.child(self.off_show_dot("listen-dot:more".into(), cx).top(px(5.)).left(px(2.)))
+                })
                 .flex_none()
                 .px_2()
                 .h_full()
@@ -6104,8 +6179,6 @@ impl Workspace {
     /// New tab and split buttons: a new empty tab, or the picker for that split. Then Fill the
     /// Whole Display, its arrows out while off and in while on.
     fn render_top_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // A transcript's mark first, at the row's right end.
-        let listen = self.render_listen_mark(cx);
         // Each the same: an icon, its sneak label, its tip.
         let button = |id: ElementId, icon: &'static str, name: String, tip: &'static str| {
             div()
@@ -6134,7 +6207,7 @@ impl Workspace {
                 this.dispatch(Action::FillDisplay, this.input, window, cx);
             }),
         );
-        div().flex_none().ml_auto().mr_2().flex().items_center().gap_1().children(listen).children(splits).child(fill)
+        div().flex_none().ml_auto().mr_2().flex().items_center().gap_1().children(splits).child(fill)
     }
 
     /// The second row: the selected space's tabs, only while it has more than one. The one on
@@ -6147,6 +6220,7 @@ impl Workspace {
         }
         let colour = self.space_colour(&of);
         let chip = self.agent_chip(SPACE_TABS, cx);
+        let dot = self.model.listen_dot();
         let tabs =
             places.into_iter().filter_map(|place| Some((place, self.model.tabs.get(place)?))).map(|(place, tab)| {
                 let (active, id) = (place == self.model.active, tab.id);
@@ -6190,6 +6264,11 @@ impl Workspace {
                     .when(!active, |d| d.child(inner_shade(false, 6.)))
                     .hover(|s| s.text_color(rgb(theme::TEXT)))
                     .child(mark(&self.marks, Mark::Tab(place)))
+                    // The pane being heard is in this tab, off show.
+                    .children(
+                        (dot == Some(ottospace_core::listen::Dot::Tab(id)))
+                            .then(|| self.off_show_dot(format!("listen-dot:tab:{id}"), cx).top(px(6.)).left(px(3.))),
+                    )
                     .children(
                         self.model
                             .mark_of(MarkOf::Tab(Some(id)))
@@ -6745,7 +6824,7 @@ impl Render for Workspace {
         // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
         // the buttons and the agent chip's badge.
         let centre = f32::from(window.viewport_size().width) - left;
-        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve() - self.listen_reserve();
+        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve();
         div()
             .size_full()
             .flex()

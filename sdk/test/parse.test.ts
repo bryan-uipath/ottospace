@@ -52,6 +52,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       agents: [],
       features: [],
       listen: null,
+      transcripts: { today: [{ name: "2026-11-17-0900-zoom.md", started_ms: 1794819600000, length_ms: 2520000 }], open: null },
       agent_mode: { panes: { "3": { level: "see", task: 2 } }, default: "act", menu: null },
       slots: {},
     },
@@ -163,8 +164,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     drawer: {
       body: [880, 40, 470, 820],
       rail: [
-        { kind: "transcript", id: null, selected: true, rect: [1360, 48, 36, 36] },
-        { kind: "task", id: 1, selected: false, rect: [1360, 96, 36, 36] },
+        { kind: "task", id: 1, section: "workspace", selected: false, rect: [1360, 48, 36, 36] },
+        { kind: "transcript", id: null, section: "everywhere", selected: true, rect: [1360, 800, 36, 36] },
       ],
       width: 470,
       agents: { "1": { model: "claude", ended: false, cols: 60, rows: 45, lines: ["fake claude ready"] } },

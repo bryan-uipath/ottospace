@@ -1,0 +1,6 @@
+[
+  {"pid": 101, "name": "Google Chrome", "windows": ["meet.example.com", "Docs"]},
+  {"pid": 102, "name": "zoom.us", "windows": ["Zoom Meeting"], "playing": true},
+  {"pid": 103, "name": "Microsoft Teams", "windows": []},
+  {"pid": 104, "name": "Slack", "windows": ["huddle"]}
+]
