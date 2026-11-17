@@ -1825,3 +1825,96 @@ fn a_window_in_a_bottom_pane_stops_above_the_notice_bar() {
     wait_for("the pane back down", || pane().filter(|b| close(b[1], body[1]) && close(b[3], body[3])));
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// Made-up words the canary says, as `say` makes them: no person's voice, no one's meeting.
+const CANARY_WORDS: &str = "The orange canary sings a quiet song about purple tables. \
+    The orange canary sings again. The orange canary is done.";
+
+/// The canary's own sound, heard and transcribed on this Mac: `say` into a file, played by the
+/// canary (in its process, or a child's: `child`), its pane transcribed by the user's ⌘⌃T, and a
+/// line of it in the transcript's Markdown file. None: why it was skipped (no macOS 26, or the
+/// speech model not installed: a test run downloads none).
+fn canary_transcribed(name: &str, child: bool) -> Option<String> {
+    let home = support::temp(&format!("otto-apps-listen-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("make the folder");
+    let dir = home.join("transcripts");
+    let settings = json!({"restore_layout": false, "transcripts_dir": dir});
+    std::fs::write(home.join("settings.json"), settings.to_string()).expect("write settings");
+    let words = home.join("words.aiff");
+    let said = Command::new("/usr/bin/say").arg("-o").arg(&words).arg(CANARY_WORDS).status().expect("say");
+    assert!(said.success(), "say -o");
+
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), &format!("canary-{name}"), "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        &format!("otto-{name}"),
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_RETURN_KEY", "f19"),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
+            ("OTTOSPACE_FEATURES", "transcripts"),
+        ],
+    );
+    let reply = otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    assert_eq!(reply["state"]["panes"][0]["kind"]["type"], "app", "{reply}");
+    // The recogniser is asked for at start: the app pane offers a start once it answers.
+    let started = wait_or("the transcript to start, or say why not", String::new, || {
+        let reply = otto.call(json!({"cmd": "state"}));
+        if reply["state"]["listen"]["status"] == "on" {
+            return Some(Ok(()));
+        }
+        if let Some(why) = reply["notice"].as_str().filter(|why| why.contains("Transcript")) {
+            return Some(Err(why.to_string()));
+        }
+        if reply["state"]["listen"].is_null() {
+            otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-t", "as": "user"}));
+        }
+        None
+    });
+    if let Err(why) = started {
+        if why.contains("macOS 26") || why.contains("not installed") {
+            let _ = std::fs::remove_dir_all(&home);
+            return Some(why);
+        }
+        panic!("{why}");
+    }
+    canary.call(json!({"cmd": "play", "path": words, "child": child}));
+    let file = || std::fs::read_dir(&dir).ok()?.flatten().map(|entry| entry.path()).next();
+    let heard =
+        |text: &str| text.lines().any(|line| line.contains("**them**") && line.to_lowercase().contains("canary"));
+    let start = Instant::now();
+    let text = loop {
+        let text = file().and_then(|path| std::fs::read_to_string(path).ok()).unwrap_or_default();
+        if heard(&text) {
+            break text;
+        }
+        assert!(start.elapsed() < Duration::from_secs(90), "no line of the canary's words in 90 s:\n{text}");
+        std::thread::sleep(Duration::from_millis(250));
+    };
+    eprintln!("the canary's transcript:\n{text}");
+    let stopped = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-t", "as": "user"}));
+    assert_eq!(stopped["state"]["listen"], Value::Null, "{stopped}");
+    let _ = std::fs::remove_dir_all(&home);
+    None
+}
+
+#[test]
+#[ignore = "hosts the canary and hears its own made-up speech; run with `cargo e2e-apps`"]
+fn the_canarys_own_speech_is_transcribed_into_its_file() {
+    if let Some(why) = canary_transcribed("speech", false) {
+        eprintln!("skipped: {why}");
+    }
+}
+
+/// Chrome and Electron apps play sound from helper processes, which ScreenCaptureKit does not
+/// offer as apps of their own: this says whether the app's filter hears its child's sound.
+#[test]
+#[ignore = "hosts the canary and hears its own made-up speech; run with `cargo e2e-apps`"]
+fn a_sound_the_canarys_child_plays_is_heard_as_the_canarys() {
+    if let Some(why) = canary_transcribed("child", true) {
+        eprintln!("skipped: {why}");
+    }
+}

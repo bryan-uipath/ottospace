@@ -59,9 +59,18 @@ jobs:
       # The tests post a few real pointer events with cliclick.
       - name: cliclick
         run: command -v cliclick || HOMEBREW_NO_AUTO_UPDATE=1 brew install cliclick
+      # Apple's on-device speech model, for the canary's transcript test: the system downloads it
+      # into its own store, on this runner only (a test run downloads none). If it cannot, the
+      # test says it skipped.
+      - name: Speech model
+        run: cargo run -p ottospace-mac --example speech_status -- --install || true
       - name: App-window tests
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.repeat == '0' }}
-        run: cargo e2e-apps
+        run: cargo e2e-apps --skip canarys
+      # The canary's transcript, shown: what the recogniser heard, or why it skipped.
+      - name: Transcript tests
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.repeat == '0' }}
+        run: cargo e2e-apps canarys --nocapture
       # To measure a flaky step: every attempt runs, and the step fails if any did.
       - name: One test, repeated
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.repeat != '0' }}

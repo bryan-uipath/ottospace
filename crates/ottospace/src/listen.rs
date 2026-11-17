@@ -1,7 +1,8 @@
 //! Transcripts in the shell (`ottospace_core::listen`): ⌘⌃T, the pane header's `Transcribe` and
 //! its indicator, the top row's mark, the drawer's lines, the sound and the file
-//! (`listen_file`). The decisions are the core's. One source so far: a test run's fixture
-//! (`OTTOSPACE_LISTEN_FIXTURE`, read only under `OTTOSPACE_E2E`), replayed as what was heard.
+//! (`listen_file`). The decisions are the core's. The sound is the source pane's app's
+//! (`listen_live`), or in a test run its fixture (`OTTOSPACE_LISTEN_FIXTURE`, read only under
+//! `OTTOSPACE_E2E`), replayed as what was heard.
 //!
 //! What was heard reaches the core in batches on a fixed tick (`BATCH`), empty or not, and the
 //! level meter (`listen_meter`, draw-only) is drawn on a fixed tick (`FRAME`): a reply's
@@ -15,6 +16,7 @@ use ottospace_core::listen::{self, Heard, Record, Row, Speaker, Status};
 use ottospace_core::{Action, Effect, Origin, PaneId, theme};
 use serde::Deserialize;
 
+use crate::listen_live::{self, Live};
 use crate::listen_meter::{Hearing, Meter};
 use crate::{Workspace, config, listen_file, now_ms, rect};
 
@@ -55,6 +57,16 @@ pub(crate) struct Feed {
     paused: bool,
     /// Heard since the last batch.
     pending: Vec<Heard>,
+    /// The app's streams while they run (none while paused), and the app's pid: none for a fixture.
+    live: Option<Live>,
+    pid: Option<i32>,
+}
+
+/// Where a transcript's sound comes from.
+enum Plan {
+    Fixture(VecDeque<Said>),
+    /// The app of this pid.
+    App(i32),
 }
 
 /// The file of transcript `id`. None kept in a test run with no folder of its own.
@@ -162,9 +174,10 @@ impl Workspace {
         match effect {
             Effect::ListenWrite { id, records } => self.listen_write(id, records),
             Effect::ListenOpen { id, .. } => self.listen_open(id.clone(), window, cx),
+            // Nothing is captured while paused: the app's streams stop.
             Effect::ListenPauseStreams { id } => {
                 if let Some(feed) = self.listen_feed.as_mut().filter(|feed| feed.id == *id) {
-                    (feed.paused, feed.due) = (true, None);
+                    (feed.paused, feed.due, feed.live) = (true, None, None);
                 }
             }
             Effect::ListenResumeStreams { id } => {
@@ -172,6 +185,9 @@ impl Workspace {
                     (feed.paused, feed.run_ms) = (false, 0);
                     if let Some(meter) = &mut self.listen_meter {
                         meter.restart(Instant::now());
+                    }
+                    if let Some(pid) = feed.pid {
+                        self.listen_resume_live(id.clone(), pid, window, cx);
                     }
                 }
             }
@@ -215,11 +231,36 @@ impl Workspace {
         }
     }
 
-    /// The streams of `id`: in a test run, its fixture's lines; else none yet. A task of its own,
-    /// as the streams would be: what it hears goes to the core every `BATCH`, as `System` news.
+    /// The streams of `id`: the source pane's app's sound, or in a test run its fixture's lines.
+    /// A task of its own: what it hears goes to the core every `BATCH`, as `System` news.
     fn listen_open(&mut self, id: String, window: &Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| {
-            let began = this.update_in(cx, |this, window, cx| this.listen_begin(&id, window, cx));
+            let Ok(plan) = this.update(cx, |this, _| this.listen_plan(&id)) else { return };
+            let began = match plan {
+                Ok(Plan::Fixture(lines)) => Ok((lines, None, None)),
+                Ok(Plan::App(pid)) => {
+                    let ready = cx.background_executor().spawn(async { listen_live::ready() }).await;
+                    let ready = match ready {
+                        Ok(true) => Ok(()),
+                        // The user's Start asks the system for its model: "Downloading speech model…".
+                        Ok(false) => {
+                            let _ = this.update(cx, |this, cx| {
+                                this.listen_downloading = Some(id.clone());
+                                cx.notify();
+                            });
+                            cx.background_executor().spawn(async { listen_live::install() }).await
+                        }
+                        Err(why) => Err(why),
+                    };
+                    let live = match ready {
+                        Ok(()) => cx.background_executor().spawn(async move { Live::start(pid) }).await,
+                        Err(why) => Err(why),
+                    };
+                    live.map(|live| (VecDeque::new(), Some(live), Some(pid)))
+                }
+                Err(why) => Err(why),
+            };
+            let began = this.update_in(cx, |this, window, cx| this.listen_begin(&id, began, window, cx));
             if !began.unwrap_or(false) {
                 return;
             }
@@ -235,25 +276,55 @@ impl Workspace {
         .detach();
     }
 
-    /// The streams start, or say why not. True: they run.
-    fn listen_begin(&mut self, id: &str, window: &Window, cx: &mut Context<Self>) -> bool {
+    /// Where the sound of `id` comes from, or why there is none.
+    fn listen_plan(&self, id: &str) -> Result<Plan, String> {
+        let unwritable =
+            self.listen_file.as_ref().filter(|file| file.id == id).and_then(|file| file.writer.as_ref().err());
+        if let Some(why) = unwritable {
+            return Err(why.clone());
+        }
+        if let Some(path) = fixture_path() {
+            return read_fixture(&path).map(Plan::Fixture);
+        }
+        let pane = self.model.listen.on.as_ref().filter(|on| on.id == id).and_then(|on| on.source.pane());
+        match pane.and_then(|pane| self.hosted.get(&pane)) {
+            Some(hosted) => match listen_live::refusal(hosted.pid) {
+                Some(why) => Err(why.into()),
+                None => Ok(Plan::App(hosted.pid)),
+            },
+            None if std::env::var_os("OTTOSPACE_E2E").is_some() => Err(NO_FIXTURE.to_string()),
+            None => Err("its window is not in the pane".into()),
+        }
+    }
+
+    /// The streams run (the fixture's lines, or the app's streams and its pid), or say why not.
+    /// True: they run. One stopped meanwhile (a download is long) keeps nothing.
+    fn listen_begin(
+        &mut self,
+        id: &str,
+        began: Result<(VecDeque<Said>, Option<Live>, Option<i32>), String>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.listen_downloading.as_deref() == Some(id) {
+            self.listen_downloading = None;
+        }
         if self.model.listen.on.as_ref().is_none_or(|on| on.id != id) {
             return false;
         }
-        let unwritable =
-            self.listen_file.as_ref().filter(|file| file.id == id).and_then(|file| file.writer.as_ref().err());
-        let lines = match (unwritable, fixture_path()) {
-            (Some(why), _) => Err(why.clone()),
-            (None, Some(path)) => read_fixture(&path),
-            (None, None) if std::env::var_os("OTTOSPACE_E2E").is_some() => Err(NO_FIXTURE.to_string()),
-            (None, None) => Err(listen::NO_SOURCE.to_string()),
-        };
-        match lines {
-            Ok(lines) => {
+        match began {
+            Ok((lines, live, pid)) => {
                 let pending = Vec::new();
-                self.listen_feed = Some(Feed { id: id.into(), lines, due: None, run_ms: 0, paused: false, pending });
+                let paused = false;
+                self.listen_feed =
+                    Some(Feed { id: id.into(), lines, due: None, run_ms: 0, paused, pending, live, pid });
                 self.listen_meter = Some(Meter::new(Instant::now()));
                 self.dispatch(Action::ListenBegan { id: id.into(), at: now_ms() }, Origin::System, window, cx);
+                // The others in the call are not told by ottospace: the user is reminded to.
+                let app = self.model.listen.pane().and_then(|pane| self.hosted.get(&pane)).map(|h| h.app.clone());
+                if let Some(app) = app {
+                    self.told = Some((format!("Transcribing {app}: let the others know."), Instant::now()));
+                }
                 true
             }
             Err(why) => {
@@ -264,15 +335,55 @@ impl Workspace {
         }
     }
 
-    /// One frame: the fixture's lines that are due join the batch (its levels go to the meter);
-    /// on a `batch` frame the batch goes to the core, empty or not; the meter and the clock are
-    /// drawn again. False: it ended.
+    /// New streams after a pause, counting from 0, once they run. One paused or stopped
+    /// meanwhile keeps none.
+    fn listen_resume_live(&mut self, id: String, pid: i32, window: &Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            let live = cx.background_executor().spawn(async move { Live::start(pid) }).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let feed =
+                    this.listen_feed.as_mut().filter(|feed| feed.id == id && !feed.paused && feed.live.is_none());
+                match (feed, live) {
+                    (Some(feed), Ok(live)) => feed.live = Some(live),
+                    (Some(_), Err(why)) => this.listen_stream_lost(&id, why, window, cx),
+                    (None, _) => {}
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The sound stopped coming: the core ends it, and the bar says why.
+    fn listen_stream_lost(&mut self, id: &str, why: String, window: &Window, cx: &mut Context<Self>) {
+        let ended = Action::ListenEnded { id: id.into(), why: listen::Ended::StreamFailed, at: now_ms() };
+        self.dispatch(ended, Origin::System, window, cx);
+        self.broke(format!("Transcript stopped: {why}"));
+    }
+
+    /// One frame: what the streams heard (or the fixture's lines that are due) joins the batch,
+    /// the level goes to the meter; on a `batch` frame the batch goes to the core, empty or not;
+    /// the meter and the clock are drawn again. False: it ended.
     fn listen_step(&mut self, id: &str, batch: bool, window: &Window, cx: &mut Context<Self>) -> bool {
         if self.model.listen.on.as_ref().is_none_or(|on| on.id != id) {
             return false;
         }
         let Some(feed) = self.listen_feed.as_mut().filter(|feed| feed.id == id) else { return false };
         let now = Instant::now();
+        if let Some(taken) = feed.live.as_ref().map(Live::take) {
+            if let Some(meter) = self.listen_meter.as_mut() {
+                if let Some(level) = taken.level {
+                    meter.level(level, now);
+                }
+                if !taken.lines.is_empty() {
+                    meter.words(now);
+                }
+            }
+            feed.pending.extend(taken.lines);
+            if let Some(why) = taken.failed {
+                self.listen_stream_lost(id, why, window, cx);
+                return false;
+            }
+        }
         while !feed.paused
             && let Some(next) = feed.lines.front()
         {
@@ -321,7 +432,14 @@ impl Workspace {
             return self.model.listen_offered(pane).then(|| start.into_any_element());
         };
         let paused = on.status == Status::Paused;
-        let word = if paused { "Paused" } else { "Transcribing" };
+        let downloading = self.listen_downloading.as_deref() == Some(on.id.as_str());
+        let word = if paused {
+            "Paused"
+        } else if downloading {
+            "Downloading speech model…"
+        } else {
+            "Transcribing"
+        };
         let (toggle, label) = if paused { ("listen-resume", "Resume") } else { ("listen-pause", "Pause") };
         // In a narrow header it gives way before ×: the words first, then Pause, then Stop. The top
         // row's mark and the drawer still show it.
@@ -393,6 +511,27 @@ impl Workspace {
     /// How long the one on has run: `12:04`.
     fn listen_clock(&self) -> String {
         listen::clock(self.model.listen.on.as_ref().map_or(0, |on| on.elapsed(now_ms())))
+    }
+
+    /// The menu bar's dot while one is on, and the user's choice in its menu: Stop, or Show. Not
+    /// in a test run: it would sit in the user's own menu bar.
+    pub(crate) fn listen_menu_bar(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if std::env::var_os("OTTOSPACE_E2E").is_some() {
+            return;
+        }
+        ottospace_mac::status_item::set(self.model.listen.on.as_ref().map(|_| "ottospace is transcribing"));
+        let at = now_ms();
+        // Only the user's own mouse reaches a status item's menu.
+        match ottospace_mac::status_item::take() {
+            Some(ottospace_mac::status_item::Chosen::Stop) => {
+                self.dispatch(Action::ListenStop { at }, Origin::User, window, cx);
+            }
+            Some(ottospace_mac::status_item::Chosen::Show) => {
+                cx.activate(true);
+                self.dispatch(Action::ListenShow { on: true }, Origin::User, window, cx);
+            }
+            None => {}
+        }
     }
 
     /// Points the top row keeps for its mark while one is on.
@@ -496,7 +635,12 @@ impl Workspace {
         });
         let volatile = on.volatile().map(|(from, text)| line(String::new(), *from, text.clone(), true));
         let empty = (on.rows().next().is_none() && on.volatile().next().is_none()).then(|| {
-            let waiting = if on.status == Status::Starting { "Starting…" } else { "Nothing heard yet" };
+            let downloading = self.listen_downloading.as_deref() == Some(on.id.as_str());
+            let waiting = match on.status {
+                Status::Starting if downloading => "Downloading speech model… (Apple's, on this Mac; once)",
+                Status::Starting => "Starting…",
+                _ => "Nothing heard yet",
+            };
             div().text_xs().text_color(rgb(theme::MUTED)).child(waiting)
         });
         // The last line at the foot: what does not fit goes off the top.

@@ -22,8 +22,8 @@ pub const SOURCE_ON: &str = "this pane is being transcribed: only the user close
 pub const ONE_AT_A_TIME: &str = "a transcript is on: stop it first";
 /// ⌘⌃T with focus on no pane that can be heard.
 pub const FOCUS_APP: &str = "focus an app pane to transcribe it";
-/// No source of sound in this build: the app's audio comes in a later slice.
-pub const NO_SOURCE: &str = "no audio source yet";
+/// This Mac has no recogniser: `SpeechAnalyzer` is macOS 26's.
+pub const NO_SOURCE: &str = "transcripts need macOS 26";
 
 /// The most lines the drawer keeps of the transcript on.
 pub const RING: usize = 2_000;
@@ -164,6 +164,8 @@ pub struct Listening {
     pub shown: bool,
     /// A test run's fixture is the source (`ListenFixture`): a terminal pane may be heard.
     pub fixture: bool,
+    /// The recogniser is here (`ListenAvailable`): an app pane may be heard.
+    pub available: bool,
     /// The pane whose transcript stopped because its sound stopped coming: its header shows a grey
     /// dot until the user's Stop (its ×), a new start or the pane's close. Not in the state.
     pub lost: Option<PaneId>,
