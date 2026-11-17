@@ -9256,7 +9256,7 @@ fn row_fixtures(repo: &Path) -> Vec<(&'static str, String)> {
 
 /// Each call's row shows what ran (a command, a path, a pattern, a host, a query, a subtask),
 /// and what the CLI said besides is a row; the state has their shapes, never their words. The
-/// user's click opens a command's row, and again closes it.
+/// user's click opens a command's row, and again closes it; its sneak label opens it too.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn tool_rows_show_what_ran_and_the_clis_other_words_are_rows() {
@@ -9357,6 +9357,13 @@ fn tool_rows_show_what_ran_and_the_clis_other_words_are_rows() {
     assert!(open[3] > last[3], "open, it is taller: {open:?} after {last:?}");
     otto.user_click(at(open, 0.5, 0.1));
     assert_eq!(bash(&otto)["expanded"], false);
+    // Its sneak label does what the click does.
+    let id = |rows: Vec<(String, [f64; 4])>| {
+        let ids = rows.into_iter().map(|(id, _)| id).filter(|id| id.starts_with("chat-row:1:"));
+        ids.max_by_key(|id| id.rsplit(':').next().and_then(|n| n.parse::<u64>().ok())).expect("a row")
+    };
+    sneak_to(&otto, &id(otto.controls()));
+    assert_eq!(bash(&otto)["expanded"], true);
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }

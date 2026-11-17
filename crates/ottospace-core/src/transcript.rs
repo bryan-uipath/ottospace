@@ -55,7 +55,7 @@ impl fmt::Debug for Text {
 }
 
 /// `text`'s first `max` bytes, at a character boundary.
-pub(crate) fn cut(text: &str, max: usize) -> &str {
+pub fn cut(text: &str, max: usize) -> &str {
     let mut end = text.len().min(max);
     while !text.is_char_boundary(end) {
         end -= 1;
@@ -562,6 +562,16 @@ impl Transcript {
     }
 
     /// The reply block being written is whole as it stands.
+    /// A row the CLI says on its own time. Said while a reply streams, it goes before it, so the
+    /// reply goes on: `Hel`, a note, `Hello` is one reply.
+    fn aside(&mut self, entry: Entry) {
+        self.push(entry);
+        let n = self.items.len();
+        if n >= 2 && matches!(self.items[n - 2].entry, Entry::Assistant { streaming: true, .. }) {
+            self.items.swap(n - 2, n - 1);
+        }
+    }
+
     fn settle(&mut self) {
         if let Some(Item { entry: Entry::Assistant { streaming, .. }, .. }) = self.items.back_mut() {
             *streaming = false;
@@ -737,30 +747,17 @@ impl Transcript {
                         if Some(of) == id.as_ref() && gist.kind == gist::Kind::Subtask)
                 };
                 if !self.items.iter().any(started) {
-                    self.settle();
-                    self.push(Entry::Note { note: NoteKind::Subtask, text: description });
+                    self.aside(Entry::Note { note: NoteKind::Subtask, text: description });
                 }
             }
             Event::SubtaskEnded { status, summary } => {
-                self.settle();
-                self.push(Entry::Note { note: NoteKind::Ended { status }, text: summary });
+                self.aside(Entry::Note { note: NoteKind::Ended { status }, text: summary })
             }
-            Event::Note { text } => {
-                self.settle();
-                self.push(Entry::Note { note: NoteKind::Notification, text });
-            }
-            Event::DeniedBy { tool, by } => {
-                self.settle();
-                self.push(Entry::Notice(Notice::DeniedBy { tool, by }));
-            }
+            Event::Note { text } => self.aside(Entry::Note { note: NoteKind::Notification, text }),
+            Event::DeniedBy { tool, by } => self.aside(Entry::Notice(Notice::DeniedBy { tool, by })),
             Event::ModelFallback { from, to } => {
                 self.model = Some(to.clone());
-                self.push(Entry::Notice(Notice::ModelFallback { from, to }));
-                // Said while a reply streams: the notice goes before it, so the reply goes on.
-                let n = self.items.len();
-                if n >= 2 && matches!(self.items[n - 2].entry, Entry::Assistant { streaming: true, .. }) {
-                    self.items.swap(n - 2, n - 1);
-                }
+                self.aside(Entry::Notice(Notice::ModelFallback { from, to }));
             }
             Event::Permission { ticket, tool, label, detail, len, cut, claim } => {
                 if !self.cards.iter().any(|card| card.ticket == ticket) && self.cards.len() < MAX_CARDS {
@@ -1323,6 +1320,15 @@ mod tests {
         r.fold(Event::ModelFallback { from: None, to: "m-2".into() }, 2);
         r.fold(Event::Text { text: text("Looked.") }, 3);
         assert_eq!(texts(&r), [r#"ModelFallback { from: None, to: "m-2" }"#, "done:Looked."]);
+        // So does a note, a subtask's end or a denial.
+        let mut n = Transcript::default();
+        n.fold(Event::TextDelta { text: text("Hel") }, 1);
+        n.fold(Event::Note { text: text("ready") }, 2);
+        n.fold(Event::SubtaskEnded { status: Status::Failed, summary: text("x") }, 3);
+        n.fold(Event::DeniedBy { tool: "Bash".into(), by: By::Hook }, 4);
+        n.fold(Event::Text { text: text("Hello") }, 5);
+        assert_eq!(texts(&n).last().map(String::as_str), Some("done:Hello"));
+        assert_eq!(texts(&n).iter().filter(|t| t.starts_with("done:")).count(), 1, "{:?}", texts(&n));
         let summary = serde_json::to_value(t.summary()).unwrap();
         let ended = &summary["entries"][2];
         assert_eq!(ended, &serde_json::json!({"kind": "note", "note": "ended", "status": "completed", "bytes": 8}));

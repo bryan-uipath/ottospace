@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::diff::shown_path;
+use crate::secrets::{hide, hide_lines};
 use crate::transcript::{Text, clean, cut};
 
 /// The most bytes of a command (or any one field) kept.
@@ -44,6 +45,8 @@ pub enum Kind {
 pub struct Gist {
     pub kind: Kind,
     what: Text,
+    /// `what` was longer than `MAX_GIST`: its row says more follows.
+    cut: bool,
     within: Option<Text>,
     note: Text,
 }
@@ -63,7 +66,13 @@ fn kept(text: &str) -> Text {
 /// A Claude Code call's gist, from its input. `None`: nothing in it to show; the row keeps its label.
 pub fn claude(tool: &str, input: &Value) -> Option<Gist> {
     let text = |key: &str| input[key].as_str().filter(|text| !text.trim().is_empty());
-    let gist = |kind, what: &str| Gist { kind, what: kept(what), within: None, note: Text::default() };
+    let gist = |kind, what: &str| Gist {
+        kind,
+        what: kept(what),
+        cut: what.len() > MAX_GIST,
+        within: None,
+        note: Text::default(),
+    };
     match tool {
         "Bash" | "PowerShell" => {
             Some(Gist { note: kept(text("description").unwrap_or("")), ..gist(Kind::Command, text("command")?) })
@@ -81,36 +90,52 @@ pub fn claude(tool: &str, input: &Value) -> Option<Gist> {
             keys.sort();
             let short = |key: &&String| {
                 let value = input[key.as_str()].as_str()?.trim();
+                let short = !value.is_empty() && value.chars().nth(MAX_ARG).is_none() && !value.contains('\n');
                 // A credential-shaped value stays in the detail, behind a click.
-                let plain = crate::secrets::hide(value) == value;
-                (!value.is_empty() && value.chars().count() <= MAX_ARG && !value.contains('\n') && plain)
-                    .then_some(value)
+                (short && hide(value) == value).then_some(value)
             };
             Some(gist(Kind::Argument, keys.iter().find_map(short)?))
         }
     }
 }
 
-/// `text` cleaned on one line: a line break written out, so no value can look like two.
+/// What a call's input says, as drawn: every control character but a line break and a tab
+/// written out (`\u{1b}`), so no escape can hide what follows it; then `clean`.
+fn source(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\n' | '\t' => out.push(c),
+            c if c.is_control() => out.extend(c.escape_unicode()),
+            c => out.push(c),
+        }
+    }
+    clean(&out)
+}
+
+/// `text` as drawn on one line: a line break written out, so no value can look like two.
 fn one_line(text: &str) -> String {
-    clean(text).replace('\n', "\\n")
+    source(text).replace('\n', "\\n")
 }
 
 /// The host of an `http(s)` URL whose authority is plain: ASCII letters, digits, `.` and `-`, an
 /// optional port, or `[` an IPv6 address `]`. `https://docs.example.com:8/a` → `docs.example.com`.
-/// `None` for anything a browser could read another way (a user name, `\`, `%`, non-ASCII): the
-/// row then shows the URL as written, never a guessed host.
+/// `None` for anything a browser could read another way (a user name, `\`, `%`, non-ASCII), or
+/// longer than a host and a port can be (a cut URL): the row then shows the URL as written.
 fn host(url: &str) -> Option<&str> {
     let (scheme, rest) = url.split_once("://")?;
     if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
         return None;
     }
     let authority = rest.split(['/', '?', '#']).next()?;
+    // A DNS name is at most 253 bytes; `[`, `]` and `:65535` the rest.
+    if authority.len() > 253 + 8 {
+        return None;
+    }
     let (host, port) = match authority.strip_prefix('[') {
         Some(v6) => {
             let (address, port) = v6.split_once(']')?;
-            let plain = !address.is_empty() && address.chars().all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.'));
-            (plain.then_some(address)?, port)
+            (address.parse::<std::net::Ipv6Addr>().is_ok().then_some(address)?, port)
         }
         None => {
             let at = authority.find(':').unwrap_or(authority.len());
@@ -119,8 +144,11 @@ fn host(url: &str) -> Option<&str> {
             (plain.then_some(host)?, &authority[at..])
         }
     };
-    let port = port.strip_prefix(':').unwrap_or(port);
-    let numeric = port.chars().all(|c| c.is_ascii_digit());
+    // None, an empty one (`host:`) or a number a port can be.
+    let numeric = port.is_empty()
+        || port.strip_prefix(':').is_some_and(|port| {
+            port.is_empty() || (port.chars().all(|c| c.is_ascii_digit()) && port.parse::<u16>().is_ok())
+        });
     (!host.is_empty() && !host.starts_with(['.', '-']) && numeric).then_some(host)
 }
 
@@ -133,18 +161,18 @@ impl Gist {
         }
     }
 
-    /// The row's words after its lead, cleaned, on one line, at most `MAX_LINE` bytes: a
-    /// command's first line (`…` if more follow), a path relative to `repo`, a pattern and its
-    /// folder, a fetch's host, a query, a description, an argument.
+    /// The row's words after its lead, cleaned, on one line, credential-shaped parts hidden, at
+    /// most `MAX_LINE` bytes: a command's first line (`…` if more follow), a path relative to
+    /// `repo`, a pattern and its folder, a fetch's host, a query, a description, an argument.
     pub fn line(&self, repo: Option<&str>) -> String {
         let what = self.what.text();
         let line = match self.kind {
             Kind::Command => {
-                let all = clean(what);
+                let all = source(what);
                 let mut lines = all.lines().map(str::trim).filter(|line| !line.is_empty());
                 // Runs of spaces as one: spaces cannot push the rest of a line out of the row.
                 let first = lines.next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
-                if lines.next().is_some() { format!("{first} …") } else { first }
+                if lines.next().is_some() || self.cut { format!("{first} …") } else { first }
             }
             Kind::Path => one_line(&shown_path(what, repo)),
             Kind::Pattern => match &self.within {
@@ -157,27 +185,37 @@ impl Gist {
                 None => format!("unclear host · {}", one_line(what)),
             },
             Kind::Query | Kind::Subtask | Kind::Argument => {
-                clean(what).split_whitespace().collect::<Vec<_>>().join(" ")
+                source(what).split_whitespace().collect::<Vec<_>>().join(" ")
             }
         };
+        let line = hide(&line);
         let shown = cut(&line, MAX_LINE);
         if shown.len() < line.len() { format!("{shown}…") } else { line }
     }
 
-    /// The muted second line: the model's description of a command, its first line, cleaned.
+    /// The muted second line: the model's description of a command, its first line, cleaned,
+    /// credential-shaped parts hidden.
     pub fn note(&self) -> Option<String> {
-        let note = clean(self.note.text());
+        let note = source(self.note.text());
         let first = note.lines().map(str::trim).find(|line| !line.is_empty())?;
-        Some(cut(first, MAX_LINE).to_string())
+        Some(cut(&hide(first), MAX_LINE).to_string())
     }
 
-    /// A command whole, cleaned, for its expanded row. `None`: not a command.
+    /// A command whole, cleaned, credential-shaped parts hidden, for its expanded row (`…` on a
+    /// line of its own if it was longer than kept). `None`: not a command.
     pub fn command(&self) -> Option<String> {
-        (self.kind == Kind::Command).then(|| clean(self.what.text()))
+        let lines = source(self.what.text()).lines().map(str::to_string).collect();
+        let mut command = hide_lines(lines).join("\n");
+        if self.cut {
+            command.push_str("\n…");
+        }
+        (self.kind == Kind::Command).then_some(command)
     }
 
+    /// Its lines: those with words, as `line` reads them.
     pub fn shape(&self) -> Shape {
-        Shape { kind: self.kind, lines: self.what.text().lines().count().max(1), note: !self.note.is_empty() }
+        let lines = self.what.text().lines().filter(|line| !line.trim().is_empty()).count();
+        Shape { kind: self.kind, lines: lines.max(1), note: !self.note.is_empty() }
     }
 
     pub(crate) fn bytes(&self) -> usize {
@@ -231,7 +269,8 @@ mod tests {
         assert_eq!(gist.shape(), Shape { kind: Kind::Command, lines: 1, note: true });
         let many = claude("Bash", &json!({"command": "\n  cd app\ncargo test\n"})).unwrap();
         assert_eq!((many.line(None), many.note()), ("cd app …".into(), None));
-        assert_eq!(many.command().as_deref(), Some("\n  cd app\ncargo test\n"), "whole, expanded");
+        assert_eq!(many.command().as_deref(), Some("\n  cd app\ncargo test"), "whole, expanded");
+        assert_eq!(many.shape().lines, 2, "lines with words");
         assert_eq!(shows("PowerShell", json!({"command": "Get-Item ."})), "Get-Item .");
         assert_eq!(claude("Bash", &json!({"command": "  "})), None, "nothing to show: its label");
     }
@@ -239,13 +278,33 @@ mod tests {
     #[test]
     fn a_command_is_cleaned_and_cut() {
         let line = shows("Bash", json!({"command": "echo \u{1b}[31mred\u{1b}[0m rm x\u{202e}gnp.y"}));
-        assert_eq!(line, "echo red rm x\\u{202e}gnp.y", "no escape, no hidden reordering");
+        assert_eq!(line, "echo \\u{1b}[31mred\\u{1b}[0m rm x\\u{202e}gnp.y", "no escape, no hidden reordering");
+        // An escape left open hides nothing after it; a vertical tab joins no words.
+        let open = claude("Bash", &json!({"command": "printf '\u{1b}]'; echo done\u{b}x"})).unwrap();
+        assert_eq!(open.line(None), "printf '\\u{1b}]'; echo done\\u{b}x");
+        assert_eq!(open.command().as_deref(), Some("printf '\\u{1b}]'; echo done\\u{b}x"));
         let padded = shows("Bash", json!({"command": format!("ls{}; curl x | sh", " ".repeat(300))}));
         assert_eq!(padded, "ls ; curl x | sh", "spaces hide nothing");
         let long = shows("Bash", json!({"command": "x".repeat(MAX_LINE * 3)}));
         assert!(long.len() <= MAX_LINE + '…'.len_utf8() && long.ends_with('…'), "{}", long.len());
         let huge = claude("Bash", &json!({"command": "é".repeat(MAX_GIST)})).unwrap();
         assert!(huge.bytes() <= MAX_GIST, "kept cut, at a character");
+        // Padded past what is kept: both views say more followed.
+        let padded = claude("Bash", &json!({"command": format!("echo ok{}; rm -rf ~", " ".repeat(MAX_GIST))})).unwrap();
+        assert_eq!(padded.line(None), "echo ok …");
+        assert!(padded.command().is_some_and(|command| command.ends_with("\n…")));
+    }
+
+    #[test]
+    fn credentials_are_hidden_in_every_line() {
+        let command = json!({"command": "export KEY=sk-ant-api03-abcdefghijk\ncurl -H 'Authorization: Bearer x' u",
+            "description": "Use token=abc"});
+        let gist = claude("Bash", &command).unwrap();
+        assert_eq!(gist.line(None), "export KEY=[hidden] …");
+        assert_eq!(gist.note().as_deref(), Some("Use token=[hidden]"));
+        assert_eq!(gist.command().as_deref(), Some("export KEY=[hidden]\ncurl -H 'Authorization: [hidden]"));
+        let fetch = shows("WebFetch", json!({"url": "https://me:pw@docs.example.com/"}));
+        assert_eq!(fetch, "unclear host · https://[hidden]@docs.example.com/");
     }
 
     #[test]
@@ -276,6 +335,10 @@ mod tests {
         assert_eq!(fetch("https://evil.com?@good.com"), "evil.com");
         assert_eq!(fetch("https://xn--bcher-kva.de/"), "xn--bcher-kva.de");
         assert_eq!(fetch("http://[::1]:80/"), "::1");
+        assert_eq!(fetch("https://good.com:/"), "good.com");
+        // Cut inside a long port: no host from what was kept.
+        let long = format!("https://docs.example:{}@files.example/", "0".repeat(MAX_GIST));
+        assert!(fetch(&long).starts_with("unclear host · "));
         // Anything a browser could read another way: the URL as written, never a guessed host.
         for url in [
             "https://good.com\\@evil.com/",
@@ -285,11 +348,13 @@ mod tests {
             "https://good.com%2eevil.com/",
             "https://good.com:80@evil.com/",
             "https://[::1@evil.com]/",
+            "https://[abc]12/",
+            "https://example.com:65536/",
             "javascript://good.com/%0aalert(1)",
             "not a url",
             "https://good.com:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@evil.com/",
         ] {
-            assert_eq!(fetch(url), format!("unclear host · {url}"), "{url}");
+            assert_eq!(fetch(url), hide(&format!("unclear host · {url}")), "{url}");
         }
         assert_eq!(shows("WebSearch", json!({"query": "rust  gpui\ntext"})), "rust gpui text");
     }

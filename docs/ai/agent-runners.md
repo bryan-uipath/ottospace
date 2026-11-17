@@ -532,13 +532,18 @@ the command's first line in monospace, `…` if more lines follow, its `descript
 second line; Read, Edit, Write, MultiEdit, NotebookEdit the path relative to the task's
 repository (else as written); Grep and Glob the pattern, and `in <path>` if given; WebFetch the
 host (no port, path or query), and for a URL whose authority is not plain (a user name, `\`,
-`%`, non-ASCII) "unclear host · " and the URL as written; WebSearch the query; Agent and Task "Started a subtask:"
+`%`, non-ASCII, an invalid IPv6 address or port, longer than a host and port can be) "unclear
+host · " and the URL as written; WebSearch the query; Agent and Task "Started a subtask:"
 and the description; any other tool its first string argument, by key name, of at most 80
 characters on one line, not credential-shaped; nothing to show: `tool · label` as before. Every word is cleaned
-(`transcript::clean`), on one line, cut at 400 bytes and again to the row with an ellipsis; no
-markup, no link. A click (or its sneak label) opens a command's row: the command whole and its
-output (the tool result's text, at most 16 KB, kept only for a command, drawn with
-credential-shaped parts hidden). A sub-agent's calls are indented, in the order they came: with
+(`transcript::clean`, after control characters are written out, `\u{1b}`, so an escape left
+open hides nothing after it), credential-shaped parts hidden (`secrets::hide`), on one line,
+cut at 400 bytes and again to the row with an ellipsis; no markup, no link. A command longer
+than the 16 KB kept ends in `…`. A click (or its sneak label) opens a command's row: the command
+whole and its output (the tool result's text, at most 16 KB, kept only for a command), both
+drawn with credential-shaped parts hidden. A row the CLI says on its own time (a note, a
+subtask's end, a denial, a fallback) goes before a reply that is streaming, so the reply stays
+one. A sub-agent's calls are indented, in the order they came: with
 two sub-agents at once, their calls interleave. The state has the gist's shape alone (`summary`: kind, lines, note) and
 `expanded`; a watched session gets the same rows from its file (`Cursor::with_edits` carries the
 gist and the output, as it carries an edit's change). Not built: Codex gists, ↵ on a focused row

@@ -524,7 +524,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn toggle_row(&mut self, subject: &Subject, id: u64, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_row(&mut self, subject: &Subject, id: u64, cx: &mut Context<Self>) {
         let open = &mut self.drawer.looks.entry(subject.clone()).or_default().open;
         if !open.remove(&id) {
             open.insert(id);
@@ -790,8 +790,11 @@ impl Workspace {
                         let body = open.then(|| match gist.command() {
                             Some(command) => {
                                 // As an agent's stderr is shown: cleaned, credential-shaped parts hidden.
-                                let printed =
-                                    output.as_ref().map(|output| ottospace_core::transcript::details(output.text()));
+                                let printed = output.as_ref().map(|output| {
+                                    let printed = ottospace_core::transcript::details(output.text());
+                                    // A tab drawn as four spaces: cut again to what was kept.
+                                    ottospace_core::transcript::cut(&printed, gist::MAX_OUTPUT).to_string()
+                                });
                                 div()
                                     .id(ElementId::Name(format!("chat-row-body:{key}:{id}").into()))
                                     .flex()

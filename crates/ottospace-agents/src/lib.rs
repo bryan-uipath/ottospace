@@ -487,7 +487,10 @@ fn model_of(value: &Value) -> Option<String> {
     let id = value.as_str()?;
     // `[1m]` marks a 1M-token window, as in `ottospace-sessions`: `claude-opus-5-5[1m]`.
     let bare = id.strip_suffix("[1m]").unwrap_or(id);
-    (ottospace_core::agents::is_name(bare) && ottospace_sessions::station::is_name(bare)).then(|| id.to_string())
+    // Not credential-shaped (`ghs_…`): a name goes to the state.
+    let plain = ottospace_core::secrets::hide(bare) == bare;
+    (ottospace_core::agents::is_name(bare) && ottospace_sessions::station::is_name(bare) && plain)
+        .then(|| id.to_string())
 }
 
 /// A session id as a label: a UUID, else `None`.
