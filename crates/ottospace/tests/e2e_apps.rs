@@ -2147,28 +2147,30 @@ fn the_window_fills_its_display_an_apps_window_stops_at_the_dock_and_every_end_b
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
-    fn CGWindowListCreate(option: u32, relative_to: u32) -> *const std::ffi::c_void;
+    fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> core_foundation::array::CFArrayRef;
 }
 
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFArrayGetCount(array: *const std::ffi::c_void) -> isize;
-    fn CFArrayGetValueAtIndex(array: *const std::ffi::c_void, index: isize) -> *const std::ffi::c_void;
-    fn CFRelease(object: *const std::ffi::c_void);
-}
-
-/// The on-screen windows in front of window `id`, by number: what covers it.
-fn windows_above(id: u32) -> Vec<u32> {
+/// The on-screen windows in front of window `id`: `(number, owner pid, layer)`. What covers it.
+fn windows_above(id: u32) -> Vec<(i64, i64, i64)> {
+    use core_foundation::array::CFArray;
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
     // kCGWindowListOptionOnScreenAboveWindow.
-    let list = unsafe { CGWindowListCreate(1 << 1, id) };
-    if list.is_null() {
+    let raw = unsafe { CGWindowListCopyWindowInfo(1 << 1, id) };
+    if raw.is_null() {
         return Vec::new();
     }
-    let ids = (0..unsafe { CFArrayGetCount(list) })
-        .map(|i| unsafe { CFArrayGetValueAtIndex(list, i) } as usize as u32)
-        .collect();
-    unsafe { CFRelease(list) };
-    ids
+    let list: CFArray<CFDictionary<CFString, CFType>> = unsafe { CFArray::wrap_under_create_rule(raw) };
+    let number = |d: &CFDictionary<CFString, CFType>, key: &'static str| {
+        d.find(CFString::from_static_string(key)).and_then(|v| v.downcast::<CFNumber>()).and_then(|n| n.to_i64())
+    };
+    let row = |d: &CFDictionary<CFString, CFType>| {
+        let [n, pid, layer] = ["kCGWindowNumber", "kCGWindowOwnerPID", "kCGWindowLayer"].map(|k| number(d, k));
+        Some((n?, pid?, layer?))
+    };
+    list.iter().filter_map(|d| row(&d)).collect()
 }
 
 /// Closes Finder's windows of these names on drop, pass or fail: Finder is the user's, and the
@@ -2219,23 +2221,43 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
     }
     let me = std::process::id();
     let dir = support::temp(&format!("otto-apps-finder-{me}"));
-    let inner = format!("otto-inner-{me}");
-    std::fs::create_dir_all(dir.join(&inner)).expect("make folders");
+    // `first`: opened by a double-click before hosting, the control. `inner`: while hosted.
+    let (first, inner) = (format!("otto-first-{me}"), format!("otto-inner-{me}"));
+    for name in [&first, &inner] {
+        std::fs::create_dir_all(dir.join(name)).expect("make folders");
+    }
     let outer = dir.file_name().and_then(|n| n.to_str()).expect("folder name").to_string();
-    let _close = CloseFinderWindows(vec![outer.clone(), inner.clone()]);
+    let _close = CloseFinderWindows(vec![outer.clone(), first.clone(), inner.clone()]);
     let opened = Command::new("open").args(["-a", "Finder"]).arg(&dir).status().expect("run open");
     assert!(opened.success(), "open -a Finder failed");
     let ours = || {
         let windows = ottospace_mac::ax::Window::standard_of(pid);
-        windows.into_iter().find(|w| w.title().is_some_and(|t| t == outer || t == inner))
+        windows.into_iter().find(|w| w.title().is_some_and(|t| t == outer))
     };
     let finder_window = wait_for("Finder's window of the folder", || ours().and_then(|w| w.id()));
     let frame = || {
         let w = ottospace_mac::ax::Window::find(pid, finder_window)?;
         w.frame().map(|f| [f.origin.x, f.origin.y, f.size.width, f.size.height])
     };
-    let original = wait_for("its frame", frame);
     let title = || ottospace_mac::ax::Window::find(pid, finder_window).and_then(|w| w.title());
+    // Where Finder draws a folder's icon, read from its own tree.
+    let icon_of = |name: &str| {
+        let window = ottospace_mac::ax::Window::find(pid, finder_window)?;
+        let limits = ottospace_core::ax::Limits { depth: 30, nodes: 3000, millis: None };
+        let tree = ottospace_mac::ax_tree::read(&window, limits, ottospace_mac::ax_tree::Fetch::Batched);
+        named_frame(&serde_json::to_value(&tree.root).ok()?, name)
+    };
+    let double_click = |icon: [f64; 4]| click_at(icon[0] + icon[2] / 2.0, icon[1] + icon[3] / 2.0, true);
+
+    // The control: not hosted, a double-click on a folder opens it; back again with ⌘[.
+    bring_forward(pid as u32, "Finder");
+    let icon = wait_for("the first folder's icon", || icon_of(&first));
+    double_click(icon);
+    let control = || format!("title {:?}, icon {icon:?}, window {:?}, front {:?}", title(), frame(), front_app());
+    wait_or("the control double-click to open its folder", control, || (title()? == first).then_some(()));
+    press("keystroke \"[\" using command down");
+    wait_for("the window back at the folder", || (title()? == outer).then_some(()));
+    let original = wait_for("its frame", frame);
 
     let pid_text = pid.to_string();
     let env = [("OTTOSPACE_E2E", "1"), ("OTTOSPACE_HOST_ONLY", pid_text.as_str()), ("OTTOSPACE_RETURN_KEY", "f19")];
@@ -2245,15 +2267,15 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
     assert_eq!(reply["state"]["panes"][0]["kind"]["type"], "app", "{reply}");
     let spot = point(&state()["parking"]).expect("parking spot");
     wait_for("the Finder window to park", || frame().filter(|f| close(f[0], spot[0])));
-    let otto_window = state()["frame"]["window"].as_u64().expect("ottospace's window number") as u32;
+    let otto_pid = otto.child.id() as i64;
     // What a stuck click leaves to read: who is in front, what covers the window, its main window.
     let seen = || {
         format!(
-            "front {:?}; window {finder_window} at {:?}; ottospace's {otto_window} above it: {}; \
-             Finder's main window {:?}; mode {}",
+            "front {:?}; window {finder_window} at {:?}; above it (number, pid, layer) {:?}, ottospace is pid \
+             {otto_pid}; Finder's main window {:?}; mode {}",
             front_app(),
             frame(),
-            windows_above(finder_window).contains(&otto_window),
+            windows_above(finder_window as u32),
             ottospace_mac::ax::Window::main_id(pid),
             state()["mode"],
         )
@@ -2269,12 +2291,11 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
     report(&format!("finder, live: {}", seen()));
 
     // A real double-click on the folder inside opens it: Finder took the click.
-    let tree = otto.call(json!({"cmd": "ax_tree", "depth": 30, "nodes": 3000}));
-    let icon = named_frame(&tree["tree"]["root"], &inner).unwrap_or_else(|| panic!("no {inner} in the tree: {tree}"));
+    let icon = wait_for("the inner folder's icon", || icon_of(&inner));
     let (x, y) = (icon[0] + icon[2] / 2.0, icon[1] + icon[3] / 2.0);
     assert!(x > live[0] && x < live[0] + live[2] && y > live[1] && y < live[1] + live[3], "{icon:?} in {live:?}");
-    click_at(x, y, true);
-    let opened = || format!("title {:?}; {}", title(), seen());
+    double_click(icon);
+    let opened = || format!("title {:?}; icon {icon:?}; {}", title(), seen());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         wait_or("the double-click to open the folder", opened, || (title()? == inner).then_some(()))
     }));
