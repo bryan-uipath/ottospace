@@ -64,13 +64,22 @@ A small script printed the variable and tried to connect.
 - **Hidden from what clients read (before (b)).** An agent that runs `env` puts its pass in its
   session file and, in the terminal view, on its screen: the state's `drawer.agents.<task>.lines`.
   Each live pass (`pass::Live`, registered while held, gone when dropped) reads `[hidden]`, in
-  either case: in every terminal's `lines` (searched across wrapped rows) and `text` (so `capture`,
-  `wait`'s match, a saved history), in every socket reply as a last step (session reads,
-  transcripts, errors), and in the trace. A piece of 8 digits or more at a text's start or end is
-  hidden too: a screen's edge (scrolled, or output still arriving) may cut a pass. A `wait` cannot
-  match a pass: no oracle for it. Not hidden: a terminal's picture (a user-started capture's PNG),
-  the user's own ⌘C, a pass printed in pieces, and the agent's environment itself (`ps eww` of a
-  same-user process: section 2's honest limit). A dead pass shows again: it grants nothing.
+  either case: in every terminal's `lines` and `text` (so `capture`, `wait`'s match, a saved
+  history), in every socket reply as a last step (session reads, transcripts, errors), and in the
+  trace. Only whole passes are matched: hiding a part would be an oracle (a client types a guess
+  into a terminal and reads whether it was hidden, a digit at a time). So a terminal searches the
+  whole lines its screen's edges cut (rows that wrap, scrolled or not), not only the rows on show;
+  and the first row of a full history (10,000 lines, what was dropped above may have cut a pass)
+  loses a leading run of 8 or more hex digits whatever they are, a rule no digit of a pass decides.
+  A `wait` cannot match a pass. Not hidden: a terminal's picture (a user-started capture's PNG),
+  the user's own ⌘C, a pass printed in pieces, the head of one whose output is still arriving
+  (between two reads of the pty, for milliseconds), and the agent's environment itself (`ps eww`
+  of a same-user process: section 2's honest limit). A dead pass shows again: it grants nothing.
+- **Considered: the pass not in the environment.** An inherited descriptor, or a 0600 file whose
+  path is in the environment, read by `ottospace ctl` and the SDK: `env` would print no pass.
+  Not now: whether Claude Code's and Codex's tool shells inherit an extra descriptor is not
+  probed (both pass the environment on, verified), and a file breaks "never in a file". A probe
+  for stage (b) or later.
 - **On the wire.** A top-level `"pass"` on any request line, taken off before `Request` is parsed
   (`control::parse`): the closed set is unchanged; a line with no pass parses from its text, as
   before. Not 32 hex digits: an error that does not repeat
