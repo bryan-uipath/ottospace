@@ -67,6 +67,9 @@ macro_rules! commands {
                 match (self, self.group()) {
                     (_, Group::Marks) => Some(Feature::Marks),
                     (Command::Transcribe, _) => Some(Feature::Transcripts),
+                    (Command::AgentMenu | Command::AgentOff | Command::AgentSee | Command::AgentAct, _) => {
+                        Some(Feature::AgentMode)
+                    }
                     _ => None,
                 }
             }
@@ -135,6 +138,10 @@ commands! {
     CalendarForward: "Next Day in Calendar", View;
     CalendarToday: "Today in Calendar", View;
     Transcribe: "Start or Stop Transcribing", View;
+    AgentMenu: "Agent Mode…", Panes;
+    AgentOff: "Agent Mode: Off", Panes;
+    AgentSee: "Agent Mode: See", Panes;
+    AgentAct: "Agent Mode: See and Act", Panes;
     AxOverlay: "Accessibility Overlay", Developer;
     AxInspector: "Accessibility Inspector", Developer;
     InspectorFilter: "Filter the Accessibility Inspector", Developer;

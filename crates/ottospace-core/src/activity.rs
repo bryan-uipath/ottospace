@@ -19,6 +19,8 @@ pub enum Station {
     Shell,
     Network,
     Browser,
+    /// An app pane the user let the task see (agent mode): fed only by ottospace's own rows.
+    Apps,
     Agents,
     Skills,
     Hooks,
@@ -27,13 +29,14 @@ pub enum Station {
 
 impl Station {
     /// Clockwise from the top: the person and the model, then the tools.
-    pub const DIAL: [Station; 11] = [
+    pub const DIAL: [Station; 12] = [
         Station::You,
         Station::Model,
         Station::Files,
         Station::Shell,
         Station::Network,
         Station::Browser,
+        Station::Apps,
         Station::Agents,
         Station::Skills,
         Station::Memory,
@@ -50,6 +53,7 @@ impl Station {
             Station::Shell => "Shell",
             Station::Network => "Network",
             Station::Browser => "Browser",
+            Station::Apps => "Apps",
             Station::Agents => "Agents",
             Station::Skills => "Skills",
             Station::Hooks => "Hooks",
@@ -117,7 +121,7 @@ struct Last {
 /// One conversation's activity.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Activity {
-    uses: [Use; 11],
+    uses: [Use; 12],
     running: Vec<Running>,
     route: VecDeque<(Station, u64)>,
     last: Option<Last>,
@@ -189,6 +193,17 @@ impl Activity {
             (used.failed, used.failing) = (used.failed.saturating_add(1), used.failing.saturating_add(1));
         }
         (self.stepped, self.thinking) = (false, at);
+        self.latest = self.latest.max(at);
+    }
+
+    /// ottospace served (or refused) a read of an app pane for the task: its own record, not the
+    /// agent's account. One use of Apps; refused, a failed one.
+    pub(crate) fn app(&mut self, label: &str, failed: bool, at: u64) {
+        self.used(Station::Apps, label, at);
+        if failed {
+            let used = &mut self.uses[Station::Apps.at()];
+            (used.failed, used.failing) = (used.failed.saturating_add(1), used.failing.saturating_add(1));
+        }
         self.latest = self.latest.max(at);
     }
 
@@ -625,7 +640,7 @@ mod tests {
         }
         let route: Vec<Station> = b.dial(20, &live()).route.iter().map(|leg| leg.station).collect();
         use Station::*;
-        assert_eq!(route, [Browser, Agents, Skills, Memory, Hooks, Other]);
+        assert_eq!(route, [Apps, Agents, Skills, Memory, Hooks, Other]);
     }
 
     #[test]

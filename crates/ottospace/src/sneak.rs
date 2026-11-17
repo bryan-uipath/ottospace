@@ -302,7 +302,10 @@ impl Workspace {
         }
         let (kind, name) = id.split_once(':').unwrap_or((id, ""));
         let number = name.parse::<u32>().ok();
-        if self.activate_drawer(kind, name, window, cx) || self.click_listen(kind, name, window, cx) {
+        if self.activate_drawer(kind, name, window, cx)
+            || self.click_listen(kind, name, window, cx)
+            || self.click_agent(kind, name, window, cx)
+        {
             return;
         }
         let action = match (kind, name) {

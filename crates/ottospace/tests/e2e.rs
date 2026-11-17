@@ -3600,10 +3600,12 @@ fn bad_requests_are_refused_and_quit_exits() {
 
     // Accessibility requests need an app pane: others are refused, and nothing toggles.
     otto.call(json!({"cmd": "split", "kind": "empty"}));
+    // `ax_tree` is agent mode's, off by its flag here: refused for anyone.
     for bad in [r#"{"cmd":"ax_tree"}"#, r#"{"cmd":"ax_tree","pane":1}"#, r#"{"cmd":"ax_overlay"}"#] {
         let reply = otto.raw(bad);
         assert_eq!(reply["ok"], false, "{bad} -> {reply}");
-        assert!(reply["error"].as_str().is_some_and(|e| e.contains("app pane")), "{bad} -> {reply}");
+        let why = |e: &str| e.contains("app pane") || e == "feature off: agent_mode";
+        assert!(reply["error"].as_str().is_some_and(why), "{bad} -> {reply}");
     }
     assert_eq!(otto.raw(r#"{"cmd":"ax_tree","limit":1}"#)["ok"], false, "unknown field");
     let reply = otto.call(json!({"cmd": "state"}));
@@ -9208,6 +9210,103 @@ fn a_live_pass_is_hidden_from_every_client() {
         drop(otto);
         let _ = std::fs::remove_dir_all(&root);
     }
+}
+
+/// Agent mode (flag `agent_mode`): an app pane the user put in a task's workspace starts at the
+/// default (Act) for that task; one a client opened starts at Off. `app_read`, `app_look` and
+/// `ax_tree` answer only that task's agent (its pass) at See or more, each one a row in its
+/// conversation; refused with no pass, a made-up or dead one, another task's, at Off. Only the
+/// user sets a level: the robot's menu by their click or ⌘⌃V; a client's click, key or ⌘⌃V is
+/// refused. Made-up tasks; the pane holds no window (a test run hosts none).
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn agent_mode_lets_only_the_workspaces_task_read_an_app_pane_and_only_the_user_sets_it() {
+    let extra = [("FAKE_SAY_PASS", "1"), ("OTTOSPACE_FEATURES", "agent_mode")];
+    let (root, record, env) = native_setup("agent-mode", &[], &extra);
+    let otto = launch_env("agent-mode", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+    otto.call(json!({"cmd": "task_new", "line": "second >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let file = record.join("pass");
+    let pass_of = |o: &Otto, task: u64| -> String {
+        let _ = std::fs::remove_file(&file);
+        o.start_task(task);
+        o.wait_for("its pass", |_| {
+            std::fs::read_to_string(&file).ok().filter(|t| t.ends_with('\n')).map(|t| t.trim().to_string())
+        })
+    };
+    let second = pass_of(&otto, 2);
+    let first = pass_of(&otto, 1);
+    // Task 1's workspace is on show: the user's pick there, and a client's.
+    let panes = |o: &Otto| o.call(json!({"cmd": "state"}))["state"]["agent_mode"]["panes"].clone();
+    otto.call(json!({"cmd": "app_fixture", "name": "Mail", "user": true}));
+    let ids = |o: &Otto| panes(o).as_object().map(|p| p.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
+    let mine: u64 = ids(&otto)[0].parse().unwrap();
+    otto.call(json!({"cmd": "app_fixture", "name": "Notes"}));
+    let theirs: u64 = ids(&otto).iter().map(|id| id.parse().unwrap()).find(|id| *id != mine).unwrap();
+    assert_eq!(panes(&otto)[mine.to_string()], json!({"level": "act", "task": 1}));
+    assert_eq!(panes(&otto)[theirs.to_string()], json!({"level": "off", "task": 1}), "a client's pane: Off");
+    // Who may read.
+    let ask = |cmd: &str, pane: u64, pass: Option<&str>| {
+        let mut line = json!({"cmd": cmd, "pane": pane});
+        if let Some(pass) = pass {
+            line["pass"] = json!(pass);
+        }
+        let reply = otto.raw(&line.to_string());
+        assert_eq!(reply["ok"], false, "{line} -> {reply}");
+        reply["error"].as_str().unwrap_or_default().to_string()
+    };
+    let says = |error: String, part: &str| assert!(error.contains(part), "{error:?} has no {part:?}");
+    says(ask("app_read", mine, None), "only a task's agent");
+    says(ask("app_read", mine, Some("0123456789abcdef0123456789abcdef")), "no running agent's");
+    says(ask("app_read", mine, Some(&"0".repeat(32))), "no running agent's");
+    says(ask("app_read", mine, Some(&second)), "not in task 2's workspace");
+    says(ask("app_read", theirs, Some(&first)), "agent mode is off on pane");
+    says(ask("ax_tree", theirs, Some(&first)), "agent mode is off on pane");
+    // Granted: the read is let through, and finds no window (a test run hosts none).
+    says(ask("app_read", mine, Some(&first)), "no window");
+    says(ask("app_read", mine, Some(&first)), "less than a second");
+    says(ask("app_look", mine, Some(&first)), "no picture");
+    // Each one for task 1 is a row in its conversation.
+    let rows = |o: &Otto| {
+        let entries =
+            o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"]["transcript"]["entries"].clone();
+        entries.as_array().map_or(0, |e| e.iter().filter(|e| e["notice"] == "app_used").count())
+    };
+    assert_eq!(rows(&otto), 5, "the refusals at Off, the reads and the look");
+    // A client's key, click or ⌘⌃V toward the level changes nothing.
+    let robot = otto.control(&format!("agent:{mine}"));
+    otto.click(at(robot, 0.5, 0.5), 1);
+    otto.raw(r#"{"cmd":"key","keys":"cmd-ctrl-v"}"#);
+    let menu = |o: &Otto| o.call(json!({"cmd": "state"}))["state"]["agent_mode"]["menu"].clone();
+    assert_eq!(menu(&otto), Value::Null, "a client opens no menu");
+    // The user's click opens it; their click on Off sets it.
+    otto.user_click(at(robot, 0.5, 0.5));
+    assert_eq!(menu(&otto)["pane"], mine);
+    otto.click(at(otto.control("agent-item:2"), 0.5, 0.5), 1);
+    assert_eq!(panes(&otto)[mine.to_string()]["level"], "act", "a client's click on an item is refused");
+    otto.user_click(at(otto.control("agent-item:0"), 0.5, 0.5));
+    assert_eq!((panes(&otto)[mine.to_string()]["level"].clone(), menu(&otto)), (json!("off"), Value::Null));
+    says(ask("app_read", mine, Some(&first)), "agent mode is off on pane");
+    // ⌘⌃V, the user's, on the focused pane (the client's, the last opened): ↓ to See, ↵.
+    otto.user_key("cmd-ctrl-v");
+    assert_eq!(menu(&otto), json!({"pane": theirs, "selected": 0}));
+    otto.raw(r#"{"cmd":"key","keys":"enter"}"#);
+    assert_eq!(panes(&otto)[theirs.to_string()]["level"], "off", "a client's key is not the menu's");
+    otto.user_key("down");
+    otto.user_key("enter");
+    assert_eq!(panes(&otto)[theirs.to_string()], json!({"level": "see", "task": 1}));
+    says(ask("app_read", theirs, Some(&first)), "no window");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+
+    // The flag off: no level, and no read of any app pane by anyone.
+    let otto = Otto::launch("agent-mode-off");
+    let reply = otto.raw(r#"{"cmd":"app_read","pane":1}"#);
+    assert_eq!(reply["error"], "feature off: agent_mode", "{reply}");
+    assert_eq!(otto.raw(r#"{"cmd":"ax_tree"}"#)["error"], "feature off: agent_mode");
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["agent_mode"]["panes"], json!({}));
 }
 
 /// The recorded 2.1.325 turn is read whole ("ok", once); once its agent is stopped, the

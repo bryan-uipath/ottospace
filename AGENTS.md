@@ -119,6 +119,10 @@ Rules:
   `listen_end` (`"why"`: `app_quit`, `stream_failed`) ends the one on as the shell would; the state's
   `listen_lines` (the drawer's rows) and `listen_rects` (where its controls are drawn) are null
   outside a test run. See `docs/ai/transcripts.md`.
+- `app_fixture` (`"name"`, `"user"`): an app pane with no window (a test run hosts none), as the
+  user's pick (`user`) or a client's `open_app`, for agent mode's robot and its grants. A read of it,
+  once granted, finds no window. In an app-window run (`OTTOSPACE_HOST_ONLY`, no user to grant a
+  level) `ax_tree` reads the canary's pane as before. See `docs/ai/agent-mode.md`.
 - `OTTOSPACE_REDUCE_MOTION` (read only under `OTTOSPACE_E2E`) stands for the system's Reduce Motion
   in the dial. The state's `counts.dial_frames` counts the frames the dial asked for because
   something in it moves: none at rest.

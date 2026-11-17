@@ -1,6 +1,6 @@
 # Agent mode on an app pane: See, See and act
 
-A design, not built. 2026-11-15.
+A design. 2026-11-15. Stages (a) and (b) are built: see "as built" below.
 
 The owner made a workspace, added Spotify, and asked its task "what app am i using right now",
 "testing to see if the agent could see the spotify app (and potentially help me automate it)".
@@ -106,6 +106,69 @@ A small script printed the variable and tried to connect.
 - **The MCP route.** Not built: the pass is route-agnostic (an MCP server the runner starts
   inherits the same variable and attaches it the same way). Lean: build it in (b), the first stage
   whose requests a sandboxed tool shell needs. Owner's call.
+
+## Stage (b), as built (2026-11-17)
+
+- **The grant, in the core.** `ottospace-core/src/agent_mode.rs` (types) and `model/agent.rs`. Each app
+  pane has a `Grant { level, task }` (`Model.agent`, `state.agent_mode.panes`), kept after every
+  step (`settle_agent`): the task is the front task of the pane's workspace (`Tab::space`'s
+  members, none done) when the pane came; a pane whose task no longer works there (moved to another
+  workspace by a drag or Move Tab, the task done, dismissed or unbound) is Off, for the task there
+  now. A pane in no task's workspace is Off for none and grants nothing; one where a task comes
+  later stays Off. Not kept over a restart.
+- **The default is the user's act only.** `agent_mode` in the settings (default `act`) is the level of
+  a new app pane only where the user's own act put its window there (their pick, drag or click:
+  `AgentMode.by_user`, recorded from the origin of the step that first made it an app pane,
+  whatever the flag). One a client opened (`open_app`) or filled, the system adopted, or a restore
+  rebuilt starts at Off: an agent that opens Mail in its own workspace cannot read it. A security
+  review (HIGH) found the first build gave the default to every pane.
+- **Only the user sets a level.** `AgentLevel`, `AgentMenu`, `AgentMenuMove`, `AgentMenuChoose` and
+  `AgentMenuClose` are refused from `Socket` and `System` (`agent_mode::USERS_ALONE`); `AppUsed` is
+  refused from a client (`SHELLS_ALONE`) and ignored from the user. The menu has no letters; Act is
+  never a cycle away. A property rule: a level changes only by the user's choice or a reset to Off;
+  a new pane is above Off only if the user filled it.
+- **Who may read.** `Model::app_access(pane, Caller, AppUse, now)`: the flag on, a pass (none: refused;
+  a made-up or dead one: refused), the pane an app pane granted to the caller's task, See or more,
+  one read and one look a second. The shell asks before it reads and again before it delivers (Off
+  since: dropped). `app_read {pane}` (tree, `captured` and labelled untrusted, every string cleaned,
+  no value in a secure text field), `app_look {pane}` (the last frame, PNG at most 1600 px, 0600 in
+  `materials/agent-<pid>-<task>-<word>/`, removed when the pane is no longer seen by that task), and
+  `ax_tree` (`app_read`'s older name, default the focused pane). An app-window test run
+  (`OTTOSPACE_HOST_ONLY`: it hosts only the canary, and has no user to grant a level) still reads
+  `ax_tree` as before: `e2e_apps.rs` uses it to find the canary's controls.
+- **On screen.** The robot in an app pane's header (`agent:<pane>`): glyph, `Off`/`See`/`Act`, caret;
+  muted at Off, dimmed with no task, the app's blue at See, amber at Act with the pane's border in
+  it. A click, ⌘⌃V, the palette (Agent Mode…, Agent Mode: Off / See / See and Act) or a label
+  (`agent:<pane>`, `agent-item:<n>`). See and act's item says "Pressing arrives later": it grants
+  what See does. Every use and refusal is a row in the task's conversation (`Notice::AppUsed`) and a
+  use of the dial's twelfth station, Apps. Not yet: the pulse while a read runs, the tip's "read 4 s
+  ago", a row for a terminal-view conversation (it has no transcript).
+- **Flag.** `agent_mode` (Experimental, off): off, no robot, no key, and every read of an app pane by
+  a client is refused, `ax_tree` too. The grants are kept, and kept true, while it is off: a
+  settings write that turns it off and on again raises no level (the review's HIGH finding).
+- **Limits, honest.** A look's picture is 0600 in a 0700 folder: another same-user process (another
+  task's agent included) can still list and read it while it is there, as it could read the
+  agent's environment; the folder goes below See, at most 10 are kept, and a start sweeps a gone
+  run's. A refused read is a row too, not limited: an agent floods only its own conversation. Not
+  verified: whether macOS counts an agent ottospace started as ottospace's (its responsible
+  process), so that its own AX or ScreenCaptureKit calls would use ottospace's grants and pass by
+  agent mode altogether. A probe before stage (c): a program in a pane calls
+  `AXIsProcessTrusted` and `CGWindowListCreateImage`. `ax_overlay` (roles, paths and frames, no
+  text) is not gated. The `OTTOSPACE_HOST_ONLY` seam is read in any run: only the user sets it.
+- **The MCP route: not now; a follow-up.** A sandboxed tool shell cannot reach the socket (Probes).
+  Built now, an MCP server is a new long-lived process the runner starts, its config written into
+  each runner's start (Claude's `--mcp-config`, Codex's `config.toml`), and a new trust path to test
+  with both real CLIs, which the tests may not run. It is not small. Today's users run without the
+  sandbox (verified for Claude with the user's settings), and Claude's sandbox can allow the one
+  socket (`sandbox.network.allowUnixSockets`). Follow-up: `ottospace mcp`, a stdio server with
+  `app_read`, `app_look` and `task_brief` as tools, reading the pass file as `ottospace ctl` does,
+  started by the runner outside its sandbox; a `RunnerSpec` field says how each runner is given it.
+- **e2e.** `agent_mode_lets_only_the_workspaces_task_read_an_app_pane_and_only_the_user_sets_it`,
+  with a test-only `app_fixture` (an app pane with no window, as the user's pick or a client's):
+  no pass, a made-up pass, a dead one (`GONE`), another task's, Off, a client's pane at Off, the
+  limit, the rows; a client's click, key and ⌘⌃V refused; the user's click and ⌘⌃V set a level; the
+  flag off refuses all. `e2e-apps` cannot grant a level (no user acts outside `OTTOSPACE_E2E`):
+  `app_read` and `app_look` of the canary at See wait for a seam for that.
 
 ## What exists today
 

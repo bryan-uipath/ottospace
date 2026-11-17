@@ -109,6 +109,8 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
     }),
   (c) => c.taskBrief({ id: 1 }),
   (c) => c.axTree({ pane: 1, depth: 20, nodes: 500 }),
+  (c) => c.appRead({ pane: 1, depth: 20, nodes: 500 }),
+  (c) => c.appLook({ pane: 1 }),
   (c) => c.axOverlay({ refresh: true }),
   (c) => c.sneak(),
   (c) =>
@@ -122,6 +124,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.recordStart({ dir: "/tmp/rec" }),
   (c) => c.recordStop(),
   (c) => c.listenEnd({ why: "app_quit" }),
+  (c) => c.appFixture({ name: "Mail", user: true }),
   (c) => c.zoomPress(),
   (c) => c.calendar({ day: "tomorrow", days: 2 }),
   (c) => c.calendar({ day: "yesterday" }),

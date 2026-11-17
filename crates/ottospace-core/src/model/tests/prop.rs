@@ -5,6 +5,7 @@
 //! `OTTOSPACE_PROP_SEED=<n>` runs that one sequence again.
 
 use super::*;
+use crate::agent_mode::{AppUse, Level};
 use crate::ax::{Frame, Source};
 use crate::calendar::{ColorRule, DayStep, Event};
 use crate::clip::{Amount, Verb};
@@ -64,6 +65,12 @@ impl Gen<'_> {
     fn pane(&mut self) -> PaneId {
         let real: Vec<PaneId> = self.m.panes.iter().map(|p| p.id).collect();
         self.one_of(&real, Self::stray)
+    }
+
+    /// An app pane agent mode knows, more often than not.
+    fn app_pane(&mut self) -> PaneId {
+        let real: Vec<PaneId> = self.m.agent.panes.keys().copied().collect();
+        self.one_of(&real, Self::pane)
     }
 
     /// How much a clipboard holds: nothing, a word, lines, a command that would run.
@@ -1313,6 +1320,18 @@ const MAKERS: &[Make] = &[
         why: g.rng.pick(&[crate::listen::Ended::AppQuit, crate::listen::Ended::StreamFailed]),
         at: g.time(),
     },
+    |g| Action::AgentLevel { pane: g.rng.coin().then(|| g.app_pane()), level: g.rng.pick(&Level::ALL) },
+    |g| Action::AgentMenu { pane: g.rng.coin().then(|| g.app_pane()), keys: g.rng.coin() },
+    |g| Action::AgentMenuMove { delta: g.delta() },
+    |g| Action::AgentMenuChoose { index: g.rng.coin().then(|| g.rng.below(4)) },
+    |_| Action::AgentMenuClose,
+    |g| Action::AppUsed {
+        task: g.task(),
+        pane: g.app_pane(),
+        what: g.rng.pick(&[AppUse::Read, AppUse::Look]),
+        refused: g.rng.coin().then(|| g.text()),
+        at: g.time(),
+    },
     // Random flags: what a feature turned off shows goes, and its actions do nothing (`Run::step`).
     |g| {
         let on: Vec<&str> = features::ALL.into_iter().filter(|_| g.rng.coin()).map(Feature::name).collect();
@@ -1435,6 +1454,34 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(!waits, "a mark waits with marks off: {:?}", m.mark_input);
         let listed = m.palette.iter().flat_map(Palette::matches).any(|c| c.feature() == Some(Feature::Marks));
         ensure!(!listed, "the palette lists a mark command with marks off");
+    }
+    // Agent mode: every app pane has a grant, and only it, the flag on or off. One above Off is to
+    // a task that works in the pane's workspace; a pane in no task's is Off. Off, no menu is open.
+    ensure!(m.features.on(Feature::AgentMode) || m.agent.menu.is_none(), "the agent menu open with its flag off");
+    {
+        let apps: Vec<PaneId> = m
+            .tab_panes()
+            .into_iter()
+            .flatten()
+            .filter(|id| matches!(m.pane(*id).map(|p| &p.kind), Some(Kind::App { .. })))
+            .collect();
+        let known: Vec<PaneId> = m.agent.panes.keys().copied().collect();
+        ensure!(
+            apps.iter().all(|id| known.contains(id)) && known.len() == apps.len(),
+            "grants {known:?} for app panes {apps:?}"
+        );
+        for (pane, grant) in &m.agent.panes {
+            let working = m.pane_tasks(*pane);
+            ensure!(
+                grant.task.is_none_or(|task| working.contains(&task)),
+                "pane {pane} granted to {grant:?}, working {working:?}"
+            );
+            ensure!(
+                grant.level == crate::agent_mode::Level::Off || grant.task.is_some(),
+                "pane {pane} above Off with no task"
+            );
+        }
+        ensure!(m.agent.menu.is_none_or(|menu| known.contains(&menu.pane)), "the agent menu on no app pane");
     }
     if !m.features.on(Feature::AppsSection) {
         ensure!(!shown(Section::Apps), "the Apps section with it off");
@@ -2489,8 +2536,37 @@ impl Run {
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
         let filled_before = m.fill_display;
+        let grants_before = m.agent.panes.clone();
+        let (default, last_before) = (m.agent.default, m.agent.last.clone());
         let effects = m.update(sent);
         check(m)?;
+        // A level rises only by the user's own choice. A pane kept by its task keeps its level but
+        // for the user's; a pane new to it starts at the default, or Off.
+        let users_level =
+            origin == Origin::User && matches!(action, Action::AgentLevel { .. } | Action::AgentMenuChoose { .. });
+        for (pane, grant) in &m.agent.panes {
+            use crate::agent_mode::Level::Off;
+            match grants_before.get(pane) {
+                Some(was) if was.task == grant.task => ensure!(
+                    users_level || grant.level == was.level,
+                    "{origin:?}'s {action:?} moved pane {pane} from {was:?} to {grant:?}"
+                ),
+                Some(was) => ensure!(grant.level == Off, "pane {pane} carried {was:?} to {grant:?}"),
+                None => ensure!(
+                    grant.level == Off
+                        || (m.agent.by_user.get(pane) == Some(&true)
+                            && (grant.level == default || grant.level == m.agent.default)),
+                    "new pane {pane} at {grant:?}, the default {default:?}: only one the user filled starts above Off"
+                ),
+            }
+        }
+        // Only ottospace records a use of an app.
+        ensure!(
+            m.agent.last == last_before
+                || (origin == Origin::System && matches!(action, Action::AppUsed { .. }))
+                || m.agent.last.iter().all(|(pane, uses)| last_before.get(pane) == Some(uses)),
+            "{origin:?}'s {action:?} changed when an app was last read"
+        );
         // Only the user starts a transcript: their click, or their key.
         let listen_now = m.listen.on.as_ref().map(|on| on.id.clone());
         let starts = matches!(action, Action::ListenStart { .. } | Action::ListenToggle { .. });
@@ -3905,6 +3981,8 @@ fn code(sent: &Envelope) -> String {
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("verb", "Verb"),
+        ("level", "Level"),
+        ("what", "AppUse"),
         ("axis", "Axis"),
         ("at", "TabAt"),
         ("dir", "Dir"),

@@ -2,6 +2,7 @@
 //! The shell (`ottospace`) turns input into [`Action`]s and carries out the [`Effect`]s.
 
 pub mod activity;
+pub mod agent_mode;
 pub mod agents;
 pub mod app_wheel;
 pub mod apps;

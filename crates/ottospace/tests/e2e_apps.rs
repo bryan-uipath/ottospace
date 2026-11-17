@@ -268,12 +268,12 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     // Accessibility: GPUI exposes no controls, so the canary's tree is its window chrome: three
     // pressable traffic lights, all in the title bar the parked stream crops off.
     let tree = otto.call(json!({"cmd": "ax_tree"}));
-    assert_eq!(tree["tree"]["root"]["role"], "AXWindow", "{tree}");
+    assert_eq!(tree["captured"]["tree"]["role"], "AXWindow", "{tree}");
     let presses =
         |n: &&Value| n["role"] == "AXButton" && n["actions"].as_array().is_some_and(|a| a.contains(&json!("AXPress")));
     let top = tree["window"]["y"].as_f64().expect("window frame");
     let buttons: Vec<Value> =
-        tree["tree"]["root"]["children"].as_array().map_or(vec![], |c| c.iter().filter(presses).cloned().collect());
+        tree["captured"]["tree"]["children"].as_array().map_or(vec![], |c| c.iter().filter(presses).cloned().collect());
     assert!(buttons.len() >= 3, "close, minimise and zoom: {tree}");
     assert!(buttons.iter().all(|b| b["frame"]["y"].as_f64().is_some_and(|y| y - top < crop)), "in the bar: {tree}");
     // So the overlay reads the tree but labels nothing: controls the picture does not show are dropped.
@@ -1063,7 +1063,7 @@ fn a_hosted_window_is_captured_with_the_part_of_its_tree_under_the_circle() {
     // Where the button is, by the canary's own tree: in the window, so below the title bar that
     // the picture crops off. The circle goes round it there.
     let tree = otto.call(json!({"cmd": "ax_tree", "pane": 1}));
-    let children = tree["tree"]["root"]["children"].as_array().cloned().unwrap_or_default();
+    let children = tree["captured"]["tree"]["children"].as_array().cloned().unwrap_or_default();
     let named = children.iter().find(|node| node["title"] == "Canary button").unwrap_or_else(|| panic!("{tree}"));
     let part = |of: &Value, key: &str| of[key].as_f64().expect("a number");
     let crop = state()["crop"]["1"].as_f64().expect("the crop");
@@ -1545,7 +1545,7 @@ fn a_sneak_label_presses_a_control_in_the_hosted_app_and_a_disabled_one_has_none
 
     // The tree, to tell the controls apart by their paths: the labels carry no text.
     let tree = otto.call(json!({"cmd": "ax_tree", "pane": 1}));
-    let children = tree["tree"]["root"]["children"].as_array().cloned().unwrap_or_default();
+    let children = tree["captured"]["tree"]["children"].as_array().cloned().unwrap_or_default();
     let path_of = |title: &str| {
         let at = children.iter().position(|node| node["title"] == title);
         json!([at.unwrap_or_else(|| panic!("no {title} in {tree}"))])

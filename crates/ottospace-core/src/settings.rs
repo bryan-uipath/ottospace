@@ -90,6 +90,10 @@ pub struct Settings {
     /// `terminal` (the CLI's own TUI). Codex always shows in a terminal for now.
     #[serde(default)]
     pub conversation_view: Option<crate::transcript::View>,
+    /// The agent mode level a new app pane starts at in a task's workspace: `act` (default),
+    /// `see` or `off`. The robot in a pane's header changes one pane (`agent_mode` flag).
+    #[serde(default)]
+    pub agent_mode: Option<crate::agent_mode::Level>,
     /// The key that captures the pane in use, from any app: modifiers and a key with `-`
     /// between them. Default: `ctrl-alt-cmd-space`. `"off"`: no key.
     #[serde(default)]
@@ -543,6 +547,7 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         agent_models,
         default_agent: _,
         conversation_view: _,
+        agent_mode: _,
         capture_key,
         capture: _,
         workbook_scrollback_lines: _,
@@ -1197,7 +1202,7 @@ mod tests {
             wrong,
             [
                 "features: \"apps_section\" must be true or false",
-                "features: \"tabs\" is not a feature: the features are marks, apps_section, transcripts"
+                "features: \"tabs\" is not a feature: the features are marks, apps_section, transcripts, agent_mode"
             ]
         );
         assert!(Settings::parse(r#"{"features": {"tabs": true}}"#).unwrap_err().contains("marks, apps_section"));
@@ -1207,7 +1212,9 @@ mod tests {
         let text = "{\n  \"tasks\": \"t\",\n  \"features\": {\"marks\": true}\n}\n";
         let set = with_feature(text, "apps_section", true).unwrap();
         assert!(set.starts_with("{\n  \"tasks\": \"t\",\n  \"features\": {"), "{set}");
-        let both = crate::features::Features::all().with(crate::features::Feature::Transcripts, false);
+        let both = crate::features::Features::all()
+            .with(crate::features::Feature::Transcripts, false)
+            .with(crate::features::Feature::AgentMode, false);
         assert_eq!(Settings::read(&set).0.features(), both);
         assert_eq!(with_feature("", "marks", false).unwrap(), "{\n  \"features\": {\n    \"marks\": false\n  }\n}\n");
         assert!(with_feature(r#"{"features": true}"#, "marks", true).unwrap_err().contains("not an object"));
