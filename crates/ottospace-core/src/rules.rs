@@ -60,7 +60,7 @@ pub struct Rule {
 /// A rule as written. Its own struct, not `#[serde(flatten)]`, which serde refuses beside
 /// `deny_unknown_fields`: a misspelt key must stay an error.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, expecting = "struct Rule")]
 struct RuleFields {
     #[serde(default)]
     app: Option<String>,
@@ -198,6 +198,8 @@ mod tests {
         // A rule with no selector selects every window. A misspelt key is refused.
         assert!(!manages(&[rule(r#"{"do": "ignore"}"#)], &zoom("Zoom Meeting", "AXStandardWindow")));
         assert!(serde_json::from_str::<Rule>(r#"{"ap": "zoom.us", "do": "ignore"}"#).is_err());
+        // The settings' notice names a rule, not the struct it is read through.
+        assert!(serde_json::from_str::<Rule>("5").unwrap_err().to_string().contains("expected struct Rule at"));
         assert!(serde_json::from_str::<Rule>(r#"{"app": "zoom.us"}"#).is_err(), "a rule must say what to do");
     }
 
