@@ -6730,6 +6730,8 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     assert_eq!(otto.user_key("cmd-ctrl-e")["state"]["list"], 0);
     let undone = otto.user_key("u");
     assert_eq!((&undone["workbooks"][0]["summary"], &undone["workbook_offer"]), (&json!("2 terminals"), &Value::Null));
+    // Taken back, the save's note goes with the offer: no "Saved" left saying it.
+    assert_eq!(undone["notice"], Value::Null, "{}", undone["notice"]);
     assert_eq!(otto.user_key("r")["state"]["mark_input"]["type"], "workbook");
     let renamed = otto.user_key("o p s enter");
     assert_eq!(

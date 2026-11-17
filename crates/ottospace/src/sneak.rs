@@ -317,7 +317,9 @@ impl Workspace {
                 None
             }
             ("notice", "offer") => {
-                self.take_notice_offer(window, cx);
+                if let Some((drawn, _)) = self.notice_shown().and_then(|shown| self.notice_offer(&shown)) {
+                    self.take_notice_offer(drawn, window, cx);
+                }
                 None
             }
             ("bar", "add") => {

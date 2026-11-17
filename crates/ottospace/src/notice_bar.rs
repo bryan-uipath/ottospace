@@ -138,11 +138,12 @@ impl Workspace {
         }
     }
 
-    /// A click or label on the bar's offer. An undo whose time is up takes nothing back.
-    pub(crate) fn take_notice_offer(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let now = crate::now_ms();
-        self.model.update(Action::Tick { now }.sent_by(ottospace_core::Origin::System));
-        if let Some((_, action)) = self.notice_shown().and_then(|shown| self.notice_offer(&shown)) {
+    /// A click or label on the bar's offer `drawn`. An undo whose time is up takes nothing back,
+    /// and a notice that came since (a meeting's Join) is not taken in its place.
+    pub(crate) fn take_notice_offer(&mut self, drawn: Offer, window: &Window, cx: &mut Context<Self>) {
+        self.tick_now();
+        let offer = self.notice_shown().and_then(|shown| self.notice_offer(&shown));
+        if let Some((_, action)) = offer.filter(|(offer, _)| *offer == drawn) {
             self.dispatch(action, self.input, window, cx);
         }
         cx.notify();
@@ -190,7 +191,7 @@ impl Workspace {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         };
         let offer = self.notice_offer(&shown).map(|(offer, _)| {
-            let click = cx.listener(|this, _, window, cx| this.take_notice_offer(window, cx));
+            let click = cx.listener(move |this, _, window, cx| this.take_notice_offer(offer, window, cx));
             button("notice-offer")
                 .underline()
                 .child(offer.label())

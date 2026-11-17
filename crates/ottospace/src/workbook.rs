@@ -117,7 +117,9 @@ impl Workspace {
             Some(why) => self.error = Some(why),
             None => {
                 self.error = None;
-                if let Some(note) = self.model.workbook_saved_note() {
+                // An update's offer says the note already: a second copy would stay after × or Undo.
+                let note = self.model.workbook_saved_note();
+                if let Some(note) = note.filter(|note| self.model.workbooks.notice().is_none_or(|n| n.text != *note)) {
                     self.told = Some((note, std::time::Instant::now()));
                 }
             }
