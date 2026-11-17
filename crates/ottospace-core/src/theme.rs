@@ -34,6 +34,8 @@ pub const COMMAND: u32 = 0xed6aff;
 /// The accessibility inspector's filter has the keyboard.
 pub const INSPECT: u32 = 0x8ec5ff;
 pub const ERROR: u32 = 0xff8484;
+/// A transcript is on: its dot and time.
+pub const RECORDING: u32 = 0xff6467;
 /// Selected terminal text: a muted cyan, dark enough for light text on it.
 pub const SELECTION: u32 = 0x155e75;
 /// Sneak labels: a solid amber pill with dark text, readable over any app.

@@ -268,6 +268,11 @@ lines (polled, either says when someone speaks), not the app's name beyond what 
 says, not the file's path. `sdk/src/types.ts` and `parse.ts` gain the key; each test-only request
 gets its SDK method and fixture line.
 
+`frame.seq` and `frame.number` are in every reply too: a `ListenHeard` dispatched as it is heard
+moves both, and says when someone speaks. Slice 2, before real audio: the shell holds heard lines
+and dispatches them on a fixed tick while one is on (an empty batch too), so both rise at a
+constant rate; an e2e test checks `seq` rises the same with and without a fixture line.
+
 The shell: SCK streams on their queue, samples to the shim, the shim's callbacks to the UI thread
 as `ListenHeard` (`System`), the file writes on a writer thread, the indicator and the drawer drawn
 from the model.
@@ -422,7 +427,7 @@ Test-only, under `OTTOSPACE_E2E` (`control::test_refusal`, documented in CLAUDE.
 2. **App audio to text, kept.** The Swift shim (`SpeechTranscriber`), SCK per-app audio with
    helpers (measure Chrome, Slack and Zoom first), the Markdown file in `transcripts_dir` (§5), the
    menu-bar status item, the first-use explanation and the start reminder, the asset install
-   offer; the e2e-apps test. Evidence: a recording of a canary's made-up speech, and the file it
+   offer; the e2e-apps test; heard lines on a fixed tick, so `frame.seq` says nothing (§4). Evidence: a recording of a canary's made-up speech, and the file it
    wrote.
 3. **The mic.** `captureMicrophone`, `them`/`me`, the Microphone permission and usage key.
 4. **App rules and meeting detection.** `transcribe` rules (`button`, `mic`, `meeting`, `start`),

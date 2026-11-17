@@ -10171,3 +10171,142 @@ fn a_task_started_on_home_gets_its_own_workspace() {
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// Made-up lines a transcript's fixture replays: a volatile line, two finals, then one that
+/// comes only after the test is over.
+const LISTEN_FIXTURE: &str = r#"{"after_ms":100,"from":"them","text":"made up","final":false}
+{"after_ms":100,"from":"them","text":"made-up words one","final":true}
+{"after_ms":100,"from":"me","text":"made-up words two","final":true}
+{"after_ms":600000,"from":"them","text":"never heard","final":true}
+"#;
+
+/// A test run with transcripts on and the fixture as their sound, in a folder of its own.
+fn listen_otto(name: &str) -> Otto {
+    let fixture = support::temp(&format!("ottospace-e2e-listen-fixture-{name}-{}", std::process::id()));
+    std::fs::write(&fixture, LISTEN_FIXTURE).unwrap();
+    let home = user_folder(&format!("listen-{name}"), r#"{"repos": [], "restore_layout": false}"#);
+    let env = [
+        ("OTTOSPACE_FEATURES", "transcripts"),
+        ("OTTOSPACE_LISTEN_FIXTURE", fixture.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+    ];
+    Otto::launch_with(&format!("listen-{name}"), &env)
+}
+
+impl Otto {
+    /// Where the transcript control `id` was drawn (`listen_rects`), after a fresh frame.
+    fn listen_rect(&self, id: &str) -> [f64; 4] {
+        let drawn = self.drawn();
+        rect(drawn["listen_rects"].get(id).unwrap_or_else(|| panic!("no {id} in {}", drawn["listen_rects"])))
+    }
+
+    /// The drawer's rows once `n` of them are final.
+    fn listen_finals(&self, n: usize) -> Value {
+        self.wait_for(&format!("{n} final lines"), |o| {
+            let state = o.call(json!({"cmd": "state"}));
+            let finals = state["listen_lines"].as_array()?.iter().filter(|l| l["final"] == true).count();
+            (finals >= n).then(|| state["listen_lines"].clone())
+        })
+    }
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
+    let otto = listen_otto("hand");
+    otto.call(json!({"cmd": "split"}));
+    let start = otto.listen_rect("listen-start:1");
+    let header = rect(&otto.drawn()["headers"]["1"]);
+    assert!(start[1] >= header[1] && start[1] + start[3] <= header[1] + header[3] + 1.0, "{start:?} in {header:?}");
+
+    // A client's click and key start nothing.
+    otto.call(json!({"cmd": "mouse", "action": "down", "x": start[0] + 4.0, "y": start[1] + 4.0}));
+    otto.call(json!({"cmd": "mouse", "action": "up", "x": start[0] + 4.0, "y": start[1] + 4.0}));
+    let key = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-t"}));
+    assert_eq!(key["state"]["listen"], Value::Null, "{key}");
+
+    // The user's click does: the indicator in the header and on the top row, the lines in the drawer.
+    let on = otto.user_click(at(start, 0.5, 0.5));
+    assert_eq!(on["state"]["listen"]["source"], json!({"pane": 1}), "{on}");
+    let lines = otto.listen_finals(2);
+    let texts: Vec<(&str, &str)> =
+        lines.as_array().unwrap().iter().map(|l| (l["from"].as_str().unwrap(), l["text"].as_str().unwrap())).collect();
+    assert_eq!(texts, [("them", "made-up words one"), ("me", "made-up words two")]);
+    let indicator = otto.listen_rect("listen-header");
+    assert!(indicator[1] >= header[1] && indicator[1] < header[1] + header[3], "{indicator:?} in {header:?}");
+    let top = otto.listen_rect("listen-top:");
+    assert!(top[1] < header[1], "the top row's mark {top:?} is above the panes");
+    otto.listen_rect("listen-view");
+    // What was heard is in no client's state: only this test run's `listen_lines` has it.
+    let mut state = otto.call(json!({"cmd": "state"}));
+    state["listen_lines"] = Value::Null;
+    assert!(!state.to_string().contains("made-up words"), "the text reached the state");
+
+    // A client can neither pause, stop, end nor close it.
+    let close = otto.raw(r#"{"cmd":"close","pane":1}"#);
+    assert!(close["error"].as_str().is_some_and(|why| why.contains("being transcribed")), "{close}");
+    let pause = otto.listen_rect("listen-pause:header");
+    otto.call(json!({"cmd": "mouse", "action": "down", "x": pause[0] + 2.0, "y": pause[1] + 2.0}));
+    otto.call(json!({"cmd": "mouse", "action": "up", "x": pause[0] + 2.0, "y": pause[1] + 2.0}));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["listen"]["status"], "on");
+
+    // The user's Pause, Resume: a gap in the lines.
+    let paused = otto.user_click(at(pause, 0.5, 0.5));
+    assert_eq!(paused["state"]["listen"]["status"], "paused", "{paused}");
+    let resumed = otto.user_click(at(otto.listen_rect("listen-resume:header"), 0.5, 0.5));
+    assert_eq!(resumed["state"]["listen"]["status"], "on", "{resumed}");
+    assert!(resumed["listen_lines"].as_array().unwrap().iter().any(|l| l["paused_ms"].is_u64()), "{resumed}");
+
+    // ⌘⌃T stops it, from any pane; again on the focused pane it starts one; the user's close ends it.
+    otto.call(json!({"cmd": "split"}));
+    let stopped = otto.user_key("cmd-ctrl-t");
+    assert_eq!((&stopped["state"]["listen"], &stopped["listen_lines"]), (&Value::Null, &json!([])), "{stopped}");
+    otto.call(json!({"cmd": "focus", "pane": 1}));
+    assert_eq!(otto.user_key("cmd-ctrl-t")["state"]["listen"]["source"], json!({"pane": 1}));
+    // In a narrower pane the indicator gives way, or goes: × stays in its header, and the top
+    // row still shows it.
+    otto.call(json!({"cmd": "split"}));
+    let drawn = otto.drawn();
+    let (header, close) = (rect(&drawn["headers"]["1"]), rect(&drawn["closes"]["1"]));
+    assert!(close[0] + close[2] <= header[0] + header[2] + 1.0, "{drawn}");
+    if let Some(indicator) = drawn["listen_rects"].get("listen-header") {
+        assert!(rect(indicator)[0] + rect(indicator)[2] <= close[0], "{drawn}");
+    }
+    assert!(drawn["listen_rects"].get("listen-top:").is_some(), "{drawn}");
+    let closed = otto.user_click(at(close, 0.5, 0.5));
+    assert_eq!((&closed["state"]["listen"], pane_ids(&closed)), (&Value::Null, vec![2, 3]), "{closed}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_transcript_ends_when_its_app_quits_and_the_bar_says_so() {
+    let otto = listen_otto("ended");
+    otto.call(json!({"cmd": "split"}));
+    otto.user_key("cmd-ctrl-t");
+    otto.listen_finals(1);
+    let ended = otto.call(json!({"cmd": "listen_end", "why": "app_quit"}));
+    assert_eq!(ended["state"]["listen"], Value::Null, "{ended}");
+    assert_eq!(ended["notice"], "Transcript stopped: the app quit");
+    let again = otto.raw(r#"{"cmd":"listen_end","why":"stream_failed"}"#);
+    assert_eq!(again["error"], "no transcript is on");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn transcripts_are_absent_with_the_flag_off_and_silent_with_no_source() {
+    // Off: no button, the key does nothing, the request answers `feature off`.
+    let off = Otto::launch("listen-off");
+    let split = off.call(json!({"cmd": "split"}));
+    assert_eq!((&split["state"]["listen"], &split["listen_rects"]), (&Value::Null, &json!({})), "{split}");
+    let key = off.user_key("cmd-ctrl-t");
+    assert_eq!((&key["state"]["listen"], &key["notice"]), (&Value::Null, &Value::Null), "{key}");
+    let end = off.raw(r#"{"cmd":"listen_end","why":"app_quit"}"#);
+    assert_eq!(end["error"], "feature off: transcripts");
+    drop(off);
+    // On with no fixture: nothing can be heard, so nothing offers a start, and the key says where to go.
+    let on = Otto::launch_with("listen-nosource", &[("OTTOSPACE_FEATURES", "transcripts")]);
+    let split = on.call(json!({"cmd": "split"}));
+    assert_eq!(split["listen_rects"], json!({}), "{split}");
+    let key = on.user_key("cmd-ctrl-t");
+    assert_eq!((&key["state"]["listen"], &key["notice"]), (&Value::Null, &json!("focus an app pane to transcribe it")));
+}

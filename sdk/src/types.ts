@@ -115,7 +115,7 @@ export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
 export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
 /** A feature flag (`features` in `settings.json`). Off, its requests answer "feature off: <name>". */
-export type Feature = "marks" | "apps_section";
+export type Feature = "marks" | "apps_section" | "transcripts";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
@@ -995,7 +995,27 @@ export interface Model {
   agents: Subject[];
   /** The feature flags that are on. Read-only: only the user turns one, in Features…. */
   features: Feature[];
+  /** The transcript on, or null. Times only: never what was heard. Only the user starts or stops one. */
+  listen: Listen | null;
 }
+
+/** A transcript of an app pane's sound: its status, source and times. */
+export interface Listen {
+  status: "starting" | "on" | "paused";
+  source: { pane: PaneId };
+  mic: boolean;
+  /** Started by an app rule of the user's, not their click. */
+  auto: boolean;
+  /** When it started, epoch ms. */
+  started_ms: number;
+  /** The pauses that ended, in ms. */
+  paused_ms: number;
+  /** When the pause on began, epoch ms; null unless paused. */
+  paused_at_ms: number | null;
+}
+
+/** Test runs only: a row of the transcript drawer, or a pause between two runs of its streams. */
+export type ListenLine = { from: "them" | "me"; final: boolean; text: string } | { paused_ms: number };
 
 export interface Terminal {
   cols: number;
@@ -1268,6 +1288,11 @@ export interface Snapshot {
   /** Test runs only, while the key reference shows: its groups' rows (binding ids, notes' keys),
    * the known ids, whether they are open, and where `Known · n` is drawn. Else null. */
   key_reference: KeyReference | null;
+  /** Test runs only: the transcript drawer's rows, the volatile lines last. Else null. */
+  listen_lines: ListenLine[] | null;
+  /** Test runs only: where a transcript's controls were drawn, by id (`listen-start:3`,
+   * `listen-header`, `listen-stop:header`, `listen-top:`, `listen-view`). Else null. */
+  listen_rects: Record<string, Rect> | null;
   /** The marks, in the user's order. */
   marks: Mark[];
   /** The name of the mark just taken off, while the Marks section offers to put it back. */

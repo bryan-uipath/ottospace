@@ -38,6 +38,9 @@ const BOOK_UIDS: &[&str] = &["00000000000000a1", "00000000000000a2", "0000000000
 const SESSIONS: &[&str] = &["s1", "s2", "s3", "8f14e45f-ceea-467f-a8d3-0242ac130004"];
 /// In every line of a terminal's saved history, and nowhere else.
 const SAVED: &str = "SAVEDHISTORY";
+/// What a transcript heard: never in the state.
+const HEARD: &str = "HEARDWORDS";
+const LISTEN_IDS: &[&str] = &["t1", "t2", ""];
 const CONTROLS: &[&str] = &["rail:apps", "pane:1", "close:1", "tab:1", "tab-close:1", "mark-remove:1", "c0", "c1"];
 
 /// Arguments for an action: from the model as it is half the time, else anything.
@@ -242,6 +245,12 @@ impl Gen<'_> {
     fn meeting_id(&mut self) -> u64 {
         let real: Vec<u64> = self.m.calendar.events.iter().map(|e| e.id).collect();
         self.one_of(&real, |g| g.rng.pick(&[0, 9, u64::MAX]))
+    }
+
+    /// The transcript on's id, mostly; else another.
+    fn listen_id(&mut self) -> String {
+        let on = self.m.listen.on.as_ref().map(|on| on.id.clone());
+        self.one_of(&Vec::from_iter(on), |g| g.name(LISTEN_IDS))
     }
 
     /// A plain name from `pool`, else hostile text.
@@ -1273,6 +1282,35 @@ const MAKERS: &[Make] = &[
     |g| Action::CalendarDismiss { id: g.meeting_id() },
     |g| Action::CalendarJoin { id: g.meeting_id() },
     |g| Action::CalendarDay { step: g.rng.pick(&[DayStep::Back, DayStep::Forward, DayStep::Today]) },
+    |g| Action::ListenStart {
+        source: crate::listen::Source::Pane(g.pane()),
+        mic: g.rng.coin(),
+        id: g.name(LISTEN_IDS),
+        at: g.time(),
+    },
+    |g| Action::ListenToggle { id: g.name(LISTEN_IDS), at: g.time() },
+    |g| Action::ListenPause { at: g.time() },
+    |g| Action::ListenResume { at: g.time() },
+    |g| Action::ListenStop { at: g.time() },
+    |g| Action::ListenShow { on: g.rng.coin() },
+    |_| Action::ListenFixture,
+    |g| Action::ListenBegan { id: g.listen_id(), at: g.time() },
+    |g| Action::ListenFailed { id: g.listen_id(), why: g.text() },
+    |g| {
+        let text = if g.rng.coin() { format!("{HEARD} {}", g.text()) } else { HEARD.into() };
+        Action::ListenHeard {
+            id: g.listen_id(),
+            from: g.rng.pick(&[crate::listen::Speaker::Them, crate::listen::Speaker::Me]),
+            start_ms: g.rng.pick(&[0, 500, u64::MAX]),
+            text,
+            is_final: g.rng.coin(),
+        }
+    },
+    |g| Action::ListenEnded {
+        id: g.listen_id(),
+        why: g.rng.pick(&[crate::listen::Ended::AppQuit, crate::listen::Ended::StreamFailed]),
+        at: g.time(),
+    },
     // Random flags: what a feature turned off shows goes, and its actions do nothing (`Run::step`).
     |g| {
         let on: Vec<&str> = features::ALL.into_iter().filter(|_| g.rng.coin()).map(Feature::name).collect();
@@ -1360,6 +1398,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::MarkSubmit
             | Action::CaptureBack
             | Action::RestoreLayout { .. }
+            | Action::ListenShow { on: true }
     )
 }
 
@@ -1444,6 +1483,17 @@ fn check(m: &Model) -> Result<(), String> {
     }
     let chats: Vec<String> = m.chats.iter().map(|chat| format!("{:?}", chat.subject)).collect();
     ensure!(unique(&chats), "two transcripts for one conversation: {chats:?}");
+    // A transcript on is of the flag on and a pane that is there; its rows are bounded; it is
+    // paused with the time it paused. The drawer shows one only while it is on.
+    if let Some(on) = &m.listen.on {
+        ensure!(m.features.on(Feature::Transcripts), "a transcript on with the flag off");
+        ensure!(on.source.pane().is_some_and(|pane| m.pane(pane).is_some()), "a transcript of no pane: {on:?}");
+        ensure!(on.rows().count() <= crate::listen::RING, "{} rows kept", on.rows().count());
+        let paused = on.status == crate::listen::Status::Paused;
+        ensure!(paused == on.paused_at.is_some(), "{:?} with a pause at {:?}", on.status, on.paused_at);
+    }
+    ensure!(!m.listen.shown || m.listen.on.is_some(), "the drawer on no transcript");
+    ensure!(!m.listen.shown || !m.listen_hidden(), "the transcript over what has the keyboard in the drawer");
     // Tabs, their trees and the panes.
     ensure!(!m.tabs.is_empty(), "no tabs");
     ensure!(m.active < m.tabs.len(), "tab {} is on show, of {}", m.active, m.tabs.len());
@@ -2213,6 +2263,7 @@ fn check_state(m: &Model) -> Result<(), String> {
     // A terminal's saved history is kept, and never shown in the state: the rows count it only.
     let rows = serde_json::to_string(&m.workbook_rows()).unwrap_or_default();
     ensure!(!state.to_string().contains(SAVED) && !rows.contains(SAVED), "a saved history reached the state");
+    ensure!(!state.to_string().contains(HEARD), "what a transcript heard reached the state");
     let _ = (
         m.draft(m.compose_line().map(String::as_str).unwrap_or_default()),
         m.mark_refusal(MarkOf::Pane(None)),
@@ -2429,9 +2480,17 @@ impl Run {
         let beside = (m.compose_modal() && m.mode() == Mode::Compose && !m.keys && gated.is_none())
             .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty() && !m.compose_theirs)));
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
+        let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
         let filled_before = m.fill_display;
         let effects = m.update(sent);
         check(m)?;
+        // Only the user starts a transcript: their click, or their key.
+        let listen_now = m.listen.on.as_ref().map(|on| on.id.clone());
+        let starts = matches!(action, Action::ListenStart { .. } | Action::ListenToggle { .. });
+        ensure!(
+            listen_now.is_none() || listen_now == listen_before || (origin == Origin::User && starts),
+            "{origin:?}'s {action:?} started a transcript"
+        );
         // Only the user puts the window over the menu bar and the Dock, now or in the run whose
         // layout is restored (a client's restore is refused); anyone's end of it tells the shell.
         let restores = matches!(action, Action::RestoreLayout { .. }) && origin != Origin::Socket;
@@ -3116,6 +3175,20 @@ impl Run {
         // The effects: each names what is there, and after them the shell holds what the model does.
         for effect in &effects {
             match effect {
+                // Streams open for the transcript just started, close for one that was on.
+                Effect::ListenOpen { id, .. } => {
+                    let on = m.listen.on.as_ref().map(|on| &on.id);
+                    ensure!(on == Some(id) && listen_before.is_none(), "{origin:?}'s {action:?} opened {id:?}");
+                }
+                // Ended by the user, the shell or a flag: never by a client.
+                Effect::ListenClose { id } => {
+                    ensure!(listen_before.as_ref() == Some(id), "{action:?} closed {id:?}, not on");
+                    ensure!(origin != Origin::Socket, "a client's {action:?} ended {id:?}")
+                }
+                Effect::ListenPauseStreams { id } | Effect::ListenResumeStreams { id } => {
+                    let users = origin == Origin::User;
+                    ensure!(users && listen_before.as_ref() == Some(id), "{origin:?}'s {action:?} paused or resumed")
+                }
                 Effect::Opened(pane) => {
                     ensure!(m.pane(*pane).is_some(), "pane {pane} was opened and is not there");
                     self.shell.panes.retain(|id| id != pane);
@@ -3835,6 +3908,8 @@ fn code(sent: &Envelope) -> String {
         ("dots", "Rect"),
         ("show", "Show"),
         ("step", "DayStep"),
+        ("from", "crate::listen::Speaker"),
+        ("why", "crate::listen::Ended"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {
@@ -3875,6 +3950,13 @@ fn code(sent: &Envelope) -> String {
         let events = events.join(", ");
         return format!(
             "Action::AgentEvents {{ task: {task}, events: vec![{events}], at: {at} }}.sent_by(Origin::{:?})",
+            sent.origin
+        );
+    }
+    if let Action::ListenStart { source: crate::listen::Source::Pane(pane), mic, id, at } = &sent.action {
+        return format!(
+            "Action::ListenStart {{ source: crate::listen::Source::Pane({pane}), mic: {mic}, id: {id:?}.into(), \
+             at: {at} }}.sent_by(Origin::{:?})",
             sent.origin
         );
     }
@@ -4169,6 +4251,38 @@ fn a_task_that_makes_a_workspace_its_own_shares_its_default() {
         .into(),
         Action::OpenCompose { text: "fix #2048".into() }.into(),
         Action::ComposeSubmit { open: true }.into(),
+    ])
+    .unwrap();
+}
+
+/// A client's list of workspaces dropped the one on show, and its new-task box with it (seed 892,
+/// once the transcript makers shifted the runs). Only ottospace reads the folder, at start.
+#[test]
+fn a_clients_list_of_workspaces_is_refused() {
+    let assign = || Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] };
+    let known = Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] };
+    replay(&[
+        Action::TaskAdd { title: "a".into(), priority: 2, state: State::Running, tab: None, assign: assign() }.into(),
+        Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known, open: false }.into(),
+        Action::SpaceOpen { space: Owner::Task { id: 2 } }.into(),
+        Action::SelectTab { index: 1 }.into(),
+        split(Axis::Right, Kind::Terminal),
+        Action::OpenCompose { text: "x".into() }.into(),
+        restore_workbooks("[]").sent_by(Origin::Socket),
+    ])
+    .unwrap();
+}
+
+/// A client's flags turned transcripts off and ended the user's (seed 534 of the long run). Only
+/// ottospace reads the flags, from settings.json.
+#[test]
+fn a_clients_flags_are_refused() {
+    let app = Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() };
+    replay(&[
+        Action::Open { kind: app, axis: Axis::Right, beside: None }.into(),
+        by(Origin::System, Action::ListenFixture),
+        Action::ListenToggle { id: "t1".into(), at: 0 }.into(),
+        set_features(&["marks"]).sent_by(Origin::Socket),
     ])
     .unwrap();
 }

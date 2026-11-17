@@ -102,6 +102,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::CalendarBack => Box::new(CalendarBack),
         Command::CalendarForward => Box::new(CalendarForward),
         Command::CalendarToday => Box::new(CalendarToday),
+        Command::Transcribe => Box::new(crate::listen::Transcribe),
         Command::OpenSettings => Box::new(OpenSettings),
         Command::OpenFolder => Box::new(OpenFolder),
         Command::BringBack => Box::new(BringBack),

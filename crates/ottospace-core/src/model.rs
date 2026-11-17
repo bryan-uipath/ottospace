@@ -21,6 +21,7 @@ use crate::key_use::{self, Binding, KeyUse};
 use crate::keys::Mods;
 use crate::layout::{Axis, Dir, Node, Rect, Zone};
 use crate::list::ListRow;
+use crate::listen::{self, Listening};
 use crate::marks::{self, Extra, MarkId, MarkInput, MarkOf, MarkRef, Marks, Need};
 use crate::progress;
 use crate::repos::{self, Repo};
@@ -1482,6 +1483,57 @@ pub enum Action {
     SetFeatures {
         features: Features,
     },
+    /// The user's start of a transcript of `source` (`listen`). `id` and `at` are the shell's.
+    ListenStart {
+        source: listen::Source,
+        mic: bool,
+        id: String,
+        at: u64,
+    },
+    /// ⌘⌃T: stops the transcript on, else starts one of the focused pane.
+    ListenToggle {
+        id: String,
+        at: u64,
+    },
+    ListenPause {
+        at: u64,
+    },
+    ListenResume {
+        at: u64,
+    },
+    ListenStop {
+        at: u64,
+    },
+    /// The drawer on the transcript (the top row's mark selects its pane's tab), or off it.
+    ListenShow {
+        on: bool,
+    },
+    /// A test run's fixture is the sound: a terminal pane may be heard.
+    ListenFixture,
+    /// The shell's: the streams of `id` run.
+    ListenBegan {
+        id: String,
+        at: u64,
+    },
+    /// The shell's: they could not start.
+    ListenFailed {
+        id: String,
+        why: String,
+    },
+    /// The shell's: a line heard, `start_ms` into this run of the streams.
+    ListenHeard {
+        id: String,
+        from: listen::Speaker,
+        start_ms: u64,
+        text: String,
+        is_final: bool,
+    },
+    /// The shell's: the source's app quit or the stream failed.
+    ListenEnded {
+        id: String,
+        why: listen::Ended,
+        at: u64,
+    },
 }
 
 /// What the right drawer shows (see `Model::drawer_view`).
@@ -1582,6 +1634,7 @@ impl Action {
                 | Action::TalkStart
                 | Action::TalkToggle
                 | Action::TalkKeys { .. }
+                | Action::ListenShow { on: true }
         )
     }
 
@@ -1840,7 +1893,18 @@ impl Action {
             | Action::EditorOpen
             | Action::EditorKeys { .. }
             | Action::EditorDone { .. }
-            | Action::SetFeatures { .. } => false,
+            | Action::SetFeatures { .. }
+            | Action::ListenStart { .. }
+            | Action::ListenToggle { .. }
+            | Action::ListenPause { .. }
+            | Action::ListenResume { .. }
+            | Action::ListenStop { .. }
+            | Action::ListenShow { .. }
+            | Action::ListenFixture
+            | Action::ListenBegan { .. }
+            | Action::ListenFailed { .. }
+            | Action::ListenHeard { .. }
+            | Action::ListenEnded { .. } => false,
         }
     }
 
@@ -1866,6 +1930,17 @@ impl Action {
             | Action::ListPin
             | Action::AppsToggle { .. }
             | Action::AppsFilter { .. } => Some(Feature::AppsSection),
+            Action::ListenStart { .. }
+            | Action::ListenToggle { .. }
+            | Action::ListenPause { .. }
+            | Action::ListenResume { .. }
+            | Action::ListenStop { .. }
+            | Action::ListenShow { .. }
+            | Action::ListenFixture
+            | Action::ListenBegan { .. }
+            | Action::ListenFailed { .. }
+            | Action::ListenHeard { .. }
+            | Action::ListenEnded { .. } => Some(Feature::Transcripts),
             // Shared with workbooks (a name typed, a row's letter), or data a restore reads.
             Action::MarkType { .. }
             | Action::MarkBackspace
@@ -2253,6 +2328,23 @@ pub enum Effect {
     Notice {
         text: String,
     },
+    /// Start the streams of transcript `id`, then `ListenBegan` (or `ListenFailed`).
+    ListenOpen {
+        id: String,
+        source: listen::Source,
+        mic: bool,
+    },
+    /// Stop its streams for a pause; nothing is captured until `ListenResumeStreams`.
+    ListenPauseStreams {
+        id: String,
+    },
+    ListenResumeStreams {
+        id: String,
+    },
+    /// It ended: stop its streams for good.
+    ListenClose {
+        id: String,
+    },
     /// The user dismissed the notice of `kind`: a slot the shell holds it in is emptied.
     NoticeDismissed {
         kind: crate::notice::Kind,
@@ -2440,6 +2532,7 @@ pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
 
 pub mod chat;
 pub mod editor;
+mod transcribe;
 pub mod worktrees;
 pub(crate) use worktrees::subagent_path;
 #[cfg(test)]
@@ -2741,6 +2834,8 @@ pub struct Model {
     /// What the status bar says of the editor's last text, and when (`editor_note`).
     #[serde(skip)]
     editor_note: Option<(String, u64)>,
+    /// The transcript on, if one is. In the state: its status and times, never its text.
+    pub listen: Listening,
 }
 
 impl Default for Model {
@@ -2857,6 +2952,7 @@ impl Default for Model {
             settings_file: crate::settings::Watch::default(),
             editing: None,
             editor_note: None,
+            listen: Listening::default(),
         };
         // Home's own tab, on show.
         let home = Tab { id: HOME_TAB, title: HOME.into(), space: Owner::Home, layout: None, focused: None };
@@ -2962,6 +3058,28 @@ impl Model {
             Action::NoticeDismiss { .. } => Some(crate::notice::USERS_ALONE),
             // So does a scroll in another app.
             Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
+            // Only the user starts, pauses, resumes or stops a transcript; only the shell reports
+            // what it heard. A client's key, click or label is the client's.
+            Action::ListenStart { .. }
+            | Action::ListenToggle { .. }
+            | Action::ListenPause { .. }
+            | Action::ListenResume { .. }
+            | Action::ListenStop { .. } => Some(listen::USERS_ALONE),
+            Action::ListenFixture
+            | Action::ListenBegan { .. }
+            | Action::ListenFailed { .. }
+            | Action::ListenHeard { .. }
+            | Action::ListenEnded { .. }
+                if origin == Origin::Socket =>
+            {
+                Some(listen::SHELLS_ALONE)
+            }
+            // Nor does a client end one by closing its pane. The shell's close (the window is gone) does.
+            Action::Close { .. } | Action::CloseTab { .. }
+                if origin == Origin::Socket && self.closes_listened(action) =>
+            {
+                Some(listen::SOURCE_ON)
+            }
             // A label in another app presses there: only the user's own letters spell one.
             Action::SneakType { text } if self.sneak.as_ref().is_some_and(|s| s.reaches_app(text)) => {
                 Some(crate::sneak_apps::USERS_ALONE)
@@ -2983,12 +3101,16 @@ impl Model {
             Action::ListDismiss | Action::ListUndo if self.sidebar == Some(Section::Apps) => Some(apps::USERS_ALONE),
             // The layout file is read by the shell at start, and its app panes start the user's apps.
             Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
+            Action::RestoreWorkbooks { .. } if origin == Origin::Socket => Some(workbook::READ_ALONE),
             Action::StartFresh | Action::UnfilledOpen { .. } if origin != Origin::User => {
                 Some(crate::layout_file::USERS_ALONE)
             }
             // The editor writes the user's settings: no client opens it. Only the shell reads the file.
             Action::EditSettings => Some(SETTINGS_USERS),
-            Action::SettingsRead { .. } if origin == Origin::Socket => Some("only ottospace reads settings.json"),
+            // The flags too: a client turning one off would end what it holds (a transcript).
+            Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
+                Some("only ottospace reads settings.json")
+            }
             // A workbook is the user's file, and opening one starts their apps.
             Action::SpaceOpen { space: Owner::Workbook { .. } }
             | Action::WorkbookSave { .. }
@@ -3380,6 +3502,7 @@ impl Model {
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
         self.settle_row_menu();
+        self.settle_listen();
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
         if self.list.is_none() && listed.is_some() {
             self.list_kept = zones::KeptRow(listed);
@@ -5200,14 +5323,28 @@ impl Model {
                 }
             }
             Action::CalendarJoin { id } => effects.extend(self.calendar.join(id).map(|url| Effect::OpenLink { url })),
-            Action::SetFeatures { features } => self.set_features(features),
+            Action::SetFeatures { features } => self.set_features(features, effects),
+            action @ (Action::ListenStart { .. }
+            | Action::ListenToggle { .. }
+            | Action::ListenPause { .. }
+            | Action::ListenResume { .. }
+            | Action::ListenStop { .. }
+            | Action::ListenShow { .. }
+            | Action::ListenFixture
+            | Action::ListenBegan { .. }
+            | Action::ListenFailed { .. }
+            | Action::ListenHeard { .. }
+            | Action::ListenEnded { .. }) => self.listen_act(action, effects),
         }
     }
 
     /// The features on from now. What one turned off shows goes: its section, its rail cell,
     /// its wait for a letter or a name, its filter, its commands in the palette.
-    fn set_features(&mut self, features: Features) {
+    fn set_features(&mut self, features: Features, effects: &mut Vec<Effect>) {
         self.features = features;
+        if !self.features.on(Feature::Transcripts) {
+            self.listen_end(None, effects);
+        }
         let sections = self.sections();
         if self.sidebar.is_some_and(|section| !sections.contains(&section)) {
             (self.sidebar, self.list) = (None, None);
@@ -7549,6 +7686,10 @@ impl Model {
         if self.visual == Some(id) {
             self.visual = None;
         }
+        // The pane being transcribed is gone: so is its transcript.
+        if self.listen.pane() == Some(id) {
+            self.listen_end(None, effects);
+        }
         effects.push(Effect::Closed(closed));
     }
 
@@ -8118,7 +8259,18 @@ mod tests {
         Action::RowMenuMove { .. },
         Action::RowMenuChoose { .. },
         Action::RowMenuClose,
-        Action::SetFeatures { .. }
+        Action::SetFeatures { .. },
+        Action::ListenStart { .. },
+        Action::ListenToggle { .. },
+        Action::ListenPause { .. },
+        Action::ListenResume { .. },
+        Action::ListenStop { .. },
+        Action::ListenShow { .. },
+        Action::ListenFixture,
+        Action::ListenBegan { .. },
+        Action::ListenFailed { .. },
+        Action::ListenHeard { .. },
+        Action::ListenEnded { .. }
     );
 
     /// One of each action.
@@ -8379,6 +8531,17 @@ mod tests {
             Action::ToggleProject { project: None, done: false },
             Action::SessionWork { work: progress::Work::default(), cwd: None },
             Action::SetFeatures { features: Features::default() },
+            Action::ListenStart { source: listen::Source::Pane(1), mic: false, id: text(), at: 0 },
+            Action::ListenToggle { id: text(), at: 0 },
+            Action::ListenPause { at: 0 },
+            Action::ListenResume { at: 0 },
+            Action::ListenStop { at: 0 },
+            Action::ListenShow { on: true },
+            Action::ListenFixture,
+            Action::ListenBegan { id: text(), at: 0 },
+            Action::ListenFailed { id: text(), why: text() },
+            Action::ListenHeard { id: text(), from: listen::Speaker::Them, start_ms: 0, text: text(), is_final: true },
+            Action::ListenEnded { id: text(), why: listen::Ended::AppQuit, at: 0 },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
         places.sort_unstable();
@@ -8398,6 +8561,27 @@ mod tests {
                 | Action::TalkInterrupt
                 | Action::TalkView { .. }
         )
+    }
+
+    /// A transcript's start, pause, resume or stop: the user's alone. What it heard: the shell's.
+    fn listen_refused(action: &Action, origin: Origin) -> Option<&'static str> {
+        match action {
+            Action::ListenStart { .. }
+            | Action::ListenToggle { .. }
+            | Action::ListenPause { .. }
+            | Action::ListenResume { .. }
+            | Action::ListenStop { .. } => Some(listen::USERS_ALONE),
+            Action::ListenFixture
+            | Action::ListenBegan { .. }
+            | Action::ListenFailed { .. }
+            | Action::ListenHeard { .. }
+            | Action::ListenEnded { .. }
+                if origin == Origin::Socket =>
+            {
+                Some(listen::SHELLS_ALONE)
+            }
+            _ => None,
+        }
     }
 
     /// A pin, a hide or their undo: refused from all but the user on its own ground.
@@ -8561,6 +8745,7 @@ mod tests {
                     _ if origin == Origin::User => None,
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
+                    _ if listen_refused(action, origin).is_some() => listen_refused(action, origin),
                     Action::TaskTalk { .. }
                     | Action::SessionOpen { .. }
                     | Action::TalkStart
@@ -8582,10 +8767,11 @@ mod tests {
                     Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),
                     Action::NoticeDismiss { .. } => Some(crate::notice::USERS_ALONE),
                     Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
+                    Action::RestoreWorkbooks { .. } if origin == Origin::Socket => Some(workbook::READ_ALONE),
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     Action::Paste { .. } => Some(clip::USERS_ALONE),
                     Action::EditSettings => Some(SETTINGS_USERS),
-                    Action::SettingsRead { .. } if origin == Origin::Socket => {
+                    Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
@@ -14453,6 +14639,7 @@ mod tests {
                     _ if user => None,
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
+                    _ if listen_refused(action, origin).is_some() => listen_refused(action, origin),
                     Action::TaskTalk { .. }
                     | Action::SessionOpen { .. }
                     | Action::TalkStart
@@ -14474,10 +14661,11 @@ mod tests {
                     Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),
                     Action::NoticeDismiss { .. } => Some(crate::notice::USERS_ALONE),
                     Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
+                    Action::RestoreWorkbooks { .. } if origin == Origin::Socket => Some(workbook::READ_ALONE),
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     Action::Paste { .. } => Some(clip::USERS_ALONE),
                     Action::EditSettings => Some(SETTINGS_USERS),
-                    Action::SettingsRead { .. } if origin == Origin::Socket => {
+                    Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),

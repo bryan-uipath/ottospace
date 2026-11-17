@@ -31,10 +31,11 @@ impl Stage {
 pub enum Feature {
     Marks,
     AppsSection,
+    Transcripts,
 }
 
 /// Every flag, in the order the docs and the palette list them.
-pub const ALL: [Feature; 2] = [Feature::Marks, Feature::AppsSection];
+pub const ALL: [Feature; 3] = [Feature::Marks, Feature::AppsSection, Feature::Transcripts];
 
 /// Flags whose feature is stable now: a setting of one is ignored, with a warning.
 pub const RETIRED: &[&str] = &[];
@@ -45,12 +46,13 @@ impl Feature {
         match self {
             Feature::Marks => "marks",
             Feature::AppsSection => "apps_section",
+            Feature::Transcripts => "transcripts",
         }
     }
 
     pub fn stage(self) -> Stage {
         match self {
-            Feature::Marks | Feature::AppsSection => Stage::Experimental,
+            Feature::Marks | Feature::AppsSection | Feature::Transcripts => Stage::Experimental,
         }
     }
 
@@ -63,6 +65,9 @@ impl Feature {
         match self {
             Feature::Marks => "Marks: name a pane or a tab, and go back to it with a letter",
             Feature::AppsSection => "The Apps section: the Dock's apps, pins, Not running and All apps",
+            Feature::Transcripts => {
+                "Transcripts (⌘⌃T): an app pane's audio as lines in the drawer. In progress: no audio source yet"
+            }
         }
     }
 
@@ -75,6 +80,7 @@ impl Feature {
         match self {
             Feature::Marks => "feature off: marks",
             Feature::AppsSection => "feature off: apps_section",
+            Feature::Transcripts => "feature off: transcripts",
         }
     }
 }
@@ -168,7 +174,7 @@ mod tests {
             assert_eq!(serde_json::to_value(feature).unwrap(), feature.name());
             assert!(feature.off().ends_with(feature.name()) && !RETIRED.contains(&feature.name()));
         }
-        assert_eq!(Features::default(), Features(Vec::new()), "both are experimental today");
+        assert_eq!(Features::default(), Features(Vec::new()), "all are experimental today");
     }
 
     #[test]
@@ -179,11 +185,15 @@ mod tests {
             Features::from_settings(&set(&[("marks", false), ("apps_section", true)])).0,
             [Feature::AppsSection]
         );
-        assert_eq!(Features::all().with(Feature::Marks, false), Features(vec![Feature::AppsSection]));
-        assert_eq!(Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true), Features::all());
-        assert_eq!(Features::parse_list(" apps_section,marks ").unwrap(), Features::all());
+        assert_eq!(
+            Features::all().with(Feature::Marks, false),
+            Features(vec![Feature::AppsSection, Feature::Transcripts])
+        );
+        let three = Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true);
+        assert_eq!(three.with(Feature::Transcripts, true), Features::all());
+        assert_eq!(Features::parse_list(" transcripts,apps_section,marks ").unwrap(), Features::all());
         assert_eq!(Features::parse_list("").unwrap(), Features(Vec::new()));
-        assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section"));
+        assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts"));
     }
 
     /// What the model does with a feature off, and on again.
@@ -278,7 +288,7 @@ mod tests {
             m.update(Action::PaletteFeatures);
             let flags = m.palette.as_ref().map(|p| p.feature_matches().into_iter().cloned().collect::<Vec<_>>());
             let names: Vec<(&str, bool)> = flags.iter().flatten().map(|c| (c.feature.name(), c.on)).collect();
-            assert_eq!(names, [("marks", false), ("apps_section", false)]);
+            assert_eq!(names, [("marks", false), ("apps_section", false), ("transcripts", false)]);
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
             m.update(crate::model::Action::FieldEdit { edit: crate::edit::Edit::Insert("apps".into()) });
             let effects = m.update(Action::PaletteChoose { index: None });
@@ -293,7 +303,7 @@ mod tests {
         assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
             wrong("bookmarks", &yes).unwrap(),
-            "\"bookmarks\" is not a feature: the features are marks, apps_section"
+            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts"
         );
         assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
         assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());

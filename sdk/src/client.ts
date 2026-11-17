@@ -489,6 +489,13 @@ export class Client {
     return recordReply(await this.send({ cmd: "record_stop" }));
   }
   /**
+   * For tests (`OTTOSPACE_E2E`): the transcript on ends as when its app quits or its sound stops.
+   * Rejects outside a test run: no client ends a transcript.
+   */
+  listenEnd(args: { why: "app_quit" | "stream_failed" }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "listen_end", ...args });
+  }
+  /**
    * For tests (`OTTOSPACE_E2E`): the window's green button, pressed as the user would. It fills
    * the display instead of zooming. Rejects outside a test run: only the user's hand fills it.
    */

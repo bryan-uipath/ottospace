@@ -60,6 +60,7 @@ pub enum Binding {
     Quit,
     ReturnKey,
     CaptureKey,
+    Transcribe,
 }
 
 /// Every binding, in the key reference's order.
@@ -105,6 +106,7 @@ pub const ALL: &[Binding] = &[
     Binding::Quit,
     Binding::ReturnKey,
     Binding::CaptureKey,
+    Binding::Transcribe,
 ];
 
 impl Binding {
@@ -144,6 +146,7 @@ impl Binding {
             Binding::EditSettings => &[C::EditSettings],
             Binding::Hide => &[C::Hide],
             Binding::Quit => &[C::Quit],
+            Binding::Transcribe => &[C::Transcribe],
             Binding::MoveToTab
             | Binding::TabNumber
             | Binding::SpaceNumber
@@ -189,7 +192,9 @@ impl Binding {
             | B::MarkPane
             | B::MarkJump
             | B::MarkNumber => Group::Tabs,
-            B::NewTask | B::NextTask | B::TalkFocus | B::TalkToggle | B::DialToggle | B::CaptureKey => Group::Tasks,
+            B::NewTask | B::NextTask | B::TalkFocus | B::TalkToggle | B::DialToggle | B::CaptureKey | B::Transcribe => {
+                Group::Tasks
+            }
             B::Copy | B::Paste => Group::Text,
             B::VisualMode | B::ListMode | B::SneakMode => Group::Modes,
             B::Palette | B::ShowKeys | B::EditSettings | B::FillDisplay | B::ReturnKey | B::Hide | B::Quit => {
@@ -231,6 +236,7 @@ impl Binding {
             B::NextChat => "Next / previous conversation here",
             B::HideSpace => "Hide tab group",
             B::CaptureKey => "Capture, from any app",
+            B::Transcribe => "Transcribe the pane / stop",
             B::Copy => "Copy",
             B::Paste => "Paste",
             B::VisualMode => "Select text with keys",

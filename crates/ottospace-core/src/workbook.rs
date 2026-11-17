@@ -27,6 +27,8 @@ const EMPTY: &str = "a tab with nothing in it has nothing to save";
 
 /// Why a client's workbook action does nothing: they are the user's files and apps.
 pub const USERS_ALONE: &str = "only the user makes, saves, opens, renames or deletes a workspace";
+/// Why a client's list of workspaces is refused: ottospace reads them from the folder, at start.
+pub const READ_ALONE: &str = "only ottospace reads the workspaces folder";
 
 /// What the shell read of its terminals at a save: each one's directory, and its history.
 type Read<'a> = (&'a [(PaneId, String)], &'a [(PaneId, History)]);

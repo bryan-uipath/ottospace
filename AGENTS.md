@@ -112,6 +112,13 @@ Rules:
     key codes 0 to 50 (`a`, `7`, `/`; not `A`). A `cmd-` shortcut, by the flag alone, is pressed as
     without `repeat` while `key_repeating()` says held. `escape`, `backspace` and arrows answer
     "no key to hold down".
+- `OTTOSPACE_LISTEN_FIXTURE=<file.jsonl>` (read only under `OTTOSPACE_E2E`) is a transcript's sound:
+  timed lines (`{"after_ms":300,"from":"them","text":"made-up words","final":true}`) replayed as
+  what was heard, and a terminal pane may then be a source (a test run hosts no app). With none, a
+  test run's start fails with "no audio source in a test run": never SCK, the mic or real audio.
+  `listen_end` (`"why"`: `app_quit`, `stream_failed`) ends the one on as the shell would; the state's
+  `listen_lines` (the drawer's rows) and `listen_rects` (where its controls are drawn) are null
+  outside a test run. See `docs/ai/transcripts.md`.
 - `OTTOSPACE_REDUCE_MOTION` (read only under `OTTOSPACE_E2E`) stands for the system's Reduce Motion
   in the dial. The state's `counts.dial_frames` counts the frames the dial asked for because
   something in it moves: none at rest.

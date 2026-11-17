@@ -5,7 +5,7 @@
 //! pane ("live") and replays the click; clicking ottospace itself parks it again.
 
 // The state snapshot is one `json!` with more keys than the default limit expands.
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -81,6 +81,7 @@ mod inspector;
 mod key_use;
 mod keycaps;
 mod layout_file;
+mod listen;
 mod markdown;
 mod marks;
 mod menus;
@@ -722,6 +723,7 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-l", TalkToggle, None),
         KeyBinding::new("cmd-enter", TalkGo, None),
         KeyBinding::new("cmd-shift-a", DialToggle, None),
+        KeyBinding::new("cmd-ctrl-t", listen::Transcribe, None),
         // Marks: ⌘' waits for a mark's letter. ⌘⌥1..9 go to the first nine (`key_down`).
         KeyBinding::new("cmd-b", MarkPane, None),
         KeyBinding::new("cmd-shift-b", MarkTab, None),
@@ -951,6 +953,8 @@ struct Workspace {
     ax_overlay: Option<ax_debug::Overlay>,
     /// The meeting timeline's feed reader and what it draws.
     timeline: calendar::Timeline,
+    /// What a transcript's streams hear: in a test run, its fixture being replayed.
+    listen_feed: Option<listen::Feed>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -1229,6 +1233,10 @@ impl Workspace {
         model.update(Action::SetCalendar { on, notify, links_only, hide_free, colors }.sent_by(Origin::System));
         // Before what a restore reads: a section behind a flag that is off is not put back.
         model.update(Action::SetFeatures { features: features::startup() }.sent_by(Origin::System));
+        // A test run's fixture is a transcript's sound: a terminal pane may be heard.
+        if listen::fixture_path().is_some() {
+            model.update(Action::ListenFixture.sent_by(Origin::System));
+        }
         model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         let kept = config::load_tasks();
         let unread = kept.unread;
@@ -1353,6 +1361,7 @@ impl Workspace {
             control,
             ax_overlay: None,
             timeline: calendar::Timeline::start(),
+            listen_feed: None,
             focus,
             _subscriptions: subscriptions,
         };
@@ -1639,6 +1648,10 @@ impl Workspace {
                     worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), *fresh, done);
                 }
                 Effect::Notice { text } => (self.error, self.refused) = (Some(text.clone()), Some(text.clone())),
+                Effect::ListenOpen { .. }
+                | Effect::ListenPauseStreams { .. }
+                | Effect::ListenResumeStreams { .. }
+                | Effect::ListenClose { .. } => self.listen_effect(effect, window, cx),
                 Effect::NoticeDismissed { kind } => self.notice_dismissed(*kind),
                 Effect::Told { text } => self.told = Some((text.clone(), Instant::now())),
                 // A picture of the pane is asked for: the cursor's going scrolls the terminal to
@@ -2373,6 +2386,17 @@ impl Workspace {
                     continue;
                 }
                 Request::CalendarCall { in_call } => Some(Action::CallSeen { in_call, at: now_ms() }),
+                // As the shell would report it: the shell's news, and its line on the bar.
+                Request::ListenEnd { why } => {
+                    match self.model.listen.on.as_ref().map(|on| on.id.clone()) {
+                        Some(id) => {
+                            self.dispatch(Action::ListenEnded { id, why, at: now_ms() }, Origin::System, window, cx);
+                            self.broke(why.said().into());
+                        }
+                        None => failure = Some("no transcript is on".into()),
+                    }
+                    None
+                }
                 Request::RecordStart { dir } => {
                     let size = to_cg(window.bounds().size);
                     let id = ns_view(window).map(|view| unsafe { ottospace_mac::window::number(view) });
@@ -3127,6 +3151,11 @@ impl Workspace {
             // The bindings the user knows (`key_use`), by id. Null outside a test run: what the
             // user's keys are used for is never on the socket.
             "keys_known": std::env::var_os("OTTOSPACE_E2E").map(|_| self.keys_known()),
+            // Test runs only: the transcript drawer's rows (`from`, `final`, `text`; a pause as
+            // `paused_ms`), and where its controls were drawn, by id. Null outside a test run:
+            // what was heard never reaches a client.
+            "listen_lines": self.listen_lines(),
+            "listen_rects": self.listen_rects(),
             // While the key reference shows, in a test run: its groups' binding ids in order, the
             // known ones and whether they are open, and where `Known · n` is drawn. Else null.
             "key_reference": std::env::var_os("OTTOSPACE_E2E").filter(|_| self.model.keys).map(|_| {
@@ -5219,6 +5248,8 @@ impl Workspace {
                     .children(marked.map(|sign| div().flex_none().text_color(rgb(theme::MARK)).child(sign))),
             )
             .child(self.controls.mark(format!("header:{id}")))
+            // A transcript's indicator never shrinks: it shows while one is on.
+            .children(self.listen_header(id, cx))
             // `fit` and × never shrink, so they stay in the header however narrow the pane.
             .child(
                 // The task of its tab: the same badge as on the bar.
@@ -5682,6 +5713,8 @@ impl Workspace {
     /// New tab and split buttons: a new empty tab, or the picker for that split. Then Fill the
     /// Whole Display, its arrows out while off and in while on.
     fn render_top_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // A transcript's mark first, at the row's right end.
+        let listen = self.render_listen_mark(cx);
         // Each the same: an icon, its sneak label, its tip.
         let button = |id: ElementId, icon: &'static str, name: String, tip: &'static str| {
             div()
@@ -5710,7 +5743,7 @@ impl Workspace {
                 this.dispatch(Action::FillDisplay, this.input, window, cx);
             }),
         );
-        div().flex_none().ml_auto().mr_2().flex().gap_1().children(splits).child(fill)
+        div().flex_none().ml_auto().mr_2().flex().items_center().gap_1().children(listen).children(splits).child(fill)
     }
 
     /// The second row: the selected space's tabs, only while it has more than one. The one on
@@ -6302,12 +6335,15 @@ impl Render for Workspace {
         self.drawer.width = drawer;
         // The inspector takes the drawer's place while it is open; the drawer keeps its state.
         let right = self.render_inspector(drawer, cx);
-        let right = right.or_else(|| self.render_draft(cx)).or_else(|| self.render_drawer(drawer, cx));
+        let right = right
+            .or_else(|| self.render_draft(cx))
+            .or_else(|| self.render_listen_view(drawer, cx))
+            .or_else(|| self.render_drawer(drawer, cx));
         let right_width = if right.is_some() { drawer } else { 0. };
         // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
         // the buttons and the agent chip's badge.
         let centre = f32::from(window.viewport_size().width) - left;
-        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve();
+        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve() - self.listen_reserve();
         div()
             .size_full()
             .flex()
@@ -6418,6 +6454,10 @@ impl Render for Workspace {
                 if this.model.compose_keys() {
                     this.dispatch(Action::ComposeSubmit { open: true }, this.input, window, cx);
                 }
+            }))
+            .on_action(cx.listener(|this, _: &listen::Transcribe, window, cx| match this.on(Feature::Transcripts) {
+                true => this.transcribe_key(window, cx),
+                false => cx.propagate(),
             }))
             .on_action(cx.listener(|this, _: &CapturePane, window, cx| {
                 this.error = this.capture_pane(None, this.input, window, cx).err();
@@ -6946,7 +6986,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 8] = [
+        const TESTS_ONLY: [&str; 9] = [
             "capture_start",
             "repo_add",
             "inspector_fixture",
@@ -6954,6 +6994,7 @@ mod tests {
             "calendar_call",
             "record_start",
             "record_stop",
+            "listen_end",
             "zoom_press",
         ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
