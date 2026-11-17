@@ -63,9 +63,8 @@ impl Model {
                 if let Some(cut) = self.listen.pause(at)
                     && let Some(on) = &self.listen.on
                 {
-                    if !cut.is_empty() {
-                        effects.push(Effect::ListenWrite { id: on.id.clone(), records: cut });
-                    }
+                    // Written even with none cut: the effects say nothing of whether someone was speaking.
+                    effects.push(Effect::ListenWrite { id: on.id.clone(), records: cut });
                     effects.push(Effect::ListenPauseStreams { id: on.id.clone() });
                 }
             }
@@ -225,6 +224,15 @@ mod tests {
         };
         assert_eq!(m.update(Action::ListenPause { at: 2_000 }), [cut, Effect::ListenPauseStreams { id: "t2".into() }]);
         assert_eq!(m.update(Action::ListenPause { at: 2_500 }), [], "paused already");
+        // A pause in silence makes the same effects, with nothing cut.
+        let mut quiet = model();
+        quiet.update(start(2));
+        quiet.update(Action::ListenBegan { id: "t2".into(), at: 1_200 }.sent_by(Origin::System));
+        let none = Effect::ListenWrite { id: "t2".into(), records: vec![] };
+        assert_eq!(
+            quiet.update(Action::ListenPause { at: 2_000 }),
+            [none, Effect::ListenPauseStreams { id: "t2".into() }]
+        );
         for origin in [Origin::Socket, Origin::System] {
             assert!(m.update(Action::ListenResume { at: 3 }.sent_by(origin)).is_empty());
         }

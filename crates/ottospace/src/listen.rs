@@ -147,12 +147,26 @@ impl Workspace {
                     (feed.paused, feed.run_ms) = (false, 0);
                 }
             }
-            Effect::ListenClose { id } => {
-                if self.listen_feed.as_ref().is_some_and(|feed| feed.id == *id) {
-                    self.listen_feed = None;
-                }
-            }
+            Effect::ListenClose { id } => self.listen_close(id),
             _ => {}
+        }
+    }
+
+    /// Its streams close for good.
+    fn listen_close(&mut self, id: &str) {
+        if self.listen_feed.as_ref().is_some_and(|feed| feed.id == id) {
+            self.listen_feed = None;
+        }
+    }
+
+    /// A transcript a turned-off flag ended, outside a dispatch: its file's end, its streams' close.
+    pub(crate) fn listen_ended(&mut self, effects: &[Effect]) {
+        for effect in effects {
+            match effect {
+                Effect::ListenWrite { id, records } => self.listen_write(id, records),
+                Effect::ListenClose { id } => self.listen_close(id),
+                _ => {}
+            }
         }
     }
 
@@ -170,7 +184,11 @@ impl Workspace {
             writer.send(records.iter().filter(|record| !matches!(record, Record::Begin(_))).cloned().collect());
         }
         if records.iter().any(|record| matches!(record, Record::End { .. } | Record::Failed)) {
-            self.listen_file = None;
+            // Kept until written, for a quit right after to wait for.
+            if let Some(File { writer: Ok(writer), .. }) = self.listen_file.take() {
+                self.listen_ending.retain(|writer| !writer.done());
+                self.listen_ending.push(writer);
+            }
         }
     }
 
@@ -192,6 +210,7 @@ impl Workspace {
     /// ottospace is quitting: the one on ends now, as when its app quits, with what was heard and
     /// what was being heard; its file is written to the end before the app goes.
     pub(crate) fn listen_quit(&mut self) {
+        std::mem::take(&mut self.listen_ending).into_iter().for_each(listen_file::Writer::finish);
         let Some(id) = self.model.listen.on.as_ref().map(|on| on.id.clone()) else { return };
         let mut effects: Vec<Effect> =
             self.listen_rest().map(|rest| self.model.update(rest.sent_by(Origin::System))).unwrap_or_default();
