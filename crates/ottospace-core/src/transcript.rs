@@ -253,6 +253,14 @@ pub enum Notice {
     MessageElsewhere,
     /// A message of before, as its session's file has it (`Transcript::past`).
     MessageBefore,
+    /// ottospace served (or refused) the task's read of an app pane (agent mode): its record,
+    /// not the agent's account. `app`: the app's name, cleaned.
+    AppUsed {
+        what: crate::agent_mode::AppUse,
+        app: String,
+        pane: crate::model::PaneId,
+        refused: Option<String>,
+    },
     /// Its process ended. `replied`: anything came back from it since it started; `details`:
     /// its stderr's end can be shown.
     /// `by_user`: the user stopped it; no error, a quiet divider.
@@ -478,6 +486,13 @@ impl Transcript {
             self.items.pop_back();
         }
         self.push(Entry::Notice(Notice::Resumed { here, ended }));
+    }
+
+    /// A use of an app pane by this conversation's task, as ottospace saw it: a row, and one use
+    /// of the dial's Apps station (failed, if refused).
+    pub(crate) fn app_used(&mut self, notice: Notice, label: &str, failed: bool, at: u64) {
+        self.push(Entry::Notice(notice));
+        self.activity.app(label, failed, at);
     }
 
     /// Opens the first card's whole payload: Allow is possible from now on.
