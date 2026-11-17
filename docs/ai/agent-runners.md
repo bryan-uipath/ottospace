@@ -502,6 +502,46 @@ folder; they print protocol names and key names, never text):
 | Codex approval | asked under the user's config. `item/started` (commandExecution) comes before `item/commandExecution/requestApproval`, whose params carry `availableDecisions` (not in the plain schema; in `--experimental`'s: "decisions the client may present") — that alone made the first run decline. It grants nothing, so it is now known; Allow is offered only when it lists `accept`. `additionalPermissions` (also experimental) declines as wider. After Allow: `serverRequest/resolved`, the item completes, the file exists |
 | Codex interrupt | `turn/interrupt` → `turn/completed` with `turn.status: interrupted` |
 
+### Rows (2026-11-17, Claude Code 2.1.326)
+
+The event names and fields below were read from the CLI's own bundled code (its record
+builders; the binary was read, never run), and fixed in
+`tests/fixtures/claude/synthetic-2.1.326-rows.jsonl`:
+
+| Line | Fields read | Row |
+|---|---|---|
+| `system.task_started` | `tool_use_id`, `description` | none when its call has a row (the `Agent` row reads "Started a subtask: <description>"); else "Started a subtask: <description>" (a background shell, say) |
+| `system.task_notification` | `status` (`completed`, `failed`, `stopped`/`killed`), `summary` | "Subtask done: <summary>" (failed, stopped, ended) |
+| `system.permission_denied` | `tool_name`, `decision_reason_type` | "Denied: <tool> by your settings" (`rule`, `subcommandResults`), "by the permission mode", "by auto mode", "by a hook", …; none for `permissionPromptTool` (the user's own Deny here, already a notice) |
+| `system.permission_check_status` | none | none: its `status` is `checking` or `done`, a check under way; what it decided comes as `permission_denied` or as a `can_use_tool` request (the card, then "You allowed/denied …") |
+| `system.notification` | `text` | "Claude Code: <text>" |
+| `system.model_fallback`, `model_refusal_fallback`, `model_consent_fallback` | `originalModel`/`original_model`, `fallbackModel`/`fallback_model` (names) | "The model changed: A → B"; the header's model follows |
+
+Quiet now (known, nothing to show): `system.task_progress`, `task_updated`, `task_summary`,
+`background_tasks_changed`, `session_state_changed`, `session_title_changed`,
+`session_metadata`, `post_turn_summary`, `permission_check_status`. Others the code names and
+the parser still counts as not understood (seen in the binary, never in a recording):
+`turn_preempted`, `late_allow_not_run`, `session_writes_lost`, `elicitation_complete`,
+`memory_recall`, `tool_host_result`, `file_attachments_missing`, `instruction_size_warning`,
+`mirror_error`. The session file's own `system` records (`informational`, `local_command`,
+`turn_duration`, `api_error`, `stop_hook_summary`, `away_summary`, …) are not read by the watch
+view.
+
+A call's row shows its gist (`ottospace_core::gist::claude`, from its input): Bash and PowerShell
+the command's first line in monospace, `…` if more lines follow, its `description` on a muted
+second line; Read, Edit, Write, MultiEdit, NotebookEdit the path relative to the task's
+repository (else as written); Grep and Glob the pattern, and `in <path>` if given; WebFetch the
+host (no user, port, path or query); WebSearch the query; Agent and Task "Started a subtask:"
+and the description; any other tool its first string argument, by key name, of at most 80
+characters on one line; nothing to show: `tool · label` as before. Every word is cleaned
+(`transcript::clean`), on one line, cut at 400 bytes and again to the row with an ellipsis; no
+markup, no link. A click (or its sneak label) opens a command's row: the command whole and its
+output (the tool result's text, at most 16 KB, kept only for a command). A sub-agent's calls are
+indented under its row. The state has the gist's shape alone (`summary`: kind, lines, note) and
+`expanded`; a watched session gets the same rows from its file (`Cursor::with_edits` carries the
+gist and the output, as it carries an edit's change). Not built: Codex gists, ↵ on a focused row
+(the drawer has no row focus: a click or a sneak label opens it).
+
 Lines no rule reads (`Unknown`), and what becomes of them:
 
 | Runner | Kind | Decision |

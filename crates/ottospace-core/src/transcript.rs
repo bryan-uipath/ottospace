@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use crate::activity::{Activity, Dial, Is, Pulse, Station};
 use crate::diff::{Diff, DiffShape};
+use crate::gist::{self, Gist};
 
 /// Text a model, a tool or the CLI wrote. Never `Serialize`; `Debug` prints its length only.
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -127,7 +128,8 @@ pub enum Event {
         text: Text,
     },
     /// `diff`: an edit's change, from the call's input (`diff::claude`, `diff::codex_*`).
-    /// `station`: where it goes (`ottospace_sessions::station::classify`).
+    /// `station`: where it goes (`ottospace_sessions::station::classify`). `gist`: what its row
+    /// shows (`gist::claude`).
     ToolStart {
         id: String,
         sub: bool,
@@ -136,10 +138,38 @@ pub enum Event {
         label: String,
         detail: Text,
         diff: Option<Diff>,
+        gist: Option<Gist>,
     },
+    /// `output`: what the call gave back (`gist::output`), kept only for a command's row.
     ToolEnd {
         id: String,
         failed: bool,
+        output: Option<Text>,
+    },
+    /// A sub-agent or a background task started (Claude's `system/task_started`). `id`: the call
+    /// that started it, whose row then says so; with none, a row of its own.
+    Subtask {
+        id: Option<String>,
+        description: Text,
+    },
+    /// A sub-agent or background task ended, and what it said of it (`system/task_notification`).
+    SubtaskEnded {
+        status: Status,
+        summary: Text,
+    },
+    /// The CLI's own notification (`system/notification`): its text.
+    Note {
+        text: Text,
+    },
+    /// A call denied without asking the user (`system/permission_denied`): `by` what.
+    DeniedBy {
+        tool: String,
+        by: By,
+    },
+    /// The CLI went on with another model (`system/model_fallback` and its kin).
+    ModelFallback {
+        from: Option<String>,
+        to: String,
     },
     /// `ticket`: the shell's number for the runner's request. `cut`: `detail` is the first part.
     Permission {
@@ -242,6 +272,16 @@ pub enum Notice {
         tool: String,
         label: String,
     },
+    /// A call the CLI denied without asking the user, `by` what (its settings, its mode, …).
+    DeniedBy {
+        tool: String,
+        by: By,
+    },
+    /// The CLI went on with another model.
+    ModelFallback {
+        from: Option<String>,
+        to: String,
+    },
     /// The session was gone on with. `here`: its earlier turns are on show above, and this is a
     /// quiet divider, which takes the place of the end before it (`ended`); else they are in its
     /// file, not here, and it says so.
@@ -273,6 +313,82 @@ pub enum Notice {
     },
 }
 
+/// What denied a call without asking the user: from Claude's `decision_reason_type`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum By {
+    /// A rule in the user's settings (`rule`, `subcommandResults`).
+    Settings,
+    /// The permission mode (`mode`).
+    Mode,
+    /// Auto mode's classifier (`classifier`).
+    AutoMode,
+    /// One of the user's hooks (`hook`).
+    Hook,
+    /// Outside the folders the session may touch (`workingDir`).
+    Folder,
+    /// A safety check (`safetyCheck`).
+    Safety,
+    /// The sandbox (`sandboxOverride`).
+    Sandbox,
+    /// Nobody could be asked (`asyncAgent`).
+    Nobody,
+    /// Anything else.
+    Other,
+}
+
+impl By {
+    /// Claude's `decision_reason_type`. `None`: `permissionPromptTool`, the user's own answer
+    /// here, which the card's notice already says.
+    pub fn claude(reason: Option<&str>) -> Option<Self> {
+        Some(match reason {
+            Some("rule" | "subcommandResults") => By::Settings,
+            Some("mode") => By::Mode,
+            Some("classifier") => By::AutoMode,
+            Some("hook") => By::Hook,
+            Some("workingDir") => By::Folder,
+            Some("safetyCheck") => By::Safety,
+            Some("sandboxOverride") => By::Sandbox,
+            Some("asyncAgent") => By::Nobody,
+            Some("permissionPromptTool") => return None,
+            _ => By::Other,
+        })
+    }
+}
+
+/// How a subtask ended (`task_notification`'s `status`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Status {
+    Completed,
+    Failed,
+    Stopped,
+    Other,
+}
+
+impl Status {
+    pub fn named(status: Option<&str>) -> Self {
+        match status {
+            Some("completed") => Status::Completed,
+            Some("failed") => Status::Failed,
+            Some("stopped" | "killed") => Status::Stopped,
+            _ => Status::Other,
+        }
+    }
+}
+
+/// What a note row says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "note")]
+pub enum NoteKind {
+    /// "Started a subtask: <description>".
+    Subtask,
+    /// "Subtask done: <summary>", and the like.
+    Ended { status: Status },
+    /// The CLI's notification.
+    Notification,
+}
+
 /// How an agent ended, kept on the divider of the resume that followed: for its hover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct End {
@@ -291,7 +407,7 @@ pub enum Entry {
         text: Text,
         streaming: bool,
     },
-    /// `sub`: a call a sub-agent made.
+    /// `sub`: a call a sub-agent made. `gist`: what its row shows; `output`: a command's.
     Tool {
         id: String,
         sub: bool,
@@ -300,6 +416,13 @@ pub enum Entry {
         detail: Text,
         state: Call,
         diff: Option<Diff>,
+        gist: Option<Gist>,
+        output: Option<Text>,
+    },
+    /// A compact muted row of what the CLI said: a subtask, how it ended, a notification.
+    Note {
+        note: NoteKind,
+        text: Text,
     },
     /// A request denied without asking, with what it asked.
     AutoDenied {
@@ -315,7 +438,11 @@ impl Entry {
     fn bytes(&self) -> usize {
         match self {
             Entry::User { text } | Entry::Assistant { text, .. } => text.len(),
-            Entry::Tool { detail, diff, .. } => detail.len() + 64 + diff.as_ref().map_or(0, Diff::bytes),
+            Entry::Tool { detail, diff, gist, output, .. } => {
+                let more = gist.as_ref().map_or(0, Gist::bytes) + output.as_ref().map_or(0, Text::len);
+                detail.len() + 64 + diff.as_ref().map_or(0, Diff::bytes) + more
+            }
+            Entry::Note { text, .. } => text.len() + 32,
             Entry::AutoDenied { detail, .. } => detail.len() + 64,
             Entry::Notice(_) => 32,
         }
@@ -529,6 +656,10 @@ impl Transcript {
                 | Event::AutoDenied { .. }
                 | Event::TurnFinished { .. }
                 | Event::Error { .. }
+                | Event::Subtask { .. }
+                | Event::SubtaskEnded { .. }
+                | Event::Note { .. }
+                | Event::DeniedBy { .. }
         ) {
             self.replied = true;
         }
@@ -565,26 +696,63 @@ impl Transcript {
                 }
                 _ => self.push(Entry::Assistant { text, streaming: false }),
             },
-            Event::ToolStart { id, sub, tool, station, label, detail, diff } => {
+            Event::ToolStart { id, sub, tool, station, label, detail, diff, gist } => {
                 self.settle();
                 self.activity.start(&id, station, &label, at);
                 if let Some(turn) = &mut self.turn {
                     turn.tool = Some(label.clone());
                 }
-                self.push(Entry::Tool { id, sub, tool, label, detail, state: Call::Running, diff });
+                let state = Call::Running;
+                self.push(Entry::Tool { id, sub, tool, label, detail, state, diff, gist, output: None });
             }
-            Event::ToolEnd { id, failed } => {
+            Event::ToolEnd { id, failed, output } => {
                 self.activity.end(&id, failed, at);
                 let call = self.items.iter_mut().rev().find_map(|item| match &mut item.entry {
-                    Entry::Tool { id: of, state, .. } if *of == id => Some(state),
+                    Entry::Tool { id: of, state, gist, output, .. } if *of == id => Some((state, gist, output)),
                     _ => None,
                 });
-                if let Some(state) = call {
+                let mut grew = 0;
+                if let Some((state, gist, kept)) = call {
                     *state = if failed { Call::Failed } else { Call::Done };
+                    // Only a command's row opens on what it printed.
+                    let command = gist.as_ref().is_some_and(|gist| gist.kind == gist::Kind::Command);
+                    if let Some(output) = output.filter(|output| command && !output.is_empty() && kept.is_none()) {
+                        grew = output.len();
+                        *kept = Some(output);
+                    }
+                }
+                if grew > 0 {
+                    self.bytes += grew;
+                    self.trim();
                 }
                 if let Some(turn) = &mut self.turn {
                     turn.tool = None;
                 }
+            }
+            // The call that started it says so (its gist); else a row of its own.
+            Event::Subtask { id, description } => {
+                let started =
+                    |item: &Item| matches!(&item.entry, Entry::Tool { id: of, .. } if Some(of) == id.as_ref());
+                if !self.items.iter().any(started) {
+                    self.settle();
+                    self.push(Entry::Note { note: NoteKind::Subtask, text: description });
+                }
+            }
+            Event::SubtaskEnded { status, summary } => {
+                self.settle();
+                self.push(Entry::Note { note: NoteKind::Ended { status }, text: summary });
+            }
+            Event::Note { text } => {
+                self.settle();
+                self.push(Entry::Note { note: NoteKind::Notification, text });
+            }
+            Event::DeniedBy { tool, by } => {
+                self.settle();
+                self.push(Entry::Notice(Notice::DeniedBy { tool, by }));
+            }
+            Event::ModelFallback { from, to } => {
+                self.model = Some(to.clone());
+                self.push(Entry::Notice(Notice::ModelFallback { from, to }));
             }
             Event::Permission { ticket, tool, label, detail, len, cut, claim } => {
                 if !self.cards.iter().any(|card| card.ticket == ticket) && self.cards.len() < MAX_CARDS {
@@ -722,10 +890,32 @@ pub struct Summary {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Shape {
-    User { bytes: usize },
-    Assistant { bytes: usize, streaming: bool },
-    Tool { tool: String, label: String, state: Call, sub: bool, diff: Option<DiffShape> },
-    AutoDenied { tool: String, label: String, reason: String },
+    User {
+        bytes: usize,
+    },
+    Assistant {
+        bytes: usize,
+        streaming: bool,
+    },
+    /// `summary`: what its row shows, by kind and lines (`gist::Shape`), never its words.
+    Tool {
+        tool: String,
+        label: String,
+        state: Call,
+        sub: bool,
+        diff: Option<DiffShape>,
+        summary: Option<gist::Shape>,
+    },
+    Note {
+        #[serde(flatten)]
+        note: NoteKind,
+        bytes: usize,
+    },
+    AutoDenied {
+        tool: String,
+        label: String,
+        reason: String,
+    },
     Notice(Notice),
 }
 
@@ -734,13 +924,15 @@ impl Shape {
         match entry {
             Entry::User { text } => Shape::User { bytes: text.len() },
             Entry::Assistant { text, streaming } => Shape::Assistant { bytes: text.len(), streaming: *streaming },
-            Entry::Tool { tool, label, state, sub, diff, .. } => Shape::Tool {
+            Entry::Tool { tool, label, state, sub, diff, gist, .. } => Shape::Tool {
                 tool: tool.clone(),
                 label: label.clone(),
                 state: *state,
                 sub: *sub,
                 diff: diff.as_ref().map(Diff::shape),
+                summary: gist.as_ref().map(Gist::shape),
             },
+            Entry::Note { note, text } => Shape::Note { note: *note, bytes: text.len() },
             Entry::AutoDenied { tool, label, reason, .. } => {
                 Shape::AutoDenied { tool: tool.clone(), label: label.clone(), reason: reason.clone() }
             }
@@ -775,6 +967,7 @@ mod tests {
                 }
                 Entry::Tool { label, state, .. } => format!("tool:{label}:{state:?}"),
                 Entry::AutoDenied { label, .. } => format!("auto:{label}"),
+                Entry::Note { note, text } => format!("note:{note:?}:{}", text.text()),
                 Entry::Notice(notice) => format!("{notice:?}"),
             })
             .collect()
@@ -802,10 +995,11 @@ mod tests {
             label: "git".into(),
             detail: text("git status"),
             diff: None,
+            gist: None,
         };
         t.fold(tool, 15);
         assert_eq!(t.live_label(), Some("git"));
-        t.fold(Event::ToolEnd { id: "a".into(), failed: false }, 16);
+        t.fold(Event::ToolEnd { id: "a".into(), failed: false, output: None }, 16);
         t.fold(Event::TextDelta { text: text("Done") }, 17);
         t.fold(Event::TurnFinished { outcome: Outcome::Completed }, 18);
         assert_eq!(texts(&t), ["user:hi", "done:Let me look.", "tool:git:Done", "done:Done"]);
@@ -827,6 +1021,7 @@ mod tests {
             label: "a.rs".into(),
             detail: text("/a.rs"),
             diff: None,
+            gist: None,
         };
         t.fold(tool, 2);
         t.fold(permission(1, false), 3);
@@ -878,13 +1073,14 @@ mod tests {
             label: "ls".into(),
             detail: Text::default(),
             diff: None,
+            gist: None,
         };
         let usage = Event::Usage { context: Some(5), window: None, cost_micro_usd: None };
         let mut t = Transcript::default();
         t.started(false);
         t.send("go", 0);
         t.fold(call("a"), 1);
-        t.fold(Event::ToolEnd { id: "a".into(), failed: false }, 2);
+        t.fold(Event::ToolEnd { id: "a".into(), failed: false, output: None }, 2);
         t.fold(usage.clone(), 3);
         let model = |t: &Transcript| t.dial(4).spot(Station::Model).map(|spot| spot.calls);
         assert_eq!(model(&t), Some(1));
@@ -1004,6 +1200,7 @@ mod tests {
             label: "secret.rs".into(),
             detail: Text::default(),
             diff,
+            gist: None,
         };
         assert!(start(diff.clone()).shows_when_watched());
         t.fold(start(diff.clone()), 1);
@@ -1022,5 +1219,96 @@ mod tests {
         assert_eq!((&shape["added"], &shape["removed"], &shape["lines"]), (&2.into(), &1.into(), &3.into()));
         assert!(summary["entries"][1]["diff"].is_null(), "{summary}");
         assert!(!summary.to_string().contains("w/secret"), "{summary}");
+    }
+    /// A command's row keeps what it printed; a row of another kind does not. Its summary in the
+    /// state is a shape: no command, no output.
+    #[test]
+    fn a_command_row_keeps_its_output_and_the_state_only_its_shape() {
+        let call = |id: &str, tool: &str, input: serde_json::Value| Event::ToolStart {
+            id: id.into(),
+            sub: false,
+            tool: tool.into(),
+            station: Station::Shell,
+            label: "x".into(),
+            detail: Text::default(),
+            diff: None,
+            gist: crate::gist::claude(tool, &input),
+        };
+        let end = |id: &str| Event::ToolEnd { id: id.into(), failed: false, output: Some(text("secret out")) };
+        let mut t = Transcript::default();
+        t.fold(call("b", "Bash", serde_json::json!({"command": "echo secret", "description": "Say"})), 1);
+        t.fold(end("b"), 2);
+        t.fold(call("r", "Read", serde_json::json!({"file_path": "/w/secret.rs"})), 3);
+        t.fold(end("r"), 4);
+        let outputs: Vec<Option<&str>> = t
+            .items()
+            .map(|item| match &item.entry {
+                Entry::Tool { output, .. } => output.as_ref().map(Text::text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outputs, [Some("secret out"), None]);
+        let summary = serde_json::to_value(t.summary()).unwrap();
+        assert_eq!(summary["entries"][0]["summary"], serde_json::json!({"kind": "command", "lines": 1, "note": true}));
+        assert_eq!(summary["entries"][1]["summary"]["kind"], "path");
+        assert!(!summary.to_string().contains("secret"), "{summary}");
+    }
+
+    /// A subtask's start is its call's row when there is one, else a row of its own; its end,
+    /// a notification, a denial by settings and a fallback are rows; the state has their kinds.
+    #[test]
+    fn subtasks_notes_denials_and_fallbacks_are_rows() {
+        let mut t = Transcript::default();
+        let agent = serde_json::json!({"description": "Find it", "subagent_type": "Explore"});
+        t.fold(
+            Event::ToolStart {
+                id: "a".into(),
+                sub: false,
+                tool: "Agent".into(),
+                station: Station::Agents,
+                label: "Explore".into(),
+                detail: Text::default(),
+                diff: None,
+                gist: crate::gist::claude("Agent", &agent),
+            },
+            1,
+        );
+        t.fold(Event::Subtask { id: Some("a".into()), description: text("Find it") }, 2);
+        t.fold(Event::Subtask { id: Some("z".into()), description: text("Watch the build") }, 3);
+        t.fold(Event::SubtaskEnded { status: Status::Completed, summary: text("Found it") }, 4);
+        t.fold(Event::Note { text: text("Fast mode is off") }, 5);
+        t.fold(Event::DeniedBy { tool: "Bash".into(), by: By::Settings }, 6);
+        t.fold(Event::ModelFallback { from: Some("m-1".into()), to: "m-2".into() }, 7);
+        assert_eq!(
+            texts(&t),
+            [
+                "tool:Explore:Running",
+                "note:Subtask:Watch the build",
+                "note:Ended { status: Completed }:Found it",
+                "note:Notification:Fast mode is off",
+                r#"DeniedBy { tool: "Bash", by: Settings }"#,
+                r#"ModelFallback { from: Some("m-1"), to: "m-2" }"#,
+            ]
+        );
+        assert_eq!(t.model.as_deref(), Some("m-2"));
+        let summary = serde_json::to_value(t.summary()).unwrap();
+        let ended = &summary["entries"][2];
+        assert_eq!(ended, &serde_json::json!({"kind": "note", "note": "ended", "status": "completed", "bytes": 8}));
+        assert_eq!(
+            summary["entries"][4],
+            serde_json::json!({"kind": "notice", "notice": "denied_by", "tool": "Bash", "by": "settings"})
+        );
+        assert!(!summary.to_string().contains("Found"), "{summary}");
+    }
+
+    #[test]
+    fn denials_and_ends_are_named_from_fixed_tables() {
+        assert_eq!(By::claude(Some("rule")), Some(By::Settings));
+        assert_eq!(By::claude(Some("classifier")), Some(By::AutoMode));
+        assert_eq!(By::claude(Some("permissionPromptTool")), None, "the user's own answer: its notice says it");
+        assert_eq!(By::claude(Some("a private reason")), Some(By::Other));
+        assert_eq!(By::claude(None), Some(By::Other));
+        assert_eq!(Status::named(Some("killed")), Status::Stopped);
+        assert_eq!(Status::named(Some("anything")), Status::Other);
     }
 }

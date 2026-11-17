@@ -709,8 +709,13 @@ mod tests {
             label: "cargo test".into(),
             detail: Text::default(),
             diff: None,
+            gist: None,
         };
-        let run = vec![Event::TurnStarted, call("a", Station::Shell), Event::ToolEnd { id: "a".into(), failed: true }];
+        let run = vec![
+            Event::TurnStarted,
+            call("a", Station::Shell),
+            Event::ToolEnd { id: "a".into(), failed: true, output: None },
+        ];
         events(&mut m, &one, [run, vec![Event::Hook, call("b", Station::Network)]].concat());
         let dial = m.chat(&one).map(|chat| chat.transcript.dial(6)).unwrap();
         let count = |s| dial.spot(s).map(|spot| (spot.calls, spot.failing, spot.lit));
@@ -757,12 +762,13 @@ mod tests {
             label,
             detail: Text::default(),
             diff: None,
+            gist: None,
         };
         events(&mut m, &one, vec![Event::TurnStarted, call]);
         let (state, line) = chip(&m).unwrap();
         assert!(state == Pulse::Running && line.starts_with("Working · cargo test xx"), "{line:?}");
         assert_eq!(line.chars().count(), "Working · ".chars().count() + crate::talk::CHIP_LABEL);
-        events(&mut m, &one, vec![Event::ToolEnd { id: "a".into(), failed: false }]);
+        events(&mut m, &one, vec![Event::ToolEnd { id: "a".into(), failed: false, output: None }]);
         assert_eq!(chip(&m), said(Pulse::Running, "Working"));
         // A request waits: needs you, with what it asks for.
         events(&mut m, &one, vec![card(1, false)]);

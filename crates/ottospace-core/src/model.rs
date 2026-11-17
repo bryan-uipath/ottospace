@@ -13150,6 +13150,7 @@ mod tests {
             label: "git".into(),
             detail: Text::default(),
             diff: None,
+            gist: None,
         };
         let card = Event::Permission {
             ticket: 1,
@@ -13177,6 +13178,7 @@ mod tests {
                 label: "git".into(),
                 detail: Text::default(),
                 diff: None,
+                gist: None,
             },
         ];
         m.update(Action::AgentEvents { task: held.clone(), events: again, at: 2 }.sent_by(Origin::System));
@@ -13526,7 +13528,8 @@ mod tests {
         assert_eq!(m.watch_target(), Some(target));
         let (id, tool, label) = ("a".to_string(), "Bash".to_string(), "git".to_string());
         let station = crate::activity::Station::Shell;
-        let call = Event::ToolStart { id, sub: false, tool, station, label, detail: Text::default(), diff: None };
+        let call =
+            Event::ToolStart { id, sub: false, tool, station, label, detail: Text::default(), diff: None, gist: None };
         let events = vec![Event::WatchFromStart, Event::MessageElsewhere, call];
         m.update(Action::AgentEvents { task: task.clone(), events, at: NOW }.sent_by(Origin::System));
         let t = &m.chat(&task).expect("its past").transcript;

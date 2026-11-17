@@ -9,7 +9,7 @@ export interface NativeChat {
   /** Its structured process runs now. */
   native: boolean;
   transcript: {
-    /** Each entry by kind: `user`, `assistant` (bytes, streaming), `tool` (tool, label, state, sub, and `diff`: an edit's card by counts, `{changes, more_files, added, removed, lines, more}`, else null), `auto_denied`, `notice`. */
+    /** Each entry by kind: `user`, `assistant` (bytes, streaming), `tool` (tool, label, state, sub, `diff`: an edit's card by counts, `{changes, more_files, added, removed, lines, more}`, else null, `summary`: what its row shows, `{kind: command|path|pattern|host|query|subtask|argument, lines, note}`, else null, and `expanded`: the user opened it), `note` (`note`: `subtask`, `ended` with `status`, or `notification`; `bytes`), `auto_denied`, `notice` (incl. `denied_by` with `tool` and `by`, `model_fallback` with `from` and `to`). */
     entries: ({ kind: string } & Record<string, unknown>)[];
     /** Entries no longer kept here; the session's file has them. */
     dropped: number;
