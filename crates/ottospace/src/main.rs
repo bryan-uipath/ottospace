@@ -904,6 +904,9 @@ struct Workspace {
     row_hovered: Option<ottospace_core::list::ListRow>,
     /// A key closed a row's menu: held on, it is not for what was under the menu.
     row_menu_spent: bool,
+    /// What a tick with no window brought (`tick_now`), carried out at the next dispatch: a
+    /// closed temporary workspace's panes, its Undo run out.
+    held_effects: Vec<Effect>,
     kept_layout: layout_file::Kept,
     /// `keys.json` as last read and written.
     kept_keys: key_use::Kept,
@@ -1426,6 +1429,7 @@ impl Workspace {
             kept_workbooks: workbook::Kept::default(),
             row_hovered: None,
             row_menu_spent: false,
+            held_effects: Vec::new(),
             kept_layout: layout_file::Kept::default(),
             kept_keys: key_use::Kept::default(),
             caps_drawn: Cell::default(),
@@ -1592,6 +1596,10 @@ impl Workspace {
         // A brief that shows is read from its task's folder, once.
         if let Some(task) = self.model.brief {
             self.brief_of(task);
+        }
+        let held = std::mem::take(&mut self.held_effects);
+        if !held.is_empty() {
+            self.with_origin(Origin::System, |this| this.carry_out(&held, window, cx));
         }
         // What an effect dispatches in turn (a picked app's pane, a label's control) has the same sender.
         self.with_origin(origin, |this| this.carry_out(&effects, window, cx));
@@ -4161,9 +4169,13 @@ impl Workspace {
     }
 
     /// Tells the core the time now, and gives a meeting alert that time brought (`Effect::MeetingAlert`).
+    /// The rest (a closed workspace's panes) waits for the next dispatch, which has a window.
     fn tick_now(&mut self) {
         for effect in self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System)) {
             self.meeting_effect(&effect);
+            if !matches!(effect, Effect::MeetingAlert { .. } | Effect::OpenLink { .. }) {
+                self.held_effects.push(effect);
+            }
         }
     }
 

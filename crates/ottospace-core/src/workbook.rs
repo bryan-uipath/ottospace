@@ -508,9 +508,10 @@ impl Workbooks {
         self.list.iter().find(|book| book.task == Some(task)).map(|book| book.id)
     }
 
-    /// Binds a workbook to a task, or (`None`) unbinds it. Bound, it is kept.
+    /// Binds a workbook to a task, or (`None`) unbinds it. Bound, it is kept. A closing one is
+    /// bound to none: it goes when its Undo runs out.
     pub(crate) fn bind(&mut self, id: WorkbookId, task: Option<TaskId>) {
-        if let Some(book) = self.get_mut(id) {
+        if let Some(book) = self.get_mut(id).filter(|book| task.is_none() || book.closing.is_none()) {
             book.task = task;
             book.kept |= task.is_some();
         }
@@ -1310,8 +1311,9 @@ impl Model {
                 continue;
             }
             let of = Owner::Workbook { id };
-            while let Some(at) = self.tabs.iter().position(|tab| tab.space == of) {
-                self.act(crate::model::Action::CloseTab { index: Some(at) }, effects);
+            // Never on show (it would be back on the row): what the user is in stays as it is.
+            while let Some(at) = (0..self.tabs.len()).find(|at| self.tabs[*at].space == of && *at != self.active) {
+                self.close_background_tab(at, effects);
             }
             self.workbooks.list.retain(|book| book.id != id);
         }
@@ -2200,6 +2202,24 @@ mod tests {
         m.update(Action::WorkbookOpen { workbook: 2, tab: None, home: None });
         m.update(Action::SpaceHide { index: None });
         assert_eq!((names(&m), m.workbooks.offered()), (vec!["Workspace 3"], None));
+    }
+
+    /// Review: its time up, the closed workspace's tabs closed as ⌘⇧W does, which parked the
+    /// app the user was in elsewhere. Only its own panes go.
+    #[test]
+    fn a_closed_workspace_going_leaves_the_app_the_user_is_in_alone() {
+        let mut m = Model::default();
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        m.update(Action::SpaceHide { index: None });
+        m.update(Action::WorkbookNew { uid: UID_2.into() });
+        let app = Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() };
+        m.update(Action::Open { kind: app, axis: Right, beside: None });
+        m.update(Action::Enter { pane: 2 });
+        let effects = m.update(Action::Tick { now: NOTICE_MS + 1 }.sent_by(Origin::System));
+        assert_eq!((m.live, m.panes.len(), m.workbooks.list.len()), (Some(2), 1, 1));
+        let closed: Vec<&Effect> = effects.iter().filter(|e| !matches!(e, Effect::Closed(p) if p.id == 1)).collect();
+        assert!(closed.iter().all(|e| !matches!(e, Effect::Parked(_) | Effect::Closed(_))), "{effects:?}");
     }
 
     /// A tab of a temporary workspace being closed selected again (a mark, a client's

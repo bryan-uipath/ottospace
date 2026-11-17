@@ -4050,7 +4050,7 @@ impl Model {
         effects.push(Effect::PressApp { pane, path, role, at, focus });
     }
 
-    pub(crate) fn act(&mut self, action: Action, effects: &mut Vec<Effect>) {
+    fn act(&mut self, action: Action, effects: &mut Vec<Effect>) {
         match action {
             Action::Split { axis, kind } => {
                 self.leave(effects);
@@ -7982,6 +7982,22 @@ impl Model {
     }
 
     /// Removes a pane from whichever tab holds it.
+    /// Closes tab `index`, not on show, with its panes; what is on show stays as it is: no app
+    /// parked, no mode ended. A closed temporary workspace's tabs, once its Undo runs out.
+    pub(crate) fn close_background_tab(&mut self, index: usize, effects: &mut Vec<Effect>) {
+        if index == self.active || self.tabs.get(index).is_none_or(|tab| tab.id == spaces::HOME_TAB) {
+            return;
+        }
+        let tab = self.tabs.remove(index);
+        self.unlinked.iter_mut().for_each(|(_, ids, _)| ids.retain(|id| *id != tab.id));
+        self.marks.forget_tab(tab.id);
+        self.workbooks.forget_tab(tab.id);
+        for id in tab.layout.as_ref().map(Node::leaves).unwrap_or_default() {
+            self.close_pane(id, effects);
+        }
+        self.active -= usize::from(index < self.active);
+    }
+
     fn close_pane(&mut self, id: PaneId, effects: &mut Vec<Effect>) {
         let Some(i) = self.panes.iter().position(|p| p.id == id) else { return };
         let closed = self.panes.remove(i);
@@ -11185,6 +11201,24 @@ mod tests {
         // Taken back: its tab is its space's again.
         m.update(Action::TaskUndo);
         assert_eq!((m.tab_task(), m.spaces().len()), (Some(a), 3));
+    }
+
+    /// Review: a dismissed task's tab in a temporary workspace made for it, that workspace closed,
+    /// then the dismissal undone: the task was bound to the closing workspace, kept and closing.
+    #[test]
+    fn a_dismissal_undone_binds_no_closing_workspace_and_keeps_its_tab() {
+        let mut m = Model::default();
+        term(&mut m);
+        let a = add_task(&mut m, "a", State::Captured);
+        m.update(Action::TabPlace { tab: None, at: TabAt::End(task_space(a)) });
+        m.update(Action::TaskDismiss { id: a });
+        let Owner::Workbook { id } = m.space().clone() else { panic!("{:?}", m.space()) };
+        m.update(Action::SpaceHide { index: None });
+        assert!(m.workbooks.closing(id));
+        m.update(Action::TaskUndo);
+        assert_eq!((m.workbooks.bound_to(a), m.workbooks.is_kept(id)), (None, false));
+        m.update(Action::Tick { now: NOTICE_MS + 1 }.sent_by(Origin::System));
+        assert_eq!((m.panes.len(), m.tabs.iter().filter(|tab| tab.space == task_space(a)).count()), (1, 1));
     }
 
     #[test]

@@ -106,7 +106,7 @@ impl Workspace {
             }
             None => {
                 // An undo it offers counts its seconds from now; a pause pauses now.
-                self.model.update(Action::Tick { now: crate::now_ms() }.sent_by(Origin::System));
+                self.tick_now();
                 // What was heard before the user's pause is kept.
                 let pause = matches!(self.model.row_menu_action(index), Some(Action::ListenPause { .. }));
                 if pause && self.input == Origin::User {

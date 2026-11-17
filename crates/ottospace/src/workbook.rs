@@ -103,7 +103,7 @@ impl Workspace {
             return false;
         }
         // The offer to take a delete or an update back counts its seconds from now.
-        self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System));
+        self.tick_now();
         self.dispatch(action, self.input, window, cx);
         true
     }
