@@ -53,6 +53,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       features: [],
       listen: null,
       agent_mode: { panes: { "3": { level: "see", task: 2 } }, default: "act", menu: null },
+      slots: {},
     },
     bounds: {},
     frames: {},

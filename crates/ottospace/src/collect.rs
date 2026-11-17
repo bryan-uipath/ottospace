@@ -268,11 +268,13 @@ fn ignored(hosted: &Hosted) -> (Option<String>, bool) {
         let (bundle, name) = ax::app_identity(hosted.pid);
         let title = window.title();
         let subrole = window.subrole().unwrap_or_else(|| "AXStandardWindow".into());
+        let identifier = window.identifier();
         let facts = rules::Facts {
             app: name.as_deref().unwrap_or(&hosted.app),
             bundle: bundle.as_deref().or(hosted.bundle.as_deref()),
             title: title.as_deref().unwrap_or(&hosted.title),
             subrole: &subrole,
+            identifier: identifier.as_deref(),
         };
         let managed = rules::manages(&config::live().windows, &facts);
         (title, !managed)

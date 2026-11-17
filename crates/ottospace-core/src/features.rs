@@ -32,11 +32,13 @@ pub enum Feature {
     Marks,
     AppsSection,
     Transcripts,
+    Slots,
     AgentMode,
 }
 
 /// Every flag, in the order the docs and the palette list them.
-pub const ALL: [Feature; 4] = [Feature::Marks, Feature::AppsSection, Feature::Transcripts, Feature::AgentMode];
+pub const ALL: [Feature; 5] =
+    [Feature::Marks, Feature::AppsSection, Feature::Transcripts, Feature::Slots, Feature::AgentMode];
 
 /// Flags whose feature is stable now: a setting of one is ignored, with a warning.
 pub const RETIRED: &[&str] = &[];
@@ -48,13 +50,16 @@ impl Feature {
             Feature::Marks => "marks",
             Feature::AppsSection => "apps_section",
             Feature::Transcripts => "transcripts",
+            Feature::Slots => "slots",
             Feature::AgentMode => "agent_mode",
         }
     }
 
     pub fn stage(self) -> Stage {
         match self {
-            Feature::Marks | Feature::AppsSection | Feature::Transcripts | Feature::AgentMode => Stage::Experimental,
+            Feature::Marks | Feature::AppsSection | Feature::Transcripts | Feature::Slots | Feature::AgentMode => {
+                Stage::Experimental
+            }
         }
     }
 
@@ -69,6 +74,9 @@ impl Feature {
             Feature::AppsSection => "The Apps section: the Dock's apps, pins, Not running and All apps",
             Feature::Transcripts => {
                 "Transcripts (⌘⌃T): an app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file"
+            }
+            Feature::Slots => {
+                "Slots: a pane that keeps its place and waits for a window you name. In progress: not on screen yet"
             }
             Feature::AgentMode => {
                 "Agent mode (⌘⌃V): let a workspace's task see an app pane, from the robot in its header"
@@ -86,6 +94,7 @@ impl Feature {
             Feature::Marks => "feature off: marks",
             Feature::AppsSection => "feature off: apps_section",
             Feature::Transcripts => "feature off: transcripts",
+            Feature::Slots => "feature off: slots",
             Feature::AgentMode => "feature off: agent_mode",
         }
     }
@@ -193,14 +202,17 @@ mod tests {
         );
         assert_eq!(
             Features::all().with(Feature::Marks, false),
-            Features(vec![Feature::AppsSection, Feature::Transcripts, Feature::AgentMode])
+            Features(vec![Feature::AppsSection, Feature::Transcripts, Feature::Slots, Feature::AgentMode])
         );
         let three = Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true);
-        assert_eq!(three.with(Feature::Transcripts, true).with(Feature::AgentMode, true), Features::all());
-        let list = " agent_mode,transcripts,apps_section,marks ";
+        assert_eq!(
+            three.with(Feature::Transcripts, true).with(Feature::Slots, true).with(Feature::AgentMode, true),
+            Features::all()
+        );
+        let list = " agent_mode,slots,transcripts,apps_section,marks ";
         assert_eq!(Features::parse_list(list).unwrap(), Features::all());
         assert_eq!(Features::parse_list("").unwrap(), Features(Vec::new()));
-        assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts"));
+        assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts, slots"));
     }
 
     /// What the model does with a feature off, and on again.
@@ -297,7 +309,13 @@ mod tests {
             let names: Vec<(&str, bool)> = flags.iter().flatten().map(|c| (c.feature.name(), c.on)).collect();
             assert_eq!(
                 names,
-                [("marks", false), ("apps_section", false), ("transcripts", false), ("agent_mode", false)]
+                [
+                    ("marks", false),
+                    ("apps_section", false),
+                    ("transcripts", false),
+                    ("slots", false),
+                    ("agent_mode", false)
+                ]
             );
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
             m.update(crate::model::Action::FieldEdit { edit: crate::edit::Edit::Insert("apps".into()) });
@@ -313,7 +331,7 @@ mod tests {
         assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
             wrong("bookmarks", &yes).unwrap(),
-            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, agent_mode"
+            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode"
         );
         assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
         assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());

@@ -59,6 +59,13 @@ pub enum Kind {
         #[serde(default)]
         name: String,
     },
+    /// A slot that waits for a window of this app (`docs/ai/slots.md`). What it asks for and
+    /// where it is are the model's `slots`. Never made from an action's kind: only `SlotMake`.
+    Slot {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bundle: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -420,9 +427,12 @@ pub enum Action {
     },
     /// Add a pane for a window the app opened itself (e.g. DevTools), beside `beside`.
     /// Focus and the keyboard stay where they are: the user did not ask for this pane.
+    /// `seen`: the window's facts (the shell's alone): a slot on the tab on show that selects it
+    /// takes or offers it instead (`Model::slot_adopt`).
     Adopt {
         kind: Kind,
         beside: Option<PaneId>,
+        seen: Option<crate::slot::Seen>,
     },
     /// Close a pane (default: the focused one).
     Close {
@@ -1572,6 +1582,57 @@ pub enum Action {
         refused: Option<String>,
         at: u64,
     },
+    /// The user's Keep in "Keep this pane as a slot": app pane `pane`, whose window is of process
+    /// `pid`, becomes a filled slot. On a slot: its new settings (the dialog's edit).
+    SlotMake {
+        pane: PaneId,
+        pid: i32,
+        slot: crate::slot::Slot,
+    },
+    /// The slot ends: a filled one stays an app pane, one that waits is an empty pane.
+    SlotClear {
+        pane: PaneId,
+    },
+    /// Bring it here: the window the slot offers goes in it.
+    SlotAccept {
+        pane: PaneId,
+    },
+    /// Not this one: the slot passes over the window it offers, for this run, and offers the next.
+    SlotDecline {
+        pane: PaneId,
+    },
+    /// "2 more match": offer the next.
+    SlotNext {
+        pane: PaneId,
+    },
+    /// Look Again: forget the windows passed over.
+    SlotLookAgain {
+        pane: PaneId,
+    },
+    /// Give Back the Window: it goes back where it was, and the slot waits, passing over it.
+    SlotGiveBack {
+        pane: PaneId,
+    },
+    /// What a look at an app found (`Effect::WatchSlots`). The shell's alone.
+    SlotWindows {
+        look: crate::slot::Look,
+    },
+    /// The shell hosted the window `Effect::HostSlot` named: the pane's kind now. `None`: it could not.
+    SlotHosted {
+        pane: PaneId,
+        kind: Option<Kind>,
+    },
+    /// Every 2 s while a slot is Away.
+    SlotTick {
+        at: u64,
+    },
+    /// The window of app pane `pane` is gone: closed, or no longer listed. A slot waits for it;
+    /// any other pane closes. The shell's alone.
+    WindowGone {
+        pane: PaneId,
+        app_running: bool,
+        at: u64,
+    },
 }
 
 /// What the right drawer shows (see `Model::drawer_view`).
@@ -1610,6 +1671,20 @@ pub struct Envelope {
 impl Action {
     pub fn sent_by(self, origin: Origin) -> Envelope {
         Envelope { action: self, origin }
+    }
+
+    /// Whether it would put a slot's kind in a pane, which only `SlotMake` and a slot's own
+    /// steps do: a slot made that way would have nothing to wait for.
+    fn makes_slot_kind(&self) -> bool {
+        let kind = match self {
+            Action::Split { kind, .. }
+            | Action::Open { kind, .. }
+            | Action::Adopt { kind, .. }
+            | Action::Fill { kind, .. } => Some(kind),
+            Action::SlotHosted { kind, .. } => kind.as_ref(),
+            _ => None,
+        };
+        matches!(kind, Some(Kind::Slot { .. }))
     }
 
     /// Whether the action acts on panes, tabs or the bar: it waits while the picker, the new-task
@@ -1950,7 +2025,18 @@ impl Action {
             | Action::AgentMenuChoose { .. }
             | Action::AgentMenuClose
             | Action::AgentOfferAccept { .. }
-            | Action::AppUsed { .. } => false,
+            | Action::AppUsed { .. }
+            | Action::SlotMake { .. }
+            | Action::SlotClear { .. }
+            | Action::SlotAccept { .. }
+            | Action::SlotDecline { .. }
+            | Action::SlotNext { .. }
+            | Action::SlotLookAgain { .. }
+            | Action::SlotGiveBack { .. }
+            | Action::SlotWindows { .. }
+            | Action::SlotHosted { .. }
+            | Action::SlotTick { .. }
+            | Action::WindowGone { .. } => false,
         }
     }
 
@@ -1994,6 +2080,18 @@ impl Action {
             | Action::AgentMenuClose
             | Action::AgentOfferAccept { .. }
             | Action::AppUsed { .. } => Some(Feature::AgentMode),
+            Action::SlotMake { .. }
+            | Action::SlotClear { .. }
+            | Action::SlotAccept { .. }
+            | Action::SlotDecline { .. }
+            | Action::SlotNext { .. }
+            | Action::SlotLookAgain { .. }
+            | Action::SlotGiveBack { .. }
+            | Action::SlotWindows { .. }
+            | Action::SlotHosted { .. }
+            | Action::SlotTick { .. } => Some(Feature::Slots),
+            // Every pane's window going, a slot's or not: of no flag.
+            Action::WindowGone { .. } => None,
             // Shared with workbooks (a name typed, a row's letter), or data a restore reads.
             Action::MarkType { .. }
             | Action::MarkBackspace
@@ -2406,6 +2504,20 @@ pub enum Effect {
         id: String,
         records: Vec<listen::Record>,
     },
+    /// Host window `window` of process `pid` in slot pane `pane`, then send `SlotHosted`.
+    HostSlot {
+        pane: PaneId,
+        pid: i32,
+        window: u32,
+    },
+    /// Look at these apps' windows every 2 s and send `SlotWindows` when they change. Empty: none.
+    WatchSlots {
+        apps: Vec<(Option<String>, String)>,
+    },
+    /// Put slot pane `pane`'s window back where it was before it was hosted. The pane stays.
+    GiveBack {
+        pane: PaneId,
+    },
     /// The user dismissed the notice of `kind`: a slot the shell holds it in is emptied.
     NoticeDismissed {
         kind: crate::notice::Kind,
@@ -2594,6 +2706,7 @@ pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
 mod agent;
 pub mod chat;
 pub mod editor;
+pub mod slots;
 mod transcribe;
 pub mod worktrees;
 pub(crate) use worktrees::subagent_path;
@@ -2904,6 +3017,21 @@ pub struct Model {
     /// Each app pane's agent mode level and the task it is given to, the default, the menu.
     #[serde(rename = "agent_mode")]
     pub agent: crate::agent_mode::AgentMode,
+    /// Each slot, by its pane: filled or not. In the state: its status, how many windows match
+    /// and its matching, never what it selects or a window's title.
+    pub slots: std::collections::BTreeMap<PaneId, slots::Run>,
+    /// The last look at each app a slot names, and the apps the shell is asked to look at.
+    #[serde(skip)]
+    slot_looks: Vec<crate::slot::Look>,
+    #[serde(skip)]
+    slot_watch: Vec<(Option<String>, String)>,
+    /// A slot's record kept as read while it is not run (the flag off, or a newer build's), with
+    /// its app: a pane of that app writes it back, so turning the flag on again loses none.
+    #[serde(skip)]
+    slot_dormant: std::collections::BTreeMap<PaneId, (Option<String>, String, serde_json::Value)>,
+    /// The user's `windows` rules, as the settings say: a slot is offered no window they ignore.
+    #[serde(skip)]
+    window_rules: Vec<crate::rules::Rule>,
 }
 
 impl Default for Model {
@@ -3023,6 +3151,11 @@ impl Default for Model {
             editor_note: None,
             listen: Listening::default(),
             agent: crate::agent_mode::AgentMode::default(),
+            slots: Default::default(),
+            slot_looks: Vec::new(),
+            slot_watch: Vec::new(),
+            slot_dormant: Default::default(),
+            window_rules: Vec::new(),
         };
         // Home's own tab, on show.
         let home = Tab { id: HOME_TAB, title: HOME.into(), space: Owner::Home, layout: None, focused: None };
@@ -3165,6 +3298,34 @@ impl Model {
                 if origin == Origin::Socket && self.closes_listened(action) =>
             {
                 Some(listen::SOURCE_ON)
+            }
+            // A slot is the user's: no client's request, key, click or label makes, fills or
+            // clears one, and only the shell says what a look found.
+            Action::SlotMake { .. }
+            | Action::SlotClear { .. }
+            | Action::SlotAccept { .. }
+            | Action::SlotDecline { .. }
+            | Action::SlotNext { .. }
+            | Action::SlotLookAgain { .. }
+            | Action::SlotGiveBack { .. } => Some(crate::slot::USERS_ALONE),
+            Action::SlotWindows { .. }
+            | Action::SlotHosted { .. }
+            | Action::SlotTick { .. }
+            | Action::WindowGone { .. }
+            | Action::Adopt { seen: Some(_), .. }
+                if origin == Origin::Socket =>
+            {
+                Some(crate::slot::SHELLS_ALONE)
+            }
+            // Nor takes one out of the user's layout, or moves it to a tab they do not see.
+            Action::Close { .. }
+            | Action::CloseTab { .. }
+            | Action::SwapDir { .. }
+            | Action::MovePane { .. }
+            | Action::DropPane { .. }
+                if origin == Origin::Socket && self.moves_slot(action) =>
+            {
+                Some(crate::slot::SLOT_PANE)
             }
             // A label in another app presses there: only the user's own letters spell one.
             Action::SneakType { text } if self.sneak.as_ref().is_some_and(|s| s.reaches_app(text)) => {
@@ -3527,7 +3688,8 @@ impl Model {
     pub fn update(&mut self, sent: impl Into<Envelope>) -> Vec<Effect> {
         let sent = self.space_click(sent.into());
         // A feature that is off is absent: its actions change nothing and ask for nothing.
-        if self.disabled(&sent.action).is_some() {
+        // Nor does a pane become a slot but by `SlotMake`.
+        if self.disabled(&sent.action).is_some() || sent.action.makes_slot_kind() {
             return Vec::new();
         }
         let (origin, line) = (sent.origin, self.compose_line().cloned());
@@ -3883,6 +4045,7 @@ impl Model {
         self.panes.iter_mut().filter(|pane| stale.contains(&pane.id)).for_each(|pane| pane.fit = None);
         self.mark_stuck();
         self.prune_unfilled();
+        self.settle_slots(&mut effects);
         self.settle_app_filter();
         self.settle_talk();
         // The inspector goes with its pane, and gives up the keyboard to an app that takes it.
@@ -4088,7 +4251,13 @@ impl Model {
                     }
                 }
             }
-            Action::Adopt { kind, beside } => {
+            Action::Adopt { kind, beside, seen } => {
+                // A slot's window, back or new to it, or one it offers: no new pane.
+                if let Some(seen) = seen.filter(|_| !self.by_user)
+                    && self.slot_adopt(&kind, seen, effects)
+                {
+                    return;
+                }
                 self.next_id += 1;
                 let id = self.next_id;
                 self.panes.push(Pane { id, kind, cwd: None, fit: None });
@@ -5449,6 +5618,17 @@ impl Model {
             | Action::AgentMenuClose
             | Action::AgentOfferAccept { .. }
             | Action::AppUsed { .. }) => self.agent_act(action, effects),
+            action @ (Action::SlotMake { .. }
+            | Action::SlotClear { .. }
+            | Action::SlotAccept { .. }
+            | Action::SlotDecline { .. }
+            | Action::SlotNext { .. }
+            | Action::SlotLookAgain { .. }
+            | Action::SlotGiveBack { .. }
+            | Action::SlotWindows { .. }
+            | Action::SlotHosted { .. }
+            | Action::SlotTick { .. }) => self.slot_act(action, effects),
+            Action::WindowGone { pane, app_running, at } => self.window_gone(pane, app_running, at, effects),
         }
     }
 
@@ -5995,7 +6175,7 @@ impl Model {
         for pane in &self.panes {
             let id = Some(pane.id as u32);
             match &pane.kind {
-                Kind::Empty => {}
+                Kind::Empty | Kind::Slot { .. } => {}
                 Kind::Terminal => {
                     let info = self.terminals.iter().find(|info| info.pane == pane.id);
                     let cwd = info.and_then(|info| info.cwd.clone()).or(pane.cwd.clone());
@@ -7414,7 +7594,7 @@ impl Model {
         let kind = match pane.kind {
             Kind::App { .. } => None,
             Kind::Terminal => Some("a terminal"),
-            Kind::Empty => Some("empty"),
+            Kind::Empty | Kind::Slot { .. } => Some("empty"),
         };
         if let Some(kind) = kind {
             return Some(format!("pane {id} is {kind}: fit is for an app pane whose window refused the pane's size"));
@@ -7451,6 +7631,7 @@ impl Model {
         let stale = |n: &crate::notice::Notice| matches!(n.kind, SettingsProblem | SettingsRetired | SettingsRestart);
         self.notice_hidden.retain(|n| !stale(n) || Some(&n.text) == line.as_ref());
         let Some(settings) = settings else { return };
+        self.window_rules = settings.windows.clone();
         self.act(Action::TasksView { view: settings.tasks_view.unwrap_or_default() }, effects);
         self.act(Action::SessionsRange { range: settings.sessions_range.unwrap_or_default() }, effects);
         self.act(Action::SessionQuiet { ms: settings.quiet_ms() }, effects);
@@ -7869,6 +8050,7 @@ impl Model {
         if self.listen.lost == Some(id) {
             self.listen.lost = None;
         }
+        self.slots.remove(&id);
         effects.push(Effect::Closed(closed));
     }
 
@@ -8052,7 +8234,7 @@ mod tests {
             Action::Tick { now: 1 },
             Action::SetApps { names: vec!["Notes".into()] },
             Action::SetRepos { repos: Vec::new() },
-            Action::Adopt { kind: app(7), beside: None },
+            Action::Adopt { kind: app(7), beside: None, seen: None },
             Action::Close { pane: Some(2) },
             Action::SneakDrawn { targets: controls(3) },
         ] {
@@ -8457,7 +8639,18 @@ mod tests {
         Action::AgentMenuChoose { .. },
         Action::AgentMenuClose,
         Action::AgentOfferAccept { .. },
-        Action::AppUsed { .. }
+        Action::AppUsed { .. },
+        Action::SlotMake { .. },
+        Action::SlotClear { .. },
+        Action::SlotAccept { .. },
+        Action::SlotDecline { .. },
+        Action::SlotNext { .. },
+        Action::SlotLookAgain { .. },
+        Action::SlotGiveBack { .. },
+        Action::SlotWindows { .. },
+        Action::SlotHosted { .. },
+        Action::SlotTick { .. },
+        Action::WindowGone { .. }
     );
 
     /// One of each action.
@@ -8466,7 +8659,7 @@ mod tests {
         let samples = vec![
             Action::Split { axis: Right, kind: Kind::Empty },
             Action::Open { kind: app(1), axis: Right, beside: None },
-            Action::Adopt { kind: app(1), beside: None },
+            Action::Adopt { kind: app(1), beside: None, seen: None },
             Action::DropPane { source: 1, target: 1, zone: Zone::Left },
             Action::PaneWants { pane: 1, content: [400., 600.], outer: [406., 638.], window: [520., 600.] },
             Action::Fit { pane: None },
@@ -8737,6 +8930,17 @@ mod tests {
             Action::AgentMenuClose,
             Action::AgentOfferAccept { pane: 1 },
             Action::AppUsed { task: 1, pane: 1, what: crate::agent_mode::AppUse::Read, refused: None, at: 0 },
+            Action::SlotMake { pane: 1, pid: 1, slot: crate::slot::Slot::default() },
+            Action::SlotClear { pane: 1 },
+            Action::SlotAccept { pane: 1 },
+            Action::SlotDecline { pane: 1 },
+            Action::SlotNext { pane: 1 },
+            Action::SlotLookAgain { pane: 1 },
+            Action::SlotGiveBack { pane: 1 },
+            Action::SlotWindows { look: crate::slot::Look::default() },
+            Action::SlotHosted { pane: 1, kind: None },
+            Action::SlotTick { at: 0 },
+            Action::WindowGone { pane: 9, app_running: true, at: 0 },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
         places.sort_unstable();
@@ -8794,6 +8998,29 @@ mod tests {
                 Some(crate::agent_mode::USERS_ALONE)
             }
             Action::AppUsed { .. } if origin == Origin::Socket => Some(crate::agent_mode::SHELLS_ALONE),
+            _ => None,
+        }
+    }
+
+    /// A slot made, filled or cleared: the user's alone. What a look found: the shell's.
+    fn slot_refused(action: &Action, origin: Origin) -> Option<&'static str> {
+        match action {
+            Action::SlotMake { .. }
+            | Action::SlotClear { .. }
+            | Action::SlotAccept { .. }
+            | Action::SlotDecline { .. }
+            | Action::SlotNext { .. }
+            | Action::SlotLookAgain { .. }
+            | Action::SlotGiveBack { .. } => Some(crate::slot::USERS_ALONE),
+            Action::SlotWindows { .. }
+            | Action::SlotHosted { .. }
+            | Action::SlotTick { .. }
+            | Action::WindowGone { .. }
+            | Action::Adopt { seen: Some(_), .. }
+                if origin == Origin::Socket =>
+            {
+                Some(crate::slot::SHELLS_ALONE)
+            }
             _ => None,
         }
     }
@@ -8961,6 +9188,7 @@ mod tests {
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
                     _ if listen_refused(action, origin).is_some() => listen_refused(action, origin),
                     _ if agent_refused(action, origin).is_some() => agent_refused(action, origin),
+                    _ if slot_refused(action, origin).is_some() => slot_refused(action, origin),
                     Action::TaskTalk { .. }
                     | Action::SessionOpen { .. }
                     | Action::TalkStart
@@ -9268,7 +9496,7 @@ mod tests {
         m.update(Action::Open { kind: app(1), axis: Right, beside: None });
         m.update(Action::Enter { pane: 1 });
         // DevTools opens while Chrome is live: the user keeps typing in Chrome.
-        assert_eq!(m.update(Action::Adopt { kind: app(2), beside: Some(1) }), [Effect::Opened(2)]);
+        assert_eq!(m.update(Action::Adopt { kind: app(2), beside: Some(1), seen: None }), [Effect::Opened(2)]);
         assert_eq!((m.focused, m.live, m.mode()), (Some(1), Some(1), Mode::App));
         assert_eq!(m.layout.as_ref().unwrap().neighbor(1, Dir::Right), Some(2));
     }
@@ -14629,7 +14857,7 @@ mod tests {
         m.update(Action::NewTab);
         term(&mut m);
         // DevTools appears for the app in the background tab.
-        m.update(Action::Adopt { kind: app(9), beside: Some(1) });
+        m.update(Action::Adopt { kind: app(9), beside: Some(1), seen: None });
         assert_eq!(m.layout.as_ref().unwrap().leaves(), [2]);
         m.update(Action::SelectTab { index: 0 });
         assert_eq!(m.layout.as_ref().unwrap().leaves(), [1, 3]);
@@ -15020,6 +15248,7 @@ mod tests {
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
                     _ if listen_refused(action, origin).is_some() => listen_refused(action, origin),
                     _ if agent_refused(action, origin).is_some() => agent_refused(action, origin),
+                    _ if slot_refused(action, origin).is_some() => slot_refused(action, origin),
                     Action::TaskTalk { .. }
                     | Action::SessionOpen { .. }
                     | Action::TalkStart

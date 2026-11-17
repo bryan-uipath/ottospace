@@ -12,6 +12,7 @@ import type {
   Feature,
   Listen,
   ListenLine,
+  Slot,
   CalendarReply,
   Meeting,
   TimeSpan,
@@ -386,6 +387,11 @@ function paneKind(value: unknown, at: string): PaneKind {
     // An app with no bundle (a bare binary) has no `bundle`.
     if (o.bundle !== undefined) app.bundle = str(o.bundle, `${at}.bundle`);
     return app;
+  }
+  if (o.type === "slot") {
+    const slot: PaneKind = { type: "slot", name: str(o.name, `${at}.name`) };
+    if (o.bundle !== undefined) slot.bundle = str(o.bundle, `${at}.bundle`);
+    return slot;
   }
   throw wrong(`${at}.type`, "a pane kind", o.type);
 }
@@ -1093,7 +1099,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 }
 
 function feature(value: unknown, at: string): Feature {
-  if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "agent_mode") return value;
+  if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
   throw wrong(at, "a feature", value);
 }
 
@@ -1366,6 +1372,16 @@ function model(value: unknown, at: string): Model {
     features: list(feature)(o.features, `${at}.features`),
     listen: orNull(listen)(o.listen, `${at}.listen`),
     agent_mode: agentMode(o.agent_mode, `${at}.agent_mode`),
+    slots: map(slot)(o.slots, `${at}.slots`),
+  };
+}
+
+function slot(value: unknown, at: string): Slot {
+  const o = fields(value, at);
+  return {
+    status: oneOf(["absent", "empty", "offered", "filled", "away"] as const, "a slot's status")(o.status, `${at}.status`),
+    matches: num(o.matches, `${at}.matches`),
+    matching: oneOf(["manual", "automatic"] as const, "a slot's matching")(o.matching, `${at}.matching`),
   };
 }
 
