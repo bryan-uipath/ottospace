@@ -1,5 +1,5 @@
-# Several tasks in one workspace: each ↵ in ⌘N joins it. The drawer's strip has a tab a task
-# (the front one wide, with its title), the top row their badges stacked.
+# Several tasks in one workspace: each ↵ in ⌘N joins it. The drawer's rail has an item a task
+# (the most urgent first, the front one lifted), the top row their badges stacked.
 {"click":"top:new_workspace"}
 {"cmd":"key","keys":"cmd-d","as":"user"}
 {"cmd":"key","keys":"cmd-n","as":"user"}
@@ -17,7 +17,7 @@
 {"cmd":"task_set_state","id":1,"state":"needs_you"}
 {"settle":700}
 {"shot":"three-tasks"}
-{"click":"strip:1"}
+{"click":"drawer-rail:1"}
 {"settle":500}
 {"shot":"the-first-in-front"}
 {"cmd":"key","keys":"cmd-n","as":"user"}
