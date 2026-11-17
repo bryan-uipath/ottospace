@@ -2340,6 +2340,29 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
     report(&format!("finder, live: {}", seen()));
     let (bx, by) = blank(live);
     report(&format!("finder, hosted: lost releases {:?}; {}", lost_releases(bx, by), seen()));
+    // Bisect: ottospace stopped (no polling, no frames taken), then stopped with the test asking
+    // Finder what ottospace asks each half second.
+    let signal = |s: &str| Command::new("kill").args([s, &otto.child.id().to_string()]).status().expect("kill");
+    signal("-STOP");
+    report(&format!("finder, hosted, ottospace stopped: lost {:?}", [lost_releases(bx, by), lost_releases(bx, by)]));
+    let polling = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let poller = {
+        let polling = polling.clone();
+        std::thread::spawn(move || {
+            while polling.load(std::sync::atomic::Ordering::Relaxed) {
+                for w in ottospace_mac::ax::Window::standard_of(pid) {
+                    let _ = (w.id(), w.subrole(), w.frame());
+                }
+                let _ = ottospace_mac::ax::Window::main_id(pid);
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        })
+    };
+    report(&format!("finder, hosted, stopped, AX polled: lost {:?}", [lost_releases(bx, by), lost_releases(bx, by)]));
+    polling.store(false, std::sync::atomic::Ordering::Relaxed);
+    let _ = poller.join();
+    signal("-CONT");
+    report(&format!("finder, hosted, running again: lost {:?}", lost_releases(bx, by)));
 
     // A real double-click on the folder inside opens it: Finder took the click.
     let icon = wait_for("the inner folder's icon", || icon_of(&inner));
