@@ -4670,6 +4670,7 @@ impl Workspace {
             self.dispatch(action, origin, window, cx);
             return;
         }
+        config::reread_repos();
         self.model.update(Action::SetRepoDirs { dirs: config::repo_dirs() }.sent_by(Origin::System));
         let before = self.model.repo_dirs.clone();
         self.error = None; // what the last try said is not about this one

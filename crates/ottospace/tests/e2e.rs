@@ -900,6 +900,12 @@ fn a_repository_is_added_by_the_user_kept_in_their_order_and_an_old_folder_is_on
     let reply = otto.user_key(&letters(&labels[&remove]));
     assert_eq!(names(&reply), ["zed", "app"]);
     assert_eq!(listed(), json!([dir("elsewhere/zed"), dir("old/app")]));
+    // An entry written by hand while it runs stays when the user adds one.
+    let by_hand = json!([dir("elsewhere/zed"), dir("old/app"), dir("elsewhere/web")]);
+    std::fs::write(home.join("settings.json"), json!({"repos": by_hand, "restore_layout": false}).to_string()).unwrap();
+    otto.user_key("escape");
+    assert_eq!(names(&add(&otto, &dir("old/api"))), ["zed", "app", "web", "api"]);
+    assert_eq!(listed(), json!([dir("elsewhere/zed"), dir("old/app"), dir("elsewhere/web"), dir("old/api")]));
 }
 
 #[test]

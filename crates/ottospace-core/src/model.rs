@@ -7449,8 +7449,10 @@ impl Model {
     /// selects its first row. Not a repository's own folder: a notice.
     fn repo_add(&mut self, dir: String, found: Vec<Repo>, effects: &mut Vec<Effect>) {
         let worktree = self.repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == dir));
+        // `OTTOSPACE_REPOS`'s folders list their repositories flat, with no entry of their own.
+        let fixed = self.repo_dirs.fixed && self.repos.iter().any(|r| r.path == dir);
         let repo = found.iter().any(|r| r.path == dir);
-        match self.repo_dirs.may_add(&dir, repo, worktree) {
+        match self.repo_dirs.may_add(&dir, repo, worktree || fixed) {
             Err(text) => return effects.push(Effect::Notice { text }),
             Ok(false) => {}
             Ok(true) => {
@@ -13671,6 +13673,12 @@ mod tests {
         assert_eq!(m.update(Action::RepoRemove { path: "/src/zed".into() }), saved);
         assert_eq!((m.repo_dirs.dirs.len(), m.repos.len(), m.repo_listed("/src/zed")), (1, 1, false));
         assert_eq!(m.update(Action::RepoRemove { path: "/src/zed".into() }), notice("zed is not in Repos"));
+        // `OTTOSPACE_REPOS` naming `/src`: its `zed` is listed, so selected, not refused.
+        let fixed = repos::RepoDirs { dirs: vec![dir("/src", "/src")], fixed: true, ..Default::default() };
+        m.update(Action::SetRepoDirs { dirs: fixed });
+        m.update(Action::SetRepos { repos: vec![repo("/src/zed")] });
+        m.update(Action::LeaveList);
+        assert_eq!((m.update(add("/src/zed", vec![repo("/src/zed")])), m.list), (vec![], Some(1)));
     }
 
     #[test]

@@ -944,6 +944,7 @@ function reposGroup(value: unknown, at: string): ReposGroup {
   return {
     name: str(o.name, `${at}.name`),
     path: str(o.path, `${at}.path`),
+    group: orNull(str)(o.group, `${at}.group`),
     header: orNull(rect)(o.header, `${at}.header`),
     folded: bool(o.folded, `${at}.folded`),
     rows: list(checkoutRow)(o.rows, `${at}.rows`),

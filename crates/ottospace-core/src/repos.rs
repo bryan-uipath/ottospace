@@ -70,7 +70,8 @@ impl RepoDirs {
 
     /// Why `dir` (resolved) cannot be added. `repo`: it is a repository's own folder (a linked
     /// worktree's is not). `Ok(false)`: listed already, as an entry of its own or (`listed`) as a
-    /// worktree of one. A repository listed only through a group is added: it leaves the group.
+    /// worktree of one, or of an `OTTOSPACE_REPOS` folder. A repository listed only through a group
+    /// is added: it leaves the group.
     pub fn may_add(&self, dir: &str, repo: bool, listed: bool) -> Result<bool, String> {
         match () {
             _ if !dir.starts_with('/') => Err(format!("Not a directory: {dir}")),

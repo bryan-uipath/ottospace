@@ -693,17 +693,21 @@ pub fn with_changes(text: &str, changes: &[ListChange]) -> Result<String, String
 /// it. `Err`: the file is not a JSON object, or its `repos` is not a list of entries: it is left
 /// alone, nothing in it dropped for not being understood.
 pub fn with_repos(text: &str, dirs: &[crate::repos::RepoDir]) -> Result<String, String> {
-    if let Some(now) = object(text)?.get("repos") {
-        serde_json::from_value::<Vec<RepoEntry>>(now.clone()).map_err(|_| {
-            "`repos` is not a list of repositories: [\"~/code/app\", {\"path\": \"~/code/web\", \"pinned\": true}]"
-                .to_string()
-        })?;
-    }
+    repos_of(text)?;
     let entry = |dir: &crate::repos::RepoDir| match dir.pinned {
         true => serde_json::json!({"path": dir.text, "pinned": true}),
         false => serde_json::json!(dir.text),
     };
     with_items(text, "repos", &dirs.iter().map(entry).collect::<Vec<_>>())
+}
+
+/// The settings file's `repos` as it is now (none: no key). `Err`: as `with_repos`'s.
+pub fn repos_of(text: &str) -> Result<Vec<RepoEntry>, String> {
+    let Some(now) = object(text)?.remove("repos") else { return Ok(Vec::new()) };
+    serde_json::from_value(now).map_err(|_| {
+        "`repos` is not a list of repositories: [\"~/code/app\", {\"path\": \"~/code/web\", \"pinned\": true}]"
+            .to_string()
+    })
 }
 
 /// `text` with its top-level `key` set to `value`: every other key, and the file's spacing, as
@@ -1220,6 +1224,11 @@ mod tests {
         // A `repos` that is not a list of entries is the user's to fix: never written over.
         assert!(with_repos(r#"{"repos": "~/code"}"#, &dirs).unwrap_err().starts_with("`repos` is not a list"));
         assert!(with_repos("[1]", &dirs).is_err());
+        // What the file names now, which an act on the list starts from.
+        let now = repos_of(r#"{"repos": ["/a", {"path": "/b", "pinned": true}]}"#).unwrap();
+        assert_eq!(now.iter().map(|e| (e.path(), e.pinned())).collect::<Vec<_>>(), [("/a", false), ("/b", true)]);
+        assert_eq!(repos_of("{}"), Ok(vec![]));
+        assert!(repos_of(r#"{"repos": "~/code"}"#).is_err());
     }
 
     #[test]

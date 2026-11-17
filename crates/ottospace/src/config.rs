@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::{fs, io};
 
 use ottospace_core::repos::{RepoDir, RepoDirs};
-use ottospace_core::settings::{ListChange, Settings, expand_home, with_changes, with_repos};
+use ottospace_core::settings::{ListChange, Settings, expand_home, repos_of, with_changes, with_repos};
 use ottospace_core::tasks::Task;
 use ottospace_sessions::ConfigDirs;
 
@@ -140,6 +140,15 @@ pub fn transcripts_dir() -> Option<PathBuf> {
 
 /// The settings' `repos` as the Repos section last changed them: each entry as named, and pinned.
 static NAMED: Mutex<Option<Vec<(String, bool)>>> = Mutex::new(None);
+
+/// The file's `repos` as it is now, for an act on the list to start from: an entry written by
+/// hand since the start stays. Not read (no file, not a list of entries): as before.
+pub fn reread_repos() {
+    let Some(Ok(entries)) = settings_text().map(|text| repos_of(&text)) else { return };
+    if let Ok(mut named) = NAMED.lock() {
+        *named = Some(entries.iter().map(|entry| (entry.path().to_string(), entry.pinned())).collect());
+    }
+}
 
 /// Where repositories are looked for now, on any thread: each entry's folder.
 pub fn repo_roots() -> Vec<PathBuf> {
