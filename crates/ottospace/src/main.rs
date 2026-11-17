@@ -83,6 +83,7 @@ mod keycaps;
 mod layout_file;
 mod listen;
 mod listen_file;
+mod listen_live;
 mod listen_meter;
 mod markdown;
 mod marks;
@@ -963,6 +964,8 @@ struct Workspace {
     listen_ending: Vec<listen_file::Writer>,
     /// What the transcript on hears now, for the meter and its label alone.
     listen_meter: Option<listen_meter::Meter>,
+    /// The transcript whose speech model the system is downloading, for its label.
+    listen_downloading: Option<String>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -1088,6 +1091,16 @@ impl Workspace {
 
         // ~60Hz tick: answer control calls, redraw on new frames, keep windows matched to panes.
         // Every ~500ms, also look for new and closed windows of hosted apps.
+        // Whether this Mac has the recogniser, asked once: then an app pane may be transcribed.
+        cx.spawn_in(window, async move |this, cx| {
+            let on = cx.background_executor().spawn(async { listen_live::available() }).await;
+            if let Some(on) = on {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.dispatch(Action::ListenAvailable { on }, Origin::System, window, cx)
+                });
+            }
+        })
+        .detach();
         cx.spawn_in(window, async move |this, cx| {
             for tick in 0u64.. {
                 cx.background_executor().timer(Duration::from_millis(16)).await;
@@ -1103,6 +1116,7 @@ impl Workspace {
                         this.poll_sessions(window, cx);
                         this.read_titles(cx);
                     }
+                    this.listen_menu_bar(window, cx);
                     // The green button, Window ▸ Zoom or a title bar double-click: only the user's hand.
                     if ottospace_mac::window::take_zoom() {
                         this.dispatch(Action::FillDisplay, Origin::User, window, cx);
@@ -1375,6 +1389,7 @@ impl Workspace {
             listen_file: None,
             listen_ending: Vec::new(),
             listen_meter: None,
+            listen_downloading: None,
             focus,
             _subscriptions: subscriptions,
         };
