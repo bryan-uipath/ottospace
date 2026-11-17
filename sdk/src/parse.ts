@@ -256,9 +256,14 @@ function railRow(value: unknown, at: string): Snapshot["drawer"]["rail"][number]
   const o = fields(value, at);
   const kind = o.kind;
   if (kind !== "transcript" && kind !== "task") throw wrong(`${at}.kind`, "transcript or task", kind);
+  const section = o.section;
+  if (section !== "workspace" && section !== "everywhere") {
+    throw wrong(`${at}.section`, "workspace or everywhere", section);
+  }
   return {
     kind,
     id: orNull(num)(o.id, `${at}.id`),
+    section,
     selected: bool(o.selected, `${at}.selected`),
     rect: orNull(rect)(o.rect, `${at}.rect`),
   };

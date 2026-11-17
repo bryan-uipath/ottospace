@@ -158,8 +158,11 @@ export type Focus =
 /** The rail cell that has the keyboard (in list mode): a section, or an item of the drawer's rail. */
 export type RailFocus = { left: Section } | { right: RailItem };
 
-/** An item of the drawer's rail: the transcript on, or a task. */
+/** An item of the drawer's rail: the transcript (idle or on), or a task. */
 export type RailItem = { kind: "transcript" } | { kind: "task"; id: TaskId };
+
+/** The drawer rail's parts: this workspace's tasks on top, what every workspace shows below. */
+export type RailSection = "workspace" | "everywhere";
 
 /** A heading of the Tasks section, in the order drawn. `open`: tasks with tabs open that do not need the user. */
 export type Heading = "needs_you" | "running" | "later" | "done" | "sessions";
@@ -1334,7 +1337,8 @@ export interface Snapshot {
   /** Test runs only: the transcript drawer's rows, the volatile lines last. Else null. */
   listen_lines: ListenLine[] | null;
   /** Test runs only: where a transcript's controls were drawn, by id (`listen-start:3`,
-   * `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-top:`, `listen-view`). Else null. */
+   * `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-view`,
+   * `listen-idle`, the off-show dot `listen-dot:space:<place>` or `listen-dot:tab:<id>`). Else null. */
   listen_rects: Record<string, Rect> | null;
   /** The marks, in the user's order. */
   marks: Mark[];
@@ -1373,11 +1377,18 @@ export interface Snapshot {
   drawer: {
     body: Rect | null;
     /**
-     * The drawer's rail, in order: the transcript on first, then this workspace's tasks, the most
-     * urgent first. Empty with fewer than two. `selected`: what the drawer shows (only the user
-     * changes it); `rect`: where it was drawn, or null. Never what was heard.
+     * The drawer's rail, top to bottom: this workspace's tasks, the most urgent first (`section`
+     * `workspace`), then below a divider the transcript, idle or on (`section` `everywhere`), while
+     * the `transcripts` flag is on and something could be heard. `selected`: what the drawer shows
+     * (only the user changes it); `rect`: where it was drawn, or null. Never what was heard.
      */
-    rail: { kind: "transcript" | "task"; id: TaskId | null; selected: boolean; rect: Rect | null }[];
+    rail: {
+      kind: "transcript" | "task";
+      id: TaskId | null;
+      section: RailSection;
+      selected: boolean;
+      rect: Rect | null;
+    }[];
     /** Its width in points as last drawn. */
     width: number;
     agents: Record<string, { model: string; ended: boolean; cols: number; rows: number; lines: string[] }>;

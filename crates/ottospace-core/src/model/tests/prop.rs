@@ -1702,7 +1702,19 @@ fn check(m: &Model) -> Result<(), String> {
         let paused = on.status == crate::listen::Status::Paused;
         ensure!(paused == on.paused_at.is_some(), "{:?} with a pause at {:?}", on.status, on.paused_at);
     }
-    ensure!(!m.listen.shown || m.listen.on.is_some(), "the drawer on no transcript");
+    ensure!(!m.listen.shown || m.listen_item(), "the drawer on a transcript the rail does not hold");
+    // The off-show dot: exactly while the pane heard is in a tab not on show, of a space on the
+    // row; on that tab if its space is selected, else on its space.
+    let holder = m.listen.pane().and_then(|pane| m.tab_panes().iter().position(|panes| panes.contains(&pane)));
+    let want = holder.filter(|at| *at != m.active).map(|at| &m.tabs[at]).and_then(|tab| {
+        let hidden = m.spaces().iter().any(|space| space.of == tab.space && space.hidden);
+        match (hidden, tab.space == *m.space()) {
+            (true, _) => None,
+            (false, true) => Some(crate::listen::Dot::Tab(tab.id)),
+            (false, false) => Some(crate::listen::Dot::Space(tab.space.clone())),
+        }
+    });
+    ensure!(m.listen_dot() == want, "the dot {:?}, not {want:?}", m.listen_dot());
     // A grey mark of a lost stream is of a pane that is there, with none on, the flag on.
     if let Some(lost) = m.listen.lost {
         ensure!(m.pane(lost).is_some() && m.listen.on.is_none(), "a lost mark on {lost} with {:?}", m.listen.on);
@@ -2411,24 +2423,22 @@ fn check_zones(m: &Model) -> Result<(), String> {
     if let Some(crate::model::zones::RailFocus::Right(item)) = m.rail_focus {
         ensure!(m.rail().contains(&item) && m.rail_drawn(), "the keyboard on {item:?}, not on a drawn rail");
     }
-    // The drawer's rail: two items or none; the transcript first while one is on, then the tasks
-    // by urgency, each once; the transcript selected while it is shown.
+    // The drawer's rail: this workspace's tasks by urgency, each once, then (below the divider)
+    // the transcript, there whenever it can be had; the transcript selected while it is shown.
     let rail = m.rail();
-    ensure!(rail.len() != 1, "a rail of one item");
     let task = |item: &RailItem| match item {
         RailItem::Task { id } => Some(*id),
         RailItem::Transcript => None,
     };
     let tasks: Vec<TaskId> = rail.iter().filter_map(task).collect();
     let transcript = rail.iter().position(|item| *item == RailItem::Transcript);
-    let placed = transcript.is_none_or(|at| at == 0);
-    ensure!(
-        placed && transcript.is_some() == (m.listen.on.is_some() && !rail.is_empty()),
-        "the transcript on {rail:?}"
-    );
+    let placed = transcript.is_none_or(|at| at + 1 == rail.len());
+    ensure!(placed && transcript.is_some() == m.listen_item(), "the transcript on {rail:?}");
+    let sections = rail.windows(2).all(|two| two[0].section() <= two[1].section());
+    ensure!(sections, "the rail's sections out of order: {rail:?}");
     let ordered = tasks.windows(2).all(|two| m.urgency(two[0]) <= m.urgency(two[1]));
     ensure!(unique(&tasks) && ordered, "the rail's tasks out of order: {tasks:?}");
-    if m.listen.shown && !rail.is_empty() {
+    if m.listen.shown {
         ensure!(m.rail_selected() == Some(RailItem::Transcript), "the transcript shown, the rail on {rail:?}");
     }
     Ok(())

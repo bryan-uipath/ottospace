@@ -36,6 +36,25 @@ impl Model {
         }
     }
 
+    /// Whether the rail holds the transcript, idle or on: the flag is on and something could be
+    /// heard (the recogniser is here, or a test run's fixture), or one is on.
+    pub fn listen_item(&self) -> bool {
+        let here = self.listen.available || self.listen.fixture || self.listen.on.is_some();
+        self.features.on(crate::features::Feature::Transcripts) && here
+    }
+
+    /// The red dot of the pane being heard, off show: none while its tab is on show (its header
+    /// has the dot), none for a source in no pane, and none in a hidden space (off the row).
+    pub fn listen_dot(&self) -> Option<listen::Dot> {
+        let pane = self.listen.pane()?;
+        let at = self.tab_panes().iter().position(|panes| panes.contains(&pane))?;
+        let tab = self.tabs.get(at).filter(|_| at != self.active)?;
+        if self.spaces().iter().any(|space| space.of == tab.space && space.hidden) {
+            return None;
+        }
+        Some(if tab.space == *self.space() { listen::Dot::Tab(tab.id) } else { listen::Dot::Space(tab.space.clone()) })
+    }
+
     /// The drawer shows the transcript only while nothing that takes keys is in it: the new-task
     /// box, the conversation with the keyboard and the editor take it back, so no key goes unseen.
     pub(crate) fn listen_hidden(&self) -> bool {
@@ -43,7 +62,7 @@ impl Model {
     }
 
     pub(super) fn settle_listen(&mut self) {
-        if self.listen_hidden() {
+        if self.listen_hidden() || !self.listen_item() {
             self.listen.shown = false;
         }
     }
@@ -94,12 +113,13 @@ impl Model {
                     self.listen.lost = None;
                 }
             }
-            // The top row's mark: the drawer on the transcript, in its pane's tab.
+            // The drawer on the transcript, idle or on (the pane's dot, the menu bar's Show): in
+            // its pane's tab while one is on.
             Action::ListenShow { on: true } => {
                 if let Some(pane) = self.listen.pane() {
                     self.show_tab_of(pane, effects);
-                    self.listen.shown = true;
                 }
+                self.listen.shown = self.listen_item();
             }
             Action::ListenShow { on: false } => self.listen.shown = false,
             // The shell's alone: a key or click of the user's reports nothing.
@@ -334,6 +354,28 @@ mod tests {
         assert_eq!(m.update(toggle(3)), [Effect::Notice { text: listen::FOCUS_APP.into() }]);
     }
 
+    /// The owner: "we show the record + time in 3 spots". The pane's own dot while its tab is on
+    /// show; off show, a dot on its tab (its space selected) or on its space in the top row.
+    #[test]
+    fn the_dot_marks_the_tab_or_space_of_the_pane_heard_only_while_it_is_off_show() {
+        let mut m = model();
+        m.update(start(2));
+        assert_eq!(m.listen_dot(), None, "on show: the pane's header has it");
+        let (tab, space) = (m.tabs[m.active].id, m.space().clone());
+        m.update(Action::NewTab);
+        assert_eq!(m.listen_dot(), Some(listen::Dot::Tab(tab)));
+        m.update(Action::WorkbookNew { uid: "00000000000000a1".into() });
+        assert_ne!(*m.space(), space);
+        assert_eq!(m.listen_dot(), Some(listen::Dot::Space(space)));
+        // Its pane's dot shows it: on show again, no dot elsewhere.
+        m.update(Action::ListenShow { on: true });
+        assert_eq!(m.listen_dot(), None);
+        // None on, none anywhere.
+        m.update(Action::NewTab);
+        m.update(Action::ListenStop { at: 5_000 });
+        assert_eq!(m.listen_dot(), None);
+    }
+
     #[test]
     fn closing_the_pane_ends_it_and_a_client_cannot() {
         let mut m = model();
@@ -350,7 +392,8 @@ mod tests {
         // The shell's close (its window is gone) and the user's end it.
         let effects = m.update(Action::Close { pane: Some(2) }.sent_by(Origin::System));
         assert!(effects.contains(&Effect::ListenClose { id: "t2".into() }), "{effects:?}");
-        assert!(m.listen.on.is_none() && !m.listen.shown);
+        // The drawer stays on the transcript, idle.
+        assert!(m.listen.on.is_none() && m.listen.shown);
     }
 
     #[test]

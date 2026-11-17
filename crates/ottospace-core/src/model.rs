@@ -1552,7 +1552,7 @@ pub enum Action {
     ListenStop {
         at: u64,
     },
-    /// The drawer on the transcript (the top row's mark selects its pane's tab), or off it.
+    /// The drawer on the transcript, idle or on (one on: its pane's tab selected), or off it.
     ListenShow {
         on: bool,
     },
@@ -5633,6 +5633,10 @@ impl Model {
                 if let Some(talk) = &mut self.talk {
                     talk.open = false;
                 }
+            }
+            // No conversation here: ⌘⇧L opens the drawer on the transcript, the rail beside it.
+            Action::TalkToggle if self.talk.is_none() && self.by_user => {
+                self.listen_act(Action::ListenShow { on: true }, effects)
             }
             Action::TalkToggle => {
                 if let Some(open) = self.talk.as_ref().map(|talk| !talk.open) {
@@ -10500,8 +10504,8 @@ mod tests {
             (m.members(&of), m.front(&of), m.task_space(4), m.task_space(5)),
             (vec![1, 2, 3], Some(3), task_space(4), task_space(5))
         );
-        // A workspace of one task has no rail.
-        assert_eq!(rail_tasks(&workspace_of_one_task()), Vec::<TaskId>::new());
+        // A workspace of one task: the rail still shows it.
+        assert_eq!(rail_tasks(&workspace_of_one_task()), [1]);
     }
 
     #[test]
@@ -10561,7 +10565,7 @@ mod tests {
         m.update(Action::TalkFront { task: 2 });
         assert_eq!(rail_tasks(&m), [1, 2]);
         m.update(Action::TaskSetState { id: 2, state: State::Done });
-        assert_eq!((m.front(&of), rail_tasks(&m)), (Some(1), vec![]));
+        assert_eq!((m.front(&of), rail_tasks(&m)), (Some(1), vec![1]));
         m.update(state(2, State::Running));
         // The front one dismissed, by anyone: the most urgent remaining.
         m.update(Action::TalkFront { task: 2 });
@@ -13130,6 +13134,22 @@ mod tests {
     fn resumed(subject: Subject, runner: &str, id: &str, cwd: &str) -> Effect {
         let start = agents::Start::Resume { runner: RunnerId::named(runner).unwrap(), session: id.into() };
         Effect::StartAgent { task: subject, start, cwd: Some(cwd.into()), brief: None }
+    }
+
+    /// A session's space: no task, so nothing in front; ⌘⌥] / ⌘⌥[ still reach the transcript.
+    #[test]
+    fn in_a_sessions_space_the_rail_keys_start_from_the_top_or_the_foot() {
+        use crate::model::rail::RailItem;
+        let mut m = conversations();
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::ListenFixture.sent_by(Origin::System));
+        m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() });
+        assert_eq!((m.rail(), m.rail_selected(), m.rail_drawn()), (vec![RailItem::Transcript], None, true));
+        m.update(Action::TalkCycle { delta: 1 });
+        assert_eq!(m.rail_selected(), Some(RailItem::Transcript));
+        m.listen.shown = false;
+        m.update(Action::TalkCycle { delta: -1 });
+        assert_eq!(m.rail_selected(), Some(RailItem::Transcript));
     }
 
     /// A session another terminal holds is watched, read-only: what it did, no card, no turn;
