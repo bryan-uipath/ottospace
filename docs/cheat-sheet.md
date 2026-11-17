@@ -40,7 +40,7 @@ ottospace            # opens on the Repos list
 | Switch tab (of the task on show) | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
 | Switch task or workspace (top row) | ⌘⌃1 … ⌘⌃9 · ⌘⌃] ⌘⌃[ |
 | Go to Home (the house, first on the top row) | ⌘⌃1, or Go to Home in the palette |
-| Switch conversation in a workspace of several tasks | The strip over the drawer (a tab a task; + adds one) · ⌘⌥] ⌘⌥[ |
+| Switch what the drawer shows (several tasks, or a task and a running transcript) | The rail at the drawer's right edge (the transcript first, then the tasks by urgency; + adds a task) · ⌘⌥] ⌘⌥[ |
 | New workspace | + on the top row, or in the Workspaces section's header |
 | Hide the task or workspace on show | ⌘⌃W, or its × on the top row. Its row in Tasks or Workspaces opens it again |
 | Close the tab and its panes | ⌘⇧W |

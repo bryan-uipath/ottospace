@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Action, Effect, Envelope, Host, Kind, Model, Origin, Tab};
 use crate::talk::{Subject, Talk};
-use crate::tasks::{State, TaskId};
+use crate::tasks::TaskId;
 use crate::workbook::WorkbookId;
 
 /// Whose a space is.
@@ -85,8 +85,6 @@ pub struct SpaceRow {
     pub tasks: Vec<TaskId>,
     /// The task whose conversation is in front, if it has a task.
     pub front: Option<TaskId>,
-    /// The tabs of the drawer's strip while it is selected, in order. Empty: no strip.
-    pub strip: Vec<TaskId>,
     /// Its default worktree, while listed: where its new terminals and tasks start.
     pub worktree: Option<String>,
     /// What its item on the top row shows before its name.
@@ -162,7 +160,6 @@ impl Model {
             tabs: self.space_tabs(&space.of).into_iter().filter(|at| self.tabs[*at].id != HOME_TAB).collect(),
             tasks: self.space_tasks(&space.of),
             front: self.front(&space.of),
-            strip: self.strip(&space.of),
             worktree: self.space_worktree(&space.of).map(String::from),
             glyph: self.glyph(&space.of),
             kept: self.space_kept(&space.of),
@@ -223,15 +220,6 @@ impl Model {
         tasks
     }
 
-    /// The tabs of the drawer's strip: the space's tasks in the order they came, those done left
-    /// out but the one in front. Fewer than two: no strip.
-    pub fn strip(&self, of: &Owner) -> Vec<TaskId> {
-        let front = self.front(of);
-        let done = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| task.state == State::Done);
-        let tabs: Vec<TaskId> = self.members(of).into_iter().filter(|id| Some(*id) == front || !done(id)).collect();
-        if tabs.len() > 1 { tabs } else { Vec::new() }
-    }
-
     /// The task in front in a space: the one set, while it is in it, else the space's own.
     pub fn front(&self, of: &Owner) -> Option<TaskId> {
         let members = self.members(of);
@@ -268,16 +256,6 @@ impl Model {
         if let Some(space) = self.spaces.iter_mut().find(|space| space.of == of) {
             space.front = Some(task);
         }
-    }
-
-    /// The next (positive) or previous conversation of the selected space's strip. It wraps.
-    pub(crate) fn cycle_front(&mut self, delta: i32) {
-        let strip = self.strip(self.space());
-        let Some(at) = self.front(self.space()).and_then(|front| strip.iter().position(|id| *id == front)) else {
-            return;
-        };
-        let to = (at as i64 + i64::from(delta)).rem_euclid(strip.len() as i64) as usize;
-        self.set_front(strip[to]);
     }
 
     /// A space's name: its task's title, its session's, its workbook's.

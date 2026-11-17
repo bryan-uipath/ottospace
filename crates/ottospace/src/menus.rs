@@ -88,8 +88,8 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 item("Go to Home", GoHome),
                 item("Next Tab Group", NextSpace),
                 item("Previous Tab Group", PrevSpace),
-                item("Next Conversation in This Workspace", NextChat),
-                item("Previous Conversation in This Workspace", PrevChat),
+                item("Next in the Drawer's Rail", NextChat),
+                item("Previous in the Drawer's Rail", PrevChat),
                 item("Hide", HideSpace),
             ])
             .collect(),
