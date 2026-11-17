@@ -135,9 +135,9 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     scrollbars: {},
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
     spaces: [
-      { of: { kind: "home" }, hidden: false, selected: false, tabs: [], tasks: [], front: null, worktree: null, glyph: { kind: "home" } },
-      { of: { kind: "workbook", id: 1 }, hidden: false, selected: true, tabs: [0], tasks: [], front: null, worktree: "/code/app", glyph: { kind: "app", name: "Notes" } },
-      { of: { kind: "task", id: 1 }, hidden: true, selected: false, tabs: [1], tasks: [1], front: 1, worktree: null, glyph: { kind: "tasks" } },
+      { of: { kind: "home" }, hidden: false, selected: false, tabs: [], tasks: [], front: null, worktree: null, glyph: { kind: "home" }, kept: true },
+      { of: { kind: "workbook", id: 1 }, hidden: false, selected: true, tabs: [0], tasks: [], front: null, worktree: "/code/app", glyph: { kind: "app", name: "Notes" }, kept: true },
+      { of: { kind: "task", id: 1 }, hidden: true, selected: false, tabs: [1], tasks: [1], front: 1, worktree: null, glyph: { kind: "tasks" }, kept: true },
     ],
     badges: { "1": "FL" },
     calendar: {

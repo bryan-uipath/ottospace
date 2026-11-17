@@ -43,6 +43,7 @@ use ottospace_core::model::zones::RailFocus;
 use ottospace_core::model::{CONFIRM_UP, Glyph, Owner, TabAt};
 use ottospace_core::notice::{self, Notice};
 use ottospace_core::repos::{Checkout, Repo};
+use ottospace_core::row_menu::MenuOf;
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::scrollbar::{Extent, key_step};
 use ottospace_core::settings::Installed;
@@ -697,8 +698,9 @@ actions!(ottospace, [Cut, SelectAll, Undo, Redo]);
 actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, NewTask, NextTask]);
 // Marks: mark the focused pane or the tab on show, and the jump prefix.
 actions!(ottospace, [MarkPane, MarkTab, MarkJump]);
-// Save the tab on show as a workbook, add it to one, or save all the tabs as one.
-actions!(ottospace, [SaveWorkbook, AddTabToWorkbook, SaveAllWorkbook]);
+// Save the tab on show as a workbook, add it to one, or save all the tabs as one; keep the
+// selected temporary workspace.
+actions!(ottospace, [SaveWorkbook, AddTabToWorkbook, SaveAllWorkbook, KeepWorkbook]);
 // The repository of the focused pane's folder, to the Repos list.
 actions!(ottospace, [AddToRepos]);
 // The next start is empty: the layout is not kept this run.
@@ -952,6 +954,9 @@ struct Workspace {
     row_hovered: Option<ottospace_core::list::ListRow>,
     /// A key closed a row's menu: held on, it is not for what was under the menu.
     row_menu_spent: bool,
+    /// What a tick with no window brought (`tick_now`), carried out at the next dispatch: a
+    /// closed temporary workspace's panes, its Undo run out.
+    held_effects: Vec<Effect>,
     kept_layout: layout_file::Kept,
     /// `keys.json` as last read and written.
     kept_keys: key_use::Kept,
@@ -1233,8 +1238,9 @@ impl Workspace {
                             this.host_launched(window, cx);
                             this.refresh_inspector(window, cx);
                             // A snoozed task returns when its time comes, and the offer to undo goes.
+                            // A dispatch also carries out what a tick with no window held.
                             let now = now_ms();
-                            if this.model.due(now) {
+                            if this.model.due(now) || !this.held_effects.is_empty() {
                                 this.dispatch(Action::Tick { now }, Origin::System, window, cx);
                                 cx.notify();
                             }
@@ -1477,6 +1483,7 @@ impl Workspace {
             kept_workbooks: workbook::Kept::default(),
             row_hovered: None,
             row_menu_spent: false,
+            held_effects: Vec::new(),
             kept_layout: layout_file::Kept::default(),
             kept_keys: key_use::Kept::default(),
             caps_drawn: Cell::default(),
@@ -1644,6 +1651,10 @@ impl Workspace {
         // A brief that shows is read from its task's folder, once.
         if let Some(task) = self.model.brief {
             self.brief_of(task);
+        }
+        let held = std::mem::take(&mut self.held_effects);
+        if !held.is_empty() {
+            self.with_origin(Origin::System, |this| this.carry_out(&held, window, cx));
         }
         // What an effect dispatches in turn (a picked app's pane, a label's control) has the same sender.
         self.with_origin(origin, |this| this.carry_out(&effects, window, cx));
@@ -4255,9 +4266,13 @@ impl Workspace {
     }
 
     /// Tells the core the time now, and gives a meeting alert that time brought (`Effect::MeetingAlert`).
+    /// The rest (a closed workspace's panes) waits for the next dispatch, which has a window.
     fn tick_now(&mut self) {
         for effect in self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System)) {
             self.meeting_effect(&effect);
+            if !matches!(effect, Effect::MeetingAlert { .. } | Effect::OpenLink { .. }) {
+                self.held_effects.push(effect);
+            }
         }
     }
 
@@ -5911,7 +5926,11 @@ impl Workspace {
             let of = space.of.clone();
             let on = of == selected;
             let small = of == Owner::Home || (compact && !on);
-            let tip: SharedString = self.model.space_title(&of).into();
+            // A temporary workspace's name is muted; its tip says it closes without saving.
+            let temporary = !self.model.space_kept(&of);
+            let title = self.model.space_title(&of);
+            let tip: SharedString =
+                if temporary { format!("{title} · {}", workbook::TEMPORARY_TIP) } else { title.clone() }.into();
             let colour = self.space_colour(&of);
             let count = self.model.space_tabs(&of).len();
             // Home's house, a task's badge, a lone app's icon, a workbook's glyph; a session's chat
@@ -5963,12 +5982,46 @@ impl Workspace {
                     .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
                     .child("×")
                     .child(self.controls.mark(format!("space-hide:{place}")))
-                    .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("Hide (⌘⌃W): nothing in it stops".into()))))
+                    .tooltip(move |_, cx| {
+                        // A temporary workspace's × discards it, Undo aside.
+                        let tip = if temporary {
+                            "Close (⌘⌃W): not kept, Undo on the notice bar"
+                        } else {
+                            "Hide (⌘⌃W): nothing in it stops"
+                        };
+                        AnyView::from(cx.new(|_| Tooltip(tip.into())))
+                    })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
-                        this.dispatch(Action::SpaceHide { index: Some(place) }, this.input, window, cx);
+                        this.hide_space(Some(place), window, cx);
                     }))
             });
+            // A temporary workspace's …: its menu, Keep (`MenuOf::Space`).
+            let dots = match &of {
+                Owner::Workbook { id } if temporary && !small => {
+                    let (id, control) = (*id, format!("space-menu:{id}"));
+                    let open = self.model.row_menu().is_some_and(|(menu, _)| menu.row == MenuOf::Space(id));
+                    Some(
+                        div()
+                            .id(ElementId::Name(control.clone().into()))
+                            .flex_none()
+                            .px_1()
+                            .rounded_sm()
+                            .text_color(rgb(theme::MUTED))
+                            .opacity(if on || open { 0.8 } else { 0.0 })
+                            .group_hover("space", |s| s.opacity(0.8))
+                            .when(open, |d| d.bg(rgb(theme::SELECTED)))
+                            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+                            .child("…")
+                            .child(self.controls.mark(control))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation(); // not a click on the space
+                                this.open_row_menu(MenuOf::Space(id), false, window, cx);
+                            })),
+                    )
+                }
+                _ => None,
+            };
             let to = of.clone();
             div()
                 .id(("space", place))
@@ -5978,7 +6031,11 @@ impl Workspace {
                 // The selected space keeps its name; the others give way first.
                 .when(!small, |d| d.min_w(px(MIN_SPACE)).max_w(px(MAX_SPACE)).flex_shrink())
                 .when(on && compact && !small, |d| d.min_w(px(selected_width)))
-                .when(small, |d| d.flex_none().tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))))
+                .when(small || temporary, |d| {
+                    let tip = tip.clone();
+                    d.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
+                })
+                .when(small, |d| d.flex_none())
                 .overflow_hidden()
                 .pl_3()
                 .pr_1()
@@ -5998,11 +6055,15 @@ impl Workspace {
                 .hover(|s| s.text_color(rgb(theme::TEXT)))
                 .child(mark(&self.marks, Mark::Space(place)))
                 .children(lead)
-                .children((!small).then(|| cut_text(self.model.space_title(&of)).flex_1()))
+                .children((!small).then(|| {
+                    let name = cut_text(title).flex_1();
+                    if temporary { name.text_color(rgb(theme::MUTED)) } else { name }
+                }))
                 .children(
                     (count > 1 && !small)
                         .then(|| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(count.to_string())),
                 )
+                .children(dots)
                 .children(hide.filter(|_| !small))
                 .child(self.controls.mark(format!("space:{place}")))
                 // A tab dropped on a space moves there.
@@ -6259,6 +6320,7 @@ impl Workspace {
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.dismiss.is_some()) => ("DISMISS?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.unlist.is_some()) => ("UNLIST?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.paste.is_some()) => ("PASTE?", ""),
+            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.close.is_some()) => ("CLOSE?", ""),
             Mode::Confirm => ("QUIT?", ""),
             // The capture bar lists the annotate keys.
             Mode::Annotate => ("ANNOTATE", ""),
@@ -6886,6 +6948,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &SaveWorkbook, window, cx| this.save_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &AddTabToWorkbook, window, cx| this.pick_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &SaveAllWorkbook, window, cx| this.save_all_workbook(window, cx)))
+            .on_action(cx.listener(|this, _: &KeepWorkbook, window, cx| this.keep_workspace(window, cx)))
             .on_action(cx.listener(|this, _: &AddToRepos, window, cx| this.add_focused_folder(window, cx)))
             .on_action(cx.listener(|this, _: &StartFresh, window, cx| {
                 drop(this.dispatch(Action::StartFresh, this.input, window, cx))
@@ -6944,7 +7007,7 @@ impl Render for Workspace {
                 this.dispatch(Action::TalkCycle { delta: -1 }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &HideSpace, window, cx| {
-                this.dispatch(Action::SpaceHide { index: None }, this.input, window, cx);
+                this.hide_space(None, window, cx);
             }))
             .on_action(cx.listener(|this, _: &GoHome, window, cx| {
                 this.dispatch(Action::SpaceSelect { index: 0 }, this.input, window, cx);

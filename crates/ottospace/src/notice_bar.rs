@@ -5,7 +5,7 @@
 use std::time::Instant;
 
 use gpui::{AnyView, App, Context, Div, MouseButton, SharedString, Window, div, prelude::*, px, rgb};
-use ottospace_core::model::Action;
+use ottospace_core::model::{Action, Origin};
 use ottospace_core::notice::{self, Kind, Notice, Offer};
 use ottospace_core::theme;
 
@@ -115,7 +115,12 @@ impl Workspace {
             Some((id, _)) => Action::CalendarDismiss { id },
             None => Action::NoticeDismiss { notice: shown.kind, text: shown.text },
         };
+        let undo = shown.kind == Kind::Undo;
         self.dispatch(action, self.input, window, cx);
+        // A closed temporary workspace's offer ended: it goes now, not at the next tick.
+        if undo {
+            self.dispatch(Action::Tick { now: crate::now_ms() }, Origin::System, window, cx);
+        }
         cx.notify();
         true
     }

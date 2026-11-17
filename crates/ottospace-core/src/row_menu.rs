@@ -2,14 +2,16 @@
 //! at a time, the user's alone; any other move of the user's closes it, and so does its … moving
 //! (the list under it changed). It holds the keyboard: ↓ ↑ move, ↵ takes, any other key closes.
 //! No item has a letter: a key meant for what is behind the menu must never delete.
-//! Today a workspace's row and its tabs' rows have one, and so has the drawer's transcript
-//! header (its ⋯: Pause or Resume); another row gets one by naming its items in `row_items`.
+//! Today a workspace's row and its tabs' rows have one, a temporary workspace's item on the top
+//! row (Keep), and the drawer's transcript header (its ⋯: Pause or Resume); another row gets one
+//! by naming its items in `row_items`.
 
 use serde::Serialize;
 
 use crate::layout::Rect;
 use crate::list::ListRow;
-use crate::model::{Action, Model};
+use crate::model::{Action, Model, Owner};
+use crate::workbook::WorkbookId;
 
 /// Why a client's request that takes the keyboard waits: the user's keys are in a row's menu.
 pub const MENU_OPEN: &str = "a row's menu is open";
@@ -22,6 +24,8 @@ pub enum Item {
     Delete,
     /// A tab out of its workspace.
     Remove,
+    /// A temporary workspace kept.
+    Keep,
     /// The transcript on: its streams stop, or start again.
     Pause,
     Resume,
@@ -33,16 +37,19 @@ impl Item {
             Item::Rename => "Rename",
             Item::Delete => "Delete",
             Item::Remove => "Remove",
+            Item::Keep => "Keep",
             Item::Pause => "Pause",
             Item::Resume => "Resume",
         }
     }
 }
 
-/// Whose menu it is: a row of the bar's, or the drawer's transcript header's.
+/// Whose menu it is: a row of the bar's, a workspace's item on the top row, or the drawer's
+/// transcript header's.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MenuOf {
     Row(ListRow),
+    Space(WorkbookId),
     Transcript,
 }
 
@@ -91,7 +98,14 @@ impl Model {
     /// while paused, none while it starts or with none shown.
     pub fn menu_items(&self, of: &MenuOf) -> &'static [Item] {
         match of {
+            // A temporary workspace offers Keep.
+            MenuOf::Row(ListRow::Workbook(id)) if !self.workbooks.is_kept(*id) => {
+                &[Item::Rename, Item::Keep, Item::Delete]
+            }
             MenuOf::Row(row) => row_items(row),
+            // On the top row: Keep, while it is temporary.
+            MenuOf::Space(id) if !self.workbooks.is_kept(*id) => &[Item::Keep],
+            MenuOf::Space(_) => &[],
             // One decision with the palette's and the menu bar's (`listen_pause_action`).
             MenuOf::Transcript => match self.listen_pause_action(0).filter(|_| self.listen.shown) {
                 Some(Action::ListenPause { .. }) => &[Item::Pause],
@@ -105,6 +119,7 @@ impl Model {
     fn menu_there(&self, of: &MenuOf) -> bool {
         let there = match of {
             MenuOf::Row(row) => self.list_rows().contains(row),
+            MenuOf::Space(id) => self.shown_spaces().iter().any(|space| space.of == Owner::Workbook { id: *id }),
             MenuOf::Transcript => true,
         };
         there && !self.menu_items(of).is_empty()
@@ -146,13 +161,14 @@ impl Model {
         let (workbook, tab) = match (&menu.row, item) {
             (_, Item::Pause) => return Some(Action::ListenPause { at }),
             (_, Item::Resume) => return Some(Action::ListenResume { at }),
-            (MenuOf::Row(ListRow::Workbook(id)), _) => (*id, None),
+            (MenuOf::Row(ListRow::Workbook(id)) | MenuOf::Space(id), _) => (*id, None),
             (MenuOf::Row(ListRow::WorkbookTab(id, at)), _) => (*id, Some(*at)),
             _ => return None,
         };
         match item {
             Item::Rename => Some(Action::WorkbookEdit { workbook, tab }),
             Item::Delete | Item::Remove => Some(Action::WorkbookRemove { workbook, tab }),
+            Item::Keep => Some(Action::WorkbookKeep { workbook }),
             Item::Pause | Item::Resume => None,
         }
     }
@@ -169,6 +185,7 @@ impl Model {
         match action {
             Action::WorkbookEdit { workbook, tab } => self.workbook_edit(workbook, tab),
             Action::WorkbookRemove { workbook, tab } => self.workbook_remove(workbook, tab),
+            Action::WorkbookKeep { workbook } => self.workbook_keep(workbook),
             action @ (Action::ListenPause { .. } | Action::ListenResume { .. }) => self.listen_act(action, effects),
             _ => {}
         }
@@ -195,10 +212,11 @@ mod tests {
     const UID_2: &str = "1b7c0e9a55d2f346";
     const DOTS: Option<Rect> = Some(Rect { x: 280., y: 150., w: 20., h: 16. });
 
-    /// One workspace, "Workspace 2", its section open.
+    /// One kept workspace, "Workspace 2", its section open.
     fn listed() -> Model {
         let mut m = Model::default();
         m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::WorkbookKeep { workbook: 1 });
         m.update(Action::ToggleSection { section: Section::Workbook });
         m
     }
@@ -384,11 +402,52 @@ mod tests {
         assert!(m.row_menu().is_none() && m.picker.is_some());
     }
 
+    /// A temporary workspace's menu offers Keep, the user's alone; kept, it offers no more.
+    #[test]
+    fn a_temporary_workspaces_menu_keeps_it_and_a_kept_ones_has_no_keep() {
+        let mut m = Model::default();
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::ToggleSection { section: Section::Workbook });
+        m.update(open(ListRow::Workbook(1), true));
+        let items = |m: &Model| m.row_menu().map(|(_, items)| items.to_vec()).unwrap_or_default();
+        assert_eq!(items(&m), [Item::Rename, Item::Keep, Item::Delete]);
+        assert_eq!(m.row_menu_action(Some(1)), Some(Action::WorkbookKeep { workbook: 1 }));
+        // A client's Keep is refused: the file is the user's.
+        let theirs = Action::WorkbookKeep { workbook: 1 }.sent_by(Origin::Socket);
+        assert_eq!(m.refusal(&theirs.action, theirs.origin), Some(USERS_ALONE));
+        m.update(theirs);
+        assert!(!m.workbooks.is_kept(1));
+        m.update(Action::RowMenuChoose { index: Some(1) });
+        assert!(m.workbooks.is_kept(1) && m.row_menu().is_none());
+        m.update(open(ListRow::Workbook(1), true));
+        assert_eq!(items(&m), [Item::Rename, Item::Delete]);
+    }
+
+    /// A temporary workspace's item on the top row has a … too: Keep. Kept or off the row, none.
+    #[test]
+    fn a_temporary_workspaces_item_on_the_top_row_offers_keep() {
+        let mut m = Model::default();
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::RowMenu { row: MenuOf::Space(1), dots: DOTS, keys: true });
+        let items = |m: &Model| m.row_menu().map(|(_, items)| items.to_vec()).unwrap_or_default();
+        assert_eq!(items(&m), [Item::Keep]);
+        m.update(Action::RowMenuChoose { index: None });
+        assert!(m.workbooks.is_kept(1) && m.row_menu().is_none());
+        m.update(Action::RowMenu { row: MenuOf::Space(1), dots: DOTS, keys: true });
+        assert!(m.row_menu().is_none());
+        // Off the row (a client's × leaves it listed): no menu there.
+        m.update(Action::WorkbookNew { uid: UID_2.into() });
+        m.update(Action::SpaceHide { index: None }.sent_by(Origin::Socket));
+        m.update(Action::RowMenu { row: MenuOf::Space(2), dots: DOTS, keys: true });
+        assert!(m.row_menu().is_none());
+    }
+
     /// Review: Rename from the menu did nothing, and said nothing, where a name cannot be typed.
     #[test]
     fn what_an_item_stands_for_is_the_action_the_shell_asks_about() {
         let mut m = listed();
         m.update(Action::WorkbookNew { uid: UID_2.into() });
+        m.update(Action::WorkbookKeep { workbook: 2 });
         m.update(Action::WorkbookFold { workbook: 1 });
         m.update(open(ListRow::Workbook(2), true));
         assert_eq!(m.row_menu_action(None), Some(Action::WorkbookEdit { workbook: 2, tab: None }));
