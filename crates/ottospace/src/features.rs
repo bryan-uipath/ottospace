@@ -54,7 +54,7 @@ impl Workspace {
 
     fn set_features(&mut self, features: Features, cx: &mut App) {
         let effects = self.model.update(Action::SetFeatures { features }.sent_by(Origin::System));
-        self.listen_ended(&effects);
+        self.listen_ended(&effects, cx);
         cx.set_menus(menus::app_menus(&self.model.features));
     }
 

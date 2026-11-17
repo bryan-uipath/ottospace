@@ -5,14 +5,16 @@ use super::{Action, Effect, Kind, Model, PaneId};
 use crate::listen::{self, Record, Source, Status};
 
 impl Model {
-    /// Why `pane` cannot be heard now, if it cannot. Slice 1 has no audio: only a test run's
-    /// fixture is a source, and then a terminal pane stands in for an app's (a test run hosts none).
+    /// Why `pane` cannot be heard now, if it cannot. An app pane, where the recogniser is here
+    /// (`ListenAvailable`). A test run's fixture is a source too, and then a terminal pane stands
+    /// in for an app's (a test run hosts none).
     pub fn listen_refusal(&self, pane: Option<PaneId>) -> Option<&'static str> {
         let kind = pane.and_then(|pane| self.pane(pane)).map(|pane| &pane.kind);
+        let (fixture, available) = (self.listen.fixture, self.listen.available);
         match kind {
             None | Some(Kind::Empty) => Some(listen::FOCUS_APP),
-            Some(Kind::Terminal) if !self.listen.fixture => Some(listen::FOCUS_APP),
-            Some(_) if !self.listen.fixture => Some(listen::NO_SOURCE),
+            Some(Kind::Terminal) if !fixture => Some(listen::FOCUS_APP),
+            Some(Kind::App { .. }) if !fixture && !available => Some(listen::NO_SOURCE),
             Some(_) => None,
         }
     }
@@ -93,6 +95,7 @@ impl Model {
             // The shell's alone: a key or click of the user's reports nothing.
             _ if self.by_user => {}
             Action::ListenFixture => self.listen.fixture = true,
+            Action::ListenAvailable { on } => self.listen.available = on,
             Action::ListenBegan { id, at } => self.listen.began(&id, at),
             // A batch, on the shell's fixed tick, empty or not: the file's write is one effect either way,
             // so neither the reply nor the trace says when someone spoke.
@@ -283,9 +286,16 @@ mod tests {
         assert_eq!(m.update(start(1)), [Effect::Notice { text: listen::FOCUS_APP.into() }]);
         let app = Kind::App { window: 7, title: "Call".into(), bundle: None, name: "Zoom".into() };
         m.update(Action::Open { kind: app, axis: Axis::Right, beside: None });
-        // No sound yet outside a test run: an app pane says so, and offers nothing.
+        // No recogniser on this Mac: an app pane says so, and offers nothing.
         assert_eq!(m.update(start(2)), [Effect::Notice { text: listen::NO_SOURCE.into() }]);
         assert!(m.listen.on.is_none() && !m.listen_offered(2));
+        // With one, the app pane offers a start, and the terminal still does not; a client cannot
+        // say there is one.
+        m.update(Action::ListenAvailable { on: true }.sent_by(Origin::Socket));
+        assert!(!m.listen_offered(2));
+        m.update(Action::ListenAvailable { on: true }.sent_by(Origin::System));
+        assert!(m.listen_offered(2) && !m.listen_offered(1));
+        m.update(Action::ListenAvailable { on: false }.sent_by(Origin::System));
         m.update(Action::ListenFixture.sent_by(Origin::System));
         assert!(m.listen_offered(1) && m.listen_offered(2));
     }
@@ -388,10 +398,16 @@ mod tests {
         let mut m = model();
         m.update(start(2));
         let off = crate::features::Features::all().with(crate::features::Feature::Transcripts, false);
-        let effects = m.update(Action::SetFeatures { features: off }.sent_by(Origin::System));
+        let effects = m.update(Action::SetFeatures { features: off.clone() }.sent_by(Origin::System));
         assert_eq!(effects, ended("t2", Record::Failed));
         assert!(m.update(start(2)).is_empty() && m.listen.on.is_none(), "off, it is absent");
         assert!(!m.listen_offered(2));
+        // What the shell learnt with it off is kept for when it turns on.
+        let mut m = Model::default();
+        m.update(Action::SetFeatures { features: off }.sent_by(Origin::System));
+        m.update(Action::ListenAvailable { on: true }.sent_by(Origin::System));
+        m.update(Action::SetFeatures { features: crate::features::Features::all() }.sent_by(Origin::System));
+        assert!(m.listen.available);
     }
 
     #[test]
