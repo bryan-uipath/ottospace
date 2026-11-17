@@ -1415,9 +1415,13 @@ pub enum Action {
     TalkFront {
         task: TaskId,
     },
-    /// The next (positive) or previous conversation of the selected workspace. The user's alone.
+    /// The next (positive) or previous item of the drawer's rail (`rail`). The user's alone.
     TalkCycle {
         delta: i32,
+    },
+    /// Show an item of the drawer's rail: the transcript, or a task's conversation. The user's alone.
+    RailSelect {
+        item: rail::RailItem,
     },
     /// The keyboard goes into the conversation, or back to the workspace.
     TalkKeys {
@@ -1613,6 +1617,7 @@ impl Action {
                 | Action::SpaceCycle { .. }
                 | Action::TalkFront { .. }
                 | Action::TalkCycle { .. }
+                | Action::RailSelect { .. }
                 | Action::SpaceHide { .. }
                 | Action::SpaceOpen { .. }
                 | Action::TabPlace { .. }
@@ -1756,6 +1761,7 @@ impl Action {
             | Action::SpaceCycle { .. }
             | Action::TalkFront { .. }
             | Action::TalkCycle { .. }
+            | Action::RailSelect { .. }
             | Action::SpaceHide { .. }
             | Action::SpaceOpen { .. }
             | Action::TabPlace { .. }
@@ -1990,6 +1996,7 @@ impl Action {
             | Action::SpaceCycle { .. }
             | Action::TalkFront { .. }
             | Action::TalkCycle { .. }
+            | Action::RailSelect { .. }
             | Action::SpaceHide { .. }
             | Action::SpaceOpen { .. }
             | Action::TabPlace { .. }
@@ -2538,6 +2545,7 @@ pub enum TabAt {
 
 pub mod zones;
 
+pub mod rail;
 pub mod spaces;
 pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
 
@@ -3215,6 +3223,8 @@ impl Model {
             Action::TabPlace { .. } => Some(TABS_USERS),
             // So is which of a workspace's conversations is in front.
             Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
+            // What the drawer shows is the user's choice: its rail, the transcript's mark.
+            Action::RailSelect { .. } | Action::ListenShow { .. } => Some(rail::RAIL_USERS),
             // A client changes no space under the user's keys in the chat, nor takes them.
             action if self.space_refusal(action, origin).is_some() => self.space_refusal(action, origin),
             action
@@ -3420,6 +3430,7 @@ impl Model {
             | Action::SpaceCycle { .. }
             | Action::TalkFront { .. }
             | Action::TalkCycle { .. }
+            | Action::RailSelect { .. }
             | Action::SpaceHide { .. }
             | Action::SpaceOpen { .. }
             | Action::WorkbookNew { .. }
@@ -3705,6 +3716,7 @@ impl Model {
                 | Action::SpaceCycle { .. }
                 | Action::TalkFront { .. }
                 | Action::TalkCycle { .. }
+                | Action::RailSelect { .. }
                 | Action::SpaceHide { .. }
                 | Action::SpaceOpen { .. }
                 | Action::CycleTab { .. }
@@ -5282,9 +5294,10 @@ impl Model {
                     self.set_front(task);
                 }
             }
-            Action::TalkCycle { delta } => self.cycle_front(delta),
+            Action::TalkCycle { delta } => self.rail_cycle(delta, effects),
+            Action::RailSelect { item } => self.rail_select(item, effects),
             // The drawer on the transcript has no × of its own: ⌘⇧L closes the drawer, whatever it shows.
-            Action::TalkToggle if self.listen.shown => {
+            Action::TalkToggle if self.listen.shown && self.by_user => {
                 self.listen.shown = false;
                 self.talk_keys(false, effects);
                 if let Some(talk) = &mut self.talk {
@@ -8138,6 +8151,7 @@ mod tests {
         Action::SpaceCycle { .. },
         Action::TalkFront { .. },
         Action::TalkCycle { .. },
+        Action::RailSelect { .. },
         Action::SpaceHide { .. },
         Action::SpaceOpen { .. },
         Action::SelectVisibleTab { .. },
@@ -8533,6 +8547,7 @@ mod tests {
             Action::TalkToggle,
             Action::TalkFront { task: 1 },
             Action::TalkCycle { delta: 1 },
+            Action::RailSelect { item: rail::RailItem::Transcript },
             Action::TalkKeys { on: true },
             Action::TalkResize { width: 400. },
             Action::TalkWide,
@@ -8784,6 +8799,7 @@ mod tests {
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
+                    Action::RailSelect { .. } | Action::ListenShow { .. } => Some(rail::RAIL_USERS),
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::DialToggle => Some(chat::DIAL_USERS),
@@ -9771,6 +9787,15 @@ mod tests {
     }
 
     /// A model with a kept workspace of two tabs and a task `first >app` started in it.
+    /// The tasks on the drawer's rail, in order.
+    fn rail_tasks(m: &Model) -> Vec<TaskId> {
+        let task = |item| match item {
+            rail::RailItem::Task { id } => Some(id),
+            rail::RailItem::Transcript => None,
+        };
+        m.rail().into_iter().filter_map(task).collect()
+    }
+
     fn workspace_of_one_task() -> Model {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
@@ -9811,7 +9836,7 @@ mod tests {
         );
         let of = task_space(1);
         assert_eq!(
-            (m.members(&of), m.front(&of), m.tab_task(), m.strip(&of)),
+            (m.members(&of), m.front(&of), m.tab_task(), rail_tasks(&m)),
             (vec![1, 2], Some(2), Some(2), vec![1, 2])
         );
         assert_eq!(m.talk.as_ref().map(|talk| (&talk.task, talk.open)), Some((&Subject::Task(2), true)));
@@ -9829,7 +9854,7 @@ mod tests {
             (vec![1, 2, 3], Some(3), task_space(4), task_space(5))
         );
         // A workspace of one task has no strip.
-        assert_eq!(workspace_of_one_task().strip(&of), Vec::<TaskId>::new());
+        assert_eq!(rail_tasks(&workspace_of_one_task()), Vec::<TaskId>::new());
     }
 
     #[test]
@@ -9885,11 +9910,11 @@ mod tests {
         // An agent's report of done takes no conversation from under the user; the user's own
         // done gives way to the most urgent one that is not. Done, it leaves the strip.
         m.update(state(3, State::Done));
-        assert_eq!((m.front(&of), m.strip(&of)), (Some(3), vec![1, 2, 3]));
+        assert_eq!((m.front(&of), rail_tasks(&m)), (Some(3), vec![1, 2, 3]));
         m.update(Action::TalkFront { task: 2 });
-        assert_eq!(m.strip(&of), [1, 2]);
+        assert_eq!(rail_tasks(&m), [1, 2]);
         m.update(Action::TaskSetState { id: 2, state: State::Done });
-        assert_eq!((m.front(&of), m.strip(&of)), (Some(1), vec![]));
+        assert_eq!((m.front(&of), rail_tasks(&m)), (Some(1), vec![]));
         m.update(state(2, State::Running));
         // The front one dismissed, by anyone: the most urgent remaining.
         m.update(Action::TalkFront { task: 2 });
@@ -9976,7 +10001,7 @@ mod tests {
         let states: Vec<State> = r.tasks.list.iter().map(|task| task.state).collect();
         assert_eq!(states, [State::NeedsYou; 3]);
         assert_eq!(
-            (r.space(), r.members(&of), r.front(&of), r.strip(&of)),
+            (r.space(), r.members(&of), r.front(&of), rail_tasks(&r)),
             (&of, vec![1, 2, 3], Some(2), vec![1, 2, 3])
         );
         assert_eq!(r.workbooks.bound_to(1), Some(1));
@@ -14680,6 +14705,7 @@ mod tests {
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
+                    Action::RailSelect { .. } | Action::ListenShow { .. } => Some(rail::RAIL_USERS),
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::DialToggle => Some(chat::DIAL_USERS),

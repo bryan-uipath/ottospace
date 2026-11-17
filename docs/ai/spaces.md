@@ -178,7 +178,7 @@ main checkout.
   it. Its workspace's default follows from the task's old worktree only when the task is the
   workspace's one task (the main checkout to the new worktree: "some cases the agent will use
   the main checkout, and some cases it will create a worktree"); with others there it stays
-  ("like the subagent case"), and the task's row and strip tab name its own.
+  ("like the subagent case"), and the task's row and rail item name its own.
 - **A new worktree from the box** (`ComposeWorktree`, `box_worktree`, `Making`). The owner's
   canvas: "⌘N here joins this workspace and shares its checkout; the new-task box offers a new
   worktree as the other choice". Offered (`compose_worktree`) while the box is the drawer's, the
@@ -205,7 +205,7 @@ main checkout.
 - **Gone on with** (`--resume`): where the session started, as before, since Claude Code finds a
   session by the folder it started in.
 - **Shown.** The state's `spaces[].worktree`. Where a workspace's tasks work in more than one
-  worktree, each task's row says its worktree's name and its strip tab's hover too
+  worktree, each task's row says its worktree's name and its rail item's hover too
   (`Model::worktree_label`, `tasks_bar` rows' `worktree`); else nothing is said.
 - **Who.** Only the user's act sets a default (a Repos click, their + made a worktree), or the
   task's own agent moving (above), or the files read again: a client's click on a row with no workspace opens a terminal as `OpenRepo`
@@ -297,22 +297,17 @@ right now"; "i'd expect < 5 so the ui should be suitable for that".
 - **One conversation in front** a workspace (`Model::front`): the drawer's subject, the
   dial's, the agent chip's, `tab_task`. Everything that spoke of "the selected space's
   conversation" asks `Model::space_subject`; where a task lives is `Model::task_space`.
-- **Who changes the front**: the user alone. A new task they start (it), a tab of the strip
-  (`TalkFront`), ⌘⌥] / ⌘⌥[ (`TalkCycle`, around the strip), a task's row and ⌘⇧N (which
+- **Who changes the front**: the user alone. A new task they start (it), an item of the drawer's rail
+  (`RailSelect`), ⌘⌥] / ⌘⌥[ (`TalkCycle`, around the rail), a task's row and ⌘⇧N (which
   switches within and across workspaces). A client's `TalkFront`/`TalkCycle` is refused
   (`FRONT_USERS`), and its `task_open` selects the workspace and leaves the front one.
 - **The front one gone**: dismissed or deleted by anyone, the most urgent remaining task is
   in front (needs you, running, later, on hold, done; then priority, then the older). Marked
   done by the user (in any workspace): the same, among those not done. Marked done by its agent's report: it
   stays in front, since that is no act of the user's and a conversation is not taken from
-  under them; it leaves the strip once another is in front.
-- **The drawer's strip** (`Model::strip`, `talk_strip`): over the conversation, a tab a task
-  in the order they came, done ones left out. Each is the task's badge, whose corner dot is
-  its state's colour, so one that needs you is seen without opening it. The front tab is wide
-  and says its title, cut with …; the others are badges, the title on hover. + at its end
-  opens the new-task box here. Hidden with fewer than two tasks. Made for one to five: no
-  scrolling, no overflow menu; past that the others stay badges and the front one keeps 96
-  points for its title.
+  under them; it leaves the rail once another is in front.
+- **The drawer's strip** (replaced by the rail, below): a horizontal tab a task over the
+  conversation.
 - **The top row**: a workspace's item shows its tasks' badges stacked, the most urgent first
   and on top (five at most), then its name: the kept workspace's name with several tasks,
   the task's title with one, as before. Its summary state is its most urgent task's.
@@ -329,6 +324,36 @@ right now"; "i'd expect < 5 so the ui should be suitable for that".
 - Property rules: a task is in one space at most; the front task is one of the space's; no
   step but the user's takes a task from the front while it is still there; only the user's ↵
   on a new task (or their undo) joins a task to a workspace.
+
+## The drawer's rail (built)
+
+The owner's design (2026-11-16, the canvas "Right rail"): one way to switch what the drawer
+shows, a column at its right edge, replacing the strip.
+
+- **Items** (`Model::rail`, `model/rail.rs`): the transcript while one is on (running or paused;
+  none that ended), then the selected space's tasks by urgency (needs you, running, later, on
+  hold; done ones left out but the one in front). Fewer than two: no rail, as before.
+- **Drawn** (`drawer_rail.rs`): 48 points wide, inside the drawer's width. The transcript's
+  waveform (in the accent while selected) with a red dot while it records, a divider, each
+  task's badge with its state's dot, then +, a new task here. The selected item is lifted with
+  an accent edge; the one list mode's keys are on is ringed. Shown with the transcript or a
+  conversation, not over the new-task box, a brief beside the tabs or the inspector.
+- **Selected** (`Model::rail_selected`): the transcript while it is shown, else the task in
+  front. `RailSelect`: the transcript is shown in this space's drawer (its pane's tab is not
+  brought up, unlike the top row's mark); a task is put in front, its conversation open.
+- **Keys**: ⌘⌥] / ⌘⌥[ (`TalkCycle`) step through the rail and wrap. ⌘⇧] / ⌘⇧[ were asked for,
+  but are Next / Previous Tab. List mode: → past the drawer (or past the panes, onto the
+  transcript, which takes no keys) is the rail (`RailFocus::Right`, focus `drawer_rail`), ↑ ↓
+  move, ↵ shows, ← or Esc back to the pane. Sneak labels: `drawer-rail:transcript`,
+  `drawer-rail:<id>`, `drawer-rail:new`.
+- **Who**: the user alone. `RailSelect`, `TalkCycle` and `ListenShow` (the top row's mark,
+  the pane header's dot) are refused from a client (`RAIL_USERS`); a client's ⌘⇧L leaves the
+  transcript shown.
+- **State**: `drawer.rail`, each `kind`, `id`, `selected`, `rect`. Never a transcript's text.
+- Property rules: two items or none; the transcript first while one is on, the tasks by
+  urgency, each once; the transcript selected while shown; the keys on the rail only on an
+  item of it; after another's step in the same space an item still on the rail stays selected,
+  unless what takes keys took the drawer from the transcript.
 
 ## Open questions
 

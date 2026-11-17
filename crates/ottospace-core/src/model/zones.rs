@@ -1,9 +1,10 @@
 //! Directional focus across the window's zones: left of the panes the section list, then the
-//! left rail; right of them the drawer. The user's alone: a client's focus move stops at the
+//! left rail; right of them the drawer, then the drawer's rail (`rail`). The user's alone: a client's focus move stops at the
 //! panes, as before.
 
 use serde::Serialize;
 
+use super::rail::RailItem;
 use super::{Action, Effect, Model, Section};
 use crate::layout::{Dir, Node};
 use crate::model::PaneId;
@@ -13,11 +14,13 @@ use crate::model::PaneId;
 pub const SECTIONS: [Section; 6] =
     [Section::Tasks, Section::Calendar, Section::Apps, Section::Workbook, Section::Repos, Section::Marks];
 
-/// The rail when it has the keyboard, in list mode as the section list does: a section's cell.
+/// A rail when it has the keyboard, in list mode as the section list does: a section's cell, or
+/// an item of the drawer's rail.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RailFocus {
     Left(Section),
+    Right(RailItem),
 }
 
 /// Where the keyboard is, for the state reply and the property test.
@@ -28,6 +31,8 @@ pub enum Target {
     /// The open section's list, on this row.
     List(usize),
     Rail(Section),
+    /// An item of the drawer's rail.
+    DrawerRail(RailItem),
     /// The drawer: the agent's terminal or the new task.
     Drawer,
     /// The accessibility inspector in the drawer's place: its rows.
@@ -55,6 +60,7 @@ impl Model {
     pub fn focus_target(&self) -> Target {
         match self.rail_focus {
             Some(RailFocus::Left(section)) => Target::Rail(section),
+            Some(RailFocus::Right(item)) => Target::DrawerRail(item),
             None if self.list.is_some() => Target::List(self.list.unwrap_or_default()),
             None if self.inspector.as_ref().is_some_and(|inspector| inspector.filtering) => Target::Inspector,
             None if self.talk.as_ref().is_some_and(|talk| talk.keys) || self.drawer_compose() => Target::Drawer,
@@ -74,9 +80,18 @@ impl Model {
                 Dir::Right => self.open_section(section, effects),
                 Dir::Left => {}
             },
+            // The drawer's rail: ↑ ↓ move, ← back to the panes; nothing lies right of it.
+            (Action::FocusDir { dir }, Some(RailFocus::Right(_))) => match dir {
+                Dir::Up | Dir::Down => self.rail_move(if *dir == Dir::Up { -1 } else { 1 }),
+                Dir::Left => self.back_to_pane(Dir::Right, effects),
+                Dir::Right => {}
+            },
             (Action::ListMove { delta }, Some(_)) => self.rail_move(*delta),
             (Action::ListChoose { .. }, Some(RailFocus::Left(section))) => self.open_section(section, effects),
-            (Action::LeaveList, Some(_)) => self.back_to_pane(Dir::Left, effects),
+            // ↵ shows the item; the keys stay on the rail.
+            (Action::ListChoose { .. }, Some(RailFocus::Right(item))) => self.rail_select(item, effects),
+            (Action::LeaveList, Some(RailFocus::Left(_))) => self.back_to_pane(Dir::Left, effects),
+            (Action::LeaveList, Some(RailFocus::Right(_))) => self.back_to_pane(Dir::Right, effects),
             // Other list keys (Tab, s, h, x) do nothing on a rail.
             (Action::ListSection { .. } | Action::ListSnooze { .. } | Action::ListHold, Some(_)) => {}
             (Action::ListDismiss | Action::ListUndo | Action::ListPin | Action::ListReorder { .. }, Some(_)) => {}
@@ -87,8 +102,8 @@ impl Model {
             (Action::FocusDir { dir: Dir::Right }, None) if self.list.is_some() => {
                 self.back_to_pane(Dir::Left, effects)
             }
-            // The drawer is the last zone on the right.
-            (Action::FocusDir { dir: Dir::Right }, None) if self.in_right_zone() => {}
+            // Right of the drawer its rail, while it shows; else the drawer is the last zone.
+            (Action::FocusDir { dir: Dir::Right }, None) if self.in_right_zone() => self.enter_drawer_rail(effects),
             (Action::FocusDir { dir: Dir::Left }, None) if self.in_right_zone() => {
                 self.leave_right_zone(effects);
                 self.back_to_pane(Dir::Right, effects);
@@ -103,8 +118,13 @@ impl Model {
                 } else if self.inspector.is_some() {
                     // The inspector has the drawer's place: its rows take the keys.
                     self.act(Action::InspectorFilter { on: true }, effects);
-                } else if self.talk.as_ref().is_some_and(|talk| talk.open && self.agent_runs(&talk.task)) {
+                } else if !self.listen.shown
+                    && self.talk.as_ref().is_some_and(|talk| talk.open && self.agent_runs(&talk.task))
+                {
                     self.talk_keys(true, effects);
+                } else if self.listen.shown {
+                    // The transcript takes no keys: on to its rail.
+                    self.enter_drawer_rail(effects);
                 }
             }
             _ => return false,
@@ -156,8 +176,22 @@ impl Model {
                 let at = sections.iter().position(|s| *s == section).unwrap_or(0);
                 Some(RailFocus::Left(sections[step(at, sections.len())]))
             }
+            Some(RailFocus::Right(item)) => {
+                let items = self.rail();
+                let at = items.iter().position(|it| *it == item).unwrap_or(0);
+                items.get(step(at, items.len().max(1))).copied().map(RailFocus::Right)
+            }
             None => None,
         };
+    }
+
+    /// The keyboard onto the drawer's rail, on the item shown, while the drawer and its rail show.
+    fn enter_drawer_rail(&mut self, effects: &mut Vec<Effect>) {
+        let open = self.listen.shown || self.talk.as_ref().is_some_and(|talk| talk.open);
+        let Some(item) = self.rail_selected().or(self.rail().first().copied()).filter(|_| open) else { return };
+        self.talk_keys(false, effects);
+        self.compose_aside();
+        self.rail_focus = Some(RailFocus::Right(item));
     }
 
     /// A section's list, with the keyboard on the row it was on when it was left, else its first.
@@ -191,7 +225,10 @@ impl Model {
             || self.live.is_some()
             || self.talk.as_ref().is_some_and(|talk| talk.keys)
             || self.mark_input.is_some();
-        if taken {
+        // An item gone from the drawer's rail (or the rail with it) takes the keyboard off it.
+        let open = self.listen.shown || self.talk.as_ref().is_some_and(|talk| talk.open);
+        let gone = matches!(self.rail_focus, Some(RailFocus::Right(item)) if !open || !self.rail().contains(&item));
+        if taken || gone {
             self.rail_focus = None;
         }
     }

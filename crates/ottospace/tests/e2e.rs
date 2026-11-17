@@ -6079,7 +6079,7 @@ fn a_task_started_in_a_workspace_makes_it_the_tasks_in_place() {
 /// joins it; the drawer's strip switches between them; a client changes none of it; kept between runs.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn several_tasks_share_a_workspace_and_the_drawers_strip_switches_between_them() {
+fn several_tasks_share_a_workspace_and_the_drawers_rail_switches_between_them() {
     let root = support::temp(&format!("ottospace-e2e-strip-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let (bin, sessions) = (root.join("bin"), root.join("sessions"));
@@ -6103,8 +6103,8 @@ fn several_tasks_share_a_workspace_and_the_drawers_strip_switches_between_them()
         otto.user_key("o n e");
         let first = otto.user_key("enter");
         let one = first["state"]["talk"]["task"].as_u64().expect("the drawer is on the first task");
-        assert_eq!((&space(&first)["strip"], &space(&first)["front"]), (&json!([]), &json!(one)));
-        assert_eq!(otto.control_opt(&format!("strip:{one}")), None, "one task: no strip");
+        assert_eq!((rail_tasks(&first), &space(&first)["front"]), (vec![], &json!(one)));
+        assert_eq!(otto.control_opt(&format!("drawer-rail:{one}")), None, "one task: no rail");
         // A second task, started here: in the same space, in front; nothing moved.
         otto.user_key("cmd-n");
         let typed = otto.user_key("t w o");
@@ -6114,17 +6114,31 @@ fn several_tasks_share_a_workspace_and_the_drawers_strip_switches_between_them()
         assert_ne!(one, two);
         assert_eq!((shown(&second), pane_ids(&second)), (shown(&first), pane_ids(&before)));
         assert_eq!(
-            (&space(&second)["of"], &space(&second)["strip"], &space(&second)["front"]),
-            (&json!({"kind": "task", "id": one}), &json!([one, two]), &json!(two))
+            (&space(&second)["of"], rail_tasks(&second), &space(&second)["front"]),
+            (&json!({"kind": "task", "id": one}), vec![one, two], &json!(two))
         );
         assert_eq!(second["workbooks"][0]["task"], json!(one));
-        // The strip: a tab each, the front one wider; a click puts the other in front.
-        let (a, b) = (otto.control(&format!("strip:{one}")), otto.control(&format!("strip:{two}")));
-        assert!(b[2] > a[2] * 2. && a[0] < b[0], "the front tab is the wide one: {a:?} {b:?}");
+        // The rail: a column at the drawer's right edge, the selected one the front one; the
+        // horizontal strip is gone. A click puts the other in front.
+        let (a, b, drawer) = (
+            otto.control(&format!("drawer-rail:{one}")),
+            otto.control(&format!("drawer-rail:{two}")),
+            otto.control("drawer-rail"),
+        );
+        assert!(a[0] == b[0] && a[1] + a[3] <= b[1] && a[0] >= drawer[0], "a column: {a:?} {b:?} in {drawer:?}");
+        assert_eq!(otto.control_opt("strip:new"), None, "the strip is gone");
+        assert_eq!(rail_selected(&second), Some(two));
+        // A client's click on it is refused, and moves nothing.
+        let theirs = otto.click(at(a, 0.5, 0.5), 1);
+        assert_eq!(
+            (rail_selected(&theirs), &space(&theirs)["front"]),
+            (Some(two), &json!(two)),
+            "{}",
+            theirs["notice"]
+        );
         let clicked = otto.user_click(at(a, 0.5, 0.5));
         assert_eq!((&space(&clicked)["front"], &clicked["state"]["talk"]["task"]), (&json!(one), &json!(one)));
-        let (a, b) = (otto.control(&format!("strip:{one}")), otto.control(&format!("strip:{two}")));
-        assert!(a[2] > b[2] * 2., "{a:?} {b:?}");
+        assert_eq!(rail_selected(&clicked), Some(one));
         // The keys: next and previous, around.
         let next = otto.user_key("cmd-alt-]");
         assert_eq!((&space(&next)["front"], &next["state"]["talk"]["task"]), (&json!(two), &json!(two)));
@@ -6134,9 +6148,9 @@ fn several_tasks_share_a_workspace_and_the_drawers_strip_switches_between_them()
         otto.user_key("cmd-l");
         otto.call(json!({"cmd": "task_new", "line": "theirs", "open": true}));
         let theirs = otto.call(json!({"cmd": "task_open", "id": one}));
-        assert_eq!((&space(&theirs)["strip"], &space(&theirs)["front"]), (&json!([one, two]), &json!(two)));
-        // + on the strip: the new-task box, for a task here.
-        let boxed = otto.user_click(at(otto.control("strip:new"), 0.5, 0.5));
+        assert_eq!((rail_tasks(&theirs), &space(&theirs)["front"]), (vec![one, two], &json!(two)));
+        // + on the rail: the new-task box, for a task here.
+        let boxed = otto.user_click(at(otto.control("drawer-rail:new"), 0.5, 0.5));
         assert_eq!(boxed["state"]["compose"], "");
         otto.user_key("escape");
         otto.call(json!({"cmd": "quit"}));
@@ -6147,13 +6161,10 @@ fn several_tasks_share_a_workspace_and_the_drawers_strip_switches_between_them()
     // Another run: both tasks there, the same one in front. It dismissed, the other is; no strip.
     let otto = Otto::launch_with("strip-2", &env);
     let again = otto.call(json!({"cmd": "state"}));
-    assert_eq!((&space(&again)["strip"], &space(&again)["front"]), (&json!([one, two]), &json!(two)));
+    assert_eq!((rail_tasks(&again), &space(&again)["front"]), (vec![one, two], &json!(two)));
     let tabs = space(&again)["tabs"].clone();
     let left = otto.call(json!({"cmd": "task_dismiss", "id": two}));
-    assert_eq!(
-        (&space(&left)["strip"], &space(&left)["front"], &space(&left)["tabs"]),
-        (&json!([]), &json!(one), &tabs)
-    );
+    assert_eq!((rail_tasks(&left), &space(&left)["front"], &space(&left)["tabs"]), (vec![], &json!(one), &tabs));
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -6431,11 +6442,23 @@ fn a_task_follows_its_agent_into_a_worktree_it_made_and_never_a_subagents() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The tasks on the drawer's rail of a reply, in order.
+fn rail_tasks(reply: &Value) -> Vec<u64> {
+    let rail = reply["drawer"]["rail"].as_array().cloned().unwrap_or_default();
+    rail.iter().filter(|item| item["kind"] == "task").filter_map(|item| item["id"].as_u64()).collect()
+}
+
+/// The task the drawer's rail has selected, if a task is.
+fn rail_selected(reply: &Value) -> Option<u64> {
+    let rail = reply["drawer"]["rail"].as_array().cloned().unwrap_or_default();
+    rail.iter().find(|item| item["selected"] == true).and_then(|item| item["id"].as_u64())
+}
+
 /// The owner: "i'd expect < 5 so the ui should be suitable for that". Five tasks in a workspace:
-/// the strip is one line inside the drawer, four badges and the front tab with room for its title.
+/// the rail is one column inside the drawer's right edge, + last.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn the_strip_of_five_tasks_is_one_line_with_room_for_the_front_ones_title() {
+fn the_rail_of_five_tasks_is_one_column_at_the_drawers_right_edge() {
     let root = support::temp(&format!("ottospace-e2e-strip5-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let (bin, sessions) = (root.join("bin"), root.join("sessions"));
@@ -6462,18 +6485,99 @@ fn the_strip_of_five_tasks_is_one_line_with_room_for_the_front_ones_title() {
     }
     let state = otto.call(json!({"cmd": "state"}));
     let space = state["spaces"].as_array().unwrap().iter().find(|s| s["selected"] == true).cloned().unwrap();
-    assert_eq!((&space["strip"], &space["front"]), (&json!(ids), &json!(ids[4])));
-    let tabs: Vec<[f64; 4]> = ids.iter().map(|id| otto.control(&format!("strip:{id}"))).collect();
-    let (new, drawer) = (otto.control("strip:new"), otto.control("talk"));
-    // One line, left to right, + last, all inside the drawer.
-    for pair in tabs.windows(2) {
-        assert!(pair[0][1] == pair[1][1] && pair[0][0] + pair[0][2] <= pair[1][0] + 0.5, "{tabs:?}");
+    assert_eq!((rail_tasks(&state), &space["front"]), (ids.clone(), &json!(ids[4])));
+    let items: Vec<[f64; 4]> = ids.iter().map(|id| otto.control(&format!("drawer-rail:{id}"))).collect();
+    let (new, rail, talk, window) =
+        (otto.control("drawer-rail:new"), otto.control("drawer-rail"), otto.control("talk"), rect(&state["window"]));
+    // One column, top to bottom, + last, right of the conversation, at the window's right edge.
+    for pair in items.windows(2) {
+        assert!(pair[0][0] == pair[1][0] && pair[0][1] + pair[0][3] <= pair[1][1] + 0.5, "{items:?}");
     }
-    assert!(tabs[0][0] >= drawer[0] && new[0] + new[2] <= drawer[0] + drawer[2] + 0.5, "{tabs:?} {new:?} {drawer:?}");
-    assert!(new[0] >= tabs[4][0] + tabs[4][2] - 0.5, "{tabs:?} {new:?}");
-    // Four badges, and the front one with room for its title.
-    assert!(tabs[..4].iter().all(|tab| tab[2] < 40.), "{tabs:?}");
-    assert!(tabs[4][2] >= 96., "{tabs:?}");
+    assert!(new[1] >= items[4][1] + items[4][3] - 0.5, "{items:?} {new:?}");
+    assert!(talk[0] + talk[2] <= rail[0] + 0.5 && rail[0] + rail[2] >= window[2] - 1., "{talk:?} {rail:?} {window:?}");
+    assert!(
+        items.iter().chain([&new]).all(|item| item[0] >= rail[0] && item[0] + item[2] <= rail[0] + rail[2]),
+        "{items:?}"
+    );
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// The drawer's rail with a transcript: it comes at two items (a task and the transcript, the
+/// transcript first) and goes at one; a click, ⌘⌥] / ⌘⌥[ and list mode switch it, a client's
+/// click does not; the transcript leaves it when it stops.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_rail_holds_the_running_transcript_and_the_tasks_and_only_the_user_switches_it() {
+    let root = support::temp(&format!("ottospace-e2e-rail-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, sessions) = (root.join("bin"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    let fixture = root.join("fixture.jsonl");
+    std::fs::write(&fixture, LISTEN_FIXTURE).unwrap();
+    let settings =
+        json!({"repos": [], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("rail", &settings.to_string());
+    let env = [
+        ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "transcripts"),
+        ("OTTOSPACE_LISTEN_FIXTURE", fixture.to_str().unwrap()),
+    ];
+    let otto = Otto::launch_with("rail", &env);
+    let kinds = |reply: &Value| -> Vec<String> {
+        let rail = reply["drawer"]["rail"].as_array().cloned().unwrap_or_default();
+        rail.iter().map(|item| item["kind"].as_str().unwrap_or_default().to_string()).collect()
+    };
+    let picked = |reply: &Value| -> Option<String> {
+        let rail = reply["drawer"]["rail"].as_array().cloned().unwrap_or_default();
+        let item = rail.iter().find(|item| item["selected"] == true)?;
+        Some(item["id"].as_u64().map_or("transcript".into(), |id| id.to_string()))
+    };
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.user_key("cmd-d");
+    otto.user_key("cmd-n");
+    otto.user_key("o n e");
+    let one = otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the first task");
+    // One item: no rail.
+    assert_eq!(kinds(&otto.drawn()), Vec::<String>::new());
+    // A transcript: two items, the transcript first.
+    otto.user_click(at(otto.listen_rect("listen-start:1"), 0.5, 0.5));
+    let two_items = otto.drawn();
+    assert_eq!(kinds(&two_items), ["transcript", "task"], "{}", two_items["drawer"]["rail"]);
+    assert_eq!(rail_tasks(&two_items), [one]);
+    // The user's click on the transcript shows it here; a client's on the task does nothing.
+    let shown = otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
+    assert_eq!(picked(&shown).as_deref(), Some("transcript"));
+    otto.listen_rect("listen-view");
+    let theirs = otto.click(at(otto.control(&format!("drawer-rail:{one}")), 0.5, 0.5), 1);
+    assert_eq!(picked(&theirs).as_deref(), Some("transcript"), "{}", theirs["notice"]);
+    // ⌘⌥] / ⌘⌥[ step through it; a client's key does not.
+    assert_eq!(picked(&otto.user_key("cmd-alt-]")), Some(one.to_string()));
+    otto.call(json!({"cmd": "key", "keys": "cmd-alt-]"}));
+    assert_eq!(picked(&otto.drawn()), Some(one.to_string()));
+    assert_eq!(picked(&otto.user_key("cmd-alt-[")).as_deref(), Some("transcript"));
+    // List mode: right of the panes, past the transcript (it takes no keys), the rail.
+    otto.call(json!({"cmd": "focus", "pane": 1}));
+    let keyed = otto.user_key("cmd-ctrl-right");
+    assert_eq!(keyed["focus"], json!({"drawer_rail": {"kind": "transcript"}}), "{}", keyed["focus"]);
+    otto.user_key("escape");
+    // A second task joins the rail; the transcript, stopped, leaves it.
+    otto.user_key("cmd-n");
+    otto.user_key("t w o");
+    let two = otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the second task");
+    assert_eq!(
+        (kinds(&otto.drawn()), rail_tasks(&otto.drawn())),
+        (vec!["transcript".into(), "task".into(), "task".into()], vec![one, two])
+    );
+    otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
+    otto.user_click(at(otto.listen_rect("listen-stop:view"), 0.5, 0.5));
+    let stopped = otto.drawn();
+    assert_eq!((kinds(&stopped), rail_tasks(&stopped)), (vec!["task".into(), "task".into()], vec![one, two]));
+    // With one item left the rail goes.
+    otto.call(json!({"cmd": "task_dismiss", "id": two}));
+    let alone = otto.drawn();
+    assert!(kinds(&alone).is_empty() && otto.control_opt("drawer-rail").is_none(), "{}", alone["drawer"]["rail"]);
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
