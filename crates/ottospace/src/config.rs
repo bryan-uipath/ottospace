@@ -20,9 +20,15 @@ pub struct Config {
     pub error: Option<String>,
 }
 
+static CONFIG: OnceLock<Config> = OnceLock::new();
+
 pub fn get() -> &'static Config {
-    static CONFIG: OnceLock<Config> = OnceLock::new();
     CONFIG.get_or_init(load)
+}
+
+/// As `get`, but `None` until read: for a panic hook, which must not read it (the panic may be in `load`).
+pub fn loaded() -> Option<&'static Config> {
+    CONFIG.get()
 }
 
 pub fn user_home() -> String {
