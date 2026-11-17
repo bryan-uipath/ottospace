@@ -211,7 +211,8 @@ mod tests {
         assert!(by_id.selects(&main) && !by_id.selects(&viewer));
         // The same glob as every field: `*x*` contains, letters in either case.
         assert!(select(r#"{"identifier": "*MEETING*"}"#).selects(&main));
-        // No identifier is empty text: `*` matches it, a name does not.
+        // No identifier is empty text: `""` and `*` match it, a name does not.
+        assert!(select(r#"{"identifier": ""}"#).selects(&viewer) && !select(r#"{"identifier": ""}"#).selects(&main));
         assert!(
             select(r#"{"identifier": "*"}"#).selects(&viewer) && !select(r#"{"identifier": "x"}"#).selects(&viewer)
         );
