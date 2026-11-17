@@ -3787,6 +3787,7 @@ dependencies = [
  "core-video",
  "gpui",
  "libc",
+ "log",
  "objc2-core-foundation",
  "objc2-core-graphics",
  "ottospace-agents",
