@@ -10432,20 +10432,37 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     state["listen_lines"] = Value::Null;
     assert!(!state.to_string().contains("made-up words"), "the text reached the state");
 
+    // The pane's header is the source's mark alone: the controls are the drawer's, one Stop and ⋯.
+    let drawn = otto.drawn()["listen_rects"].clone();
+    let ids: Vec<&str> = drawn.as_object().unwrap().keys().map(String::as_str).collect();
+    let button = |id: &&&str| id.contains(':') && !id.starts_with("listen-top") && !id.starts_with("listen-hearing");
+    let controls: Vec<&&str> = ids.iter().filter(button).collect();
+    assert_eq!((controls, ids.contains(&"listen-menu")), (vec![&"listen-stop:view"], true), "{drawn}");
+
     // A client can neither pause, stop, end nor close it.
     let close = otto.raw(r#"{"cmd":"close","pane":1}"#);
     assert!(close["error"].as_str().is_some_and(|why| why.contains("being transcribed")), "{close}");
-    let pause = otto.listen_rect("listen-pause:header");
-    otto.call(json!({"cmd": "mouse", "action": "down", "x": pause[0] + 2.0, "y": pause[1] + 2.0}));
-    otto.call(json!({"cmd": "mouse", "action": "up", "x": pause[0] + 2.0, "y": pause[1] + 2.0}));
+    let menu = otto.listen_rect("listen-menu");
+    let theirs = otto.click(at(menu, 0.5, 0.5), 1);
+    assert!(theirs["row_menu"].is_null(), "{}", theirs["row_menu"]);
     assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["listen"]["status"], "on");
 
-    // The user's Pause, Resume: a gap in the lines.
-    let paused = otto.user_click(at(pause, 0.5, 0.5));
-    assert_eq!(paused["state"]["listen"]["status"], "paused", "{paused}");
-    let resumed = otto.user_click(at(otto.listen_rect("listen-resume:header"), 0.5, 0.5));
+    // The user's ⋯ offers Pause; Pause, then Resume where the meter was: a gap in the lines.
+    let open = otto.user_click(at(menu, 0.5, 0.5));
+    let item = &open["row_menu"]["items"][0];
+    assert_eq!((&open["row_menu"]["transcript"], &item["item"]), (&json!(true), &json!("pause")), "{open}");
+    let paused = otto.user_click(at(rect(&otto.drawn()["row_menu"]["items"][0]["rect"]), 0.5, 0.5));
+    assert_eq!((&paused["state"]["listen"]["status"], &paused["row_menu"]), (&json!("paused"), &Value::Null));
+    let resumed = otto.user_click(at(otto.listen_rect("listen-resume:view"), 0.5, 0.5));
     assert_eq!(resumed["state"]["listen"]["status"], "on", "{resumed}");
     assert!(resumed["listen_lines"].as_array().unwrap().iter().any(|l| l["paused_ms"].is_u64()), "{resumed}");
+
+    // No × of its own: ⌘⇧L closes the drawer on it; the dot in the pane's header shows it again.
+    otto.user_key("cmd-shift-l");
+    let closed = otto.drawn();
+    assert!(closed["listen_rects"].get("listen-view").is_none(), "{}", closed["listen_rects"]);
+    otto.user_click(at(otto.listen_rect("listen-header"), 0.5, 0.5));
+    otto.listen_rect("listen-view");
 
     // ⌘⌃T stops it, from any pane; again on the focused pane it starts one; the user's close ends it.
     otto.call(json!({"cmd": "split"}));

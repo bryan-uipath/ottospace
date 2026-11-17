@@ -66,7 +66,7 @@ macro_rules! commands {
             pub fn feature(self) -> Option<Feature> {
                 match (self, self.group()) {
                     (_, Group::Marks) => Some(Feature::Marks),
-                    (Command::Transcribe, _) => Some(Feature::Transcripts),
+                    (Command::Transcribe | Command::PauseTranscript, _) => Some(Feature::Transcripts),
                     _ => None,
                 }
             }
@@ -136,6 +136,7 @@ commands! {
     CalendarForward: "Next Day in Calendar", View;
     CalendarToday: "Today in Calendar", View;
     Transcribe: "Start or Stop Transcribing", View;
+    PauseTranscript: "Pause or Resume Transcribing", View;
     AxOverlay: "Accessibility Overlay", Developer;
     AxInspector: "Accessibility Inspector", Developer;
     InspectorFilter: "Filter the Accessibility Inspector", Developer;

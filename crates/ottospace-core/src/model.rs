@@ -1292,7 +1292,7 @@ pub enum Action {
     /// `dots`: where the … is drawn. `keys`: a key or a label opened it, so the keys are on its
     /// first item; a click's are on none.
     RowMenu {
-        row: ListRow,
+        row: crate::row_menu::MenuOf,
         dots: Option<Rect>,
         keys: bool,
     },
@@ -5021,7 +5021,7 @@ impl Model {
             Action::RowMenu { row, dots, keys } => self.row_menu_open(row, dots, keys),
             Action::RowMenuDrawn { dots } => self.row_menu_drawn(dots),
             Action::RowMenuMove { delta } => self.row_menu_move(delta),
-            Action::RowMenuChoose { index } => self.row_menu_choose(index),
+            Action::RowMenuChoose { index } => self.row_menu_choose(index, effects),
             Action::RowMenuClose => self.row_menu = None,
             Action::WorkbookUndo => self.workbook_undo(),
             Action::ListReorder { delta } => match self.selected_mark() {
@@ -5296,6 +5296,14 @@ impl Model {
                 }
             }
             Action::TalkCycle { delta } => self.cycle_front(delta),
+            // The drawer on the transcript has no × of its own: ⌘⇧L closes the drawer, whatever it shows.
+            Action::TalkToggle if self.listen.shown => {
+                self.listen.shown = false;
+                self.talk_keys(false, effects);
+                if let Some(talk) = &mut self.talk {
+                    talk.open = false;
+                }
+            }
             Action::TalkToggle => {
                 if let Some(open) = self.talk.as_ref().map(|talk| !talk.open) {
                     self.talk_keys(open, effects);
@@ -8579,7 +8587,7 @@ mod tests {
             Action::WorkbookEdit { workbook: 1, tab: None },
             Action::WorkbookRemove { workbook: 1, tab: None },
             Action::WorkbookFold { workbook: 1 },
-            Action::RowMenu { row: ListRow::Workbook(1), dots: None, keys: true },
+            Action::RowMenu { row: ListRow::Workbook(1).into(), dots: None, keys: true },
             Action::RowMenuDrawn { dots: None },
             Action::RowMenuMove { delta: 1 },
             Action::RowMenuChoose { index: None },

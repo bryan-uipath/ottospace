@@ -881,14 +881,16 @@ export interface WorkbookTab {
   buttons: { menu: Rect | null };
 }
 
-/** The open menu of a row of the bar (its …): whose row, the item the keys are on, and its items. Only the user opens one or chooses from it. */
+/** The open menu of a row of the bar (its …), or of the drawer's transcript header (its ⋯): whose, the item the keys are on, and its items. Only the user opens one or chooses from it. */
 export interface RowMenu {
   /** The workspace whose row it is of; `tab`: that tab's row, by place. */
   workbook: number | null;
   tab: number | null;
+  /** The transcript header's: Pause, or Resume while paused. */
+  transcript: boolean;
   /** The item the keys are on; null: none (a click opened it). */
   selected: number | null;
-  items: { item: "rename" | "delete" | "remove"; label: string; rect: Rect | null }[];
+  items: { item: "rename" | "delete" | "remove" | "pause" | "resume"; label: string; rect: Rect | null }[];
 }
 
 /** A workspace of the user's (the user reads "workspace"; the state keeps `workbook`): a named set of saved tabs, none in a new one. No directory is listed: `panes` names kinds only. */
@@ -1296,7 +1298,7 @@ export interface Snapshot {
   /** Test runs only: the transcript drawer's rows, the volatile lines last. Else null. */
   listen_lines: ListenLine[] | null;
   /** Test runs only: where a transcript's controls were drawn, by id (`listen-start:3`,
-   * `listen-header`, `listen-stop:header`, `listen-top:`, `listen-view`). Else null. */
+   * `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-top:`, `listen-view`). Else null. */
   listen_rects: Record<string, Rect> | null;
   /** The marks, in the user's order. */
   marks: Mark[];

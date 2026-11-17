@@ -17,6 +17,7 @@ use crate::listen::Heard;
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
 use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
+use crate::row_menu::MenuOf;
 use crate::sessions::{Link, Seen};
 use crate::sneak_apps;
 use crate::transcript::{Event as Said, Outcome, Text, View};
@@ -111,12 +112,13 @@ impl Gen<'_> {
         }
     }
 
-    /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not.
-    fn menu_row(&mut self) -> ListRow {
-        match self.rng.below(4) {
-            0 => ListRow::Task(self.task()),
-            1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)),
-            _ => ListRow::Workbook(self.workbook()),
+    /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not; or the transcript's header.
+    fn menu_row(&mut self) -> MenuOf {
+        match self.rng.below(5) {
+            0 => ListRow::Task(self.task()).into(),
+            1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)).into(),
+            2 => MenuOf::Transcript,
+            _ => ListRow::Workbook(self.workbook()).into(),
         }
     }
 
@@ -1566,10 +1568,10 @@ fn check(m: &Model) -> Result<(), String> {
         m.space()
     );
     // The agent chip is there exactly while the selected space has a conversation and nothing
-    // is in the drawer's place: no conversation open, new task, draft, brief or inspector. It
-    // is that conversation's, and names its space's place on the row.
+    // is in the drawer's place: no conversation open, new task, draft, brief, inspector or
+    // transcript. It is that conversation's, and names its space's place on the row.
     let busy = m.talk.as_ref().is_some_and(|talk| talk.open) || m.compose.is_some() || m.capture.is_some();
-    let busy = busy || m.brief.is_some() || m.inspector.is_some();
+    let busy = busy || m.brief.is_some() || m.inspector.is_some() || m.listen.shown;
     let chip = m.agent_chip();
     ensure!(
         chip.is_some() == (m.space_subject(m.space()).is_some() && !busy),
@@ -2041,7 +2043,11 @@ fn check(m: &Model) -> Result<(), String> {
 
     // A row's menu is of a row the open section lists, on one of its items.
     if let Some((menu, items)) = m.row_menu() {
-        ensure!(m.list_rows().contains(&menu.row), "a menu of {:?}, which is not listed", menu.row);
+        let listed = match &menu.row {
+            MenuOf::Row(row) => m.list_rows().contains(row),
+            MenuOf::Transcript => m.listen.shown && !items.is_empty(),
+        };
+        ensure!(listed, "a menu of {:?}, which is not listed", menu.row);
         let on = menu.selected.is_none_or(|at| at < items.len());
         ensure!(on, "a menu on item {:?} of {}", menu.selected, items.len());
     }

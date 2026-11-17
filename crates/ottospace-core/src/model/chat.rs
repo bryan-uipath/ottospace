@@ -388,7 +388,7 @@ impl Model {
     /// is in the drawer's place. What its agent does, with no clock in it.
     pub fn agent_chip(&self) -> Option<Chip> {
         let subject = &self.talk.as_ref().filter(|talk| !talk.open)?.task;
-        if self.drawer_view().shows() || self.inspector.is_some() {
+        if self.drawer_view().shows() || self.inspector.is_some() || self.listen.shown {
             return None;
         }
         let space = self.shown_spaces().iter().position(|space| space.of == *self.space())?;
@@ -802,6 +802,25 @@ mod tests {
         assert_eq!(chip(&m), said(Pulse::Running, "Working"));
         m.update(Action::TaskSetState { id, state: State::NeedsYou }.sent_by(Origin::System));
         assert_eq!(chip(&m), said(Pulse::NeedsYou, "Needs you"));
+    }
+
+    /// The transcript in the drawer's place: no chip, so the user's click on the selected space
+    /// only selects it, and leaves the transcript shown (⌘⇧L would close it).
+    #[test]
+    fn no_agent_chip_while_the_transcript_is_in_the_drawer() {
+        let mut m = two_live();
+        m.update(Action::TalkToggle);
+        let at = m.agent_chip().map(|chip| chip.space);
+        assert!(at.is_some());
+        m.update(Action::Split { axis: crate::Axis::Right, kind: crate::model::Kind::Terminal });
+        m.update(Action::ListenFixture.sent_by(Origin::System));
+        let source = crate::listen::Source::Pane(m.focused.unwrap_or_default());
+        m.update(Action::ListenStart { source, mic: false, id: "t".into(), at: 1 });
+        m.update(Action::ListenShow { on: true });
+        assert!(m.listen.shown);
+        assert_eq!(m.agent_chip(), None);
+        m.update(Action::SpaceClick { index: at.unwrap_or_default() });
+        assert!(m.listen.shown && m.talk.as_ref().is_some_and(|talk| !talk.open));
     }
 
     /// The user's click on the selected space (or the chip) opens its closed conversation, as
