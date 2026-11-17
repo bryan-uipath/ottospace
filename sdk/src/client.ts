@@ -19,6 +19,7 @@ import {
   taskPopReply,
   taskReply,
   recordReply,
+  audioProbeReply,
   traceReply,
   waitReply,
 } from "./parse.ts";
@@ -48,6 +49,7 @@ import type {
   MarkReply,
   MarksReply,
   RecordReply,
+  AudioProbeReply,
   TraceReply,
   KeyArgs,
   MouseArgs,
@@ -512,6 +514,17 @@ export class Client {
    */
   listenEnd(args: { why: "app_quit" | "stream_failed" }): Promise<Snapshot> {
     return this.snapshot({ cmd: "listen_end", ...args });
+  }
+  /**
+   * For tests (`OTTOSPACE_E2E`): hears the app `OTTOSPACE_HOST_ONLY` names, no recogniser, each
+   * buffer's presentation time kept. Rejects outside a test run: no client hears an app.
+   */
+  async audioProbeStart(): Promise<void> {
+    await this.send({ cmd: "audio_probe_start" });
+  }
+  /** For tests: stops it; the buffers heard. */
+  async audioProbeStop(): Promise<AudioProbeReply> {
+    return audioProbeReply(await this.send({ cmd: "audio_probe_stop" }));
   }
   /**
    * For tests (`OTTOSPACE_E2E`): the window's green button, pressed as the user would. It fills

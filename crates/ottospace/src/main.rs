@@ -453,8 +453,10 @@ const MAX_SPACE: f32 = 220.;
 const HOME_ICON: &str = "icons/home.svg";
 /// The top row's Fill the Whole Display button: off (arrows out), on (arrows in).
 const FILL_ICONS: [&str; 2] = ["icons/fill-expand.svg", "icons/fill-collapse.svg"];
-/// A space drawn as its badge alone, as Home always is: its icon.
+/// A space drawn as its badge alone: its icon.
 const BADGE_SPACE: f32 = 36.;
+/// Home's item: its 16-point house, 12 points either side, and its border.
+const HOME_SPACE: f32 = 41.;
 const TRAFFIC_LIGHTS: f32 = 80.;
 /// The narrowest a tab shrinks to when the strip is full: a few letters of its title and its ×.
 const MIN_TAB: f32 = 80.;
@@ -811,6 +813,8 @@ struct Workspace {
     key_notice: Option<String>,
     /// A test run's recording of its own window (`record_start`).
     recording: Option<record::Recording>,
+    /// A test run's ear on the canary's sound (`audio_probe_start`).
+    audio_probe: Option<listen_live::Probe>,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// Each pane's bounds inside its border, for e2e to check the live window's gap.
@@ -1314,6 +1318,7 @@ impl Workspace {
             visual_after: Vec::new(),
             key_notice: None,
             recording: None,
+            audio_probe: None,
             cells: HashMap::new(),
             frames: HashMap::new(),
             renders: 0,
@@ -2450,6 +2455,32 @@ impl Workspace {
                     let answer = match self.recording.take() {
                         Some(recording) => serde_json::json!({ "ok": true, "frames": recording.stop() }).to_string(),
                         None => control::error("not recording"),
+                    };
+                    let _ = reply.send(answer);
+                    continue;
+                }
+                Request::AudioProbeStart => {
+                    let started = match self.audio_probe {
+                        Some(_) => Err("already hearing".to_string()),
+                        None => listen_live::Probe::start(),
+                    };
+                    let answer = match started {
+                        Ok(probe) => {
+                            self.audio_probe = Some(probe);
+                            serde_json::json!({ "ok": true }).to_string()
+                        }
+                        Err(why) => control::error(&why),
+                    };
+                    let _ = reply.send(answer);
+                    continue;
+                }
+                Request::AudioProbeStop => {
+                    let answer = match self.audio_probe.take() {
+                        Some(probe) => {
+                            let (buffers, failed) = probe.stop();
+                            serde_json::json!({ "ok": true, "buffers": buffers, "failed": failed }).to_string()
+                        }
+                        None => control::error("not hearing"),
                     };
                     let _ = reply.send(answer);
                     continue;
@@ -3951,7 +3982,6 @@ impl Workspace {
             Some(Section::Apps) => return Some(self.apps_child(at)),
             // The offer to put a mark back, if it shows, is above the rows.
             Some(Section::Marks) => return Some(at + usize::from(self.mark_offered().is_some())),
-            Some(Section::Workbook) => return Some(at + usize::from(self.model.workbooks.offered().is_some())),
             // The day's all-day line is above the rows.
             Some(Section::Calendar) => {
                 let calendar = &self.model.calendar;
@@ -5539,11 +5569,11 @@ impl Workspace {
         // Home is its icon alone, always. Short of room, a space not selected is its badge
         // alone, its title on hover. Shorter still, the badges that do not fit after the selected
         // one give way to a count: the selected space always shows.
-        let compact = BADGE_SPACE + shown.len().saturating_sub(1) as f32 * TITLED_SPACE > room;
-        let tight = compact && room < 2. * BADGE_SPACE + TITLED_SPACE;
+        let compact = HOME_SPACE + shown.len().saturating_sub(1) as f32 * TITLED_SPACE > room;
+        let tight = compact && room < HOME_SPACE + BADGE_SPACE + TITLED_SPACE;
         let selected_width = if tight { MIN_SPACE } else { TITLED_SPACE };
         let others = shown.iter().filter(|space| space.of != selected && space.of != Owner::Home).count();
-        let fits = |n: usize| BADGE_SPACE + selected_width + n as f32 * BADGE_SPACE <= room;
+        let fits = |n: usize| HOME_SPACE + selected_width + n as f32 * BADGE_SPACE <= room;
         let badges =
             if !compact || fits(others) { others } else { (0..others).rev().find(|n| fits(n + 1)).unwrap_or(0) };
         let mut room_for = badges;
@@ -5598,7 +5628,7 @@ impl Workspace {
                 }
                 (Glyph::Home, _) => {
                     let ink = if on { theme::TEXT } else { theme::MUTED };
-                    let house = svg().path(HOME_ICON).size(px(15.)).flex_none().text_color(rgb(ink));
+                    let house = svg().path(HOME_ICON).size(px(16.)).flex_none().text_color(rgb(ink));
                     Some(house.into_any_element())
                 }
                 _ => None,
@@ -5629,12 +5659,13 @@ impl Workspace {
                 .h_full()
                 // The selected space keeps its name; the others give way first.
                 .when(!small, |d| d.min_w(px(MIN_SPACE)).max_w(px(MAX_SPACE)).flex_shrink())
-                .when(of == Owner::Home, |d| d.pr_3())
                 .when(on && compact && !small, |d| d.min_w(px(selected_width)))
                 .when(small, |d| d.flex_none().tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))))
                 .overflow_hidden()
                 .pl_3()
                 .pr_1()
+                // Home's house alone: as much room right as left. After `pr_1`, which would win.
+                .when(of == Owner::Home, |d| d.pr_3())
                 .flex()
                 .items_center()
                 .gap_2()
@@ -7024,7 +7055,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 9] = [
+        const TESTS_ONLY: [&str; 11] = [
             "capture_start",
             "repo_add",
             "inspector_fixture",
@@ -7033,6 +7064,8 @@ mod tests {
             "record_start",
             "record_stop",
             "listen_end",
+            "audio_probe_start",
+            "audio_probe_stop",
             "zoom_press",
         ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));

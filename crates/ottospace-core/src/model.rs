@@ -3484,8 +3484,10 @@ impl Model {
             if self.refusal(&sent.action, origin).is_some() {
                 return Vec::new();
             }
-            if *kind == crate::notice::Kind::Editor {
-                self.editor_note = None;
+            match kind {
+                crate::notice::Kind::Editor => self.editor_note = None,
+                crate::notice::Kind::Undo => self.workbooks.dismiss(text),
+                _ => {}
             }
             if !kind.held() {
                 self.notice_hidden.retain(|hidden| hidden.kind != *kind);
