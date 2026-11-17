@@ -5473,9 +5473,11 @@ impl Workspace {
         let marked = marked.and_then(|mark| self.model.marks.get(mark));
         let marked = marked.map(|mark| mark.key.map_or("◆".to_string(), |key| format!("◆ {}", key.to_uppercase())));
         // Focus: a line in the mode's accent over the header's foot and its 1pt border, taking no room.
-        // A live window with a title bar covers the header: the line goes in the 2pt gap above it.
+        // A raised window with a title bar covers the header: the line goes in the 2pt gap above it.
         let accent = theme::focus_line(self.model.focused == Some(id), self.model.mode());
-        let covered = bar > 0.0 && self.model.live == Some(id);
+        // A peek raises the window as entering does.
+        let raised = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
+        let covered = bar > 0.0 && raised == Some(id);
         let line = |d: Div| d.absolute().left_0().right_0().h(px(theme::FOCUS_LINE));
         let (line, top_line) = match accent {
             Some(colour) if covered => (None, Some(line(div()).top_0().bg(rgb(colour)))),
