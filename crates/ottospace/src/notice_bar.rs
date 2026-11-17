@@ -143,6 +143,23 @@ impl Workspace {
         }
     }
 
+    /// A workspace's Undo still offered while a higher notice (an error, a meeting) takes the bar: it
+    /// shows beside that one, so it cannot run out unseen. None while the bar says it itself.
+    pub(crate) fn undo_beside(&self, shown: &Notice) -> Option<Notice> {
+        let undo = self.model.workbooks.notice().filter(|_| shown.kind != Kind::Undo)?;
+        (!self.model.notice_hidden.contains(&undo)).then_some(undo)
+    }
+
+    /// The user's click on the Undo beside a higher notice: taken back, if still offered.
+    fn take_undo_beside(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.tick_now();
+        let shown = self.notice_shown();
+        if shown.is_some_and(|shown| self.undo_beside(&shown).is_some()) {
+            self.dispatch(Action::WorkbookUndo, self.input, window, cx);
+        }
+        cx.notify();
+    }
+
     /// A click or label on the bar's offer `drawn`. An undo whose time is up takes nothing back,
     /// and a notice that came since (a meeting's Join) is not taken in its place.
     pub(crate) fn take_notice_offer(&mut self, drawn: Offer, window: &Window, cx: &mut Context<Self>) {
@@ -204,6 +221,27 @@ impl Workspace {
                 .child(self.controls.mark("notice:offer"))
                 .on_click(click)
         });
+        // Beside a higher notice: the workspace's Undo, its text quiet, so it is seen before it runs out.
+        let undo = self.undo_beside(&shown).map(|undo| {
+            let click = cx.listener(|this, _, window, cx| this.take_undo_beside(window, cx));
+            let take = button("notice-undo")
+                .underline()
+                .child("Undo")
+                .child(mark(&self.marks, Mark::NoticeUndo))
+                .child(self.controls.mark("notice:undo"))
+                .on_click(click);
+            let said = div().flex_none().opacity(0.75).child(undo.text);
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_1()
+                .pl_2()
+                .border_l_1()
+                .border_color(rgb(text))
+                .child(said)
+                .child(take)
+        });
         let close = button("notice-close")
             .child("×")
             .child(mark(&self.marks, Mark::NoticeClose))
@@ -226,6 +264,7 @@ impl Workspace {
             .child(glyph(&shown, background, text))
             .child(crate::cut_text(shown.text.clone()).flex_1().id("notice-text").tooltip(tip))
             .children(offer)
+            .children(undo)
             .child(close);
         let bar = recessed(line, DEPTH).flex_none().w_full().h(px(self.bar.height));
         Some(bar.bg(rgb(background)).child(mark(&self.marks, Mark::Notice)))
@@ -248,6 +287,8 @@ impl Workspace {
             "offer": offer,
             "offer_rect": offer.and_then(|_| drawn(Mark::NoticeOffer)),
             "close": drawn(Mark::NoticeClose),
+            // A workspace's Undo beside a higher notice: its text and where its Undo is; null: none.
+            "undo": self.undo_beside(shown).map(|undo| serde_json::json!({ "text": undo.text, "rect": drawn(Mark::NoticeUndo) })),
             // Where it is drawn, and how much of it shows: less than its full height while it moves.
             "rect": drawn(Mark::Notice),
             "height": self.bar.height,

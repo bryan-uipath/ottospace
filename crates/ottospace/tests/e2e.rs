@@ -5883,6 +5883,32 @@ fn a_temporary_workspaces_dots_on_the_top_row_keep_it() {
     assert!(otto.control_opt("space-menu:1").is_none(), "a kept one has no …");
 }
 
+/// A workspace's Undo stays on the bar when an error takes it: beside the error, its text and its
+/// own Undo, the user's alone. Taken, the workspace is back and only the error is left.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_workspaces_undo_stays_beside_a_higher_notice() {
+    let home = user_folder("notice-undo-beside", r#"{"repos": []}"#);
+    let otto = Otto::launch_with("notice-undo-beside", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    let closed = otto.user_key("cmd-ctrl-w");
+    assert_eq!(closed["workbook_offer"], "closed", "{closed}");
+    std::fs::write(home.join("settings.json"), "{ not json").unwrap();
+    let both = otto.wait_for("the error over the Undo", |o| {
+        let s = o.drawn();
+        (s["notice_bar"]["level"] == "error" && s["notice_bar"]["undo"]["rect"].is_array()).then_some(s)
+    });
+    let bar = &both["notice_bar"];
+    assert_eq!((&bar["kind"], &bar["undo"]["text"]), (&json!("settings_problem"), &json!("Workspace closed")), "{bar}");
+    let undo = at(rect(&bar["undo"]["rect"]), 0.5, 0.5);
+    // A client's click takes nothing back.
+    assert_eq!(otto.click(undo, 1)["workbook_offer"], "closed");
+    let back = otto.user_click(undo);
+    assert_eq!((&back["workbook_offer"], space_kept(&back, 1)), (&Value::Null, json!(false)), "{back}");
+    let after = otto.drawn();
+    assert_eq!((&after["notice_bar"]["level"], &after["notice_bar"]["undo"]), (&json!("error"), &Value::Null));
+}
+
 /// × on a temporary workspace whose terminal runs something asks first, as ⌘Q does: closed, the
 /// program ends once its Undo runs out. Esc: still on the row. ↵: closed, Undo offered.
 #[test]

@@ -1204,6 +1204,8 @@ export interface NoticeBar {
   offer_rect: Rect | null;
   /** Its ×. Only the user's click dismisses. */
   close: Rect | null;
+  /** A workspace's Undo still offered beside a higher notice (an error, a meeting): its text and its Undo's rect. Only the user's click takes it. */
+  undo: { text: string; rect: Rect | null } | null;
   rect: Rect | null;
   /** How much of it shows: less than 28 while it opens or closes. The panes' feet are this much higher. */
   height: number;
