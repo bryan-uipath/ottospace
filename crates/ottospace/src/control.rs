@@ -231,6 +231,14 @@ pub enum Request {
     },
     /// Reads the repository list from disk again. It is `state.repos` in the reply.
     Repos,
+    /// Opens a file read only in a viewer pane, beside `beside` (default: the focused pane):
+    /// markdown drawn, code and text with line numbers, a picture shown. `path` is absolute and
+    /// names a regular file; the viewer reloads it when it changes. Nothing is ever written.
+    OpenFile {
+        path: String,
+        #[serde(default)]
+        beside: Option<PaneId>,
+    },
     /// Opens a terminal in a listed repository or worktree, by its `path` from `state.repos`.
     OpenRepo {
         path: String,

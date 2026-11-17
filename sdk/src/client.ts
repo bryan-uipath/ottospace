@@ -356,6 +356,10 @@ export class Client {
   openRepo(args: OpenRepoArgs): Promise<Snapshot> {
     return this.snapshot({ cmd: "open_repo", ...args });
   }
+  /** A file, read only, in a viewer pane beside `beside` (default: the focused pane). `path` is absolute. */
+  openFile(args: { path: string; beside?: number }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "open_file", ...args });
+  }
   async taskAdd(args: TaskAddArgs): Promise<TaskReply> {
     return taskReply(await this.send({ cmd: "task_add", ...args }));
   }

@@ -3200,7 +3200,8 @@ fn the_picker_filter_is_a_field_and_offers_apps_that_are_not_running() {
     };
     // Nothing typed: what the picker showed before. The folders are read on another thread.
     let reply = otto.call(json!({"cmd": "picker"}));
-    assert_eq!((rows(&reply), reply["field"]["of"].as_str()), (vec!["terminal ".to_string()], Some("picker")));
+    let none_typed = vec!["terminal ".to_string(), "file ".to_string()];
+    assert_eq!((rows(&reply), reply["field"]["of"].as_str()), (none_typed, Some("picker")));
     otto.wait_for("the scan of the apps folder", |o| {
         let reply = o.call(json!({"cmd": "picker_query", "query": "sk"}));
         (rows(&reply) == ["closed Sketchpad", "closed Skylark", "closed Lumen Desk"]).then_some(())
@@ -11235,4 +11236,185 @@ fn the_log_says_the_start_the_displays_and_the_quit() {
     assert!(events.iter().all(|e| e["at"].as_str().is_some_and(|at| at.len() == 25)), "{events:?}");
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+}
+
+/// The markdown fixture and its picture, copied into a folder of the test's own: a test may
+/// change or remove them. The path as the app resolves it (the temp folder is behind a link).
+fn fixture_copy(name: &str) -> PathBuf {
+    let dir = support::temp(&format!("ottospace-e2e-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/markdown");
+    for file in ["fixture.md", "checker.png"] {
+        std::fs::copy(from.join(file), dir.join(file)).unwrap();
+    }
+    std::fs::canonicalize(&dir).unwrap()
+}
+
+/// Viewer `pane`'s view in a reply: `state.viewers`.
+fn view(reply: &Value, pane: u64) -> Value {
+    reply["state"]["viewers"][pane.to_string()].clone()
+}
+
+/// The state once viewer `pane` has read its file and been laid out: `lines` read, `most` known.
+fn viewer_read(otto: &Otto, pane: u64, lines: u64) -> Value {
+    otto.wait_for("the file read and laid out", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        let v = view(&state, pane);
+        (v["read"] == json!({"status": "shown", "lines": lines}) && v["most"].is_u64()).then_some(state)
+    })
+}
+
+fn line_count(path: &Path) -> u64 {
+    std::fs::read_to_string(path).unwrap().lines().count() as u64
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_file_opens_in_a_viewer_moves_by_counts_reloads_and_edits_beside() {
+    let dir = fixture_copy("viewer");
+    let file = dir.join("fixture.md");
+    let path = file.to_str().unwrap();
+    // The stand-in editor: says what it was given, then waits until it is killed.
+    let editor = dir.join("edit");
+    let script = format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {}/args\nwhile :; do sleep 0.1; done\n", dir.display());
+    std::fs::write(&editor, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let env = [("VISUAL", editor.to_str().unwrap()), ("EDITOR", "/usr/bin/false")];
+    let otto = Otto::launch_with("viewer", &env);
+    otto.call(json!({"cmd": "split"}));
+
+    // A client opens it beside the terminal: the pane says its path, the state its kind and lines.
+    let reply = otto.call(json!({"cmd": "open_file", "path": path}));
+    assert_eq!(reply["state"]["panes"][1]["kind"], json!({"type": "file", "path": path}));
+    assert_eq!((reply["state"]["focused"].as_u64(), view(&reply, 2)["shows"].as_str()), (Some(2), Some("markdown")));
+    let lines = line_count(&file);
+    let state = viewer_read(&otto, 2, lines);
+    assert_eq!(state["viewers"]["2"]["body"], "markdown");
+    assert_eq!(state["viewers"]["2"]["shape"]["blocks"]["table"], 2);
+    assert_eq!(state["titles"]["2"], "fixture.md");
+    // Never the file's text.
+    assert!(!state.to_string().contains("pneumonoultramicroscopic"), "the file's text is in the state");
+
+    // A count before a move: the status bar shows it typed; Esc takes it back.
+    let reply = otto.call(json!({"cmd": "key", "keys": "1 0"}));
+    assert_eq!(view(&reply, 2)["pending"], "10");
+    assert_eq!(view(&otto.call(json!({"cmd": "key", "keys": "escape"})), 2)["pending"], Value::Null);
+    assert_eq!(view(&otto.call(json!({"cmd": "key", "keys": "1 0 j"})), 2)["top"], 10);
+    let most = view(&otto.call(json!({"cmd": "key", "keys": "shift-g"})), 2)["most"].as_u64().unwrap();
+    assert!(most > 10, "the fixture is longer than the pane: {most}");
+    assert_eq!(view(&otto.call(json!({"cmd": "state"})), 2)["top"], most);
+    assert_eq!(view(&otto.call(json!({"cmd": "key", "keys": "g g 5 j"})), 2)["top"], 5);
+    // The shell drew it there: its next report says the same line.
+    otto.wait_for("the view at line 5", |o| (view(&o.call(json!({"cmd": "state"})), 2)["top"] == 5).then_some(()));
+
+    // Changed on disk: read again, at the same line.
+    let mut text = std::fs::read_to_string(&file).unwrap();
+    text.push_str("\nOne more line.\n\nAnd another.\n");
+    std::fs::write(&file, &text).unwrap();
+    let state = viewer_read(&otto, 2, line_count(&file));
+    assert_eq!(view(&state, 2)["top"], 5);
+
+    // ⌃G: the user's editor on the file, in a terminal beside the viewer.
+    let reply = otto.call(json!({"cmd": "key", "keys": "ctrl-g"}));
+    assert_eq!((pane_ids(&reply), reply["state"]["focused"].as_u64()), (vec![1, 2, 3], Some(3)));
+    assert_eq!(reply["state"]["panes"][2]["kind"]["type"], "terminal");
+    let args = dir.join("args");
+    otto.wait_for("the editor", |_| std::fs::read_to_string(&args).ok().filter(|a| *a == format!("{path}\n")));
+
+    // Gone from disk: "File not found", and back when it is.
+    std::fs::remove_file(&file).unwrap();
+    otto.wait_for("the file missing", |o| {
+        (view(&o.call(json!({"cmd": "state"})), 2)["read"]["status"] == "missing").then_some(())
+    });
+    std::fs::write(&file, "# Back\n").unwrap();
+    viewer_read(&otto, 2, 1);
+
+    // A picture; and what is refused: a relative path, a folder, no file.
+    let picture = dir.join("checker.png");
+    let reply = otto.call(json!({"cmd": "open_file", "path": picture, "beside": 1}));
+    let id = pane_ids(&reply).into_iter().max().unwrap();
+    assert_eq!(view(&reply, id)["shows"], "image");
+    otto.wait_for("the picture", |o| {
+        (o.call(json!({"cmd": "state"}))["viewers"][id.to_string()]["body"] == "image").then_some(())
+    });
+    for bad in [json!("fixture.md"), json!(dir), json!(dir.join("gone.md"))] {
+        let reply = otto.raw(&json!({"cmd": "open_file", "path": bad}).to_string());
+        assert_eq!(reply["ok"], false, "{bad}: {reply}");
+    }
+
+    // The picker's "File…" asks for a file: a test run shows no panel and counts the ask.
+    otto.call(json!({"cmd": "picker"}));
+    otto.call(json!({"cmd": "picker_query", "query": "file"}));
+    let reply = otto.call(json!({"cmd": "picker_choose"}));
+    assert_eq!((reply["mode"].as_str(), reply["counts"]["file_prompts"].as_u64()), (Some("normal"), Some(1)));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_viewer_comes_back_after_a_restart_at_its_line() {
+    let dir = fixture_copy("viewer-restart");
+    let home = support::temp(&format!("ottospace-e2e-home-viewer-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let file = dir.join("fixture.md");
+    let path = file.to_str().unwrap();
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let mut otto = Otto::launch_with("viewer-restart-1", &env);
+    otto.call(json!({"cmd": "open_file", "path": path}));
+    viewer_read(&otto, 1, line_count(&file));
+    otto.call(json!({"cmd": "key", "keys": "2 0 j"}));
+    otto.wait_for("the view at line 20", |o| (view(&o.call(json!({"cmd": "state"})), 1)["top"] == 20).then_some(()));
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+    let text = std::fs::read_to_string(home.join("layout.json")).unwrap();
+    assert!(text.contains("\"type\": \"file\"") && text.contains("\"top\": 20"), "{text}");
+    assert!(!text.contains("pneumonoultramicroscopic"), "the file's text is not kept");
+
+    let otto = Otto::launch_with("viewer-restart-2", &env);
+    let state = viewer_read(&otto, 1, line_count(&file));
+    assert_eq!(state["state"]["panes"][0]["kind"], json!({"type": "file", "path": path}));
+    otto.wait_for("the view back at line 20", |o| {
+        (view(&o.call(json!({"cmd": "state"})), 1)["top"] == 20).then_some(())
+    });
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_cmd_click_on_a_path_in_a_terminal_opens_the_viewer_beside_and_reuses_it() {
+    let dir = fixture_copy("viewer-click");
+    std::fs::write(dir.join("notes.txt"), "one\ntwo\n").unwrap();
+    let otto = Otto::launch("viewer-click");
+    otto.call(json!({"cmd": "split"}));
+    let typed = format!("cd '{}' && printf 'fixture.md\\nnotes.txt:2\\n'\r", dir.display());
+    otto.call(json!({"cmd": "type", "pane": 1, "text": typed}));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^notes.txt:2$"}));
+    let state = otto.drawn();
+    let lines: Vec<String> =
+        state["terminals"]["1"]["lines"].as_array().unwrap().iter().map(|l| l.as_str().unwrap().to_string()).collect();
+    let bounds = rect(&state["bounds"]["1"]);
+    let cell = (state["cell"][0].as_f64().unwrap(), state["cell"][1].as_f64().unwrap());
+    let on = |text: &str| {
+        let row =
+            lines.iter().position(|line| line == text).unwrap_or_else(|| panic!("{text} not on screen: {lines:?}"));
+        [bounds[0] + cell.0 * 2.5, bounds[1] + cell.1 * (row as f64 + 0.5)]
+    };
+    let cmd_click = |p: [f64; 2]| {
+        otto.call(json!({"cmd": "mouse", "action": "down", "x": p[0], "y": p[1], "modifiers": ["cmd"]}));
+        otto.call(json!({"cmd": "mouse", "action": "up", "x": p[0], "y": p[1], "modifiers": ["cmd"]}))
+    };
+    let fixture = dir.join("fixture.md");
+    cmd_click(on("fixture.md"));
+    let reply = otto.wait_for("the viewer", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        (pane_ids(&state) == [1, 2]).then_some(state)
+    });
+    assert_eq!(reply["state"]["panes"][1]["kind"], json!({"type": "file", "path": fixture}));
+    assert_eq!((reply["state"]["focused"].as_u64(), view(&reply, 2)["opener"].as_u64()), (Some(1), Some(1)));
+    // The next one goes to the same viewer; the line number is no part of the path.
+    cmd_click(on("notes.txt:2"));
+    let reply = otto.wait_for("the viewer reused", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        (state["state"]["panes"][1]["kind"]["path"] == json!(dir.join("notes.txt"))).then_some(state)
+    });
+    assert_eq!((pane_ids(&reply), view(&reply, 2)["shows"].as_str()), (vec![1, 2], Some("text")));
 }

@@ -66,6 +66,8 @@ pub enum Kind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bundle: Option<String>,
     },
+    /// A file, read only (`viewer`): its view is the model's `viewers`, by pane.
+    File { path: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -316,6 +318,8 @@ pub const MAX_FILTER: usize = 200;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PickItem {
     Terminal,
+    /// "File…": the open panel, then the file in a viewer.
+    File,
     /// A running app, by name. The shell hosts its main window.
     App {
         name: String,
@@ -331,6 +335,7 @@ impl PickItem {
     pub fn label(&self) -> &str {
         match self {
             PickItem::Terminal => "Terminal",
+            PickItem::File => "File…",
             PickItem::App { name } | PickItem::Closed { name, .. } => name,
         }
     }
@@ -1248,6 +1253,38 @@ pub enum Action {
     /// Open Settings: a tab titled "Settings" whose terminal runs the user's editor on
     /// `settings.json`, or the one opened so that is still there. Only the user's.
     EditSettings,
+    /// The file at `path` (absolute) in a viewer: in `beside` (default: the focused pane) if it
+    /// is empty, else split from it along `axis`. `reuse`: the viewer `beside` opened before, in
+    /// its tab, shows it instead, and the keyboard stays on `beside` (`docs/ai/file-viewer.md`).
+    OpenFile {
+        path: String,
+        axis: Axis,
+        beside: Option<PaneId>,
+        reuse: bool,
+    },
+    /// A key while the focused viewer has the keyboard, named as `vim::Keys::press` takes it.
+    ViewerKey {
+        key: String,
+    },
+    /// The view as the shell drew it: the first line on show, the last place it may be, the
+    /// lines on show. After a layout and the user's wheel. The shell's alone.
+    ViewerScrolled {
+        pane: PaneId,
+        top: u32,
+        most: u32,
+        page: u32,
+    },
+    /// What the shell read of the file a viewer shows, never its text. The shell's alone.
+    ViewerRead {
+        pane: PaneId,
+        path: String,
+        read: crate::viewer::Read,
+    },
+    /// ⌃G or Edit: the user's editor on the viewer's file (default: the focused pane's), in a
+    /// terminal beside it.
+    ViewerEdit {
+        pane: Option<PaneId>,
+    },
     /// `settings.json` as the shell read it: at start, then each time it changed. The shell's
     /// alone: what is right applies, what is wrong is said in the status bar.
     /// `written`: just after the app wrote it itself.
@@ -1723,6 +1760,19 @@ impl Action {
         matches!(kind, Some(Kind::Slot { .. }))
     }
 
+    /// Whether it would put a file in a pane by a path the viewer does not open (`viewer::sound`).
+    fn makes_unsound_file(&self) -> bool {
+        let kind = match self {
+            Action::Split { kind, .. }
+            | Action::Open { kind, .. }
+            | Action::Adopt { kind, .. }
+            | Action::Fill { kind, .. } => Some(kind),
+            Action::SlotHosted { kind, .. } => kind.as_ref(),
+            _ => None,
+        };
+        matches!(kind, Some(Kind::File { path }) if !crate::viewer::sound(path))
+    }
+
     /// Whether the action acts on panes, tabs or the bar: it waits while the picker, the new-task
     /// box, the key reference or visual mode has the keyboard.
     pub fn for_panes(&self) -> bool {
@@ -1753,6 +1803,8 @@ impl Action {
                 | Action::NewTab
                 | Action::NewEmptyTab
                 | Action::EditSettings
+                | Action::OpenFile { .. }
+                | Action::ViewerEdit { .. }
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
                 | Action::SpaceSelect { .. }
@@ -2080,7 +2132,12 @@ impl Action {
             | Action::SlotWindows { .. }
             | Action::SlotHosted { .. }
             | Action::SlotTick { .. }
-            | Action::WindowGone { .. } => false,
+            | Action::WindowGone { .. }
+            | Action::OpenFile { .. }
+            | Action::ViewerKey { .. }
+            | Action::ViewerScrolled { .. }
+            | Action::ViewerRead { .. }
+            | Action::ViewerEdit { .. } => false,
         }
     }
 
@@ -2375,6 +2432,11 @@ impl Action {
             | Action::EditorOpen
             | Action::EditorKeys { .. }
             | Action::EditorDone { .. }
+            | Action::OpenFile { .. }
+            | Action::ViewerKey { .. }
+            | Action::ViewerScrolled { .. }
+            | Action::ViewerRead { .. }
+            | Action::ViewerEdit { .. }
             | Action::SetFeatures { .. } => None,
         }
     }
@@ -2521,6 +2583,28 @@ pub enum Effect {
     /// terminal runs that, not a shell. Carried out with the pane's `Opened`.
     EditSettings {
         pane: PaneId,
+    },
+    /// Pane `pane` was just opened for the user's editor on `path`, a viewer's file. Carried out
+    /// with the pane's `Opened`, as `EditSettings`.
+    EditFile {
+        pane: PaneId,
+        path: String,
+    },
+    /// The user chose "File…" in the picker: ask which file (the open panel), then send
+    /// `OpenFile` as theirs, in a new tab first with `new_tab`.
+    ChooseFile {
+        axis: Axis,
+        new_tab: bool,
+    },
+    /// Read the file viewer `pane` shows (its `Kind::File`), and watch it: `ViewerRead` with what
+    /// was found, again when it changes. Its last file is no longer watched.
+    ViewFile {
+        pane: PaneId,
+    },
+    /// Scroll viewer `pane` so line `top` is the first on show.
+    ViewerScroll {
+        pane: PaneId,
+        top: u32,
     },
     /// `settings.json` is right again: what the shell reads as it goes (`windows`, `capture`,
     /// `wheel_to_apps`, `workbook_scrollback_lines`) reads these from now on.
@@ -2761,6 +2845,7 @@ pub mod chat;
 pub mod editor;
 pub mod slots;
 mod transcribe;
+mod viewer;
 pub mod worktrees;
 pub(crate) use worktrees::subagent_path;
 #[cfg(test)]
@@ -3056,6 +3141,8 @@ pub struct Model {
     /// The pane Open Settings opened (or a restore opened again), while it may still be there.
     #[serde(skip)]
     pub(crate) settings_pane: Option<PaneId>,
+    /// Each file viewer's view, by pane: one for each `Kind::File` pane (`settle_viewers`).
+    pub viewers: std::collections::BTreeMap<PaneId, crate::viewer::Viewer>,
     /// What the status bar says of `settings.json` (`settings_line`).
     #[serde(skip)]
     settings_file: crate::settings::Watch,
@@ -3199,6 +3286,7 @@ impl Default for Model {
             // In this crate's tests every feature is on: a test of one that is off turns it off.
             features: if cfg!(test) { Features::all() } else { Features::default() },
             settings_pane: None,
+            viewers: Default::default(),
             settings_file: crate::settings::Watch::default(),
             editing: None,
             editor_note: None,
@@ -3317,6 +3405,10 @@ impl Model {
             Action::NoticeDismiss { .. } => Some(crate::notice::USERS_ALONE),
             // So does a scroll in another app.
             Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
+            // What was read and drawn of a file is the shell's to say.
+            Action::ViewerRead { .. } | Action::ViewerScrolled { .. } if origin == Origin::Socket => {
+                Some(viewer::SHELLS_ALONE)
+            }
             // Nor puts the transcript the user has in the drawer away, or the keys over it.
             Action::TalkToggle | Action::TalkKeys { on: true } if self.listen.shown => Some(rail::RAIL_USERS),
             // Only the user starts, pauses, resumes or stops a transcript; only the shell reports
@@ -3566,6 +3658,12 @@ impl Model {
             // Its brief says the ask, the notes and the drawings are the user's: so they are.
             action if self.capture.is_some() && self.drafts(action) => Some(capture::DRAFT_USERS),
             action if self.confirm.is_some() && action.takes_keyboard() => Some(CONFIRM_UP),
+            // Nor takes the workspace "Close this workspace?" is about off the row: the user answers.
+            Action::SpaceHide { .. } | Action::CloseTab { .. }
+                if self.confirm.as_ref().is_some_and(|c| c.close.is_some()) =>
+            {
+                Some(CONFIRM_UP)
+            }
             // A key a client presses is input to the wait, as a label's letter is to sneak mode.
             Action::MarkPrefix | Action::MarkEdit { .. } | Action::ListMarkEdit { .. } => None,
             action if self.mark_input.is_some() && action.takes_keyboard() => Some(marks::INPUT_ON),
@@ -3756,7 +3854,7 @@ impl Model {
         let sent = self.space_click(sent.into());
         // A feature that is off is absent: its actions change nothing and ask for nothing.
         // Nor does a pane become a slot but by `SlotMake`.
-        if self.disabled(&sent.action).is_some() || sent.action.makes_slot_kind() {
+        if self.disabled(&sent.action).is_some() || sent.action.makes_slot_kind() || sent.action.makes_unsound_file() {
             return Vec::new();
         }
         let (origin, line) = (sent.origin, self.compose_line().cloned());
@@ -3824,6 +3922,7 @@ impl Model {
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
         self.settle_row_menu();
+        self.settle_viewers(&mut effects);
         self.settle_listen();
         self.settle_agent(origin);
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
@@ -4950,6 +5049,10 @@ impl Model {
                     Some(PickItem::App { name }) => {
                         effects.push(Effect::HostApp { name, axis: picker.axis, new_tab: picker.new_tab })
                     }
+                    // The shell asks which file (the open panel), then sends `OpenFile` as the user's.
+                    Some(PickItem::File) => {
+                        effects.push(Effect::ChooseFile { axis: picker.axis, new_tab: picker.new_tab })
+                    }
                     Some(PickItem::Closed { name, path }) => {
                         effects.push(Effect::LaunchApp { name, path, axis: picker.axis, new_tab: picker.new_tab })
                     }
@@ -5332,6 +5435,11 @@ impl Model {
                 effects.push(Effect::ForgetLayout);
             }
             Action::EditSettings => self.edit_settings(effects),
+            Action::OpenFile { path, axis, beside, reuse } => self.open_file(path, axis, beside, reuse, effects),
+            Action::ViewerKey { key } => self.viewer_key(&key, effects),
+            Action::ViewerScrolled { pane, top, most, page } => self.viewer_scrolled(pane, top, most, page),
+            Action::ViewerRead { pane, path, read } => self.viewer_read(pane, &path, read),
+            Action::ViewerEdit { pane } => self.viewer_edit(pane, effects),
             Action::SettingsRead { text, written } => self.settings_read(&text, written, effects),
             Action::UnfilledOpen { pane } => self.unfilled_open(pane, effects),
             Action::WorkbookSave { uid, cwds, histories } => self.workbook_save(uid, (&cwds, &histories), effects),
@@ -6279,7 +6387,7 @@ impl Model {
         for pane in &self.panes {
             let id = Some(pane.id as u32);
             match &pane.kind {
-                Kind::Empty | Kind::Slot { .. } => {}
+                Kind::Empty | Kind::Slot { .. } | Kind::File { .. } => {}
                 Kind::Terminal => {
                     let info = self.terminals.iter().find(|info| info.pane == pane.id);
                     let cwd = info.and_then(|info| info.cwd.clone()).or(pane.cwd.clone());
@@ -7699,6 +7807,7 @@ impl Model {
         let kind = match pane.kind {
             Kind::App { .. } => None,
             Kind::Terminal => Some("a terminal"),
+            Kind::File { .. } => Some("a file"),
             Kind::Empty | Kind::Slot { .. } => Some("empty"),
         };
         if let Some(kind) = kind {
@@ -8693,6 +8802,11 @@ mod tests {
         Action::RestoreLayout { .. },
         Action::StartFresh,
         Action::EditSettings,
+        Action::OpenFile { .. },
+        Action::ViewerKey { .. },
+        Action::ViewerScrolled { .. },
+        Action::ViewerRead { .. },
+        Action::ViewerEdit { .. },
         Action::SettingsRead { .. },
         Action::UnfilledOpen { .. },
         Action::WorkbookSave { .. },
@@ -8983,6 +9097,11 @@ mod tests {
             },
             Action::StartFresh,
             Action::EditSettings,
+            Action::OpenFile { path: "/w/a.md".into(), axis: Axis::Right, beside: None, reuse: false },
+            Action::ViewerKey { key: "j".into() },
+            Action::ViewerScrolled { pane: 1, top: 0, most: 0, page: 0 },
+            Action::ViewerRead { pane: 1, path: "/w/a.md".into(), read: crate::viewer::Read::Missing },
+            Action::ViewerEdit { pane: None },
             Action::SettingsRead { text: "{}".into(), written: false },
             Action::UnfilledOpen { pane: 1 },
             Action::WorkbookSave { uid: text(), cwds: Vec::new(), histories: Vec::new() },
@@ -9357,6 +9476,9 @@ mod tests {
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
                     Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
+                    Action::ViewerRead { .. } | Action::ViewerScrolled { .. } if origin == Origin::Socket => {
+                        Some(viewer::SHELLS_ALONE)
+                    }
                     Action::WorktreeEdit { .. } | Action::ComposeWorktree { .. } => Some(crate::repos::USERS_ALONE),
                     Action::WorktreeAdded { .. } | Action::WorktreeFailed { .. } if origin == Origin::Socket => {
                         Some(crate::repos::USERS_ALONE)
@@ -15448,6 +15570,9 @@ mod tests {
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
                     Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
+                    Action::ViewerRead { .. } | Action::ViewerScrolled { .. } if origin == Origin::Socket => {
+                        Some(viewer::SHELLS_ALONE)
+                    }
                     Action::WorktreeEdit { .. } | Action::ComposeWorktree { .. } => Some(crate::repos::USERS_ALONE),
                     Action::WorktreeAdded { .. } | Action::WorktreeFailed { .. } if origin == Origin::Socket => {
                         Some(crate::repos::USERS_ALONE)

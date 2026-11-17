@@ -106,7 +106,7 @@ impl Model {
             return None;
         }
         match &pane.kind {
-            Kind::Empty | Kind::Slot { .. } => None,
+            Kind::Empty | Kind::Slot { .. } | Kind::File { .. } => None,
             Kind::Terminal => Some(Source::Terminal {
                 cwd: read.and_then(|f| f.cwd.clone()).or_else(|| pane.cwd.clone()),
                 program: read.and_then(|f| f.program.clone()),

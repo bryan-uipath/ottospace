@@ -32,6 +32,14 @@ use ottospace_core::{Action, Origin, theme};
 use crate::markdown::{self, Block, Span};
 use crate::{Tooltip, Workspace};
 
+/// Whose markdown is drawn, for its links and pictures: a conversation's (inside its task's
+/// repository), or a file viewer's (inside the file's folder).
+#[derive(Clone)]
+pub(crate) enum Links {
+    Chat(Subject),
+    File { pane: ottospace_core::PaneId, dir: String },
+}
+
 /// A native agent: its process, the requests it waits on by our number, and when it started.
 pub struct Native {
     driver: Driver,
@@ -460,10 +468,12 @@ impl Workspace {
         cx.stop_propagation();
     }
 
-    /// A click on a link: a web page in the default browser, a file of the repository revealed
-    /// in Finder. Only the user's click, and only what `links::target` gave; a file is checked
-    /// again with its links resolved, so a symlink cannot lead out of the repository.
-    fn open_link(&mut self, subject: &Subject, target: &Target, cx: &mut Context<Self>) {
+    /// A click on a link: a web page in the default browser, a file of the repository (or of the
+    /// viewed file's folder) revealed in Finder; with ⌘ (`cmd`), a text or markdown file opens in
+    /// the viewer instead (`viewer::opens_on_click`). Only the user's click, and only what
+    /// `links::target` gave; a file is checked again with its links resolved, so a symlink cannot
+    /// lead out of the folder.
+    fn open_link(&mut self, of: &Links, target: &Target, cmd: bool, window: &Window, cx: &mut Context<Self>) {
         if self.input != Origin::User {
             self.error = Some("only the user's click opens a link".into());
             return;
@@ -478,8 +488,23 @@ impl Workspace {
             }
             Target::File(path) => {
                 let real = std::fs::canonicalize(path).ok();
-                let root = self.repo_of(subject).and_then(|repo| std::fs::canonicalize(repo).ok());
+                let root = match of {
+                    Links::Chat(subject) => self.repo_of(subject),
+                    Links::File { dir, .. } => Some(dir.clone()),
+                };
+                let root = root.and_then(|root| std::fs::canonicalize(root).ok());
                 match real.zip(root).filter(|(real, root)| real.starts_with(root)) {
+                    Some((real, _)) if cmd && ottospace_core::viewer::opens_on_click(&real.to_string_lossy()) => {
+                        self.drawer.opened.push("viewer");
+                        let path = real.to_string_lossy().into_owned();
+                        // A viewer's link goes to the viewer it opened, beside it.
+                        let (beside, reuse) = match of {
+                            Links::File { pane, .. } => (Some(*pane), true),
+                            Links::Chat(_) => (None, false),
+                        };
+                        let open = Action::OpenFile { path, axis: ottospace_core::Axis::Right, beside, reuse };
+                        self.dispatch(open, Origin::User, window, cx);
+                    }
                     Some((real, _)) => {
                         self.drawer.opened.push("file");
                         if !test {
@@ -740,13 +765,13 @@ impl Workspace {
                     self.drawer.looks.get(subject).and_then(|look| look.parsed.get(&id)).map(|(_, b)| b.clone());
                 let blocks = blocks.unwrap_or_else(|| Rc::new(markdown::parse(text.text(), None)));
                 let plain = markdown::plain(&blocks);
-                let at = format!("{key}:{id}");
+                let (at, of) = (format!("{key}:{id}"), Links::Chat(subject.clone()));
                 let body = div()
                     .flex()
                     .flex_col()
                     .gap_1p5()
                     .text_sm()
-                    .children(blocks.iter().enumerate().map(|(n, block)| self.block(subject, &at, n, block, cx)))
+                    .children(blocks.iter().enumerate().map(|(n, block)| self.block(&of, &at, n, block, cx)))
                     .children(streaming.then(|| div().text_xs().text_color(rgb(theme::MUTED)).child("…")));
                 self.with_copy(key, id, body, plain, text.text().to_string(), cx)
             }
@@ -838,10 +863,12 @@ impl Workspace {
                 .child(file.shown(repo.as_deref()));
             let path = match target {
                 Some(target) => {
-                    let subject = subject.clone();
-                    path.cursor_pointer()
-                        .hover(|s| s.text_color(rgb(theme::PRIMARY)))
-                        .on_click(cx.listener(move |this, _, _, cx| this.open_link(&subject, &target, cx)))
+                    let of = Links::Chat(subject.clone());
+                    path.cursor_pointer().hover(|s| s.text_color(rgb(theme::PRIMARY))).on_click(cx.listener(
+                        move |this, e: &gpui::ClickEvent, window, cx| {
+                            this.open_link(&of, &target, e.modifiers().platform, window, cx)
+                        },
+                    ))
                 }
                 None => path,
             };
@@ -932,13 +959,13 @@ impl Workspace {
         div().group("chat-msg").relative().child(body).child(words).into_any_element()
     }
 
-    /// One block of a reply.
-    fn block(&self, subject: &Subject, at: &str, n: usize, block: &Block, cx: &mut Context<Self>) -> AnyElement {
+    /// One block of a reply, or of a viewed markdown file.
+    pub(crate) fn block(&self, of: &Links, at: &str, n: usize, block: &Block, cx: &mut Context<Self>) -> AnyElement {
         let at = format!("{at}.{n}");
         match block {
-            Block::Para(spans) => self.spans(subject, &at, spans, cx),
+            Block::Para(spans) => self.spans(of, &at, spans, cx),
             Block::Heading(spans) => {
-                div().font_weight(FontWeight::SEMIBOLD).child(self.spans(subject, &at, spans, cx)).into_any_element()
+                div().font_weight(FontWeight::SEMIBOLD).child(self.spans(of, &at, spans, cx)).into_any_element()
             }
             Block::Code { label, shown, copy, more } => {
                 let copy = copy.clone();
@@ -983,7 +1010,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .children(inner.iter().enumerate().map(|(i, block)| self.block(subject, &at, i, block, cx)))
+                .children(inner.iter().enumerate().map(|(i, block)| self.block(of, &at, i, block, cx)))
                 .into_any_element(),
             Block::List { start, items } => div()
                 .flex()
@@ -999,7 +1026,7 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .children(item.iter().enumerate().map(|(j, b)| self.block(subject, &at, j, b, cx))),
+                            .children(item.iter().enumerate().map(|(j, b)| self.block(of, &at, j, b, cx))),
                     )
                 }))
                 .into_any_element(),
@@ -1017,7 +1044,7 @@ impl Workspace {
                         .when(r > 0, |d| d.border_t_1().border_color(rgb(theme::BORDER)))
                         .children(row.iter().enumerate().map(|(c, cell)| {
                             let at = format!("{at}.{r}.{c}");
-                            div().flex_1().min_w_0().px_1p5().py_0p5().child(self.spans(subject, &at, cell, cx))
+                            div().flex_1().min_w_0().px_1p5().py_0p5().child(self.spans(of, &at, cell, cx))
                         }))
                 }))
                 .into_any_element(),
@@ -1037,7 +1064,7 @@ impl Workspace {
     }
 
     /// A run of spans as one text: styles by range, links clickable with their target on hover.
-    fn spans(&self, subject: &Subject, at: &str, spans: &[Span], cx: &mut Context<Self>) -> AnyElement {
+    fn spans(&self, of: &Links, at: &str, spans: &[Span], cx: &mut Context<Self>) -> AnyElement {
         let mut text = String::new();
         let (mut styles, mut links) = (Vec::new(), Vec::new());
         for span in spans {
@@ -1069,13 +1096,13 @@ impl Workspace {
         }
         let ranges: Vec<_> = links.iter().map(|(range, _)| range.clone()).collect();
         let (targets, tips) = (Rc::new(links), ranges.clone());
-        let (workspace, subject) = (cx.entity().downgrade(), subject.clone());
+        let (workspace, of) = (cx.entity().downgrade(), of.clone());
         let clicked = targets.clone();
         InteractiveText::new(ElementId::Name(format!("chat-text:{at}").into()), styled)
-            .on_click(ranges, move |n, _, cx| {
+            .on_click(ranges, move |n, window, cx| {
                 let Some((_, link)) = clicked.get(n) else { return };
-                let target = link.target.clone();
-                let _ = workspace.update(cx, |this, cx| this.open_link(&subject, &target, cx));
+                let (target, cmd) = (link.target.clone(), window.modifiers().platform);
+                let _ = workspace.update(cx, |this, cx| this.open_link(&of, &target, cmd, window, cx));
             })
             .tooltip(move |index, _, cx| {
                 let n = tips.iter().position(|range| range.contains(&index))?;
@@ -1411,7 +1438,7 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
 /// Reads a local image for a thumbnail, off the main thread: inside the repository once its
 /// links are resolved, a regular file of at most `MAX_THUMB`, a PNG, JPEG, GIF or WebP by its
 /// first bytes. Never a URL: nothing is fetched.
-fn read_thumb(path: String, repo: Option<String>) -> Thumb {
+pub(crate) fn read_thumb(path: String, repo: Option<String>) -> Thumb {
     let (send, read) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let image = (|| {
@@ -1435,7 +1462,7 @@ fn read_thumb(path: String, repo: Option<String>) -> Thumb {
 }
 
 /// The local images among `blocks`.
-fn images(blocks: &[Block], each: &mut impl FnMut(&str)) {
+pub(crate) fn images(blocks: &[Block], each: &mut impl FnMut(&str)) {
     for block in blocks {
         match block {
             Block::Image { path } => each(path),
@@ -1447,7 +1474,7 @@ fn images(blocks: &[Block], each: &mut impl FnMut(&str)) {
 }
 
 /// A reply's structure for the state: how many blocks of each kind, and links. No text.
-fn shape(blocks: &[Block]) -> serde_json::Value {
+pub(crate) fn shape(blocks: &[Block]) -> serde_json::Value {
     let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
     fn count<'a>(blocks: &'a [Block], counts: &mut std::collections::BTreeMap<&'a str, usize>) {
         for block in blocks {
