@@ -129,6 +129,14 @@ pub fn call() -> Call {
     }
 }
 
+/// The pids of the processes playing sound now, as CoreAudio says of each audio process
+/// (`kAudioProcessPropertyIsRunningOutput` and `kAudioProcessPropertyPID`, macOS 14.2): a flag
+/// and a pid each, no name. Empty before 14.2.
+pub fn playing_pids() -> Vec<i32> {
+    let list = objects(b"prs#").unwrap_or_default();
+    list.into_iter().filter(|id| read_u32(*id, b"piro").is_some_and(|on| on != 0)).filter_map(|id| Some(read_u32(id, b"ppid")? as i32)).collect()
+}
+
 fn address(selector: &[u8; 4], scope: &[u8; 4]) -> PropertyAddress {
     PropertyAddress { selector: code(selector), scope: code(scope), element: 0 }
 }

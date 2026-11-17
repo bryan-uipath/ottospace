@@ -11064,6 +11064,114 @@ fn the_dot_of_the_pane_heard_is_on_its_tab_or_space_only_while_off_show() {
     otto.listen_rect("listen-header");
 }
 
+/// The owner: opened idle, "Transcribe a window…" and today's finished transcripts, each read-only
+/// in the drawer; the picker lists apps that can play sound, the one playing first; only the
+/// user's pick starts one, of an app in no pane. Made-up apps (`OTTOSPACE_LISTEN_APPS`), the
+/// fixture's lines, a made-up file in the test's own folder.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_idle_transcript_lists_today_and_only_the_users_pick_starts_one_of_an_app() {
+    let home = user_folder("listen-idle", r#"{"repos": [], "restore_layout": false}"#);
+    let today = std::process::Command::new("/bin/date").arg("+%Y-%m-%d").output().unwrap();
+    let today = String::from_utf8(today.stdout).unwrap().trim().to_string();
+    let name = format!("{today}-0900-zoom.md");
+    std::fs::create_dir_all(home.join("transcripts")).unwrap();
+    let file = format!(
+        "# Transcript: Zoom, {today} 09:00\n\n- Started: {today} 09:00 (+00:00)\n- Ended: 09:42, 42 minutes\n\
+         - App: Zoom (us.zoom.xos)\n- Microphone: off\n- Started by: you\n\n> Heard on this Mac.\n\n\
+         - 09:00:12 **them**: made-up words in the file\n"
+    );
+    std::fs::write(home.join("transcripts").join(&name), &file).unwrap();
+    std::fs::write(home.join("transcripts").join(format!("{today}-1000-x.md")), "still being written").unwrap();
+    // A link to a finished one outside the folder, and a FIFO: neither listed, neither blocks.
+    std::fs::write(home.join("outside.md"), &file).unwrap();
+    std::os::unix::fs::symlink(home.join("outside.md"), home.join("transcripts").join(format!("{today}-0800-link.md")))
+        .unwrap();
+    let fifo = home.join("transcripts").join(format!("{today}-0700-fifo.md"));
+    assert!(std::process::Command::new("/usr/bin/mkfifo").arg(&fifo).status().unwrap().success());
+    let (fixture, apps) = (home.join("fixture.jsonl"), home.join("apps.json"));
+    std::fs::write(&fixture, LISTEN_FIXTURE).unwrap();
+    let made_up = json!([
+        {"pid": 101, "name": "Chrome", "windows": ["made-up tab one", "made-up tab two"]},
+        {"pid": 102, "name": "Zoom", "windows": ["made-up meeting"], "playing": true},
+    ]);
+    std::fs::write(&apps, made_up.to_string()).unwrap();
+    let env = [
+        ("OTTOSPACE_FEATURES", "transcripts"),
+        ("OTTOSPACE_LISTEN_FIXTURE", fixture.to_str().unwrap()),
+        ("OTTOSPACE_LISTEN_APPS", apps.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+    ];
+    let otto = Otto::launch_with("listen-idle", &env);
+    otto.call(json!({"cmd": "split"}));
+    // No conversation: ⌘⇧L opens the transcript, idle; Today lists the finished file alone.
+    otto.user_key("cmd-shift-l");
+    otto.listen_rect("listen-idle");
+    let listed = otto.wait_for("today's transcripts", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        let today = state["state"]["transcripts"]["today"].as_array().cloned().unwrap_or_default();
+        (!today.is_empty()).then_some(today)
+    });
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!((&listed[0]["name"], &listed[0]["length_ms"]), (&json!(name), &json!(42 * 60_000)));
+    // Opened read-only by the user's click, not a client's; its words never in a client's state.
+    let row = otto.listen_rect("listen-past:0");
+    let theirs = otto.click(at(row, 0.5, 0.5), 1);
+    assert_eq!(theirs["state"]["transcripts"]["open"], Value::Null);
+    let open = otto.user_click(at(row, 0.5, 0.5));
+    assert_eq!(open["state"]["transcripts"]["open"], json!(name));
+    otto.listen_rect("listen-past-view");
+    let lines = otto.wait_for("the file's lines", |o| {
+        let lines = o.call(json!({"cmd": "state"}))["listen_lines"].clone();
+        (lines.as_array().is_some_and(|l| !l.is_empty())).then_some(lines)
+    });
+    assert_eq!(lines[0]["text"], "made-up words in the file", "{lines}");
+    let mut state = otto.call(json!({"cmd": "state"}));
+    state["listen_lines"] = Value::Null;
+    assert!(!state.to_string().contains("made-up words"), "the file's text reached the state");
+    otto.user_click(at(otto.listen_rect("listen-back"), 0.5, 0.5));
+    // Put away, the file gone meanwhile, opened again: Today is read anew, not what it last listed.
+    otto.user_key("cmd-shift-l");
+    assert!(otto.drawn()["listen_rects"].get("listen-idle").is_none(), "{}", otto.drawn()["listen_rects"]);
+    std::fs::remove_file(home.join("transcripts").join(&name)).unwrap();
+    std::thread::sleep(Duration::from_millis(1_500));
+    otto.user_key("cmd-shift-l");
+    otto.listen_rect("listen-idle");
+    otto.wait_for("Today without the file", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        state["state"]["transcripts"]["today"].as_array().is_some_and(Vec::is_empty).then_some(())
+    });
+    // The picker: a client's click opens none; the user's lists Zoom (playing) first, each window a
+    // row, no title in the state.
+    let pick = otto.listen_rect("listen-pick");
+    assert!(otto.click(at(pick, 0.5, 0.5), 1)["state"]["picker"].is_null());
+    let picker = otto.user_click(at(pick, 0.5, 0.5))["state"]["picker"].clone();
+    let rows: Vec<(String, bool)> = picker["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| (item["name"].as_str().unwrap().to_string(), item["playing"] == true))
+        .collect();
+    let want = [("Zoom", true), ("Chrome", false), ("Chrome", false)].map(|(n, p)| (n.to_string(), p));
+    assert_eq!((rows, &picker["transcribe"]), (want.to_vec(), &json!(true)));
+    assert!(!picker.to_string().contains("made-up"), "{picker}");
+    // A client's typing, ↓ and ↵ filter and pick nothing; the user's ↵ hears Zoom, in no pane.
+    let typed = otto.call(json!({"cmd": "key", "keys": "c h r"}));
+    assert_eq!(typed["state"]["picker"]["query"], "", "{}", typed["state"]["picker"]);
+    otto.call(json!({"cmd": "key", "keys": "down"}));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["picker"]["selected"], 0);
+    let theirs = otto.call(json!({"cmd": "key", "keys": "enter"}));
+    assert!(theirs["state"]["listen"].is_null() && theirs["state"]["picker"].is_object(), "{theirs}");
+    let on = otto.user_key("enter");
+    assert_eq!((&on["state"]["listen"]["source"], &on["state"]["picker"]), (&json!({"app": true}), &Value::Null));
+    otto.listen_finals(1);
+    otto.user_key("cmd-t");
+    let ids = otto.drawn()["listen_rects"].clone();
+    assert!(ids.as_object().unwrap().keys().all(|id| !id.starts_with("listen-dot")), "{ids}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The files in `dir`, by name.
 fn files_in(dir: &Path) -> Vec<PathBuf> {
     names_in(dir).unwrap_or_default().into_iter().map(|name| dir.join(name)).collect()

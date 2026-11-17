@@ -85,6 +85,43 @@ impl Drop for AppAudio {
     }
 }
 
+/// The apps that can be heard, for "Transcribe a window…": those ScreenCaptureKit offers with a
+/// window on screen (each its titles, for the user's eyes), or playing sound now. A helper
+/// process that plays (a browser's tab) counts for the app it was started by. Waits on the
+/// system: off the main thread.
+pub fn sound_apps() -> Vec<ottospace_core::listen::SoundApp> {
+    let Ok(content) = SCShareableContent::get() else { return Vec::new() };
+    let apps = content.applications();
+    let pids: Vec<i32> = apps.iter().map(|app| app.process_id()).collect();
+    // A playing pid, or the nearest of its parents that is an offered app.
+    let playing: Vec<i32> = crate::meeting::playing_pids()
+        .into_iter()
+        .filter_map(|pid| std::iter::successors(Some(pid), |p| crate::process::parent(*p).filter(|q| *q > 1)).take(8).find(|p| pids.contains(p)))
+        .collect();
+    let own = std::process::id() as i32;
+    let windows = content.windows();
+    let mut found = Vec::new();
+    for app in &apps {
+        let pid = app.process_id();
+        let titles: Vec<String> = windows
+            .iter()
+            .filter(|w| w.is_on_screen() && w.window_layer() == 0)
+            .filter(|w| w.owning_application().is_some_and(|owner| owner.process_id() == pid))
+            .filter_map(|w| w.title().filter(|t| !t.is_empty()))
+            .collect();
+        let plays = playing.contains(&pid);
+        let shown = windows.iter().any(|w| {
+            w.is_on_screen() && w.window_layer() == 0 && w.owning_application().is_some_and(|o| o.process_id() == pid)
+        });
+        if pid == own || !(plays || shown) {
+            continue;
+        }
+        let bundle = Some(app.bundle_identifier()).filter(|b| !b.is_empty());
+        found.push(ottospace_core::listen::SoundApp { pid, name: app.application_name(), bundle, windows: titles, playing: plays });
+    }
+    found
+}
+
 /// Plays a sound file in this process (`NSSound`): for the canary, whose own audio a test hears.
 pub fn play(path: &str) -> bool {
     use objc2::AnyThread;

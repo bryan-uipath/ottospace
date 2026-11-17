@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use gpui::{AnyElement, App, Context, Div, Stateful, Window, actions, div, prelude::*, px, rgb};
+use ottospace_core::listen::file::PastLine;
 use ottospace_core::listen::{self, Heard, Record, Row, Speaker, Status};
 use ottospace_core::row_menu::MenuOf;
 use ottospace_core::{Action, Effect, Origin, PaneId, theme};
@@ -96,6 +97,31 @@ fn read_fixture(path: &str) -> Result<VecDeque<Said>, String> {
         }
     };
     lines.map(said).collect()
+}
+
+/// `OTTOSPACE_LISTEN_APPS`, in a test run only: a JSON list of made-up apps the picker lists
+/// (`{"pid":1,"name":"Zoom","windows":["Zoom Meeting"],"playing":true}`). None named: none.
+fn fixture_apps() -> Vec<listen::SoundApp> {
+    let path = std::env::var("OTTOSPACE_LISTEN_APPS").ok().filter(|_| std::env::var_os("OTTOSPACE_E2E").is_some());
+    let text = path.and_then(|path| std::fs::read_to_string(path).ok()).unwrap_or_default();
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+/// Today's files of `transcripts_dir` as last handed to the core (none since shown: the first
+/// read goes, even if empty); the lines of the one open read-only, with its file's length and
+/// change time when read; whether a read is under way.
+#[derive(Default)]
+pub(crate) struct Past {
+    files: Option<Vec<(String, String)>>,
+    open: Option<(String, listen_file::Stamp, Vec<PastLine>)>,
+    reading: bool,
+}
+
+impl Past {
+    /// The lines of `name`, if it is the one read.
+    fn lines(&self, name: &str) -> &[PastLine] {
+        self.open.as_ref().filter(|(open, ..)| open == name).map_or(&[], |(_, _, lines)| lines.as_slice())
+    }
 }
 
 /// A transcript's id: its start time and a count, so two in one millisecond differ.
@@ -212,6 +238,16 @@ impl Workspace {
             }
             "listen-resume" => Action::ListenResume { at },
             "listen-header" | "listen-dot" => Action::ListenShow { on: true },
+            "listen-pick" => {
+                self.listen_pick(window, cx);
+                return true;
+            }
+            "listen-past" => {
+                let at: Option<usize> = name.parse().ok();
+                let past = at.and_then(|at| self.model.transcripts.today.get(at)).map(|past| past.name.clone());
+                Action::ListenOpenPast { name: past }
+            }
+            "listen-back" => Action::ListenOpenPast { name: None },
             // Only a label comes here (a click opens it itself): the keys on its first item.
             "listen-menu" => {
                 self.open_row_menu(MenuOf::Transcript, true, window, cx);
@@ -402,8 +438,14 @@ impl Workspace {
         if let Some(path) = fixture_path() {
             return read_fixture(&path).map(Plan::Fixture);
         }
-        let pane = self.model.listen.on.as_ref().filter(|on| on.id == id).and_then(|on| on.source.pane());
-        match pane.and_then(|pane| self.hosted.get(&pane)) {
+        let source = self.model.listen.on.as_ref().filter(|on| on.id == id).map(|on| on.source);
+        if let Some(listen::Source::App { pid }) = source {
+            return match listen_live::refusal(pid) {
+                Some(why) => Err(why.into()),
+                None => Ok(Plan::App(pid)),
+            };
+        }
+        match source.and_then(|source| source.pane()).and_then(|pane| self.hosted.get(&pane)) {
             Some(hosted) => match listen_live::refusal(hosted.pid) {
                 Some(why) => Err(why.into()),
                 None => Ok(Plan::App(hosted.pid)),
@@ -438,7 +480,11 @@ impl Workspace {
                 self.listen_meter = Some(Meter::new(Instant::now()));
                 self.dispatch(Action::ListenBegan { id: id.into(), at: now_ms() }, Origin::System, window, cx);
                 // The others in the call are not told by ottospace: the user is reminded to.
-                let app = self.model.listen.pane().and_then(|pane| self.hosted.get(&pane)).map(|h| h.app.clone());
+                let picked = |pid| self.model.listen.apps.iter().find(|app| app.pid == pid).map(|app| app.name.clone());
+                let app = match self.model.listen.on.as_ref().map(|on| on.source) {
+                    Some(listen::Source::App { pid }) => picked(pid),
+                    _ => self.model.listen.pane().and_then(|pane| self.hosted.get(&pane)).map(|h| h.app.clone()),
+                };
                 if let Some(app) = app {
                     self.told = Some((format!("Transcribing {app}: let the others know."), Instant::now()));
                 }
@@ -491,6 +537,16 @@ impl Workspace {
     /// the meter and the clock are drawn again. False: it ended.
     fn listen_step(&mut self, id: &str, batch: bool, window: &Window, cx: &mut Context<Self>) -> bool {
         if self.model.listen.on.as_ref().is_none_or(|on| on.id != id) {
+            return false;
+        }
+        // An app heard in no pane: no pane closes when it quits, and paused it has no stream to
+        // fail. Its stream's pid (none for a test run's fixture) is asked.
+        let picked = self.model.listen.on.as_ref().is_some_and(|on| matches!(on.source, listen::Source::App { .. }));
+        let pid = self.listen_feed.as_ref().filter(|feed| feed.id == id).and_then(|feed| feed.pid);
+        if batch && picked && pid.is_some_and(|pid| !ottospace_mac::process::alive(pid)) {
+            self.listen_flush(window, cx);
+            let ended = Action::ListenEnded { id: id.into(), why: listen::Ended::AppQuit, at: now_ms() };
+            self.dispatch(ended, Origin::System, window, cx);
             return false;
         }
         let Some(feed) = self.listen_feed.as_mut().filter(|feed| feed.id == id) else { return false };
@@ -690,8 +746,13 @@ impl Workspace {
         if !self.model.listen.shown {
             return None;
         }
-        let Some(on) = self.model.listen.on.as_ref() else { return Some(self.render_listen_idle(width)) };
-        let source = on.source.pane().and_then(|pane| self.model.pane(pane)).map(|pane| self.pane_title(pane));
+        let Some(on) = self.model.listen.on.as_ref() else { return Some(self.render_listen_idle(width, cx)) };
+        let source = match on.source {
+            listen::Source::Pane(pane) => self.model.pane(pane).map(|pane| self.pane_title(pane)),
+            listen::Source::App { pid } => {
+                self.model.listen.apps.iter().find(|app| app.pid == pid).map(|app| app.name.clone())
+            }
+        };
         let paused = on.status == Status::Paused;
         // Paused: the word and Resume where the meter was.
         let paused_note = paused.then(|| {
@@ -806,7 +867,7 @@ impl Workspace {
     }
 
     /// The drawer's transcript view, `width` wide: its header over its body.
-    fn listen_panel(&self, width: f32, header: Div, body: Div) -> AnyElement {
+    fn listen_panel(&self, width: f32, header: Div, body: impl IntoElement) -> AnyElement {
         div()
             .id("listen")
             .w(px(width))
@@ -823,8 +884,12 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// The transcript with none on: it says so, and how one starts.
-    fn render_listen_idle(&self, width: f32) -> AnyElement {
+    /// The transcript with none on: "Transcribe a window…" and today's finished ones, each a
+    /// click from read-only in the drawer; or the one open.
+    fn render_listen_idle(&self, width: f32, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(open) = self.render_listen_past(width, cx) {
+            return open;
+        }
         let header = div()
             .px_3()
             .py_2()
@@ -837,16 +902,211 @@ impl Workspace {
             .child("Transcript")
             .child(div().text_xs().text_color(rgb(theme::MUTED)).child("not listening"))
             .child(self.controls.mark("listen-idle"));
-        let hint = "⌘⌃T in an app pane transcribes its app's sound. Lines land in a file on this Mac.";
-        let body = div().flex_1().min_h_0().px_3().py_2().text_xs().text_color(rgb(theme::MUTED)).child(hint);
+        let pick = div()
+            .id("listen-pick")
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(theme::BORDER_STRONG))
+            .cursor_pointer()
+            .hover(|s| s.bg(rgb(theme::SELECTED)))
+            .text_sm()
+            .child("Transcribe a window…")
+            .child(self.controls.mark("listen-pick"))
+            .on_click(cx.listener(|this, _, window, cx| this.listen_pick(window, cx)));
+        let about =
+            "Listens to one app's sound: a call in Zoom, Teams or a browser tab. Lines land in a file on this Mac.";
+        let rows = self.model.transcripts.today.iter().enumerate().map(|(at, past)| {
+            let name = past.name.clone();
+            let start = ottospace_core::calendar::clock(past.started_ms, crate::calendar::zone_offset(past.started_ms));
+            let long = format!("{} min", past.length_ms / 60_000);
+            div()
+                .id(("listen-past", at))
+                .flex()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(theme::SELECTED)))
+                .text_xs()
+                .child(div().flex_1().min_w_0().truncate().child(past.app.clone()))
+                .child(div().flex_none().text_color(rgb(theme::MUTED)).child(format!("{start} · {long}")))
+                .child(self.controls.mark(format!("listen-past:{at}")))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.dispatch(Action::ListenOpenPast { name: Some(name.clone()) }, this.input, window, cx);
+                }))
+        });
+        let today = (!self.model.transcripts.today.is_empty()).then(|| {
+            let heading = div().pt_3().text_xs().text_color(rgb(theme::MUTED)).child("TODAY");
+            div().flex().flex_col().gap_0p5().child(heading).children(rows)
+        });
+        // Scrolls: a long day's rows stay in reach.
+        let body = div()
+            .id("listen-idle-body")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px_3()
+            .py_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(pick)
+            .child(div().text_xs().text_color(rgb(theme::MUTED)).child(about))
+            .children(today);
         self.listen_panel(width, header, body)
+    }
+
+    /// The past transcript open, read-only: its lines as the file has them, plain; ‹ goes back.
+    fn render_listen_past(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let name = self.model.transcripts.open.as_ref()?;
+        let past = self.model.transcripts.today.iter().find(|past| past.name == *name)?;
+        let back = button("listen-back", "‹ Today").child(self.controls.mark("listen-back")).on_click(cx.listener(
+            |this, _, window, cx| {
+                this.dispatch(Action::ListenOpenPast { name: None }, this.input, window, cx);
+            },
+        ));
+        let when = format!(
+            "{} · {} min",
+            ottospace_core::calendar::clock(past.started_ms, crate::calendar::zone_offset(past.started_ms)),
+            past.length_ms / 60_000
+        );
+        let header = div()
+            .px_3()
+            .py_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .border_b_1()
+            .border_color(rgb(theme::BORDER))
+            .text_sm()
+            .child(back)
+            .child(div().flex_1().min_w_0().truncate().child(format!("{} · {when}", past.app)))
+            .child(div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child("read-only"))
+            .child(self.controls.mark("listen-past-view"));
+        let lines = self.listen_past.lines(name);
+        let rows = lines.iter().map(|line| match line {
+            PastLine::Heard { time, from, text } => {
+                let (word, colour) = match from {
+                    Speaker::Them => ("them", theme::PRIMARY),
+                    Speaker::Me => ("me", theme::PICK),
+                };
+                div()
+                    .flex()
+                    .gap_2()
+                    .text_xs()
+                    .child(div().flex_none().w(px(60.)).text_color(rgb(theme::MUTED)).child(time.clone()))
+                    .child(div().flex_none().w(px(36.)).text_color(rgb(colour)).child(word))
+                    .child(div().flex_1().min_w_0().child(text.clone()))
+            }
+            PastLine::Paused { time, minutes } => {
+                div().text_xs().text_color(rgb(theme::MUTED)).child(format!("{time} paused {minutes}"))
+            }
+        });
+        let body = div()
+            .id("listen-past-lines")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px_3()
+            .py_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .children(rows);
+        Some(self.listen_panel(width, header, body))
+    }
+
+    /// "Transcribe a window…": the apps that can play sound, read off the main thread (in a test
+    /// run its fixture's, `OTTOSPACE_LISTEN_APPS`, never the user's), then the picker as whoever
+    /// clicked (a client's is refused).
+    pub(crate) fn listen_pick(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let origin = self.input;
+        let probe = Action::ListenPicker { apps: Vec::new(), id: String::new(), at: 0 };
+        if let Some(why) = self.model.refusal(&probe, origin) {
+            self.error = Some(why.into());
+            return cx.notify();
+        }
+        if std::env::var_os("OTTOSPACE_E2E").is_some() {
+            let at = now_ms();
+            self.dispatch(Action::ListenPicker { apps: fixture_apps(), id: new_id(at), at }, origin, window, cx);
+            return;
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            let apps = cx.background_executor().spawn(async { ottospace_mac::app_audio::sound_apps() }).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let at = now_ms();
+                this.dispatch(Action::ListenPicker { apps, id: new_id(at), at }, origin, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// About once a second while the idle view shows: today's files of `transcripts_dir`, to
+    /// the core when they changed. The open one's lines are read again with them.
+    pub(crate) fn listen_read_past(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let idle = self.model.listen.shown && self.model.listen.on.is_none();
+        let Some(dir) = config::transcripts_dir().filter(|_| idle) else {
+            // Shown again, it is all read and sent anew.
+            self.listen_past = Past::default();
+            return;
+        };
+        if self.listen_past.reading {
+            return;
+        }
+        self.listen_past.reading = true;
+        let now = now_ms();
+        let (y, m, d) =
+            ottospace_core::ics::civil(((now / 1_000) as i64 + crate::calendar::zone_offset(now)).div_euclid(86_400));
+        let today = format!("{y:04}-{m:02}-{d:02}");
+        let open = self.model.transcripts.open.clone();
+        let known = self.listen_past.open.as_ref().filter(|(name, ..)| Some(name) == open.as_ref()).map(|o| o.1);
+        // Off the main thread: a folder, a header each, and the open one only once it changed.
+        cx.spawn_in(window, async move |this, cx| {
+            let read = cx.background_executor().spawn(async move {
+                let files = listen_file::today(&dir, &today);
+                let lines = open.map(|name| {
+                    let stamp = listen_file::stamp(&dir, &name);
+                    let lines = (Some(stamp) != known).then(|| listen_file::read_lines(&dir, &name));
+                    (name, stamp, lines)
+                });
+                (files, today, lines)
+            });
+            let (files, today, lines) = read.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.listen_past.reading = false;
+                match lines {
+                    Some((name, stamp, Some(lines))) => {
+                        this.listen_past.open = Some((name, stamp, lines));
+                        cx.notify();
+                    }
+                    Some(_) => {}
+                    None => this.listen_past.open = None,
+                }
+                if this.listen_past.files.as_ref() != Some(&files) {
+                    this.listen_past.files = Some(files.clone());
+                    this.dispatch(Action::ListenPast { files, today }, Origin::System, window, cx);
+                }
+            });
+        })
+        .detach();
     }
 
     /// Test runs only: the drawer's rows (`from`, `final`, `text`; a pause as `paused_ms`), the
     /// volatile lines last. Null outside a test run: what was heard never reaches a client.
     pub(crate) fn listen_lines(&self) -> Option<serde_json::Value> {
         std::env::var_os("OTTOSPACE_E2E")?;
-        let Some(on) = &self.model.listen.on else { return Some(serde_json::json!([])) };
+        let Some(on) = &self.model.listen.on else {
+            let open =
+                self.model.transcripts.open.as_deref().map(|name| self.listen_past.lines(name)).unwrap_or_default();
+            let row = |line: &PastLine| match line {
+                PastLine::Heard { from, text, .. } => serde_json::json!({ "from": from, "final": true, "text": text }),
+                PastLine::Paused { .. } => serde_json::json!({ "paused_ms": 0 }),
+            };
+            return Some(open.iter().map(row).collect());
+        };
         let rows = on.rows().map(|row| match row {
             Row::Heard { from, text, .. } => serde_json::json!({ "from": from, "final": true, "text": text }),
             Row::Paused { ms } => serde_json::json!({ "paused_ms": ms }),

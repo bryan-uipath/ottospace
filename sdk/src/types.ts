@@ -686,7 +686,10 @@ export type PickItem =
   | { type: "terminal" }
   | { type: "app"; name: string }
   /** An installed app that is not running, by its bundle's path. Choosing it starts it. */
-  | { type: "closed"; name: string; path: string };
+  | { type: "closed"; name: string; path: string }
+  /** In the transcript's picker: an app that can play sound (one row per window; titles are
+   * never in the state), and whether it plays now. Only the user picks one. */
+  | { type: "sound"; name: string; playing: boolean };
 
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
@@ -713,6 +716,8 @@ export interface Picker {
   query: string;
   /** An index into the items that match `query`. */
   selected: number;
+  /** The transcript's picker ("Transcribe a window…"): only the user moves, filters or picks. */
+  transcribe: boolean;
 }
 
 /** The command palette, while it is open. Only the user types, moves or runs in it. */
@@ -1016,6 +1021,9 @@ export interface Model {
   features: Feature[];
   /** The transcript on, or null. Times only: never what was heard. Only the user starts or stops one. */
   listen: Listen | null;
+  /** Today's finished transcripts (`transcripts_dir`), newest first: file name, start, length;
+   * never their text. `open`: the one the user opened read-only in the drawer, or null. */
+  transcripts: { today: PastTranscript[]; open: string | null };
   /** Agent mode: each app pane's level and the task it is given to. Only the user sets a level. */
   agent_mode: AgentMode;
   /**
@@ -1046,9 +1054,19 @@ export interface AgentMode {
 }
 
 /** A transcript of an app pane's sound: its status, source and times. */
+export interface PastTranscript {
+  /** The file's name: `2026-11-17-0900-zoom.md`. */
+  name: string;
+  /** Epoch ms. */
+  started_ms: number;
+  /** To the minute. */
+  length_ms: number;
+}
+
 export interface Listen {
   status: "starting" | "on" | "paused";
-  source: { pane: PaneId };
+  /** The pane heard, or an app the user picked (which one is not said). */
+  source: { pane: PaneId } | { app: true };
   mic: boolean;
   /** Started by an app rule of the user's, not their click. */
   auto: boolean;
