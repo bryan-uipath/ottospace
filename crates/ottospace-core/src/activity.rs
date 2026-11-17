@@ -408,7 +408,7 @@ impl Spot {
 /// The lines beside the dial; each may be missing.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Lines {
-    /// What it does now (`Shell · cargo test · 0:14`), else the last thing and when.
+    /// What it does now (`Shell · cargo test`), else the last thing and when.
     pub now: Option<String>,
     /// `4 turns · 12m`.
     pub turns: Option<String>,
