@@ -653,19 +653,35 @@ impl Screen {
     }
 }
 
-/// Rows searched past each edge of what is read, beyond a wrapped line's own: a pass a program
-/// broke over rows itself (a TUI, a narrow pane) is seen whole across the edge. As many rows as
-/// 32 digits fill at the pane's width, and one more; 3 at least.
-fn past_edge<T>(term: &Term<T>) -> i32 {
-    (32usize.div_ceil(term.columns().max(1)) + 1).max(3) as i32
+/// The most rows searched past an edge: a pass printed a character a row, blank rows between,
+/// is one in pieces (not hidden), and a read stays cheap.
+const MOST_PAST: i32 = 256;
+
+/// The last row searched past `edge`, going `step` (-1 up, 1 down): rows until they hold 32
+/// characters other than spaces, and one more. A pass the edge cuts is then searched whole
+/// however few columns its rows use (a narrow pane, a TUI's indent or column). To the grid's end
+/// at most.
+fn past<T>(term: &Term<T>, edge: Line, step: i32) -> Line {
+    let (top, bottom) = (term.topmost_line(), term.bottommost_line());
+    let (mut line, mut held) = (edge, 0);
+    for _ in 0..MOST_PAST {
+        let next = line + step;
+        if next < top || next > bottom {
+            break;
+        }
+        line = next;
+        if held >= 32 {
+            break;
+        }
+        held +=
+            rows_of(term, line, line).iter().map(|(row, _)| row.chars().filter(|c| *c != ' ').count()).sum::<usize>();
+    }
+    line
 }
 
-/// The rows a read from `top` to `bottom` searches: the lines its edges cut, and `past_edge` more.
+/// The rows a read from `top` to `bottom` searches: the lines its edges cut, and `past` them.
 fn searched<T>(term: &Term<T>, top: Line, bottom: Line) -> (Line, Line) {
-    let past = past_edge(term);
-    let from = line_start(term, Line((top.0 - past).max(term.topmost_line().0)));
-    let to = line_end(term, Line((bottom.0 + past).min(term.bottommost_line().0)));
-    (from, to)
+    (line_start(term, past(term, top, -1)), line_end(term, past(term, bottom, 1)))
 }
 
 /// `Terminal::lines`: the rows on show, a live pass hidden in the rows around them too.
@@ -977,12 +993,30 @@ mod tests {
         let mut narrow = super::tests::term(4, 2, &format!("{}\r\none\r\ntwo", rows.join("\r\n")));
         narrow.scroll_display(GridScroll::Delta(1));
         assert_eq!(lines_of(&narrow), ["", "one"], "all eight rows searched, though the edge cuts them");
+        // 40 wide, but each row indented 36: 4 digits a row, as in a TUI's column. The rows a
+        // pass could use are searched, not those its width would fill.
+        let indent = " ".repeat(36);
+        let indented: Vec<String> = rows.iter().map(|row| format!("{indent}{row}")).collect();
+        let mut column = super::tests::term(40, 2, &format!("{}\r\none\r\ntwo", indented.join("\r\n")));
+        column.scroll_display(GridScroll::Delta(1));
+        assert_eq!(lines_of(&column), ["", "one"], "the tail row of an indented pass");
+        column.scroll_display(GridScroll::Delta(8));
+        let head = format!("{indent}[hidden]");
+        assert_eq!(lines_of(&column), [head.as_str(), ""], "its head on show, the bottom edge cutting the rest");
         // A selection of part of it, here the 16 digits on the top row, reads `[hidden]` in the
         // state; one of other rows reads as it is.
         assert_eq!(drag(&mut short, at(0, 0), past(0, 15)).as_deref(), Some(&hex[16..]));
         assert_eq!(selected_shown(&short).as_deref(), Some(crate::pass::HIDDEN));
         drag(&mut short, at(1, 0), past(1, 2));
         assert_eq!(selected_shown(&short).as_deref(), Some("one"));
+        // No oracle: part of the pass a client typed at the prompt, the bottom edge right after
+        // it, reads as it is, as wrong digits do; the edge cuts no pass there.
+        let wrong = "0123456789abcdef0123456789abcdef";
+        for part in [&hex[..31], &wrong[..31], &hex[1..]] {
+            let typed = super::tests::term(40, 3, &format!("one\r\n$ echo {part}"));
+            assert_eq!(lines_of(&typed), ["one", &format!("$ echo {part}"), ""]);
+            assert_eq!(text_of(&typed, true), format!("one\n$ echo {part}"));
+        }
         // Gone, the pass shows again: it grants nothing.
         drop(live);
         assert_eq!(lines_of(&short)[0], &hex[16..]);

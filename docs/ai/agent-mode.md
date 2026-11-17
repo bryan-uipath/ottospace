@@ -81,7 +81,8 @@ A small script printed the variable and tried to connect.
   into a terminal and reads whether it was hidden, a digit at a time). So a terminal searches its
   rows as one text, each row's leading spaces left out (a pass wrapped, broken by the program's own
   line breaks or cursor moves, on the alternate screen), with the lines the screen's edges cut and
-  as many rows past each edge as 32 digits fill at the pane's width, plus one (3 at least); and the
+  rows past each edge until they hold 32 characters other than spaces, plus one (a narrow pane,
+  or a TUI's indent, uses few columns a row; at most 256 rows); and the
   first row of a full history (10,000 lines: what was dropped above may have cut a pass) loses a
   leading run of 8 or more hex digits whatever they are, a rule no digit of a pass decides. A
   `wait` cannot match a pass. Not hidden: a terminal's picture (a user-started capture's PNG), the
