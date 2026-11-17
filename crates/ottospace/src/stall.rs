@@ -15,9 +15,9 @@ pub(crate) const STALL: Duration = Duration::from_millis(750);
 const AFTER_CHANGE: [Duration; 4] =
     [Duration::ZERO, Duration::from_millis(300), Duration::from_secs(1), Duration::from_secs(3)];
 
-/// The longest wait between kicks of one stall: a kick can block for a second while the window
-/// server has no drawable to give.
-const MOST_BETWEEN: Duration = Duration::from_secs(8);
+/// Ticks that must see the wait too: one update that held the main thread past `STALL` (a
+/// stream starting) is no stall, the frame is next in line.
+const TICKS: u32 = 3;
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum Verdict {
@@ -39,6 +39,8 @@ pub(crate) struct Stall {
     renders: u64,
     /// Since when the window has had something to draw and drawn nothing.
     waiting: Option<Instant>,
+    /// Ticks since then.
+    ticks: u32,
     kicks: u32,
     next: Option<Instant>,
     /// Kicks planned after a change of the displays, soonest first.
@@ -47,7 +49,7 @@ pub(crate) struct Stall {
 
 impl Stall {
     pub(crate) fn new() -> Self {
-        Stall { renders: 0, waiting: None, kicks: 0, next: None, planned: Vec::new() }
+        Stall { renders: 0, waiting: None, ticks: 0, kicks: 0, next: None, planned: Vec::new() }
     }
 
     /// The displays changed at `now`: kicks follow at `AFTER_CHANGE`.
@@ -64,7 +66,7 @@ impl Stall {
                 (0, _) | (_, None) => Verdict::Nothing,
                 (kicks, Some(since)) => Verdict::Recovered { kicks, lasted: now - since },
             };
-            (self.waiting, self.kicks, self.next) = (None, 0, None);
+            (self.waiting, self.ticks, self.kicks, self.next) = (None, 0, 0, None);
             if wants {
                 self.waiting = Some(now);
             }
@@ -72,7 +74,7 @@ impl Stall {
         }
         if !shown {
             // A hidden window is not drawn, by design.
-            (self.waiting, self.kicks, self.next) = (None, 0, None);
+            (self.waiting, self.ticks, self.kicks, self.next) = (None, 0, 0, None);
             return Verdict::Nothing;
         }
         let planned = self.planned.first().is_some_and(|at| *at <= now);
@@ -81,21 +83,25 @@ impl Stall {
         }
         let since = match (wants, self.waiting) {
             (false, _) => {
-                (self.waiting, self.kicks, self.next) = (None, 0, None);
+                (self.waiting, self.ticks, self.kicks, self.next) = (None, 0, 0, None);
                 None
             }
-            (true, Some(since)) => Some(since),
+            (true, Some(since)) => {
+                self.ticks += 1;
+                Some(since)
+            }
             (true, None) => {
                 self.waiting = Some(now);
                 Some(now)
             }
         };
-        let stalled = since.map(|since| now - since).filter(|waited| *waited >= STALL);
+        let stalled = since.map(|since| now - since).filter(|waited| *waited >= STALL && self.ticks >= TICKS);
         let due = stalled.is_some() && self.next.is_none_or(|next| next <= now);
         if due {
             self.kicks += 1;
-            // 1, 2, 4, 8, 8.. seconds apart.
-            let between = Duration::from_secs(1 << (self.kicks - 1).min(3)).min(MOST_BETWEEN);
+            // 1, 2, 4, 8, 8.. seconds apart: a kick can block for a second while the window
+            // server has no drawable to give.
+            let between = Duration::from_secs(1 << (self.kicks - 1).min(3));
             self.next = Some(now + between);
             return Verdict::Kick { stalled, first: self.kicks == 1 };
         }
@@ -135,18 +141,28 @@ mod tests {
     fn a_stall_is_kicked_further_apart_until_a_frame_comes() {
         let (mut stall, start) = (Stall::new(), Instant::now());
         assert_eq!(stall.check(start, 5, true, true), Verdict::Nothing);
-        assert_eq!(stall.check(start + ms(700), 5, true, true), Verdict::Nothing);
-        assert_eq!(stall.check(start + STALL, 5, true, true), Verdict::Kick { stalled: Some(STALL), first: true });
-        // The next a second later, then two.
-        assert_eq!(stall.check(start + ms(1700), 5, true, true), Verdict::Nothing);
-        let second = stall.check(start + ms(1750), 5, true, true);
-        assert_eq!(second, Verdict::Kick { stalled: Some(ms(1750)), first: false });
-        assert_eq!(stall.check(start + ms(3700), 5, true, true), Verdict::Nothing);
-        assert!(matches!(stall.check(start + ms(3750), 5, true, true), Verdict::Kick { first: false, .. }));
+        // A tick every 50 ms with no frame: kicked at 750 ms, a second later, then two.
+        let kicks: Vec<(u64, Verdict)> = (1..=80u64)
+            .map(|n| (n * 50, stall.check(start + ms(n * 50), 5, true, true)))
+            .filter(|(_, verdict)| *verdict != Verdict::Nothing)
+            .collect();
+        let at: Vec<u64> = kicks.iter().map(|(t, _)| *t).collect();
+        assert_eq!(at, [750, 1750, 3750]);
+        assert_eq!(kicks[0].1, Verdict::Kick { stalled: Some(STALL), first: true });
+        assert_eq!(kicks[1].1, Verdict::Kick { stalled: Some(ms(1750)), first: false });
         // A frame: over, and said once.
-        let recovered = stall.check(start + ms(4000), 6, false, true);
-        assert_eq!(recovered, Verdict::Recovered { kicks: 3, lasted: ms(4000) });
-        assert_eq!(stall.check(start + ms(4016), 7, false, true), Verdict::Nothing);
+        let recovered = stall.check(start + ms(4050), 6, false, true);
+        assert_eq!(recovered, Verdict::Recovered { kicks: 3, lasted: ms(4050) });
+        assert_eq!(stall.check(start + ms(4066), 7, false, true), Verdict::Nothing);
+    }
+
+    #[test]
+    fn one_long_update_is_no_stall() {
+        let (mut stall, start) = (Stall::new(), Instant::now());
+        assert_eq!(stall.check(start, 5, true, true), Verdict::Nothing);
+        // The main thread held for a second: the next tick sees the wait, but the frame is next.
+        assert_eq!(stall.check(start + ms(1000), 5, true, true), Verdict::Nothing);
+        assert_eq!(stall.check(start + ms(1016), 6, false, true), Verdict::Nothing);
     }
 
     #[test]

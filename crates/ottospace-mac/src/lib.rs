@@ -1,5 +1,6 @@
 //! macOS platform layer: Accessibility window control and display geometry.
 
+pub mod app_audio;
 pub mod ax;
 pub mod ax_press;
 pub mod ax_tree;
@@ -15,6 +16,8 @@ pub mod oslog;
 pub mod pasteboard;
 pub mod process;
 pub mod recovery;
+pub mod speech;
+pub mod status_item;
 pub mod time;
 pub mod wheel;
 pub mod window;

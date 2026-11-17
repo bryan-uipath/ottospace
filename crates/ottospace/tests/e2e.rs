@@ -10496,7 +10496,7 @@ fn the_window_draws_on_after_the_displays_change() {
     assert_eq!(redraws(&otto), 0, "a window that draws is not kicked");
     otto.call(json!({"cmd": "display_change"}));
     // At once, then as the new setup settles: four within 3 s.
-    otto.wait_for("the kicks after the change", |o| (redraws(o) >= 4).then_some(()));
+    let kicked = otto.wait_for("the kicks after the change", |o| Some(redraws(o)).filter(|n| *n >= 4));
     for _ in 0..3 {
         let before = otto.call(json!({"cmd": "state"}))["frame"]["number"].as_u64().expect("frame");
         let after = otto.call(json!({"cmd": "split", "axis": "down"}));
@@ -10504,7 +10504,7 @@ fn the_window_draws_on_after_the_displays_change() {
         assert!(drawn > before && after["stale"].is_null(), "{before} {after}");
     }
     // Frames come, so nothing more is kicked.
-    assert_eq!(redraws(&otto), 4);
+    assert_eq!(redraws(&otto), kicked);
 }
 
 /// `<home>/log`: the start, the display the window is on, a change of the displays and the quit,
