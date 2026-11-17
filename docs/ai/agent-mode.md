@@ -140,7 +140,8 @@ A small script printed the variable and tried to connect.
   a new app pane only where the user's own act put its window there (their pick, drag or click:
   `AgentMode.by_user`, recorded from the origin of the step that first made it an app pane,
   whatever the flag). One a client opened (`open_app`) or filled, the system adopted, or a restore
-  rebuilt starts at Off (a restore may only offer the user's own pick, above): an agent that opens Mail in its own workspace cannot read it. A security
+  rebuilt starts at Off (a restore may only offer the user's own pick, above; a restored pane with
+  a kept level starts at Off even when the user's pick fills it): an agent that opens Mail in its own workspace cannot read it. A security
   review (HIGH) found the first build gave the default to every pane.
 - **Only the user sets a level.** `AgentLevel`, `AgentMenu`, `AgentMenuMove`, `AgentMenuChoose` and
   `AgentMenuClose` are refused from `Socket` and `System` (`agent_mode::USERS_ALONE`); `AppUsed` is
@@ -165,7 +166,11 @@ A small script printed the variable and tried to connect.
   ago", a row for a terminal-view conversation (it has no transcript).
 - **Flag.** `agent_mode` (Experimental, off): off, no robot, no key, and every read of an app pane by
   a client is refused, `ax_tree` too. The grants are kept, and kept true, while it is off: a
-  settings write that turns it off and on again raises no level (the review's HIGH finding).
+  settings write that turns it off and on again raises no level (the review's HIGH finding). No pane
+  starts above Off while the flag is off, the user's included: an agent that writes the flag on in
+  `settings.json` finds nothing granted (a second review, MEDIUM). Not closed: such a write (the
+  flag, or `agent_mode: "act"`) holds for the panes the user places after it; `settings.json` is
+  the same user's file, as `layout.json` is. A read in flight when the flag goes off is dropped.
 - **Limits, honest.** A look's picture is 0600 in a 0700 folder: another same-user process (another
   task's agent included) can still list and read it while it is there, as it could read the
   agent's environment; the folder goes below See, at most 10 are kept, and a start sweeps a gone

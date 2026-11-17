@@ -9627,7 +9627,7 @@ mod tests {
     /// at See or more, once a second.
     #[test]
     fn agent_mode_grants_a_pane_to_its_workspaces_task_and_only_the_user_sets_it() {
-        use crate::agent_mode::{AppUse, Level, NO_PASS, NO_TASK, SHELLS_ALONE, USERS_ALONE};
+        use crate::agent_mode::{AppUse, Grant, Level, NO_PASS, NO_TASK, SHELLS_ALONE, USERS_ALONE};
         let mut m = Model::default();
         let grant = |m: &Model, pane| m.agent.panes.get(&pane).map(|grant| (grant.level, grant.task));
         // In the workspace made for it, no task: Off, and the menu offers nothing.
@@ -9723,6 +9723,13 @@ mod tests {
         let kept = m.agent.panes.clone();
         m.update(Action::SetFeatures { features: crate::features::Features::default() }.sent_by(Origin::System));
         assert_eq!(read(&m, Caller::Task(other), 9_000), Err(Feature::AgentMode.off().into()));
+        // The user's pane in a task's workspace while the flag is off: Off, not the default.
+        m.update(Action::SpaceOpen { space: task_space(other) });
+        m.update(Action::Open { kind: app(4), axis: Right, beside: None });
+        let fourth = m.focused.unwrap_or_default();
+        assert_eq!(grant(&m, fourth), Some((Level::Off, Some(other))));
+        let mut kept = kept;
+        kept.insert(fourth, Grant { level: Level::Off, task: Some(other) });
         // Off and on again (a settings write): every grant as it was, none raised.
         m.update(Action::SetFeatures { features: crate::features::Features::all() }.sent_by(Origin::System));
         assert_eq!(m.agent.panes, kept);

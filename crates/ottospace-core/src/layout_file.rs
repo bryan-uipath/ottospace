@@ -1057,10 +1057,12 @@ mod tests {
         let (mut r, effects) = restored(&m, planted.clone(), &[], false);
         let (back, mail) = (waiting(&effects, "Slack"), waiting(&effects, "Mail"));
         assert_eq!(kept(&r.layout_file(&[], &[], 0)), kept(&planted), "kept while the windows are not there");
-        for (name, window) in [("Slack", 12), ("Mail", 11)] {
-            r.update(Action::Fill { pane: waiting(&effects, name), kind: app(window, name) }.sent_by(Origin::System));
+        // Slack's window comes back by itself; the user picks Mail for its pane.
+        for (name, window, origin) in [("Slack", 12, Origin::System), ("Mail", 11, Origin::User)] {
+            r.update(Action::Fill { pane: waiting(&effects, name), kind: app(window, name) }.sent_by(origin));
         }
-        // Both start at Off, each with its offer; written again, both are kept as offers.
+        // Both start at Off (the user's fill too: not the default), each with its offer; written
+        // again, both are kept as offers.
         assert_eq!((grant(&r, back), grant(&r, mail)), (Some((Level::Off, Some(1))), Some((Level::Off, Some(1)))));
         assert_eq!(r.agent.offers.keys().copied().collect::<Vec<_>>(), [back.min(mail), back.max(mail)]);
         assert_eq!(kept(&r.layout_file(&[], &[], 0)), kept(&planted));

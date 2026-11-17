@@ -301,7 +301,7 @@ test("calendar: with no feed set it says only that", async () => {
 test("agent mode on: a read of an app pane with no pass is refused", async () => {
   await withOttospace(async (client) => {
     const noPass = /only a task's agent reads an app pane/;
-    await assert.rejects(client.axTree(), { message: noPass });
+    await assert.rejects(client.axTree({ pane: 1 }), { message: noPass });
     await assert.rejects(client.appRead({ pane: 1 }), { message: noPass });
     await assert.rejects(client.appLook({ pane: 1 }), { message: noPass });
   }, ["agent_mode"]);

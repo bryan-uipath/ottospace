@@ -27,7 +27,8 @@ impl Model {
     /// After every step (`origin`: whose it was): every app pane has a grant, to a task that works
     /// in its workspace or to none. A new pane starts at the default only where a task works and
     /// the user's own act put its window there (`by_user`); else at Off, until the user picks a
-    /// level: a client that opens Mail in its task's workspace cannot read it. One whose task no
+    /// level: a client that opens Mail in its task's workspace cannot read it; and none while the flag
+    /// is off. One whose task no
     /// longer works there (it moved to another workspace, the task ended, was dismissed or unbound)
     /// is Off, for the task now there: a grant is never carried to a task the user did not give it
     /// to. A closed pane's goes. Over a restart only a level the user picked is kept
@@ -67,9 +68,14 @@ impl Model {
                         Grant { level: Level::Off, task: front }
                     }
                     None => {
+                        // A restored pane with a kept level starts at Off whoever fills it: the
+                        // file only offers. And none starts above Off while the flag is off: a
+                        // settings write that turns it on must find nothing granted.
+                        let kept = self.agent.restored.contains_key(&id);
                         self.offer_back(id, origin, &working);
-                        let users = self.agent.by_user.get(&id).copied().unwrap_or(false);
-                        let level = if front.is_some() && users { self.agent.default } else { Level::Off };
+                        let users = self.agent.by_user.get(&id).copied().unwrap_or(false) && !kept;
+                        let on = self.features.on(Feature::AgentMode);
+                        let level = if front.is_some() && users && on { self.agent.default } else { Level::Off };
                         Grant { level, task: front }
                     }
                 };

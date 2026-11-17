@@ -42,15 +42,15 @@ pub(crate) fn sweep_looks() {
 /// A look's folder: `<materials>/agent-<pid>-<task>-<word>/`, made for one pane and task, removed
 /// when the pane's grant is no longer See or more for that task, and at the next start.
 /// Also where the open menu's robot was last painted: a frame's render comes before its paint.
+/// Each folder counts its own pictures.
 pub(crate) struct Looks {
-    folders: HashMap<PaneId, (TaskId, PathBuf)>,
-    count: u32,
+    folders: HashMap<PaneId, (TaskId, PathBuf, u32)>,
     robot: Option<[f32; 4]>,
 }
 
 impl Default for Looks {
     fn default() -> Self {
-        Self { folders: HashMap::new(), count: 0, robot: None }
+        Self { folders: HashMap::new(), robot: None }
     }
 }
 
@@ -314,9 +314,10 @@ impl Workspace {
             .detach();
     }
 
-    /// Still granted to `task` at See or more: an answer read before an Off is dropped.
+    /// Still granted to `task` at See or more, the flag on: an answer read before an Off is dropped.
     fn still_sees(&self, pane: PaneId, task: TaskId) -> bool {
-        self.model.agent.panes.get(&pane).is_some_and(|grant| grant.task == Some(task) && grant.level >= Level::See)
+        let granted = |grant: &ottospace_core::agent_mode::Grant| grant.task == Some(task) && grant.level >= Level::See;
+        self.on(ottospace_core::features::Feature::AgentMode) && self.model.agent.panes.get(&pane).is_some_and(granted)
     }
 
     fn serve_read(
@@ -358,13 +359,12 @@ impl Workspace {
         let Some(frame) = self.hosted.get(&pane).and_then(|hosted| hosted.frame()) else {
             return drop(reply.send(control::error("no picture of this pane yet")));
         };
-        let Some(dir) = self.look_dir(pane, task) else {
+        let Some((dir, count)) = self.look_dir(pane, task) else {
             return drop(reply.send(control::error("no folder to keep the picture in")));
         };
-        self.looks.count += 1;
-        let name = format!("look-{}.png", self.looks.count);
+        let name = format!("look-{count}.png");
         // At most `LOOKS_KEPT` a folder: the one that many before goes.
-        if let Some(old) = self.looks.count.checked_sub(LOOKS_KEPT) {
+        if let Some(old) = count.checked_sub(LOOKS_KEPT) {
             let _ = std::fs::remove_file(dir.join(format!("look-{old}.png")));
         }
         let frame = crate::Frame(frame);
@@ -394,15 +394,19 @@ impl Workspace {
     }
 
     /// The folder of looks for `pane` and `task`, under the materials folder: one name a pane, a
-    /// word nobody can guess in it. The first picture written makes it, 0700.
-    fn look_dir(&mut self, pane: PaneId, task: TaskId) -> Option<PathBuf> {
-        if let Some((_, dir)) = self.looks.folders.get(&pane).filter(|(of, _)| *of == task) {
-            return Some(dir.clone());
+    /// word nobody can guess in it; and the next picture's number in it. The first picture
+    /// written makes it, 0700. Another task's folder of the pane goes.
+    fn look_dir(&mut self, pane: PaneId, task: TaskId) -> Option<(PathBuf, u32)> {
+        if let Some((_, dir, count)) = self.looks.folders.get_mut(&pane).filter(|(of, _, _)| *of == task) {
+            *count += 1;
+            return Some((dir.clone(), *count));
         }
         let word = crate::collect::new_word()?;
         let dir = crate::config::materials_dir()?.join(format!("agent-{}-{task}-{word}", std::process::id()));
-        self.looks.folders.insert(pane, (task, dir.clone()));
-        Some(dir)
+        if let Some((_, old, _)) = self.looks.folders.insert(pane, (task, dir.clone(), 1)) {
+            let _ = std::fs::remove_dir_all(old);
+        }
+        Some((dir, 1))
     }
 
     /// Each tick: where the open menu's robot is; a look folder whose pane is no longer seen by
@@ -416,11 +420,11 @@ impl Workspace {
             .looks
             .folders
             .iter()
-            .filter(|(pane, (task, _))| !self.still_sees(**pane, *task))
+            .filter(|(pane, (task, _, _))| !self.still_sees(**pane, *task))
             .map(|(p, _)| *p)
             .collect();
         for pane in gone {
-            if let Some((_, dir)) = self.looks.folders.remove(&pane) {
+            if let Some((_, dir, _)) = self.looks.folders.remove(&pane) {
                 let _ = std::fs::remove_dir_all(dir);
             }
         }
