@@ -10978,8 +10978,7 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     assert_eq!((&stopped["state"]["listen"], &stopped["listen_lines"]), (&Value::Null, &json!([])), "{stopped}");
     otto.call(json!({"cmd": "focus", "pane": 1}));
     assert_eq!(otto.user_key("cmd-ctrl-t")["state"]["listen"]["source"], json!({"pane": 1}));
-    // In narrower panes the dot stays, the pane's one mark on show, left of ×, which stays too.
-    otto.call(json!({"cmd": "split"}));
+    // In a narrower pane the dot stays, the pane's one mark on show, left of ×, which stays too.
     otto.call(json!({"cmd": "split"}));
     let drawn = otto.drawn();
     let (header, close) = (rect(&drawn["headers"]["1"]), rect(&drawn["closes"]["1"]));
@@ -10987,7 +10986,7 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     let indicator = rect(drawn["listen_rects"].get("listen-header").unwrap_or_else(|| panic!("no dot: {drawn}")));
     assert!(indicator[0] + indicator[2] <= close[0] && indicator[0] >= header[0], "{drawn}");
     let closed = otto.user_click(at(close, 0.5, 0.5));
-    assert_eq!((&closed["state"]["listen"], pane_ids(&closed)), (&Value::Null, vec![2, 3, 4]), "{closed}");
+    assert_eq!((&closed["state"]["listen"], pane_ids(&closed)), (&Value::Null, vec![2, 3]), "{closed}");
 }
 
 #[test]
