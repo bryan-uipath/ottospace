@@ -453,8 +453,10 @@ const MAX_SPACE: f32 = 220.;
 const HOME_ICON: &str = "icons/home.svg";
 /// The top row's Fill the Whole Display button: off (arrows out), on (arrows in).
 const FILL_ICONS: [&str; 2] = ["icons/fill-expand.svg", "icons/fill-collapse.svg"];
-/// A space drawn as its badge alone, as Home always is: its icon.
+/// A space drawn as its badge alone: its icon.
 const BADGE_SPACE: f32 = 36.;
+/// Home's item: its 16-point house, 12 points either side, and its border.
+const HOME_SPACE: f32 = 41.;
 const TRAFFIC_LIGHTS: f32 = 80.;
 /// The narrowest a tab shrinks to when the strip is full: a few letters of its title and its ×.
 const MIN_TAB: f32 = 80.;
@@ -5537,11 +5539,11 @@ impl Workspace {
         // Home is its icon alone, always. Short of room, a space not selected is its badge
         // alone, its title on hover. Shorter still, the badges that do not fit after the selected
         // one give way to a count: the selected space always shows.
-        let compact = BADGE_SPACE + shown.len().saturating_sub(1) as f32 * TITLED_SPACE > room;
-        let tight = compact && room < 2. * BADGE_SPACE + TITLED_SPACE;
+        let compact = HOME_SPACE + shown.len().saturating_sub(1) as f32 * TITLED_SPACE > room;
+        let tight = compact && room < HOME_SPACE + BADGE_SPACE + TITLED_SPACE;
         let selected_width = if tight { MIN_SPACE } else { TITLED_SPACE };
         let others = shown.iter().filter(|space| space.of != selected && space.of != Owner::Home).count();
-        let fits = |n: usize| BADGE_SPACE + selected_width + n as f32 * BADGE_SPACE <= room;
+        let fits = |n: usize| HOME_SPACE + selected_width + n as f32 * BADGE_SPACE <= room;
         let badges =
             if !compact || fits(others) { others } else { (0..others).rev().find(|n| fits(n + 1)).unwrap_or(0) };
         let mut room_for = badges;
