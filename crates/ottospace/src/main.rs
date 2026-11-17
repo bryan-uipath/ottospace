@@ -137,6 +137,8 @@ struct Latest {
     /// What the stream has sent, frames and "nothing changed": a test run shows that a live
     /// window's stream sends none and starts again as it parks.
     samples: AtomicU64,
+    /// The frame held is from before the stream last started: a capture waits for a new one.
+    old: AtomicBool,
 }
 
 impl Latest {
@@ -162,6 +164,7 @@ impl SCStreamOutputTrait for Output {
         }
         if let Ok(mut slot) = self.0.frame.lock() {
             *slot = Some(Frame(buffer));
+            self.0.old.store(false, Relaxed);
             self.0.dirty.store(true, Relaxed);
         }
     }
@@ -402,16 +405,13 @@ impl Hosted {
     }
 
     /// Stops the stream while the window is live: the real window is on screen, and a captured
-    /// one loses quick clicks. The frame held says it is old (`seen` 0) until `resume`.
+    /// one loses quick clicks.
     fn pause(&mut self) {
         if self.paused.is_some() {
             return;
         }
         match self.stream.stop_capture() {
-            Ok(()) => {
-                self.latest.seen.store(0, Relaxed);
-                self.paused = Some((self.shown, self.shown_crop));
-            }
+            Ok(()) => self.paused = Some((self.shown, self.shown_crop)),
             Err(_) => event_log::event("stream_stop_failed", serde_json::json!({ "window": self.window_id })),
         }
     }
@@ -420,18 +420,15 @@ impl Hosted {
     /// A failed start stays paused, and the next park tries again.
     fn resume(&mut self, scale: f64) {
         let Some(streamed) = self.paused else { return };
+        // Here, not in `pause`: a frame sent as the stream stopped may land after the stop.
+        self.latest.old.store(true, Relaxed);
         if self.stream.start_capture().is_err() {
             return event_log::event("stream_start_failed", serde_json::json!({ "window": self.window_id }));
         }
         self.paused = None;
-        if streamed != (self.shown, self.shown_crop) {
-            let config = stream_config(self.shown, self.shown_crop, scale);
-            match self.stream.update_configuration(&config) {
-                Ok(()) => self.latest.expect(&config),
-                // What the stream shows; the next check asks again.
-                Err(_) => (self.shown, self.shown_crop) = streamed,
-            }
-        }
+        // What the stream shows; `show` configures it for the pane now.
+        (self.shown, self.shown_crop) = streamed;
+        self.show(scale);
     }
 
     /// The crop for this window with its pane content at `rect`; see `titlebar::crop`.
@@ -1870,7 +1867,6 @@ impl Workspace {
                     .detach();
                 }
                 Effect::Live(id) => {
-                    self.live_since = Some(Instant::now());
                     self.went_live += 1;
                     let keep = self.bars_leave();
                     if let Some(hosted) = self.hosted.get_mut(id) {
@@ -1878,6 +1874,8 @@ impl Workspace {
                         hosted.pause();
                         hosted.bring_up(keep, window, cx);
                     }
+                    // After the blocking stop and AX calls: the activation they delay is still ignored.
+                    self.live_since = Some(Instant::now());
                 }
             }
         }

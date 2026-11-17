@@ -1211,7 +1211,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   no task works; See in the app's blue with the task's tip, See and act in amber; the pane's
   header line in the level's colour. Only the task the pane is granted to (its agent's pass) may `app_read` its tree or
   `app_look` at its picture (a PNG at most 1600 px, 0600, in `materials/agent-<pid>-<task>-<word>/`,
-  the last 10 kept, gone when the level goes below See and at the next start), at See or more, one read and one look a second; `ax_tree` is
+  the last 10 kept, gone when the level goes below See and at the next start; none while the pane is live), at See or more, one read and one look a second; `ax_tree` is
   `app_read`'s older name. Every use and refusal is a row in that task's conversation and a spoke
   of the dial's Apps station. A pane that moves to another task's workspace, or whose task ends,
   is Off; grants are not kept over a restart. See and act presses nothing yet (stage (c)).
