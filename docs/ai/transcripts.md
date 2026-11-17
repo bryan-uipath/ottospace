@@ -469,7 +469,9 @@ Test-only, under `OTTOSPACE_E2E` (`control::test_refusal`, documented in CLAUDE.
   SCK sent no buffers while an app is silent, each silence would shrink them. The test-only
   `audio_probe_start`/`audio_probe_stop` keep each buffer's presentation time; the canary says
   words, 8 s of silence in the file, plays nothing for 8 s, and speaks again; the test asserts the
-  samples cover the presented time.
+  samples cover the presented time. CI (2026-11-17, macOS 26 runner): 1182 buffers of 20 ms,
+  968 of them silent (RMS below 0.001), 23640 ms presented and 23640 ms of samples, no gap over
+  100 ms. SCK sends silent buffers while the app plays nothing, so no padding is needed.
 
 ## 10. Slices
 
