@@ -453,8 +453,10 @@ const MAX_SPACE: f32 = 220.;
 const HOME_ICON: &str = "icons/home.svg";
 /// The top row's Fill the Whole Display button: off (arrows out), on (arrows in).
 const FILL_ICONS: [&str; 2] = ["icons/fill-expand.svg", "icons/fill-collapse.svg"];
-/// A space drawn as its badge alone, as Home always is: its icon.
+/// A space drawn as its badge alone: its icon.
 const BADGE_SPACE: f32 = 36.;
+/// Home's item: its 16-point house, 12 points either side, and its border.
+const HOME_SPACE: f32 = 41.;
 const TRAFFIC_LIGHTS: f32 = 80.;
 /// The narrowest a tab shrinks to when the strip is full: a few letters of its title and its ×.
 const MIN_TAB: f32 = 80.;
@@ -5565,11 +5567,11 @@ impl Workspace {
         // Home is its icon alone, always. Short of room, a space not selected is its badge
         // alone, its title on hover. Shorter still, the badges that do not fit after the selected
         // one give way to a count: the selected space always shows.
-        let compact = BADGE_SPACE + shown.len().saturating_sub(1) as f32 * TITLED_SPACE > room;
-        let tight = compact && room < 2. * BADGE_SPACE + TITLED_SPACE;
+        let compact = HOME_SPACE + shown.len().saturating_sub(1) as f32 * TITLED_SPACE > room;
+        let tight = compact && room < HOME_SPACE + BADGE_SPACE + TITLED_SPACE;
         let selected_width = if tight { MIN_SPACE } else { TITLED_SPACE };
         let others = shown.iter().filter(|space| space.of != selected && space.of != Owner::Home).count();
-        let fits = |n: usize| BADGE_SPACE + selected_width + n as f32 * BADGE_SPACE <= room;
+        let fits = |n: usize| HOME_SPACE + selected_width + n as f32 * BADGE_SPACE <= room;
         let badges =
             if !compact || fits(others) { others } else { (0..others).rev().find(|n| fits(n + 1)).unwrap_or(0) };
         let mut room_for = badges;
@@ -5624,7 +5626,7 @@ impl Workspace {
                 }
                 (Glyph::Home, _) => {
                     let ink = if on { theme::TEXT } else { theme::MUTED };
-                    let house = svg().path(HOME_ICON).size(px(15.)).flex_none().text_color(rgb(ink));
+                    let house = svg().path(HOME_ICON).size(px(16.)).flex_none().text_color(rgb(ink));
                     Some(house.into_any_element())
                 }
                 _ => None,
@@ -5655,12 +5657,13 @@ impl Workspace {
                 .h_full()
                 // The selected space keeps its name; the others give way first.
                 .when(!small, |d| d.min_w(px(MIN_SPACE)).max_w(px(MAX_SPACE)).flex_shrink())
-                .when(of == Owner::Home, |d| d.pr_3())
                 .when(on && compact && !small, |d| d.min_w(px(selected_width)))
                 .when(small, |d| d.flex_none().tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))))
                 .overflow_hidden()
                 .pl_3()
                 .pr_1()
+                // Home's house alone: as much room right as left. After `pr_1`, which would win.
+                .when(of == Owner::Home, |d| d.pr_3())
                 .flex()
                 .items_center()
                 .gap_2()
