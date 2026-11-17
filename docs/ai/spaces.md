@@ -57,14 +57,14 @@ need to persist by default. maybe we need a way to differentiate persisted vs no
   its last tab closed or moved away) closes it (`settle_closing`, after `act`): it leaves the list
   at once, its space hidden with its tabs, and the notice bar offers `Workspace closed` with Undo
   for `NOTICE_MS` (#208's offer, `Change::Closed`). The user's Undo brings it back on the row,
-  selected, as it was. Its time up (a `Tick`; × on the bar sets it up now): its tabs close, their
+  selected, as it was. Its time up (a `Tick`; × on the bar sets it up now, and the shell ticks then): its tabs close, their
   terminals and windows with them, and it is gone. Only time passing ends one, so no other step
   ends a pane by it. A tab of it selected meanwhile (a mark, a client's `select_tab`) puts it back
   on the row, temporary still, and the offer goes. A second close while one is offered takes the
   bar; the first still goes at its own time.
 - **Who.** Only the user's step closes one or keeps one: a client's `hide_space` or `close_tab`
-  leaves it listed (it goes at quit, having no file, unless it is on the row then), and its
-  `WorkbookKeep` is refused (`USERS_ALONE`).
+  leaves it listed (hidden, it comes back after a restart as an open one does; with no tab left
+  it goes at quit, having no file), and its `WorkbookKeep` is refused (`USERS_ALONE`).
 - **Numbering.** + names a new one with the lowest free number among the listed workspaces and
   one whose Undo is offered (`free_name`): once closed ones go, "Workspace 2" comes again.
 - **Look.** Its name is muted on the top row and in the section, its tip "Temporary: closes

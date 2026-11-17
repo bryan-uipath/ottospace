@@ -2187,11 +2187,13 @@ mod tests {
         assert_eq!((m.panes.len(), m.workbooks.list.len(), m.workbooks.offered()), (0, 1, None));
         m.update(Action::WorkbookNew { uid: "00000000000000a1".into() });
         assert_eq!(names(&m), ["Workspace 2", "Workspace 3"]);
-        // Its last tab closed by the user: closed too. × on the offer ends it at once.
+        // Its last tab closed by the user: closed too. × on the offer: it goes at the next tick.
         m.update(Action::CloseTab { index: None });
         assert_eq!((names(&m), m.workbooks.offered()), (vec!["Workspace 3"], Some(Change::Closed)));
         let text = "Workspace closed".to_string();
         m.update(Action::NoticeDismiss { notice: crate::notice::Kind::Undo, text });
+        assert_eq!((m.workbooks.offered(), m.workbooks.list.len()), (None, 2));
+        m.update(Action::Tick { now: NOTICE_MS + 2 }.sent_by(Origin::System));
         assert_eq!((names(&m), m.workbooks.list.len()), (vec!["Workspace 3"], 1));
         // A kept one closes as before: listed, its file kept.
         m.update(Action::WorkbookKeep { workbook: 2 });

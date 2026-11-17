@@ -3682,12 +3682,8 @@ impl Model {
                 self.notice_hidden.retain(|hidden| hidden.kind != *kind);
                 self.notice_hidden.push(crate::notice::Notice { kind: *kind, text: text.clone() });
             }
-            let mut effects = vec![Effect::NoticeDismissed { kind: *kind }];
-            // A closed temporary workspace whose offer ended goes now, as when its time is up.
-            if self.workbooks.list.iter().any(|book| book.closing.is_some_and(|until| until <= self.now)) {
-                effects.extend(self.update(Action::Tick { now: self.now }.sent_by(Origin::System)));
-            }
-            return effects;
+            // A closed temporary workspace whose offer ended goes at the next `Tick`: only time ends one.
+            return vec![Effect::NoticeDismissed { kind: *kind }];
         }
         let mut effects = self.step(sent);
         // A peek ends when what it was over changes: the tab, the tree, the mode.

@@ -4770,6 +4770,20 @@ fn split(axis: Axis, kind: Kind) -> Envelope {
     Action::Split { axis, kind }.into()
 }
 
+/// × on a closed temporary workspace's offer closed its panes in the dismissal itself: a
+/// dismissal changes nothing else, and only time ends one (seed 908).
+#[test]
+fn dismissing_a_closed_workspaces_offer_closes_no_pane_itself() {
+    let app = Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() };
+    replay(&[
+        split(Axis::Right, Kind::Terminal),
+        Action::Open { kind: app, axis: Axis::Right, beside: None }.into(),
+        Action::SpaceHide { index: None }.into(),
+        Action::NoticeDismiss { notice: crate::notice::Kind::Undo, text: "Workspace closed".into() }.into(),
+    ])
+    .unwrap();
+}
+
 /// A task filed in a workspace it then made its own, with a default worktree, works there: the
 /// rule took only a joined workspace as sharing its repository (seed 1664).
 #[test]
