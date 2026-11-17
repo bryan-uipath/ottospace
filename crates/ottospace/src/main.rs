@@ -32,6 +32,7 @@ use ottospace_core::clip::{self, Verb};
 use ottospace_core::compose;
 use ottospace_core::edit::{self, Edit};
 use ottospace_core::features::Feature;
+use ottospace_core::fill;
 use ottospace_core::hosted::{self as hosting, Click};
 use ottospace_core::key_use::{Binding, Line};
 use ottospace_core::keys::{self, FilterKey, Mods};
@@ -292,8 +293,7 @@ impl Hosted {
 
     /// Sizes the window to the pane (so the stream matches) and parks it on the off-screen sliver.
     /// With a `crop`, the window is that much taller and the stream shows only the part below it.
-    fn park(&mut self, scale: f64, crop: f64) {
-        let size = to_cg(self.bounds.get().size);
+    fn park(&mut self, size: CGSize, scale: f64, crop: f64) {
         // Only resize/reconfigure when the pane changed; redoing it on every park flickers.
         if size != self.parked_size || crop != self.crop {
             // Move first. Resized where it stood, macOS clamps the window to what fits above the
@@ -353,13 +353,19 @@ impl Hosted {
         let _ = self.window.set_size(frame.size);
         let _ = self.window.set_position(frame.origin);
         self.placed = rect;
+        // Live shorter than parked (above the Dock while the window fills its display): the next
+        // park sizes it again.
+        if (rect.size, crop) != (self.parked_size, self.crop) {
+            self.parked_size = CGSize::ZERO;
+        }
     }
 
     /// Places the window over its pane and activates its app: entering, and a peek. The app may
     /// have resized its window since it was parked: a click is judged against what it covers now.
-    fn bring_up(&mut self, window: &Window, cx: &App) {
+    fn bring_up(&mut self, keep: Option<ottospace_core::ax::Frame>, window: &Window, cx: &App) {
         let rect = on_screen(self.bounds.get(), window, cx);
-        self.place(rect, self.crop_at(rect, top_limit(window, cx)));
+        let crop = self.crop_at(rect, top_limit(window, cx));
+        self.place(pane_rect(rect, keep, true, crop), crop);
         self.window.raise();
         self.show(window.scale_factor() as f64);
     }
@@ -391,6 +397,8 @@ impl AssetSource for Assets {
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
+            "icons/fill-expand.svg" => Some(include_bytes!("../assets/icons/fill-expand.svg")),
+            "icons/fill-collapse.svg" => Some(include_bytes!("../assets/icons/fill-collapse.svg")),
             "icons/dismiss.svg" => Some(include_bytes!("../assets/icons/dismiss.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             "icons/runner-claude.svg" => Some(include_bytes!("../assets/icons/runner-claude.svg")),
@@ -412,6 +420,21 @@ const SKILL_STUB: &str = include_str!("../skill/SKILL.md");
 /// The return key's name (e.g. "F18") once it is registered. Unset: there is no return key.
 static RETURN_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// The window while it fills its display, in Accessibility's coordinates.
+#[derive(Clone, Copy)]
+struct Filled {
+    /// Its frame before.
+    before: ottospace_core::ax::Frame,
+    /// The frame the mode gave it.
+    frame: ottospace_core::ax::Frame,
+    /// What the menu bar and the Dock leave of the display when they show.
+    visible: ottospace_core::ax::Frame,
+    /// The window has been given `frame`: until then it is not looked at (`fill_holds`).
+    set: bool,
+    /// Where the window was as the mode was turned off, before the bars came back.
+    left: Option<ottospace_core::ax::Frame>,
+}
+
 /// Height of the top bar (the native title strip, so all of it drags the window), and the width
 /// it keeps clear on the left for the traffic lights.
 const TOP_BAR: f32 = 40.;
@@ -424,6 +447,8 @@ const TITLED_SPACE: f32 = 150.;
 const MAX_SPACE: f32 = 220.;
 /// Home's item on the top row: a house.
 const HOME_ICON: &str = "icons/home.svg";
+/// The top row's Fill the Whole Display button: off (arrows out), on (arrows in).
+const FILL_ICONS: [&str; 2] = ["icons/fill-expand.svg", "icons/fill-collapse.svg"];
 /// A space drawn as its badge alone, as Home always is: its icon.
 const BADGE_SPACE: f32 = 36.;
 const TRAFFIC_LIGHTS: f32 = 80.;
@@ -570,8 +595,24 @@ pub(crate) fn rect(b: Bounds<Pixels>) -> [f32; 4] {
 actions!(
     ottospace,
     [
-        SplitRight, SplitDown, PickPane, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown, FocusNext, FocusPrev,
-        Zoom, NewTab, NextTab, PrevTab, CloseTab, ShowKeys, AxOverlay
+        SplitRight,
+        SplitDown,
+        PickPane,
+        ClosePane,
+        FocusLeft,
+        FocusRight,
+        FocusUp,
+        FocusDown,
+        FocusNext,
+        FocusPrev,
+        ZoomWindow,
+        FillDisplay,
+        NewTab,
+        NextTab,
+        PrevTab,
+        CloseTab,
+        ShowKeys,
+        AxOverlay
     ]
 );
 // The picker for a pane below the focused one.
@@ -644,8 +685,8 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-alt-l", SwapRight, None),
         KeyBinding::new("cmd-shift-alt-k", SwapUp, None),
         KeyBinding::new("cmd-shift-alt-j", SwapDown, None),
-        // Fill the screen without leaving the Space (see `zoom_instead_of_fullscreen`).
-        KeyBinding::new("cmd-ctrl-f", Zoom, None),
+        // The Mac's Enter Full Screen key, free: native full screen is off (`zoom_instead_of_fullscreen`).
+        KeyBinding::new("cmd-ctrl-f", FillDisplay, None),
         // Debug: outline the focused app pane's accessibility tree.
         KeyBinding::new("cmd-ctrl-a", AxOverlay, None),
         // Tabs. ⌘1..⌘9 select one (handled in `key_down`).
@@ -899,6 +940,10 @@ struct Workspace {
     bar: notice_bar::Bar,
     /// False in e2e runs, which must never move the user's real windows.
     hosting: bool,
+    /// While the window fills its display.
+    filled: Option<Filled>,
+    /// A zoom of the window (its green button) fills the display instead (`zoom_asks`).
+    zoom_asks: bool,
     /// Test runs: the pid of the one app that may be hosted.
     host_only: Option<i32>,
     control: Option<Receiver<Call>>,
@@ -966,6 +1011,7 @@ impl Workspace {
     ) -> Self {
         let this = cx.weak_entity();
         let subscriptions = vec![
+            cx.observe_window_bounds(window, Self::fill_holds),
             // Clicking ottospace itself (title bar, empty space) raises it over the live window,
             // so hand that pane back to its stream. Ignore the activation that the swap click
             // itself delivers late (the race that used to bounce windows straight back).
@@ -1043,6 +1089,10 @@ impl Workspace {
                         this.poll_sessions(window, cx);
                         this.read_titles(cx);
                     }
+                    // The green button, Window ▸ Zoom or a title bar double-click: only the user's hand.
+                    if ottospace_mac::window::take_zoom() {
+                        this.dispatch(Action::FillDisplay, Origin::User, window, cx);
+                    }
                     if hotkey::take_press() {
                         this.key_used(Binding::ReturnKey);
                         this.return_to_ottospace(window, cx);
@@ -1084,6 +1134,10 @@ impl Workspace {
                         // before the panes were drawn again after the last change: until then
                         // the sizes are those of the layout before it.
                         let drawn = this.renders > this.dispatched_at;
+                        // A display that changed moves no window: looked at, not told.
+                        if tick % 30 == 15 {
+                            this.fill_holds(window, cx);
+                        }
                         for (pane, content, outer, kept) in this.sync_layout(window, cx, tick % 30 == 15) {
                             if drawn && this.model.wants_changed(pane, content, outer, kept) {
                                 let wants = Action::PaneWants { pane, content, outer, window: kept };
@@ -1142,11 +1196,14 @@ impl Workspace {
         .detach();
 
         // Native fullscreen would move ottospace to its own Space, where other apps' windows
-        // cannot follow. Make the green button zoom instead.
+        // cannot follow. Make the green button zoom instead, and the zoom fill the display.
+        let mut zoom_asks = false;
         if let Ok(handle) = HasWindowHandle::window_handle(window)
             && let RawWindowHandle::AppKit(appkit) = handle.as_raw()
         {
             unsafe { ottospace_mac::window::zoom_instead_of_fullscreen(appkit.ns_view.as_ptr()) };
+            // SAFETY: GPUI's own view, on the main thread.
+            zoom_asks = unsafe { ottospace_mac::window::zoom_asks(appkit.ns_view.as_ptr()) };
             // A run with hosting off never activates the app, so keep its window visible another
             // way. Not with hosting on: a floating ottospace would cover the live app window.
             if !hosting {
@@ -1290,6 +1347,8 @@ impl Workspace {
             kept_keys: key_use::Kept::default(),
             caps_drawn: Cell::default(),
             hosting,
+            filled: None,
+            zoom_asks,
             host_only,
             control,
             ax_overlay: None,
@@ -1527,10 +1586,13 @@ impl Workspace {
                 }
                 Effect::Parked(id) => {
                     self.live_since = None;
+                    let keep = self.bars_leave();
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("park", serde_json::json!({ "pane": id, "window": hosted.window_id }));
-                        let crop = hosted.crop_at(on_screen(hosted.bounds.get(), window, cx), top_limit(window, cx));
-                        hosted.park(window.scale_factor() as f64, crop);
+                        let limit = top_limit(window, cx);
+                        let rect = on_screen(hosted.bounds.get(), window, cx);
+                        let crop = hosted.crop_at(rect, limit);
+                        hosted.park(pane_rect(rect, keep, false, crop).size, window.scale_factor() as f64, crop);
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
                         // bar shows no mode. If the user moved to a third app, leave them there.
@@ -1588,6 +1650,7 @@ impl Workspace {
                     }
                 }
                 Effect::Activate { id } => self.activate(id, window, cx),
+                Effect::FillDisplay { on } => self.fill_display(*on, window, cx),
                 Effect::Run { command } => self.run_command(*command, window, cx),
                 Effect::PressApp { pane, path, role, at, .. } => self.press_app(*pane, path, role, *at, window, cx),
                 Effect::Peek(pane) => self.peek(*pane, window, cx),
@@ -1646,9 +1709,10 @@ impl Workspace {
                 Effect::Live(id) => {
                     self.live_since = Some(Instant::now());
                     self.went_live += 1;
+                    let keep = self.bars_leave();
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("unpark", serde_json::json!({ "pane": id, "window": hosted.window_id }));
-                        hosted.bring_up(window, cx);
+                        hosted.bring_up(keep, window, cx);
                     }
                 }
             }
@@ -2334,6 +2398,20 @@ impl Workspace {
                     };
                     let _ = reply.send(answer);
                     continue;
+                }
+                // A test run only: the green button. The next tick takes the zoom it asks for.
+                Request::ZoomPress => {
+                    match ns_view(window).filter(|_| self.zoom_asks) {
+                        // SAFETY: GPUI's own view, on the main thread.
+                        Some(view) => {
+                            if !unsafe { ottospace_mac::window::press_zoom(view) } {
+                                failure = Some("the zoom was not turned into a fill".into());
+                            }
+                        }
+                        // It would zoom the test's window over the user's screen.
+                        None => failure = Some("the window's zoom does not fill the display".into()),
+                    }
+                    None
                 }
                 Request::Trace => {
                     let _ = reply.send(serde_json::json!({ "ok": true, "trace": trace::jsonl() }).to_string());
@@ -3425,20 +3503,23 @@ impl Workspace {
         let scale = window.scale_factor() as f64;
         // A peeked window is kept over its pane as the live one is.
         let live = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
+        // Under the notice bar as it is in this frame: the windows follow it as it opens and closes.
         let limit = top_limit(window, cx);
+        let keep = self.bars_leave();
         for (id, hosted) in &mut self.hosted {
             let rect = on_screen(hosted.bounds.get(), window, cx);
             if rect.size.width < 1.0 {
                 continue; // not laid out yet
             }
             let crop = hosted.crop_at(rect, limit);
+            let rect = pane_rect(rect, keep, live == Some(*id), crop);
             if live == Some(*id) {
                 let drifted = check && hosted.window_frame().is_some_and(|f| f.origin != raised(rect, crop).origin);
                 if hosted.placed != rect || drifted {
                     hosted.place(rect, crop);
                 }
             } else if hosted.parked_size != rect.size || hosted.crop != crop {
-                hosted.park(scale, crop);
+                hosted.park(rect.size, scale, crop);
             }
             // Only on a check: reading a window's size is a synchronous accessibility call.
             // An app that resized its own window: the preview and the click rule follow it.
@@ -4097,6 +4178,68 @@ impl Workspace {
             .child(self.render_field("type to filter", cx));
         let panel = self.list_panel(panel, header, "picker", rows, "No match");
         dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel)
+    }
+
+    /// Carries out `Effect::FillDisplay`. A run with hosting off changes no window: its own
+    /// floats over the user's screen.
+    fn fill_display(&mut self, on: bool, window: &Window, cx: &mut Context<Self>) {
+        if !self.hosting {
+            return;
+        }
+        // SAFETY: GPUI's own view, on the main thread.
+        let at = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::placement(view) });
+        // Read first too: AppKit may push the window under a menu bar that comes back.
+        if let (false, Some(filled)) = (on, &mut self.filled) {
+            filled.left = at.as_ref().map(|at| at.window);
+        }
+        // The bars before anything that can fail: nothing leaves them away. `at` was read first:
+        // `visible` is what they leave while they show.
+        ottospace_mac::window::hide_bars(on);
+        // Kept from a turn before whose frame is still to come: its `before` is the true one.
+        if let (true, None, Some(at)) = (on, self.filled, at) {
+            let frame = fill::frame(at.screen, at.safe_top);
+            self.filled = Some(Filled { before: at.window, frame, visible: at.visible, set: false, left: None });
+        }
+        let Some(view) = ns_view(window).map(|view| view as usize) else { return };
+        // Not in this update: GPUI drops the resize AppKit reports while the app is borrowed,
+        // and the layout keeps the old size (as its own `zoom_window` defers). By then the mode
+        // may have turned again: the frame is the one the model asks for now.
+        cx.spawn(async move |this, cx| {
+            let Ok((on, Some(filled))) = this.update(cx, |this, _| (this.model.fill_display, this.filled)) else {
+                return;
+            };
+            let view = view as *mut std::ffi::c_void;
+            // SAFETY: the window's own view, alive while its workspace is; the main thread.
+            if let Some(at) = unsafe { ottospace_mac::window::placement(view) } {
+                let screens = recovery::screens();
+                let now = filled.left.unwrap_or(at.window);
+                let back = || fill::back(now, filled.frame, filled.before, &screens.visible, screens.main);
+                unsafe { ottospace_mac::window::set_frame(view, if on { filled.frame } else { back() }) };
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.filled = this.filled.filter(|_| on).map(|filled| Filled { set: true, ..filled });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Ends the mode when the window no longer has its display's frame: dragged, zoomed, moved
+    /// by the system, or the display changed under it.
+    fn fill_holds(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.filled.is_some_and(|filled| filled.set) || !self.model.fill_display {
+            return;
+        }
+        // SAFETY: GPUI's own view, on the main thread.
+        let at = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::placement(view) });
+        if at.is_some_and(|at| !fill::holds(at.window, fill::frame(at.screen, at.safe_top))) {
+            self.dispatch(Action::FillEnded, Origin::System, window, cx);
+        }
+    }
+
+    /// While the window fills its display: what the menu bar and the Dock leave when they show.
+    fn bars_leave(&self) -> Option<ottospace_core::ax::Frame> {
+        self.filled.filter(|_| self.model.fill_display).map(|filled| filled.visible)
     }
 
     /// A click on a pane body. An app pane goes live, then the click is replayed so it lands in
@@ -5536,27 +5679,38 @@ impl Workspace {
             .child(self.render_top_buttons(cx))
     }
 
-    /// New tab and split buttons: a new empty tab, or the picker for that split.
+    /// New tab and split buttons: a new empty tab, or the picker for that split. Then Fill the
+    /// Whole Display, its arrows out while off and in while on.
     fn render_top_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div().flex_none().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
-            |(i, (name, icon, tip, axis, new_tab))| {
-                let (tip, axis, new_tab) = (*tip, *axis, *new_tab);
-                div()
-                    .id(("split", i))
-                    .w(px(28.))
-                    .h(px(22.))
-                    .rounded_md()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgb(theme::SELECTED)))
-                    .child(svg().path(*icon).size(px(16.)).text_color(rgb(theme::MUTED)))
-                    .child(self.controls.mark(format!("top:{name}")))
-                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-                    .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, new_tab, window, cx)))
-            },
-        ))
+        // Each the same: an icon, its sneak label, its tip.
+        let button = |id: ElementId, icon: &'static str, name: String, tip: &'static str| {
+            div()
+                .id(id)
+                .w(px(28.))
+                .h(px(22.))
+                .rounded_md()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(theme::SELECTED)))
+                .child(svg().path(icon).size(px(16.)).text_color(rgb(theme::MUTED)))
+                .child(self.controls.mark(format!("top:{name}")))
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
+        };
+        let splits = SPLITS.iter().enumerate().map(|(i, (name, icon, tip, axis, new_tab))| {
+            let (axis, new_tab) = (*axis, *new_tab);
+            button(("split", i).into(), icon, name.to_string(), tip)
+                .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, new_tab, window, cx)))
+        });
+        let on = self.model.fill_display;
+        let tip = if on { "Back from the whole display  ⌃⌘F" } else { "Fill the whole display  ⌃⌘F" };
+        let fill = button("fill-display".into(), FILL_ICONS[usize::from(on)], "fill".into(), tip).on_click(
+            cx.listener(|this, _, window, cx| {
+                this.dispatch(Action::FillDisplay, this.input, window, cx);
+            }),
+        );
+        div().flex_none().ml_auto().mr_2().flex().gap_1().children(splits).child(fill)
     }
 
     /// The second row: the selected space's tabs, only while it has more than one. The one on
@@ -6083,6 +6237,12 @@ fn title_bar(window: &ax::Window) -> f64 {
     titlebar::height(&facts) as f64
 }
 
+/// The part of an app pane's content `rect` on screen its window is sized to: while the window
+/// fills its display (`keep`: what the bars leave), as `fill::app_rect` says.
+fn pane_rect(rect: CGRect, keep: Option<ottospace_core::ax::Frame>, live: bool, crop: f64) -> CGRect {
+    recovery::to_rect(fill::app_rect(recovery::to_frame(rect), keep, live, crop))
+}
+
 /// A pane body's rect (window-content coordinates) in global top-left screen coordinates.
 fn on_screen(body: Bounds<Pixels>, window: &Window, cx: &App) -> CGRect {
     // gpui window bounds are relative to the window's display; offset by its global origin.
@@ -6300,7 +6460,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FocusPrev, window, cx| {
                 this.dispatch(Action::FocusCycle { delta: -1 }, this.input, window, cx);
             }))
-            .on_action(cx.listener(|_, _: &Zoom, window, _| window.zoom_window()))
+            // As the green button: `zoom_asks` turns it into Fill the Whole Display.
+            .on_action(cx.listener(|_, _: &ZoomWindow, window, _| window.zoom_window()))
+            .on_action(cx.listener(|this, _: &FillDisplay, window, cx| {
+                this.dispatch(Action::FillDisplay, this.input, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &Quit, window, cx| this.ask_quit(window, cx)))
             .on_action(cx.listener(|this, _: &ShowKeys, window, cx| {
                 this.dispatch(Action::ToggleKeys, this.input, window, cx);
@@ -6782,7 +6946,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 7] = [
+        const TESTS_ONLY: [&str; 8] = [
             "capture_start",
             "repo_add",
             "inspector_fixture",
@@ -6790,6 +6954,7 @@ mod tests {
             "calendar_call",
             "record_start",
             "record_stop",
+            "zoom_press",
         ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
         for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {
@@ -6816,7 +6981,7 @@ mod tests {
     #[test]
     fn every_rail_icon_is_embedded() {
         let icons = SECTIONS.iter().map(|(_, icon, _)| *icon).chain(SPLITS.iter().map(|(_, icon, ..)| *icon));
-        for path in icons.chain([HOME_ICON]) {
+        for path in icons.chain([HOME_ICON]).chain(FILL_ICONS) {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }
     }

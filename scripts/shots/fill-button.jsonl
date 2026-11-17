@@ -1,0 +1,13 @@
+# The top row's Fill the Whole Display button, right of the splits: off (arrows out), its
+# tip, and on (arrows in), the pointer away. A test run moves no window: only the button and the state change.
+{"cmd":"split"}
+{"cmd":"split","axis":"down"}
+{"shot":"off"}
+{"hover":"top:fill"}
+{"settle":500}
+{"shot":"tip"}
+{"click":"top:fill"}
+{"until":"state.fill_display","is":true}
+{"hover":"space:0"}
+{"settle":500}
+{"shot":"on"}

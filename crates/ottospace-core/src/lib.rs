@@ -16,6 +16,7 @@ pub mod compose;
 pub mod diff;
 pub mod edit;
 pub mod features;
+pub mod fill;
 #[cfg(test)]
 mod fuzz;
 pub mod home;
