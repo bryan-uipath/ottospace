@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::process::Command;
 
 // screencapturekit's Swift bridge needs the system Swift runtime; its own rpath doesn't reach the
@@ -30,6 +31,12 @@ fn main() {
     let triple = format!("{arch}-apple-macosx14.0");
     let mut args = vec!["build", "-c", "release", "--triple", &triple, "--package-path", "swift/listen"];
     args.extend(["--scratch-path", &scratch]);
+    // The scratch folder's module cache records its path and fails once moved (a target folder
+    // copied elsewhere: "missing required module 'SwiftShims'"). Built at another path: start again.
+    let stamp = format!("{scratch}.path");
+    if fs::read_to_string(&stamp).ok().as_deref() != Some(scratch.as_str()) {
+        let _ = fs::remove_dir_all(&scratch);
+    }
     if speech {
         args.extend(["-Xswiftc", "-DOTTOSPACE_SPEECH_SDK"]);
     }
@@ -40,6 +47,7 @@ fn main() {
         String::from_utf8_lossy(&built.stdout),
         String::from_utf8_lossy(&built.stderr)
     );
+    fs::write(&stamp, &scratch).expect("write the scratch stamp");
     let bin = Command::new("swift").args(&args).arg("--show-bin-path").output().expect("swift --show-bin-path");
     let bin = String::from_utf8_lossy(&bin.stdout).trim().to_string();
     println!("cargo:rustc-link-search=native={bin}");

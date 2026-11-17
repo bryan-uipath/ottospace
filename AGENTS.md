@@ -177,7 +177,7 @@ Rules:
   `app-windows.yml`, `shots.yml` and `reliability.yml` restore it and save none (`save-if: false`).
   A job that builds the same dependencies joins it; one that saves from a pull request does not.
 - `.github/workflows/shots.yml`, on pull requests that change `crates/ottospace/src/**`,
-  `crates/ottospace-core/src/**`, `scripts/shot`, `scripts/shots/**` or `scripts/test-shot.sh`:
+  `crates/ottospace-core/src/**`, `crates/ottospace-mac/**`, `scripts/shot`, `scripts/shots/**` or `scripts/test-shot.sh`:
   `scripts/test-shot.sh`, then `scripts/shot --compare` of every scenario against the merge base;
   the pictures are the artifact `shots`. Read-only token, no comment on the pull request. Not a
   required check. (`test-shot.sh` needs a screen that draws, so it runs here, not in scripts.yml.)
