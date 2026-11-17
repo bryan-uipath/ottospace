@@ -68,10 +68,12 @@ need to persist by default. maybe we need a way to differentiate persisted vs no
   `select_tab`, focus or mark into it, a pane moved into or out of it, or its tab or pane closed, is
   refused (`CLOSING`, `touches_closing`), and any other
   step not the user's that puts it on the row is undone in `settle_closing` (its space hidden
-  again, the tab on show before back: `keep_closing`). A second close while one is offered takes
+  again, the tab on show before back: `keep_closing`). A window the shell adopts beside a pane of
+  it joins the tab on show instead (`Model::in_closing`). A second close while one is offered takes
   the bar; the first still goes at its own time, and keeps its own Undo: each closing workspace
   shows under the others in the section (`Workbooks::closing_rows`, state `workbooks_closing`),
-  italic, `Closing` and Undo (`WorkbookReopen`, the user's alone), whatever the bar says since.
+  italic, `Closing` and Undo (`WorkbookReopen`, the user's alone; by click or label, the clock
+  moved first as for the bar's), whatever the bar says since.
 - **Who.** Only the user's step closes one or keeps one: a client's `hide_space` or `close_tab`
   leaves it listed (hidden, it comes back after a restart as an open one does; with no tab left
   it goes at quit, having no file), and its `WorkbookKeep` is refused (`USERS_ALONE`).
@@ -86,7 +88,8 @@ need to persist by default. maybe we need a way to differentiate persisted vs no
 - Property rules: no step but the user's keeps or closes a temporary workspace or takes one off
   the list (the files read again aside); no temporary workspace is written; a closing one is not
   listed, not on the row, not kept and not in `layout.json`, nor are its tabs; no step but the
-  user's brings a closing one back, whatever the action.
+  user's brings a closing one back, whatever the action; no client's changes its panes (time
+  aside), and no shell's step adds one.
 
 ## Home (built)
 

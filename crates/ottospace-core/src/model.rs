@@ -4362,6 +4362,9 @@ impl Model {
                 {
                     return;
                 }
+                // A window opened beside a pane of a closing workspace joins the tab on show: what
+                // that workspace's Undo brings back stays as it was.
+                let beside = beside.filter(|pane| !self.in_closing(*pane));
                 self.next_id += 1;
                 let id = self.next_id;
                 self.panes.push(Pane { id, kind, cwd: None, fit: None });

@@ -440,6 +440,12 @@ impl Workspace {
                 }
                 None
             }
+            ("workbook-reopen", _) => {
+                if let Some(id) = number {
+                    self.reopen_workbook(id, window, cx);
+                }
+                None
+            }
             // A tab of a workbook: `workbook-tab-menu:3:1`.
             ("workbook-tab" | "workbook-tab-menu", _) => {
                 let place = name.split_once(':').and_then(|(id, at)| Some((id.parse().ok()?, at.parse().ok()?)));

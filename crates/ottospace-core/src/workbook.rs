@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::edit::{Edit, Field};
 use crate::layout::Node;
 use crate::marks::{self, Extra, MAX_NAME, MarkInput, Need, PaneRecord, RecordKind, TabRecord};
-use crate::model::{Action, Effect, Kind, Model, Owner, PaneId, Section, Space, Tab, TabAt};
+use crate::model::{Action, Effect, Kind, Model, Owner, PaneId, Section, Space, Tab};
 use crate::notice::{self, Notice};
 use crate::tasks::{NOTICE_MS, TaskId};
 
@@ -1288,7 +1288,7 @@ impl Model {
     }
 
     /// Whether `action` would bring a closing workspace back or change what it keeps for its Undo:
-    /// a tab of it selected, closed or given a tab; a pane of it focused, entered, closed or moved,
+    /// a tab of it selected or closed; a pane of it focused, entered, closed or moved,
     /// or one moved into it; a mark in it gone to. Refused from a client (`CLOSING`); any other
     /// step not the user's that puts it on the row is undone (`keep_closing`).
     pub(crate) fn touches_closing(&self, action: &Action) -> bool {
@@ -1296,7 +1296,6 @@ impl Model {
         let closing =
             |index: Option<usize>| index.and_then(|at| self.tabs.get(at)).is_some_and(|t| closing_space(&t.space));
         let of_pane = |pane: PaneId| self.tab_of(pane).and_then(|tab| self.tabs.iter().position(|t| t.id == tab));
-        let of_tab = |tab: u32| self.tabs.iter().position(|t| t.id == tab);
         match action {
             Action::SelectTab { index } => closing(Some(*index)),
             Action::CloseTab { index } => closing(Some(index.unwrap_or(self.active))),
@@ -1304,20 +1303,18 @@ impl Model {
             Action::Close { pane } => closing(pane.or(self.focused).and_then(of_pane)),
             Action::MovePane { pane, tab } => closing(Some(*tab)) || closing(pane.or(self.focused).and_then(of_pane)),
             Action::DropPane { source, target, .. } => closing(of_pane(*source)) || closing(of_pane(*target)),
-            Action::TabPlace { tab, at } => {
-                let moved = closing(tab.and_then(of_tab).or(Some(self.active)));
-                moved
-                    || match at {
-                        TabAt::End(of) => closing_space(of),
-                        TabAt::Before(tab) => closing(of_tab(*tab)),
-                    }
-            }
             Action::MarkGo { mark, .. } => {
                 let Some(mark) = self.marks.find(mark).and_then(|id| self.marks.get(id)) else { return false };
                 closing(self.mark_pane(mark).and_then(of_pane).or_else(|| self.mark_tab(mark)))
             }
             _ => false,
         }
+    }
+
+    /// Whether pane `pane` is in a tab of a closing workspace.
+    pub(crate) fn in_closing(&self, pane: PaneId) -> bool {
+        let tab = self.tab_of(pane).and_then(|tab| self.tabs.iter().find(|t| t.id == tab));
+        tab.is_some_and(|t| matches!(t.space, Owner::Workbook { id } if self.workbooks.closing(id)))
     }
 
     /// Whether workbook `id`'s space is on the row with a tab, or its tab is on show.
@@ -2423,6 +2420,10 @@ mod tests {
             m.tab_of(pane).and_then(|id| m.tabs.iter().find(|tab| tab.id == id)).map(|t| t.space.clone())
         };
         assert_eq!((tab_of(&m, 1), tab_of(&m, 2)), (Some(of.clone()), Some(Owner::Workbook { id: 2 })));
+        // A window the shell adopts beside a pane of it joins the tab on show instead.
+        let adopt = Action::Adopt { kind: Kind::Terminal, beside: Some(1), seen: None };
+        m.update(adopt.sent_by(Origin::System));
+        assert_eq!(tab_of(&m, m.next_id), Some(Owner::Workbook { id: 2 }));
     }
 
     /// The user's close of the last tab of a temporary workspace whose terminal runs asks, as its

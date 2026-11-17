@@ -260,6 +260,13 @@ impl Workspace {
         self.model.workbooks.closing_rows().into_iter().map(row).collect()
     }
 
+    /// Undo on closing workspace `id`'s row, by click or label. The clock first, as the bar's Undo:
+    /// one whose time is up stays gone.
+    pub(crate) fn reopen_workbook(&mut self, id: WorkbookId, window: &Window, cx: &mut Context<Self>) {
+        self.tick_now();
+        self.dispatch(Action::WorkbookReopen { workbook: id }, self.input, window, cx);
+    }
+
     /// The name of the workbook open tab `tab` stands for: the tab bar marks it.
     pub(crate) fn workbook_of(&self, tab: u32) -> Option<String> {
         let (id, _) = self.model.workbooks.entry_of(tab)?;
@@ -429,9 +436,7 @@ impl Workspace {
                 .hover(|s| s.underline())
                 .child("Undo")
                 .child(self.controls.mark(control))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.dispatch(Action::WorkbookReopen { workbook: id }, this.input, window, cx);
-                }));
+                .on_click(cx.listener(move |this, _, window, cx| this.reopen_workbook(id, window, cx)));
             let name = crate::cut_text(row.name).flex_1().min_w_0().italic().text_color(rgb(theme::MUTED));
             let closing = div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child("Closing");
             let line = crate::sidebar_row(ElementId::Name(format!("workbook-closing:{id}").into()), false)

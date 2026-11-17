@@ -2800,6 +2800,17 @@ impl Run {
         let listed_before = listed(m);
         let closing_before: Vec<workbook::WorkbookId> =
             m.workbooks.list.iter().filter(|book| book.closing.is_some()).map(|book| book.id).collect();
+        // Each closing workspace's tabs, each with its panes and whether they are empty: what its Undo brings back.
+        let closing_held = |m: &Model| -> Vec<(u32, Vec<(PaneId, bool)>)> {
+            let panes = m.tab_panes();
+            let shown = |pane: &PaneId| m.pane(*pane).map(|p| (*pane, p.kind == Kind::Empty));
+            let held = |(at, tab): (usize, &Tab)| {
+                let of = matches!(tab.space, Owner::Workbook { id } if closing_before.contains(&id));
+                of.then(|| (tab.id, panes.get(at).into_iter().flatten().filter_map(shown).collect()))
+            };
+            m.tabs.iter().enumerate().filter_map(held).collect()
+        };
+        let closing_was = closing_held(m);
         let bindings = |m: &Model| -> Vec<(String, Option<TaskId>)> {
             m.workbooks.list.iter().map(|book| (book.uid.clone(), book.task)).collect()
         };
@@ -3084,6 +3095,19 @@ impl Run {
             let still = m.workbooks.get(*id).is_none() || m.workbooks.closing(*id);
             ensure!(still, "{origin:?}'s {action:?} brought closing workspace {id} back");
         }
+        // Nor does a client change what a closing one holds (no pane moved in or out, opened, closed); time
+        // ends it. The shell's step may end a pane there (a window quit), or give a waiting one its window
+        // (`Fill`), never add one.
+        let held = closing_held(m);
+        let was: Vec<&(PaneId, bool)> = closing_was.iter().flat_map(|(_, panes)| panes).collect();
+        let changed = match origin {
+            Origin::Socket => !matches!(action, Action::Tick { .. }) && held != closing_was,
+            Origin::System => {
+                held.iter().flat_map(|(_, panes)| panes).any(|(pane, _)| !was.iter().any(|(p, _)| p == pane))
+            }
+            Origin::User => false,
+        };
+        ensure!(!changed, "{origin:?}'s {action:?} changed a closing workspace: {closing_was:?} to {held:?}");
         // Nobody but the user moves what the user types to: not the chat (its agent may end), not
         // the new-task box.
         if let Some(was) = &typing_to {

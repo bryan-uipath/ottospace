@@ -5943,6 +5943,12 @@ fn the_last_tab_closed_asks_and_each_closing_workspace_keeps_its_undo() {
     assert_eq!(back["workbooks_closing"].as_array().map(Vec::len), Some(1), "{back}");
     assert_eq!((&back["workbook_offer"], pane_ids(&back)), (&json!("closed"), vec![pane.as_u64().unwrap_or(0)]));
     assert_eq!(back["workbooks"][0]["name"], "Workspace 2", "{}", back["workbooks"]);
+    // The second one's Undo by its label: back too, and the bar's offer of it goes.
+    let id = back["workbooks_closing"][0]["id"].as_u64().unwrap_or(0);
+    let (_, labels) = sneak(&otto);
+    let label = otto.user_key(&letters(&labels[&format!("workbook-reopen:{id}")]));
+    let rows = label["workbooks_closing"].as_array().map(Vec::len);
+    assert_eq!((rows, &label["workbook_offer"]), (Some(0), &Value::Null), "{label}");
 }
 
 /// The owner's report: the section's + took the tab on show (another session's), and a second +
