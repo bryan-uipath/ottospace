@@ -174,16 +174,17 @@ impl Workspace {
 
     /// The palette's and the menu bar's Pause or Resume: whichever the one on can do.
     pub(crate) fn pause_key(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let Some(status) = self.model.listen.on.as_ref().map(|on| on.status) else { return };
-        let at = now_ms();
-        let action = match status {
-            Status::Paused => Action::ListenResume { at },
-            _ => {
-                self.listen_flush(window, cx);
-                Action::ListenPause { at }
-            }
-        };
-        self.dispatch(action, self.input, window, cx);
+        self.listen_pause(self.input, window, cx);
+    }
+
+    /// Pause or Resume as `origin`, as the core says fits (`Model::listen_pause_action`); what
+    /// was heard before a pause goes to the core first.
+    fn listen_pause(&mut self, origin: Origin, window: &Window, cx: &mut Context<Self>) {
+        let Some(action) = self.model.listen_pause_action(now_ms()) else { return };
+        if matches!(action, Action::ListenPause { .. }) {
+            self.listen_flush(window, cx);
+        }
+        self.dispatch(action, origin, window, cx);
     }
 
     /// `Transcribe` in a pane's header.
@@ -636,8 +637,9 @@ impl Workspace {
         if std::env::var_os("OTTOSPACE_E2E").is_some() {
             return;
         }
-        let paused = self.model.listen.on.as_ref().is_some_and(|on| on.status == Status::Paused);
-        ottospace_mac::status_item::set(self.model.listen.on.as_ref().map(|_| "ottospace is transcribing"), paused);
+        // Pause or Resume as it fits, none while it starts.
+        let pause = self.model.listen_pause_action(0).map(|action| matches!(action, Action::ListenResume { .. }));
+        ottospace_mac::status_item::set(self.model.listen.on.as_ref().map(|_| "ottospace is transcribing"), pause);
         let at = now_ms();
         // Only the user's own mouse reaches a status item's menu.
         match ottospace_mac::status_item::take() {
@@ -645,15 +647,7 @@ impl Workspace {
                 self.listen_flush(window, cx);
                 self.dispatch(Action::ListenStop { at }, Origin::User, window, cx);
             }
-            Some(ottospace_mac::status_item::Chosen::Pause) => {
-                let action = if paused {
-                    Action::ListenResume { at }
-                } else {
-                    self.listen_flush(window, cx);
-                    Action::ListenPause { at }
-                };
-                self.dispatch(action, Origin::User, window, cx);
-            }
+            Some(ottospace_mac::status_item::Chosen::Pause) => self.listen_pause(Origin::User, window, cx),
             Some(ottospace_mac::status_item::Chosen::Show) => {
                 cx.activate(true);
                 self.dispatch(Action::ListenShow { on: true }, Origin::User, window, cx);
@@ -842,7 +836,7 @@ impl Workspace {
     }
 
     /// Test runs only: where each of a transcript's controls was drawn, by id (`listen-start:3`,
-    /// `listen-header`, `listen-stop:header`, `listen-pause:view`, `listen-top:`, `listen-view`).
+    /// `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-top:`, `listen-view`).
     /// Null outside a test run.
     pub(crate) fn listen_rects(&self) -> Option<BTreeMap<String, [f32; 4]>> {
         std::env::var_os("OTTOSPACE_E2E")?;

@@ -150,10 +150,11 @@ impl Model {
             (MenuOf::Row(ListRow::WorkbookTab(id, at)), _) => (*id, Some(*at)),
             _ => return None,
         };
-        Some(match item {
-            Item::Rename => Action::WorkbookEdit { workbook, tab },
-            _ => Action::WorkbookRemove { workbook, tab },
-        })
+        match item {
+            Item::Rename => Some(Action::WorkbookEdit { workbook, tab }),
+            Item::Delete | Item::Remove => Some(Action::WorkbookRemove { workbook, tab }),
+            Item::Pause | Item::Resume => None,
+        }
     }
 
     /// Takes an item: the menu closes, and the row is renamed (its name typed in place) or

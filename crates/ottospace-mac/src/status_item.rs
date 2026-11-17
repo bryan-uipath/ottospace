@@ -59,9 +59,10 @@ thread_local! {
     static SHOWN: RefCell<Option<Shown>> = const { RefCell::new(None) };
 }
 
-/// Shows the dot (`title` on its hover, e.g. `Transcribing`), or takes it away; `paused`: its
-/// menu offers Resume, not Pause. On the main thread.
-pub fn set(on: Option<&str>, paused: bool) {
+/// Shows the dot (`title` on its hover, e.g. `Transcribing`), or takes it away. `pause`: its
+/// menu offers Pause (`Some(false)`), Resume (`Some(true)`) or neither (`None`, while it
+/// starts). On the main thread.
+pub fn set(on: Option<&str>, pause: Option<bool>) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     SHOWN.with_borrow_mut(|shown| {
         match (on, shown.as_ref()) {
@@ -74,10 +75,12 @@ pub fn set(on: Option<&str>, paused: bool) {
             _ => {}
         }
         if let Some(shown) = shown.as_ref() {
-            let title = NSString::from_str(if paused { "Resume Transcribing" } else { "Pause Transcribing" });
+            let resume = pause.unwrap_or(false);
+            let title = NSString::from_str(if resume { "Resume Transcribing" } else { "Pause Transcribing" });
             if shown.pause.title() != title {
                 shown.pause.setTitle(&title);
             }
+            shown.pause.setHidden(pause.is_none());
         }
     });
 }

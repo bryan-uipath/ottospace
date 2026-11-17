@@ -1293,7 +1293,7 @@ export interface Snapshot {
   /** Test runs only: the transcript drawer's rows, the volatile lines last. Else null. */
   listen_lines: ListenLine[] | null;
   /** Test runs only: where a transcript's controls were drawn, by id (`listen-start:3`,
-   * `listen-header`, `listen-stop:header`, `listen-top:`, `listen-view`). Else null. */
+   * `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-top:`, `listen-view`). Else null. */
   listen_rects: Record<string, Rect> | null;
   /** The marks, in the user's order. */
   marks: Mark[];

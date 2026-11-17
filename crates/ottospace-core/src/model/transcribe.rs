@@ -26,6 +26,16 @@ impl Model {
             && self.listen_refusal(Some(pane)).is_none()
     }
 
+    /// What Pause or Resume (the palette, the menu bar's dot) does now: Pause while it runs,
+    /// Resume while paused; nothing while it starts, or with none on.
+    pub fn listen_pause_action(&self, at: u64) -> Option<Action> {
+        match self.listen.on.as_ref()?.status {
+            Status::On => Some(Action::ListenPause { at }),
+            Status::Paused => Some(Action::ListenResume { at }),
+            Status::Starting => None,
+        }
+    }
+
     /// The drawer shows the transcript only while nothing that takes keys is in it: the new-task
     /// box, the conversation with the keyboard and the editor take it back, so no key goes unseen.
     pub(super) fn listen_hidden(&self) -> bool {
@@ -441,19 +451,22 @@ mod tests {
         let open = Action::RowMenu { row: MenuOf::Transcript, dots: None, keys: true };
         let items = |m: &Model| m.row_menu().map(|(_, items)| items.to_vec());
         let mut m = model();
-        // Starting: nothing to pause, so no menu.
+        // Starting: nothing to pause, so no menu, and the palette's Pause or Resume does nothing.
+        assert_eq!(m.listen_pause_action(5), None);
         m.update(start(2));
         m.update(open.clone());
-        assert_eq!(items(&m), None);
+        assert_eq!((items(&m), m.listen_pause_action(5)), (None, None));
         m.update(Action::ListenBegan { id: "t2".into(), at: 1_200 }.sent_by(Origin::System));
         m.update(open.clone());
         assert_eq!(items(&m), Some(vec![Item::Pause]));
+        assert_eq!(m.listen_pause_action(5), Some(Action::ListenPause { at: 5 }));
         m.update(Action::Tick { now: 2_000 }.sent_by(Origin::System));
         let effects = m.update(Action::RowMenuChoose { index: None });
         assert!(effects.contains(&Effect::ListenPauseStreams { id: "t2".into() }), "{effects:?}");
         assert_eq!((status(&m), m.row_menu.is_none()), (Some(Status::Paused), true));
         m.update(open.clone());
         assert_eq!(items(&m), Some(vec![Item::Resume]));
+        assert_eq!(m.listen_pause_action(5), Some(Action::ListenResume { at: 5 }));
         // A client neither chooses from it nor closes it.
         let choose = Action::RowMenuChoose { index: None };
         assert_eq!(m.refusal(&choose, Origin::Socket), Some(crate::workbook::USERS_ALONE));

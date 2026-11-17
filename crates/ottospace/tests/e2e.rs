@@ -10273,7 +10273,8 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     assert!(resumed["listen_lines"].as_array().unwrap().iter().any(|l| l["paused_ms"].is_u64()), "{resumed}");
 
     // No × of its own: ⌘⇧L closes the drawer on it; the dot in the pane's header shows it again.
-    let closed = otto.user_key("cmd-shift-l");
+    otto.user_key("cmd-shift-l");
+    let closed = otto.drawn();
     assert!(closed["listen_rects"].get("listen-view").is_none(), "{}", closed["listen_rects"]);
     otto.user_click(at(otto.listen_rect("listen-header"), 0.5, 0.5));
     otto.listen_rect("listen-view");
