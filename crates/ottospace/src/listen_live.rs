@@ -62,6 +62,7 @@ pub(crate) fn ready() -> Result<bool, String> {
             }
         }
         Status::Unsupported => Err("the system's language has no speech model".into()),
+        Status::Unavailable => Err("this Mac cannot run Apple's speech recogniser".into()),
         Status::Absent => Err(ottospace_core::listen::NO_SOURCE.into()),
     }
 }

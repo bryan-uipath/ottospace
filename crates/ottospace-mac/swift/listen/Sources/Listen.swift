@@ -59,14 +59,16 @@ private func chosen(_ name: String?) async -> Locale? {
 #endif
 
 /// 0: no recogniser here (below macOS 26, or built without its SDK). 1: supported, its model not
-/// installed. 2: installed. 3: being downloaded. 4: this locale is not supported.
+/// installed. 2: installed. 3: being downloaded. 4: this locale is not supported. 5: macOS 26, but
+/// this Mac cannot run the transcriber (`isAvailable` false: a virtual machine, for one).
 @_cdecl("ottospace_listen_status")
 public func ottospace_listen_status(_ locale: UnsafePointer<CChar>?) -> Int32 {
     #if OTTOSPACE_SPEECH_SDK
     if #available(macOS 26, *) {
         let name = named(locale)
         return blocking {
-            guard SpeechTranscriber.isAvailable, let locale = await chosen(name) else { return 4 }
+            guard SpeechTranscriber.isAvailable else { return 5 }
+            guard let locale = await chosen(name) else { return 4 }
             let module = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
             switch await AssetInventory.status(forModules: [module]) {
             case .installed: return 2

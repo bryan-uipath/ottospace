@@ -24,6 +24,8 @@ pub enum Status {
     Absent,
     /// The language has no model.
     Unsupported,
+    /// macOS 26, but this Mac cannot run the transcriber (a virtual machine, for one).
+    Unavailable,
     /// Supported, its model not installed: the system can download it.
     NotInstalled,
     Downloading,
@@ -47,6 +49,7 @@ pub fn status(locale: Option<&str>) -> Status {
         2 => Status::Installed,
         3 => Status::Downloading,
         4 => Status::Unsupported,
+        5 => Status::Unavailable,
         _ => Status::Absent,
     }
 }

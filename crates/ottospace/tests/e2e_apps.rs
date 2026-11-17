@@ -1875,7 +1875,7 @@ fn canary_transcribed(name: &str, child: bool) -> Option<String> {
         None
     });
     if let Err(why) = started {
-        if why.contains("macOS 26") || why.contains("not installed") {
+        if why.contains("macOS 26") || why.contains("not installed") || why.contains("cannot run") {
             let _ = std::fs::remove_dir_all(&home);
             return Some(why);
         }
