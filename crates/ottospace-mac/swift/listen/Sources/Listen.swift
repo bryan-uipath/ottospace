@@ -193,6 +193,8 @@ public func ottospace_listen_new(
                         await analyzer.cancelAndFinishNow()
                     }
                 } catch {
+                    // Finished all the same, so its results end and the last callback comes.
+                    await analyzer.cancelAndFinishNow()
                     say(error.localizedDescription) { callback(context, 1, $0, 0, 0, false) }
                 }
                 await results.value

@@ -228,7 +228,8 @@ crate already builds its own Swift bridge, behind a C ABI: `listen_new(locale) -
 The build checks the SDK is 26 or later and builds a stub that says "unavailable" otherwise, so
 CI on an older Xcode still builds. The package targets macOS 14 and guards every Speech call with
 `#available(macOS 26, *)`, so the new symbols are weak-linked and the binary still launches on 14
-(checked in slice 2). The shell reads the OS version once and sends `ListenAvailable { on }`
+(checked in slice 2: `otool -l` shows Speech.framework as `LC_LOAD_WEAK_DYLIB`; it is on 14 too,
+for `SFSpeechRecognizer`). The shell reads the OS version once and sends `ListenAvailable { on }`
 (`System`): the core, which has no system data, then shows or hides the feature's controls. Rejected: a separate helper executable (the bundle ships only
 the `ottospace` binary); objc2 bindings (there are none for a Swift-only API).
 

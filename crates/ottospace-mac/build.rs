@@ -6,8 +6,9 @@ use std::process::Command;
 //
 // The recogniser's shim (`swift/listen`, `speech.rs`), built here as the `screencapturekit` crate
 // builds its bridge: `swift build` into OUT_DIR, linked static. With an SDK of 26 or later it is
-// built with `OTTOSPACE_SPEECH_SDK` (the Speech calls, weak-linked: the binary still launches on
-// macOS 14); with an older one it is a stub that says "unavailable".
+// built with `OTTOSPACE_SPEECH_SDK`; with an older one it is a stub that says "unavailable". The
+// binary still launches on macOS 14: Speech.framework is there (SFSpeechRecognizer), and the
+// macOS 26 symbols are weak because every call is behind `#available`.
 fn main() {
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     println!("cargo:rerun-if-changed=swift/listen");
@@ -44,7 +45,4 @@ fn main() {
     println!("cargo:rustc-link-search=native={bin}");
     println!("cargo:rustc-link-lib=static=OttospaceListen");
     println!("cargo:rustc-link-lib=framework=AVFoundation");
-    if speech {
-        println!("cargo:rustc-link-arg=-Wl,-weak_framework,Speech");
-    }
 }

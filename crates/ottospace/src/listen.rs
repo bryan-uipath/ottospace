@@ -120,6 +120,27 @@ fn pulse(level: f32) -> Div {
     div().flex_none().size(px(14.)).flex().items_center().justify_center().child(ring.child(dot(false)))
 }
 
+/// Stops an app's streams on another thread: ScreenCaptureKit's stop waits for the system.
+fn stop_off_main(live: Option<Live>, cx: &mut Context<Workspace>) {
+    if let Some(live) = live {
+        cx.background_executor().spawn(async move { drop(live) }).detach();
+    }
+}
+
+/// A browser, whose every tab is heard with the one in the pane (`Transcribing (all tabs)`).
+fn browser(bundle: &str) -> bool {
+    const BROWSERS: [&str; 7] = [
+        "com.google.Chrome",
+        "com.apple.Safari",
+        "org.mozilla.firefox",
+        "com.microsoft.edgemac",
+        "com.brave.Browser",
+        "company.thebrowser.Browser",
+        "com.vivaldi.Vivaldi",
+    ];
+    BROWSERS.contains(&bundle)
+}
+
 /// The grey dot of a transcript whose sound stopped coming.
 fn grey_dot() -> Div {
     div().flex_none().size(px(8.)).rounded_full().bg(rgb(theme::MUTED))
@@ -180,7 +201,8 @@ impl Workspace {
             // Nothing is captured while paused: the app's streams stop.
             Effect::ListenPauseStreams { id } => {
                 if let Some(feed) = self.listen_feed.as_mut().filter(|feed| feed.id == *id) {
-                    (feed.paused, feed.due, feed.live) = (true, None, None);
+                    (feed.paused, feed.due) = (true, None);
+                    stop_off_main(feed.live.take(), cx);
                 }
             }
             Effect::ListenResumeStreams { id } => {
@@ -196,7 +218,8 @@ impl Workspace {
             }
             Effect::ListenClose { id } => {
                 if self.listen_feed.as_ref().is_some_and(|feed| feed.id == *id) {
-                    (self.listen_feed, self.listen_meter) = (None, None);
+                    stop_off_main(self.listen_feed.take().and_then(|feed| feed.live), cx);
+                    self.listen_meter = None;
                 }
             }
             _ => {}
@@ -232,7 +255,8 @@ impl Workspace {
     /// The batch of what was heard and not yet handed over, if one is on.
     fn listen_rest(&mut self) -> Option<Action> {
         let feed = self.listen_feed.as_mut()?;
-        let lines = std::mem::take(&mut feed.pending);
+        let mut lines = std::mem::take(&mut feed.pending);
+        lines.extend(feed.live.as_ref().map(Live::take).map(|taken| taken.lines).unwrap_or_default());
         Some(Action::ListenHeard { id: feed.id.clone(), lines })
     }
 
@@ -282,7 +306,10 @@ impl Workspace {
                         }
                         Err(why) => Err(why),
                     };
+                    // Stopped while the model came: nothing is captured.
+                    let on = |this: &Workspace| this.model.listen.on.as_ref().is_some_and(|on| on.id == id);
                     let live = match ready {
+                        Ok(()) if !this.update(cx, |this, _| on(this)).unwrap_or(false) => Err("stopped".into()),
                         Ok(()) => cx.background_executor().spawn(async move { Live::start(pid) }).await,
                         Err(why) => Err(why),
                     };
@@ -340,6 +367,7 @@ impl Workspace {
             self.listen_downloading = None;
         }
         if self.model.listen.on.as_ref().is_none_or(|on| on.id != id) {
+            stop_off_main(began.ok().and_then(|(_, live, _)| live), cx);
             return false;
         }
         match began {
@@ -369,15 +397,22 @@ impl Workspace {
     /// meanwhile keeps none.
     fn listen_resume_live(&mut self, id: String, pid: i32, window: &Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| {
+            let wanted = |this: &Workspace| {
+                this.listen_feed.as_ref().is_some_and(|feed| feed.id == id && !feed.paused && feed.live.is_none())
+            };
+            // Paused or stopped again meanwhile: nothing is captured.
+            if !this.update(cx, |this, _| wanted(this)).unwrap_or(false) {
+                return;
+            }
             let live = cx.background_executor().spawn(async move { Live::start(pid) }).await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                let feed =
-                    this.listen_feed.as_mut().filter(|feed| feed.id == id && !feed.paused && feed.live.is_none());
-                match (feed, live) {
-                    (Some(feed), Ok(live)) => feed.live = Some(live),
-                    (Some(_), Err(why)) => this.listen_stream_lost(&id, why, window, cx),
-                    (None, _) => {}
+            let _ = this.update_in(cx, |this, window, cx| match (wanted(this), live) {
+                (true, Ok(live)) => {
+                    if let Some(feed) = this.listen_feed.as_mut() {
+                        feed.live = Some(live);
+                    }
                 }
+                (true, Err(why)) => this.listen_stream_lost(&id, why, window, cx),
+                (false, live) => stop_off_main(live.ok(), cx),
             });
         })
         .detach();
@@ -463,12 +498,13 @@ impl Workspace {
         };
         let paused = on.status == Status::Paused;
         let downloading = self.listen_downloading.as_deref() == Some(on.id.as_str());
-        let word = if paused {
-            "Paused"
-        } else if downloading {
-            "Downloading speech model…"
-        } else {
-            "Transcribing"
+        // A browser is heard whole: SCK filters by app, not by tab.
+        let tabs = self.hosted.get(&pane).and_then(|hosted| hosted.bundle.as_deref()).is_some_and(browser);
+        let word = match (paused, downloading, tabs) {
+            (true, ..) => "Paused",
+            (_, true, _) => "Downloading speech model…",
+            (_, _, true) => "Transcribing (all tabs)",
+            _ => "Transcribing",
         };
         let (toggle, label) = if paused { ("listen-resume", "Resume") } else { ("listen-pause", "Pause") };
         // In a narrow header it gives way before ×: the words first, then Pause, then Stop. The top
@@ -554,6 +590,7 @@ impl Workspace {
         // Only the user's own mouse reaches a status item's menu.
         match ottospace_mac::status_item::take() {
             Some(ottospace_mac::status_item::Chosen::Stop) => {
+                self.listen_flush(window, cx);
                 self.dispatch(Action::ListenStop { at }, Origin::User, window, cx);
             }
             Some(ottospace_mac::status_item::Chosen::Show) => {
