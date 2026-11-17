@@ -130,6 +130,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     mark_removed: null,
     unfilled: [],
     workbooks: [],
+    workbooks_closing: [],
     workbook_offer: null,
     row_menu: null,
     scrollbars: {},

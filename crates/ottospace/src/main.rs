@@ -3391,6 +3391,7 @@ impl Workspace {
             // (each `title`, `panes`, `summary`, `open`, `tab`), `unfolded`. No directory.
             // `row` and `buttons`: where the Workbook section drew it, or null; so for each tab.
             "workbooks": self.workbooks_json(),
+            "workbooks_closing": self.closing_json(),
             // What the Workbook section offers to take back (`deleted`, `updated`), or null.
             "workbook_offer": self.model.workbooks.offered(),
             // A row's open menu (its …), or null: `workbook` and `tab` (whose row), `selected`
@@ -5876,7 +5877,7 @@ impl Workspace {
             let of = space.of.clone();
             let on = of == selected;
             let small = of == Owner::Home || (compact && !on);
-            // A temporary workspace's name is muted; its tip says it closes without saving.
+            // A temporary workspace's name is muted and italic (selected or not); its tip says it closes without saving.
             let temporary = !self.model.space_kept(&of);
             let title = self.model.space_title(&of);
             let tip: SharedString =
@@ -6007,7 +6008,7 @@ impl Workspace {
                 .children(lead)
                 .children((!small).then(|| {
                     let name = cut_text(title).flex_1();
-                    if temporary { name.text_color(rgb(theme::MUTED)) } else { name }
+                    if temporary { name.text_color(rgb(theme::MUTED)).italic() } else { name }
                 }))
                 .children(
                     (count > 1 && !small)
@@ -6969,7 +6970,7 @@ impl Render for Workspace {
                 this.dispatch(Action::CycleTab { delta: -1 }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
-                this.dispatch(Action::CloseTab { index: None }, this.input, window, cx);
+                this.ask_close_tab(None, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
                 this.dispatch(Action::Close { pane: None }, this.input, window, cx);

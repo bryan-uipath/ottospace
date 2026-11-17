@@ -264,7 +264,7 @@ impl Workspace {
     /// Closes a tab by its id: its × on the bar, and the ×'s label.
     pub(crate) fn close_tab(&mut self, tab: u32, window: &Window, cx: &mut Context<Self>) {
         if let Some(index) = self.model.tabs.iter().position(|t| t.id == tab) {
-            self.dispatch(Action::CloseTab { index: Some(index) }, self.input, window, cx);
+            self.ask_close_tab(Some(index), window, cx);
         }
     }
 

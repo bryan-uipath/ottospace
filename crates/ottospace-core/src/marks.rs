@@ -785,7 +785,7 @@ impl Model {
     }
 
     /// The index of the open tab a tab mark stands for.
-    fn mark_tab(&self, mark: &Mark) -> Option<usize> {
+    pub(crate) fn mark_tab(&self, mark: &Mark) -> Option<usize> {
         let Target::Tab(_) = &mark.target else { return None };
         self.tabs.iter().position(|tab| Some(tab.id) == mark.live)
     }

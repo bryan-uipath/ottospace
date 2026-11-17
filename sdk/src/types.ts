@@ -1344,6 +1344,8 @@ export interface Snapshot {
   unfilled: Array<{ pane: PaneId; why: string; open: Rect | null }>;
   /** The user's workspaces, by name. Only the user makes, saves, opens, renames or deletes one. */
   workbooks: Workbook[];
+  /** Temporary workspaces the user closed, each with its own Undo (the user's alone) until its time is up. */
+  workbooks_closing: Array<{ id: number; name: string; undo: Rect | null }>;
   /** What the notice bar offers to take back (`kind` `undo`), while it offers. */
   workbook_offer: "deleted" | "updated" | "closed" | null;
   /** The open menu of a row of the bar, or null. */

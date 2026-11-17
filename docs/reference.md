@@ -49,7 +49,7 @@ running, and the rest of the design is not built: see the
 | [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today, behind the `marks` [flag](#features), off by default |
 | Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the drawer; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`), and its agent is told the brief's path. Kept in `~/.ottospace/materials` | Works today |
-| Workspaces: + on the top row or in the Workspaces section makes a new, empty one, listed there; temporary (its name muted) until it gets a task, a repository, a name or Keep, and then kept between runs. ⌘⇧S saves a tab into one (its splits, each terminal's directory, each app), to open again from the section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
+| Workspaces: + on the top row or in the Workspaces section makes a new, empty one, listed there; temporary (its name muted and italic) until it gets a task, a repository, a name or Keep, and then kept between runs. ⌘⇧S saves a tab into one (its splits, each terminal's directory, each app), to open again from the section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | Tabs and layout come back after quitting: every tab (with its task and workspace), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
 | [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; a soft pulse as one comes near; a meeting notice on the notice bar, a notification and a sound when one has started and you are in no call | Works today |
@@ -709,7 +709,7 @@ workspace.
   number no listed workspace has): its space goes after the selected one on the top row, with one empty tab,
   selected, ready for ⌘E or ⌘D. It never takes or records the tab on show.
 - **Temporary or kept**: a new workspace (from +, or what you opened on Home) is temporary: its
-  name is muted on the top row and in the section, and its tip says "Temporary: closes without
+  name is muted and italic on the top row (selected or not) and in the section, and its tip says "Temporary: closes without
   saving · ⋯ Keep". It has no file. It is kept from the moment it has a task (↵ on a new task in
   it), a repository (a Repos click made it, or set its worktree), a name you gave it, a tab saved
   into it (⌘⇧S), or Keep (its row's …, the … on its item on the top row, File ▸ Keep Workspace,
@@ -720,10 +720,14 @@ workspace.
   too. A temporary one closed (×, ⌘⌃W, its last tab closed or moved away) leaves the list at
   once: `Workspace closed` shows on the [notice bar](#notice-bar) for six seconds with Undo,
   which brings it back on the row as it was; its terminals and apps run until then, and close
-  when the offer ends (× ends it at once). If a terminal in it runs a program, × and ⌘⌃W ask
-  first, as ⌘Q does ("Close this workspace?": ↵ closes, Esc keeps it). A temporary workspace open when you quit comes back
+  when its time is up (× on the bar ends it at once). Each closed one keeps its own Undo: under
+  the others in the Workspaces section it shows, italic, with `Closing` and Undo until its own
+  time is up, whatever the bar says since (another close, a delete, a save). If a terminal in it
+  runs a program, ×, ⌘⌃W and closing its last tab (⌘⇧W, the tab's ×) ask first, as ⌘Q does
+  ("Close this workspace?": ↵ closes it, with its Undo; Esc keeps it). A temporary workspace open when you quit comes back
   with the [layout](#restoring-the-layout); once closed it never does. Only your own acts keep or close one:
-  a client's `hide_space` or `close_tab` leaves it listed.
+  a client's `hide_space` or `close_tab` leaves it listed, and no client's step brings a closing
+  one back (its `select_tab` is refused).
 - **Save**: ⌘⇧S, or File ▸ Save Tab as Workspace. In a workspace, the tab on show is saved into
   it; in the first space or a task's, as a new workspace of that tab. It records
   the tab's splits and their sizes, and each app pane's app (bundle id and name); for each

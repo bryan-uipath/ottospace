@@ -840,6 +840,11 @@ const MAKERS: &[Make] = &[
     |g| Action::SelectTab { index: g.index(g.m.tabs.len()) },
     |g| Action::CycleTab { delta: g.delta() },
     |g| Action::CloseTab { index: g.rng.coin().then(|| g.index(g.m.tabs.len())) },
+    |g| {
+        let running = g.m.panes.iter().filter(|_| g.rng.coin()).map(|p| p.id).collect::<Vec<_>>();
+        let running = running.into_iter().map(|pane| Running { pane, program: None, background: false }).collect();
+        Action::CloseTabAsked { index: g.rng.coin().then(|| g.index(g.m.tabs.len())), running }
+    },
     |g| Action::PickerQuery { query: g.name(&["s", "S", "sl", "term", "Slack"]) },
     |g| Action::PickerMove { delta: g.delta() },
     |g| {
@@ -1295,6 +1300,7 @@ const MAKERS: &[Make] = &[
     |g| Action::RowMenuChoose { index: g.rng.coin().then(|| g.rng.below(3)) },
     |_| Action::RowMenuClose,
     |_| Action::WorkbookUndo,
+    |g| Action::WorkbookReopen { workbook: g.workbook() },
     |g| Action::SetAgents {
         claude: g.names(AGENTS, 2),
         codex: Vec::new(),
@@ -1527,6 +1533,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::SelectVisibleTab { .. }
             | Action::CycleTab { .. }
             | Action::CloseTab { .. }
+            | Action::CloseTabAsked { .. }
             | Action::NewTab
             | Action::NewEmptyTab
             | Action::SpaceSelect { .. }
@@ -1559,6 +1566,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::WorkbookOpen { .. }
             // A closed temporary workspace's Undo: it is back, selected.
             | Action::WorkbookUndo
+            | Action::WorkbookReopen { .. }
             | Action::ListUndo
             | Action::ListChoose { .. }
             | Action::MarkType { .. }
@@ -2790,6 +2798,8 @@ impl Run {
         let listed =
             |m: &Model| -> Vec<(String, bool)> { m.workbooks.listed().map(|b| (b.uid.clone(), b.kept)).collect() };
         let listed_before = listed(m);
+        let closing_before: Vec<workbook::WorkbookId> =
+            m.workbooks.list.iter().filter(|book| book.closing.is_some()).map(|book| book.id).collect();
         let bindings = |m: &Model| -> Vec<(String, Option<TaskId>)> {
             m.workbooks.list.iter().map(|book| (book.uid.clone(), book.task)).collect()
         };
@@ -3069,6 +3079,11 @@ impl Run {
         let tabs_kept = m.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>() == tabs_before;
         let row_kept = m.spaces.iter().map(|space| space.of.clone()).collect::<Vec<_>>() == spaces_before;
         ensure!(!hides || (tabs_kept && row_kept), "{action:?} changed the tabs or the spaces");
+        // Only the user's step brings a closing workspace back, whatever the action.
+        for id in closing_before.iter().filter(|_| origin != Origin::User) {
+            let still = m.workbooks.get(*id).is_none() || m.workbooks.closing(*id);
+            ensure!(still, "{origin:?}'s {action:?} brought closing workspace {id} back");
+        }
         // Nobody but the user moves what the user types to: not the chat (its agent may end), not
         // the new-task box.
         if let Some(was) = &typing_to {
@@ -3100,7 +3115,10 @@ impl Run {
             // Its space gone (a task, a workspace), a tab is the workspace's the task was bound
             // to, else the workspace selected last's. Never Home's (`check`).
             let gone = matches!(now, Owner::Task { .. } | Owner::Workbook { .. }) && !m.owner_valid(was);
-            let undone = matches!(action, Action::TaskUndo | Action::ListUndo | Action::WorkbookUndo);
+            let undone = matches!(
+                action,
+                Action::TaskUndo | Action::ListUndo | Action::WorkbookUndo | Action::WorkbookReopen { .. }
+            );
             let adopted =
                 matches!((was, now, &action), (Owner::Session { .. }, Owner::Task { .. }, Action::SessionAdopt { .. }));
             ensure!(
@@ -3182,7 +3200,10 @@ impl Run {
                 action,
                 Action::ComposeSubmit { open: true } | Action::ComposeEnter | Action::TaskFromLine { open: true, .. }
             );
-            let undone = matches!(action, Action::TaskUndo | Action::ListUndo | Action::WorkbookUndo);
+            let undone = matches!(
+                action,
+                Action::TaskUndo | Action::ListUndo | Action::WorkbookUndo | Action::WorkbookReopen { .. }
+            );
             ensure!(
                 read || (origin == Origin::User && (starts || undone)),
                 "{origin:?}'s {action:?} bound a workspace"
