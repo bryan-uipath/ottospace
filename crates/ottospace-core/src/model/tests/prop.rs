@@ -5247,3 +5247,40 @@ fn seed_356_a_task_that_takes_over_a_workspace_works_in_its_default() {
     ])
     .unwrap();
 }
+
+/// A capture's ↵ starts task 2 in task 1's workspace; dismissing task 1 leaves task 2 its heir,
+/// with the link. The same rule took that for a new binding.
+#[test]
+fn a_dismissed_tasks_heir_takes_its_link() {
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::CaptureStart {
+            pane: None,
+            draft: "d1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![],
+            images: true,
+        }
+        .sent_by(Origin::User),
+        Action::TaskFromLine {
+            line: "#canvas flicker ../..e\u{301}İ>y p0 @~/>/p@".into(),
+            known: Known {
+                names: Names {
+                    agents: vec!["codex-gpt-6-astra".into(), "claude".into(), "codex-gpt-6-astra".into()],
+                    skills: vec!["\u{feff}".into(), "code-review".into(), "a\u{7f}".into()],
+                },
+                paths: vec![PathFound {
+                    typed: "../..e\u{301}İ>y".into(),
+                    resolved: "/code/app../..e\u{301}İ>y".into(),
+                }],
+                entries: vec!["/src/".into()],
+            },
+            open: true,
+        }
+        .sent_by(Origin::User),
+        Action::AgentExited { task: Subject::Task(1) }.sent_by(Origin::System),
+        Action::ComposeEnter.sent_by(Origin::User),
+        Action::TaskDismiss { id: 1 }.sent_by(Origin::System),
+    ])
+    .unwrap();
+}
