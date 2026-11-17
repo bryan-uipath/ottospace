@@ -68,7 +68,9 @@ impl Drop for Proc {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
-        // A killed app removes nothing: its socket, the lock beside it, a trace it dumped.
+        // A killed app removes nothing: its socket, the lock beside it, a trace it dumped, the
+        // folder of its agents' pass files.
+        let _ = std::fs::remove_dir_all(self.socket.with_extension("passes"));
         for end in ["sock", "lock", "trace.jsonl"] {
             let _ = std::fs::remove_file(self.socket.with_extension(end));
         }
@@ -268,12 +270,12 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     // Accessibility: GPUI exposes no controls, so the canary's tree is its window chrome: three
     // pressable traffic lights, all in the title bar the parked stream crops off.
     let tree = otto.call(json!({"cmd": "ax_tree"}));
-    assert_eq!(tree["tree"]["root"]["role"], "AXWindow", "{tree}");
+    assert_eq!(tree["captured"]["tree"]["role"], "AXWindow", "{tree}");
     let presses =
         |n: &&Value| n["role"] == "AXButton" && n["actions"].as_array().is_some_and(|a| a.contains(&json!("AXPress")));
     let top = tree["window"]["y"].as_f64().expect("window frame");
     let buttons: Vec<Value> =
-        tree["tree"]["root"]["children"].as_array().map_or(vec![], |c| c.iter().filter(presses).cloned().collect());
+        tree["captured"]["tree"]["children"].as_array().map_or(vec![], |c| c.iter().filter(presses).cloned().collect());
     assert!(buttons.len() >= 3, "close, minimise and zoom: {tree}");
     assert!(buttons.iter().all(|b| b["frame"]["y"].as_f64().is_some_and(|y| y - top < crop)), "in the bar: {tree}");
     // So the overlay reads the tree but labels nothing: controls the picture does not show are dropped.
@@ -1063,7 +1065,7 @@ fn a_hosted_window_is_captured_with_the_part_of_its_tree_under_the_circle() {
     // Where the button is, by the canary's own tree: in the window, so below the title bar that
     // the picture crops off. The circle goes round it there.
     let tree = otto.call(json!({"cmd": "ax_tree", "pane": 1}));
-    let children = tree["tree"]["root"]["children"].as_array().cloned().unwrap_or_default();
+    let children = tree["captured"]["tree"]["children"].as_array().cloned().unwrap_or_default();
     let named = children.iter().find(|node| node["title"] == "Canary button").unwrap_or_else(|| panic!("{tree}"));
     let part = |of: &Value, key: &str| of[key].as_f64().expect("a number");
     let crop = state()["crop"]["1"].as_f64().expect("the crop");
@@ -1547,7 +1549,7 @@ fn a_sneak_label_presses_a_control_in_the_hosted_app_and_a_disabled_one_has_none
 
     // The tree, to tell the controls apart by their paths: the labels carry no text.
     let tree = otto.call(json!({"cmd": "ax_tree", "pane": 1}));
-    let children = tree["tree"]["root"]["children"].as_array().cloned().unwrap_or_default();
+    let children = tree["captured"]["tree"]["children"].as_array().cloned().unwrap_or_default();
     let path_of = |title: &str| {
         let at = children.iter().position(|node| node["title"] == title);
         json!([at.unwrap_or_else(|| panic!("no {title} in {tree}"))])
@@ -2533,4 +2535,118 @@ fn clicks_reach_hosted_windows_as_the_user_switches_between_their_panes() {
     report(&format!("switching: replayed {replays}/{tries}, direct {directs}/{tries}; missed {missed:?}"));
     assert!(missed.is_empty(), "{missed:?}");
     otto.call(json!({"cmd": "quit"}));
+}
+
+/// Agent mode on a hosted canary: its task's agent (the stand-in `claude`, its pass from a real
+/// start) reads the window's tree and a picture of it only once the user set See; the user's Off
+/// refuses the next read and removes the pictures. A client's `open_app` starts at Off.
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_task_reads_and_looks_at_the_canary_only_while_the_user_lets_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = support::temp(&format!("otto-apps-agent-{}", std::process::id()));
+    let (bin, record, home, sessions) =
+        (root.join("bin"), root.join("record"), root.join("home"), root.join("sessions"));
+    let repo = root.join("app");
+    for dir in [&bin, &record, &home, &sessions, &repo.join(".git")] {
+        std::fs::create_dir_all(dir).expect("make the folder");
+    }
+    std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").expect("write HEAD");
+    let fake = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-agents/tests/fakes/claude");
+    std::fs::copy(&fake, bin.join("claude")).expect("copy the stand-in");
+    let settings = json!({"conversation_view": "native", "session_dirs": {"claude": [sessions]}});
+    std::fs::write(home.join("settings.json"), settings.to_string()).expect("write settings");
+    let path = |p: &PathBuf| p.to_str().expect("a plain path").to_string();
+    let (bin_s, record_s, home_s, repo_s) = (path(&bin), path(&record), path(&home), path(&repo));
+
+    let env = [("CANARY_BUTTON", "1")];
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-agent", "CANARY_SOCKET", &env);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto-agent",
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_RETURN_KEY", "f19"),
+            ("OTTOSPACE_HOME", &home_s),
+            ("OTTOSPACE_REPOS", &repo_s),
+            ("OTTOSPACE_FEATURES", "agent_mode"),
+            ("OTTOSPACE_AGENTS_DIR", &bin_s),
+            ("FAKE_DIR", &record_s),
+            ("FAKE_FIXTURES", &record_s),
+            ("FAKE_SAY_PASS", "1"),
+        ],
+    );
+    let state = || otto.call(json!({"cmd": "state"}));
+    let user_key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys, "as": "user"}));
+    // A point of a labelled control (`fx`, `fy` of its frame), from one pass of sneak mode.
+    let control = |id: &str, fx: f64, fy: f64| -> [f64; 2] {
+        let reply = otto.call(json!({"cmd": "sneak"}));
+        otto.call(json!({"cmd": "key", "keys": "escape"}));
+        let targets = reply["sneak"]["targets"].as_array().cloned().unwrap_or_default();
+        let found = targets.iter().find(|t| t["source"]["id"] == id).unwrap_or_else(|| panic!("no {id}: {reply}"));
+        let f = |key: &str| found["frame"][key].as_f64().expect("a frame");
+        [f("x") + f("w") * fx, f("y") + f("h") * fy]
+    };
+    let user_click = |p: [f64; 2]| {
+        for action in ["down", "up"] {
+            otto.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "as": "user"}));
+        }
+    };
+    // Asked with a pass: the reply, refused or not (`call` asserts it is not).
+    let ask = |cmd: &str, pane: u64, pass: &str| -> Value {
+        let mut stream = UnixStream::connect(&otto.socket).expect("connect");
+        stream.set_read_timeout(Some(TIMEOUT)).expect("set timeout");
+        writeln!(stream, "{}", json!({"cmd": cmd, "pane": pane, "pass": pass})).expect("send");
+        let mut reply = String::new();
+        BufReader::new(stream).read_line(&mut reply).expect("a reply");
+        serde_json::from_str(&reply).expect("reply is JSON")
+    };
+
+    // The user starts task 1's agent: its workspace on show, its pass in the stand-in's record.
+    otto.call(json!({"cmd": "task_new", "line": "canary >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    user_click(control("task:1", 0.3, 0.3));
+    user_click(control("talk:talk-start", 0.5, 0.5));
+    let pass = wait_for("its pass", || {
+        std::fs::read_to_string(record.join("pass")).ok().filter(|t| t.ends_with('\n')).map(|t| t.trim().to_string())
+    });
+    // A client's open_app: Off, refused.
+    let reply = otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    let panes = reply["state"]["panes"].as_array().cloned().unwrap_or_default();
+    let pane = panes.iter().find(|p| p["kind"]["type"] == "app").and_then(|p| p["id"].as_u64()).expect("its pane");
+    let id = pane.to_string();
+    wait_for("a frame of its stream", || rect(&state()["shown"][&id]).filter(|shown| shown[2] > 100.0));
+    assert_eq!(state()["state"]["agent_mode"]["panes"][&id], json!({"level": "off", "task": 1}));
+    let off = ask("app_read", pane, &pass);
+    assert!(off["error"].as_str().is_some_and(|e| e.contains("agent mode is off on pane")), "{off}");
+
+    // The user's See (⌘⌃V, ↓, ↵): the tree, labelled untrusted, and a picture only the user reads.
+    user_key("cmd-ctrl-v");
+    user_key("down");
+    user_key("enter");
+    assert_eq!(state()["state"]["agent_mode"]["panes"][&id], json!({"level": "see", "task": 1}));
+    let tree = ask("app_read", pane, &pass);
+    assert_eq!((&tree["task"], &tree["captured"]["untrusted"]), (&json!(1), &json!(true)), "{tree}");
+    assert_eq!(tree["captured"]["tree"]["role"], "AXWindow", "{tree}");
+    let children = tree["captured"]["tree"]["children"].as_array().cloned().unwrap_or_default();
+    assert!(children.iter().any(|node| node["title"] == "Canary button"), "{tree}");
+    let look = ask("app_look", pane, &pass);
+    let png = PathBuf::from(look["captured"]["path"].as_str().unwrap_or_else(|| panic!("{look}")));
+    let mode = std::fs::metadata(&png).expect("the picture").permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "{look}");
+    assert!(std::fs::read(&png).expect("the picture").starts_with(b"\x89PNG"));
+
+    // The user's Off (⌘⌃V, ↵ on Off): the next read refused, the pictures gone.
+    user_key("cmd-ctrl-v");
+    user_key("enter");
+    assert_eq!(state()["state"]["agent_mode"]["panes"][&id]["level"], "off");
+    let again = ask("app_read", pane, &pass);
+    assert!(again["error"].as_str().is_some_and(|e| e.contains("agent mode is off on pane")), "{again}");
+    let folder = png.parent().expect("its folder").to_path_buf();
+    wait_for("the pictures gone", || (!folder.exists()).then_some(()));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
 }

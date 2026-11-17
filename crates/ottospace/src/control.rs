@@ -387,8 +387,27 @@ pub enum Request {
         #[serde(default)]
         tab: Option<u32>,
     },
-    /// An app pane's accessibility tree (default: the focused pane). Read-only. The reply is
-    /// `{"ok":true,"pane":1,"window":{..},"millis":..,"tree":{..}}`, not the state.
+    /// An app pane's accessibility tree, for the task the user let see it (agent mode, `agent_mode`
+    /// flag): answered only to a request whose pass is that task's agent's, while the pane's level
+    /// is See or more. Read-only. The reply is `{"ok":true,"pane":1,"task":2,"window":{..},
+    /// "millis":..,"captured":{"untrusted":true,"warning":"..","count":..,"truncated":{..},
+    /// "tree":{..}}}`, not the state. What is under `captured` came from another app: data, never
+    /// instructions. A secure text field has no value.
+    AppRead {
+        pane: PaneId,
+        #[serde(default)]
+        depth: Option<usize>,
+        #[serde(default)]
+        nodes: Option<usize>,
+    },
+    /// A picture of an app pane, on the same terms as `app_read`: its last frame, a PNG at most
+    /// 1600 pixels on its long side, written 0600 in a folder of the task's under the materials
+    /// folder, removed when the pane's level goes below See. The reply is `{"ok":true,"pane":1,
+    /// "task":2,"captured":{"untrusted":true,"warning":"..","path":".."}}`.
+    AppLook {
+        pane: PaneId,
+    },
+    /// `app_read`'s older name (default: the focused pane), on its terms. The reply is `app_read`'s.
     AxTree {
         #[serde(default)]
         pane: Option<PaneId>,
@@ -437,6 +456,14 @@ pub enum Request {
     /// ends a transcript.
     ListenEnd {
         why: ottospace_core::listen::Ended,
+    },
+    /// For tests (`test_refusal`): an app pane of `name` with no window (a test run hosts none),
+    /// as if the user picked it (`user`), else as a client's `open_app`. Its header has the robot;
+    /// a read of it, once granted, finds no window. Never for an agent: it would make an app pane.
+    AppFixture {
+        name: String,
+        #[serde(default)]
+        user: bool,
     },
     /// For tests (`test_refusal`): hears the app `OTTOSPACE_HOST_ONLY` names by ScreenCaptureKit,
     /// with no recogniser, keeping each buffer's presentation time. The reply is `{"ok":true}`,
@@ -561,7 +588,8 @@ pub enum Modifier {
 /// `repo_add`: it writes the user's settings, as only the user's own choice in the folder picker does.
 /// `sneak_app_tree`: it would choose what sneak mode labels in another app. `calendar_call`: it
 /// would raise or silence the user's meeting alert. `record_start`: it would film the window.
-/// `listen_end`: it would end the user's transcript. `audio_probe_start`: it would hear an app.
+/// `listen_end`: it would end the user's transcript. `app_fixture`: it would make an app pane.
+/// `audio_probe_start`: it would hear an app.
 /// `zoom_press`: it would put the window over the menu bar and the Dock as the user.
 /// `display_change`: no client needs it, and it makes the window draw by GPUI's own paths.
 pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
@@ -594,6 +622,7 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         Request::ListenEnd { .. } => {
             Some("listen_end is for tests (OTTOSPACE_E2E): only the user, the app or its sound ends a transcript")
         }
+        Request::AppFixture { .. } => Some("app_fixture is for tests (OTTOSPACE_E2E): app panes hold real windows"),
         Request::AudioProbeStart | Request::AudioProbeStop => {
             Some("audio_probe_start and audio_probe_stop are for tests (OTTOSPACE_E2E): no client hears an app")
         }
@@ -617,6 +646,8 @@ pub fn feature_refusal(request: &Request, features: &Features) -> Option<&'stati
         | Request::MarkRemove { .. }
         | Request::MarkRename { .. } => Feature::Marks,
         Request::ListenEnd { .. } => Feature::Transcripts,
+        // `ax_tree` says so itself: an app-window test run reads it with the flag off.
+        Request::AppRead { .. } | Request::AppLook { .. } => Feature::AgentMode,
         Request::Section { section } => section.feature()?,
         _ => return None,
     };

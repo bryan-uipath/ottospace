@@ -38,6 +38,10 @@ pub const INSPECT: u32 = 0x8ec5ff;
 pub const ERROR: u32 = 0xff8484;
 /// A transcript is on: its dot and time.
 pub const RECORDING: u32 = 0xff6467;
+/// Agent mode at See: the app's primary. At See and act: the needs-you amber. The pane's header
+/// line takes the level's colour.
+pub const AGENT_SEE: u32 = PRIMARY;
+pub const AGENT_ACT: u32 = SNEAK;
 /// Selected terminal text: a muted cyan, dark enough for light text on it.
 pub const SELECTION: u32 = 0x155e75;
 /// Sneak labels: a solid amber pill with dark text, readable over any app.
@@ -95,6 +99,7 @@ pub fn station(station: Station) -> u32 {
         Station::Shell => APP,
         Station::Network => PRIMARY,
         Station::Browser => INSPECT,
+        Station::Apps => AGENT_SEE,
         Station::Agents => COMMAND,
         Station::Skills => COMPOSE,
         Station::Memory => LIST,
@@ -147,9 +152,34 @@ pub fn accent(mode: Mode) -> u32 {
     }
 }
 
+/// Height of the focused pane's line along its header's foot, in points: a window's title bar
+/// separator, not an outline.
+pub const FOCUS_LINE: f32 = 2.0;
+
+/// The colour of that line: the mode's accent on the focused pane; none while the keyboard is in
+/// the bar or the drawer (list mode, a conversation, the new-task box, the inspector).
+pub fn focus_line(focused: bool, mode: Mode) -> Option<u32> {
+    match mode {
+        _ if !focused => None,
+        Mode::List | Mode::Talk | Mode::Compose | Mode::Inspect => None,
+        mode => Some(accent(mode)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_focused_pane_has_a_line_and_only_while_the_workspace_has_the_keyboard() {
+        assert_eq!(focus_line(true, Mode::Normal), Some(PRIMARY));
+        assert_eq!(focus_line(true, Mode::App), Some(APP));
+        assert_eq!(focus_line(true, Mode::Sneak), Some(SNEAK));
+        assert_eq!(focus_line(false, Mode::Normal), None);
+        for mode in [Mode::List, Mode::Talk, Mode::Compose, Mode::Inspect] {
+            assert_eq!(focus_line(true, mode), None, "{mode:?}");
+        }
+    }
 
     #[test]
     fn identity_colours_are_apart_from_each_other_and_from_the_state_colours() {

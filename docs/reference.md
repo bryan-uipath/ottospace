@@ -129,6 +129,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧A | Collapse the conversation's [dial](#the-agent-dial) to its marker beside the badge, or open it again (a click on either does the same). Kept per task |
 | ⌘⇧N | Next task: the space and chat of the first task that needs you |
 | ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
+| ⌘⌃V | With the `agent_mode` [flag](#features) on: the robot's menu on the focused app pane (Off, See, See and act): what the task of its workspace may do there. ↓ ↑ move, ↵ takes, any other key closes. Also Agent Mode… and Agent Mode: Off / See / See and Act (the palette). Only yours: a client's key, click or label sets nothing |
 | ⌘⌃T | With the `transcripts` [flag](#features) on: stop the transcript that is on, from any pane; else start one of the focused app pane. With focus on no such pane, the status bar says "focus an app pane to transcribe it". Also Start or Stop Transcribing (View, the palette). The app's audio is heard by ScreenCaptureKit (Screen Recording covers it) and transcribed by Apple's on-device recogniser: nothing leaves the Mac. The first start may ask the system for its speech model ("Downloading speech model…"). Below macOS 26 it says "transcripts need macOS 26". While one is on: the source pane's header shows a red dot and the time (a click shows the transcript in the drawer); the drawer's transcript header has the level, the time, Stop, and ⋯ with Pause or Resume (paused: "Paused" and Resume where the level was); ⌘⇧L closes the drawer on it. Pause or Resume Transcribing is also in the palette and the View menu, and the menu bar's red dot has Stop, Pause or Resume, and Show. Only yours: a socket client's ⌘⌃T, click or label starts and stops nothing |
 | ⌘B / ⌘⇧B | With the `marks` [flag](#features) on (so for the next two rows): mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
@@ -466,17 +467,17 @@ A native conversation has a dial under its header: where its agent's calls go, a
   request waits for you), and is larger for
   each further call running there at once (up to four): it springs to its size, with a kick
   when a call starts, and settles back when one ends.
-- **Dashes**: the route of the last calls, fading out over a minute.
-- Beside it, when the drawer is wide enough: what it does now (`Shell · cargo test · 0:14`), or
-  the last thing and when; the context used (`62% of context`); turns and how long.
-- Hover a station for its name and counts, the ring for the tokens.
+- **Timer**: under the centre's picture, the running call's time, or the model's (`0:14`).
+- The dial is centred; under it, when the drawer is wide enough: what it does now
+  (`Shell · cargo test`), or the last thing and when; turns and how long.
+- Hover a station for its name and counts, the ring for the context used and the tokens.
 - A click on it (or ⌘⇧A, or Toggle Agent Dial) collapses it to an 18-point marker beside the
   badge (the ring, a white dot while a call runs, a red one for a failure); a click on the marker
   opens it. It is open while the agent runs and collapsed once it ended, unless you left it the
   other way: that is kept per task, with the layout.
 - A watched session's dial steps a message at a time, with no time arcs: its dots spring to
-  their sizes, nothing pulses or turns. With Reduce motion on, nothing fades or moves: the route
-  shows until it expires, and a lit station is its colour and its larger size.
+  their sizes, nothing pulses or turns. With Reduce motion on, nothing moves: a lit station is its
+  colour and its larger size.
 - It is drawn frame by frame only while something in it moves; at rest, collapsed or not on
   screen, never.
 - The state reply has its stations, counts, what is lit (and how many calls run there), the
@@ -1086,6 +1087,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
   "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
   "default_agent": "claude",
   "conversation_view": "native",
+  "agent_mode": "act",
   "capture_key": "ctrl-alt-cmd-space",
   "capture": { "keep_images": true, "ax": true },
   "workbook_scrollback_lines": 500,
@@ -1115,6 +1117,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
 | `agent_models` | The models the `@agent` dropdown offers after each runner, in place of the built-in list: ids as the runner's CLI takes them. `claude` and `codex` are each a list; a runner left out keeps its own, an empty list offers the runner alone. An id that does not start with the runner's name gets it in the tag: `gpt-6-astra` is `@codex-gpt-6-astra`, `opus` is `@claude-opus`. An entry that is not a name (letters and digits, with `.`, `-` or `_` between them one at a time; at most 64) is left out and named in the status bar | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`; `gpt-6-astra` |
 | `default_agent` | The agent a task with no `@agent` starts: a runner (`claude`, `codex`) or a runner and a model (`claude-opus-5-5`, `codex-gpt-6-astra`). The first WHO pick in the drawer | `claude` |
+| `agent_mode` | With the `agent_mode` flag: the level an app pane you put in a task's workspace starts at, `act`, `see` or `off`. One a client opened (`open_app`), the system adopted or a restore rebuilt starts at Off; after a restart, a level you picked with the robot is offered in the pane's header, and comes back only when you click the offer. The robot in a pane's header changes one pane | `act` |
 | `conversation_view` | How the drawer shows a Claude Code conversation: `native` (drawn by ottospace: markdown, cards for permission requests, a composer) or `terminal` (the CLI's own TUI). The header's `Chat \| Terminal` switches one conversation, and the layout keeps the pick. Codex always shows in a terminal for now | `native` |
 | `workbook_scrollback_lines` | How many of a terminal's last lines a [workspace](#workspaces), and the [restored layout](#restoring-the-layout), keeps, shown again above its prompt when it opens. At most `2000`. `0`: none is kept | `500` |
 | `restore_layout` | [Restore the layout](#restoring-the-layout) at start and keep it in `layout.json`. `false`: every start is empty | `true` |
@@ -1162,6 +1165,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 | `apps_section` | Experimental | off | The Apps section: the Dock's apps, pins, Not running and All apps |
 | `transcripts` | Experimental | off | Transcripts (⌘⌃T): an app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file |
 | `slots` | Experimental | off | Slots: a pane that keeps its place and waits for a window you name. In progress: not on screen yet |
+| `agent_mode` | Experimental | off | Agent mode (⌘⌃V): let a workspace's task see an app pane, from the robot in its header |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1177,6 +1181,17 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   [transcripts.md](ai/transcripts.md)).
 - `slots` off: a slot, restored or turned off mid-run, is a plain app pane of its app that keeps
   the slot on its record for the flag's return. In progress: the model only (design: [slots.md](ai/slots.md)).
+- `agent_mode` off: no robot in an app pane's header, ⌘⌃V does nothing, no Agent Mode commands,
+  the grants are kept as they are (turning it on again raises none), and every read of an app pane by a client (`app_read`,
+  `app_look`, `ax_tree`) answers `feature off: agent_mode` (design: [agent-mode.md](ai/agent-mode.md)).
+  On: an app pane's header has a robot with its level (`Off`, `See`, `Act`, a caret), dimmed where
+  no task works; See in the app's blue with the task's tip, See and act in amber; the pane's
+  header line in the level's colour. Only the task the pane is granted to (its agent's pass) may `app_read` its tree or
+  `app_look` at its picture (a PNG at most 1600 px, 0600, in `materials/agent-<pid>-<task>-<word>/`,
+  the last 10 kept, gone when the level goes below See and at the next start), at See or more, one read and one look a second; `ax_tree` is
+  `app_read`'s older name. Every use and refusal is a row in that task's conversation and a spoke
+  of the dial's Apps station. A pane that moves to another task's workspace, or whose task ends,
+  is Off; grants are not kept over a restart. See and act presses nothing yet (stage (c)).
 
 ## Driving it from outside
 
@@ -1332,6 +1347,8 @@ first brainstorm:
 [transcripts.md](ai/transcripts.md): an app's audio transcribed on the Mac, live, started and stopped by the user alone. Slice 1 is in (behind `transcripts`): the model, ⌘⌃T, the indicator and the drawer's lines, fed only by a test fixture. Then the file in `transcripts_dir`, heard lines handed over on a fixed tick, and the level meter with its label (Hearing speech, Listening, No sound for 30 s), drawn only. Then the app's real audio (ScreenCaptureKit) and Apple's on-device recogniser, the model's download, the menu bar's dot and the start reminder.
 
 [slots.md](ai/slots.md): slots, panes that wait for a window (one window selector for slots, `windows` rules and transcripts' `meeting`), offer it, and empty when it closes. In: the selector (`windows` rules take `identifier`) and, behind `slots`, the model: its states, who may, and the record in `layout.json`. Not on screen yet.
+
+[multi-monitor.md](ai/multi-monitor.md): a tab folded out to another display (⌘⇧O), focus arrows across displays, unplug folds it back in; behind `multi_monitor`. Not built.
 
 [repos.md](ai/repos.md): the Repos section: the opt-in list and its order, groups from older settings, folding, the default folder's dot, and how + makes a worktree (the git it runs, what it refuses).
 

@@ -1,9 +1,7 @@
 //! A conversation's activity, for the dial over its transcript: where its calls go (stations),
 //! how much each is used (decayed), what is lit now, what failed since the user's last message,
-//! the route of the last calls, and the lines beside it. Folded from the transcript's events,
+//! its running time, and the lines beside it. Folded from the transcript's events,
 //! times passed in. Design: `docs/ai/agent-dial.md`.
-
-use std::collections::VecDeque;
 
 use serde::Serialize;
 
@@ -19,6 +17,8 @@ pub enum Station {
     Shell,
     Network,
     Browser,
+    /// An app pane the user let the task see (agent mode): fed only by ottospace's own rows.
+    Apps,
     Agents,
     Skills,
     Hooks,
@@ -27,13 +27,14 @@ pub enum Station {
 
 impl Station {
     /// Clockwise from the top: the person and the model, then the tools.
-    pub const DIAL: [Station; 11] = [
+    pub const DIAL: [Station; 12] = [
         Station::You,
         Station::Model,
         Station::Files,
         Station::Shell,
         Station::Network,
         Station::Browser,
+        Station::Apps,
         Station::Agents,
         Station::Skills,
         Station::Memory,
@@ -50,6 +51,7 @@ impl Station {
             Station::Shell => "Shell",
             Station::Network => "Network",
             Station::Browser => "Browser",
+            Station::Apps => "Apps",
             Station::Agents => "Agents",
             Station::Skills => "Skills",
             Station::Hooks => "Hooks",
@@ -75,9 +77,6 @@ impl Station {
 
 /// A use counts half after this long: a spoke is heavier for what the agent does now.
 pub const HALF_LIFE_MS: u64 = 10 * 60_000;
-/// The route: the last stations gone to, each fading out over `ROUTE_MS`.
-pub const ROUTE: usize = 6;
-pub const ROUTE_MS: u64 = 60_000;
 /// The context ring turns amber, then red.
 pub const AMBER: f32 = 0.7;
 pub const RED: f32 = 0.9;
@@ -117,9 +116,8 @@ struct Last {
 /// One conversation's activity.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Activity {
-    uses: [Use; 11],
+    uses: [Use; 12],
     running: Vec<Running>,
-    route: VecDeque<(Station, u64)>,
     last: Option<Last>,
     turns: u32,
     first: Option<u64>,
@@ -139,13 +137,6 @@ impl Activity {
         (used.at, used.calls) = (used.at.max(at), used.calls.saturating_add(1));
         self.first.get_or_insert(at);
         self.latest = self.latest.max(at);
-        match self.route.back_mut() {
-            Some((last, when)) if *last == station => *when = at,
-            _ => self.route.push_back((station, at)),
-        }
-        while self.route.len() > ROUTE {
-            self.route.pop_front();
-        }
         // The idle line says the last call or message: a model step is no news after it.
         if station != Station::Model {
             self.last = Some(Last { station, label: label.to_string(), at });
@@ -189,6 +180,17 @@ impl Activity {
             (used.failed, used.failing) = (used.failed.saturating_add(1), used.failing.saturating_add(1));
         }
         (self.stepped, self.thinking) = (false, at);
+        self.latest = self.latest.max(at);
+    }
+
+    /// ottospace served (or refused) a read of an app pane for the task: its own record, not the
+    /// agent's account. One use of Apps; refused, a failed one.
+    pub(crate) fn app(&mut self, label: &str, failed: bool, at: u64) {
+        self.used(Station::Apps, label, at);
+        if failed {
+            let used = &mut self.uses[Station::Apps.at()];
+            (used.failed, used.failing) = (used.failed.saturating_add(1), used.failing.saturating_add(1));
+        }
         self.latest = self.latest.max(at);
     }
 
@@ -245,8 +247,6 @@ impl Activity {
             let (calls, failed, failing) = (used.calls, used.failed, used.failing);
             Spot { station, calls, failed, failing, lit, running, weight, for_ms: since }
         });
-        let route = self.route.iter().filter(|(_, at)| now.saturating_sub(*at) < ROUTE_MS);
-        let route = route.map(|(station, at)| Leg { station: *station, age_ms: now.saturating_sub(*at) }).collect();
         let context = match (is.context, is.window) {
             (Some(context), Some(window)) if window > 0 => Some((context as f64 / window as f64).min(1.) as f32),
             _ => None,
@@ -257,14 +257,14 @@ impl Activity {
             _ => Level::Calm,
         };
         let pulse = self.pulse(is);
-        let lines = self.lines(now, is, pulse, context, model_lit);
+        let lines = self.lines(now, is, pulse, model_lit);
         let failed = stations.iter().any(|spot| spot.failing > 0);
         let lit = stations.iter().any(|spot| spot.lit && spot.station != Station::You);
-        let ring = ring_tip(is.context, is.window);
-        Dial { pulse, stations: stations.to_vec(), context, level, failed, lit, route, timed: is.timed, lines, ring }
+        let ring = ring_tip(context, is.context, is.window);
+        Dial { pulse, stations: stations.to_vec(), context, level, failed, lit, timed: is.timed, lines, ring }
     }
 
-    fn lines(&self, now: u64, is: &Is, pulse: Pulse, context: Option<f32>, model_lit: bool) -> Lines {
+    fn lines(&self, now: u64, is: &Is, pulse: Pulse, model_lit: bool) -> Lines {
         let clock = |since: u64| is.timed.then(|| clock(now.saturating_sub(since)));
         let said = |parts: Vec<Option<String>>| parts.into_iter().flatten().collect::<Vec<_>>().join(" · ");
         let label = |station: Station, label: &str| {
@@ -276,18 +276,19 @@ impl Activity {
             age => format!("{age} ago"),
         };
         let newest = self.running.last();
+        // The running time, under the centre: the newest call's, else the model's.
+        let timer = match (is.asking, newest) {
+            (Some(_), _) => None,
+            (None, Some(call)) => clock(call.since),
+            (None, None) => model_lit.then(|| clock(self.thinking)).flatten(),
+        };
         let now_line = if let Some(asked) = is.asking {
             Some(said(vec![Some("Needs you".into()), label(Station::You, asked)]))
         } else if let Some(call) = newest {
             let more = (self.running.len() > 1).then(|| format!("{} more", self.running.len() - 1));
-            Some(said(vec![
-                Some(call.station.name().into()),
-                label(call.station, &call.label),
-                clock(call.since),
-                more,
-            ]))
+            Some(said(vec![Some(call.station.name().into()), label(call.station, &call.label), more]))
         } else if model_lit {
-            Some(said(vec![Some(Station::Model.name().into()), clock(self.thinking)]))
+            Some(Station::Model.name().into())
         } else if let (Pulse::Error, Some(kind)) = (pulse, &self.error) {
             Some(said(vec![Some("Failed".into()), label(Station::Other, kind), Some(ago(self.latest))]))
         } else {
@@ -296,14 +297,13 @@ impl Activity {
                 said(vec![Some(last.station.name().into()), label(last.station, &last.label), Some(ago(last.at))])
             })
         };
-        let context = context.map(|f| format!("{}% of context", (f * 100.).round() as u32));
         let end = if is.live || is.watched { now } else { self.latest };
         let turns = (self.turns > 0).then(|| {
             let plural = if self.turns == 1 { "turn" } else { "turns" };
             let lasted = self.first.map(|first| span(end.saturating_sub(first)));
             said(vec![Some(format!("{} {plural}", self.turns)), lasted])
         });
-        Lines { now: now_line, context, turns }
+        Lines { now: now_line, turns, timer }
     }
 }
 
@@ -312,12 +312,12 @@ fn decayed(weight: f64, then: u64, now: u64) -> f64 {
     weight * 0.5f64.powf(now.saturating_sub(then) as f64 / HALF_LIFE_MS as f64)
 }
 
-/// A running time: `0:14`, `12:05`, `1:02:03`.
+/// A running time: `0:14`, `12:05`, from an hour `1h02` (it fits inside the ring).
 fn clock(ms: u64) -> String {
     let s = ms / 1000;
     match s {
         0..3600 => format!("{}:{:02}", s / 60, s % 60),
-        _ => format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60),
+        _ => format!("{}h{:02}", s / 3600, s / 60 % 60),
     }
 }
 
@@ -340,12 +340,15 @@ fn tokens(n: u64) -> String {
     }
 }
 
-fn ring_tip(context: Option<u64>, window: Option<u64>) -> Option<String> {
-    match (context, window) {
-        (Some(context), Some(window)) if window > 0 => {
-            Some(format!("{} of {} tokens", tokens(context), tokens(window)))
-        }
-        (Some(context), _) => Some(format!("{} tokens", tokens(context))),
+fn ring_tip(used: Option<f32>, context: Option<u64>, window: Option<u64>) -> Option<String> {
+    match (context, window, used) {
+        (Some(context), Some(window), Some(used)) => Some(format!(
+            "{}% of context used\n{} of {} tokens",
+            (used * 100.).round() as u32,
+            tokens(context),
+            tokens(window)
+        )),
+        (Some(context), _, _) => Some(format!("{} tokens", tokens(context))),
         _ => None,
     }
 }
@@ -417,23 +420,15 @@ impl Spot {
     }
 }
 
-/// A stop on the route, oldest first.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Leg {
-    pub station: Station,
-    #[serde(skip)]
-    pub age_ms: u64,
-}
-
 /// The lines beside the dial; each may be missing.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Lines {
-    /// What it does now (`Shell · cargo test · 0:14`), else the last thing and when.
+    /// What it does now (`Shell · cargo test`), else the last thing and when.
     pub now: Option<String>,
-    /// `62% of context`.
-    pub context: Option<String>,
     /// `4 turns · 12m`.
     pub turns: Option<String>,
+    /// The running call's or the model's time, under the centre: `0:14`.
+    pub timer: Option<String>,
 }
 
 /// The dial at one moment. The state reply has its structure and counts, never its lines.
@@ -449,7 +444,6 @@ pub struct Dial {
     pub failed: bool,
     /// A call or the model is at work.
     pub lit: bool,
-    pub route: Vec<Leg>,
     pub timed: bool,
     #[serde(skip)]
     pub lines: Lines,
@@ -476,7 +470,7 @@ pub const LINES_MIN_WIDTH: f32 = 360.;
 mod tests {
     use super::*;
 
-    /// Why, what is done, as it is then, when, and the three lines.
+    /// Why, what is done, as it is then, when, and the lines: now, turns, the timer.
     type Case = (&'static str, Box<dyn Fn(&mut Activity)>, Is<'static>, u64, [Option<&'static str>; 3]);
 
     fn live<'a>() -> Is<'a> {
@@ -492,7 +486,10 @@ mod tests {
         let dial = a.dial(15_000, &is);
         let shell = dial.spot(Station::Shell).cloned().unwrap();
         assert_eq!((shell.calls, shell.lit, shell.for_ms), (1, true, Some(14_000)));
-        assert_eq!(dial.lines.now.as_deref(), Some("Shell · cargo test · 0:14"));
+        assert_eq!(
+            (dial.lines.now.as_deref(), dial.lines.timer.as_deref()),
+            (Some("Shell · cargo test"), Some("0:14"))
+        );
         assert_eq!((dial.pulse, dial.lit, dial.failed), (Pulse::Running, true, false));
         // One model request for the step that asked for the call.
         assert_eq!(dial.spot(Station::Model).map(|s| (s.calls, s.lit)), Some((1, false)));
@@ -502,7 +499,7 @@ mod tests {
         assert!(dial.failed);
         // The model has the turn again: lit, since the call ended.
         assert_eq!(dial.spot(Station::Model).map(|s| (s.lit, s.for_ms)), Some((true, Some(1_000))));
-        assert_eq!(dial.lines.now.as_deref(), Some("Model · 0:01"));
+        assert_eq!((dial.lines.now.as_deref(), dial.lines.timer.as_deref()), (Some("Model"), Some("0:01")));
         a.message(20_000);
         let dial = a.dial(20_000, &is);
         assert!(!dial.failed, "the user's next message clears it");
@@ -519,7 +516,7 @@ mod tests {
                 Box::new(|a| a.message(0)),
                 Is { asking: Some("git push"), turn: true, context: Some(62), window: Some(100), ..live() },
                 5_000,
-                [Some("Needs you · git push"), Some("62% of context"), Some("1 turn · 5s")],
+                [Some("Needs you · git push"), Some("1 turn · 5s"), None],
             ),
             (
                 "idle: the last call and when",
@@ -530,34 +527,34 @@ mod tests {
                 }),
                 live(),
                 190_000,
-                [Some("Files · src/main.rs · 3m ago"), None, Some("1 turn · 3m")],
+                [Some("Files · src/main.rs · 3m ago"), Some("1 turn · 3m"), None],
             ),
             (
                 "a label that only names its station is not said twice",
                 Box::new(|a| a.start("3", Station::Shell, "shell", 200_000)),
                 Is { turn: true, ..live() },
                 200_000,
-                [Some("Shell · 0:00"), None, Some("1 turn · 3m")],
+                [Some("Shell"), Some("1 turn · 3m"), Some("0:00")],
             ),
             (
                 "ended: no clock runs on",
                 Box::new(|a| a.settle(None, 210_000)),
                 Is::default(),
                 900_000,
-                [Some("Shell · 11m ago"), None, Some("1 turn · 3m")],
+                [Some("Shell · 11m ago"), Some("1 turn · 3m"), None],
             ),
             (
                 "failed",
                 Box::new(|a| a.settle(Some("rate_limit".into()), 220_000)),
                 Is::default(),
                 400_000,
-                [Some("Failed · rate_limit · 3m ago"), None, Some("1 turn · 3m")],
+                [Some("Failed · rate_limit · 3m ago"), Some("1 turn · 3m"), None],
             ),
         ];
         for (why, step, is, now, want) in cases {
             step(&mut a);
             let lines = a.dial(now, &is).lines;
-            assert_eq!([lines.now.as_deref(), lines.context.as_deref(), lines.turns.as_deref()], want, "{why}");
+            assert_eq!([lines.now.as_deref(), lines.turns.as_deref(), lines.timer.as_deref()], want, "{why}");
         }
     }
 
@@ -588,11 +585,11 @@ mod tests {
         let cases = [
             (None, Some(100), None, Level::Calm, None),
             (Some(50), None, None, Level::Calm, Some("50 tokens")),
-            (Some(69), Some(100), Some(0.69), Level::Calm, Some("69 of 100 tokens")),
-            (Some(75_000), Some(100_000), Some(0.75), Level::Amber, Some("75k of 100k tokens")),
-            (Some(920_000), Some(1_000_000), Some(0.92), Level::Red, Some("920k of 1.0M tokens")),
+            (Some(69), Some(100), Some(0.69), Level::Calm, Some("69% of context used\n69 of 100 tokens")),
+            (Some(75_000), Some(100_000), Some(0.75), Level::Amber, Some("75% of context used\n75k of 100k tokens")),
+            (Some(920_000), Some(1_000_000), Some(0.92), Level::Red, Some("92% of context used\n920k of 1.0M tokens")),
             (Some(5), Some(0), None, Level::Calm, Some("5 tokens")),
-            (Some(300), Some(200), Some(1.), Level::Red, Some("300 of 200 tokens")),
+            (Some(300), Some(200), Some(1.), Level::Red, Some("100% of context used\n300 of 200 tokens")),
         ];
         for (context, window, fraction, level, tip) in cases {
             let dial = a.dial(0, &Is { context, window, ..live() });
@@ -605,7 +602,15 @@ mod tests {
     }
 
     #[test]
-    fn spokes_weigh_recent_use_and_the_route_fades_in_a_minute() {
+    fn the_timer_fits_inside_the_ring() {
+        let cases = [(14_000, "0:14"), (725_000, "12:05"), (3_723_000, "1h02"), (36_000_000, "10h00")];
+        for (ms, want) in cases {
+            assert_eq!(clock(ms), want);
+        }
+    }
+
+    #[test]
+    fn spokes_weigh_recent_use() {
         let mut a = Activity::default();
         for n in 0..4 {
             a.start(&format!("f{n}"), Station::Files, "a.rs", 0);
@@ -616,16 +621,6 @@ mod tests {
         // Four uses a half-life ago weigh two; the newest one, one.
         assert_eq!((weight(Station::Files), weight(Station::Shell)), (Some(1.), Some(0.5)));
         assert_eq!(weight(Station::Network), Some(0.));
-        let route: Vec<Station> = a.dial(HALF_LIFE_MS, &live()).route.iter().map(|leg| leg.station).collect();
-        assert_eq!(route, [Station::Shell], "the calls of ten minutes ago are off the route");
-        // The route keeps the last few, a station once in a row.
-        let mut b = Activity::default();
-        for (n, station) in Station::DIAL.iter().enumerate() {
-            b.start(&n.to_string(), *station, "", n as u64);
-        }
-        let route: Vec<Station> = b.dial(20, &live()).route.iter().map(|leg| leg.station).collect();
-        use Station::*;
-        assert_eq!(route, [Browser, Agents, Skills, Memory, Hooks, Other]);
     }
 
     #[test]

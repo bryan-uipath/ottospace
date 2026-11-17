@@ -27,6 +27,7 @@ use gpui::{
     prelude::*, px, quad, relative, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use ottospace_core::agent_mode::AppUse;
 use ottospace_core::calendar::DayStep;
 use ottospace_core::clip::{self, Verb};
 use ottospace_core::compose;
@@ -58,6 +59,7 @@ use ottospace_mac::{ax, capture, display, hotkey, icon, input, recovery};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use screencapturekit::prelude::*;
 
+mod agent_mode;
 mod app_wheel;
 mod apps;
 mod ax_debug;
@@ -402,6 +404,7 @@ impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
             "icons/apps.svg" => Some(include_bytes!("../assets/icons/apps.svg")),
+            "icons/robot.svg" => Some(include_bytes!("../assets/icons/robot.svg")),
             "icons/home.svg" => Some(include_bytes!("../assets/icons/home.svg")),
             "icons/workbook.svg" => Some(include_bytes!("../assets/icons/workbook.svg")),
             "icons/tasks.svg" => Some(include_bytes!("../assets/icons/tasks.svg")),
@@ -743,6 +746,7 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-enter", TalkGo, None),
         KeyBinding::new("cmd-shift-a", DialToggle, None),
         KeyBinding::new("cmd-ctrl-t", listen::Transcribe, None),
+        KeyBinding::new("cmd-ctrl-v", agent_mode::AgentMenuKey, None),
         // Marks: ⌘' waits for a mark's letter. ⌘⌥1..9 go to the first nine (`key_down`).
         KeyBinding::new("cmd-b", MarkPane, None),
         KeyBinding::new("cmd-shift-b", MarkTab, None),
@@ -985,6 +989,8 @@ struct Workspace {
     timeline: calendar::Timeline,
     /// What a transcript's streams hear: in a test run, its fixture being replayed.
     listen_feed: Option<listen::Feed>,
+    /// Agent mode's pictures of app panes, by pane: their folders (`agent_mode::Looks`).
+    looks: agent_mode::Looks,
     /// The file of the transcript on, if one is kept.
     listen_file: Option<listen::File>,
     /// Files of transcripts that ended, until their end is written.
@@ -1232,7 +1238,7 @@ impl Workspace {
                         if runs && tick % 30 == 0 {
                             cx.notify();
                         }
-                        // A dial lit or fading is drawn again each second; at rest only on a change.
+                        // A dial lit is drawn again each second; at rest only on a change.
                         if tick % 60 == 0 && this.dial_moves() {
                             cx.notify();
                         }
@@ -1244,6 +1250,7 @@ impl Workspace {
                         }
                         this.sync_sneak(window, cx);
                         this.sync_row_menu(window, cx);
+                        this.sync_agent_looks();
                         this.read_sneak_app(window, cx);
                         if tick % 4 == 0 {
                             this.check_peek(window, cx);
@@ -1435,6 +1442,7 @@ impl Workspace {
             ax_overlay: None,
             timeline: calendar::Timeline::start(),
             listen_feed: None,
+            looks: agent_mode::Looks::default(),
             listen_file: None,
             listen_ending: Vec::new(),
             listen_meter: None,
@@ -2486,9 +2494,32 @@ impl Workspace {
                     self.wait(pane, &pattern, timeout_ms, reply, cx);
                     continue;
                 }
+                // Only to the task the user let see the pane (agent mode): its pass says who asks.
+                Request::AppRead { pane, depth, nodes } => {
+                    self.serve_app(pane, AppUse::Read, pass, (depth, nodes), reply, window, cx);
+                    continue;
+                }
                 Request::AxTree { pane, depth, nodes } => {
-                    let source = self.ax_source(pane.or(self.model.focused));
-                    ax_debug::serve_tree(source, depth, nodes, reply, cx.background_executor());
+                    // The canary's seam is a test run's alone: outside one, `ax_tree` is gated.
+                    let canary = self.host_only.filter(|_| std::env::var_os("OTTOSPACE_E2E").is_some());
+                    if canary.is_none() && !self.on(Feature::AgentMode) {
+                        let _ = reply.send(control::error(Feature::AgentMode.off()));
+                        continue;
+                    }
+                    let Some(pane) = pane.or(self.model.focused) else {
+                        let _ = reply.send(control::error("not an app pane"));
+                        continue;
+                    };
+                    // An app-window test run hosts the canary alone, and has no user to grant
+                    // a level: its tree is read as before (`OTTOSPACE_HOST_ONLY`, `e2e_apps.rs`).
+                    match canary {
+                        Some(_) => self.serve_canary_tree(pane, (depth, nodes), reply, cx),
+                        None => self.serve_app(pane, AppUse::Read, pass, (depth, nodes), reply, window, cx),
+                    }
+                    continue;
+                }
+                Request::AppLook { pane } => {
+                    self.serve_app(pane, AppUse::Look, pass, (None, None), reply, window, cx);
                     continue;
                 }
                 Request::AxOverlay { refresh } => {
@@ -2514,6 +2545,14 @@ impl Workspace {
                 }
                 Request::CalendarCall { in_call } => Some(Action::CallSeen { in_call, at: now_ms() }),
                 // As the shell would report it: the shell's news, and its line on the bar.
+                // An app pane with no window, as the user's pick or a client's.
+                Request::AppFixture { name, user } => {
+                    let id = 900_000 + self.model.panes.len() as u32;
+                    let kind = Kind::App { window: id, title: name.clone(), bundle: None, name };
+                    let origin = if user { Origin::User } else { Origin::Socket };
+                    self.dispatch(Action::Open { kind, axis: Axis::Right, beside: None }, origin, window, cx);
+                    None
+                }
                 Request::ListenEnd { why } => {
                     match self.model.listen.on.as_ref().map(|on| on.id.clone()) {
                         Some(id) => {
@@ -3792,6 +3831,10 @@ impl Workspace {
         }
         // A row's open menu takes the user's plain keys: its own, and any other closes it.
         let plain = !(key.modifiers.platform || key.modifiers.control || key.modifiers.alt);
+        if plain && self.model.sneak.is_none() && self.agent_menu_key(&key.key, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if plain && self.model.sneak.is_none() && self.row_menu_key(&key.key, window, cx) {
             cx.stop_propagation();
             return;
@@ -5474,6 +5517,20 @@ impl Workspace {
         let marked = self.model.mark_of(MarkOf::Pane(Some(id))).filter(|_| self.on(Feature::Marks));
         let marked = marked.and_then(|mark| self.model.marks.get(mark));
         let marked = marked.map(|mark| mark.key.map_or("◆".to_string(), |key| format!("◆ {}", key.to_uppercase())));
+        // Focus: a line in the mode's accent over the header's foot and its 1pt border, taking no room.
+        // A raised window with a title bar covers the header: the line goes in the 2pt gap above it.
+        // Agent mode's level, where a task may use the pane, takes the line's place on any pane.
+        let focus = theme::focus_line(self.model.focused == Some(id), self.model.mode());
+        let accent = self.agent_header_line(id).or(focus);
+        // A peek raises the window as entering does.
+        let raised = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
+        let covered = bar > 0.0 && raised == Some(id);
+        let line = |d: Div| d.absolute().left_0().right_0().h(px(theme::FOCUS_LINE));
+        let (line, top_line) = match accent {
+            Some(colour) if covered => (None, Some(line(div()).top_0().bg(rgb(colour)))),
+            Some(colour) => (Some(line(div()).bottom(px(-1.)).bg(rgb(colour))), None),
+            None => (None, None),
+        };
         // The header is the pane's handle: a drag of it carries the pane to a drop zone or a tab.
         let workspace = cx.weak_entity();
         let header = div()
@@ -5491,6 +5548,7 @@ impl Workspace {
             .flex()
             .items_center()
             .justify_between()
+            .relative()
             .bg(rgb(theme::RAISED))
             .border_b_1()
             .border_color(rgb(theme::BORDER))
@@ -5519,6 +5577,8 @@ impl Workspace {
             .child(self.controls.mark(format!("header:{id}")))
             // A transcript's indicator never shrinks: it shows while one is on.
             .children(self.listen_header(id, cx))
+            // Agent mode's robot: what the workspace's task may do here. Never shrinks.
+            .children(self.agent_header(id, cx))
             // `fit` and × never shrink, so they stay in the header however narrow the pane.
             .child(
                 // The task of its tab: the same badge as on the bar.
@@ -5545,7 +5605,8 @@ impl Workspace {
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _, window, cx| this.close_pane(id, window, cx))),
                     ),
-            );
+            )
+            .children(line);
         // Once its picture is taken. Until then the pane draws as ever, beside the bar.
         let taken = |material: &&ottospace_core::capture::Material| self.shots.contains_key(&material.n);
         let annotated = self.model.annotated().filter(|material| material.pane == id).filter(taken);
@@ -5654,7 +5715,7 @@ impl Workspace {
             }
         };
         // The content sits 2pt inside the pane. A live app window is placed over it, and without
-        // the gap that window's own edge covers the pane's accent border.
+        // the gap that window's own edge covers the pane's border.
         let inner = div()
             .relative()
             .size_full()
@@ -5677,7 +5738,6 @@ impl Workspace {
 
         // While another pane is live, fade this one: input goes to the live app, not here.
         let faded = self.model.live.is_some_and(|live| live != id);
-        let focused = self.model.focused == Some(id);
         div()
             .flex_1()
             .size_full()
@@ -5685,12 +5745,8 @@ impl Workspace {
             .flex()
             .flex_col()
             .border_1()
-            // In list mode the bar has the keyboard: the focused pane is only where a row would open.
-            .border_color(rgb(match (focused, self.model.mode()) {
-                (true, Mode::List) => theme::BORDER_STRONG,
-                (true, mode) => theme::accent(mode),
-                (false, _) => theme::BORDER,
-            }))
+            // Neutral on every pane: the header's line marks focus (`theme::focus_line`).
+            .border_color(rgb(theme::BORDER))
             .when(faded, |d| d.opacity(0.5))
             .relative()
             .when(bar > 0.0, |d| d.p(px(2.)))
@@ -5699,6 +5755,7 @@ impl Workspace {
             )
             .child(header)
             .child(body)
+            .children(top_line)
             // The pulse: the border and a tint in the focus colour, over the pane, taking no clicks.
             .when(glow > 0., |d| {
                 let color = gpui::Hsla::from(rgb(theme::PRIMARY));
@@ -6132,7 +6189,7 @@ impl Workspace {
             // The app is up for a scroll: it has the keyboard until the peek ends.
             _ if peek_hint.is_some() => ("PEEK", peek_hint.as_deref().unwrap_or_default()),
             // A key, not the key list: ⌘/ shows the keys of every mode. A mode you can be in by
-            // accident names its way out. Normal is the focus border's colour alone: no chip.
+            // accident names its way out. Normal is the focus line's colour alone: no chip.
             Mode::Normal => ("", ""),
             Mode::Pick => ("PICK", ""),
             Mode::Palette => ("COMMAND", ""),
@@ -6659,7 +6716,7 @@ impl Render for Workspace {
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                 // A press outside a row's open menu closes it, and is no press on what is there.
-                if this.row_menu_press(event, window, cx) {
+                if this.row_menu_press(event, window, cx) || this.agent_menu_press(event, window, cx) {
                     return cx.stop_propagation();
                 }
                 // ⌥-click while the new-task box is open references what is under it, and
@@ -6734,6 +6791,21 @@ impl Render for Workspace {
                 if this.model.compose_keys() {
                     this.dispatch(Action::ComposeSubmit { open: true }, this.input, window, cx);
                 }
+            }))
+            .on_action(cx.listener(
+                |this, _: &agent_mode::AgentMenuKey, window, cx| match this.on(Feature::AgentMode) {
+                    true => this.agent_open(None, true, window, cx),
+                    false => cx.propagate(),
+                },
+            ))
+            .on_action(cx.listener(|this, _: &agent_mode::AgentOff, window, cx| {
+                this.agent_level(ottospace_core::agent_mode::Level::Off, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &agent_mode::AgentSee, window, cx| {
+                this.agent_level(ottospace_core::agent_mode::Level::See, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &agent_mode::AgentAct, window, cx| {
+                this.agent_level(ottospace_core::agent_mode::Level::Act, window, cx)
             }))
             .on_action(cx.listener(|this, _: &listen::Transcribe, window, cx| match this.on(Feature::Transcripts) {
                 true => this.transcribe_key(window, cx),
@@ -6969,6 +7041,7 @@ impl Render for Workspace {
             .children(self.render_inspector_outline())
             // Over everything of ottospace's own. It is never on while an app's window is.
             .children(self.render_row_menu(window, cx))
+            .children(self.render_agent_menu(window, cx))
             .children(self.model.sneak.as_ref().map(sneak::labels))
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
             .children(self.model.palette.as_ref().map(|palette| self.render_palette(palette, cx)))
@@ -7219,6 +7292,7 @@ fn main() {
             }
         }
         collect::sweep_drafts();
+        agent_mode::sweep_looks();
     });
 }
 
@@ -7288,7 +7362,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 12] = [
+        const TESTS_ONLY: [&str; 13] = [
             "capture_start",
             "repo_add",
             "inspector_fixture",
@@ -7297,6 +7371,7 @@ mod tests {
             "record_start",
             "record_stop",
             "listen_end",
+            "app_fixture",
             "audio_probe_start",
             "audio_probe_stop",
             "zoom_press",
