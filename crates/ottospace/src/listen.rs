@@ -3,7 +3,8 @@
 //! (`listen_file`). The decisions are the core's. One source so far: a test run's fixture
 //! (`OTTOSPACE_LISTEN_FIXTURE`, read only under `OTTOSPACE_E2E`), replayed as what was heard.
 //!
-//! What was heard reaches the core in batches on a fixed tick (`BATCH`), empty or not: a reply's
+//! What was heard reaches the core in batches on a fixed tick (`BATCH`), empty or not, and the
+//! level meter (`listen_meter`, draw-only) is drawn on a fixed tick (`FRAME`): a reply's
 //! `frame.seq` and `frame.number` rise at the same rate whether someone speaks or not.
 
 use std::collections::{BTreeMap, VecDeque};
@@ -14,6 +15,7 @@ use ottospace_core::listen::{self, Heard, Record, Row, Speaker, Status};
 use ottospace_core::{Action, Effect, Origin, PaneId, theme};
 use serde::Deserialize;
 
+use crate::listen_meter::{Hearing, Meter};
 use crate::{Workspace, config, listen_file, now_ms, rect};
 
 // ⌘⌃T: a transcript of the focused pane, or the one on stopped.
@@ -24,18 +26,22 @@ const NO_FIXTURE: &str = "no audio source in a test run";
 /// A pane narrower than this, as last drawn, has no transcript control in its header: the title
 /// and × need the room. The top row's mark and the drawer still show one that is on.
 const HEADER_ROOM: f32 = 240.;
-/// How often what was heard is handed to the core, whether anything was or not. It also draws
-/// the clock.
-const BATCH: Duration = Duration::from_millis(250);
+/// How often the meter, the label and the clock are drawn while one is on, sound or not.
+const FRAME: Duration = Duration::from_millis(125);
+/// Every this many frames what was heard goes to the core (250 ms), whether anything was or not.
+const BATCH: u32 = 2;
 
 /// A fixture line: `{"after_ms":300,"from":"them","text":"made-up words","final":true}`, heard
-/// `after_ms` after the line before it (or the streams' start).
+/// `after_ms` after the line before it (or the streams' start). `{"after_ms":100,"level":0.3}`:
+/// the sound's level from then (RMS, 0 to 1), for the meter.
 #[derive(Clone, Debug, Deserialize)]
 struct Said {
     #[serde(default)]
     after_ms: u64,
+    #[serde(default)]
+    level: Option<f32>,
     #[serde(flatten)]
-    heard: Heard,
+    heard: Option<Heard>,
 }
 
 /// The fixture being replayed for transcript `id`.
@@ -66,7 +72,15 @@ pub(crate) fn fixture_path() -> Option<String> {
 fn read_fixture(path: &str) -> Result<VecDeque<Said>, String> {
     let text = std::fs::read_to_string(path).map_err(|why| format!("the fixture: {why}"))?;
     let lines = text.lines().filter(|line| !line.trim().is_empty());
-    lines.map(|line| serde_json::from_str(line).map_err(|why| format!("the fixture: {why}"))).collect()
+    let said = |line: &str| -> Result<Said, String> {
+        let said: Said = serde_json::from_str(line).map_err(|why| format!("the fixture: {why}"))?;
+        // A flattened `Option` takes words it cannot read as none: `"from":"Them"` is a mistake, not a pause.
+        match (&said.level, &said.heard) {
+            (None, None) => Err(format!("the fixture: neither a level nor words: {line}")),
+            _ => Ok(said),
+        }
+    };
+    lines.map(said).collect()
 }
 
 /// A transcript's id: its start time and a count, so two in one millisecond differ.
@@ -92,6 +106,28 @@ fn button(id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div> 
 fn dot(paused: bool) -> Div {
     let dot = div().flex_none().size(px(8.)).rounded_full().border_1().border_color(rgb(theme::RECORDING));
     if paused { dot } else { dot.bg(rgb(theme::RECORDING)) }
+}
+
+/// The red dot pulsing with the sound: a halo as wide as the level.
+fn pulse(level: f32) -> Div {
+    let halo = 8. + 6. * level.clamp(0., 1.);
+    let colour = gpui::Rgba { a: 0.45, ..gpui::rgb(theme::RECORDING) };
+    let ring = div().flex_none().size(px(halo)).rounded_full().bg(colour).flex().items_center().justify_center();
+    div().flex_none().size(px(14.)).flex().items_center().justify_center().child(ring.child(dot(false)))
+}
+
+/// The grey dot of a transcript whose sound stopped coming.
+fn grey_dot() -> Div {
+    div().flex_none().size(px(8.)).rounded_full().bg(rgb(theme::MUTED))
+}
+
+/// Five bars, lit up to the level.
+fn bars(level: f32) -> Div {
+    let lit = (level.clamp(0., 1.) * 5.).ceil() as usize;
+    div().flex_none().h(px(12.)).flex().items_end().gap(px(1.5)).children((0..5).map(|i| {
+        let colour = if i < lit { theme::RECORDING } else { theme::BORDER };
+        div().w(px(3.)).h(px(4. + 2. * i as f32)).rounded_sm().bg(rgb(colour))
+    }))
 }
 
 impl Workspace {
@@ -145,6 +181,9 @@ impl Workspace {
             Effect::ListenResumeStreams { id } => {
                 if let Some(feed) = self.listen_feed.as_mut().filter(|feed| feed.id == *id) {
                     (feed.paused, feed.run_ms) = (false, 0);
+                    if let Some(meter) = &mut self.listen_meter {
+                        meter.restart(Instant::now());
+                    }
                 }
             }
             Effect::ListenClose { id } => self.listen_close(id),
@@ -155,7 +194,7 @@ impl Workspace {
     /// Its streams close for good.
     fn listen_close(&mut self, id: &str) {
         if self.listen_feed.as_ref().is_some_and(|feed| feed.id == id) {
-            self.listen_feed = None;
+            (self.listen_feed, self.listen_meter) = (None, None);
         }
     }
 
@@ -241,9 +280,10 @@ impl Workspace {
             if !began.unwrap_or(false) {
                 return;
             }
-            loop {
-                cx.background_executor().timer(BATCH).await;
-                let going = this.update_in(cx, |this, window, cx| this.listen_step(&id, window, cx));
+            for frame in 1u32.. {
+                cx.background_executor().timer(FRAME).await;
+                let going =
+                    this.update_in(cx, |this, window, cx| this.listen_step(&id, frame % BATCH == 0, window, cx));
                 if !going.unwrap_or(false) {
                     return;
                 }
@@ -269,6 +309,7 @@ impl Workspace {
             Ok(lines) => {
                 let pending = Vec::new();
                 self.listen_feed = Some(Feed { id: id.into(), lines, due: None, run_ms: 0, paused: false, pending });
+                self.listen_meter = Some(Meter::new(Instant::now()));
                 self.dispatch(Action::ListenBegan { id: id.into(), at: now_ms() }, Origin::System, window, cx);
                 true
             }
@@ -280,9 +321,10 @@ impl Workspace {
         }
     }
 
-    /// One tick: the fixture's lines that are due join the batch, and the batch goes to the core,
-    /// empty or not; the clock is drawn again. False: it ended.
-    fn listen_step(&mut self, id: &str, window: &Window, cx: &mut Context<Self>) -> bool {
+    /// One frame: the fixture's lines that are due join the batch (its levels go to the meter);
+    /// on a `batch` frame the batch goes to the core, empty or not; the meter and the clock are
+    /// drawn again. False: it ended.
+    fn listen_step(&mut self, id: &str, batch: bool, window: &Window, cx: &mut Context<Self>) -> bool {
         if self.model.listen.on.as_ref().is_none_or(|on| on.id != id) {
             return false;
         }
@@ -298,11 +340,21 @@ impl Workspace {
             }
             let Some(said) = feed.lines.pop_front() else { break };
             feed.run_ms = feed.run_ms.saturating_add(said.after_ms);
-            feed.pending.push(Heard { start_ms: feed.run_ms, ..said.heard });
+            if let (Some(level), Some(meter)) = (said.level, self.listen_meter.as_mut()) {
+                meter.level(level, now);
+            }
+            if let Some(heard) = said.heard {
+                feed.pending.push(Heard { start_ms: feed.run_ms, ..heard });
+                if let Some(meter) = self.listen_meter.as_mut() {
+                    meter.words(now);
+                }
+            }
             feed.due = feed.lines.front().map(|next| due + Duration::from_millis(next.after_ms));
         }
-        let lines = std::mem::take(&mut feed.pending);
-        self.dispatch(Action::ListenHeard { id: id.into(), lines }, Origin::System, window, cx);
+        if batch {
+            let lines = std::mem::take(&mut feed.pending);
+            self.dispatch(Action::ListenHeard { id: id.into(), lines }, Origin::System, window, cx);
+        }
         cx.notify();
         true
     }
@@ -313,6 +365,9 @@ impl Workspace {
         let width = self.frames.get(&pane).map(|frame| f32::from(frame.get().size.width));
         if width.is_some_and(|width| width > 1. && width < HEADER_ROOM) {
             return None;
+        }
+        if self.model.listen.lost == Some(pane) && self.model.listen.on.is_none() {
+            return Some(self.listen_lost(cx));
         }
         let on = self.model.listen.on.as_ref().filter(|on| on.source.pane() == Some(pane));
         let Some(on) = on else {
@@ -333,7 +388,7 @@ impl Workspace {
             .overflow_hidden()
             .items_center()
             .gap_1()
-            .child(dot(paused))
+            .child(if paused { dot(true) } else { pulse(self.listen_level()) })
             .child(
                 div()
                     .min_w_0()
@@ -346,6 +401,34 @@ impl Workspace {
             // No pause before the streams run: there is nothing to stop yet.
             .when(on.status != Status::Starting, |d| d.child(self.listen_button(toggle, label, "header", cx)));
         Some(row.into_any_element())
+    }
+
+    /// A pane's header after its transcript's sound stopped coming: a grey dot, why, and × (the
+    /// user's Stop) to put it away. The notice bar says more.
+    fn listen_lost(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex()
+            .min_w_0()
+            .overflow_hidden()
+            .items_center()
+            .gap_1()
+            .child(grey_dot())
+            .child(div().min_w_0().truncate().text_color(rgb(theme::MUTED)).child("Transcript stopped: no sound"))
+            .child(self.controls.mark("listen-lost"))
+            .child(self.listen_button("listen-stop", "×", "lost", cx))
+            .into_any_element()
+    }
+
+    /// The level the meter shows now, 0 to 1: none while paused or starting.
+    fn listen_level(&self) -> f32 {
+        let on = self.model.listen.on.as_ref().is_some_and(|on| on.status == Status::On);
+        self.listen_meter.as_ref().filter(|_| on).map_or(0., |meter| meter.shown(Instant::now()))
+    }
+
+    /// What the label says now: none while paused or starting.
+    fn listen_hearing(&self) -> Option<Hearing> {
+        let on = self.model.listen.on.as_ref().is_some_and(|on| on.status == Status::On);
+        self.listen_meter.as_ref().filter(|_| on).map(|meter| meter.hearing(Instant::now()))
     }
 
     /// One of the indicator's buttons, in the pane's header or the drawer (`place`).
@@ -419,12 +502,30 @@ impl Workspace {
             .border_b_1()
             .border_color(rgb(theme::BORDER))
             .text_sm()
-            .child(dot(paused))
+            .child(if paused { dot(true) } else { pulse(self.listen_level()) })
             .child(div().flex_1().min_w_0().truncate().child(format!(
                 "Transcript · {} · {}",
                 source.filter(|s| !s.is_empty()).unwrap_or_else(|| "pane".into()),
                 self.listen_clock()
             )))
+            // What it hears now, for the eye alone: never in the state.
+            .children(self.listen_hearing().map(|hearing| {
+                let colour = if hearing == Hearing::Silent { theme::SNEAK } else { theme::MUTED };
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .text_xs()
+                    .text_color(rgb(colour))
+                    .child(bars(self.listen_level()))
+                    .child(hearing.label())
+                    // Named by what it hears only in a test run: every mark is a sneak target, and
+                    // sneak mode's state goes to every client.
+                    .when(std::env::var_os("OTTOSPACE_E2E").is_some(), |d| {
+                        d.child(self.controls.mark(format!("listen-hearing:{}", hearing.id())))
+                    })
+            }))
             .when(on.status != Status::Starting, |d| d.child(self.listen_button(toggle, label, "view", cx).text_xs()))
             .child(self.listen_button("listen-stop", "Stop", "view", cx).text_xs())
             .child(self.listen_button("listen-close", "×", "view", cx));

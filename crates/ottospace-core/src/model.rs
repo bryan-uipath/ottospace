@@ -5348,6 +5348,7 @@ impl Model {
         self.features = features;
         if !self.features.on(Feature::Transcripts) {
             self.listen_end(None, None, effects);
+            self.listen.lost = None;
         }
         let sections = self.sections();
         if self.sidebar.is_some_and(|section| !sections.contains(&section)) {
@@ -7690,9 +7691,12 @@ impl Model {
         if self.visual == Some(id) {
             self.visual = None;
         }
-        // The pane being transcribed is gone: so is its transcript.
+        // The pane being transcribed is gone: so is its transcript, and a grey mark of one lost.
         if self.listen.pane() == Some(id) {
             self.listen_end(None, None, effects);
+        }
+        if self.listen.lost == Some(id) {
+            self.listen.lost = None;
         }
         effects.push(Effect::Closed(closed));
     }
