@@ -1510,6 +1510,10 @@ pub enum Action {
     },
     /// A test run's fixture is the sound: a terminal pane may be heard.
     ListenFixture,
+    /// The shell's: this Mac has the recogniser (macOS 26), so an app pane may be heard.
+    ListenAvailable {
+        on: bool,
+    },
     /// The shell's: the streams of `id` run.
     ListenBegan {
         id: String,
@@ -1927,6 +1931,7 @@ impl Action {
             | Action::ListenStop { .. }
             | Action::ListenShow { .. }
             | Action::ListenFixture
+            | Action::ListenAvailable { .. }
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
@@ -1994,7 +1999,9 @@ impl Action {
             | Action::Unfilled { .. }
             | Action::SetApps { .. }
             | Action::SetAppSettings { .. }
-            | Action::SetDock { .. } => None,
+            | Action::SetDock { .. }
+            // Whether this Mac has the recogniser: kept for when the flag turns on.
+            | Action::ListenAvailable { .. } => None,
             Action::ToggleSection {
                 section: Section::Workbook | Section::Tasks | Section::Repos | Section::Calendar,
             }
@@ -3118,6 +3125,7 @@ impl Model {
             | Action::ListenResume { .. }
             | Action::ListenStop { .. } => Some(listen::USERS_ALONE),
             Action::ListenFixture
+            | Action::ListenAvailable { .. }
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
@@ -3164,7 +3172,11 @@ impl Model {
             Action::ListDismiss | Action::ListUndo if self.sidebar == Some(Section::Apps) => Some(apps::USERS_ALONE),
             // The layout file is read by the shell at start, and its app panes start the user's apps.
             Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
-            Action::RestoreWorkbooks { .. } if origin == Origin::Socket => Some(workbook::READ_ALONE),
+            // Read at start: one while the user types in the new-task box is no start, and would
+            // take the box with the workspace it is in (seed 637).
+            Action::RestoreWorkbooks { .. } if origin == Origin::Socket || self.compose.is_some() => {
+                Some(workbook::READ_ALONE)
+            }
             Action::StartFresh | Action::UnfilledOpen { .. } if origin != Origin::User => {
                 Some(crate::layout_file::USERS_ALONE)
             }
@@ -5395,6 +5407,7 @@ impl Model {
             | Action::ListenStop { .. }
             | Action::ListenShow { .. }
             | Action::ListenFixture
+            | Action::ListenAvailable { .. }
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
@@ -8343,6 +8356,7 @@ mod tests {
         Action::ListenStop { .. },
         Action::ListenShow { .. },
         Action::ListenFixture,
+        Action::ListenAvailable { .. },
         Action::ListenBegan { .. },
         Action::ListenFailed { .. },
         Action::ListenHeard { .. },
@@ -8620,6 +8634,7 @@ mod tests {
             Action::ListenStop { at: 0 },
             Action::ListenShow { on: true },
             Action::ListenFixture,
+            Action::ListenAvailable { on: true },
             Action::ListenBegan { id: text(), at: 0 },
             Action::ListenFailed { id: text(), why: text() },
             Action::ListenHeard { id: text(), lines: Vec::new() },
@@ -8660,6 +8675,7 @@ mod tests {
             | Action::ListenResume { .. }
             | Action::ListenStop { .. } => Some(listen::USERS_ALONE),
             Action::ListenFixture
+            | Action::ListenAvailable { .. }
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
@@ -8873,7 +8889,9 @@ mod tests {
                     Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),
                     Action::NoticeDismiss { .. } => Some(crate::notice::USERS_ALONE),
                     Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
-                    Action::RestoreWorkbooks { .. } if origin == Origin::Socket => Some(workbook::READ_ALONE),
+                    Action::RestoreWorkbooks { .. } if origin == Origin::Socket || m.compose.is_some() => {
+                        Some(workbook::READ_ALONE)
+                    }
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     Action::Paste { .. } => Some(clip::USERS_ALONE),
                     Action::EditSettings => Some(SETTINGS_USERS),
@@ -14875,7 +14893,9 @@ mod tests {
                     Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),
                     Action::NoticeDismiss { .. } => Some(crate::notice::USERS_ALONE),
                     Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
-                    Action::RestoreWorkbooks { .. } if origin == Origin::Socket => Some(workbook::READ_ALONE),
+                    Action::RestoreWorkbooks { .. } if origin == Origin::Socket || m.compose.is_some() => {
+                        Some(workbook::READ_ALONE)
+                    }
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     Action::Paste { .. } => Some(clip::USERS_ALONE),
                     Action::EditSettings => Some(SETTINGS_USERS),

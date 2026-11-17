@@ -159,7 +159,7 @@ Signals, by what the app's rule names:
 | What is captured | One app's audio output: `SCContentFilter(display:including:[app]exceptingWindows:[])` with `SCStreamConfiguration.capturesAudio = true`, `excludesCurrentProcessAudio = true`, `sampleRate = 16000`, `channelCount = 1`, a 2×2 video size and the lowest frame rate (SCK needs a display filter; the frames are dropped unread). Audio is filtered per app by ScreenCaptureKit, not per window |
 | Which app | Started from a pane: that pane's window's app (any hosted window). From the picker: `SCShareableContent`'s applications, hosted ones first, then those whose audio process runs output (CoreAudio `kAudioProcessPropertyIsRunningOutput` with `kAudioProcessPropertyPID`, macOS 14.2: a flag per pid, no name read from the app) |
 | A browser tab | Is its browser: every tab of that browser is heard (SCK has no tab filter). The pane header says `Transcribing Chrome (all tabs)` |
-| Helper processes | Chromium browsers, Electron apps (Slack, Teams) and possibly Zoom play audio from helper processes with their own bundle ids. The filter must include the app's helpers (the running applications whose bundle lies inside the app's bundle). **Not measured: slice 2's first task**, with Chrome and Slack playing made-up audio. If SCK misses them, the fallback is a Core Audio process tap (below) |
+| Helper processes | Chromium browsers, Electron apps (Slack, Teams) and possibly Zoom play audio from helper processes with their own bundle ids. Measured 2026-11-16 (a read-only list, nothing captured): `SCShareableContent.applications` offered 47 apps and none of Chrome's 39 helper processes (`Google Chrome Helper (Renderer)` and the rest), but did offer `com.microsoft.teams2.helper`. So the filter cannot name Chrome's helpers: it names the app's pid alone, and whether SCK hears a child's sound as its parent's is what the app-window test `a_sound_the_canarys_child_plays_is_heard_as_the_canarys` would answer (the canary plays through `afplay`, its child). **Still open**: CI's runner (a virtual Mac, macOS 26) cannot run `SpeechTranscriber` (`isAvailable` false, measured 2026-11-17), so both canary tests skip there; they answer on a real Mac with the model installed. If SCK does not hear the child, the fallback is a Core Audio process tap (below) |
 | The user's voice | Off by default. When on: the microphone as a second, separate stream, `SCStreamConfiguration.captureMicrophone = true` (macOS 15), output type `.microphone`, its own recognizer. Lines from the app are `them`, from the mic `me`. Two streams, never a mix: the label is where the sound came from, not a diarization guess |
 | Echo | With speakers (no headset) the mic hears the call too, so a line may appear as both `them` and `me`. v1 says so on the mic toggle ("use headphones"); dropping a `me` line that repeats a `them` line within 2 s is a later refinement in the core |
 | Who among "them" | Not told apart. Speaker diarization on device is not in `SpeechTranscriber`; names from Zoom's tiles ([zoom-ax.md](1-initial-brainstorm/zoom-ax.md)) would be Zoom-only. Later, if wanted |
@@ -172,9 +172,13 @@ Permissions:
 - **Microphone**: asked only when the user turns the mic on, the first time. The bundle needs
   `NSMicrophoneUsageDescription` (`scripts/bundle.sh`); a bare binary inherits its terminal's.
 - **Speech recognition**: `SFSpeechRecognizer` needs `requestAuthorization` and
-  `NSSpeechRecognitionUsageDescription`. Whether `SpeechAnalyzer` does too is **not verified**
-  (Apple's pages did not render for reading; slice 2 checks it on first use and adds the key if
-  asked). Either way, no prompt before the user's first Start.
+  `NSSpeechRecognitionUsageDescription`. `SpeechAnalyzer` does not: Apple's "Asking Permission to
+  Use Speech Recognition" (read 2026-11-16 through its JSON,
+  `developer.apple.com/tutorials/data/documentation/speech/asking-permission-to-use-speech-recognition.json`)
+  says "This process only applies to speech recognition using SFSpeechRecognizer. SpeechAnalyzer
+  transcriber modules don't send audio data of the user's voice to Apple's servers." So no usage
+  key and no prompt. The app-window test (CI) runs the real recogniser with no grant and would fail
+  if one were asked for.
 
 macOS versions: SCK audio 13.0, `captureMicrophone` 15.0, `SpeechAnalyzer` 26.0. The bundle's
 `LSMinimumSystemVersion` stays 14.0: below 26 the feature is absent (no button, no command), and
@@ -205,7 +209,7 @@ Rejected:
 
 **Recommendation: `SpeechTranscriber`** (preset `timeIndexedProgressiveTranscription`: volatile
 results, final ones, audio time ranges), one `SpeechAnalyzer` per stream (`them`, `me`). The
-locale: the system's, matched with `supportedLocale(equivalentTo:)`; a `transcripts_locale`
+locale: the system's, matched with `supportedLocale(equivalentTo:)`, else the first of the user's preferred languages that matches (built: CI's runner has a system locale that matches none); a `transcripts_locale`
 setting overrides it. If its assets are not installed, Start says so and offers to install them
 (`AssetInventory.assetInstallationRequest`): the system downloads Apple's model, by the user's
 click, once; that is the OS's own model store, not ottospace sending audio anywhere.
@@ -224,7 +228,8 @@ crate already builds its own Swift bridge, behind a C ABI: `listen_new(locale) -
 The build checks the SDK is 26 or later and builds a stub that says "unavailable" otherwise, so
 CI on an older Xcode still builds. The package targets macOS 14 and guards every Speech call with
 `#available(macOS 26, *)`, so the new symbols are weak-linked and the binary still launches on 14
-(checked in slice 2). The shell reads the OS version once and sends `ListenAvailable { on }`
+(checked in slice 2: `otool -l` shows Speech.framework as `LC_LOAD_WEAK_DYLIB`; it is on 14 too,
+for `SFSpeechRecognizer`). The shell reads the OS version once and sends `ListenAvailable { on }`
 (`System`): the core, which has no system data, then shows or hides the feature's controls. Rejected: a separate helper executable (the bundle ships only
 the `ottospace` binary); objc2 bindings (there are none for a Swift-only API).
 
@@ -446,7 +451,9 @@ Test-only, under `OTTOSPACE_E2E` (`control::test_refusal`, documented in CLAUDE.
   an auto start and its stop driven by `listen_meeting`.
 - **e2e-apps** (CI only, `app-windows.yml`, never local: it takes the keyboard): the canary plays
   a fixture made with `say -o` of made-up words; SCK captures the canary's audio only
-  (`OTTOSPACE_HOST_ONLY`); the real `SpeechTranscriber` hears one of the words. Needs the runner on
+  (`OTTOSPACE_HOST_ONLY`); the real `SpeechTranscriber` hears one of the words. Built; on CI it
+  skips: the hosted runner says `SpeechTranscriber.isAvailable` false ("this Mac cannot run Apple's
+  speech recogniser"), with en-US its locale and language, so no model can be installed. Needs the runner on
   macOS 26 with the en-US asset installed (here it was `supported`, not `installed`) and no speech
   prompt pending; skipped with a reason otherwise. Installing the asset in a CI setup step would be
   a network fetch on CI only: to decide in slice 2. Never the user's mic or apps; the mic stream is
@@ -459,7 +466,10 @@ Test-only, under `OTTOSPACE_E2E` (`control::test_refusal`, documented in CLAUDE.
    cheat sheet), the top-row mark, Stop and Pause; `OTTOSPACE_LISTEN_FIXTURE`; the drawer view of
    lines. No audio, no file. Outside a test run the button is not drawn yet (there is no source).
    Evidence: pictures.
-2. **App audio to text, kept.** The Swift shim (`SpeechTranscriber`), SCK per-app audio with
+2. **App audio to text, kept.** Built as three stacked pull requests: 2a the file and the fixed
+   tick, 2b the meter (§6a), 2c the audio, the recogniser, the model's download, the menu bar's dot
+   and the start reminder. The first-use explanation (§7) is not in 2c: it is the one part left of
+   this slice. The Swift shim (`SpeechTranscriber`), SCK per-app audio with
    helpers (measure Chrome, Slack and Zoom first), the Markdown file in `transcripts_dir` (§5), the
    menu-bar status item, the first-use explanation and the start reminder, the asset install
    offer; the e2e-apps test; heard lines on a fixed tick, so `frame.seq` says nothing (§4). Evidence: a recording of a canary's made-up speech, and the file it
