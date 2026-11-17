@@ -143,18 +143,17 @@ impl Workspace {
         }
     }
 
-    /// A workspace's Undo still offered while a higher notice (an error, a meeting) takes the bar: it
-    /// shows beside that one, so it cannot run out unseen. None while the bar says it itself.
+    /// A workspace's Undo drawn beside the notice the bar shows (`notice::undo_beside`).
     pub(crate) fn undo_beside(&self, shown: &Notice) -> Option<Notice> {
-        let undo = self.model.workbooks.notice().filter(|_| shown.kind != Kind::Undo)?;
-        (!self.model.notice_hidden.contains(&undo)).then_some(undo)
+        notice::undo_beside(shown, self.model.workbooks.notice(), &self.model.notice_hidden)
     }
 
-    /// The user's click on the Undo beside a higher notice: taken back, if still offered.
-    fn take_undo_beside(&mut self, window: &Window, cx: &mut Context<Self>) {
+    /// A click or label on the Undo beside a higher notice, which said `drawn`: taken back only if
+    /// that one is still offered, never one that came since in its place.
+    pub(crate) fn take_undo_beside(&mut self, drawn: &str, window: &Window, cx: &mut Context<Self>) {
         self.tick_now();
-        let shown = self.notice_shown();
-        if shown.is_some_and(|shown| self.undo_beside(&shown).is_some()) {
+        let still = self.notice_shown().and_then(|shown| self.undo_beside(&shown));
+        if still.is_some_and(|undo| undo.text == drawn) {
             self.dispatch(Action::WorkbookUndo, self.input, window, cx);
         }
         cx.notify();
@@ -223,14 +222,16 @@ impl Workspace {
         });
         // Beside a higher notice: the workspace's Undo, its text quiet, so it is seen before it runs out.
         let undo = self.undo_beside(&shown).map(|undo| {
-            let click = cx.listener(|this, _, window, cx| this.take_undo_beside(window, cx));
+            let drawn = undo.text.clone();
+            let click = cx.listener(move |this, _, window, cx| this.take_undo_beside(&drawn, window, cx));
             let take = button("notice-undo")
                 .underline()
                 .child("Undo")
                 .child(mark(&self.marks, Mark::NoticeUndo))
                 .child(self.controls.mark("notice:undo"))
                 .on_click(click);
-            let said = div().flex_none().opacity(0.75).child(undo.text);
+            // Cut before the higher notice's own text is: it says what Undo takes back, no more.
+            let said = crate::cut_text(undo.text).max_w(px(180.)).opacity(0.75);
             div()
                 .flex_none()
                 .flex()

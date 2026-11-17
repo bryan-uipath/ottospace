@@ -5903,7 +5903,11 @@ fn a_workspaces_undo_stays_beside_a_higher_notice() {
     let undo = at(rect(&bar["undo"]["rect"]), 0.5, 0.5);
     // A client's click takes nothing back.
     assert_eq!(otto.click(undo, 1)["workbook_offer"], "closed");
-    let back = otto.user_click(undo);
+    // Nor does a client's sneak label; the user's takes it back.
+    assert_eq!(sneak_to(&otto, "notice:undo")["workbook_offer"], "closed");
+    let (_, labels) = sneak(&otto);
+    let label = labels.get("notice:undo").cloned().unwrap_or_default();
+    let back = otto.call(json!({"cmd": "key", "keys": letters(&label), "as": "user"}));
     assert_eq!((&back["workbook_offer"], space_kept(&back, 1)), (&Value::Null, json!(false)), "{back}");
     let after = otto.drawn();
     assert_eq!((&after["notice_bar"]["level"], &after["notice_bar"]["undo"]), (&json!("error"), &Value::Null));
