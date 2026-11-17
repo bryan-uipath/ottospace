@@ -465,9 +465,20 @@ pub enum Request {
         #[serde(default)]
         user: bool,
     },
+    /// For tests (`test_refusal`): hears the app `OTTOSPACE_HOST_ONLY` names by ScreenCaptureKit,
+    /// with no recogniser, keeping each buffer's presentation time. The reply is `{"ok":true}`,
+    /// not the state. Never for an agent: no client hears an app.
+    AudioProbeStart,
+    /// For tests: stops it. The reply is `{"ok":true,"buffers":[{"pts_ms":..,"samples":..,"rms":..}],
+    /// "failed":null}` (`failed`: why the system stopped the stream, if it did).
+    AudioProbeStop,
     /// For tests (`test_refusal`): the window's green button, pressed as the user would: a zoom,
     /// which fills the display instead. Refused outside a test run: only the user's hand fills it.
     ZoomPress,
+    /// For tests (`test_refusal`): the displays changed, as macOS says when one is plugged in or
+    /// taken away (a test cannot unplug one). The shell kicks GPUI to draw again, as it then
+    /// does (`stall`). Never for an agent: it makes the window draw by paths of its own.
+    DisplayChange,
     /// The user's meetings of `day` (`today`, the default, `tomorrow` or `YYYY-MM-DD`) and the
     /// `days` (1 to 7) from it, busy and free time: `{"ok":true,"configured":true,"meetings":[..],..}`,
     /// not the state. Only what the app holds (today and the next 7 days), never a fetch. Titles
@@ -578,7 +589,9 @@ pub enum Modifier {
 /// `sneak_app_tree`: it would choose what sneak mode labels in another app. `calendar_call`: it
 /// would raise or silence the user's meeting alert. `record_start`: it would film the window.
 /// `listen_end`: it would end the user's transcript. `app_fixture`: it would make an app pane.
+/// `audio_probe_start`: it would hear an app.
 /// `zoom_press`: it would put the window over the menu bar and the Dock as the user.
+/// `display_change`: no client needs it, and it makes the window draw by GPUI's own paths.
 pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
     match request {
         _ if e2e => None,
@@ -610,8 +623,14 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
             Some("listen_end is for tests (OTTOSPACE_E2E): only the user, the app or its sound ends a transcript")
         }
         Request::AppFixture { .. } => Some("app_fixture is for tests (OTTOSPACE_E2E): app panes hold real windows"),
+        Request::AudioProbeStart | Request::AudioProbeStop => {
+            Some("audio_probe_start and audio_probe_stop are for tests (OTTOSPACE_E2E): no client hears an app")
+        }
         Request::ZoomPress => {
             Some("zoom_press is for tests (OTTOSPACE_E2E): only the user's green button fills the display")
+        }
+        Request::DisplayChange => {
+            Some("display_change is for tests (OTTOSPACE_E2E): macOS says when the displays change")
         }
         _ => None,
     }
@@ -905,8 +924,13 @@ mod tests {
         let add = parse(r#"{"cmd":"repo_add","path":"/tmp/app"}"#);
         assert!(test_refusal(&add, false).expect("refused").contains("only the user"));
         assert_eq!(test_refusal(&add, true), None);
-        // Nor a recording of the window.
-        for line in [r#"{"cmd":"record_start","dir":"/tmp/rec"}"#, r#"{"cmd":"record_stop"}"#] {
+        // Nor a recording of the window, nor hearing an app.
+        let probe = [r#"{"cmd":"audio_probe_start"}"#, r#"{"cmd":"audio_probe_stop"}"#];
+        for line in
+            [r#"{"cmd":"record_start","dir":"/tmp/rec"}"#, r#"{"cmd":"record_stop"}"#, r#"{"cmd":"display_change"}"#]
+                .into_iter()
+                .chain(probe)
+        {
             assert!(test_refusal(&parse(line), false).expect(line).contains("for tests"));
             assert_eq!(test_refusal(&parse(line), true), None);
         }

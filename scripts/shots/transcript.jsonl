@@ -1,5 +1,5 @@
 # Transcripts: Transcribe in a pane's header, then the indicator there and on the top row, and the
-# drawer's lines as they come; then paused. A test run hears no app: the fixture's made-up lines
+# drawer's lines as they come. Pausing: transcript-paused. A test run hears no app: the fixture's made-up lines
 # (transcript/fixture.jsonl) stand in for the sound, and a terminal pane for an app's.
 {"env":{"OTTOSPACE_FEATURES":"transcripts","OTTOSPACE_LISTEN_FIXTURE":"{ROOT}/fixture.jsonl"}}
 {"cmd":"split"}
@@ -10,6 +10,3 @@
 {"click":"listen-start:1"}
 {"until":"listen_lines","len":6}
 {"shot":"on"}
-{"click":"listen-pause:header"}
-{"until":"state.listen.status","is":"paused"}
-{"shot":"paused"}

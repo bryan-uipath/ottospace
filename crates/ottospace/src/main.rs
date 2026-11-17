@@ -105,6 +105,7 @@ mod scrollbar;
 mod sessions;
 mod sneak;
 mod sneak_apps;
+mod stall;
 mod tags;
 mod talk;
 mod terminal;
@@ -456,8 +457,10 @@ const MAX_SPACE: f32 = 220.;
 const HOME_ICON: &str = "icons/home.svg";
 /// The top row's Fill the Whole Display button: off (arrows out), on (arrows in).
 const FILL_ICONS: [&str; 2] = ["icons/fill-expand.svg", "icons/fill-collapse.svg"];
-/// A space drawn as its badge alone, as Home always is: its icon.
+/// A space drawn as its badge alone: its icon.
 const BADGE_SPACE: f32 = 36.;
+/// Home's item: its 16-point house, 12 points either side, and its border.
+const HOME_SPACE: f32 = 41.;
 const TRAFFIC_LIGHTS: f32 = 80.;
 /// The narrowest a tab shrinks to when the strip is full: a few letters of its title and its ×.
 const MIN_TAB: f32 = 80.;
@@ -639,6 +642,8 @@ actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, 
 actions!(ottospace, [MarkPane, MarkTab, MarkJump]);
 // Save the tab on show as a workbook, add it to one, or save all the tabs as one.
 actions!(ottospace, [SaveWorkbook, AddTabToWorkbook, SaveAllWorkbook]);
+// The repository of the focused pane's folder, to the Repos list.
+actions!(ottospace, [AddToRepos]);
 // The next start is empty: the layout is not kept this run.
 actions!(ottospace, [StartFresh]);
 // What the capture key does, from the menu.
@@ -815,6 +820,8 @@ struct Workspace {
     key_notice: Option<String>,
     /// A test run's recording of its own window (`record_start`).
     recording: Option<record::Recording>,
+    /// A test run's ear on the canary's sound (`audio_probe_start`).
+    audio_probe: Option<listen_live::Probe>,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// Each pane's bounds inside its border, for e2e to check the live window's gap.
@@ -832,6 +839,11 @@ struct Workspace {
     settling: Vec<(Instant, Sender<String>)>,
     /// When the frame being drawn began, for the trace's frame time.
     frame_start: Rc<Cell<Option<Instant>>>,
+    /// Frames that stopped coming (`stall`), and how often GPUI was kicked to draw again.
+    stall: stall::Stall,
+    redraws: u64,
+    /// A terminal's or hosted window's output asked for a frame not drawn yet: a stall too.
+    output: bool,
     /// What the home screen last drew, and the lattice lines kept between frames.
     home: home::Shared,
     /// ottospace's own controls as last painted: what sneak mode labels.
@@ -1222,8 +1234,10 @@ impl Workspace {
                     });
                     this.take_snapshots(window, cx);
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
+                        this.output = true;
                         cx.notify();
                     }
+                    this.watch_frames(window);
                 });
                 if alive.is_err() {
                     break;
@@ -1321,6 +1335,7 @@ impl Workspace {
             visual_after: Vec::new(),
             key_notice: None,
             recording: None,
+            audio_probe: None,
             cells: HashMap::new(),
             frames: HashMap::new(),
             renders: 0,
@@ -1330,6 +1345,9 @@ impl Workspace {
             settles: std::env::var_os("OTTOSPACE_E2E").is_some(),
             settling: Vec::new(),
             frame_start: Rc::default(),
+            stall: stall::Stall::new(),
+            redraws: 0,
+            output: false,
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
             chip_line: Rc::default(),
@@ -1663,9 +1681,9 @@ impl Workspace {
                 }
                 // Later reads of the list look where the model now does (also after "Unlist?" is
                 // answered); a file not written leaves them as the settings are.
-                Effect::SaveRepos { changes } => {
+                Effect::SaveRepos { dirs } => {
                     let said = self.error.take();
-                    self.save_apps(changes);
+                    self.save_list(|| config::save_repos(dirs));
                     let failed = self.error.as_ref().is_some_and(|error| error.starts_with(Self::NOT_WRITTEN));
                     self.error = self.error.take().or(said);
                     if failed {
@@ -1957,6 +1975,38 @@ impl Workspace {
         self.settle(false, window, cx);
         // What a request reaches through a shared method (`open_app`, a click) is the client's too.
         self.with_origin(Origin::Socket, |this| this.serve_calls(window, cx));
+    }
+
+    /// Each tick: after a change of the displays, or while the shown window has something to draw
+    /// and draws nothing, GPUI is kicked to draw again (`stall`). The tick is a timer, not a
+    /// frame: it goes on when frames stop.
+    fn watch_frames(&mut self, window: &mut Window) {
+        let now = Instant::now();
+        if display::take_change() {
+            self.stall.displays_changed(now);
+            trace::record("displays", serde_json::json!({ "count": display::all().len() }));
+        }
+        let wants = self.seq > self.drawn_seq || !self.settling.is_empty() || self.output;
+        // SAFETY: GPUI's own view, on the main thread.
+        let shown = ns_view(window).is_some_and(|view| unsafe { ottospace_mac::window::visible(view) });
+        match self.stall.check(now, self.renders, wants, shown) {
+            stall::Verdict::Nothing => {}
+            stall::Verdict::Kick { stalled, first } => {
+                let stalled = stalled.map(|waited| waited.as_millis() as u64);
+                trace::record("redraw", serde_json::json!({ "stalled_ms": stalled, "first": first }));
+                // SAFETY: GPUI's own view, on the main thread, in a timer's update: GPUI holds no
+                // lock of its window here.
+                // Counted only when GPUI's handlers were there to take it.
+                if ns_view(window).is_some_and(|view| unsafe { ottospace_mac::window::redraw(view) }) {
+                    self.redraws += 1;
+                }
+                window.refresh();
+            }
+            stall::Verdict::Recovered { kicks, lasted } => {
+                let lasted = lasted.as_millis() as u64;
+                trace::record("redrawn", serde_json::json!({ "kicks": kicks, "lasted_ms": lasted }));
+            }
+        }
     }
 
     /// Replies with the state. In a test run, not before a frame has drawn every action so far,
@@ -2494,6 +2544,32 @@ impl Workspace {
                     let _ = reply.send(answer);
                     continue;
                 }
+                Request::AudioProbeStart => {
+                    let started = match self.audio_probe {
+                        Some(_) => Err("already hearing".to_string()),
+                        None => listen_live::Probe::start(),
+                    };
+                    let answer = match started {
+                        Ok(probe) => {
+                            self.audio_probe = Some(probe);
+                            serde_json::json!({ "ok": true }).to_string()
+                        }
+                        Err(why) => control::error(&why),
+                    };
+                    let _ = reply.send(answer);
+                    continue;
+                }
+                Request::AudioProbeStop => {
+                    let answer = match self.audio_probe.take() {
+                        Some(probe) => {
+                            let (buffers, failed) = probe.stop();
+                            serde_json::json!({ "ok": true, "buffers": buffers, "failed": failed }).to_string()
+                        }
+                        None => control::error("not hearing"),
+                    };
+                    let _ = reply.send(answer);
+                    continue;
+                }
                 // A test run only: the green button. The next tick takes the zoom it asks for.
                 Request::ZoomPress => {
                     match ns_view(window).filter(|_| self.zoom_asks) {
@@ -2506,6 +2582,11 @@ impl Workspace {
                         // It would zoom the test's window over the user's screen.
                         None => failure = Some("the window's zoom does not fill the display".into()),
                     }
+                    None
+                }
+                // A test run only: as macOS says it; the next tick kicks GPUI to draw again.
+                Request::DisplayChange => {
+                    display::note_change();
                     None
                 }
                 Request::Trace => {
@@ -2625,7 +2706,11 @@ impl Workspace {
             };
             let rows: Vec<serde_json::Value> = repo.checkouts().into_iter().map(row).collect();
             let (header, folded) = (drawn(Mark::Repo(n)), self.model.repo_folded(repo));
-            serde_json::json!({ "name": repo.name, "path": repo.path, "header": header, "folded": folded, "rows": rows })
+            // The group's folder it is drawn under, if any.
+            let group = self.model.repo_dirs.group_of(&repo.path).map(|dir| &dir.path);
+            serde_json::json!({
+                "name": repo.name, "path": repo.path, "group": group, "header": header, "folded": folded, "rows": rows,
+            })
         };
         self.model.repos.iter().enumerate().map(group).collect()
     }
@@ -3019,7 +3104,7 @@ impl Workspace {
                     // Lines scrolled back from the bottom, and lines of history kept.
                     "display_offset": display_offset, "history": history,
                     // What ⌘C would copy.
-                    "selection": t.selected(),
+                    "selection": t.selected_shown(),
                     // Its first and last cell as [line, column], line 0 the top of the screen and
                     // negative in history.
                     "selection_range": t.selection_range(),
@@ -3207,6 +3292,9 @@ impl Workspace {
                 "pr_opens": self.pr_opens,
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
+                // How often GPUI's own handlers were kicked to draw again (`stall`): after a change
+                // of the displays, or frames that stopped.
+                "redraws": self.redraws,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
                 // Scrolls over an app pane's picture, peeks they started, and the one on now (its pane; 0:
                 // none).
@@ -3657,6 +3745,7 @@ impl Workspace {
             self.dispatch(Action::Close { pane: Some(id) }, Origin::System, window, cx);
         }
         if redraw {
+            self.output = true;
             cx.notify();
         }
     }
@@ -3995,7 +4084,6 @@ impl Workspace {
             Some(Section::Apps) => return Some(self.apps_child(at)),
             // The offer to put a mark back, if it shows, is above the rows.
             Some(Section::Marks) => return Some(at + usize::from(self.mark_offered().is_some())),
-            Some(Section::Workbook) => return Some(at + usize::from(self.model.workbooks.offered().is_some())),
             // The day's all-day line is above the rows.
             Some(Section::Calendar) => {
                 let calendar = &self.model.calendar;
@@ -4575,10 +4663,24 @@ impl Workspace {
         .detach();
     }
 
-    /// A folder for the Repos list: resolved first (links, `..`), and only a directory. The
+    /// "Add Folder to Repos": the focused terminal's folder, else the folder the tab's task works
+    /// in; its repository joins the list.
+    fn add_focused_folder(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let cwd = self.model.focused.and_then(|id| self.terminals.get(&id)).and_then(|t| t.cwd());
+        let task = || self.model.tab_task().and_then(|id| self.model.task_worktree(id)).map(PathBuf::from);
+        match cwd.map(PathBuf::from).or_else(task) {
+            Some(dir) => self.add_repo(&dir, self.input, window, cx),
+            None => self.error = Some("No folder here: focus a terminal, or a task's tab".into()),
+        }
+        cx.notify();
+    }
+
+    /// A folder for the Repos list: resolved first (links, `..`), only a directory, then the
+    /// repository it is in (`/code/app/src` → `/code/app`; a worktree's → its repository's). The
     /// core decides what to do with what is found there.
     fn add_repo(&mut self, path: &Path, origin: Origin, window: &Window, cx: &mut Context<Self>) {
-        let dir = path.canonicalize().ok().filter(|dir| dir.is_dir());
+        let dir =
+            path.canonicalize().ok().filter(|dir| dir.is_dir()).map(|dir| repos::repository_of(&dir).unwrap_or(dir));
         let Some(dir) = dir.as_deref().and_then(Path::to_str) else {
             self.error = Some(format!("Not a directory: {}", path.display()));
             return;
@@ -4666,6 +4768,7 @@ impl Workspace {
             self.dispatch(action, origin, window, cx);
             return;
         }
+        config::reread_repos();
         self.model.update(Action::SetRepoDirs { dirs: config::repo_dirs() }.sent_by(Origin::System));
         let before = self.model.repo_dirs.clone();
         self.error = None; // what the last try said is not about this one
@@ -5092,11 +5195,25 @@ impl Workspace {
                 }))
         };
         // Each repository's name (a list row of its own), then its checkouts unless folded: its
-        // own folder first. `index` counts checkouts, drawn or not; `at` the list's rows.
+        // own folder first. A group's folder over its repositories, drawn while it is unfolded.
+        // `index` counts checkouts, drawn or not; `at` the list's rows.
         let mut items: Vec<AnyElement> = Vec::new();
         let (mut index, mut at) = (0, 0);
+        let mut group: Option<String> = None;
         for (n, repo) in self.model.repos.iter().enumerate() {
             let checkouts = repo.checkouts();
+            let of = self.model.repo_dirs.group_of(&repo.path).cloned();
+            if of.as_ref().map(|dir| &dir.path) != group.as_ref() {
+                group = of.as_ref().map(|dir| dir.path.clone());
+                if let Some(dir) = &of {
+                    items.push(self.repo_group(at, dir, cx).into_any_element());
+                    at += 1;
+                }
+            }
+            if group.as_ref().is_some_and(|path| !self.model.repos_open.contains(path)) {
+                index += checkouts.len();
+                continue;
+            }
             let folded = self.model.repo_folded(repo);
             items.push(self.repo_heading(n, at, repo, folded, checkouts.len(), cx).into_any_element());
             at += 1;
@@ -5117,15 +5234,45 @@ impl Workspace {
             }
             items.extend(well(group, 0.));
         }
-        let empty = self.model.repos.is_empty().then(|| {
-            let roots: Vec<String> = repos::roots().iter().map(|root| root.display().to_string()).collect();
-            let hint = format!(
-                "No repositories in: {}. Set OTTOSPACE_REPOS to the directories that hold yours.",
-                if roots.is_empty() { "(no directories)".to_string() } else { roots.join(", ") }
-            );
-            div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(hint)
+        // Opt-in: none until the user adds one, by the + here or in the header, or by a drop.
+        let empty = self.model.repos.is_empty().then(|| match self.model.repo_dirs.fixed {
+            true => div()
+                .px_2()
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child("No repositories in the folders OTTOSPACE_REPOS names.")
+                .into_any_element(),
+            false => div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    list_row("repos-empty-add", false)
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(svg().path("icons/plus.svg").size(px(12.)).text_color(rgb(theme::PRIMARY)))
+                        .child("Add a repository")
+                        .child(self.controls.mark("repos-empty:add"))
+                        .on_click(cx.listener(|this, _, window, cx| this.bar_add(Section::Repos, window, cx))),
+                )
+                .child(div().px_2().text_xs().text_color(rgb(theme::MUTED)).child("Or drop its folder here."))
+                .into_any_element(),
         });
-        let list = div().id("repos").flex_1().flex().flex_col().p_2().overflow_y_scroll();
+        let list = div()
+            .id("repos")
+            .flex_1()
+            .flex()
+            .flex_col()
+            .p_2()
+            .overflow_y_scroll()
+            .drag_over::<gpui::ExternalPaths>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+            .on_drop(cx.listener(|this, dropped: &gpui::ExternalPaths, window, cx| {
+                for path in dropped.paths() {
+                    this.add_repo(path, this.input, window, cx);
+                }
+                cx.notify();
+            }));
         self.bars.tracked(
             "repos",
             list.track_scroll(&self.list_scroll).children(empty).children(items).children(self.pr_note.map(|note| {
@@ -5175,6 +5322,48 @@ impl Workspace {
                 this.dispatch(Action::PrOpen { path: path.clone() }, this.input, window, cx);
             }));
         Some((marker, width))
+    }
+
+    /// A group's folder (an entry of the old settings that holds repositories): a chevron that
+    /// folds them, its name as the settings write it, how many; under the pointer, the trash
+    /// (stop listing all of them). `at`: its place among the list's rows.
+    fn repo_group(&self, at: usize, dir: &ottospace_core::repos::RepoDir, cx: &mut Context<Self>) -> Stateful<Div> {
+        let selected = self.model.list == Some(at);
+        let open = self.model.repos_open.contains(&dir.path);
+        let count = self.model.group_repos(&dir.path).len();
+        let path = dir.path.clone();
+        let remove = {
+            let path = path.clone();
+            let click =
+                move |this: &mut Self, window: &Window, cx: &mut Context<Self>| this.remove_repo(&path, window, cx);
+            let tip = ("icons/trash.svg", "Stop listing this folder's repositories (nothing on disk is touched)");
+            self.icon_word(format!("repo-remove:{}", dir.path), tip, click, cx)
+        };
+        let tip =
+            format!("{} · a folder of repositories from your old settings: remove it, add the ones you use", dir.path);
+        list_row(("repo-group", at), selected)
+            .group("repo-name")
+            .when(at > 0, |d| d.mt_2())
+            .h(px(26.))
+            .px_2()
+            .py_0()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .child(div().flex_none().w(px(10.)).text_xs().text_color(rgb(theme::MUTED)).child(if open {
+                "▾"
+            } else {
+                "▸"
+            }))
+            .child(cut_text(format!("{}/", dir.text.trim_end_matches('/'))).flex_shrink().text_xs())
+            .child(div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(format!("· {count}")))
+            .child(div().flex_1())
+            .child(words::words("repo-name", selected).top(px(3.)).child(remove))
+            .child(self.controls.mark(format!("repo-fold:{path}")))
+            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.dispatch(Action::RepoFold { path: path.clone(), fold: None }, this.input, window, cx);
+            }))
     }
 
     /// A repository's name: a chevron that folds its rows (a click anywhere on the line does),
@@ -5587,11 +5776,11 @@ impl Workspace {
         // Home is its icon alone, always. Short of room, a space not selected is its badge
         // alone, its title on hover. Shorter still, the badges that do not fit after the selected
         // one give way to a count: the selected space always shows.
-        let compact = BADGE_SPACE + shown.len().saturating_sub(1) as f32 * TITLED_SPACE > room;
-        let tight = compact && room < 2. * BADGE_SPACE + TITLED_SPACE;
+        let compact = HOME_SPACE + shown.len().saturating_sub(1) as f32 * TITLED_SPACE > room;
+        let tight = compact && room < HOME_SPACE + BADGE_SPACE + TITLED_SPACE;
         let selected_width = if tight { MIN_SPACE } else { TITLED_SPACE };
         let others = shown.iter().filter(|space| space.of != selected && space.of != Owner::Home).count();
-        let fits = |n: usize| BADGE_SPACE + selected_width + n as f32 * BADGE_SPACE <= room;
+        let fits = |n: usize| HOME_SPACE + selected_width + n as f32 * BADGE_SPACE <= room;
         let badges =
             if !compact || fits(others) { others } else { (0..others).rev().find(|n| fits(n + 1)).unwrap_or(0) };
         let mut room_for = badges;
@@ -5646,7 +5835,7 @@ impl Workspace {
                 }
                 (Glyph::Home, _) => {
                     let ink = if on { theme::TEXT } else { theme::MUTED };
-                    let house = svg().path(HOME_ICON).size(px(15.)).flex_none().text_color(rgb(ink));
+                    let house = svg().path(HOME_ICON).size(px(16.)).flex_none().text_color(rgb(ink));
                     Some(house.into_any_element())
                 }
                 _ => None,
@@ -5677,12 +5866,13 @@ impl Workspace {
                 .h_full()
                 // The selected space keeps its name; the others give way first.
                 .when(!small, |d| d.min_w(px(MIN_SPACE)).max_w(px(MAX_SPACE)).flex_shrink())
-                .when(of == Owner::Home, |d| d.pr_3())
                 .when(on && compact && !small, |d| d.min_w(px(selected_width)))
                 .when(small, |d| d.flex_none().tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))))
                 .overflow_hidden()
                 .pl_3()
                 .pr_1()
+                // Home's house alone: as much room right as left. After `pr_1`, which would win.
+                .when(of == Owner::Home, |d| d.pr_3())
                 .flex()
                 .items_center()
                 .gap_2()
@@ -6096,16 +6286,22 @@ pub(crate) fn recessed(inner: impl IntoElement, depth: f32) -> Div {
 /// The shadow cast into a box from its top (`top`) or bottom edge, `depth` points deep: the box
 /// sits below its edge. It takes no room and no clicks; the box is `relative`.
 pub(crate) fn inner_shade(top: bool, depth: f32) -> Div {
-    let (dark, clear) = (black().opacity(0.6), black().opacity(0.));
+    shade(top, depth, 0.6)
+}
+
+/// `inner_shade`, `strength` its darkest opacity: a well's is softer.
+fn shade(top: bool, depth: f32, strength: f32) -> Div {
+    let (dark, clear) = (black().opacity(strength), black().opacity(0.));
     let (from, to) = if top { (dark, clear) } else { (clear, dark) };
     let shade = gpui::linear_gradient(180., gpui::linear_color_stop(from, 0.), gpui::linear_color_stop(to, 1.));
     let edge = div().absolute().left_0().right_0().h(px(depth)).bg(shade);
     if top { edge.top_0() } else { edge.bottom_0() }
 }
 
-/// A row of an open sidebar group, in the group's well: darker than the section and across its
-/// padding, a shadow at the well's top (`first`) and bottom (`last`). Each row stays a child of
-/// the list, so list mode still scrolls to it; it covers the list's `gap` above it.
+/// A row of an open sidebar group, in the group's well: a little darker than the section (`WELL`)
+/// and across its padding, a soft shadow at the well's top (`first`) and bottom (`last`). Each row
+/// stays a child of the list, so list mode still scrolls to it; it covers the list's `gap` above it.
+/// Not Calendar's rows: they sit level, as Workspaces' do, a list of the day, not an opened-up group.
 pub(crate) fn in_well(row: impl IntoElement, first: bool, last: bool, gap: f32) -> Div {
     const PAD: f32 = 8.; // the list's padding (`p_2`)
     const RIM: f32 = 6.; // the well's own room at its top and bottom, as deep as its shadows
@@ -6114,13 +6310,13 @@ pub(crate) fn in_well(row: impl IntoElement, first: bool, last: bool, gap: f32) 
         .relative()
         .mx(px(-PAD))
         .px(px(PAD))
-        .bg(rgb(theme::BACKGROUND))
+        .bg(rgb(theme::WELL))
         .when(!first, |d| d.mt(px(-gap)).pt(px(gap)))
         .when(first, |d| d.pt(px(RIM)))
         .when(last, |d| d.pb(px(RIM)))
         .child(row)
-        .when(first, |d| d.child(inner_shade(true, RIM)))
-        .when(last, |d| d.child(inner_shade(false, RIM)))
+        .when(first, |d| d.child(shade(true, RIM, 0.35)))
+        .when(last, |d| d.child(shade(false, RIM, 0.35)))
 }
 
 /// `rows` of an open group, each in its well (`in_well`).
@@ -6373,6 +6569,7 @@ impl Render for Workspace {
         *self.badges.borrow_mut() = self.model.badges();
         // This frame draws every action so far: the replies held for it can go (`settle`).
         self.drawn_seq = self.seq;
+        self.output = false;
         self.frame_start.set(Some(Instant::now()));
         for pane in &self.model.panes {
             self.cells.entry(pane.id).or_default();
@@ -6553,6 +6750,12 @@ impl Render for Workspace {
                 true => this.transcribe_key(window, cx),
                 false => cx.propagate(),
             }))
+            .on_action(cx.listener(
+                |this, _: &listen::PauseTranscribing, window, cx| match this.on(Feature::Transcripts) {
+                    true => this.pause_key(window, cx),
+                    false => cx.propagate(),
+                },
+            ))
             .on_action(cx.listener(|this, _: &CapturePane, window, cx| {
                 this.error = this.capture_pane(None, this.input, window, cx).err();
                 cx.notify();
@@ -6569,6 +6772,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &SaveWorkbook, window, cx| this.save_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &AddTabToWorkbook, window, cx| this.pick_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &SaveAllWorkbook, window, cx| this.save_all_workbook(window, cx)))
+            .on_action(cx.listener(|this, _: &AddToRepos, window, cx| this.add_focused_folder(window, cx)))
             .on_action(cx.listener(|this, _: &StartFresh, window, cx| {
                 drop(this.dispatch(Action::StartFresh, this.input, window, cx))
             }))
@@ -6875,6 +7079,9 @@ fn main() {
     // Started from a task agent's shell (a dev build): that pass is its, not for our children.
     // SAFETY: no thread has started yet.
     unsafe { std::env::remove_var(pass::VAR) };
+    // The variable that held the pass itself before it moved to a file (an older build's agent).
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("OTTOSPACE_TASK_PASS") };
     // Hidden while its output has no stable shape. Reads other programs' session files.
     if args.get(1).is_some_and(|a| a == "sessions") {
         sessions(args.get(2));
@@ -6940,6 +7147,8 @@ fn main() {
         // Run as a bare binary (`ottospace`, `cargo run`) there is no bundle to supply the icon.
         ottospace_mac::window::set_dock_icon(include_bytes!("../assets/ottospace.icns"));
         cx.bind_keys(keymap());
+        // A change of the displays may leave GPUI drawing on none (`stall`).
+        display::watch();
         // The menu bar lists the same actions; the app-level ones are handled here.
         cx.on_action(|_: &Hide, cx| cx.hide());
         cx.on_action(|_: &About, cx| {
@@ -7086,7 +7295,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 10] = [
+        const TESTS_ONLY: [&str; 13] = [
             "capture_start",
             "repo_add",
             "inspector_fixture",
@@ -7096,7 +7305,10 @@ mod tests {
             "record_stop",
             "listen_end",
             "app_fixture",
+            "audio_probe_start",
+            "audio_probe_stop",
             "zoom_press",
+            "display_change",
         ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
         for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {

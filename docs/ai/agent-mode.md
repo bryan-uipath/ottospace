@@ -79,14 +79,20 @@ A small script printed the variable and tried to connect.
   history), in every socket reply as a last step (session reads, transcripts, errors), and in the
   trace. Only whole passes are matched: hiding a part would be an oracle (a client types a guess
   into a terminal and reads whether it was hidden, a digit at a time). So a terminal searches its
-  rows as one text, each row's leading spaces left out (a pass wrapped, broken by the program's own
-  line breaks or cursor moves, on the alternate screen), with the lines the screen's edges cut and
-  as many rows past each edge as 32 digits fill at the pane's width, plus one (3 at least); and the
-  first row of a full history (10,000 lines: what was dropped above may have cut a pass) loses a
-  leading run of 8 or more hex digits whatever they are, a rule no digit of a pass decides. A
+  rows as one text, each row's edges left out: spaces and box borders, U+2500 to U+257F (a pass
+  wrapped, broken by the program's own line breaks or cursor moves, on the alternate screen, in an
+  approval prompt's box), with the lines the screen's edges cut and
+  rows past each edge until they hold 32 characters other than spaces and box borders, plus one (a narrow pane,
+  or a TUI's indent, uses few columns a row; at most 256 rows); and the
+  first row of a full history (10,000 lines: what was dropped above may have cut a pass), while a pass is live, loses a
+  leading run of 8 or more hex digits whatever they are (its indent left out, going on over rows
+  the run fills), a rule no digit of a pass decides. A
   `wait` cannot match a pass. Not hidden: a terminal's picture (a user-started capture's PNG), the
-  user's own ⌘C, a pass printed in pieces, and the head of one whose output is still arriving
-  (between two reads of the pty, for milliseconds). A dead pass shows again: it grants nothing.
+  user's own ⌘C, a pass printed in pieces, the head of one whose output is still arriving
+  (between two reads of the pty, for milliseconds), and the rest of one whose head the terminal
+  dropped other than from a full history (scrolled off the alternate screen or a scroll region,
+  erased, overwritten). A pass's uses: which task `task_brief` answers for when the request names
+  none, and which task reads an app pane (stage (b)). Hiding is defence in depth, not the boundary. A dead pass shows again: it grants nothing.
 - **On the wire.** A top-level `"pass"` on any request line, taken off before `Request` is parsed
   (`control::parse`): the closed set is unchanged; a line with no pass parses from its text, as
   before. Not 32 hex digits: an error that does not repeat

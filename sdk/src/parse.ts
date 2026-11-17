@@ -70,6 +70,8 @@ import type {
   MarkReply,
   MarksReply,
   RecordReply,
+  ProbeBuffer,
+  AudioProbeReply,
   TraceReply,
   Workbook,
   WorkbookPane,
@@ -945,6 +947,7 @@ function reposGroup(value: unknown, at: string): ReposGroup {
   return {
     name: str(o.name, `${at}.name`),
     path: str(o.path, `${at}.path`),
+    group: orNull(str)(o.group, `${at}.group`),
     header: orNull(rect)(o.header, `${at}.header`),
     folded: bool(o.folded, `${at}.folded`),
     rows: list(checkoutRow)(o.rows, `${at}.rows`),
@@ -1030,7 +1033,7 @@ function repoDirs(value: unknown, at: string): RepoDirs {
   const o = fields(value, at);
   const dir = (value: unknown, at: string) => {
     const d = fields(value, at);
-    return { text: str(d.text, `${at}.text`), path: str(d.path, `${at}.path`) };
+    return { text: str(d.text, `${at}.text`), path: str(d.path, `${at}.path`), pinned: bool(d.pinned, `${at}.pinned`) };
   };
   return { dirs: list(dir)(o.dirs, `${at}.dirs`), fixed: bool(o.fixed, `${at}.fixed`) };
 }
@@ -1303,12 +1306,15 @@ function rowMenu(value: unknown, at: string): RowMenu {
   const item = (value: unknown, at: string): RowMenu["items"][number] => {
     const i = fields(value, at);
     const kind = i.item;
-    if (kind !== "rename" && kind !== "delete" && kind !== "remove") throw wrong(`${at}.item`, "a menu item", kind);
-    return { item: kind, label: str(i.label, `${at}.label`), rect: orNull(rect)(i.rect, `${at}.rect`) };
+    const kinds = ["rename", "delete", "remove", "pause", "resume"] as const;
+    const known = kinds.find((k) => k === kind);
+    if (known === undefined) throw wrong(`${at}.item`, "a menu item", kind);
+    return { item: known, label: str(i.label, `${at}.label`), rect: orNull(rect)(i.rect, `${at}.rect`) };
   };
   return {
     workbook: orNull(num)(o.workbook, `${at}.workbook`),
     tab: orNull(num)(o.tab, `${at}.tab`),
+    transcript: bool(o.transcript, `${at}.transcript`),
     selected: orNull(num)(o.selected, `${at}.selected`),
     items: list(item)(o.items, `${at}.items`),
   };
@@ -1335,6 +1341,7 @@ function model(value: unknown, at: string): Model {
     rail_focus: orNull(railFocus)(o.rail_focus, `${at}.rail_focus`),
     repos: list(repo)(o.repos, `${at}.repos`),
     repo_dirs: repoDirs(o.repo_dirs, `${at}.repo_dirs`),
+    repos_open: list(str)(o.repos_open, `${at}.repos_open`),
     tasks: { list: list(task)(fields(o.tasks, `${at}.tasks`).list, `${at}.tasks.list`) },
     collapsed: list(heading)(o.collapsed, `${at}.collapsed`),
     tasks_view: tasksView(o.tasks_view, `${at}.tasks_view`),
@@ -1793,6 +1800,20 @@ export function traceReply(value: unknown): TraceReply {
 
 export function recordReply(value: unknown): RecordReply {
   return { ok: true, frames: num(fields(value, "reply").frames, "frames") };
+}
+
+function probeBuffer(value: unknown, at: string): ProbeBuffer {
+  const o = fields(value, at);
+  return {
+    pts_ms: orNull(num)(o.pts_ms, `${at}.pts_ms`),
+    samples: num(o.samples, `${at}.samples`),
+    rms: num(o.rms, `${at}.rms`),
+  };
+}
+
+export function audioProbeReply(value: unknown): AudioProbeReply {
+  const o = fields(value, "reply");
+  return { ok: true, buffers: list(probeBuffer)(o.buffers, "buffers"), failed: orNull(str)(o.failed, "failed") };
 }
 
 function scrollbar(value: unknown, at: string): Scrollbar {

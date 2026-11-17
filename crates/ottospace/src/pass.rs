@@ -144,20 +144,36 @@ fn live() -> Vec<String> {
     LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
 }
 
+/// Whether any pass is live: else nothing is hidden, not even `hide_digits_at_top`'s digits.
+pub(crate) fn any_live() -> bool {
+    !LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty()
+}
+
 /// Where a whole live pass is in `text`, in either case: byte ranges, sorted, merged where they
 /// overlap. Only whole passes: what is hidden then never says whether a part of one was guessed.
 fn found(text: &str) -> Vec<std::ops::Range<usize>> {
     if text.len() < 32 {
         return Vec::new();
     }
-    let live = live();
+    found_among(text, &live())
+}
+
+/// `found`, among the passes `live`.
+fn found_among(text: &str, live: &[String]) -> Vec<std::ops::Range<usize>> {
     if live.is_empty() {
         return Vec::new();
     }
     // ASCII lower case keeps every byte where it was: a match's range is the original's.
     let lower = text.to_ascii_lowercase();
-    let mut found: Vec<_> =
-        live.iter().flat_map(|hex| lower.match_indices(hex.as_str())).map(|(at, hex)| at..at + hex.len()).collect();
+    // Every start, overlapping ones too: `match_indices` skips one that begins inside another.
+    let mut found = Vec::new();
+    for hex in live {
+        let mut from = 0;
+        while let Some(at) = lower[from..].find(hex.as_str()) {
+            found.push(from + at..from + at + hex.len());
+            from += at + 1;
+        }
+    }
     found.sort_by_key(|range| range.start);
     merged(found)
 }
@@ -192,8 +208,8 @@ pub(crate) fn hide(text: &str) -> Cow<'_, str> {
 }
 
 /// A grid's rows with every live pass hidden, also one printed across rows: wrapped, broken by
-/// the program's own line breaks or cursor moves, on the alternate screen. The rows are searched
-/// as one text, each row's leading spaces left out of it (a continuation indented). A pass's
+/// the program's own line breaks or cursor moves, on the alternate screen, in a box. The rows are
+/// searched as one text, each row's edges left out of it (an indent, a box's borders). A pass's
 /// first row shows `HIDDEN`; its rest, on that row and later ones, goes. Whole passes only: no
 /// part of one decides what is hidden. The caller gives rows past the edges of what it shows
 /// (`terminal::lines_of`), so a pass the edge cuts is searched whole.
@@ -202,12 +218,13 @@ pub(crate) fn hide_rows(rows: Vec<String>) -> Vec<String> {
         return rows;
     }
     // The searched text, and where each row starts in it: (its first byte there, the leading
-    // bytes left out).
+    // bytes left out). Each row's edges (spaces, a box's borders) are left out of it.
     let (mut joined, mut starts) = (String::new(), Vec::with_capacity(rows.len()));
-    for (n, row) in rows.iter().enumerate() {
-        let skip = if n == 0 { 0 } else { row.len() - row.trim_start().len() };
+    for row in &rows {
+        let end = row.trim_end_matches(edge).len();
+        let skip = end - row[..end].trim_start_matches(edge).len();
         starts.push((joined.len(), skip));
-        joined.push_str(&row[skip..]);
+        joined.push_str(&row[skip..end]);
     }
     let found = found(&joined);
     if found.is_empty() {
@@ -245,12 +262,36 @@ pub(crate) fn hide_rows(rows: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-/// `text` with a run of 8 or more hex digits at its start as `HIDDEN`, whatever the digits: for
-/// text a cut may have left the end of a pass at (`terminal::cut_history`). It looks at no pass,
-/// so what it hides says nothing of one.
-pub(crate) fn hide_digits_at_start(text: &str) -> String {
-    let run = text.bytes().take_while(u8::is_ascii_hexdigit).count();
-    if run < 8 { text.to_string() } else { format!("{HIDDEN}{}", &text[run..]) }
+/// Rows read from where a cut may have left the end of a pass (`terminal::cut_history`): a run
+/// of 8 or more hex digits at their start, each row's indent left out and the run going on to the
+/// next row while it fills a row, is `HIDDEN`, whatever the digits. It looks at no pass, so what
+/// it hides says nothing of one.
+pub(crate) fn hide_digits_at_top(mut rows: Vec<String>) -> Vec<String> {
+    // Per row: (where its run starts, how long it is).
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for row in &rows {
+        let at = row.len() - row.trim_start_matches(edge).len();
+        let run = row[at..].bytes().take_while(u8::is_ascii_hexdigit).count();
+        runs.push((at, run));
+        // The run ends in this row: what follows it is not a digit.
+        if run == 0 || at + run < row.trim_end_matches(edge).len() {
+            break;
+        }
+    }
+    if runs.iter().map(|(_, run)| run).sum::<usize>() < 8 {
+        return rows;
+    }
+    for (n, (at, run)) in runs.into_iter().enumerate() {
+        let mark = if n == 0 { HIDDEN } else { "" };
+        rows[n].replace_range(at..at + run, mark);
+    }
+    rows
+}
+
+/// What may stand at a row's edges around a pass the program printed whole: spaces, and the
+/// borders of a box drawn round it (an approval prompt's), U+2500 to U+257F.
+pub(crate) fn edge(c: char) -> bool {
+    c == ' ' || ('\u{2500}'..='\u{257f}').contains(&c)
 }
 
 impl Pass {
@@ -407,10 +448,18 @@ mod tests {
             }
         }
         assert_eq!(hide(wrong), wrong, "a made-up one is not live");
-        // A run of digits a cut left at the start is hidden whatever its digits.
-        assert_eq!(hide_digits_at_start(&format!("{} $", &hex[20..])), "[hidden] $");
-        assert_eq!(hide_digits_at_start(&format!("{} $", &wrong[20..])), "[hidden] $");
-        assert_eq!(hide_digits_at_start("abc1234 $"), "abc1234 $", "7 digits");
+        // A run of digits a cut left at the start is hidden whatever its digits, indented, or
+        // over narrow rows.
+        let top = |rows: &[&str]| hide_digits_at_top(rows.iter().map(|row| row.to_string()).collect());
+        assert_eq!(top(&[&format!("{} $", &hex[20..])]), ["[hidden] $"]);
+        assert_eq!(top(&[&format!("{} $", &wrong[20..])]), ["[hidden] $"]);
+        assert_eq!(top(&["abc1234 $", "5678"]), ["abc1234 $", "5678"], "7 digits");
+        assert_eq!(top(&[&format!("    {}", &hex[20..])]), ["    [hidden]"]);
+        assert_eq!(top(&["abcd", " 1234", "56 $", "ff"]), ["[hidden]", " ", " $", "ff"]);
+        assert_eq!(top(&["│ abcd │", "│ 1234 │"]), ["│ [hidden] │", "│  │"]);
+        // In a box (an approval prompt), its borders and padding between the rows: one pass.
+        let boxed = vec![row(&format!("│ PASS={} │", &hex[..12])), row(&format!("│ {}     │", &hex[12..]))];
+        assert_eq!(hide_rows(boxed), ["│ PASS=[hidden] │", "│      │"]);
         // Revoked: no longer hidden (and no longer a pass).
         drop(live);
         assert_eq!(hide(&hex), hex);
@@ -428,5 +477,8 @@ mod tests {
         let (one, two) = (one.pass().hex(), two.pass().hex());
         let text = format!("{one}{two} {two}{one}");
         assert_eq!(hide(&text), "[hidden][hidden] [hidden][hidden]");
+        // One that begins inside another (this pass's first digit is its last): one range.
+        let hex = "a0123456789abcdef0123456789abcda".to_string();
+        assert_eq!(found_among(&format!("{hex}{}", &hex[1..]), &[hex]), [0..63]);
     }
 }

@@ -25,7 +25,7 @@ video player. Not built. Nothing here was recorded: see [Feasibility](#feasibili
    fetched by ottospace. A recognizer that may use a server (`SFSpeechRecognizer` without
    `requiresOnDeviceRecognition`) is never used.
 3. **Always shown while on.** An indicator in the source pane's header (a pane source), on the
-   top row, and in the menu bar (from slice 2, where real audio starts); one Stop in each. No
+   top row, and in the menu bar (from slice 2, where real audio starts); a Stop one click from each (the pane's and the top row's show the drawer's; the menu bar's has its own). No
    mode hides it.
 4. **Never resumes by itself.** A stop (by the user, the meeting ending, the app quitting,
    ottospace quitting or crashing) is final for that meeting; a restart or session restore does not
@@ -43,9 +43,9 @@ video player. Not built. Nothing here was recorded: see [Feasibility](#feasibili
 |---|---|
 | Who | `ListenStart`, `ListenPause`, `ListenResume` and `ListenStop`: `Origin::User` only, refused otherwise with `listen::USERS_ALONE` ("only the user starts or stops a transcript"). A client's key, click or sneak label is the client's, so refused too. The one other start is `ListenAuto` (`System`, §1a), allowed only under a rule the user wrote. The property test holds both for every origin and mode |
 | From where | (a) An app pane's header: a `Transcribe` button beside `fit` and ×, on app panes whose rule shows it (§1a). (b) **⌘⌃T** toggles for the focused app pane: it starts one there when none is on, and stops the one that is on (from any pane: one key to stop is worth more than symmetry). With focus elsewhere and none on, it does nothing and the status bar says "focus an app pane to transcribe it". Free: no `cmd-ctrl-t` in the code's bindings, none in `docs/reference.md` or `docs/cheat-sheet.md`, and not a macOS default (⌃⌘F, ⌃⌘Q, ⌃⌘Space are). Slice 1 adds it to both docs. (c) The palette's `Transcribe the Pane` / `Stop Transcribing` and the View menu. (d) `Transcribe an App…` in the palette: a picker of running apps. (e) A meeting detected in an app whose rule says `offer` (a notice) or `auto` (§1a) |
-| Indicator | Pane header (a pane source): a red dot, `Transcribing 12:04`, Pause, Stop. Top row: a red dot and the time at its right end, from every space; a click selects the source pane's space (an app source: the space selected) and opens the drawer on the transcript. An app source has no header: the top row and the menu bar are its marks. Menu bar: an `NSStatusItem` (a red dot) only while one is on, its menu Pause / Stop / Show. Paused: the dot hollow, `Paused 12:04` |
+| Indicator | Pane header (a pane source): the red dot and the time only (`12:04`, pulsing with the level; `· all tabs` for a browser), a click shows the transcript in the drawer. The controls are the drawer's transcript header's: the meter, the time, one Stop, and ⋯ with Pause or Resume (also the palette's Pause or Resume Transcribing and the menu bar's dot); paused, "Paused" and Resume where the meter was. No × of its own: ⌘⇧L closes the drawer on it. The owner (2026-11-16): "why do we need pause + stop + x in the transcript pane". Top row: a red dot and the time at its right end, from every space; a click selects the source pane's space (an app source: the space selected) and opens the drawer on the transcript. An app source has no header: the top row and the menu bar are its marks. Menu bar: an `NSStatusItem` (a red dot) only while one is on, its menu Stop / Pause (Resume while paused) / Show. Paused: the dot hollow |
 | The system's own | macOS shows its screen-and-audio recording mark (and the orange microphone dot when the mic is on) in the menu bar. ottospace does not, and could not, hide it. The status item is still ours: the system's mark does not say which app or offer Stop |
-| Stop | One action. Every Stop (header, top row, menu bar, palette) is the same `ListenStop` |
+| Stop | One action. Every Stop (the drawer's header, the menu bar, the palette, ⌘⌃T) is the same `ListenStop` |
 | Pause | Stops the streams (the system's mark goes off: nothing is captured while paused, not even into a buffer). Resume starts new streams into the same transcript; the gap is a line `paused 3m`. New streams count from 0: the core adds the time before the pause (`ListenHeard` times are per run; the core keeps each run's offset). Chosen over muting the stream: a paused capture that still captures is not a pause |
 | One at a time | v1: at most one transcript on. Starting another while one is on is refused with "a transcript is on: stop it first". Two at once (a call and a video) is not a need yet |
 | Source pane closes | For an app whose rule names its meeting windows (§1b), the meeting decides, not the pane (Zoom's main window goes while the user shares, and its pane may close with it). Otherwise it stops: the core's close handler ends it (effects `ListenWrite{end}`, `ListenClose`), not a `ListenStop` action. The user's close only: a client's `close` of that pane is refused (rule 1). A transcript started from a pane is "this pane is being transcribed": the pane gone, it ends. The window's app may run on (Zoom after a meeting), and a source nobody sees would record on unseen |
@@ -322,12 +322,18 @@ from the model.
   transcribing`), and each final line is appended and flushed as it arrives, so a crash loses at
   most the line still in the recogniser. At the end, the header's `Ended` is filled in by writing
   the whole file again to a temporary file in the same folder (0600) and renaming it over the
-  original. A crash leaves `still transcribing`, read as ended at the last line.
+  original. A crash leaves `still transcribing`, read as ended at the last line. The rewrite is
+  from what ottospace wrote, not from the file: an edit the user makes to the file while it is
+  being written is overwritten when it ends. Accepted by the owner (2026-11-17); the first-use
+  explanation says so (§7).
 - **The text**: each line goes through `capture::plain` (one line, visible characters only), and
   Markdown's active characters in it are escaped (`\`, `` ` ``, `*`, `_`, `[`, `]`, `<`, `>`, `#`,
   `|`; built: also `!`, `&`, `~`, `:`, `@` and the `.` of `www.`, so previews that find links in
-  bare text find none), so heard words never render as a link, an image, HTML or a heading. A unit test writes
-  hostile strings and parses the file back.
+  bare text find none; and Obsidian's and GitHub's own: `$` math, `%%` comments, `==` highlights,
+  `^` superscripts and block ids, with `~~`, `[[` wiki links and embeds, `#tag` and `[^` footnotes
+  already covered by `~`, `[`, `!` and `#`), so heard words never render as a link, an image, HTML,
+  a heading, math, a tag or a hidden comment. A unit test writes hostile strings and reads them
+  back; another checks each syntax's escaped form.
 - **No jsonl**: the app needs no second copy. The Transcripts list and `Add to task` read the
   Markdown back with the core's own parser for this format (unit-tested). Lines it does not
   recognise (the user edited the file) are skipped, and a file it cannot read is listed as "not
@@ -392,7 +398,8 @@ ottospace gives no legal advice and does not decide for the user. Its stance:
   captured (that app's audio, and the mic if on); that it stays on this Mac; where the files go
   (the folder, and, if it is not ottospace's own, "if this folder is synced or a git repository,
   transcripts go where it goes"); that the others are not told; that an `auto` rule starts one
-  with no click; and that rules on recording calls differ by place. `Start` / `Cancel`.
+  with no click; that rules on recording calls differ by place; and, in these words, "Edits you
+  make to a transcript's file while it is being written are lost when it ends." `Start` / `Cancel`.
   Remembered in settings (`transcripts_explained`, written by `ListenExplained`, the user's act).
 - **Every start**: the notice bar says "Transcribing Zoom: let the others know." (info, until
   dismissed or 10 seconds). For an auto start this, with the indicator, is how the user learns it
@@ -458,6 +465,13 @@ Test-only, under `OTTOSPACE_E2E` (`control::test_refusal`, documented in CLAUDE.
   prompt pending; skipped with a reason otherwise. Installing the asset in a CI setup step would be
   a network fetch on CI only: to decide in slice 2. Never the user's mic or apps; the mic stream is
   tested only with the fixture.
+- **Silence timing** (e2e-apps, CI only, no recogniser): line times count the samples fed, so if
+  SCK sent no buffers while an app is silent, each silence would shrink them. The test-only
+  `audio_probe_start`/`audio_probe_stop` keep each buffer's presentation time; the canary says
+  words, 8 s of silence in the file, plays nothing for 8 s, and speaks again; the test asserts the
+  samples cover the presented time. CI (2026-11-17, macOS 26 runner): 1182 buffers of 20 ms,
+  968 of them silent (RMS below 0.001), 23640 ms presented and 23640 ms of samples, no gap over
+  100 ms. SCK sends silent buffers while the app plays nothing, so no padding is needed.
 
 ## 10. Slices
 

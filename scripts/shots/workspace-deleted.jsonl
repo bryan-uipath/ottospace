@@ -1,0 +1,12 @@
+# A workspace deleted from the Workspaces section: the rows before, and the offer to take it back.
+{"click":"top:new_workspace"}
+{"click":"top:new_workspace"}
+{"click":"top:new_workspace"}
+{"click":"space:0"}
+{"cmd":"section","section":"workbook"}
+{"cmd":"key","keys":"cmd-ctrl-e","as":"user"}
+{"cmd":"key","keys":"j j","as":"user"}
+{"shot":"selected"}
+{"cmd":"key","keys":"x","as":"user"}
+{"settle":500}
+{"shot":"deleted"}

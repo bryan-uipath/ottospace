@@ -20,6 +20,7 @@ import {
   taskPopReply,
   taskReply,
   recordReply,
+  audioProbeReply,
   traceReply,
   waitReply,
 } from "./parse.ts";
@@ -51,6 +52,7 @@ import type {
   MarkReply,
   MarksReply,
   RecordReply,
+  AudioProbeReply,
   TraceReply,
   KeyArgs,
   MouseArgs,
@@ -537,11 +539,29 @@ export class Client {
     return this.snapshot({ cmd: "app_fixture", ...args });
   }
   /**
+   * For tests (`OTTOSPACE_E2E`): hears the app `OTTOSPACE_HOST_ONLY` names, no recogniser, each
+   * buffer's presentation time kept. Rejects outside a test run: no client hears an app.
+   */
+  async audioProbeStart(): Promise<void> {
+    await this.send({ cmd: "audio_probe_start" });
+  }
+  /** For tests: stops it; the buffers heard. */
+  async audioProbeStop(): Promise<AudioProbeReply> {
+    return audioProbeReply(await this.send({ cmd: "audio_probe_stop" }));
+  }
+  /**
    * For tests (`OTTOSPACE_E2E`): the window's green button, pressed as the user would. It fills
    * the display instead of zooming. Rejects outside a test run: only the user's hand fills it.
    */
   zoomPress(): Promise<Snapshot> {
     return this.snapshot({ cmd: "zoom_press" });
+  }
+  /**
+   * For tests (`OTTOSPACE_E2E`): the displays changed, as macOS says when one is plugged in or
+   * taken away. The app kicks its window to draw again (`counts.redraws`). Rejects outside a test run.
+   */
+  displayChange(): Promise<Snapshot> {
+    return this.snapshot({ cmd: "display_change" });
   }
   /**
    * The user's meetings of `day` and the `days` after it, busy and free time: what the app holds

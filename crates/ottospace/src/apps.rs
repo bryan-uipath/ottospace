@@ -206,11 +206,16 @@ impl Workspace {
     /// not a list of names, is left alone, and the status bar says so; the pin then lasts
     /// until ottospace quits.
     pub fn save_apps(&mut self, changes: &[ottospace_core::settings::ListChange]) {
+        self.save_list(|| config::save_apps(changes));
+    }
+
+    /// Writes one of the settings' lists by `save`, as `save_apps` does.
+    pub fn save_list(&mut self, save: impl FnOnce() -> Result<(), String>) {
         // The lists of a run that hosts only its test app are not the user's.
         if self.host_only.is_some() {
             return;
         }
-        match config::save_apps(changes) {
+        match save() {
             Err(why) => self.broke(format!("{}{why}", Self::NOT_WRITTEN)),
             Ok(()) => {
                 let not_written = |text: &str| text.starts_with(Self::NOT_WRITTEN);

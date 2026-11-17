@@ -9,12 +9,40 @@ use crate::notice::Kind;
 /// still shows in a terminal (`Model::talk_view`).
 pub const DEFAULT_VIEW: crate::transcript::View = crate::transcript::View::Native;
 
+/// An entry of `repos`: `"~/code/app"`, or `{ "path": "~/code/app", "pinned": true }`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(untagged, expecting = "a path, or { \"path\": \"~/code/app\", \"pinned\": true }")]
+pub enum RepoEntry {
+    Path(String),
+    Entry(PinnedRepo),
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PinnedRepo {
+    pub path: String,
+    #[serde(default)]
+    pub pinned: bool,
+}
+
+impl RepoEntry {
+    pub fn path(&self) -> &str {
+        match self {
+            RepoEntry::Path(path) | RepoEntry::Entry(PinnedRepo { path, .. }) => path,
+        }
+    }
+
+    pub fn pinned(&self) -> bool {
+        matches!(self, RepoEntry::Entry(PinnedRepo { pinned: true, .. }))
+    }
+}
+
 /// `~/.ottospace/settings.json`. Every key is optional. An unknown key is an error, so a typing
 /// mistake does not pass for a setting that silently does nothing.
 ///
 /// ```json
 /// { "terminal": { "font": "JetBrains Mono", "font_size": 14 },
-///   "repos": ["~/code", "~/work/clients"],
+///   "repos": [{ "path": "~/code/app", "pinned": true }, "~/code/web"],
 ///   "tasks": "~/notes/tasks",
 ///   "sessions": true,
 ///   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
@@ -32,9 +60,11 @@ pub const DEFAULT_VIEW: crate::transcript::View = crate::transcript::View::Nativ
 pub struct Settings {
     #[serde(default)]
     pub terminal: Terminal,
-    /// Directories that are repositories or hold them. Default: `~/code` and `~/notes`.
+    /// The repositories the Repos section lists, in its order: added by the user (none by
+    /// default). An entry is a path, or `{ "path": …, "pinned": true }`. One that is a folder of
+    /// repositories (from when this named folders to look in) lists them as one group.
     #[serde(default)]
-    pub repos: Option<Vec<String>>,
+    pub repos: Vec<RepoEntry>,
     /// The directory tasks are kept in. Default: `tasks` beside the settings file.
     #[serde(default)]
     pub tasks: Option<String>,
@@ -613,10 +643,7 @@ pub fn closed_apps(wanted: &[Installed], running_bundles: &[String]) -> Vec<Inst
     closed
 }
 
-/// The directories of `repos` when the settings name none.
-pub const DEFAULT_REPOS: [&str; 2] = ["~/code", "~/notes"];
-
-/// One entry added to, or taken off, a list of the settings file: `apps`, `apps_hidden` or `repos`.
+/// One entry added to, or taken off, a list of the settings file: `apps` or `apps_hidden`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ListChange {
     pub key: &'static str,
@@ -625,8 +652,7 @@ pub struct ListChange {
     pub text: String,
 }
 
-/// The settings file's text after `changes`, for a pin made in the Apps section or a directory
-/// added in Repos. A file with no `repos` has the default ones: they are written with the change. Each is made
+/// The settings file's text after `changes`, for a pin made in the Apps section. Each is made
 /// to the list as the file has it NOW, which may not be the one read at start: the user may
 /// have edited it since, or another ottospace. Only the lists changed are touched: every
 /// other key, known or not, and the file's own spacing stay as they are. An entry is added
@@ -636,14 +662,13 @@ pub struct ListChange {
 pub fn with_changes(text: &str, changes: &[ListChange]) -> Result<String, String> {
     let keys = object(text)?;
     let mut new = text.to_string();
-    for key in ["apps", "apps_hidden", "repos"] {
+    for key in ["apps", "apps_hidden"] {
         let mine: Vec<&ListChange> = changes.iter().filter(|change| change.key == key).collect();
         if mine.is_empty() {
             continue;
         }
         let names = |list: &Vec<serde_json::Value>| list.iter().map(|item| item.as_str().map(str::to_string)).collect();
         let before: Vec<String> = match keys.get(key) {
-            None if key == "repos" => DEFAULT_REPOS.map(String::from).to_vec(),
             None => Vec::new(),
             Some(value) => value
                 .as_array()
@@ -661,15 +686,33 @@ pub fn with_changes(text: &str, changes: &[ListChange]) -> Result<String, String
         let kept = before.iter().filter(|text| list.contains(text));
         let added = list.iter().filter(|text| !before.contains(text));
         let list: Vec<String> = kept.chain(added).cloned().collect();
-        // Counted in the file as it is now: another ottospace may have added since the start.
-        if key == "repos" && list.len() > before.len() && list.len() > crate::repos::MAX_DIRS {
-            return Err(format!("`repos` names {} directories already", before.len()));
-        }
         if list != before {
             new = with_list(&new, key, &list)?;
         }
     }
     Ok(new)
+}
+
+/// The settings file's text with `repos` as `dirs`, in their order: an entry as the settings
+/// named it, a pinned one as `{"path": …, "pinned": true}`. Only the Repos section's acts write
+/// it. `Err`: the file is not a JSON object, or its `repos` is not a list of entries: it is left
+/// alone, nothing in it dropped for not being understood.
+pub fn with_repos(text: &str, dirs: &[crate::repos::RepoDir]) -> Result<String, String> {
+    repos_of(text)?;
+    let entry = |dir: &crate::repos::RepoDir| match dir.pinned {
+        true => serde_json::json!({"path": dir.text, "pinned": true}),
+        false => serde_json::json!(dir.text),
+    };
+    with_items(text, "repos", &dirs.iter().map(entry).collect::<Vec<_>>())
+}
+
+/// The settings file's `repos` as it is now (none: no key). `Err`: as `with_repos`'s.
+pub fn repos_of(text: &str) -> Result<Vec<RepoEntry>, String> {
+    let Some(now) = object(text)?.remove("repos") else { return Ok(Vec::new()) };
+    serde_json::from_value(now).map_err(|_| {
+        "`repos` is not a list of repositories: [\"~/code/app\", {\"path\": \"~/code/web\", \"pinned\": true}]"
+            .to_string()
+    })
 }
 
 /// `text` with its top-level `key` set to `value`: every other key, and the file's spacing, as
@@ -721,7 +764,12 @@ fn with_apps(text: &str, apps: &[String], hidden: &[String]) -> Result<String, S
 }
 
 fn with_list(text: &str, key: &str, list: &[String]) -> Result<String, String> {
-    let quoted: Vec<String> = list.iter().map(|item| serde_json::Value::from(item.as_str()).to_string()).collect();
+    with_items(text, key, &list.iter().map(|item| serde_json::Value::from(item.as_str())).collect::<Vec<_>>())
+}
+
+/// `text` with its top-level `key` the list `list`, one item after another on one line.
+fn with_items(text: &str, key: &str, list: &[serde_json::Value]) -> Result<String, String> {
+    let quoted: Vec<String> = list.iter().map(serde_json::Value::to_string).collect();
     let value = format!("[{}]", quoted.join(", "));
     let body = text.trim_start_matches('\u{feff}');
     if body.trim().is_empty() {
@@ -843,7 +891,8 @@ mod tests {
         let settings = Settings::parse("").unwrap();
         assert_eq!(settings, Settings::parse("{}").unwrap());
         assert_eq!((settings.terminal.font.as_str(), settings.terminal.font_size), ("Menlo", 13.));
-        assert_eq!((settings.terminal.line_height(), settings.repos, settings.tasks), (18., None, None));
+        // No repository is listed until the user adds one.
+        assert_eq!((settings.terminal.line_height(), settings.repos, settings.tasks), (18., vec![], None));
     }
 
     #[test]
@@ -853,7 +902,7 @@ mod tests {
         assert_eq!((settings.terminal.font.as_str(), settings.terminal.font_size), ("JetBrains Mono", 13.));
         assert_eq!(
             (settings.repos, settings.tasks.as_deref()),
-            (Some(vec!["~/code".to_string()]), Some("~/notes/tasks"))
+            (vec![RepoEntry::Path("~/code".into())], Some("~/notes/tasks"))
         );
         assert_eq!((settings.sessions, settings.session_dirs), (None, None));
     }
@@ -938,7 +987,7 @@ mod tests {
             (settings.tasks.as_deref(), settings.apps.as_slice()),
             (Some("~/notes/tasks"), &["Slack".to_string()][..])
         );
-        assert_eq!((settings.repos, settings.terminal), (None, Terminal::default()));
+        assert_eq!((settings.repos, settings.terminal), (vec![], Terminal::default()));
         assert_eq!(wrong.len(), 2, "{wrong:?}");
         assert!(
             wrong.iter().any(|w| w.starts_with("terminl: ")) && wrong.iter().any(|w| w.starts_with("repos: ")),
@@ -1161,23 +1210,30 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_added_to_repos_keeps_the_default_ones_of_a_file_that_names_none() {
-        let change = |add: bool, text: &str| [ListChange { key: "repos", add, text: text.into() }];
-        let after = |text: &str, add: bool, dir: &str| with_changes(text, &change(add, dir)).unwrap();
-        assert_eq!(after(r#"{"repos": ["~/work"]}"#, true, "/src/app"), r#"{"repos": ["~/work", "/src/app"]}"#);
-        assert_eq!(after(r#"{"repos": ["~/work", "/src/app"]}"#, false, "/src/app"), r#"{"repos": ["~/work"]}"#);
-        // No `repos`: `~/code` and `~/notes` are listed, and stay so once the key is there.
-        let defaults = "{\n  \"repos\": [\"~/code\", \"~/notes\", \"/src/app\"]\n}\n";
-        assert_eq!(after("", true, "/src/app"), defaults);
-        assert_eq!(after(r#"{"apps": []}"#, false, "~/notes"), r#"{"apps": [], "repos": ["~/code"]}"#);
-        // Taking off what is not there writes nothing.
-        assert_eq!(after(r#"{"apps": []}"#, false, "/src/app"), r#"{"apps": []}"#);
-        // A full list takes no more, whoever filled it; one can still be taken off.
-        let full =
-            serde_json::json!({"repos": (0..crate::repos::MAX_DIRS).map(|n| format!("/d{n}")).collect::<Vec<_>>()});
-        let refused = with_changes(&full.to_string(), &change(true, "/src/app")).unwrap_err();
-        assert_eq!(refused, "`repos` names 64 directories already");
-        assert!(!after(&full.to_string(), false, "/d1").contains("\"/d1\""));
+    fn repos_is_a_list_of_paths_or_pinned_entries_written_whole_in_order() {
+        use crate::repos::RepoDir;
+        // A bare path is an unpinned entry; an object may pin one. Anything else is a problem.
+        let read = Settings::parse(r#"{"repos": ["~/a", {"path": "/b", "pinned": true}, {"path": "/c"}]}"#).unwrap();
+        let entries: Vec<(&str, bool)> = read.repos.iter().map(|e| (e.path(), e.pinned())).collect();
+        assert_eq!(entries, [("~/a", false), ("/b", true), ("/c", false)]);
+        for wrong in [r#"{"repos": [1]}"#, r#"{"repos": [{"path": "/a", "pin": true}]}"#, r#"{"repos": "~/a"}"#] {
+            assert!(Settings::read(wrong).1.iter().any(|w| w.starts_with("repos: ")), "{wrong}");
+        }
+        let pinned = RepoDir { pinned: true, ..RepoDir::new("/src/app", "/src/app") };
+        let dirs = [pinned, RepoDir::new("~/work", "/home/work")];
+        let written = r#"{"repos": [{"path":"/src/app","pinned":true}, "~/work"]}"#;
+        assert_eq!(with_repos(r#"{"repos": ["~/old"]}"#, &dirs).unwrap(), written);
+        // Other keys stay; a file with none gets the key; an empty list is written as such.
+        assert_eq!(with_repos(r#"{"apps": []}"#, &dirs[1..]).unwrap(), r#"{"apps": [], "repos": ["~/work"]}"#);
+        assert_eq!(with_repos(r#"{"repos": ["/a"]}"#, &[]).unwrap(), r#"{"repos": []}"#);
+        // A `repos` that is not a list of entries is the user's to fix: never written over.
+        assert!(with_repos(r#"{"repos": "~/code"}"#, &dirs).unwrap_err().starts_with("`repos` is not a list"));
+        assert!(with_repos("[1]", &dirs).is_err());
+        // What the file names now, which an act on the list starts from.
+        let now = repos_of(r#"{"repos": ["/a", {"path": "/b", "pinned": true}]}"#).unwrap();
+        assert_eq!(now.iter().map(|e| (e.path(), e.pinned())).collect::<Vec<_>>(), [("/a", false), ("/b", true)]);
+        assert_eq!(repos_of("{}"), Ok(vec![]));
+        assert!(repos_of(r#"{"repos": "~/code"}"#).is_err());
     }
 
     #[test]

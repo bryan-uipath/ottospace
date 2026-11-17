@@ -1190,7 +1190,9 @@ fn a_workbook_hosts_its_apps_window_again_beside_its_terminal() {
         wait_for("the window in the workbook's pane", || Some(state()).filter(|s| kinds(s) == ["app", "terminal"]));
     assert_eq!(built["hosted"].as_object().map(|h| h.len()), Some(1), "{}", built["state"]["panes"]);
     assert_eq!(built["state"]["panes"][0]["kind"]["title"], "Canary 1");
-    assert_eq!((&built["workbooks"][0]["open"], &built["notice"]), (&json!(true), &Value::Null));
+    // The save's note may still show: information now, no longer an error.
+    let note = built["notice"].as_str().unwrap_or("Saved ");
+    assert!(built["workbooks"][0]["open"] == json!(true) && note.starts_with("Saved "), "{}", built["notice"]);
 }
 
 #[test]
@@ -1924,6 +1926,105 @@ fn a_sound_the_canarys_child_plays_is_heard_as_the_canarys() {
     if let Some(why) = canary_transcribed("child", true) {
         eprintln!("skipped: {why}");
     }
+}
+
+/// A 16-bit mono 44.1 kHz WAV of `parts`: (seconds, tone or silence), each tone 440 Hz. Made by
+/// the test, not `say`: CI's `say -o` often wrote seconds too few.
+fn wav(file: &std::path::Path, parts: &[(f64, bool)]) {
+    const RATE: u32 = 44_100;
+    let mut samples: Vec<i16> = Vec::new();
+    for &(secs, tone) in parts {
+        let n = (secs * f64::from(RATE)) as usize;
+        let at = |i: usize| (i as f64 * 440. * std::f64::consts::TAU / f64::from(RATE)).sin() * 8_000.;
+        samples.extend((0..n).map(|i| if tone { at(i) as i16 } else { 0 }));
+    }
+    let data = (samples.len() * 2) as u32;
+    let mut out = Vec::with_capacity(44 + data as usize);
+    out.extend(b"RIFF");
+    out.extend((36 + data).to_le_bytes());
+    out.extend(b"WAVEfmt ");
+    // fmt: length 16, PCM, one channel, rate, bytes a second, bytes a frame, bits a sample.
+    for (value, bytes) in [(16, 4), (1, 2), (1, 2), (RATE, 4), (RATE * 2, 4), (2, 2), (16, 2)] {
+        out.extend(&u32::to_le_bytes(value)[..bytes]);
+    }
+    out.extend(b"data");
+    out.extend(data.to_le_bytes());
+    out.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+    std::fs::write(file, out).expect("write the sound");
+}
+
+/// Whether ScreenCaptureKit sends buffers while an app is silent, or none: then the samples fed
+/// to the recogniser lose each silence and a line's time shrinks by it. The canary plays a tone
+/// with 8 s of silence inside the file, then plays nothing for 8 s, then a tone again; each
+/// buffer's presentation time is kept with no recogniser (CI's virtual machine has none). The
+/// time from the first buffer to the last is what the samples must cover.
+#[test]
+#[ignore = "hears the canary's own tones; run with `cargo e2e-apps`"]
+fn the_canarys_silence_comes_as_samples_not_as_a_gap_in_time() {
+    let home = support::temp(&format!("otto-apps-probe-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("make the folder");
+    std::fs::write(home.join("settings.json"), json!({"restore_layout": false}).to_string()).expect("settings");
+    // Tone, 8 s of zeros, tone; then a short tone.
+    let (gap, gap_s) = (home.join("gap.wav"), 2. + 8. + 2.);
+    wav(&gap, &[(2., true), (8., false), (2., true)]);
+    let (short, short_s) = (home.join("short.wav"), 1.5);
+    wav(&short, &[(short_s, true)]);
+
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-probe", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto-probe",
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
+        ],
+    );
+    otto.call(json!({"cmd": "audio_probe_start"}));
+    std::thread::sleep(Duration::from_secs(1));
+    canary.call(json!({"cmd": "play", "path": gap}));
+    std::thread::sleep(Duration::from_secs_f64(gap_s + 0.5));
+    // Nothing playing.
+    std::thread::sleep(Duration::from_secs(8));
+    canary.call(json!({"cmd": "play", "path": short}));
+    std::thread::sleep(Duration::from_secs_f64(short_s + 1.0));
+    let reply = otto.call(json!({"cmd": "audio_probe_stop"}));
+    let _ = std::fs::remove_dir_all(&home);
+
+    // (presentation ms, length ms, rms) of each buffer with a time.
+    let buffers: Vec<(f64, f64, f64)> = reply["buffers"]
+        .as_array()
+        .expect("buffers")
+        .iter()
+        .filter_map(|b| Some((b["pts_ms"].as_f64()?, b["samples"].as_f64()? / 16., b["rms"].as_f64()?)))
+        .collect();
+    let given = reply["buffers"].as_array().map_or(0, Vec::len);
+    assert!(!buffers.is_empty(), "no buffer with a time of {given}; the stream said {}", reply["failed"]);
+    let (first, last) = (buffers[0], buffers[buffers.len() - 1]);
+    let span = last.0 + last.1 - first.0;
+    let sampled: f64 = buffers.iter().map(|b| b.1).sum();
+    // Where time jumps past the samples: (at ms from the first, ms missing).
+    let gaps: Vec<(f64, f64)> =
+        buffers.windows(2).map(|w| (w[1].0 - first.0, w[1].0 - (w[0].0 + w[0].1))).filter(|gap| gap.1 > 100.).collect();
+    let quiet = buffers.iter().filter(|b| b.2 < 0.001).count();
+    eprintln!("audio probe: the stream said {}", reply["failed"]);
+    eprintln!(
+        "audio probe: {given} buffers ({} timed, {quiet} silent), {span:.0} ms presented, {sampled:.0} ms of samples, \
+         gaps over 100 ms (at, missing): {gaps:.0?}",
+        buffers.len()
+    );
+    // The largest step from one buffer's time to the next: needs no sample rate.
+    let step = buffers.windows(2).map(|w| w[1].0 - w[0].0).fold(0., f64::max);
+    let played = (gap_s + 8. + short_s - 1.) * 1_000.;
+    // Words heard before the silences and after them: the first sound to the last spans both.
+    let loud: Vec<f64> = buffers.iter().filter(|b| b.2 >= 0.001).map(|b| b.0).collect();
+    let heard = loud.last().zip(loud.first()).map_or(0., |(last, first)| last - first);
+    assert!(heard > (gap_s + 8. - 1.) * 1_000., "sound heard over {heard:.0} ms only, {} loud buffers", loud.len());
+    assert!(span > played, "the canary played for {played:.0} ms, buffers span {span:.0} ms");
+    assert!(step < 1_000., "{step:.0} ms between two buffers: {gaps:.0?}");
+    assert!((span - sampled).abs() < 500., "{:.0} ms presented, not sampled: {gaps:.0?}", span - sampled);
 }
 
 #[test]

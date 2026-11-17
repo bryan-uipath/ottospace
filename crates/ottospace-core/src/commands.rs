@@ -66,7 +66,7 @@ macro_rules! commands {
             pub fn feature(self) -> Option<Feature> {
                 match (self, self.group()) {
                     (_, Group::Marks) => Some(Feature::Marks),
-                    (Command::Transcribe, _) => Some(Feature::Transcripts),
+                    (Command::Transcribe | Command::PauseTranscript, _) => Some(Feature::Transcripts),
                     (Command::AgentMenu | Command::AgentOff | Command::AgentSee | Command::AgentAct, _) => {
                         Some(Feature::AgentMode)
                     }
@@ -123,6 +123,7 @@ commands! {
     SaveWorkbook: "Save Tab as Workspace", Workbook;
     AddTabToWorkbook: "Add Tab to Workspace…", Workbook;
     SaveAllWorkbook: "Save All Tabs as Workspace", Workbook;
+    AddToRepos: "Add Folder to Repos", Panes;
     StartFresh: "Start Fresh", App;
     Features: "Features…", App;
     MarkPane: "Mark Pane", Marks;
@@ -142,6 +143,7 @@ commands! {
     AgentOff: "Agent Mode: Off", Panes;
     AgentSee: "Agent Mode: See", Panes;
     AgentAct: "Agent Mode: See and Act", Panes;
+    PauseTranscript: "Pause or Resume Transcribing", View;
     AxOverlay: "Accessibility Overlay", Developer;
     AxInspector: "Accessibility Inspector", Developer;
     InspectorFilter: "Filter the Accessibility Inspector", Developer;

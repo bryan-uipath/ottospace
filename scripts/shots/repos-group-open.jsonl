@@ -1,0 +1,6 @@
+# Settings from before named a folder to look in: its repositories, one group, unfolded by the
+# user's click on its folder.
+{"cmd":"section","section":"repos"}
+{"settle":true}
+{"click":"repo-fold:{ROOT}/user/clients"}
+{"shot":"open"}

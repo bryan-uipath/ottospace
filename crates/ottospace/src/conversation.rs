@@ -88,6 +88,8 @@ impl Stopping {
             terminal.signal(libc::SIGHUP);
         }
         if let Some(native) = &mut native {
+            // Stopped, its pass goes now: its file too, though its stdout may stay open.
+            native.pass = None;
             let _ = native.driver.kill();
         }
         Self { terminal, native, since: Instant::now() }
@@ -312,6 +314,10 @@ impl Workspace {
         let mut ended = Vec::new();
         let mut details = Vec::new();
         for (subject, native) in &mut self.drawer.native {
+            // Its process gone, its pass goes: the file too, and the pass is no longer hidden.
+            if native.reaped() {
+                native.pass = None;
+            }
             let mut events = Vec::new();
             while let Ok(said) = native.driver.events().try_recv() {
                 let mut kept = false;
