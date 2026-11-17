@@ -156,6 +156,9 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       rows: 4, rail: "near", day: -1, day_start: 1794470400000,
       all_day_line: [70, 66, 236, 20], first_row: [70, 90, 236, 30],
       nav: { back: [140, 38, 14, 19], forward: [232, 38, 14, 19], today: [252, 38, 42, 19] },
+      fetch: { state: "failed", at: 1794470400000, error: "http", code: 403 },
+      fetch_line: "The calendar answered 403 · last read 09:40", empty_note: "No meetings today",
+      fetch_rect: [70, 200, 236, 20], retry: [270, 200, 36, 18], retries: 1,
     },
     drawer: {
       body: [880, 40, 470, 820],

@@ -585,9 +585,10 @@ enum Mark {
     BandNow,
     BandBlock(usize),
     BandOut(usize),
-    /// The Calendar section's all-day line and its first row.
+    /// The Calendar section's all-day line, its first row and its fetch's line.
     CalendarAllDay,
     CalendarFirstRow,
+    CalendarFetch,
     /// The status bar.
     Status,
     /// The notice bar, its × and what it offers.
@@ -1645,7 +1646,9 @@ impl Workspace {
                 }
                 Effect::AgentInterrupt { task } => self.native_input(task, NativeInput::Interrupt),
                 Effect::AgentMoved { from, to } => self.move_agent(from, to),
-                Effect::MeetingAlert { .. } | Effect::OpenLink { .. } => self.meeting_effect(effect),
+                Effect::MeetingAlert { .. } | Effect::OpenLink { .. } | Effect::CalendarRetry => {
+                    self.meeting_effect(effect)
+                }
                 Effect::ReadSession { runner, id } => agents.extend(self.read_session(runner, id)),
                 // Slots are not on screen yet (slice 3), and their flag is off.
                 Effect::HostSlot { .. } | Effect::WatchSlots { .. } | Effect::GiveBack { .. } => {}

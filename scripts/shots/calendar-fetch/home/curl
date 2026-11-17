@@ -1,0 +1,12 @@
+#!/bin/sh
+# Stands for curl (OTTOSPACE_CURL): each call takes the next line of `modes`. A timeout after
+# 3 s; a 403; the made-up feed slowly, 1 KB then the rest 3 s later.
+/bin/cat > /dev/null
+dir='{ROOT}/home'
+n=$(( $(/bin/cat "$dir/n" 2>/dev/null || echo 0) + 1 ))
+echo $n > "$dir/n"
+case $(/usr/bin/sed -n "${n}p" "$dir/modes") in
+timeout) /bin/sleep 3; printf 000 >&2; exit 28 ;;
+forbidden) printf Forbidden; printf 403 >&2; exit 22 ;;
+*) /usr/bin/head -c 1024 "$dir/today.ics"; /bin/sleep 3; /usr/bin/tail -c +1025 "$dir/today.ics"; printf 200 >&2 ;;
+esac
