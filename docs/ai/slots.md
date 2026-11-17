@@ -369,19 +369,13 @@ Each a stacked, draft PR, behind a `slots` feature flag (`features.rs`) from sli
 6. **`has`.** `ProbeTree`, the cache, the bounded read; `windows` and `meeting` accept it. Only when
    an app needs it.
 
-## Open questions for the owner, with the recommended default
+## Owner's decisions (2026-11-17)
 
-1. A filled slot's window goes and a matching one of the same app comes back while Away (Zoom
-   after a share): **recommended: take it back without asking**, Manual too. Or offer it like any
-   new window?
-2. Named selectors in settings (`"selectors": { "zoom-main": {...} }`), shared by slots, `windows`
-   and `meeting`? **Recommended: not in v1**; inline in each place, the same JSON.
-3. Displays by number (1 has the menu bar, then left to right) or by the display's name? A number
-   moves when a display is rearranged; a name does not, but two equal monitors share one.
-   **Recommended: number.**
-4. Should Automatic fill a slot on a tab that is not on show (the window parked)? **Recommended: no**
-   (§3).
-5. Show the window id in the dialog at all, or tick it silently? **Recommended: show it**, as
-   "the app's own name for this window", so a slot that waits for it can be understood.
-6. Choosing something else with ⌘E in an empty slot: end the slot (recommended), or keep it under
-   the pick and offer when its window appears?
+Every recommendation taken:
+
+1. A window coming back while Away (Zoom after a share) goes back in without asking, Manual too.
+2. No named selectors in v1: each place writes its own, the same JSON.
+3. Displays by number (1 has the menu bar, then left to right).
+4. Automatic never fills a slot on a tab that is not on show: it waits until the tab is.
+5. The dialog shows the window id, as "the app's own name for this window".
+6. Choosing something else with ⌘E in an empty slot ends the slot.
