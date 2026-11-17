@@ -1016,7 +1016,6 @@ const TOLD_FOR: Duration = Duration::from_secs(8);
 /// Longest a `wait` request may run: 10 minutes.
 const MAX_WAIT_MS: u64 = 600_000;
 
-/// The window's `NSView`, for the test requests that hand it an event.
 /// The active displays for the log: how many, and each one's size in points ("1728x1117"),
 /// never its name.
 fn displays() -> serde_json::Value {
@@ -1028,6 +1027,7 @@ fn size_of(rect: CGRect) -> String {
     format!("{}x{}", rect.size.width.round(), rect.size.height.round())
 }
 
+/// The window's `NSView`, for the test requests that hand it an event.
 fn ns_view(window: &Window) -> Option<*mut std::ffi::c_void> {
     match HasWindowHandle::window_handle(window).ok()?.as_raw() {
         RawWindowHandle::AppKit(appkit) => Some(appkit.ns_view.as_ptr()),
@@ -3431,9 +3431,9 @@ impl Workspace {
             return Ok(());
         }
         let id = target.id;
-        // Why: this file's words or ScreenCaptureKit's, never the window's title.
-        let hosted = Hosted::new(target).inspect_err(|why| {
-            event_log::event("host_failed", serde_json::json!({ "window": id, "why": why }));
+        // Its number only: why may be ScreenCaptureKit's text, which the log cannot vouch for.
+        let hosted = Hosted::new(target).inspect_err(|_| {
+            event_log::event("host_failed", serde_json::json!({ "window": id }));
         })?;
         // The window is in hand, so the tab will not be left empty.
         if new_tab {

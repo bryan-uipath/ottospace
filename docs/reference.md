@@ -1209,9 +1209,10 @@ Only you can read it (0600). At 1 MB it becomes `log.1` and the one before goes:
 | `window_display` | The window is on another display: its number and size |
 | `stall` | The window had something to draw for `stalled_ms` and drew nothing; ottospace has it draw again |
 | `redrawn` | Frames came again after a stall: `kicks`, `lasted_ms` |
-| `host_failed` | A window could not be hosted: its number, and why (ottospace's words or ScreenCaptureKit's) |
+| `host_failed` | A window could not be hosted: its number |
 | `give_back_failed` | A hosted window could not be put back on a screen: its number |
-| `panic` | Where (`file:line`) and on which thread; never the message |
+| `gpui` | An error or warning of GPUI's macOS layer: where, and for its window and display link what it said (e.g. `could not create display link, code: -6661`) |
+| `panic` | Where (`crate/src/file.rs:line`) and on which thread; never the message |
 
 Never in it: terminal or transcript text, titles, meetings, passes, paths or file contents.
 The same lines go to the unified log, subsystem `dev.ottospace` (in zsh, `log` is a builtin, so

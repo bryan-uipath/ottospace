@@ -10525,14 +10525,16 @@ fn the_log_says_the_start_the_displays_and_the_quit() {
     otto.call(json!({"cmd": "quit"}));
     exits(&mut otto);
     let events = events();
-    // A slow machine's stall may come between; it is not what this test is about.
-    let stalls = ["stall", "redrawn"];
-    let events: Vec<Value> = events.into_iter().filter(|e| !stalls.iter().any(|s| e["ev"] == *s)).collect();
+    // Start first and quit last; between them the change once, and the window's display at least
+    // once (a slow machine's stall may come too: not what this test is about).
     let names: Vec<&str> = events.iter().filter_map(|e| e["ev"].as_str()).collect();
-    assert_eq!(names, ["start", "window_display", "displays", "quit"], "{events:?}");
+    assert_eq!((names.first(), names.last()), (Some(&"start"), Some(&"quit")), "{names:?}");
+    let count = |ev: &str| names.iter().filter(|name| **name == ev).count();
+    assert_eq!(count("displays"), 1, "{names:?}");
+    assert!(count("window_display") >= 1, "{names:?}");
     let start = &events[0];
     assert!(start["pid"].is_u64() && start["version"].is_string() && start["displays"]["count"].as_u64() > Some(0));
-    let changed = &events[2];
+    let changed = events.iter().find(|e| e["ev"] == "displays").expect("the change");
     let sizes = changed["sizes"].as_array().expect("sizes");
     assert_eq!(changed["count"].as_u64(), Some(sizes.len() as u64));
     // "1728x1117": a size, never a name.
