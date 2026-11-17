@@ -1787,7 +1787,8 @@ function probeBuffer(value: unknown, at: string): ProbeBuffer {
 }
 
 export function audioProbeReply(value: unknown): AudioProbeReply {
-  return { ok: true, buffers: list(probeBuffer)(fields(value, "reply").buffers, "buffers") };
+  const o = fields(value, "reply");
+  return { ok: true, buffers: list(probeBuffer)(o.buffers, "buffers"), failed: orNull(str)(o.failed, "failed") };
 }
 
 function scrollbar(value: unknown, at: string): Scrollbar {

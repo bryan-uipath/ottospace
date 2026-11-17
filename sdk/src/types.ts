@@ -1439,10 +1439,11 @@ export interface ProbeBuffer {
   rms: number;
 }
 
-/** `audio_probe_stop`'s reply: the buffers heard, in order. */
+/** `audio_probe_stop`'s reply: the buffers heard, in order; why the system stopped it, if it did. */
 export interface AudioProbeReply {
   ok: true;
   buffers: ProbeBuffer[];
+  failed: string | null;
 }
 
 /** A scroll area's bar, in window points. `opacity` 0: faded out, and it takes no press. */

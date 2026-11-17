@@ -442,7 +442,8 @@ pub enum Request {
     /// with no recogniser, keeping each buffer's presentation time. The reply is `{"ok":true}`,
     /// not the state. Never for an agent: no client hears an app.
     AudioProbeStart,
-    /// For tests: stops it. The reply is `{"ok":true,"buffers":[{"pts_ms":..,"samples":..,"rms":..}]}`.
+    /// For tests: stops it. The reply is `{"ok":true,"buffers":[{"pts_ms":..,"samples":..,"rms":..}],
+    /// "failed":null}` (`failed`: why the system stopped the stream, if it did).
     AudioProbeStop,
     /// For tests (`test_refusal`): the window's green button, pressed as the user would: a zoom,
     /// which fills the display instead. Refused outside a test run: only the user's hand fills it.

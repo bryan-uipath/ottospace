@@ -2472,7 +2472,10 @@ impl Workspace {
                 }
                 Request::AudioProbeStop => {
                     let answer = match self.audio_probe.take() {
-                        Some(probe) => serde_json::json!({ "ok": true, "buffers": probe.stop() }).to_string(),
+                        Some(probe) => {
+                            let (buffers, failed) = probe.stop();
+                            serde_json::json!({ "ok": true, "buffers": buffers, "failed": failed }).to_string()
+                        }
                         None => control::error("not hearing"),
                     };
                     let _ = reply.send(answer);

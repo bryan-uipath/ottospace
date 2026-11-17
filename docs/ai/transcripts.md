@@ -332,8 +332,8 @@ from the model.
   bare text find none; and Obsidian's and GitHub's own: `$` math, `%%` comments, `==` highlights,
   `^` superscripts and block ids, with `~~`, `[[` wiki links and embeds, `#tag` and `[^` footnotes
   already covered by `~`, `[`, `!` and `#`), so heard words never render as a link, an image, HTML,
-  a heading, math, a tag or a hidden comment. Unit tests write hostile strings, one per syntax,
-  and parse the file back.
+  a heading, math, a tag or a hidden comment. A unit test writes hostile strings and reads them
+  back; another checks each syntax's escaped form.
 - **No jsonl**: the app needs no second copy. The Transcripts list and `Add to task` read the
   Markdown back with the core's own parser for this format (unit-tested). Lines it does not
   recognise (the user edited the file) are skipped, and a file it cannot read is listed as "not
@@ -465,6 +465,11 @@ Test-only, under `OTTOSPACE_E2E` (`control::test_refusal`, documented in CLAUDE.
   prompt pending; skipped with a reason otherwise. Installing the asset in a CI setup step would be
   a network fetch on CI only: to decide in slice 2. Never the user's mic or apps; the mic stream is
   tested only with the fixture.
+- **Silence timing** (e2e-apps, CI only, no recogniser): line times count the samples fed, so if
+  SCK sent no buffers while an app is silent, each silence would shrink them. The test-only
+  `audio_probe_start`/`audio_probe_stop` keep each buffer's presentation time; the canary says
+  words, 8 s of silence in the file, plays nothing for 8 s, and speaks again; the test asserts the
+  samples cover the presented time.
 
 ## 10. Slices
 

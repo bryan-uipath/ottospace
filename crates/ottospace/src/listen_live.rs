@@ -126,6 +126,8 @@ impl Live {
 /// comes as buffers or as none.
 pub(crate) struct Probe {
     buffers: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// Why the system stopped the stream, if it did.
+    failed: Arc<Mutex<Option<String>>>,
     _audio: AppAudio,
 }
 
@@ -142,14 +144,22 @@ impl Probe {
                 buffers.push(serde_json::json!({ "pts_ms": pts_ms, "samples": samples.len(), "rms": rms }));
             }
         };
-        let audio = AppAudio::start(pid, heard, |_| {})?;
-        Ok(Probe { buffers, _audio: audio })
+        let failed = Arc::new(Mutex::new(None));
+        let why = failed.clone();
+        let stopped = move |reason: String| {
+            if let Ok(mut why) = why.lock() {
+                *why = Some(reason);
+            }
+        };
+        let audio = AppAudio::start(pid, heard, stopped)?;
+        Ok(Probe { buffers, failed, _audio: audio })
     }
 
-    /// Stops it: the buffers heard, in order.
-    pub(crate) fn stop(self) -> Vec<serde_json::Value> {
-        let Probe { buffers, _audio } = self;
+    /// Stops it: the buffers heard, in order, and why the system stopped it, if it did.
+    pub(crate) fn stop(self) -> (Vec<serde_json::Value>, Option<String>) {
+        let Probe { buffers, failed, _audio } = self;
         drop(_audio);
-        buffers.lock().map(|mut buffers| std::mem::take(&mut *buffers)).unwrap_or_default()
+        let buffers = buffers.lock().map(|mut buffers| std::mem::take(&mut *buffers)).unwrap_or_default();
+        (buffers, failed.lock().ok().and_then(|mut failed| failed.take()))
     }
 }
