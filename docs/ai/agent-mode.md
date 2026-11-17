@@ -139,8 +139,8 @@ A small script printed the variable and tried to connect.
 - **The default is the user's act only.** `agent_mode` in the settings (default `act`) is the level of
   a new app pane only where the user's own act put its window there (their pick, drag or click:
   `AgentMode.by_user`, recorded from the origin of the step that first made it an app pane,
-  whatever the flag). One a client opened (`open_app`) or filled, the system adopted, or a restore
-  rebuilt starts at Off (a restore may only offer the user's own pick, above; a restored pane with
+  whatever the flag). One a client opened (`open_app`) or filled, the system adopted, or a record
+  rebuilt (a restore, a tab mark: `AgentMode.from_record`, a same-user file) starts at Off (a restore may only offer the user's own pick, above; a restored pane with
   a kept level starts at Off even when the user's pick fills it): an agent that opens Mail in its own workspace cannot read it. A security
   review (HIGH) found the first build gave the default to every pane.
 - **Only the user sets a level.** `AgentLevel`, `AgentMenu`, `AgentMenuMove`, `AgentMenuChoose` and
@@ -151,8 +151,8 @@ A small script printed the variable and tried to connect.
 - **Who may read.** `Model::app_access(pane, Caller, AppUse, now)`: the flag on, a pass (none: refused;
   a made-up or dead one: refused), the pane an app pane granted to the caller's task, See or more,
   one read and one look a second. The shell asks before it reads and again before it delivers (Off
-  since: dropped). `app_read {pane}` (tree, `captured` and labelled untrusted, every string cleaned,
-  no value in a secure text field), `app_look {pane}` (the last frame, PNG at most 1600 px, 0600 in
+  since, or the asker's pass gone: dropped; a look whose folder was swept meanwhile: removed). `app_read {pane}` (tree, `captured` and labelled untrusted, every string cleaned,
+  no value in a secure text field, nor its children), `app_look {pane}` (the last frame, PNG at most 1600 px, 0600 in
   `materials/agent-<pid>-<task>-<word>/`, removed when the pane is no longer seen by that task), and
   `ax_tree` (`app_read`'s older name, default the focused pane). An app-window test run
   (`OTTOSPACE_HOST_ONLY`: it hosts only the canary, and has no user to grant a level) still reads
@@ -170,7 +170,8 @@ A small script printed the variable and tried to connect.
   starts above Off while the flag is off, the user's included: an agent that writes the flag on in
   `settings.json` finds nothing granted (a second review, MEDIUM). Not closed: such a write (the
   flag, or `agent_mode: "act"`) holds for the panes the user places after it; `settings.json` is
-  the same user's file, as `layout.json` is. A read in flight when the flag goes off is dropped.
+  the same user's file, as `layout.json` is. To close it: a confirmation of the default each
+  run (not persisted, since a kept one is forgeable), at odds with Act as the default. A read in flight when the flag goes off is dropped.
 - **Limits, honest.** A look's picture is 0600 in a 0700 folder: another same-user process (another
   task's agent included) can still list and read it while it is there, as it could read the
   agent's environment; the folder goes below See, at most 10 are kept, and a start sweeps a gone
@@ -179,7 +180,7 @@ A small script printed the variable and tried to connect.
   process), so that its own AX or ScreenCaptureKit calls would use ottospace's grants and pass by
   agent mode altogether. A probe before stage (c): a program in a pane calls
   `AXIsProcessTrusted` and `CGWindowListCreateImage`. `ax_overlay` (roles, paths and frames, no
-  text) is not gated. The `OTTOSPACE_HOST_ONLY` seam is read in any run: only the user sets it.
+  text) is not gated. The `OTTOSPACE_HOST_ONLY` seam for `ax_tree` holds only with `OTTOSPACE_E2E` too.
 - **The MCP route: not now; a follow-up.** A sandboxed tool shell cannot reach the socket (Probes).
   Built now, an MCP server is a new long-lived process the runner starts, its config written into
   each runner's start (Claude's `--mcp-config`, Codex's `config.toml`), and a new trust path to test

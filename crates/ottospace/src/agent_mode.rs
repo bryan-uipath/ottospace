@@ -12,6 +12,7 @@ use ottospace_core::features::Feature;
 use ottospace_core::tasks::{Caller, TaskId};
 use ottospace_core::{Action, Origin, PaneId, theme};
 
+use crate::pass::Pass;
 use crate::{Tooltip, Workspace, control, dialog, now_ms, rect};
 
 // ⌘⌃V opens the focused app pane's menu; the palette sets a level on it.
@@ -264,13 +265,14 @@ impl Workspace {
         &mut self,
         pane: PaneId,
         what: AppUse,
-        caller: Caller,
+        pass: Option<Pass>,
         limits: (Option<usize>, Option<usize>),
         reply: Sender<String>,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
         let at = now_ms();
+        let caller = self.caller(pass.as_ref());
         let access = self.model.app_access(pane, caller, what, at);
         if let Caller::Task(task) = caller {
             let refused = access.as_ref().err().cloned();
@@ -281,8 +283,8 @@ impl Workspace {
             Err(why) => return drop(reply.send(control::error(&why))),
         };
         match what {
-            AppUse::Read => self.serve_read(pane, task, limits, reply, cx),
-            AppUse::Look => self.serve_look(pane, task, reply, cx),
+            AppUse::Read => self.serve_read(pane, (task, pass), limits, reply, cx),
+            AppUse::Look => self.serve_look(pane, (task, pass), reply, cx),
         }
     }
 
@@ -323,10 +325,15 @@ impl Workspace {
         self.on(Feature::AgentMode) && self.model.agent.panes.get(&pane).is_some_and(granted)
     }
 
+    /// As `still_sees`, and the asker's pass still `task`'s: an agent stopped while it waits gets nothing.
+    fn still_answers(&self, pane: PaneId, (task, pass): (TaskId, Option<&Pass>)) -> bool {
+        self.still_sees(pane, task) && self.caller(pass) == Caller::Task(task)
+    }
+
     fn serve_read(
         &mut self,
         pane: PaneId,
-        task: TaskId,
+        (task, pass): (TaskId, Option<Pass>),
         (depth, nodes): (Option<usize>, Option<usize>),
         reply: Sender<String>,
         cx: &mut Context<Self>,
@@ -337,7 +344,7 @@ impl Workspace {
         let read = cx.background_executor().spawn(async move { crate::ax_debug::read_hosted(source, depth, nodes) });
         cx.spawn(async move |this, cx| {
             let read = read.await;
-            let seeing = this.update(cx, |this, _| this.still_sees(pane, task)).unwrap_or(false);
+            let seeing = this.update(cx, |this, _| this.still_answers(pane, (task, pass.as_ref()))).unwrap_or(false);
             let answer = match read {
                 _ if !seeing => control::error("agent mode went off on this pane while it was read"),
                 Err(why) => control::error(&why),
@@ -358,7 +365,13 @@ impl Workspace {
 
     /// The pane's last frame as a PNG, at most 1600 px on its long side, written 0600 in the
     /// look folder of this pane and task. The reply gives its path.
-    fn serve_look(&mut self, pane: PaneId, task: TaskId, reply: Sender<String>, cx: &mut Context<Self>) {
+    fn serve_look(
+        &mut self,
+        pane: PaneId,
+        (task, pass): (TaskId, Option<Pass>),
+        reply: Sender<String>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(frame) = self.hosted.get(&pane).and_then(|hosted| hosted.frame()) else {
             return drop(reply.send(control::error("no picture of this pane yet")));
         };
@@ -371,6 +384,7 @@ impl Workspace {
             let _ = std::fs::remove_file(dir.join(format!("look-{old}.png")));
         }
         let frame = crate::Frame(frame);
+        let folder = dir.clone();
         let work = cx.background_executor().spawn(async move {
             let png = crate::collect::frame_png(&frame, Some(LOOK_MOST)).ok_or("the picture could not be made")?;
             crate::config::write_private(&dir, &name, &png).map_err(|_| "the picture could not be kept")?;
@@ -378,7 +392,17 @@ impl Workspace {
         });
         cx.spawn(async move |this, cx| {
             let written = work.await;
-            let seeing = this.update(cx, |this, _| this.still_sees(pane, task)).unwrap_or(false);
+            // The folder still this pane's for `task`: one swept while it was written (an Off and
+            // See again) is no longer tracked, so it goes, picture and all.
+            let seeing = this
+                .update(cx, |this, _| {
+                    let tracked = this.looks.folders.get(&pane).is_some_and(|(of, at, _)| *of == task && *at == folder);
+                    if !tracked {
+                        let _ = std::fs::remove_dir_all(&folder);
+                    }
+                    tracked && this.still_answers(pane, (task, pass.as_ref()))
+                })
+                .unwrap_or(false);
             let answer = match written {
                 Ok(path) if seeing => {
                     let path = path.to_string_lossy().into_owned();

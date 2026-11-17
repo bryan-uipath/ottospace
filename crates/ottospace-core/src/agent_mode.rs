@@ -139,6 +139,10 @@ pub struct AgentMode {
     /// click gives it (`AgentOfferAccept`). The file could be anyone's of the same user.
     #[serde(skip)]
     pub offers: BTreeMap<PaneId, Kept>,
+    /// Empty panes a record rebuilt for an app (a tab mark, a restore): whoever fills one, it
+    /// starts at Off. The record is a same-user file, so an agent's too.
+    #[serde(skip)]
+    pub from_record: BTreeSet<PaneId>,
 }
 
 impl Default for AgentMode {
@@ -146,7 +150,8 @@ impl Default for AgentMode {
         // The owner's choice (2026-11-16): Act, changeable in the settings.
         let (panes, last, by_user) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
         let (chosen, restored, offers) = (BTreeSet::new(), BTreeMap::new(), BTreeMap::new());
-        Self { panes, default: Level::Act, menu: None, last, by_user, chosen, restored, offers }
+        let from_record = BTreeSet::new();
+        Self { panes, default: Level::Act, menu: None, last, by_user, chosen, restored, offers, from_record }
     }
 }
 
@@ -180,15 +185,17 @@ pub fn menu_key(key: &str) -> crate::model::Action {
 }
 
 /// An app's tree as a task may see it: every string on one line, of characters that show, at
-/// most `MAX_TEXT`; a secure text field (a password) has no value, whatever the app says. Text
+/// most `MAX_TEXT`; a secure text field (a password) has no value and no children, whatever the app says. Text
 /// is not stripped otherwise: reading it is what See is. Data, never instructions: the reply puts
 /// it under `captured`, labelled (`capture::WARNING`).
 pub fn seen(mut node: crate::ax::Node) -> crate::ax::Node {
     let clean =
         |text: &mut Option<String>| *text = text.take().map(|text| crate::capture::plain(&text, crate::ax::MAX_TEXT));
     let secure = |text: &Option<String>| text.as_deref() == Some("AXSecureTextField");
+    // Nor anything under it: an app may echo the value in a child (`AXStaticText`).
     if node.role == "AXSecureTextField" || secure(&node.subrole) {
         node.value = None;
+        node.children.clear();
     }
     node.role = crate::capture::plain(&node.role, crate::ax::MAX_TEXT);
     for text in [&mut node.subrole, &mut node.title, &mut node.description, &mut node.value, &mut node.identifier] {
@@ -217,7 +224,10 @@ mod tests {
             title: Some("Inbox\u{202e}\u{200b}\nnew".into()),
             children: vec![
                 field("AXSecureTextField", None, "hunter2"),
-                field("AXTextField", Some("AXSecureTextField"), "hunter3"),
+                Node {
+                    children: vec![field("AXStaticText", None, "hunter4")],
+                    ..field("AXTextField", Some("AXSecureTextField"), "hunter3")
+                },
                 field("AXTextField", None, &"a".repeat(500)),
             ],
             ..Node::default()
@@ -225,6 +235,7 @@ mod tests {
         let seen = seen(root);
         assert_eq!(seen.title.as_deref(), Some("Inbox new"));
         assert_eq!((seen.children[0].value.as_deref(), seen.children[1].value.as_deref()), (None, None));
+        assert!(seen.children[1].children.is_empty(), "no echo of the password under its field");
         assert_eq!(seen.children[2].value.as_ref().map(|v| v.chars().count()), Some(crate::ax::MAX_TEXT + 1));
         // The level's order: Act grants all See does.
         assert!(Level::Off < Level::See && Level::See < Level::Act);

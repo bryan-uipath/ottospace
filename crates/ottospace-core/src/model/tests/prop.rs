@@ -1510,6 +1510,7 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(m.agent.chosen.iter().all(|pane| known.contains(pane)), "a pick {:?} of no app pane", m.agent.chosen);
         let empty = |pane: &PaneId| m.pane(*pane).is_some_and(|pane| pane.kind == Kind::Empty);
         ensure!(m.agent.restored.keys().all(empty), "a kept level waits on a pane that is not empty");
+        ensure!(m.agent.from_record.iter().all(empty), "a record's app pane waits on a pane that is not empty");
         let off = |pane: &PaneId| m.agent.level(*pane) == crate::agent_mode::Level::Off && known.contains(pane);
         ensure!(m.agent.offers.keys().all(off), "an offer on a pane above Off, or on no app pane");
     }

@@ -2450,13 +2450,13 @@ impl Workspace {
                 }
                 // Only to the task the user let see the pane (agent mode): its pass says who asks.
                 Request::AppRead { pane, depth, nodes } => {
-                    let caller = self.caller(pass.as_ref());
-                    self.serve_app(pane, AppUse::Read, caller, (depth, nodes), reply, window, cx);
+                    self.serve_app(pane, AppUse::Read, pass, (depth, nodes), reply, window, cx);
                     continue;
                 }
                 Request::AxTree { pane, depth, nodes } => {
-                    let caller = self.caller(pass.as_ref());
-                    if self.host_only.is_none() && !self.on(Feature::AgentMode) {
+                    // The canary's seam is a test run's alone: outside one, `ax_tree` is gated.
+                    let canary = self.host_only.filter(|_| std::env::var_os("OTTOSPACE_E2E").is_some());
+                    if canary.is_none() && !self.on(Feature::AgentMode) {
                         let _ = reply.send(control::error(Feature::AgentMode.off()));
                         continue;
                     }
@@ -2466,15 +2466,14 @@ impl Workspace {
                     };
                     // An app-window test run hosts the canary alone, and has no user to grant
                     // a level: its tree is read as before (`OTTOSPACE_HOST_ONLY`, `e2e_apps.rs`).
-                    match self.host_only {
+                    match canary {
                         Some(_) => self.serve_canary_tree(pane, (depth, nodes), reply, cx),
-                        None => self.serve_app(pane, AppUse::Read, caller, (depth, nodes), reply, window, cx),
+                        None => self.serve_app(pane, AppUse::Read, pass, (depth, nodes), reply, window, cx),
                     }
                     continue;
                 }
                 Request::AppLook { pane } => {
-                    let caller = self.caller(pass.as_ref());
-                    self.serve_app(pane, AppUse::Look, caller, (None, None), reply, window, cx);
+                    self.serve_app(pane, AppUse::Look, pass, (None, None), reply, window, cx);
                     continue;
                 }
                 Request::AxOverlay { refresh } => {

@@ -46,8 +46,12 @@ impl Model {
         // Who filled each app pane: the step it first was one in. Emptied and filled again, anew.
         self.agent.by_user.retain(|pane, _| apps.contains(pane));
         for pane in &apps {
-            self.agent.by_user.entry(*pane).or_insert(origin == Origin::User);
+            let from_record = self.agent.from_record.contains(pane);
+            self.agent.by_user.entry(*pane).or_insert(origin == Origin::User && !from_record);
         }
+        let empty = |model: &Model, pane: &PaneId| model.pane(*pane).is_some_and(|pane| pane.kind == Kind::Empty);
+        let from_record = std::mem::take(&mut self.agent.from_record);
+        self.agent.from_record = from_record.into_iter().filter(|pane| empty(self, pane)).collect();
         // The flag off hides the robot and refuses every read; the grants are kept as they are,
         // so turning it off and on again (a settings write) raises no level.
         if !self.features.on(Feature::AgentMode) {
