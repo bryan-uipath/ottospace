@@ -28,7 +28,7 @@ impl Live {
         let mut bytes = [0u8; 16];
         std::fs::File::open("/dev/urandom").and_then(|mut source| source.read_exact(&mut bytes)).ok()?;
         let pass = Pass(bytes);
-        LIVE.lock().ok()?.push(pass.hex());
+        LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(pass.hex());
         Some(Self(pass))
     }
 
@@ -44,9 +44,8 @@ impl Live {
 impl Drop for Live {
     fn drop(&mut self) {
         let hex = self.0.hex();
-        if let Ok(mut live) = LIVE.lock()
-            && let Some(at) = live.iter().position(|one| *one == hex)
-        {
+        let mut live = LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(at) = live.iter().position(|one| *one == hex) {
             live.swap_remove(at);
         }
     }
@@ -61,16 +60,35 @@ impl std::fmt::Debug for Live {
 /// What a live pass reads as wherever a client could read it.
 pub(crate) const HIDDEN: &str = "[hidden]";
 
-/// Where a live pass is in `text`, in either case: byte ranges, sorted, not overlapping.
+/// The shortest piece of a pass hidden at the start or the end of a text: a screen's edge (its
+/// top row, scrolled, or output still arriving) may cut a pass. Shorter pieces leave 100 bits.
+const EDGE: usize = 8;
+
+/// The live passes' hex. A lock a panic poisoned still holds them: hiding must not fail open.
+fn live() -> Vec<String> {
+    LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+}
+
+/// Where a live pass is in `text`, in either case: byte ranges, sorted, not overlapping. Also its
+/// end at the start of `text`, and its start at the end, of `EDGE` digits or more.
 fn found(text: &str) -> Vec<std::ops::Range<usize>> {
-    let Ok(live) = LIVE.lock() else { return Vec::new() };
-    if live.is_empty() || text.len() < 32 {
+    if text.len() < EDGE {
+        return Vec::new();
+    }
+    let live = live();
+    if live.is_empty() {
         return Vec::new();
     }
     // ASCII lower case keeps every byte where it was: a match's range is the original's.
     let lower = text.to_ascii_lowercase();
     let mut found: Vec<_> =
         live.iter().flat_map(|hex| lower.match_indices(hex.as_str())).map(|(at, hex)| at..at + hex.len()).collect();
+    for hex in &live {
+        let head = (EDGE..hex.len()).rev().find(|n| lower.ends_with(&hex[..*n]));
+        found.extend(head.map(|n| lower.len() - n..lower.len()));
+        let tail = (EDGE..hex.len()).rev().find(|n| lower.starts_with(&hex[hex.len() - n..]));
+        found.extend(tail.map(|n| 0..n));
+    }
     found.sort_by_key(|range| range.start);
     let mut end = 0;
     found.retain(|range| {
@@ -212,9 +230,15 @@ mod tests {
         assert_eq!(hide_rows(rows), ["$ env", "PASS=[hidden]", "", "$"]);
         let rows = vec![format!("é {hex} é")];
         assert_eq!(hide_rows(rows), ["é [hidden] é"]);
-        // Half of it is not it; a made-up one is not live.
-        let half = &hex[..16];
-        assert_eq!(hide(half), half);
+        // Cut by a screen's edge: its start at the end, its end at the start, of 8 digits or
+        // more. Within the text, half of it is not it.
+        assert_eq!(hide(&format!("PASS={}", &hex[..12])), "PASS=[hidden]");
+        assert_eq!(hide(&format!("{} $", &hex[20..])), "[hidden] $");
+        let rows = vec![hex[25..].to_string(), "$ ls".to_string(), format!("PASS={}", &hex[..9])];
+        assert_eq!(hide_rows(rows), [&hex[25..], "$ ls", "PASS=[hidden]"], "7 digits are left");
+        let half = format!("a {} b", &hex[..16]);
+        assert_eq!(hide(&half), half);
+        // A made-up one is not live.
         let other = "0123456789abcdef0123456789abcdef";
         assert_eq!(hide(other), other);
         // Revoked: no longer hidden (and no longer a pass).

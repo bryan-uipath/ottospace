@@ -66,9 +66,11 @@ A small script printed the variable and tried to connect.
   Each live pass (`pass::Live`, registered while held, gone when dropped) reads `[hidden]`, in
   either case: in every terminal's `lines` (searched across wrapped rows) and `text` (so `capture`,
   `wait`'s match, a saved history), in every socket reply as a last step (session reads,
-  transcripts, errors), and in the trace. A `wait` cannot match a pass: no oracle for it. Not
-  hidden: a terminal's picture (a user-started capture's PNG), the user's own ⌘C, and a pass
-  printed in pieces. A dead pass shows again: it grants nothing.
+  transcripts, errors), and in the trace. A piece of 8 digits or more at a text's start or end is
+  hidden too: a screen's edge (scrolled, or output still arriving) may cut a pass. A `wait` cannot
+  match a pass: no oracle for it. Not hidden: a terminal's picture (a user-started capture's PNG),
+  the user's own ⌘C, a pass printed in pieces, and the agent's environment itself (`ps eww` of a
+  same-user process: section 2's honest limit). A dead pass shows again: it grants nothing.
 - **On the wire.** A top-level `"pass"` on any request line, taken off before `Request` is parsed
   (`control::parse`): the closed set is unchanged; a line with no pass parses from its text, as
   before. Not 32 hex digits: an error that does not repeat
