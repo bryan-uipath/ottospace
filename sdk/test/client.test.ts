@@ -135,6 +135,8 @@ test("run: the command and the marker cannot break each other", async () => {
     assert.deepEqual(await shell.run("echo a;", quick), { status: 0, output: "a" });
     // A job in the background: the shell may print a job line, so only that it ends, with 0.
     assert.equal((await shell.run("sleep 0.2 &", quick)).status, 0);
+    // Reap it now, or bash's late "[1]+ Done" notice lands in a later command's output.
+    assert.equal((await shell.run("wait", quick)).status, 0);
     // Quotes in the command survive the quoting, and an empty line in the output is kept.
     assert.deepEqual(await shell.run(`echo "it's"; echo; echo 'two  words'`, quick), {
       status: 0,
