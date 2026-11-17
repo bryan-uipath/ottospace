@@ -19,7 +19,7 @@ use ottospace_core::settings::expand_home;
 use ottospace_core::{Action, Effect, Origin, theme};
 use ottospace_mac::meeting;
 
-use crate::{Mark, Tooltip, Workspace, config, home, list_button, mark, now_ms, progress, words};
+use crate::{Mark, Tooltip, Workspace, config, home, mark, now_ms, progress, words};
 
 /// The band's height above the status bar, its 1-point top line included; hover takes all of it.
 const BAND: f32 = 12.;
@@ -564,13 +564,15 @@ impl Workspace {
         if rows.is_empty() {
             children.push(div().px_2().text_xs().text_color(rgb(theme::MUTED)).child("No meetings").into_any_element());
         }
+        let mut meetings = Vec::new();
         for (index, row) in rows.iter().enumerate() {
             let ListRow::Meeting(id) = row else { continue };
             let Some(event) = calendar.events.iter().find(|e| e.id == *id) else { continue };
             let row = self.meeting_row(event, (index, self.model.list == Some(index)), now, cx);
             let first = (index == 0).then(|| mark(&self.marks, Mark::CalendarFirstRow));
-            children.push(div().flex_none().relative().children(first).child(row).into_any_element());
+            meetings.push(div().flex_none().relative().children(first).child(row).into_any_element());
         }
+        children.extend(crate::well(meetings, 4.));
         // Its own scroll, at the top when the section opens (it was not drawn the frame before)
         // or its day changes; never another section's.
         let (frame, day) = self.calendar_shown.get();
@@ -634,8 +636,8 @@ impl Workspace {
             )
     }
 
-    /// One meeting on one line, as a Tasks row (`list_button`): a dot and a faint tint in its
-    /// colour (the band's), its start, its title and one quiet fact; the band's card on hover.
+    /// One meeting on one line, as a Tasks row (`sidebar_row`): a dot and a faint tint in its
+    /// colour (the band's), its title and one quiet fact, else its start; the band's card on hover.
     /// Past ones faded, the one that runs stronger, with now's colour at its edge.
     fn meeting_row(
         &self,
@@ -654,7 +656,7 @@ impl Workspace {
         let card = progress::meeting_tip(card, paint.color);
         let group: &'static str = "meeting-row";
         let join = event.link.as_ref().map(|_| {
-            words::words(group, selected).top(px(2.)).child(self.word(
+            words::words(group, selected).child(self.word(
                 format!("meeting-row-join:{id}"),
                 ("Join", "Open the meeting's link"),
                 move |this, window, cx| drop(this.dispatch(Action::CalendarJoin { id }, this.input, window, cx)),
@@ -665,21 +667,21 @@ impl Workspace {
         let tint = div().absolute().inset_0().rounded_md().bg(rgb(paint.color));
         let tint = tint.opacity(if running { 0.22 } else { 0.1 * paint.alpha.max(0.4) });
         let fact = calendar.row_fact(event, now);
-        let muted = || div().flex_none().text_xs().text_color(rgb(theme::MUTED));
         // Now's colour, as the band's tick: a bar at the edge of the meeting that runs, where a
         // Tasks row marks the task on show.
         let bar = div().absolute().left(px(-1.)).top(px(5.)).bottom(px(5.)).w(px(3.)).rounded_full();
-        list_button(("meeting", index), selected)
+        // One muted detail: `now` or `in 12m` when it says one, else when it starts.
+        let meta = crate::row_meta(fact.unwrap_or_else(|| clock(event.start))).relative();
+        crate::sidebar_row(("meeting", index), selected)
             .group(group)
             .relative()
             .when(stage == Stage::Past, |d| d.opacity(0.5))
             .child(tint)
             .children(running.then(|| bar.bg(rgb(theme::TEXT))))
-            .child(div().h(px(20.)).flex().items_center().child(home::dot(paint.color).opacity(paint.alpha.max(0.5))))
-            .child(muted().relative().w(px(34.)).child(clock(event.start)))
+            .child(home::dot(paint.color).opacity(paint.alpha.max(0.5)))
             .child(crate::cut_text(event.title.clone()).flex_1())
-            .children(fact.map(|fact| muted().relative().child(fact)))
-            .children(join)
+            .child(meta)
+            .children(join.map(|join| join.top(px(3.5))))
             .tooltip(card)
             .into_any_element()
     }

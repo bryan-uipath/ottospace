@@ -393,6 +393,7 @@ impl AssetSource for Assets {
             "icons/workbook.svg" => Some(include_bytes!("../assets/icons/workbook.svg")),
             "icons/tasks.svg" => Some(include_bytes!("../assets/icons/tasks.svg")),
             "icons/repos.svg" => Some(include_bytes!("../assets/icons/repos.svg")),
+            "icons/pull-request.svg" => Some(include_bytes!("../assets/icons/pull-request.svg")),
             "icons/marks.svg" => Some(include_bytes!("../assets/icons/marks.svg")),
             "icons/calendar.svg" => Some(include_bytes!("../assets/icons/calendar.svg")),
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
@@ -4802,7 +4803,7 @@ impl Workspace {
             .when(selected, |d| d.pb_0p5().rounded_md().bg(rgb(theme::SELECTED)))
             .child(div().w(px(8.)).text_color(rgb(theme::MUTED)).child(if collapsed { "▸" } else { "▾" }))
             .child(heading.title())
-            .child(div().text_color(rgb(theme::MUTED)).child(count.to_string()))
+            .child(div().text_color(rgb(theme::MUTED)).child(format!("· {count}")))
             .relative()
             .child(self.controls.mark(format!("task-heading:{}", heading_name(heading))))
             .on_click(cx.listener(move |this, _, window, cx| this.click_heading(heading, window, cx)))
@@ -4823,10 +4824,12 @@ impl Workspace {
         let heading = heading.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(total.clone()))));
         let mut rows = vec![heading.into_any_element()];
         listed += 1;
+        let mut group = Vec::new();
         for row in &bar.rows {
-            rows.push(self.session_row(row, self.model.list == Some(listed), cx));
+            group.push(self.session_row(row, self.model.list == Some(listed), cx));
             listed += 1;
         }
+        rows.extend(well(group, 4.));
         rows
     }
 
@@ -4843,18 +4846,17 @@ impl Workspace {
         };
         // A click on the row opens it: no Open word.
         let actions = words::words("session-row", selected)
-            .top(px(2.))
+            .top(px(3.5))
             .child(button("session-adopt", "Track", "Track as a task"))
             .child(button("session-hide", "Hide", "Hide"));
         let color = if row.active { theme::task(Group::Running) } else { theme::BORDER_STRONG };
         let (runner, id, card) = (row.runner.clone(), row.id.clone(), row.clone());
-        list_button(ElementId::Name(format!("session:{key}").into()), selected)
+        sidebar_row(ElementId::Name(format!("session:{key}").into()), selected)
             .group("session-row")
-            .relative()
-            .child(div().h(px(20.)).flex().items_center().child(home::dot(color)))
+            .child(home::dot(color))
             // The title may be text a model wrote: drawn as it is, on one line.
-            .child(div().flex_1().min_w_0().truncate().child(row.title().to_string()))
-            .child(div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(row.runner.clone()))
+            .child(cut_text(row.title().to_string()).flex_1())
+            .child(row_meta(row.runner.clone()))
             .child(actions)
             .child(self.controls.mark(format!("session:{key}")))
             .tooltip(move |_, cx| AnyView::from(cx.new(|_| progress::SessionCard(card.clone()))))
@@ -4880,12 +4882,14 @@ impl Workspace {
                 self.heading_row(section.heading, section.count, section.collapsed, selected, cx).into_any_element(),
             );
             listed += 1;
+            let mut group = Vec::new();
             for row in &section.rows {
                 if let Some(task) = self.model.tasks.get(row.id) {
-                    rows.push(self.task_row(task, row, self.model.list == Some(listed), cx));
+                    group.push(self.task_row(task, row, self.model.list == Some(listed), cx));
                 }
                 listed += 1;
             }
+            rows.extend(well(group, 4.));
         }
         // Nothing listed: say so, with the button that files a task.
         let empty = rows.is_empty().then(|| {
@@ -4929,16 +4933,17 @@ impl Workspace {
         // Over the end of the title line, on the row's own colour: hidden, they take no room from it.
         // No Start or Show: a click on the row opens its conversation. Hold is `h` in list mode.
         let actions = words::words("task-row", selected)
-            .top(px(2.))
+            .top(px(3.5))
             .child(button("task-snooze", "Snooze", "1 hour · S"))
             .child(button("task-dismiss", "Done", "X"));
         // The task on show: a bar at the row's edge, and its title in bold.
         let bar = div().absolute().left(px(-1.)).top(px(5.)).bottom(px(5.)).w(px(3.)).rounded_full();
         let muted = || div().text_xs().text_color(rgb(theme::MUTED));
-        list_button(("task", id as usize), selected)
+        sidebar_row(("task", id as usize), selected)
             .group("task-row")
-            .relative()
+            // A second line while its agent works: the first stays where a one-line row has it.
             .items_start()
+            .py(px(3.))
             .children(row.current.then(|| bar.bg(rgb(theme::PRIMARY))))
             .child(div().h(px(20.)).flex().items_center().children(self.task_badge(id, 18.)))
             .child(
@@ -4990,29 +4995,26 @@ impl Workspace {
                 ))
             });
             let badge = task.and_then(|id| self.task_badge(id, 16.));
-            // At its end, in this order: the pull request's mark, the task's badge. The branch is given
-            // the room left, so it never runs under them.
-            let badge_room = if badge.is_some() { 22. } else { 0. };
+            // At its end, in this order: the pull request's mark, the task's badge. The words sit
+            // left of them, so the pull request stays there to click.
+            let badge_room = if badge.is_some() { 24. } else { 0. };
             let pr = self.pr_marker(&checkout.path, cx);
-            let pr_room = pr.as_ref().map_or(0., |(_, width)| width + 6.);
+            let pr_room = pr.as_ref().map_or(0., |(_, width)| width + 8.);
             let room = 8. + badge_room + pr_room;
-            let dot = checkout.default.then(|| {
-                div().absolute().left(px(12.)).top(px(11.)).size(px(5.)).rounded_full().bg(rgb(theme::PRIMARY))
-            });
+            // The repository's own folder says so, where a pull request would be.
+            let default = (checkout.default && pr.is_none()).then(|| row_meta("default"));
             let tip = match checkout.default {
                 true => format!("{} · the repository's own folder", checkout.path),
                 false => checkout.path.clone(),
             };
-            list_row(("repo", index), selected)
+            sidebar_row(("repo", index), selected)
                 .group("repo-row")
-                .py_1()
-                .pr(px(room))
-                .children(dot)
-                .children(badge.map(|badge| badge.absolute().right(px(8.)).top(px(5.))))
-                .children(pr.map(|(marker, _)| marker.absolute().right(px(8. + badge_room)).top(px(4.))))
-                .child(div().truncate().child(checkout.branch))
-                // Left of the marks at its end, so the pull request stays there to click.
-                .children(terminal.map(|words| words.top(px(4.)).right(px(room - 2.))))
+                .child(home::dot(if checkout.default { theme::PRIMARY } else { theme::BORDER_STRONG }))
+                .child(cut_text(checkout.branch).flex_1())
+                .children(default)
+                .children(pr.map(|(marker, _)| marker.flex_none()))
+                .children(badge.map(|badge| badge.flex_none()))
+                .children(terminal.map(|words| words.top(px(3.5)).right(px(room - 2.))))
                 .child(mark(&self.marks, Mark::Checkout(index)))
                 .child(self.controls.mark(format!("repo:{}", checkout.path)))
                 .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
@@ -5037,13 +5039,15 @@ impl Workspace {
                 let line = div().flex_none().pl(px(26.)).pr_2().py_0p5().rounded_md().border_1();
                 items.push(line.border_color(rgb(theme::MARK)).text_size(px(13.)).child(field).into_any_element());
             }
+            let mut group = Vec::new();
             for checkout in checkouts {
                 if !folded {
-                    items.push(row(index, at, checkout, cx).into_any_element());
+                    group.push(row(index, at, checkout, cx).into_any_element());
                     at += 1;
                 }
                 index += 1;
             }
+            items.extend(well(group, 0.));
         }
         let empty = self.model.repos.is_empty().then(|| {
             let roots: Vec<String> = repos::roots().iter().map(|root| root.display().to_string()).collect();
@@ -5063,8 +5067,9 @@ impl Workspace {
         )
     }
 
-    /// The open pull request of the checkout at `path`, as one small mark: `#131`, muted for a
-    /// draft, then a green tick (ready to merge), an amber dot (waiting) or a red dot (failing).
+    /// The open pull request of the checkout at `path`, as one small mark: the pull request icon
+    /// and `#131`, green while open and muted for a draft, then a green tick (ready to merge), an
+    /// amber dot (waiting) or a red dot (failing).
     /// Hover: its card; the user's click opens it. Its drawn width, for the row to leave room.
     fn pr_marker(&self, path: &str, cx: &mut Context<Self>) -> Option<(Stateful<Div>, f32)> {
         use ottospace_core::prs::Look;
@@ -5077,7 +5082,9 @@ impl Workspace {
             Look::Failing => (Some("●"), theme::ERROR),
             Look::Draft | Look::Open => (None, theme::MUTED),
         };
-        let width = 7. * number.len() as f32 + if sign.is_some() { 12. } else { 0. };
+        let width = 16. + 7. * number.len() as f32 + if sign.is_some() { 12. } else { 0. };
+        let state = if summary.draft { theme::MUTED } else { theme::PICK };
+        let icon = svg().path("icons/pull-request.svg").size(px(12.)).flex_none().text_color(rgb(state));
         let path = path.to_string();
         let marker = div()
             .id(ElementId::Name(format!("repo-pr:{path}").into()))
@@ -5088,8 +5095,9 @@ impl Workspace {
             .rounded_sm()
             .text_xs()
             .line_height(px(17.))
-            .text_color(rgb(if summary.draft { theme::MUTED } else { theme::TEXT }))
+            .text_color(rgb(state))
             .hover(|s| s.bg(rgb(theme::BORDER_STRONG)))
+            .child(icon)
             .child(number)
             .children(sign.map(|sign| div().text_size(px(9.)).text_color(rgb(color)).child(sign)))
             .child(self.controls.mark(format!("repo-pr:{path}")))
@@ -5102,7 +5110,7 @@ impl Workspace {
     }
 
     /// A repository's name: a chevron that folds its rows (a click anywhere on the line does),
-    /// the name, the number of its checkouts while folded; under the pointer, + (a worktree) and
+    /// the name and the number of its checkouts; under the pointer, + (a worktree) and
     /// the trash (stop listing it). `at`: its place among the list's rows.
     fn repo_heading(
         &self,
@@ -5129,10 +5137,8 @@ impl Workspace {
             let tip = ("icons/trash.svg", "Stop listing this repository (nothing on disk is touched)");
             self.icon_word(format!("repo-remove:{}", repo.path), tip, click, cx)
         });
-        let count = folded.then(|| {
-            let badge = div().flex_none().px_1p5().rounded_full().bg(rgb(theme::BORDER)).text_xs();
-            badge.text_color(rgb(theme::MUTED)).line_height(px(15.)).child(count.to_string())
-        });
+        // A group's heading, as in every section: its name and how many it holds.
+        let count = div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(format!("· {count}"));
         // A checkout row's look (hover, selection), on one line of its own height.
         list_row(("repo-head", n), selected)
             .group("repo-name")
@@ -5148,17 +5154,9 @@ impl Workspace {
             } else {
                 "▾"
             }))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(13.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(theme::TEXT))
-                    .child(repo.name.clone()),
-            )
-            .children(count)
+            .child(cut_text(repo.name.clone()).flex_shrink().text_xs())
+            .child(count)
+            .child(div().flex_1())
             .child(words::words("repo-name", selected).top(px(3.)).child(add).children(remove))
             .child(mark(&self.marks, Mark::Repo(n)))
             .child(self.controls.mark(format!("repo-fold:{path}")))
@@ -5180,8 +5178,7 @@ impl Workspace {
         };
         // The window kept another size than the pane's: say so. In a narrow header the words
         // give way first: they shrink and are cut with an ellipsis.
-        let hint =
-            pane.fit.as_ref().map(|fit| div().min_w_0().truncate().text_color(rgb(theme::SNEAK)).child(fit.label()));
+        let hint = pane.fit.as_ref().map(|fit| cut_text(fit.label()).text_color(rgb(theme::SNEAK)));
         // And offer to fit the pane to it, unless a fit would move nothing (the hint says why).
         let word = pane.fit.as_ref().filter(|fit| fit.stuck.is_none()).map(|_| {
             div()
@@ -5254,7 +5251,7 @@ impl Workspace {
                     .overflow_hidden()
                     .items_center()
                     .children(icon.map(|icon| img(icon).size(px(14.)).flex_none()))
-                    .child(div().min_w_0().truncate().child(title))
+                    .child(cut_text(title))
                     .children(marked.map(|sign| div().flex_none().text_color(rgb(theme::MARK)).child(sign))),
             )
             .child(self.controls.mark(format!("header:{id}")))
@@ -5628,7 +5625,7 @@ impl Workspace {
                 .hover(|s| s.text_color(rgb(theme::TEXT)))
                 .child(mark(&self.marks, Mark::Space(place)))
                 .children(lead)
-                .children((!small).then(|| div().flex_1().min_w_0().truncate().child(self.model.space_title(&of))))
+                .children((!small).then(|| cut_text(self.model.space_title(&of)).flex_1()))
                 .children(
                     (count > 1 && !small)
                         .then(|| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(count.to_string())),
@@ -5688,10 +5685,15 @@ impl Workspace {
             .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New workspace".into()))))
             .on_click(cx.listener(|this, _, window, cx| this.new_workspace(window, cx)));
         // The traffic lights sit over the left column: room for them only where it is narrower.
+        let lights = (TRAFFIC_LIGHTS - left).max(0.);
+        // The row sits below the selected space: a shadow at its foot, which only that space covers.
+        let below = inner_shade(false, 7.).left(px(lights));
         div()
             .h(px(TOP_BAR))
             .flex_none()
-            .pl(px((TRAFFIC_LIGHTS - left).max(0.)))
+            .relative()
+            .child(below)
+            .pl(px(lights))
             .flex()
             .items_center()
             .border_b_1()
@@ -5800,6 +5802,8 @@ impl Workspace {
                         let line = div().absolute().left_0().right_0().bottom_0().h(px(2.)).bg(rgb(colour));
                         d.text_color(rgb(theme::TEXT)).child(line)
                     })
+                    // A tab not on show sits below the one that is.
+                    .when(!active, |d| d.child(inner_shade(false, 6.)))
                     .hover(|s| s.text_color(rgb(theme::TEXT)))
                     .child(mark(&self.marks, Mark::Tab(place)))
                     .children(
@@ -5815,7 +5819,7 @@ impl Workspace {
                             AnyView::from(cx.new(|_| Tooltip(format!("Workspace: {book}").into())))
                         })
                     })
-                    .child(div().flex_1().min_w_0().truncate().child(tab.title.clone()))
+                    .child(cut_text(tab.title.clone()).flex_1())
                     .child(self.controls.mark(format!("tab:{}", tab.id)))
                     .child(
                         div()
@@ -5913,7 +5917,7 @@ impl Workspace {
             .when(!mode.is_empty(), |d| {
                 d.child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
             })
-            .child(div().min_w_0().truncate().child(hint))
+            .child(cut_text(hint))
             // Pushes what follows to the right (an auto margin there closed the gaps on the left).
             // Its hover names the build.
             .child(div().id("status-space").flex_1().h_full().tooltip(|_, cx| {
@@ -5967,7 +5971,7 @@ fn terminal_title(cwd: Option<&str>, program: Option<&str>, home: Option<&str>) 
 fn task_title_cells(task: &Task) -> impl Iterator<Item = Div> {
     // Only P1 is said: the other priorities are on the card.
     let priority = (task.priority == 1).then(|| div().flex_none().text_xs().text_color(rgb(theme::ERROR)).child("P1"));
-    priority.into_iter().chain([div().flex_1().min_w_0().truncate().child(task.title.clone())])
+    priority.into_iter().chain([cut_text(task.title.clone()).flex_1()])
 }
 
 /// A task's tags as a cell at the end of its row, no wider than `width`. No tags: no cell.
@@ -6014,13 +6018,43 @@ fn title_shadow() -> Div {
 /// `inner` as if it lay under the app, seen through a gap: a shadow falls on its top and bottom
 /// edges, `depth` points deep. The shadows take no room and no clicks; the caller sizes the result.
 pub(crate) fn recessed(inner: impl IntoElement, depth: f32) -> Div {
+    div().relative().overflow_hidden().child(inner).child(inner_shade(true, depth)).child(inner_shade(false, depth))
+}
+
+/// The shadow cast into a box from its top (`top`) or bottom edge, `depth` points deep: the box
+/// sits below its edge. It takes no room and no clicks; the box is `relative`.
+pub(crate) fn inner_shade(top: bool, depth: f32) -> Div {
     let (dark, clear) = (black().opacity(0.6), black().opacity(0.));
-    let edge = |from, to| {
-        let shade = gpui::linear_gradient(180., gpui::linear_color_stop(from, 0.), gpui::linear_color_stop(to, 1.));
-        div().absolute().left_0().right_0().h(px(depth)).bg(shade)
-    };
-    let (top, bottom) = (edge(dark, clear).top_0(), edge(clear, dark).bottom_0());
-    div().relative().overflow_hidden().child(inner).child(top).child(bottom)
+    let (from, to) = if top { (dark, clear) } else { (clear, dark) };
+    let shade = gpui::linear_gradient(180., gpui::linear_color_stop(from, 0.), gpui::linear_color_stop(to, 1.));
+    let edge = div().absolute().left_0().right_0().h(px(depth)).bg(shade);
+    if top { edge.top_0() } else { edge.bottom_0() }
+}
+
+/// A row of an open sidebar group, in the group's well: darker than the section and across its
+/// padding, a shadow at the well's top (`first`) and bottom (`last`). Each row stays a child of
+/// the list, so list mode still scrolls to it; it covers the list's `gap` above it.
+pub(crate) fn in_well(row: impl IntoElement, first: bool, last: bool, gap: f32) -> Div {
+    const PAD: f32 = 8.; // the list's padding (`p_2`)
+    const RIM: f32 = 6.; // the well's own room at its top and bottom, as deep as its shadows
+    div()
+        .flex_none()
+        .relative()
+        .mx(px(-PAD))
+        .px(px(PAD))
+        .bg(rgb(theme::BACKGROUND))
+        .when(!first, |d| d.mt(px(-gap)).pt(px(gap)))
+        .when(first, |d| d.pt(px(RIM)))
+        .when(last, |d| d.pb(px(RIM)))
+        .child(row)
+        .when(first, |d| d.child(inner_shade(true, RIM)))
+        .when(last, |d| d.child(inner_shade(false, RIM)))
+}
+
+/// `rows` of an open group, each in its well (`in_well`).
+pub(crate) fn well(rows: Vec<AnyElement>, gap: f32) -> impl Iterator<Item = AnyElement> {
+    let last = rows.len().saturating_sub(1);
+    rows.into_iter().enumerate().map(move |(at, row)| in_well(row, at == 0, at == last, gap).into_any_element())
 }
 
 /// The rail's open cell, raised: the panel's background, a soft shadow below it, and an accent bar
@@ -6039,6 +6073,38 @@ pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32) -> Stateful<Div> {
 /// A rail cell with the keyboard (`zones`): a ring in list mode's colour, apart from "open".
 pub(crate) fn focus_ring(cell: Stateful<Div>) -> Stateful<Div> {
     cell.child(div().absolute().inset(px(4.)).rounded(px(8.)).border_2().border_color(rgb(theme::LIST)))
+}
+
+/// A row's height in a sidebar section (`sidebar_row`).
+pub(crate) const ROW: f32 = 28.;
+
+/// A row of a sidebar section, one grammar in each: `ROW` points, a leading mark that carries the
+/// state's colour, the title cut with "…", one muted detail at the right, its actions on hover.
+/// No outline at rest, so a long list stays quiet; hover and list mode's selection fill it.
+pub(crate) fn sidebar_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .relative()
+        .min_h(px(ROW))
+        .px_2()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded_md()
+        // Always there, so a row does not shift by a point when it is selected.
+        .border_1()
+        .border_color(transparent_black())
+        .text_size(px(13.))
+        .text_color(rgb(theme::TEXT))
+        .cursor_pointer()
+        .hover(|s| s.bg(rgb(theme::SELECTED)))
+        .when(selected, |row| row.bg(rgb(theme::SELECTED)).border_color(rgb(theme::LIST)))
+}
+
+/// A row's muted detail at its right: `4m`, `09:00`, `2 tabs`.
+pub(crate) fn row_meta(text: impl Into<SharedString>) -> Div {
+    div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(text.into())
 }
 
 /// A row under a heading (a repository's checkout): no outline at rest, so a long list stays
@@ -6098,9 +6164,21 @@ fn mods(m: gpui::Modifiers) -> Mods {
 
 /// One line of `text`, cut with "…" where it does not fit. GPUI 0.2.2 keeps a text's first
 /// measure, which for a flex item has no width: laid over a box of the row's height, it has one.
+/// The box is as wide as the whole text, drawn clear, so it may shrink to fit as well as grow.
 pub(crate) fn cut_text(text: impl Into<SharedString>) -> Div {
-    let over = div().absolute().inset_0().truncate().child(text.into());
-    div().relative().min_w_0().child("\u{200b}").child(over)
+    // One line, as the cut shows: a line break would make the box taller and hide what follows it.
+    let text: SharedString = text.into();
+    let text: SharedString = if text.contains('\n') { text.replace('\n', " ").into() } else { text };
+    // The clear copy a letter at a time, as the cut adds them up (unkerned): a text that fits is
+    // never cut (`ToTo`, emoji, accents). Past `EACH` letters, the rest in one piece: it is cut anyway.
+    const EACH: usize = 128;
+    let split = text.char_indices().nth(EACH).map_or(text.len(), |(at, _)| at);
+    let letters = text[..split].chars().map(|c| SharedString::from(c.to_string()));
+    let rest = (split < text.len()).then(|| SharedString::from(text[split..].to_string()));
+    // Opacity, not a clear colour: emoji are painted in theirs.
+    let room = div().flex().pr(px(1.)).whitespace_nowrap().opacity(0.).child("\u{200b}").children(letters);
+    let over = div().absolute().inset_0().truncate().child(text);
+    div().relative().min_w_0().overflow_hidden().child(room.children(rest)).child(over)
 }
 
 /// A row of a secondary-bar list. A button at rest: its outline shows. Hover lifts it.
