@@ -325,6 +325,7 @@ impl Workspace {
             if !row.unfolded {
                 continue;
             }
+            let mut tabs = Vec::new();
             for (at, tab) in row.tabs.into_iter().enumerate() {
                 let selected = self.model.list == Some(index);
                 index += 1;
@@ -351,8 +352,9 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.click_workbook("workbook-tab", id, Some(at), window, cx)
                     }));
-                children.push(tab_row.into_any_element());
+                tabs.push(tab_row.into_any_element());
             }
+            children.extend(crate::well(tabs, 4.));
         }
         // After a delete or an update, a line at the top offers to take it back, as Tasks does.
         let notice = self.model.workbooks.offered().map(|change| {

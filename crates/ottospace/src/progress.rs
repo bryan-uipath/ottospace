@@ -293,16 +293,17 @@ impl Workspace {
             if group.folded {
                 continue;
             }
+            let mut group_rows = Vec::new();
             for row in &group.rows {
                 if let Some(task) = self.model.tasks.get(row.id) {
-                    rows.push(self.task_row(task, row, self.model.list == Some(*listed), cx));
+                    group_rows.push(self.task_row(task, row, self.model.list == Some(*listed), cx));
                 }
                 *listed += 1;
             }
             if group.done > 0 {
                 let project = group.project.clone();
                 let selected = self.model.list == Some(*listed);
-                rows.push(
+                group_rows.push(
                     div()
                         .id(gpui::ElementId::Name(format!("project-done:{key}").into()))
                         .pl(px(22.))
@@ -329,11 +330,12 @@ impl Workspace {
                 *listed += 1;
                 for row in &group.done_rows {
                     if let Some(task) = self.model.tasks.get(row.id) {
-                        rows.push(self.task_row(task, row, self.model.list == Some(*listed), cx));
+                        group_rows.push(self.task_row(task, row, self.model.list == Some(*listed), cx));
                     }
                     *listed += 1;
                 }
             }
+            rows.extend(crate::well(group_rows, 4.));
         }
         rows
     }
