@@ -388,7 +388,8 @@ shows, a column at its right edge, replacing the strip.
   selected item is lifted with an accent edge; the one list mode's keys are on is ringed. Shown
   with the transcript or a conversation, not over the new-task box, a brief beside the tabs or
   the inspector (they take the drawer, and its keys). With no conversation, the user's ⌘⇧L opens
-  the drawer on the transcript.
+  the drawer on the transcript. Idle, it shows "Transcribe a window…" and Today
+  (`transcripts.md`, "The idle view").
 - **Selected** (`Model::rail_selected`): the transcript while it is shown, else the task in
   front. `RailSelect`: the transcript is shown in this space's drawer (its pane's tab is not
   brought up, unlike the pane's dots); a task is put in front, its conversation open.
