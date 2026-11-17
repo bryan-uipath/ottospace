@@ -128,7 +128,7 @@ commands! {
     ListMode: "Drive the Bar with the Keyboard", View;
     SneakMode: "Label the Controls", View;
     VisualMode: "Select with the Keyboard", View;
-    Zoom: "Fill the Screen", View;
+    FillDisplay: "Fill the Whole Display", View;
     ShowKeys: "Keys", View;
     ResetKeyCounts: "Reset Key Counts", View;
     CalendarBack: "Previous Day in Calendar", View;

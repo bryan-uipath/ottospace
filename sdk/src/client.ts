@@ -494,6 +494,11 @@ export class Client {
    */
   listenEnd(args: { why: "app_quit" | "stream_failed" }): Promise<Snapshot> {
     return this.snapshot({ cmd: "listen_end", ...args });
+   * For tests (`OTTOSPACE_E2E`): the window's green button, pressed as the user would. It fills
+   * the display instead of zooming. Rejects outside a test run: only the user's hand fills it.
+   */
+  zoomPress(): Promise<Snapshot> {
+    return this.snapshot({ cmd: "zoom_press" });
   }
   /**
    * The user's meetings of `day` and the `days` after it, busy and free time: what the app holds

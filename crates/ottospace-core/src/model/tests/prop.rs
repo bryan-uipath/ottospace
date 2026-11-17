@@ -1153,6 +1153,8 @@ const MAKERS: &[Make] = &[
         }
         layout.selected = g.rng.coin().then(|| g.rng.pick(&[0, 1, 2, 99]));
         layout.drawer.task = g.rng.coin().then(|| g.task());
+        // A run before that quit filled or not, whatever this model is now.
+        layout.fill = g.rng.coin();
         let layout = layout_file::parse(&layout_file::write(&layout)).unwrap_or(layout);
         let gone = g.names(DIRS, 2);
         let home = g.rng.coin().then(|| g.name(DIRS));
@@ -1263,6 +1265,8 @@ const MAKERS: &[Make] = &[
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
     |_| Action::TalkWide,
     |_| Action::DialToggle,
+    |_| Action::FillDisplay,
+    |_| Action::FillEnded,
     |g| {
         let colors = g.rng.coin().then(|| ColorRule { text: g.text().to_lowercase(), color: 1 });
         let (on, notify, links_only, hide_free) = (g.rng.coin(), g.rng.coin(), g.rng.coin(), g.rng.coin());
@@ -2285,6 +2289,8 @@ struct Shell {
     /// The window up for a scroll.
     peek: Option<PaneId>,
     visual: Option<PaneId>,
+    /// Its window fills the display.
+    filled: bool,
     /// What it keeps of the draft in the bar: (the draft, the capture's number).
     kept: Vec<(String, u32)>,
 }
@@ -2482,6 +2488,7 @@ impl Run {
             .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty() && !m.compose_theirs)));
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
+        let filled_before = m.fill_display;
         let effects = m.update(sent);
         check(m)?;
         // Only the user starts a transcript: their click, or their key.
@@ -2491,6 +2498,11 @@ impl Run {
             listen_now.is_none() || listen_now == listen_before || (origin == Origin::User && starts),
             "{origin:?}'s {action:?} started a transcript"
         );
+        // Only the user puts the window over the menu bar and the Dock, now or in the run whose
+        // layout is restored (a client's restore is refused); anyone's end of it tells the shell.
+        let restores = matches!(action, Action::RestoreLayout { .. }) && origin != Origin::Socket;
+        let fills = matches!(action, Action::FillDisplay) && origin == Origin::User || restores;
+        ensure!(fills || !m.fill_display || filled_before, "{origin:?}'s {action:?} filled the display");
         // A notice is said to the user: only their dismissal takes one off the bar, and only a
         // read of the settings (their line fixed or changed) puts one back. No input: one effect.
         let dismisses = matches!(action, Action::NoticeDismiss { .. });
@@ -3308,6 +3320,7 @@ impl Run {
                     let empty = |pane: PaneId| m.pane(pane).is_some_and(|p| p.kind == Kind::Empty);
                     ensure!(into.is_none_or(empty), "a window is hosted into {into:?}, no empty pane");
                 }
+                Effect::FillDisplay { on } => self.shell.filled = *on,
                 Effect::Activate { id } => {
                     let own = format!("{:?}", Source::Own { id: id.clone() });
                     ensure!(labelled.contains(&own), "a control with no label is activated: {id:?}");
@@ -3552,6 +3565,7 @@ impl Run {
             !self.shell.panes.iter().any(|pane| gone(&pane)),
             "the shell holds a pane the model closed without a word"
         );
+        ensure!(self.shell.filled == m.fill_display, "the shell's window fills the display: {}", self.shell.filled);
         ensure!(self.shell.live == m.live, "the shell's live pane is {:?}; the model's {:?}", self.shell.live, m.live);
         let peek = m.peek.as_ref().map(|peek| peek.pane);
         ensure!(self.shell.peek == peek, "the shell's peek is {:?}; the model's {peek:?}", self.shell.peek);
@@ -5375,6 +5389,43 @@ fn seed_356_a_task_that_takes_over_a_workspace_works_in_its_default() {
         Action::OpenCompose { text: "#SS>y\u{202e}abc >İa\u{300}\u{301}\u{302}\\ #2048".into() }.sent_by(Origin::User),
         Action::ComposeRef { target: Pointed::Tab(3) }.sent_by(Origin::System),
         Action::ComposeSubmit { open: true }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
+/// A capture's ↵ starts task 2 in task 1's workspace; dismissing task 1 leaves task 2 its heir,
+/// with the link. The same rule took that for a new binding.
+#[test]
+fn a_dismissed_tasks_heir_takes_its_link() {
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::CaptureStart {
+            pane: None,
+            draft: "d1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![],
+            images: true,
+        }
+        .sent_by(Origin::User),
+        Action::TaskFromLine {
+            line: "#canvas flicker ../..e\u{301}İ>y p0 @~/>/p@".into(),
+            known: Known {
+                names: Names {
+                    agents: vec!["codex-gpt-6-astra".into(), "claude".into(), "codex-gpt-6-astra".into()],
+                    skills: vec!["\u{feff}".into(), "code-review".into(), "a\u{7f}".into()],
+                },
+                paths: vec![PathFound {
+                    typed: "../..e\u{301}İ>y".into(),
+                    resolved: "/code/app../..e\u{301}İ>y".into(),
+                }],
+                entries: vec!["/src/".into()],
+            },
+            open: true,
+        }
+        .sent_by(Origin::User),
+        Action::AgentExited { task: Subject::Task(1) }.sent_by(Origin::System),
+        Action::ComposeEnter.sent_by(Origin::User),
+        Action::TaskDismiss { id: 1 }.sent_by(Origin::System),
     ])
     .unwrap();
 }
