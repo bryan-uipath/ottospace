@@ -847,6 +847,8 @@ struct Workspace {
     /// Frames that stopped coming (`stall`), and how often GPUI was kicked to draw again.
     stall: stall::Stall,
     redraws: u64,
+    /// Stalls in a row, so a locked screen does not fill the log.
+    stall_log: event_log::Streak,
     /// The display the window was last on, by number, for the log.
     on_display: Option<u32>,
     /// A terminal's or hosted window's output asked for a frame not drawn yet: a stall too.
@@ -1363,6 +1365,7 @@ impl Workspace {
             frame_start: Rc::default(),
             stall: stall::Stall::new(),
             redraws: 0,
+            stall_log: event_log::Streak::default(),
             on_display: None,
             output: false,
             home: home::Shared::default(),
@@ -2019,8 +2022,8 @@ impl Workspace {
                 let stalled = stalled.map(|waited| waited.as_millis() as u64);
                 trace::record("redraw", serde_json::json!({ "stalled_ms": stalled, "first": first }));
                 // A stall once, as it starts; not each kick after it, nor those after a display change.
-                if first {
-                    event_log::event("stall", serde_json::json!({ "stalled_ms": stalled }));
+                if let Some(n) = first.then(|| self.stall_log.stall(now)).flatten() {
+                    event_log::event("stall", serde_json::json!({ "stalled_ms": stalled, "n": n }));
                 }
                 // SAFETY: GPUI's own view, on the main thread, in a timer's update: GPUI holds no
                 // lock of its window here.
@@ -2033,7 +2036,9 @@ impl Workspace {
             stall::Verdict::Recovered { kicks, lasted } => {
                 let lasted = lasted.as_millis() as u64;
                 trace::record("redrawn", serde_json::json!({ "kicks": kicks, "lasted_ms": lasted }));
-                event_log::event("redrawn", serde_json::json!({ "kicks": kicks, "lasted_ms": lasted }));
+                if let Some(n) = self.stall_log.redrawn() {
+                    event_log::event("redrawn", serde_json::json!({ "kicks": kicks, "lasted_ms": lasted, "n": n }));
+                }
             }
         }
     }

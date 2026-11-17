@@ -13,7 +13,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ottospace_core::calendar::reply::rfc3339;
 use ottospace_core::ics::Table;
@@ -131,12 +131,61 @@ fn line(now: i64, offset: i64, event: &str, fields: Value) -> String {
     let (at, ev) = (json!(local_time(now, offset)), json!(event));
     let mut line = json!({ "at": at, "ev": ev });
     if let (Some(line), Value::Object(fields)) = (line.as_object_mut(), fields) {
-        line.extend(fields);
-        // A field never stands for the time or the event.
-        line.insert("at".into(), at);
-        line.insert("ev".into(), ev);
+        // Only the fields on the event's list: never `at` or `ev`, nor a field added without review.
+        let listed = fields_of(event);
+        line.extend(fields.into_iter().filter(|(name, _)| {
+            let known = listed.contains(&name.as_str());
+            debug_assert!(known, "{event}: field {name:?} is not on its list");
+            known
+        }));
     }
     line.to_string()
+}
+
+/// The fields each event may have: names, numbers, ids and sizes. A new one is a privacy review.
+fn fields_of(event: &str) -> &'static [&'static str] {
+    match event {
+        "start" => &["pid", "version", "commit", "hosting", "displays"],
+        "quit" => &["hosted"],
+        "displays" => &["count", "sizes"],
+        "window_display" => &["display", "size"],
+        "stall" => &["stalled_ms", "n"],
+        "redrawn" => &["kicks", "lasted_ms", "n"],
+        "host_failed" | "give_back_failed" => &["window"],
+        "gpui" => &["level", "src", "said", "n"],
+        "panic" => &["src", "thread"],
+        _ => &[],
+    }
+}
+
+/// How long frames must flow, with no stall, before a stall counts as the 1st again.
+const CALM: Duration = Duration::from_secs(60);
+
+/// Stalls in a row (a locked screen and a busy terminal: one a second), heard at the 1st, 2nd,
+/// 4th, 8th..; a stall `CALM` after the last starts over.
+#[derive(Default)]
+pub(crate) struct Streak {
+    n: u64,
+    last: Option<Instant>,
+    /// The current stall was written: so is its `redrawn`.
+    heard: bool,
+}
+
+impl Streak {
+    /// A stall starts at `now`: `Some(n)` when it is written.
+    pub(crate) fn stall(&mut self, now: Instant) -> Option<u64> {
+        if self.last.is_some_and(|last| now - last >= CALM) {
+            self.n = 0;
+        }
+        (self.n, self.last) = (self.n + 1, Some(now));
+        self.heard = self.n.is_power_of_two();
+        self.heard.then_some(self.n)
+    }
+
+    /// The stall ended: `Some(n)` when its start was written.
+    pub(crate) fn redrawn(&mut self) -> Option<u64> {
+        std::mem::take(&mut self.heard).then_some(self.n)
+    }
 }
 
 /// `2026-11-16T17:51:03-08:00`.
@@ -224,6 +273,46 @@ mod tests {
     }
 
     #[test]
+    fn stalls_in_a_row_are_heard_at_their_first_second_fourth_time_and_again_after_calm() {
+        let (mut streak, start) = (Streak::default(), Instant::now());
+        let mut heard = Vec::new();
+        // One a second for 9 seconds, each redrawn.
+        for s in 0..9 {
+            let n = streak.stall(start + Duration::from_secs(s));
+            assert_eq!(streak.redrawn(), n, "a redrawn is written with its stall");
+            heard.extend(n);
+        }
+        assert_eq!(heard, [1, 2, 4, 8]);
+        assert_eq!(streak.redrawn(), None, "once");
+        // Not calm long enough: the 10th.
+        assert_eq!(streak.stall(start + Duration::from_secs(8) + CALM - Duration::from_secs(1)), None);
+        // Calm: the 1st again.
+        assert_eq!(streak.stall(start + Duration::from_secs(70) + CALM), Some(1));
+    }
+
+    #[test]
+    fn a_field_off_its_events_list_is_dropped() {
+        let fields = json!({ "window": 7, "title": "Fake Secret Title", "at": "then" });
+        let line = std::panic::catch_unwind(|| line(0, 0, "host_failed", fields.clone()));
+        if cfg!(debug_assertions) {
+            assert!(line.is_err(), "a debug build stops at it");
+        } else {
+            assert_eq!(line.unwrap(), r#"{"at":"1970-01-01T00:00:00+00:00","ev":"host_failed","window":7}"#);
+        }
+    }
+
+    #[test]
+    fn every_event_kind_is_on_the_list_with_its_fields() {
+        for (event, fields) in samples(&config::user_home()) {
+            let listed = fields_of(event);
+            assert!(!listed.is_empty(), "{event} has no list");
+            for name in fields.as_object().unwrap().keys() {
+                assert!(listed.contains(&name.as_str()), "{event}: {name}");
+            }
+        }
+    }
+
+    #[test]
     fn gpui_is_heard_at_its_first_second_fourth_time() {
         let mut seen = BTreeMap::new();
         let heard: Vec<u64> = (0..9).filter_map(|_| nth(&mut seen, "a.rs:1")).collect();
@@ -231,57 +320,54 @@ mod tests {
         assert_eq!(nth(&mut seen, "b.rs:1"), Some(1));
     }
 
-    /// Every kind of event, fed what could leak (a pass, a title, the home path), as the app builds
-    /// it: none of that reaches the file.
-    #[test]
-    fn no_event_writes_a_pass_a_title_or_the_home_path() {
-        let dir = temp("private");
-        let home = config::user_home();
-        let (pass, title) = ("hunter2-fake-pass", "Fake Secret Title");
+    const PASS: &str = "hunter2-fake-pass";
+    const TITLE: &str = "Fake Secret Title";
+
+    fn gpui_record(level: log::Level, file: &str, text: &str) -> Option<Value> {
+        gpui_fields(
+            &log::Record::builder().level(level).file(Some(file)).line(Some(489)).args(format_args!("{text}")).build(),
+        )
+    }
+
+    /// Every kind of event, fed what could leak (a pass, a title, `home`), as the app builds it:
+    /// none of that reaches the file.
+    fn samples(home: &str) -> Vec<(&'static str, Value)> {
         let src = format!("{home}/.cargo/registry/src/index.crates.io-1949/gpui-0.2.2/src/platform/mac");
-        let record = |level, file: &str, text: &str| {
-            gpui_fields(
-                &log::Record::builder()
-                    .level(level)
-                    .file(Some(file))
-                    .line(Some(489))
-                    .args(format_args!("{text}"))
-                    .build(),
-            )
-        };
-        let gpui = |file: &str, text: &str| record(log::Level::Error, &format!("{src}/{file}"), text);
+        let gpui = |file: &str, text: &str| gpui_record(log::Level::Error, &format!("{src}/{file}"), text).unwrap();
         let displays = json!({ "count": 2, "sizes": ["1728x1117", "2560x1440"] });
         let start =
             json!({ "pid": 42, "version": "0.1.0", "commit": "abc1234", "hosting": true, "displays": displays });
         let main = format!("{home}/code/ottospace/crates/ottospace/src/main.rs");
-        let events = [
+        vec![
             ("start", start),
             ("displays", displays.clone()),
             ("window_display", json!({ "display": 1, "size": "1728x1117" })),
-            ("stall", json!({ "stalled_ms": 1500 })),
-            ("redrawn", json!({ "kicks": 3, "lasted_ms": 2100 })),
+            ("stall", json!({ "stalled_ms": 1500, "n": 1 })),
+            ("redrawn", json!({ "kicks": 3, "lasted_ms": 2100, "n": 1 })),
             ("host_failed", json!({ "window": 77 })),
             ("give_back_failed", json!({ "window": 77 })),
             ("quit", json!({ "hosted": 1 })),
             ("panic", panic_fields(Some((&main, 12)), Some("main"))),
             ("panic", panic_fields(Some((&format!("{home}/src/app/target/debug/build/x-1/out/gen.rs"), 3)), None)),
             // The first line only.
+            ("gpui", gpui("display_link.rs", &format!("could not create display link, code: -6661\n{PASS} {TITLE}"))),
             (
                 "gpui",
-                gpui("display_link.rs", &format!("could not create display link, code: -6661\n{pass} {title}"))
-                    .unwrap(),
-            ),
-            (
-                "gpui",
-                gpui("window.rs", &format!("could not start display link, code: -6660 {}", "x".repeat(200) + pass))
-                    .unwrap(),
+                gpui("window.rs", &format!("could not start display link, code: -6660 {}", "x".repeat(200) + PASS)),
             ),
             // No words but fixed ones and a code.
-            ("gpui", gpui("text_system.rs", &format!("font {title} for {home}")).unwrap()),
-        ];
+            ("gpui", gpui("text_system.rs", &format!("font {TITLE} for {home}"))),
+        ]
+    }
+
+    #[test]
+    fn no_event_writes_a_pass_a_title_or_the_home_path() {
+        let dir = temp("private");
+        let home = config::user_home();
+        let (pass, title) = (PASS, TITLE);
         // A warning outside it is not an event at all.
-        assert_eq!(record(log::Level::Warn, &format!("{home}/code/app/src/lib.rs"), pass), None);
-        for (event, fields) in events {
+        assert_eq!(gpui_record(log::Level::Warn, &format!("{home}/code/app/src/lib.rs"), pass), None);
+        for (event, fields) in samples(&home) {
             write(event, fields, Some(&*dir));
         }
         let text = fs::read_to_string(dir.join(NAME)).unwrap();

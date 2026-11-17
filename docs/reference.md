@@ -1211,14 +1211,15 @@ Only you can read it (0600). At 1 MB it becomes `log.1` and the one before goes:
 | `quit` | `hosted`: windows given back |
 | `displays` | The displays changed (one plugged in or taken away): `count`, `sizes` in points |
 | `window_display` | The window is on another display: its number and size |
-| `stall` | The window had something to draw for `stalled_ms` and drew nothing; ottospace has it draw again |
-| `redrawn` | Frames came again after a stall: `kicks`, `lasted_ms` |
+| `stall` | The window had something to draw for `stalled_ms` and drew nothing; ottospace has it draw again. `n`: stalls in a row (a minute with none starts over), written the 1st, 2nd, 4th, 8th.. |
+| `redrawn` | Frames came again after a written stall: `kicks`, `lasted_ms`, its `n` |
 | `host_failed` | A window could not be hosted: its number |
 | `give_back_failed` | A hosted window could not be put back on a screen: its number |
 | `gpui` | An error or warning of GPUI's macOS layer: `level`, `src` (`gpui-0.2.2/src/platform/mac/window.rs:489`), `said` only when fixed words and a code (`could not create display link, code: -6661`), and `n`: one from the same place is written its 1st, 2nd, 4th, 8th.. time |
 | `panic` | `src` (`crate/src/file.rs:line`) and `thread`; never the message |
 
-Never in it: terminal or transcript text, titles, meetings, passes, paths or file contents.
+Never in it: terminal or transcript text, titles, meetings, passes, paths or file contents. Each event
+keeps only the fields listed here.
 The same lines go to the unified log, subsystem `dev.ottospace` (in zsh, `log` is a builtin, so
 name `/usr/bin/log`):
 
