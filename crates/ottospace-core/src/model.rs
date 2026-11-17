@@ -1940,7 +1940,6 @@ impl Action {
             | Action::ListenStop { .. }
             | Action::ListenShow { .. }
             | Action::ListenFixture
-            | Action::ListenAvailable { .. }
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
@@ -1960,7 +1959,9 @@ impl Action {
             | Action::Unfilled { .. }
             | Action::SetApps { .. }
             | Action::SetAppSettings { .. }
-            | Action::SetDock { .. } => None,
+            | Action::SetDock { .. }
+            // Whether this Mac has the recogniser: kept for when the flag turns on.
+            | Action::ListenAvailable { .. } => None,
             Action::ToggleSection {
                 section: Section::Workbook | Section::Tasks | Section::Repos | Section::Calendar,
             }

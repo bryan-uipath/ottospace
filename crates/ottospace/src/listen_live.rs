@@ -114,4 +114,9 @@ impl Live {
     pub(crate) fn take(&self) -> Taken {
         self.taken.lock().map(|mut taken| std::mem::take(&mut *taken)).unwrap_or_default()
     }
+
+    /// The lines that came since the last look, the rest left for it.
+    pub(crate) fn take_lines(&self) -> Vec<Heard> {
+        self.taken.lock().map(|mut taken| std::mem::take(&mut taken.lines)).unwrap_or_default()
+    }
 }

@@ -122,8 +122,6 @@ final class Recogniser: @unchecked Sendable {
     let source: AVAudioFormat
     let target: AVAudioFormat
     let lock = NSLock()
-    var task: Task<Void, Never>?
-    var fed: Int64 = 0
 
     init(input: AsyncStream<AnalyzerInput>.Continuation, source: AVAudioFormat, target: AVAudioFormat) {
         self.input = input
@@ -160,7 +158,6 @@ final class Recogniser: @unchecked Sendable {
             if error != nil { return }
             out = converted
         }
-        fed += Int64(out.frameLength)
         input.yield(AnalyzerInput(buffer: out))
     }
 }
@@ -189,7 +186,7 @@ public func ottospace_listen_new(
             let (stream, input) = AsyncStream<AnalyzerInput>.makeStream()
             let analyzer = SpeechAnalyzer(modules: [transcriber])
             let recogniser = Recogniser(input: input, source: source, target: target)
-            recogniser.task = Task.detached {
+            Task.detached {
                 let context = UnsafeMutableRawPointer(bitPattern: raw)
                 let results = Task {
                     do {

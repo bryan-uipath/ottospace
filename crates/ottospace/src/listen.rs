@@ -282,7 +282,8 @@ impl Workspace {
     fn listen_rest(&mut self) -> Option<Action> {
         let feed = self.listen_feed.as_mut()?;
         let mut lines = std::mem::take(&mut feed.pending);
-        lines.extend(feed.live.as_ref().map(Live::take).map(|taken| taken.lines).unwrap_or_default());
+        // Its lines only: a failure waits for the next frame, which ends it.
+        lines.extend(feed.live.as_ref().map(Live::take_lines).unwrap_or_default());
         Some(Action::ListenHeard { id: feed.id.clone(), lines })
     }
 
@@ -325,11 +326,20 @@ impl Workspace {
                         Ok(true) => Ok(()),
                         // The user's Start asks the system for its model: "Downloading speech model…".
                         Ok(false) => {
-                            let _ = this.update(cx, |this, cx| {
-                                this.listen_downloading = Some(id.clone());
-                                cx.notify();
+                            // Stopped while the system was asked: no download.
+                            let still = this.update(cx, |this, cx| {
+                                let on = this.model.listen.on.as_ref().is_some_and(|on| on.id == id);
+                                if on {
+                                    this.listen_downloading = Some(id.clone());
+                                    cx.notify();
+                                }
+                                on
                             });
-                            cx.background_executor().spawn(async { listen_live::install() }).await
+                            if still.unwrap_or(false) {
+                                cx.background_executor().spawn(async { listen_live::install() }).await
+                            } else {
+                                Err("stopped".into())
+                            }
                         }
                         Err(why) => Err(why),
                     };
@@ -447,6 +457,8 @@ impl Workspace {
 
     /// The sound stopped coming: the core ends it, and the bar says why.
     fn listen_stream_lost(&mut self, id: &str, why: String, window: &Window, cx: &mut Context<Self>) {
+        // What was heard before it stopped is kept.
+        self.listen_flush(window, cx);
         let ended = Action::ListenEnded { id: id.into(), why: listen::Ended::StreamFailed, at: now_ms() };
         self.dispatch(ended, Origin::System, window, cx);
         self.broke(format!("Transcript stopped: {why}"));

@@ -1835,6 +1835,13 @@ const CANARY_WORDS: &str = "The orange canary sings a quiet song about purple ta
 /// line of it in the transcript's Markdown file. None: why it was skipped (no macOS 26, or the
 /// speech model not installed: a test run downloads none).
 fn canary_transcribed(name: &str, child: bool) -> Option<String> {
+    // Below macOS 26 no recogniser answers: its notice and one not yet asked read the same.
+    let os = Command::new("/usr/bin/sw_vers").arg("-productVersion").output().expect("sw_vers");
+    let major: u32 =
+        String::from_utf8_lossy(&os.stdout).split('.').next().and_then(|m| m.trim().parse().ok()).unwrap_or(0);
+    if major < 26 {
+        return Some(format!("macOS {major}: transcripts need macOS 26"));
+    }
     let home = support::temp(&format!("otto-apps-listen-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&home).expect("make the folder");
     let dir = home.join("transcripts");

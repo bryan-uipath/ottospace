@@ -398,10 +398,16 @@ mod tests {
         let mut m = model();
         m.update(start(2));
         let off = crate::features::Features::all().with(crate::features::Feature::Transcripts, false);
-        let effects = m.update(Action::SetFeatures { features: off }.sent_by(Origin::System));
+        let effects = m.update(Action::SetFeatures { features: off.clone() }.sent_by(Origin::System));
         assert_eq!(effects, ended("t2", Record::Failed));
         assert!(m.update(start(2)).is_empty() && m.listen.on.is_none(), "off, it is absent");
         assert!(!m.listen_offered(2));
+        // What the shell learnt with it off is kept for when it turns on.
+        let mut m = Model::default();
+        m.update(Action::SetFeatures { features: off }.sent_by(Origin::System));
+        m.update(Action::ListenAvailable { on: true }.sent_by(Origin::System));
+        m.update(Action::SetFeatures { features: crate::features::Features::all() }.sent_by(Origin::System));
+        assert!(m.listen.available);
     }
 
     #[test]
