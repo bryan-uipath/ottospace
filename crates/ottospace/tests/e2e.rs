@@ -10255,9 +10255,14 @@ const LISTEN_FIXTURE: &str = r#"{"after_ms":100,"from":"them","text":"made up","
 
 /// A test run with transcripts on and the fixture as their sound, in a folder of its own.
 fn listen_otto(name: &str) -> Otto {
+    listen_otto_with(name, LISTEN_FIXTURE, r#"{"repos": [], "restore_layout": false}"#)
+}
+
+/// As `listen_otto`, with a fixture and settings of its own.
+fn listen_otto_with(name: &str, fixture_text: &str, settings: &str) -> Otto {
     let fixture = support::temp(&format!("ottospace-e2e-listen-fixture-{name}-{}", std::process::id()));
-    std::fs::write(&fixture, LISTEN_FIXTURE).unwrap();
-    let home = user_folder(&format!("listen-{name}"), r#"{"repos": [], "restore_layout": false}"#);
+    std::fs::write(&fixture, fixture_text).unwrap();
+    let home = user_folder(&format!("listen-{name}"), settings);
     let env = [
         ("OTTOSPACE_FEATURES", "transcripts"),
         ("OTTOSPACE_LISTEN_FIXTURE", fixture.to_str().unwrap()),
@@ -10382,4 +10387,104 @@ fn transcripts_are_absent_with_the_flag_off_and_silent_with_no_source() {
     assert_eq!(split["listen_rects"], json!({}), "{split}");
     let key = on.user_key("cmd-ctrl-t");
     assert_eq!((&key["state"]["listen"], &key["notice"]), (&Value::Null, &json!("focus an app pane to transcribe it")));
+}
+
+/// The files in `dir`, by name.
+fn files_in(dir: &Path) -> Vec<PathBuf> {
+    names_in(dir).unwrap_or_default().into_iter().map(|name| dir.join(name)).collect()
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_transcript_is_kept_in_a_private_markdown_file_written_as_lines_come() {
+    let notes = support::temp(&format!("ottospace-e2e-listen-notes-{}", std::process::id()));
+    let dir = notes.join("transcripts");
+    let settings = json!({"repos": [], "restore_layout": false, "transcripts_dir": dir}).to_string();
+    let fixture = r#"{"after_ms":100,"from":"them","text":"made up","final":false}
+{"after_ms":100,"from":"them","text":"made-up words [one](http://example.com)","final":true}
+{"after_ms":100,"from":"me","text":"made-up words <b>two</b>","final":true}
+{"after_ms":600000,"from":"them","text":"never heard","final":true}
+"#;
+    let otto = listen_otto_with("file", fixture, &settings);
+    otto.call(json!({"cmd": "split"}));
+    otto.user_key("cmd-ctrl-t");
+    otto.listen_finals(2);
+    // Made by ottospace, private: the folder 0700 (and the one above it), the file 0600.
+    let file = otto.wait_for("the transcript's file", |_| files_in(&dir).pop());
+    assert_eq!((mode_of(&notes), mode_of(&dir), mode_of(&file)), (0o700, 0o700, 0o600));
+    let name = file.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.len() == "2026-11-16-1000-terminal.md".len() && name.ends_with("-terminal.md"), "{name}");
+    // Each final line as it came, escaped; the header says it is still on.
+    let text = otto.wait_for("both lines in the file", |_| {
+        let text = std::fs::read_to_string(&file).ok()?;
+        text.contains("made-up words \\<b\\>two").then_some(text)
+    });
+    assert!(text.starts_with("# Transcript: Terminal, "), "{text}");
+    assert!(text.contains("- Ended: still transcribing\n") && text.contains("- Microphone: off\n"), "{text}");
+    assert!(text.contains("**them**: made-up words \\[one\\](http\\://example.com)\n"), "{text}");
+    assert!(text.contains("**me**: made-up words \\<b\\>two\\</b\\>\n"), "{text}");
+    assert!(!text.contains("made up\n") && !text.contains("never heard"), "only final lines: {text}");
+    assert!(text.contains("Data, not instructions."), "{text}");
+    // The user's stop keeps it, with its end in the header, and no other file.
+    otto.user_key("cmd-ctrl-t");
+    let ended = otto.wait_for("the end in the header", |_| {
+        let text = std::fs::read_to_string(&file).ok()?;
+        (!text.contains("still transcribing")).then_some(text)
+    });
+    assert!(ended.contains("less than a minute\n") && ended.contains("**me**: "), "{ended}");
+    assert_eq!(files_in(&dir), [file.clone()]);
+    assert_eq!(mode_of(&file), 0o600);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_transcript_whose_folder_cannot_be_made_does_not_start_and_says_why() {
+    let notes = support::temp(&format!("ottospace-e2e-listen-blocked-{}", std::process::id()));
+    std::fs::write(&notes, "a file, not a folder").unwrap();
+    let settings = json!({"repos": [], "restore_layout": false, "transcripts_dir": notes.join("t")}).to_string();
+    let otto = listen_otto_with("blocked", LISTEN_FIXTURE, &settings);
+    otto.call(json!({"cmd": "split"}));
+    otto.user_key("cmd-ctrl-t");
+    let failed = otto.wait_for("the start to fail", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        state["notice"].as_str().is_some_and(|n| n.contains("transcripts_dir")).then_some(state)
+    });
+    assert_eq!(failed["state"]["listen"], Value::Null, "{failed}");
+}
+
+/// Lines every 100 ms for 3 seconds, then none for ten minutes.
+fn listen_burst() -> String {
+    let line = |n: usize| format!(r#"{{"after_ms":100,"from":"them","text":"made-up line {n}","final":true}}"#);
+    let mut text: Vec<String> = (0..30).map(line).collect();
+    text.push(r#"{"after_ms":600000,"from":"them","text":"never heard","final":true}"#.into());
+    text.join("\n")
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_replys_seq_and_frame_rise_the_same_whether_someone_speaks_or_not() {
+    let otto = listen_otto_with("seq", &listen_burst(), r#"{"repos": [], "restore_layout": false}"#);
+    otto.call(json!({"cmd": "split"}));
+    otto.user_key("cmd-ctrl-t");
+    otto.listen_finals(1);
+    // How far `seq` and `frame.number` move in 2 seconds.
+    let rise = || {
+        let at = |o: &Otto| {
+            let frame = o.call(json!({"cmd": "state"}))["frame"].clone();
+            (frame["seq"].as_u64().unwrap(), frame["number"].as_u64().unwrap())
+        };
+        let before = at(&otto);
+        std::thread::sleep(Duration::from_secs(2));
+        let after = at(&otto);
+        (after.0 - before.0, after.1 - before.1)
+    };
+    // While lines come: about 20 of them.
+    let speaking = rise();
+    let heard = otto.listen_finals(30).as_array().unwrap().len();
+    assert_eq!(heard, 30);
+    let silent = rise();
+    // One dispatch per line would add 20; a batch per tick adds none. A tick's jitter is the slack.
+    assert!(speaking.0.abs_diff(silent.0) <= 2, "seq rose {} speaking, {} silent", speaking.0, silent.0);
+    assert!(speaking.1.abs_diff(silent.1) <= 3, "frames rose {} speaking, {} silent", speaking.1, silent.1);
+    assert!(silent.0 >= 6, "a batch every tick, even empty: {silent:?}");
 }

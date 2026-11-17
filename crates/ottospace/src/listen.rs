@@ -1,17 +1,20 @@
 //! Transcripts in the shell (`ottospace_core::listen`): ⌘⌃T, the pane header's `Transcribe` and
-//! its indicator, the top row's mark, the drawer's lines, and the sound. The decisions are the
-//! core's. Slice 1 has one source: a test run's fixture (`OTTOSPACE_LISTEN_FIXTURE`, read only
-//! under `OTTOSPACE_E2E`), replayed as what was heard. No audio, no file.
+//! its indicator, the top row's mark, the drawer's lines, the sound and the file
+//! (`listen_file`). The decisions are the core's. One source so far: a test run's fixture
+//! (`OTTOSPACE_LISTEN_FIXTURE`, read only under `OTTOSPACE_E2E`), replayed as what was heard.
+//!
+//! What was heard reaches the core in batches on a fixed tick (`BATCH`), empty or not: a reply's
+//! `frame.seq` and `frame.number` rise at the same rate whether someone speaks or not.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use gpui::{AnyElement, Context, Div, Stateful, Window, actions, div, prelude::*, px, rgb};
-use ottospace_core::listen::{self, Row, Speaker, Status};
+use ottospace_core::listen::{self, Heard, Record, Row, Speaker, Status};
 use ottospace_core::{Action, Effect, Origin, PaneId, theme};
 use serde::Deserialize;
 
-use crate::{Workspace, now_ms, rect};
+use crate::{Workspace, config, listen_file, now_ms, rect};
 
 // ⌘⌃T: a transcript of the focused pane, or the one on stopped.
 actions!(ottospace, [Transcribe]);
@@ -21,8 +24,9 @@ const NO_FIXTURE: &str = "no audio source in a test run";
 /// A pane narrower than this, as last drawn, has no transcript control in its header: the title
 /// and × need the room. The top row's mark and the drawer still show one that is on.
 const HEADER_ROOM: f32 = 240.;
-/// The longest the clock goes undrawn while one is on.
-const TICK: Duration = Duration::from_secs(1);
+/// How often what was heard is handed to the core, whether anything was or not. It also draws
+/// the clock.
+const BATCH: Duration = Duration::from_millis(250);
 
 /// A fixture line: `{"after_ms":300,"from":"them","text":"made-up words","final":true}`, heard
 /// `after_ms` after the line before it (or the streams' start).
@@ -30,10 +34,8 @@ const TICK: Duration = Duration::from_secs(1);
 struct Said {
     #[serde(default)]
     after_ms: u64,
-    from: Speaker,
-    text: String,
-    #[serde(rename = "final", default)]
-    is_final: bool,
+    #[serde(flatten)]
+    heard: Heard,
 }
 
 /// The fixture being replayed for transcript `id`.
@@ -45,6 +47,15 @@ pub(crate) struct Feed {
     /// Ms into this run of the streams: a resume starts from 0, as new streams would.
     run_ms: u64,
     paused: bool,
+    /// Heard since the last batch.
+    pending: Vec<Heard>,
+}
+
+/// The file of transcript `id`. None kept in a test run with no folder of its own.
+pub(crate) struct File {
+    id: String,
+    /// `Err`: it could not be made, and why, for the start to fail with.
+    writer: Result<listen_file::Writer, String>,
 }
 
 /// `OTTOSPACE_LISTEN_FIXTURE`, in a test run only.
@@ -86,6 +97,7 @@ fn dot(paused: bool) -> Div {
 impl Workspace {
     /// ⌘⌃T, from the key, the menu or the palette.
     pub(crate) fn transcribe_key(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.listen_flush(window, cx);
         let at = now_ms();
         self.dispatch(Action::ListenToggle { id: new_id(at), at }, self.input, window, cx);
     }
@@ -107,9 +119,11 @@ impl Workspace {
                 }
                 return true;
             }
-            "listen-pause" => Action::ListenPause { at },
+            "listen-pause" | "listen-stop" => {
+                self.listen_flush(window, cx);
+                if kind == "listen-pause" { Action::ListenPause { at } } else { Action::ListenStop { at } }
+            }
             "listen-resume" => Action::ListenResume { at },
-            "listen-stop" => Action::ListenStop { at },
             "listen-top" => Action::ListenShow { on: true },
             "listen-close" => Action::ListenShow { on: false },
             _ => return false,
@@ -118,9 +132,10 @@ impl Workspace {
         true
     }
 
-    /// Carries out a transcript's effect: its streams open, pause, resume or close.
+    /// Carries out a transcript's effect: its streams open, pause, resume or close; its file is written.
     pub(crate) fn listen_effect(&mut self, effect: &Effect, window: &Window, cx: &mut Context<Self>) {
         match effect {
+            Effect::ListenWrite { id, records } => self.listen_write(id, records),
             Effect::ListenOpen { id, .. } => self.listen_open(id.clone(), window, cx),
             Effect::ListenPauseStreams { id } => {
                 if let Some(feed) = self.listen_feed.as_mut().filter(|feed| feed.id == *id) {
@@ -132,17 +147,94 @@ impl Workspace {
                     (feed.paused, feed.run_ms) = (false, 0);
                 }
             }
-            Effect::ListenClose { id } => {
-                if self.listen_feed.as_ref().is_some_and(|feed| feed.id == *id) {
-                    self.listen_feed = None;
-                }
-            }
+            Effect::ListenClose { id } => self.listen_close(id),
             _ => {}
         }
     }
 
-    /// The streams of `id`: in a test run, its fixture's lines, one at a time; else none yet.
-    /// A task of its own, as the streams would be: what it hears comes back as `System` news.
+    /// Its streams close for good.
+    fn listen_close(&mut self, id: &str) {
+        if self.listen_feed.as_ref().is_some_and(|feed| feed.id == id) {
+            self.listen_feed = None;
+        }
+    }
+
+    /// A transcript a turned-off flag ended, outside a dispatch: its file's end, its streams' close.
+    pub(crate) fn listen_ended(&mut self, effects: &[Effect]) {
+        for effect in effects {
+            match effect {
+                Effect::ListenWrite { id, records } => self.listen_write(id, records),
+                Effect::ListenClose { id } => self.listen_close(id),
+                _ => {}
+            }
+        }
+    }
+
+    /// The file's records: `Begin` makes it, an end or a failure is its last.
+    fn listen_write(&mut self, id: &str, records: &[Record]) {
+        for record in records {
+            if let Record::Begin(head) = record {
+                let writer = config::transcripts_dir()
+                    .map(|dir| listen_file::begin(&dir, head.clone()).map_err(|why| format!("transcripts_dir: {why}")));
+                self.listen_file = writer.map(|writer| File { id: id.into(), writer });
+            }
+        }
+        let Some(file) = self.listen_file.as_ref().filter(|file| file.id == id) else { return };
+        if let Ok(writer) = &file.writer {
+            writer.send(records.iter().filter(|record| !matches!(record, Record::Begin(_))).cloned().collect());
+        }
+        if records.iter().any(|record| matches!(record, Record::End { .. } | Record::Failed)) {
+            // Kept until written, for a quit right after to wait for.
+            if let Some(File { writer: Ok(writer), .. }) = self.listen_file.take() {
+                self.listen_ending.retain(|writer| !writer.done());
+                self.listen_ending.push(writer);
+            }
+        }
+    }
+
+    /// Before the user's Pause or Stop: what was heard since the last batch goes to the core now,
+    /// so none of it is lost. At the user's act, not when someone spoke.
+    pub(crate) fn listen_flush(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if let Some(action) = self.listen_rest() {
+            self.dispatch(action, Origin::System, window, cx);
+        }
+    }
+
+    /// The batch of what was heard and not yet handed over, if one is on.
+    fn listen_rest(&mut self) -> Option<Action> {
+        let feed = self.listen_feed.as_mut()?;
+        let lines = std::mem::take(&mut feed.pending);
+        Some(Action::ListenHeard { id: feed.id.clone(), lines })
+    }
+
+    /// ottospace is quitting: the one on ends now, as when its app quits, with what was heard and
+    /// what was being heard; its file is written to the end before the app goes.
+    pub(crate) fn listen_quit(&mut self) {
+        std::mem::take(&mut self.listen_ending).into_iter().for_each(listen_file::Writer::finish);
+        let Some(id) = self.model.listen.on.as_ref().map(|on| on.id.clone()) else { return };
+        let mut effects: Vec<Effect> =
+            self.listen_rest().map(|rest| self.model.update(rest.sent_by(Origin::System))).unwrap_or_default();
+        let ended = Action::ListenEnded { id, why: listen::Ended::AppQuit, at: now_ms() };
+        effects.extend(self.model.update(ended.sent_by(Origin::System)));
+        let writer = self.listen_file.as_ref().map(|file| file.id.clone());
+        for effect in &effects {
+            if let Effect::ListenWrite { id, records } = effect {
+                // The last write takes the file: then it is finished, not dropped.
+                let last = records.iter().any(|record| matches!(record, Record::End { .. } | Record::Failed));
+                if last && writer.as_deref() == Some(id.as_str()) {
+                    if let Some(File { writer: Ok(writer), .. }) = self.listen_file.take() {
+                        writer.send(records.clone());
+                        writer.finish();
+                    }
+                } else {
+                    self.listen_write(id, records);
+                }
+            }
+        }
+    }
+
+    /// The streams of `id`: in a test run, its fixture's lines; else none yet. A task of its own,
+    /// as the streams would be: what it hears goes to the core every `BATCH`, as `System` news.
     fn listen_open(&mut self, id: String, window: &Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| {
             let began = this.update_in(cx, |this, window, cx| this.listen_begin(&id, window, cx));
@@ -150,8 +242,7 @@ impl Workspace {
                 return;
             }
             loop {
-                let Ok(Some(wait)) = this.update(cx, |this, _| this.listen_wait(&id)) else { return };
-                cx.background_executor().timer(wait).await;
+                cx.background_executor().timer(BATCH).await;
                 let going = this.update_in(cx, |this, window, cx| this.listen_step(&id, window, cx));
                 if !going.unwrap_or(false) {
                     return;
@@ -166,14 +257,18 @@ impl Workspace {
         if self.model.listen.on.as_ref().is_none_or(|on| on.id != id) {
             return false;
         }
-        let lines = match fixture_path() {
-            Some(path) => read_fixture(&path),
-            None if std::env::var_os("OTTOSPACE_E2E").is_some() => Err(NO_FIXTURE.to_string()),
-            None => Err(listen::NO_SOURCE.to_string()),
+        let unwritable =
+            self.listen_file.as_ref().filter(|file| file.id == id).and_then(|file| file.writer.as_ref().err());
+        let lines = match (unwritable, fixture_path()) {
+            (Some(why), _) => Err(why.clone()),
+            (None, Some(path)) => read_fixture(&path),
+            (None, None) if std::env::var_os("OTTOSPACE_E2E").is_some() => Err(NO_FIXTURE.to_string()),
+            (None, None) => Err(listen::NO_SOURCE.to_string()),
         };
         match lines {
             Ok(lines) => {
-                self.listen_feed = Some(Feed { id: id.into(), lines, due: None, run_ms: 0, paused: false });
+                let pending = Vec::new();
+                self.listen_feed = Some(Feed { id: id.into(), lines, due: None, run_ms: 0, paused: false, pending });
                 self.dispatch(Action::ListenBegan { id: id.into(), at: now_ms() }, Origin::System, window, cx);
                 true
             }
@@ -185,34 +280,30 @@ impl Workspace {
         }
     }
 
-    /// How long until the next line or the clock's next second. None: it ended.
-    fn listen_wait(&mut self, id: &str) -> Option<Duration> {
-        let on = self.model.listen.on.as_ref().is_some_and(|on| on.id == id);
-        let feed = self.listen_feed.as_mut().filter(|feed| on && feed.id == id)?;
-        let now = Instant::now();
-        let next = feed.lines.front().filter(|_| !feed.paused);
-        if let (None, Some(next)) = (feed.due, next) {
-            feed.due = Some(now + Duration::from_millis(next.after_ms));
-        }
-        Some(feed.due.map_or(TICK, |due| due.saturating_duration_since(now).min(TICK)))
-    }
-
-    /// A line heard if it is due, and the clock drawn again. False: it ended.
+    /// One tick: the fixture's lines that are due join the batch, and the batch goes to the core,
+    /// empty or not; the clock is drawn again. False: it ended.
     fn listen_step(&mut self, id: &str, window: &Window, cx: &mut Context<Self>) -> bool {
         if self.model.listen.on.as_ref().is_none_or(|on| on.id != id) {
             return false;
         }
-        cx.notify();
         let Some(feed) = self.listen_feed.as_mut().filter(|feed| feed.id == id) else { return false };
-        if feed.paused || feed.due.is_none_or(|due| due > Instant::now()) {
-            return true;
+        let now = Instant::now();
+        while !feed.paused
+            && let Some(next) = feed.lines.front()
+        {
+            // The first after a start or a resume counts from now; each next from the one before.
+            let due = *feed.due.get_or_insert(now + Duration::from_millis(next.after_ms));
+            if due > now {
+                break;
+            }
+            let Some(said) = feed.lines.pop_front() else { break };
+            feed.run_ms = feed.run_ms.saturating_add(said.after_ms);
+            feed.pending.push(Heard { start_ms: feed.run_ms, ..said.heard });
+            feed.due = feed.lines.front().map(|next| due + Duration::from_millis(next.after_ms));
         }
-        let Some(said) = feed.lines.pop_front() else { return true };
-        feed.due = None;
-        feed.run_ms = feed.run_ms.saturating_add(said.after_ms);
-        let (start_ms, from, text, is_final) = (feed.run_ms, said.from, said.text, said.is_final);
-        let heard = Action::ListenHeard { id: id.into(), from, start_ms, text, is_final };
-        self.dispatch(heard, Origin::System, window, cx);
+        let lines = std::mem::take(&mut feed.pending);
+        self.dispatch(Action::ListenHeard { id: id.into(), lines }, Origin::System, window, cx);
+        cx.notify();
         true
     }
 
