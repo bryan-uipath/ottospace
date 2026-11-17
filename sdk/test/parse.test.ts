@@ -21,6 +21,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       layout: null,
       focused: null,
       live: null,
+      fill_display: false,
       sidebar: null,
       compose: null,
       list: null,
