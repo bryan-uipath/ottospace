@@ -100,11 +100,10 @@ fn write(receiver: mpsc::Receiver<Vec<Record>>, mut made: File, path: PathBuf, h
                 }
                 return;
             }
+            // A line that fails to write is not traced: when one is written says when someone spoke.
             record => {
                 let Some(line) = file::line(&record, &offset) else { continue };
-                if let Err(err) = made.write_all(line.as_bytes()).and_then(|()| made.flush()) {
-                    failed("line", err);
-                }
+                let _ = made.write_all(line.as_bytes()).and_then(|()| made.flush());
                 body += &line;
             }
         }
@@ -115,7 +114,9 @@ fn write(receiver: mpsc::Receiver<Vec<Record>>, mut made: File, path: PathBuf, h
 fn rewrite(path: &Path, head: &Head, at: u64, body: &str) -> io::Result<()> {
     let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     let temp = path.with_file_name(format!(".{name}.tmp"));
-    let mut out = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&temp)?;
+    // A temporary file a crash left keeps its mode: made new, so it is 0600.
+    let _ = fs::remove_file(&temp);
+    let mut out = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temp)?;
     out.write_all(file::header(head, Some(at), &offset).as_bytes())?;
     out.write_all(body.as_bytes())?;
     out.sync_all()?;

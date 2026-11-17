@@ -97,6 +97,7 @@ fn dot(paused: bool) -> Div {
 impl Workspace {
     /// ⌘⌃T, from the key, the menu or the palette.
     pub(crate) fn transcribe_key(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.listen_flush(window, cx);
         let at = now_ms();
         self.dispatch(Action::ListenToggle { id: new_id(at), at }, self.input, window, cx);
     }
@@ -118,9 +119,11 @@ impl Workspace {
                 }
                 return true;
             }
-            "listen-pause" => Action::ListenPause { at },
+            "listen-pause" | "listen-stop" => {
+                self.listen_flush(window, cx);
+                if kind == "listen-pause" { Action::ListenPause { at } } else { Action::ListenStop { at } }
+            }
             "listen-resume" => Action::ListenResume { at },
-            "listen-stop" => Action::ListenStop { at },
             "listen-top" => Action::ListenShow { on: true },
             "listen-close" => Action::ListenShow { on: false },
             _ => return false,
@@ -171,16 +174,43 @@ impl Workspace {
         }
     }
 
-    /// ottospace is quitting: the file of the one on ends now, its header with the end.
+    /// Before the user's Pause or Stop: what was heard since the last batch goes to the core now,
+    /// so none of it is lost. At the user's act, not when someone spoke.
+    pub(crate) fn listen_flush(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if let Some(action) = self.listen_rest() {
+            self.dispatch(action, Origin::System, window, cx);
+        }
+    }
+
+    /// The batch of what was heard and not yet handed over, if one is on.
+    fn listen_rest(&mut self) -> Option<Action> {
+        let feed = self.listen_feed.as_mut()?;
+        let lines = std::mem::take(&mut feed.pending);
+        Some(Action::ListenHeard { id: feed.id.clone(), lines })
+    }
+
+    /// ottospace is quitting: the one on ends now, as when its app quits, with what was heard and
+    /// what was being heard; its file is written to the end before the app goes.
     pub(crate) fn listen_quit(&mut self) {
-        if let Some(File { writer: Ok(writer), .. }) = self.listen_file.take() {
-            let on = self.model.listen.on.as_ref();
-            let record = match on.map(|on| (on.status, on.started)) {
-                Some((Status::Starting, _)) | None => Record::Failed,
-                Some((_, started)) => Record::End { at: now_ms().max(started) },
-            };
-            writer.send(vec![record]);
-            writer.finish();
+        let Some(id) = self.model.listen.on.as_ref().map(|on| on.id.clone()) else { return };
+        let mut effects: Vec<Effect> =
+            self.listen_rest().map(|rest| self.model.update(rest.sent_by(Origin::System))).unwrap_or_default();
+        let ended = Action::ListenEnded { id, why: listen::Ended::AppQuit, at: now_ms() };
+        effects.extend(self.model.update(ended.sent_by(Origin::System)));
+        let writer = self.listen_file.as_ref().map(|file| file.id.clone());
+        for effect in &effects {
+            if let Effect::ListenWrite { id, records } = effect {
+                // The last write takes the file: then it is finished, not dropped.
+                let last = records.iter().any(|record| matches!(record, Record::End { .. } | Record::Failed));
+                if last && writer.as_deref() == Some(id.as_str()) {
+                    if let Some(File { writer: Ok(writer), .. }) = self.listen_file.take() {
+                        writer.send(records.clone());
+                        writer.finish();
+                    }
+                } else {
+                    self.listen_write(id, records);
+                }
+            }
         }
     }
 

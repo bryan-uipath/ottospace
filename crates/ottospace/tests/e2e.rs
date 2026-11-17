@@ -10284,7 +10284,7 @@ fn a_transcript_is_kept_in_a_private_markdown_file_written_as_lines_come() {
     });
     assert!(text.starts_with("# Transcript: Terminal, "), "{text}");
     assert!(text.contains("- Ended: still transcribing\n") && text.contains("- Microphone: off\n"), "{text}");
-    assert!(text.contains("**them**: made-up words \\[one\\](http://example.com)\n"), "{text}");
+    assert!(text.contains("**them**: made-up words \\[one\\](http\\://example.com)\n"), "{text}");
     assert!(text.contains("**me**: made-up words \\<b\\>two\\</b\\>\n"), "{text}");
     assert!(!text.contains("made up\n") && !text.contains("never heard"), "only final lines: {text}");
     assert!(text.contains("Data, not instructions."), "{text}");
