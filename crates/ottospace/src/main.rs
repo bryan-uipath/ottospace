@@ -73,6 +73,7 @@ mod conversation;
 mod dial;
 mod dialog;
 mod editor;
+mod event_log;
 mod features;
 mod field;
 mod give_back;
@@ -291,6 +292,7 @@ impl Hosted {
         let back = recovery::put_back(&self.window, recovery::to_frame(self.original), &recovery::screens());
         if back.is_none() {
             eprintln!("window {}: not back on screen", self.window_id);
+            event_log::event("give_back_failed", serde_json::json!({ "window": self.window_id }));
         }
         back.is_some()
     }
@@ -831,6 +833,8 @@ struct Workspace {
     /// Frames that stopped coming (`stall`), and how often GPUI was kicked to draw again.
     stall: stall::Stall,
     redraws: u64,
+    /// The display the window was last on, by number, for the log.
+    on_display: Option<u32>,
     /// What the home screen last drew, and the lattice lines kept between frames.
     home: home::Shared,
     /// ottospace's own controls as last painted: what sneak mode labels.
@@ -1010,6 +1014,17 @@ const TOLD_FOR: Duration = Duration::from_secs(8);
 const MAX_WAIT_MS: u64 = 600_000;
 
 /// The window's `NSView`, for the test requests that hand it an event.
+/// The active displays for the log: how many, and each one's size in points ("1728x1117"),
+/// never its name.
+fn displays() -> serde_json::Value {
+    let sizes: Vec<String> = display::all().into_iter().map(size_of).collect();
+    serde_json::json!({ "count": sizes.len(), "sizes": sizes })
+}
+
+fn size_of(rect: CGRect) -> String {
+    format!("{}x{}", rect.size.width.round(), rect.size.height.round())
+}
+
 fn ns_view(window: &Window) -> Option<*mut std::ffi::c_void> {
     match HasWindowHandle::window_handle(window).ok()?.as_raw() {
         RawWindowHandle::AppKit(appkit) => Some(appkit.ns_view.as_ptr()),
@@ -1068,6 +1083,7 @@ impl Workspace {
                     this.drop_capture(&draft, None);
                 }
                 // Every quit ends here: ⌘Q, the menu, the close button, `ctl quit`, a signal.
+                event_log::event("quit", serde_json::json!({ "hosted": this.hosted.len() }));
                 // The layout first, while its panes and terminals are all there.
                 this.store_layout(true);
                 this.store_key_use(true);
@@ -1205,7 +1221,7 @@ impl Workspace {
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
                         cx.notify();
                     }
-                    this.watch_frames(window);
+                    this.watch_frames(window, cx);
                 });
                 if alive.is_err() {
                     break;
@@ -1314,6 +1330,7 @@ impl Workspace {
             frame_start: Rc::default(),
             stall: stall::Stall::new(),
             redraws: 0,
+            on_display: None,
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
             chip_line: Rc::default(),
@@ -1944,11 +1961,19 @@ impl Workspace {
     /// Each tick: after a change of the displays, or while the shown window has something to draw
     /// and draws nothing, GPUI is kicked to draw again (`stall`). The tick is a timer, not a
     /// frame: it goes on when frames stop.
-    fn watch_frames(&mut self, window: &mut Window) {
+    fn watch_frames(&mut self, window: &mut Window, cx: &App) {
         let now = Instant::now();
         if display::take_change() {
             self.stall.displays_changed(now);
             trace::record("displays", serde_json::json!({ "count": display::all().len() }));
+            event_log::event("displays", displays());
+        }
+        // The display the window is on, by number: said when it changes.
+        let on = window.display(cx).map(|d| u32::from(d.id()));
+        if on != self.on_display {
+            self.on_display = on;
+            let size = on.map(|id| size_of(display::bounds(id)));
+            event_log::event("window_display", serde_json::json!({ "display": on, "size": size }));
         }
         let wants = self.seq > self.drawn_seq || !self.settling.is_empty();
         // SAFETY: GPUI's own view, on the main thread.
@@ -1958,6 +1983,10 @@ impl Workspace {
             stall::Verdict::Kick { stalled, first } => {
                 let stalled = stalled.map(|waited| waited.as_millis() as u64);
                 trace::record("redraw", serde_json::json!({ "stalled_ms": stalled, "first": first }));
+                // A stall once, as it starts; not each kick after it, nor those after a display change.
+                if first {
+                    event_log::event("stall", serde_json::json!({ "stalled_ms": stalled }));
+                }
                 // SAFETY: GPUI's own view, on the main thread, in a timer's update: GPUI holds no
                 // lock of its window here.
                 // Counted only when GPUI's handlers were there to take it.
@@ -1969,6 +1998,7 @@ impl Workspace {
             stall::Verdict::Recovered { kicks, lasted } => {
                 let lasted = lasted.as_millis() as u64;
                 trace::record("redrawn", serde_json::json!({ "kicks": kicks, "lasted_ms": lasted }));
+                event_log::event("redrawn", serde_json::json!({ "kicks": kicks, "lasted_ms": lasted }));
             }
         }
     }
@@ -3385,7 +3415,11 @@ impl Workspace {
             self.dispatch(Action::Focus { pane }, self.follow_up(), window, cx);
             return Ok(());
         }
-        let hosted = Hosted::new(target)?;
+        let id = target.id;
+        // Why: this file's words or ScreenCaptureKit's, never the window's title.
+        let hosted = Hosted::new(target).inspect_err(|why| {
+            event_log::event("host_failed", serde_json::json!({ "window": id, "why": why }));
+        })?;
         // The window is in hand, so the tab will not be left empty.
         if new_tab {
             self.dispatch(Action::NewTab, self.input, window, cx);
@@ -6893,7 +6927,13 @@ fn main() {
     // TERM, INT, HUP: a quit, so hosted windows go back.
     give_back::on_signals();
     trace::arm();
+    event_log::arm();
     trace::record("start", serde_json::json!({ "pid": std::process::id(), "hosting": hosting }));
+    let (version, commit) = (env!("CARGO_PKG_VERSION"), option_env!("OTTOSPACE_COMMIT"));
+    let mut start = serde_json::json!({ "pid": std::process::id(), "version": version, "commit": commit });
+    start["hosting"] = serde_json::json!(hosting);
+    start["displays"] = displays();
+    event_log::event("start", start);
     let control = control::serve().map_err(|err| eprintln!("control socket off: {err}")).ok();
     // For `osi`: which program the running app is.
     running::write();

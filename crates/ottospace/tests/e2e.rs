@@ -10506,3 +10506,38 @@ fn the_window_draws_on_after_the_displays_change() {
     // Frames come, so nothing more is kicked.
     assert_eq!(redraws(&otto), 4);
 }
+
+/// `<home>/log`: the start, the display the window is on, a change of the displays and the quit,
+/// private, in the folder the test named. Counts and sizes only.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_log_says_the_start_the_displays_and_the_quit() {
+    let home = support::temp(&format!("ottospace-e2e-event-log-{}", std::process::id()));
+    let mut otto = Otto::launch_with("event-log", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let file = home.join("log");
+    let events = || -> Vec<Value> {
+        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        text.lines().map(|line| serde_json::from_str(line).expect("a JSON line")).collect()
+    };
+    let has = |events: &[Value], ev: &str| events.iter().any(|e| e["ev"] == ev);
+    otto.call(json!({"cmd": "display_change"}));
+    otto.wait_for("the change in the log", |_| Some(events()).filter(|e| has(e, "displays")));
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+    let events = events();
+    // A slow machine's stall may come between; it is not what this test is about.
+    let stalls = ["stall", "redrawn"];
+    let events: Vec<Value> = events.into_iter().filter(|e| !stalls.iter().any(|s| e["ev"] == *s)).collect();
+    let names: Vec<&str> = events.iter().filter_map(|e| e["ev"].as_str()).collect();
+    assert_eq!(names, ["start", "window_display", "displays", "quit"], "{events:?}");
+    let start = &events[0];
+    assert!(start["pid"].is_u64() && start["version"].is_string() && start["displays"]["count"].as_u64() > Some(0));
+    let changed = &events[2];
+    let sizes = changed["sizes"].as_array().expect("sizes");
+    assert_eq!(changed["count"].as_u64(), Some(sizes.len() as u64));
+    // "1728x1117": a size, never a name.
+    assert!(sizes.iter().all(|s| s.as_str().is_some_and(|s| s.split('x').all(|n| n.parse::<f64>().is_ok()))));
+    assert!(events.iter().all(|e| e["at"].as_str().is_some_and(|at| at.len() == 25)), "{events:?}");
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+}

@@ -1196,6 +1196,34 @@ ottospace ctl '{"cmd":"trace"}'                      # the last 2,000 events: na
 `OTTOSPACE_TRACE=1` also writes the trace to `~/.ottospace/trace.jsonl` when the app panics or gets
 `kill -USR1`.
 
+### The log
+
+`~/.ottospace/log` keeps what happened to the app, to read after a problem: one JSON line an
+event, in local time, e.g. `{"at":"2026-11-16T17:51:03-08:00","ev":"displays","count":1,"sizes":["1728x1117"]}`.
+Only you can read it (0600). At 1 MB it becomes `log.1` and the one before goes: 2 MB at most.
+
+| Event | Fields |
+|---|---|
+| `start` | `pid`, `version`, `commit`, `hosting`, `displays` (`count`, `sizes`) |
+| `quit` | `hosted`: windows given back |
+| `displays` | The displays changed (one plugged in or taken away): `count`, `sizes` in points |
+| `window_display` | The window is on another display: its number and size |
+| `stall` | The window had something to draw for `stalled_ms` and drew nothing; ottospace has it draw again |
+| `redrawn` | Frames came again after a stall: `kicks`, `lasted_ms` |
+| `host_failed` | A window could not be hosted: its number, and why (ottospace's words or ScreenCaptureKit's) |
+| `give_back_failed` | A hosted window could not be put back on a screen: its number |
+| `panic` | Where (`file:line`) and on which thread; never the message |
+
+Never in it: terminal or transcript text, titles, meetings, passes, paths or file contents.
+The same lines go to the unified log, subsystem `dev.ottospace` (in zsh, `log` is a builtin, so
+name `/usr/bin/log`):
+
+```sh
+/usr/bin/log show --predicate 'subsystem == "dev.ottospace"' --last 1d
+```
+
+A test run writes neither: the file only in a folder it names with `OTTOSPACE_HOME`.
+
 `ottospace skill` prints every request with an example, and what the state fields mean. Fields are
 in `Request` in [`crates/ottospace/src/control.rs`](../crates/ottospace/src/control.rs). Unknown commands and
 fields are refused.
