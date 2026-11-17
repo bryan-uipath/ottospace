@@ -380,7 +380,8 @@ impl Workspace {
             let cell = [f64::from(f32::from(self.cell.width)), f64::from(f32::from(self.cell.height))];
             let height = f64::from(f32::from(shown.height));
             let row = if height > 0.0 { cell[1] / height } else { 0.0 };
-            let lines = screen.lines();
+            // Its rows with every live pass hidden, as a client reads them.
+            let lines = self.terminals.get(&pane).map(|terminal| terminal.lines()).unwrap_or_default();
             self.shots.insert(n, Shot { frozen: Frozen::Terminal { screen, shown, cell }, png: None, scale });
             self.dispatch(taken(true, false), Origin::System, window, cx);
             self.dispatch(content(Content::Terminal { lines, row }), Origin::System, window, cx);

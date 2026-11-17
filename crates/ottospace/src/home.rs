@@ -342,7 +342,7 @@ impl Workspace {
 
         // Home's house and name over the key caps; an empty tab's caps alone.
         let heading = on_home.then(|| {
-            let house = svg().path(HOME_ICON).size(px(18.)).flex_none().text_color(rgb(theme::MUTED));
+            let house = svg().path(HOME_ICON).size(px(16.)).flex_none().text_color(rgb(theme::MUTED));
             div().flex().items_center().gap_2().text_base().child(house).child(HOME_NAME)
         });
         drawn.borrow_mut().heading = heading.as_ref().map(|_| HOME_NAME);

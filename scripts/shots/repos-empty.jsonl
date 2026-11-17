@@ -1,0 +1,9 @@
+# Opt-in: a new user's Repos section lists nothing (before: every repository under ~/code) and
+# offers to add one. Two added: listed in the order added, not by name.
+{"cmd":"section","section":"repos"}
+{"settle":true}
+{"shot":"empty"}
+{"cmd":"repo_add","path":"{ROOT}/user/code/web"}
+{"cmd":"repo_add","path":"{ROOT}/user/code/canvas-app/src"}
+{"cmd":"key","keys":"escape"}
+{"shot":"added"}

@@ -12,7 +12,11 @@ fn item(name: &'static str, action: impl Action) -> MenuItem {
 pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
     let marks = features.on(ottospace_core::features::Feature::Marks);
     let transcripts = features.on(ottospace_core::features::Feature::Transcripts);
-    let transcribe = [MenuItem::separator(), item("Start or Stop Transcribing", listen::Transcribe)];
+    let transcribe = [
+        MenuItem::separator(),
+        item("Start or Stop Transcribing", listen::Transcribe),
+        item("Pause or Resume Transcribing", listen::PauseTranscribing),
+    ];
     let mark_tab = [MenuItem::separator(), item("Mark Tab", MarkTab), item("Go to Mark…", MarkJump)];
     vec![
         Menu {
@@ -39,6 +43,8 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 item("Save Tab as Workspace", SaveWorkbook),
                 item("Add Tab to Workspace…", AddTabToWorkbook),
                 item("Save All Tabs as Workspace", SaveAllWorkbook),
+                MenuItem::separator(),
+                item("Add Folder to Repos", AddToRepos),
                 MenuItem::separator(),
                 item("Start Fresh", StartFresh),
                 MenuItem::separator(),
