@@ -28,6 +28,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       rail_focus: null,
       repos: [],
       repo_dirs: { dirs: [], fixed: false },
+      repos_open: [],
       tasks: { list: [] },
       collapsed: ["done"],
       tasks_view: "state",

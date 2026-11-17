@@ -1,0 +1,15 @@
+# Transcripts: the drawer's header holds the controls: Stop, and ⋯ with Pause. Paused, "Paused" and
+# Resume where the meter was. The fixture's made-up lines stand in for the sound.
+{"env":{"OTTOSPACE_FEATURES":"transcripts","OTTOSPACE_LISTEN_FIXTURE":"{ROOT}/fixture.jsonl"}}
+{"cmd":"split"}
+{"cmd":"wait","pattern":"^\\$"}
+{"cmd":"type","text":"clear && echo weekly sync\r"}
+{"cmd":"wait","pattern":"^weekly sync$"}
+{"click":"listen-start:1"}
+{"until":"listen_lines","len":6}
+{"click":"listen-menu"}
+{"settle":300}
+{"shot":"menu"}
+{"click":"row-menu:0"}
+{"until":"state.listen.status","is":"paused"}
+{"shot":"paused"}

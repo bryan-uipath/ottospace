@@ -72,6 +72,8 @@
 {"cmd":"record_start","dir":"/tmp/rec"}
 {"cmd":"record_stop"}
 {"cmd":"listen_end","why":"app_quit"}
+{"cmd":"audio_probe_start"}
+{"cmd":"audio_probe_stop"}
 {"cmd":"zoom_press"}
 {"cmd":"display_change"}
 {"cmd":"calendar","day":"tomorrow","days":2}

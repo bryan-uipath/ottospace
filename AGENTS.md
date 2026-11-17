@@ -106,6 +106,10 @@ Rules:
   - `record_start` (`"dir"`) and `record_stop`: ScreenCaptureKit films ottospace's own window
     into `dir`, a raw BGRA file a change and `frames.jsonl` (`record.rs`), for
     `scripts/shot --record`. Outside a test run no client films the window.
+  - `audio_probe_start` and `audio_probe_stop`: ScreenCaptureKit hears the app
+    `OTTOSPACE_HOST_ONLY` names (the canary), with no recogniser; the stop's reply lists each
+    buffer's `pts_ms`, `samples` and `rms`, to see whether silence comes as buffers. Outside a test
+    run no client hears an app.
   - `zoom_press`: the window's green button, pressed as the user would (`performZoom:`). The zoom
     fills the display instead (`ottospace_mac::window::zoom_asks`); refused if that hook is not in,
     so it never zooms the test's window. Outside a test run only the user's hand fills the display.

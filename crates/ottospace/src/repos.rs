@@ -15,6 +15,20 @@ pub fn scan() -> Vec<Repo> {
     roots().iter().flat_map(|root| found_in(root)).collect()
 }
 
+/// The repository `dir` (resolved) is in: the nearest folder up with a `.git`; a linked
+/// worktree's (`gitdir: /code/app/.git/worktrees/app-2`) is its main repository, `/code/app`.
+/// `None`: in none.
+pub fn repository_of(dir: &Path) -> Option<PathBuf> {
+    let top = dir.ancestors().find(|at| at.join(".git").exists())?;
+    let pointer = text(&top.join(".git")).and_then(|text| Some(top.join(text.trim().strip_prefix("gitdir: ")?)));
+    let main = pointer.and_then(|git_dir| {
+        let worktrees = git_dir.canonicalize().ok()?.parent()?.to_path_buf();
+        let dot_git = worktrees.parent().filter(|_| worktrees.ends_with("worktrees"))?;
+        dot_git.ends_with(".git").then(|| dot_git.parent().map(Path::to_path_buf)).flatten()
+    });
+    Some(main.unwrap_or_else(|| top.to_path_buf()))
+}
+
 /// The repositories of one directory: itself, or those it holds one level down.
 pub fn found_in(root: &Path) -> Vec<Repo> {
     if root.join(".git").exists() {
