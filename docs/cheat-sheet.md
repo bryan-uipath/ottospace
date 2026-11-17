@@ -243,7 +243,7 @@ The Calendar section (second on the rail, only while `calendar_ics` is set) list
 
 `calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a band of the workday (`calendar_workday`, `"09:00-17:00"`) above the status bar, hover a block for its details (now's tick: the next meeting and when the feed was read), a pulse from 10 minutes before, and at the start, if you are in no call (or still in an earlier one), a meeting notice on the notice bar (Join, × to dismiss) and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link; `calendar_email` (your address in the feed) leaves out meetings you declined; `calendar_hide_free: true` leaves out free entries (a feed without attendees); `calendar_colors` colours by title (`[{"match": "1:1", "color": "teal"}]`). On the band calls sit in lanes over faint blocks of time held; a block that starts with `Focus` or `Deep Work` and has no call link is green.
 
-`windows` rules name windows ottospace leaves alone, by `app`, `title` and `subrole`: [reference](reference.md#settings).
+`windows` rules name windows ottospace leaves alone, by `app`, `title`, `identifier` and `subrole`: [reference](reference.md#settings).
 
 `repos`: the repositories Repos lists, in its order, none until you add one. Older settings named folders to look in: a folder of repositories there shows as one folded group (remove it, add the ones you use); `~/code` and `~/notes` are no longer looked in by default.
 

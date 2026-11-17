@@ -62,7 +62,7 @@ is a made-up "Meetings" app; so are the examples here.
   letters in either case. "Contains" is written `*x*`, "is" is written `x`, a pattern is anything
   else. One syntax for every field.
 - **`Selector` is one struct in `ottospace-core::rules`**, with `selects(&Facts) -> Match` (`Yes`,
-  `No`, or `NeedsTree` while `has` is unread). `Facts` gains `identifier: Option<&str>`. Today only
+  `No`, or `NeedsTree` while `has` is unread; until `has` exists, slice 1 returns `bool`). `Facts` gains `identifier: Option<&str>`. Today only
   `ottospace-mac::ax_tree` reads `AXIdentifier`; slice 1 adds it to `ax::Window` and the facts the
   window list gives (`standard_of`).
 - **Evaluated in the core, once.** The shell passes facts and the core runs `selects`, for slots,
