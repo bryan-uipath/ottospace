@@ -1432,6 +1432,19 @@ export interface RecordReply {
   frames: number;
 }
 
+/** One sound buffer `audio_probe_stop` heard: its presentation time (null: none), length, level. */
+export interface ProbeBuffer {
+  pts_ms: number | null;
+  samples: number;
+  rms: number;
+}
+
+/** `audio_probe_stop`'s reply: the buffers heard, in order. */
+export interface AudioProbeReply {
+  ok: true;
+  buffers: ProbeBuffer[];
+}
+
 /** A scroll area's bar, in window points. `opacity` 0: faded out, and it takes no press. */
 export interface Scrollbar {
   track: Rect;

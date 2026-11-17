@@ -1926,6 +1926,82 @@ fn a_sound_the_canarys_child_plays_is_heard_as_the_canarys() {
     }
 }
 
+/// A sound file's length, by `afinfo`.
+fn seconds(file: &std::path::Path) -> f64 {
+    let info = Command::new("/usr/bin/afinfo").arg(file).output().expect("afinfo");
+    let info = String::from_utf8_lossy(&info.stdout).into_owned();
+    let line = info.lines().find_map(|line| line.trim().strip_prefix("estimated duration:"));
+    line.and_then(|rest| rest.trim().trim_end_matches("sec").trim().parse().ok()).expect("a duration")
+}
+
+/// Whether ScreenCaptureKit sends buffers while an app is silent, or none: then the samples fed
+/// to the recogniser lose each silence and a line's time shrinks by it. The canary says made-up
+/// words with 8 s of silence inside the file, then plays nothing for 8 s, then speaks again; each
+/// buffer's presentation time is kept with no recogniser (CI's virtual machine has none). The
+/// time from the first buffer to the last is what the samples must cover.
+#[test]
+#[ignore = "hears the canary's own made-up speech; run with `cargo e2e-apps`"]
+fn the_canarys_silence_comes_as_samples_not_as_a_gap_in_time() {
+    let home = support::temp(&format!("otto-apps-probe-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("make the folder");
+    std::fs::write(home.join("settings.json"), json!({"restore_layout": false}).to_string()).expect("settings");
+    let say = |name: &str, words: &str| {
+        let file = home.join(name);
+        let said = Command::new("/usr/bin/say").arg("-o").arg(&file).arg(words).status().expect("say");
+        assert!(said.success(), "say -o");
+        file
+    };
+    let gap = say("gap.aiff", "The orange canary sings. [[slnc 8000]] The orange canary sings again.");
+    let short = say("short.aiff", "The orange canary is done.");
+
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-probe", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto-probe",
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
+        ],
+    );
+    otto.call(json!({"cmd": "audio_probe_start"}));
+    std::thread::sleep(Duration::from_secs(1));
+    canary.call(json!({"cmd": "play", "path": gap}));
+    std::thread::sleep(Duration::from_secs_f64(seconds(&gap) + 0.5));
+    // Nothing playing.
+    std::thread::sleep(Duration::from_secs(8));
+    canary.call(json!({"cmd": "play", "path": short}));
+    std::thread::sleep(Duration::from_secs_f64(seconds(&short) + 1.0));
+    let reply = otto.call(json!({"cmd": "audio_probe_stop"}));
+    let _ = std::fs::remove_dir_all(&home);
+
+    // (presentation ms, length ms, rms) of each buffer with a time.
+    let buffers: Vec<(f64, f64, f64)> = reply["buffers"]
+        .as_array()
+        .expect("buffers")
+        .iter()
+        .filter_map(|b| Some((b["pts_ms"].as_f64()?, b["samples"].as_f64()? / 16., b["rms"].as_f64()?)))
+        .collect();
+    let given = reply["buffers"].as_array().map_or(0, Vec::len);
+    assert!(!buffers.is_empty(), "no buffer with a time of {given}: {reply}");
+    let (first, last) = (buffers[0], buffers[buffers.len() - 1]);
+    let span = last.0 + last.1 - first.0;
+    let sampled: f64 = buffers.iter().map(|b| b.1).sum();
+    // Where time jumps past the samples: (at ms from the first, ms missing).
+    let gaps: Vec<(f64, f64)> =
+        buffers.windows(2).map(|w| (w[1].0 - first.0, w[1].0 - (w[0].0 + w[0].1))).filter(|gap| gap.1 > 100.).collect();
+    let quiet = buffers.iter().filter(|b| b.2 < 0.001).count();
+    eprintln!(
+        "audio probe: {given} buffers ({} timed, {quiet} silent), {span:.0} ms presented, {sampled:.0} ms of samples, \
+         gaps over 100 ms (at, missing): {gaps:.0?}",
+        buffers.len()
+    );
+    assert!(span > 20_000., "the canary played for more than 20 s, buffers span {span:.0} ms");
+    assert!(span - sampled < 500., "{:.0} ms presented with no samples: {gaps:.0?}", span - sampled);
+}
+
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
 fn the_window_fills_its_display_an_apps_window_stops_at_the_dock_and_every_end_brings_the_bars_back() {

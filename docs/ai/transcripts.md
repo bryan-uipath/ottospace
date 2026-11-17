@@ -322,12 +322,18 @@ from the model.
   transcribing`), and each final line is appended and flushed as it arrives, so a crash loses at
   most the line still in the recogniser. At the end, the header's `Ended` is filled in by writing
   the whole file again to a temporary file in the same folder (0600) and renaming it over the
-  original. A crash leaves `still transcribing`, read as ended at the last line.
+  original. A crash leaves `still transcribing`, read as ended at the last line. The rewrite is
+  from what ottospace wrote, not from the file: an edit the user makes to the file while it is
+  being written is overwritten when it ends. Accepted by the owner (2026-11-17); the first-use
+  explanation says so (§7).
 - **The text**: each line goes through `capture::plain` (one line, visible characters only), and
   Markdown's active characters in it are escaped (`\`, `` ` ``, `*`, `_`, `[`, `]`, `<`, `>`, `#`,
   `|`; built: also `!`, `&`, `~`, `:`, `@` and the `.` of `www.`, so previews that find links in
-  bare text find none), so heard words never render as a link, an image, HTML or a heading. A unit test writes
-  hostile strings and parses the file back.
+  bare text find none; and Obsidian's and GitHub's own: `$` math, `%%` comments, `==` highlights,
+  `^` superscripts and block ids, with `~~`, `[[` wiki links and embeds, `#tag` and `[^` footnotes
+  already covered by `~`, `[`, `!` and `#`), so heard words never render as a link, an image, HTML,
+  a heading, math, a tag or a hidden comment. Unit tests write hostile strings, one per syntax,
+  and parse the file back.
 - **No jsonl**: the app needs no second copy. The Transcripts list and `Add to task` read the
   Markdown back with the core's own parser for this format (unit-tested). Lines it does not
   recognise (the user edited the file) are skipped, and a file it cannot read is listed as "not
@@ -392,7 +398,8 @@ ottospace gives no legal advice and does not decide for the user. Its stance:
   captured (that app's audio, and the mic if on); that it stays on this Mac; where the files go
   (the folder, and, if it is not ottospace's own, "if this folder is synced or a git repository,
   transcripts go where it goes"); that the others are not told; that an `auto` rule starts one
-  with no click; and that rules on recording calls differ by place. `Start` / `Cancel`.
+  with no click; that rules on recording calls differ by place; and, in these words, "Edits you
+  make to a transcript's file while it is being written are lost when it ends." `Start` / `Cancel`.
   Remembered in settings (`transcripts_explained`, written by `ListenExplained`, the user's act).
 - **Every start**: the notice bar says "Transcribing Zoom: let the others know." (info, until
   dismissed or 10 seconds). For an auto start this, with the indicator, is how the user learns it

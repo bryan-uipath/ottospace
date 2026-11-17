@@ -811,6 +811,8 @@ struct Workspace {
     key_notice: Option<String>,
     /// A test run's recording of its own window (`record_start`).
     recording: Option<record::Recording>,
+    /// A test run's ear on the canary's sound (`audio_probe_start`).
+    audio_probe: Option<listen_live::Probe>,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// Each pane's bounds inside its border, for e2e to check the live window's gap.
@@ -1312,6 +1314,7 @@ impl Workspace {
             visual_after: Vec::new(),
             key_notice: None,
             recording: None,
+            audio_probe: None,
             cells: HashMap::new(),
             frames: HashMap::new(),
             renders: 0,
@@ -2448,6 +2451,29 @@ impl Workspace {
                     let answer = match self.recording.take() {
                         Some(recording) => serde_json::json!({ "ok": true, "frames": recording.stop() }).to_string(),
                         None => control::error("not recording"),
+                    };
+                    let _ = reply.send(answer);
+                    continue;
+                }
+                Request::AudioProbeStart => {
+                    let started = match self.audio_probe {
+                        Some(_) => Err("already hearing".to_string()),
+                        None => listen_live::Probe::start(),
+                    };
+                    let answer = match started {
+                        Ok(probe) => {
+                            self.audio_probe = Some(probe);
+                            serde_json::json!({ "ok": true }).to_string()
+                        }
+                        Err(why) => control::error(&why),
+                    };
+                    let _ = reply.send(answer);
+                    continue;
+                }
+                Request::AudioProbeStop => {
+                    let answer = match self.audio_probe.take() {
+                        Some(probe) => serde_json::json!({ "ok": true, "buffers": probe.stop() }).to_string(),
+                        None => control::error("not hearing"),
                     };
                     let _ = reply.send(answer);
                     continue;
@@ -7015,7 +7041,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 9] = [
+        const TESTS_ONLY: [&str; 11] = [
             "capture_start",
             "repo_add",
             "inspector_fixture",
@@ -7024,6 +7050,8 @@ mod tests {
             "record_start",
             "record_stop",
             "listen_end",
+            "audio_probe_start",
+            "audio_probe_stop",
             "zoom_press",
         ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
