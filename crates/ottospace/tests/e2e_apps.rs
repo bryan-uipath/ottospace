@@ -2216,6 +2216,36 @@ fn named_frame(node: &Value, name: &str) -> Option<[f64; 4]> {
     }
 }
 
+/// Clicks at `x, y` the ways a test does, and counts the releases the system did not take:
+/// `[cliclick, cliclick double, posted]`, of three each.
+fn lost_releases(x: f64, y: f64) -> [usize; 3] {
+    let lost = |click: &dyn Fn()| {
+        (0..3)
+            .filter(|_| {
+                click();
+                std::thread::sleep(Duration::from_millis(300));
+                let down = ottospace_mac::input::left_button_down();
+                if down {
+                    let up = Command::new("cliclick").arg(format!("du:{x:.0},{y:.0}")).status();
+                    assert!(up.is_ok_and(|s| s.success()), "cliclick failed");
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+                std::thread::sleep(Duration::from_millis(400));
+                down
+            })
+            .count()
+    };
+    let cliclick = |kind: &str| {
+        let status = Command::new("cliclick").arg(format!("{kind}:{x:.0},{y:.0}")).status();
+        assert!(status.is_ok_and(|s| s.success()), "cliclick failed");
+    };
+    [
+        lost(&|| cliclick("c")),
+        lost(&|| cliclick("dc")),
+        lost(&|| ottospace_mac::input::click(objc2_core_foundation::CGPoint::new(x, y), 1)),
+    ]
+}
+
 #[test]
 #[ignore = "moves a Finder window it opens; run with `cargo e2e-apps` and OTTOSPACE_E2E_FINDER"]
 fn a_hosted_finder_window_takes_the_users_clicks() {
@@ -2292,6 +2322,10 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
     let live = wait_or("the window over its pane", seen, || frame().filter(|f| !close(f[0], spot[0])));
     std::thread::sleep(Duration::from_millis(800));
     report(&format!("finder, live: {}", seen()));
+    // A blank spot of its icon view, low on the right.
+    let blank = |f: [f64; 4]| (f[0] + f[2] - 60.0, f[1] + f[3] - 60.0);
+    let (bx, by) = blank(live);
+    report(&format!("finder, hosted: lost releases {:?}; {}", lost_releases(bx, by), seen()));
 
     // A real double-click on the folder inside opens it: Finder took the click.
     let icon = wait_for("the inner folder's icon", || icon_of(&inner));
@@ -2303,9 +2337,6 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
         wait_or("the double-click to open the folder", opened, || (title()? == inner).then_some(()))
     }));
     report(&format!("finder, after the double-click: {}", opened()));
-    if let Err(panic) = result {
-        std::panic::resume_unwind(panic);
-    }
 
     // Quit: the window goes back where it was.
     otto.call(json!({"cmd": "quit"}));
@@ -2315,8 +2346,40 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
     bring_forward(pid as u32, "Finder");
     press("keystroke \"[\" using command down");
     wait_for("the window back at the folder", || (title()? == outer).then_some(()));
+    let (bx, by) = blank(wait_for("its frame", frame));
+    report(&format!("finder, given back: lost releases {:?}; front {:?}", lost_releases(bx, by), front_app()));
     let icon = wait_for("the first folder's icon", || icon_of(&first));
     double_click(icon);
     let control = || format!("title {:?}, icon {icon:?}, window {:?}, front {:?}", title(), frame(), front_app());
     wait_or("the control double-click to open its folder", control, || (title()? == first).then_some(()));
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_hosted_canary_window_takes_the_users_clicks() {
+    // The control for Finder's: the same clicks on a hosted canary window.
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-clicks", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || global_frame(&canary, 0));
+    let otto = otto_for(&canary, "otto-clicks", &[]);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let spot = host_and_park(&otto);
+    bring_forward(otto.child.id(), "ottospace");
+    let at = on_picture(&otto);
+    click_at(at[0], at[1], false);
+    wait_for("the pane to go live", || (state()["mode"] == "app").then_some(()));
+    let live = wait_for("the window over its pane", || global_frame(&canary, 0).filter(|f| !close(f[0], spot[0])));
+    std::thread::sleep(Duration::from_millis(800));
+    let clicks = || canary.call(json!({"cmd": "state"}))["windows"][0]["clicks"].as_array().map_or(0, Vec::len);
+    let before = clicks();
+    let lost = lost_releases(live[0] + live[2] - 60.0, live[1] + live[3] - 60.0);
+    report(&format!(
+        "canary, hosted: lost releases {lost:?}; clicks taken {}; front {:?}",
+        clicks() - before,
+        front_app()
+    ));
+    assert_eq!(state()["mode"], "app", "the clicks stayed in the app");
+    otto.call(json!({"cmd": "quit"}));
 }
