@@ -1993,11 +1993,6 @@ fn the_canarys_silence_comes_as_samples_not_as_a_gap_in_time() {
         .filter_map(|b| Some((b["pts_ms"].as_f64()?, b["samples"].as_f64()? / 16., b["rms"].as_f64()?)))
         .collect();
     let given = reply["buffers"].as_array().map_or(0, Vec::len);
-    if given == 0 && reply["failed"].is_null() {
-        // A Mac with no audio output gives none: nothing to measure.
-        eprintln!("skipped: no buffer");
-        return;
-    }
     assert!(!buffers.is_empty(), "no buffer with a time of {given}; the stream said {}", reply["failed"]);
     let (first, last) = (buffers[0], buffers[buffers.len() - 1]);
     let span = last.0 + last.1 - first.0;
@@ -2015,7 +2010,10 @@ fn the_canarys_silence_comes_as_samples_not_as_a_gap_in_time() {
     // The largest step from one buffer's time to the next: needs no sample rate.
     let step = buffers.windows(2).map(|w| w[1].0 - w[0].0).fold(0., f64::max);
     let played = (gap_s + 8. + short_s - 1.) * 1_000.;
-    assert!(quiet < buffers.len(), "every buffer silent: the canary's words were not heard");
+    // Words heard before the silences and after them: the first sound to the last spans both.
+    let loud: Vec<f64> = buffers.iter().filter(|b| b.2 >= 0.001).map(|b| b.0).collect();
+    let heard = loud.last().zip(loud.first()).map_or(0., |(last, first)| last - first);
+    assert!(heard > (gap_s + 8. - 1.) * 1_000., "sound heard over {heard:.0} ms only, {} loud buffers", loud.len());
     assert!(span > played, "the canary played for {played:.0} ms, buffers span {span:.0} ms");
     assert!(step < 1_000., "{step:.0} ms between two buffers: {gaps:.0?}");
     assert!((span - sampled).abs() < 500., "{:.0} ms presented, not sampled: {gaps:.0?}", span - sampled);
