@@ -178,13 +178,18 @@ Rules:
   (`install.sh`, `scripts/osi`, `scripts/test-osi.sh`, `scripts/package.sh`): `scripts/test-osi.sh`.
   A file the test starts to read is added to its `paths`.
 - One Rust cache for the dev build: `ci.yml`'s `e2e` job saves it, on `main` only (`shared-key: e2e`);
-  `app-windows.yml`, `shots.yml` and `reliability.yml` restore it and save none (`save-if: false`).
+  `app-windows.yml`, `shots.yml`, `bench.yml` and `reliability.yml` restore it and save none (`save-if: false`).
   A job that builds the same dependencies joins it; one that saves from a pull request does not.
 - `.github/workflows/shots.yml`, on pull requests that change `crates/ottospace/src/**`,
   `crates/ottospace-core/src/**`, `crates/ottospace-mac/**`, `scripts/shot`, `scripts/shots/**` or `scripts/test-shot.sh`:
   `scripts/test-shot.sh`, then `scripts/shot --compare` of every scenario against the merge base;
   the pictures are the artifact `shots`. Read-only token, no comment on the pull request. Not a
   required check. (`test-shot.sh` needs a screen that draws, so it runs here, not in scripts.yml.)
+- `.github/workflows/bench.yml`, on pull requests that change `crates/**`, `Cargo.lock`, `scripts/bench`,
+  `scripts/shot`, the fixtures it copies or `bench.yml`: `scripts/bench --compare` against the merge base (dev build, both sides on one
+  runner), the table in the job summary, the JSON as an artifact. Red past the thresholds in
+  `scripts/bench`; not a required check: whoever merges a red run says in the pull request whether
+  the regression is real and accepted. Nightly and by hand on `main`: the JSON alone, for trends.
 - `.github/workflows/release.yml`, on a `v*` tag: `scripts/package.sh`, GitHub Release.
 - `.github/workflows/pages.yml`, on pushes to `main` that touch `site/**`: deploys `site/` to GitHub
   Pages. Never on pull requests. Only its deploy job has `pages: write` and `id-token: write`.

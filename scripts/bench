@@ -1,0 +1,434 @@
+#!/usr/bin/env python3
+"""Benchmarks of ottospace on a private test instance: startup, memory, CPU.
+
+  scripts/bench [--bin PATH] [--release] [--runs N] [--out DIR]
+  scripts/bench --compare <base-ref> [--bin-before PATH --bin-after PATH] [--runs N] [--out DIR]
+
+Each instance is scripts/shot's (`Instance`): OTTOSPACE_E2E, its home and socket in a fresh
+temp folder, `/bin/sh` terminals, no apps, no repositories or sessions of the user's.
+
+  startup_warm_ms      process start to: the socket answers and a frame is drawn (`frame.number`
+                       > 0). The binary was run before; one unmeasured launch first.
+  startup_cold_ms      the same, the first launch of a fresh copy (`cp -c`) of the binary at a new
+                       path: none of its pages in the file cache, no launch closure for it. The
+                       system's libraries stay cached: dropping those needs root (`purge`).
+  startup_sessions_ms  the same, with a home of 50 made-up Claude Code and Codex sessions in 5
+                       repositories, 12 tasks and a saved layout of 3 tabs.
+  sessions_read_ms     with that home, process start to its sessions listed (Tasks, Elsewhere, open).
+  rss_idle_mb, footprint_idle_mb    resident size and phys_footprint, 5 s after start.
+  rss_8_terms_mb, footprint_8_terms_mb   after 8 terminals, each with 5000 lines of scrollback.
+  cpu_idle_pct         the process's CPU over 30 s with nothing moving (100 = one core).
+  frames_idle, dial_frames_idle     frames drawn and dial frames over those 30 s: 0 at rest.
+  wakeups_idle_per_s   the process's wakeups a second over those 30 s.
+  cpu_stream_pct       its CPU over 10 s while one terminal prints about 2500 lines a second.
+
+Startups: median and p90 of --runs launches (cold: --cold-runs). With --compare, both sides
+run alternately, so drift of the machine falls on both; the deltas are printed and the exit
+status is 1 when one passes a threshold (THRESHOLDS below), 2 when the bench itself failed.
+Writes <out>/bench.json and <out>/bench.md (also printed).
+"""
+
+import argparse
+import ctypes
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shutil
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+SHOTS = os.path.join(HERE, "shots")
+
+# The private instance, the builds and the base tree are scripts/shot's (no __pycache__ of it left).
+sys.dont_write_bytecode = True
+_loader = importlib.machinery.SourceFileLoader("shot", os.path.join(HERE, "shot"))
+_spec = importlib.util.spec_from_loader("shot", _loader)
+shot = importlib.util.module_from_spec(_spec)
+_loader.exec_module(shot)
+Failed, say = shot.Failed, shot.say
+
+# A start is timed by these waits: look every 5 ms, not 50.
+shot.Instance.poll = 0.005
+
+IDLE_S, STREAM_S, TERMS, SCROLLBACK = 30, 10, 8, 5000
+
+# A regression past these turns the CI job red: (metric, relative rise, absolute rise, floor). All
+# must be passed, so a small number's noise does not: e.g. idle CPU fails above 2% of a core and
+# a point more than the base, whatever its relative rise.
+THRESHOLDS = [
+    ("startup_warm_ms", 0.20, 50, 0),
+    ("startup_cold_ms", 0.20, 50, 0),
+    ("startup_sessions_ms", 0.20, 50, 0),
+    ("rss_idle_mb", 0.25, 10, 0),
+    ("rss_8_terms_mb", 0.25, 10, 0),
+    ("cpu_idle_pct", None, 1.0, 2.0),
+]
+LIMITS = "startup median +20% and +50 ms; RSS +25% and +10 MB; idle CPU above 2% of a core and +1 point."
+
+
+# proc_pid_rusage(2): CPU times, wakeups, resident size and phys_footprint of a pid we started.
+class RusageV2(ctypes.Structure):
+    _fields_ = [("uuid", ctypes.c_uint8 * 16)] + [
+        (name, ctypes.c_uint64)
+        for name in [
+            "user_time", "system_time", "pkg_idle_wkups", "interrupt_wkups", "pageins", "wired_size",
+            "resident_size", "phys_footprint", "proc_start_abstime", "proc_exit_abstime", "child_user_time",
+            "child_system_time", "child_pkg_idle_wkups", "child_interrupt_wkups", "child_pageins",
+            "child_elapsed_abstime", "diskio_bytesread", "diskio_byteswritten",
+        ]
+    ]
+
+
+class Timebase(ctypes.Structure):
+    _fields_ = [("numer", ctypes.c_uint32), ("denom", ctypes.c_uint32)]
+
+
+LIBC = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+_tb = Timebase()
+LIBC.mach_timebase_info(ctypes.byref(_tb))
+# The CPU times are in Mach time units (on Apple silicon not nanoseconds).
+NS_PER_TICK = _tb.numer / _tb.denom
+
+
+def usage(pid):
+    info = RusageV2()
+    if LIBC.proc_pid_rusage(pid, 2, ctypes.byref(info)) != 0:
+        raise Failed(f"proc_pid_rusage({pid}) failed")
+    return {
+        "cpu_s": (info.user_time + info.system_time) * NS_PER_TICK / 1e9,
+        "wakeups": info.pkg_idle_wkups + info.interrupt_wkups,
+        "rss_mb": info.resident_size / 2**20,
+        "footprint_mb": info.phys_footprint / 2**20,
+    }
+
+
+def cpu_over(inst, seconds):
+    """The process's CPU (percent of one core), wakeups a second and frames over `seconds`."""
+    s0, u0, t0 = inst.state(), usage(inst.proc.pid), time.perf_counter()
+    time.sleep(seconds)
+    u1, t1 = usage(inst.proc.pid), time.perf_counter()
+    s1 = inst.state()
+    wall = t1 - t0
+    return {
+        "cpu_pct": 100 * (u1["cpu_s"] - u0["cpu_s"]) / wall,
+        "wakeups_per_s": (u1["wakeups"] - u0["wakeups"]) / wall,
+        "frames": s1["frame"]["number"] - s0["frame"]["number"],
+        "dial_frames": s1["counts"]["dial_frames"] - s0["counts"]["dial_frames"],
+    }
+
+
+# ---------------------------------------------------------------------------------- fixtures
+
+
+def slug(path):
+    return re.sub(r"[^A-Za-z0-9]", "-", path)
+
+
+def make_fixture(root):
+    """A home with sessions, tasks and settings, all made up; returns the env for an instance.
+    The layout is added by `prime`. Sessions are written from scripts/shots' own fixtures."""
+    root = os.path.realpath(root)  # the app resolves the repositories: /tmp is /private/tmp
+    with open(os.path.join(SHOTS, "restart/sessions/claude/projects/_slug-repos-app/"
+                                  "8f14e45f-ceea-467f-a8d3-0242ac130009.jsonl")) as f:
+        claude_tpl = f.read()
+    codex_dir = os.path.join(SHOTS, "tasks/codex/sessions/2026/11/12")
+    codex_name = next(n for n in sorted(os.listdir(codex_dir)) if "c0de0001" in n)
+    with open(os.path.join(codex_dir, codex_name)) as f:
+        codex_tpl = f.read()
+    repos = [os.path.join(root, "repos", name) for name in ["app", "api", "site", "docs", "cli"]]
+    home = os.path.join(root, "home")
+    os.makedirs(os.path.join(home, "tasks"))
+    index = []
+    for r, repo in enumerate(repos):
+        os.makedirs(os.path.join(repo, ".git"))
+        with open(os.path.join(repo, ".git", "HEAD"), "w") as f:
+            f.write("ref: refs/heads/main\n")
+        project = os.path.join(root, "claude", "projects", slug(repo))
+        os.makedirs(project)
+        for n in range(5):
+            sid = f"8f14e45f-ceea-467f-a8d3-{r:06d}{n:06d}"
+            with open(os.path.join(project, sid + ".jsonl"), "w") as f:
+                f.write(claude_tpl.replace("8f14e45f-ceea-467f-a8d3-0242ac130009", sid).replace("{ROOT}/repos/app", repo))
+            cid = f"c0de{r:02d}{n:02d}-0000-4000-8000-{r:06d}{n:06d}"
+            day = os.path.join(root, "codex", "sessions", "2026", "11", f"{10 + r:02d}")
+            os.makedirs(day, exist_ok=True)
+            stamp = f"2026-11-{10 + r:02d}T09-{n:02d}-00"
+            text = codex_tpl.replace("c0de0001-0000-4000-8000-000000000001", cid).replace("{ROOT}/repos/app", repo)
+            with open(os.path.join(day, f"rollout-{stamp}-{cid}.jsonl"), "w") as f:
+                f.write(text)
+            index.append({"id": cid, "thread_name": f"Made-up thread {r}.{n}", "updated_at": f"2026-11-{10 + r:02d}T09:{n:02d}:01Z"})
+    with open(os.path.join(root, "codex", "session_index.jsonl"), "w") as f:
+        f.writelines(json.dumps(line) + "\n" for line in index)
+    for t in range(1, 13):
+        task = {"id": t, "title": f"made-up task {t}", "state": ["needs_you", "running", "later", "done"][t % 4],
+                "priority": 1 + t % 3, "repo": repos[t % 5], "created": 1794800000000 + t * 1000, "colour": t % 6}
+        if t <= 5:
+            # Its repository's first Claude session.
+            task["session"] = {"runner": "claude", "id": f"8f14e45f-ceea-467f-a8d3-{t % 5:06d}000000", "state": "done"}
+        with open(os.path.join(home, "tasks", f"{t}.json"), "w") as f:
+            json.dump(task, f)
+    settings = {"repos": repos, "sessions": True, "restore_layout": True,
+                "session_dirs": {"claude": [os.path.join(root, "claude")], "codex": os.path.join(root, "codex")}}
+    with open(os.path.join(home, "settings.json"), "w") as f:
+        json.dump(settings, f)
+    return home
+
+
+def prime(binary, home):
+    """Runs the app once on `home` to leave a saved layout: 3 tabs, 2 terminals each."""
+    inst = shot.Instance(binary, None, {"OTTOSPACE_HOME": home})
+    try:
+        for tab in range(3):
+            if tab:
+                inst.ok({"cmd": "new_tab"})
+            for _ in range(2):
+                inst.ok({"cmd": "split", "axis": "right"})
+        inst.settle()
+        inst.wait("layout.json", lambda: os.path.exists(os.path.join(home, "layout.json")), timeout=10)
+        time.sleep(1.5)  # written a second after the last change
+    finally:
+        inst.close()
+
+
+# ---------------------------------------------------------------------------------- runs
+
+
+def launch(binary, env=None):
+    inst = shot.Instance(binary, None, env or {})
+    # Started: later waits look less often, so each full state they ask for loads the app less.
+    inst.poll = 0.02
+    return inst
+
+
+def startup(binary, env=None, sessions=False):
+    inst = launch(binary, env)
+    try:
+        row = {"ms": inst.drawn * 1000, "socket_ms": inst.answered * 1000}
+        if sessions:
+            # Closed, the Tasks section reads only the tasks' sessions: open it on Elsewhere, of any age.
+            # Both requests toggle: sent only when it is not open already.
+            s = inst.state()
+            if s["state"]["sidebar"] != "tasks":
+                inst.ok({"cmd": "section", "section": "tasks"})
+            if s["sessions_bar"]["collapsed"]:
+                inst.ok({"cmd": "task_group", "heading": "sessions"})
+            inst.ok({"cmd": "sessions_range", "range": "all"})
+            # One read takes them all in; those a task follows are not listed (46 today).
+            listed = lambda: (shot.path_get(inst.state(), "sessions_bar.total") or 0) >= 40
+            inst.wait("the sessions listed", listed, timeout=30)
+            row["sessions_ms"] = (time.perf_counter() - inst.started) * 1000
+        return row
+    finally:
+        inst.close()
+
+
+def long_run(binary):
+    """One instance: memory at idle, CPU at idle, memory with 8 terminals, CPU while one streams."""
+    inst = launch(binary)
+    out = {}
+    try:
+        time.sleep(5)
+        u = usage(inst.proc.pid)
+        out["rss_idle_mb"], out["footprint_idle_mb"] = u["rss_mb"], u["footprint_mb"]
+        idle = cpu_over(inst, IDLE_S)
+        out["cpu_idle_pct"], out["wakeups_idle_per_s"] = idle["cpu_pct"], idle["wakeups_per_s"]
+        out["frames_idle"], out["dial_frames_idle"] = idle["frames"], idle["dial_frames"]
+        panes = []
+        for _ in range(TERMS):
+            before = {p["id"] for p in inst.state()["state"]["panes"]}
+            inst.ok({"cmd": "split", "axis": "right" if len(panes) % 2 else "down"})
+            panes += [p["id"] for p in inst.state()["state"]["panes"] if p["id"] not in before]
+        if len(panes) != TERMS:  # a start has no pane: each split opens one terminal
+            raise Failed(f"{len(panes)} terminals opened, not {TERMS}")
+        for pane in panes:
+            inst.ok({"cmd": "type", "pane": pane, "text": f"seq 1 {SCROLLBACK}; echo bench-done\r"})
+        for pane in panes:
+            inst.ok({"cmd": "wait", "pane": pane, "pattern": "^bench-done$", "timeout_ms": 60000})
+        inst.settle()
+        time.sleep(3)
+        u = usage(inst.proc.pid)
+        out["rss_8_terms_mb"], out["footprint_8_terms_mb"] = u["rss_mb"], u["footprint_mb"]
+        # About 2500 lines a second: 50, then 20 ms of sleep. A fixed load, so the CPU it takes compares.
+        loop = ('i=0; while :; do j=0; while [ $j -lt 50 ]; do i=$((i+1)); j=$((j+1)); '
+                'echo "made-up build output line $i: compiling crate $j of 50"; done; sleep 0.02; done\r')
+        inst.ok({"cmd": "type", "pane": panes[0], "text": loop})
+        time.sleep(1)
+        out["cpu_stream_pct"] = cpu_over(inst, STREAM_S)["cpu_pct"]
+        inst.ok({"cmd": "type", "pane": panes[0], "text": "\x03"})
+        return out
+    finally:
+        inst.close()
+
+
+def stats(values):
+    values = sorted(values)
+    p90 = values[min(len(values) - 1, max(0, -(-len(values) * 9 // 10) - 1))]  # nearest rank
+    return {"median": statistics.median(values), "p90": p90, "runs": [round(v, 1) for v in values]}
+
+
+def bench(sides, args, scratch):
+    """`sides`: {name: binary}. Each measure runs every side in turn, alternating which goes first."""
+    names = list(sides)
+    raw = {name: {"warm": [], "cold": [], "sessions": [], "sessions_read": []} for name in names}
+    order = lambda i: names if i % 2 == 0 else names[::-1]
+
+    say("startup, warm ...")
+    for name in names:
+        startup(sides[name])  # unmeasured: the binary's first launch
+    for i in range(args.runs):
+        for name in order(i):
+            raw[name]["warm"].append(startup(sides[name])["ms"])
+
+    say("startup, cold ...")
+    for i in range(args.cold_runs):
+        for name in order(i):
+            fresh = os.path.join(scratch, f"cold-{name}-{i}")
+            os.makedirs(fresh)
+            copy = os.path.join(fresh, "ottospace")
+            subprocess.run(["cp", "-c", sides[name], copy], check=True)
+            raw[name]["cold"].append(startup(copy)["ms"])
+            shutil.rmtree(fresh)
+
+    say("startup, with sessions ...")
+    # A fixture a side, its layout saved by that side's own build.
+    templates = {}
+    for name in names:
+        templates[name] = make_fixture(os.path.join(scratch, f"fixture-{name}"))
+        prime(sides[name], templates[name])
+    for i in range(args.runs):
+        for name in order(i):
+            home = os.path.join(scratch, f"home-{name}-{i}")
+            shutil.copytree(templates[name], home)
+            row = startup(sides[name], {"OTTOSPACE_HOME": home}, sessions=True)
+            raw[name]["sessions"].append(row["ms"])
+            raw[name]["sessions_read"].append(row["sessions_ms"])
+            shutil.rmtree(home)
+
+    result = {}
+    for name in names:
+        say(f"memory and CPU, {name} ({IDLE_S + STREAM_S + 20} s) ...")
+        r = raw[name]
+        result[name] = {
+            "startup_warm_ms": stats(r["warm"]),
+            "startup_cold_ms": stats(r["cold"]),
+            "startup_sessions_ms": stats(r["sessions"]),
+            "sessions_read_ms": stats(r["sessions_read"]),
+            **{k: round(v, 2) for k, v in long_run(sides[name]).items()},
+        }
+    return result
+
+
+# ---------------------------------------------------------------------------------- report
+
+ROWS = [
+    ("startup_warm_ms", "startup, warm (ms)"),
+    ("startup_cold_ms", "startup, cold (ms)"),
+    ("startup_sessions_ms", "startup, 50 sessions + tasks + layout (ms)"),
+    ("sessions_read_ms", "  then the sessions listed (ms)"),
+    ("rss_idle_mb", "RSS, idle (MB)"),
+    ("footprint_idle_mb", "footprint, idle (MB)"),
+    ("rss_8_terms_mb", f"RSS, {TERMS} terminals × {SCROLLBACK} lines (MB)"),
+    ("footprint_8_terms_mb", f"footprint, {TERMS} terminals (MB)"),
+    ("cpu_idle_pct", f"CPU, idle {IDLE_S} s (%)"),
+    ("wakeups_idle_per_s", "  wakeups a second, idle"),
+    ("frames_idle", f"  frames drawn, idle {IDLE_S} s"),
+    ("dial_frames_idle", f"  dial frames, idle {IDLE_S} s"),
+    ("cpu_stream_pct", f"CPU, a terminal streaming {STREAM_S} s (%)"),
+]
+
+
+def value(side, key):
+    v = side[key]
+    return v["median"] if isinstance(v, dict) else v
+
+
+def cell(side, key):
+    v = side[key]
+    if isinstance(v, dict):
+        return f"{v['median']:.0f} / {v['p90']:.0f}"
+    return f"{v:.1f}" if isinstance(v, float) else str(v)
+
+
+def regressions(before, after):
+    found = []
+    for key, rel, rise, floor in THRESHOLDS:
+        b, a = value(before, key), value(after, key)
+        if a > floor and a - b > rise and (rel is None or b <= 0 or (a - b) / b > rel):
+            found.append(f"{key}: {b:.1f} → {a:.1f}")
+    return found
+
+
+def table(result, meta):
+    names = list(result)
+    lines = [f"Build: {meta['profile']}. Startups: median / p90 of {meta['runs']} runs (cold: {meta['cold_runs']}).", ""]
+    if len(names) == 1:
+        lines += ["| | value |", "|---|---|"]
+        lines += [f"| {label} | {cell(result[names[0]], key)} |" for key, label in ROWS]
+        return "\n".join(lines) + "\n"
+    b, a = result[names[0]], result[names[1]]
+    lines += [f"| | {names[0]} | {names[1]} | Δ |", "|---|---|---|---|"]
+    for key, label in ROWS:
+        vb, va = value(b, key), value(a, key)
+        delta = f"{(va - vb) / vb * 100:+.0f}%" if vb else f"{va - vb:+.1f}"
+        lines.append(f"| {label} | {cell(b, key)} | {cell(a, key)} | {delta} |")
+    found = regressions(b, a)
+    lines += ["", "**Past a threshold:** " + "; ".join(found) if found else "No metric past a threshold."]
+    lines += ["", "Thresholds: " + LIMITS]
+    return "\n".join(lines) + "\n"
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--bin", help="the ottospace binary (default: cargo build this tree)")
+    parser.add_argument("--compare", metavar="BASE", help="BASE (before) against this tree (after)")
+    parser.add_argument("--bin-before")
+    parser.add_argument("--bin-after")
+    parser.add_argument("--release", action="store_true", help="release builds (default: dev, as CI's cache)")
+    parser.add_argument("--runs", type=int, default=10)
+    parser.add_argument("--cold-runs", type=int, default=5)
+    parser.add_argument("--out", default=os.path.join(REPO, ".bench"))
+    args = parser.parse_args()
+    if args.runs < 1 or args.cold_runs < 1:
+        parser.error("--runs and --cold-runs: at least 1")
+    if shot.screen_locked():
+        say("the screen is locked: nothing draws. Unlock it and run again")
+        return 3
+    cargo = ["--release"] if args.release else []
+    scratch = tempfile.mkdtemp(prefix="ottospace-bench-")
+    try:
+        if args.compare:
+            before = args.bin_before or shot.build_ref(args.compare, scratch, cargo)
+            after = args.bin_after or shot.build(REPO, os.path.join(scratch, "ottospace-after"), None, cargo)
+            sides = {"before": before, "after": after}
+        else:
+            sides = {"this": args.bin or shot.build(REPO, os.path.join(scratch, "ottospace"), None, cargo)}
+        result = bench(sides, args, scratch)
+    except Failed as err:
+        say(f"bench: {err}")
+        return 2
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    commit = subprocess.run(["git", "-C", REPO, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    meta = {"profile": "release" if args.release else "dev", "runs": args.runs, "cold_runs": args.cold_runs,
+            "commit": commit, "base": args.compare, "machine": os.uname().machine,
+            "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    md = table(result, meta)
+    os.makedirs(args.out, exist_ok=True)
+    with open(os.path.join(args.out, "bench.json"), "w") as f:
+        json.dump({"meta": meta, "result": result}, f, indent=2)
+    with open(os.path.join(args.out, "bench.md"), "w") as f:
+        f.write(md)
+    print(md)
+    say(f"wrote {args.out}/bench.json and bench.md")
+    return 1 if len(result) == 2 and regressions(result["before"], result["after"]) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
