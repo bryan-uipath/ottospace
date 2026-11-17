@@ -1,0 +1,21 @@
+# The focused pane: a line in the mode's accent under its header, no outline. Two terminals, focus
+# on each; a terminal beside an empty pane, focus on each; list mode (the bar has the keyboard).
+{"cmd":"split"}
+{"cmd":"wait","pattern":"^\\$"}
+{"cmd":"type","text":"clear && echo 'build ok: 42 tests'\r"}
+{"cmd":"wait","pattern":"^build ok"}
+{"cmd":"split"}
+{"cmd":"wait","pattern":"^\\$"}
+{"cmd":"type","text":"clear && echo 'watching src/'\r"}
+{"cmd":"wait","pattern":"^watching"}
+{"shot":"terminals-right"}
+{"cmd":"focus_dir","dir":"left"}
+{"shot":"terminals-left"}
+{"cmd":"new_tab"}
+{"cmd":"split"}
+{"cmd":"split","kind":"empty"}
+{"shot":"empty-focused"}
+{"cmd":"focus_dir","dir":"left"}
+{"shot":"terminal-focused"}
+{"cmd":"key","keys":"cmd-ctrl-h","as":"user"}
+{"shot":"list-mode"}

@@ -1185,8 +1185,8 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   the grants are kept as they are (turning it on again raises none), and every read of an app pane by a client (`app_read`,
   `app_look`, `ax_tree`) answers `feature off: agent_mode` (design: [agent-mode.md](ai/agent-mode.md)).
   On: an app pane's header has a robot with its level (`Off`, `See`, `Act`, a caret), dimmed where
-  no task works; See in the app's blue with the task's tip, See and act in amber with the pane's
-  border. Only the task the pane is granted to (its agent's pass) may `app_read` its tree or
+  no task works; See in the app's blue with the task's tip, See and act in amber; the pane's
+  header line in the level's colour. Only the task the pane is granted to (its agent's pass) may `app_read` its tree or
   `app_look` at its picture (a PNG at most 1600 px, 0600, in `materials/agent-<pid>-<task>-<word>/`,
   the last 10 kept, gone when the level goes below See and at the next start), at See or more, one read and one look a second; `ax_tree` is
   `app_read`'s older name. Every use and refusal is a row in that task's conversation and a spoke
