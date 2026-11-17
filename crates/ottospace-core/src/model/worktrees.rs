@@ -358,7 +358,7 @@ impl Model {
         self.open_terminal_at(axis, Some(path), effects);
     }
 
-    /// The worktree a task's row and strip tab name while its workspace's tasks work in more
+    /// The worktree a task's row and rail item name while its workspace's tasks work in more
     /// than one: its checkout's name (`app-2`), else its folder's (`~`: the home folder).
     pub fn worktree_label(&self, id: TaskId) -> Option<String> {
         let members = self.members(&self.task_space(id));

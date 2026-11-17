@@ -107,8 +107,8 @@ commands! {
     // After Next Task: a query of its name ranks a later tie lower.
     NextSpace: "Next Tab Group", Tabs;
     PrevSpace: "Previous Tab Group", Tabs;
-    NextChat: "Next Conversation in This Workspace", Tabs;
-    PrevChat: "Previous Conversation in This Workspace", Tabs;
+    NextChat: "Next in the Drawer's Rail", Tabs;
+    PrevChat: "Previous in the Drawer's Rail", Tabs;
     HideSpace: "Hide", Tabs;
     GoHome: "Go to Home", Tabs;
     CapturePane: "Capture the Pane", Tasks;

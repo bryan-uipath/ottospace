@@ -72,6 +72,7 @@ mod control;
 mod conversation;
 mod dial;
 mod dialog;
+mod drawer_rail;
 mod editor;
 mod event_log;
 mod features;
@@ -408,6 +409,7 @@ impl AssetSource for Assets {
             "icons/pull-request.svg" => Some(include_bytes!("../assets/icons/pull-request.svg")),
             "icons/marks.svg" => Some(include_bytes!("../assets/icons/marks.svg")),
             "icons/calendar.svg" => Some(include_bytes!("../assets/icons/calendar.svg")),
+            "icons/waveform.svg" => Some(include_bytes!("../assets/icons/waveform.svg")),
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
@@ -6626,10 +6628,7 @@ impl Render for Workspace {
         self.drawer.width = drawer;
         // The inspector takes the drawer's place while it is open; the drawer keeps its state.
         let right = self.render_inspector(drawer, cx);
-        let right = right
-            .or_else(|| self.render_draft(cx))
-            .or_else(|| self.render_listen_view(drawer, cx))
-            .or_else(|| self.render_drawer(drawer, cx));
+        let right = right.or_else(|| self.render_draft(cx)).or_else(|| self.render_railed_drawer(drawer, cx));
         let right_width = if right.is_some() { drawer } else { 0. };
         // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
         // the buttons and the agent chip's badge.
