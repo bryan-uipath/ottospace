@@ -297,12 +297,12 @@ fn decayed(weight: f64, then: u64, now: u64) -> f64 {
     weight * 0.5f64.powf(now.saturating_sub(then) as f64 / HALF_LIFE_MS as f64)
 }
 
-/// A running time: `0:14`, `12:05`, `1:02:03`.
+/// A running time: `0:14`, `12:05`, from an hour `1h02` (it fits inside the ring).
 fn clock(ms: u64) -> String {
     let s = ms / 1000;
     match s {
         0..3600 => format!("{}:{:02}", s / 60, s % 60),
-        _ => format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60),
+        _ => format!("{}h{:02}", s / 3600, s / 60 % 60),
     }
 }
 
@@ -583,6 +583,14 @@ mod tests {
                 (fraction, level, tip),
                 "{context:?}/{window:?}"
             );
+        }
+    }
+
+    #[test]
+    fn the_timer_fits_inside_the_ring() {
+        let cases = [(14_000, "0:14"), (725_000, "12:05"), (3_723_000, "1h02"), (36_000_000, "10h00")];
+        for (ms, want) in cases {
+            assert_eq!(clock(ms), want);
         }
     }
 

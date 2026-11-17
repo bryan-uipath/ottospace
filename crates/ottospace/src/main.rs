@@ -1230,7 +1230,7 @@ impl Workspace {
                         if runs && tick % 30 == 0 {
                             cx.notify();
                         }
-                        // A dial lit or fading is drawn again each second; at rest only on a change.
+                        // A dial lit is drawn again each second; at rest only on a change.
                         if tick % 60 == 0 && this.dial_moves() {
                             cx.notify();
                         }
