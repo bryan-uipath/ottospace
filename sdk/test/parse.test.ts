@@ -52,6 +52,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       agents: [],
       features: [],
       listen: null,
+      slots: {},
     },
     bounds: {},
     frames: {},

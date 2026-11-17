@@ -1626,6 +1626,8 @@ impl Workspace {
                 Effect::AgentMoved { from, to } => self.move_agent(from, to),
                 Effect::MeetingAlert { .. } | Effect::OpenLink { .. } => self.meeting_effect(effect),
                 Effect::ReadSession { runner, id } => agents.extend(self.read_session(runner, id)),
+                // Slots are not on screen yet (slice 3), and their flag is off.
+                Effect::HostSlot { .. } | Effect::WatchSlots { .. } | Effect::GiveBack { .. } => {}
                 Effect::Opened(id) => {
                     if self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal) {
                         // The shell learns where it runs, so a program in it can name its own pane.
@@ -3415,7 +3417,9 @@ impl Workspace {
             self.known.push((pid, ids));
         }
         let effects = self.dispatch(action, self.input, window, cx);
-        if let Some(Effect::Opened(id)) = effects.last() {
+        // The pane opened last: a settle may ask for more after it (`Effect::WatchSlots`).
+        let opened = effects.iter().rev().find(|effect| matches!(effect, Effect::Opened(_)));
+        if let Some(Effect::Opened(id)) = opened {
             // A pane in a background tab is not drawn, so the layout sync never parks its
             // window. Move it off screen now; it is sized when its tab is first shown.
             let drawn = self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(id));
@@ -3676,7 +3680,7 @@ impl Workspace {
         for ax_window in fresh {
             if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
                 let beside = self.hosted.iter().filter(|(_, h)| h.pid == hosted.pid).map(|(id, _)| *id).max();
-                let action = Action::Adopt { kind: hosted.kind(), beside };
+                let action = Action::Adopt { kind: hosted.kind(), beside, seen: None };
                 self.attach(hosted, action, window, cx);
             }
         }
@@ -4818,7 +4822,7 @@ impl Workspace {
     /// for an empty pane.
     fn pane_title(&self, pane: &Pane) -> String {
         match &pane.kind {
-            Kind::Empty => String::new(),
+            Kind::Empty | Kind::Slot { .. } => String::new(),
             Kind::Terminal => self.titles.get(&pane.id).cloned().unwrap_or_default(),
             // A window with no title says whose it is.
             Kind::App { title, name, .. } if title.is_empty() => name.clone(),
@@ -5462,6 +5466,7 @@ impl Workspace {
             Kind::App { name, .. } => name.clone().into(),
             Kind::Terminal => "Terminal".into(),
             Kind::Empty => "Empty pane".into(),
+            Kind::Slot { name, .. } => format!("Slot · {name}").into(),
         };
         // A marked pane says so, with its letter: ⌘B gives no other sign while the Marks list is shut.
         let marked = self.model.mark_of(MarkOf::Pane(Some(id))).filter(|_| self.on(Feature::Marks));
