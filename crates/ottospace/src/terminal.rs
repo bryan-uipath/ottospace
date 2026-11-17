@@ -443,6 +443,11 @@ impl Terminal {
         selected_text(&self.term.lock())
     }
 
+    /// What ⌘C would copy, for a client: `[hidden]` if a row it takes holds a live pass's cell.
+    pub fn selected_shown(&self) -> Option<String> {
+        selected_shown(&self.term.lock())
+    }
+
     /// The selection's first and last cell as (line, column), line 0 the top of the screen and
     /// negative in history.
     pub fn selection_range(&self) -> Option<[(i32, usize); 2]> {
@@ -582,21 +587,18 @@ impl Terminal {
         (self.grid.cols, self.grid.rows)
     }
 
-    /// Visible rows as plain text, trailing spaces removed.
+    /// Visible rows as plain text, trailing spaces removed. A live pass reads `[hidden]`: the
+    /// lines the screen's edges cut are searched whole (`pass::hide_rows`).
     pub fn lines(&self) -> Vec<String> {
-        self.screen().lines()
+        lines_of(&self.term.lock())
     }
 
     /// The bottom screen as plain text, with everything scrolled off above it if `history`.
     /// A wrapped line is one line. Trailing spaces, and blank lines at the end, are removed.
-    /// The alternate screen (vim, less) has no history.
+    /// The alternate screen (vim, less) has no history. A live pass reads `[hidden]`, in every
+    /// client's read and in the saved history.
     pub fn text(&self, history: bool) -> String {
-        let term = self.term.lock();
-        let top = if history { term.topmost_line() } else { Line(0) };
-        let (start, end) = (Point::new(top, Column(0)), Point::new(term.bottommost_line(), term.last_column()));
-        let mut text = term.bounds_to_string(start, end);
-        text.truncate(text.trim_end().len());
-        text
+        text_of(&self.term.lock(), history)
     }
 
     pub fn screen(&self) -> Screen {
@@ -639,12 +641,6 @@ impl Terminal {
 }
 
 impl Screen {
-    /// The rows as plain text, trailing spaces removed.
-    pub fn lines(&self) -> Vec<String> {
-        let text = |row: &Vec<Span>| row.iter().map(|s| s.text.as_str()).collect::<String>().trim_end().to_string();
-        self.rows.iter().map(text).collect()
-    }
-
     /// The rows as a picture of a pane `size` points large, `scale` pixels a point: a PNG.
     /// Plain data in and out: for a thread of its own.
     pub fn picture(&self, size: [f64; 2], cell: [f64; 2], scale: f64) -> Option<Vec<u8>> {
@@ -655,6 +651,141 @@ impl Screen {
         let (font_size, background) = (f64::from(font.font_size), palette::BACKGROUND);
         grid_png(&Grid { rows: &rows, size, cell, font: &font.font, font_size, background, scale })
     }
+}
+
+/// The most rows searched past an edge: a pass printed a character a row, blank rows between,
+/// is one in pieces (not hidden), and a read stays cheap.
+const MOST_PAST: i32 = 256;
+
+/// The last row searched past `edge`, going `step` (-1 up, 1 down): rows until they hold 32
+/// characters other than a row's edges (`pass::edge`: a box's borders count none), and one more.
+/// A pass the edge cuts is then searched whole however few columns its rows use (a narrow pane, a
+/// TUI's indent or column, a narrow box). To the grid's end at most.
+fn past<T>(term: &Term<T>, edge: Line, step: i32) -> Line {
+    let (top, bottom) = (term.topmost_line(), term.bottommost_line());
+    let (mut line, mut held) = (edge, 0);
+    for _ in 0..MOST_PAST {
+        let next = line + step;
+        if next < top || next > bottom {
+            break;
+        }
+        line = next;
+        if held >= 32 {
+            break;
+        }
+        held += rows_of(term, line, line)
+            .iter()
+            .map(|(row, _)| row.chars().filter(|c| !crate::pass::edge(*c)).count())
+            .sum::<usize>();
+    }
+    line
+}
+
+/// The rows a read from `top` to `bottom` searches: the lines its edges cut, and `past` them.
+fn searched<T>(term: &Term<T>, top: Line, bottom: Line) -> (Line, Line) {
+    (line_start(term, past(term, top, -1)), line_end(term, past(term, bottom, 1)))
+}
+
+/// `Terminal::lines`: the rows on show, a live pass hidden in the rows around them too.
+fn lines_of<T>(term: &Term<T>) -> Vec<String> {
+    let offset = term.grid().display_offset() as i32;
+    let top = Line(-offset);
+    let bottom = Line(term.screen_lines() as i32 - 1 - offset);
+    let (from, to) = searched(term, top, bottom);
+    let rows = cut_history(term, from, rows_of(term, from, to)).into_iter().map(|(row, _)| row).collect();
+    let shown = crate::pass::hide_rows(rows).into_iter().skip((top.0 - from.0) as usize).take(term.screen_lines());
+    shown.map(|row| row.trim_end().to_string()).collect()
+}
+
+/// `Terminal::text`, a live pass hidden also in the rows above the screen's top.
+fn text_of<T>(term: &Term<T>, history: bool) -> String {
+    let top = if history { term.topmost_line() } else { Line(0) };
+    let (from, to) = searched(term, top, term.bottommost_line());
+    let (rows, wraps): (Vec<String>, Vec<bool>) = cut_history(term, from, rows_of(term, from, to)).into_iter().unzip();
+    let skip = (top.0 - from.0) as usize;
+    let mut text = String::new();
+    for (row, wraps) in crate::pass::hide_rows(rows).into_iter().zip(wraps).skip(skip) {
+        text.push_str(&row);
+        if !wraps {
+            text.push('\n');
+        }
+    }
+    text.truncate(text.trim_end().len());
+    text
+}
+
+/// `Terminal::selected_shown`. Whole rows decide, by `lines_of`'s search: what a part of a pass
+/// would hide never does, so a selection says nothing of a guess (e.g. 31 digits of 32).
+fn selected_shown<T>(term: &Term<T>) -> Option<String> {
+    let text = selected_text(term)?;
+    let range = term.selection.as_ref()?.to_range(term)?;
+    let (from, to) = searched(term, range.start.line, range.end.line);
+    let rows = rows_of(term, from, to);
+    let raw: Vec<String> = rows.iter().map(|(row, _)| row.clone()).collect();
+    let shown = crate::pass::hide_rows(cut_history(term, from, rows).into_iter().map(|(row, _)| row).collect());
+    let (skip, take) = ((range.start.line.0 - from.0) as usize, (range.end.line.0 - range.start.line.0 + 1) as usize);
+    let touched = raw.iter().zip(&shown).skip(skip).take(take).any(|(raw, shown)| raw != shown);
+    Some(if touched { crate::pass::HIDDEN.to_string() } else { text })
+}
+
+/// Whether grid row `line` wraps into the next.
+fn wraps<T>(term: &Term<T>, line: Line) -> bool {
+    term.grid()[line][Column(term.columns() - 1)].flags.contains(Flags::WRAPLINE)
+}
+
+/// The first row of the line `line` is part of.
+fn line_start<T>(term: &Term<T>, mut line: Line) -> Line {
+    while line > term.topmost_line() && wraps(term, line - 1) {
+        line -= 1;
+    }
+    line
+}
+
+/// The last row of the line `line` is part of.
+fn line_end<T>(term: &Term<T>, mut line: Line) -> Line {
+    while line < term.bottommost_line() && wraps(term, line) {
+        line += 1;
+    }
+    line
+}
+
+/// Grid rows `from..=to` as plain text, each with whether it wraps into the next. A wide
+/// character's spacer is left out; a row that does not wrap loses its trailing spaces.
+fn rows_of<T>(term: &Term<T>, from: Line, to: Line) -> Vec<(String, bool)> {
+    let row = |line: i32| {
+        let row = &term.grid()[Line(line)];
+        let spacer = Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER;
+        let cells = (0..term.columns()).map(|col| &row[Column(col)]).filter(|cell| !cell.flags.intersects(spacer));
+        let mut text = String::new();
+        for cell in cells {
+            if cell.c == '\t' || cell.flags.contains(Flags::HIDDEN) {
+                text.push(' ');
+            } else {
+                // Its zero-width characters too (a combining accent, an emoji's joiner).
+                text.push(cell.c);
+                text.extend(cell.zerowidth().into_iter().flatten());
+            }
+        }
+        let wraps = wraps(term, Line(line));
+        if !wraps {
+            text.truncate(text.trim_end().len());
+        }
+        (text, wraps)
+    };
+    (from.0..=to.0).map(row).collect()
+}
+
+/// Rows read from the top of a full history: what was dropped above may have cut a pass, so a
+/// run of 8 or more hex digits starting there is hidden, whatever its digits
+/// (`pass::hide_digits_at_top`: a rule on any digits says nothing of a pass's).
+fn cut_history<T>(term: &Term<T>, from: Line, rows: Vec<(String, bool)>) -> Vec<(String, bool)> {
+    let full = term.grid().history_size() >= Config::default().scrolling_history;
+    // No pass live: nothing to hide (e.g. a commit hash at the top of a user's saved history).
+    if !full || from != term.topmost_line() || !crate::pass::any_live() {
+        return rows;
+    }
+    let (text, wraps): (Vec<String>, Vec<bool>) = rows.into_iter().unzip();
+    crate::pass::hide_digits_at_top(text).into_iter().zip(wraps).collect()
 }
 
 impl Terminal {
@@ -834,6 +965,88 @@ mod tests {
         press_at(term, from, Press::Start(SelectKind::Simple));
         extend_to(term, to);
         selected_text(term)
+    }
+
+    /// A pass that wraps across the screen's edge: no digit of it in the rows on show, the text
+    /// of the screen or the history. Its line is searched whole, wherever the edge cuts it.
+    #[test]
+    fn a_live_pass_the_screens_edge_cuts_shows_no_digit() {
+        let dir = crate::pass::minted_dir("edge-cuts");
+        let live = crate::pass::Live::mint_in(dir.as_ref()).unwrap();
+        let hex = live.pass().hex();
+        // 20 wide: "PASS=" and 15 digits on one row, 17 on the next; then 3 rows under it.
+        let mut term = term(20, 3, &format!("PASS={hex}\r\none\r\ntwo\r\nend"));
+        let digits = |text: &str| hex.as_bytes().windows(4).any(|w| text.contains(std::str::from_utf8(w).unwrap()));
+        // Its tail is the top row on show: the screen's top cuts its line.
+        term.scroll_display(GridScroll::Delta(1));
+        let shown = lines_of(&term);
+        assert_eq!(shown, ["", "one", "two"], "its tail goes with the hidden head");
+        assert!(!digits(&text_of(&term, false)), "{}", text_of(&term, false));
+        // Its head is the bottom row on show: the screen's bottom cuts it.
+        term.scroll_display(GridScroll::Delta(1));
+        assert_eq!(lines_of(&term), ["PASS=[hidden]", "", "one"]);
+        assert!(text_of(&term, true).starts_with("PASS=[hidden]\none"), "{}", text_of(&term, true));
+        // Broken by the program's own line break, then by a cursor move on the alternate screen
+        // (a TUI): no wrap flag, one pass still. The screen's edge between the halves too.
+        for opening in ["", "\x1b[?1049h"] {
+            let split = format!("{opening}PASS={}\r\n{}\r\nend", &hex[..16], &hex[16..]);
+            let mut term = super::tests::term(40, 3, &split);
+            assert_eq!(lines_of(&term), ["PASS=[hidden]", "", "end"], "{opening:?}");
+            assert!(!digits(&text_of(&term, true)));
+            let moved = format!("\x1b[2J\x1b[1;1HPASS={}\x1b[2;3H{}", &hex[..20], &hex[20..]);
+            print(&mut term, &moved);
+            assert!(!lines_of(&term).iter().any(|row| digits(row)), "{:?}", lines_of(&term));
+        }
+        let mut short = super::tests::term(40, 2, &format!("PASS={}\r\n{}\r\none\r\ntwo", &hex[..16], &hex[16..]));
+        short.scroll_display(GridScroll::Delta(1));
+        assert_eq!(lines_of(&short), ["", "one"], "the top edge between its halves");
+        // 4 wide, the program's own breaks: eight rows of 4 digits, the top edge on the last one.
+        let rows: Vec<&str> = (0..8).map(|n| &hex[n * 4..n * 4 + 4]).collect();
+        let mut narrow = super::tests::term(4, 2, &format!("{}\r\none\r\ntwo", rows.join("\r\n")));
+        narrow.scroll_display(GridScroll::Delta(1));
+        assert_eq!(lines_of(&narrow), ["", "one"], "all eight rows searched, though the edge cuts them");
+        // 40 wide, but each row indented 36: 4 digits a row, as in a TUI's column. The rows a
+        // pass could use are searched, not those its width would fill.
+        let indent = " ".repeat(36);
+        let indented: Vec<String> = rows.iter().map(|row| format!("{indent}{row}")).collect();
+        let mut column = super::tests::term(40, 2, &format!("{}\r\none\r\ntwo", indented.join("\r\n")));
+        column.scroll_display(GridScroll::Delta(1));
+        assert_eq!(lines_of(&column), ["", "one"], "the tail row of an indented pass");
+        column.scroll_display(GridScroll::Delta(8));
+        let head = format!("{indent}[hidden]");
+        assert_eq!(lines_of(&column), [head.as_str(), ""], "its head on show, the bottom edge cutting the rest");
+        // In a box 6 wide, 2 digits a row: its borders do not shrink the rows searched.
+        let boxed: Vec<String> =
+            rows.iter().flat_map(|row| [&row[..2], &row[2..]]).map(|d| format!("\u{2502} {d} \u{2502}")).collect();
+        let mut boxed = super::tests::term(6, 2, &format!("{}\r\none", boxed.join("\r\n")));
+        assert_eq!(lines_of(&boxed), ["\u{2502}  \u{2502}", "one"], "the tail row of a boxed pass");
+        boxed.scroll_display(GridScroll::Delta(1));
+        assert_eq!(lines_of(&boxed), ["\u{2502}  \u{2502}", "\u{2502}  \u{2502}"]);
+        // A selection of part of it, here the 16 digits on the top row, reads `[hidden]` in the
+        // state; one of other rows reads as it is.
+        assert_eq!(drag(&mut short, at(0, 0), past(0, 15)).as_deref(), Some(&hex[16..]));
+        assert_eq!(selected_shown(&short).as_deref(), Some(crate::pass::HIDDEN));
+        drag(&mut short, at(1, 0), past(1, 2));
+        assert_eq!(selected_shown(&short).as_deref(), Some("one"));
+        // No oracle: part of the pass a client typed at the prompt, the bottom edge right after
+        // it, reads as it is, as wrong digits do; the edge cuts no pass there.
+        let wrong = "0123456789abcdef0123456789abcdef";
+        for part in [&hex[..31], &wrong[..31], &hex[1..]] {
+            let typed = super::tests::term(40, 3, &format!("one\r\n$ echo {part}"));
+            assert_eq!(lines_of(&typed), ["one", &format!("$ echo {part}"), ""]);
+            assert_eq!(text_of(&typed, true), format!("one\n$ echo {part}"));
+        }
+        // Gone, the pass shows again: it grants nothing.
+        drop(live);
+        assert_eq!(lines_of(&short)[0], &hex[16..]);
+    }
+
+    /// What clients read keeps a cell's zero-width characters: a combining accent, a joiner.
+    #[test]
+    fn zero_width_characters_are_read_with_their_cell() {
+        let term = term(20, 2, "cafe\u{301} a\u{200d}b");
+        assert_eq!(lines_of(&term)[0], "cafe\u{301} a\u{200d}b");
+        assert_eq!(text_of(&term, false), "cafe\u{301} a\u{200d}b");
     }
 
     #[test]

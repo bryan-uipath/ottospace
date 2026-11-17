@@ -7,6 +7,8 @@ use crate::tasks::Group;
 pub const BACKGROUND: u32 = 0x09090b;
 /// Bars, pane headers, the secondary bar.
 pub const RAISED: u32 = 0x18181b;
+/// An open sidebar group's well: halfway from `RAISED` (the sidebar) to `BACKGROUND`, a subtle dip.
+pub const WELL: u32 = 0x101013;
 /// Selected rows and hovered controls.
 pub const SELECTED: u32 = 0x27272a;
 pub const BORDER: u32 = 0x27272a;
