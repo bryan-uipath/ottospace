@@ -38,7 +38,7 @@ export async function withOttospace(
   };
   // Never the user's `~/.ottospace`, and never hosting inherited from the caller's shell.
   delete env.OTTOSPACE_HOME;
-  delete env.OTTOSPACE_TASK_PASS;
+  delete env.OTTOSPACE_TASK_PASS_FILE;
   delete env.OTTOSPACE_HOST_ONLY;
   const app = spawn(BINARY, [], { env, stdio: "ignore" });
   const kill = () => app.kill("SIGKILL");

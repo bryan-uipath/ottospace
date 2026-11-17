@@ -5,7 +5,8 @@
 // To write the file again after a change: `UPDATE_FIXTURE=1 npm test`.
 
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
@@ -151,12 +152,12 @@ async function record(): Promise<string[]> {
   };
   const client = new Client(transport, async () => transport);
   // Run by a task's agent: its pass would be in the fixture, and committed.
-  const pass = process.env.OTTOSPACE_TASK_PASS;
-  delete process.env.OTTOSPACE_TASK_PASS;
+  const pass = process.env.OTTOSPACE_TASK_PASS_FILE;
+  delete process.env.OTTOSPACE_TASK_PASS_FILE;
   try {
     for (const call of CALLS) await assert.rejects(call(client), /recorded/);
   } finally {
-    if (pass !== undefined) process.env.OTTOSPACE_TASK_PASS = pass;
+    if (pass !== undefined) process.env.OTTOSPACE_TASK_PASS_FILE = pass;
   }
   return lines;
 }
@@ -197,20 +198,28 @@ test("an agent's pass rides on every request, and finds its task's brief", async
     close: () => {},
   };
   const client = new Client(transport, async () => transport);
-  const before = { pass: process.env.OTTOSPACE_TASK_PASS, task: process.env.OTTOSPACE_TASK };
+  const before = { file: process.env.OTTOSPACE_TASK_PASS_FILE, task: process.env.OTTOSPACE_TASK };
   const pass = "0123456789abcdef0123456789abcdef";
+  // The environment names a file; the pass is in it.
+  const dir = mkdtempSync(join(tmpdir(), "ottospace-sdk-pass-"));
+  const file = join(dir, "pass");
+  writeFileSync(file, pass, { mode: 0o600 });
   try {
-    process.env.OTTOSPACE_TASK_PASS = pass;
+    process.env.OTTOSPACE_TASK_PASS_FILE = file;
     process.env.OTTOSPACE_TASK = "7";
     await assert.rejects(client.state(), /recorded/);
     // No id: the pass says whose; `$OTTOSPACE_TASK` is not sent for it.
     await assert.rejects(client.taskBrief(), /recorded/);
     await assert.rejects(client.taskBrief({ id: 2 }), /recorded/);
-    delete process.env.OTTOSPACE_TASK_PASS;
+    // Its file gone (the agent ended): a pass never minted, refused as dead, not none.
+    rmSync(file);
+    await assert.rejects(client.state(), /recorded/);
+    delete process.env.OTTOSPACE_TASK_PASS_FILE;
     await assert.rejects(client.state(), /recorded/);
     await assert.rejects(client.taskBrief(), /recorded/);
   } finally {
-    for (const [name, value] of [["OTTOSPACE_TASK_PASS", before.pass], ["OTTOSPACE_TASK", before.task]] as const) {
+    rmSync(dir, { recursive: true, force: true });
+    for (const [name, value] of [["OTTOSPACE_TASK_PASS_FILE", before.file], ["OTTOSPACE_TASK", before.task]] as const) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }
@@ -219,6 +228,7 @@ test("an agent's pass rides on every request, and finds its task's brief", async
     { cmd: "state", pass },
     { cmd: "task_brief", pass },
     { cmd: "task_brief", id: 2, pass },
+    { cmd: "state", pass: "0".repeat(32) },
     { cmd: "state" },
     { cmd: "task_brief", id: 7 },
   ]);

@@ -45,7 +45,7 @@ pub struct Native {
     pub session: Option<(ottospace_core::runner::RunnerId, String)>,
     pub cwd: Option<String>,
     /// Its task's pass, while it runs (`pass`): none for a session's agent, nor once it moved.
-    pub(crate) pass: Option<crate::pass::Pass>,
+    pub(crate) pass: Option<crate::pass::Live>,
 }
 
 /// What the drawer keeps of a conversation's look, not its state: where it is scrolled, the
@@ -88,6 +88,8 @@ impl Stopping {
             terminal.signal(libc::SIGHUP);
         }
         if let Some(native) = &mut native {
+            // Stopped, its pass goes now: its file too, though its stdout may stay open.
+            native.pass = None;
             let _ = native.driver.kill();
         }
         Self { terminal, native, since: Instant::now() }
@@ -252,13 +254,13 @@ impl Workspace {
         if let Some(dir) = dir {
             command.current_dir(dir);
         }
-        let pass = subject.task().map(|_| crate::pass::Pass::mint().ok_or("no random bytes for a pass")).transpose()?;
+        let pass = subject.task().map(|_| crate::pass::Live::mint()).transpose()?;
         if let Some(task) = subject.task() {
             command.env("OTTOSPACE_TASK", task.to_string());
         }
         // Its own, for its tool shells' `ottospace ctl`: the user's shells in the task's tab have none.
         if let Some(pass) = &pass {
-            command.env(crate::pass::VAR, pass.hex());
+            command.env(crate::pass::VAR, pass.file());
         }
         // An empty key is no key: passed on, the CLI could take it for one and fail.
         if std::env::var_os("ANTHROPIC_API_KEY").is_some_and(|key| key.is_empty()) {
@@ -312,6 +314,10 @@ impl Workspace {
         let mut ended = Vec::new();
         let mut details = Vec::new();
         for (subject, native) in &mut self.drawer.native {
+            // Its process gone, its pass goes: the file too, and the pass is no longer hidden.
+            if native.reaped() {
+                native.pass = None;
+            }
             let mut events = Vec::new();
             while let Ok(said) = native.driver.events().try_recv() {
                 let mut kept = false;
