@@ -5897,9 +5897,9 @@ fn closing_a_temporary_workspace_whose_terminal_runs_asks_first() {
     let asked = otto.user_key("cmd-ctrl-w");
     assert_eq!((&asked["mode"], &asked["state"]["confirm"]["close"]), (&json!("confirm"), &json!(1)), "{asked}");
     assert_eq!((&asked["workbook_offer"], space_kept(&asked, 1)), (&Value::Null, json!(false)));
-    // A client's answer is refused.
-    let refused = otto.raw(&json!({"cmd": "key", "keys": "enter"}).to_string());
-    assert!(refused["error"].as_str().is_some_and(|why| why.contains("only the user")), "{refused}");
+    // A client's ↵ answers nothing: the question stays, nothing closed.
+    let theirs = otto.call(json!({"cmd": "key", "keys": "enter"}));
+    assert_eq!((&theirs["mode"], &theirs["workbook_offer"]), (&json!("confirm"), &Value::Null), "{theirs}");
     let kept = otto.user_key("escape");
     assert_eq!((&kept["mode"], &kept["workbook_offer"]), (&json!("normal"), &Value::Null), "{kept}");
     otto.user_key("cmd-ctrl-w");

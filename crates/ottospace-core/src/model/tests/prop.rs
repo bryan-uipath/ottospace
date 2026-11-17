@@ -2748,6 +2748,8 @@ impl Run {
         let on_meeting = matches!(m.list.and_then(|at| m.list_rows().into_iter().nth(at)), Some(ListRow::Meeting(_)));
         let tab_before = m.tabs[m.active].id;
         let tabs_before: Vec<u32> = m.tabs.iter().map(|tab| tab.id).collect();
+        // Yes to "Close this workspace?" hides it, as its × would.
+        let closes = matches!(action, Action::QuitConfirm) && m.confirm.as_ref().is_some_and(|c| c.close.is_some());
         let talks =
             matches!(action, Action::TaskTalk { .. } | Action::SessionOpen { .. } | Action::SessionAdopt { .. });
 
@@ -3316,6 +3318,7 @@ impl Run {
             tab_now == tab_before
                 || !m.tabs.iter().any(|tab| tab.id == tab_before)
                 || selects_tab(&action)
+                || closes
                 || left_home,
             "{origin:?}'s {action:?} changed the tab on show from {tab_before} to {tab_now}"
         );
@@ -6079,6 +6082,18 @@ fn a_live_slots_window_going_parks_it() {
         slot_make(2, 1, any).into(),
         Action::Enter { pane: 2 }.into(),
         by(Origin::System, Action::WindowGone { pane: 2, app_running: true, at: 1 }),
+    ])
+    .unwrap();
+}
+
+/// Yes to "Close this workspace?" hides it as its × does, and the tab on show moves on (seed 729).
+#[test]
+fn yes_to_closing_a_workspace_moves_the_tab_on_show() {
+    let running = (1..=2).map(|pane| Running { pane, program: None, background: false }).collect();
+    replay(&[
+        split(Axis::Right, Kind::Terminal),
+        Action::SpaceHideAsked { index: None, running }.into(),
+        Action::QuitConfirm.into(),
     ])
     .unwrap();
 }
