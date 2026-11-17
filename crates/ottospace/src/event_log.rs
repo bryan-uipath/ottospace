@@ -24,16 +24,17 @@ const LIMIT: u64 = 1 << 20;
 
 /// Writes `{"at":..,"ev":event, ..fields}`. `fields`: names, numbers and ids only.
 pub(crate) fn event(event: &str, fields: Value) {
-    write(event, fields, Some(config::get()));
+    write(event, fields, config::get().home.as_deref());
 }
 
-fn write(event: &str, fields: Value, config: Option<&config::Config>) {
+fn write(event: &str, fields: Value, home: Option<&Path>) {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_secs() as i64);
     let line = line(now, ottospace_mac::time::utc_offset(now), event, fields);
-    if std::env::var_os("OTTOSPACE_E2E").is_none() {
+    // Unit tests write only their own folder.
+    if !cfg!(test) && std::env::var_os("OTTOSPACE_E2E").is_none() {
         ottospace_mac::oslog::write(&line);
     }
-    if let Some(home) = config.and_then(|config| config.home.as_deref()) {
+    if let Some(home) = home {
         let _ = append(home, &line);
     }
 }
@@ -45,10 +46,10 @@ fn write(event: &str, fields: Value, config: Option<&config::Config>) {
 pub(crate) fn arm() {
     let before = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let at = info.location().map(|at| format!("{}:{}", short(at.file()), at.line()));
-        let thread = std::thread::current().name().map(String::from);
+        let at = info.location().map(|at| (at.file(), at.line()));
         // Not `config::get`: the panic may be in reading it.
-        write("panic", json!({ "at": at, "thread": thread }), config::loaded());
+        let home = config::loaded().and_then(|config| config.home.as_deref());
+        write("panic", panic_fields(at, std::thread::current().name()), home);
         before(info);
     }));
     if log::set_logger(&Gpui).is_ok() {
@@ -63,6 +64,25 @@ fn short(file: &str) -> &str {
     file[..src].rfind('/').map_or(file, |start| &file[start + 1..])
 }
 
+fn panic_fields(at: Option<(&str, u32)>, thread: Option<&str>) -> Value {
+    json!({ "src": at.map(|(file, line)| format!("{}:{line}", short(file))), "thread": thread })
+}
+
+/// A `gpui` event's fields for a record from GPUI's macOS layer; `None` for any other record.
+fn gpui_fields(record: &log::Record) -> Option<Value> {
+    let file = record.file().unwrap_or_default();
+    if record.level() > log::Level::Warn || !(file.contains("/gpui-") && file.contains("/src/platform/mac/")) {
+        return None;
+    }
+    let at = format!("{}:{}", short(file), record.line().unwrap_or(0));
+    // Words only from these two: their errors are GPUI's own fixed text and a code.
+    let said = (file.ends_with("/window.rs") || file.ends_with("/display_link.rs")).then(|| {
+        let text = record.args().to_string();
+        text.lines().next().unwrap_or_default().chars().take(120).collect::<String>()
+    });
+    Some(json!({ "level": record.level().as_str(), "src": at, "said": said }))
+}
+
 /// GPUI's records from its macOS layer, as `gpui` events.
 struct Gpui;
 
@@ -72,17 +92,9 @@ impl log::Log for Gpui {
     }
 
     fn log(&self, record: &log::Record) {
-        let file = record.file().unwrap_or_default();
-        if !self.enabled(record.metadata()) || !(file.contains("/gpui-") && file.contains("/src/platform/mac/")) {
-            return;
+        if let Some(fields) = gpui_fields(record) {
+            event("gpui", fields);
         }
-        let at = format!("{}:{}", short(file), record.line().unwrap_or(0));
-        // Words only from these two: their errors are GPUI's own fixed text and a code.
-        let said = (file.ends_with("/window.rs") || file.ends_with("/display_link.rs")).then(|| {
-            let text = record.args().to_string();
-            text.lines().next().unwrap_or_default().chars().take(120).collect::<String>()
-        });
-        event("gpui", json!({ "level": record.level().as_str(), "at": at, "said": said }));
     }
 
     fn flush(&self) {}
@@ -90,9 +102,13 @@ impl log::Log for Gpui {
 
 /// The line for `event` at `now` (seconds since 1970), in local time `offset` seconds east of UTC.
 fn line(now: i64, offset: i64, event: &str, fields: Value) -> String {
-    let mut line = json!({ "at": local_time(now, offset), "ev": event });
+    let (at, ev) = (json!(local_time(now, offset)), json!(event));
+    let mut line = json!({ "at": at, "ev": ev });
     if let (Some(line), Value::Object(fields)) = (line.as_object_mut(), fields) {
         line.extend(fields);
+        // A field never stands for the time or the event.
+        line.insert("at".into(), at);
+        line.insert("ev".into(), ev);
     }
     line.to_string()
 }
@@ -189,6 +205,74 @@ mod tests {
         assert_eq!(short("crates/ottospace/src/main.rs"), "ottospace/src/main.rs");
         assert_eq!(short("/rustc/abc/library/core/src/option.rs"), "core/src/option.rs");
         assert_eq!(short("/Users/me/build.rs"), "build.rs");
+    }
+
+    /// Every kind of event, fed what could leak (a pass, a title, the home path), as the app builds
+    /// it: none of that reaches the file.
+    #[test]
+    fn no_event_writes_a_pass_a_title_or_the_home_path() {
+        let dir = temp("private");
+        let home = config::user_home();
+        let (pass, title) = ("hunter2-fake-pass", "Fake Secret Title");
+        let src = format!("{home}/.cargo/registry/src/index.crates.io-1949/gpui-0.2.2/src/platform/mac");
+        let record = |level, file: &str, text: &str| {
+            gpui_fields(
+                &log::Record::builder()
+                    .level(level)
+                    .file(Some(file))
+                    .line(Some(489))
+                    .args(format_args!("{text}"))
+                    .build(),
+            )
+        };
+        let gpui = |file: &str, text: &str| record(log::Level::Error, &format!("{src}/{file}"), text);
+        let displays = json!({ "count": 2, "sizes": ["1728x1117", "2560x1440"] });
+        let start =
+            json!({ "pid": 42, "version": "0.1.0", "commit": "abc1234", "hosting": true, "displays": displays });
+        let main = format!("{home}/code/ottospace/crates/ottospace/src/main.rs");
+        let events = [
+            ("start", start),
+            ("displays", displays.clone()),
+            ("window_display", json!({ "display": 1, "size": "1728x1117" })),
+            ("stall", json!({ "stalled_ms": 1500 })),
+            ("redrawn", json!({ "kicks": 3, "lasted_ms": 2100 })),
+            ("host_failed", json!({ "window": 77 })),
+            ("give_back_failed", json!({ "window": 77 })),
+            ("quit", json!({ "hosted": 1 })),
+            ("panic", panic_fields(Some((&main, 12)), Some("main"))),
+            // The first line only, at most 120 characters.
+            (
+                "gpui",
+                gpui("display_link.rs", &format!("could not create display link, code: -6661\n{pass} {title}"))
+                    .unwrap(),
+            ),
+            (
+                "gpui",
+                gpui("window.rs", &format!("could not start display link, code: -6660 {}", "x".repeat(200) + pass))
+                    .unwrap(),
+            ),
+            // No words from anywhere else in GPUI's macOS layer.
+            ("gpui", gpui("text_system.rs", &format!("font {title} for {home}")).unwrap()),
+        ];
+        // A warning outside it is not an event at all.
+        assert_eq!(record(log::Level::Warn, &format!("{home}/code/app/src/lib.rs"), pass), None);
+        for (event, fields) in events {
+            write(event, fields, Some(&dir.0));
+        }
+        let text = fs::read_to_string(dir.0.join(NAME)).unwrap();
+        assert_eq!(text.lines().count(), 12, "{text}");
+        // `at` is each line's time, never overwritten by a field.
+        assert!(
+            text.lines().all(|line| serde_json::from_str::<Value>(line).unwrap()["at"].as_str().unwrap().len() == 25)
+        );
+        assert!(!home.is_empty());
+        for forbidden in [pass, title, &home, "Caused by", "/Users/"] {
+            assert!(!text.contains(forbidden), "{forbidden:?} in\n{text}");
+        }
+        assert!(text.contains(r#""src":"ottospace/src/main.rs:12""#), "{text}");
+        assert!(text.contains(r#""said":"could not create display link, code: -6661""#), "{text}");
+        // Shown with `--nocapture`.
+        println!("{text}");
     }
 
     #[test]

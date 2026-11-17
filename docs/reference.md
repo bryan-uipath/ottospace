@@ -1201,7 +1201,7 @@ ottospace ctl '{"cmd":"trace"}'                      # the last 2,000 events: na
 
 ### The log
 
-`~/.ottospace/log` keeps what happened to the app, to read after a problem: one JSON line an
+`<home>/log` (`~/.ottospace/log`, or in `OTTOSPACE_HOME`) keeps what happened to the app, to read after a problem: one JSON line an
 event, in local time, e.g. `{"at":"2026-11-16T17:51:03-08:00","ev":"displays","count":1,"sizes":["1728x1117"]}`.
 Only you can read it (0600). At 1 MB it becomes `log.1` and the one before goes: 2 MB at most.
 
@@ -1215,8 +1215,8 @@ Only you can read it (0600). At 1 MB it becomes `log.1` and the one before goes:
 | `redrawn` | Frames came again after a stall: `kicks`, `lasted_ms` |
 | `host_failed` | A window could not be hosted: its number |
 | `give_back_failed` | A hosted window could not be put back on a screen: its number |
-| `gpui` | An error or warning of GPUI's macOS layer: where, and for its window and display link what it said (e.g. `could not create display link, code: -6661`) |
-| `panic` | Where (`crate/src/file.rs:line`) and on which thread; never the message |
+| `gpui` | An error or warning of GPUI's macOS layer: `level`, `src` (`gpui-0.2.2/src/platform/mac/window.rs:489`), and for its window and display link `said`, the first line (e.g. `could not create display link, code: -6661`) |
+| `panic` | `src` (`crate/src/file.rs:line`) and `thread`; never the message |
 
 Never in it: terminal or transcript text, titles, meetings, passes, paths or file contents.
 The same lines go to the unified log, subsystem `dev.ottospace` (in zsh, `log` is a builtin, so
