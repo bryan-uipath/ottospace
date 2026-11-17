@@ -211,6 +211,14 @@ pub struct Occurrence {
     pub show: Show,
 }
 
+/// The text opens a calendar: a `BEGIN:VCALENDAR` line. Not so for a sign-in page served in its
+/// place, which `parse` would read as an empty feed.
+pub fn is_calendar(text: &str) -> bool {
+    cut(text, MAX_BYTES)
+        .lines()
+        .any(|line| line.trim_matches(['\u{feff}', ' ', '\r']).eq_ignore_ascii_case("BEGIN:VCALENDAR"))
+}
+
 /// Reads a feed. Anything it cannot read is left out; it never fails.
 pub fn parse(text: &str) -> Feed {
     parse_for(text, None)

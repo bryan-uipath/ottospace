@@ -8474,6 +8474,94 @@ fn a_feed_link_goes_to_curl_on_its_standard_input_not_its_arguments() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// Bryan, 2026-11-17: "shows no meetings but i definitely have some today", then "it loaded up
+/// now". Before a read landed the section said "No meetings", as for an empty day, and a fetch
+/// that failed was tried again only a refresh interval (5 minutes) later. Now it says it loads,
+/// how far, what failed; tries again soon by itself, and at once on the user's Retry.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_calendar_says_it_loads_what_failed_and_tries_again() {
+    use std::os::unix::fs::PermissionsExt;
+    let link = "https://calendar.example.com/private-s3cret/basic.ics";
+    // Two days on: tomorrow's at any hour, so today is empty.
+    // Notes long enough that the slow answer comes in two parts.
+    let notes = format!("DESCRIPTION:{}\r\n", "Made-up notes. ".repeat(200));
+    let text = feed(&[("a", "Offsite prep", 2 * 86_400, 2 * 86_400 + 1_800, &notes)]);
+    let home = calendar_folder("calendar-fetch", &text, Some(link));
+    let dir = home.to_str().unwrap();
+    // A stand-in for curl: each call takes the next line of `modes`. A timeout once the test saw
+    // it load (`go`: a slow launch would miss a fixed wait); a 403; a sign-in page in place of the
+    // feed; the feed slowly, 2 KB then the rest.
+    std::fs::write(home.join("modes"), "timeout\nforbidden\npage\nslow\n").unwrap();
+    let script = format!(
+        "#!/bin/sh\n/bin/cat > /dev/null\nn=$(( $(/bin/cat '{dir}/n' 2>/dev/null || echo 0) + 1 ))\necho $n > '{dir}/n'\n\
+         case $(/usr/bin/sed -n \"${{n}}p\" '{dir}/modes') in\n\
+         timeout) while [ ! -e '{dir}/go' ]; do /bin/sleep 0.1; done; printf 000 >&2; exit 28 ;;\n\
+         forbidden) printf Forbidden; printf 403 >&2; exit 22 ;;\n\
+         page) printf '<html>Sign in</html>'; printf 200 >&2 ;;\n\
+         *) /usr/bin/head -c 2048 '{dir}/today.ics'; /bin/sleep 2; /usr/bin/tail -c +2049 '{dir}/today.ics'; printf 200 >&2 ;;\n\
+         esac\n"
+    );
+    std::fs::write(home.join("curl"), script).unwrap();
+    std::fs::set_permissions(home.join("curl"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let curl = home.join("curl");
+    let otto =
+        Otto::launch_with("calendar-fetch", &[("OTTOSPACE_HOME", dir), ("OTTOSPACE_CURL", curl.to_str().unwrap())]);
+    otto.call(json!({"cmd": "section", "section": "calendar"}));
+    let calendar = |o: &Otto| o.call(json!({"cmd": "state"}))["calendar"].clone();
+    let fetching = |o: &Otto, state: &str, line: &str| {
+        o.wait_for(&format!("{state}: {line}"), |o| {
+            let c = calendar(o);
+            (c["fetch"]["state"] == state && c["fetch_line"].as_str().is_some_and(|l| l.starts_with(line))).then_some(c)
+        })
+    };
+    // At once at start: loading, and no "No meetings".
+    let loading = fetching(&otto, "loading", "Loading the calendar…");
+    assert_eq!((&loading["empty_note"], loading["fetch_rect"].is_array()), (&Value::Null, true), "{loading}");
+    std::fs::write(home.join("go"), "").unwrap();
+    // Timed out: what failed, a Retry, still no "No meetings".
+    let failed = fetching(&otto, "failed", "Couldn't reach the calendar (timed out after");
+    assert_eq!((&failed["fetch"]["error"], &failed["empty_note"]), (&json!("timed_out"), &Value::Null), "{failed}");
+    // A client's click on Retry fetches nothing.
+    otto.click(centre(&failed["retry"]), 1);
+    assert_eq!(calendar(&otto)["retries"], 0);
+    // Tried again by itself, 15 s on: the server's answer.
+    let forbidden = fetching(&otto, "failed", "The calendar answered 403");
+    assert_eq!((&forbidden["fetch"]["code"], &forbidden["retries"]), (&json!(403), &json!(0)), "{forbidden}");
+    // The user's Retry fetches at once: a page in place of the feed is no calendar.
+    otto.user_click(centre(&forbidden["retry"]));
+    let page = fetching(&otto, "failed", "Couldn't read the calendar: not an iCalendar feed");
+    assert_eq!((&page["fetch"]["error"], &page["retries"]), (&json!("not_calendar"), &json!(1)), "{page}");
+    // Again: the slow feed's bytes as they come, then the read and an empty day.
+    otto.user_click(centre(&page["retry"]));
+    let slow =
+        otto.wait_for("the first bytes", |o| Some(calendar(o)).filter(|c| c["fetch"]["bytes"].as_u64() > Some(0)));
+    let bytes = slow["fetch"]["bytes"].as_u64().unwrap_or(0);
+    let said = format!("Loading the calendar… {} KB", bytes.div_ceil(1024));
+    assert_eq!((slow["fetch_line"].as_str(), &slow["retry"]), (Some(said.as_str()), &Value::Null), "{slow}");
+    assert!(bytes <= 2048, "before the rest: {slow}");
+    let read = fetching(&otto, "read", "Updated just now · 1 event");
+    assert_eq!(
+        (&read["empty_note"], &read["rows"], &read["stale"]),
+        (&json!("No meetings today"), &json!(0), &json!(false))
+    );
+    // The app's log: each fetch, its outcome's kind, sizes and times. No link, no title.
+    let log = std::fs::read_to_string(home.join("log")).unwrap();
+    let events: Vec<Value> = log.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    let of = |ev: &str| events.iter().filter(|e| e["ev"] == ev).cloned().collect::<Vec<_>>();
+    assert_eq!(of("calendar_fetch").len(), 4, "{log}");
+    let errors: Vec<Value> = of("calendar_failed").iter().map(|e| e["error"].clone()).collect();
+    assert_eq!(errors, [json!("timed_out"), json!("http"), json!("not_calendar")], "{log}");
+    let read = &of("calendar_read")[0];
+    assert_eq!((&read["vevents"], &read["held"]), (&json!(1), &json!(1)), "{log}");
+    assert!(read["bytes"].as_u64() > Some(2048) && read["ms"].as_u64() >= Some(2_000), "{log}");
+    assert!(!log.contains("s3cret") && !log.contains("Offsite"), "{log}");
+    let state = otto.call(json!({"cmd": "state"})).to_string();
+    assert!(!state.contains("s3cret") && !state.contains("Offsite"), "{state}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_calendar_request_gives_titles_and_busy_time_but_no_link_or_address() {

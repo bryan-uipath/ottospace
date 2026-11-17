@@ -7,6 +7,7 @@
 use super::*;
 use crate::agent_mode::{AppUse, Level};
 use crate::ax::{Frame, Source};
+use crate::calendar::fetch::Failure;
 use crate::calendar::{ColorRule, DayStep, Event};
 use crate::clip::{Amount, Verb};
 use crate::compose::{Known, Names, PathFound};
@@ -1389,6 +1390,13 @@ const MAKERS: &[Make] = &[
     |g| Action::CalendarDismiss { id: g.meeting_id() },
     |g| Action::CalendarJoin { id: g.meeting_id() },
     |g| Action::CalendarDay { step: g.rng.pick(&[DayStep::Back, DayStep::Forward, DayStep::Today]) },
+    |g| Action::CalendarFetching { since: g.time(), bytes: g.rng.pick(&[0, 4_096, 1_557_023]) },
+    |g| {
+        let why = [Failure::TimedOut { secs: 30 }, Failure::Http(403), Failure::NotCalendar];
+        let failure = g.rng.coin().then(|| g.rng.pick(&why));
+        Action::CalendarFetched { at: g.time(), events: g.rng.below(2_000) as u32, failure }
+    },
+    |_| Action::CalendarRetry,
     |g| Action::ListenStart {
         source: crate::listen::Source::Pane(g.pane()),
         mic: g.rng.coin(),
@@ -3040,10 +3048,14 @@ impl Run {
             |e: &Effect| matches!(e, Effect::StartAgent { .. } | Effect::ReadSession { .. } | Effect::AgentSend { .. });
         ensure!(!selects || !effects.iter().any(acts), "{origin:?}'s {action:?} started an agent: {effects:?}");
         ensure!(!selects || m.chats == chats_before, "{origin:?}'s {action:?} changed a transcript");
-        // A dial moves only on what its agent did, a message sent, or its process starting or ending.
+        // A dial moves only on what its agent did (an app it read too), a message sent, or its process starting or ending.
         let moves = matches!(
             action,
-            Action::AgentEvents { .. } | Action::TalkSend | Action::AgentStarted { .. } | Action::AgentExited { .. }
+            Action::AgentEvents { .. }
+                | Action::AppUsed { .. }
+                | Action::TalkSend
+                | Action::AgentStarted { .. }
+                | Action::AgentExited { .. }
         );
         for chat in m.chats.iter().filter(|_| !moves) {
             let was = chats_before.iter().find(|was| was.subject == chat.subject);
@@ -3983,6 +3995,11 @@ impl Run {
                     ensure!(matches!(action, Action::Tick { .. }) && *started <= m.now, "an alert by {action:?}")
                 }
                 Effect::OpenLink { .. } => {}
+                // The network is reached again only by the user's Retry, with a feed set.
+                Effect::CalendarRetry => {
+                    ensure!(user && matches!(action, Action::CalendarRetry), "{origin:?}'s {action:?} fetched");
+                    ensure!(m.calendar.on, "a retry with no feed");
+                }
                 // A pull request opens by the user's click alone, and only a plain GitHub link.
                 Effect::OpenPr { url } => {
                     ensure!(user && matches!(action, Action::PrOpen { .. }), "{origin:?}'s {action:?} opened {url}");
@@ -4059,8 +4076,9 @@ impl Run {
         (holds.sort(), kept.sort());
         ensure!(holds == kept, "the draft holds {holds:?}; the shell keeps {kept:?}");
         // The shell was told of every pane that shows something. (Not of an empty pane of a
-        // tab built from a mark: it hears of that one when it is filled.)
-        let unknown = |pane: &&Pane| pane.kind != Kind::Empty && !self.shell.panes.contains(&pane.id);
+        // tab built from a mark, nor of a slot restored waiting: it hears of those when filled.)
+        let waits = |pane: &Pane| matches!(pane.kind, Kind::Empty | Kind::Slot { .. });
+        let unknown = |pane: &&Pane| !waits(pane) && !self.shell.panes.contains(&pane.id);
         let unknown: Vec<PaneId> = m.panes.iter().filter(unknown).map(|pane| pane.id).collect();
         ensure!(unknown.is_empty(), "the shell was never told panes {unknown:?} opened");
         let gone = |pane: &&PaneId| m.pane(**pane).is_none();
@@ -4467,6 +4485,7 @@ fn code(sent: &Envelope) -> String {
         ("dots", "Rect"),
         ("show", "Show"),
         ("step", "DayStep"),
+        ("failure", "Failure"),
         ("from", "crate::listen::Speaker"),
         ("why", "crate::listen::Ended"),
     ];
@@ -4873,6 +4892,48 @@ fn by(origin: Origin, action: Action) -> Envelope {
 
 fn split(axis: Axis, kind: Kind) -> Envelope {
     Action::Split { axis, kind }.into()
+}
+
+/// A task's read of an app pane lights the dial's Apps station (`app_used`): the check let only
+/// the agent's events move a dial (seed 501).
+#[test]
+fn an_app_read_moves_the_dial() {
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        Action::CaptureStart {
+            pane: None,
+            draft: "d1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![],
+            images: true,
+        }
+        .into(),
+        Action::ComposeSubmit { open: true }.into(),
+        by(Origin::System, Action::AgentStarted { task: Subject::Task(1), session: Some("--resume".into()), at: 66 }),
+        by(
+            Origin::System,
+            Action::AppUsed { task: 1, pane: 4, what: AppUse::Read, refused: Some("".into()), at: 6002 },
+        ),
+    ])
+    .unwrap();
+}
+
+/// A workbook's slot comes back waiting, as an empty pane does: the shell hears of it when it is
+/// filled (`slot_fill`). The check wanted it told at once (seed 1217).
+#[test]
+fn a_slot_a_workbook_restores_waits_unannounced_until_filled() {
+    let slot = r#"{"select":{},"pick":"any","matching":"automatic","absent":"wait","closed":"keep"}"#;
+    let saved = History { lines: vec!["SAVEDHISTORY-0 ".into()], command: None, saved: 0 };
+    let app = Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() };
+    replay(&[
+        split(Axis::Right, Kind::Terminal),
+        Action::Open { kind: app, axis: Axis::Right, beside: None }.into(),
+        slot_make(2, 1, slot).into(),
+        Action::WorkbookSave { uid: "00000000000000a1".into(), cwds: vec![], histories: vec![(2, saved)] }.into(),
+        Action::CloseTab { index: None }.into(),
+        Action::WorkbookOpen { workbook: 1, tab: None, home: None }.into(),
+    ])
+    .unwrap();
 }
 
 /// × on a closed temporary workspace's offer closed its panes in the dismissal itself: a
