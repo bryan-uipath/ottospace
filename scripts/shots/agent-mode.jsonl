@@ -1,0 +1,16 @@
+# Agent mode: the robot in an app pane's header, its menu, and the levels. A test run hosts no
+# window: `app_fixture` makes app panes with none. First a workspace no task works in (dimmed,
+# grants nothing); then a task's: Mail is the user's pick (the default, See and act: amber, the
+# pane's header line too), Notes a client's (Off).
+{"env":{"OTTOSPACE_FEATURES":"agent_mode"}}
+{"cmd":"app_fixture","name":"Calendar","user":true}
+{"shot":"no-task"}
+{"cmd":"task_add","title":"Plan the launch","state":"running"}
+{"cmd":"task_open","id":1}
+{"cmd":"app_fixture","name":"Mail","user":true}
+{"cmd":"app_fixture","name":"Notes"}
+{"shot":"levels"}
+{"click":"agent:2"}
+{"shot":"menu"}
+{"click":"agent-item:1"}
+{"shot":"see"}

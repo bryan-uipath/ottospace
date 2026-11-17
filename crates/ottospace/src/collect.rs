@@ -69,7 +69,7 @@ impl Frozen {
 
 fn encode(pixels: &Still, scale: f64) -> Option<Vec<u8>> {
     match pixels {
-        Still::Frame(frame) => frame_png(frame),
+        Still::Frame(frame) => frame_png(frame, None),
         Still::Rows(screen, size, cell) => screen.picture(*size, *cell, scale),
     }
 }
@@ -129,7 +129,8 @@ pub fn nv12_to_rgba(y: &[u8], y_stride: usize, c: &[u8], c_stride: usize, width:
 }
 
 /// A stream frame as a PNG.
-fn frame_png(frame: &Frame) -> Option<Vec<u8>> {
+/// A frame as a PNG; `most`: its longest side at most that many pixels, every n-th pixel kept.
+pub(crate) fn frame_png(frame: &Frame, most: Option<usize>) -> Option<Vec<u8>> {
     let buffer = &frame.0;
     if buffer.get_plane_count() < 2 || buffer.lock_base_address(kCVPixelBufferLock_ReadOnly) != 0 {
         return None;
@@ -145,7 +146,20 @@ fn frame_png(frame: &Frame) -> Option<Vec<u8>> {
         _ => None,
     };
     buffer.unlock_base_address(kCVPixelBufferLock_ReadOnly);
-    image::png_from_rgba(width, height, &rgba?)
+    let rgba = rgba?;
+    let step = most.map_or(1, |most| width.max(height).div_ceil(most.max(1)));
+    if step <= 1 {
+        return image::png_from_rgba(width, height, &rgba);
+    }
+    let (w, h) = (width.div_ceil(step), height.div_ceil(step));
+    let mut small = Vec::with_capacity(w * h * 4);
+    for row in (0..height).step_by(step) {
+        for col in (0..width).step_by(step) {
+            let at = (row * width + col) * 4;
+            small.extend_from_slice(&rgba[at..at + 4]);
+        }
+    }
+    image::png_from_rgba(w, h, &small)
 }
 
 /// The process that made a draft, if `draft` is a name the shell gives one:
@@ -170,7 +184,7 @@ pub(crate) fn task_dir(task: TaskId, name: &str) -> Option<PathBuf> {
 
 /// A word nobody can guess, 24 letters and digits: for a draft's task's folder and its brief's
 /// fence. 96 bits from the system's random source. `None`: that could not be read.
-fn new_word() -> Option<String> {
+pub(crate) fn new_word() -> Option<String> {
     use std::io::Read;
     let mut bytes = [0u8; 12];
     std::fs::File::open("/dev/urandom").and_then(|mut source| source.read_exact(&mut bytes)).ok()?;

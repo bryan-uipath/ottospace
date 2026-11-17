@@ -1552,6 +1552,40 @@ pub enum Action {
         why: listen::Ended,
         at: u64,
     },
+    /// The user's level for an app pane (default: the focused one): what the task of its
+    /// workspace may do there (`agent_mode`). Only the user's: a client's is refused.
+    AgentLevel {
+        pane: Option<PaneId>,
+        level: crate::agent_mode::Level,
+    },
+    /// The robot's menu on an app pane (default: the focused one; ⌘⌃V), or shut if open there.
+    /// `keys`: by a key or a label, so the keys are on its first item.
+    AgentMenu {
+        pane: Option<PaneId>,
+        keys: bool,
+    },
+    AgentMenuMove {
+        delta: i32,
+    },
+    /// Take an item of the open menu (default: the one the keys are on).
+    AgentMenuChoose {
+        index: Option<usize>,
+    },
+    AgentMenuClose,
+    /// The user's click on a restored pane's offer: the level they picked in a run before, kept
+    /// in `layout.json`, given again. Read back, it is only an offer: a file the same user's
+    /// agent could write grants nothing by itself.
+    AgentOfferAccept {
+        pane: PaneId,
+    },
+    /// The shell's: it served (`refused`: none) or refused a task's read or look of an app pane.
+    AppUsed {
+        task: TaskId,
+        pane: PaneId,
+        what: crate::agent_mode::AppUse,
+        refused: Option<String>,
+        at: u64,
+    },
     /// The user's Keep in "Keep this pane as a slot": app pane `pane`, whose window is of process
     /// `pid`, becomes a filled slot. On a slot: its new settings (the dialog's edit).
     SlotMake {
@@ -1991,6 +2025,13 @@ impl Action {
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
             | Action::ListenEnded { .. }
+            | Action::AgentLevel { .. }
+            | Action::AgentMenu { .. }
+            | Action::AgentMenuMove { .. }
+            | Action::AgentMenuChoose { .. }
+            | Action::AgentMenuClose
+            | Action::AgentOfferAccept { .. }
+            | Action::AppUsed { .. }
             | Action::SlotMake { .. }
             | Action::SlotClear { .. }
             | Action::SlotAccept { .. }
@@ -2038,6 +2079,13 @@ impl Action {
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
             | Action::ListenEnded { .. } => Some(Feature::Transcripts),
+            Action::AgentLevel { .. }
+            | Action::AgentMenu { .. }
+            | Action::AgentMenuMove { .. }
+            | Action::AgentMenuChoose { .. }
+            | Action::AgentMenuClose
+            | Action::AgentOfferAccept { .. }
+            | Action::AppUsed { .. } => Some(Feature::AgentMode),
             Action::SlotMake { .. }
             | Action::SlotClear { .. }
             | Action::SlotAccept { .. }
@@ -2663,6 +2711,7 @@ pub mod rail;
 pub mod spaces;
 pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
 
+mod agent;
 pub mod chat;
 pub mod editor;
 pub mod slots;
@@ -2973,6 +3022,9 @@ pub struct Model {
     editor_note: Option<(String, u64)>,
     /// The transcript on, if one is. In the state: its status and times, never its text.
     pub listen: Listening,
+    /// Each app pane's agent mode level and the task it is given to, the default, the menu.
+    #[serde(rename = "agent_mode")]
+    pub agent: crate::agent_mode::AgentMode,
     /// Each slot, by its pane: filled or not. In the state: its status, how many windows match
     /// and its matching, never what it selects or a window's title.
     pub slots: std::collections::BTreeMap<PaneId, slots::Run>,
@@ -3106,6 +3158,7 @@ impl Default for Model {
             editing: None,
             editor_note: None,
             listen: Listening::default(),
+            agent: crate::agent_mode::AgentMode::default(),
             slots: Default::default(),
             slot_looks: Vec::new(),
             slot_watch: Vec::new(),
@@ -3209,6 +3262,9 @@ impl Model {
         let boxed = self.picker.is_some() || self.compose_keys();
         match action {
             _ if origin == Origin::User => None,
+            // Only ottospace records what a task did in an app: no client forges or hides a row.
+            // The user's is ignored (`app_used`): the shell sends it as its own.
+            Action::AppUsed { .. } if origin == Origin::Socket => Some(crate::agent_mode::SHELLS_ALONE),
             // What the user's keys are used for is theirs: no client adds to it or clears it.
             Action::KeyUsed { .. } | Action::ResetKeyUse => Some(key_use::USERS_ALONE),
             Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),
@@ -3234,6 +3290,18 @@ impl Model {
                 if origin == Origin::Socket =>
             {
                 Some(listen::SHELLS_ALONE)
+            }
+            // Only the user lets a task see an app, or opens the menu that does: a client's key,
+            // click or label is the client's, and a timer grants nothing.
+            Action::AgentLevel { .. }
+            | Action::AgentMenu { .. }
+            | Action::AgentMenuMove { .. }
+            | Action::AgentMenuChoose { .. }
+            | Action::AgentMenuClose
+            | Action::AgentOfferAccept { .. }
+                if origin != Origin::User =>
+            {
+                Some(crate::agent_mode::USERS_ALONE)
             }
             // Nor does a client end one by closing its pane. The shell's close (the window is gone) does.
             Action::Close { .. } | Action::CloseTab { .. }
@@ -3702,6 +3770,7 @@ impl Model {
         self.settle_brief();
         self.settle_row_menu();
         self.settle_listen();
+        self.settle_agent(origin);
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
         if self.list.is_none() && listed.is_some() {
             self.list_kept = zones::KeptRow(listed);
@@ -5557,6 +5626,13 @@ impl Model {
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
             | Action::ListenEnded { .. }) => self.listen_act(action, effects),
+            action @ (Action::AgentLevel { .. }
+            | Action::AgentMenu { .. }
+            | Action::AgentMenuMove { .. }
+            | Action::AgentMenuChoose { .. }
+            | Action::AgentMenuClose
+            | Action::AgentOfferAccept { .. }
+            | Action::AppUsed { .. }) => self.agent_act(action, effects),
             action @ (Action::SlotMake { .. }
             | Action::SlotClear { .. }
             | Action::SlotAccept { .. }
@@ -7575,6 +7651,8 @@ impl Model {
         self.act(Action::SessionsRange { range: settings.sessions_range.unwrap_or_default() }, effects);
         self.act(Action::SessionQuiet { ms: settings.quiet_ms() }, effects);
         self.paste_confirm = settings.paste_confirm.unwrap_or_default();
+        // For app panes from now: a level set is kept.
+        self.agent.default = settings.agent_mode.unwrap_or(crate::agent_mode::Level::Act);
         // The models are read only at start (`agent_models`).
         let (claude, codex) = (self.models.claude.clone(), self.models.codex.clone());
         let shows = settings.conversation_view.unwrap_or(crate::settings::DEFAULT_VIEW);
@@ -8571,6 +8649,13 @@ mod tests {
         Action::ListenFailed { .. },
         Action::ListenHeard { .. },
         Action::ListenEnded { .. },
+        Action::AgentLevel { .. },
+        Action::AgentMenu { .. },
+        Action::AgentMenuMove { .. },
+        Action::AgentMenuChoose { .. },
+        Action::AgentMenuClose,
+        Action::AgentOfferAccept { .. },
+        Action::AppUsed { .. },
         Action::SlotMake { .. },
         Action::SlotClear { .. },
         Action::SlotAccept { .. },
@@ -8855,6 +8940,13 @@ mod tests {
             Action::ListenFailed { id: text(), why: text() },
             Action::ListenHeard { id: text(), lines: Vec::new() },
             Action::ListenEnded { id: text(), why: listen::Ended::AppQuit, at: 0 },
+            Action::AgentLevel { pane: Some(1), level: crate::agent_mode::Level::See },
+            Action::AgentMenu { pane: None, keys: true },
+            Action::AgentMenuMove { delta: 1 },
+            Action::AgentMenuChoose { index: None },
+            Action::AgentMenuClose,
+            Action::AgentOfferAccept { pane: 1 },
+            Action::AppUsed { task: 1, pane: 1, what: crate::agent_mode::AppUse::Read, refused: None, at: 0 },
             Action::SlotMake { pane: 1, pid: 1, slot: crate::slot::Slot::default() },
             Action::SlotClear { pane: 1 },
             Action::SlotAccept { pane: 1 },
@@ -8905,6 +8997,24 @@ mod tests {
             {
                 Some(listen::SHELLS_ALONE)
             }
+            _ => None,
+        }
+    }
+
+    /// Agent mode: a level or the menu, the user's alone; a record of an app's use, the shell's.
+    fn agent_refused(action: &Action, origin: Origin) -> Option<&'static str> {
+        match action {
+            Action::AgentLevel { .. }
+            | Action::AgentMenu { .. }
+            | Action::AgentMenuMove { .. }
+            | Action::AgentMenuChoose { .. }
+            | Action::AgentMenuClose
+            | Action::AgentOfferAccept { .. }
+                if origin != Origin::User =>
+            {
+                Some(crate::agent_mode::USERS_ALONE)
+            }
+            Action::AppUsed { .. } if origin == Origin::Socket => Some(crate::agent_mode::SHELLS_ALONE),
             _ => None,
         }
     }
@@ -9094,6 +9204,7 @@ mod tests {
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
                     _ if listen_refused(action, origin).is_some() => listen_refused(action, origin),
+                    _ if agent_refused(action, origin).is_some() => agent_refused(action, origin),
                     _ if slot_refused(action, origin).is_some() => slot_refused(action, origin),
                     Action::TaskTalk { .. }
                     | Action::SessionOpen { .. }
@@ -9754,6 +9865,120 @@ mod tests {
         m.update(Action::SpaceOpen { space: task_space(id) });
         m.update(Action::Open { kind: app(2), axis: Right, beside: None });
         assert_eq!(m.glyph(&task_space(id)), Glyph::Tasks);
+    }
+
+    /// Agent mode: an app pane in a task's workspace starts at the default (Act) for that task,
+    /// one elsewhere at Off for none; only the user changes a level; a pane that leaves its task's
+    /// workspace, or whose task ends, is Off; and only a caller whose pass is that task's reads it,
+    /// at See or more, once a second.
+    #[test]
+    fn agent_mode_grants_a_pane_to_its_workspaces_task_and_only_the_user_sets_it() {
+        use crate::agent_mode::{AppUse, Grant, Level, NO_PASS, NO_TASK, SHELLS_ALONE, USERS_ALONE};
+        let mut m = Model::default();
+        let grant = |m: &Model, pane| m.agent.panes.get(&pane).map(|grant| (grant.level, grant.task));
+        // In the workspace made for it, no task: Off, and the menu offers nothing.
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        assert_eq!(grant(&m, 1), Some((Level::Off, None)));
+        assert_eq!(
+            m.update(Action::AgentLevel { pane: Some(1), level: Level::See }),
+            [Effect::Notice { text: NO_TASK.into() }]
+        );
+        assert_eq!(grant(&m, 1), Some((Level::Off, None)));
+        m.update(Action::AgentMenu { pane: Some(1), keys: true });
+        assert_eq!(m.agent.menu.map(|menu| menu.selected), Some(None), "no item to be on");
+        m.update(Action::AgentMenuClose);
+        // A task's workspace: its new app pane is at the default, for the task.
+        let task = add_task(&mut m, "plan the week", State::Running);
+        let other = add_task(&mut m, "fix the zoom", State::Running);
+        m.update(Action::SpaceOpen { space: task_space(task) });
+        m.update(Action::Open { kind: app(2), axis: Right, beside: None });
+        let pane = m.focused.unwrap_or_default();
+        assert_eq!(grant(&m, pane), Some((Level::Act, Some(task))));
+        // One a client opened there, or the system adopted, starts at Off: no grant the user did
+        // not give. An empty pane a client fills is the client's too.
+        for (origin, window) in [(Origin::Socket, 20), (Origin::System, 21)] {
+            m.update(Action::Open { kind: app(window), axis: Right, beside: None }.sent_by(origin));
+            let theirs = m.panes.iter().find(|p| p.kind == app(window)).map(|p| p.id).unwrap_or_default();
+            assert_eq!(grant(&m, theirs), Some((Level::Off, Some(task))), "{origin:?}");
+        }
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        let empty = m.focused.unwrap_or_default();
+        m.update(Action::Fill { pane: empty, kind: app(22) }.sent_by(Origin::Socket));
+        assert_eq!(grant(&m, empty), Some((Level::Off, Some(task))));
+        m.update(Action::Close { pane: Some(empty) });
+        m.update(Action::Focus { pane });
+        // A client's level, menu or key toward it is refused, and changes nothing.
+        for action in [
+            Action::AgentLevel { pane: Some(pane), level: Level::Off },
+            Action::AgentMenu { pane: Some(pane), keys: true },
+            Action::AgentMenuChoose { index: Some(0) },
+        ] {
+            for origin in [Origin::Socket, Origin::System] {
+                assert_eq!(m.refusal(&action, origin), Some(USERS_ALONE));
+                m.update(action.clone().sent_by(origin));
+                assert_eq!(grant(&m, pane), Some((Level::Act, Some(task))));
+            }
+        }
+        // The user's menu: by a key, on Off; ↓ to See; ↵ takes it.
+        m.update(Action::AgentMenu { pane: None, keys: true });
+        assert_eq!(m.agent.menu.map(|menu| (menu.pane, menu.selected)), Some((pane, Some(0))));
+        m.update(Action::AgentMenuMove { delta: 1 });
+        m.update(Action::AgentMenuChoose { index: None });
+        assert_eq!((grant(&m, pane), m.agent.menu), (Some((Level::See, Some(task))), None));
+        // Who may read it.
+        let read = |m: &Model, caller, now| m.app_access(pane, caller, AppUse::Read, now);
+        assert_eq!(read(&m, Caller::Task(task), 0), Ok(task));
+        assert_eq!(read(&m, Caller::Anyone, 0), Err(NO_PASS.into()));
+        assert_eq!(read(&m, Caller::Unknown, 0), Err(STALE_PASS.into()));
+        assert!(read(&m, Caller::Task(other), 0).is_err_and(|why| why.contains("not in task")));
+        assert!(m.app_access(99, Caller::Task(task), AppUse::Read, 0).is_err_and(|why| why.contains("not an app")));
+        // A read served: the row in the task's conversation, and the limit of one a second.
+        let used = Action::AppUsed { task, pane, what: AppUse::Read, refused: None, at: 5_000 };
+        assert_eq!(m.refusal(&used, Origin::Socket), Some(SHELLS_ALONE));
+        m.update(used.clone().sent_by(Origin::Socket));
+        m.update(used.clone().sent_by(Origin::User));
+        assert_eq!(read(&m, Caller::Task(task), 5_100), Ok(task), "only ottospace's record counts");
+        m.update(used.sent_by(Origin::System));
+        assert!(read(&m, Caller::Task(task), 5_100).is_err_and(|why| why.contains("less than a second")));
+        assert_eq!(read(&m, Caller::Task(task), 6_000), Ok(task));
+        assert_eq!(m.app_access(pane, Caller::Task(task), AppUse::Look, 5_100), Ok(task), "a look counts apart");
+        // Off: no read, by anyone.
+        m.update(Action::AgentLevel { pane: Some(pane), level: Level::Off });
+        assert!(read(&m, Caller::Task(task), 9_000).is_err_and(|why| why.contains("agent mode is off on pane")));
+        // Act grants what See does (presses come later).
+        m.update(Action::AgentLevel { pane: Some(pane), level: Level::Act });
+        assert_eq!(read(&m, Caller::Task(task), 9_000), Ok(task));
+        // The pane moved to another task's workspace: Off, for that task.
+        m.update(Action::SpaceOpen { space: task_space(other) });
+        let to = m.active;
+        m.update(Action::SpaceOpen { space: task_space(task) });
+        m.update(Action::MovePane { pane: Some(pane), tab: to });
+        assert_eq!(grant(&m, pane), Some((Level::Off, Some(other))));
+        // The task done: Off, for none.
+        m.update(Action::SpaceOpen { space: task_space(task) });
+        m.update(Action::Open { kind: app(3), axis: Right, beside: None });
+        let third = m.focused.unwrap_or_default();
+        assert_eq!(grant(&m, third).map(|(level, _)| level), Some(Level::Act));
+        m.update(Action::TaskSetState { id: task, state: State::Done });
+        assert_eq!(grant(&m, third), Some((Level::Off, None)));
+        // The settings' default for new panes; the flag off holds nothing and reads nothing.
+        m.update(
+            Action::SettingsRead { text: r#"{"agent_mode": "see"}"#.into(), written: false }.sent_by(Origin::System),
+        );
+        assert_eq!(m.agent.default, Level::See);
+        let kept = m.agent.panes.clone();
+        m.update(Action::SetFeatures { features: crate::features::Features::default() }.sent_by(Origin::System));
+        assert_eq!(read(&m, Caller::Task(other), 9_000), Err(Feature::AgentMode.off().into()));
+        // The user's pane in a task's workspace while the flag is off: Off, not the default.
+        m.update(Action::SpaceOpen { space: task_space(other) });
+        m.update(Action::Open { kind: app(4), axis: Right, beside: None });
+        let fourth = m.focused.unwrap_or_default();
+        assert_eq!(grant(&m, fourth), Some((Level::Off, Some(other))));
+        let mut kept = kept;
+        kept.insert(fourth, Grant { level: Level::Off, task: Some(other) });
+        // Off and on again (a settings write): every grant as it was, none raised.
+        m.update(Action::SetFeatures { features: crate::features::Features::all() }.sent_by(Origin::System));
+        assert_eq!(m.agent.panes, kept);
     }
 
     #[test]
@@ -15049,6 +15274,7 @@ mod tests {
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
                     _ if listen_refused(action, origin).is_some() => listen_refused(action, origin),
+                    _ if agent_refused(action, origin).is_some() => agent_refused(action, origin),
                     _ if slot_refused(action, origin).is_some() => slot_refused(action, origin),
                     Action::TaskTalk { .. }
                     | Action::SessionOpen { .. }

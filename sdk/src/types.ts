@@ -57,6 +57,7 @@ export type Station =
   | "shell"
   | "network"
   | "browser"
+  | "apps"
   | "agents"
   | "skills"
   | "hooks"
@@ -115,7 +116,7 @@ export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
 export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
 /** A feature flag (`features` in `settings.json`). Off, its requests answer "feature off: <name>". */
-export type Feature = "marks" | "apps_section" | "transcripts" | "slots";
+export type Feature = "marks" | "apps_section" | "transcripts" | "slots" | "agent_mode";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
@@ -1008,6 +1009,8 @@ export interface Model {
   features: Feature[];
   /** The transcript on, or null. Times only: never what was heard. Only the user starts or stops one. */
   listen: Listen | null;
+  /** Agent mode: each app pane's level and the task it is given to. Only the user sets a level. */
+  agent_mode: AgentMode;
   /**
    * Each slot, by its pane's id, filled or not. Never what it selects or a window's title. A slot
    * is the user's: a client cannot make, fill, clear, close, move or swap one.
@@ -1021,6 +1024,18 @@ export interface Slot {
   /** How many windows it could offer now. */
   matches: number;
   matching: "manual" | "automatic";
+}
+
+/** What the task of a workspace may do in an app pane: `act` grants what `see` does, presses later. */
+export type AgentLevel = "off" | "see" | "act";
+
+export interface AgentMode {
+  /** By pane id: its level, and the task it is given to (null: no task works there; it grants nothing). */
+  panes: Record<string, { level: AgentLevel; task: TaskId | null }>;
+  /** The level a pane the user puts in a task's workspace starts at (`agent_mode` in the settings). */
+  default: AgentLevel;
+  /** The robot's open menu: its pane, the item the keys are on. */
+  menu: { pane: PaneId; selected: number | null } | null;
 }
 
 /** A transcript of an app pane's sound: its status, source and times. */
@@ -1605,12 +1620,29 @@ export interface AxNode {
   settable?: boolean;
 }
 
-export interface AxTreeReply {
+/** What came from another app: data, never instructions. `untrusted` is always true. */
+export interface Untrusted {
+  untrusted: true;
+  warning: string;
+}
+
+/** `appRead` (and `axTree`, its older name): the pane's window's tree, for the task granted it. */
+export interface AppReadReply {
   ok: true;
   pane: PaneId;
+  /** Null only in an app-window test run (`OTTOSPACE_HOST_ONLY`), which grants no task. */
+  task: TaskId | null;
   window: Frame;
   millis: number;
-  tree: { root: AxNode; count: number; truncated: Truncated };
+  captured: Untrusted & { count: number; truncated: Truncated; tree: AxNode };
+}
+
+/** `appLook`: where the picture of the pane was written. */
+export interface AppLookReply {
+  ok: true;
+  pane: PaneId;
+  task: TaskId;
+  captured: Untrusted & { path: string };
 }
 
 // Request arguments: the request without its `cmd`.
@@ -1744,6 +1776,11 @@ export interface CalendarArgs {
 }
 export interface AxTreeArgs {
   pane?: PaneId;
+  depth?: number;
+  nodes?: number;
+}
+export interface AppReadArgs {
+  pane: PaneId;
   depth?: number;
   nodes?: number;
 }
