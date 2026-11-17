@@ -93,6 +93,14 @@ impl Meter {
     }
 }
 
+/// The RMS of `samples`, for `Meter::level`.
+pub(crate) fn rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.;
+    }
+    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +129,11 @@ mod tests {
         m.restart(at(80_000));
         m.words(at(111_000));
         assert_eq!(m.hearing(at(113_500)), Hearing::Listening);
+    }
+
+    #[test]
+    fn rms_of_a_square_wave_is_its_height() {
+        assert_eq!(rms(&[]), 0.);
+        assert!((rms(&[0.5, -0.5, 0.5, -0.5]) - 0.5).abs() < 1e-6);
     }
 }

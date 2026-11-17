@@ -66,7 +66,7 @@ impl Feature {
             Feature::Marks => "Marks: name a pane or a tab, and go back to it with a letter",
             Feature::AppsSection => "The Apps section: the Dock's apps, pins, Not running and All apps",
             Feature::Transcripts => {
-                "Transcripts (⌘⌃T): an app pane's audio as lines in the drawer. In progress: no audio source yet"
+                "Transcripts (⌘⌃T): an app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file"
             }
         }
     }

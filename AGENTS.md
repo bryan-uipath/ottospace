@@ -123,6 +123,11 @@ Rules:
   `listen_end` (`"why"`: `app_quit`, `stream_failed`) ends the one on as the shell would; the state's
   `listen_lines` (the drawer's rows) and `listen_rects` (where its controls are drawn) are null
   outside a test run. See `docs/ai/transcripts.md`.
+- Transcripts in a test run: the sound is `OTTOSPACE_LISTEN_FIXTURE` (made-up lines and levels;
+  read only under `OTTOSPACE_E2E`), never SCK or the mic. The one exception is
+  `OTTOSPACE_HOST_ONLY=<pid>`: then only that app (the canary, `{"cmd":"play"}` on its socket) is
+  heard by SCK and the real recogniser. A test run never downloads the speech model and shows no
+  menu-bar dot. The meter and its label are draw-only: never in the state.
 - `OTTOSPACE_REDUCE_MOTION` (read only under `OTTOSPACE_E2E`) stands for the system's Reduce Motion
   in the dial. The state's `counts.dial_frames` counts the frames the dial asked for because
   something in it moves: none at rest.
