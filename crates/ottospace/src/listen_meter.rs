@@ -69,7 +69,8 @@ impl Meter {
 
     /// A line, volatile or final, came.
     pub(crate) fn words(&mut self, now: Instant) {
-        self.words_at = Some(now);
+        // Words are sound, however quiet.
+        (self.words_at, self.sound_at) = (Some(now), Some(now));
     }
 
     /// A resume: the silence counts from now.
@@ -116,5 +117,9 @@ mod tests {
         assert_eq!(m.hearing(at(70_000)), Hearing::Silent, "never any sound: from the start");
         m.level(f32::NAN, at(70_000));
         assert_eq!(m.shown(at(70_000)), 0.);
+        // Quiet words are sound too: after them, listening, not silent.
+        m.restart(at(80_000));
+        m.words(at(111_000));
+        assert_eq!(m.hearing(at(113_500)), Hearing::Listening);
     }
 }

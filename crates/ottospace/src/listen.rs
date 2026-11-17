@@ -72,7 +72,15 @@ pub(crate) fn fixture_path() -> Option<String> {
 fn read_fixture(path: &str) -> Result<VecDeque<Said>, String> {
     let text = std::fs::read_to_string(path).map_err(|why| format!("the fixture: {why}"))?;
     let lines = text.lines().filter(|line| !line.trim().is_empty());
-    lines.map(|line| serde_json::from_str(line).map_err(|why| format!("the fixture: {why}"))).collect()
+    let said = |line: &str| -> Result<Said, String> {
+        let said: Said = serde_json::from_str(line).map_err(|why| format!("the fixture: {why}"))?;
+        // A flattened `Option` takes words it cannot read as none: `"from":"Them"` is a mistake, not a pause.
+        match (&said.level, &said.heard) {
+            (None, None) => Err(format!("the fixture: neither a level nor words: {line}")),
+            _ => Ok(said),
+        }
+    };
+    lines.map(said).collect()
 }
 
 /// A transcript's id: its start time and a count, so two in one millisecond differ.
