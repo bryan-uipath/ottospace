@@ -147,9 +147,34 @@ pub fn accent(mode: Mode) -> u32 {
     }
 }
 
+/// Height of the focused pane's line along its header's foot, in points: a window's title bar
+/// separator, not an outline.
+pub const FOCUS_LINE: f32 = 2.0;
+
+/// The colour of that line: the mode's accent on the focused pane; none while the keyboard is in
+/// the bar or the drawer (list mode, a conversation, the new-task box).
+pub fn focus_line(focused: bool, mode: Mode) -> Option<u32> {
+    match mode {
+        _ if !focused => None,
+        Mode::List | Mode::Talk | Mode::Compose => None,
+        mode => Some(accent(mode)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_focused_pane_has_a_line_and_only_while_the_workspace_has_the_keyboard() {
+        assert_eq!(focus_line(true, Mode::Normal), Some(PRIMARY));
+        assert_eq!(focus_line(true, Mode::App), Some(APP));
+        assert_eq!(focus_line(true, Mode::Sneak), Some(SNEAK));
+        assert_eq!(focus_line(false, Mode::Normal), None);
+        for mode in [Mode::List, Mode::Talk, Mode::Compose] {
+            assert_eq!(focus_line(true, mode), None, "{mode:?}");
+        }
+    }
 
     #[test]
     fn identity_colours_are_apart_from_each_other_and_from_the_state_colours() {
