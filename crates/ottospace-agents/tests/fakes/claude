@@ -36,10 +36,22 @@ if [ -n "$FAKE_SESSIONS" ]; then
   done
 fi
 [ -f "$FAKE_FIXTURES/start.jsonl" ] && replay start.jsonl
+# `$FAKE_SAY_PASS` set: it runs `env` (a text line of the stream, on the screen in the terminal
+# view: the pass file's path, never the pass), then prints the file itself in both cases, as an
+# agent that `cat`s it would, and writes the pass to `pass` and the `env` line to `env`.
+if [ -n "$FAKE_SAY_PASS" ]; then
+  said=$(env | grep '^OTTOSPACE_TASK_PASS')
+  printf '%s\n' "$said" >"$FAKE_DIR/env"
+  pass=$(cat "$OTTOSPACE_TASK_PASS_FILE")
+  up=$(printf '%s' "$pass" | tr a-f A-F)
+  printf '{"type":"assistant","session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"%s %s %s"}]}}\n' "$said" "$pass" "$up"
+  printf '%s\n' "$pass" >"$FAKE_DIR/pass"
+fi
 # `$FAKE_CTL` set: once `ask-<n>` appears (n: this start's number), it sends that request with
-# `$FAKE_OTTOSPACE ctl` as its tool shell would (`ctl-own-<n>`), with a made-up pass
-# (`ctl-wrong-<n>`) and with none (`ctl-none-<n>`). A child in a group of its own, which outlives
-# it (its group is killed when it ends), sends it again once `go-<n>` appears (`ctl-after-<n>`).
+# `$FAKE_OTTOSPACE ctl` as its tool shell would (`ctl-own-<n>`), with a made-up pass in a file
+# of its own (`ctl-wrong-<n>`) and with none (`ctl-none-<n>`). A child in a group of its own,
+# which outlives it (its group is killed when it ends), sends it again once `go-<n>` appears
+# (`ctl-after-<n>`): by then its pass file is gone.
 # Needs `perl` (macOS has it) for that group.
 # Each waits 30 s at most.
 if [ -n "$FAKE_CTL" ]; then
@@ -47,10 +59,12 @@ if [ -n "$FAKE_CTL" ]; then
   await() { i=0; while [ ! -e "$FAKE_DIR/$1" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done; }
   await "ask-$n"
   # The pass itself, for the test to look for where it must never be (a dead one by then).
-  printf '%s\n' "$OTTOSPACE_TASK_PASS" >"$FAKE_DIR/pass-$n"
+  cat "$OTTOSPACE_TASK_PASS_FILE" >"$FAKE_DIR/pass-$n"
+  printf '\n' >>"$FAKE_DIR/pass-$n"
   "$FAKE_OTTOSPACE" ctl "$FAKE_CTL" >"$FAKE_DIR/ctl-own-$n"
-  OTTOSPACE_TASK_PASS=0123456789abcdef0123456789abcdef "$FAKE_OTTOSPACE" ctl "$FAKE_CTL" >"$FAKE_DIR/ctl-wrong-$n"
-  env -u OTTOSPACE_TASK_PASS "$FAKE_OTTOSPACE" ctl "$FAKE_CTL" >"$FAKE_DIR/ctl-none-$n"
+  printf '0123456789abcdef0123456789abcdef' >"$FAKE_DIR/wrong-pass"
+  OTTOSPACE_TASK_PASS_FILE="$FAKE_DIR/wrong-pass" "$FAKE_OTTOSPACE" ctl "$FAKE_CTL" >"$FAKE_DIR/ctl-wrong-$n"
+  env -u OTTOSPACE_TASK_PASS_FILE "$FAKE_OTTOSPACE" ctl "$FAKE_CTL" >"$FAKE_DIR/ctl-none-$n"
   export n
   # `apart-<n>`: in its own group, so out of reach of the kill of this one's when it ends.
   perl -e 'setpgrp(0, 0); exec @ARGV' sh -c ': >"$FAKE_DIR/apart-$n"
