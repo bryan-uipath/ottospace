@@ -65,7 +65,11 @@ A small script printed the variable and tried to connect.
   `OTTOSPACE_TASK_PASS_FILE`: the path of a file that holds the pass, 0600 (created new, never
   through a link), in a 0700 folder beside the control socket (`<socket>.passes`: in a test run,
   the test's own folder), one file per process, removed when the pass is dropped, the folder
-  emptied at start and removed at quit. `ottospace ctl` and the SDK read it. An agent that runs
+  emptied at start and removed at quit. The folder is opened once (`O_NOFOLLOW | O_DIRECTORY`)
+  and used only if `fstat` says it is ours and 0700; then everything goes through that fd: files
+  made with `openat`, listed from it, and only regular files (`fstatat`, no follow) removed with
+  `unlinkat`, then `rmdir`. A folder or entry swapped for a link between check and use removes
+  nothing elsewhere. `ottospace ctl` and the SDK read it. An agent that runs
   `env` prints a path, which grants nothing a same-user process could not read already: the file
   is readable by the same user, as another process's environment is (`ps -E`). That is the
   accepted boundary (section 2's honest limit); another user reads neither. A file gone (its agent

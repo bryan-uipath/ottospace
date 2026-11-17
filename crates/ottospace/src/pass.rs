@@ -7,8 +7,11 @@
 //! it. Its text is also hidden from what clients read (`hide`), should an agent print the file.
 
 use std::borrow::Cow;
+use std::ffi::{CStr, CString};
 use std::io::{Read, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -29,6 +32,9 @@ pub(crate) struct Pass([u8; 16]);
 pub(crate) struct Live {
     pass: Pass,
     file: PathBuf,
+    /// Its folder, and its file's name there: removed through the folder, never by path.
+    folder: Folder,
+    name: CString,
 }
 
 /// The live passes' hex, for `hide`. Only `Live` adds and removes.
@@ -39,28 +45,108 @@ pub(crate) fn folder() -> PathBuf {
     crate::control::path().with_extension("passes")
 }
 
-/// At start: a run before's files (it ended without dropping them) go, and so does the folder.
-/// Only files are removed, and only from a folder: a link at its place is left alone.
-pub(crate) fn sweep(dir: &Path) {
-    if !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
-        return;
+/// The pass folder, opened once and used through its fd from then on: what is checked is what
+/// is listed, written and unlinked, even if its path is swapped for a link meanwhile.
+struct Folder(OwnedFd);
+
+impl Folder {
+    /// `dir` itself, never a link (`O_NOFOLLOW`), and only if it is `uid`'s, mode 0700: else None.
+    fn open(dir: &Path, uid: libc::uid_t) -> Option<Self> {
+        let path = CString::new(dir.as_os_str().as_bytes()).ok()?;
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: `path` is a valid C string; the fd is owned from here on.
+        let fd = unsafe { libc::open(path.as_ptr(), flags) };
+        let folder = Self((fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) })?);
+        let meta = folder.stat(c".")?;
+        let ours = meta.st_uid == uid && meta.st_mode & libc::S_IFMT == libc::S_IFDIR && meta.st_mode & 0o7777 == 0o700;
+        ours.then_some(folder)
     }
-    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        if entry.file_type().is_ok_and(|kind| kind.is_file()) {
-            let _ = std::fs::remove_file(entry.path());
+
+    /// `name` in the folder, a link not followed.
+    fn stat(&self, name: &CStr) -> Option<libc::stat> {
+        // SAFETY: a zeroed `stat` is valid; `fstatat` fills it.
+        let mut meta: libc::stat = unsafe { std::mem::zeroed() };
+        let found = unsafe { libc::fstatat(self.0.as_raw_fd(), name.as_ptr(), &mut meta, libc::AT_SYMLINK_NOFOLLOW) };
+        (found == 0).then_some(meta)
+    }
+
+    /// The entries' names, `.` and `..` left out. Read from a fresh open of the fd's folder, so
+    /// each listing starts at its top.
+    fn names(&self) -> Vec<CString> {
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
+        // SAFETY: `fdopendir` takes the new fd, `closedir` closes it; names are copied before.
+        let fd = unsafe { libc::openat(self.0.as_raw_fd(), c".".as_ptr(), flags) };
+        if fd < 0 {
+            return Vec::new();
+        }
+        let stream = unsafe { libc::fdopendir(fd) };
+        if stream.is_null() {
+            unsafe { libc::close(fd) };
+            return Vec::new();
+        }
+        let mut names = Vec::new();
+        loop {
+            let entry = unsafe { libc::readdir(stream) };
+            if entry.is_null() {
+                break;
+            }
+            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+            if name != c"." && name != c".." {
+                names.push(name.to_owned());
+            }
+        }
+        unsafe { libc::closedir(stream) };
+        names
+    }
+
+    /// Unlinks `name` from the folder if it is a regular file. A link is neither followed nor removed.
+    fn unlink_file(&self, name: &CStr) {
+        if self.stat(name).is_some_and(|meta| meta.st_mode & libc::S_IFMT == libc::S_IFREG) {
+            // SAFETY: a name in the folder's fd; `unlinkat` never follows its last component.
+            unsafe { libc::unlinkat(self.0.as_raw_fd(), name.as_ptr(), 0) };
         }
     }
+
+    /// A new file `name` in the folder, 0600 from its first byte; never one that is there, or a link.
+    fn create(&self, name: &CStr) -> std::io::Result<std::fs::File> {
+        let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: a name in the folder's fd; the new fd is owned by the `File`.
+        let fd = unsafe { libc::openat(self.0.as_raw_fd(), name.as_ptr(), flags, 0o600 as libc::c_uint) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(std::fs::File::from(unsafe { OwnedFd::from_raw_fd(fd) }))
+    }
+}
+
+fn uid() -> libc::uid_t {
+    // SAFETY: no arguments, cannot fail.
+    unsafe { libc::geteuid() }
+}
+
+/// At start and at quit: a run's files (one before ended without dropping them) go, and so does
+/// the folder. Only regular files, through the folder's fd, and only from the folder itself,
+/// ours and 0700: a link at its place, or one in it, is left alone.
+pub(crate) fn sweep(dir: &Path) {
+    sweep_as(dir, uid());
+}
+
+/// `sweep`, the folder required to be `uid`'s.
+fn sweep_as(dir: &Path, uid: libc::uid_t) {
+    let Some(folder) = Folder::open(dir, uid) else { return };
+    folder.names().iter().for_each(|name| folder.unlink_file(name));
+    // `rmdir` takes only an empty folder, never a link.
     let _ = std::fs::remove_dir(dir);
 }
 
 /// The folder for pass files, 0700: made with the first pass, gone with the last (`Live::drop`).
-/// A link or anything else at its place makes no folder.
-fn ready(dir: &Path) -> std::io::Result<()> {
-    match std::fs::symlink_metadata(dir) {
-        Ok(meta) if meta.is_dir() => std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)),
-        Ok(_) => Err(std::io::Error::other("the pass folder's place holds something else")),
-        Err(_) => std::fs::DirBuilder::new().mode(0o700).create(dir),
+/// A link or anything else at its place, or a folder not ours and 0700, makes no folder.
+fn ready(dir: &Path) -> std::io::Result<Folder> {
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Err(err) if err.kind() != std::io::ErrorKind::AlreadyExists => return Err(err),
+        _ => {}
     }
+    Folder::open(dir, uid()).ok_or_else(|| std::io::Error::other("the pass folder's place holds something else"))
 }
 
 impl Live {
@@ -72,7 +158,7 @@ impl Live {
     /// With its file in `dir`, made if it is not there.
     pub(crate) fn mint_in(dir: &Path) -> Result<Self, String> {
         // The folder itself, never a link to elsewhere.
-        ready(dir).map_err(|err| format!("no folder for the pass's file: {err}"))?;
+        let folder = ready(dir).map_err(|err| format!("no folder for the pass's file: {err}"))?;
         let mut bytes = [0u8; 16];
         let random = std::fs::File::open("/dev/urandom").and_then(|mut source| source.read_exact(&mut bytes));
         // All zeros is `GONE`'s: never a live pass.
@@ -82,18 +168,13 @@ impl Live {
         let pass = Pass(bytes);
         static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let file = dir.join(format!("pass-{}-{n}", std::process::id()));
-        // A new file, never one that is there (or a link): 0600 from its first byte.
-        let written = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&file)
-            .and_then(|mut out| out.write_all(pass.hex().as_bytes()));
+        let name = format!("pass-{}-{n}", std::process::id());
+        let file = dir.join(&name);
+        let name = CString::new(name).map_err(|err| err.to_string())?;
+        let written = folder.create(&name).and_then(|mut out| out.write_all(pass.hex().as_bytes()));
         written.map_err(|err| format!("the pass's file: {err}"))?;
         LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(pass.hex());
-        Ok(Self { pass, file })
+        Ok(Self { pass, file, folder, name })
     }
 
     pub(crate) fn pass(&self) -> &Pass {
@@ -108,7 +189,7 @@ impl Live {
 
 impl Drop for Live {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.file);
+        self.folder.unlink_file(&self.name);
         let hex = self.pass.hex();
         let mut live = LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(at) = live.iter().position(|one| *one == hex) {
@@ -349,6 +430,7 @@ pub(crate) fn minted_dir(name: &str) -> crate::scratch::Scratch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     /// The file holds the pass, 0600 in a 0700 folder, and goes with it; `ottospace ctl` reads it,
     /// and a file gone reads as a pass never minted: refused as dead, not taken for no pass.
@@ -387,6 +469,44 @@ mod tests {
         assert!(Live::mint_in(link.as_ref()).is_err());
         sweep(link.as_ref());
         assert!(dir.as_ref().exists(), "a link's target is not swept");
+    }
+
+    /// The sweep works through the folder's fd: a link at its place, a link in it, a folder of
+    /// another mode or owner: nothing elsewhere is removed.
+    #[test]
+    fn a_sweep_removes_only_files_in_our_own_folder() {
+        let outside = crate::scratch::Scratch::dir(&format!("ottospace-test-sweep-outside-{}", std::process::id()));
+        let target = outside.join("keep");
+        std::fs::write(&target, "keep").unwrap();
+        // A link in the folder: the file it points to survives, and so does the link.
+        let dir = minted_dir("sweep-entry-link");
+        std::os::unix::fs::symlink(&target, dir.join("pass-1-0")).unwrap();
+        std::fs::write(dir.join("pass-1-1"), "old").unwrap();
+        sweep(dir.as_ref());
+        assert!(target.exists(), "a link's target is not removed");
+        assert!(dir.join("pass-1-0").symlink_metadata().is_ok(), "nor the link");
+        assert!(!dir.join("pass-1-1").exists(), "a file is");
+        // A link at the folder's place: its target's files stay.
+        let real = minted_dir("sweep-real");
+        std::fs::write(real.join("pass-2-0"), "old").unwrap();
+        let link = crate::scratch::Scratch::path(&format!("ottospace-test-sweep-link-{}", std::process::id()));
+        std::os::unix::fs::symlink(real.as_ref(), link.as_ref()).unwrap();
+        sweep(link.as_ref());
+        assert!(real.join("pass-2-0").exists(), "a linked folder is refused");
+        assert!(Live::mint_in(link.as_ref()).is_err());
+        // Another mode, or another owner: left alone, and no pass is minted in it.
+        let open = crate::scratch::Scratch::dir(&format!("ottospace-test-sweep-mode-{}", std::process::id()));
+        std::fs::set_permissions(open.as_ref(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(open.join("pass-3-0"), "old").unwrap();
+        sweep(open.as_ref());
+        assert!(open.join("pass-3-0").exists(), "0755: left alone");
+        assert!(Live::mint_in(open.as_ref()).is_err());
+        std::fs::write(real.join("pass-4-0"), "old").unwrap();
+        sweep_as(real.as_ref(), uid() + 1);
+        assert!(real.join("pass-4-0").exists(), "another owner's: left alone");
+        // Ours, 0700: every file goes, then the folder.
+        sweep(real.as_ref());
+        assert!(!real.exists());
     }
 
     #[test]
