@@ -152,7 +152,9 @@ impl Drop for Otto {
         support::exiting(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
-        // A killed app removes nothing: its socket, the lock beside it, a trace it dumped.
+        // A killed app removes nothing: its socket, the lock beside it, a trace it dumped, the
+        // folder of its agents' pass files.
+        let _ = std::fs::remove_dir_all(self.socket.with_extension("passes"));
         for end in ["sock", "lock", "trace.jsonl"] {
             let _ = std::fs::remove_file(self.socket.with_extension(end));
         }
@@ -5745,6 +5747,84 @@ fn agent_argv(dir: &Path, name: &str) -> Option<Vec<String>> {
     Some(text.split_terminator('\0').map(str::to_string).collect())
 }
 
+/// The owner's report: "Workspace deleted" showed above the section's rows and pushed them down.
+/// It is on the notice bar at the foot: nothing above it moves, Undo is the user's alone, × ends it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_deleted_workspace_is_offered_back_on_the_notice_bar_and_nothing_above_it_moves() {
+    let home = user_folder("workspace-deleted", r#"{"repos": [], "restore_layout": false}"#);
+    let otto = Otto::launch_with("workspace-deleted", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let names = |reply: &Value| -> Vec<String> {
+        let rows = reply["workbooks"].as_array().cloned().unwrap_or_default();
+        rows.iter().filter_map(|row| row["name"].as_str().map(str::to_string)).collect()
+    };
+    // The bar fully open with the offer, or gone: it grows and shrinks over a few frames.
+    let bar = |open: bool| {
+        let met = move |o: &Otto| {
+            let reply = o.drawn();
+            let drawn = &reply["notice_bar"];
+            let shown = drawn["height"] == 28.0 && drawn["kind"] == "undo";
+            (if open { shown } else { drawn.is_null() }).then_some(reply)
+        };
+        otto.wait_for("the notice bar", met)
+    };
+    // The rows of the first two workspaces, and the section's header.
+    let above = |reply: &Value| (reply["workbooks"][0]["row"].clone(), reply["workbooks"][1]["row"].clone());
+    for _ in 0..3 {
+        otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    }
+    otto.call(json!({"cmd": "select_space", "index": 0}));
+    otto.call(json!({"cmd": "section", "section": "workbook"}));
+    otto.user_key("cmd-ctrl-e");
+    otto.user_key("j j");
+    let before = bar(false);
+    assert_eq!(names(&before), ["Workspace 2", "Workspace 3", "Workspace 4"]);
+
+    // The user's `x` deletes the last: information at the foot, with Undo and ×.
+    otto.user_key("x");
+    let shown = bar(true);
+    let drawn = &shown["notice_bar"];
+    assert_eq!(
+        (names(&shown).len(), &shown["workbook_offer"], &drawn["level"], &drawn["text"], &drawn["offer"]),
+        (2, &json!("deleted"), &json!("info"), &json!("Workspace deleted"), &json!("undo"))
+    );
+    let (window, at_rest) = (rect(&shown["window"]), rect(&drawn["rect"]));
+    assert_eq!(at_rest[1] + at_rest[3], window[3] - 24.0, "{at_rest:?} in {window:?}");
+    // Nothing above it moves: the rows that stay and the section's header.
+    assert_eq!((above(&shown), &shown["bar_header"]), (above(&before), &before["bar_header"]));
+    assert!(rect(&shown["workbooks"][1]["row"])[1] < at_rest[1]);
+
+    // A client's click on Undo, its label on it, and its click on × are refused: the offer stands.
+    let (undo, close) = (at(rect(&drawn["offer_rect"]), 0.5, 0.5), at(rect(&drawn["close"]), 0.5, 0.5));
+    otto.click(undo, 1);
+    sneak_to(&otto, "notice:offer");
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    otto.click(close, 1);
+    let stands = bar(true);
+    assert_eq!((names(&stands).len(), &stands["workbook_offer"]), (2, &json!("deleted")));
+    // The user's click on Undo puts it back, and the bar goes.
+    otto.user_click(undo);
+    let back = bar(false);
+    assert_eq!((names(&back), &back["workbook_offer"]), (names(&before), &Value::Null));
+    assert_eq!(above(&back), above(&before));
+
+    // Deleted again, the user's × ends the offer: `u` puts nothing back.
+    let list = || {
+        if otto.call(json!({"cmd": "state"}))["mode"] == "list" {
+            otto.user_key("cmd-ctrl-e");
+        }
+        otto.user_key("cmd-ctrl-e")
+    };
+    list();
+    otto.user_key("j j x");
+    assert_eq!(bar(true)["workbook_offer"], "deleted");
+    let dismissed = otto.dismiss_notice();
+    assert_eq!((&dismissed["workbook_offer"], names(&dismissed).len()), (&Value::Null, 2));
+    bar(false);
+    list();
+    assert_eq!(names(&otto.user_key("u")).len(), 2);
+}
+
 /// The owner's report: the section's + took the tab on show (another session's), and a second +
 /// said "Updated". + makes a new, empty workspace each time, on the top row and in the section.
 #[test]
@@ -5920,18 +6000,18 @@ fn a_workspaces_row_opens_on_a_click_and_its_dots_rename_and_delete() {
     let deleted = otto.user_click(at(rect(&open["row_menu"]["items"][1]["rect"]), 0.5, 0.5));
     assert_eq!((names(&deleted), &deleted["workbook_offer"]), (vec!["Workspace 3".to_string()], &json!("deleted")));
     assert_eq!(deleted["row_menu"], Value::Null);
-    // The menu does not hang where its … was: the line that offers the undo runs out (six
-    // seconds), the row under it moves up, and the menu closes. A label opened it: the keys are
-    // on its first item.
+    // The undo is offered on the notice bar, not above the rows: when it runs out (six seconds)
+    // no row moves, and the menu stays under its …. A label opened it: the keys are on its first item.
     otto.drawn();
     let (_, labels) = sneak(&otto);
     let open = otto.user_key(&letters(&labels["workbook-menu:2"]));
     assert_eq!((&open["row_menu"]["workbook"], &open["row_menu"]["selected"]), (&json!(2), &json!(0)));
-    let moved = otto.wait_for("the undo line to go, and the menu with it", |otto| {
-        let state = otto.call(json!({"cmd": "state"}));
-        (state["workbook_offer"].is_null() && state["row_menu"].is_null()).then_some(state)
+    let gone = otto.wait_for("the offer to run out", |otto| {
+        let state = otto.drawn();
+        (state["workbook_offer"].is_null() && state["notice_bar"].is_null()).then_some(state)
     });
-    assert_eq!(names(&moved), ["Workspace 3"]);
+    assert_eq!((names(&gone), &gone["row_menu"]["workbook"]), (vec!["Workspace 3".to_string()], &json!(2)));
+    otto.user_key("escape");
     // A click on the body opens it: selected if it is on the row, back on the row if hidden.
     let rows = otto.drawn();
     assert_eq!(selected(&otto.user_click(body(&rows, 0))), json!({"kind": "workbook", "id": 2}));
@@ -6640,11 +6720,20 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
         (&updated["workbooks"][0]["summary"], &updated["workbook_offer"], &updated["mode"]),
         (&json!("3 terminals"), &json!("updated"), &json!("normal"))
     );
+    // The bar offers it back, saying what the save kept.
+    let offered = otto.wait_for("the offer on the bar", |o| {
+        let bar = o.drawn()["notice_bar"].clone();
+        (bar["kind"] == "undo").then_some(bar)
+    });
+    assert!(offered["text"].as_str().is_some_and(|text| text.starts_with("Saved \"dri\": ")), "{offered}");
+    assert_eq!(offered["offer"], "undo");
     assert_eq!((names(&updated), workbook_files(&home).len()), (vec!["dri".to_string()], 1));
     // List mode: U takes it back, R renames, X deletes and U puts back. Not for a client's keys.
     assert_eq!(otto.user_key("cmd-ctrl-e")["state"]["list"], 0);
     let undone = otto.user_key("u");
     assert_eq!((&undone["workbooks"][0]["summary"], &undone["workbook_offer"]), (&json!("2 terminals"), &Value::Null));
+    // Taken back, the save's note goes with the offer: no "Saved" left saying it.
+    assert_eq!(undone["notice"], Value::Null, "{}", undone["notice"]);
     assert_eq!(otto.user_key("r")["state"]["mark_input"]["type"], "workbook");
     let renamed = otto.user_key("o p s enter");
     assert_eq!(
@@ -9134,6 +9223,78 @@ fn a_task_agents_pass_in_its_terminal_finds_its_task_until_it_ends() {
     assert_eq!(reply(&otto, "ctl-after-1"), stale);
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// An agent's `env` shows its pass file's path, never the pass. A live pass is hidden wherever a
+/// client reads text, as defence in depth. An agent that prints its pass (`cat` of the file)
+/// shows `[hidden]` in the state, in either view; a pane that prints it shows it so in a
+/// capture and a wait, which cannot match the pass either. Nor is it in the trace.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_live_pass_is_hidden_from_every_client() {
+    use std::os::unix::fs::PermissionsExt;
+    for view in ["terminal", "native"] {
+        let name = format!("pass-hidden-{view}");
+        let (root, record, env) = native_setup(&name, &[], &[("FAKE_SAY_PASS", "1")]);
+        let settings = root.join("home/settings.json");
+        let mut written: Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        written["conversation_view"] = json!(view);
+        std::fs::write(&settings, written.to_string()).unwrap();
+        let otto = launch_env(&name, &env);
+        otto.call(json!({"cmd": "split"}));
+        otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+        otto.call(json!({"cmd": "section", "section": "tasks"}));
+        otto.start_task(1);
+        let file = record.join("pass");
+        let pass = otto.wait_for("its pass", |_| {
+            std::fs::read_to_string(&file).ok().filter(|text| text.ends_with('\n')).map(|text| text.trim().to_string())
+        });
+        assert_eq!(pass.len(), 32);
+        // `env` shows the path of its pass file, never the pass: 0600, in a 0700 folder beside the
+        // socket. The same user can read it, as `ps -E` reads an environment: the accepted boundary.
+        let said = std::fs::read_to_string(record.join("env")).unwrap();
+        let path = said.trim().strip_prefix("OTTOSPACE_TASK_PASS_FILE=").expect(&said).to_string();
+        assert!(!said.contains(&pass), "{said}");
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let folder = Path::new(&path).parent().unwrap();
+        assert_eq!((mode(Path::new(&path)), mode(folder)), (0o600, 0o700));
+        assert_eq!(folder.extension().and_then(|e| e.to_str()), Some("passes"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), pass);
+        let shows = |text: &str, what: &str| {
+            assert!(
+                !text.contains(&pass) && !text.contains(&pass.to_uppercase()),
+                "{view}: the pass in {what}: {text}"
+            );
+        };
+        // Said twice. The terminal view's screen is in the state: hidden twice. The native
+        // transcript in the state keeps sizes, not text.
+        let state = otto.wait_for("the pass said", |o| {
+            let state = o.call(json!({"cmd": "state"}));
+            let said = match view {
+                "terminal" => state.to_string().matches("[hidden]").count() >= 2,
+                _ => state["drawer"]["native"]["chats"]["1"]["transcript"]["entries"][1]["kind"] == "assistant",
+            };
+            said.then(|| state.to_string())
+        });
+        shows(&state, "the state");
+        // A pane that prints it.
+        let path = file.to_str().unwrap();
+        let typed = format!("cat '{path}'; tr a-f A-F < '{path}'; echo end-$((6*7))\r");
+        otto.call(json!({"cmd": "type", "pane": 1, "text": typed}));
+        otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^end-42$", "timeout_ms": 40000}));
+        let capture = otto.call(json!({"cmd": "capture", "pane": 1, "history": true}));
+        assert_eq!(capture["text"].as_str().unwrap().lines().filter(|line| *line == "[hidden]").count(), 2);
+        shows(&capture.to_string(), "a capture");
+        // A wait matches what shows, never the pass: no oracle for it.
+        let guess = otto.raw(r#"{"cmd":"wait","pane":1,"pattern":"^[0-9a-fA-F]{32}$","timeout_ms":300}"#);
+        assert_eq!(guess["ok"], false, "{guess}");
+        let found = otto.call(json!({"cmd": "wait", "pane": 1, "pattern": r"^\[hidden\]$", "timeout_ms": 1000}));
+        assert_eq!(found["line"], "[hidden]");
+        shows(&otto.call(json!({"cmd": "state"})).to_string(), "the state");
+        shows(&otto.call(json!({"cmd": "trace"})).to_string(), "the trace");
+        drop(otto);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 /// The recorded 2.1.325 turn is read whole ("ok", once); once its agent is stopped, the
