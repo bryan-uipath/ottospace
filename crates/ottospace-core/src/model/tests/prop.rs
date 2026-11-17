@@ -1398,7 +1398,10 @@ const MAKERS: &[Make] = &[
     },
     |_| Action::CalendarRetry,
     |g| Action::ListenStart {
-        source: crate::listen::Source::Pane(g.pane()),
+        source: match g.rng.coin() {
+            true => crate::listen::Source::Pane(g.pane()),
+            false => crate::listen::Source::App { pid: g.rng.pick(&[10, 11, 12]) },
+        },
         mic: g.rng.coin(),
         id: g.name(LISTEN_IDS),
         at: g.time(),
@@ -1427,6 +1430,36 @@ const MAKERS: &[Make] = &[
         id: g.listen_id(),
         why: g.rng.pick(&[crate::listen::Ended::AppQuit, crate::listen::Ended::StreamFailed]),
         at: g.time(),
+    },
+    // Window titles carry the heard marker: a title must never reach the state either.
+    |g| {
+        let apps = (0..g.rng.pick(&[0, 1, 3]))
+            .map(|_| crate::listen::SoundApp {
+                pid: g.rng.pick(&[10, 11, 12]),
+                name: g.rng.pick(&["Zoom", "Chrome", "zoom"]).into(),
+                bundle: None,
+                windows: (0..g.rng.pick(&[0, 2])).map(|_| format!("{HEARD} window")).collect(),
+                playing: g.rng.coin(),
+            })
+            .collect();
+        Action::ListenPicker { apps, id: g.name(LISTEN_IDS), at: g.time() }
+    },
+    |g| {
+        let head =
+            |app: &str, started| crate::listen::file::Head { app: app.into(), bundle: None, mic: false, started };
+        let ended = |app: &str, at: u64| crate::listen::file::header(&head(app, at), Some(at + 60_000), &|_| 0);
+        // 2026-11-16 09:00 and 10:00 UTC, and one still on.
+        let files = vec![
+            ("2026-11-16-0900-zoom.md".to_string(), ended("Zoom", 1_794_819_600_000)),
+            ("2026-11-16-1000-chrome.md".to_string(), ended("Chrome", 1_794_823_200_000)),
+            ("2026-11-16-1100-zoom.md".to_string(), crate::listen::file::header(&head("Zoom", 0), None, &|_| 0)),
+        ];
+        let today = g.rng.pick(&["2026-11-16", "2026-11-17"]).to_string();
+        Action::ListenPast { files: files.into_iter().filter(|_| g.rng.coin()).collect(), today }
+    },
+    |g| {
+        let names = ["2026-11-16-0900-zoom.md", "2026-11-16-1000-chrome.md", "x.md"];
+        Action::ListenOpenPast { name: g.rng.coin().then(|| g.rng.pick(&names).to_string()) }
     },
     |g| Action::AgentLevel { pane: g.rng.coin().then(|| g.app_pane()), level: g.rng.pick(&Level::ALL) },
     |g| Action::AgentMenu { pane: g.rng.coin().then(|| g.app_pane()), keys: g.rng.coin() },
@@ -1697,12 +1730,30 @@ fn check(m: &Model) -> Result<(), String> {
     // paused with the time it paused. The drawer shows one only while it is on.
     if let Some(on) = &m.listen.on {
         ensure!(m.features.on(Feature::Transcripts), "a transcript on with the flag off");
-        ensure!(on.source.pane().is_some_and(|pane| m.pane(pane).is_some()), "a transcript of no pane: {on:?}");
+        let source = match on.source {
+            crate::listen::Source::Pane(pane) => m.pane(pane).is_some(),
+            crate::listen::Source::App { pid } => m.listen.apps.iter().any(|app| app.pid == pid),
+        };
+        ensure!(source, "a transcript of no pane and no app picked: {on:?}");
         ensure!(on.rows().count() <= crate::listen::RING, "{} rows kept", on.rows().count());
         let paused = on.status == crate::listen::Status::Paused;
         ensure!(paused == on.paused_at.is_some(), "{:?} with a pause at {:?}", on.status, on.paused_at);
     }
     ensure!(!m.listen.shown || m.listen_item(), "the drawer on a transcript the rail does not hold");
+    // Today: newest first; the one open is listed, and only on the idle view.
+    let today = &m.transcripts.today;
+    ensure!(today.windows(2).all(|two| two[0].started_ms >= two[1].started_ms), "Today out of order");
+    if let Some(open) = &m.transcripts.open {
+        let idle = m.listen.shown && m.listen.on.is_none();
+        ensure!(idle && today.iter().any(|past| past.name == *open), "{open} open, idle: {idle}");
+    }
+    // The transcript's picker: the apps playing sound first.
+    if let Some(picker) = m.picker.as_ref().filter(|picker| picker.transcribe) {
+        let playing: Vec<bool> =
+            picker.items.iter().map(|item| matches!(item, PickItem::Sound { playing: true, .. })).collect();
+        ensure!(playing.windows(2).all(|two| two[0] >= two[1]), "a quiet app above one playing: {playing:?}");
+        ensure!(picker.items.iter().all(|item| matches!(item, PickItem::Sound { .. })), "{:?}", picker.items);
+    }
     // The off-show dot: exactly while the pane heard is in a tab not on show, of a space on the
     // row; on that tab if its space is selected, else on its space.
     let holder = m.listen.pane().and_then(|pane| m.tab_panes().iter().position(|panes| panes.contains(&pane)));
@@ -2843,6 +2894,7 @@ impl Run {
             .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty() && !m.compose_theirs)));
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
+        let transcribe_picker = m.picker.as_ref().is_some_and(|picker| picker.transcribe);
         let filled_before = m.fill_display;
         let grants_before = m.agent.panes.clone();
         let (default, last_before) = (m.agent.default, m.agent.last.clone());
@@ -2927,9 +2979,10 @@ impl Run {
             let twice = held_before.iter().any(|(pane, held)| pane != id && Some(*held) == window);
             ensure!(!filled || !twice, "slot {id} filled with {window:?}, which another pane holds");
         }
-        // Only the user starts a transcript: their click, or their key.
+        // Only the user starts a transcript: their click, their key, or their pick in its picker.
         let listen_now = m.listen.on.as_ref().map(|on| on.id.clone());
-        let starts = matches!(action, Action::ListenStart { .. } | Action::ListenToggle { .. });
+        let picks = transcribe_picker && matches!(action, Action::PickerChoose { .. });
+        let starts = matches!(action, Action::ListenStart { .. } | Action::ListenToggle { .. }) || picks;
         ensure!(
             listen_now.is_none() || listen_now == listen_before || (origin == Origin::User && starts),
             "{origin:?}'s {action:?} started a transcript"
@@ -4545,6 +4598,23 @@ fn code(sent: &Envelope) -> String {
         return format!(
             "Action::ListenStart {{ source: crate::listen::Source::Pane({pane}), mic: {mic}, id: {id:?}.into(), \
              at: {at} }}.sent_by(Origin::{:?})",
+            sent.origin
+        );
+    }
+    if let Action::ListenPicker { apps, id, at } = &sent.action {
+        let app = |app: &crate::listen::SoundApp| {
+            let crate::listen::SoundApp { pid, name, bundle, windows, playing } = app;
+            let windows: Vec<String> = windows.iter().map(|w| format!("{w:?}.into()")).collect();
+            format!(
+                "crate::listen::SoundApp {{ pid: {pid}, name: {name:?}.into(), bundle: {bundle:?}.map(|b: &str| b.to_string()), \
+                 windows: vec![{}], playing: {playing} }}",
+                windows.join(", ")
+            )
+        };
+        let apps: Vec<String> = apps.iter().map(app).collect();
+        return format!(
+            "Action::ListenPicker {{ apps: vec![{}], id: {id:?}.into(), at: {at} }}.sent_by(Origin::{:?})",
+            apps.join(", "),
             sent.origin
         );
     }
@@ -6165,6 +6235,21 @@ fn yes_to_closing_a_workspace_moves_the_tab_on_show() {
         split(Axis::Right, Kind::Terminal),
         Action::SpaceHideAsked { index: None, running }.into(),
         Action::QuitConfirm.into(),
+    ])
+    .unwrap();
+}
+
+/// The user's pick in the transcript's picker starts one: the check allowed only ListenStart and
+/// ListenToggle (seed 316).
+#[test]
+fn seed_316_the_users_pick_in_the_transcripts_picker_starts_one() {
+    let zoom =
+        |pid, playing| crate::listen::SoundApp { pid, name: "Zoom".into(), bundle: None, windows: vec![], playing };
+    replay(&[
+        by(Origin::System, Action::ListenFixture),
+        Action::ListenPicker { apps: vec![zoom(10, false), zoom(11, false), zoom(10, true)], id: "".into(), at: 1 }
+            .into(),
+        Action::PickerChoose { index: Some(0) }.into(),
     ])
     .unwrap();
 }

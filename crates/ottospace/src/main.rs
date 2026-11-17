@@ -1008,6 +1008,8 @@ struct Workspace {
     listen_meter: Option<listen_meter::Meter>,
     /// The transcript whose speech model the system is downloading, for its label.
     listen_downloading: Option<String>,
+    /// Today's files of `transcripts_dir` as last handed to the core, and the one open read-only.
+    listen_past: listen::Past,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -1173,6 +1175,9 @@ impl Workspace {
                         this.read_titles(cx);
                     }
                     this.listen_menu_bar(window, cx);
+                    if tick % 60 == 0 {
+                        this.listen_read_past(window, cx);
+                    }
                     // The green button, Window ▸ Zoom or a title bar double-click: only the user's hand.
                     if ottospace_mac::window::take_zoom() {
                         this.dispatch(Action::FillDisplay, Origin::User, window, cx);
@@ -1458,6 +1463,7 @@ impl Workspace {
             listen_ending: Vec::new(),
             listen_meter: None,
             listen_downloading: None,
+            listen_past: listen::Past::default(),
             focus,
             _subscriptions: subscriptions,
         };
@@ -4427,13 +4433,17 @@ impl Workspace {
     }
 
     /// The picker dropdown, under the split buttons. A click outside it closes it.
-    fn render_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> AnyElement {
+        if picker.transcribe {
+            return self.render_sound_picker(picker, cx);
+        }
         let selected = picker.selected;
         let rows = picker.matches().into_iter().enumerate().map(|(i, item)| {
             let (tag, color) = match item {
                 PickItem::Terminal => ("TERM", theme::PRIMARY),
                 PickItem::App { .. } => ("APP", theme::APP),
                 PickItem::Closed { .. } => ("APP", theme::MUTED),
+                PickItem::Sound { .. } => ("APP", theme::APP),
             };
             dialog::filter_row(("pick", i), i == selected)
                 .child(match item {
@@ -4470,7 +4480,60 @@ impl Workspace {
             .child(div().text_color(rgb(theme::PICK)).child(title))
             .child(self.render_field("type to filter", cx));
         let panel = self.list_panel(panel, header, "picker", rows, "No match");
-        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel)
+        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel).into_any_element()
+    }
+
+    /// The transcript's picker ("Transcribe a window…"), in ⌘E's style: each app that can play
+    /// sound and its windows, the one playing now first and marked. A pick hears that app.
+    fn render_sound_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> AnyElement {
+        let selected = picker.selected;
+        let rows = picker.matches().into_iter().enumerate().filter_map(|(i, item)| {
+            let PickItem::Sound { name, window, playing, .. } = item else { return None };
+            let icon = match self.icons.contains_key(name) {
+                true => div().w(px(28.)).flex_none().child(self.app_icon(name)),
+                false => div().w(px(28.)).flex_none(),
+            };
+            let label = match window {
+                Some(window) => format!("{name} · {window}"),
+                None => name.clone(),
+            };
+            let now = playing.then(|| {
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(rgb(theme::RECORDING))
+                    .child(div().size(px(6.)).rounded_full().bg(rgb(theme::RECORDING)))
+                    .child("sound now")
+            });
+            let row = dialog::filter_row(("pick", i), i == selected)
+                .child(icon)
+                .child(div().flex_1().min_w_0().truncate().child(label))
+                .children(now)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.dispatch(Action::PickerChoose { index: Some(i) }, this.input, window, cx);
+                }));
+            Some(row.into_any_element())
+        });
+        let rows: Vec<AnyElement> = rows.collect();
+        let panel = dialog::floating(360.).absolute().top(px(TOP_BAR + 6.)).right(px(8.)).max_h(px(420.));
+        let header = div()
+            .h(px(34.))
+            .text_xs()
+            .child(div().text_color(rgb(theme::PICK)).child("Listen to…"))
+            .child(self.render_field("type to filter", cx));
+        let foot = div()
+            .px_3()
+            .py_2()
+            .border_t_1()
+            .border_color(rgb(theme::BORDER))
+            .text_xs()
+            .text_color(rgb(theme::MUTED))
+            .child("↵ listen · Esc cancel · needn't be in a pane");
+        let panel = self.list_panel(panel, header, "picker", rows, "No app to listen to").child(foot);
+        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel).into_any_element()
     }
 
     /// Carries out `Effect::FillDisplay`. A run with hosting off changes no window: its own

@@ -3,6 +3,8 @@
 //! one plain line each, its Markdown escaped: heard words never render as a link, an image, HTML
 //! or a heading. The shell writes the file (`docs/ai/transcripts.md` §5); what goes in it is here.
 
+use serde::Serialize;
+
 use super::{Record, Speaker};
 use crate::ics::civil;
 
@@ -155,6 +157,122 @@ pub fn line(record: &Record, offset: &dyn Fn(u64) -> i64) -> Option<String> {
     }
 }
 
+/// A finished transcript, as its file's header says: a row of the idle view's Today list.
+/// Its file name (which carries the app's, lowercased), start and length are in the state; the
+/// app's name as the header has it is drawn, never sent.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Past {
+    /// The file's name in `transcripts_dir`: `2026-11-16-1000-zoom.md`.
+    pub name: String,
+    #[serde(skip)]
+    pub app: String,
+    pub started_ms: u64,
+    /// To the minute, as the header says it.
+    pub length_ms: u64,
+}
+
+/// A line of a past transcript, read back: its time (`10:00:12`), who, and the words; or a pause.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PastLine {
+    Heard { time: String, from: Speaker, text: String },
+    Paused { time: String, minutes: String },
+}
+
+/// `text` with `escape`'s backslashes taken out: `\*` reads `*`.
+fn unescape(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        out.push(if c == '\\' { chars.next().unwrap_or('\\') } else { c });
+    }
+    out
+}
+
+/// `2026-11-16 10:00 (+01:00)` as ms since 1970.
+fn started(text: &str) -> Option<u64> {
+    let (when, zone) = text.split_once(" (")?;
+    let zone = zone.strip_suffix(')')?;
+    let num = |s: &str| s.parse::<i64>().ok();
+    let (date, time) = when.split_once(' ')?;
+    let mut ymd = date.splitn(3, '-').map(num);
+    let (y, m, d) = (ymd.next()??, ymd.next()??, ymd.next()??);
+    let (h, min) = time.split_once(':')?;
+    let (sign, zone) = match zone.split_at_checked(1)? {
+        ("+", rest) => (1, rest),
+        ("-", rest) => (-1, rest),
+        _ => return None,
+    };
+    let (zh, zm) = zone.split_once(':')?;
+    let (h, min, zh, zm) = (num(h)?, num(min)?, num(zh)?, num(zm)?);
+    // An edited header's out-of-range numbers read as none, not an overflow.
+    if !(1970..=9999).contains(&y) || [m, d, h, min, zh, zm].iter().any(|n| !(0..100).contains(n)) {
+        return None;
+    }
+    let local = crate::ics::days_from_civil(y, m, d) * 86_400 + h * 3_600 + min * 60;
+    let utc = local - sign * (zh * 3_600 + zm * 60);
+    u64::try_from(utc).ok().map(|s| s * 1_000)
+}
+
+/// `10:47, 47 minutes` as ms; none while it is on (`still transcribing`).
+fn length(text: &str) -> Option<u64> {
+    let (_, long) = text.rsplit_once(", ")?;
+    let minutes: u64 = match long {
+        "less than a minute" => 0,
+        "1 minute" => 1,
+        _ => long.strip_suffix(" minutes")?.parse().ok()?,
+    };
+    minutes.checked_mul(60_000)
+}
+
+/// A file's header read back, if it is a finished transcript ottospace wrote: a file it cannot
+/// read, or one still being written (or left so by a crash), is none.
+pub fn read_head(name: &str, text: &str) -> Option<Past> {
+    let field = |key: &str| text.lines().find_map(|line| line.strip_prefix(key));
+    let started_ms = started(field("- Started: ")?)?;
+    let length_ms = length(field("- Ended: ")?)?;
+    let app = field("- App: ")?;
+    // A bundle is in parentheses at the end; the name itself is escaped, so its own `(` is too.
+    let app = app.rsplit_once(" (").filter(|(_, b)| b.ends_with(')')).map_or(app, |(name, _)| name);
+    Some(Past { name: name.into(), app: unescape(app), started_ms, length_ms })
+}
+
+/// Today's finished transcripts in `files` (each a name and its text), newest first: those whose
+/// name starts with `today` (`2026-11-17`, the local date) and whose header reads back.
+pub fn today(files: &[(String, String)], today: &str) -> Vec<Past> {
+    let ours = |name: &str| name.ends_with(".md") && name.strip_prefix(today).is_some_and(|rest| rest.starts_with('-'));
+    let mut past: Vec<Past> =
+        files.iter().filter(|(name, _)| ours(name)).filter_map(|(name, text)| read_head(name, text)).collect();
+    // One minute's second file (`-2.md`, a longer name) is the newer.
+    past.sort_by(|a, b| {
+        b.started_ms.cmp(&a.started_ms).then_with(|| (b.name.len(), &b.name).cmp(&(a.name.len(), &a.name)))
+    });
+    past
+}
+
+/// A past transcript's lines, read back with this module's own format; a line it does not know
+/// (the user edited the file) is left out.
+pub fn read_lines(text: &str) -> Vec<PastLine> {
+    let row = |line: &str| {
+        let rest = line.strip_prefix("- ")?;
+        let (time, rest) = rest.split_once(' ')?;
+        let timed = time.len() == 8 && time.bytes().all(|b| b.is_ascii_digit() || b == b':');
+        if !timed {
+            return None;
+        }
+        let time = time.to_string();
+        if let Some(pause) = rest.strip_prefix("*paused ").and_then(|p| p.strip_suffix('*')) {
+            return Some(PastLine::Paused { time, minutes: pause.into() });
+        }
+        let (from, text) = match rest.split_once("**: ")? {
+            ("**them", text) => (Speaker::Them, text),
+            ("**me", text) => (Speaker::Me, text),
+            _ => return None,
+        };
+        Some(PastLine::Heard { time, from, text: crate::capture::plain(&unescape(text), super::MAX_LINE) })
+    };
+    text.lines().filter_map(row).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +396,61 @@ mod tests {
         for (heard, file) in cases {
             assert_eq!(escape(heard, 200), file, "{heard:?}");
         }
+    }
+
+    #[test]
+    fn a_finished_header_reads_back_and_one_still_on_does_not() {
+        let hostile = Head { app: "Zo*om (x) [y](z)".into(), ..head() };
+        let ended = header(&hostile, Some(START + 47 * 60_000 + 5_000), &paris);
+        let past = read_head("2026-11-16-1000-zoom.md", &ended).unwrap();
+        let name = "2026-11-16-1000-zoom.md".to_string();
+        let want = Past { name, app: "Zo*om (x) [y](z)".into(), started_ms: START, length_ms: 47 * 60_000 };
+        assert_eq!(past, want);
+        let west = header(&Head { bundle: None, ..head() }, Some(START + 30_000), &|_| -19_800);
+        let past = read_head("x.md", &west).unwrap();
+        // 09:00 UTC is 03:30 at -05:30, and reads back as 09:00 UTC.
+        assert_eq!((past.app.as_str(), past.started_ms, past.length_ms), ("Zoom", START, 0));
+        assert_eq!(read_head("x.md", &header(&head(), None, &paris)), None, "still on");
+        assert_eq!(read_head("x.md", "# notes\n- Started: soon"), None);
+        // Edited out of range: none, not an overflow.
+        let huge = ended.replace("47 minutes", "999999999999999999 minutes");
+        assert_eq!(read_head("x.md", &huge), None);
+        let far = ended.replace("- Started: 2026", "- Started: 99999999999999");
+        assert_eq!(read_head("x.md", &far), None);
+    }
+
+    #[test]
+    fn todays_list_is_its_files_newest_first() {
+        let file = |at: u64| header(&head(), Some(at + 60_000), &paris);
+        let files = vec![
+            ("2026-11-16-1000-zoom.md".to_string(), file(START)),
+            ("2026-11-16-1100-zoom.md".to_string(), file(START + 3_600_000)),
+            ("2026-11-16-1100-zoom-2.md".to_string(), file(START + 3_600_000)),
+            ("2026-11-15-1000-zoom.md".to_string(), file(START - 86_400_000)),
+            ("2026-11-16-notes.txt".to_string(), file(START)),
+            ("2026-11-16-1200-zoom.md".to_string(), header(&head(), None, &paris)),
+        ];
+        let names: Vec<String> = today(&files, "2026-11-16").into_iter().map(|p| p.name).collect();
+        assert_eq!(names, ["2026-11-16-1100-zoom-2.md", "2026-11-16-1100-zoom.md", "2026-11-16-1000-zoom.md"]);
+    }
+
+    #[test]
+    fn lines_read_back_as_written_and_others_are_left_out() {
+        let words = r"made-up *words* [x](y) \ <b>";
+        let them = Record::Line { from: Speaker::Them, at: START + 12_000, text: words.into() };
+        let pause = Record::Paused { at: START + 760_000, ms: 180_000 };
+        let text = format!(
+            "{}{}{}- edited by hand\n- 10:00:13 **someone**: x\n",
+            header(&head(), Some(START + 900_000), &paris),
+            line(&them, &paris).unwrap(),
+            line(&pause, &paris).unwrap()
+        );
+        assert_eq!(
+            read_lines(&text),
+            [
+                PastLine::Heard { time: "10:00:12".into(), from: Speaker::Them, text: words.into() },
+                PastLine::Paused { time: "10:12:40".into(), minutes: "3 minutes".into() },
+            ]
+        );
     }
 }
