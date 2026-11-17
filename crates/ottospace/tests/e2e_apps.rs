@@ -2144,3 +2144,146 @@ fn the_window_fills_its_display_an_apps_window_stops_at_the_dock_and_every_end_b
     let _ = otto.child.wait();
     wait_for("the bars back after the kill", || bars_hidden(false));
 }
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGWindowListCreate(option: u32, relative_to: u32) -> *const std::ffi::c_void;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFArrayGetCount(array: *const std::ffi::c_void) -> isize;
+    fn CFArrayGetValueAtIndex(array: *const std::ffi::c_void, index: isize) -> *const std::ffi::c_void;
+    fn CFRelease(object: *const std::ffi::c_void);
+}
+
+/// The on-screen windows in front of window `id`, by number: what covers it.
+fn windows_above(id: u32) -> Vec<u32> {
+    // kCGWindowListOptionOnScreenAboveWindow.
+    let list = unsafe { CGWindowListCreate(1 << 1, id) };
+    if list.is_null() {
+        return Vec::new();
+    }
+    let ids = (0..unsafe { CFArrayGetCount(list) })
+        .map(|i| unsafe { CFArrayGetValueAtIndex(list, i) } as usize as u32)
+        .collect();
+    unsafe { CFRelease(list) };
+    ids
+}
+
+/// Closes Finder's windows of these names on drop, pass or fail: Finder is the user's, and the
+/// test opened them. Declared before ottospace, so it runs after ottospace is gone.
+struct CloseFinderWindows(Vec<String>);
+
+impl Drop for CloseFinderWindows {
+    fn drop(&mut self) {
+        for name in &self.0 {
+            let script = format!(
+                "tell application \"System Events\" to tell process \"Finder\" to repeat with w in \
+                 (every window whose name is \"{name}\")\nclick (first button of w whose subrole is \
+                 \"AXCloseButton\")\nend repeat"
+            );
+            let _ = Command::new("osascript").args(["-e", &script]).status();
+        }
+    }
+}
+
+/// Finder's pid: it always runs.
+fn finder_pid() -> i32 {
+    let finder =
+        ottospace_mac::ax::running().into_iter().find(|(_, bundle, _)| bundle.as_deref() == Some("com.apple.finder"));
+    finder.expect("Finder runs").0
+}
+
+/// The first node named `name` (title, value or description) with a frame: `[x, y, w, h]`.
+fn named_frame(node: &Value, name: &str) -> Option<[f64; 4]> {
+    let named = ["title", "value", "description"].iter().any(|k| node[*k] == name);
+    let f = &node["frame"];
+    match [f["x"].as_f64(), f["y"].as_f64(), f["w"].as_f64(), f["h"].as_f64()] {
+        [Some(x), Some(y), Some(w), Some(h)] if named && w > 0.0 && h > 0.0 => Some([x, y, w, h]),
+        _ => node["children"].as_array()?.iter().find_map(|child| named_frame(child, name)),
+    }
+}
+
+#[test]
+#[ignore = "moves a Finder window it opens; run with `cargo e2e-apps` and OTTOSPACE_E2E_FINDER"]
+fn a_hosted_finder_window_takes_the_users_clicks() {
+    // Finder is the user's own app: only where nobody's Finder windows are (CI asks for it).
+    if std::env::var_os("OTTOSPACE_E2E_FINDER").is_none() {
+        return eprintln!("OTTOSPACE_E2E_FINDER not set: Finder not hosted");
+    }
+    let pid = finder_pid();
+    // Hosting picks Finder's main window, and adopts every new one: none of them may be the user's.
+    if !ottospace_mac::ax::Window::standard_of(pid).is_empty() {
+        return eprintln!("Finder has windows open: not hosted, so none of them moves");
+    }
+    let me = std::process::id();
+    let dir = support::temp(&format!("otto-apps-finder-{me}"));
+    let inner = format!("otto-inner-{me}");
+    std::fs::create_dir_all(dir.join(&inner)).expect("make folders");
+    let outer = dir.file_name().and_then(|n| n.to_str()).expect("folder name").to_string();
+    let _close = CloseFinderWindows(vec![outer.clone(), inner.clone()]);
+    let opened = Command::new("open").args(["-a", "Finder"]).arg(&dir).status().expect("run open");
+    assert!(opened.success(), "open -a Finder failed");
+    let ours = || {
+        let windows = ottospace_mac::ax::Window::standard_of(pid);
+        windows.into_iter().find(|w| w.title().is_some_and(|t| t == outer || t == inner))
+    };
+    let finder_window = wait_for("Finder's window of the folder", || ours().and_then(|w| w.id()));
+    let frame = || {
+        let w = ottospace_mac::ax::Window::find(pid, finder_window)?;
+        w.frame().map(|f| [f.origin.x, f.origin.y, f.size.width, f.size.height])
+    };
+    let original = wait_for("its frame", frame);
+    let title = || ottospace_mac::ax::Window::find(pid, finder_window).and_then(|w| w.title());
+
+    let pid_text = pid.to_string();
+    let env = [("OTTOSPACE_E2E", "1"), ("OTTOSPACE_HOST_ONLY", pid_text.as_str()), ("OTTOSPACE_RETURN_KEY", "f19")];
+    let otto = Proc::launch(env!("CARGO_BIN_EXE_ottospace"), "otto-finder", "OTTOSPACE_SOCKET", &env);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let reply = otto.call(json!({"cmd": "open_app", "name": "Finder"}));
+    assert_eq!(reply["state"]["panes"][0]["kind"]["type"], "app", "{reply}");
+    let spot = point(&state()["parking"]).expect("parking spot");
+    wait_for("the Finder window to park", || frame().filter(|f| close(f[0], spot[0])));
+    let otto_window = state()["frame"]["window"].as_u64().expect("ottospace's window number") as u32;
+    // What a stuck click leaves to read: who is in front, what covers the window, its main window.
+    let seen = || {
+        format!(
+            "front {:?}; window {finder_window} at {:?}; ottospace's {otto_window} above it: {}; \
+             Finder's main window {:?}; mode {}",
+            front_app(),
+            frame(),
+            windows_above(finder_window).contains(&otto_window),
+            ottospace_mac::ax::Window::main_id(pid),
+            state()["mode"],
+        )
+    };
+
+    // The user's way in: a real click on the parked pane makes it live.
+    bring_forward(otto.child.id(), "ottospace");
+    let at = on_picture(&otto);
+    click_at(at[0], at[1], false);
+    wait_or("the pane to go live", seen, || (state()["mode"] == "app").then_some(()));
+    let live = wait_or("the window over its pane", seen, || frame().filter(|f| !close(f[0], spot[0])));
+    std::thread::sleep(Duration::from_millis(800));
+    report(&format!("finder, live: {}", seen()));
+
+    // A real double-click on the folder inside opens it: Finder took the click.
+    let tree = otto.call(json!({"cmd": "ax_tree", "depth": 30, "nodes": 3000}));
+    let icon = named_frame(&tree["tree"]["root"], &inner).unwrap_or_else(|| panic!("no {inner} in the tree: {tree}"));
+    let (x, y) = (icon[0] + icon[2] / 2.0, icon[1] + icon[3] / 2.0);
+    assert!(x > live[0] && x < live[0] + live[2] && y > live[1] && y < live[1] + live[3], "{icon:?} in {live:?}");
+    click_at(x, y, true);
+    let opened = || format!("title {:?}; {}", title(), seen());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wait_or("the double-click to open the folder", opened, || (title()? == inner).then_some(()))
+    }));
+    report(&format!("finder, after the double-click: {}", opened()));
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+
+    // Quit: the window goes back where it was.
+    otto.call(json!({"cmd": "quit"}));
+    wait_for("the Finder window back", || frame().filter(|f| (0..4).all(|i| close(f[i], original[i]))));
+}

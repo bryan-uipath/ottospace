@@ -67,8 +67,11 @@ jobs:
           defaults read -g AppleLocale || true
           defaults read -g AppleLanguages || true
           cargo run -p ottospace-mac --example speech_status -- --install || true
+      # Finder is hosted only here: the runner's Finder has no windows of anyone's.
       - name: App-window tests
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.repeat == '0' }}
+        env:
+          OTTOSPACE_E2E_FINDER: '1'
         run: cargo e2e-apps --skip canarys
       # The canary's transcript, shown: what the recogniser heard, or why it skipped.
       - name: Transcript tests
@@ -80,6 +83,7 @@ jobs:
         env:
           REPEAT: ${{ inputs.repeat }}
           TEST: ${{ inputs.test }}
+          OTTOSPACE_E2E_FINDER: '1'
         run: |
           failed=0
           for i in $(seq 1 "$REPEAT"); do
