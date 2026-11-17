@@ -6,10 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use objc2::ffi::class_addMethod;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
-use objc2::{AnyThread, MainThreadMarker, sel};
+use objc2::{AnyThread, MainThreadMarker, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationPresentationOptions, NSEvent, NSEventModifierFlags,
-    NSEventType, NSFloatingWindowLevel, NSImage, NSScreen, NSView, NSWindowCollectionBehavior,
+    NSEventType, NSFloatingWindowLevel, NSImage, NSScreen, NSView, NSWindowCollectionBehavior, NSWindowOcclusionState,
 };
 use objc2_core_foundation::CGPoint;
 use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags, CGScrollEventUnit};
@@ -52,6 +52,44 @@ pub enum MouseKind {
 pub unsafe fn number(ns_view: *mut c_void) -> isize {
     let view = unsafe { &*(ns_view as *const NSView) };
     view.window().map_or(0, |window| window.windowNumber())
+}
+
+/// True while some of the view's window shows on a screen: GPUI draws it only then.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, on the main thread.
+pub unsafe fn visible(ns_view: *mut c_void) -> bool {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    view.window().is_some_and(|window| window.occlusionState().contains(NSWindowOcclusionState::Visible))
+}
+
+/// Makes GPUI draw its window again when frames stopped coming, as after a display went away.
+/// GPUI 0.2 draws on a CVDisplayLink of the window's display, made again only by its own
+/// `windowDidChangeScreen:`, occlusion and activation handlers; made while the displays change,
+/// it may be for a display that is gone, or fail and be none. Two of GPUI's own paths, as AppKit
+/// would take them: its delegate's `windowDidChangeScreen:` (the window is its own delegate)
+/// makes a new link for the screen the window is on now; the layer marked for display has
+/// GPUI's `displayLayer:` draw a frame at the next commit, link or none, and make a link again.
+/// False: the window lacks one of them (not GPUI 0.2's), and what it has was still done.
+///
+/// # Safety
+/// `ns_view` must point to a live GPUI `NSView`, on the main thread, outside GPUI's window lock:
+/// not inside one of its platform callbacks (an `App` update from a task or timer is fine).
+pub unsafe fn redraw(ns_view: *mut c_void) -> bool {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    let Some(window) = view.window() else { return false };
+    let delegate: *mut AnyObject = unsafe { msg_send![&*window, delegate] };
+    let relinks = !delegate.is_null()
+        && unsafe { msg_send![delegate, respondsToSelector: sel!(windowDidChangeScreen:)] };
+    if relinks {
+        let _: () = unsafe { msg_send![delegate, windowDidChangeScreen: std::ptr::null_mut::<AnyObject>()] };
+    }
+    let layer: *mut AnyObject = unsafe { msg_send![view, layer] };
+    let draws = !layer.is_null() && unsafe { msg_send![view, respondsToSelector: sel!(displayLayer:)] };
+    if draws {
+        let _: () = unsafe { msg_send![layer, setNeedsDisplay] };
+    }
+    relinks && draws
 }
 
 /// Hands the view a pointer event as AppKit would, by calling its own handler (`mouseDown:` and

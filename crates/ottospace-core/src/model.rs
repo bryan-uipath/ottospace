@@ -59,6 +59,13 @@ pub enum Kind {
         #[serde(default)]
         name: String,
     },
+    /// A slot that waits for a window of this app (`docs/ai/slots.md`). What it asks for and
+    /// where it is are the model's `slots`. Never made from an action's kind: only `SlotMake`.
+    Slot {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bundle: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -420,9 +427,12 @@ pub enum Action {
     },
     /// Add a pane for a window the app opened itself (e.g. DevTools), beside `beside`.
     /// Focus and the keyboard stay where they are: the user did not ask for this pane.
+    /// `seen`: the window's facts (the shell's alone): a slot on the tab on show that selects it
+    /// takes or offers it instead (`Model::slot_adopt`).
     Adopt {
         kind: Kind,
         beside: Option<PaneId>,
+        seen: Option<crate::slot::Seen>,
     },
     /// Close a pane (default: the focused one).
     Close {
@@ -645,14 +655,15 @@ pub enum Action {
     SetRepoDirs {
         dirs: repos::RepoDirs,
     },
-    /// Add `dir` (resolved) to the settings' `repos`: `found` is what the shell read there. With
-    /// no repository, a notice. Listed already: nothing is written. Its first row is selected.
+    /// Add the repository at `dir` (resolved) to the end of the settings' `repos`: `found` is what
+    /// the shell read there. Not a repository's own folder: a notice. Listed already: nothing is
+    /// written. Its first row is selected.
     RepoAdd {
         dir: String,
         found: Vec<Repo>,
     },
-    /// Stop listing the repository at `path`: its directory comes off the settings' `repos`,
-    /// if it is named there as itself.
+    /// Stop listing the repository or group at `path`: its entry comes off the settings' `repos`,
+    /// if it is named there as itself. Nothing on disk changes.
     RepoRemove {
         path: String,
     },
@@ -667,7 +678,8 @@ pub enum Action {
         path: String,
         axis: Axis,
     },
-    /// Fold a repository's rows under its name (`fold`: `None` toggles what is shown).
+    /// Fold a repository's rows under its name, or a group's repositories under its folder's
+    /// (`fold`: `None` toggles what is shown).
     RepoFold {
         path: String,
         fold: Option<bool>,
@@ -1290,7 +1302,7 @@ pub enum Action {
     /// `dots`: where the … is drawn. `keys`: a key or a label opened it, so the keys are on its
     /// first item; a click's are on none.
     RowMenu {
-        row: ListRow,
+        row: crate::row_menu::MenuOf,
         dots: Option<Rect>,
         keys: bool,
     },
@@ -1536,6 +1548,57 @@ pub enum Action {
         why: listen::Ended,
         at: u64,
     },
+    /// The user's Keep in "Keep this pane as a slot": app pane `pane`, whose window is of process
+    /// `pid`, becomes a filled slot. On a slot: its new settings (the dialog's edit).
+    SlotMake {
+        pane: PaneId,
+        pid: i32,
+        slot: crate::slot::Slot,
+    },
+    /// The slot ends: a filled one stays an app pane, one that waits is an empty pane.
+    SlotClear {
+        pane: PaneId,
+    },
+    /// Bring it here: the window the slot offers goes in it.
+    SlotAccept {
+        pane: PaneId,
+    },
+    /// Not this one: the slot passes over the window it offers, for this run, and offers the next.
+    SlotDecline {
+        pane: PaneId,
+    },
+    /// "2 more match": offer the next.
+    SlotNext {
+        pane: PaneId,
+    },
+    /// Look Again: forget the windows passed over.
+    SlotLookAgain {
+        pane: PaneId,
+    },
+    /// Give Back the Window: it goes back where it was, and the slot waits, passing over it.
+    SlotGiveBack {
+        pane: PaneId,
+    },
+    /// What a look at an app found (`Effect::WatchSlots`). The shell's alone.
+    SlotWindows {
+        look: crate::slot::Look,
+    },
+    /// The shell hosted the window `Effect::HostSlot` named: the pane's kind now. `None`: it could not.
+    SlotHosted {
+        pane: PaneId,
+        kind: Option<Kind>,
+    },
+    /// Every 2 s while a slot is Away.
+    SlotTick {
+        at: u64,
+    },
+    /// The window of app pane `pane` is gone: closed, or no longer listed. A slot waits for it;
+    /// any other pane closes. The shell's alone.
+    WindowGone {
+        pane: PaneId,
+        app_running: bool,
+        at: u64,
+    },
 }
 
 /// What the right drawer shows (see `Model::drawer_view`).
@@ -1574,6 +1637,20 @@ pub struct Envelope {
 impl Action {
     pub fn sent_by(self, origin: Origin) -> Envelope {
         Envelope { action: self, origin }
+    }
+
+    /// Whether it would put a slot's kind in a pane, which only `SlotMake` and a slot's own
+    /// steps do: a slot made that way would have nothing to wait for.
+    fn makes_slot_kind(&self) -> bool {
+        let kind = match self {
+            Action::Split { kind, .. }
+            | Action::Open { kind, .. }
+            | Action::Adopt { kind, .. }
+            | Action::Fill { kind, .. } => Some(kind),
+            Action::SlotHosted { kind, .. } => kind.as_ref(),
+            _ => None,
+        };
+        matches!(kind, Some(Kind::Slot { .. }))
     }
 
     /// Whether the action acts on panes, tabs or the bar: it waits while the picker, the new-task
@@ -1907,7 +1984,18 @@ impl Action {
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
-            | Action::ListenEnded { .. } => false,
+            | Action::ListenEnded { .. }
+            | Action::SlotMake { .. }
+            | Action::SlotClear { .. }
+            | Action::SlotAccept { .. }
+            | Action::SlotDecline { .. }
+            | Action::SlotNext { .. }
+            | Action::SlotLookAgain { .. }
+            | Action::SlotGiveBack { .. }
+            | Action::SlotWindows { .. }
+            | Action::SlotHosted { .. }
+            | Action::SlotTick { .. }
+            | Action::WindowGone { .. } => false,
         }
     }
 
@@ -1944,6 +2032,18 @@ impl Action {
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
             | Action::ListenEnded { .. } => Some(Feature::Transcripts),
+            Action::SlotMake { .. }
+            | Action::SlotClear { .. }
+            | Action::SlotAccept { .. }
+            | Action::SlotDecline { .. }
+            | Action::SlotNext { .. }
+            | Action::SlotLookAgain { .. }
+            | Action::SlotGiveBack { .. }
+            | Action::SlotWindows { .. }
+            | Action::SlotHosted { .. }
+            | Action::SlotTick { .. } => Some(Feature::Slots),
+            // Every pane's window going, a slot's or not: of no flag.
+            Action::WindowGone { .. } => None,
             // Shared with workbooks (a name typed, a row's letter), or data a restore reads.
             Action::MarkType { .. }
             | Action::MarkBackspace
@@ -2296,10 +2396,10 @@ pub enum Effect {
     SaveApps {
         changes: Vec<crate::settings::ListChange>,
     },
-    /// The directories of the Repos list changed: make these changes to `repos` in the
-    /// settings file, as it is then.
+    /// The Repos list's entries changed: write them, in this order, as `repos` in the settings
+    /// file.
     SaveRepos {
-        changes: Vec<crate::settings::ListChange>,
+        dirs: Vec<repos::RepoDir>,
     },
     /// Say `text` in the notice bar as information: what the user's own step did.
     Told {
@@ -2355,6 +2455,20 @@ pub enum Effect {
     ListenWrite {
         id: String,
         records: Vec<listen::Record>,
+    },
+    /// Host window `window` of process `pid` in slot pane `pane`, then send `SlotHosted`.
+    HostSlot {
+        pane: PaneId,
+        pid: i32,
+        window: u32,
+    },
+    /// Look at these apps' windows every 2 s and send `SlotWindows` when they change. Empty: none.
+    WatchSlots {
+        apps: Vec<(Option<String>, String)>,
+    },
+    /// Put slot pane `pane`'s window back where it was before it was hosted. The pane stays.
+    GiveBack {
+        pane: PaneId,
     },
     /// The user dismissed the notice of `kind`: a slot the shell holds it in is emptied.
     NoticeDismissed {
@@ -2543,6 +2657,7 @@ pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
 
 pub mod chat;
 pub mod editor;
+pub mod slots;
 mod transcribe;
 pub mod worktrees;
 pub(crate) use worktrees::subagent_path;
@@ -2626,6 +2741,9 @@ pub struct Model {
     /// the same, until that ends.
     #[serde(skip)]
     repos_held: Vec<String>,
+    /// Groups (a folder of repositories, from the old settings) the user unfolded, by path. A
+    /// group is folded until then; not kept.
+    pub repos_open: Vec<String>,
     /// Each GitHub repository's open pull requests, by its path, as gh last told them. Other
     /// people's text: never in the state (`checkout_pr` gives what may be).
     #[serde(skip)]
@@ -2847,6 +2965,21 @@ pub struct Model {
     editor_note: Option<(String, u64)>,
     /// The transcript on, if one is. In the state: its status and times, never its text.
     pub listen: Listening,
+    /// Each slot, by its pane: filled or not. In the state: its status, how many windows match
+    /// and its matching, never what it selects or a window's title.
+    pub slots: std::collections::BTreeMap<PaneId, slots::Run>,
+    /// The last look at each app a slot names, and the apps the shell is asked to look at.
+    #[serde(skip)]
+    slot_looks: Vec<crate::slot::Look>,
+    #[serde(skip)]
+    slot_watch: Vec<(Option<String>, String)>,
+    /// A slot's record kept as read while it is not run (the flag off, or a newer build's), with
+    /// its app: a pane of that app writes it back, so turning the flag on again loses none.
+    #[serde(skip)]
+    slot_dormant: std::collections::BTreeMap<PaneId, (Option<String>, String, serde_json::Value)>,
+    /// The user's `windows` rules, as the settings say: a slot is offered no window they ignore.
+    #[serde(skip)]
+    window_rules: Vec<crate::rules::Rule>,
 }
 
 impl Default for Model {
@@ -2869,6 +3002,7 @@ impl Default for Model {
             repos: Vec::new(),
             repo_dirs: repos::RepoDirs::default(),
             repos_folded: Vec::new(),
+            repos_open: Vec::new(),
             repos_held: Vec::new(),
             prs: Vec::new(),
             tasks: Tasks::default(),
@@ -2964,6 +3098,11 @@ impl Default for Model {
             editing: None,
             editor_note: None,
             listen: Listening::default(),
+            slots: Default::default(),
+            slot_looks: Vec::new(),
+            slot_watch: Vec::new(),
+            slot_dormant: Default::default(),
+            window_rules: Vec::new(),
         };
         // Home's own tab, on show.
         let home = Tab { id: HOME_TAB, title: HOME.into(), space: Owner::Home, layout: None, focused: None };
@@ -3091,6 +3230,34 @@ impl Model {
                 if origin == Origin::Socket && self.closes_listened(action) =>
             {
                 Some(listen::SOURCE_ON)
+            }
+            // A slot is the user's: no client's request, key, click or label makes, fills or
+            // clears one, and only the shell says what a look found.
+            Action::SlotMake { .. }
+            | Action::SlotClear { .. }
+            | Action::SlotAccept { .. }
+            | Action::SlotDecline { .. }
+            | Action::SlotNext { .. }
+            | Action::SlotLookAgain { .. }
+            | Action::SlotGiveBack { .. } => Some(crate::slot::USERS_ALONE),
+            Action::SlotWindows { .. }
+            | Action::SlotHosted { .. }
+            | Action::SlotTick { .. }
+            | Action::WindowGone { .. }
+            | Action::Adopt { seen: Some(_), .. }
+                if origin == Origin::Socket =>
+            {
+                Some(crate::slot::SHELLS_ALONE)
+            }
+            // Nor takes one out of the user's layout, or moves it to a tab they do not see.
+            Action::Close { .. }
+            | Action::CloseTab { .. }
+            | Action::SwapDir { .. }
+            | Action::MovePane { .. }
+            | Action::DropPane { .. }
+                if origin == Origin::Socket && self.moves_slot(action) =>
+            {
+                Some(crate::slot::SLOT_PANE)
             }
             // A label in another app presses there: only the user's own letters spell one.
             Action::SneakType { text } if self.sneak.as_ref().is_some_and(|s| s.reaches_app(text)) => {
@@ -3453,7 +3620,8 @@ impl Model {
     pub fn update(&mut self, sent: impl Into<Envelope>) -> Vec<Effect> {
         let sent = self.space_click(sent.into());
         // A feature that is off is absent: its actions change nothing and ask for nothing.
-        if self.disabled(&sent.action).is_some() {
+        // Nor does a pane become a slot but by `SlotMake`.
+        if self.disabled(&sent.action).is_some() || sent.action.makes_slot_kind() {
             return Vec::new();
         }
         let (origin, line) = (sent.origin, self.compose_line().cloned());
@@ -3484,8 +3652,10 @@ impl Model {
             if self.refusal(&sent.action, origin).is_some() {
                 return Vec::new();
             }
-            if *kind == crate::notice::Kind::Editor {
-                self.editor_note = None;
+            match kind {
+                crate::notice::Kind::Editor => self.editor_note = None,
+                crate::notice::Kind::Undo => self.workbooks.dismiss(text),
+                _ => {}
             }
             if !kind.held() {
                 self.notice_hidden.retain(|hidden| hidden.kind != *kind);
@@ -3806,6 +3976,7 @@ impl Model {
         self.panes.iter_mut().filter(|pane| stale.contains(&pane.id)).for_each(|pane| pane.fit = None);
         self.mark_stuck();
         self.prune_unfilled();
+        self.settle_slots(&mut effects);
         self.settle_app_filter();
         self.settle_talk();
         // The inspector goes with its pane, and gives up the keyboard to an app that takes it.
@@ -3862,11 +4033,16 @@ impl Model {
             }
             Action::Open { kind, axis, beside } => drop(self.open(kind, axis, beside, effects)),
             Action::SetRepos { repos } => {
-                self.repos = repos::arrange(repos);
+                self.repos = repos::arrange(repos, &self.repo_dirs);
                 self.repo_field_gone();
                 self.follow_moves();
             }
-            Action::SetRepoDirs { dirs } => self.repo_dirs = dirs,
+            Action::SetRepoDirs { mut dirs } => {
+                dirs.settle();
+                self.repos = repos::arrange(std::mem::take(&mut self.repos), &dirs);
+                self.repo_dirs = dirs;
+                self.repos_open.retain(|open| self.repo_dirs.dirs.iter().any(|dir| dir.path == *open));
+            }
             Action::RepoAdd { dir, found } => self.repo_add(dir, found, effects),
             // A repository a live task works in: asked first (the trash is one hover away).
             Action::RepoRemove { path } if self.repo_worked_in(&path) && self.repo_dirs.to_remove(&path).is_ok() => {
@@ -3889,7 +4065,7 @@ impl Model {
                 }
             }
             Action::WorktreeAdded { repo, path, asked, fresh, repos } => {
-                self.repos = repos::arrange(repos);
+                self.repos = repos::arrange(repos, &self.repo_dirs);
                 self.repo_field_gone();
                 self.follow_moves();
                 self.repos_folded.retain(|folded| *folded != repo);
@@ -3905,7 +4081,7 @@ impl Model {
                 }
             }
             Action::WorktreeFailed { asked, fresh, repos } => {
-                self.repos = repos::arrange(repos);
+                self.repos = repos::arrange(repos, &self.repo_dirs);
                 self.repo_field_gone();
                 self.follow_moves();
                 // A new task's waits in its checkout, unstarted: its Start is the user's.
@@ -4006,7 +4182,13 @@ impl Model {
                     }
                 }
             }
-            Action::Adopt { kind, beside } => {
+            Action::Adopt { kind, beside, seen } => {
+                // A slot's window, back or new to it, or one it offers: no new pane.
+                if let Some(seen) = seen.filter(|_| !self.by_user)
+                    && self.slot_adopt(&kind, seen, effects)
+                {
+                    return;
+                }
                 self.next_id += 1;
                 let id = self.next_id;
                 self.panes.push(Pane { id, kind, cwd: None, fit: None });
@@ -4510,7 +4692,7 @@ impl Model {
                 Some(ListRow::App(name)) => effects.push(Effect::HostApp { name, axis, new_tab: false }),
                 Some(ListRow::Repo(path)) => self.act(Action::RepoClick { path, axis }, effects),
                 // The selection stays on the name: the same key unfolds it again.
-                Some(ListRow::RepoHead(path)) => self.repo_fold(&path, None),
+                Some(ListRow::RepoHead(path) | ListRow::RepoGroup(path)) => self.repo_fold(&path, None),
                 // The user's ↵ on a task is a click on it: its conversation. A client's goes to its tabs.
                 Some(ListRow::Task(id)) if self.by_user => self.talk_to(Subject::Task(id), false, effects),
                 Some(ListRow::Task(id)) => {
@@ -5008,7 +5190,7 @@ impl Model {
             Action::RowMenu { row, dots, keys } => self.row_menu_open(row, dots, keys),
             Action::RowMenuDrawn { dots } => self.row_menu_drawn(dots),
             Action::RowMenuMove { delta } => self.row_menu_move(delta),
-            Action::RowMenuChoose { index } => self.row_menu_choose(index),
+            Action::RowMenuChoose { index } => self.row_menu_choose(index, effects),
             Action::RowMenuClose => self.row_menu = None,
             Action::WorkbookUndo => self.workbook_undo(),
             Action::ListReorder { delta } => match self.selected_mark() {
@@ -5283,6 +5465,14 @@ impl Model {
                 }
             }
             Action::TalkCycle { delta } => self.cycle_front(delta),
+            // The drawer on the transcript has no × of its own: ⌘⇧L closes the drawer, whatever it shows.
+            Action::TalkToggle if self.listen.shown => {
+                self.listen.shown = false;
+                self.talk_keys(false, effects);
+                if let Some(talk) = &mut self.talk {
+                    talk.open = false;
+                }
+            }
             Action::TalkToggle => {
                 if let Some(open) = self.talk.as_ref().map(|talk| !talk.open) {
                     self.talk_keys(open, effects);
@@ -5352,6 +5542,17 @@ impl Model {
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
             | Action::ListenEnded { .. }) => self.listen_act(action, effects),
+            action @ (Action::SlotMake { .. }
+            | Action::SlotClear { .. }
+            | Action::SlotAccept { .. }
+            | Action::SlotDecline { .. }
+            | Action::SlotNext { .. }
+            | Action::SlotLookAgain { .. }
+            | Action::SlotGiveBack { .. }
+            | Action::SlotWindows { .. }
+            | Action::SlotHosted { .. }
+            | Action::SlotTick { .. }) => self.slot_act(action, effects),
+            Action::WindowGone { pane, app_running, at } => self.window_gone(pane, app_running, at, effects),
         }
     }
 
@@ -5898,7 +6099,7 @@ impl Model {
         for pane in &self.panes {
             let id = Some(pane.id as u32);
             match &pane.kind {
-                Kind::Empty => {}
+                Kind::Empty | Kind::Slot { .. } => {}
                 Kind::Terminal => {
                     let info = self.terminals.iter().find(|info| info.pane == pane.id);
                     let cwd = info.and_then(|info| info.cwd.clone()).or(pane.cwd.clone());
@@ -6392,7 +6593,8 @@ impl Model {
 
     /// The row list mode starts on: the first that is not a heading.
     fn first_row(&self) -> usize {
-        self.list_rows().iter().position(|row| !matches!(row, ListRow::Heading(_) | ListRow::RepoHead(_))).unwrap_or(0)
+        let heading = |row: &ListRow| matches!(row, ListRow::Heading(_) | ListRow::RepoHead(_) | ListRow::RepoGroup(_));
+        self.list_rows().iter().position(|row| !heading(row)).unwrap_or(0)
     }
 
     /// The paste goes to terminal `pane`, and its notice says so. A pane closed since: nothing.
@@ -7049,7 +7251,7 @@ impl Model {
         match self.sidebar {
             Some(Section::Apps) => self.app_rows(),
             // Each repository's name, then its rows unless it is folded.
-            Some(Section::Repos) => self.repos.iter().flat_map(|repo| self.repo_rows(repo)).collect(),
+            Some(Section::Repos) => self.repo_list_rows(),
             Some(Section::Tasks) => self.task_list_rows(self.tasks_view, false),
             Some(Section::Marks) => self.marks.list.iter().map(|mark| ListRow::Mark(mark.id)).collect(),
             Some(Section::Calendar) => self.calendar.agenda(),
@@ -7316,7 +7518,7 @@ impl Model {
         let kind = match pane.kind {
             Kind::App { .. } => None,
             Kind::Terminal => Some("a terminal"),
-            Kind::Empty => Some("empty"),
+            Kind::Empty | Kind::Slot { .. } => Some("empty"),
         };
         if let Some(kind) = kind {
             return Some(format!("pane {id} is {kind}: fit is for an app pane whose window refused the pane's size"));
@@ -7353,6 +7555,7 @@ impl Model {
         let stale = |n: &crate::notice::Notice| matches!(n.kind, SettingsProblem | SettingsRetired | SettingsRestart);
         self.notice_hidden.retain(|n| !stale(n) || Some(&n.text) == line.as_ref());
         let Some(settings) = settings else { return };
+        self.window_rules = settings.windows.clone();
         self.act(Action::TasksView { view: settings.tasks_view.unwrap_or_default() }, effects);
         self.act(Action::SessionsRange { range: settings.sessions_range.unwrap_or_default() }, effects);
         self.act(Action::SessionQuiet { ms: settings.quiet_ms() }, effects);
@@ -7430,27 +7633,58 @@ impl Model {
         self.repo_name(path).is_some()
     }
 
-    /// The Repos section's +: `dir` joins the settings' directories unless it is listed
-    /// already, and list mode selects its first row. Nothing found there: a notice.
+    /// The Repos section's + (or a folder dropped on it, or "Add Folder to Repos"): the
+    /// repository at `dir` joins the end of the list unless it is listed already, and list mode
+    /// selects its first row. Not a repository's own folder: a notice.
     fn repo_add(&mut self, dir: String, found: Vec<Repo>, effects: &mut Vec<Effect>) {
-        let listed = self.repo_listed(&dir);
-        let wanted: Vec<String> =
-            if listed { vec![dir.clone()] } else { found.iter().map(|r| r.path.clone()).collect() };
-        match self.repo_dirs.may_add(&dir, found.len(), listed) {
+        let worktree = self.repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == dir));
+        // `OTTOSPACE_REPOS`'s folders list their repositories flat, with no entry of their own.
+        let fixed = self.repo_dirs.fixed && self.repos.iter().any(|r| r.path == dir);
+        let repo = found.iter().any(|r| r.path == dir);
+        match self.repo_dirs.may_add(&dir, repo, worktree || fixed) {
             Err(text) => return effects.push(Effect::Notice { text }),
             Ok(false) => {}
             Ok(true) => {
-                let change = crate::settings::ListChange { key: "repos", add: true, text: dir.clone() };
-                effects.push(Effect::SaveRepos { changes: vec![change] });
-                self.repo_dirs.dirs.push(repos::RepoDir { text: dir.clone(), path: dir });
-                self.repos = repos::arrange(self.repos.drain(..).chain(found).collect());
+                self.repo_dirs.dirs.push(repos::RepoDir::new(&dir, &dir));
+                effects.push(Effect::SaveRepos { dirs: self.repo_dirs.dirs.clone() });
+                let found = found.into_iter().filter(|r| r.path == dir);
+                let kept = self.repos.drain(..).filter(|r| r.path != dir);
+                self.repos = repos::arrange(kept.chain(found).collect(), &self.repo_dirs);
             }
         }
         self.leave(effects);
         self.sidebar = Some(Section::Repos);
-        self.repos_folded.retain(|folded| !wanted.contains(folded));
-        let row = |row: &ListRow| matches!(row, ListRow::Repo(path) if wanted.contains(path));
+        self.repos_folded.retain(|folded| *folded != dir);
+        // A group's folder, listed already: unfolded.
+        if !self.group_repos(&dir).is_empty() {
+            self.group_fold(&dir, Some(false));
+        }
+        let row = |row: &ListRow| matches!(row, ListRow::Repo(path) | ListRow::RepoGroup(path) if *path == dir);
         self.list = self.list_rows().iter().position(row);
+    }
+
+    /// The Repos section's rows: each repository's (`repo_rows`), in the list's order; a group's
+    /// folder over the repositories it holds, which show only while it is unfolded.
+    fn repo_list_rows(&self) -> Vec<ListRow> {
+        let mut rows = Vec::new();
+        let mut group: Option<&str> = None;
+        for repo in &self.repos {
+            let of = self.repo_dirs.group_of(&repo.path).map(|dir| dir.path.as_str());
+            if of.is_some() && of != group {
+                rows.extend(of.map(|path| ListRow::RepoGroup(path.to_string())));
+            }
+            group = of;
+            if of.is_none_or(|path| self.repos_open.iter().any(|open| open == path)) {
+                rows.extend(self.repo_rows(repo));
+            }
+        }
+        rows
+    }
+
+    /// The repositories a group's folder holds, as listed.
+    pub fn group_repos(&self, path: &str) -> Vec<&Repo> {
+        let held = |repo: &&Repo| self.repo_dirs.group_of(&repo.path).is_some_and(|dir| dir.path == path);
+        self.repos.iter().filter(held).collect()
     }
 
     /// A repository's rows in list mode: its name, then its checkouts unless it is folded.
@@ -7481,6 +7715,9 @@ impl Model {
     /// Folds or unfolds a repository's rows, as shown now: `None` toggles. List mode's selection
     /// stays on its row, or goes to the repository's name when that row is folded away.
     fn repo_fold(&mut self, path: &str, fold: Option<bool>) {
+        if !self.group_repos(path).is_empty() {
+            return self.group_fold(path, fold);
+        }
         let Some(repo) = self.repos.iter().find(|repo| repo.path == path).cloned() else { return };
         let selected = self.list.and_then(|at| self.list_rows().into_iter().nth(at));
         let folded = self.repo_folded(&repo);
@@ -7501,6 +7738,22 @@ impl Model {
         if let (Some(row), Some(_)) = (selected, self.list) {
             let rows = self.list_rows();
             let head = ListRow::RepoHead(path.to_string());
+            self.list = rows.iter().position(|r| *r == row).or_else(|| rows.iter().position(|r| *r == head));
+        }
+    }
+
+    /// Folds or unfolds a group. The selection stays on its row, or goes to the group's when that
+    /// row is folded away.
+    fn group_fold(&mut self, path: &str, fold: Option<bool>) {
+        let selected = self.list.and_then(|at| self.list_rows().into_iter().nth(at));
+        let open = self.repos_open.iter().any(|p| p == path);
+        self.repos_open.retain(|p| p != path);
+        if !fold.unwrap_or(open) {
+            self.repos_open.push(path.to_string());
+        }
+        if let (Some(row), Some(_)) = (selected, self.list) {
+            let rows = self.list_rows();
+            let head = ListRow::RepoGroup(path.to_string());
             self.list = rows.iter().position(|r| *r == row).or_else(|| rows.iter().position(|r| *r == head));
         }
     }
@@ -7537,9 +7790,13 @@ impl Model {
         crate::prs::pick(prs, branches.iter().find(|b| b.path == path).filter(|b| b.name == now)?)
     }
 
-    /// The repository whose rows list mode's selection is on: its name or one of its checkouts.
+    /// The repository whose rows list mode's selection is on: its name or one of its checkouts;
+    /// or the group whose folder's row it is on.
     pub fn selected_repo(&self) -> Option<String> {
         let row = self.list.and_then(|at| self.list_rows().into_iter().nth(at))?;
+        if let ListRow::RepoGroup(path) = row {
+            return Some(path);
+        }
         let of = |repo: &&Repo| match &row {
             ListRow::RepoHead(path) => repo.path == *path,
             ListRow::Repo(path) => repo.checkouts().iter().any(|checkout| checkout.path == *path),
@@ -7582,17 +7839,21 @@ impl Model {
         effects.push(Effect::AddWorktree { repo, branch, path, root, fresh: false });
     }
 
-    /// "Remove" on a repository's name: its directory comes off the settings, or a notice says
-    /// why not. It stays listed while a directory that holds it is still named.
+    /// "Remove" on a repository's name or a group's: its entry comes off the settings, or a
+    /// notice says why not. A repository stays listed while a group that holds it is still named.
     fn repo_remove(&mut self, path: &str, effects: &mut Vec<Effect>) {
         match self.repo_dirs.to_remove(path) {
             Err(text) => effects.push(Effect::Notice { text }),
             Ok(dir) => {
-                let change = crate::settings::ListChange { key: "repos", add: false, text: dir.text.clone() };
-                effects.push(Effect::SaveRepos { changes: vec![change] });
+                let at = self.repo_dirs.dirs.iter().position(|d| *d == dir);
+                let before = self.repo_dirs.clone();
                 self.repo_dirs.dirs.retain(|d| *d != dir);
-                let held = self.repo_dirs.holder(path).is_some();
-                self.repos.retain(|repo| held || repo.path != path);
+                effects.push(Effect::SaveRepos { dirs: self.repo_dirs.dirs.clone() });
+                self.repos_open.retain(|open| open != path);
+                // Gone: what that entry listed, unless another (a group that holds it) lists it still.
+                let dirs = &self.repo_dirs;
+                self.repos.retain(|repo| before.place(&repo.path) != at || dirs.place(&repo.path).is_some());
+                self.repos = repos::arrange(std::mem::take(&mut self.repos), &self.repo_dirs);
                 self.repo_field_gone();
                 let text = format!("Unlisted {} · nothing on disk changed", repos::name_of(path));
                 effects.push(Effect::Told { text });
@@ -7711,6 +7972,7 @@ impl Model {
         if self.listen.lost == Some(id) {
             self.listen.lost = None;
         }
+        self.slots.remove(&id);
         effects.push(Effect::Closed(closed));
     }
 
@@ -7894,7 +8156,7 @@ mod tests {
             Action::Tick { now: 1 },
             Action::SetApps { names: vec!["Notes".into()] },
             Action::SetRepos { repos: Vec::new() },
-            Action::Adopt { kind: app(7), beside: None },
+            Action::Adopt { kind: app(7), beside: None, seen: None },
             Action::Close { pane: Some(2) },
             Action::SneakDrawn { targets: controls(3) },
         ] {
@@ -8292,7 +8554,18 @@ mod tests {
         Action::ListenBegan { .. },
         Action::ListenFailed { .. },
         Action::ListenHeard { .. },
-        Action::ListenEnded { .. }
+        Action::ListenEnded { .. },
+        Action::SlotMake { .. },
+        Action::SlotClear { .. },
+        Action::SlotAccept { .. },
+        Action::SlotDecline { .. },
+        Action::SlotNext { .. },
+        Action::SlotLookAgain { .. },
+        Action::SlotGiveBack { .. },
+        Action::SlotWindows { .. },
+        Action::SlotHosted { .. },
+        Action::SlotTick { .. },
+        Action::WindowGone { .. }
     );
 
     /// One of each action.
@@ -8301,7 +8574,7 @@ mod tests {
         let samples = vec![
             Action::Split { axis: Right, kind: Kind::Empty },
             Action::Open { kind: app(1), axis: Right, beside: None },
-            Action::Adopt { kind: app(1), beside: None },
+            Action::Adopt { kind: app(1), beside: None, seen: None },
             Action::DropPane { source: 1, target: 1, zone: Zone::Left },
             Action::PaneWants { pane: 1, content: [400., 600.], outer: [406., 638.], window: [520., 600.] },
             Action::Fit { pane: None },
@@ -8507,7 +8780,7 @@ mod tests {
             Action::WorkbookEdit { workbook: 1, tab: None },
             Action::WorkbookRemove { workbook: 1, tab: None },
             Action::WorkbookFold { workbook: 1 },
-            Action::RowMenu { row: ListRow::Workbook(1), dots: None, keys: true },
+            Action::RowMenu { row: ListRow::Workbook(1).into(), dots: None, keys: true },
             Action::RowMenuDrawn { dots: None },
             Action::RowMenuMove { delta: 1 },
             Action::RowMenuChoose { index: None },
@@ -8565,6 +8838,17 @@ mod tests {
             Action::ListenFailed { id: text(), why: text() },
             Action::ListenHeard { id: text(), lines: Vec::new() },
             Action::ListenEnded { id: text(), why: listen::Ended::AppQuit, at: 0 },
+            Action::SlotMake { pane: 1, pid: 1, slot: crate::slot::Slot::default() },
+            Action::SlotClear { pane: 1 },
+            Action::SlotAccept { pane: 1 },
+            Action::SlotDecline { pane: 1 },
+            Action::SlotNext { pane: 1 },
+            Action::SlotLookAgain { pane: 1 },
+            Action::SlotGiveBack { pane: 1 },
+            Action::SlotWindows { look: crate::slot::Look::default() },
+            Action::SlotHosted { pane: 1, kind: None },
+            Action::SlotTick { at: 0 },
+            Action::WindowGone { pane: 9, app_running: true, at: 0 },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
         places.sort_unstable();
@@ -8603,6 +8887,29 @@ mod tests {
                 if origin == Origin::Socket =>
             {
                 Some(listen::SHELLS_ALONE)
+            }
+            _ => None,
+        }
+    }
+
+    /// A slot made, filled or cleared: the user's alone. What a look found: the shell's.
+    fn slot_refused(action: &Action, origin: Origin) -> Option<&'static str> {
+        match action {
+            Action::SlotMake { .. }
+            | Action::SlotClear { .. }
+            | Action::SlotAccept { .. }
+            | Action::SlotDecline { .. }
+            | Action::SlotNext { .. }
+            | Action::SlotLookAgain { .. }
+            | Action::SlotGiveBack { .. } => Some(crate::slot::USERS_ALONE),
+            Action::SlotWindows { .. }
+            | Action::SlotHosted { .. }
+            | Action::SlotTick { .. }
+            | Action::WindowGone { .. }
+            | Action::Adopt { seen: Some(_), .. }
+                if origin == Origin::Socket =>
+            {
+                Some(crate::slot::SHELLS_ALONE)
             }
             _ => None,
         }
@@ -8770,6 +9077,7 @@ mod tests {
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
                     _ if listen_refused(action, origin).is_some() => listen_refused(action, origin),
+                    _ if slot_refused(action, origin).is_some() => slot_refused(action, origin),
                     Action::TaskTalk { .. }
                     | Action::SessionOpen { .. }
                     | Action::TalkStart
@@ -9077,7 +9385,7 @@ mod tests {
         m.update(Action::Open { kind: app(1), axis: Right, beside: None });
         m.update(Action::Enter { pane: 1 });
         // DevTools opens while Chrome is live: the user keeps typing in Chrome.
-        assert_eq!(m.update(Action::Adopt { kind: app(2), beside: Some(1) }), [Effect::Opened(2)]);
+        assert_eq!(m.update(Action::Adopt { kind: app(2), beside: Some(1), seen: None }), [Effect::Opened(2)]);
         assert_eq!((m.focused, m.live, m.mode()), (Some(1), Some(1), Mode::App));
         assert_eq!(m.layout.as_ref().unwrap().neighbor(1, Dir::Right), Some(2));
     }
@@ -13565,46 +13873,94 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_is_added_to_the_repos_list_and_taken_off_it_by_the_user_alone() {
+    fn a_repository_is_added_to_the_repos_list_and_taken_off_it_by_the_user_alone() {
         let repo = |path: &str| Repo { name: repos::name_of(path), path: path.into(), branch: None, worktrees: vec![] };
-        let dir = |text: &str, path: &str| repos::RepoDir { text: text.into(), path: path.into() };
-        let change = |add: bool, text: &str| crate::settings::ListChange { key: "repos", add, text: text.into() };
+        let dir = repos::RepoDir::new;
         let notice = |text: &str| vec![Effect::Notice { text: text.into() }];
         let mut m = Model::default();
+        // Opt-in: nothing is listed until the user adds it.
+        m.update(Action::ToggleSection { section: Section::Repos });
+        assert!(m.list_rows().is_empty());
         m.update(Action::SetRepoDirs {
-            dirs: repos::RepoDirs { dirs: vec![dir("~/code", "/code")], fixed: false, worktrees: None },
+            dirs: repos::RepoDirs { dirs: vec![dir("~/w/app", "/code/app")], ..Default::default() },
         });
         m.update(Action::SetRepos { repos: listed() });
         let add = |dir: &str, found: Vec<Repo>| Action::RepoAdd { dir: dir.into(), found };
         // A client writes no settings: refused, and nothing changes.
         assert_eq!(m.refusal(&add("/src/zed", vec![repo("/src/zed")]), Origin::Socket), Some(apps::USERS_ALONE));
-        // No repository there: said, and nothing is written.
-        assert_eq!(m.update(add("/tmp", vec![])), notice("No repository in /tmp"));
+        // Not a repository's own folder, even one that holds some: said, and nothing is written.
+        assert_eq!(m.update(add("/tmp", vec![])), notice("Not a repository: /tmp"));
+        assert_eq!(m.update(add("/src", vec![repo("/src/zed")])), notice("Not a repository: /src"));
         assert_eq!((m.repo_dirs.dirs.len(), m.list), (1, None));
-        // A repository: written, listed, and its row selected in list mode.
-        let saved = vec![Effect::SaveRepos { changes: vec![change(true, "/src/zed")] }];
-        assert_eq!(m.update(add("/src/zed", vec![repo("/src/zed")])), saved);
-        assert_eq!(m.repo_dirs.dirs[1], dir("/src/zed", "/src/zed"));
+        // A repository: the whole list written, it last, and its row selected in list mode.
+        let both = vec![dir("~/w/app", "/code/app"), dir("/src/zed", "/src/zed")];
+        assert_eq!(m.update(add("/src/zed", vec![repo("/src/zed")])), [Effect::SaveRepos { dirs: both.clone() }]);
+        assert_eq!(m.repo_dirs.dirs, both);
         assert_eq!((m.sidebar, m.mode(), m.list), (Some(Section::Repos), Mode::List, Some(4)));
         assert_eq!(m.list_rows()[4], ListRow::Repo("/src/zed".into()));
-        // Listed already, as itself or through `~/code`: selected, nothing written.
+        // Listed already, as itself or as a worktree of one: selected, nothing written.
         m.update(Action::LeaveList);
         assert_eq!((m.update(add("/src/zed", vec![repo("/src/zed")])), m.list), (vec![], Some(4)));
-        assert_eq!((m.update(add("/code/app", vec![repo("/code/app")])), m.list), (vec![], Some(1)));
+        assert_eq!((m.update(add("/code/app-2", vec![])), m.list), (vec![], Some(2)));
         assert_eq!(m.repo_dirs.dirs.len(), 2);
-        // Remove: only a directory named as itself. One held by `~/code` is the user's to edit.
-        let through = "app is listed through ~/code: take that directory out of `repos` in settings.json";
-        assert_eq!(m.update(Action::RepoRemove { path: "/code/app".into() }), notice(through));
         // Unlisted: said, as information, so nobody wonders whether files went.
         let told = Effect::Told { text: "Unlisted zed · nothing on disk changed".into() };
-        let saved = vec![Effect::SaveRepos { changes: vec![change(false, "/src/zed")] }, told];
+        let saved = vec![Effect::SaveRepos { dirs: both[..1].to_vec() }, told];
         assert_eq!(m.update(Action::RepoRemove { path: "/src/zed".into() }), saved);
         assert_eq!((m.repo_dirs.dirs.len(), m.repos.len(), m.repo_listed("/src/zed")), (1, 1, false));
+        assert_eq!(m.update(Action::RepoRemove { path: "/src/zed".into() }), notice("zed is not in Repos"));
+        // `OTTOSPACE_REPOS` naming `/src`: its `zed` is listed, so selected, not refused.
+        let fixed = repos::RepoDirs { dirs: vec![dir("/src", "/src")], fixed: true, ..Default::default() };
+        m.update(Action::SetRepoDirs { dirs: fixed });
+        m.update(Action::SetRepos { repos: vec![repo("/src/zed")] });
+        m.update(Action::LeaveList);
+        assert_eq!((m.update(add("/src/zed", vec![repo("/src/zed")])), m.list), (vec![], Some(1)));
+    }
+
+    #[test]
+    fn an_old_folder_of_repositories_is_one_folded_group_kept_in_its_place_and_removed_whole() {
+        let repo = |path: &str| Repo { name: repos::name_of(path), path: path.into(), branch: None, worktrees: vec![] };
+        let dir = repos::RepoDir::new;
+        let mut m = Model::default();
+        // The old settings named `~/clients` (a folder of two) between two repositories.
+        let dirs = vec![dir("/w/zed", "/w/zed"), dir("~/clients", "/clients"), dir("/w/app", "/w/app")];
+        m.update(Action::SetRepoDirs { dirs: repos::RepoDirs { dirs, ..Default::default() } });
+        m.update(Action::SetRepos {
+            repos: vec![repo("/w/app"), repo("/clients/b"), repo("/clients/a"), repo("/w/zed")],
+        });
+        m.update(Action::ToggleSection { section: Section::Repos });
+        let (head, group) = (|p: &str| ListRow::RepoHead(p.into()), |p: &str| ListRow::RepoGroup(p.into()));
+        let row = |p: &str| ListRow::Repo(p.into());
+        // In the entries' order; the group folded, a row of its own.
+        assert_eq!(m.list_rows(), [head("/w/zed"), row("/w/zed"), group("/clients"), head("/w/app"), row("/w/app")]);
+        // ↵ on it unfolds: its repositories by name. Anyone may fold.
+        m.update(Action::FocusList);
+        m.update(Action::ListMove { delta: 1 });
+        assert_eq!(m.selected_repo().as_deref(), Some("/clients"));
+        m.update(Action::ListChoose { axis: Right });
+        let open = [group("/clients"), head("/clients/a"), row("/clients/a"), head("/clients/b"), row("/clients/b")];
+        assert_eq!(m.list_rows()[2..7], open);
+        m.update(Action::RepoFold { path: "/clients".into(), fold: Some(true) }.sent_by(Origin::Socket));
+        assert_eq!(m.list_rows().len(), 5);
+        // One of its repositories added by itself leaves the group, to the end of the list.
+        m.update(Action::RepoAdd { dir: "/clients/b".into(), found: vec![repo("/clients/b")] });
+        let paths: Vec<&str> = m.repos.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, ["/w/zed", "/clients/a", "/w/app", "/clients/b"]);
+        // A repository in it is not removed alone; the group is, whole, and nothing on disk.
+        let through = "a is listed in the folder ~/clients: remove that from Repos";
+        assert_eq!(
+            m.update(Action::RepoRemove { path: "/clients/a".into() }),
+            [Effect::Notice { text: through.into() }]
+        );
+        m.update(Action::RepoRemove { path: "/clients".into() });
+        let paths: Vec<&str> = m.repos.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, ["/w/zed", "/w/app", "/clients/b"]);
+        assert!(m.repos_open.is_empty() && !m.list_rows().contains(&group("/clients")));
     }
 
     #[test]
     fn the_trash_asks_before_unlisting_a_repository_a_live_task_works_in() {
-        let dir = |text: &str| repos::RepoDir { text: text.into(), path: text.into() };
+        let dir = |text: &str| repos::RepoDir::new(text, text);
         let mut m = Model::default();
         m.update(Action::SetRepoDirs { dirs: repos::RepoDirs { dirs: vec![dir("/code/app")], ..Default::default() } });
         m.update(Action::SetRepos { repos: listed() });
@@ -14276,7 +14632,7 @@ mod tests {
         m.update(Action::NewTab);
         term(&mut m);
         // DevTools appears for the app in the background tab.
-        m.update(Action::Adopt { kind: app(9), beside: Some(1) });
+        m.update(Action::Adopt { kind: app(9), beside: Some(1), seen: None });
         assert_eq!(m.layout.as_ref().unwrap().leaves(), [2]);
         m.update(Action::SelectTab { index: 0 });
         assert_eq!(m.layout.as_ref().unwrap().leaves(), [1, 3]);
@@ -14666,6 +15022,7 @@ mod tests {
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
                     _ if listen_refused(action, origin).is_some() => listen_refused(action, origin),
+                    _ if slot_refused(action, origin).is_some() => slot_refused(action, origin),
                     Action::TaskTalk { .. }
                     | Action::SessionOpen { .. }
                     | Action::TalkStart

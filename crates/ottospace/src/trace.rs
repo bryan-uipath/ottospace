@@ -39,9 +39,11 @@ pub fn record(event: &str, fields: Value) {
     ring.events.push_back(line.to_string());
 }
 
-/// The ring as JSONL, oldest first.
+/// The ring as JSONL, oldest first. No live pass, should a field ever carry one.
 pub fn jsonl() -> String {
-    ring().lock().map(|ring| ring.events.iter().map(|line| format!("{line}\n")).collect()).unwrap_or_default()
+    let text: String =
+        ring().lock().map(|ring| ring.events.iter().map(|line| format!("{line}\n")).collect()).unwrap_or_default();
+    crate::pass::hide(&text).into_owned()
 }
 
 /// An enum value's variant name, never its payload: `Split { .. }` gives `Split`. The payload is

@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{AnyElement, App, Context, Div, Stateful, Window, actions, div, prelude::*, px, rgb};
 use ottospace_core::listen::{self, Heard, Record, Row, Speaker, Status};
+use ottospace_core::row_menu::MenuOf;
 use ottospace_core::{Action, Effect, Origin, PaneId, theme};
 use serde::Deserialize;
 
@@ -20,8 +21,8 @@ use crate::listen_live::{self, Live};
 use crate::listen_meter::{Hearing, Meter};
 use crate::{Workspace, config, listen_file, now_ms, rect};
 
-// ⌘⌃T: a transcript of the focused pane, or the one on stopped.
-actions!(ottospace, [Transcribe]);
+// ⌘⌃T: a transcript of the focused pane, or the one on stopped. The palette's Pause or Resume.
+actions!(ottospace, [Transcribe, PauseTranscribing]);
 
 /// What the shell says when a test run names no fixture: it never hears a real app or the mic.
 const NO_FIXTURE: &str = "no audio source in a test run";
@@ -171,14 +172,29 @@ impl Workspace {
         self.dispatch(Action::ListenToggle { id: new_id(at), at }, self.input, window, cx);
     }
 
+    /// The palette's and the menu bar's Pause or Resume: whichever the one on can do.
+    pub(crate) fn pause_key(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.listen_pause(self.input, window, cx);
+    }
+
+    /// Pause or Resume as `origin`, as the core says fits (`Model::listen_pause_action`); what
+    /// was heard before a pause goes to the core first.
+    fn listen_pause(&mut self, origin: Origin, window: &Window, cx: &mut Context<Self>) {
+        let Some(action) = self.model.listen_pause_action(now_ms()) else { return };
+        if matches!(action, Action::ListenPause { .. }) {
+            self.listen_flush(window, cx);
+        }
+        self.dispatch(action, origin, window, cx);
+    }
+
     /// `Transcribe` in a pane's header.
     fn listen_start(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
         let (source, at) = (listen::Source::Pane(pane), now_ms());
         self.dispatch(Action::ListenStart { source, mic: false, id: new_id(at), at }, self.input, window, cx);
     }
 
-    /// A click of the indicator's (or its sneak label): `start`, `pause`, `resume`, `stop`, `top`
-    /// (the top row's mark) or `close` (the drawer's ×). False: no such control.
+    /// A click of the indicator's (or its sneak label): `start`, `resume`, `stop`, `menu` (the
+    /// drawer's ⋯), `top` (the top row's mark) or `header` (the source pane's). False: no such control.
     pub(crate) fn click_listen(&mut self, kind: &str, name: &str, window: &Window, cx: &mut Context<Self>) -> bool {
         let at = now_ms();
         let action = match kind {
@@ -188,13 +204,17 @@ impl Workspace {
                 }
                 return true;
             }
-            "listen-pause" | "listen-stop" => {
+            "listen-stop" => {
                 self.listen_flush(window, cx);
-                if kind == "listen-pause" { Action::ListenPause { at } } else { Action::ListenStop { at } }
+                Action::ListenStop { at }
             }
             "listen-resume" => Action::ListenResume { at },
-            "listen-top" => Action::ListenShow { on: true },
-            "listen-close" => Action::ListenShow { on: false },
+            "listen-top" | "listen-header" => Action::ListenShow { on: true },
+            // Only a label comes here (a click opens it itself): the keys on its first item.
+            "listen-menu" => {
+                self.open_row_menu(MenuOf::Transcript, true, window, cx);
+                return true;
+            }
             _ => return false,
         };
         self.dispatch(action, self.input, window, cx);
@@ -536,36 +556,29 @@ impl Workspace {
             return self.model.listen_offered(pane).then(|| start.into_any_element());
         };
         let paused = on.status == Status::Paused;
-        let downloading = self.listen_downloading.as_deref() == Some(on.id.as_str());
         // A browser is heard whole: SCK filters by app, not by tab.
         let tabs = self.hosted.get(&pane).and_then(|hosted| hosted.bundle.as_deref()).is_some_and(browser);
-        let word = match (paused, downloading, tabs) {
-            (true, ..) => "Paused",
-            (_, true, _) => "Downloading speech model…",
-            (_, _, true) => "Transcribing (all tabs)",
-            _ => "Transcribing",
-        };
-        let (toggle, label) = if paused { ("listen-resume", "Resume") } else { ("listen-pause", "Pause") };
-        // In a narrow header it gives way before ×: the words first, then Pause, then Stop. The top
-        // row's mark and the drawer still show it.
+        let clock = if tabs { format!("{} · all tabs", self.listen_clock()) } else { self.listen_clock() };
+        // The source's mark only: the red dot and the time. Its controls are the drawer's; a
+        // click shows it there. In a narrow header the time gives way before ×.
         let row = div()
+            .id("listen-header")
             .flex()
             .min_w_0()
             .overflow_hidden()
             .items_center()
             .gap_1()
+            .px_1()
+            .rounded_sm()
+            .cursor_pointer()
+            .hover(|s| s.bg(rgb(theme::SELECTED)))
             .child(if paused { dot(true) } else { pulse(self.listen_level()) })
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgb(theme::RECORDING))
-                    .child(format!("{word} {}", self.listen_clock())),
-            )
+            .child(div().min_w_0().truncate().text_color(rgb(theme::RECORDING)).child(clock))
             .child(self.controls.mark("listen-header"))
-            .child(self.listen_button("listen-stop", "Stop", "header", cx))
-            // No pause before the streams run: there is nothing to stop yet.
-            .when(on.status != Status::Starting, |d| d.child(self.listen_button(toggle, label, "header", cx)));
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.click_listen("listen-header", "", window, cx);
+            }));
         Some(row.into_any_element())
     }
 
@@ -618,13 +631,15 @@ impl Workspace {
         listen::clock(self.model.listen.on.as_ref().map_or(0, |on| on.elapsed(now_ms())))
     }
 
-    /// The menu bar's dot while one is on, and the user's choice in its menu: Stop, or Show. Not
-    /// in a test run: it would sit in the user's own menu bar.
+    /// The menu bar's dot while one is on, and the user's choice in its menu: Stop, Pause or
+    /// Resume, or Show. Not in a test run: it would sit in the user's own menu bar.
     pub(crate) fn listen_menu_bar(&mut self, window: &Window, cx: &mut Context<Self>) {
         if std::env::var_os("OTTOSPACE_E2E").is_some() {
             return;
         }
-        ottospace_mac::status_item::set(self.model.listen.on.as_ref().map(|_| "ottospace is transcribing"));
+        // Pause or Resume as it fits, none while it starts.
+        let pause = self.model.listen_pause_action(0).map(|action| matches!(action, Action::ListenResume { .. }));
+        ottospace_mac::status_item::set(self.model.listen.on.as_ref().map(|_| "ottospace is transcribing"), pause);
         let at = now_ms();
         // Only the user's own mouse reaches a status item's menu.
         match ottospace_mac::status_item::take() {
@@ -632,6 +647,7 @@ impl Workspace {
                 self.listen_flush(window, cx);
                 self.dispatch(Action::ListenStop { at }, Origin::User, window, cx);
             }
+            Some(ottospace_mac::status_item::Chosen::Pause) => self.listen_pause(Origin::User, window, cx),
             Some(ottospace_mac::status_item::Chosen::Show) => {
                 cx.activate(true);
                 self.dispatch(Action::ListenShow { on: true }, Origin::User, window, cx);
@@ -680,7 +696,29 @@ impl Workspace {
         let on = self.model.listen.on.as_ref().filter(|_| self.model.listen.shown)?;
         let source = on.source.pane().and_then(|pane| self.model.pane(pane)).map(|pane| self.pane_title(pane));
         let paused = on.status == Status::Paused;
-        let (toggle, label) = if paused { ("listen-resume", "Resume") } else { ("listen-pause", "Pause") };
+        // Paused: the word and Resume where the meter was.
+        let paused_note = paused.then(|| {
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child("Paused")
+                .child(self.listen_button("listen-resume", "Resume", "view", cx))
+        });
+        // ⋯: Pause or Resume (`MenuOf::Transcript`). None while it starts: nothing to pause yet.
+        let open = self.model.row_menu().is_some_and(|(menu, _)| menu.row == MenuOf::Transcript);
+        let dots = (!self.model.menu_items(&MenuOf::Transcript).is_empty()).then(|| {
+            button("listen-menu", "⋯")
+                .when(open, |d| d.bg(rgb(theme::BORDER_STRONG)))
+                .child(self.controls.mark("listen-menu"))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_row_menu(MenuOf::Transcript, false, window, cx);
+                }))
+        });
         let header = div()
             .px_3()
             .py_2()
@@ -714,9 +752,9 @@ impl Workspace {
                         d.child(self.controls.mark(format!("listen-hearing:{}", hearing.id())))
                     })
             }))
-            .when(on.status != Status::Starting, |d| d.child(self.listen_button(toggle, label, "view", cx).text_xs()))
+            .children(paused_note)
             .child(self.listen_button("listen-stop", "Stop", "view", cx).text_xs())
-            .child(self.listen_button("listen-close", "×", "view", cx));
+            .children(dots);
         let speaker = |from: Speaker| match from {
             Speaker::Them => ("them", theme::PRIMARY),
             Speaker::Me => ("me", theme::PICK),
@@ -798,7 +836,7 @@ impl Workspace {
     }
 
     /// Test runs only: where each of a transcript's controls was drawn, by id (`listen-start:3`,
-    /// `listen-header`, `listen-stop:header`, `listen-pause:view`, `listen-top:`, `listen-view`).
+    /// `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-top:`, `listen-view`).
     /// Null outside a test run.
     pub(crate) fn listen_rects(&self) -> Option<BTreeMap<String, [f32; 4]>> {
         std::env::var_os("OTTOSPACE_E2E")?;

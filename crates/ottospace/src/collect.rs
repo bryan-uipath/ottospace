@@ -254,11 +254,13 @@ fn ignored(hosted: &Hosted) -> (Option<String>, bool) {
         let (bundle, name) = ax::app_identity(hosted.pid);
         let title = window.title();
         let subrole = window.subrole().unwrap_or_else(|| "AXStandardWindow".into());
+        let identifier = window.identifier();
         let facts = rules::Facts {
             app: name.as_deref().unwrap_or(&hosted.app),
             bundle: bundle.as_deref().or(hosted.bundle.as_deref()),
             title: title.as_deref().unwrap_or(&hosted.title),
             subrole: &subrole,
+            identifier: identifier.as_deref(),
         };
         let managed = rules::manages(&config::live().windows, &facts);
         (title, !managed)
@@ -378,7 +380,8 @@ impl Workspace {
             let cell = [f64::from(f32::from(self.cell.width)), f64::from(f32::from(self.cell.height))];
             let height = f64::from(f32::from(shown.height));
             let row = if height > 0.0 { cell[1] / height } else { 0.0 };
-            let lines = screen.lines();
+            // Its rows with every live pass hidden, as a client reads them.
+            let lines = self.terminals.get(&pane).map(|terminal| terminal.lines()).unwrap_or_default();
             self.shots.insert(n, Shot { frozen: Frozen::Terminal { screen, shown, cell }, png: None, scale });
             self.dispatch(taken(true, false), Origin::System, window, cx);
             self.dispatch(content(Content::Terminal { lines, row }), Origin::System, window, cx);

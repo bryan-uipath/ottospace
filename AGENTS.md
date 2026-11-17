@@ -48,6 +48,8 @@ Rules:
   drop. `a_test_leaves_nothing_in_the_temp_dir` checks it.
 - An E2E run reads no `settings.json` and keeps no tasks on disk, unless the test names its own
   folder with `OTTOSPACE_HOME`. Tests must never read or write the user's `~/.ottospace`.
+  The event log (`event_log.rs`, `<home>/log`) follows the same rule, and a test run writes none
+  of it to the unified log.
 - E2E runs set `OTTOSPACE_E2E`, which turns window hosting off. Tests must never move the
   user's real windows.
 - A `cargo e2e` run stays out of the user's way: the app is a background app (no Dock icon,
@@ -104,9 +106,17 @@ Rules:
   - `record_start` (`"dir"`) and `record_stop`: ScreenCaptureKit films ottospace's own window
     into `dir`, a raw BGRA file a change and `frames.jsonl` (`record.rs`), for
     `scripts/shot --record`. Outside a test run no client films the window.
+  - `audio_probe_start` and `audio_probe_stop`: ScreenCaptureKit hears the app
+    `OTTOSPACE_HOST_ONLY` names (the canary), with no recogniser; the stop's reply lists each
+    buffer's `pts_ms`, `samples` and `rms`, to see whether silence comes as buffers. Outside a test
+    run no client hears an app.
   - `zoom_press`: the window's green button, pressed as the user would (`performZoom:`). The zoom
     fills the display instead (`ottospace_mac::window::zoom_asks`); refused if that hook is not in,
     so it never zooms the test's window. Outside a test run only the user's hand fills the display.
+  - `display_change`: the displays changed, as macOS's reconfiguration callback says (a test
+    cannot unplug one). The shell then kicks GPUI to draw again, as after a real change
+    (`stall.rs`, `ottospace_mac::window::redraw`); the state's `counts.redraws` counts the kicks.
+    Outside a test run only macOS says the displays changed.
   - `"repeat":true` on `key`: each key as one still held down. A key that types is a real repeat
     to `keyDown:`: `enter`, `tab`, `space`, or a character the layout types with no modifier on
     key codes 0 to 50 (`a`, `7`, `/`; not `A`). A `cmd-` shortcut, by the flag alone, is pressed as
