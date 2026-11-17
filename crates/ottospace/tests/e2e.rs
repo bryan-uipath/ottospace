@@ -6718,6 +6718,13 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
         (&updated["workbooks"][0]["summary"], &updated["workbook_offer"], &updated["mode"]),
         (&json!("3 terminals"), &json!("updated"), &json!("normal"))
     );
+    // The bar offers it back, saying what the save kept.
+    let offered = otto.wait_for("the offer on the bar", |o| {
+        let bar = o.drawn()["notice_bar"].clone();
+        (bar["kind"] == "undo").then_some(bar)
+    });
+    assert!(offered["text"].as_str().is_some_and(|text| text.starts_with("Saved \"dri\": ")), "{offered}");
+    assert_eq!(offered["offer"], "undo");
     assert_eq!((names(&updated), workbook_files(&home).len()), (vec!["dri".to_string()], 1));
     // List mode: U takes it back, R renames, X deletes and U puts back. Not for a client's keys.
     assert_eq!(otto.user_key("cmd-ctrl-e")["state"]["list"], 0);

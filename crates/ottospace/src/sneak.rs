@@ -316,7 +316,10 @@ impl Workspace {
                 self.dismiss_notice(window, cx);
                 None
             }
-            ("notice", "offer") => self.notice_shown().and_then(|shown| self.notice_offer(&shown)).map(|(_, a)| a),
+            ("notice", "offer") => {
+                self.take_notice_offer(window, cx);
+                None
+            }
             ("bar", "add") => {
                 if let Some(section) = self.model.sidebar {
                     self.bar_add(section, window, cx);

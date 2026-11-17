@@ -720,7 +720,7 @@ workspace.
   name selected: type over it, ↵ keeps it, Esc keeps it as it is. No two workspaces share a name
   (`DRI`, `DRI 2`).
 - **Save again** on a tab that came from a workspace, or was saved into one, updates that tab of
-  it. The notice bar says `Workspace updated` with Undo for six seconds.
+  it. The notice bar says what it kept, with Undo, for six seconds.
 - **Open**: click its row, or ⌘⌃E and ↵. Its space comes back on the top row, selected. Each of
   its saved tabs that is not open opens in a new tab, in order, and the
   first is selected; a tab of it that is open already is kept, not opened twice. With none saved

@@ -111,12 +111,25 @@ impl Workspace {
         let _ = self.workbook_act(Action::WorkbookNew { uid: marks::new_uid() }, window, cx);
     }
 
+    /// After a save: why it did nothing, or what it kept (information, under an Undo it offers).
+    fn say_saved(&mut self, refused: Option<String>) {
+        match refused {
+            Some(why) => self.error = Some(why),
+            None => {
+                self.error = None;
+                if let Some(note) = self.model.workbook_saved_note() {
+                    self.told = Some((note, std::time::Instant::now()));
+                }
+            }
+        }
+    }
+
     /// ⌘⇧S and the menu: saves the tab on show, or updates the workbook it came from.
     pub(crate) fn save_workbook(&mut self, window: &Window, cx: &mut Context<Self>) {
         let refused = self.model.workbook_save_refusal();
         let action = Action::WorkbookSave { uid: marks::new_uid(), cwds: self.cwds(), histories: self.histories() };
         if self.workbook_act(action, window, cx) {
-            self.error = refused.or_else(|| self.model.workbook_saved_note());
+            self.say_saved(refused);
         }
     }
 
@@ -126,7 +139,7 @@ impl Workspace {
         let (uid, cwds, histories) = (marks::new_uid(), self.cwds(), self.histories());
         let action = Action::WorkbookSaveAll { uid, cwds, histories };
         if self.workbook_act(action, window, cx) {
-            self.error = refused.or_else(|| self.model.workbook_saved_note());
+            self.say_saved(refused);
         }
     }
 
@@ -169,7 +182,7 @@ impl Workspace {
                 let (cwds, histories) = (self.cwds(), self.histories());
                 let action = Action::WorkbookAddTab { workbook: id, cwds, histories };
                 if self.workbook_act(action, window, cx) {
-                    self.error = refused.or_else(|| self.model.workbook_saved_note());
+                    self.say_saved(refused);
                 }
             }
             // Only what the bar lists changes: nothing written, nothing opened.

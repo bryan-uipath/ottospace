@@ -380,6 +380,8 @@ struct Offer {
     /// Deleted: the tabs that were in its space, and the workspace made for them, if one was.
     tabs: Vec<u32>,
     made: Option<WorkbookId>,
+    /// Saved again or added to: what the save kept, said in place of "Workspace updated".
+    note: Option<String>,
 }
 
 /// A pane of a workbook's tab, as the state lists it.
@@ -559,12 +561,16 @@ impl Workbooks {
 
     /// The offer as the notice bar says it, at the window's foot: nothing in the section moves.
     pub fn notice(&self) -> Option<Notice> {
-        self.offered().map(|change| Notice { kind: notice::Kind::Undo, text: change.title().into() })
+        let offer = self.offer.as_ref()?;
+        let text = offer.note.clone().unwrap_or_else(|| offer.change.title().into());
+        Some(Notice { kind: notice::Kind::Undo, text })
     }
 
     /// × on the bar: the offer it says ends, as when its time is up. One said since stays.
     pub(crate) fn dismiss(&mut self, text: &str) {
-        self.offer = self.offer.take().filter(|offer| offer.change.title() != text);
+        if self.notice().is_some_and(|said| said.text == text) {
+            self.offer = None;
+        }
     }
 
     /// True if the offer's time is up at `now`.
@@ -833,7 +839,9 @@ impl Model {
         if let Some(book) = self.workbooks.get_mut(id) {
             *book = after;
         }
-        self.workbooks.offer = Some(Offer { change: Change::Updated, before, until, tabs: Vec::new(), made: None });
+        let note = self.workbook_saved_note();
+        self.workbooks.offer =
+            Some(Offer { change: Change::Updated, before, until, tabs: Vec::new(), made: None, note });
     }
 
     /// Where a save of `tab` goes: its tab of the workbook it stands for, else a new tab (`None`)
@@ -1104,13 +1112,14 @@ impl Model {
                     book.live.remove(place);
                 }
                 self.workbooks.offer =
-                    Some(Offer { change: Change::Updated, before, until, tabs: Vec::new(), made: None });
+                    Some(Offer { change: Change::Updated, before, until, tabs: Vec::new(), made: None, note: None });
             }
             _ => {
                 let before = self.workbooks.list.remove(at);
                 let of = Owner::Workbook { id };
                 let tabs = self.space_tabs(&of).into_iter().map(|at| self.tabs[at].id).collect();
-                self.workbooks.offer = Some(Offer { change: Change::Deleted, before, until, tabs, made: None });
+                self.workbooks.offer =
+                    Some(Offer { change: Change::Deleted, before, until, tabs, made: None, note: None });
             }
         }
         // The name being typed is of a workbook or a tab that is gone, or has moved.
@@ -1619,15 +1628,22 @@ mod tests {
         m.update(dismiss("Workspace deleted"));
         m.update(Action::WorkbookUndo);
         assert_eq!((names(&m), m.workbooks.notice()), (vec!["Workspace 3"], None));
-        // A tab added: "Workspace updated". The user's Undo takes it back; its time up, it goes.
+        // A tab added: what the save kept, so it is not hidden under the Undo. A tab removed:
+        // "Workspace updated". The user's Undo takes either back; its time up, it goes.
         let mut m = saved();
         m.update(Action::MarkCancel);
         m.update(Action::NewTab);
         m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
         m.update(Action::WorkbookAddTab { workbook: 1, cwds: vec![], histories: Vec::new() });
+        let note = m.workbook_saved_note();
+        assert!(note.as_ref().is_some_and(|note| note.starts_with("Saved ")), "{note:?}");
+        assert_eq!(m.workbooks.notice().map(|n| n.text), note.clone());
+        m.update(dismiss("Workspace updated"));
+        assert!(m.workbooks.notice().is_some(), "not the text on the bar");
+        m.update(Action::WorkbookRemove { workbook: 1, tab: Some(1) });
         assert_eq!(m.workbooks.notice().map(|n| n.text), Some("Workspace updated".into()));
         m.update(Action::WorkbookUndo);
-        assert_eq!(m.workbooks.notice(), None);
+        assert_eq!(m.workbooks.list[0].tabs.len(), 2);
         m.update(Action::WorkbookRemove { workbook: 1, tab: None });
         assert!(m.workbooks.notice().is_some());
         m.update(Action::Tick { now: m.now + NOTICE_MS }.sent_by(Origin::System));

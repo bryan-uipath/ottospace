@@ -36,7 +36,7 @@ pub enum Level {
 /// | `start` | error | the app | yes |
 /// | `keys` | warning | the app | yes |
 /// | `editor` | info | the app | yes |
-/// | `undo` | info | the sender: a workspace deleted or a tab of it removed, offered back (`Workbooks::notice`) | no |
+/// | `undo` | info | the sender: a workspace deleted or updated (a tab saved again, added or removed), offered back (`Workbooks::notice`) | no |
 /// | `meeting` | meeting | the app: a meeting started and no call is on (`Calendar::banner`) | yes |
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

@@ -1301,7 +1301,7 @@ export interface Snapshot {
   unfilled: Array<{ pane: PaneId; why: string; open: Rect | null }>;
   /** The user's workspaces, by name. Only the user makes, saves, opens, renames or deletes one. */
   workbooks: Workbook[];
-  /** What the Workspaces section offers to take back, while it offers. */
+  /** What the notice bar offers to take back (`kind` `undo`), while it offers. */
   workbook_offer: "deleted" | "updated" | null;
   /** The open menu of a row of the bar, or null. */
   row_menu: RowMenu | null;
