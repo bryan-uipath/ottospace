@@ -17,6 +17,14 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
         item("Start or Stop Transcribing", listen::Transcribe),
         item("Pause or Resume Transcribing", listen::PauseTranscribing),
     ];
+    let agents = features.on(ottospace_core::features::Feature::AgentMode);
+    let agent = [
+        MenuItem::separator(),
+        item("Agent Mode…", agent_mode::AgentMenuKey),
+        item("Agent Mode: Off", agent_mode::AgentOff),
+        item("Agent Mode: See", agent_mode::AgentSee),
+        item("Agent Mode: See and Act", agent_mode::AgentAct),
+    ];
     let mark_tab = [MenuItem::separator(), item("Mark Tab", MarkTab), item("Go to Mark…", MarkJump)];
     vec![
         Menu {
@@ -82,6 +90,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
             .into_iter()
             .chain(mark_tab.into_iter().filter(|_| marks))
             .chain(transcribe.into_iter().filter(|_| transcripts))
+            .chain(agent.into_iter().filter(|_| agents))
             .chain([MenuItem::separator(), item("Next Tab", NextTab), item("Previous Tab", PrevTab)])
             .chain([
                 MenuItem::separator(),

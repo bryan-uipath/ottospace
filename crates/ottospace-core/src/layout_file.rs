@@ -311,6 +311,14 @@ impl Model {
             if record.unsound().is_some() {
                 continue;
             }
+            // A level the user picked for an app pane, and for which task; no other.
+            for pane in &mut record.panes {
+                pane.extra.remove(crate::agent_mode::KEY);
+                let kept = self.agent.kept(pane.id).filter(|_| matches!(pane.kind, RecordKind::App { .. }));
+                if let Some(kept) = kept.and_then(|kept| serde_json::to_value(kept).ok()) {
+                    pane.extra.insert(crate::agent_mode::KEY.into(), kept);
+                }
+            }
             // Panes by their place in reading order, from 1: the file says nothing of this run's ids.
             let ids: Vec<(u32, PaneId)> = record.panes.iter().zip(1..).map(|(pane, new)| (pane.id, new)).collect();
             let new_id = |old: u32| ids.iter().find(|(from, _)| *from == old).map(|(_, to)| *to);
@@ -495,6 +503,16 @@ impl Model {
             // As a workbook's: each terminal that started shows its history, typed command and all.
             let panes: Vec<PaneId> = (base + 1..).take(record.shown().len()).collect();
             for (pane, kept) in panes.iter().zip(record.shown()) {
+                // A level the user picked, for a task still there: it waits for the window.
+                let picked = kept.extra.get(crate::agent_mode::KEY).cloned();
+                let picked = picked.and_then(|value| serde_json::from_value::<crate::agent_mode::Kept>(value).ok());
+                if let (Some(kept), RecordKind::App { bundle, name, .. }) = (picked, &kept.kind)
+                    && self.tasks.live(kept.task).is_some()
+                    && self.pane(*pane).is_some_and(|open| open.kind == Kind::Empty)
+                {
+                    let waiting = crate::agent_mode::Waiting { kept, bundle: bundle.clone(), name: name.clone() };
+                    self.agent.restored.insert(*pane, waiting);
+                }
                 let started = self.pane(*pane).is_some_and(|open| open.kind == Kind::Terminal);
                 // The Settings tab's terminal: the editor again, once, with no history. Its title
                 // is the one kept ("Settings").
@@ -1053,6 +1071,103 @@ mod tests {
         fresh.update(restore(file).sent_by(Origin::System));
         let open: Vec<(bool, Option<PaneId>)> = fresh.mark_rows().iter().map(|row| (row.open, row.pane)).collect();
         assert_eq!(open, [(true, None), (true, Some(2))]);
+    }
+
+    /// Over a restart only a level the user picked is kept, for its task, and read back it is
+    /// only an offer: the file is the same user's, so an agent could plant one. Every restored
+    /// pane starts at Off; the same app's window, filled by no client, offers the kept level;
+    /// only the user's click gives it. A planted level is an offer too, and gives nothing alone.
+    #[test]
+    fn a_kept_level_comes_back_as_an_offer_only_the_users_click_takes() {
+        use crate::agent_mode::{KEY, Level, USERS_ALONE};
+        let mut m = Model::default();
+        task(&mut m, "fix zoom");
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
+        let app = |window, name: &str| Kind::App { window, title: String::new(), bundle: None, name: name.into() };
+        m.update(Action::Open { kind: app(1, "Mail"), axis: Right, beside: None });
+        m.update(Action::Open { kind: app(2, "Slack"), axis: Right, beside: None });
+        let slack = m.focused.unwrap_or_default();
+        m.update(Action::AgentLevel { pane: Some(slack), level: Level::See });
+        assert_eq!(m.agent.level(1), Level::Act, "the default, not picked");
+        let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
+        let name = |pane: &marks::PaneRecord| match &pane.kind {
+            RecordKind::App { name, .. } => name.clone(),
+            _ => String::new(),
+        };
+        let kept = |file: &Layout| -> Vec<(String, serde_json::Value)> {
+            let panes = file.tabs.iter().flat_map(|saved| saved.tab.panes.iter());
+            panes.filter_map(|pane| Some((name(pane), pane.extra.get(KEY)?.clone()))).collect()
+        };
+        let see = serde_json::json!({ "level": "see", "task": 1 });
+        assert_eq!(kept(&file), [("Slack".to_string(), see.clone())]);
+        let waiting = |effects: &[Effect], app: &str| {
+            let into = effects.iter().find_map(|effect| match effect {
+                Effect::HostWindow { name, into: Some(pane), .. } if name == app => Some(*pane),
+                _ => None,
+            });
+            into.unwrap_or_default()
+        };
+        let grant = |r: &Model, pane| r.agent.panes.get(&pane).map(|grant| (grant.level, grant.task));
+        // A level planted for Mail (Act), and one for a task that is gone.
+        let mut planted = file.clone();
+        for pane in planted.tabs.iter_mut().flat_map(|saved| saved.tab.panes.iter_mut()) {
+            if name(pane) == "Mail" {
+                pane.extra.insert(KEY.into(), serde_json::json!({ "level": "act", "task": 1 }));
+            }
+        }
+        let (mut r, effects) = restored(&m, planted.clone(), &[], false);
+        let (back, mail) = (waiting(&effects, "Slack"), waiting(&effects, "Mail"));
+        assert_eq!(kept(&r.layout_file(&[], &[], 0)), kept(&planted), "kept while the windows are not there");
+        // Slack's window comes back by itself; the user picks Mail for its pane.
+        for (name, window, origin) in [("Slack", 12, Origin::System), ("Mail", 11, Origin::User)] {
+            r.update(Action::Fill { pane: waiting(&effects, name), kind: app(window, name) }.sent_by(origin));
+        }
+        // Both start at Off (the user's fill too: not the default), each with its offer; written
+        // again, both are kept as offers.
+        assert_eq!((grant(&r, back), grant(&r, mail)), (Some((Level::Off, Some(1))), Some((Level::Off, Some(1)))));
+        assert_eq!(r.agent.offers.keys().copied().collect::<Vec<_>>(), [back.min(mail), back.max(mail)]);
+        assert_eq!(kept(&r.layout_file(&[], &[], 0)), kept(&planted));
+        // A client's click, or the system's, is refused and gives nothing.
+        let accept = Action::AgentOfferAccept { pane: mail };
+        for origin in [Origin::Socket, Origin::System] {
+            assert_eq!(r.refusal(&accept, origin), Some(USERS_ALONE));
+            r.update(accept.clone().sent_by(origin));
+            assert_eq!(grant(&r, mail), Some((Level::Off, Some(1))), "{origin:?}");
+        }
+        // The user's click gives it, once.
+        r.update(Action::AgentOfferAccept { pane: back });
+        assert_eq!(grant(&r, back), Some((Level::See, Some(1))));
+        assert!(!r.agent.offers.contains_key(&back));
+        // The user's own level on Mail ends its offer.
+        r.update(Action::AgentLevel { pane: Some(mail), level: Level::Off });
+        assert!(r.agent.offers.is_empty());
+        assert_eq!(kept(&r.layout_file(&[], &[], 0)), [("Slack".to_string(), see)]);
+        // A task gone, another app's window in the waiting pane, or a client's fill: no offer.
+        let mut gone = file.clone();
+        for pane in gone.tabs.iter_mut().flat_map(|saved| saved.tab.panes.iter_mut()) {
+            if pane.extra.contains_key(KEY) {
+                pane.extra.insert(KEY.into(), serde_json::json!({ "level": "act", "task": 99 }));
+            }
+        }
+        for (file, kind, origin) in [
+            (gone, app(13, "Slack"), Origin::System),
+            (file.clone(), app(13, "Notes"), Origin::System),
+            (file.clone(), app(14, "Slack"), Origin::Socket),
+        ] {
+            let (mut r, effects) = restored(&m, file, &[], false);
+            let waits = waiting(&effects, "Slack");
+            r.update(Action::Fill { pane: waits, kind }.sent_by(origin));
+            assert_eq!((grant(&r, waits), r.agent.offers.len()), (Some((Level::Off, Some(1))), 0), "{origin:?}");
+            assert_eq!(kept(&r.layout_file(&[], &[], 0)), []);
+        }
+        // Moved to another task's workspace, the pick goes with the reset to Off.
+        task(&mut m, "plan");
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 2 } });
+        let to = m.active;
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
+        m.update(Action::MovePane { pane: Some(slack), tab: to });
+        assert_eq!(m.agent.level(slack), Level::Off);
+        assert_eq!(kept(&m.layout_file(&[], &[], 0)), []);
     }
 
     #[test]

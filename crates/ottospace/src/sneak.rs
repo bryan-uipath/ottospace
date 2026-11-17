@@ -304,6 +304,7 @@ impl Workspace {
         let number = name.parse::<u32>().ok();
         if self.activate_drawer(kind, name, window, cx)
             || self.click_listen(kind, name, window, cx)
+            || self.click_agent(kind, name, window, cx)
             || self.click_drawer_rail(kind, name, window, cx)
         {
             return;

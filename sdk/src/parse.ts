@@ -24,7 +24,10 @@ import type {
   AxSource,
   Editor,
   AxTarget,
-  AxTreeReply,
+  AgentMode,
+  AppLookReply,
+  AppReadReply,
+  Untrusted,
   Axis,
   Brief,
   BriefMaterial,
@@ -843,7 +846,7 @@ function nativeChat(value: unknown, at: string): NativeChat {
 function station(value: unknown, at: string): Station {
   if (value === "you" || value === "model" || value === "memory" || value === "files") return value;
   if (value === "shell" || value === "network" || value === "browser" || value === "agents") return value;
-  if (value === "skills" || value === "hooks" || value === "other") return value;
+  if (value === "skills" || value === "hooks" || value === "other" || value === "apps") return value;
   throw wrong(at, "a station", value);
 }
 
@@ -1119,7 +1122,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 }
 
 function feature(value: unknown, at: string): Feature {
-  if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots") return value;
+  if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
   throw wrong(at, "a feature", value);
 }
 
@@ -1392,6 +1395,7 @@ function model(value: unknown, at: string): Model {
     agents: list(subject)(o.agents, `${at}.agents`),
     features: list(feature)(o.features, `${at}.features`),
     listen: orNull(listen)(o.listen, `${at}.listen`),
+    agent_mode: agentMode(o.agent_mode, `${at}.agent_mode`),
     slots: map(slot)(o.slots, `${at}.slots`),
   };
 }
@@ -1403,6 +1407,22 @@ function slot(value: unknown, at: string): Slot {
     matches: num(o.matches, `${at}.matches`),
     matching: oneOf(["manual", "automatic"] as const, "a slot's matching")(o.matching, `${at}.matching`),
   };
+}
+
+const agentLevel = oneOf(["off", "see", "act"] as const, "an agent mode level");
+
+function agentMode(value: unknown, at: string): AgentMode {
+  const o = fields(value, at);
+  const panes: AgentMode["panes"] = {};
+  for (const [id, grant] of Object.entries(fields(o.panes, `${at}.panes`))) {
+    const g = fields(grant, `${at}.panes.${id}`);
+    panes[id] = { level: agentLevel(g.level, `${at}.panes.${id}.level`), task: orNull(num)(g.task, `${at}.panes.${id}.task`) };
+  }
+  const menu = (value: unknown, at: string) => {
+    const m = fields(value, at);
+    return { pane: num(m.pane, `${at}.pane`), selected: orNull(num)(m.selected, `${at}.selected`) };
+  };
+  return { panes, default: agentLevel(o.default, `${at}.default`), menu: orNull(menu)(o.menu, `${at}.menu`) };
 }
 
 function listen(value: unknown, at: string): Listen {
@@ -1881,19 +1901,37 @@ export function waitReply(value: unknown): WaitReply {
   return { ok: true, pane: num(o.pane, "pane"), line: str(o.line, "line") };
 }
 
-export function axTreeReply(value: unknown): AxTreeReply {
+function untrusted(o: Record<string, unknown>, at: string): Untrusted {
+  if (o.untrusted !== true) throw new Error(`${at}.untrusted: expected true`);
+  return { untrusted: true, warning: str(o.warning, `${at}.warning`) };
+}
+
+export function appReadReply(value: unknown): AppReadReply {
   const o = fields(value, "reply");
-  const tree = fields(o.tree, "tree");
+  const captured = fields(o.captured, "captured");
   return {
     ok: true,
     pane: num(o.pane, "pane"),
+    task: orNull(num)(o.task, "task"),
     window: frame(o.window, "window"),
     millis: num(o.millis, "millis"),
-    tree: {
-      root: axNode(tree.root, "tree.root"),
-      count: num(tree.count, "tree.count"),
-      truncated: truncated(tree.truncated, "tree.truncated"),
+    captured: {
+      ...untrusted(captured, "captured"),
+      count: num(captured.count, "captured.count"),
+      truncated: truncated(captured.truncated, "captured.truncated"),
+      tree: axNode(captured.tree, "captured.tree"),
     },
+  };
+}
+
+export function appLookReply(value: unknown): AppLookReply {
+  const o = fields(value, "reply");
+  const captured = fields(o.captured, "captured");
+  return {
+    ok: true,
+    pane: num(o.pane, "pane"),
+    task: num(o.task, "task"),
+    captured: { ...untrusted(captured, "captured"), path: str(captured.path, "captured.path") },
   };
 }
 

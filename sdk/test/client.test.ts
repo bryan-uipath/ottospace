@@ -298,11 +298,21 @@ test("calendar: with no feed set it says only that", async () => {
   });
 });
 
+test("agent mode on: a read of an app pane with no pass is refused", async () => {
+  await withOttospace(async (client) => {
+    const noPass = /only a task's agent reads an app pane/;
+    await assert.rejects(client.axTree({ pane: 1 }), { message: noPass });
+    await assert.rejects(client.appRead({ pane: 1 }), { message: noPass });
+    await assert.rejects(client.appLook({ pane: 1 }), { message: noPass });
+  }, ["agent_mode"]);
+});
+
 test("a refused request rejects with the app's message", async () => {
   await withOttospace(async (client) => {
     await assert.rejects(client.taskOpen({ id: 99 }), { name: "Error", message: "no task 99" });
     await assert.rejects(client.type({ pane: 99, text: "x" }), { message: "no terminal pane to type into" });
-    await assert.rejects(client.axTree(), { message: "not an app pane" });
+    // Agent mode gates every read of an app pane: off for a new user.
+    await assert.rejects(client.axTree(), { message: "feature off: agent_mode" });
     await assert.rejects(client.send({ cmd: "no_such_request" }), /unknown variant `no_such_request`/);
     await assert.rejects(client.send({ cmd: "focus", pane: 1, extra: 1 }), /unknown field `extra`/);
     // The connection is still good after a refusal.
