@@ -9,7 +9,6 @@ use serde::Serialize;
 
 use crate::layout::Rect;
 use crate::list::ListRow;
-use crate::listen::Status;
 use crate::model::{Action, Model};
 
 /// Why a client's request that takes the keyboard waits: the user's keys are in a row's menu.
@@ -93,9 +92,10 @@ impl Model {
     pub fn menu_items(&self, of: &MenuOf) -> &'static [Item] {
         match of {
             MenuOf::Row(row) => row_items(row),
-            MenuOf::Transcript => match self.listen.on.as_ref().filter(|_| self.listen.shown).map(|on| on.status) {
-                Some(Status::On) => &[Item::Pause],
-                Some(Status::Paused) => &[Item::Resume],
+            // One decision with the palette's and the menu bar's (`listen_pause_action`).
+            MenuOf::Transcript => match self.listen_pause_action(0).filter(|_| self.listen.shown) {
+                Some(Action::ListenPause { .. }) => &[Item::Pause],
+                Some(Action::ListenResume { .. }) => &[Item::Resume],
                 _ => &[],
             },
         }

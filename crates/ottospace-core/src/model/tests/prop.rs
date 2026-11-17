@@ -1560,10 +1560,10 @@ fn check(m: &Model) -> Result<(), String> {
         m.space()
     );
     // The agent chip is there exactly while the selected space has a conversation and nothing
-    // is in the drawer's place: no conversation open, new task, draft, brief or inspector. It
-    // is that conversation's, and names its space's place on the row.
+    // is in the drawer's place: no conversation open, new task, draft, brief, inspector or
+    // transcript. It is that conversation's, and names its space's place on the row.
     let busy = m.talk.as_ref().is_some_and(|talk| talk.open) || m.compose.is_some() || m.capture.is_some();
-    let busy = busy || m.brief.is_some() || m.inspector.is_some();
+    let busy = busy || m.brief.is_some() || m.inspector.is_some() || m.listen.shown;
     let chip = m.agent_chip();
     ensure!(
         chip.is_some() == (m.space_subject(m.space()).is_some() && !busy),
