@@ -26,7 +26,7 @@ video player. Not built. Nothing here was recorded: see [Feasibility](#feasibili
    `requiresOnDeviceRecognition`) is never used.
 3. **Always shown while on.** The menu bar's dot always (from slice 2, where real audio
    starts; not in a test run), with its own Stop. In the window, the owner's three spots
-   (2026-11-17): a red dot in the source pane's header while its tab is on show (narrow too), on
+   (2026-11-17): a red dot in the source pane's header while its tab is on show (in a pane down to 150 points wide), on
    its tab or space while off show (on the top row's "+N" when its space is left off for room),
    and on the drawer's rail while the drawer is open; each shows the drawer's Stop in one click.
    Not in the window: a source in no pane (an app picked) with the drawer closed, or a pane in a
