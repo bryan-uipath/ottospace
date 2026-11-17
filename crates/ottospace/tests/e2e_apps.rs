@@ -2191,14 +2191,14 @@ fn a_task_reads_and_looks_at_the_canary_only_while_the_user_lets_it() {
     );
     let state = || otto.call(json!({"cmd": "state"}));
     let user_key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys, "as": "user"}));
-    // A labelled control's middle, from one pass of sneak mode.
-    let control = |id: &str| -> [f64; 2] {
+    // A point of a labelled control (`fx`, `fy` of its frame), from one pass of sneak mode.
+    let control = |id: &str, fx: f64, fy: f64| -> [f64; 2] {
         let reply = otto.call(json!({"cmd": "sneak"}));
         otto.call(json!({"cmd": "key", "keys": "escape"}));
         let targets = reply["sneak"]["targets"].as_array().cloned().unwrap_or_default();
         let found = targets.iter().find(|t| t["source"]["id"] == id).unwrap_or_else(|| panic!("no {id}: {reply}"));
         let f = |key: &str| found["frame"][key].as_f64().expect("a frame");
-        [f("x") + f("w") / 2.0, f("y") + f("h") / 2.0]
+        [f("x") + f("w") * fx, f("y") + f("h") * fy]
     };
     let user_click = |p: [f64; 2]| {
         for action in ["down", "up"] {
@@ -2218,8 +2218,8 @@ fn a_task_reads_and_looks_at_the_canary_only_while_the_user_lets_it() {
     // The user starts task 1's agent: its workspace on show, its pass in the stand-in's record.
     otto.call(json!({"cmd": "task_new", "line": "canary >app"}));
     otto.call(json!({"cmd": "section", "section": "tasks"}));
-    user_click(control("task:1"));
-    user_click(control("talk:talk-start"));
+    user_click(control("task:1", 0.3, 0.3));
+    user_click(control("talk:talk-start", 0.5, 0.5));
     let pass = wait_for("its pass", || {
         std::fs::read_to_string(record.join("pass")).ok().filter(|t| t.ends_with('\n')).map(|t| t.trim().to_string())
     });
