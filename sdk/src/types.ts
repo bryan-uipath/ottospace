@@ -254,6 +254,8 @@ export interface SpaceRow {
   worktree: string | null;
   /** What its item on the top row shows before its name. */
   glyph: Glyph;
+  /** False for a temporary workspace (no task, no default worktree, never renamed or kept): the user's close discards it. True for every other space. */
+  kept: boolean;
 }
 
 /** A top-row item's glyph: Home's house, a task's badges, the icon of the one app pane a workspace of no task holds alone (by the app's name), or the name alone. */
@@ -850,6 +852,8 @@ export interface Confirm {
   paste: PasteAsk | null;
   /** Not the quit question: "Unlist this repository?" for the one at this path, which a task works in. Only the user answers it. */
   unlist: string | null;
+  /** Not the quit question: "Close this workspace?" for this temporary one, whose terminals in `running` end once its Undo runs out. Only the user answers it. */
+  close: number | null;
 }
 
 /** What a mark waits for while it has the keyboard (`mode` is `mark`). */
@@ -892,11 +896,13 @@ export interface RowMenu {
   /** The workspace whose row it is of; `tab`: that tab's row, by place. */
   workbook: number | null;
   tab: number | null;
+  /** The workspace's item on the top row's (a temporary one's: Keep), not its row's. */
+  space: boolean;
   /** The transcript header's: Pause, or Resume while paused. */
   transcript: boolean;
   /** The item the keys are on; null: none (a click opened it). */
   selected: number | null;
-  items: { item: "rename" | "delete" | "remove" | "pause" | "resume"; label: string; rect: Rect | null }[];
+  items: { item: "rename" | "delete" | "remove" | "keep" | "pause" | "resume"; label: string; rect: Rect | null }[];
 }
 
 /** A workspace of the user's (the user reads "workspace"; the state keeps `workbook`): a named set of saved tabs, none in a new one. No directory is listed: `panes` names kinds only. */
@@ -1196,7 +1202,7 @@ export interface NoticeBar {
   level: NoticeLevel;
   /** A meeting's is `Meeting started`: its title is never in the state. */
   text: string;
-  /** What it offers beside the text: `open_settings`, `join` (a meeting's link), `undo` (a workspace deleted or updated), or null. */
+  /** What it offers beside the text: `open_settings`, `join` (a meeting's link), `undo` (a workspace deleted, updated or, temporary, closed), or null. */
   offer: string | null;
   offer_rect: Rect | null;
   /** Its ×. Only the user's click dismisses. */
@@ -1343,7 +1349,7 @@ export interface Snapshot {
   /** The user's workspaces, by name. Only the user makes, saves, opens, renames or deletes one. */
   workbooks: Workbook[];
   /** What the notice bar offers to take back (`kind` `undo`), while it offers. */
-  workbook_offer: "deleted" | "updated" | null;
+  workbook_offer: "deleted" | "updated" | "closed" | null;
   /** The open menu of a row of the bar, or null. */
   row_menu: RowMenu | null;
   /** Each scroll area whose content does not fit, by id (`tasks`, `picker`, `keys`, `terminal:1`). */
@@ -1463,6 +1469,20 @@ export interface Snapshot {
     first_row: Rect | null;
     /** Its header's ‹ and ›, and Today while on another day. */
     nav: { back: Rect | null; forward: Rect | null; today: Rect | null };
+    /**
+     * The feed's fetch: `loading` since (ms) with bytes so far, `read` at with its VEVENTs,
+     * `failed` at with a kind (`timed_out`, `unreachable`, `http`, `moved`, `not_public`,
+     * `too_big`, `not_calendar`, `file`, `curl`) and the HTTP status or curl's exit code. Never the link.
+     */
+    fetch: CalendarFetch;
+    /** The section's fetch line and its empty day's note (null before a good read), as drawn. */
+    fetch_line: string;
+    empty_note: string | null;
+    /** Where the fetch line and its Retry (only after a failure) are drawn. */
+    fetch_rect: Rect | null;
+    retry: Rect | null;
+    /** In a test run, retries the user's clicks carried out (null otherwise). */
+    retries: number | null;
   };
   /**
    * Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last frame drew
@@ -1553,6 +1573,13 @@ export interface WaitReply {
   /** The first line that matched. */
   line: string;
 }
+
+/** The calendar feed's fetch, as the state gives it. */
+export type CalendarFetch =
+  | { state: "idle" }
+  | { state: "loading"; since: number; bytes: number }
+  | { state: "read"; at: number; events: number }
+  | { state: "failed"; at: number; error: string; code: number | null };
 
 /** `calendar`'s reply with no feed set (`calendar_ics`). */
 export interface CalendarOff {

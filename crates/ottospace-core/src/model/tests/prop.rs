@@ -7,6 +7,7 @@
 use super::*;
 use crate::agent_mode::{AppUse, Level};
 use crate::ax::{Frame, Source};
+use crate::calendar::fetch::Failure;
 use crate::calendar::{ColorRule, DayStep, Event};
 use crate::clip::{Amount, Verb};
 use crate::compose::{Known, Names, PathFound};
@@ -183,16 +184,19 @@ impl Gen<'_> {
             task: self.rng.one_in(3).then(|| self.task()),
             worktree: self.rng.one_in(3).then(|| self.name(DIRS)),
             live: Vec::new(),
+            kept: true,
+            closing: None,
             extra: self.extra(),
         }
     }
 
     /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not; or the transcript's header.
     fn menu_row(&mut self) -> MenuOf {
-        match self.rng.below(5) {
+        match self.rng.below(6) {
             0 => ListRow::Task(self.task()).into(),
             1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)).into(),
             2 => MenuOf::Transcript,
+            3 => MenuOf::Space(self.workbook()),
             _ => ListRow::Workbook(self.workbook()).into(),
         }
     }
@@ -981,6 +985,12 @@ const MAKERS: &[Make] = &[
     |g| Action::TalkCycle { delta: g.delta() },
     |g| Action::RailSelect { item: g.rail_item() },
     |g| Action::SpaceHide { index: g.rng.coin().then(|| g.index(g.m.shown_spaces().len())) },
+    |g| {
+        // The terminals running, as the shell sees them: some of the panes.
+        let running = g.m.panes.iter().filter(|_| g.rng.coin()).map(|p| p.id).collect::<Vec<_>>();
+        let running = running.into_iter().map(|pane| Running { pane, program: None, background: false }).collect();
+        Action::SpaceHideAsked { index: g.rng.coin().then(|| g.index(g.m.shown_spaces().len())), running }
+    },
     |g| Action::SpaceOpen { space: g.owner() },
     |g| Action::SelectVisibleTab { index: g.index(g.m.tabs.len()) },
     |g| Action::Tick { now: g.time() },
@@ -1278,6 +1288,7 @@ const MAKERS: &[Make] = &[
     |g| Action::WorkbookEdit { workbook: g.workbook(), tab: g.book_tab() },
     |g| Action::WorkbookRemove { workbook: g.workbook(), tab: g.book_tab() },
     |g| Action::WorkbookFold { workbook: g.workbook() },
+    |g| Action::WorkbookKeep { workbook: g.workbook() },
     |g| Action::RowMenu { row: g.menu_row(), dots: g.dots(), keys: g.rng.coin() },
     |g| Action::RowMenuDrawn { dots: g.dots() },
     |g| Action::RowMenuMove { delta: g.delta() },
@@ -1379,6 +1390,13 @@ const MAKERS: &[Make] = &[
     |g| Action::CalendarDismiss { id: g.meeting_id() },
     |g| Action::CalendarJoin { id: g.meeting_id() },
     |g| Action::CalendarDay { step: g.rng.pick(&[DayStep::Back, DayStep::Forward, DayStep::Today]) },
+    |g| Action::CalendarFetching { since: g.time(), bytes: g.rng.pick(&[0, 4_096, 1_557_023]) },
+    |g| {
+        let why = [Failure::TimedOut { secs: 30 }, Failure::Http(403), Failure::NotCalendar];
+        let failure = g.rng.coin().then(|| g.rng.pick(&why));
+        Action::CalendarFetched { at: g.time(), events: g.rng.below(2_000) as u32, failure }
+    },
+    |_| Action::CalendarRetry,
     |g| Action::ListenStart {
         source: crate::listen::Source::Pane(g.pane()),
         mic: g.rng.coin(),
@@ -1517,6 +1535,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::TalkFront { .. }
             | Action::TalkCycle { .. }
             | Action::SpaceHide { .. }
+            | Action::SpaceHideAsked { .. }
             | Action::SpaceOpen { .. }
             | Action::WorkbookNew { .. }
             | Action::TaskTalk { .. }
@@ -1538,6 +1557,9 @@ fn selects_tab(action: &Action) -> bool {
             | Action::PickerChoose { .. }
             | Action::MarkGo { .. }
             | Action::WorkbookOpen { .. }
+            // A closed temporary workspace's Undo: it is back, selected.
+            | Action::WorkbookUndo
+            | Action::ListUndo
             | Action::ListChoose { .. }
             | Action::MarkType { .. }
             | Action::MarkSubmit
@@ -2213,6 +2235,11 @@ fn check(m: &Model) -> Result<(), String> {
     if let Some((menu, items)) = m.row_menu() {
         let listed = match &menu.row {
             MenuOf::Row(row) => m.list_rows().contains(row),
+            // A workspace's item on the top row: on the row, and temporary (Keep its one item).
+            MenuOf::Space(id) => {
+                let of = Owner::Workbook { id: *id };
+                m.shown_spaces().iter().any(|space| space.of == of) && !m.workbooks.is_kept(*id)
+            }
             MenuOf::Transcript => m.listen.shown && !items.is_empty(),
         };
         ensure!(listed, "a menu of {:?}, which is not listed", menu.row);
@@ -2256,6 +2283,26 @@ fn check(m: &Model) -> Result<(), String> {
     for book in books.iter().filter(|book| book.task.is_some()) {
         let own = m.tabs.iter().any(|tab| tab.space == Owner::Workbook { id: book.id });
         ensure!(!own, "workspace {:?} is bound to a task and has a space of its own", book.name);
+    }
+    // A temporary workspace has no file; one closing is not listed, not on the row and not in
+    // `layout.json`, nor are its tabs; a closing one is never kept.
+    ensure!(m.workbooks.stored().all(|book| book.kept), "a temporary workspace would be written");
+    let layout = m.layout_file(&[], &[], 0);
+    for book in books.iter().filter(|book| book.closing.is_some()) {
+        let of = Owner::Workbook { id: book.id };
+        ensure!(!book.kept, "workspace {:?} is kept and closing", book.name);
+        ensure!(!m.workbook_rows().iter().any(|row| row.id == book.id), "closing workspace {:?} is listed", book.name);
+        ensure!(
+            *m.space() != of && m.shown_spaces().iter().all(|s| s.of != of),
+            "closing {:?} is on the row",
+            book.name
+        );
+        let named = layout.spaces.iter().any(|space| space.workbook.as_deref() == Some(book.uid.as_str()));
+        ensure!(!named, "closing workspace {:?} is in layout.json", book.name);
+    }
+    for space in layout.spaces.iter().filter(|space| space.name.is_some()) {
+        let book = books.iter().find(|book| Some(book.uid.as_str()) == space.workbook.as_deref());
+        ensure!(book.is_some_and(|book| !book.kept), "layout.json names a workspace that is not temporary");
     }
     let lives: Vec<u32> = books.iter().flat_map(|book| book.live.iter().flatten().copied()).collect();
     ensure!(unique(&lives) && lives.iter().all(|tab| tab_ids.contains(tab)), "workbooks stand for tabs {lives:?}");
@@ -2712,6 +2759,8 @@ impl Run {
         let on_meeting = matches!(m.list.and_then(|at| m.list_rows().into_iter().nth(at)), Some(ListRow::Meeting(_)));
         let tab_before = m.tabs[m.active].id;
         let tabs_before: Vec<u32> = m.tabs.iter().map(|tab| tab.id).collect();
+        // Yes to "Close this workspace?" hides it, as its × would.
+        let closes = matches!(action, Action::QuitConfirm) && m.confirm.as_ref().is_some_and(|c| c.close.is_some());
         let talks =
             matches!(action, Action::TaskTalk { .. } | Action::SessionOpen { .. } | Action::SessionAdopt { .. });
 
@@ -2733,12 +2782,17 @@ impl Run {
                 | Action::TalkCycle { .. }
                 | Action::RailSelect { .. }
                 | Action::SpaceHide { .. }
+                | Action::SpaceHideAsked { .. }
                 | Action::SpaceOpen { .. }
         );
-        let hides = matches!(action, Action::SpaceHide { .. });
+        let hides = matches!(action, Action::SpaceHide { .. } | Action::SpaceHideAsked { .. });
         let owners_before: Vec<(u32, Owner)> = m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect();
         let books_before: Vec<String> = m.workbooks.list.iter().map(workbook::write).collect();
         let uids_before: Vec<String> = m.workbooks.list.iter().map(|book| book.uid.clone()).collect();
+        // Each listed workspace by its file name, and whether it is kept.
+        let listed =
+            |m: &Model| -> Vec<(String, bool)> { m.workbooks.listed().map(|b| (b.uid.clone(), b.kept)).collect() };
+        let listed_before = listed(m);
         let bindings = |m: &Model| -> Vec<(String, Option<TaskId>)> {
             m.workbooks.list.iter().map(|book| (book.uid.clone(), book.task)).collect()
         };
@@ -2945,6 +2999,7 @@ impl Run {
                     | Action::TalkCycle { .. }
                     | Action::RailSelect { .. }
                     | Action::SpaceHide { .. }
+                    | Action::SpaceHideAsked { .. }
                     | Action::SpaceOpen { .. }
                     | Action::WorkbookNew { .. }
             );
@@ -2996,10 +3051,14 @@ impl Run {
             |e: &Effect| matches!(e, Effect::StartAgent { .. } | Effect::ReadSession { .. } | Effect::AgentSend { .. });
         ensure!(!selects || !effects.iter().any(acts), "{origin:?}'s {action:?} started an agent: {effects:?}");
         ensure!(!selects || m.chats == chats_before, "{origin:?}'s {action:?} changed a transcript");
-        // A dial moves only on what its agent did, a message sent, or its process starting or ending.
+        // A dial moves only on what its agent did (an app it read too), a message sent, or its process starting or ending.
         let moves = matches!(
             action,
-            Action::AgentEvents { .. } | Action::TalkSend | Action::AgentStarted { .. } | Action::AgentExited { .. }
+            Action::AgentEvents { .. }
+                | Action::AppUsed { .. }
+                | Action::TalkSend
+                | Action::AgentStarted { .. }
+                | Action::AgentExited { .. }
         );
         for chat in m.chats.iter().filter(|_| !moves) {
             let was = chats_before.iter().find(|was| was.subject == chat.subject);
@@ -3195,6 +3254,26 @@ impl Run {
             };
             ensure!(read || follows, "{origin:?}'s {action:?} moved task {id} to {worktree:?}");
         }
+        // Only the user keeps a temporary workspace (Keep, a name, a save, a task, a Repos click, a
+        // worktree of their +) or closes one: no one else's step keeps or discards one, or takes
+        // one off the list. The files read again keep what they hold.
+        if origin != Origin::User
+            && !matches!(
+                action,
+                Action::RestoreWorkbooks { .. } | Action::RestoreLayout { .. } | Action::WorktreeAdded { .. }
+            )
+        {
+            let now = listed(m);
+            for (uid, kept) in &listed_before {
+                let after = now.iter().find(|(known, _)| known == uid).map(|(_, kept)| *kept);
+                ensure!(
+                    after == Some(*kept),
+                    "{origin:?}'s {action:?} made workspace {uid} {after:?} from kept: {kept}"
+                );
+            }
+            let kept_new = now.iter().any(|(uid, kept)| *kept && !uids_before.contains(uid));
+            ensure!(!kept_new, "{origin:?}'s {action:?} made a kept workspace");
+        }
         // + makes at most one workbook, of no tab, with a new empty tab on show in its space;
         // it records nothing in any other, and no tab there was changes space (above).
         if let Action::WorkbookNew { .. } = action {
@@ -3254,6 +3333,7 @@ impl Run {
             tab_now == tab_before
                 || !m.tabs.iter().any(|tab| tab.id == tab_before)
                 || selects_tab(&action)
+                || closes
                 || left_home,
             "{origin:?}'s {action:?} changed the tab on show from {tab_before} to {tab_now}"
         );
@@ -3918,6 +3998,11 @@ impl Run {
                     ensure!(matches!(action, Action::Tick { .. }) && *started <= m.now, "an alert by {action:?}")
                 }
                 Effect::OpenLink { .. } => {}
+                // The network is reached again only by the user's Retry, with a feed set.
+                Effect::CalendarRetry => {
+                    ensure!(user && matches!(action, Action::CalendarRetry), "{origin:?}'s {action:?} fetched");
+                    ensure!(m.calendar.on, "a retry with no feed");
+                }
                 // A pull request opens by the user's click alone, and only a plain GitHub link.
                 Effect::OpenPr { url } => {
                     ensure!(user && matches!(action, Action::PrOpen { .. }), "{origin:?}'s {action:?} opened {url}");
@@ -3994,8 +4079,9 @@ impl Run {
         (holds.sort(), kept.sort());
         ensure!(holds == kept, "the draft holds {holds:?}; the shell keeps {kept:?}");
         // The shell was told of every pane that shows something. (Not of an empty pane of a
-        // tab built from a mark: it hears of that one when it is filled.)
-        let unknown = |pane: &&Pane| pane.kind != Kind::Empty && !self.shell.panes.contains(&pane.id);
+        // tab built from a mark, nor of a slot restored waiting: it hears of those when filled.)
+        let waits = |pane: &Pane| matches!(pane.kind, Kind::Empty | Kind::Slot { .. });
+        let unknown = |pane: &&Pane| !waits(pane) && !self.shell.panes.contains(&pane.id);
         let unknown: Vec<PaneId> = m.panes.iter().filter(unknown).map(|pane| pane.id).collect();
         ensure!(unknown.is_empty(), "the shell was never told panes {unknown:?} opened");
         let gone = |pane: &&PaneId| m.pane(**pane).is_none();
@@ -4402,6 +4488,7 @@ fn code(sent: &Envelope) -> String {
         ("dots", "Rect"),
         ("show", "Show"),
         ("step", "DayStep"),
+        ("failure", "Failure"),
         ("from", "crate::listen::Speaker"),
         ("why", "crate::listen::Ended"),
     ];
@@ -4808,6 +4895,62 @@ fn by(origin: Origin, action: Action) -> Envelope {
 
 fn split(axis: Axis, kind: Kind) -> Envelope {
     Action::Split { axis, kind }.into()
+}
+
+/// A task's read of an app pane lights the dial's Apps station (`app_used`): the check let only
+/// the agent's events move a dial (seed 501).
+#[test]
+fn an_app_read_moves_the_dial() {
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        Action::CaptureStart {
+            pane: None,
+            draft: "d1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![],
+            images: true,
+        }
+        .into(),
+        Action::ComposeSubmit { open: true }.into(),
+        by(Origin::System, Action::AgentStarted { task: Subject::Task(1), session: Some("--resume".into()), at: 66 }),
+        by(
+            Origin::System,
+            Action::AppUsed { task: 1, pane: 4, what: AppUse::Read, refused: Some("".into()), at: 6002 },
+        ),
+    ])
+    .unwrap();
+}
+
+/// A workbook's slot comes back waiting, as an empty pane does: the shell hears of it when it is
+/// filled (`slot_fill`). The check wanted it told at once (seed 1217).
+#[test]
+fn a_slot_a_workbook_restores_waits_unannounced_until_filled() {
+    let slot = r#"{"select":{},"pick":"any","matching":"automatic","absent":"wait","closed":"keep"}"#;
+    let saved = History { lines: vec!["SAVEDHISTORY-0 ".into()], command: None, saved: 0 };
+    let app = Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() };
+    replay(&[
+        split(Axis::Right, Kind::Terminal),
+        Action::Open { kind: app, axis: Axis::Right, beside: None }.into(),
+        slot_make(2, 1, slot).into(),
+        Action::WorkbookSave { uid: "00000000000000a1".into(), cwds: vec![], histories: vec![(2, saved)] }.into(),
+        Action::CloseTab { index: None }.into(),
+        Action::WorkbookOpen { workbook: 1, tab: None, home: None }.into(),
+    ])
+    .unwrap();
+}
+
+/// × on a closed temporary workspace's offer closed its panes in the dismissal itself: a
+/// dismissal changes nothing else, and only time ends one (seed 908).
+#[test]
+fn dismissing_a_closed_workspaces_offer_closes_no_pane_itself() {
+    let app = Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() };
+    replay(&[
+        split(Axis::Right, Kind::Terminal),
+        Action::Open { kind: app, axis: Axis::Right, beside: None }.into(),
+        Action::SpaceHide { index: None }.into(),
+        Action::NoticeDismiss { notice: crate::notice::Kind::Undo, text: "Workspace closed".into() }.into(),
+    ])
+    .unwrap();
 }
 
 /// A task filed in a workspace it then made its own, with a default worktree, works there: the
@@ -6003,6 +6146,18 @@ fn a_live_slots_window_going_parks_it() {
         slot_make(2, 1, any).into(),
         Action::Enter { pane: 2 }.into(),
         by(Origin::System, Action::WindowGone { pane: 2, app_running: true, at: 1 }),
+    ])
+    .unwrap();
+}
+
+/// Yes to "Close this workspace?" hides it as its × does, and the tab on show moves on (seed 729).
+#[test]
+fn yes_to_closing_a_workspace_moves_the_tab_on_show() {
+    let running = (1..=2).map(|pane| Running { pane, program: None, background: false }).collect();
+    replay(&[
+        split(Axis::Right, Kind::Terminal),
+        Action::SpaceHideAsked { index: None, running }.into(),
+        Action::QuitConfirm.into(),
     ])
     .unwrap();
 }

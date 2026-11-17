@@ -49,7 +49,7 @@ running, and the rest of the design is not built: see the
 | [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today, behind the `marks` [flag](#features), off by default |
 | Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the drawer; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`), and its agent is told the brief's path. Kept in `~/.ottospace/materials` | Works today |
-| Workspaces: + on the top row or in the Workspaces section makes a new, empty one, listed there and kept between runs. ⌘⇧S saves a tab into one (its splits, each terminal's directory, each app), to open again from the section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
+| Workspaces: + on the top row or in the Workspaces section makes a new, empty one, listed there; temporary (its name muted) until it gets a task, a repository, a name or Keep, and then kept between runs. ⌘⇧S saves a tab into one (its splits, each terminal's directory, each app), to open again from the section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | Tabs and layout come back after quitting: every tab (with its task and workspace), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
 | [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; a soft pulse as one comes near; a meeting notice on the notice bar, a notification and a sound when one has started and you are in no call | Works today |
@@ -707,10 +707,24 @@ workspace.
 
 - **New**: + on the top row, + in the Workspaces section's header, or `New workspace` in the
   empty section. Each makes a new, empty workspace, "Workspace 2", "Workspace 3" (the lowest
-  number free): its space goes after the selected one on the top row, with one empty tab,
+  number no listed workspace has): its space goes after the selected one on the top row, with one empty tab,
   selected, ready for ⌘E or ⌘D. It never takes or records the tab on show.
-- **Close**: × on its space (⌘⌃W) takes it off the top row. Nothing in it stops, it stays
-  listed, and its row opens it again as it was. With its last tab closed it leaves the row too.
+- **Temporary or kept**: a new workspace (from +, or what you opened on Home) is temporary: its
+  name is muted on the top row and in the section, and its tip says "Temporary: closes without
+  saving · ⋯ Keep". It has no file. It is kept from the moment it has a task (↵ on a new task in
+  it), a repository (a Repos click made it, or set its worktree), a name you gave it, a tab saved
+  into it (⌘⇧S), or Keep (its row's …, the … on its item on the top row, File ▸ Keep Workspace,
+  the palette). A kept one never
+  turns temporary again. Workspaces saved before this are kept.
+- **Close**: × on its space (⌘⌃W) takes it off the top row. A kept one: nothing in it stops, it
+  stays listed, and its row opens it again as it was. With its last tab closed it leaves the row
+  too. A temporary one closed (×, ⌘⌃W, its last tab closed or moved away) leaves the list at
+  once: `Workspace closed` shows on the [notice bar](#notice-bar) for six seconds with Undo,
+  which brings it back on the row as it was; its terminals and apps run until then, and close
+  when the offer ends (× ends it at once). If a terminal in it runs a program, × and ⌘⌃W ask
+  first, as ⌘Q does ("Close this workspace?": ↵ closes, Esc keeps it). A temporary workspace open when you quit comes back
+  with the [layout](#restoring-the-layout); once closed it never does. Only your own acts keep or close one:
+  a client's `hide_space` or `close_tab` leaves it listed.
 - **Save**: ⌘⇧S, or File ▸ Save Tab as Workspace. In a workspace, the tab on show is saved into
   it; in the first space or a task's, as a new workspace of that tab. It records
   the tab's splits and their sizes, and each app pane's app (bundle id and name); for each
@@ -747,7 +761,8 @@ workspace.
   Each opens alone (click, ↵), and its … has Rename (its title; `r` in list mode) and Remove (`x` in list mode: out of the
   workspace; the last one deletes the workspace).
 - **The row**: a click anywhere on it opens the workspace, or selects it if it is open. The
-  pointer on it (or list mode's selection) shows one …: its menu has Rename and Delete.
+  pointer on it (or list mode's selection) shows one …: its menu has Rename and Delete, and Keep
+  on a temporary one.
   In the menu ↓ ↑ move, ↵ takes the item the keys are on; Esc, any other key or a click
   outside closes it. In list mode `r` and `x` rename and delete with no menu. Deleting leaves the open
   tabs alone; `Workspace deleted` shows on the [notice bar](#notice-bar) for six seconds, with
@@ -874,7 +889,10 @@ the way.
   checked, and curl pinned to that address), at most 5 MB, 30 seconds. A proxy set in your
   environment (`https_proxy`) applies. With `gh` for pull requests (`repos_prs`), it is ottospace's only network access. The link is handed to curl on its standard input, not in
   its arguments, and is never shown, logged or put in the state. A read that fails keeps the
-  events of the last one. Recurring meetings, time zones, cancelled meetings and moved
+  events of the last one, and is tried again 15 seconds later, then 30, doubling up to
+  `calendar_refresh_minutes`. Each fetch is in the app's log (`<home>/log`): its try, then its
+  size, events and time, or what failed (`timed_out`, `http` and the status, …); never the link
+  or a title. Recurring meetings, time zones, cancelled meetings and moved
   occurrences are followed; see [meeting-timeline.md](ai/meeting-timeline.md) for what is not.
 - **Declined meetings**: set `calendar_email` to your address as the feed lists you among a
   meeting's attendees, and a meeting (or one occurrence) you declined is left out everywhere: the
@@ -890,7 +908,12 @@ the way.
   title, and at most one quiet fact at the end (`now`, or `in 12m` for the next within the hour).
   Hover a row for the band's card. Past meetings are faded; the one that runs is stronger, with a
   white bar at its edge, as now's tick. `Join` shows on hover or selection for a meeting with an
-  `https:` link. "No meetings" when the day is empty. The header: `‹ Today ›`, or `‹ Mon 16 Nov ›`
+  `https:` link. Under the rows a muted line says how the feed's fetch goes: `Loading the
+  calendar… 412 KB` (or the seconds before a byte), `Updated 2 min ago · 1858 events`, or what
+  failed in plain words (`Couldn't reach the calendar (timed out after 30 s)`, `The calendar
+  answered 403`, `Couldn't read the calendar: not an iCalendar feed`) with the time of the last
+  good read and `Retry`, which fetches at once (your click only). "No meetings today" ("No
+  meetings" on another day) only once a read succeeded. The header: `‹ Today ›`, or `‹ Mon 16 Nov ›`
   and `Today` on another day, from 7 days back to 7 on; its date's tooltip says when the feed was
   read. The section goes back to today when the day turns and at start; the band, the alerts and
   now's tick are always of today. The rail cell shows a steady amber dot while a meeting is 2

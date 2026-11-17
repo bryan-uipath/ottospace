@@ -109,6 +109,109 @@ fn a_vtimezone_of_the_feed_gives_summer_and_winter_offsets() {
     assert_eq!(on(&text, 2027, 3, 30, &utc())[0].1, at(2027, 3, 30, 8, 0));
 }
 
+/// A Windows zone of Outlook's published feed: `name`, standard offset `std` hours.
+fn windows_zone(name: &str, std: i64) -> String {
+    let (s, d) = (format!("{:+03}00", std), format!("{:+03}00", std + 1));
+    format!(
+        "BEGIN:VTIMEZONE\r\nTZID:{name}\r\nBEGIN:STANDARD\r\nDTSTART:16010101T020000\r\nTZOFFSETFROM:{d}\r\n\
+         TZOFFSETTO:{s}\r\nRRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=1SU;BYMONTH=11\r\nEND:STANDARD\r\n\
+         BEGIN:DAYLIGHT\r\nDTSTART:16010101T020000\r\nTZOFFSETFROM:{s}\r\nTZOFFSETTO:{d}\r\n\
+         RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=2SU;BYMONTH=3\r\nEND:DAYLIGHT\r\nEND:VTIMEZONE\r\n"
+    )
+}
+
+/// Bryan, 2026-11-17, "shows no meetings": his feed's shape, made up. Outlook's published ICS,
+/// about 1.5 MB: some 1,900 VEVENTs over years, Windows TZIDs each with a VTIMEZONE, weekly
+/// series with moved occurrences (RECURRENCE-ID) and EXDATEs, long UIDs folded over lines, and
+/// Outlook's busy status. Today's meetings are all read: the reader was not the cause.
+#[test]
+fn an_outlook_feed_of_two_thousand_events_gives_todays_meetings() {
+    let zones: String = [("Pacific Standard Time", -8), ("Mountain Standard Time", -7), ("Central Standard Time", -6)]
+        .iter()
+        .map(|(name, std)| windows_zone(name, *std))
+        .collect();
+    let uid = |n: usize| format!("UID:040000008200E00074C5B7101A82E008{}\r\n {n:08}\r\n", "0".repeat(40));
+    let busy = "X-MICROSOFT-CDO-BUSYSTATUS:BUSY\r\nTRANSP:OPAQUE\r\nCLASS:PUBLIC\r\nPRIORITY:5\r\n";
+    let notes = format!("DESCRIPTION:{}\r\n", "Made-up notes. ".repeat(36));
+    let mut events = String::new();
+    // Years of past one-off meetings.
+    for n in 0..1_800 {
+        let (y, d) = (2021 + n as i64 / 400, 1 + n as i64 % 28);
+        let m = 1 + n as i64 / 28 % 12;
+        events += &event(&format!(
+            "{}SUMMARY:Old {n}\r\nDTSTART;TZID=Pacific Standard Time:{y}{m:02}{d:02}T100000\r\n\
+             DTEND;TZID=Pacific Standard Time:{y}{m:02}{d:02}T103000\r\n{busy}{notes}",
+            uid(n)
+        ));
+    }
+    // Today, 2026-11-17, a Tuesday: one-offs in three zones, a weekly series with today moved,
+    // a daily series with an EXDATE, and a free entry.
+    let today = [
+        ("A", "Central Standard Time", "20261117T080000", "20261117T083000"),
+        ("B", "Mountain Standard Time", "20261117T090000", "20261117T100000"),
+        ("C", "Pacific Standard Time", "20261117T140000", "20261117T143000"),
+    ];
+    for (n, (title, zone, start, end)) in today.iter().enumerate() {
+        events += &event(&format!(
+            "{}SUMMARY:{title}\r\nDTSTART;TZID={zone}:{start}\r\nDTEND;TZID={zone}:{end}\r\n{busy}",
+            uid(5_000 + n)
+        ));
+    }
+    let weekly = "DTSTART;TZID=Pacific Standard Time:20250902T110000\r\n\
+                  DTEND;TZID=Pacific Standard Time:20250902T113000\r\n";
+    events += &event(&format!("{}SUMMARY:Weekly\r\n{weekly}RRULE:FREQ=WEEKLY;BYDAY=TU;WKST=SU\r\n{busy}", uid(6_000)));
+    events += &event(&format!(
+        "{}SUMMARY:Weekly moved\r\nRECURRENCE-ID;TZID=Pacific Standard Time:20261117T110000\r\n\
+         DTSTART;TZID=Pacific Standard Time:20261117T120000\r\nDTEND;TZID=Pacific Standard Time:20261117T123000\r\n{busy}",
+        uid(6_000)
+    ));
+    events += &event(&format!(
+        "{}SUMMARY:Daily\r\nDTSTART;TZID=Pacific Standard Time:20260105T090000\r\n\
+         DTEND;TZID=Pacific Standard Time:20260105T091500\r\nRRULE:FREQ=DAILY;INTERVAL=1\r\n\
+         EXDATE;TZID=Pacific Standard Time:20261116T090000\r\n{busy}",
+        uid(6_001)
+    ));
+    events += &event(&format!(
+        "{}SUMMARY:Lunch\r\nDTSTART;TZID=Pacific Standard Time:20261117T130000\r\n\
+         DTEND;TZID=Pacific Standard Time:20261117T133000\r\nX-MICROSOFT-CDO-BUSYSTATUS:FREE\r\n",
+        uid(6_002)
+    ));
+    let text = feed(&format!("METHOD:PUBLISH\r\nPRODID:Microsoft Exchange Server 2010\r\n{zones}{events}"));
+    assert!(text.len() > 1_000_000 && text.len() < MAX_BYTES, "{} bytes", text.len());
+    let parsed = parse(&text);
+    assert_eq!(parsed.events.len(), 1_807);
+    assert!(named_zones(&parsed).is_empty(), "every zone is defined in the feed");
+    // The user in Pacific time (-8 in November).
+    let pacific = Zones { local: Table::fixed(-8 * H), named: Vec::new() };
+    let midnight = at(2026, 11, 17, 8, 0);
+    let (found, work) = expand_counted(&parsed, midnight, midnight + DAY, &pacific);
+    assert!(work < SCAN_BUDGET / 10, "{work}");
+    let found: Vec<(&str, i64)> = found.iter().map(|o| (o.summary.as_str(), o.start)).collect();
+    let pst = |h: i64| at(2026, 11, 17, h + 8, 0);
+    assert_eq!(
+        found,
+        [
+            ("A", pst(6)),
+            ("B", pst(8)),
+            ("Daily", pst(9)),
+            ("Weekly moved", pst(12)),
+            ("Lunch", pst(13)),
+            ("C", pst(14))
+        ]
+    );
+    // The day before: the EXDATE, and the weekly series not on a Monday.
+    let before = expand(&parsed, midnight - DAY, midnight, &pacific);
+    assert!(before.iter().all(|o| o.summary != "Daily" && o.summary != "Weekly"), "{before:?}");
+}
+
+#[test]
+fn a_page_in_place_of_the_feed_is_no_calendar() {
+    assert!(is_calendar(&feed("")));
+    assert!(is_calendar("\u{feff}begin:vcalendar\r\nEND:VCALENDAR\r\n"), "a byte-order mark, any case");
+    assert!(!is_calendar("<!DOCTYPE html><html><body>Sign in</body></html>\n"));
+    assert!(!is_calendar(""));
+}
+
 #[test]
 fn local_time_in_a_changing_zone() {
     let table = Table(vec![(i64::MIN, H), (at(2026, 10, 25, 1, 0), H), (at(2026, 3, 29, 1, 0), 2 * H)]);

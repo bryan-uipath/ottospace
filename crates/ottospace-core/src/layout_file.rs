@@ -71,6 +71,9 @@ pub struct SavedSpace {
     /// A workbook's id for good (`Workbook::uid`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workbook: Option<String>,
+    /// A temporary workspace's name: it has no file, so this one keeps it while it is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
     /// Its tab shown last, by place in `tabs`.
@@ -270,23 +273,30 @@ impl Model {
         // An editor's screen is not history: the Settings pane keeps none.
         let histories: Vec<(PaneId, History)> =
             histories.into_iter().filter(|(pane, _)| Some(*pane) != self.settings_pane).collect();
-        // The row as kept. A session's space is not: its tabs name none.
+        // The row as kept. A session's space is not: its tabs name none. Nor a temporary
+        // workspace the user closed: its tabs are not kept either.
+        let closing = |of: &Owner| matches!(of, Owner::Workbook { id } if self.workbooks.closing(*id));
         let kept = |space: &Space| {
-            let (kind, task, workbook) = match &space.of {
-                Owner::Home => ("workspace", None, None),
-                Owner::Task { id } => ("task", Some(known(Some(*id))?), None),
-                Owner::Workbook { id } => ("workbook", None, Some(self.workbooks.get(*id)?.uid.clone())),
+            let (kind, task, workbook, name) = match &space.of {
+                Owner::Home => ("workspace", None, None, None),
+                Owner::Task { id } => ("task", Some(known(Some(*id))?), None, None),
+                Owner::Workbook { id } => {
+                    let book = self.workbooks.get(*id).filter(|book| book.closing.is_none())?;
+                    ("workbook", None, Some(book.uid.clone()), Some(book.name.clone()).filter(|_| !book.kept))
+                }
                 Owner::Session { .. } => return None,
             };
             let tasks: Vec<TaskId> = space.joined.iter().copied().filter(|id| known(Some(*id)).is_some()).collect();
             let front = self.front(&space.of).filter(|id| tasks.contains(id));
-            let saved = SavedSpace { kind: kind.into(), task, workbook, hidden: space.hidden, tab: None, tasks, front };
+            let hidden = space.hidden;
+            let saved = SavedSpace { kind: kind.into(), task, workbook, name, hidden, tab: None, tasks, front };
             Some((space.of.clone(), space.last, saved))
         };
         let mut spaces: Vec<(Owner, Option<u32>, SavedSpace)> = self.spaces.iter().filter_map(kept).collect();
         let (mut records, mut links, mut selected) = (Vec::new(), Vec::new(), None);
         // Home's own tab is not kept: it is always there.
-        for (index, tab) in self.tabs.iter().enumerate().filter(|(_, tab)| tab.id != HOME_TAB).take(MAX_TABS) {
+        let tabs = self.tabs.iter().enumerate().filter(|(_, tab)| tab.id != HOME_TAB && !closing(&tab.space));
+        for (index, tab) in tabs.take(MAX_TABS) {
             let Some(mut record) = self.tab_record(index, cwds, &histories) else { continue };
             let space = spaces.iter().position(|(of, ..)| *of == tab.space);
             // An older build reads a tab's task from the record.
@@ -427,6 +437,12 @@ impl Model {
             self.fill_display = true;
             effects.push(Effect::FillDisplay { on: true });
         }
+        // A temporary workspace that was open: back, as it was, still temporary.
+        for saved in layout.spaces.iter().filter(|saved| saved.kind == "workbook") {
+            if let (Some(uid), Some(name)) = (&saved.workbook, &saved.name) {
+                self.temporary_workspace(uid, name);
+            }
+        }
         let mut owners: Vec<Owner> = layout.spaces.iter().map(|saved| self.owner_of(saved)).collect();
         // The first space's tabs, by place: all of it that is named, and in a file with no
         // spaces every tab of no live task.
@@ -440,6 +456,10 @@ impl Model {
         let upgraded = layout.tabs.iter().any(|saved| first(saved) && holds(saved));
         let firsts: Vec<bool> = layout.tabs.iter().map(first).collect();
         let upgraded = upgraded.then(|| self.stray_workspace(Some("Workspace".into())));
+        // It held what the user had open before workspaces could be temporary: kept.
+        if let Some(Owner::Workbook { id }) = &upgraded {
+            self.workbook_keep(*id);
+        }
         // Where the first space was on the row: after Home.
         if let Some(of) = &upgraded {
             self.spaces.insert(1, Space::new(of.clone()));
@@ -693,6 +713,40 @@ mod tests {
         m.space_rows().into_iter().map(|row| (m.space_title(&row.of), row.tabs)).collect()
     }
 
+    /// A temporary workspace has no file: `layout.json` keeps its name while it is open, so a
+    /// restart brings it back, still temporary. One the user closed is in neither.
+    #[test]
+    fn a_temporary_workspace_open_at_quit_comes_back_and_a_closed_one_never_does() {
+        let mut m = Model::default();
+        for uid in ["00000000000000a1", "00000000000000a2"] {
+            m.update(Action::WorkbookNew { uid: uid.into() });
+            m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        }
+        m.update(Action::SpaceHide { index: None });
+        let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
+        let books: Vec<(Option<&str>, Option<&str>)> = file
+            .spaces
+            .iter()
+            .filter(|space| space.kind == "workbook")
+            .map(|space| (space.workbook.as_deref(), space.name.as_deref()))
+            .collect();
+        assert_eq!((books, file.tabs.len()), (vec![(Some("00000000000000a1"), Some("Workspace 2"))], 1));
+        // The next run reads no file of either: the layout alone brings the open one back.
+        let mut fresh = Model::default();
+        let files: Vec<_> = m.workbooks.stored().cloned().collect();
+        fresh.update(Action::RestoreWorkbooks { workbooks: files }.sent_by(Origin::System));
+        fresh.update(restore(file).sent_by(Origin::System));
+        let names: Vec<(&str, bool)> = fresh.workbooks.list.iter().map(|b| (b.name.as_str(), b.kept)).collect();
+        assert_eq!(
+            (names, fresh.space(), fresh.panes.len()),
+            (vec![("Workspace 2", false)], &Owner::Workbook { id: 1 }, 1)
+        );
+        // Kept, its file holds it, and the layout names it as any other.
+        fresh.update(Action::WorkbookKeep { workbook: 1 });
+        let again = fresh.layout_file(&[], &[], 0);
+        assert_eq!(again.spaces.iter().filter_map(|space| space.name.as_deref()).count(), 0);
+    }
+
     #[test]
     fn an_older_files_first_space_is_a_kept_workspace_named_workspace_and_nothing_is_lost() {
         let mut m = Model::default();
@@ -703,7 +757,7 @@ mod tests {
         let home = ("Home".to_string(), vec![]);
         assert_eq!(row(&r), [home, ("Workspace".into(), vec![0, 1]), ("fix zoom".into(), vec![2])]);
         let book = &r.workbooks.list[0];
-        assert_eq!((book.name.as_str(), book.tabs.len(), valid(&book.uid)), ("Workspace", 0, true));
+        assert_eq!((book.name.as_str(), book.tabs.len(), valid(&book.uid), book.kept), ("Workspace", 0, true, true));
         // Selected, as it was, with its tab, its split and its terminals.
         assert_eq!((r.space(), r.tabs[r.active].title.as_str()), (&Owner::Workbook { id: book.id }, "notes"));
         assert!(matches!(&r.layout, Some(Node::Split { ratio, .. }) if (ratio - 0.4).abs() < 0.01), "{:?}", r.layout);

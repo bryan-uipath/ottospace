@@ -6,6 +6,7 @@ import type {
   AgentChip,
   AgentDial,
   AgentLine,
+  CalendarFetch,
   NoticeBar,
   NoticeLevel,
   AppEntry,
@@ -771,6 +772,7 @@ function spaceRow(value: unknown, at: string): SpaceRow {
     front: orNull(num)(o.front, `${at}.front`),
     worktree: orNull(str)(o.worktree, `${at}.worktree`),
     glyph: glyph(o.glyph, `${at}.glyph`),
+    kept: bool(o.kept, `${at}.kept`),
   };
 }
 
@@ -1242,6 +1244,7 @@ function confirm(value: unknown, at: string): Confirm {
     dismiss: orNull(num)(o.dismiss, `${at}.dismiss`),
     paste: orNull(pasteAsk)(o.paste, `${at}.paste`),
     unlist: orNull(str)(o.unlist, `${at}.unlist`),
+    close: orNull(num)(o.close, `${at}.close`),
   };
 }
 
@@ -1337,7 +1340,7 @@ function rowMenu(value: unknown, at: string): RowMenu {
   const item = (value: unknown, at: string): RowMenu["items"][number] => {
     const i = fields(value, at);
     const kind = i.item;
-    const kinds = ["rename", "delete", "remove", "pause", "resume"] as const;
+    const kinds = ["rename", "delete", "remove", "keep", "pause", "resume"] as const;
     const known = kinds.find((k) => k === kind);
     if (known === undefined) throw wrong(`${at}.item`, "a menu item", kind);
     return { item: known, label: str(i.label, `${at}.label`), rect: orNull(rect)(i.rect, `${at}.rect`) };
@@ -1345,15 +1348,16 @@ function rowMenu(value: unknown, at: string): RowMenu {
   return {
     workbook: orNull(num)(o.workbook, `${at}.workbook`),
     tab: orNull(num)(o.tab, `${at}.tab`),
+    space: bool(o.space, `${at}.space`),
     transcript: bool(o.transcript, `${at}.transcript`),
     selected: orNull(num)(o.selected, `${at}.selected`),
     items: list(item)(o.items, `${at}.items`),
   };
 }
 
-function workbookOffer(value: unknown, at: string): "deleted" | "updated" {
-  if (value === "deleted" || value === "updated") return value;
-  throw wrong(at, "deleted or updated", value);
+function workbookOffer(value: unknown, at: string): "deleted" | "updated" | "closed" {
+  if (value === "deleted" || value === "updated" || value === "closed") return value;
+  throw wrong(at, "deleted, updated or closed", value);
 }
 
 function model(value: unknown, at: string): Model {
@@ -1816,7 +1820,28 @@ function calendar(value: unknown, at: string): Snapshot["calendar"] {
     all_day_line: orNull(rect)(o.all_day_line, `${at}.all_day_line`),
     first_row: orNull(rect)(o.first_row, `${at}.first_row`),
     nav: nav(o.nav, `${at}.nav`),
+    fetch: calendarFetch(o.fetch, `${at}.fetch`),
+    fetch_line: str(o.fetch_line, `${at}.fetch_line`),
+    empty_note: orNull(str)(o.empty_note, `${at}.empty_note`),
+    fetch_rect: orNull(rect)(o.fetch_rect, `${at}.fetch_rect`),
+    retry: orNull(rect)(o.retry, `${at}.retry`),
+    retries: orNull(num)(o.retries, `${at}.retries`),
   };
+}
+
+function calendarFetch(value: unknown, at: string): CalendarFetch {
+  const o = fields(value, at);
+  const state = oneOf(["idle", "loading", "read", "failed"] as const, "a fetch's state")(o.state, `${at}.state`);
+  switch (state) {
+    case "idle":
+      return { state };
+    case "loading":
+      return { state, since: num(o.since, `${at}.since`), bytes: num(o.bytes, `${at}.bytes`) };
+    case "read":
+      return { state, at: num(o.at, `${at}.at`), events: num(o.events, `${at}.events`) };
+    case "failed":
+      return { state, at: num(o.at, `${at}.at`), error: str(o.error, `${at}.error`), code: orNull(num)(o.code, `${at}.code`) };
+  }
 }
 
 function frameNumbers(value: unknown, at: string): Snapshot["frame"] {

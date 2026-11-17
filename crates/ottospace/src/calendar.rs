@@ -8,10 +8,11 @@
 use std::io::{Read as _, Write as _};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use gpui::{AnyElement, AnyView, Context, Div, Window, div, prelude::*, px, relative, rgb};
+use ottospace_core::calendar::fetch::{self, Failure};
 use ottospace_core::calendar::{self, Event, Stage, Workday};
 use ottospace_core::ics::{self, Table, Zones};
 use ottospace_core::list::ListRow;
@@ -19,7 +20,9 @@ use ottospace_core::settings::expand_home;
 use ottospace_core::{Action, Effect, Origin, theme};
 use ottospace_mac::meeting;
 
-use crate::{Mark, Tooltip, Workspace, config, home, mark, now_ms, progress, words};
+use serde_json::json;
+
+use crate::{Mark, Tooltip, Workspace, config, event_log, home, mark, now_ms, progress, words};
 
 /// The band's height above the status bar, its 1-point top line included; hover takes all of it.
 const BAND: f32 = 12.;
@@ -56,14 +59,27 @@ pub struct Read {
     problem: Option<&'static str>,
 }
 
+/// What the feed thread tells the UI thread: a fetch's progress, its end, a read.
+enum Heard {
+    Fetching { since: u64, bytes: u64 },
+    Fetched { at: u64, events: u32, failure: Option<Failure> },
+    Read(Read),
+}
+
 /// What a failed read says in the status bar, never naming the link.
 const MOVED: &str = "calendar feed redirects: put its final https address in calendar_ics";
 const PRIVATE: &str = "calendar feed: its host is not on the internet";
+/// A fetch's progress is told at most this often.
+const PROGRESS: Duration = Duration::from_millis(200);
 
 /// The timeline's shell state. Inert when no feed is set.
 #[derive(Default)]
 pub struct Timeline {
-    reads: Option<Receiver<Read>>,
+    heard: Option<Receiver<Heard>>,
+    /// Wakes the feed thread to fetch now: the user's Retry.
+    retry: Option<Sender<()>>,
+    /// Retries carried out, for a test.
+    retries: u32,
     /// `calendar_workday`: the band's span.
     workday: Workday,
     reduce_motion: bool,
@@ -76,7 +92,7 @@ pub struct Timeline {
 }
 
 impl Timeline {
-    /// Starts the reader if the settings name a feed.
+    /// Starts the reader if the settings name a feed. Its first fetch starts at once.
     pub fn start() -> Self {
         let settings = &config::get().settings;
         let workday = settings.workday();
@@ -86,56 +102,129 @@ impl Timeline {
         } else {
             Source::File(PathBuf::from(expand_home(feed, &config::user_home())))
         };
-        let every = Duration::from_secs(60 * u64::from(settings.calendar_refresh_minutes.unwrap_or(5).max(1)));
+        let every = 60_000 * u64::from(settings.calendar_refresh_minutes.unwrap_or(5).max(1));
         // Only to match while parsing: never sent, stored in the model, or logged.
         let me = settings.calendar_email.clone();
         let (tx, rx) = mpsc::channel();
+        let (retry, wake) = mpsc::channel::<()>();
         // The feed is parsed once a read, and its events worked out again only then or when the
         // day turns: nothing that grows with the feed runs on the timer.
         std::thread::spawn(move || {
-            let (mut feed, mut fetched, mut days) = (ics::Feed::default(), None::<Instant>, [0u64; calendar::DAYS]);
+            let (mut feed, mut days) = (ics::Feed::default(), [0u64; calendar::DAYS]);
+            // At once; after a failure soon again (`retry_after`), not a whole interval on.
+            let (mut next, mut failures) = (Instant::now(), 0u32);
             // When the feed was last read whole, and whether the last fetch failed: a new day's
             // re-evaluation is no read, so it changes neither.
-            let (mut read_at, mut failed) = (None::<u64>, false);
+            let (mut read_at, mut failed, mut last_failure) = (None::<u64>, false, None::<Failure>);
             loop {
                 let now = now_ms();
-                let due = fetched.is_none_or(|at| at.elapsed() >= every);
-                let mut problem = None;
+                let due = Instant::now() >= next;
+                // The fetch's end is told after its read: a frame never shows it read with nothing held.
+                let (mut problem, mut fetched, mut outcome) = (None, None, None);
                 if due {
-                    match fetch(&source) {
-                        Ok(text) => (feed, read_at, failed) = (ics::parse_for(&text, me.as_deref()), Some(now), false),
-                        Err(why) => (failed, problem) = (true, why),
+                    event_log::event("calendar_fetch", json!({ "try": failures + 1 }));
+                    let began = Instant::now();
+                    // The start, the first bytes, then at most every `PROGRESS`.
+                    let (mut told, mut said) = (began, None::<u64>);
+                    let mut progress = |bytes: u64| {
+                        if said.is_none_or(|said| said == 0 && bytes > 0) || told.elapsed() >= PROGRESS {
+                            (told, said) = (Instant::now(), Some(bytes));
+                            let _ = tx.send(Heard::Fetching { since: now, bytes });
+                        }
+                    };
+                    let got = fetch(&source, &mut progress);
+                    let took = began.elapsed().as_millis() as u64;
+                    let got =
+                        got.and_then(|text| if ics::is_calendar(&text) { Ok(text) } else { Err(Failure::NotCalendar) });
+                    let at = now_ms();
+                    match got {
+                        Ok(text) => {
+                            let parsed = Instant::now();
+                            (feed, read_at, failed, failures) =
+                                (ics::parse_for(&text, me.as_deref()), Some(now), false, 0);
+                            let events = u32::try_from(feed.events.len()).unwrap_or(u32::MAX);
+                            fetched = Some((text.len(), took, parsed.elapsed().as_millis() as u64));
+                            last_failure = None;
+                            // As `read_at`: one clock for "updated" and "last read".
+                            outcome = Some(Heard::Fetched { at: now, events, failure: None });
+                        }
+                        Err(why) => {
+                            (failed, failures) = (true, failures.saturating_add(1));
+                            // Once a run of failures, or when it changes: a dismissed notice stays gone.
+                            let new = last_failure.replace(why) != Some(why);
+                            problem = match why {
+                                Failure::Moved if new => Some(MOVED),
+                                Failure::NotPublic if new => Some(PRIVATE),
+                                _ => None,
+                            };
+                            let (exit, http) = match why {
+                                Failure::Curl(code) => (Some(code), None),
+                                Failure::Http(code) => (None, Some(code)),
+                                _ => (None, None),
+                            };
+                            let fields = json!({ "error": why.kind(), "curl_exit": exit, "http": http, "ms": took, "try": failures });
+                            event_log::event("calendar_failed", fields);
+                            outcome = Some(Heard::Fetched { at, events: 0, failure: Some(why) });
+                        }
                     }
-                    fetched = Some(Instant::now());
+                    next = Instant::now() + Duration::from_millis(fetch::retry_after(failures, every));
+                    // Retries asked for while this one ran: it was the fetch they asked for.
+                    while wake.try_recv().is_ok() {}
                 }
                 if due || now >= days[calendar::BACK + 1] {
                     let (events, today, held_from) = evaluate(&feed, now);
                     days = today;
+                    if let Some((bytes, ms, parse_ms)) = fetched {
+                        let (vevents, held) = (feed.events.len(), events.len());
+                        let fields =
+                            json!({ "bytes": bytes, "vevents": vevents, "held": held, "ms": ms, "parse_ms": parse_ms });
+                        event_log::event("calendar_read", fields);
+                    }
                     let events = read_at.filter(|_| !failed).map(|_| events);
                     let read = Read { events, days, at: read_at.unwrap_or(now), held_from, problem };
-                    if tx.send(read).is_err() {
+                    if tx.send(Heard::Read(read)).is_err() {
                         return;
                     }
                 }
-                std::thread::sleep(WAKE);
+                if let Some(outcome) = outcome {
+                    let _ = tx.send(outcome);
+                }
+                // Asleep until the next fetch, a new day's look (`WAKE`), or the user's Retry.
+                match wake.recv_timeout(WAKE.min(next.saturating_duration_since(Instant::now()))) {
+                    Ok(()) => next = Instant::now(),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                }
             }
         });
-        Self { reads: Some(rx), workday, ..Self::default() }
+        Self { heard: Some(rx), retry: Some(retry), workday, ..Self::default() }
     }
 }
 
-/// The feed's text, or what the status bar may say of the failure (`None`: nothing more than
-/// "not updated"). The link is never in a message.
-fn fetch(source: &Source) -> Result<String, Option<&'static str>> {
+/// The feed's text, or why not. `progress` hears the bytes read so far. The link is never in a
+/// failure.
+fn fetch(source: &Source, progress: &mut dyn FnMut(u64)) -> Result<String, Failure> {
     match source {
         Source::File(path) => {
-            let file = std::fs::File::open(path).map_err(|_| None)?;
-            let mut bytes = Vec::new();
-            file.take(ics::MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|_| None)?;
+            progress(0);
+            let file = std::fs::File::open(path).map_err(|_| Failure::File)?;
+            let bytes = read_capped(file, progress).map_err(|_| Failure::File)?;
             let fits = bytes.len() <= ics::MAX_BYTES;
-            fits.then(|| String::from_utf8_lossy(&bytes).into_owned()).ok_or(None)
+            fits.then(|| String::from_utf8_lossy(&bytes).into_owned()).ok_or(Failure::TooBig)
         }
-        Source::Link(link) => curl(link),
+        Source::Link(link) => curl(link, progress),
+    }
+}
+
+/// Up to one byte over `ics::MAX_BYTES`, in pieces, `progress` told of each.
+fn read_capped(from: impl std::io::Read, progress: &mut dyn FnMut(u64)) -> std::io::Result<Vec<u8>> {
+    let (mut from, mut bytes, mut piece) = (from.take(ics::MAX_BYTES as u64 + 1), Vec::new(), [0u8; 64 * 1024]);
+    loop {
+        match from.read(&mut piece)? {
+            0 => return Ok(bytes),
+            n => bytes.extend_from_slice(&piece[..n]),
+        }
+        progress(bytes.len() as u64);
     }
 }
 
@@ -145,18 +234,21 @@ fn fetch(source: &Source) -> Result<String, Option<&'static str>> {
 /// the user's environment (`https_proxy`) still applies; the proxy then looks the host up.
 /// A test run may name another program in `OTTOSPACE_CURL`, which stands for curl, reads the same
 /// config and is given no pinned address (a test looks nothing up).
-fn curl(link: &str) -> Result<String, Option<&'static str>> {
+fn curl(link: &str, progress: &mut dyn FnMut(u64)) -> Result<String, Failure> {
+    progress(0);
+    let began = Instant::now();
     let test = std::env::var_os("OTTOSPACE_E2E").and(std::env::var_os("OTTOSPACE_CURL"));
     let pin = match test {
         Some(_) => None,
         None => {
             use std::net::ToSocketAddrs;
-            let (host, port) = calendar::feed_host(link).ok_or(None)?;
-            let found: Vec<_> = (host, port).to_socket_addrs().map_err(|_| None)?.map(|a| a.ip()).collect();
-            Some(calendar::pin_address(&found).ok_or(Some(PRIVATE))?)
+            let (host, port) = calendar::feed_host(link).ok_or(Failure::Curl(-1))?;
+            let found = (host, port).to_socket_addrs().map_err(|_| Failure::Unreachable)?;
+            let found: Vec<_> = found.map(|a| a.ip()).collect();
+            Some(calendar::pin_address(&found).ok_or(Failure::NotPublic)?)
         }
     };
-    let config = calendar::curl_config(link, pin).ok_or(None)?;
+    let config = calendar::curl_config(link, pin).ok_or(Failure::Curl(-1))?;
     let program = test.map_or_else(|| PathBuf::from("/usr/bin/curl"), PathBuf::from);
     let mut child = Command::new(program)
         .args(["-q", "--config", "-"])
@@ -165,22 +257,25 @@ fn curl(link: &str) -> Result<String, Option<&'static str>> {
         // Only the status code: `silent`, and no `show-error`, whose messages may quote the link.
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|_| None)?;
-    child.stdin.take().ok_or(None)?.write_all(config.as_bytes()).map_err(|_| None)?;
-    let mut bytes = Vec::new();
-    let read = child.stdout.take().ok_or(None)?.take(ics::MAX_BYTES as u64 + 1).read_to_end(&mut bytes);
-    if read.is_err() || bytes.len() > ics::MAX_BYTES {
+        .map_err(|_| Failure::Curl(-1))?;
+    child.stdin.take().ok_or(Failure::Curl(-1))?.write_all(config.as_bytes()).map_err(|_| Failure::Curl(-1))?;
+    let read = read_capped(child.stdout.take().ok_or(Failure::Curl(-1))?, progress);
+    let over = read.as_ref().map_or(true, |bytes| bytes.len() > ics::MAX_BYTES);
+    if over {
         let _ = child.kill();
     }
     let mut code = String::new();
-    let _ = child.stderr.take().ok_or(None)?.take(16).read_to_string(&mut code);
-    let ok = child.wait().map_err(|_| None)?.success();
-    match calendar::feed_answer(&code) {
-        calendar::Answer::Moved => Err(Some(MOVED)),
-        calendar::Answer::Read if ok && read.is_ok() && bytes.len() <= ics::MAX_BYTES => {
-            Ok(String::from_utf8_lossy(&bytes).into_owned())
+    let _ = child.stderr.take().ok_or(Failure::Curl(-1))?.take(16).read_to_string(&mut code);
+    let exit = child.wait().ok().and_then(|status| status.code());
+    match read {
+        Ok(bytes) if bytes.len() > ics::MAX_BYTES => Err(Failure::TooBig),
+        Ok(bytes) => {
+            match Failure::of_curl(exit, code.trim().parse().ok(), began.elapsed().as_secs_f32().round() as u32) {
+                None => Ok(String::from_utf8_lossy(&bytes).into_owned()),
+                Some(why) => Err(why),
+            }
         }
-        _ => Err(None),
+        Err(_) => Err(Failure::Curl(-1)),
     }
 }
 
@@ -248,12 +343,19 @@ impl Workspace {
     /// From the main loop: the feed's reads, the call while a meeting is near, and a redraw while the
     /// band pulses (10 a second), else every 20 seconds, as now moves along it.
     pub(crate) fn tick_timeline(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let reads: Vec<Read> = self.timeline.reads.iter().flat_map(|rx| rx.try_iter()).collect();
-        for Read { events, days, at, held_from, problem } in reads {
-            if problem.is_some() {
-                self.error = problem.map(String::from);
-            }
-            self.dispatch(Action::CalendarRead { events, days, at, held_from }, Origin::System, window, cx);
+        let heard: Vec<Heard> = self.timeline.heard.iter().flat_map(|rx| rx.try_iter()).collect();
+        for heard in heard {
+            let action = match heard {
+                Heard::Fetching { since, bytes } => Action::CalendarFetching { since, bytes },
+                Heard::Fetched { at, events, failure } => Action::CalendarFetched { at, events, failure },
+                Heard::Read(Read { events, days, at, held_from, problem }) => {
+                    if problem.is_some() {
+                        self.error = problem.map(String::from);
+                    }
+                    Action::CalendarRead { events, days, at, held_from }
+                }
+            };
+            self.dispatch(action, Origin::System, window, cx);
         }
         if !self.model.calendar.on {
             return;
@@ -281,7 +383,10 @@ impl Workspace {
         let pulses =
             calendar.near(now).any(|e| matches!(calendar::stage(e, now), Stage::Approaching | Stage::Imminent));
         let pulse = pulses && !self.timeline.reduce_motion;
-        if pulse || now.saturating_sub(self.timeline.slid) >= 20_000 {
+        // A fetch's seconds go on in the section while it runs.
+        let loading = matches!(calendar.fetch, fetch::Fetch::Loading { .. });
+        let every = if loading { 1_000 } else { 20_000 };
+        if pulse || now.saturating_sub(self.timeline.slid) >= every {
             self.timeline.slid = now;
             cx.notify();
         }
@@ -297,6 +402,11 @@ impl Workspace {
                 meeting::beep();
             }
             // `joinable` again, at the door: the one allow-function.
+            Effect::CalendarRetry => {
+                if self.timeline.retry.as_ref().is_some_and(|retry| retry.send(()).is_ok()) {
+                    self.timeline.retries += 1;
+                }
+            }
             Effect::OpenLink { url } if calendar::joinable(url) => {
                 if test {
                     self.timeline.joins += 1;
@@ -314,7 +424,14 @@ impl Workspace {
     /// card for each, no click.
     pub(crate) fn render_timeline(&self) -> Option<AnyElement> {
         let gone = |m: &Mark| {
-            matches!(m, Mark::BandBlock(_) | Mark::BandOut(_) | Mark::CalendarAllDay | Mark::CalendarFirstRow)
+            matches!(
+                m,
+                Mark::BandBlock(_)
+                    | Mark::BandOut(_)
+                    | Mark::CalendarAllDay
+                    | Mark::CalendarFirstRow
+                    | Mark::CalendarFetch
+            )
         };
         self.marks.borrow_mut().retain(|m, _| !gone(m));
         let calendar = &self.model.calendar;
@@ -511,6 +628,14 @@ impl Workspace {
             // Where its all-day line and first row are drawn, and the open section's header.
             "all_day_line": drawn(Mark::CalendarAllDay),
             "first_row": drawn(Mark::CalendarFirstRow),
+            // The fetch: its state, its progress or what failed (a kind and a code, never the link),
+            // the section's line and empty note as drawn, the line's rect and its Retry's.
+            "fetch": fetch_snapshot(calendar.fetch),
+            "fetch_line": calendar.fetch_line(now, zone_offset(now)),
+            "empty_note": calendar.empty_note(),
+            "fetch_rect": drawn(Mark::CalendarFetch),
+            "retry": at("calendar-retry".into()),
+            "retries": std::env::var_os("OTTOSPACE_E2E").map(|_| self.timeline.retries),
             "nav": serde_json::json!({
                 "back": at("calendar-day:back".into()),
                 "forward": at("calendar-day:forward".into()),
@@ -519,6 +644,28 @@ impl Workspace {
             "joins": std::env::var_os("OTTOSPACE_E2E").map(|_| self.timeline.joins),
         })
     }
+}
+
+/// The fetch in the state: counts, times, a kind and a code. Never the link or a title.
+fn fetch_snapshot(fetch: fetch::Fetch) -> serde_json::Value {
+    let mut out = json!({ "state": fetch.name() });
+    let fields = match fetch {
+        fetch::Fetch::Idle => json!({}),
+        fetch::Fetch::Loading { since, bytes } => json!({ "since": since, "bytes": bytes }),
+        fetch::Fetch::Read { at, events } => json!({ "at": at, "events": events }),
+        fetch::Fetch::Failed { at, why } => {
+            let code = match why {
+                Failure::Http(code) => Some(i64::from(code)),
+                Failure::Curl(code) => Some(i64::from(code)),
+                _ => None,
+            };
+            json!({ "at": at, "error": why.kind(), "code": code })
+        }
+    };
+    if let (Some(out), serde_json::Value::Object(fields)) = (out.as_object_mut(), fields) {
+        out.extend(fields);
+    }
+    out
 }
 
 /// The local zone's offset at `ms`, seconds east of UTC.
@@ -561,8 +708,9 @@ impl Workspace {
             );
         }
         let rows = calendar.agenda();
-        if rows.is_empty() {
-            children.push(div().px_2().text_xs().text_color(rgb(theme::MUTED)).child("No meetings").into_any_element());
+        // An empty day only once a read succeeded; before, the fetch's line below says how it goes.
+        if let Some(note) = calendar.empty_note().filter(|_| rows.is_empty()) {
+            children.push(div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(note).into_any_element());
         }
         let mut meetings = Vec::new();
         for (index, row) in rows.iter().enumerate() {
@@ -574,6 +722,7 @@ impl Workspace {
         }
         // Level, as Workspaces' rows: a list of the day, not an opened-up group (no `well`).
         children.extend(meetings);
+        children.push(self.fetch_line(now, offset, cx));
         // Its own scroll, at the top when the section opens (it was not drawn the frame before)
         // or its day changes; never another section's.
         let (frame, day) = self.calendar_shown.get();
@@ -584,6 +733,23 @@ impl Workspace {
         let list = div().id("calendar").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         let list = list.track_scroll(&self.calendar_scroll).children(children);
         div().flex_1().min_h_0().flex().flex_col().child(self.bars.tracked("calendar", list, &self.calendar_scroll))
+    }
+
+    /// The fetch's muted line under the rows: loading with its progress, what failed with a Retry
+    /// (the user's click alone fetches), or when it was read and how many events.
+    fn fetch_line(&self, now: u64, offset: i64, cx: &mut Context<Self>) -> AnyElement {
+        let calendar = &self.model.calendar;
+        let failed = matches!(calendar.fetch, fetch::Fetch::Failed { .. });
+        let retry = failed.then(|| {
+            let click = |this: &mut Self, window: &Window, cx: &mut Context<Self>| {
+                drop(this.dispatch(Action::CalendarRetry, this.input, window, cx))
+            };
+            self.word("calendar-retry".into(), ("Retry", "Read the calendar again"), click, cx).flex_none()
+        });
+        let text = div().flex_1().min_w_0().child(calendar.fetch_line(now, offset));
+        let line = div().flex_none().flex().items_center().gap_1().px_2().pt_1().text_xs();
+        let line = line.text_color(rgb(if failed { theme::TEXT } else { theme::MUTED }));
+        line.child(mark(&self.marks, Mark::CalendarFetch)).relative().child(text).children(retry).into_any_element()
     }
 
     /// The header's day: `‹ Today ›`, `‹ Mon 16 Nov ›`, and Today while on another day. Its

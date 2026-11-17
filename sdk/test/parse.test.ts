@@ -135,9 +135,9 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     scrollbars: {},
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
     spaces: [
-      { of: { kind: "home" }, hidden: false, selected: false, tabs: [], tasks: [], front: null, worktree: null, glyph: { kind: "home" } },
-      { of: { kind: "workbook", id: 1 }, hidden: false, selected: true, tabs: [0], tasks: [], front: null, worktree: "/code/app", glyph: { kind: "app", name: "Notes" } },
-      { of: { kind: "task", id: 1 }, hidden: true, selected: false, tabs: [1], tasks: [1], front: 1, worktree: null, glyph: { kind: "tasks" } },
+      { of: { kind: "home" }, hidden: false, selected: false, tabs: [], tasks: [], front: null, worktree: null, glyph: { kind: "home" }, kept: true },
+      { of: { kind: "workbook", id: 1 }, hidden: false, selected: true, tabs: [0], tasks: [], front: null, worktree: "/code/app", glyph: { kind: "app", name: "Notes" }, kept: true },
+      { of: { kind: "task", id: 1 }, hidden: true, selected: false, tabs: [1], tasks: [1], front: 1, worktree: null, glyph: { kind: "tasks" }, kept: true },
     ],
     badges: { "1": "FL" },
     calendar: {
@@ -156,6 +156,9 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       rows: 4, rail: "near", day: -1, day_start: 1794470400000,
       all_day_line: [70, 66, 236, 20], first_row: [70, 90, 236, 30],
       nav: { back: [140, 38, 14, 19], forward: [232, 38, 14, 19], today: [252, 38, 42, 19] },
+      fetch: { state: "failed", at: 1794470400000, error: "http", code: 403 },
+      fetch_line: "The calendar answered 403 · last read 09:40", empty_note: "No meetings today",
+      fetch_rect: [70, 200, 236, 20], retry: [270, 200, 36, 18], retries: 1,
     },
     drawer: {
       body: [880, 40, 470, 820],
