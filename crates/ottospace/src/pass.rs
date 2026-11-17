@@ -51,13 +51,19 @@ struct Folder(OwnedFd);
 
 impl Folder {
     /// `dir` itself, never a link (`O_NOFOLLOW`), and only if it is `uid`'s, mode 0700: else None.
-    fn open(dir: &Path, uid: libc::uid_t) -> Option<Self> {
+    /// `repair`: a folder of `uid`'s with another mode is made 0700 through the fd first.
+    fn open(dir: &Path, uid: libc::uid_t, repair: bool) -> Option<Self> {
         let path = CString::new(dir.as_os_str().as_bytes()).ok()?;
         let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
         // SAFETY: `path` is a valid C string; the fd is owned from here on.
         let fd = unsafe { libc::open(path.as_ptr(), flags) };
         let folder = Self((fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) })?);
-        let meta = folder.stat(c".")?;
+        let mut meta = folder.stat(c".")?;
+        // SAFETY: the folder's own fd.
+        if repair && meta.st_uid == uid && meta.st_mode & 0o7777 != 0o700 {
+            (unsafe { libc::fchmod(folder.0.as_raw_fd(), 0o700) } == 0).then_some(())?;
+            meta = folder.stat(c".")?;
+        }
         let ours = meta.st_uid == uid && meta.st_mode & libc::S_IFMT == libc::S_IFDIR && meta.st_mode & 0o7777 == 0o700;
         ours.then_some(folder)
     }
@@ -133,20 +139,20 @@ pub(crate) fn sweep(dir: &Path) {
 
 /// `sweep`, the folder required to be `uid`'s.
 fn sweep_as(dir: &Path, uid: libc::uid_t) {
-    let Some(folder) = Folder::open(dir, uid) else { return };
+    let Some(folder) = Folder::open(dir, uid, false) else { return };
     folder.names().iter().for_each(|name| folder.unlink_file(name));
     // `rmdir` takes only an empty folder, never a link.
     let _ = std::fs::remove_dir(dir);
 }
 
 /// The folder for pass files, 0700: made with the first pass, gone with the last (`Live::drop`).
-/// A link or anything else at its place, or a folder not ours and 0700, makes no folder.
+/// A link or anything else at its place, or a folder not ours, makes no folder; ours is made 0700.
 fn ready(dir: &Path) -> std::io::Result<Folder> {
     match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Err(err) if err.kind() != std::io::ErrorKind::AlreadyExists => return Err(err),
         _ => {}
     }
-    Folder::open(dir, uid()).ok_or_else(|| std::io::Error::other("the pass folder's place holds something else"))
+    Folder::open(dir, uid(), true).ok_or_else(|| std::io::Error::other("the pass folder's place holds something else"))
 }
 
 impl Live {
@@ -494,13 +500,28 @@ mod tests {
         sweep(link.as_ref());
         assert!(real.join("pass-2-0").exists(), "a linked folder is refused");
         assert!(Live::mint_in(link.as_ref()).is_err());
-        // Another mode, or another owner: left alone, and no pass is minted in it.
+        // Another mode, or another owner: the sweep leaves it alone. A mint makes ours 0700 again.
         let open = crate::scratch::Scratch::dir(&format!("ottospace-test-sweep-mode-{}", std::process::id()));
         std::fs::set_permissions(open.as_ref(), std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(open.join("pass-3-0"), "old").unwrap();
         sweep(open.as_ref());
         assert!(open.join("pass-3-0").exists(), "0755: left alone");
-        assert!(Live::mint_in(open.as_ref()).is_err());
+        drop(Live::mint_in(open.as_ref()).unwrap());
+        assert_eq!(std::fs::metadata(open.as_ref()).unwrap().permissions().mode() & 0o777, 0o700);
+        // A pass's file goes through its folder's fd: its path swapped for a link to another
+        // folder holding a file of that name, that file survives.
+        let live = Live::mint_in(real.as_ref()).unwrap();
+        let moved = crate::scratch::Scratch::path(&format!("ottospace-test-sweep-moved-{}", std::process::id()));
+        std::fs::rename(real.as_ref(), moved.as_ref()).unwrap();
+        let decoy = live.file().file_name().map(|name| outside.join(name)).unwrap();
+        std::fs::write(&decoy, "keep").unwrap();
+        std::os::unix::fs::symlink(outside.as_ref(), real.as_ref()).unwrap();
+        let name = live.file().file_name().map(|name| moved.join(name)).unwrap();
+        drop(live);
+        assert!(decoy.exists(), "the link's folder is not touched");
+        assert!(!name.exists(), "the file went from the folder it was made in");
+        std::fs::remove_file(real.as_ref()).unwrap();
+        std::fs::rename(moved.as_ref(), real.as_ref()).unwrap();
         std::fs::write(real.join("pass-4-0"), "old").unwrap();
         sweep_as(real.as_ref(), uid() + 1);
         assert!(real.join("pass-4-0").exists(), "another owner's: left alone");
