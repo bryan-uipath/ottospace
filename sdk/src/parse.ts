@@ -67,6 +67,8 @@ import type {
   MarkReply,
   MarksReply,
   RecordReply,
+  ProbeBuffer,
+  AudioProbeReply,
   TraceReply,
   Workbook,
   WorkbookPane,
@@ -1773,6 +1775,20 @@ export function traceReply(value: unknown): TraceReply {
 
 export function recordReply(value: unknown): RecordReply {
   return { ok: true, frames: num(fields(value, "reply").frames, "frames") };
+}
+
+function probeBuffer(value: unknown, at: string): ProbeBuffer {
+  const o = fields(value, at);
+  return {
+    pts_ms: orNull(num)(o.pts_ms, `${at}.pts_ms`),
+    samples: num(o.samples, `${at}.samples`),
+    rms: num(o.rms, `${at}.rms`),
+  };
+}
+
+export function audioProbeReply(value: unknown): AudioProbeReply {
+  const o = fields(value, "reply");
+  return { ok: true, buffers: list(probeBuffer)(o.buffers, "buffers"), failed: orNull(str)(o.failed, "failed") };
 }
 
 function scrollbar(value: unknown, at: string): Scrollbar {
