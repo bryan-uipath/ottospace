@@ -807,9 +807,21 @@ const MAKERS: &[Make] = &[
     |_| Action::KeysKnown,
     |g| {
         use crate::notice::Kind::*;
-        let kinds =
-            [Failed, Refused, Unsaved, Told, SettingsProblem, SettingsRetired, SettingsRestart, Start, Keys, Meeting];
-        let said = g.m.settings_line().filter(|_| g.rng.coin());
+        let kinds = [
+            Failed,
+            Refused,
+            Unsaved,
+            Told,
+            SettingsProblem,
+            SettingsRetired,
+            SettingsRestart,
+            Start,
+            Keys,
+            Meeting,
+            Undo,
+        ];
+        let offered = g.m.workbooks.notice().map(|notice| notice.text);
+        let said = g.m.settings_line().or(offered).filter(|_| g.rng.coin());
         Action::NoticeDismiss { notice: g.rng.pick(&kinds), text: said.unwrap_or_else(|| g.text()) }
     },
     |g| {
@@ -1555,10 +1567,10 @@ fn check(m: &Model) -> Result<(), String> {
         m.space()
     );
     // The agent chip is there exactly while the selected space has a conversation and nothing
-    // is in the drawer's place: no conversation open, new task, draft, brief or inspector. It
-    // is that conversation's, and names its space's place on the row.
+    // is in the drawer's place: no conversation open, new task, draft, brief, inspector or
+    // transcript. It is that conversation's, and names its space's place on the row.
     let busy = m.talk.as_ref().is_some_and(|talk| talk.open) || m.compose.is_some() || m.capture.is_some();
-    let busy = busy || m.brief.is_some() || m.inspector.is_some();
+    let busy = busy || m.brief.is_some() || m.inspector.is_some() || m.listen.shown;
     let chip = m.agent_chip();
     ensure!(
         chip.is_some() == (m.space_subject(m.space()).is_some() && !busy),
@@ -2522,6 +2534,7 @@ impl Run {
             m.palette.iter().flat_map(|p| p.feature_matches()).map(|c| (c.feature, c.on)).collect();
         let key_use = m.key_use.clone();
         let hidden = m.notice_hidden.clone();
+        let offer_before = m.workbooks.notice();
         // The new task in the drawer with the keyboard, the bar beside it, and the user's line.
         let beside = (m.compose_modal() && m.mode() == Mode::Compose && !m.keys && gated.is_none())
             .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty() && !m.compose_theirs)));
@@ -2551,6 +2564,13 @@ impl Run {
             "{origin:?} changed the dismissed notices: {action:?}"
         );
         ensure!(!reads || m.notice_hidden.iter().all(|n| hidden.contains(n)), "a read dismissed a notice");
+        // The offer on the bar: only the user's × on it ends it early.
+        if let (Action::NoticeDismiss { notice: crate::notice::Kind::Undo, text }, Some(said)) =
+            (&action, &offer_before)
+        {
+            let ended = m.workbooks.notice().is_none();
+            ensure!(ended == (origin == Origin::User && *text == said.text), "{origin:?}'s dismissal: {ended}");
+        }
         if let Action::NoticeDismiss { notice, .. } = &action {
             let told = if origin == Origin::User { vec![Effect::NoticeDismissed { kind: *notice }] } else { vec![] };
             ensure!(effects == told, "a notice's dismissal by {origin:?} made {effects:?}");

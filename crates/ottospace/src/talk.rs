@@ -32,7 +32,7 @@ pub struct Agent {
     /// The core was told it ended.
     told: bool,
     /// Its task's pass, while its program runs (`pass`): none for a session's agent, nor once it moved.
-    pass: Option<crate::pass::Pass>,
+    pass: Option<crate::pass::Live>,
 }
 
 /// What a drag of the drawer's left edge carries.
@@ -149,9 +149,9 @@ impl Workspace {
         let Command { program: name, args } = command;
         // The agent can ask for its task's brief over the socket, as in a task's own terminals; its
         // pass says the request is the agent's own.
-        let pass = task.map(|_| crate::pass::Pass::mint().ok_or("no random bytes for a pass")).transpose()?;
+        let pass = task.map(|_| crate::pass::Live::mint()).transpose()?;
         let mut vars: Vec<(&str, String)> = task.map(|id| ("OTTOSPACE_TASK", id.to_string())).into_iter().collect();
-        vars.extend(pass.as_ref().map(|pass| (crate::pass::VAR, pass.hex())));
+        vars.extend(pass.as_ref().map(|pass| (crate::pass::VAR, pass.file().to_string_lossy().into_owned())));
         // No repository: the home folder, as the core says, not wherever ottospace was started.
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
         let cwd = cwd.or(home.as_deref());
@@ -168,9 +168,9 @@ impl Workspace {
     /// one's process gone is enough, before its stdout ends.
     pub(crate) fn caller(&self, given: Option<&crate::pass::Pass>) -> ottospace_core::tasks::Caller {
         let terminals = self.drawer.agents.iter().filter(|(_, agent)| !agent.terminal.exited());
-        let terminals = terminals.filter_map(|(subject, agent)| Some((agent.pass.as_ref()?, subject.task()?)));
+        let terminals = terminals.filter_map(|(subject, agent)| Some((agent.pass.as_ref()?.pass(), subject.task()?)));
         let native = self.drawer.native.iter().filter(|(_, native)| !native.reaped());
-        let native = native.filter_map(|(subject, native)| Some((native.pass.as_ref()?, subject.task()?)));
+        let native = native.filter_map(|(subject, native)| Some((native.pass.as_ref()?.pass(), subject.task()?)));
         crate::pass::caller(given, terminals.chain(native))
     }
 

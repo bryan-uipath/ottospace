@@ -111,12 +111,27 @@ impl Workspace {
         let _ = self.workbook_act(Action::WorkbookNew { uid: marks::new_uid() }, window, cx);
     }
 
+    /// After a save: why it did nothing, or what it kept (information, under an Undo it offers).
+    fn say_saved(&mut self, refused: Option<String>) {
+        match refused {
+            Some(why) => self.error = Some(why),
+            None => {
+                self.error = None;
+                // An update's offer says the note already: a second copy would stay after × or Undo.
+                let note = self.model.workbook_saved_note();
+                if let Some(note) = note.filter(|note| self.model.workbooks.notice().is_none_or(|n| n.text != *note)) {
+                    self.told = Some((note, std::time::Instant::now()));
+                }
+            }
+        }
+    }
+
     /// ⌘⇧S and the menu: saves the tab on show, or updates the workbook it came from.
     pub(crate) fn save_workbook(&mut self, window: &Window, cx: &mut Context<Self>) {
         let refused = self.model.workbook_save_refusal();
         let action = Action::WorkbookSave { uid: marks::new_uid(), cwds: self.cwds(), histories: self.histories() };
         if self.workbook_act(action, window, cx) {
-            self.error = refused.or_else(|| self.model.workbook_saved_note());
+            self.say_saved(refused);
         }
     }
 
@@ -126,7 +141,7 @@ impl Workspace {
         let (uid, cwds, histories) = (marks::new_uid(), self.cwds(), self.histories());
         let action = Action::WorkbookSaveAll { uid, cwds, histories };
         if self.workbook_act(action, window, cx) {
-            self.error = refused.or_else(|| self.model.workbook_saved_note());
+            self.say_saved(refused);
         }
     }
 
@@ -169,7 +184,7 @@ impl Workspace {
                 let (cwds, histories) = (self.cwds(), self.histories());
                 let action = Action::WorkbookAddTab { workbook: id, cwds, histories };
                 if self.workbook_act(action, window, cx) {
-                    self.error = refused.or_else(|| self.model.workbook_saved_note());
+                    self.say_saved(refused);
                 }
             }
             // Only what the bar lists changes: nothing written, nothing opened.
@@ -191,11 +206,6 @@ impl Workspace {
         let gone = format!("{name}: {} is gone; its terminal starts in your home folder", gone.join(", "));
         // A window that could not be hosted: `carry_out` left the reason in `error`.
         self.error = Some(self.error.take().map_or(gone.clone(), |unhosted| format!("{gone}; {unhosted}")));
-    }
-
-    /// A click on "Updated · Undo" or "Workspace deleted · Undo", or its label.
-    pub(crate) fn undo_workbook(&mut self, window: &Window, cx: &mut Context<Self>) {
-        self.workbook_act(Action::WorkbookUndo, window, cx);
     }
 
     /// The workbooks as the state lists them: each row, and where it, its tabs' rows and their
@@ -372,13 +382,9 @@ impl Workspace {
             }
             children.extend(crate::well(tabs, 4.));
         }
-        // After a delete or an update, a line at the top offers to take it back, as Tasks does.
-        let notice = self.model.workbooks.offered().map(|change| {
-            self.undo_line("workbook-undo", change.title())
-                .on_click(cx.listener(|this, _, window, cx| this.undo_workbook(window, cx)))
-        });
+        // A delete or an update is offered back on the notice bar: nothing here moves.
         let list = div().id("workbooks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
-        let list = list.track_scroll(&self.list_scroll).children(notice).children(empty).children(children);
+        let list = list.track_scroll(&self.list_scroll).children(empty).children(children);
         self.bars.tracked("workbooks", list, &self.list_scroll)
     }
 }

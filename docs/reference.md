@@ -604,9 +604,11 @@ once, read-only: nothing in the app is pressed or set), for a terminal the rows.
   `brief.json`, and for each capture `1.png`, `1.annotated.png`, `1.json`. They are never in the
   tasks folder. A cancelled draft leaves nothing.
 - An agent ottospace starts for a task reads its brief with `ottospace ctl '{"cmd":"task_brief"}'`:
-  it has a pass of its own in its environment (`OTTOSPACE_TASK_PASS`), which `ottospace ctl` and
-  the SDK send with each request. The pass dies with the agent's process; a new start has a new one.
-  ottospace never writes it to the state, a log or a file; an agent that prints it puts it in its own transcript.
+  it has a pass of its own, in a file whose path its environment holds (`OTTOSPACE_TASK_PASS_FILE`;
+  the file is 0600, in a 0700 folder beside the control socket), which `ottospace ctl` and the SDK
+  read and send with each request. `env` shows the path, never the pass. The pass and its file die
+  with the agent's process; a new start has a new one. ottospace never writes it to the state or a
+  log, and a pass printed anyway reads `[hidden]` in every reply.
 - A terminal opened in a task's tab has `OTTOSPACE_TASK`, not the pass; an agent there reads the brief with
   `ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"`.
 - In the brief, everything that came from another app or a terminal is quoted and labelled as
@@ -723,7 +725,7 @@ workspace.
   name selected: type over it, ↵ keeps it, Esc keeps it as it is. No two workspaces share a name
   (`DRI`, `DRI 2`).
 - **Save again** on a tab that came from a workspace, or was saved into one, updates that tab of
-  it. The section says `Updated · Undo` for six seconds.
+  it. The notice bar says what it kept, with Undo, for six seconds.
 - **Open**: click its row, or ⌘⌃E and ↵. Its space comes back on the top row, selected. Each of
   its saved tabs that is not open opens in a new tab, in order, and the
   first is selected; a tab of it that is open already is kept, not opened twice. With none saved
@@ -746,8 +748,8 @@ workspace.
   pointer on it (or list mode's selection) shows one …: its menu has Rename and Delete.
   In the menu ↓ ↑ move, ↵ takes the item the keys are on; Esc, any other key or a click
   outside closes it. In list mode `r` and `x` rename and delete with no menu. Deleting leaves the open
-  tabs alone; `Workspace deleted · Undo` shows for six
-  seconds (`u` in list mode).
+  tabs alone; `Workspace deleted` shows on the [notice bar](#notice-bar) for six seconds, with
+  Undo (`u` in list mode) and ×, which ends the offer. Nothing in the section moves.
 - Kept lines and commands can hold secrets a tool printed, or a token in a command line. They
   stay in your workspace files, plain text with escape sequences taken out, at most 64 KB a
   terminal and 1 MB a workspace. Credential-shaped text is hidden as `[hidden]` (tokens, `key=`
@@ -1030,7 +1032,8 @@ once under the system's Reduce Motion. A live app window in a bottom pane stops 
 - **One at a time**: the most pressing, and of those the newest. An error is not replaced by
   information; when it goes, what it covered shows.
 - **One line**: text too long is cut with an ellipsis, and the hover shows all of it. A settings
-  problem offers **Open settings**; a meeting with a link, **Join**.
+  problem offers **Open settings**; a meeting with a link, **Join**; a workspace deleted or updated,
+  **Undo** (only your click takes it back).
 - **Dismiss**: × on the bar, or Esc when no mode and no terminal takes it. Only you dismiss a
   notice: a socket client cannot, and its failure never takes the place of what your own step
   said. A dismissed settings line comes back when it says something else.
@@ -1053,6 +1056,7 @@ once under the system's Reduce Motion. A live app window in a bottom pane stops 
 | `keys` | warning | the app: a global key not registered | yes |
 | `editor` | information | the app: your editor gave its text back | yes |
 | `meeting` | meeting | the app: a meeting started and you are in no call; × is its Dismiss, Join its link | yes; its title never in the state |
+| `undo` | information | the sender: a workspace you deleted or updated, offered back for six seconds; × ends the offer | no; only you delete one |
 
 A copy's "Copied 3 lines", the mode and the count of tasks that need you stay in the status bar.
 

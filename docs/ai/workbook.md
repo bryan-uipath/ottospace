@@ -44,7 +44,7 @@ A new workbook is named for the tab. The section opens on it with the name selec
 field: type over it, ↵ keeps it, Esc keeps the tab's name. Names are unique (`DRI`, `DRI 2`).
 
 **Save again.** A tab that came from a workbook, or was saved as one, updates that workbook.
-It does not ask: the section says `Updated · Undo` for six seconds, and Undo puts the old
+It does not ask: the notice bar says `Workspace updated · Undo` for six seconds, and Undo puts the old
 layout back.
 
 **Open.** Click the row, `Open`, or ↵ in list mode. A new tab of no task, named for the
@@ -63,7 +63,7 @@ workbook, with the recorded splits:
 - if the workbook's tab is open already, it is selected.
 
 **Rename, delete.** `Rename` and `Delete` on the row (hover or list mode), `r` and `x` in list
-mode. Renaming renames the open tab too. `Workbook deleted · Undo` for six seconds, `u` in
+mode. Renaming renames the open tab too. `Workspace deleted · Undo` on the notice bar for six seconds, `u` in
 list mode. The open tab stays.
 
 **Files.** `~/.ottospace/workbooks/<id>.json` (under `OTTOSPACE_HOME`; nothing in a test run
@@ -114,7 +114,7 @@ The owner: "a workbook could have multiple tabs". A workbook is a list of tabs.
 
 **Save.** ⌘⇧S keeps its meaning on a tab of no workbook: a new workbook of that one tab. On a
 tab opened from a workbook, or saved or added into one, it updates that tab's place in it
-(`Updated · Undo`). Two ways to grow one:
+(`Workspace updated · Undo`, on the notice bar). Two ways to grow one:
 
 - **Add tab**: the word on a workbook's row, `a` on it in list mode, or File ▸ Add Tab to
   Workbook… (a menu item cannot ask which, so it opens the section in list mode and the status
@@ -144,7 +144,7 @@ at once: the user asked for them.
 **The row.** `3 tabs · 4 terminals · Chrome, Slack`; one tab: `2 terminals · Chrome, Slack`.
 ▸ before a workbook of several tabs (space in list mode) lists its tabs under it, folded by
 default and not kept between runs. A tab's row opens it alone (click, ↵) and has `Rename` (its
-title, `r`) and `Remove` (`x`: out of the workbook, `Updated · Undo`; its last tab deletes the
+title, `r`) and `Remove` (`x`: out of the workbook, `Workspace updated · Undo`; its last tab deletes the
 workbook). The row's words were `Open`, `Add tab`, `Rename`, `Delete`; since, a click on the
 row opens it and one … has a menu, Rename and Delete (`spaces.md`, "The row").
 
