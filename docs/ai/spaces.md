@@ -343,7 +343,7 @@ shows, a column at its right edge, replacing the strip.
   brought up, unlike the top row's mark); a task is put in front, its conversation open.
 - **Keys**: ⌘⌥] / ⌘⌥[ (`TalkCycle`) step through the rail and wrap. ⌘⇧] / ⌘⇧[ were asked for,
   but are Next / Previous Tab. List mode: → past the drawer (or past the panes, onto the
-  transcript, which takes no keys) is the rail (`RailFocus::Right`, focus `drawer_rail`), ↑ ↓
+  transcript or a stopped agent's conversation, which take no keys) is the rail (`RailFocus::Right`, focus `drawer_rail`), ↑ ↓
   move, ↵ shows, ← or Esc back to the pane. Sneak labels: `drawer-rail:transcript`,
   `drawer-rail:<id>`, `drawer-rail:new`.
 - **Who**: the user alone. `RailSelect`, `TalkCycle` and `ListenShow` (the top row's mark,

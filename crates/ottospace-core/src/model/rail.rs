@@ -234,4 +234,21 @@ mod tests {
         m.update(Action::ListenStop { at: 5_000 });
         assert_ne!(m.focus_target(), Target::DrawerRail(RailItem::Transcript));
     }
+
+    /// Review: a conversation whose agent does not run takes no keys, so → past the panes went
+    /// nowhere and the rail was out of the keyboard's reach. It goes on to the rail.
+    #[test]
+    fn past_a_conversation_that_takes_no_keys_the_keyboard_reaches_the_rail() {
+        use crate::layout::Dir;
+        use crate::model::zones::Target;
+        let mut m = three();
+        for id in m.tasks.list.iter().map(|task| task.id).collect::<Vec<_>>() {
+            m.update(Action::AgentExited { task: crate::talk::Subject::Task(id) }.sent_by(Origin::System));
+        }
+        let front = m.rail_selected();
+        assert!(m.rail_drawn() && front.is_some() && m.talk.as_ref().is_some_and(|talk| !talk.keys));
+        m.update(Action::Focus { pane: 1 });
+        m.update(Action::FocusDir { dir: Dir::Right });
+        assert_eq!(Some(m.focus_target()), front.map(Target::DrawerRail));
+    }
 }

@@ -1,6 +1,6 @@
 # A worktree's Repos row: a workspace of its own, named for its branch, that worktree its default.
 # The box offers a new worktree for the task (⌥⌘N), then this checkout again.
-# Two tasks there, one in the repository's own folder: the strip's tab and the task rows say which.
+# Two tasks there, one in the repository's own folder: the rail's hover and the task rows say which.
 {"cmd":"section","section":"repos"}
 {"until":"repos_bar.2"}
 {"click":"repo:{ROOT}/repos/canvas-app-2"}
@@ -18,6 +18,6 @@
 {"cmd":"section","section":"tasks"}
 {"settle":700}
 {"shot":"two-worktrees"}
-{"hover":"strip:1"}
+{"hover":"drawer-rail:1"}
 {"settle":1500}
-{"shot":"strip-hover"}
+{"shot":"rail-hover"}

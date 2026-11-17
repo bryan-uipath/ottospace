@@ -122,8 +122,8 @@ impl Model {
                     && self.talk.as_ref().is_some_and(|talk| talk.open && self.agent_runs(&talk.task))
                 {
                     self.talk_keys(true, effects);
-                } else if self.listen.shown {
-                    // The transcript takes no keys: on to its rail.
+                } else {
+                    // The transcript, or a stopped agent's conversation, takes no keys: on to the rail, if drawn.
                     self.enter_drawer_rail(effects);
                 }
             }
