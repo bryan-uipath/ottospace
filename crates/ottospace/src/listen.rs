@@ -26,8 +26,8 @@ actions!(ottospace, [Transcribe, PauseTranscribing]);
 
 /// What the shell says when a test run names no fixture: it never hears a real app or the mic.
 const NO_FIXTURE: &str = "no audio source in a test run";
-/// A pane narrower than this, as last drawn, has no transcript control in its header: the title
-/// and × need the room. The drawer's rail and header still show one that is on.
+/// A pane narrower than this, as last drawn, has no `Transcribe` or lost mark in its header: the
+/// title and × need the room. The red dot of one on stays: it is the pane's mark.
 const HEADER_ROOM: f32 = 240.;
 /// How often the meter, the label and the clock are drawn while one is on, sound or not.
 const FRAME: Duration = Duration::from_millis(125);
@@ -541,7 +541,9 @@ impl Workspace {
     /// heard. None elsewhere, and outside a test run (no source yet).
     pub(crate) fn listen_header(&self, pane: PaneId, cx: &mut Context<Self>) -> Option<AnyElement> {
         let width = self.frames.get(&pane).map(|frame| f32::from(frame.get().size.width));
-        if width.is_some_and(|width| width > 1. && width < HEADER_ROOM) {
+        let narrow = width.is_some_and(|width| width > 1. && width < HEADER_ROOM);
+        let heard = self.model.listen.pane() == Some(pane);
+        if narrow && !heard {
             return None;
         }
         if self.model.listen.lost == Some(pane) && self.model.listen.on.is_none() {

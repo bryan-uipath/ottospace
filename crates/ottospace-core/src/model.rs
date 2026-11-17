@@ -5635,7 +5635,9 @@ impl Model {
                 }
             }
             // No conversation here: ⌘⇧L opens the drawer on the transcript, the rail beside it.
-            Action::TalkToggle if self.talk.is_none() && self.by_user => self.listen.shown = self.listen_item(),
+            Action::TalkToggle if self.talk.is_none() && self.by_user => {
+                self.listen_act(Action::ListenShow { on: true }, effects)
+            }
             Action::TalkToggle => {
                 if let Some(open) = self.talk.as_ref().map(|talk| !talk.open) {
                     self.talk_keys(open, effects);

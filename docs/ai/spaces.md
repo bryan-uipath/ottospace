@@ -373,7 +373,8 @@ right now"; "i'd expect < 5 so the ui should be suitable for that".
 The owner's design (2026-11-16, the canvas "Right rail"): one way to switch what the drawer
 shows, a column at its right edge, replacing the strip.
 
-- **v2** (the owner, 2026-11-17, canvas "Rail v2"): "the rail always shows"; two parts with a
+- **v2** (the owner, 2026-11-17, canvas "Rail v2"): "the rail always shows" (whenever the
+  drawer shows a conversation or the transcript, and has an item); two parts with a
   divider: on top this workspace's tasks, below what is the same in every workspace, for now
   only the transcript. No "need you elsewhere" item, no capture draft, no pinned chat.
 - **Items** (`Model::rail`, `model/rail.rs`), each of a section (`RailSection`): `workspace`,

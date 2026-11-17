@@ -1703,11 +1703,18 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(paused == on.paused_at.is_some(), "{:?} with a pause at {:?}", on.status, on.paused_at);
     }
     ensure!(!m.listen.shown || m.listen_item(), "the drawer on a transcript the rail does not hold");
-    // The off-show dot: exactly while the pane heard is in a tab not on show.
-    let off_show = m.listen.pane().is_some_and(|pane| {
-        m.tab_panes().iter().enumerate().any(|(at, panes)| at != m.active && panes.contains(&pane))
+    // The off-show dot: exactly while the pane heard is in a tab not on show, of a space on the
+    // row; on that tab if its space is selected, else on its space.
+    let holder = m.listen.pane().and_then(|pane| m.tab_panes().iter().position(|panes| panes.contains(&pane)));
+    let want = holder.filter(|at| *at != m.active).map(|at| &m.tabs[at]).and_then(|tab| {
+        let hidden = m.spaces().iter().any(|space| space.of == tab.space && space.hidden);
+        match (hidden, tab.space == *m.space()) {
+            (true, _) => None,
+            (false, true) => Some(crate::listen::Dot::Tab(tab.id)),
+            (false, false) => Some(crate::listen::Dot::Space(tab.space.clone())),
+        }
     });
-    ensure!(m.listen_dot().is_some() == off_show, "the dot {:?} with the pane off show: {off_show}", m.listen_dot());
+    ensure!(m.listen_dot() == want, "the dot {:?}, not {want:?}", m.listen_dot());
     // A grey mark of a lost stream is of a pane that is there, with none on, the flag on.
     if let Some(lost) = m.listen.lost {
         ensure!(m.pane(lost).is_some() && m.listen.on.is_none(), "a lost mark on {lost} with {:?}", m.listen.on);

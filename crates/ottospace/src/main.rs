@@ -5873,6 +5873,9 @@ impl Workspace {
             .collect();
         let more = others - badges;
         let dot = self.model.listen_dot();
+        // The heard pane's space left off for room: the count carries its dot.
+        let dot_in_more = matches!(&dot, Some(ottospace_core::listen::Dot::Space(of))
+            if !shown.iter().any(|(_, space)| space.of == *of));
         let spaces = shown.into_iter().map(|(place, space)| {
             let of = space.of.clone();
             // The pane being heard is in this space, off show: a red dot at its corner.
@@ -6035,6 +6038,10 @@ impl Workspace {
         let more = (more > 0).then(|| {
             div()
                 .id("more-spaces")
+                .relative()
+                .when(dot_in_more, |d| {
+                    d.child(self.off_show_dot("listen-dot:more".into(), cx).top(px(5.)).left(px(2.)))
+                })
                 .flex_none()
                 .px_2()
                 .h_full()

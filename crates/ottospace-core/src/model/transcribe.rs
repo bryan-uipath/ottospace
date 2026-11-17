@@ -44,11 +44,14 @@ impl Model {
     }
 
     /// The red dot of the pane being heard, off show: none while its tab is on show (its header
-    /// has the dot), and none for a source in no pane.
+    /// has the dot), none for a source in no pane, and none in a hidden space (off the row).
     pub fn listen_dot(&self) -> Option<listen::Dot> {
         let pane = self.listen.pane()?;
         let at = self.tab_panes().iter().position(|panes| panes.contains(&pane))?;
         let tab = self.tabs.get(at).filter(|_| at != self.active)?;
+        if self.spaces().iter().any(|space| space.of == tab.space && space.hidden) {
+            return None;
+        }
         Some(if tab.space == *self.space() { listen::Dot::Tab(tab.id) } else { listen::Dot::Space(tab.space.clone()) })
     }
 
