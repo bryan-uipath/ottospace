@@ -62,9 +62,12 @@ impl Model {
                 None => effects.push(Effect::Notice { text: listen::FOCUS_APP.into() }),
             },
             Action::ListenPause { at } => {
-                if self.listen.pause(at)
+                if let Some(cut) = self.listen.pause(at)
                     && let Some(on) = &self.listen.on
                 {
+                    if !cut.is_empty() {
+                        effects.push(Effect::ListenWrite { id: on.id.clone(), records: cut });
+                    }
                     effects.push(Effect::ListenPauseStreams { id: on.id.clone() });
                 }
             }
@@ -149,12 +152,15 @@ impl Model {
     /// Ends the transcript on (of `id`, if given), its streams and its file, at `at` (else the
     /// last tick). One that never began keeps no file. True if one ended.
     pub(super) fn listen_end(&mut self, id: Option<&str>, at: Option<u64>, effects: &mut Vec<Effect>) -> bool {
-        let Some(on) = self.listen.end(id) else { return false };
-        let record = match on.status {
-            Status::Starting => Record::Failed,
-            _ => Record::End { at: at.unwrap_or(self.now).max(on.started) },
+        let Some(mut on) = self.listen.end(id) else { return false };
+        let at = at.unwrap_or(self.now).max(on.started);
+        // What was being heard is kept as it stands, then the end.
+        let records = match on.status {
+            Status::Starting => vec![Record::Failed],
+            Status::Paused => vec![Record::End { at }],
+            Status::On => on.settle(at).into_iter().chain([Record::End { at }]).collect(),
         };
-        effects.push(Effect::ListenWrite { id: on.id.clone(), records: vec![record] });
+        effects.push(Effect::ListenWrite { id: on.id.clone(), records });
         effects.push(Effect::ListenClose { id: on.id });
         true
     }
@@ -221,7 +227,13 @@ mod tests {
             }
         }
         assert_eq!(status(&m), Some(Status::On));
-        assert_eq!(m.update(Action::ListenPause { at: 2_000 }), [Effect::ListenPauseStreams { id: "t2".into() }]);
+        m.update(heard("cut o", false));
+        let cut = Effect::ListenWrite {
+            id: "t2".into(),
+            records: vec![Record::Line { from: Speaker::Them, at: 2_000, text: "cut o".into() }],
+        };
+        assert_eq!(m.update(Action::ListenPause { at: 2_000 }), [cut, Effect::ListenPauseStreams { id: "t2".into() }]);
+        assert_eq!(m.update(Action::ListenPause { at: 2_500 }), [], "paused already");
         for origin in [Origin::Socket, Origin::System] {
             assert!(m.update(Action::ListenResume { at: 3 }.sent_by(origin)).is_empty());
         }
@@ -425,10 +437,13 @@ mod tests {
         assert_eq!(effects, [Effect::ListenWrite { id: "t2".into(), records: vec![] }]);
         // Another's batch writes nothing.
         assert!(m.update(Action::ListenHeard { id: "old".into(), lines: vec![] }.sent_by(Origin::System)).is_empty());
-        // The pane closed: the file ends at the last tick's time.
+        // The pane closed: the file ends at the last tick's time, the line being heard kept first.
         m.update(Action::Tick { now: 9_000 }.sent_by(Origin::System));
         let effects = m.update(Action::Close { pane: Some(2) });
-        assert!(effects.windows(2).any(|two| two == ended("t2", Record::End { at: 9_000 })), "{effects:?}");
+        let next = Record::Line { from: Speaker::Them, at: 9_000, text: "next".into() };
+        let write = Effect::ListenWrite { id: "t2".into(), records: vec![next, Record::End { at: 9_000 }] };
+        let close = Effect::ListenClose { id: "t2".into() };
+        assert!(effects.windows(2).any(|two| two == [write.clone(), close.clone()]), "{effects:?}");
     }
 
     #[test]

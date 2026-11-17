@@ -154,6 +154,21 @@ impl Listen {
     pub fn volatile(&self) -> impl Iterator<Item = &(Speaker, String)> {
         self.volatile.iter()
     }
+
+    /// The lines still being heard kept as they stand, at `at`: a pause or an end cuts them off,
+    /// and the recogniser's best guess is worth more than nothing. Their records for the file.
+    pub fn settle(&mut self, at: u64) -> Vec<Record> {
+        let into = self.elapsed(at);
+        let records = std::mem::take(&mut self.volatile).into_iter().map(|(from, text)| {
+            self.rows.push_back(Row::Heard { from, at: into, text: text.clone() });
+            Record::Line { from, at, text }
+        });
+        let records: Vec<Record> = records.collect();
+        while self.rows.len() > RING {
+            self.rows.pop_front();
+        }
+        records
+    }
 }
 
 /// What the core holds of transcripts.
@@ -252,12 +267,13 @@ impl Listening {
         Some(Record::Line { from, at: wall, text })
     }
 
-    /// True if it paused: the streams stop.
-    pub fn pause(&mut self, at: u64) -> bool {
-        let Some(on) = self.on.as_mut().filter(|on| on.status == Status::On) else { return false };
-        (on.status, on.paused_at) = (Status::Paused, Some(at.max(on.started)));
-        on.volatile.clear();
-        true
+    /// The lines it cut off, if it paused: the streams stop.
+    pub fn pause(&mut self, at: u64) -> Option<Vec<Record>> {
+        let on = self.on.as_mut().filter(|on| on.status == Status::On)?;
+        let at = at.max(on.started);
+        let cut = on.settle(at);
+        (on.status, on.paused_at) = (Status::Paused, Some(at));
+        Some(cut)
     }
 
     /// The pause, if it resumed: new streams, counting from 0, start where the transcript is.
@@ -362,7 +378,10 @@ mod tests {
     fn a_pause_hears_nothing_and_the_next_run_counts_on() {
         let mut l = on();
         l.heard("t1", Speaker::Them, 1_000, "before", true);
-        assert!(l.pause(5_000) && !l.pause(6_000));
+        l.heard("t1", Speaker::Them, 1_200, "cut o", false);
+        // The line being heard is kept as it stands: on the wall clock at the pause.
+        let cut = Record::Line { from: Speaker::Them, at: 5_000, text: "cut o".into() };
+        assert_eq!((l.pause(5_000), l.pause(6_000)), (Some(vec![cut]), None));
         assert_eq!(l.on.as_ref().unwrap().elapsed(9_000), 4_000, "the clock stops while paused");
         l.heard("t1", Speaker::Them, 0, "while paused", true);
         assert_eq!(l.resume(65_000), Some(Record::Paused { at: 5_000, ms: 60_000 }));
@@ -370,7 +389,7 @@ mod tests {
         // The new run counts from 0, at 4 s into the transcript; on the wall clock, 1 s after the resume.
         let record = l.heard("t1", Speaker::Them, 1_000, "after", true);
         assert_eq!(record, Some(Record::Line { from: Speaker::Them, at: 66_000, text: "after".into() }));
-        assert_eq!(texts(&l), ["1500 before", "paused 60000", "5000 after"]);
+        assert_eq!(texts(&l), ["1500 before", "4000 cut o", "paused 60000", "5000 after"]);
         let on = l.on.as_ref().unwrap();
         assert_eq!((on.paused_total, on.elapsed(70_000)), (60_000, 9_000));
     }

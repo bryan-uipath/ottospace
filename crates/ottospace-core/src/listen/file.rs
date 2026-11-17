@@ -86,11 +86,14 @@ pub fn names(head: &Head, offset: i64) -> impl Iterator<Item = String> {
     (1..).map(move |n| if n == 1 { format!("{stem}.md") } else { format!("{stem}-{n}.md") })
 }
 
-/// `text` with Markdown's active characters escaped, on one plain line.
+/// `text` with Markdown's active characters escaped, on one plain line. `:` and `@` too, and the
+/// `.` of `www.`: previews that find links in bare text (GitHub's) find none.
 pub fn escape(text: &str, max: usize) -> String {
     let mut out = String::new();
     for c in crate::capture::plain(text, max).chars() {
-        if matches!(c, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '#' | '|' | '!' | '&' | '~') {
+        let www = c == '.' && out.to_lowercase().ends_with("www");
+        if www || matches!(c, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '#' | '|' | '!' | '&' | '~' | ':' | '@')
+        {
             out.push('\\');
         }
         out.push(c);
@@ -234,6 +237,7 @@ mod tests {
             "`code` *bold* _it_ ~~gone~~ \\ &amp;",
             "two\nlines\r\n- item",
             "\u{202e}reversed\u{200b}\u{1b}[31m",
+            "see https://example.com or www.example.com, mail a@example.com",
         ];
         for text in hostile {
             let escaped = escape(text, 2_000);
@@ -241,7 +245,7 @@ mod tests {
             // Every active character is escaped: none stands bare.
             let mut chars = escaped.chars();
             while let Some(c) = chars.next() {
-                assert!(!"[]<>#|`*_!&~".contains(c), "{c:?} bare in {escaped:?}");
+                assert!(!"[]<>#|`*_!&~:@".contains(c), "{c:?} bare in {escaped:?}");
                 if c == '\\' {
                     chars.next();
                 }
@@ -249,6 +253,7 @@ mod tests {
             assert_eq!(unescape(&escaped), crate::capture::plain(text, 2_000), "{text:?}");
         }
         let app = header(&Head { app: "[Zoom](http://x)\n# h".into(), ..head() }, None, &paris);
-        assert!(app.starts_with("# Transcript: \\[Zoom\\](http://x) \\# h, "), "{app}");
+        assert!(app.starts_with("# Transcript: \\[Zoom\\](http\\://x) \\# h, "), "{app}");
+        assert_eq!(escape("WWW.x and www", 50), "WWW\\.x and www");
     }
 }

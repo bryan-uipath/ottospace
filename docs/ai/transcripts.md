@@ -260,7 +260,8 @@ Effects: `ListenOpen { id, source, mic, locale }` (the shell starts SCK and the 
 `ListenPauseStreams`, `ListenResumeStreams`, `ListenClose { id }`, `ListenWrite { id, records }`
 (built: `Begin` with the header's facts before `ListenOpen`; each final line on the wall clock; a
 pause when it ends; `End { at }`, or `Failed` for one whose streams never ran, whose file then
-goes). Every batch makes one `ListenWrite`, empty or not: the trace, which a client can read,
+goes; a pause or an end first keeps the line still being heard, as it stands, and the shell
+hands over what it holds before the user's Pause or Stop and at quit). Every batch makes one `ListenWrite`, empty or not: the trace, which a client can read,
 names effects, and must not say when someone spoke either.
 
 The core keeps: the rules, each app's meeting episode and whether the user stopped in it, and the
@@ -323,7 +324,8 @@ from the model.
   original. A crash leaves `still transcribing`, read as ended at the last line.
 - **The text**: each line goes through `capture::plain` (one line, visible characters only), and
   Markdown's active characters in it are escaped (`\`, `` ` ``, `*`, `_`, `[`, `]`, `<`, `>`, `#`,
-  `|`), so heard words never render as a link, an image, HTML or a heading. A unit test writes
+  `|`; built: also `!`, `&`, `~`, `:`, `@` and the `.` of `www.`, so previews that find links in
+  bare text find none), so heard words never render as a link, an image, HTML or a heading. A unit test writes
   hostile strings and parses the file back.
 - **No jsonl**: the app needs no second copy. The Transcripts list and `Add to task` read the
   Markdown back with the core's own parser for this format (unit-tested). Lines it does not
