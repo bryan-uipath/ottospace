@@ -40,7 +40,7 @@ ottospace            # opens on the Repos list
 | Switch tab (of the task on show) | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
 | Switch task or workspace (top row) | ⌘⌃1 … ⌘⌃9 · ⌘⌃] ⌘⌃[ |
 | Go to Home (the house, first on the top row) | ⌘⌃1, or Go to Home in the palette |
-| Switch what the drawer shows (several tasks, or a task and a running transcript) | The rail at the drawer's right edge (the transcript first, then the tasks by urgency; + adds a task) · ⌘⌥] ⌘⌥[ |
+| Switch what the drawer shows | The rail at the drawer's right edge: the workspace's tasks by urgency and + on top, the transcript at the foot · ⌘⌥] ⌘⌥[ |
 | New workspace | + on the top row, or in the Workspaces section's header |
 | Hide the task or workspace on show | ⌘⌃W, or its × on the top row. Its row in Tasks or Workspaces opens it again |
 | Close the tab and its panes | ⌘⇧W |
@@ -145,7 +145,7 @@ Key Counts forgets it.
 | Switch between running agents | Click its task on the top row, or ⌘⌃1 … ⌘⌃9 |
 | See a task's tabs | Click its row, or ⌘⇧N for the next that needs you: its space |
 | Let a task see an app pane (the `agent_mode` flag) | The robot in the pane's header, or ⌘⌃V: Off, See, See and act (presses come later). Only that workspace's task may read it, and every read is a row in its chat |
-| Transcribe an app pane's audio (the `transcripts` flag; macOS 26) | ⌘⌃T starts on the focused app pane, and stops it from anywhere. While on: a red dot and the time in the pane's header and on the top row (click either for the drawer's lines). The drawer's header shows the level and says Hearing speech, Listening or No sound for 30 s, with Stop, and ⋯ for Pause or Resume (also the palette and the menu bar's dot). Kept as Markdown in `transcripts_dir` |
+| Transcribe an app pane's audio (the `transcripts` flag; macOS 26) | ⌘⌃T starts on the focused app pane, and stops it from anywhere. While on: a red dot in the pane's header, on its tab or workspace while off show, and on the drawer's rail (click any for the drawer's lines and the time). The drawer's header shows the level and says Hearing speech, Listening or No sound for 30 s, with Stop, and ⋯ for Pause or Resume (also the palette and the menu bar's dot). Kept as Markdown in `transcripts_dir` |
 | Point at something for a task ("this message", "this error") | ⌃⌥⌘Space, from any app: the pane in use freezes as a picture and a draft opens on the right. Drag to circle, ⇧-drag a box, ⌥-drag a line, click to type a note. ↵, type what you want, ↵ starts it (⇧↵ for later). Esc leaves the picture; Esc in the title cancels the draft. The task keeps the pictures and the text under what you circled as its brief: [Capture](reference.md#capture) |
 | Capture a second pane into the same draft | While drawing, click the other pane. Or press ⌃⌥⌘Space again |
 | Give an agent a task's brief | In a terminal of the task: `ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"` |

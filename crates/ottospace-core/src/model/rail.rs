@@ -1,8 +1,8 @@
 //! The drawer's right rail (`docs/ai/spaces.md`, "The drawer's rail"): a narrow column at the
-//! drawer's right edge, one item for each thing the drawer can show here. The running
-//! transcript first while it runs, then the selected space's tasks, the most urgent first. Shown
-//! only with two items or more. The selected item is what the drawer shows; only the user
-//! changes it.
+//! drawer's right edge, one item for each thing the drawer can show here, in two sections. On
+//! top this workspace's tasks, the most urgent first; below a divider what is the same in every
+//! workspace: the transcript, idle or recording. Always shown with the drawer. The selected item
+//! is what the drawer shows; only the user changes it.
 
 use serde::{Deserialize, Serialize};
 
@@ -16,27 +16,41 @@ pub const RAIL_USERS: &str = "only the user switches what the drawer shows";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RailItem {
-    /// The transcript on (running or paused): one that ended is not on the rail.
+    /// The transcript: idle, or one on (running or paused).
     Transcript,
     Task {
         id: TaskId,
     },
 }
 
+/// The rail's two parts: this workspace's, then (below the divider) what every workspace shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RailSection {
+    Workspace,
+    Everywhere,
+}
+
+impl RailItem {
+    pub fn section(self) -> RailSection {
+        match self {
+            RailItem::Task { .. } => RailSection::Workspace,
+            RailItem::Transcript => RailSection::Everywhere,
+        }
+    }
+}
+
 impl Model {
-    /// The rail's items, in order: the transcript while one is on, then the selected space's
-    /// tasks by urgency (needs you, running, later, on hold; done ones left out but the one in
-    /// front). Fewer than two: no rail.
+    /// The rail's items, top to bottom: the selected space's tasks by urgency (needs you,
+    /// running, later, on hold; done ones left out but the one in front), then the transcript
+    /// while it can be had (`listen_item`).
     pub fn rail(&self) -> Vec<RailItem> {
         let of = self.space();
         let front = self.front(of);
         let done = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| task.state == State::Done);
-        let tasks: Vec<TaskId> =
-            self.space_tasks(of).into_iter().filter(|id| Some(*id) == front || !done(id)).collect();
-        let transcript = self.listen.on.as_ref().map(|_| RailItem::Transcript);
-        let items: Vec<RailItem> =
-            transcript.into_iter().chain(tasks.into_iter().map(|id| RailItem::Task { id })).collect();
-        if items.len() > 1 { items } else { Vec::new() }
+        let tasks = self.space_tasks(of).into_iter().filter(|id| Some(*id) == front || !done(id));
+        let transcript = self.listen_item().then_some(RailItem::Transcript);
+        tasks.map(|id| RailItem::Task { id }).chain(transcript).collect()
     }
 
     /// The item the drawer shows, while there is a rail: the transcript while it is shown, else
@@ -50,8 +64,8 @@ impl Model {
         shown.filter(|item| rail.contains(item))
     }
 
-    /// Whether the rail is drawn: it has items, and the drawer shows the transcript or a
-    /// conversation, not the new-task box, a capture's draft or the inspector in its place.
+    /// Whether the rail is drawn: it has items, and the drawer shows the transcript (idle or on)
+    /// or a conversation, not the new-task box, a capture's draft or the inspector in its place.
     pub fn rail_drawn(&self) -> bool {
         let talk = self.talk.as_ref().is_some_and(|talk| talk.open);
         let boxed = self.compose.is_some() || self.welcome();
@@ -95,6 +109,7 @@ impl Model {
 mod tests {
     use super::*;
     use crate::Axis;
+    use crate::features::{Feature, Features};
     use crate::listen::Source;
     use crate::model::{Action, Kind, Origin};
     use crate::tasks::State;
@@ -128,28 +143,60 @@ mod tests {
     }
 
     #[test]
-    fn the_rail_is_the_transcript_then_the_tasks_by_urgency_and_none_with_one_item() {
+    fn the_rail_is_the_tasks_by_urgency_then_the_transcript_always() {
         let mut m = Model::default();
         m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
-        m.update(Action::ListenFixture.sent_by(Origin::System));
+        // Nothing here could be heard: no transcript, and no task yet. One task: shown alone.
+        assert_eq!(m.rail(), []);
         m.update(Action::OpenCompose { text: "one".into() });
         m.update(Action::ComposeSubmit { open: true });
-        // One task: nothing to switch.
-        assert_eq!(m.rail(), []);
-        // A transcript joins it: two items, the transcript first and shown.
+        assert_eq!(m.rail(), [task(1)]);
+        assert!(m.rail_drawn(), "one item shows the rail");
+        // Something can be heard: the transcript below, idle, in the other section.
+        m.update(Action::ListenFixture.sent_by(Origin::System));
+        assert_eq!(m.rail(), [task(1), RailItem::Transcript]);
+        let sections: Vec<RailSection> = m.rail().into_iter().map(RailItem::section).collect();
+        assert_eq!(sections, [RailSection::Workspace, RailSection::Everywhere]);
+        // On, it is still last and shown; stopped, it stays, idle, and so does the drawer on it.
         listen(&mut m);
-        assert_eq!((m.rail(), m.rail_selected()), (vec![RailItem::Transcript, task(1)], Some(RailItem::Transcript)));
-        // It stops: it leaves the rail, and with one item the rail goes.
+        assert_eq!((m.rail(), m.rail_selected()), (vec![task(1), RailItem::Transcript], Some(RailItem::Transcript)));
         m.update(Action::ListenStop { at: 2_000 });
-        assert_eq!((m.rail(), m.rail_selected()), (vec![], None));
+        assert_eq!((m.rail(), m.rail_selected()), (vec![task(1), RailItem::Transcript], Some(RailItem::Transcript)));
+        // The flag off: the transcript goes, and the drawer leaves it.
+        m.update(Action::SetFeatures { features: Features::all().with(Feature::Transcripts, false) });
+        assert_eq!((m.rail(), m.listen.shown), (vec![task(1)], false));
         // Tasks by urgency: needs you, running, then the rest; done ones go, but the one in front.
         let mut m = three();
         set(&mut m, 1, State::Captured);
         set(&mut m, 2, State::NeedsYou);
         set(&mut m, 3, State::Running);
-        assert_eq!(m.rail(), [task(2), task(3), task(1)]);
+        assert_eq!(m.rail(), [task(2), task(3), task(1), RailItem::Transcript]);
         set(&mut m, 2, State::Done);
-        assert_eq!(m.rail(), [task(3), task(1)]);
+        assert_eq!(m.rail(), [task(3), task(1), RailItem::Transcript]);
+    }
+
+    /// The owner: "the transcript is still one click away". With no task, the user's ⌘⇧L opens
+    /// the drawer on the transcript idle, the rail beside it; a client's does not.
+    #[test]
+    fn with_no_task_the_users_toggle_opens_the_idle_transcript() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::ListenFixture.sent_by(Origin::System));
+        m.update(Action::TalkToggle.sent_by(Origin::Socket));
+        assert!(!m.listen.shown);
+        m.update(Action::TalkToggle);
+        assert_eq!(
+            (m.rail(), m.rail_selected(), m.rail_drawn()),
+            (vec![RailItem::Transcript], Some(RailItem::Transcript), true)
+        );
+        assert!(m.listen.on.is_none());
+        m.update(Action::TalkToggle);
+        assert!(!m.listen.shown && !m.rail_drawn());
+        // Nothing could be heard: nothing opens.
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::TalkToggle);
+        assert!(!m.listen.shown);
     }
 
     #[test]
@@ -165,12 +212,12 @@ mod tests {
         let tab = m.active;
         m.update(Action::RailSelect { item: RailItem::Transcript });
         assert_eq!((m.rail_selected(), m.active), (Some(RailItem::Transcript), tab));
-        // ⌘⌥] / ⌘⌥[ step through it in order, and wrap.
+        // ⌘⌥] / ⌘⌥[ step through it in order, and wrap: from the transcript, last, to the top.
         let order = m.rail();
         m.update(Action::TalkCycle { delta: 1 });
-        assert_eq!(m.rail_selected(), Some(order[1]));
+        assert_eq!(m.rail_selected(), Some(order[0]));
         m.update(Action::TalkCycle { delta: -2 });
-        assert_eq!(m.rail_selected(), order.last().copied());
+        assert_eq!(m.rail_selected(), Some(order[order.len() - 2]));
         // A client's choice, or step, is refused.
         for action in
             [Action::RailSelect { item: task(2) }, Action::TalkCycle { delta: 1 }, Action::ListenShow { on: false }]
@@ -212,9 +259,9 @@ mod tests {
         assert_eq!((m.focus_target(), m.mode()), (Target::DrawerRail(RailItem::Transcript), Mode::List));
         let order = m.rail();
         m.update(Action::ListMove { delta: 1 });
-        assert_eq!((m.focus_target(), m.rail_selected()), (Target::DrawerRail(order[1]), Some(RailItem::Transcript)));
+        assert_eq!((m.focus_target(), m.rail_selected()), (Target::DrawerRail(order[0]), Some(RailItem::Transcript)));
         m.update(Action::ListChoose { axis: Axis::Right });
-        assert_eq!((m.focus_target(), m.rail_selected()), (Target::DrawerRail(order[1]), Some(order[1])));
+        assert_eq!((m.focus_target(), m.rail_selected()), (Target::DrawerRail(order[0]), Some(order[0])));
         // A client's key on it does nothing.
         assert!(m.refusal(&Action::ListMove { delta: 1 }, Origin::Socket).is_some());
         m.update(Action::FocusDir { dir: Dir::Left });
@@ -227,10 +274,10 @@ mod tests {
         assert!(!matches!(m.focus_target(), Target::DrawerRail(_)), "{:?}", m.focus_target());
         m.update(Action::InspectorClose);
         m.update(Action::Focus { pane: 1 });
-        // Its item gone (the transcript stopped, the rail with it): the keys leave it.
+        // Its item gone (the flag off, the transcript with it): the keys leave it.
         m.update(Action::RailSelect { item: RailItem::Transcript });
         m.update(Action::FocusDir { dir: Dir::Right });
-        m.update(Action::ListenStop { at: 5_000 });
+        m.update(Action::SetFeatures { features: Features::all().with(Feature::Transcripts, false) });
         assert_ne!(m.focus_target(), Target::DrawerRail(RailItem::Transcript));
     }
 

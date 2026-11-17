@@ -330,28 +330,36 @@ right now"; "i'd expect < 5 so the ui should be suitable for that".
 The owner's design (2026-11-16, the canvas "Right rail"): one way to switch what the drawer
 shows, a column at its right edge, replacing the strip.
 
-- **Items** (`Model::rail`, `model/rail.rs`): the transcript while one is on (running or paused;
-  none that ended), then the selected space's tasks by urgency (needs you, running, later, on
-  hold; done ones left out but the one in front). Fewer than two: no rail, as before.
-- **Drawn** (`drawer_rail.rs`): 48 points wide, inside the drawer's width. The transcript's
-  waveform (in the accent while selected) with a red dot while it records, a divider, each
-  task's badge with its state's dot, then +, a new task here. The selected item is lifted with
-  an accent edge; the one list mode's keys are on is ringed. Shown with the transcript or a
-  conversation, not over the new-task box, a brief beside the tabs or the inspector.
+- **v2** (the owner, 2026-11-17, canvas "Rail v2"): "the rail always shows"; two parts with a
+  divider: on top this workspace's tasks, below what is the same in every workspace, for now
+  only the transcript. No "need you elsewhere" item, no capture draft, no pinned chat.
+- **Items** (`Model::rail`, `model/rail.rs`), each of a section (`RailSection`): `workspace`,
+  the selected space's tasks by urgency (needs you, running, later, on hold; done ones left out
+  but the one in front); then `everywhere`, the transcript, idle or on, while the flag is on and
+  something could be heard (`Model::listen_item`: the recogniser, a test run's fixture, or one
+  on). No minimum: one item is a rail.
+- **Drawn** (`drawer_rail.rs`): 48 points wide, inside the drawer's width. Each task's badge
+  with its state's dot, then +, a new task here; at the foot, a divider and the transcript's
+  waveform: grey while idle, in the accent while one is on, a red dot while it records. The
+  selected item is lifted with an accent edge; the one list mode's keys are on is ringed. Shown
+  with the transcript or a conversation, not over the new-task box, a brief beside the tabs or
+  the inspector (they take the drawer, and its keys). With no conversation, the user's ⌘⇧L opens
+  the drawer on the transcript.
 - **Selected** (`Model::rail_selected`): the transcript while it is shown, else the task in
   front. `RailSelect`: the transcript is shown in this space's drawer (its pane's tab is not
-  brought up, unlike the top row's mark); a task is put in front, its conversation open.
-- **Keys**: ⌘⌥] / ⌘⌥[ (`TalkCycle`) step through the rail and wrap. ⌘⇧] / ⌘⇧[ were asked for,
+  brought up, unlike the pane's dots); a task is put in front, its conversation open.
+- **Keys**: ⌘⌥] / ⌘⌥[ (`TalkCycle`) step through the rail, top to bottom, and wrap. ⌘⇧] / ⌘⇧[ were asked for,
   but are Next / Previous Tab. List mode: → past the drawer (or past the panes, onto the
   transcript or a stopped agent's conversation, which take no keys) is the rail (`RailFocus::Right`, focus `drawer_rail`), ↑ ↓
   move, ↵ shows, ← or Esc back to the pane. Sneak labels: `drawer-rail:transcript`,
   `drawer-rail:<id>`, `drawer-rail:new`.
-- **Who**: the user alone. `RailSelect`, `TalkCycle` and `ListenShow` (the top row's mark,
-  the pane header's dot) are refused from a client (`RAIL_USERS`); a client's ⌘⇧L leaves the
+- **Who**: the user alone. `RailSelect`, `TalkCycle` and `ListenShow` (the pane header's dot,
+  the dot on its tab or space) are refused from a client (`RAIL_USERS`); a client's ⌘⇧L leaves the
   transcript shown.
-- **State**: `drawer.rail`, each `kind`, `id`, `selected`, `rect`. Never a transcript's text.
-- Property rules: two items or none; the transcript first while one is on, the tasks by
-  urgency, each once; the transcript selected while shown; the keys on the rail only on an
+- **State**: `drawer.rail`, each `kind`, `id`, `section`, `selected`, `rect`. Never a
+  transcript's text.
+- Property rules: the tasks by urgency, each once, then the transcript, there exactly while it
+  can be had; sections in order; the transcript selected while shown; the keys on the rail only on an
   item of it; after another's step in the same space an item still on the rail stays selected,
   unless what takes keys took the drawer from the transcript.
 

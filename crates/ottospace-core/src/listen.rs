@@ -45,6 +45,14 @@ impl Source {
     }
 }
 
+/// Where the red dot of the pane being heard goes while its tab is not on show: on its tab in
+/// the second row (its space selected; a tab's id), else on its space in the top row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Dot {
+    Space(crate::model::Owner),
+    Tab(u32),
+}
+
 /// Whose voice a line is: the app's (`them`), or the microphone's (`me`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -292,12 +300,10 @@ impl Listening {
     }
 
     /// Ends the one on (of `id`, if given): the one that ended, for the shell to close its
-    /// streams and its file.
+    /// streams and its file. A drawer on it stays, on the transcript idle.
     pub fn end(&mut self, id: Option<&str>) -> Option<Listen> {
         let ends = self.on.as_ref().is_some_and(|on| id.is_none_or(|id| on.id == id));
-        let on = self.on.take_if(|_| ends)?;
-        self.shown = false;
-        Some(on)
+        self.on.take_if(|_| ends)
     }
 
     /// The pane being heard, if one is.
@@ -343,7 +349,7 @@ mod tests {
         assert_eq!(l.pane(), Some(1));
         assert_eq!(l.end(Some("t2")), None, "another's end ends nothing");
         assert_eq!(l.end(None).map(|on| on.id).as_deref(), Some("t1"));
-        assert!(l.on.is_none() && !l.shown);
+        assert!(l.on.is_none() && l.shown, "the drawer stays, on the transcript idle");
     }
 
     #[test]

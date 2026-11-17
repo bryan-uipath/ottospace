@@ -1520,7 +1520,7 @@ pub enum Action {
     ListenStop {
         at: u64,
     },
-    /// The drawer on the transcript (the top row's mark selects its pane's tab), or off it.
+    /// The drawer on the transcript, idle or on (one on: its pane's tab selected), or off it.
     ListenShow {
         on: bool,
     },
@@ -5557,6 +5557,8 @@ impl Model {
                     talk.open = false;
                 }
             }
+            // No conversation here: ⌘⇧L opens the drawer on the transcript, the rail beside it.
+            Action::TalkToggle if self.talk.is_none() && self.by_user => self.listen.shown = self.listen_item(),
             Action::TalkToggle => {
                 if let Some(open) = self.talk.as_ref().map(|talk| !talk.open) {
                     self.talk_keys(open, effects);
@@ -10380,8 +10382,8 @@ mod tests {
             (m.members(&of), m.front(&of), m.task_space(4), m.task_space(5)),
             (vec![1, 2, 3], Some(3), task_space(4), task_space(5))
         );
-        // A workspace of one task has no rail.
-        assert_eq!(rail_tasks(&workspace_of_one_task()), Vec::<TaskId>::new());
+        // A workspace of one task: the rail still shows it.
+        assert_eq!(rail_tasks(&workspace_of_one_task()), [1]);
     }
 
     #[test]
@@ -10441,7 +10443,7 @@ mod tests {
         m.update(Action::TalkFront { task: 2 });
         assert_eq!(rail_tasks(&m), [1, 2]);
         m.update(Action::TaskSetState { id: 2, state: State::Done });
-        assert_eq!((m.front(&of), rail_tasks(&m)), (Some(1), vec![]));
+        assert_eq!((m.front(&of), rail_tasks(&m)), (Some(1), vec![1]));
         m.update(state(2, State::Running));
         // The front one dismissed, by anyone: the most urgent remaining.
         m.update(Action::TalkFront { task: 2 });
