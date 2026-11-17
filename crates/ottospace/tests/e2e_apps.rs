@@ -2297,6 +2297,9 @@ fn clicks_reach_hosted_windows_as_the_user_switches_between_their_panes() {
         }
         false
     };
+    // What pane `pane`'s stream has sent: none while live, more once parked again.
+    let samples = |pane: u64| state()["counts"]["stream_samples"][pane.to_string()].as_u64().unwrap_or(0);
+    let mut parked: Option<(u64, u64)> = None;
     let rounds = std::env::var("OTTOSPACE_E2E_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(6);
     let (mut replays, mut directs, mut tries) = (0, 0, 0);
     let mut missed = Vec::new();
@@ -2313,6 +2316,10 @@ fn clicks_reach_hosted_windows_as_the_user_switches_between_their_panes() {
             click_at(at[0], at[1], false);
             let live_now = || (state()["state"]["live"] == pane).then_some(());
             wait_or("the pane to go live", || format!("{}", state()["state"]), live_now);
+            // The pane left for this one parked: its stream sends again.
+            if let Some((other, sent)) = parked.take() {
+                wait_for("the parked pane's stream to send again", || (samples(other) > sent).then_some(()));
+            }
             if reached(index, before) {
                 replays += 1;
             } else {
@@ -2324,6 +2331,11 @@ fn clicks_reach_hosted_windows_as_the_user_switches_between_their_panes() {
             std::thread::sleep(Duration::from_millis(300));
             let before = clicks(index);
             click_at(live[0] + live[2] / 2.0, live[1] + live[3] - 40.0, false);
+            // Live: its stream sends nothing (one sample may be on its way as it stops).
+            let sent = samples(pane);
+            std::thread::sleep(Duration::from_millis(500));
+            assert!(samples(pane) <= sent + 1, "pane {pane}'s stream sent {} while live", samples(pane) - sent);
+            parked = Some((pane, samples(pane)));
             if reached(index, before) {
                 directs += 1;
             } else {

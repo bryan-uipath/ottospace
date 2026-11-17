@@ -133,6 +133,9 @@ struct Latest {
     /// When the stream last said anything, a frame or "nothing changed" (milliseconds since
     /// 1970). It says nothing while its window is not drawn: minimised, or on another Space.
     seen: AtomicU64,
+    /// What the stream has sent, frames and "nothing changed": a test run shows that a live
+    /// window's stream sends none and starts again as it parks.
+    samples: AtomicU64,
 }
 
 impl Latest {
@@ -146,6 +149,7 @@ struct Output(Arc<Latest>);
 impl SCStreamOutputTrait for Output {
     fn did_output_sample_buffer(&self, sample: CMSampleBuffer, _: SCStreamOutputType) {
         self.0.seen.store(now_ms(), Relaxed);
+        self.0.samples.fetch_add(1, Relaxed);
         let ptr = sample.image_buffer_ptr_borrowed();
         if ptr.is_null() {
             return; // idle frames carry no image
@@ -194,8 +198,8 @@ struct Hosted {
     latest: Arc<Latest>,
     stream: SCStream,
     /// The stream is stopped while the window is live: a captured window loses quick clicks
-    /// (Finder misses double-clicks).
-    paused: bool,
+    /// (Finder misses double-clicks). Holds what the stream was configured to show then.
+    paused: Option<(CGSize, f64)>,
     pid: i32,
     /// Window corner radius in points, for masking the stream's black corners.
     radius: f64,
@@ -269,7 +273,7 @@ impl Hosted {
             window,
             original,
             latest,
-            paused: false,
+            paused: None,
             stream,
             pid,
             radius,
@@ -337,13 +341,13 @@ impl Hosted {
         let pane = to_cg(self.bounds.get().size);
         let frame = self.window_frame().filter(|_| pane.width >= 1.0)?;
         let content = CGSize::new(frame.size.width, frame.size.height - self.crop);
-        // No stream to configure while live: `resume` comes before the next park.
-        if self.paused {
-            self.content = content;
-            return Some(content);
-        }
         let shown = CGSize::new(pane.width.min(content.width), pane.height.min(content.height));
         let asked = (shown, self.crop);
+        // Live: the click rule and the mask follow the window; `resume` configures the stream.
+        if self.paused.is_some() {
+            (self.shown, self.shown_crop, self.content) = (shown, self.crop, content);
+            return Some(content);
+        }
         if asked == (self.shown, self.shown_crop) {
             self.content = content;
             return Some(content);
@@ -399,19 +403,32 @@ impl Hosted {
     /// Stops the stream while the window is live: the real window is on screen, and a captured
     /// one loses quick clicks. The frame held says it is old (`seen` 0) until `resume`.
     fn pause(&mut self) {
-        if !self.paused {
-            let _ = self.stream.stop_capture();
-            self.latest.seen.store(0, Relaxed);
-            self.paused = true;
+        if self.paused.is_some() {
+            return;
+        }
+        match self.stream.stop_capture() {
+            Ok(()) => {
+                self.latest.seen.store(0, Relaxed);
+                self.paused = Some((self.shown, self.shown_crop));
+            }
+            Err(_) => event_log::event("stream_stop_failed", serde_json::json!({ "window": self.window_id })),
         }
     }
 
-    /// Starts the stream again, as the window parks.
-    fn resume(&mut self) {
-        if self.paused {
-            self.paused = false;
-            if let Err(err) = self.stream.start_capture() {
-                eprintln!("window {}: the stream did not start again: {err:?}", self.window_id);
+    /// Starts the stream again once the window is parked, configured for what the pane shows.
+    /// A failed start stays paused, and the next park tries again.
+    fn resume(&mut self, scale: f64) {
+        let Some(streamed) = self.paused else { return };
+        if self.stream.start_capture().is_err() {
+            return event_log::event("stream_start_failed", serde_json::json!({ "window": self.window_id }));
+        }
+        self.paused = None;
+        if streamed != (self.shown, self.shown_crop) {
+            let config = stream_config(self.shown, self.shown_crop, scale);
+            match self.stream.update_configuration(&config) {
+                Ok(()) => self.latest.expect(&config),
+                // What the stream shows; the next check asks again.
+                Err(_) => (self.shown, self.shown_crop) = streamed,
             }
         }
     }
@@ -1717,8 +1734,9 @@ impl Workspace {
                         let limit = top_limit(window, cx);
                         let rect = on_screen(hosted.bounds.get(), window, cx);
                         let crop = hosted.crop_at(rect, limit);
-                        hosted.resume();
-                        hosted.park(pane_rect(rect, keep, false, crop).size, window.scale_factor() as f64, crop);
+                        let scale = window.scale_factor() as f64;
+                        hosted.park(pane_rect(rect, keep, false, crop).size, scale, crop);
+                        hosted.resume(scale);
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
                         // bar shows no mode. If the user moved to a third app, leave them there.
@@ -1843,8 +1861,8 @@ impl Workspace {
                     let keep = self.bars_leave();
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("unpark", serde_json::json!({ "pane": id, "window": hosted.window_id }));
-                        hosted.bring_up(keep, window, cx);
                         hosted.pause();
+                        hosted.bring_up(keep, window, cx);
                     }
                 }
             }
@@ -3372,6 +3390,10 @@ impl Workspace {
                 // of the displays, or frames that stopped.
                 "redraws": self.redraws,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
+                // What each app pane's stream has sent, by pane.
+                "stream_samples": self.hosted.iter()
+                    .map(|(id, h)| (id.to_string(), h.latest.samples.load(Relaxed).into()))
+                    .collect::<serde_json::Map<_, _>>(),
                 // Scrolls over an app pane's picture, peeks they started, and the one on now (its pane; 0:
                 // none).
                 "wheels": self.wheel.over,
