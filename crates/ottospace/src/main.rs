@@ -5596,7 +5596,7 @@ impl Workspace {
                 }
                 (Glyph::Home, _) => {
                     let ink = if on { theme::TEXT } else { theme::MUTED };
-                    let house = svg().path(HOME_ICON).size(px(15.)).flex_none().text_color(rgb(ink));
+                    let house = svg().path(HOME_ICON).size(px(16.)).flex_none().text_color(rgb(ink));
                     Some(house.into_any_element())
                 }
                 _ => None,
@@ -5627,12 +5627,13 @@ impl Workspace {
                 .h_full()
                 // The selected space keeps its name; the others give way first.
                 .when(!small, |d| d.min_w(px(MIN_SPACE)).max_w(px(MAX_SPACE)).flex_shrink())
-                .when(of == Owner::Home, |d| d.pr_3())
                 .when(on && compact && !small, |d| d.min_w(px(selected_width)))
                 .when(small, |d| d.flex_none().tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))))
                 .overflow_hidden()
                 .pl_3()
                 .pr_1()
+                // Home's house alone: as much room right as left. After `pr_1`, which would win.
+                .when(of == Owner::Home, |d| d.pr_3())
                 .flex()
                 .items_center()
                 .gap_2()
