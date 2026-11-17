@@ -3,15 +3,18 @@
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use objc2::ffi::class_addMethod;
 use objc2::rc::Retained;
-use objc2::{AnyThread, MainThreadMarker};
+use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
+use objc2::{AnyThread, MainThreadMarker, sel};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventModifierFlags, NSEventType, NSFloatingWindowLevel,
-    NSImage, NSScreen, NSView, NSWindowCollectionBehavior,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationPresentationOptions, NSEvent, NSEventModifierFlags,
+    NSEventType, NSFloatingWindowLevel, NSImage, NSScreen, NSView, NSWindowCollectionBehavior,
 };
 use objc2_core_foundation::CGPoint;
 use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags, CGScrollEventUnit};
 use objc2_foundation::NSPoint;
+use ottospace_core::ax::Frame;
 
 /// One pointer event for `send_mouse`. `x`, `y`: points from the top-left of the view.
 #[derive(Clone, Copy, Debug)]
@@ -206,6 +209,51 @@ pub unsafe fn zoom_instead_of_fullscreen(ns_view: *mut c_void) {
     }
 }
 
+/// Set by a zoom of the window (the green button, Window ▸ Zoom, a title bar double-click), taken by `take_zoom`.
+static ZOOM_ASKED: AtomicBool = AtomicBool::new(false);
+
+/// `zoom:`: no zoom; the shell fills the display instead.
+extern "C-unwind" fn zoom_instead(_: &AnyObject, _: Sel, _: *mut AnyObject) {
+    ZOOM_ASKED.store(true, Ordering::SeqCst);
+}
+
+/// Makes a zoom of the window ask the shell (`take_zoom`) instead of resizing it: `zoom:` is
+/// added to the window's class (GPUI's `GPUIWindow`, which inherits NSWindow's), not calling
+/// NSWindow's. Every zoom goes through it: the button's `performZoom:`, a menu item's, GPUI's
+/// `zoom_window` and title bar double-click. Not the delegate's `windowShouldZoom:toFrame:`:
+/// on the CI runner `zoom:` resized the window without asking it. False: the class has a
+/// `zoom:` of its own, left alone, and zooms as before.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread.
+pub unsafe fn zoom_asks(ns_view: *mut c_void) -> bool {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    let Some(window) = view.window() else { return false };
+    let class = AnyObject::class(&window) as *const AnyClass as *mut AnyClass;
+    // SAFETY: `zoom_instead` takes the receiver, the selector and the sender, and returns nothing.
+    let imp: Imp = unsafe { std::mem::transmute(zoom_instead as extern "C-unwind" fn(_, _, _)) };
+    // Adds only: NO if the class defines `zoom:` itself.
+    unsafe { class_addMethod(class, sel!(zoom:), imp, c"v@:@".as_ptr()) }.as_bool()
+}
+
+/// True once after each zoom `zoom_asks` turned away.
+pub fn take_zoom() -> bool {
+    ZOOM_ASKED.swap(false, Ordering::SeqCst)
+}
+
+/// Presses the window's zoom as its green button does (`performZoom:`). True if `zoom_asks`
+/// took it, as `take_zoom` will say.
+///
+/// # Safety
+/// As `zoom_asks`.
+pub unsafe fn press_zoom(ns_view: *mut c_void) -> bool {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    if let Some(window) = view.window() {
+        window.performZoom(None);
+    }
+    ZOOM_ASKED.load(Ordering::SeqCst)
+}
+
 /// Keeps a test run's window drawn wherever the user is: above ordinary windows, and on every
 /// Space, a fullscreen app's included. GPUI does not draw a window that nobody can see, and a
 /// test that waits for layout would then time out. With `click_through`, clicks pass to what is
@@ -285,6 +333,70 @@ pub unsafe fn frame(ns_view: *mut c_void) -> Option<[f64; 4]> {
     let height = NSScreen::screens(mtm).firstObject().map_or(0.0, |s| s.frame().size.height);
     let f = view.window()?.frame();
     Some([f.origin.x, height - f.origin.y - f.size.height, f.size.width, f.size.height])
+}
+
+/// An AppKit rect (from the main screen's bottom left) in Accessibility's coordinates.
+fn flipped(r: objc2_foundation::NSRect, mtm: MainThreadMarker) -> Frame {
+    let height = NSScreen::screens(mtm).firstObject().map_or(0.0, |s| s.frame().size.height);
+    Frame::new(r.origin.x, height - r.origin.y - r.size.height, r.size.width, r.size.height)
+}
+
+/// Where the view's window is, in Accessibility's coordinates.
+pub struct Placement {
+    pub window: Frame,
+    /// The whole of the screen the window is on.
+    pub screen: Frame,
+    /// What the menu bar and the Dock leave of it, as they are now.
+    pub visible: Frame,
+    /// How tall the strip is that the camera housing cuts into, at the screen's top. 0: none.
+    pub safe_top: f64,
+}
+
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread.
+pub unsafe fn placement(ns_view: *mut c_void) -> Option<Placement> {
+    let mtm = MainThreadMarker::new()?;
+    let view = unsafe { &*(ns_view as *const NSView) };
+    let window = view.window()?;
+    let screen = window.screen()?;
+    Some(Placement {
+        window: flipped(window.frame(), mtm),
+        screen: flipped(screen.frame(), mtm),
+        visible: flipped(screen.visibleFrame(), mtm),
+        safe_top: screen.safeAreaInsets().top,
+    })
+}
+
+/// Moves and sizes the view's window to `frame` (Accessibility's coordinates). Unconstrained:
+/// over the menu bar if asked.
+///
+/// # Safety
+/// As `placement`.
+pub unsafe fn set_frame(ns_view: *mut c_void, frame: Frame) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let view = unsafe { &*(ns_view as *const NSView) };
+    if let Some(window) = view.window() {
+        // AppKit measures from the main screen's bottom left.
+        let height = NSScreen::screens(mtm).firstObject().map_or(0.0, |s| s.frame().size.height);
+        let origin = NSPoint::new(frame.x, height - frame.y - frame.h);
+        window.setFrame_display(objc2_foundation::NSRect::new(origin, objc2_foundation::NSSize::new(frame.w, frame.h)), true);
+    }
+}
+
+/// While this app is the one in front, the menu bar and the Dock stay away until the pointer
+/// reaches their edge. `false`: as the system has them. Ends with the process.
+pub fn hide_bars(on: bool) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let hidden = NSApplicationPresentationOptions::AutoHideMenuBar | NSApplicationPresentationOptions::AutoHideDock;
+    let options = if on { hidden } else { NSApplicationPresentationOptions::Default };
+    NSApplication::sharedApplication(mtm).setPresentationOptions(options);
+}
+
+/// True while the app in front keeps the menu bar or the Dock away: the system's state, the
+/// same from any process. For the canary.
+pub fn bars_hidden() -> bool {
+    let Some(mtm) = MainThreadMarker::new() else { return false };
+    NSApplication::sharedApplication(mtm).currentSystemPresentationOptions() != NSApplicationPresentationOptions::Default
 }
 
 /// A native checkbox of the canary's: a press (a click or `AXPress`) turns it on or off.

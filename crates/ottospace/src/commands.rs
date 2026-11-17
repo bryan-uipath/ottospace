@@ -91,7 +91,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::ListMode => Box::new(ListMode),
         Command::SneakMode => Box::new(SneakMode),
         Command::VisualMode => Box::new(VisualMode),
-        Command::Zoom => Box::new(Zoom),
+        Command::FillDisplay => Box::new(FillDisplay),
         Command::ShowKeys => Box::new(ShowKeys),
         Command::ResetKeyCounts => Box::new(ResetKeyCounts),
         Command::AxOverlay => Box::new(AxOverlay),
@@ -354,6 +354,8 @@ mod tests {
         let mut items = menu_items();
         // The palette's own item opens it: it is no row of it.
         items.retain(|(_, action)| *action != gpui::Action::name(&CommandPalette));
+        // Window ▸ Zoom is the green button's: the palette has Fill the Whole Display.
+        items.retain(|(_, action)| *action != gpui::Action::name(&ZoomWindow));
         let commands: Vec<(String, &'static str)> =
             ALL.iter().map(|c| (c.name().to_string(), action(*c).name())).collect();
         for item in &items {
