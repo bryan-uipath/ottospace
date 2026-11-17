@@ -10,6 +10,7 @@ on:
     paths:
       - 'crates/ottospace/src/**'
       - 'crates/ottospace-core/src/**'
+      - 'crates/ottospace-mac/**'
       - 'scripts/shot'
       - 'scripts/shots/**'
       - 'scripts/test-shot.sh'

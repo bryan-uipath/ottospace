@@ -512,6 +512,14 @@ def compare(args, scratch):
         target = os.path.join(scratch, "target")
         if os.path.isdir(target_dir()):
             subprocess.run(["cp", "-Rc", target_dir(), target], check=False)
+            # Swift's module cache records its path and fails once moved ("missing required
+            # module 'SwiftShims'"): drop ottospace-mac's build folders, so its shim builds here.
+            # Cargo names them build/ottospace-mac-<hash> or, newer, build/ottospace-mac/<hash>.
+            for profile in ["debug", "release"]:
+                build_dir = os.path.join(target, profile, "build")
+                for name in os.listdir(build_dir) if os.path.isdir(build_dir) else []:
+                    if name == "ottospace-mac" or name.startswith("ottospace-mac-"):
+                        shutil.rmtree(os.path.join(build_dir, name), ignore_errors=True)
         try:
             before = build(tree, os.path.join(scratch, "ottospace-before"), target)
         finally:
