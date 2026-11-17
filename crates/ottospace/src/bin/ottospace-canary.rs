@@ -10,7 +10,9 @@
 //! `{"cmd":"move","index":0,"to":[x,y]}` and `{"cmd":"recreate","index":0,"at":[x,y]}` put a
 //! window, or a new one in its place, anywhere, off screen too. `{"cmd":"hang","ms":8000}` makes
 //! the app too busy to answer Accessibility calls for that long. `{"cmd":"minimize","index":0}`
-//! puts a window in the Dock: the app runs with none on screen.
+//! puts a window in the Dock: the app runs with none on screen. `{"cmd":"play","path":"x.aiff"}`
+//! plays a sound file in the canary's own process; with `"child":true` from a child process
+//! (`afplay`), as a browser's or an Electron app's helper plays it.
 //!
 //! With `CANARY_BUTTON` set, the first window has a native button titled "Canary button" in
 //! its content: a control its accessibility tree names. Below it, a checkbox "Canary press"
@@ -66,6 +68,12 @@ enum Request {
     },
     Minimize {
         index: usize,
+    },
+    /// Plays a sound file: in this process, or in a child (`afplay`).
+    Play {
+        path: String,
+        #[serde(default)]
+        child: bool,
     },
     Quit,
 }
@@ -265,6 +273,12 @@ fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mu
                 if let Some(handle) = handle {
                     let _ = handle.update(cx, |_, window, _| window.minimize_window());
                 }
+            }
+            Request::Play { path, child: false } => {
+                ottospace_mac::app_audio::play(&path);
+            }
+            Request::Play { path, child: true } => {
+                let _ = std::process::Command::new("/usr/bin/afplay").arg(&path).spawn();
             }
             Request::Hang { ms } => {
                 let _ = reply.send(state(windows, cx));
