@@ -1296,7 +1296,12 @@ pub enum Action {
     WorkbookFold {
         workbook: WorkbookId,
     },
-    /// Take the last delete or update of a workbook back.
+    /// Keep a temporary workspace: its file is written, and closing it no longer discards it.
+    /// The user's alone.
+    WorkbookKeep {
+        workbook: WorkbookId,
+    },
+    /// Take the last delete or update of a workbook back, or a temporary one's close.
     WorkbookUndo,
     /// … on a row of the bar: its menu (`row_menu`). On the row whose menu is open: close it.
     /// `dots`: where the … is drawn. `keys`: a key or a label opened it, so the keys are on its
@@ -1934,6 +1939,7 @@ impl Action {
             | Action::WorkbookOpen { .. }
             | Action::WorkbookRemove { .. }
             | Action::WorkbookFold { .. }
+            | Action::WorkbookKeep { .. }
             | Action::RowMenu { .. }
             | Action::RowMenuDrawn { .. }
             | Action::RowMenuMove { .. }
@@ -2233,6 +2239,7 @@ impl Action {
             | Action::WorkbookEdit { .. }
             | Action::WorkbookRemove { .. }
             | Action::WorkbookFold { .. }
+            | Action::WorkbookKeep { .. }
             | Action::RowMenu { .. }
             | Action::RowMenuDrawn { .. }
             | Action::RowMenuMove { .. }
@@ -3303,6 +3310,7 @@ impl Model {
             | Action::WorkbookOpen { .. }
             | Action::WorkbookEdit { .. }
             | Action::WorkbookRemove { .. }
+            | Action::WorkbookKeep { .. }
             | Action::RowMenu { .. }
             | Action::RowMenuMove { .. }
             | Action::RowMenuChoose { .. }
@@ -3661,7 +3669,12 @@ impl Model {
                 self.notice_hidden.retain(|hidden| hidden.kind != *kind);
                 self.notice_hidden.push(crate::notice::Notice { kind: *kind, text: text.clone() });
             }
-            return vec![Effect::NoticeDismissed { kind: *kind }];
+            let mut effects = vec![Effect::NoticeDismissed { kind: *kind }];
+            // A closed temporary workspace whose offer ended goes now, as when its time is up.
+            if self.workbooks.list.iter().any(|book| book.closing.is_some_and(|until| until <= self.now)) {
+                effects.extend(self.update(Action::Tick { now: self.now }.sent_by(Origin::System)));
+            }
+            return effects;
         }
         let mut effects = self.step(sent);
         // A peek ends when what it was over changes: the tab, the tree, the mode.
@@ -3938,7 +3951,10 @@ impl Model {
         // While the user types in the drawer, no one else moves what their keys go to.
         let typing = !user && (self.talk.as_ref().is_some_and(|talk| talk.keys) || self.composing());
         let shown = typing.then(|| (self.tabs[self.active].id, self.talk.clone()));
+        let (temporary, tick) = (self.temporary_shown(), matches!(action, Action::Tick { .. }));
         self.act(action, &mut effects);
+        // A temporary workspace the user took off the row closes; one whose Undo ran out goes.
+        self.settle_closing(user, tick, &temporary, &mut effects);
         if let Some((id, talk)) = shown {
             self.keep_shown(id, &mut effects);
             // A pane opened, focused or closed beside the user, a row selected, takes no keys from
@@ -4024,7 +4040,7 @@ impl Model {
         effects.push(Effect::PressApp { pane, path, role, at, focus });
     }
 
-    fn act(&mut self, action: Action, effects: &mut Vec<Effect>) {
+    pub(crate) fn act(&mut self, action: Action, effects: &mut Vec<Effect>) {
         match action {
             Action::Split { axis, kind } => {
                 self.leave(effects);
@@ -4817,7 +4833,7 @@ impl Model {
                     let own = |task: &&Task| !task.dismissed && self.task_space(task.id).task() == Some(task.id);
                     let live = self.tasks.list.iter().filter(own);
                     let live = live.map(|task| Owner::Task { id: task.id });
-                    let books = self.workbooks.list.iter().map(|book| Owner::Workbook { id: book.id });
+                    let books = self.workbooks.listed().map(|book| Owner::Workbook { id: book.id });
                     let all = live.chain(books);
                     all.map(|to| TaskChoice { title: self.space_title(&to), to }).collect()
                 });
@@ -5119,7 +5135,7 @@ impl Model {
             Action::MarkUndo => self.mark_undo(),
             Action::ListUndo if self.sidebar == Some(Section::Marks) => self.mark_undo(),
             Action::ListUndo if self.sidebar == Some(Section::Apps) => self.apps_undo(effects),
-            Action::ListUndo if self.sidebar == Some(Section::Workbook) => self.workbook_undo(),
+            Action::ListUndo if self.sidebar == Some(Section::Workbook) => self.workbook_undo(effects),
             Action::ListUndo => self.tasks.undo(),
             Action::MarkRemove { mark } => {
                 if let Some(id) = self.marks.find(&mark) {
@@ -5187,12 +5203,13 @@ impl Model {
             Action::WorkbookEdit { workbook, tab } => self.workbook_edit(workbook, tab),
             Action::WorkbookRemove { workbook, tab } => self.workbook_remove(workbook, tab),
             Action::WorkbookFold { workbook } => self.workbook_fold(workbook),
+            Action::WorkbookKeep { workbook } => self.workbook_keep(workbook),
             Action::RowMenu { row, dots, keys } => self.row_menu_open(row, dots, keys),
             Action::RowMenuDrawn { dots } => self.row_menu_drawn(dots),
             Action::RowMenuMove { delta } => self.row_menu_move(delta),
             Action::RowMenuChoose { index } => self.row_menu_choose(index, effects),
             Action::RowMenuClose => self.row_menu = None,
-            Action::WorkbookUndo => self.workbook_undo(),
+            Action::WorkbookUndo => self.workbook_undo(effects),
             Action::ListReorder { delta } => match self.selected_mark() {
                 // The selection goes with the mark.
                 Some(id) => {
@@ -7258,7 +7275,7 @@ impl Model {
             // Each workbook, and the tabs of an unfolded one under it.
             Some(Section::Workbook) => {
                 let mut rows = Vec::new();
-                for book in &self.workbooks.list {
+                for book in self.workbooks.listed() {
                     rows.push(ListRow::Workbook(book.id));
                     if self.workbooks.unfolded(book.id) {
                         rows.extend((0..book.tabs.len()).map(|at| ListRow::WorkbookTab(book.id, at)));
@@ -8537,6 +8554,7 @@ mod tests {
         Action::EditorKeys { .. },
         Action::EditorDone { .. },
         Action::WorkbookFold { .. },
+        Action::WorkbookKeep { .. },
         Action::RowMenu { .. },
         Action::RowMenuDrawn { .. },
         Action::RowMenuMove { .. },
@@ -8780,6 +8798,7 @@ mod tests {
             Action::WorkbookEdit { workbook: 1, tab: None },
             Action::WorkbookRemove { workbook: 1, tab: None },
             Action::WorkbookFold { workbook: 1 },
+            Action::WorkbookKeep { workbook: 1 },
             Action::RowMenu { row: ListRow::Workbook(1).into(), dots: None, keys: true },
             Action::RowMenuDrawn { dots: None },
             Action::RowMenuMove { delta: 1 },
@@ -8933,6 +8952,7 @@ mod tests {
                 | Action::WorkbookOpen { .. }
                 | Action::WorkbookEdit { .. }
                 | Action::WorkbookRemove { .. }
+                | Action::WorkbookKeep { .. }
                 | Action::WorkbookUndo
                 | Action::RowMenu { .. }
                 | Action::RowMenuMove { .. }
@@ -10029,6 +10049,8 @@ mod tests {
         // workspace goes to the task's space: it has no other.
         m.update(Action::SpaceSelect { index: 0 });
         term(&mut m);
+        // Kept: emptied by the move, a temporary one would close.
+        m.update(Action::WorkbookKeep { workbook: 2 });
         m.update(Action::TabPlace { tab: Some(3), at: TabAt::End(book.clone()) });
         assert_eq!((m.space_tabs(&task_space(1)).len(), m.spaces().iter().any(|space| space.of == book)), (3, false));
         // A task started from it is in it too, in front: no space is made. It goes again.

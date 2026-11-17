@@ -5,7 +5,7 @@
 use gpui::{Context, Div, ElementId, Window, div, prelude::*, px, rgb};
 use ottospace_core::list::ListRow;
 use ottospace_core::marks::MarkInput;
-use ottospace_core::model::Section;
+use ottospace_core::model::{Owner, Section};
 use ottospace_core::workbook::{self, History, WorkbookId, WorkbookRow};
 use ottospace_core::{Action, Origin, PaneId, theme};
 
@@ -21,6 +21,9 @@ pub struct Kept {
     /// What was wrong with the folder at start.
     pub notice: Option<String>,
 }
+
+/// What a temporary workspace's name says on hover, on the top row and in the section.
+pub(crate) const TEMPORARY_TIP: &str = "Temporary: closes without saving · ⋯ Keep";
 
 /// A control's id for a tab of a workbook: `workbook-tab-menu:3:1` is tab 1 of workbook 3.
 fn tab_control(name: &str, id: WorkbookId, at: usize) -> String {
@@ -54,9 +57,9 @@ impl Workspace {
         self.terminals.iter().map(history).collect()
     }
 
-    /// Each workbook as its file would hold it now.
+    /// Each kept workbook as its file would hold it now. A temporary one has no file.
     fn workbook_files(&self) -> Vec<(String, String)> {
-        self.model.workbooks.list.iter().map(|book| (book.uid.clone(), workbook::write(book))).collect()
+        self.model.workbooks.stored().map(|book| (book.uid.clone(), workbook::write(book))).collect()
     }
 
     /// Writes the files of the workbooks that changed, and removes those of the ones deleted.
@@ -109,6 +112,19 @@ impl Workspace {
     /// of no tab, its space open with one empty tab. Never the tab on show.
     pub(crate) fn new_workspace(&mut self, window: &Window, cx: &mut Context<Self>) {
         let _ = self.workbook_act(Action::WorkbookNew { uid: marks::new_uid() }, window, cx);
+    }
+
+    /// File ▸ Keep Workspace and the palette: the selected space's workspace, if temporary, is kept.
+    pub(crate) fn keep_workspace(&mut self, window: &Window, cx: &mut Context<Self>) {
+        match self.model.space().clone() {
+            Owner::Workbook { id } if !self.model.workbooks.is_kept(id) => {
+                let _ = self.workbook_act(Action::WorkbookKeep { workbook: id }, window, cx);
+            }
+            _ => {
+                self.error = Some("no temporary workspace is selected".into());
+                cx.notify();
+            }
+        }
     }
 
     /// After a save: why it did nothing, or what it kept (information, under an Undo it offers).
@@ -330,7 +346,11 @@ impl Workspace {
                         this.click_workbook("workbook-fold", id, None, window, cx);
                     }))
             });
+            // A temporary one's name is muted, and its tip says so.
+            let temporary = !self.model.workbooks.is_kept(id);
             let name = self.workbook_name(renaming, row.name.clone(), cx);
+            let name = if temporary && !renaming { name.text_color(rgb(theme::MUTED)) } else { name };
+            let summary = if temporary { format!("{} · {TEMPORARY_TIP}", row.summary) } else { row.summary.clone() };
             // Bound to a task: the task's badge, where the dot is.
             let lead = match row.task.and_then(|task| self.task_badge(task, 16.)) {
                 Some(badge) => badge.flex_none(),
@@ -339,7 +359,7 @@ impl Workspace {
             let shown = self.dots_shown(&ListRow::Workbook(id));
             let dots = self.row_dots(ListRow::Workbook(id), shown, cx);
             let book = crate::sidebar_row(ElementId::Name(format!("workbook:{id}").into()), selected)
-                .tooltip(tip(row.summary.clone()))
+                .tooltip(tip(summary))
                 .on_hover(cx.listener(move |this, over: &bool, _, cx| this.row_hover(ListRow::Workbook(id), *over, cx)))
                 .children(fold)
                 .child(lead)

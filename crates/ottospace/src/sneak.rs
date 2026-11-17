@@ -363,6 +363,12 @@ impl Workspace {
             ("space", _) => name.parse().ok().map(|index| Action::SpaceClick { index }),
             ("agent-chip", _) => self.model.agent_chip().map(|chip| Action::SpaceClick { index: chip.space }),
             ("space-hide", _) => name.parse().ok().map(|index| Action::SpaceHide { index: Some(index) }),
+            ("space-menu", _) => {
+                if let Some(id) = number {
+                    self.open_row_menu(ottospace_core::row_menu::MenuOf::Space(id), true, window, cx);
+                }
+                None
+            }
             ("top", "new_workspace") | ("workbook-new", _) => {
                 self.new_workspace(window, cx);
                 None

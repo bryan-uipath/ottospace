@@ -175,16 +175,19 @@ impl Gen<'_> {
             task: self.rng.one_in(3).then(|| self.task()),
             worktree: self.rng.one_in(3).then(|| self.name(DIRS)),
             live: Vec::new(),
+            kept: true,
+            closing: None,
             extra: self.extra(),
         }
     }
 
     /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not; or the transcript's header.
     fn menu_row(&mut self) -> MenuOf {
-        match self.rng.below(5) {
+        match self.rng.below(6) {
             0 => ListRow::Task(self.task()).into(),
             1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)).into(),
             2 => MenuOf::Transcript,
+            3 => MenuOf::Space(self.workbook()),
             _ => ListRow::Workbook(self.workbook()).into(),
         }
     }
@@ -1264,6 +1267,7 @@ const MAKERS: &[Make] = &[
     |g| Action::WorkbookEdit { workbook: g.workbook(), tab: g.book_tab() },
     |g| Action::WorkbookRemove { workbook: g.workbook(), tab: g.book_tab() },
     |g| Action::WorkbookFold { workbook: g.workbook() },
+    |g| Action::WorkbookKeep { workbook: g.workbook() },
     |g| Action::RowMenu { row: g.menu_row(), dots: g.dots(), keys: g.rng.coin() },
     |g| Action::RowMenuDrawn { dots: g.dots() },
     |g| Action::RowMenuMove { delta: g.delta() },
@@ -1511,6 +1515,9 @@ fn selects_tab(action: &Action) -> bool {
             | Action::PickerChoose { .. }
             | Action::MarkGo { .. }
             | Action::WorkbookOpen { .. }
+            // A closed temporary workspace's Undo: it is back, selected.
+            | Action::WorkbookUndo
+            | Action::ListUndo
             | Action::ListChoose { .. }
             | Action::MarkType { .. }
             | Action::MarkSubmit
@@ -2146,6 +2153,11 @@ fn check(m: &Model) -> Result<(), String> {
     if let Some((menu, items)) = m.row_menu() {
         let listed = match &menu.row {
             MenuOf::Row(row) => m.list_rows().contains(row),
+            // A workspace's item on the top row: on the row, and temporary (Keep its one item).
+            MenuOf::Space(id) => {
+                let of = Owner::Workbook { id: *id };
+                m.shown_spaces().iter().any(|space| space.of == of) && !m.workbooks.is_kept(*id)
+            }
             MenuOf::Transcript => m.listen.shown && !items.is_empty(),
         };
         ensure!(listed, "a menu of {:?}, which is not listed", menu.row);
@@ -2189,6 +2201,26 @@ fn check(m: &Model) -> Result<(), String> {
     for book in books.iter().filter(|book| book.task.is_some()) {
         let own = m.tabs.iter().any(|tab| tab.space == Owner::Workbook { id: book.id });
         ensure!(!own, "workspace {:?} is bound to a task and has a space of its own", book.name);
+    }
+    // A temporary workspace has no file; one closing is not listed, not on the row and not in
+    // `layout.json`, nor are its tabs; a closing one is never kept.
+    ensure!(m.workbooks.stored().all(|book| book.kept), "a temporary workspace would be written");
+    let layout = m.layout_file(&[], &[], 0);
+    for book in books.iter().filter(|book| book.closing.is_some()) {
+        let of = Owner::Workbook { id: book.id };
+        ensure!(!book.kept, "workspace {:?} is kept and closing", book.name);
+        ensure!(!m.workbook_rows().iter().any(|row| row.id == book.id), "closing workspace {:?} is listed", book.name);
+        ensure!(
+            *m.space() != of && m.shown_spaces().iter().all(|s| s.of != of),
+            "closing {:?} is on the row",
+            book.name
+        );
+        let named = layout.spaces.iter().any(|space| space.workbook.as_deref() == Some(book.uid.as_str()));
+        ensure!(!named, "closing workspace {:?} is in layout.json", book.name);
+    }
+    for space in layout.spaces.iter().filter(|space| space.name.is_some()) {
+        let book = books.iter().find(|book| Some(book.uid.as_str()) == space.workbook.as_deref());
+        ensure!(book.is_some_and(|book| !book.kept), "layout.json names a workspace that is not temporary");
     }
     let lives: Vec<u32> = books.iter().flat_map(|book| book.live.iter().flatten().copied()).collect();
     ensure!(unique(&lives) && lives.iter().all(|tab| tab_ids.contains(tab)), "workbooks stand for tabs {lives:?}");
@@ -2650,6 +2682,10 @@ impl Run {
         let owners_before: Vec<(u32, Owner)> = m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect();
         let books_before: Vec<String> = m.workbooks.list.iter().map(workbook::write).collect();
         let uids_before: Vec<String> = m.workbooks.list.iter().map(|book| book.uid.clone()).collect();
+        // Each listed workspace by its file name, and whether it is kept.
+        let listed =
+            |m: &Model| -> Vec<(String, bool)> { m.workbooks.listed().map(|b| (b.uid.clone(), b.kept)).collect() };
+        let listed_before = listed(m);
         let bindings = |m: &Model| -> Vec<(String, Option<TaskId>)> {
             m.workbooks.list.iter().map(|book| (book.uid.clone(), book.task)).collect()
         };
@@ -3055,6 +3091,26 @@ impl Run {
                 _ => false,
             };
             ensure!(read || follows, "{origin:?}'s {action:?} moved task {id} to {worktree:?}");
+        }
+        // Only the user keeps a temporary workspace (Keep, a name, a save, a task, a Repos click, a
+        // worktree of their +) or closes one: no one else's step keeps or discards one, or takes
+        // one off the list. The files read again keep what they hold.
+        if origin != Origin::User
+            && !matches!(
+                action,
+                Action::RestoreWorkbooks { .. } | Action::RestoreLayout { .. } | Action::WorktreeAdded { .. }
+            )
+        {
+            let now = listed(m);
+            for (uid, kept) in &listed_before {
+                let after = now.iter().find(|(known, _)| known == uid).map(|(_, kept)| *kept);
+                ensure!(
+                    after == Some(*kept),
+                    "{origin:?}'s {action:?} made workspace {uid} {after:?} from kept: {kept}"
+                );
+            }
+            let kept_new = now.iter().any(|(uid, kept)| *kept && !uids_before.contains(uid));
+            ensure!(!kept_new, "{origin:?}'s {action:?} made a kept workspace");
         }
         // + makes at most one workbook, of no tab, with a new empty tab on show in its space;
         // it records nothing in any other, and no tab there was changes space (above).

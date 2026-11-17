@@ -742,6 +742,7 @@ function spaceRow(value: unknown, at: string): SpaceRow {
     strip: list(num)(o.strip, `${at}.strip`),
     worktree: orNull(str)(o.worktree, `${at}.worktree`),
     glyph: glyph(o.glyph, `${at}.glyph`),
+    kept: bool(o.kept, `${at}.kept`),
   };
 }
 
@@ -1309,7 +1310,7 @@ function rowMenu(value: unknown, at: string): RowMenu {
   const item = (value: unknown, at: string): RowMenu["items"][number] => {
     const i = fields(value, at);
     const kind = i.item;
-    const kinds = ["rename", "delete", "remove", "pause", "resume"] as const;
+    const kinds = ["rename", "delete", "remove", "keep", "pause", "resume"] as const;
     const known = kinds.find((k) => k === kind);
     if (known === undefined) throw wrong(`${at}.item`, "a menu item", kind);
     return { item: known, label: str(i.label, `${at}.label`), rect: orNull(rect)(i.rect, `${at}.rect`) };
@@ -1317,15 +1318,16 @@ function rowMenu(value: unknown, at: string): RowMenu {
   return {
     workbook: orNull(num)(o.workbook, `${at}.workbook`),
     tab: orNull(num)(o.tab, `${at}.tab`),
+    space: bool(o.space, `${at}.space`),
     transcript: bool(o.transcript, `${at}.transcript`),
     selected: orNull(num)(o.selected, `${at}.selected`),
     items: list(item)(o.items, `${at}.items`),
   };
 }
 
-function workbookOffer(value: unknown, at: string): "deleted" | "updated" {
-  if (value === "deleted" || value === "updated") return value;
-  throw wrong(at, "deleted or updated", value);
+function workbookOffer(value: unknown, at: string): "deleted" | "updated" | "closed" {
+  if (value === "deleted" || value === "updated" || value === "closed") return value;
+  throw wrong(at, "deleted, updated or closed", value);
 }
 
 function model(value: unknown, at: string): Model {

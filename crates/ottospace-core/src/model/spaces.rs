@@ -91,6 +91,8 @@ pub struct SpaceRow {
     pub worktree: Option<String>,
     /// What its item on the top row shows before its name.
     pub glyph: Glyph,
+    /// False for a temporary workspace: closing it discards it. Every other space is true.
+    pub kept: bool,
 }
 
 /// What a space's item on the top row shows before its name (`Model::glyph`).
@@ -163,8 +165,22 @@ impl Model {
             strip: self.strip(&space.of),
             worktree: self.space_worktree(&space.of).map(String::from),
             glyph: self.glyph(&space.of),
+            kept: self.space_kept(&space.of),
         };
         self.spaces.iter().map(row).collect()
+    }
+
+    /// Whether a space is kept: all but a temporary workspace's.
+    pub fn space_kept(&self, of: &Owner) -> bool {
+        match of {
+            Owner::Workbook { id } => self.workbooks.is_kept(*id),
+            _ => true,
+        }
+    }
+
+    /// Whether a space is a temporary workspace's the user closed, its Undo offered: no tab goes there.
+    fn closing(&self, of: &Owner) -> bool {
+        matches!(of, Owner::Workbook { id } if self.workbooks.closing(*id))
     }
 
     /// The tasks in a space, in the order they came: its own, then each that joined it.
@@ -519,17 +535,17 @@ impl Model {
         if !moves.is_empty() {
             let new = moves.iter().any(|at| !step.tabs.contains(&self.tabs[*at].id));
             let made = origin == Origin::User && (hint.is_some() || (step.on_show && (filled || new)));
-            let open = |of: &&Owner| self.owner_valid(of) && self.spaces.iter().any(|s| s.of == **of);
+            let open =
+                |of: &&Owner| self.owner_valid(of) && !self.closing(of) && self.spaces.iter().any(|s| s.of == **of);
             // Else the first workspace on the row, before one is made.
             let kept =
                 |space: &&Space| !space.hidden && matches!(space.of, Owner::Task { .. } | Owner::Workbook { .. });
             let any = || self.spaces.iter().filter(|space| open(&&space.of)).find(kept).map(|space| space.of.clone());
             // Then the last one still kept, though closed: no file is made while one is.
-            let kept_last = || self.last_spaces.iter().rfind(|of| self.owner_valid(of)).cloned();
+            let kept_last = || self.last_spaces.iter().rfind(|of| self.owner_valid(of) && !self.closing(of)).cloned();
             // Then any kept workspace of no task: one is made only while there is none.
-            let book = || {
-                self.workbooks.list.iter().find(|book| book.task.is_none()).map(|book| Owner::Workbook { id: book.id })
-            };
+            let book =
+                || self.workbooks.listed().find(|book| book.task.is_none()).map(|book| Owner::Workbook { id: book.id });
             // One on the row before a hidden one: a step of another's unhides none it need not.
             let shown = |of: &&Owner| open(of) && self.spaces.iter().any(|s| s.of == **of && !s.hidden);
             let last = self.last_spaces.iter().rfind(shown).cloned().or_else(any);

@@ -255,6 +255,15 @@ pub struct Workbook {
     /// The id of each tab's open tab, this run, by place in `tabs`. Shorter than `tabs`: the rest are closed.
     #[serde(skip)]
     pub live: Vec<Option<u32>>,
+    /// Kept: its file is written and it stays listed once closed. A new one (+, a pane put on
+    /// Home) is temporary until renamed, saved into, kept (`WorkbookKeep`) or given a task or a
+    /// default worktree; never temporary again. A file read is kept.
+    #[serde(skip)]
+    pub kept: bool,
+    /// Closed by the user while temporary: off the list, its space hidden, until this time (ms)
+    /// its Undo is offered for. Then its tabs close and it goes; × on the offer ends it at once.
+    #[serde(skip)]
+    pub closing: Option<u64>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -283,6 +292,8 @@ pub fn parse(text: &str, stem: &str) -> Result<Workbook, String> {
     book.name = marks::clean(&book.name);
     // A default that could be no folder reads as none.
     book.worktree = book.worktree.take().filter(|path| crate::tasks::folder_fits(path));
+    // Written before temporary workspaces were: kept, as every file is.
+    book.kept = true;
     match book.unsound() {
         Some(wrong) => Err(wrong.into()),
         None => Ok(book),
@@ -303,7 +314,8 @@ fn sized(book: &Workbook) -> Result<(), String> {
 impl Workbook {
     fn new(uid: String, name: String, tabs: Vec<TabRecord>) -> Self {
         let (live, extra) = (Vec::new(), Extra::new());
-        Workbook { id: 0, version: VERSION, uid, name, tabs, task: None, worktree: None, live, extra }
+        let (kept, closing) = (false, None);
+        Workbook { id: 0, version: VERSION, uid, name, tabs, task: None, worktree: None, live, kept, closing, extra }
     }
 
     /// What is wrong with it as read from disk, if anything.
@@ -360,6 +372,8 @@ impl Workbook {
 pub enum Change {
     Deleted,
     Updated,
+    /// A temporary workspace closed: it goes when the offer ends.
+    Closed,
 }
 
 impl Change {
@@ -367,6 +381,7 @@ impl Change {
         match self {
             Change::Deleted => "Workspace deleted",
             Change::Updated => "Workspace updated",
+            Change::Closed => "Workspace closed",
         }
     }
 }
@@ -493,18 +508,40 @@ impl Workbooks {
         self.list.iter().find(|book| book.task == Some(task)).map(|book| book.id)
     }
 
-    /// Binds a workbook to a task, or (`None`) unbinds it.
+    /// Binds a workbook to a task, or (`None`) unbinds it. Bound, it is kept.
     pub(crate) fn bind(&mut self, id: WorkbookId, task: Option<TaskId>) {
         if let Some(book) = self.get_mut(id) {
             book.task = task;
+            book.kept |= task.is_some();
         }
     }
 
-    /// Sets a workbook's default worktree, or (`None`) clears it.
+    /// Sets a workbook's default worktree, or (`None`) clears it. With one, it is kept.
     pub(crate) fn set_worktree(&mut self, id: WorkbookId, worktree: Option<String>) {
         if let Some(book) = self.get_mut(id) {
             book.worktree = worktree.filter(|path| crate::tasks::folder_fits(path));
+            book.kept |= book.worktree.is_some();
         }
+    }
+
+    /// Whether workbook `id` is kept: false for a temporary one, and for none.
+    pub fn is_kept(&self, id: WorkbookId) -> bool {
+        self.get(id).is_some_and(|book| book.kept)
+    }
+
+    /// Whether workbook `id` is a temporary one the user closed, its Undo still offered.
+    pub fn closing(&self, id: WorkbookId) -> bool {
+        self.get(id).is_some_and(|book| book.closing.is_some())
+    }
+
+    /// The workbooks the section lists: all but those closing.
+    pub fn listed(&self) -> impl Iterator<Item = &Workbook> {
+        self.list.iter().filter(|book| book.closing.is_none())
+    }
+
+    /// The workbooks whose files the shell writes: the kept ones. A temporary one has none.
+    pub fn stored(&self) -> impl Iterator<Item = &Workbook> {
+        self.list.iter().filter(|book| book.kept)
     }
 
     /// Unbinds each workbook for which `loose` says so, of its id and its task.
@@ -569,7 +606,11 @@ impl Workbooks {
     /// × on the bar: the offer it says ends, as when its time is up. One said since stays.
     pub(crate) fn dismiss(&mut self, text: &str) {
         if self.notice().is_some_and(|said| said.text == text) {
-            self.offer = None;
+            // A closed temporary workspace's: it goes now, as when its time is up.
+            let closed = self.offer.take().filter(|offer| offer.change == Change::Closed);
+            if let Some(book) = closed.and_then(|offer| self.get_mut(offer.before.id)) {
+                book.closing = book.closing.map(|_| 0);
+            }
         }
     }
 
@@ -646,7 +687,7 @@ impl Model {
             let task = book.task;
             WorkbookRow { id, name, panes, summary, open: tab.is_some() || shown, tab, tabs, unfolded, task }
         };
-        self.workbooks.list.iter().map(row).collect()
+        self.workbooks.listed().map(row).collect()
     }
 
     /// What the last save kept, for the status bar: `Saved "DRI": 2 tabs, 500 lines of history,
@@ -839,7 +880,8 @@ impl Model {
         after.live = self.workbooks.get(id).map(|book| book.live.clone()).unwrap_or_default();
         after.set_live(at.filter(|at| *at < before.tabs.len()).unwrap_or(after.tabs.len() - 1), Some(tab));
         if let Some(book) = self.workbooks.get_mut(id) {
-            *book = after;
+            // Saved into by the user: kept.
+            *book = Workbook { kept: true, ..after };
         }
         let note = self.workbook_saved_note();
         self.workbooks.offer =
@@ -917,6 +959,9 @@ impl Model {
     /// Adds the tab on show to workbook `id`, or updates it there if it is one of its tabs.
     /// A tab of another workbook is that one's no longer: it stands for its tab here.
     pub(crate) fn workbook_add_tab(&mut self, id: WorkbookId, read: Read) {
+        if self.workbooks.closing(id) {
+            return;
+        }
         let Ok(record) = self.workbook_record(self.active, read.0, read.1) else { return };
         let Some(tab) = self.tabs.get(self.active).map(|tab| tab.id) else { return };
         let Some(at) = self.workbooks.get(id).map(|book| book.place_of(tab)) else { return };
@@ -944,8 +989,8 @@ impl Model {
             return None;
         }
         let live = tabs.iter().map(|(tab, _)| Some(*tab)).collect();
-        let mut book =
-            Workbook { live, ..Workbook::new(uid, name, tabs.iter().map(|(_, record)| record.clone()).collect()) };
+        let records = tabs.iter().map(|(_, record)| record.clone()).collect();
+        let mut book = Workbook { live, kept: true, ..Workbook::new(uid, name, records) };
         fit(&mut book);
         sized(&book).ok()?;
         for (tab, _) in &tabs {
@@ -989,7 +1034,7 @@ impl Model {
         home: Option<String>,
         effects: &mut Vec<Effect>,
     ) {
-        let Some(book) = self.workbooks.get(id).cloned() else { return };
+        let Some(book) = self.workbooks.get(id).filter(|book| book.closing.is_none()).cloned() else { return };
         // Bound to a task: its space is that task's, and its tabs open there. That space gone
         // (its last tab closed, no layout restored): unbound, it opens as its own.
         let of = self.workbooks.space_of(&Owner::Workbook { id });
@@ -1047,7 +1092,8 @@ impl Model {
 
     /// Starts typing a workbook's name in its row (`tab`: the title of that tab), all selected.
     pub(crate) fn workbook_edit(&mut self, id: WorkbookId, tab: Option<usize>) {
-        let Some(book) = self.workbooks.get(id).filter(|_| self.mark_input_may_start()) else { return };
+        let may = |book: &&Workbook| book.closing.is_none() && self.mark_input_may_start();
+        let Some(book) = self.workbooks.get(id).filter(may) else { return };
         let name = match tab {
             None => book.name.clone(),
             Some(at) if at < book.tabs.len() && book.tabs.len() > 1 => book.tabs[at].title.clone(),
@@ -1090,6 +1136,8 @@ impl Model {
                 None => return,
             },
         };
+        // Named by the user: kept.
+        book.kept = true;
         if tab.is_none() {
             book.name = name.clone();
             self.workbooks.sort();
@@ -1102,7 +1150,9 @@ impl Model {
     /// Deletes a workbook (`tab`: that tab of it; its last tab, the workbook), and offers for a
     /// few seconds to put it back. Its open tabs stay.
     pub(crate) fn workbook_remove(&mut self, id: WorkbookId, tab: Option<usize>) {
-        let Some(at) = self.workbooks.list.iter().position(|book| book.id == id) else { return };
+        let Some(at) = self.workbooks.list.iter().position(|book| book.id == id && book.closing.is_none()) else {
+            return;
+        };
         let until = self.now.saturating_add(NOTICE_MS);
         let book = &mut self.workbooks.list[at];
         match tab {
@@ -1143,8 +1193,16 @@ impl Model {
 
     /// Takes the last delete or update back. A name given since stays. A tab it stood for that
     /// is closed, or stands for another workbook's tab now, is not its tab again.
-    pub(crate) fn workbook_undo(&mut self) {
+    pub(crate) fn workbook_undo(&mut self, effects: &mut Vec<Effect>) {
         let Some(Offer { change, mut before, tabs, made, .. }) = self.workbooks.offer.take() else { return };
+        // A temporary workspace closed: back on the row, selected, as it was.
+        if change == Change::Closed {
+            if let Some(book) = self.workbooks.get_mut(before.id) {
+                book.closing = None;
+                self.open_space(Owner::Workbook { id: before.id }, effects);
+            }
+            return;
+        }
         let id = before.id;
         let claimed = |tab: u32| self.workbooks.list.iter().any(|book| book.id != id && book.place_of(tab).is_some());
         let keep = |tab: &u32| self.tabs.iter().any(|open| open.id == *tab) && !claimed(*tab);
@@ -1171,11 +1229,91 @@ impl Model {
                     (book.tabs, book.live) = (before.tabs, before.live);
                 }
             }
+            Change::Closed => {}
         }
         if let Some(MarkInput::Workbook { workbook, tab: Some(_), .. }) = &self.mark_input
             && *workbook == id
         {
             self.mark_input = None;
+        }
+    }
+
+    /// The user's Keep: a temporary workspace is kept from now on, its file written.
+    pub(crate) fn workbook_keep(&mut self, id: WorkbookId) {
+        if let Some(book) = self.workbooks.get_mut(id).filter(|book| book.closing.is_none()) {
+            book.kept = true;
+        }
+    }
+
+    /// The user closed temporary workspace `id`: off the list, its space hidden, its tabs kept
+    /// until the Undo offered for a few seconds runs out (`settle_closing`).
+    fn workbook_close(&mut self, id: WorkbookId) {
+        let until = self.now.saturating_add(NOTICE_MS);
+        let Some(book) = self.workbooks.get_mut(id).filter(|book| !book.kept && book.closing.is_none()) else {
+            return;
+        };
+        book.closing = Some(until);
+        let before = book.clone();
+        self.workbooks.offer =
+            Some(Offer { change: Change::Closed, before, until, tabs: Vec::new(), made: None, note: None });
+        if matches!(&self.mark_input, Some(MarkInput::Workbook { workbook, .. }) if *workbook == id) {
+            self.mark_input = None;
+        }
+        self.workbooks.unfolded.retain(|book| *book != id);
+    }
+
+    /// Whether workbook `id`'s space is on the row with a tab, or its tab is on show.
+    fn on_row(&self, id: WorkbookId) -> bool {
+        let of = Owner::Workbook { id };
+        let shown = self.spaces.iter().any(|space| space.of == of && !space.hidden);
+        (shown && self.tabs.iter().any(|tab| tab.space == of)) || *self.space() == of
+    }
+
+    /// A temporary workspace read back from `layout.json`, which alone keeps it: named `name`,
+    /// its file name `uid`. None if `uid` is no file name or is taken.
+    pub(crate) fn temporary_workspace(&mut self, uid: &str, name: &str) {
+        let name = marks::clean(name);
+        if valid_uid(uid) && !self.workbooks.holds(uid) && !name.is_empty() {
+            self.workbooks.add(Workbook::new(uid.into(), name, Vec::new()));
+        }
+    }
+
+    /// The temporary workspaces on the row before a step: the user's step that takes one off
+    /// (×, its last tab closed or moved away) closes it.
+    pub(crate) fn temporary_shown(&self) -> Vec<WorkbookId> {
+        let temporary = self.workbooks.listed().filter(|book| !book.kept);
+        temporary.map(|book| book.id).filter(|id| self.on_row(*id)).collect()
+    }
+
+    /// After every step: a temporary workspace of `before` the user's step took off the row
+    /// closes. One closing that is on the row again (a tab of it selected) is back; one whose
+    /// time is up at a `tick` goes, and its tabs close: only time passing ends one.
+    pub(crate) fn settle_closing(&mut self, user: bool, tick: bool, before: &[WorkbookId], effects: &mut Vec<Effect>) {
+        for id in before.iter().copied().filter(|_| user) {
+            if !self.workbooks.is_kept(id) && !self.on_row(id) {
+                self.workbook_close(id);
+            }
+        }
+        let closing: Vec<(WorkbookId, u64)> =
+            self.workbooks.list.iter().filter_map(|book| Some((book.id, book.closing?))).collect();
+        for (id, until) in closing {
+            if self.on_row(id) {
+                if let Some(book) = self.workbooks.get_mut(id) {
+                    book.closing = None;
+                }
+                if self.workbooks.offer.as_ref().is_some_and(|o| o.change == Change::Closed && o.before.id == id) {
+                    self.workbooks.offer = None;
+                }
+                continue;
+            }
+            if !tick || until > self.now {
+                continue;
+            }
+            let of = Owner::Workbook { id };
+            while let Some(at) = self.tabs.iter().position(|tab| tab.space == of) {
+                self.act(crate::model::Action::CloseTab { index: Some(at) }, effects);
+            }
+            self.workbooks.list.retain(|book| book.id != id);
         }
     }
 
@@ -1197,6 +1335,12 @@ impl Model {
             // One workspace a task: the first read keeps it.
             book.task = book.task.filter(|task| self.workbooks.bound_to(*task).is_none());
             self.workbooks.add(book);
+        }
+        // A temporary one has no file: it stays, unless a file of its name came.
+        for book in before.into_iter().filter(|book| !book.kept) {
+            if !self.workbooks.holds(&book.uid) {
+                self.workbooks.add(book);
+            }
         }
         let list = &self.workbooks.list;
         self.workbooks.unfolded.retain(|id| list.iter().any(|book| book.id == *id));
@@ -1248,7 +1392,7 @@ mod tests {
     }
 
     fn names(m: &Model) -> Vec<&str> {
-        m.workbooks.list.iter().map(|book| book.name.as_str()).collect()
+        m.workbooks.listed().map(|book| book.name.as_str()).collect()
     }
 
     #[test]
@@ -1460,13 +1604,14 @@ mod tests {
     }
 
     #[test]
-    fn a_new_workspace_is_the_users_alone_and_hidden_or_closed_it_stays_listed_and_opens_again() {
+    fn a_new_workspace_is_the_users_alone_and_kept_hidden_or_closed_it_stays_listed_and_opens_again() {
         let mut m = Model::default();
         let theirs = Action::WorkbookNew { uid: UID.into() };
         assert_eq!(m.refusal(&theirs, Origin::Socket), Some(USERS_ALONE));
         m.update(theirs.clone().sent_by(Origin::Socket));
         assert_eq!((m.workbooks.list.len(), m.spaces().len()), (0, 1));
         m.update(theirs);
+        m.update(Action::WorkbookKeep { workbook: 1 });
         m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
         // × takes it off the row: its pane stays, and its row opens it as it was.
         m.update(Action::SpaceHide { index: None });
@@ -1590,8 +1735,15 @@ mod tests {
         m.update(Action::WorkbookUndo);
         let back = (vec!["Workspace 2"], Some(1), None, &Owner::Workbook { id: 1 });
         assert_eq!((names(&m), m.workbook_of_tab(), m.workbooks.offered(), m.space()), back);
-        // Its tab closed and its id given to a new tab: the undo takes that one nowhere.
+        // Its tab closed and its id given to a new tab: the undo takes that one nowhere. (The
+        // workspace made for the tab kept: a temporary one closed would offer its own undo.)
+        let keep = |m: &mut Model| {
+            if let Owner::Workbook { id } = m.space().clone() {
+                m.update(Action::WorkbookKeep { workbook: id });
+            }
+        };
         m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        keep(&mut m);
         m.update(Action::CloseTab { index: None });
         m.update(Action::NewTab);
         let new = |m: &Model| m.tabs.iter().find(|tab| tab.id == 1).map(|tab| tab.space.clone());
@@ -1600,6 +1752,7 @@ mod tests {
         assert_eq!((new(&m), before.is_some()), (before, true));
         // Put back after its tab closed, it stands for no tab: a later tab may get that id.
         m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        keep(&mut m);
         m.update(Action::CloseTab { index: None });
         m.update(Action::WorkbookUndo);
         let book = m.workbooks.get(1).map(|book| book.live.clone());
@@ -1955,6 +2108,111 @@ mod tests {
         m.update(Action::WorkbookRemove { workbook: 1, tab: Some(0) });
         // Its open tabs are a workspace's still: one made for them.
         assert_eq!((names(&m), m.workbooks.offered()), (vec!["Workspace 2"], Some(Change::Deleted)));
+    }
+
+    /// The owner: "if we close that kind of workspace - no task or repo associated - it doesn't
+    /// need to persist by default". Temporary until renamed, saved into, kept, bound or given a
+    /// worktree; never temporary again by itself. Only a kept one has a file.
+    #[test]
+    fn a_new_workspace_is_temporary_until_named_saved_kept_bound_or_given_a_worktree() {
+        let stored = |m: &Model| m.workbooks.stored().map(|book| book.name.clone()).collect::<Vec<_>>();
+        let mut m = Model::default();
+        for uid in ["00000000000000a1", "00000000000000a2", "00000000000000a3", "00000000000000a4"] {
+            m.update(Action::WorkbookNew { uid: uid.into() });
+        }
+        assert_eq!((m.workbooks.list.iter().filter(|b| b.kept).count(), stored(&m).len()), (0, 0));
+        assert!(!m.space_rows().iter().find(|row| row.of == Owner::Workbook { id: 1 }).is_some_and(|row| row.kept));
+        // Renamed: kept.
+        m.workbook_rename(1, None, "ops");
+        // Kept with the menu's Keep, the user's alone.
+        m.update(Action::WorkbookKeep { workbook: 2 }.sent_by(Origin::Socket));
+        assert!(!m.workbooks.is_kept(2));
+        m.update(Action::WorkbookKeep { workbook: 2 });
+        // A default worktree: kept, and still kept once it is cleared.
+        m.workbooks.set_worktree(3, Some("/code/app".into()));
+        m.workbooks.set_worktree(3, None);
+        // A tab saved into it: kept.
+        m.update(Action::SelectTab { index: m.space_tabs(&Owner::Workbook { id: 4 })[0] });
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        save(&mut m, UID, &[]);
+        assert_eq!(stored(&m), ["ops", "Workspace 3", "Workspace 4", "Workspace 5"]);
+        assert!(m.space_rows().iter().all(|row| row.kept));
+        // Bound to a task, then unbound: kept.
+        let mut m = Model::default();
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.workbooks.bind(1, Some(7));
+        m.workbooks.bind(1, None);
+        assert!(m.workbooks.is_kept(1));
+        // A file read is kept: it was saved before workspaces could be temporary.
+        let book = Workbook::new(UID_2.into(), "Workspace 2".into(), Vec::new());
+        assert!(parse(&write(&book), UID_2).is_ok_and(|read| read.kept));
+    }
+
+    /// Closed by the user, a temporary workspace goes: off the list and the row at once, its
+    /// panes running until its Undo runs out, which brings it back as it was.
+    #[test]
+    fn closing_a_temporary_workspace_discards_it_after_an_undo_that_brings_it_back() {
+        let shown = |m: &Model| m.shown_spaces().len();
+        let mut m = Model::default();
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        // A client's × hides it, and closes nothing: it stays listed.
+        m.update(Action::SpaceHide { index: None }.sent_by(Origin::Socket));
+        assert_eq!((names(&m), m.workbooks.offered(), shown(&m)), (vec!["Workspace 2"], None, 1));
+        m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
+        // The user's: off the list, Undo offered; its terminal runs on meanwhile.
+        let effects = m.update(Action::SpaceHide { index: None });
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Closed(_))));
+        assert_eq!((names(&m), m.workbooks.offered(), m.panes.len()), (Vec::<&str>::new(), Some(Change::Closed), 1));
+        assert_eq!(m.workbooks.notice().map(|notice| notice.text), Some("Workspace closed".into()));
+        assert!(m.workbook_rows().is_empty() && m.workbooks.stored().next().is_none());
+        // Its name is the undo's while it is offered: + takes the next.
+        m.update(Action::WorkbookNew { uid: UID_2.into() });
+        m.update(Action::SpaceSelect { index: 0 });
+        assert_eq!(names(&m), ["Workspace 3"]);
+        // A client's undo is refused; the user's brings it back, selected, its terminal there.
+        m.update(Action::WorkbookUndo.sent_by(Origin::Socket));
+        assert_eq!(m.workbooks.offered(), Some(Change::Closed));
+        m.update(Action::WorkbookUndo);
+        assert_eq!(
+            (m.space(), m.focused, names(&m)),
+            (&Owner::Workbook { id: 1 }, Some(1), vec!["Workspace 2", "Workspace 3"])
+        );
+        // Closed again and its time up: gone, its terminal closed, its number free for +.
+        m.update(Action::SpaceHide { index: None });
+        m.update(Action::Tick { now: NOTICE_MS - 1 }.sent_by(Origin::System));
+        assert_eq!(m.panes.len(), 1);
+        let effects = m.update(Action::Tick { now: NOTICE_MS + 1 }.sent_by(Origin::System));
+        assert!(effects.iter().any(|effect| matches!(effect, Effect::Closed(pane) if pane.id == 1)));
+        assert_eq!((m.panes.len(), m.workbooks.list.len(), m.workbooks.offered()), (0, 1, None));
+        m.update(Action::WorkbookNew { uid: "00000000000000a1".into() });
+        assert_eq!(names(&m), ["Workspace 2", "Workspace 3"]);
+        // Its last tab closed by the user: closed too. × on the offer ends it at once.
+        m.update(Action::CloseTab { index: None });
+        assert_eq!((names(&m), m.workbooks.offered()), (vec!["Workspace 3"], Some(Change::Closed)));
+        let text = "Workspace closed".to_string();
+        m.update(Action::NoticeDismiss { notice: crate::notice::Kind::Undo, text });
+        assert_eq!((names(&m), m.workbooks.list.len()), (vec!["Workspace 3"], 1));
+        // A kept one closes as before: listed, its file kept.
+        m.update(Action::WorkbookKeep { workbook: 2 });
+        m.update(Action::WorkbookOpen { workbook: 2, tab: None, home: None });
+        m.update(Action::SpaceHide { index: None });
+        assert_eq!((names(&m), m.workbooks.offered()), (vec!["Workspace 3"], None));
+    }
+
+    /// A tab of a temporary workspace being closed selected again (a mark, a client's
+    /// selection): it is back on the row, and its Undo is no longer offered.
+    #[test]
+    fn a_closing_workspace_whose_tab_is_selected_is_back() {
+        let mut m = Model::default();
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::SpaceHide { index: None });
+        let at = m.space_tabs(&Owner::Workbook { id: 1 })[0];
+        m.update(Action::SelectTab { index: at }.sent_by(Origin::Socket));
+        assert_eq!(
+            (names(&m), m.workbooks.offered(), m.space()),
+            (vec!["Workspace 2"], None, &Owner::Workbook { id: 1 })
+        );
     }
 
     #[test]

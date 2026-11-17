@@ -23,7 +23,7 @@ Built (stage 1):
   and records no tab: its file has no tabs until one is saved into it. Twice makes two. While
   a delete can still be taken back, + takes neither that workspace's name nor its file name:
   the undo brings it back as it was. The
-  user's alone, as saving is: it writes a file.
+  user's alone, as saving is. It is temporary (below, "Temporary workspaces"): no file yet.
 - **New task** is ⌘N and the Tasks section's +. The top row's + no longer opens the box.
 - **× keeps it listed.** Hiding a workspace takes it off the row with its tabs and panes as they
   are; its row in the section brings it back. Its last tab closed: off the row, still listed;
@@ -35,6 +35,48 @@ Built (stage 1):
   file only once saved.
 - **Home** replaced the first space, "Workspace" (below, "Home").
 
+## Temporary workspaces (built)
+
+The owner: "making workspaces ephemeral if they don't have a task or a repo associated with them.
+ie, i opened a workspace and it's 'Workspace 8' because i had opened a bunch of workspaces in a
+previous session. if we close that kind of workspace - no task or repo associated - it doesn't
+need to persist by default. maybe we need a way to differentiate persisted vs not workspaces".
+
+- **Kept or temporary** (`Workbook::kept`). A workspace is kept when it has a task bound, a
+  default worktree, the user renamed it, saved a tab into it (⌘⇧S, Add Tab, Save All), or chose
+  Keep (`WorkbookKeep`: its row's …, its item's … on the top row (`MenuOf::Space`, Keep alone), File ▸
+  Keep Workspace, the palette). Else it is temporary:
+  one made with +, or for what the user opened on Home, or for a client's tab with nowhere to go.
+  It becomes kept by itself the moment it gains a task, a worktree or a name; a kept one never
+  turns temporary (`bind`, `set_worktree` and a rename set the flag, nothing clears it).
+- **No file.** The shell writes only kept workspaces (`Workbooks::stored`). A temporary one open
+  or hidden at quit is in `layout.json` (its space's `name`, beside its `workbook` id), and
+  comes back temporary (`temporary_workspace`). A build before this one reads such a space as a
+  workspace not kept: its tabs go to the workspace selected last.
+- **Closing discards.** The user's step that takes a temporary workspace off the row (×, ⌘⌃W,
+  its last tab closed or moved away) closes it (`settle_closing`, after `act`): it leaves the list
+  at once, its space hidden with its tabs, and the notice bar offers `Workspace closed` with Undo
+  for `NOTICE_MS` (#208's offer, `Change::Closed`). The user's Undo brings it back on the row,
+  selected, as it was. Its time up (a `Tick`; × on the bar sets it up now): its tabs close, their
+  terminals and windows with them, and it is gone. Only time passing ends one, so no other step
+  ends a pane by it. A tab of it selected meanwhile (a mark, a client's `select_tab`) puts it back
+  on the row, temporary still, and the offer goes. A second close while one is offered takes the
+  bar; the first still goes at its own time.
+- **Who.** Only the user's step closes one or keeps one: a client's `hide_space` or `close_tab`
+  leaves it listed (it goes at quit, having no file, unless it is on the row then), and its
+  `WorkbookKeep` is refused (`USERS_ALONE`).
+- **Numbering.** + names a new one with the lowest free number among the listed workspaces and
+  one whose Undo is offered (`free_name`): once closed ones go, "Workspace 2" comes again.
+- **Look.** Its name is muted on the top row and in the section, its tip "Temporary: closes
+  without saving · ⋯ Keep". The state says `spaces[].kept` (false only for a temporary
+  workspace) and `workbook_offer` `closed`.
+- **Migration.** Every file read is kept: a workspace saved before this rule was one the user
+  meant to keep, whatever it holds (deleting stray "Workspace 8"s is one click each). The upgrade
+  of an older layout's first space ("Workspace") is kept too.
+- Property rules: no step but the user's keeps or closes a temporary workspace or takes one off
+  the list (the files read again aside); no temporary workspace is written; a closing one is not
+  listed, not on the row, not kept and not in `layout.json`, nor are its tabs.
+
 ## Home (built)
 
 The owner: Home is the first item of the top row, a house with no word and no ×. It never holds a
@@ -44,9 +86,9 @@ pane: what you open there gets its own workspace.
   ⌘⌃1, "Go to Home" in the palette and the View menu select it. It holds one fixed empty tab of
   its own (`HOME_TAB`), its screen: the home screen (tasks that need you, the nodes, the key
   caps). The state leaves that tab out of `tabs` and says `active: null` there.
-- **The user's act on Home makes a workspace.** A pane put there, ⌘T, a Repos click: a NEW kept
+- **The user's act on Home makes a workspace.** A pane put there, ⌘T, a Repos click: a NEW
   workspace, selected, named as + names one ("Workspace 2"), or for the folder a Repos click
-  opened. Listed and kept like one made with +.
+  opened. Listed like one made with +: temporary, but for a Repos click's (its worktree keeps it).
 - **⌘N on Home**: the task gets a space of its own, as before. In a workspace it joins.
 - **Anything else goes to the workspace selected last**: a client's pane or tab, a stray tab (its
   task dismissed, its workspace deleted, a session's after a restart), a tab of no space read
