@@ -32,10 +32,11 @@ pub enum Feature {
     Marks,
     AppsSection,
     Transcripts,
+    Slots,
 }
 
 /// Every flag, in the order the docs and the palette list them.
-pub const ALL: [Feature; 3] = [Feature::Marks, Feature::AppsSection, Feature::Transcripts];
+pub const ALL: [Feature; 4] = [Feature::Marks, Feature::AppsSection, Feature::Transcripts, Feature::Slots];
 
 /// Flags whose feature is stable now: a setting of one is ignored, with a warning.
 pub const RETIRED: &[&str] = &[];
@@ -47,12 +48,13 @@ impl Feature {
             Feature::Marks => "marks",
             Feature::AppsSection => "apps_section",
             Feature::Transcripts => "transcripts",
+            Feature::Slots => "slots",
         }
     }
 
     pub fn stage(self) -> Stage {
         match self {
-            Feature::Marks | Feature::AppsSection | Feature::Transcripts => Stage::Experimental,
+            Feature::Marks | Feature::AppsSection | Feature::Transcripts | Feature::Slots => Stage::Experimental,
         }
     }
 
@@ -68,6 +70,9 @@ impl Feature {
             Feature::Transcripts => {
                 "Transcripts (⌘⌃T): an app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file"
             }
+            Feature::Slots => {
+                "Slots: a pane that keeps its place and waits for a window you name. In progress: not on screen yet"
+            }
         }
     }
 
@@ -81,6 +86,7 @@ impl Feature {
             Feature::Marks => "feature off: marks",
             Feature::AppsSection => "feature off: apps_section",
             Feature::Transcripts => "feature off: transcripts",
+            Feature::Slots => "feature off: slots",
         }
     }
 }
@@ -187,13 +193,13 @@ mod tests {
         );
         assert_eq!(
             Features::all().with(Feature::Marks, false),
-            Features(vec![Feature::AppsSection, Feature::Transcripts])
+            Features(vec![Feature::AppsSection, Feature::Transcripts, Feature::Slots])
         );
         let three = Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true);
-        assert_eq!(three.with(Feature::Transcripts, true), Features::all());
-        assert_eq!(Features::parse_list(" transcripts,apps_section,marks ").unwrap(), Features::all());
+        assert_eq!(three.with(Feature::Transcripts, true).with(Feature::Slots, true), Features::all());
+        assert_eq!(Features::parse_list(" slots,transcripts,apps_section,marks ").unwrap(), Features::all());
         assert_eq!(Features::parse_list("").unwrap(), Features(Vec::new()));
-        assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts"));
+        assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts, slots"));
     }
 
     /// What the model does with a feature off, and on again.
@@ -288,7 +294,7 @@ mod tests {
             m.update(Action::PaletteFeatures);
             let flags = m.palette.as_ref().map(|p| p.feature_matches().into_iter().cloned().collect::<Vec<_>>());
             let names: Vec<(&str, bool)> = flags.iter().flatten().map(|c| (c.feature.name(), c.on)).collect();
-            assert_eq!(names, [("marks", false), ("apps_section", false), ("transcripts", false)]);
+            assert_eq!(names, [("marks", false), ("apps_section", false), ("transcripts", false), ("slots", false)]);
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
             m.update(crate::model::Action::FieldEdit { edit: crate::edit::Edit::Insert("apps".into()) });
             let effects = m.update(Action::PaletteChoose { index: None });
@@ -303,7 +309,7 @@ mod tests {
         assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
             wrong("bookmarks", &yes).unwrap(),
-            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts"
+            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots"
         );
         assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
         assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());

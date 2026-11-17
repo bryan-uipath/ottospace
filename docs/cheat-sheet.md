@@ -54,8 +54,9 @@ ottospace            # opens on the Repos list
 | Open a section | Click its icon on the rail |
 | Use it from the keyboard | ⌘⌃E (the open section, else Apps, or with it off the first), then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
 | Read the lists again | Close and open the section, or ⌘⌃E: Apps and Repos are read when they open |
-| Add something | + in the bar's header: a new task in Tasks, a new empty workspace in Workspaces, a repository in Repos (pick a folder that is one or holds some; it goes into `repos` in the settings) |
-| Stop listing a repository | Point at its name in Repos: the trash. Only for one added as itself; nothing on disk is touched. While a task works there it asks first (↵ unlists, Esc keeps it) |
+| Add something | + in the bar's header: a new task in Tasks, a new empty workspace in Workspaces, a repository in Repos (pick its folder, or one inside it; it goes at the end of `repos` in the settings) |
+| Add a repository | Repos lists only what you add: its +, "+ Add a repository" while it is empty, a folder dropped on it, or ⌘P ▸ Add Folder to Repos (the focused terminal's folder, else the tab's task's) |
+| Stop listing a repository | Point at its name in Repos: the trash. Nothing on disk is touched. While a task works there it asks first (↵ unlists, Esc keeps it). A folder of repositories from older settings is one folded group: its trash takes it off whole |
 | New worktree | Point at a repository's name in Repos: +, type a branch, ↵. It goes in `~/.ottospace/worktrees/<repo>/<branch>` (`worktrees_dir`) and opens as a terminal tab |
 | Fold a repository | Its chevron, or ← / → in list mode |
 | A worktree's pull request | Its `#number` at the row's end: muted draft, ✓ ready, amber waiting, red failing. Hover for checks, review and merge; click opens it (via `gh`, `repos_prs`) |
@@ -210,7 +211,7 @@ restart, and the rest applies at once:
 ```json
 {
   "terminal": { "font": "JetBrains Mono", "font_size": 14 },
-  "repos": ["~/code", "~/notes"],
+  "repos": ["~/code/app", "~/code/web"],
   "tasks": "~/notes/tasks",
   "sessions": true,
   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
@@ -242,9 +243,11 @@ The Calendar section (second on the rail, only while `calendar_ics` is set) list
 
 `calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a band of the workday (`calendar_workday`, `"09:00-17:00"`) above the status bar, hover a block for its details (now's tick: the next meeting and when the feed was read), a pulse from 10 minutes before, and at the start, if you are in no call (or still in an earlier one), a meeting notice on the notice bar (Join, × to dismiss) and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link; `calendar_email` (your address in the feed) leaves out meetings you declined; `calendar_hide_free: true` leaves out free entries (a feed without attendees); `calendar_colors` colours by title (`[{"match": "1:1", "color": "teal"}]`). On the band calls sit in lanes over faint blocks of time held; a block that starts with `Focus` or `Deep Work` and has no call link is green.
 
-`windows` rules name windows ottospace leaves alone, by `app`, `title` and `subrole`: [reference](reference.md#settings).
+`windows` rules name windows ottospace leaves alone, by `app`, `title`, `identifier` and `subrole`: [reference](reference.md#settings).
 
-`OTTOSPACE_REPOS` (directories, `:` between them) wins over `repos`. `OTTOSPACE_HOME` names another folder than `~/.ottospace`.
+`repos`: the repositories Repos lists, in its order, none until you add one. Older settings named folders to look in: a folder of repositories there shows as one folded group (remove it, add the ones you use); `~/code` and `~/notes` are no longer looked in by default.
+
+`OTTOSPACE_REPOS` (directories, `:` between them) wins over `repos`, and lists what they hold flat. `OTTOSPACE_HOME` names another folder than `~/.ottospace`.
 
 ## Not there yet
 

@@ -41,7 +41,7 @@ running, and the rest of the design is not built: see the
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar | Works today |
 | The Apps section: the Dock's apps, pins, "Not running" and "All apps" | Works today, behind the `apps_section` [flag](#features), off by default |
-| Repos: each repository's name over its checkouts, one line each (the branch; a dot for the repository's own folder; its open pull request's mark; a task's badge). The chevron folds a repository (a count while folded; kept in `layout.json`; shown while a task there runs or needs you). Open a terminal in one. + in the bar's header adds a directory to `repos`; on a name under the pointer, + makes a worktree (`worktrees_dir`) and the trash stops listing it (asked first while a task works there; the status bar says nothing on disk changed) | Works today |
+| Repos: each repository's name over its checkouts, one line each (the branch; a dot for the repository's own folder; its open pull request's mark; a task's badge). The chevron folds a repository (a count while folded; kept in `layout.json`; shown while a task there runs or needs you). Open a terminal in one. Opt-in, in your order: + in the bar's header, a dropped folder or Add Folder to Repos adds a repository to the end of `repos`; a folder of repositories from older settings is one folded group. On a name under the pointer, + makes a worktree (`worktrees_dir`) and the trash stops listing it (asked first while a task works there; the status bar says nothing on disk changed) | Works today |
 | List mode (⌘⌃E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls, and on the buttons and text fields of the focused app pane; typing it clicks the control, presses the app's button, or focuses its text field | Works today |
 | The wheel over an app pane you are not in brings its window up for the scroll (a peek): `PEEK` in the status bar, parked again when the pointer leaves or the wheel is quiet | Partly verified: on CI the window comes up, the app is in front and the scrolls after the first reach it. The first scroll is lost. The window parking again by itself is unit-tested, not yet seen on CI |
@@ -1078,7 +1078,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 ```json
 {
   "terminal": { "font": "JetBrains Mono", "font_size": 14 },
-  "repos": ["~/code", "~/notes"],
+  "repos": ["~/code/app", "~/code/web"],
   "tasks": "~/notes/tasks",
   "sessions": true,
   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
@@ -1105,7 +1105,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 |---|---|---|
 | `terminal.font` | The terminal's font, by family name. Use a monospaced one | `Menlo` |
 | `terminal.font_size` | In points, 6 to 72 | `13` |
-| `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it. The section's + adds the folder you pick (a repository, or one that holds some), by its full path; if the file named none, `~/code` and `~/notes` are written with it. Remove, on a repository's name under the pointer, takes off a directory listed as itself; one that comes from a folder holding several is yours to edit. At most 64 through + | `~/code`, `~/notes` |
+| `repos` | The repositories the Repos section lists, in its order: each a path, or `{"path": …, "pinned": true}`. Opt-in: the section's + (the folder you pick, or one inside a repository), a folder dropped on the section, and Add Folder to Repos (⌘P: the focused terminal's folder, else the tab's task's) add one at the end, by its full path; a folder that is no repository is refused. The trash on a name takes it off; nothing on disk is touched. An entry that is a folder of repositories (older settings named folders to look in) lists them as one group, folded until you unfold it, removed whole; one of them added by itself leaves the group. `OTTOSPACE_REPOS` (`:` between directories) wins over it, and lists what they hold flat. At most 64 | none (before: `~/code`, `~/notes`) |
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
 | `worktrees_dir` | Where + on a repository's name makes worktrees: `<dir>/<repo>/<branch>`, slashes in the branch as `-`; a repository whose folder name another listed one shares gets a short hash of its path after it (`app-1f2e3d`). A relative path is inside `~/.ottospace`. Read each time | `worktrees` in `~/.ottospace` |
 | `transcripts_dir` | Where transcripts are kept (the `transcripts` flag): one Markdown file each, `YYYY-MM-DD-HHMM-<app>.md`, written as lines come. A folder ottospace makes is private to you (0700), each file too (0600). A relative path is inside `~/.ottospace`. Read at each start | `transcripts` in `~/.ottospace` |
@@ -1124,7 +1124,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |
-| `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; a changed rule applies to windows seen after it | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
+| `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title`, `identifier` (the app's own name for the window, its `AXIdentifier`: Zoom's main meeting window is `zm.meeting.window.main`; a window without one has empty text: `""` or `*` matches it) and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; a changed rule applies to windows seen after it | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
 | `apps` | The pinned apps: listed first under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. Each is the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`), looked for in `/Applications`, `~/Applications` and `/System/Applications` (and their `Utilities`), or the path of its bundle (`~/Tools/Lumen.app`). One that is not found is left out of the list and kept in the file. Pin and Unpin in the Apps section write this list: the name if it means that same bundle when read back (the first of that name in those folders, in that order), else its path. A name that is found only once ottospace runs (the app was installed since) is listed from the next scan. (Once you type in the picker it offers every installed app in those folders, these first) | none |
 | `apps_hidden` | Apps of the Dock not to suggest in Apps, written as `apps` is. Hide in the Apps section writes this list | none |
 | `wheel_to_apps` | The wheel or trackpad over an app pane you are not in brings its window up for the scroll (a peek). `false`: the wheel there does nothing | `true` |
@@ -1161,6 +1161,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 | `marks` | Experimental | off | Marks: name a pane or a tab, and go back to it with a letter |
 | `apps_section` | Experimental | off | The Apps section: the Dock's apps, pins, Not running and All apps |
 | `transcripts` | Experimental | off | Transcripts (⌘⌃T): an app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file |
+| `slots` | Experimental | off | Slots: a pane that keeps its place and waits for a window you name. In progress: not on screen yet |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1174,6 +1175,8 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   nothing, no Transcribe or Pause command or menu item, and the state's `listen` is null. Turning it off
   ends a transcript that is on. On, an app pane's header offers `Transcribe` on macOS 26 (design:
   [transcripts.md](ai/transcripts.md)).
+- `slots` off: a slot, restored or turned off mid-run, is a plain app pane of its app that keeps
+  the slot on its record for the flag's return. In progress: the model only (design: [slots.md](ai/slots.md)).
 
 ## Driving it from outside
 
@@ -1201,6 +1204,36 @@ ottospace ctl '{"cmd":"trace"}'                      # the last 2,000 events: na
 
 `OTTOSPACE_TRACE=1` also writes the trace to `~/.ottospace/trace.jsonl` when the app panics or gets
 `kill -USR1`.
+
+### The log
+
+`<home>/log` (`~/.ottospace/log`, or in `OTTOSPACE_HOME`) keeps what happened to the app, to read after a problem: one JSON line an
+event, in local time, e.g. `{"at":"2026-11-16T17:51:03-08:00","ev":"displays","count":1,"sizes":["1728x1117"]}`.
+Only you can read it (0600). At 1 MB it becomes `log.1` and the one before goes: 2 MB at most.
+
+| Event | Fields |
+|---|---|
+| `start` | `pid`, `version`, `commit`, `hosting`, `displays` (`count`, `sizes`) |
+| `quit` | `hosted`: windows given back |
+| `displays` | The displays changed (one plugged in or taken away): `count`, `sizes` in points |
+| `window_display` | The window is on another display: its number and size |
+| `stall` | The window had something to draw for `stalled_ms` and drew nothing; ottospace has it draw again. `n`: stalls in a row (a minute with none starts over), written the 1st, 2nd, 4th, 8th.. |
+| `redrawn` | Frames came again after a written stall: `kicks`, `lasted_ms`, its `n` |
+| `host_failed` | A window could not be hosted: its number |
+| `give_back_failed` | A hosted window could not be put back on a screen: its number |
+| `gpui` | An error or warning of GPUI's macOS layer: `level`, `src` (`gpui-0.2.2/src/platform/mac/window.rs:489`), `said` only when fixed words and a code (`could not create display link, code: -6661`), and `n`: one from the same place is written its 1st, 2nd, 4th, 8th.. time |
+| `panic` | `src` (`crate/src/file.rs:line`) and `thread`; never the message |
+
+Never in it: terminal or transcript text, titles, meetings, passes, paths or file contents. Each event
+keeps only the fields listed here.
+The same lines go to the unified log, subsystem `dev.ottospace` (in zsh, `log` is a builtin, so
+name `/usr/bin/log`):
+
+```sh
+/usr/bin/log show --predicate 'subsystem == "dev.ottospace"' --last 1d
+```
+
+A test run writes neither: the file only in a folder it names with `OTTOSPACE_HOME`.
 
 `ottospace skill` prints every request with an example, and what the state fields mean. Fields are
 in `Request` in [`crates/ottospace/src/control.rs`](../crates/ottospace/src/control.rs). Unknown commands and
@@ -1298,9 +1331,9 @@ first brainstorm:
 
 [transcripts.md](ai/transcripts.md): an app's audio transcribed on the Mac, live, started and stopped by the user alone. Slice 1 is in (behind `transcripts`): the model, ⌘⌃T, the indicator and the drawer's lines, fed only by a test fixture. Then the file in `transcripts_dir`, heard lines handed over on a fixed tick, and the level meter with its label (Hearing speech, Listening, No sound for 30 s), drawn only. Then the app's real audio (ScreenCaptureKit) and Apple's on-device recogniser, the model's download, the menu bar's dot and the start reminder.
 
-[slots.md](ai/slots.md): slots, panes that wait for a window (one window selector for slots, `windows` rules and transcripts' `meeting`), offer it, and empty when it closes. Not built.
+[slots.md](ai/slots.md): slots, panes that wait for a window (one window selector for slots, `windows` rules and transcripts' `meeting`), offer it, and empty when it closes. In: the selector (`windows` rules take `identifier`) and, behind `slots`, the model: its states, who may, and the record in `layout.json`. Not on screen yet.
 
-[repos.md](ai/repos.md): the Repos section: folding, the default folder's dot, and how + makes a worktree (the git it runs, what it refuses).
+[repos.md](ai/repos.md): the Repos section: the opt-in list and its order, groups from older settings, folding, the default folder's dot, and how + makes a worktree (the git it runs, what it refuses).
 
 [`docs/ai/backlog.md`](ai/backlog.md) is an older backlog. `docs/ideas/` holds the owner's own
 notes.

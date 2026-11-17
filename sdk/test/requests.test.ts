@@ -125,6 +125,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.audioProbeStart(),
   (c) => c.audioProbeStop(),
   (c) => c.zoomPress(),
+  (c) => c.displayChange(),
   (c) => c.calendar({ day: "tomorrow", days: 2 }),
   (c) => c.calendar({ day: "yesterday" }),
   (c) => c.marks(),

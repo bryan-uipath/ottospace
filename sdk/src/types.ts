@@ -115,7 +115,7 @@ export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
 export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
 /** A feature flag (`features` in `settings.json`). Off, its requests answer "feature off: <name>". */
-export type Feature = "marks" | "apps_section" | "transcripts";
+export type Feature = "marks" | "apps_section" | "transcripts" | "slots";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
@@ -200,7 +200,9 @@ export type PaneKind =
   | { type: "empty" }
   | { type: "terminal" }
   /** `window`: the window-server id of the hosted window. `bundle`, `name`: whose it is. */
-  | { type: "app"; window: number; title: string; bundle?: string; name: string };
+  | { type: "app"; window: number; title: string; bundle?: string; name: string }
+  /** A slot that waits for a window of this app (the `slots` flag). Where it is: `slots`. */
+  | { type: "slot"; name: string; bundle?: string };
 
 export interface Pane {
   id: PaneId;
@@ -532,6 +534,8 @@ export interface SessionsBar {
 export interface ReposGroup {
   name: string;
   path: string;
+  /** The folder entry it is drawn under (older settings), or null: an entry of its own. */
+  group: string | null;
   /** Where the heading was laid out, scrolled out of view or not. Null while the section is not drawn. */
   header: Rect | null;
   /** Its checkouts are folded under its name: not drawn, not rows of list mode. */
@@ -667,9 +671,10 @@ export interface Repo extends Worktree {
 
 /** Where the Repos list is read from. */
 export interface RepoDirs {
-  /** Each directory as the settings name it (`~/code`) and resolved (`/Users/me/code`). */
-  dirs: { text: string; path: string }[];
-  /** True while `OTTOSPACE_REPOS` names them: none is added or removed. */
+  /** The Repos list's entries, in the user's order, pinned ones first: each as the settings name it
+   * (`~/code/app`) and resolved (`/Users/me/code/app`). A folder of repositories (old settings) is a group. */
+  dirs: { text: string; path: string; pinned: boolean }[];
+  /** True while `OTTOSPACE_REPOS` names them: none is added, removed or moved, and the list is flat. */
   fixed: boolean;
 }
 
@@ -960,6 +965,8 @@ export interface Model {
   rail_focus: RailFocus | null;
   repos: Repo[];
   repo_dirs: RepoDirs;
+  /** Groups of the Repos list (folders of repositories) the user unfolded, by path. */
+  repos_open: string[];
   tasks: { list: Task[] };
   /** Headings of the Tasks section that are folded. */
   collapsed: Heading[];
@@ -1001,6 +1008,19 @@ export interface Model {
   features: Feature[];
   /** The transcript on, or null. Times only: never what was heard. Only the user starts or stops one. */
   listen: Listen | null;
+  /**
+   * Each slot, by its pane's id, filled or not. Never what it selects or a window's title. A slot
+   * is the user's: a client cannot make, fill, clear, close, move or swap one.
+   */
+  slots: Record<string, Slot>;
+}
+
+/** A slot: a pane that keeps its place and waits for a window the user named. */
+export interface Slot {
+  status: "absent" | "empty" | "offered" | "filled" | "away";
+  /** How many windows it could offer now. */
+  matches: number;
+  matching: "manual" | "automatic";
 }
 
 /** A transcript of an app pane's sound: its status, source and times. */

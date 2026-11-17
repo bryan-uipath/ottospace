@@ -48,6 +48,8 @@ Rules:
   drop. `a_test_leaves_nothing_in_the_temp_dir` checks it.
 - An E2E run reads no `settings.json` and keeps no tasks on disk, unless the test names its own
   folder with `OTTOSPACE_HOME`. Tests must never read or write the user's `~/.ottospace`.
+  The event log (`event_log.rs`, `<home>/log`) follows the same rule, and a test run writes none
+  of it to the unified log.
 - E2E runs set `OTTOSPACE_E2E`, which turns window hosting off. Tests must never move the
   user's real windows.
 - A `cargo e2e` run stays out of the user's way: the app is a background app (no Dock icon,
@@ -111,6 +113,10 @@ Rules:
   - `zoom_press`: the window's green button, pressed as the user would (`performZoom:`). The zoom
     fills the display instead (`ottospace_mac::window::zoom_asks`); refused if that hook is not in,
     so it never zooms the test's window. Outside a test run only the user's hand fills the display.
+  - `display_change`: the displays changed, as macOS's reconfiguration callback says (a test
+    cannot unplug one). The shell then kicks GPUI to draw again, as after a real change
+    (`stall.rs`, `ottospace_mac::window::redraw`); the state's `counts.redraws` counts the kicks.
+    Outside a test run only macOS says the displays changed.
   - `"repeat":true` on `key`: each key as one still held down. A key that types is a real repeat
     to `keyDown:`: `enter`, `tab`, `space`, or a character the layout types with no modifier on
     key codes 0 to 50 (`a`, `7`, `/`; not `A`). A `cmd-` shortcut, by the flag alone, is pressed as
@@ -171,7 +177,7 @@ Rules:
   `app-windows.yml`, `shots.yml` and `reliability.yml` restore it and save none (`save-if: false`).
   A job that builds the same dependencies joins it; one that saves from a pull request does not.
 - `.github/workflows/shots.yml`, on pull requests that change `crates/ottospace/src/**`,
-  `crates/ottospace-core/src/**`, `scripts/shot`, `scripts/shots/**` or `scripts/test-shot.sh`:
+  `crates/ottospace-core/src/**`, `crates/ottospace-mac/**`, `scripts/shot`, `scripts/shots/**` or `scripts/test-shot.sh`:
   `scripts/test-shot.sh`, then `scripts/shot --compare` of every scenario against the merge base;
   the pictures are the artifact `shots`. Read-only token, no comment on the pull request. Not a
   required check. (`test-shot.sh` needs a screen that draws, so it runs here, not in scripts.yml.)

@@ -414,7 +414,7 @@ impl Workspace {
         let fact = |window: &ax::Window| {
             let id = window.id()?;
             let title = window.title().unwrap_or_default();
-            Some(marks::Window { id, title, main: Some(id) == main, pane: held(id) })
+            Some(marks::Window { id, title, main: Some(id) == main, pane: held(id), slot: self.model.slot_selects(id) })
         };
         let facts: Vec<marks::Window> = windows.iter().filter_map(fact).collect();
         let pane = match (marks::pick_window(&wanted.title, &facts), wanted.into) {

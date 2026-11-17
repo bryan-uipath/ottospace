@@ -167,6 +167,15 @@ fn fake_repo(at: &Path) {
     std::fs::write(at.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
 }
 
+/// The repositories `folder` holds now, each an entry of the settings' `repos` (opt-in: a folder
+/// that holds them would be a folded group).
+fn repos_in(folder: &Path) -> Vec<PathBuf> {
+    let entries = std::fs::read_dir(folder).unwrap().map(|entry| entry.unwrap().path());
+    let mut repos: Vec<PathBuf> = entries.filter(|dir| dir.join(".git").is_dir()).collect();
+    repos.sort();
+    repos
+}
+
 /// A linked worktree of `root/repo` at `root/name`, on `branch`, as git writes one. `root` is resolved.
 fn fake_worktree(root: &Path, repo: &str, name: &str, branch: &str) {
     let admin = root.join(repo).join(".git/worktrees").join(name);
@@ -787,107 +796,118 @@ fn repos_are_listed_and_open_a_terminal_there() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_directory_is_added_to_the_repos_list_and_removed_in_the_settings() {
-    // `code` holds two repositories and is in the settings; `zed` is one by itself; `plain` has none.
+fn a_repository_is_added_by_the_user_kept_in_their_order_and_an_old_folder_is_one_group() {
+    // `old` holds two repositories (the old settings named such folders); `zed` and `web` are one
+    // each; `plain` has none.
     let root = support::temp(&format!("ottospace-e2e-repo-add-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    for repo in ["code/app", "code/web", "elsewhere/zed"] {
+    for repo in ["old/app", "old/api", "elsewhere/zed", "elsewhere/web"] {
         fake_repo(&root.join(repo));
     }
     std::fs::create_dir_all(root.join("plain/inner")).unwrap();
+    std::fs::create_dir_all(root.join("elsewhere/zed/src")).unwrap();
     let root = root.canonicalize().unwrap();
     let dir = |rest: &str| root.join(rest).to_string_lossy().into_owned();
-    // Settings with an unknown key and spacing of their own.
-    let listing = |dirs: &[String]| {
-        let dirs: Vec<String> = dirs.iter().map(|dir| json!(dir).to_string()).collect();
-        format!("{{\n    \"colour\": \"teal\",\n    \"repos\": [{}],\n    \"sessions\": false\n}}\n", dirs.join(", "))
-    };
-    let settings = listing(&[dir("code")]);
-    let home = user_folder("repo-add", &settings);
-    let otto = Otto::launch_with("repo-add", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    // A new user's settings, with spacing of their own: no `repos`.
+    let settings = "{\n    \"sessions\": false,\n    \"restore_layout\": false\n}\n";
+    let home = user_folder("repo-add", settings);
+    let launch = || Otto::launch_with("repo-add", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let otto = launch();
     let file = || std::fs::read_to_string(home.join("settings.json")).unwrap();
+    let listed = || serde_json::from_str::<Value>(&file()).unwrap()["repos"].clone();
     let names = |reply: &Value| -> Vec<String> {
         reply["state"]["repos"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap().to_string()).collect()
     };
-    let add = |path: &str| otto.call(json!({"cmd": "repo_add", "path": path}));
+    let add = |otto: &Otto, path: &str| otto.call(json!({"cmd": "repo_add", "path": path}));
+
+    // Opt-in: nothing is listed, and the section offers to add one.
     let reply = otto.call(json!({"cmd": "section", "section": "repos"}));
-    assert_eq!(
-        (names(&reply), &reply["state"]["repo_dirs"]["fixed"]),
-        (vec!["app".into(), "web".into()], &json!(false))
-    );
-
-    // The settings' unknown key is an error: it stays over a warning until the user dismisses it.
-    assert!(add(&dir("plain"))["notice"].as_str().is_some_and(|n| n.starts_with("settings.json: colour")));
-    otto.dismiss_notice();
-    // A folder with no repository, and what is no folder: said in the notice bar, nothing written.
-    let reply = add(&dir("plain"));
-    assert_eq!(reply["notice"].as_str(), Some(format!("No repository in {}", dir("plain")).as_str()));
-    let reply = add(&dir("code/app/.git/HEAD"));
-    assert!(reply["notice"].as_str().is_some_and(|notice| notice.starts_with("Not a directory")), "{reply}");
-    assert_eq!((names(&reply), file()), (vec!["app".to_string(), "web".into()], settings.clone()));
-    // A file that does not read as settings is left alone, and the list is as before: the next try writes.
-    std::fs::write(home.join("settings.json"), "{ not json").unwrap();
-    let reply = add(&dir("elsewhere/zed"));
-    assert!(reply["notice"].as_str().is_some_and(|n| n.starts_with("settings.json was not written")), "{reply}");
-    let dirs = reply["state"]["repo_dirs"]["dirs"].as_array().map(Vec::len);
-    assert_eq!((names(&reply), dirs, file().as_str()), (vec!["app".to_string(), "web".into()], Some(1), "{ not json"));
-    std::fs::write(home.join("settings.json"), &settings).unwrap();
-
-    // A repository, by a path with `..` in it: written resolved, listed, and its row selected.
-    let reply = add(&format!("{}/plain/../elsewhere/zed", root.display()));
-    let added = listing(&[dir("code"), dir("elsewhere/zed")]);
-    assert_eq!((names(&reply), file()), (vec!["app".to_string(), "web".into(), "zed".into()], added.clone()));
-    // Each name is a row of the list too: app 0-1, web 2-3, zed 4-5.
-    assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(5)));
-    // What the last try said is gone: the notice bar is back to what it said at start.
-    // (Dismissed, unless the file that did not read as settings was read meanwhile.)
-    let line = reply["notice"].as_str();
-    assert!(line.is_none_or(|notice| notice.starts_with("settings.json: colour")), "{reply}");
-    if line.is_some() {
-        otto.dismiss_notice();
+    assert_eq!((names(&reply), &reply["state"]["repo_dirs"]["dirs"]), (vec![], &json!([])));
+    otto.control("repos-empty:add");
+    // Not a repository, even a folder that holds two: said in the notice bar, nothing written.
+    for folder in ["plain", "elsewhere"] {
+        let reply = add(&otto, &dir(folder));
+        assert_eq!(reply["notice"].as_str(), Some(format!("Not a repository: {}", dir(folder)).as_str()));
     }
-    // It is still listed when the list is read again.
-    assert_eq!(names(&otto.call(json!({"cmd": "repos"}))), ["app", "web", "zed"]);
-    // Listed already, as itself or through `code`: its row is selected and nothing is written.
-    assert_eq!((add(&dir("code/web"))["state"]["list"].as_u64(), file()), (Some(3), added.clone()));
-    assert_eq!((add(&dir("elsewhere/zed"))["state"]["list"].as_u64(), file()), (Some(5), added.clone()));
-
-    // "Remove" shows on the name under the pointer. A client's label does nothing with it.
-    let header = |reply: &Value, n: usize| at(rect(&reply["repos_bar"][n]["header"]), 0.5, 0.5);
-    let remove = format!("repo-remove:{}", dir("elsewhere/zed"));
+    assert_eq!(file(), settings);
+    // "Add Folder to Repos" in a terminal inside a repository adds the repository.
+    otto.call(json!({"cmd": "split", "axis": "right"}));
+    otto.call(json!({"cmd": "type", "text": format!("cd '{}' && pwd\r", dir("elsewhere/zed/src"))}));
+    let pattern = format!("^{}$", regex::escape(&dir("elsewhere/zed/src")));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": pattern, "timeout_ms": 40000}));
+    let reply = otto.user_key("cmd-p a d d space f o l d e r space t o space r e p o s enter");
+    assert_eq!((names(&reply), listed()), (vec!["zed".to_string()], json!([dir("elsewhere/zed")])));
+    assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(1)));
     otto.user_key("escape");
-    let reply = otto.mouse("move", header(&otto.drawn(), 2));
-    assert_eq!(reply["repos_bar"][2]["name"], "zed");
+    // The next goes after it, not by name.
+    let reply = add(&otto, &dir("elsewhere/web"));
+    let both = json!([dir("elsewhere/zed"), dir("elsewhere/web")]);
+    assert_eq!((names(&reply), listed()), (vec!["zed".to_string(), "web".into()], both.clone()));
+    assert!(
+        file().starts_with("{\n    \"sessions\": false,\n    \"restore_layout\": false,\n    \"repos\": ["),
+        "{}",
+        file()
+    );
+    // Listed already: its row selected, nothing written.
+    otto.user_key("escape");
+    assert_eq!((add(&otto, &dir("elsewhere/web"))["state"]["list"].as_u64(), listed()), (Some(3), both.clone()));
+    otto.user_key("escape");
+
+    // A restart lists them in the same order.
+    drop(otto);
+    let otto = launch();
+    assert_eq!(names(&otto.call(json!({"cmd": "section", "section": "repos"}))), ["zed", "web"]);
+
+    // The trash shows on the name under the pointer. A client's label does nothing with it; the
+    // user's takes the entry off, and nothing on disk.
+    let header = |reply: &Value, n: usize| at(rect(&reply["repos_bar"][n]["header"]), 0.5, 0.5);
+    let remove = format!("repo-remove:{}", dir("elsewhere/web"));
+    otto.mouse("move", header(&otto.drawn(), 1));
     let client = sneak_to(&otto, &remove);
-    assert_eq!((names(&client), file()), (vec!["app".to_string(), "web".into(), "zed".into()], added.clone()));
-    // The user's asks first, since a task works there: Esc keeps it, ↵ takes the directory off the
-    // settings and the repository off the list, and the status bar says nothing on disk changed.
-    otto.call(json!({"cmd": "task_new", "line": "zoom >zed"}));
-    otto.mouse("move", header(&otto.drawn(), 2));
+    assert_eq!((names(&client), listed()), (vec!["zed".to_string(), "web".into()], both));
+    otto.mouse("move", header(&otto.drawn(), 1));
     let (_, labels) = sneak(&otto);
-    let asked = otto.user_key(&letters(&labels[&remove]));
-    assert_eq!((asked["mode"].as_str(), names(&asked).len(), file()), (Some("confirm"), 3, added.clone()));
-    assert_eq!(otto.user_key("escape")["mode"], "normal");
-    otto.mouse("move", header(&otto.drawn(), 2));
+    let reply = otto.user_key(&letters(&labels[&remove]));
+    assert_eq!((names(&reply), listed()), (vec!["zed".to_string()], json!([dir("elsewhere/zed")])));
+    assert_eq!(reply["notice"], "Unlisted web · nothing on disk changed");
+    assert!(root.join("elsewhere/web/.git").is_dir());
+    drop(otto);
+
+    // Settings from before, that named a folder to look in: its repositories are one group, in its
+    // place, folded until the user unfolds it.
+    std::fs::write(
+        home.join("settings.json"),
+        json!({"repos": [dir("old"), dir("elsewhere/zed")], "restore_layout": false}).to_string(),
+    )
+    .unwrap();
+    let otto = launch();
+    let reply = otto.call(json!({"cmd": "section", "section": "repos"}));
+    assert_eq!(names(&reply), ["api", "app", "zed"]);
+    let drawn = otto.drawn();
+    let bar = drawn["repos_bar"].as_array().unwrap().clone();
+    let groups: Vec<&Value> = bar.iter().map(|r| &r["group"]).collect();
+    assert_eq!(groups, [&json!(dir("old")), &json!(dir("old")), &Value::Null]);
+    assert!(bar[0]["header"].is_null() && bar[1]["rows"][0]["row"].is_null(), "a folded group is drawn: {bar:?}");
+    let fold = format!("repo-fold:{}", dir("old"));
+    otto.user_click(at(otto.control(&fold), 0.25, 0.5));
+    let open = otto.drawn();
+    assert!(!open["repos_bar"][0]["header"].is_null(), "{}", open["repos_bar"]);
+    assert_eq!(open["state"]["repos_open"], json!([dir("old")]));
+    // One of it added alone leaves the group, to the end of the list.
+    assert_eq!(names(&add(&otto, &dir("old/app"))), ["api", "zed", "app"]);
+    otto.user_key("escape");
+    // The group is removed whole, by the user's trash on it.
+    let remove = format!("repo-remove:{}", dir("old"));
+    otto.mouse("move", at(otto.control(&fold), 0.5, 0.5));
     let (_, labels) = sneak(&otto);
-    otto.user_key(&letters(&labels[&remove]));
-    let reply = otto.user_key("enter");
-    assert_eq!((names(&reply), file()), (vec!["app".to_string(), "web".into()], settings.clone()));
-    assert_eq!(reply["notice"], "Unlisted zed · nothing on disk changed");
-    // One that a folder of the settings holds is not removed: the status bar says where it comes from.
-    otto.mouse("move", header(&otto.drawn(), 0));
-    let (_, labels) = sneak(&otto);
-    let reply = otto.user_key(&letters(&labels[&format!("repo-remove:{}", dir("code/app"))]));
-    let notice = reply["notice"].as_str().unwrap_or_default();
-    assert!(notice.starts_with("app is listed through ") && file() == settings, "{notice}");
-    assert_eq!(names(&reply), ["app", "web"]);
-    // One made inside `code` since the list was read: found through it, selected, nothing written.
-    fake_repo(&root.join("code/new"));
-    let reply = add(&dir("code/new"));
-    assert_eq!((names(&reply), file()), (vec!["app".to_string(), "new".into(), "web".into()], settings));
-    assert_eq!(reply["state"]["list"].as_u64(), Some(3));
-    let _ = std::fs::remove_dir_all(&root);
-    let _ = std::fs::remove_dir_all(&home);
+    let reply = otto.user_key(&letters(&labels[&remove]));
+    assert_eq!(names(&reply), ["zed", "app"]);
+    assert_eq!(listed(), json!([dir("elsewhere/zed"), dir("old/app")]));
+    // An entry written by hand while it runs stays when the user adds one.
+    let by_hand = json!([dir("elsewhere/zed"), dir("old/app"), dir("elsewhere/web")]);
+    std::fs::write(home.join("settings.json"), json!({"repos": by_hand, "restore_layout": false}).to_string()).unwrap();
+    otto.user_key("escape");
+    assert_eq!(names(&add(&otto, &dir("old/api"))), ["zed", "app", "web", "api"]);
+    assert_eq!(listed(), json!([dir("elsewhere/zed"), dir("old/app"), dir("elsewhere/web"), dir("old/api")]));
 }
 
 #[test]
@@ -966,7 +986,8 @@ fn a_repository_folds_and_the_users_plus_makes_a_worktree_there() {
     fake_repo(&root.join("repos/web"));
     let root = root.canonicalize().unwrap();
     let app = root.join("repos/app").to_string_lossy().into_owned();
-    let settings = json!({"repos": [root.join("repos")], "restore_layout": false}).to_string();
+    let settings =
+        json!({"repos": [root.join("repos/app"), root.join("repos/web")], "restore_layout": false}).to_string();
     let home = user_folder("worktrees", &settings);
     // New worktrees go in `<home>/worktrees/<repo>/<branch>`; git reads none of the user's settings.
     let otto = Otto::launch_with(
@@ -1163,7 +1184,7 @@ fn a_worktrees_pull_request_is_marked_from_a_stand_in_gh_and_only_the_users_clic
     );
     std::fs::write(&gh, script).unwrap();
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let settings = json!({"repos": [root.join("repos")], "restore_layout": false}).to_string();
+    let settings = json!({"repos": [root.join("repos/app")], "restore_layout": false}).to_string();
     let home = user_folder("prs", &settings);
     let env = [
         ("OTTOSPACE_HOME", home.to_str().unwrap()),
@@ -1957,7 +1978,7 @@ fn settings_choose_the_font_the_repos_and_the_tasks_folder() {
         // A test run never offers to start an app, whatever the settings say.
         "apps": ["Calculator"],
         "terminal": {"font": "Monaco", "font_size": 16},
-        "repos": [home.join("src")],
+        "repos": [home.join("src/app")],
         "tasks": "elsewhere",
     });
     std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
@@ -2192,8 +2213,7 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     let settings = |sessions: bool| {
         let dirs = json!({"claude": [claude], "codex": codex});
         // Each run starts with the Tasks section closed: no layout is restored.
-        let settings =
-            json!({"repos": [home.join("src")], "sessions": sessions, "session_dirs": dirs, "restore_layout": false});
+        let settings = json!({"repos": [home.join("src/app")], "sessions": sessions, "session_dirs": dirs, "restore_layout": false});
         std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
     };
     let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
@@ -6264,7 +6284,7 @@ fn a_repos_click_makes_a_workspace_of_its_worktree_where_terminals_and_tasks_sta
     let repos = repos.canonicalize().unwrap();
     fake_worktree(&repos, "app", "app-2", "fix/zoom");
     let path = |name: &str| repos.join(name).to_string_lossy().into_owned();
-    let settings = json!({"repos": [repos], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let settings = json!({"repos": repos_in(&repos), "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
     let home = user_folder("default", &settings.to_string());
     let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
     let otto = Otto::launch_with("default", &env);
@@ -6364,7 +6384,7 @@ fn the_new_task_box_makes_a_new_worktree_and_starts_the_task_there() {
     git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"]);
     git(&app, &["branch", "deploy"]);
     let app = app.canonicalize().unwrap().to_string_lossy().into_owned();
-    let settings = json!({"repos": [root.join("repos")], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let settings = json!({"repos": repos_in(&root.join("repos")), "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
     let home = user_folder("box-worktree", &settings.to_string());
     let env = [
         ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
@@ -6477,7 +6497,7 @@ fn a_task_follows_its_agent_into_a_worktree_it_made_and_never_a_subagents() {
     let app = repos.join("app");
     moving_claude(&bin, &sessions, &root, &app);
     let path = |name: &str| repos.join(name).to_string_lossy().into_owned();
-    let settings = json!({"repos": [repos], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let settings = json!({"repos": repos_in(&repos), "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
     let home = user_folder("moves", &settings.to_string());
     let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
     let otto = Otto::launch_with("moves", &env);
@@ -6920,7 +6940,7 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     // Sessions are read from the test's own folders, named in its settings.
     let codex_home = sessions.join("codex");
     let settings = json!({
-        "repos": [repos],
+        "repos": repos_in(&repos),
         "session_dirs": {"claude": [sessions.join("claude")], "codex": codex_home},
         "conversation_view": "terminal",
     });
@@ -7034,7 +7054,7 @@ fn the_agent_chip_brings_a_closed_conversation_back() {
     let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
     fake_agents(&bin, &sessions);
     fake_repo(&repos.join("app"));
-    let settings = json!({"repos": [repos], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let settings = json!({"repos": repos_in(&repos), "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
     let home = user_folder("chip", &settings.to_string());
     let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
     let otto = Otto::launch_with("chip", &env);
@@ -7122,7 +7142,7 @@ fn a_new_task_from_home_opens_its_space_and_takes_no_tab_of_a_workspace() {
     fake_agents(&bin, &sessions);
     fake_repo(&repos.join("app"));
     let app = repos.join("app").canonicalize().unwrap();
-    let settings = json!({"repos": [repos], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let settings = json!({"repos": repos_in(&repos), "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
     let home = user_folder("groups", &settings.to_string());
     let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
     let otto = Otto::launch_with("groups", &env);
@@ -7246,7 +7266,7 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     std::fs::write(claude.join("sessions/1.json"), live.to_string()).unwrap();
     let rollout = format!("sessions/2026/11/12/rollout-2026-11-12T09-30-00-{busy}.jsonl");
     session_fixture(&format!("codex/{rollout}"), &codex.join(&rollout), &repo, hours(0));
-    let settings = json!({"repos": [repos], "session_dirs": {"claude": [claude], "codex": codex}, "conversation_view": "terminal"});
+    let settings = json!({"repos": repos_in(&repos), "session_dirs": {"claude": [claude], "codex": codex}, "conversation_view": "terminal"});
     let home = user_folder("session-open", &settings.to_string());
     let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
     let otto = Otto::launch_with("session-open", &env);
@@ -7602,7 +7622,8 @@ fn tasks_show_by_state_or_project_with_time_tokens_a_footer_and_a_card() {
     let sub = format!("{busy}/subagents/agent-a1.jsonl");
     session_fixture(&format!("{fixture}/subagents/agent-a1.jsonl"), &project.join(&sub), &repo, Duration::ZERO);
     // Each run after the first starts with nothing open: no layout is restored.
-    let settings = json!({"repos": [home.join("src")], "session_dirs": {"claude": [claude]}, "restore_layout": false});
+    let settings =
+        json!({"repos": [home.join("src/app")], "session_dirs": {"claude": [claude]}, "restore_layout": false});
     std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
     let otto = Otto::launch_with("progress", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     otto.call(json!({"cmd": "section", "section": "tasks"}));
@@ -7972,7 +7993,7 @@ fn tabs_and_layout_come_back_after_quitting_and_no_agent_starts() {
     let real = |dir: &Path| dir.canonicalize().unwrap().to_string_lossy().into_owned();
     let (one, two) = (real(&one), real(&two));
     let dirs = json!({"claude": [sessions.join("claude")], "codex": sessions.join("codex")});
-    let settings = json!({"repos": [repos], "session_dirs": dirs, "conversation_view": "terminal"});
+    let settings = json!({"repos": repos_in(&repos), "session_dirs": dirs, "conversation_view": "terminal"});
     let home = user_folder("restore", &settings.to_string());
     let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
     let mut otto = Otto::launch_with("restore-1", &env);
@@ -8815,7 +8836,7 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     // The agents crate's stand-in, as `claude`: it records argv and stdin, and replays the fixtures.
     let fake = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-agents/tests/fakes/claude");
     std::fs::copy(&fake, bin.join("claude")).unwrap();
-    let home = user_folder("native", &json!({ "repos": [repos], "conversation_view": "native" }).to_string());
+    let home = user_folder("native", &json!({ "repos": repos_in(&repos), "conversation_view": "native" }).to_string());
     let env = [
         ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
         ("OTTOSPACE_HOME", home.to_str().unwrap()),
@@ -8971,7 +8992,8 @@ fn native_setup(
     // Its own session folder: a session the fake never writes is known to be missing.
     let sessions = root.join("sessions/claude");
     std::fs::create_dir_all(&sessions).unwrap();
-    let settings = json!({ "repos": [repos], "conversation_view": "native", "session_dirs": {"claude": [sessions]} });
+    let settings =
+        json!({ "repos": repos_in(&repos), "conversation_view": "native", "session_dirs": {"claude": [sessions]} });
     std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
     let path = |p: &Path| p.to_str().unwrap().to_string();
     let mut env = vec![
@@ -9608,7 +9630,9 @@ fn stand_in_editor(dir: &Path) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let editor = dir.join("edit");
     let script = format!(
-        "#!/bin/sh\nctl='{0}'\nprintf '%s\\n' \"$1\" >\"$ctl/path\"\ncp \"$1\" \"$ctl/given\"\n\
+        // `path` is the test's signal: written last, by rename, so `given` is whole when it shows.
+        "#!/bin/sh\nctl='{0}'\ncp \"$1\" \"$ctl/given\"\n\
+         printf '%s\\n' \"$1\" >\"$ctl/path.part\"\nmv \"$ctl/path.part\" \"$ctl/path\"\n\
          printf 'stand-in editor\\n'\ncat -n \"$1\"\n\
          while [ ! -e \"$ctl/go\" ]; do sleep 0.1; done\ncode=$(cat \"$ctl/go\")\nrm -f \"$ctl/go\" \"$ctl/path\"\n\
          [ -f \"$ctl/new\" ] && cp \"$ctl/new\" \"$1\"\nexit \"$code\"\n",
@@ -9876,7 +9900,7 @@ fn real_cli_native_smoke() {
     let config = std::env::var("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap()).join(".claude"));
-    let settings = json!({"repos": [repos], "conversation_view": "native", "default_agent": "claude-haiku-5-5",
+    let settings = json!({"repos": repos_in(&repos), "conversation_view": "native", "default_agent": "claude-haiku-5-5",
         "session_dirs": {"claude": [config]}});
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -9954,7 +9978,7 @@ fn a_watched_session_says_so_and_shows_its_edits_as_they_land() {
     std::fs::create_dir_all(claude.join("sessions")).unwrap();
     let live = json!({"pid": std::process::id(), "sessionId": id, "status": "busy"});
     std::fs::write(claude.join("sessions/1.json"), live.to_string()).unwrap();
-    let settings = json!({"repos": [repos], "session_dirs": {"claude": [claude]}});
+    let settings = json!({"repos": repos_in(&repos), "session_dirs": {"claude": [claude]}});
     let home = user_folder("watch", &settings.to_string());
     let otto = Otto::launch_with("watch", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     otto.call(json!({"cmd": "split", "kind": "empty"}));
@@ -10128,7 +10152,7 @@ fn the_notice_bar_sits_at_the_foot_moves_nothing_above_and_only_the_user_dismiss
     let plain = home.canonicalize().unwrap().to_string_lossy().into_owned();
     otto.call(json!({"cmd": "repo_add", "path": plain}));
     let warned = bar(Some("warning"));
-    assert_eq!(warned["notice"].as_str(), Some(format!("No repository in {plain}").as_str()));
+    assert_eq!(warned["notice"].as_str(), Some(format!("Not a repository: {plain}").as_str()));
     // A client's failure does not take its place: the client reads its own in `notice`.
     let failed = otto.raw(r#"{"cmd":"open_app","name":"Finder"}"#);
     assert!(failed["error"].is_string(), "{failed}");
@@ -10759,4 +10783,65 @@ fn a_lost_stream_greys_the_dot_and_the_bar_says_why_until_the_user_puts_it_away(
         "it offers a start again: {}",
         drawn["listen_rects"]
     );
+}
+
+/// A change of the displays (a laptop taken off its monitors) has the shell kick GPUI to draw
+/// again, by GPUI's own `windowDidChangeScreen:` and `displayLayer:`, and the window goes on
+/// drawing after it. A test cannot unplug a display, so its display link never breaks here:
+/// this proves the kicks happen, as planned, and draw, not that they mend a broken link.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_window_draws_on_after_the_displays_change() {
+    let otto = Otto::launch("display-change");
+    let redraws = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["redraws"].as_u64().expect("redraws");
+    assert_eq!(redraws(&otto), 0, "a window that draws is not kicked");
+    otto.call(json!({"cmd": "display_change"}));
+    // At once, then as the new setup settles: four within 3 s.
+    let kicked = otto.wait_for("the kicks after the change", |o| Some(redraws(o)).filter(|n| *n >= 4));
+    for _ in 0..3 {
+        let before = otto.call(json!({"cmd": "state"}))["frame"]["number"].as_u64().expect("frame");
+        let after = otto.call(json!({"cmd": "split", "axis": "down"}));
+        let drawn = after["frame"]["number"].as_u64().expect("frame");
+        assert!(drawn > before && after["stale"].is_null(), "{before} {after}");
+    }
+    // Frames come, so nothing more is kicked.
+    assert_eq!(redraws(&otto), kicked);
+}
+
+/// `<home>/log`: the start, the display the window is on, a change of the displays and the quit,
+/// private, in the folder the test named. Counts and sizes only.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_log_says_the_start_the_displays_and_the_quit() {
+    let home = support::temp(&format!("ottospace-e2e-event-log-{}", std::process::id()));
+    let mut otto = Otto::launch_with("event-log", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let file = home.join("log");
+    let events = || -> Vec<Value> {
+        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        text.lines().map(|line| serde_json::from_str(line).expect("a JSON line")).collect()
+    };
+    let has = |events: &[Value], ev: &str| events.iter().any(|e| e["ev"] == ev);
+    otto.call(json!({"cmd": "display_change"}));
+    otto.wait_for("the change in the log", |_| Some(events()).filter(|e| has(e, "displays")));
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+    let events = events();
+    // Start first, then the change once, the window's display at least once and the quit (a slow
+    // machine's stall, or GPUI's warning as the window closes, may come too: not what this is about).
+    let names: Vec<&str> = events.iter().filter_map(|e| e["ev"].as_str()).collect();
+    assert_eq!(names.first(), Some(&"start"), "{names:?}");
+    assert!(names.contains(&"quit"), "{names:?}");
+    let count = |ev: &str| names.iter().filter(|name| **name == ev).count();
+    assert_eq!(count("displays"), 1, "{names:?}");
+    assert!(count("window_display") >= 1, "{names:?}");
+    let start = &events[0];
+    assert!(start["pid"].is_u64() && start["version"].is_string() && start["displays"]["count"].as_u64() > Some(0));
+    let changed = events.iter().find(|e| e["ev"] == "displays").expect("the change");
+    let sizes = changed["sizes"].as_array().expect("sizes");
+    assert_eq!(changed["count"].as_u64(), Some(sizes.len() as u64));
+    // "1728x1117": a size, never a name.
+    assert!(sizes.iter().all(|s| s.as_str().is_some_and(|s| s.split('x').all(|n| n.parse::<f64>().is_ok()))));
+    assert!(events.iter().all(|e| e["at"].as_str().is_some_and(|at| at.len() == 25)), "{events:?}");
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
 }

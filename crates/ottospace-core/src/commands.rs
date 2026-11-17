@@ -120,6 +120,7 @@ commands! {
     SaveWorkbook: "Save Tab as Workspace", Workbook;
     AddTabToWorkbook: "Add Tab to Workspace…", Workbook;
     SaveAllWorkbook: "Save All Tabs as Workspace", Workbook;
+    AddToRepos: "Add Folder to Repos", Panes;
     StartFresh: "Start Fresh", App;
     Features: "Features…", App;
     MarkPane: "Mark Pane", Marks;

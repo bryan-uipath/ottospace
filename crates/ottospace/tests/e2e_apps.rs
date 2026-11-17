@@ -1928,41 +1928,47 @@ fn a_sound_the_canarys_child_plays_is_heard_as_the_canarys() {
     }
 }
 
-/// A sound file's length, by `afinfo`.
-fn seconds(file: &std::path::Path) -> f64 {
-    let info = Command::new("/usr/bin/afinfo").arg(file).output().expect("afinfo");
-    let info = String::from_utf8_lossy(&info.stdout).into_owned();
-    let line = info.lines().find_map(|line| line.trim().strip_prefix("estimated duration:"));
-    line.and_then(|rest| rest.trim().trim_end_matches("sec").trim().parse().ok()).expect("a duration")
+/// A 16-bit mono 44.1 kHz WAV of `parts`: (seconds, tone or silence), each tone 440 Hz. Made by
+/// the test, not `say`: CI's `say -o` often wrote seconds too few.
+fn wav(file: &std::path::Path, parts: &[(f64, bool)]) {
+    const RATE: u32 = 44_100;
+    let mut samples: Vec<i16> = Vec::new();
+    for &(secs, tone) in parts {
+        let n = (secs * f64::from(RATE)) as usize;
+        let at = |i: usize| (i as f64 * 440. * std::f64::consts::TAU / f64::from(RATE)).sin() * 8_000.;
+        samples.extend((0..n).map(|i| if tone { at(i) as i16 } else { 0 }));
+    }
+    let data = (samples.len() * 2) as u32;
+    let mut out = Vec::with_capacity(44 + data as usize);
+    out.extend(b"RIFF");
+    out.extend((36 + data).to_le_bytes());
+    out.extend(b"WAVEfmt ");
+    // fmt: length 16, PCM, one channel, rate, bytes a second, bytes a frame, bits a sample.
+    for (value, bytes) in [(16, 4), (1, 2), (1, 2), (RATE, 4), (RATE * 2, 4), (2, 2), (16, 2)] {
+        out.extend(&u32::to_le_bytes(value)[..bytes]);
+    }
+    out.extend(b"data");
+    out.extend(data.to_le_bytes());
+    out.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+    std::fs::write(file, out).expect("write the sound");
 }
 
 /// Whether ScreenCaptureKit sends buffers while an app is silent, or none: then the samples fed
-/// to the recogniser lose each silence and a line's time shrinks by it. The canary says made-up
-/// words with 8 s of silence inside the file, then plays nothing for 8 s, then speaks again; each
+/// to the recogniser lose each silence and a line's time shrinks by it. The canary plays a tone
+/// with 8 s of silence inside the file, then plays nothing for 8 s, then a tone again; each
 /// buffer's presentation time is kept with no recogniser (CI's virtual machine has none). The
 /// time from the first buffer to the last is what the samples must cover.
 #[test]
-#[ignore = "hears the canary's own made-up speech; run with `cargo e2e-apps`"]
+#[ignore = "hears the canary's own tones; run with `cargo e2e-apps`"]
 fn the_canarys_silence_comes_as_samples_not_as_a_gap_in_time() {
     let home = support::temp(&format!("otto-apps-probe-{}", std::process::id()));
     std::fs::create_dir_all(&home).expect("make the folder");
     std::fs::write(home.join("settings.json"), json!({"restore_layout": false}).to_string()).expect("settings");
-    // CI's `say -o` once wrote under a second of silence and succeeded: try again, up to three times.
-    let say = |name: &str, words: &str, least: f64| {
-        let file = home.join(name);
-        for _ in 0..3 {
-            let said = Command::new("/usr/bin/say").arg("-o").arg(&file).arg(words).status().expect("say");
-            assert!(said.success(), "say -o");
-            let length = seconds(&file);
-            if length >= least {
-                return (file, length);
-            }
-            eprintln!("say -o wrote {length:.2} s of {name}, at least {least} s wanted");
-        }
-        panic!("say -o wrote under {least} s of {name} three times");
-    };
-    let (gap, gap_s) = say("gap.aiff", "The orange canary sings. [[slnc 8000]] The orange canary sings again.", 9.);
-    let (short, short_s) = say("short.aiff", "The orange canary is done.", 1.);
+    // Tone, 8 s of zeros, tone; then a short tone.
+    let (gap, gap_s) = (home.join("gap.wav"), 2. + 8. + 2.);
+    wav(&gap, &[(2., true), (8., false), (2., true)]);
+    let (short, short_s) = (home.join("short.wav"), 1.5);
+    wav(&short, &[(short_s, true)]);
 
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-probe", "CANARY_SOCKET", &[]);
     wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));

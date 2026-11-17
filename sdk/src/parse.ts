@@ -12,6 +12,7 @@ import type {
   Feature,
   Listen,
   ListenLine,
+  Slot,
   CalendarReply,
   Meeting,
   TimeSpan,
@@ -405,6 +406,11 @@ function paneKind(value: unknown, at: string): PaneKind {
     // An app with no bundle (a bare binary) has no `bundle`.
     if (o.bundle !== undefined) app.bundle = str(o.bundle, `${at}.bundle`);
     return app;
+  }
+  if (o.type === "slot") {
+    const slot: PaneKind = { type: "slot", name: str(o.name, `${at}.name`) };
+    if (o.bundle !== undefined) slot.bundle = str(o.bundle, `${at}.bundle`);
+    return slot;
   }
   throw wrong(`${at}.type`, "a pane kind", o.type);
 }
@@ -966,6 +972,7 @@ function reposGroup(value: unknown, at: string): ReposGroup {
   return {
     name: str(o.name, `${at}.name`),
     path: str(o.path, `${at}.path`),
+    group: orNull(str)(o.group, `${at}.group`),
     header: orNull(rect)(o.header, `${at}.header`),
     folded: bool(o.folded, `${at}.folded`),
     rows: list(checkoutRow)(o.rows, `${at}.rows`),
@@ -1051,7 +1058,7 @@ function repoDirs(value: unknown, at: string): RepoDirs {
   const o = fields(value, at);
   const dir = (value: unknown, at: string) => {
     const d = fields(value, at);
-    return { text: str(d.text, `${at}.text`), path: str(d.path, `${at}.path`) };
+    return { text: str(d.text, `${at}.text`), path: str(d.path, `${at}.path`), pinned: bool(d.pinned, `${at}.pinned`) };
   };
   return { dirs: list(dir)(o.dirs, `${at}.dirs`), fixed: bool(o.fixed, `${at}.fixed`) };
 }
@@ -1111,7 +1118,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 }
 
 function feature(value: unknown, at: string): Feature {
-  if (value === "marks" || value === "apps_section" || value === "transcripts") return value;
+  if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots") return value;
   throw wrong(at, "a feature", value);
 }
 
@@ -1359,6 +1366,7 @@ function model(value: unknown, at: string): Model {
     rail_focus: orNull(railFocus)(o.rail_focus, `${at}.rail_focus`),
     repos: list(repo)(o.repos, `${at}.repos`),
     repo_dirs: repoDirs(o.repo_dirs, `${at}.repo_dirs`),
+    repos_open: list(str)(o.repos_open, `${at}.repos_open`),
     tasks: { list: list(task)(fields(o.tasks, `${at}.tasks`).list, `${at}.tasks.list`) },
     collapsed: list(heading)(o.collapsed, `${at}.collapsed`),
     tasks_view: tasksView(o.tasks_view, `${at}.tasks_view`),
@@ -1382,6 +1390,16 @@ function model(value: unknown, at: string): Model {
     agents: list(subject)(o.agents, `${at}.agents`),
     features: list(feature)(o.features, `${at}.features`),
     listen: orNull(listen)(o.listen, `${at}.listen`),
+    slots: map(slot)(o.slots, `${at}.slots`),
+  };
+}
+
+function slot(value: unknown, at: string): Slot {
+  const o = fields(value, at);
+  return {
+    status: oneOf(["absent", "empty", "offered", "filled", "away"] as const, "a slot's status")(o.status, `${at}.status`),
+    matches: num(o.matches, `${at}.matches`),
+    matching: oneOf(["manual", "automatic"] as const, "a slot's matching")(o.matching, `${at}.matching`),
   };
 }
 
