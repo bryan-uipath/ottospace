@@ -1119,7 +1119,7 @@ impl Workspace {
                     let _ = std::fs::remove_file(control::path());
                     let _ = std::fs::remove_file(control::path().with_extension("lock"));
                     // Its agents' pass files: they end with it.
-                    let _ = std::fs::remove_dir_all(pass::folder());
+                    pass::sweep(&pass::folder());
                 }
                 running::remove();
                 async {}
