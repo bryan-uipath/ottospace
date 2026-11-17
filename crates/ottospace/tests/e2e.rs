@@ -10415,3 +10415,71 @@ fn a_replys_seq_and_frame_rise_the_same_whether_someone_speaks_or_not() {
     assert!(speaking.1.abs_diff(silent.1) <= 3, "frames rose {} speaking, {} silent", speaking.1, silent.1);
     assert!(silent.0 >= 6, "a batch every tick, even empty: {silent:?}");
 }
+
+impl Otto {
+    /// The transcript's label, by its id in `listen_rects` (`speech`, `sound`, `silent`), once it says `want`.
+    fn listen_hearing(&self, want: &str) {
+        self.wait_for(&format!("the label to say {want}"), |o| {
+            let drawn = o.drawn();
+            drawn["listen_rects"].get(format!("listen-hearing:{want}")).map(|_| ())
+        });
+    }
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_drawer_shows_it_hears_speech_then_sound_then_nothing_and_no_reply_says_so() {
+    // Words for 6 s, so a slow first look still finds them; one level, then quiet.
+    let words = (0..20).map(|n| format!(r#"{{"after_ms":300,"from":"them","text":"made-up {n}","final":false}}"#));
+    let fixture = std::iter::once(r#"{"after_ms":100,"level":0.3}"#.to_string())
+        .chain(words)
+        .chain([r#"{"after_ms":600000,"from":"them","text":"never heard","final":true}"#.to_string()])
+        .collect::<Vec<_>>()
+        .join("\n");
+    let fixture = fixture.as_str();
+    let otto = listen_otto_with("hearing", fixture, r#"{"repos": [], "restore_layout": false}"#);
+    otto.call(json!({"cmd": "split"}));
+    otto.user_key("cmd-ctrl-t");
+    otto.listen_hearing("speech");
+    otto.listen_rect("listen-header");
+    // Words stop, sound was there: listening. What it hears is never in a reply's state.
+    otto.listen_hearing("sound");
+    let mut state = otto.call(json!({"cmd": "state"}));
+    state["listen_lines"] = Value::Null;
+    state["listen_rects"] = Value::Null;
+    let text = state.to_string();
+    assert!(!text.contains("Hearing") && !text.contains("Listening"), "{text}");
+    // 30 s without sound: the label says so.
+    std::thread::sleep(Duration::from_secs(29));
+    otto.listen_hearing("silent");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_lost_stream_greys_the_dot_and_the_bar_says_why_until_the_user_puts_it_away() {
+    let otto = listen_otto("lost");
+    otto.call(json!({"cmd": "split"}));
+    otto.user_key("cmd-ctrl-t");
+    otto.listen_finals(1);
+    let lost = otto.call(json!({"cmd": "listen_end", "why": "stream_failed"}));
+    assert_eq!(
+        (&lost["state"]["listen"], &lost["notice"]),
+        (&Value::Null, &json!("Transcript stopped: the sound stopped coming"))
+    );
+    let grey = otto.listen_rect("listen-lost");
+    let header = rect(&otto.drawn()["headers"]["1"]);
+    assert!(grey[1] >= header[1] && grey[1] < header[1] + header[3], "{grey:?} in {header:?}");
+    // A client's click on its × does nothing; the user's puts it away.
+    let close = otto.listen_rect("listen-stop:lost");
+    otto.call(json!({"cmd": "mouse", "action": "down", "x": close[0] + 2.0, "y": close[1] + 2.0}));
+    otto.call(json!({"cmd": "mouse", "action": "up", "x": close[0] + 2.0, "y": close[1] + 2.0}));
+    assert!(otto.drawn()["listen_rects"].get("listen-lost").is_some());
+    otto.user_click(at(close, 0.5, 0.5));
+    let drawn = otto.drawn();
+    assert!(drawn["listen_rects"].get("listen-lost").is_none(), "{}", drawn["listen_rects"]);
+    assert!(
+        drawn["listen_rects"].get("listen-start:1").is_some(),
+        "it offers a start again: {}",
+        drawn["listen_rects"]
+    );
+}

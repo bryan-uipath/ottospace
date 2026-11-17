@@ -83,6 +83,7 @@ mod keycaps;
 mod layout_file;
 mod listen;
 mod listen_file;
+mod listen_meter;
 mod markdown;
 mod marks;
 mod menus;
@@ -960,6 +961,8 @@ struct Workspace {
     listen_file: Option<listen::File>,
     /// Files of transcripts that ended, until their end is written.
     listen_ending: Vec<listen_file::Writer>,
+    /// What the transcript on hears now, for the meter and its label alone.
+    listen_meter: Option<listen_meter::Meter>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -1371,6 +1374,7 @@ impl Workspace {
             listen_feed: None,
             listen_file: None,
             listen_ending: Vec::new(),
+            listen_meter: None,
             focus,
             _subscriptions: subscriptions,
         };
