@@ -75,6 +75,7 @@
 {"cmd":"audio_probe_start"}
 {"cmd":"audio_probe_stop"}
 {"cmd":"zoom_press"}
+{"cmd":"display_change"}
 {"cmd":"calendar","day":"tomorrow","days":2}
 {"cmd":"calendar","day":"yesterday"}
 {"cmd":"marks"}

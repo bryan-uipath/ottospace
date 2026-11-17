@@ -103,6 +103,7 @@ mod scrollbar;
 mod sessions;
 mod sneak;
 mod sneak_apps;
+mod stall;
 mod tags;
 mod talk;
 mod terminal;
@@ -834,6 +835,11 @@ struct Workspace {
     settling: Vec<(Instant, Sender<String>)>,
     /// When the frame being drawn began, for the trace's frame time.
     frame_start: Rc<Cell<Option<Instant>>>,
+    /// Frames that stopped coming (`stall`), and how often GPUI was kicked to draw again.
+    stall: stall::Stall,
+    redraws: u64,
+    /// A terminal's or hosted window's output asked for a frame not drawn yet: a stall too.
+    output: bool,
     /// What the home screen last drew, and the lattice lines kept between frames.
     home: home::Shared,
     /// ottospace's own controls as last painted: what sneak mode labels.
@@ -1221,8 +1227,10 @@ impl Workspace {
                     });
                     this.take_snapshots(window, cx);
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
+                        this.output = true;
                         cx.notify();
                     }
+                    this.watch_frames(window);
                 });
                 if alive.is_err() {
                     break;
@@ -1330,6 +1338,9 @@ impl Workspace {
             settles: std::env::var_os("OTTOSPACE_E2E").is_some(),
             settling: Vec::new(),
             frame_start: Rc::default(),
+            stall: stall::Stall::new(),
+            redraws: 0,
+            output: false,
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
             chip_line: Rc::default(),
@@ -1958,6 +1969,38 @@ impl Workspace {
         self.with_origin(Origin::Socket, |this| this.serve_calls(window, cx));
     }
 
+    /// Each tick: after a change of the displays, or while the shown window has something to draw
+    /// and draws nothing, GPUI is kicked to draw again (`stall`). The tick is a timer, not a
+    /// frame: it goes on when frames stop.
+    fn watch_frames(&mut self, window: &mut Window) {
+        let now = Instant::now();
+        if display::take_change() {
+            self.stall.displays_changed(now);
+            trace::record("displays", serde_json::json!({ "count": display::all().len() }));
+        }
+        let wants = self.seq > self.drawn_seq || !self.settling.is_empty() || self.output;
+        // SAFETY: GPUI's own view, on the main thread.
+        let shown = ns_view(window).is_some_and(|view| unsafe { ottospace_mac::window::visible(view) });
+        match self.stall.check(now, self.renders, wants, shown) {
+            stall::Verdict::Nothing => {}
+            stall::Verdict::Kick { stalled, first } => {
+                let stalled = stalled.map(|waited| waited.as_millis() as u64);
+                trace::record("redraw", serde_json::json!({ "stalled_ms": stalled, "first": first }));
+                // SAFETY: GPUI's own view, on the main thread, in a timer's update: GPUI holds no
+                // lock of its window here.
+                // Counted only when GPUI's handlers were there to take it.
+                if ns_view(window).is_some_and(|view| unsafe { ottospace_mac::window::redraw(view) }) {
+                    self.redraws += 1;
+                }
+                window.refresh();
+            }
+            stall::Verdict::Recovered { kicks, lasted } => {
+                let lasted = lasted.as_millis() as u64;
+                trace::record("redrawn", serde_json::json!({ "kicks": kicks, "lasted_ms": lasted }));
+            }
+        }
+    }
+
     /// Replies with the state. In a test run, not before a frame has drawn every action so far,
     /// so the bounds in the reply are of the new layout, never the one before it.
     fn answer(&mut self, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
@@ -2499,6 +2542,11 @@ impl Workspace {
                         // It would zoom the test's window over the user's screen.
                         None => failure = Some("the window's zoom does not fill the display".into()),
                     }
+                    None
+                }
+                // A test run only: as macOS says it; the next tick kicks GPUI to draw again.
+                Request::DisplayChange => {
+                    display::note_change();
                     None
                 }
                 Request::Trace => {
@@ -3204,6 +3252,9 @@ impl Workspace {
                 "pr_opens": self.pr_opens,
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
+                // How often GPUI's own handlers were kicked to draw again (`stall`): after a change
+                // of the displays, or frames that stopped.
+                "redraws": self.redraws,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
                 // Scrolls over an app pane's picture, peeks they started, and the one on now (its pane; 0:
                 // none).
@@ -3654,6 +3705,7 @@ impl Workspace {
             self.dispatch(Action::Close { pane: Some(id) }, Origin::System, window, cx);
         }
         if redraw {
+            self.output = true;
             cx.notify();
         }
     }
@@ -6469,6 +6521,7 @@ impl Render for Workspace {
         *self.badges.borrow_mut() = self.model.badges();
         // This frame draws every action so far: the replies held for it can go (`settle`).
         self.drawn_seq = self.seq;
+        self.output = false;
         self.frame_start.set(Some(Instant::now()));
         for pane in &self.model.panes {
             self.cells.entry(pane.id).or_default();
@@ -7024,6 +7077,8 @@ fn main() {
         // Run as a bare binary (`ottospace`, `cargo run`) there is no bundle to supply the icon.
         ottospace_mac::window::set_dock_icon(include_bytes!("../assets/ottospace.icns"));
         cx.bind_keys(keymap());
+        // A change of the displays may leave GPUI drawing on none (`stall`).
+        display::watch();
         // The menu bar lists the same actions; the app-level ones are handled here.
         cx.on_action(|_: &Hide, cx| cx.hide());
         cx.on_action(|_: &About, cx| {
@@ -7169,7 +7224,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 11] = [
+        const TESTS_ONLY: [&str; 12] = [
             "capture_start",
             "repo_add",
             "inspector_fixture",
@@ -7181,6 +7236,7 @@ mod tests {
             "audio_probe_start",
             "audio_probe_stop",
             "zoom_press",
+            "display_change",
         ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
         for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {
