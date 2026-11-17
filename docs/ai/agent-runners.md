@@ -510,7 +510,7 @@ builders; the binary was read, never run), and fixed in
 
 | Line | Fields read | Row |
 |---|---|---|
-| `system.task_started` | `tool_use_id`, `description` | none when its call has a row (the `Agent` row reads "Started a subtask: <description>"); else "Started a subtask: <description>" (a background shell, say) |
+| `system.task_started` | `tool_use_id`, `description` | none when its sub-agent call has a row (the `Agent` row reads "Started a subtask: <description>"); else "Started a subtask: <description>" (a background shell, say) |
 | `system.task_notification` | `status` (`completed`, `failed`, `stopped`/`killed`), `summary` | "Subtask done: <summary>" (failed, stopped, ended) |
 | `system.permission_denied` | `tool_name`, `decision_reason_type` | "Denied: <tool> by your settings" (`rule`, `subcommandResults`), "by the permission mode", "by auto mode", "by a hook", …; none for `permissionPromptTool` (the user's own Deny here, already a notice) |
 | `system.permission_check_status` | none | none: its `status` is `checking` or `done`, a check under way; what it decided comes as `permission_denied` or as a `can_use_tool` request (the card, then "You allowed/denied …") |
@@ -531,13 +531,15 @@ A call's row shows its gist (`ottospace_core::gist::claude`, from its input): Ba
 the command's first line in monospace, `…` if more lines follow, its `description` on a muted
 second line; Read, Edit, Write, MultiEdit, NotebookEdit the path relative to the task's
 repository (else as written); Grep and Glob the pattern, and `in <path>` if given; WebFetch the
-host (no user, port, path or query); WebSearch the query; Agent and Task "Started a subtask:"
+host (no port, path or query), and for a URL whose authority is not plain (a user name, `\`,
+`%`, non-ASCII) "unclear host · " and the URL as written; WebSearch the query; Agent and Task "Started a subtask:"
 and the description; any other tool its first string argument, by key name, of at most 80
-characters on one line; nothing to show: `tool · label` as before. Every word is cleaned
+characters on one line, not credential-shaped; nothing to show: `tool · label` as before. Every word is cleaned
 (`transcript::clean`), on one line, cut at 400 bytes and again to the row with an ellipsis; no
 markup, no link. A click (or its sneak label) opens a command's row: the command whole and its
-output (the tool result's text, at most 16 KB, kept only for a command). A sub-agent's calls are
-indented under its row. The state has the gist's shape alone (`summary`: kind, lines, note) and
+output (the tool result's text, at most 16 KB, kept only for a command, drawn with
+credential-shaped parts hidden). A sub-agent's calls are indented, in the order they came: with
+two sub-agents at once, their calls interleave. The state has the gist's shape alone (`summary`: kind, lines, note) and
 `expanded`; a watched session gets the same rows from its file (`Cursor::with_edits` carries the
 gist and the output, as it carries an edit's change). Not built: Codex gists, ↵ on a focused row
 (the drawer has no row focus: a click or a sneak label opens it).

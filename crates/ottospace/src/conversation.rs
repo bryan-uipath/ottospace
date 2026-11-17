@@ -789,7 +789,9 @@ impl Workspace {
                         // Open: the command whole and what it printed; another call, its detail.
                         let body = open.then(|| match gist.command() {
                             Some(command) => {
-                                let printed = output.as_ref().map(|output| clean(output.text()));
+                                // As an agent's stderr is shown: cleaned, credential-shaped parts hidden.
+                                let printed =
+                                    output.as_ref().map(|output| ottospace_core::transcript::details(output.text()));
                                 div()
                                     .id(ElementId::Name(format!("chat-row-body:{key}:{id}").into()))
                                     .flex()
@@ -884,20 +886,22 @@ impl Workspace {
             .relative()
             .flex()
             .flex_col()
-            .cursor_pointer()
-            .child(self.controls.mark(control))
+            .child(self.controls.mark(control.clone()))
+            // Its head opens and closes it: a click in what it printed leaves it open.
             .child(
                 div()
+                    .id(ElementId::Name(format!("{control}:head").into()))
                     .flex()
                     .gap_1p5()
                     .min_w_0()
+                    .cursor_pointer()
                     .text_xs()
                     .text_color(rgb(theme::MUTED))
                     .child(div().flex_none().text_color(rgb(color)).child(glyph.to_string()))
-                    .child(head.flex_1()),
+                    .child(head.flex_1())
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_row(&subject, id, cx))),
             )
             .children(body.map(|body| body.ml_4().mt_0p5()))
-            .on_click(cx.listener(move |this, _, _, cx| this.toggle_row(&subject, id, cx)))
             .into_any_element()
     }
 

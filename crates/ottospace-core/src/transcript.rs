@@ -731,8 +731,11 @@ impl Transcript {
             }
             // The call that started it says so (its gist); else a row of its own.
             Event::Subtask { id, description } => {
-                let started =
-                    |item: &Item| matches!(&item.entry, Entry::Tool { id: of, .. } if Some(of) == id.as_ref());
+                // Only a sub-agent's row says it started one: a background shell's call does not.
+                let started = |item: &Item| {
+                    matches!(&item.entry, Entry::Tool { id: of, gist: Some(gist), .. }
+                        if Some(of) == id.as_ref() && gist.kind == gist::Kind::Subtask)
+                };
                 if !self.items.iter().any(started) {
                     self.settle();
                     self.push(Entry::Note { note: NoteKind::Subtask, text: description });
@@ -753,6 +756,11 @@ impl Transcript {
             Event::ModelFallback { from, to } => {
                 self.model = Some(to.clone());
                 self.push(Entry::Notice(Notice::ModelFallback { from, to }));
+                // Said while a reply streams: the notice goes before it, so the reply goes on.
+                let n = self.items.len();
+                if n >= 2 && matches!(self.items[n - 2].entry, Entry::Assistant { streaming: true, .. }) {
+                    self.items.swap(n - 2, n - 1);
+                }
             }
             Event::Permission { ticket, tool, label, detail, len, cut, claim } => {
                 if !self.cards.iter().any(|card| card.ticket == ticket) && self.cards.len() < MAX_CARDS {
@@ -1291,6 +1299,30 @@ mod tests {
             ]
         );
         assert_eq!(t.model.as_deref(), Some("m-2"));
+        // A background shell's start, though its call has a row: a row of its own.
+        let shell = serde_json::json!({"command": "cargo build", "run_in_background": true});
+        let mut b = Transcript::default();
+        b.fold(
+            Event::ToolStart {
+                id: "s".into(),
+                sub: false,
+                tool: "Bash".into(),
+                station: Station::Shell,
+                label: "cargo build".into(),
+                detail: Text::default(),
+                diff: None,
+                gist: crate::gist::claude("Bash", &shell),
+            },
+            1,
+        );
+        b.fold(Event::Subtask { id: Some("s".into()), description: text("Build") }, 2);
+        assert_eq!(texts(&b), ["tool:cargo build:Running", "note:Subtask:Build"]);
+        // A fallback while a reply streams: the reply goes on, whole, after it.
+        let mut r = Transcript::default();
+        r.fold(Event::TextDelta { text: text("Look") }, 1);
+        r.fold(Event::ModelFallback { from: None, to: "m-2".into() }, 2);
+        r.fold(Event::Text { text: text("Looked.") }, 3);
+        assert_eq!(texts(&r), [r#"ModelFallback { from: None, to: "m-2" }"#, "done:Looked."]);
         let summary = serde_json::to_value(t.summary()).unwrap();
         let ended = &summary["entries"][2];
         assert_eq!(ended, &serde_json::json!({"kind": "note", "note": "ended", "status": "completed", "bytes": 8}));
