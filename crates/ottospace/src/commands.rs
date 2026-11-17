@@ -255,7 +255,7 @@ impl Workspace {
         let rows = items.into_iter().enumerate().map(|(i, (_, group, name, key))| {
             dialog::filter_row(("command", i), i == palette.selected)
                 .child(div().w(px(72.)).flex_none().text_xs().text_color(rgb(theme::MUTED)).child(group))
-                .child(div().flex_1().min_w_0().truncate().child(name))
+                .child(crate::cut_text(name).flex_1())
                 .children(key.map(|key| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(key)))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.dispatch(Action::PaletteChoose { index: Some(i) }, this.input, window, cx);

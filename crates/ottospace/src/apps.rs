@@ -310,7 +310,7 @@ impl Workspace {
             .text_color(rgb(theme::MUTED))
             .child(self.app_icon(&row.path))
             .child(self.controls.mark(format!("closed-app:{}", row.path)))
-            .child(div().flex_1().min_w_0().truncate().child(row.name.clone()))
+            .child(crate::cut_text(row.name.clone()).flex_1())
             .when(row.pinned, |d| d.child(div().flex_none().text_xs().text_color(rgb(theme::BORDER_STRONG)).child("★")))
             .when(waiting, |d| d.child(div().flex_none().text_xs().child("opening…")))
             .child(actions)
@@ -356,7 +356,7 @@ impl Workspace {
                 .gap_3()
                 .child(self.app_icon(&app.name))
                 .child(self.controls.mark(format!("app:{target}")))
-                .child(div().flex_1().min_w_0().truncate().child(app.name.clone()))
+                .child(crate::cut_text(app.name.clone()).flex_1())
                 // How many windows the app has open, when more than one.
                 .when(app.windows > 1, |row| {
                     // A fixed box with the digits centred in it. Digits have no descender, so

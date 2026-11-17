@@ -541,6 +541,8 @@ impl Workspace {
                 .items_center()
                 .gap_1p5()
                 .rounded_t_sm()
+                // Below the one in front; under the badge, so its dot keeps its colour.
+                .when(!on, |d| d.child(crate::inner_shade(false, 6.)))
                 .child(badge.flex_none())
                 // Past five the others stay badges, and the front one keeps room for some of its title.
                 .when(on, |d| {

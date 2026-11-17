@@ -385,13 +385,7 @@ impl Workspace {
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .child("runs in")
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(rgb(theme::TEXT))
-                        .child(ottospace_core::transcript::clean(folder)),
-                )
+                .child(crate::cut_text(ottospace_core::transcript::clean(folder)).text_color(rgb(theme::TEXT)))
                 .child(div().flex_none().child(clear))
         });
         let line = div()

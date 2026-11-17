@@ -1,0 +1,1 @@
+{"version": 2, "id": "1a2b3c4d5e6f7081", "name": "Investigate the flaky payments webhook retries in staging", "tabs": [{"title": "t", "layout": {"leaf": 1}, "panes": [{"id": 1, "kind": {"type": "terminal"}, "cwd": "/tmp"}]}, {"title": "u", "layout": {"leaf": 1}, "panes": [{"id": 1, "kind": {"type": "terminal"}, "cwd": "/tmp"}]}]}
