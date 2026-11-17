@@ -2454,6 +2454,12 @@ fn clicks_reach_hosted_windows_as_the_user_switches_between_their_panes() {
         }
         false
     };
+    // What covers pane `pane`'s window, for a miss.
+    let above = |pane: u64| {
+        let panes = state()["state"]["panes"].as_array().cloned().unwrap_or_default();
+        let id = panes.iter().find(|p| p["id"] == pane).and_then(|p| p["kind"]["window"].as_u64());
+        id.map(|id| windows_above(id as u32))
+    };
     let rounds = std::env::var("OTTOSPACE_E2E_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(6);
     let (mut replays, mut directs, mut tries) = (0, 0, 0);
     let mut missed = Vec::new();
@@ -2474,7 +2480,11 @@ fn clicks_reach_hosted_windows_as_the_user_switches_between_their_panes() {
             if reached(index, before) {
                 replays += 1;
             } else {
-                missed.push(format!("round {round} pane {pane}: replay; front {:?}", front_app()));
+                missed.push(format!(
+                    "round {round} pane {pane}: replay; front {:?}; above {:?}",
+                    front_app(),
+                    above(pane)
+                ));
             }
             // The live window, clicked where the user clicks next: its own content.
             let live =
@@ -2486,9 +2496,11 @@ fn clicks_reach_hosted_windows_as_the_user_switches_between_their_panes() {
                 directs += 1;
             } else {
                 missed.push(format!(
-                    "round {round} pane {pane}: direct at {live:?}; front {:?}; mode {}",
+                    "round {round} pane {pane}: direct at {live:?}; front {:?}; mode {}; above {:?}; otto {}",
                     front_app(),
-                    state()["mode"]
+                    state()["mode"],
+                    above(pane),
+                    otto.child.id()
                 ));
             }
         }
