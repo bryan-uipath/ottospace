@@ -12,7 +12,7 @@ use screencapturekit::stream::delegate_trait::SCStreamDelegateTrait;
 /// The rate the recogniser is fed at.
 pub const RATE: i32 = 16_000;
 
-type Samples = Arc<dyn Fn(&[f32]) + Send + Sync>;
+type Samples = Arc<dyn Fn(&[f32], Option<f64>) + Send + Sync>;
 type Stopped = Arc<dyn Fn(String) + Send + Sync>;
 
 struct Delegate(Stopped);
@@ -29,11 +29,12 @@ pub struct AppAudio {
 }
 
 impl AppAudio {
-    /// Starts hearing the app of `pid`: its samples to `samples`, on SCK's queue; a stop by the
+    /// Starts hearing the app of `pid`: its samples to `samples`, on SCK's queue, with the
+    /// buffer's presentation time in seconds (a host clock's, if it has one); a stop by the
     /// system (permission revoked, the app gone) to `stopped`, with why.
     pub fn start(
         pid: i32,
-        samples: impl Fn(&[f32]) + Send + Sync + 'static,
+        samples: impl Fn(&[f32], Option<f64>) + Send + Sync + 'static,
         stopped: impl Fn(String) + Send + Sync + 'static,
     ) -> Result<AppAudio, String> {
         let content = SCShareableContent::get().map_err(|e| format!("{e}"))?;
@@ -60,12 +61,13 @@ impl AppAudio {
             if kind != SCStreamOutputType::Audio {
                 return;
             }
+            let at = sample.presentation_timestamp().as_seconds();
             let Ok(list) = sample.audio_buffer_list() else { return };
             for buffer in &list {
                 let floats: Vec<f32> =
                     buffer.data().chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
                 if !floats.is_empty() {
-                    samples(&floats);
+                    samples(&floats, at);
                 }
             }
         };
