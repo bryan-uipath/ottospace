@@ -6562,22 +6562,17 @@ fn the_rail_holds_the_running_transcript_and_the_tasks_and_only_the_user_switche
     let keyed = otto.user_key("cmd-ctrl-right");
     assert_eq!(keyed["focus"], json!({"drawer_rail": {"kind": "transcript"}}), "{}", keyed["focus"]);
     otto.user_key("escape");
-    // A second task joins the rail; the transcript, stopped, leaves it.
+    // The transcript, stopped, leaves the rail: one item left, the rail goes.
+    otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
+    otto.user_click(at(otto.listen_rect("listen-stop:view"), 0.5, 0.5));
+    let alone = otto.drawn();
+    assert!(kinds(&alone).is_empty() && otto.control_opt("drawer-rail").is_none(), "{}", alone["drawer"]["rail"]);
+    // A second task brings it back, of tasks alone.
     otto.user_key("cmd-n");
     otto.user_key("t w o");
     let two = otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the second task");
-    assert_eq!(
-        (kinds(&otto.drawn()), rail_tasks(&otto.drawn())),
-        (vec!["transcript".into(), "task".into(), "task".into()], vec![one, two])
-    );
-    otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
-    otto.user_click(at(otto.listen_rect("listen-stop:view"), 0.5, 0.5));
-    let stopped = otto.drawn();
-    assert_eq!((kinds(&stopped), rail_tasks(&stopped)), (vec!["task".into(), "task".into()], vec![one, two]));
-    // With one item left the rail goes.
-    otto.call(json!({"cmd": "task_dismiss", "id": two}));
-    let alone = otto.drawn();
-    assert!(kinds(&alone).is_empty() && otto.control_opt("drawer-rail").is_none(), "{}", alone["drawer"]["rail"]);
+    let both = otto.drawn();
+    assert_eq!((kinds(&both), rail_tasks(&both)), (vec!["task".into(), "task".into()], vec![one, two]));
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
