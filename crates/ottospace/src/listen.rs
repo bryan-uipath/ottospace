@@ -590,19 +590,19 @@ impl Workspace {
     }
 
     /// The red dot on the tab or space of the pane being heard, while off show (`Model::listen_dot`),
-    /// at its corner (the caller places it). A click shows the pane and the drawer on it.
+    /// at its corner (the caller places it). A click shows the pane and the drawer on it. Paused:
+    /// hollow, as the header's.
     pub(crate) fn off_show_dot(&self, id: String, cx: &Context<Self>) -> Stateful<Div> {
-        div()
-            .id(gpui::ElementId::Name(id.clone().into()))
-            .absolute()
-            .size(px(7.))
-            .rounded_full()
-            .bg(rgb(theme::RECORDING))
-            .border_1()
-            .border_color(rgb(theme::BACKGROUND))
-            .cursor_pointer()
+        let paused = self.model.listen.on.as_ref().is_some_and(|on| on.status == Status::Paused);
+        let tip = if paused { "Transcript paused here" } else { "Transcribing a pane here" };
+        let dot = div().id(gpui::ElementId::Name(id.clone().into())).absolute().size(px(7.)).rounded_full().border_1();
+        let dot = match paused {
+            true => dot.border_color(rgb(theme::RECORDING)),
+            false => dot.bg(rgb(theme::RECORDING)).border_color(rgb(theme::BACKGROUND)),
+        };
+        dot.cursor_pointer()
             .child(self.controls.mark(id))
-            .tooltip(|_, cx| gpui::AnyView::from(cx.new(|_| crate::Tooltip("Transcribing a pane here".into()))))
+            .tooltip(move |_, cx| gpui::AnyView::from(cx.new(|_| crate::Tooltip(tip.into()))))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, window, cx| {
                 cx.stop_propagation();

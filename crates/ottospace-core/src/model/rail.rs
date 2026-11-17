@@ -96,11 +96,23 @@ impl Model {
         }
     }
 
-    /// The next (positive) or previous item of the rail, from the one selected. It wraps.
+    /// The next (positive) or previous item of the rail, from the one selected. It wraps. None
+    /// selected on a drawn rail (a session's space: no task in front): from the top, or the foot.
     pub(super) fn rail_cycle(&mut self, delta: i32, effects: &mut Vec<Effect>) {
         let rail = self.rail();
-        let Some(at) = self.rail_selected().and_then(|item| rail.iter().position(|it| *it == item)) else { return };
-        let to = (at as i64 + i64::from(delta)).rem_euclid(rail.len() as i64) as usize;
+        let from = match self.rail_selected().and_then(|item| rail.iter().position(|it| *it == item)) {
+            Some(at) => at as i64,
+            // Just above the top, or on it: a step lands on the first, or wraps to the last.
+            None if self.rail_drawn() => {
+                if delta > 0 {
+                    -1
+                } else {
+                    0
+                }
+            }
+            None => return,
+        };
+        let to = (from + i64::from(delta)).rem_euclid(rail.len() as i64) as usize;
         self.rail_select(rail[to], effects);
     }
 }

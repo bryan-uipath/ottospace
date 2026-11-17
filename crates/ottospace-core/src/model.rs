@@ -13136,6 +13136,22 @@ mod tests {
         Effect::StartAgent { task: subject, start, cwd: Some(cwd.into()), brief: None }
     }
 
+    /// A session's space: no task, so nothing in front; ⌘⌥] / ⌘⌥[ still reach the transcript.
+    #[test]
+    fn in_a_sessions_space_the_rail_keys_start_from_the_top_or_the_foot() {
+        use crate::model::rail::RailItem;
+        let mut m = conversations();
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::ListenFixture.sent_by(Origin::System));
+        m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() });
+        assert_eq!((m.rail(), m.rail_selected(), m.rail_drawn()), (vec![RailItem::Transcript], None, true));
+        m.update(Action::TalkCycle { delta: 1 });
+        assert_eq!(m.rail_selected(), Some(RailItem::Transcript));
+        m.listen.shown = false;
+        m.update(Action::TalkCycle { delta: -1 });
+        assert_eq!(m.rail_selected(), Some(RailItem::Transcript));
+    }
+
     /// A session another terminal holds is watched, read-only: what it did, no card, no turn;
     /// once idle it may be taken over, by the user's click.
     #[test]
