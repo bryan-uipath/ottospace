@@ -143,14 +143,20 @@ impl Model {
 
     /// The record's `slot` of pane `id`, if it is one: what its record keeps beside its app.
     pub(crate) fn slot_record(&self, id: PaneId) -> Option<serde_json::Value> {
-        self.slots.get(&id).and_then(|run| serde_json::to_value(&run.slot).ok())
+        let run = self.slots.get(&id).and_then(|run| serde_json::to_value(&run.slot).ok());
+        run.or_else(|| self.slot_dormant.get(&id).cloned())
     }
 
     /// A restored pane's record names a slot: it starts waiting, never filled by an old window id.
     pub(crate) fn restore_slot(&mut self, id: PaneId, record: &crate::marks::RecordKind) -> bool {
         let crate::marks::RecordKind::App { bundle, name, extra, .. } = record else { return false };
-        let slot = extra.get("slot").and_then(|value| serde_json::from_value::<Slot>(value.clone()).ok());
-        let Some(slot) = slot.filter(|_| self.features.on(Feature::Slots)) else { return false };
+        let Some(value) = extra.get("slot") else { return false };
+        let slot = serde_json::from_value::<Slot>(value.clone()).ok();
+        // With the flag off, or written by a newer build: a plain app pane that keeps it as it was.
+        let Some(slot) = slot.filter(|_| self.features.on(Feature::Slots)) else {
+            self.slot_dormant.insert(id, value.clone());
+            return false;
+        };
         let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == id) else { return false };
         pane.kind = Kind::Slot { name: name.clone(), bundle: bundle.clone() };
         self.slots.insert(id, Run::new(slot, bundle.clone(), name.clone()));
@@ -193,6 +199,10 @@ impl Model {
                 if self.live == Some(pane) || self.peek.as_ref().is_some_and(|peek| peek.pane == pane) {
                     self.leave(effects);
                 }
+                // Unhosting stops a transcript of it.
+                if self.listen.pane() == Some(pane) {
+                    self.listen_end(None, None, effects);
+                }
                 self.slot_unfill(pane);
                 if let Some(run) = self.slots.get_mut(&pane) {
                     // Passed over, or an Automatic slot would take it straight back.
@@ -223,7 +233,11 @@ impl Model {
         if self.by_user {
             return;
         }
-        if !(self.slots.contains_key(&pane) && self.slot_filled(pane)) {
+        // A slot that waits already: a late or second report changes nothing.
+        if self.slots.contains_key(&pane) && !self.slot_filled(pane) {
+            return;
+        }
+        if !self.slots.contains_key(&pane) {
             return self.act(Action::Close { pane: Some(pane) }, effects);
         }
         // The keyboard comes back to ottospace, as the shell is told (`Effect::Parked`).
@@ -310,6 +324,7 @@ impl Model {
     fn slot_windows(&mut self, look: Look, effects: &mut Vec<Effect>) {
         let waited = self.waits_for_slot_look((look.bundle.as_deref(), &look.name));
         let listed: BTreeSet<u32> = look.windows.iter().map(|seen| seen.window).collect();
+        let app = (look.bundle.clone(), look.name.clone());
         let at = self
             .slot_looks
             .iter()
@@ -319,16 +334,32 @@ impl Model {
             None => self.slot_looks.push(look),
         }
         let shown = self.layout.as_ref().map(super::Node::leaves).unwrap_or_default();
+        // What a slot earlier in the order offers: no later one takes it (several slots, §3).
+        let mut offered_here = BTreeSet::new();
         for id in shown {
             let filled = self.slot_filled(id);
-            let Some(run) = self.slots.get(&id).filter(|run| !filled && run.pending.is_none()) else { continue };
-            let Some(look) = self.slot_looks.iter().find(|look| run.of(look) && look.running) else { continue };
+            let ours = |run: &&Run| same_app((run.bundle.as_deref(), &run.name), (app.0.as_deref(), &app.1));
+            let Some(run) = self.slots.get(&id).filter(|run| !filled && run.pending.is_none()).filter(ours) else {
+                continue;
+            };
+            let Some(look) = self.slot_looks.iter().find(|look| run.of(look)) else { continue };
+            // Looked at: a plain pane of its app waits no more, and the app's windows once it
+            // starts opened while the slot waited.
+            if !look.running {
+                self.slots.get_mut(&id).map(|run| run.known.get_or_insert_default());
+                continue;
+            }
             // A closed window is passed over no more: its id may come back as another window.
             let declined: BTreeSet<u32> = run.declined.intersection(&listed).copied().collect();
             let claimed = self.slot_claims(Some(id));
-            let passed = |window: u32| claimed.contains(&window) || declined.contains(&window);
+            let passed =
+                |window: u32| claimed.contains(&window) || declined.contains(&window) || offered_here.contains(&window);
             let found = look.candidates(&run.slot, &self.window_rules, passed);
             let take = found.iter().find(|seen| run.takes(seen, look.frontmost)).map(|seen| (seen.pid, seen.window));
+            if take.is_none() {
+                let kept = run.offered.filter(|window| found.iter().any(|seen| seen.window == *window));
+                offered_here.extend(kept.or(found.first().map(|seen| seen.window)));
+            }
             let windows: Vec<u32> = look.windows.iter().map(|seen| seen.window).collect();
             let Some(run) = self.slots.get_mut(&id) else { continue };
             run.declined = declined;
@@ -353,6 +384,10 @@ impl Model {
         else {
             return;
         };
+        // Its tab went out of sight meanwhile: filling it would park the window (rule 2).
+        if !self.layout.as_ref().is_some_and(|layout| layout.leaves().contains(&id)) {
+            return;
+        }
         // A window is in one pane at most: another took it meanwhile.
         if self.panes.iter().any(|p| p.id != id && matches!(p.kind, Kind::App { window: w, .. } if w == window)) {
             return;
@@ -427,8 +462,13 @@ impl Model {
     pub(super) fn settle_slots(&mut self, effects: &mut Vec<Effect>) {
         let panes = &self.panes;
         self.slots.retain(|id, _| panes.iter().any(|pane| pane.id == *id));
+        self.slot_dormant.retain(|id, _| panes.iter().any(|pane| pane.id == *id));
         if !self.features.on(Feature::Slots) && !self.slots.is_empty() {
-            for id in std::mem::take(&mut self.slots).into_keys() {
+            for (id, run) in std::mem::take(&mut self.slots) {
+                // A filled one stays an app pane and keeps its slot on its record for the flag's return.
+                if self.slot_filled(id) {
+                    self.slot_dormant.extend(serde_json::to_value(&run.slot).ok().map(|slot| (id, slot)));
+                }
                 self.slot_emptied(id);
             }
         }
@@ -767,11 +807,61 @@ mod tests {
         let effects = r.update(system(look(vec![seen(7, 1, "Incident review"), seen(7, 5, "Lunch")])));
         assert!(host(&effects) && hosts(&effects).is_empty(), "Automatic offers what is open at a restore");
         assert!(r.slot_selects(1) && !r.slot_selects(5));
+        // The app not running: the plain pane is asked for at once, and the slot is Absent.
+        let mut quit = Model::default();
+        restore(file.clone(), &mut quit);
+        let gone = Look { bundle: Some(BUNDLE.into()), name: "Meetings".into(), ..Default::default() };
+        assert!(host(&quit.update(system(Action::SlotWindows { look: gone }))));
+        assert_eq!(quit.slots.values().map(|run| run.status).collect::<Vec<_>>(), [Status::Absent]);
         // With the flag off it is a plain app pane, as an older build reads it.
         let mut off = Model::default();
         off.update(system(Action::SetFeatures { features: crate::features::Features::default() }));
         restore(file, &mut off);
         assert!(off.slots.is_empty() && off.panes.iter().all(|p| !matches!(p.kind, Kind::Slot { .. })));
+        // Hosted as a plain pane, it keeps its slot on the record for the flag's return.
+        let kept = off.slot_dormant.keys().next().copied().unwrap_or_default();
+        off.update(system(Action::Fill { pane: kept, kind: meetings(1, "Incident review") }));
+        let text = crate::layout_file::write(&off.layout_file(&[], &[], 0));
+        assert!(text.contains(r#""slot": {"#) && text.contains("*incident*"), "{text}");
+        // Turned off mid-run, a filled slot keeps it too.
+        let mut m = kept_slot_turned_off();
+        let text = crate::layout_file::write(&m.layout_file(&[], &[], 0));
+        assert!(m.slots.is_empty() && text.contains(r#""slot": {"#), "{text}");
+        m.update(Action::Close { pane: Some(2) });
+        assert!(m.slot_dormant.is_empty());
+    }
+
+    fn kept_slot_turned_off() -> Model {
+        let mut m = kept(Matching::Manual);
+        m.update(system(Action::SetFeatures { features: crate::features::Features::default() }));
+        m
+    }
+
+    #[test]
+    fn a_look_at_another_app_leaves_a_slot_as_it_was() {
+        let mut m = waiting(Matching::Manual);
+        m.update(system(look(vec![seen(7, 2, "Incident review")])));
+        m.update(Action::SlotDecline { pane: 2 });
+        let other =
+            Look { bundle: Some("com.other".into()), name: "Other".into(), running: true, ..Default::default() };
+        m.update(system(Action::SlotWindows { look: other }));
+        assert!(m.slots[&2].declined.contains(&2), "a decline stands");
+        // A late report of its window gone closes no slot that waits.
+        m.update(system(Action::WindowGone { pane: 2, app_running: true, at: 1 }));
+        assert_eq!(status(&m, 2), Some(Status::Empty));
+    }
+
+    #[test]
+    fn a_window_two_slots_select_goes_to_the_first_even_when_the_second_would_take_it() {
+        let mut m = waiting(Matching::Manual);
+        m.update(Action::Open { kind: meetings(8, "Incident other"), axis: Right, beside: None });
+        m.update(Action::SlotMake { pane: 3, pid: 7, slot: slot("incident*", Matching::Automatic) });
+        m.update(system(Action::WindowGone { pane: 3, app_running: true, at: 0 }));
+        m.update(system(Action::SlotTick { at: slot::AWAY_MS }));
+        m.update(system(look(Vec::new())));
+        let effects = m.update(system(look(vec![seen(7, 4, "Incident new")])));
+        assert!(hosts(&effects).is_empty(), "{effects:?}");
+        assert_eq!((m.slots[&2].offered, m.slots[&3].offered), (Some(4), None));
     }
 
     #[test]

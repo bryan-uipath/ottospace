@@ -252,8 +252,9 @@ Rejected: the most specific selector first (which is more specific, `identifier`
   ```
 
   `select` holds no `app`: the record's `bundle` and `name` are its app. An older build reads a plain
-  app pane that asks for any window of the app, and keeps `slot` in `extra`, so a rollback and a
-  return lose nothing.
+  app pane that asks for any window of the app. A build before slice 2 drops `slot` on its next
+  write (it wrote no `extra`); from slice 2 a build with the flag off, or one that cannot read the
+  key, keeps it as read and writes it back, so turning the flag off and on loses nothing.
 - **Rejected: a new `RecordKind::Slot`.** `layout.json` reads an unknown kind as `empty` and the next
   write saves it so, losing the slot; `marks.json` refuses the unknown variant and loses every mark
   for the run.

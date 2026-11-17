@@ -2702,14 +2702,18 @@ impl Run {
         // A slot is the user's: only they make, change or clear one, and a client fills none.
         let made: Vec<PaneId> = m.slots.keys().filter(|id| !slots_before.contains_key(id)).copied().collect();
         let users = origin == Origin::User;
+        // Else a restore of the user's own (a layout, a tab's mark): it starts waiting.
+        let restored = made.iter().all(|id| m.slots[id].status != crate::slot::Status::Filled);
         ensure!(
-            made.is_empty() || (users && matches!(action, Action::SlotMake { .. })),
+            made.is_empty() || (users && matches!(action, Action::SlotMake { .. })) || restored,
             "{origin:?}'s {action:?} made slot {made:?}"
         );
         for (id, run) in &slots_before {
             let now = m.slots.get(id);
-            let gone = now.is_none() && m.pane(*id).is_some();
-            ensure!(!gone || users || !m.features.on(Feature::Slots), "{origin:?}'s {action:?} cleared slot {id}");
+            // Cleared, or gone with its pane: never by a client.
+            let gone = now.is_none() && m.features.on(Feature::Slots);
+            ensure!(!gone || origin != Origin::Socket, "{origin:?}'s {action:?} cleared slot {id}");
+            ensure!(!gone || m.pane(*id).is_none() || users, "{origin:?}'s {action:?} cleared slot {id}");
             let Some(now) = now else { continue };
             ensure!(users || now.slot == run.slot, "{origin:?}'s {action:?} changed slot {id}");
             ensure!(
@@ -3471,6 +3475,17 @@ impl Run {
                         users || matches!(action, Action::SlotWindows { .. }),
                         "{origin:?}'s {action:?} filled a slot"
                     );
+                    // A look takes only for Away's return or Automatic, on the tab on show, never
+                    // the window the user is in.
+                    if let Action::SlotWindows { look } = &action {
+                        let before = slots_before.get(pane);
+                        let may = before.is_some_and(|run| {
+                            run.away.is_some() || run.slot.matching == crate::slot::Matching::Automatic
+                        });
+                        let shown = m.layout.as_ref().is_some_and(|l| l.leaves().contains(pane));
+                        let front = before.is_some_and(|run| run.away.is_none()) && look.frontmost == Some(*window);
+                        ensure!(may && shown && !front, "a look took {window} into slot {pane}");
+                    }
                 }
                 Effect::GiveBack { pane } => {
                     ensure!(origin == Origin::User, "{origin:?}'s {action:?} gave back {pane}'s window");
