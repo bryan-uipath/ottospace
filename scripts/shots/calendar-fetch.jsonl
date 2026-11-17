@@ -1,0 +1,24 @@
+{"env":{"OTTOSPACE_CURL":"{ROOT}/home/curl"}}
+# The Calendar section as the feed's fetch goes, with a stand-in for curl (made-up feed, the
+# calendar scenario's): loading, a timeout, the user's Retry and a 403, Retry again and the
+# feed's bytes as they come, the day read, and a day with no meetings. The first two steps wait
+# only on what main had too, so --compare shows it before.
+{"cmd":"split","kind":"empty"}
+{"cmd":"section","section":"calendar"}
+{"sleep_ms":1200}
+{"shot":"loading"}
+{"until":"calendar.stale","is":true}
+{"shot":"timed-out"}
+{"click":"calendar-retry"}
+{"until":"calendar.fetch.code","is":403}
+{"shot":"forbidden"}
+{"click":"calendar-retry"}
+{"until":"calendar.fetch.bytes","is":1024}
+{"shot":"bytes"}
+{"until":"calendar.fetch.state","is":"read"}
+{"shot":"read"}
+{"cmd":"key","keys":"cmd-ctrl-e","as":"user"}
+{"cmd":"key","keys":"right","as":"user"}
+{"cmd":"key","keys":"right","as":"user"}
+{"cmd":"key","keys":"right","as":"user"}
+{"shot":"empty-day"}

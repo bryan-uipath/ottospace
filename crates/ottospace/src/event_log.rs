@@ -154,6 +154,10 @@ fn fields_of(event: &str) -> &'static [&'static str] {
         "host_failed" | "give_back_failed" => &["window"],
         "gpui" => &["level", "src", "said", "n"],
         "panic" => &["src", "thread"],
+        // The calendar's fetch: never its link, a title or curl's words.
+        "calendar_fetch" => &["try"],
+        "calendar_read" => &["bytes", "vevents", "held", "ms", "parse_ms"],
+        "calendar_failed" => &["error", "curl_exit", "http", "ms", "try"],
         _ => &[],
     }
 }
@@ -347,6 +351,12 @@ mod tests {
             ("host_failed", json!({ "window": 77 })),
             ("give_back_failed", json!({ "window": 77 })),
             ("quit", json!({ "hosted": 1 })),
+            ("calendar_fetch", json!({ "try": 1 })),
+            ("calendar_read", json!({ "bytes": 1_557_023, "vevents": 1858, "held": 150, "ms": 4137, "parse_ms": 5 })),
+            (
+                "calendar_failed",
+                json!({ "error": "timed_out", "curl_exit": null, "http": null, "ms": 30_002, "try": 1 }),
+            ),
             ("panic", panic_fields(Some((&main, 12)), Some("main"))),
             ("panic", panic_fields(Some((&format!("{home}/src/app/target/debug/build/x-1/out/gen.rs"), 3)), None)),
             // The first line only.
@@ -371,7 +381,7 @@ mod tests {
             write(event, fields, Some(&*dir));
         }
         let text = fs::read_to_string(dir.join(NAME)).unwrap();
-        assert_eq!(text.lines().count(), 13, "{text}");
+        assert_eq!(text.lines().count(), 16, "{text}");
         // `at` is each line's time, never overwritten by a field.
         assert!(
             text.lines().all(|line| serde_json::from_str::<Value>(line).unwrap()["at"].as_str().unwrap().len() == 25)
