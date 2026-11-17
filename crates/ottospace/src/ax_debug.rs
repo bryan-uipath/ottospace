@@ -2,17 +2,16 @@
 //! outlines each interactive node with the label sneak mode would give it. An experiment; see
 //! `docs/ai/1-initial-brainstorm/accessibility.md`.
 
-use std::sync::mpsc::Sender;
 use std::time::Instant;
 
-use gpui::{BackgroundExecutor, Bounds, IntoElement, Pixels, div, prelude::*, px, rgb};
+use gpui::{Bounds, IntoElement, Pixels, div, prelude::*, px, rgb};
 use ottospace_core::ax::{self, Frame, Labelled, Limits, Source, Tree, Truncated};
 use ottospace_core::sneak_apps::{self, AppRead};
 use ottospace_core::{PaneId, theme};
 use ottospace_mac::{ax as mac_ax, ax_tree};
 use serde::Serialize;
 
-use crate::{control, sneak};
+use crate::sneak;
 
 /// An app pane's window, as plain data so it can cross threads.
 #[derive(Clone, Copy)]
@@ -67,31 +66,17 @@ fn read(pid: i32, id: u32, limits: Limits) -> Result<Read, String> {
 pub fn read_window(pid: i32, window: u32) -> Result<(Frame, Tree), String> {
     read(pid, window, Limits::default()).map(|read| (read.window, read.tree))
 }
-
-/// Answers `ax_tree` from a background thread, so a slow app does not stall the UI.
-pub fn serve_tree(
-    hosted: Option<Hosted>,
-    depth: Option<usize>,
-    nodes: Option<usize>,
-    reply: Sender<String>,
-    executor: &BackgroundExecutor,
-) {
-    let Some(Hosted { pane, pid, window, .. }) = hosted else {
-        let _ = reply.send(control::error("not an app pane"));
-        return;
-    };
+/// For `app_read`: a hosted pane's window and tree, within the reader's limits (at most its own),
+/// and how long it took. Blocking: for a thread of its own.
+pub fn read_hosted(hosted: Hosted, depth: Option<usize>, nodes: Option<usize>) -> Result<(Frame, f64, Tree), String> {
+    let Hosted { pid, window, .. } = hosted;
     let defaults = Limits::default();
-    let limits = Limits { depth: depth.unwrap_or(defaults.depth), nodes: nodes.unwrap_or(defaults.nodes), ..defaults };
-    executor
-        .spawn(async move {
-            let answer = match read(pid, window, limits) {
-                Ok(r) => serde_json::json!({ "ok": true, "pane": pane, "window": r.window, "millis": r.millis, "tree": r.tree })
-                    .to_string(),
-                Err(err) => control::error(&err),
-            };
-            let _ = reply.send(answer);
-        })
-        .detach();
+    let limits = Limits {
+        depth: depth.map_or(defaults.depth, |d| d.min(defaults.depth)),
+        nodes: nodes.map_or(defaults.nodes, |n| n.min(defaults.nodes)),
+        ..defaults
+    };
+    read(pid, window, limits).map(|r| (r.window, r.millis, r.tree))
 }
 
 /// What the overlay draws. In the state snapshot while the overlay is on.

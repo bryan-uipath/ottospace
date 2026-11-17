@@ -135,6 +135,8 @@ test("run: the command and the marker cannot break each other", async () => {
     assert.deepEqual(await shell.run("echo a;", quick), { status: 0, output: "a" });
     // A job in the background: the shell may print a job line, so only that it ends, with 0.
     assert.equal((await shell.run("sleep 0.2 &", quick)).status, 0);
+    // Reap it now, or bash's late "[1]+ Done" notice lands in a later command's output.
+    assert.equal((await shell.run("wait", quick)).status, 0);
     // Quotes in the command survive the quoting, and an empty line in the output is kept.
     assert.deepEqual(await shell.run(`echo "it's"; echo; echo 'two  words'`, quick), {
       status: 0,
@@ -298,11 +300,21 @@ test("calendar: with no feed set it says only that", async () => {
   });
 });
 
+test("agent mode on: a read of an app pane with no pass is refused", async () => {
+  await withOttospace(async (client) => {
+    const noPass = /only a task's agent reads an app pane/;
+    await assert.rejects(client.axTree({ pane: 1 }), { message: noPass });
+    await assert.rejects(client.appRead({ pane: 1 }), { message: noPass });
+    await assert.rejects(client.appLook({ pane: 1 }), { message: noPass });
+  }, ["agent_mode"]);
+});
+
 test("a refused request rejects with the app's message", async () => {
   await withOttospace(async (client) => {
     await assert.rejects(client.taskOpen({ id: 99 }), { name: "Error", message: "no task 99" });
     await assert.rejects(client.type({ pane: 99, text: "x" }), { message: "no terminal pane to type into" });
-    await assert.rejects(client.axTree(), { message: "not an app pane" });
+    // Agent mode gates every read of an app pane: off for a new user.
+    await assert.rejects(client.axTree(), { message: "feature off: agent_mode" });
     await assert.rejects(client.send({ cmd: "no_such_request" }), /unknown variant `no_such_request`/);
     await assert.rejects(client.send({ cmd: "focus", pane: 1, extra: 1 }), /unknown field `extra`/);
     // The connection is still good after a refusal.
