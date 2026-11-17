@@ -31,9 +31,8 @@ impl Model {
         let of = self.space();
         let front = self.front(of);
         let done = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| task.state == State::Done);
-        let mut tasks: Vec<TaskId> =
-            self.members(of).into_iter().filter(|id| Some(*id) == front || !done(id)).collect();
-        tasks.sort_by_key(|id| self.urgency(*id));
+        let tasks: Vec<TaskId> =
+            self.space_tasks(of).into_iter().filter(|id| Some(*id) == front || !done(id)).collect();
         let transcript = self.listen.on.as_ref().map(|_| RailItem::Transcript);
         let items: Vec<RailItem> =
             transcript.into_iter().chain(tasks.into_iter().map(|id| RailItem::Task { id })).collect();
