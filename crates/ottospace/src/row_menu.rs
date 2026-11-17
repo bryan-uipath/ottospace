@@ -25,6 +25,7 @@ fn dots_control(row: &MenuOf) -> Option<String> {
     match row {
         MenuOf::Row(ListRow::Workbook(id)) => Some(format!("workbook-menu:{id}")),
         MenuOf::Row(ListRow::WorkbookTab(id, at)) => Some(format!("workbook-tab-menu:{id}:{at}")),
+        MenuOf::Space(id) => Some(format!("space-menu:{id}")),
         MenuOf::Transcript => Some("listen-menu".into()),
         _ => None,
     }
@@ -105,7 +106,7 @@ impl Workspace {
             }
             None => {
                 // An undo it offers counts its seconds from now; a pause pauses now.
-                self.model.update(Action::Tick { now: crate::now_ms() }.sent_by(Origin::System));
+                self.tick_now();
                 // What was heard before the user's pause is kept.
                 let pause = matches!(self.model.row_menu_action(index), Some(Action::ListenPause { .. }));
                 if pause && self.input == Origin::User {
@@ -188,18 +189,19 @@ impl Workspace {
     pub(crate) fn row_menu_json(&self) -> serde_json::Value {
         let Some((menu, items)) = self.model.row_menu() else { return serde_json::Value::Null };
         let (workbook, tab) = match menu.row {
-            MenuOf::Row(ListRow::Workbook(id)) => (Some(id), None),
+            MenuOf::Row(ListRow::Workbook(id)) | MenuOf::Space(id) => (Some(id), None),
             MenuOf::Row(ListRow::WorkbookTab(id, at)) => (Some(id), Some(at)),
             _ => (None, None),
         };
-        let transcript = menu.row == MenuOf::Transcript;
+        let (transcript, space) = (menu.row == MenuOf::Transcript, matches!(menu.row, MenuOf::Space(_)));
         let item = |(index, item): (usize, &ottospace_core::row_menu::Item)| {
             let drawn = self.controls.bounds(&item_control(index)).map(rect);
             serde_json::json!({"item": item, "label": item.label(), "rect": drawn})
         };
         let items: Vec<serde_json::Value> = items.iter().enumerate().map(item).collect();
         serde_json::json!({
-            "workbook": workbook, "tab": tab, "transcript": transcript, "selected": menu.selected, "items": items
+            "workbook": workbook, "tab": tab, "space": space, "transcript": transcript, "selected": menu.selected,
+            "items": items
         })
     }
 

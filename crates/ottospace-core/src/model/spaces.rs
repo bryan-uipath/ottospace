@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Action, Effect, Envelope, Host, Kind, Model, Origin, Tab};
+use super::{Action, Confirm, Effect, Envelope, Host, Kind, Model, Origin, PaneId, Running, Tab};
 use crate::talk::{Subject, Talk};
 use crate::tasks::TaskId;
 use crate::workbook::WorkbookId;
@@ -89,6 +89,8 @@ pub struct SpaceRow {
     pub worktree: Option<String>,
     /// What its item on the top row shows before its name.
     pub glyph: Glyph,
+    /// False for a temporary workspace: closing it discards it. Every other space is true.
+    pub kept: bool,
 }
 
 /// What a space's item on the top row shows before its name (`Model::glyph`).
@@ -160,8 +162,22 @@ impl Model {
             front: self.front(&space.of),
             worktree: self.space_worktree(&space.of).map(String::from),
             glyph: self.glyph(&space.of),
+            kept: self.space_kept(&space.of),
         };
         self.spaces.iter().map(row).collect()
+    }
+
+    /// Whether a space is kept: all but a temporary workspace's.
+    pub fn space_kept(&self, of: &Owner) -> bool {
+        match of {
+            Owner::Workbook { id } => self.workbooks.is_kept(*id),
+            _ => true,
+        }
+    }
+
+    /// Whether a space is a temporary workspace's the user closed, its Undo offered: no tab goes there.
+    fn closing(&self, of: &Owner) -> bool {
+        matches!(of, Owner::Workbook { id } if self.workbooks.closing(*id))
     }
 
     /// The tasks in a space, in the order they came: its own, then each that joined it.
@@ -361,11 +377,7 @@ impl Model {
     /// Takes the space at `place` (default: the selected one) off the row. Home stays. A
     /// selected one gives way to its right neighbour, else its left.
     pub(crate) fn hide_space(&mut self, place: Option<usize>, effects: &mut Vec<Effect>) {
-        let shown = self.shown_spaces();
-        let at = place.unwrap_or_else(|| shown.iter().position(|space| space.of == *self.space()).unwrap_or(0));
-        let Some(of) = shown.get(at).map(|space| space.of.clone()).filter(|of| *of != Owner::Home) else {
-            return;
-        };
+        let Some(of) = self.space_to_hide(place) else { return };
         if *self.space() == of
             && let Some(tab) = self.space_after(&of)
         {
@@ -374,6 +386,39 @@ impl Model {
         if let Some(space) = self.spaces.iter_mut().find(|space| space.of == of) {
             space.hidden = true;
         }
+    }
+
+    /// The space `hide_space` takes off the row: at `place`, else the selected one. Never Home.
+    fn space_to_hide(&self, place: Option<usize>) -> Option<Owner> {
+        let shown = self.shown_spaces();
+        let at = place.unwrap_or_else(|| shown.iter().position(|space| space.of == *self.space()).unwrap_or(0));
+        shown.get(at).map(|space| space.of.clone()).filter(|of| *of != Owner::Home)
+    }
+
+    /// The user's × or ⌘⌃W. A temporary workspace whose terminals run something (`running`) is
+    /// asked about first, as quit is: closed, they end once its Undo runs out. Else `hide_space`.
+    pub(crate) fn hide_space_asked(
+        &mut self,
+        place: Option<usize>,
+        mut running: Vec<Running>,
+        effects: &mut Vec<Effect>,
+    ) {
+        let id = match self.space_to_hide(place) {
+            Some(Owner::Workbook { id }) if self.closable(id) => id,
+            _ => return self.hide_space(place, effects),
+        };
+        let of = Owner::Workbook { id };
+        let panes: Vec<PaneId> = (self.tabs.iter().zip(self.tab_panes()))
+            .filter_map(|(tab, panes)| (tab.space == of).then_some(panes))
+            .flatten()
+            .collect();
+        running.retain(|r| panes.contains(&r.pane));
+        if running.is_empty() {
+            return self.hide_space(place, effects);
+        }
+        // The question is ottospace's own UI: a live window would cover it.
+        self.leave(effects);
+        self.confirm = Some(Confirm { running, dismiss: None, paste: None, unlist: None, close: Some(id) });
     }
 
     /// A space's place on the row: the order tabs keep. One not on the row goes last, and
@@ -497,17 +542,17 @@ impl Model {
         if !moves.is_empty() {
             let new = moves.iter().any(|at| !step.tabs.contains(&self.tabs[*at].id));
             let made = origin == Origin::User && (hint.is_some() || (step.on_show && (filled || new)));
-            let open = |of: &&Owner| self.owner_valid(of) && self.spaces.iter().any(|s| s.of == **of);
+            let open =
+                |of: &&Owner| self.owner_valid(of) && !self.closing(of) && self.spaces.iter().any(|s| s.of == **of);
             // Else the first workspace on the row, before one is made.
             let kept =
                 |space: &&Space| !space.hidden && matches!(space.of, Owner::Task { .. } | Owner::Workbook { .. });
             let any = || self.spaces.iter().filter(|space| open(&&space.of)).find(kept).map(|space| space.of.clone());
             // Then the last one still kept, though closed: no file is made while one is.
-            let kept_last = || self.last_spaces.iter().rfind(|of| self.owner_valid(of)).cloned();
+            let kept_last = || self.last_spaces.iter().rfind(|of| self.owner_valid(of) && !self.closing(of)).cloned();
             // Then any kept workspace of no task: one is made only while there is none.
-            let book = || {
-                self.workbooks.list.iter().find(|book| book.task.is_none()).map(|book| Owner::Workbook { id: book.id })
-            };
+            let book =
+                || self.workbooks.listed().find(|book| book.task.is_none()).map(|book| Owner::Workbook { id: book.id });
             // One on the row before a hidden one: a step of another's unhides none it need not.
             let shown = |of: &&Owner| open(of) && self.spaces.iter().any(|s| s.of == **of && !s.hidden);
             let last = self.last_spaces.iter().rfind(shown).cloned().or_else(any);
