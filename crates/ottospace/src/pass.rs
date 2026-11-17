@@ -56,16 +56,29 @@ impl Folder {
         let path = CString::new(dir.as_os_str().as_bytes()).ok()?;
         let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
         // SAFETY: `path` is a valid C string; the fd is owned from here on.
-        let fd = unsafe { libc::open(path.as_ptr(), flags) };
+        let mut fd = unsafe { libc::open(path.as_ptr(), flags) };
+        // One we cannot read (0300) has no fd to `fchmod`: its own mode, a link's never followed, then
+        // opened again and checked as any other.
+        if fd < 0 && repair && std::io::Error::last_os_error().raw_os_error() == Some(libc::EACCES) {
+            unsafe { libc::fchmodat(libc::AT_FDCWD, path.as_ptr(), 0o700, libc::AT_SYMLINK_NOFOLLOW) };
+            fd = unsafe { libc::open(path.as_ptr(), flags) };
+        }
         let folder = Self((fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) })?);
-        let mut meta = folder.stat(c".")?;
+        let mut meta = folder.meta()?;
         // SAFETY: the folder's own fd.
         if repair && meta.st_uid == uid && meta.st_mode & 0o7777 != 0o700 {
             (unsafe { libc::fchmod(folder.0.as_raw_fd(), 0o700) } == 0).then_some(())?;
-            meta = folder.stat(c".")?;
+            meta = folder.meta()?;
         }
         let ours = meta.st_uid == uid && meta.st_mode & libc::S_IFMT == libc::S_IFDIR && meta.st_mode & 0o7777 == 0o700;
         ours.then_some(folder)
+    }
+
+    /// The folder's own: `fstat`, which needs no search bit (0600), as `fstatat(".")` would.
+    fn meta(&self) -> Option<libc::stat> {
+        // SAFETY: a zeroed `stat` is valid; `fstat` fills it.
+        let mut meta: libc::stat = unsafe { std::mem::zeroed() };
+        (unsafe { libc::fstat(self.0.as_raw_fd(), &mut meta) } == 0).then_some(meta)
     }
 
     /// `name` in the folder, a link not followed.
@@ -508,6 +521,16 @@ mod tests {
         assert!(open.join("pass-3-0").exists(), "0755: left alone");
         drop(Live::mint_in(open.as_ref()).unwrap());
         assert_eq!(std::fs::metadata(open.as_ref()).unwrap().permissions().mode() & 0o777, 0o700);
+        // One we cannot read (no fd) or search is repaired too.
+        for mode in [0o300, 0o600] {
+            std::fs::set_permissions(open.as_ref(), std::fs::Permissions::from_mode(mode)).unwrap();
+            let live = Live::mint_in(open.as_ref());
+            let repaired = std::fs::metadata(open.as_ref()).unwrap().permissions().mode() & 0o777;
+            // Removable whatever happened.
+            std::fs::set_permissions(open.as_ref(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            drop(live.unwrap());
+            assert_eq!(repaired, 0o700, "{mode:o}");
+        }
         // A pass's file goes through its folder's fd: its path swapped for a link to another
         // folder holding a file of that name, that file survives.
         let live = Live::mint_in(real.as_ref()).unwrap();

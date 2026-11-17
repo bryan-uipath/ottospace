@@ -66,7 +66,7 @@ A small script printed the variable and tried to connect.
   through a link), in a 0700 folder beside the control socket (`<socket>.passes`: in a test run,
   the test's own folder), one file per process, removed when the pass is dropped, the folder
   emptied at start and removed at quit. The folder is opened once (`O_NOFOLLOW | O_DIRECTORY`)
-  and used only if `fstat` says it is ours and 0700 (a mint `fchmod`s ours back to 0700; a sweep
+  and used only if `fstat` says it is ours and 0700 (a mint `fchmod`s ours back to 0700, or one it cannot open with `fchmodat`, no follow; a sweep
   leaves any other mode alone); then everything goes through that fd: files
   made with `openat`, listed from it, and only regular files (`fstatat`, no follow) removed with
   `unlinkat`, then `rmdir`. A folder or entry swapped for a link between check and use removes
