@@ -2150,25 +2150,34 @@ unsafe extern "C" {
     fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> core_foundation::array::CFArrayRef;
 }
 
-/// The on-screen windows in front of window `id`: `(number, owner pid, layer)`. What covers it.
-fn windows_above(id: u32) -> Vec<(i64, i64, i64)> {
+/// The on-screen layer-0 windows in front of window `id`: `number pid [x y w h] alpha`. What
+/// covers it.
+fn windows_above(id: u32) -> Vec<String> {
     use core_foundation::array::CFArray;
     use core_foundation::base::{CFType, TCFType};
     use core_foundation::dictionary::CFDictionary;
     use core_foundation::number::CFNumber;
     use core_foundation::string::CFString;
+    type Dict = CFDictionary<CFString, CFType>;
     // kCGWindowListOptionOnScreenAboveWindow.
     let raw = unsafe { CGWindowListCopyWindowInfo(1 << 1, id) };
     if raw.is_null() {
         return Vec::new();
     }
-    let list: CFArray<CFDictionary<CFString, CFType>> = unsafe { CFArray::wrap_under_create_rule(raw) };
-    let number = |d: &CFDictionary<CFString, CFType>, key: &'static str| {
-        d.find(CFString::from_static_string(key)).and_then(|v| v.downcast::<CFNumber>()).and_then(|n| n.to_i64())
+    let list: CFArray<Dict> = unsafe { CFArray::wrap_under_create_rule(raw) };
+    let number = |d: &Dict, key: &str| {
+        d.find(CFString::new(key)).and_then(|v| v.downcast::<CFNumber>()).and_then(|n| n.to_f64())
     };
-    let row = |d: &CFDictionary<CFString, CFType>| {
-        let [n, pid, layer] = ["kCGWindowNumber", "kCGWindowOwnerPID", "kCGWindowLayer"].map(|k| number(d, k));
-        Some((n?, pid?, layer?))
+    let row = |d: &Dict| {
+        let [n, pid, layer, alpha] =
+            ["kCGWindowNumber", "kCGWindowOwnerPID", "kCGWindowLayer", "kCGWindowAlpha"].map(|k| number(d, k));
+        if layer? != 0.0 {
+            return None;
+        }
+        let bounds = d.find(CFString::new("kCGWindowBounds"))?.downcast::<CFDictionary>()?;
+        let bounds: Dict = unsafe { Dict::wrap_under_get_rule(bounds.as_concrete_TypeRef()) };
+        let at = ["X", "Y", "Width", "Height"].map(|k| number(&bounds, k).unwrap_or(f64::NAN));
+        Some(format!("{} {} {at:?} {}", n?, pid?, alpha?))
     };
     list.iter().filter_map(|d| row(&d)).collect()
 }
