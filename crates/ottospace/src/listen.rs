@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
-use gpui::{AnyElement, Context, Div, Stateful, Window, actions, div, prelude::*, px, rgb};
+use gpui::{AnyElement, App, Context, Div, Stateful, Window, actions, div, prelude::*, px, rgb};
 use ottospace_core::listen::{self, Heard, Record, Row, Speaker, Status};
 use ottospace_core::{Action, Effect, Origin, PaneId, theme};
 use serde::Deserialize;
@@ -84,7 +84,15 @@ pub(crate) fn fixture_path() -> Option<String> {
 fn read_fixture(path: &str) -> Result<VecDeque<Said>, String> {
     let text = std::fs::read_to_string(path).map_err(|why| format!("the fixture: {why}"))?;
     let lines = text.lines().filter(|line| !line.trim().is_empty());
-    lines.map(|line| serde_json::from_str(line).map_err(|why| format!("the fixture: {why}"))).collect()
+    let said = |line: &str| -> Result<Said, String> {
+        let said: Said = serde_json::from_str(line).map_err(|why| format!("the fixture: {why}"))?;
+        // A flattened `Option` takes words it cannot read as none: `"from":"Them"` is a mistake, not a pause.
+        match (&said.level, &said.heard) {
+            (None, None) => Err(format!("the fixture: neither a level nor words: {line}")),
+            _ => Ok(said),
+        }
+    };
+    lines.map(said).collect()
 }
 
 /// A transcript's id: its start time and a count, so two in one millisecond differ.
@@ -121,7 +129,7 @@ fn pulse(level: f32) -> Div {
 }
 
 /// Stops an app's streams on another thread: ScreenCaptureKit's stop waits for the system.
-fn stop_off_main(live: Option<Live>, cx: &mut Context<Workspace>) {
+fn stop_off_main(live: Option<Live>, cx: &App) {
     if let Some(live) = live {
         cx.background_executor().spawn(async move { drop(live) }).detach();
     }
@@ -216,13 +224,27 @@ impl Workspace {
                     }
                 }
             }
-            Effect::ListenClose { id } => {
-                if self.listen_feed.as_ref().is_some_and(|feed| feed.id == *id) {
-                    stop_off_main(self.listen_feed.take().and_then(|feed| feed.live), cx);
-                    self.listen_meter = None;
-                }
-            }
+            Effect::ListenClose { id } => self.listen_close(id, cx),
             _ => {}
+        }
+    }
+
+    /// Its streams close for good.
+    fn listen_close(&mut self, id: &str, cx: &App) {
+        if self.listen_feed.as_ref().is_some_and(|feed| feed.id == id) {
+            stop_off_main(self.listen_feed.take().and_then(|feed| feed.live), cx);
+            self.listen_meter = None;
+        }
+    }
+
+    /// A transcript a turned-off flag ended, outside a dispatch: its file's end, its streams' close.
+    pub(crate) fn listen_ended(&mut self, effects: &[Effect], cx: &App) {
+        for effect in effects {
+            match effect {
+                Effect::ListenWrite { id, records } => self.listen_write(id, records),
+                Effect::ListenClose { id } => self.listen_close(id, cx),
+                _ => {}
+            }
         }
     }
 
@@ -240,7 +262,11 @@ impl Workspace {
             writer.send(records.iter().filter(|record| !matches!(record, Record::Begin(_))).cloned().collect());
         }
         if records.iter().any(|record| matches!(record, Record::End { .. } | Record::Failed)) {
-            self.listen_file = None;
+            // Kept until written, for a quit right after to wait for.
+            if let Some(File { writer: Ok(writer), .. }) = self.listen_file.take() {
+                self.listen_ending.retain(|writer| !writer.done());
+                self.listen_ending.push(writer);
+            }
         }
     }
 
@@ -263,6 +289,7 @@ impl Workspace {
     /// ottospace is quitting: the one on ends now, as when its app quits, with what was heard and
     /// what was being heard; its file is written to the end before the app goes.
     pub(crate) fn listen_quit(&mut self) {
+        std::mem::take(&mut self.listen_ending).into_iter().for_each(listen_file::Writer::finish);
         let Some(id) = self.model.listen.on.as_ref().map(|on| on.id.clone()) else { return };
         let mut effects: Vec<Effect> =
             self.listen_rest().map(|rest| self.model.update(rest.sent_by(Origin::System))).unwrap_or_default();
