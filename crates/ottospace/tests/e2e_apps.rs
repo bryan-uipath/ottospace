@@ -2298,7 +2298,7 @@ fn clicks_reach_hosted_windows_as_the_user_switches_between_their_panes() {
         false
     };
     // What pane `pane`'s stream has sent: none while live, more once parked again.
-    let samples = |pane: u64| state()["counts"]["stream_samples"][pane.to_string()].as_u64().unwrap_or(0);
+    let samples = |pane: u64| state()["counts"][format!("stream_samples_{pane}")].as_u64().unwrap_or(0);
     let mut parked: Option<(u64, u64)> = None;
     let rounds = std::env::var("OTTOSPACE_E2E_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(6);
     let (mut replays, mut directs, mut tries) = (0, 0, 0);

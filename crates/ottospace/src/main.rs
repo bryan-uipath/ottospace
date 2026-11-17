@@ -3401,10 +3401,6 @@ impl Workspace {
                 // of the displays, or frames that stopped.
                 "redraws": self.redraws,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
-                // What each app pane's stream has sent, by pane.
-                "stream_samples": self.hosted.iter()
-                    .map(|(id, h)| (id.to_string(), h.latest.samples.load(Relaxed).into()))
-                    .collect::<serde_json::Map<_, _>>(),
                 // Scrolls over an app pane's picture, peeks they started, and the one on now (its pane; 0:
                 // none).
                 "wheels": self.wheel.over,
@@ -3472,6 +3468,13 @@ impl Workspace {
         });
         // Restored or rebuilt panes still empty: `pane`, `why`, and where its "Open <App>" is drawn, or null.
         state["unfilled"] = unfilled.into();
+        // Test runs only: what each app pane's stream has sent, `stream_samples_<pane>` (`counts`
+        // holds numbers only).
+        if let Some(counts) = state["counts"].as_object_mut() {
+            for (id, hosted) in &self.hosted {
+                counts.insert(format!("stream_samples_{id}"), hosted.latest.samples.load(Relaxed).into());
+            }
+        }
         // Where the box offers a choice of where the task works: `new` (a new worktree, the user's
         // choice), the repository's name and the `branch` it would make; else null.
         state["compose_worktree"] = serde_json::json!(self.model.compose_worktree());
