@@ -38,7 +38,7 @@ impl Model {
 
     /// The drawer shows the transcript only while nothing that takes keys is in it: the new-task
     /// box, the conversation with the keyboard and the editor take it back, so no key goes unseen.
-    pub(super) fn listen_hidden(&self) -> bool {
+    pub(crate) fn listen_hidden(&self) -> bool {
         self.compose.is_some() || self.talk.as_ref().is_some_and(|talk| talk.keys) || self.editing.is_some()
     }
 
@@ -476,7 +476,7 @@ mod tests {
         assert_eq!(status(&m), Some(Status::On));
         // The transcript put away: its menu goes with it.
         m.update(open);
-        m.update(Action::ListenShow { on: false }.sent_by(Origin::Socket));
+        m.update(Action::TalkToggle);
         assert!(m.row_menu.is_none());
     }
 

@@ -233,7 +233,7 @@ impl Binding {
             B::DialToggle => "Open / close agent dial",
             B::SpaceNumber => "Go to tab group",
             B::NextSpace => "Next / previous group",
-            B::NextChat => "Next / previous conversation here",
+            B::NextChat => "Next / previous in the drawer's rail",
             B::HideSpace => "Hide tab group",
             B::CaptureKey => "Capture, from any app",
             B::Transcribe => "Transcribe the pane / stop",

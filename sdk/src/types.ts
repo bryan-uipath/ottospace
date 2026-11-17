@@ -149,12 +149,16 @@ export type Focus =
   | { pane: PaneId }
   | { list: number }
   | { rail: Section }
+  | { drawer_rail: RailItem }
   | "drawer"
   | "inspector"
   | "nothing";
 
-/** The rail cell that has the keyboard (in list mode): a section. */
-export type RailFocus = { left: Section };
+/** The rail cell that has the keyboard (in list mode): a section, or an item of the drawer's rail. */
+export type RailFocus = { left: Section } | { right: RailItem };
+
+/** An item of the drawer's rail: the transcript on, or a task. */
+export type RailItem = { kind: "transcript" } | { kind: "task"; id: TaskId };
 
 /** A heading of the Tasks section, in the order drawn. `open`: tasks with tabs open that do not need the user. */
 export type Heading = "needs_you" | "running" | "later" | "done" | "sessions";
@@ -242,8 +246,6 @@ export interface SpaceRow {
   tasks: TaskId[];
   /** The task whose conversation is in front there (the drawer's, the dial's, the agent chip's), or null: it has no task. Only the user changes it. */
   front: TaskId | null;
-  /** The tabs of the drawer's strip while this space is selected, in the order the tasks came; empty with fewer than two. */
-  strip: TaskId[];
   /** Its default worktree (a listed checkout's path), where its new terminals and tasks start; null: none. Set by the user's click on a Repos row. */
   worktree: string | null;
   /** What its item on the top row shows before its name. */
@@ -1349,6 +1351,12 @@ export interface Snapshot {
   badges: Record<string, string>;
   drawer: {
     body: Rect | null;
+    /**
+     * The drawer's rail, in order: the transcript on first, then this workspace's tasks, the most
+     * urgent first. Empty with fewer than two. `selected`: what the drawer shows (only the user
+     * changes it); `rect`: where it was drawn, or null. Never what was heard.
+     */
+    rail: { kind: "transcript" | "task"; id: TaskId | null; selected: boolean; rect: Rect | null }[];
     /** Its width in points as last drawn. */
     width: number;
     agents: Record<string, { model: string; ended: boolean; cols: number; rows: number; lines: string[] }>;

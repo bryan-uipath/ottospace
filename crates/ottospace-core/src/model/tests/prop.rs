@@ -15,6 +15,7 @@ use crate::ics::Show;
 use crate::layout_file;
 use crate::listen::Heard;
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
+use crate::model::rail::RailItem;
 use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::row_menu::MenuOf;
@@ -203,6 +204,11 @@ impl Gen<'_> {
     fn task(&mut self) -> TaskId {
         let real: Vec<TaskId> = self.m.tasks.list.iter().map(|t| t.id).collect();
         self.one_of(&real, Self::stray)
+    }
+
+    /// An item of the drawer's rail: the transcript, or a task (on the rail or not).
+    fn rail_item(&mut self) -> RailItem {
+        if self.rng.below(3) == 0 { RailItem::Transcript } else { RailItem::Task { id: self.task() } }
     }
 
     /// A runner's event: turns, text, calls, requests (cut or not) and their end, an exit.
@@ -966,6 +972,7 @@ const MAKERS: &[Make] = &[
     |g| Action::SpaceCycle { delta: g.delta() },
     |g| Action::TalkFront { task: g.task() },
     |g| Action::TalkCycle { delta: g.delta() },
+    |g| Action::RailSelect { item: g.rail_item() },
     |g| Action::SpaceHide { index: g.rng.coin().then(|| g.index(g.m.shown_spaces().len())) },
     |g| Action::SpaceOpen { space: g.owner() },
     |g| Action::SelectVisibleTab { index: g.index(g.m.tabs.len()) },
@@ -2299,6 +2306,29 @@ fn check_zones(m: &Model) -> Result<(), String> {
     if m.rail_focus.is_some() {
         ensure!(m.list.is_none() && m.mode() == Mode::List, "a rail and {:?} have the keyboard", m.mode());
     }
+    if let Some(crate::model::zones::RailFocus::Right(item)) = m.rail_focus {
+        ensure!(m.rail().contains(&item) && m.rail_drawn(), "the keyboard on {item:?}, not on a drawn rail");
+    }
+    // The drawer's rail: two items or none; the transcript first while one is on, then the tasks
+    // by urgency, each once; the transcript selected while it is shown.
+    let rail = m.rail();
+    ensure!(rail.len() != 1, "a rail of one item");
+    let task = |item: &RailItem| match item {
+        RailItem::Task { id } => Some(*id),
+        RailItem::Transcript => None,
+    };
+    let tasks: Vec<TaskId> = rail.iter().filter_map(task).collect();
+    let transcript = rail.iter().position(|item| *item == RailItem::Transcript);
+    let placed = transcript.is_none_or(|at| at == 0);
+    ensure!(
+        placed && transcript.is_some() == (m.listen.on.is_some() && !rail.is_empty()),
+        "the transcript on {rail:?}"
+    );
+    let ordered = tasks.windows(2).all(|two| m.urgency(two[0]) <= m.urgency(two[1]));
+    ensure!(unique(&tasks) && ordered, "the rail's tasks out of order: {tasks:?}");
+    if m.listen.shown && !rail.is_empty() {
+        ensure!(m.rail_selected() == Some(RailItem::Transcript), "the transcript shown, the rail on {rail:?}");
+    }
     Ok(())
 }
 
@@ -2643,6 +2673,7 @@ impl Run {
                 | Action::SpaceCycle { .. }
                 | Action::TalkFront { .. }
                 | Action::TalkCycle { .. }
+                | Action::RailSelect { .. }
                 | Action::SpaceHide { .. }
                 | Action::SpaceOpen { .. }
         );
@@ -2663,6 +2694,7 @@ impl Run {
         };
         let task_worktrees_before = task_worktrees(m);
         let menu_before = m.row_menu.clone();
+        let rail_before = (m.space().clone(), m.rail_selected());
         let fronts_before: Vec<(Owner, TaskId)> =
             m.spaces().iter().filter_map(|space| Some((space.of.clone(), m.front(&space.of)?))).collect();
         let joined_before: Vec<(Owner, TaskId)> =
@@ -2817,6 +2849,7 @@ impl Run {
                     | Action::SpaceCycle { .. }
                     | Action::TalkFront { .. }
                     | Action::TalkCycle { .. }
+                    | Action::RailSelect { .. }
                     | Action::SpaceHide { .. }
                     | Action::SpaceOpen { .. }
                     | Action::WorkbookNew { .. }
@@ -2931,6 +2964,18 @@ impl Run {
         // Only the user opens a row's menu or moves in it: another's step leaves it, or its row went.
         let menu_kept = m.row_menu.is_none() || m.row_menu == menu_before;
         ensure!(origin == Origin::User || menu_kept, "{origin:?}'s {action:?} opened or moved a row's menu");
+        // Only the user changes what the drawer's rail has selected: after another's step in the
+        // same space, an item still on the rail stays selected, unless a new-task box or the
+        // editor took the drawer from the transcript.
+        if let (of, Some(item)) = &rail_before
+            && origin != Origin::User
+            && m.space() == of
+            && m.rail().contains(item)
+            && m.compose.is_none()
+            && m.editing.is_none()
+        {
+            ensure!(m.rail_selected() == Some(*item), "{origin:?}'s {action:?} moved the rail from {item:?}");
+        }
         // Only the user says which conversation is in front: after another's step, a task that
         // was in front and is still there to be, is. And only the user's ↵ on a new task (or
         // their undo of its dismissal) puts a task in a workspace that has one.
@@ -4257,6 +4302,7 @@ fn code(sent: &Envelope) -> String {
         ("notice", "crate::notice::Kind"),
         ("space", "Owner"),
         ("row", "ListRow"),
+        ("item", "RailItem"),
         ("dots", "Rect"),
         ("show", "Show"),
         ("step", "DayStep"),
