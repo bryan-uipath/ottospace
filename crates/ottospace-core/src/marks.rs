@@ -52,7 +52,7 @@ pub enum RecordKind {
 impl RecordKind {
     /// True if a pane showing `kind` is what this records: a terminal, or a window of the same app,
     /// or a slot for one (its window away: the mark keeps the place).
-    fn is(&self, kind: &Kind) -> bool {
+    pub(crate) fn is(&self, kind: &Kind) -> bool {
         match (self, kind) {
             (RecordKind::Terminal, Kind::Terminal) => true,
             (
@@ -717,6 +717,15 @@ impl Marks {
         marks.filter(|mark| mark.live == Some(live)).for_each(|mark| mark.live = None);
     }
 
+    /// The records of the tab marks that stand for `tab`, the removed one too (`undo_remove`).
+    pub(crate) fn tab_records(&mut self, tab: u32) -> impl Iterator<Item = &mut TabRecord> {
+        let marks = self.list.iter_mut().chain(self.removed.as_mut().map(|(_, mark)| mark));
+        marks.filter(move |mark| mark.live == Some(tab)).filter_map(|mark| match &mut mark.target {
+            Target::Tab(record) => Some(record),
+            Target::Pane(_) => None,
+        })
+    }
+
     pub(crate) fn bind(&mut self, id: MarkId, live: u32) {
         if let Some(mark) = self.get_mut(id) {
             mark.live = Some(live);
@@ -878,7 +887,9 @@ impl Model {
                     return Err("a tab with nothing in it has nothing to mark".into());
                 }
                 let (title, task, layout) = (kept_title(&tab.title, 256), tab.space.task(), layout.clone());
-                let record = TabRecord { title: title.clone(), task, focused, layout, panes, extra: Extra::new() };
+                let mut record = TabRecord { title: title.clone(), task, focused, layout, panes, extra: Extra::new() };
+                // A level the user picked: going to the mark may only offer it back.
+                self.keep_levels(&mut record);
                 if let Some(wrong) = record.unsound() {
                     return Err(format!("tab {} cannot be marked: {wrong}", tab.id));
                 }
@@ -1028,7 +1039,10 @@ impl Model {
                 // `settle_home` gives it a workspace.
                 let task = record.task.filter(|task| self.tasks.live(*task).is_some());
                 let of = task.map_or(Owner::Home, |id| self.task_space(id));
+                let base = self.next_id;
                 let tab = self.rebuild_tab(record, of, effects);
+                let panes: Vec<PaneId> = (base + 1..).take(record.shown().len()).collect();
+                self.wait_for_kept(&panes, record);
                 self.marks.bind(id, tab);
             }
         }
@@ -1667,6 +1681,85 @@ mod tests {
         m.update(Action::Fill { pane, kind: slack(8, "general") });
         assert_eq!((m.agent.level(pane), m.tab_task()), (Level::Off, Some(1)));
         assert!(m.agent.from_record.is_empty(), "filled: no longer waiting");
+        assert!(m.agent.offers.is_empty(), "the default is never kept: nothing to offer");
+    }
+
+    /// A level follows the pane's app into the mark, never another's: after a swap it is not
+    /// kept on the pane now at its place. A removed mark keeps in step too, for its undo.
+    #[test]
+    fn a_tab_marks_level_stays_with_its_app() {
+        use crate::agent_mode::{KEY, Level};
+        let mut m = Model::default();
+        let assign = Default::default();
+        m.update(Action::TaskAdd { title: "fix zoom".into(), priority: 3, state: State::Running, tab: None, assign });
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
+        let slack = open(&mut m, slack(7, "general"));
+        let mail =
+            Kind::App { window: 8, title: "Inbox".into(), bundle: Some("com.apple.mail".into()), name: "Mail".into() };
+        open(&mut m, mail);
+        mark(&mut m, MarkOf::Tab(None), &[]);
+        let levels = |m: &Model| {
+            let Target::Tab(record) = &m.marks.list[0].target else { panic!("a tab mark") };
+            record.panes.iter().map(|pane| pane.extra.get(KEY).is_some()).collect::<Vec<_>>()
+        };
+        // Swapped: Slack's level is not put on Mail's record.
+        m.update(Action::SwapDir { dir: crate::layout::Dir::Left });
+        m.update(Action::AgentLevel { pane: Some(slack), level: Level::See });
+        assert_eq!(levels(&m), [false, false]);
+        // Back in place: on Slack's.
+        m.update(Action::SwapDir { dir: crate::layout::Dir::Right });
+        m.update(Action::AgentLevel { pane: Some(slack), level: Level::Act });
+        assert_eq!(levels(&m), [true, false]);
+        // Removed, reset to Off, put back: no level to offer.
+        m.update(Action::MarkRemove { mark: MarkRef::Name("fix zoom".into()) });
+        m.update(Action::AgentLevel { pane: Some(slack), level: Level::Off });
+        m.update(Action::MarkUndo);
+        assert_eq!(levels(&m), [false, false]);
+    }
+
+    /// A level the user picked is kept on a tab mark's record and, rebuilt, only offered, as a
+    /// restore's is: Off until the user's click; a client's fill or click gives nothing.
+    #[test]
+    fn a_tab_marks_app_pane_offers_back_the_level_the_user_picked() {
+        use crate::agent_mode::{Kept, Level, USERS_ALONE};
+        let mut m = Model::default();
+        let assign = Default::default();
+        m.update(Action::TaskAdd { title: "fix zoom".into(), priority: 3, state: State::Running, tab: None, assign });
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
+        let picked = open(&mut m, slack(7, "general"));
+        m.update(Action::AgentLevel { pane: Some(picked), level: Level::See });
+        mark(&mut m, MarkOf::Tab(None), &[]);
+        let rebuilt = |m: &mut Model| {
+            m.update(Action::CloseTab { index: None });
+            let into = go(m, "fix zoom").iter().find_map(|effect| match effect {
+                Effect::HostWindow { into: Some(pane), .. } => Some(*pane),
+                _ => None,
+            });
+            into.expect("the app pane waits for its window")
+        };
+        // A client's fill: no offer.
+        let pane = rebuilt(&mut m);
+        m.update(Action::Fill { pane, kind: slack(8, "general") }.sent_by(Origin::Socket));
+        assert_eq!((m.agent.level(pane), m.agent.offers.len()), (Level::Off, 0));
+        // The user's fill: Off, with the offer, which only the user's click takes.
+        let pane = rebuilt(&mut m);
+        m.update(Action::Fill { pane, kind: slack(9, "general") });
+        assert_eq!(m.agent.level(pane), Level::Off);
+        assert_eq!(m.agent.offers.get(&pane), Some(&Kept { level: Level::See, task: 1 }));
+        let accept = Action::AgentOfferAccept { pane };
+        assert_eq!(m.refusal(&accept, Origin::Socket), Some(USERS_ALONE));
+        m.update(accept.clone().sent_by(Origin::Socket));
+        assert_eq!(m.agent.level(pane), Level::Off);
+        m.update(accept);
+        assert_eq!((m.agent.level(pane), m.agent.offers.len()), (Level::See, 0));
+        // The mark keeps the level the user has now: one picked since is offered, Off is not.
+        let mut pane = pane;
+        for (level, offered) in [(Level::Act, Some(Kept { level: Level::Act, task: 1 })), (Level::Off, None)] {
+            m.update(Action::AgentLevel { pane: Some(pane), level });
+            pane = rebuilt(&mut m);
+            m.update(Action::Fill { pane, kind: slack(9, "general") });
+            assert_eq!(m.agent.offers.get(&pane).copied(), offered, "{level:?}");
+        }
     }
 
     #[test]
