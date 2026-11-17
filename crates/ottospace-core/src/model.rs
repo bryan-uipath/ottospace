@@ -2973,10 +2973,10 @@ pub struct Model {
     slot_looks: Vec<crate::slot::Look>,
     #[serde(skip)]
     slot_watch: Vec<(Option<String>, String)>,
-    /// A slot's record kept as read while it is not run (the flag off, or a newer build's): an
-    /// app pane writes it back, so turning the flag on again loses none.
+    /// A slot's record kept as read while it is not run (the flag off, or a newer build's), with
+    /// its app: a pane of that app writes it back, so turning the flag on again loses none.
     #[serde(skip)]
-    slot_dormant: std::collections::BTreeMap<PaneId, serde_json::Value>,
+    slot_dormant: std::collections::BTreeMap<PaneId, (Option<String>, String, serde_json::Value)>,
     /// The user's `windows` rules, as the settings say: a slot is offered no window they ignore.
     #[serde(skip)]
     window_rules: Vec<crate::rules::Rule>,

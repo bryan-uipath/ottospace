@@ -92,9 +92,11 @@ impl Gen<'_> {
             self.m.slots.values().map(|run| (run.bundle.clone(), run.name.clone())).collect();
         let (bundle, name) = self
             .one_of(&apps, |g| (g.rng.maybe(|rng| rng.pick(&["com.slack", "com.safari"]).to_string()), g.name(APPS)));
-        let windows = (0..self.rng.below(4)).map(|_| self.seen()).collect();
+        let windows: Vec<crate::slot::Seen> = (0..self.rng.below(4)).map(|_| self.seen()).collect();
         let displays = vec![Frame::new(0., 0., 1920., 1080.), Frame::new(1920., 0., 1920., 1080.)];
-        let frontmost = self.rng.maybe(|rng| rng.below(5) as u32);
+        // Often one of its own windows: the one the user is in.
+        let ids: Vec<u32> = windows.iter().map(|seen| seen.window).collect();
+        let frontmost = self.rng.maybe(|rng| if ids.is_empty() { rng.below(5) as u32 } else { rng.pick(&ids) });
         crate::slot::Look { bundle, name, running: !self.rng.one_in(6), windows, displays, frontmost }
     }
 
@@ -1453,6 +1455,9 @@ fn random(rng: &mut Rng, m: &Model) -> Envelope {
         // Straight after a mark is removed: put it back, so `Run::step` can compare.
         1 if m.marks.removed().is_some() => Action::MarkUndo,
         2 if !m.slots.is_empty() => rng.pick(&SLOT_MAKERS)(&mut Gen { rng, m }),
+        // The shell's look as the shell sends it: from anyone else it is refused or ignored, and a
+        // slot would hardly ever take a window.
+        3 if !m.slots.is_empty() => return Action::SlotWindows { look: Gen { rng, m }.look() }.sent_by(Origin::System),
         _ => rng.pick(MAKERS)(&mut Gen { rng, m }),
     };
     action.sent_by(rng.pick(&[Origin::User, Origin::User, Origin::Socket, Origin::System]))
@@ -2232,8 +2237,8 @@ impl Serialize for StateWithoutApps<'_> {
 }
 
 /// Slots: each is a pane; one that waits is a slot pane, one filled holds a window of its app;
-/// a window is in one pane at most and offered by one slot at most, never one in a pane or
-/// passed over; a slot on a hidden tab offers nothing.
+/// a window is offered by one slot at most, never one in a pane or passed over; a slot on a
+/// hidden tab offers nothing.
 fn check_slots(m: &Model) -> Result<(), String> {
     use crate::marks::same_app;
     if !m.features.on(Feature::Slots) {
@@ -2689,6 +2694,7 @@ impl Run {
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
         let filled_before = m.fill_display;
         let slots_before = m.slots.clone();
+        let ids_before: Vec<PaneId> = m.panes.iter().map(|p| p.id).collect();
         let held_before: Vec<(PaneId, u32)> = m
             .panes
             .iter()
@@ -2702,8 +2708,9 @@ impl Run {
         // A slot is the user's: only they make, change or clear one, and a client fills none.
         let made: Vec<PaneId> = m.slots.keys().filter(|id| !slots_before.contains_key(id)).copied().collect();
         let users = origin == Origin::User;
-        // Else a restore of the user's own (a layout, a tab's mark): it starts waiting.
-        let restored = made.iter().all(|id| m.slots[id].status != crate::slot::Status::Filled);
+        // Else a restore of the user's own (a layout, a tab's mark): new panes, waiting.
+        let restored =
+            made.iter().all(|id| m.slots[id].status != crate::slot::Status::Filled && !ids_before.contains(id));
         ensure!(
             made.is_empty() || (users && matches!(action, Action::SlotMake { .. })) || restored,
             "{origin:?}'s {action:?} made slot {made:?}"
@@ -2724,6 +2731,9 @@ impl Run {
             let hosted = origin == Origin::System
                 && matches!(action, Action::SlotHosted { .. } | Action::Adopt { seen: Some(_), .. });
             ensure!(!filled || hosted, "{origin:?}'s {action:?} filled slot {id}");
+            // An adopted window goes straight in only as Away's return: a new one waits for a look.
+            let adopted = matches!(action, Action::Adopt { .. });
+            ensure!(!filled || !adopted || run.away.is_some(), "{action:?} took a new window into slot {id}");
             // A window is in one pane at most: a slot takes none another pane holds.
             let window =
                 m.pane(*id).and_then(|p| if let Kind::App { window, .. } = p.kind { Some(window) } else { None });
@@ -3484,7 +3494,11 @@ impl Run {
                         });
                         let shown = m.layout.as_ref().is_some_and(|l| l.leaves().contains(pane));
                         let front = before.is_some_and(|run| run.away.is_none()) && look.frontmost == Some(*window);
-                        ensure!(may && shown && !front, "a look took {window} into slot {pane}");
+                        // Automatic takes only a window first listed after the slot's first look.
+                        let old = before.is_some_and(|run| {
+                            run.away.is_none() && run.known.as_ref().is_none_or(|known| known.contains(window))
+                        });
+                        ensure!(may && shown && !front && !old, "a look took {window} into slot {pane}");
                     }
                 }
                 Effect::GiveBack { pane } => {
@@ -4032,6 +4046,19 @@ const BASES: &[(&str, Setup)] = &[
             |_| Action::Split { axis: Axis::Right, kind: Kind::Terminal },
             |_| Action::Open { kind: app(1), axis: Axis::Right, beside: None },
             |m| Action::SlotMake { pane: m.focused.unwrap_or(0), pid: 1, slot: crate::slot::Slot::default() },
+        ],
+    ),
+    // An Automatic slot that waits, its window given back: the next looks may take a new one.
+    (
+        "automatic slot",
+        &[
+            |_| Action::Split { axis: Axis::Right, kind: Kind::Terminal },
+            |_| Action::Open { kind: app(1), axis: Axis::Right, beside: None },
+            |m| {
+                let slot = crate::slot::Slot { matching: crate::slot::Matching::Automatic, ..Default::default() };
+                Action::SlotMake { pane: m.focused.unwrap_or(0), pid: 1, slot }
+            },
+            |m| Action::SlotGiveBack { pane: m.focused.unwrap_or(0) },
         ],
     ),
 ];

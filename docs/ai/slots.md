@@ -213,8 +213,9 @@ window id, is not measured: slice 4 measures it, and the design holds either way
 - **A new window of a hosted app** is adopted as a pane today (`adopt_new_windows`, every tick, for
   each app in `known`), which would beat the slot's 2 s look and make the window no candidate for
   good. So adoption asks the core first: `Adopt` carries the new window's facts, and the core either
-  gives it to a slot on the tab on show (fill, offer or return, as above) or opens it as a new pane
-  as now. One action, no race.
+  gives it to a slot on the tab on show (offer or return, as above) or opens it as a new pane
+  as now. One action, no race. An Automatic slot takes it at its next look, which says whether the
+  user is in it (`frontmost`); `Adopt` does not.
 - **A transcript of the slot's app** follows transcripts §1b: for an app whose rule names `meeting`,
   the meeting decides, so Away does not stop it, and a return is the same source. For any other
   app, the window going stops it, as a pane closing does today; `Give Back the Window` is

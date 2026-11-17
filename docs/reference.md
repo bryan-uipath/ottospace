@@ -1172,8 +1172,8 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   nothing, no Transcribe or Pause command or menu item, and the state's `listen` is null. Turning it off
   ends a transcript that is on. On, an app pane's header offers `Transcribe` on macOS 26 (design:
   [transcripts.md](ai/transcripts.md)).
-- `slots` off: a restored slot is a plain app pane of its app, and turning it off ends every slot
-  (one that waits is an empty pane). In progress: the model only (design: [slots.md](ai/slots.md)).
+- `slots` off: a slot, restored or turned off mid-run, is a plain app pane of its app that keeps
+  the slot on its record for the flag's return. In progress: the model only (design: [slots.md](ai/slots.md)).
 
 ## Driving it from outside
 

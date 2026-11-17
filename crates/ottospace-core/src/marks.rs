@@ -582,7 +582,7 @@ pub struct Marks {
     /// The last mark removed and its place, to put it back.
     removed: Option<(usize, Mark)>,
     /// Panes of rebuilt tabs that are still empty.
-    unfilled: Vec<Unfilled>,
+    pub(crate) unfilled: Vec<Unfilled>,
     /// The file's own keys this build does not know.
     pub extra: Extra,
 }
