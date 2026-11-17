@@ -1087,6 +1087,8 @@ impl Workspace {
                     // The socket and the lock file `control::serve` made beside it.
                     let _ = std::fs::remove_file(control::path());
                     let _ = std::fs::remove_file(control::path().with_extension("lock"));
+                    // Its agents' pass files: they end with it.
+                    let _ = std::fs::remove_dir_all(pass::folder());
                 }
                 running::remove();
                 async {}
@@ -3008,7 +3010,7 @@ impl Workspace {
                     // Lines scrolled back from the bottom, and lines of history kept.
                     "display_offset": display_offset, "history": history,
                     // What ⌘C would copy.
-                    "selection": t.selected(),
+                    "selection": t.selected_shown(),
                     // Its first and last cell as [line, column], line 0 the top of the screen and
                     // negative in history.
                     "selection_range": t.selection_range(),
@@ -6771,7 +6773,7 @@ fn ctl(args: &[String]) -> ! {
         std::process::exit(2);
     };
     // An agent ottospace started for a task carries its pass: the reply knows whose it is.
-    let request = control::with_pass(request, std::env::var(pass::VAR).ok().as_deref());
+    let request = control::with_pass(request, pass::from_env().as_deref());
     let reply = control::send(&control::path(), &request).unwrap_or_else(|err| {
         eprintln!("no ottospace at {}: {err}", control::path().display());
         std::process::exit(1);
@@ -6840,6 +6842,9 @@ fn main() {
     // Started from a task agent's shell (a dev build): that pass is its, not for our children.
     // SAFETY: no thread has started yet.
     unsafe { std::env::remove_var(pass::VAR) };
+    // The variable that held the pass itself before it moved to a file (an older build's agent).
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("OTTOSPACE_TASK_PASS") };
     // Hidden while its output has no stable shape. Reads other programs' session files.
     if args.get(1).is_some_and(|a| a == "sessions") {
         sessions(args.get(2));
@@ -6894,6 +6899,10 @@ fn main() {
     trace::arm();
     trace::record("start", serde_json::json!({ "pid": std::process::id(), "hosting": hosting }));
     let control = control::serve().map_err(|err| eprintln!("control socket off: {err}")).ok();
+    // The socket is this run's: so is the folder of its agents' pass files beside it.
+    if control.is_some() {
+        pass::sweep(&pass::folder());
+    }
     // For `osi`: which program the running app is.
     running::write();
 
