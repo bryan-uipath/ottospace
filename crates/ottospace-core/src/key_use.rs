@@ -50,7 +50,9 @@ pub enum Binding {
     VisualMode,
     ListMode,
     SneakMode,
-    Zoom,
+    /// `zoom` before ⌃⌘F filled the display: its counts are kept.
+    #[serde(alias = "zoom")]
+    FillDisplay,
     Palette,
     ShowKeys,
     EditSettings,
@@ -95,7 +97,7 @@ pub const ALL: &[Binding] = &[
     Binding::VisualMode,
     Binding::ListMode,
     Binding::SneakMode,
-    Binding::Zoom,
+    Binding::FillDisplay,
     Binding::Palette,
     Binding::ShowKeys,
     Binding::EditSettings,
@@ -137,7 +139,7 @@ impl Binding {
             Binding::VisualMode => &[C::VisualMode],
             Binding::ListMode => &[C::ListMode],
             Binding::SneakMode => &[C::SneakMode],
-            Binding::Zoom => &[C::Zoom],
+            Binding::FillDisplay => &[C::FillDisplay],
             Binding::ShowKeys => &[C::ShowKeys],
             Binding::EditSettings => &[C::EditSettings],
             Binding::Hide => &[C::Hide],
@@ -190,7 +192,9 @@ impl Binding {
             B::NewTask | B::NextTask | B::TalkFocus | B::TalkToggle | B::DialToggle | B::CaptureKey => Group::Tasks,
             B::Copy | B::Paste => Group::Text,
             B::VisualMode | B::ListMode | B::SneakMode => Group::Modes,
-            B::Palette | B::ShowKeys | B::EditSettings | B::Zoom | B::ReturnKey | B::Hide | B::Quit => Group::App,
+            B::Palette | B::ShowKeys | B::EditSettings | B::FillDisplay | B::ReturnKey | B::Hide | B::Quit => {
+                Group::App
+            }
         }
     }
 
@@ -235,7 +239,7 @@ impl Binding {
             B::Palette => "Any command by name",
             B::ShowKeys => "This list",
             B::EditSettings => "Settings",
-            B::Zoom => "Fill the screen",
+            B::FillDisplay => "Fill the display, over the menu bar and Dock",
             B::ReturnKey => "Back here, from any app",
             B::Hide => "Hide",
             B::Quit => "Quit",
@@ -603,6 +607,14 @@ mod tests {
         assert_eq!(KeyUse::parse(r#"{"version":2,"keys":{}}"#), Err(Unread::Newer(2)));
         assert_eq!(KeyUse::parse(r#"{"version":2,"keys":[]}"#), Err(Unread::Newer(2)));
         assert!(matches!(KeyUse::parse(&" ".repeat(MAX_FILE_BYTES + 1)), Err(Unread::Bad(_))));
+    }
+
+    /// ⌃⌘F was `zoom` before it filled the display: an older file's counts are its.
+    #[test]
+    fn an_older_files_zoom_reads_as_fill_display() {
+        let uses = KeyUse::parse(r#"{"version":1,"keys":{"zoom":{"score":3,"at":5,"known":true}}}"#).expect("reads");
+        assert_eq!(uses.0.get(&Binding::FillDisplay), Some(&Use { score: 3., at: 5, known: true }));
+        assert!(uses.write().contains("\"fill_display\""), "{}", uses.write());
     }
 
     /// The user's own keys count, and a count ends no mode; nobody else counts or resets.

@@ -15,6 +15,7 @@
 //! With `CANARY_BUTTON` set, the first window has a native button titled "Canary button" in
 //! its content: a control its accessibility tree names. Below it, a checkbox "Canary press"
 //! (`pressed` in the state: whether it is on) and a disabled one, "Canary disabled".
+//! The state's `visible` and `bars_hidden`: the menu bar and the Dock, as another app sees them.
 
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
@@ -216,7 +217,13 @@ fn state(windows: &Windows, cx: &mut App) -> String {
     });
     // Whether "Canary press" is on: a press reached it.
     let pressed = CHECKBOXES.with_borrow(|boxes| boxes.first().map(|b| b.on()));
-    json!({ "ok": true, "windows": open_windows, "pressed": pressed }).to_string()
+    // As this app sees the system: `visible`, what the menu bar and the Dock leave of the main
+    // screen when they show; `bars_hidden`, whether the app in front keeps them away now.
+    let visible = ottospace_mac::recovery::screens().main;
+    let visible = [visible.x, visible.y, visible.w, visible.h];
+    let bars_hidden = ottospace_mac::window::bars_hidden();
+    json!({ "ok": true, "windows": open_windows, "pressed": pressed, "visible": visible, "bars_hidden": bars_hidden })
+        .to_string()
 }
 
 fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mut App) {
