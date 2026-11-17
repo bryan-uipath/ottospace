@@ -151,6 +151,13 @@ impl Window {
         Some(copy_attr(&self.element, "AXSubrole")?.downcast::<CFString>().ok()?.to_string())
     }
 
+    /// The app's own name for this window (`AXIdentifier`): Zoom's `zm.meeting.window.main`.
+    /// `None` when it gives none.
+    pub fn identifier(&self) -> Option<String> {
+        let id = copy_attr(&self.element, "AXIdentifier")?.downcast::<CFString>().ok()?.to_string();
+        (!id.is_empty()).then_some(id)
+    }
+
     pub fn frame(&self) -> Option<CGRect> {
         frame_of(&self.element)
     }

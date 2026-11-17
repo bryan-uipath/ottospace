@@ -62,7 +62,7 @@ is a made-up "Meetings" app; so are the examples here.
   letters in either case. "Contains" is written `*x*`, "is" is written `x`, a pattern is anything
   else. One syntax for every field.
 - **`Selector` is one struct in `ottospace-core::rules`**, with `selects(&Facts) -> Match` (`Yes`,
-  `No`, or `NeedsTree` while `has` is unread). `Facts` gains `identifier: Option<&str>`. Today only
+  `No`, or `NeedsTree` while `has` is unread; until `has` exists, slice 1 returns `bool`). `Facts` gains `identifier: Option<&str>`. Today only
   `ottospace-mac::ax_tree` reads `AXIdentifier`; slice 1 adds it to `ax::Window` and the facts the
   window list gives (`standard_of`).
 - **Evaluated in the core, once.** The shell passes facts and the core runs `selects`, for slots,
@@ -213,8 +213,9 @@ window id, is not measured: slice 4 measures it, and the design holds either way
 - **A new window of a hosted app** is adopted as a pane today (`adopt_new_windows`, every tick, for
   each app in `known`), which would beat the slot's 2 s look and make the window no candidate for
   good. So adoption asks the core first: `Adopt` carries the new window's facts, and the core either
-  gives it to a slot on the tab on show (fill, offer or return, as above) or opens it as a new pane
-  as now. One action, no race.
+  gives it to a slot on the tab on show (offer or return, as above) or opens it as a new pane
+  as now. One action, no race. An Automatic slot takes it at its next look, which says whether the
+  user is in it (`frontmost`); `Adopt` does not.
 - **A transcript of the slot's app** follows transcripts §1b: for an app whose rule names `meeting`,
   the meeting decides, so Away does not stop it, and a return is the same source. For any other
   app, the window going stops it, as a pane closing does today; `Give Back the Window` is
@@ -252,8 +253,9 @@ Rejected: the most specific selector first (which is more specific, `identifier`
   ```
 
   `select` holds no `app`: the record's `bundle` and `name` are its app. An older build reads a plain
-  app pane that asks for any window of the app, and keeps `slot` in `extra`, so a rollback and a
-  return lose nothing.
+  app pane that asks for any window of the app. A build before slice 2 drops `slot` on its next
+  write (it wrote no `extra`); from slice 2 a build with the flag off, or one that cannot read the
+  key, keeps it as read and writes it back, so turning the flag off and on loses nothing.
 - **Rejected: a new `RecordKind::Slot`.** `layout.json` reads an unknown kind as `empty` and the next
   write saves it so, losing the slot; `marks.json` refuses the unknown variant and loses every mark
   for the run.

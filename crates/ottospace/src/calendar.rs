@@ -572,7 +572,8 @@ impl Workspace {
             let first = (index == 0).then(|| mark(&self.marks, Mark::CalendarFirstRow));
             meetings.push(div().flex_none().relative().children(first).child(row).into_any_element());
         }
-        children.extend(crate::well(meetings, 4.));
+        // Level, as Workspaces' rows: a list of the day, not an opened-up group (no `well`).
+        children.extend(meetings);
         // Its own scroll, at the top when the section opens (it was not drawn the frame before)
         // or its day changes; never another section's.
         let (frame, day) = self.calendar_shown.get();

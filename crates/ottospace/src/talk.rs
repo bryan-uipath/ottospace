@@ -32,7 +32,7 @@ pub struct Agent {
     /// The core was told it ended.
     told: bool,
     /// Its task's pass, while its program runs (`pass`): none for a session's agent, nor once it moved.
-    pass: Option<crate::pass::Pass>,
+    pass: Option<crate::pass::Live>,
 }
 
 /// What a drag of the drawer's left edge carries.
@@ -149,9 +149,9 @@ impl Workspace {
         let Command { program: name, args } = command;
         // The agent can ask for its task's brief over the socket, as in a task's own terminals; its
         // pass says the request is the agent's own.
-        let pass = task.map(|_| crate::pass::Pass::mint().ok_or("no random bytes for a pass")).transpose()?;
+        let pass = task.map(|_| crate::pass::Live::mint()).transpose()?;
         let mut vars: Vec<(&str, String)> = task.map(|id| ("OTTOSPACE_TASK", id.to_string())).into_iter().collect();
-        vars.extend(pass.as_ref().map(|pass| (crate::pass::VAR, pass.hex())));
+        vars.extend(pass.as_ref().map(|pass| (crate::pass::VAR, pass.file().to_string_lossy().into_owned())));
         // No repository: the home folder, as the core says, not wherever ottospace was started.
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
         let cwd = cwd.or(home.as_deref());
@@ -168,9 +168,9 @@ impl Workspace {
     /// one's process gone is enough, before its stdout ends.
     pub(crate) fn caller(&self, given: Option<&crate::pass::Pass>) -> ottospace_core::tasks::Caller {
         let terminals = self.drawer.agents.iter().filter(|(_, agent)| !agent.terminal.exited());
-        let terminals = terminals.filter_map(|(subject, agent)| Some((agent.pass.as_ref()?, subject.task()?)));
+        let terminals = terminals.filter_map(|(subject, agent)| Some((agent.pass.as_ref()?.pass(), subject.task()?)));
         let native = self.drawer.native.iter().filter(|(_, native)| !native.reaped());
-        let native = native.filter_map(|(subject, native)| Some((native.pass.as_ref()?, subject.task()?)));
+        let native = native.filter_map(|(subject, native)| Some((native.pass.as_ref()?.pass(), subject.task()?)));
         crate::pass::caller(given, terminals.chain(native))
     }
 
@@ -516,65 +516,6 @@ impl Workspace {
     }
 
     /// The conversation's header: state, title, Chat | Terminal, then what can be done.
-    /// The strip over the conversation: a tab for each task of the selected workspace, its badge
-    /// in its state's colour (the dot at its corner says "needs you" without opening it). The
-    /// one in front is wide and says its title; the others are their badges, the title on
-    /// hover. + starts a task here. None for a workspace of one task: `Model::strip`.
-    fn talk_strip(&self, cx: &mut Context<Self>) -> Option<Div> {
-        let of = self.model.space().clone();
-        let (tabs, front) = (self.model.strip(&of), self.model.front(&of));
-        if tabs.is_empty() {
-            return None;
-        }
-        let tab = |id: TaskId| {
-            let (task, badge) = (self.model.tasks.get(id)?, self.task_badge(id, 18.)?);
-            let (on, title) = (Some(id) == front, gpui::SharedString::from(task.title.clone()));
-            // Its workspace's tasks in different worktrees: the hover says which is its.
-            let label = self.model.worktree_label(id);
-            let tip = label.map_or(title.clone(), |label| format!("{title} · {label}").into());
-            let tab = div()
-                .id(("strip", id as usize))
-                .relative()
-                .h(px(26.))
-                .px_1p5()
-                .flex()
-                .items_center()
-                .gap_1p5()
-                .rounded_t_sm()
-                // Below the one in front; under the badge, so its dot keeps its colour.
-                .when(!on, |d| d.child(crate::inner_shade(false, 6.)))
-                .child(badge.flex_none())
-                // Past five the others stay badges, and the front one keeps room for some of its title.
-                .when(on, |d| {
-                    d.flex_1().min_w(px(96.)).bg(rgb(theme::SELECTED)).text_xs().child(crate::cut_text(title).flex_1())
-                })
-                .when(!on, |d| d.flex_none().hover(|s| s.bg(rgb(theme::SELECTED))))
-                .child(self.controls.mark(format!("strip:{id}")))
-                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.dispatch(Action::TalkFront { task: id }, this.input, window, cx);
-                }));
-            Some(tab)
-        };
-        let tabs: Vec<Stateful<Div>> = tabs.into_iter().filter_map(tab).collect();
-        let new = div()
-            .id("strip-new")
-            .relative()
-            .flex_none()
-            .px_1p5()
-            .rounded_sm()
-            .text_color(rgb(theme::MUTED))
-            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
-            .child("+")
-            .child(self.controls.mark("strip:new"))
-            .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New task in this workspace (⌘N)".into()))))
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.dispatch(Action::OpenCompose { text: String::new() }, this.input, window, cx);
-            }));
-        let strip = div().flex_none().w_full().px_1().pt_1().flex().items_center().gap_0p5().overflow_hidden();
-        Some(strip.border_b_1().border_color(rgb(theme::BORDER)).children(tabs).child(new))
-    }
-
     fn talk_header(&self, subject: &Subject, cx: &mut Context<Self>) -> Option<Div> {
         let shown = match subject {
             Subject::Task(id) => Some(self.model.tasks.get(*id)?),
@@ -790,7 +731,6 @@ impl Workspace {
                     this.dispatch(Action::TalkKeys { on: true }, this.input, window, cx);
                 }),
             )
-            .children(self.talk_strip(cx))
             .child(header)
             .children(
                 self.model
@@ -913,6 +853,8 @@ impl Workspace {
             // The shown conversation's foot, header folder and title hover (`talk::agent_line`).
             "line": self.model.talk.as_ref().map(|talk| self.agent_line(&talk.task)),
             "note": self.model.talk_note(),
+            // The drawer's rail (`drawer_rail`): its items, in order.
+            "rail": self.rail_json(),
         })
     }
 }

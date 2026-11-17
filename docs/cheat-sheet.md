@@ -40,7 +40,7 @@ ottospace            # opens on the Repos list
 | Switch tab (of the task on show) | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
 | Switch task or workspace (top row) | ⌘⌃1 … ⌘⌃9 · ⌘⌃] ⌘⌃[ |
 | Go to Home (the house, first on the top row) | ⌘⌃1, or Go to Home in the palette |
-| Switch conversation in a workspace of several tasks | The strip over the drawer (a tab a task; + adds one) · ⌘⌥] ⌘⌥[ |
+| Switch what the drawer shows (several tasks, or a task and a running transcript) | The rail at the drawer's right edge (the transcript first, then the tasks by urgency; + adds a task) · ⌘⌥] ⌘⌥[ |
 | New workspace | + on the top row, or in the Workspaces section's header |
 | Hide the task or workspace on show | ⌘⌃W, or its × on the top row. Its row in Tasks or Workspaces opens it again |
 | Close the tab and its panes | ⌘⇧W |
@@ -54,8 +54,9 @@ ottospace            # opens on the Repos list
 | Open a section | Click its icon on the rail |
 | Use it from the keyboard | ⌘⌃E (the open section, else Apps, or with it off the first), then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
 | Read the lists again | Close and open the section, or ⌘⌃E: Apps and Repos are read when they open |
-| Add something | + in the bar's header: a new task in Tasks, a new empty workspace in Workspaces, a repository in Repos (pick a folder that is one or holds some; it goes into `repos` in the settings) |
-| Stop listing a repository | Point at its name in Repos: the trash. Only for one added as itself; nothing on disk is touched. While a task works there it asks first (↵ unlists, Esc keeps it) |
+| Add something | + in the bar's header: a new task in Tasks, a new empty workspace in Workspaces, a repository in Repos (pick its folder, or one inside it; it goes at the end of `repos` in the settings) |
+| Add a repository | Repos lists only what you add: its +, "+ Add a repository" while it is empty, a folder dropped on it, or ⌘P ▸ Add Folder to Repos (the focused terminal's folder, else the tab's task's) |
+| Stop listing a repository | Point at its name in Repos: the trash. Nothing on disk is touched. While a task works there it asks first (↵ unlists, Esc keeps it). A folder of repositories from older settings is one folded group: its trash takes it off whole |
 | New worktree | Point at a repository's name in Repos: +, type a branch, ↵. It goes in `~/.ottospace/worktrees/<repo>/<branch>` (`worktrees_dir`) and opens as a terminal tab |
 | Fold a repository | Its chevron, or ← / → in list mode |
 | A worktree's pull request | Its `#number` at the row's end: muted draft, ✓ ready, amber waiting, red failing. Hover for checks, review and merge; click opens it (via `gh`, `repos_prs`) |
@@ -96,10 +97,10 @@ workspace; tabs of nothing (a dismissed task's, a client's) go to the workspace 
 | Save the tab on show | ⌘⇧S. In a workspace: into that one. Elsewhere: as a new one; type its name, ↵ |
 | Add the tab on show to one | ⌘⌃E, then `a` on its row. Or File ▸ Add Tab to Workspace… |
 | Save every tab on the bar as one | File ▸ Save All Tabs as Workspace |
-| Update a tab of it after changing it | ⌘⇧S again on that tab. Undo on the line at the top (six seconds) |
+| Update a tab of it after changing it | ⌘⇧S again on that tab. Undo on the notice bar at the foot (six seconds) |
 | Open it | Workspaces, click it. Or ⌘⌃E, ↵. Its saved tabs open in order; one already open is kept. None saved: one empty tab |
 | See, open, rename or remove one of its tabs | ▸ on its row (⌘⌃E: space), then the tab's row: click opens it; its … has Rename, Remove |
-| Rename or delete it | Point at its row: … opens a menu with Rename, Delete. Or ⌘⌃E, then `r`, `x`; `u` puts a deleted one back |
+| Rename or delete it | Point at its row: … opens a menu with Rename, Delete. Or ⌘⌃E, then `r`, `x`. Undo on the notice bar at the foot (six seconds), or `u`, puts a deleted one back |
 
 A saved tab keeps the splits, each app, and each terminal's directory, last 500 lines and the command
 running in it. Opened, a terminal shows those lines above its prompt with the command typed on
@@ -137,13 +138,13 @@ Key Counts forgets it.
 | Add a task for later | ⌘N, type a line, ⇧↵ |
 | Use the bar while writing a task | Click as usual: a rail icon or a fold leaves the box as it is; a click that goes elsewhere (a tab, a pane, a repository) puts the line aside until the next ⌘N |
 | Write a message in your editor | ⌃G in the composer or the new-task box: `$VISUAL`/`$EDITOR` opens in the drawer on the text. Save and quit puts it back (not sent; ↵ sends); quit with an error keeps it as it was. A permission card meanwhile shows under the editor: click it to answer, ⌃G back |
-| Talk to a task's agent | Click the task (or ↵ on it): its conversation shows in the drawer. Not running: Start agent, or Resume session once it ended (a click never starts one). ⌘L moves the keyboard in and out; ⌘⇧L closes the chat, or opens it again; Stop ends the agent (natively: Stop the Agent in the palette); drag its left edge to resize |
+| Talk to a task's agent | Click the task (or ↵ on it): its conversation shows in the drawer. Not running: Start agent, or Resume session once it ended (a click never starts one). ⌘L moves the keyboard in and out; ⌘⇧L closes the chat (or the drawer on a transcript), or opens it again; Stop ends the agent (natively: Stop the Agent in the palette); drag its left edge to resize |
 | Get a closed conversation back | ⌘⇧L, or click the agent chip at the right end of the tab row (the top row, with one tab): the badge and what the agent does (`Working · cargo test`, `Needs you`), amber while it needs you. A click on the selected space on the top row opens it too |
 | See what an agent is doing | The dial under a native conversation's header: its calls by station (Shell, Files, Network…, each named), lit and pulsing while one runs (larger for more at once), the centre turning while the model thinks, a red dot for a failure since your last message, the ring for the context used. Hover for counts and tokens. A click or ⌘⇧A collapses it to a marker beside the badge |
 | Chat with Claude Code in the drawer | ↵ send, ⇧↵ new line, Esc leaves; Esc Esc, or Stop at the composer's right while a turn runs, stops the turn. Once the agent ended, ↵ or Resume session (at the composer's right) goes on with its session; an ended agent says why, a stop and its resume are one thin divider, and Show details opens what its program printed. Hover a message: Copy, Copy as Markdown; a code block has its own Copy. An edit shows its diff under its call. A link opens on your click only. A permission card: `a` allow (this one request), `d` deny, `m` deny with a message, `s` show all (needed before `a` on a long one); ↵ does nothing there. `Chat \| Terminal` in the header switches to the CLI's TUI and back (`conversation_view` sets the default). The model and the folder the agent runs in are at the drawer's foot (with a mode that acts unasked: `haiku-5.5 · auto · ~/code/app`; hover it for the whole path); hover the title for mode and time |
 | Switch between running agents | Click its task on the top row, or ⌘⌃1 … ⌘⌃9 |
 | See a task's tabs | Click its row, or ⌘⇧N for the next that needs you: its space |
-| Transcribe an app pane's audio (the `transcripts` flag; macOS 26) | ⌘⌃T starts on the focused app pane, and stops it from anywhere. While on: a red dot and the time in the pane's header and on the top row (click it for the drawer's lines), with Pause and Stop. The drawer's header shows the level and says Hearing speech, Listening or No sound for 30 s. Kept as Markdown in `transcripts_dir` |
+| Transcribe an app pane's audio (the `transcripts` flag; macOS 26) | ⌘⌃T starts on the focused app pane, and stops it from anywhere. While on: a red dot and the time in the pane's header and on the top row (click either for the drawer's lines). The drawer's header shows the level and says Hearing speech, Listening or No sound for 30 s, with Stop, and ⋯ for Pause or Resume (also the palette and the menu bar's dot). Kept as Markdown in `transcripts_dir` |
 | Point at something for a task ("this message", "this error") | ⌃⌥⌘Space, from any app: the pane in use freezes as a picture and a draft opens on the right. Drag to circle, ⇧-drag a box, ⌥-drag a line, click to type a note. ↵, type what you want, ↵ starts it (⇧↵ for later). Esc leaves the picture; Esc in the title cancels the draft. The task keeps the pictures and the text under what you circled as its brief: [Capture](reference.md#capture) |
 | Capture a second pane into the same draft | While drawing, click the other pane. Or press ⌃⌥⌘Space again |
 | Give an agent a task's brief | In a terminal of the task: `ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"` |
@@ -210,7 +211,7 @@ restart, and the rest applies at once:
 ```json
 {
   "terminal": { "font": "JetBrains Mono", "font_size": 14 },
-  "repos": ["~/code", "~/notes"],
+  "repos": ["~/code/app", "~/code/web"],
   "tasks": "~/notes/tasks",
   "sessions": true,
   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
@@ -242,9 +243,11 @@ The Calendar section (second on the rail, only while `calendar_ics` is set) list
 
 `calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a band of the workday (`calendar_workday`, `"09:00-17:00"`) above the status bar, hover a block for its details (now's tick: the next meeting and when the feed was read), a pulse from 10 minutes before, and at the start, if you are in no call (or still in an earlier one), a meeting notice on the notice bar (Join, × to dismiss) and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link; `calendar_email` (your address in the feed) leaves out meetings you declined; `calendar_hide_free: true` leaves out free entries (a feed without attendees); `calendar_colors` colours by title (`[{"match": "1:1", "color": "teal"}]`). On the band calls sit in lanes over faint blocks of time held; a block that starts with `Focus` or `Deep Work` and has no call link is green.
 
-`windows` rules name windows ottospace leaves alone, by `app`, `title` and `subrole`: [reference](reference.md#settings).
+`windows` rules name windows ottospace leaves alone, by `app`, `title`, `identifier` and `subrole`: [reference](reference.md#settings).
 
-`OTTOSPACE_REPOS` (directories, `:` between them) wins over `repos`. `OTTOSPACE_HOME` names another folder than `~/.ottospace`.
+`repos`: the repositories Repos lists, in its order, none until you add one. Older settings named folders to look in: a folder of repositories there shows as one folded group (remove it, add the ones you use); `~/code` and `~/notes` are no longer looked in by default.
+
+`OTTOSPACE_REPOS` (directories, `:` between them) wins over `repos`, and lists what they hold flat. `OTTOSPACE_HOME` names another folder than `~/.ottospace`.
 
 ## Not there yet
 

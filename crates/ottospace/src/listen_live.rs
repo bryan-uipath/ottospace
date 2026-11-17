@@ -94,7 +94,7 @@ impl Live {
         let rate = f64::from(app_audio::RATE);
         let recogniser = Arc::new(Recogniser::new(None, rate, heard).ok_or("the recogniser did not start")?);
         let (into, fed) = (taken.clone(), recogniser.clone());
-        let samples = move |samples: &[f32]| {
+        let samples = move |samples: &[f32], _: Option<f64>| {
             fed.feed(samples);
             if let Ok(mut taken) = into.lock() {
                 taken.level = Some(listen_meter::rms(samples));
@@ -118,5 +118,48 @@ impl Live {
     /// The lines that came since the last look, the rest left for it.
     pub(crate) fn take_lines(&self) -> Vec<Heard> {
         self.taken.lock().map(|mut taken| std::mem::take(&mut taken.lines)).unwrap_or_default()
+    }
+}
+
+/// A test run's ear on the app `OTTOSPACE_HOST_ONLY` names (`audio_probe_start`), with no
+/// recogniser: each buffer's presentation time, length and level, to see whether an app's silence
+/// comes as buffers or as none.
+pub(crate) struct Probe {
+    buffers: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// Why the system stopped the stream, if it did.
+    failed: Arc<Mutex<Option<String>>>,
+    _audio: AppAudio,
+}
+
+impl Probe {
+    pub(crate) fn start() -> Result<Probe, String> {
+        let pid = std::env::var("OTTOSPACE_HOST_ONLY").ok().and_then(|pid| pid.parse().ok());
+        let pid = pid.ok_or("audio_probe_start hears only the app OTTOSPACE_HOST_ONLY names")?;
+        let buffers = Arc::new(Mutex::new(Vec::new()));
+        let into = buffers.clone();
+        let heard = move |samples: &[f32], at: Option<f64>| {
+            if let Ok(mut buffers) = into.lock() {
+                let pts_ms = at.map(|at| at * 1_000.);
+                let rms = listen_meter::rms(samples);
+                buffers.push(serde_json::json!({ "pts_ms": pts_ms, "samples": samples.len(), "rms": rms }));
+            }
+        };
+        let failed = Arc::new(Mutex::new(None));
+        let why = failed.clone();
+        let stopped = move |reason: String| {
+            if let Ok(mut why) = why.lock() {
+                *why = Some(reason);
+            }
+        };
+        let audio = AppAudio::start(pid, heard, stopped)?;
+        Ok(Probe { buffers, failed, _audio: audio })
+    }
+
+    /// Stops it: the buffers heard, in order, and why the system stopped it, if it did.
+    pub(crate) fn stop(self) -> (Vec<serde_json::Value>, Option<String>) {
+        let Probe { buffers, failed, _audio } = self;
+        drop(_audio);
+        let buffers = buffers.lock().map(|mut buffers| std::mem::take(&mut *buffers)).unwrap_or_default();
+        (buffers, failed.lock().ok().and_then(|mut failed| failed.take()))
     }
 }

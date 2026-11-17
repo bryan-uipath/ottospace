@@ -54,22 +54,54 @@ A small script printed the variable and tried to connect.
 
 ## Stage (a), as built (2026-11-16)
 
-- **The pass.** `crates/ottospace/src/pass.rs`: 16 bytes of `/dev/urandom`, hex, in
-  `OTTOSPACE_TASK_PASS`, minted in `start_native` and `start_agent` when the conversation is a
-  task's. Kept in the drawer's entry (`Native.pass`, `Agent.pass`), never serialized, `Debug` hidden.
-  Gone when the entry is (exit, Stop, the view switch), when a terminal agent's program ends, and on
+- **The pass.** `crates/ottospace/src/pass.rs`: 16 bytes of `/dev/urandom`, hex, minted in
+  `start_native` and `start_agent` when the conversation is a task's. Kept in the drawer's entry
+  (`Native.pass`, `Agent.pass`, a `pass::Live`), never serialized, `Debug` hidden. Gone when the
+  entry is (exit, Stop, the view switch), when a terminal agent's program ends, and on
   `move_agent` (minted for one subject only); a native agent's as soon as its process is reaped,
   before its stdout ends. Compared in constant time against every live pass. The app drops a pass
-  it inherited itself (a dev build started from an agent's shell).
-- **Not hidden from the agent's own output.** An agent that runs `env` puts its pass in its
-  session file and, in the terminal view, on its screen: the state's `drawer.agents.<task>.lines`,
-  which any client reads (the native transcript in the state keeps no tool output). Harmless while
-  (a) grants nothing; (b) must either drop each live pass from those lines (`secrets::token` does
-  not catch lowercase hex) or not rest on the pass alone.
+  variable it inherited itself (a dev build started from an agent's shell).
+- **A path in the environment, not the pass (before (b)).** The agent's environment holds
+  `OTTOSPACE_TASK_PASS_FILE`: the path of a file that holds the pass, 0600 (created new, never
+  through a link), in a 0700 folder beside the control socket (`<socket>.passes`: in a test run,
+  the test's own folder), one file per process, removed when the pass is dropped, the folder
+  emptied at start and removed at quit. The folder is opened once (`O_NOFOLLOW | O_DIRECTORY`)
+  and used only if `fstat` says it is ours and 0700 (a mint `fchmod`s ours back to 0700, or one it cannot open with `fchmodat`, no follow; a sweep
+  leaves any other mode alone); then everything goes through that fd: files
+  made with `openat`, listed from it, and only regular files (`fstatat`, no follow) removed with
+  `unlinkat`, then `rmdir`. A folder or entry swapped for a link between check and use removes
+  nothing elsewhere. `ottospace ctl` and the SDK read it. An agent that runs
+  `env` prints a path, which grants nothing a same-user process could not read already: the file
+  is readable by the same user, as another process's environment is (`ps -E`). That is the
+  accepted boundary (section 2's honest limit); another user reads neither. A file gone (its agent
+  ended): the client sends a pass never minted (all zeros, refused at mint), so a dead agent's child
+  is refused as a dead pass, never taken for a caller with none. Chosen over an inherited
+  descriptor: whether Claude Code's and Codex's tool shells keep an extra descriptor is not probed,
+  while both keep the environment (verified).
+- **Hidden from what clients read, as defence in depth.** An agent that prints the file puts the
+  pass on its screen: the state's `drawer.agents.<task>.lines`. Each live pass reads `[hidden]`, in
+  either case: in every terminal's `lines` and `text` (so `capture`, `wait`'s match, a saved
+  history), in every socket reply as a last step (session reads, transcripts, errors), and in the
+  trace. Only whole passes are matched: hiding a part would be an oracle (a client types a guess
+  into a terminal and reads whether it was hidden, a digit at a time). So a terminal searches its
+  rows as one text, each row's edges left out: spaces and box borders, U+2500 to U+257F (a pass
+  wrapped, broken by the program's own line breaks or cursor moves, on the alternate screen, in an
+  approval prompt's box), with the lines the screen's edges cut and
+  rows past each edge until they hold 32 characters other than spaces and box borders, plus one (a narrow pane,
+  or a TUI's indent, uses few columns a row; at most 256 rows); and the
+  first row of a full history (10,000 lines: what was dropped above may have cut a pass), while a pass is live, loses a
+  leading run of 8 or more hex digits whatever they are (its indent left out, going on over rows
+  the run fills), a rule no digit of a pass decides. A
+  `wait` cannot match a pass. Not hidden: a terminal's picture (a user-started capture's PNG), the
+  user's own ⌘C, a pass printed in pieces, the head of one whose output is still arriving
+  (between two reads of the pty, for milliseconds), and the rest of one whose head the terminal
+  dropped other than from a full history (scrolled off the alternate screen or a scroll region,
+  erased, overwritten). A pass's only use is which task `task_brief` answers for when the request
+  names none, which any client can ask by id: hiding is defence in depth, not the boundary. A dead pass shows again: it grants nothing.
 - **On the wire.** A top-level `"pass"` on any request line, taken off before `Request` is parsed
   (`control::parse`): the closed set is unchanged; a line with no pass parses from its text, as
   before. Not 32 hex digits: an error that does not repeat
-  it. `ottospace ctl` and the SDK attach `$OTTOSPACE_TASK_PASS` to every request.
+  it. `ottospace ctl` and the SDK attach the pass of `$OTTOSPACE_TASK_PASS_FILE` to every request.
 - **The rule, in the core.** `Model::brief_task(id, Caller, tab)`: the id named, else the caller's
   task, else as before (tab, on show, drawer). `Caller::Unknown` (a wrong or dead pass) gets an
   error, never the task on show. No new `Action`: the core never sees a pass.

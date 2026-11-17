@@ -302,7 +302,10 @@ impl Workspace {
         }
         let (kind, name) = id.split_once(':').unwrap_or((id, ""));
         let number = name.parse::<u32>().ok();
-        if self.activate_drawer(kind, name, window, cx) || self.click_listen(kind, name, window, cx) {
+        if self.activate_drawer(kind, name, window, cx)
+            || self.click_listen(kind, name, window, cx)
+            || self.click_drawer_rail(kind, name, window, cx)
+        {
             return;
         }
         let action = match (kind, name) {
@@ -316,11 +319,20 @@ impl Workspace {
                 self.dismiss_notice(window, cx);
                 None
             }
-            ("notice", "offer") => self.notice_shown().and_then(|shown| self.notice_offer(&shown)).map(|(_, a)| a),
+            ("notice", "offer") => {
+                if let Some((drawn, _)) = self.notice_shown().and_then(|shown| self.notice_offer(&shown)) {
+                    self.take_notice_offer(drawn, window, cx);
+                }
+                None
+            }
             ("bar", "add") => {
                 if let Some(section) = self.model.sidebar {
                     self.bar_add(section, window, cx);
                 }
+                None
+            }
+            ("repos-empty", "add") => {
+                self.bar_add(ottospace_core::Section::Repos, window, cx);
                 None
             }
             ("repo-remove", _) => {
@@ -426,10 +438,6 @@ impl Workspace {
             }
             ("row-menu", _) => {
                 self.click_row_menu(name, window, cx);
-                None
-            }
-            ("workbook-undo", _) => {
-                self.undo_workbook(window, cx);
                 None
             }
             ("top", "fill") => Some(Action::FillDisplay),

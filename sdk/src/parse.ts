@@ -12,6 +12,7 @@ import type {
   Feature,
   Listen,
   ListenLine,
+  Slot,
   CalendarReply,
   Meeting,
   TimeSpan,
@@ -55,6 +56,7 @@ import type {
   Work,
   Focus,
   RailFocus,
+  RailItem,
   Home,
   Glyph,
   HomeDrawn,
@@ -67,6 +69,8 @@ import type {
   MarkReply,
   MarksReply,
   RecordReply,
+  ProbeBuffer,
+  AudioProbeReply,
   TraceReply,
   Workbook,
   WorkbookPane,
@@ -227,12 +231,33 @@ function focus(value: unknown, at: string): Focus {
   const o = fields(value, at);
   if (o.pane !== undefined) return { pane: num(o.pane, `${at}.pane`) };
   if (o.list !== undefined) return { list: num(o.list, `${at}.list`) };
+  if (o.drawer_rail !== undefined) return { drawer_rail: railItem(o.drawer_rail, `${at}.drawer_rail`) };
   return { rail: section(o.rail, `${at}.rail`) };
+}
+
+function railItem(value: unknown, at: string): RailItem {
+  const o = fields(value, at);
+  if (o.kind === "transcript") return { kind: "transcript" };
+  if (o.kind === "task") return { kind: "task", id: num(o.id, `${at}.id`) };
+  throw wrong(`${at}.kind`, "transcript or task", o.kind);
 }
 
 function railFocus(value: unknown, at: string): RailFocus {
   const o = fields(value, at);
+  if (o.right !== undefined) return { right: railItem(o.right, `${at}.right`) };
   return { left: section(o.left, `${at}.left`) };
+}
+
+function railRow(value: unknown, at: string): Snapshot["drawer"]["rail"][number] {
+  const o = fields(value, at);
+  const kind = o.kind;
+  if (kind !== "transcript" && kind !== "task") throw wrong(`${at}.kind`, "transcript or task", kind);
+  return {
+    kind,
+    id: orNull(num)(o.id, `${at}.id`),
+    selected: bool(o.selected, `${at}.selected`),
+    rect: orNull(rect)(o.rect, `${at}.rect`),
+  };
 }
 
 function heading(value: unknown, at: string): Heading {
@@ -381,6 +406,11 @@ function paneKind(value: unknown, at: string): PaneKind {
     // An app with no bundle (a bare binary) has no `bundle`.
     if (o.bundle !== undefined) app.bundle = str(o.bundle, `${at}.bundle`);
     return app;
+  }
+  if (o.type === "slot") {
+    const slot: PaneKind = { type: "slot", name: str(o.name, `${at}.name`) };
+    if (o.bundle !== undefined) slot.bundle = str(o.bundle, `${at}.bundle`);
+    return slot;
   }
   throw wrong(`${at}.type`, "a pane kind", o.type);
 }
@@ -731,7 +761,6 @@ function spaceRow(value: unknown, at: string): SpaceRow {
     tabs: list(num)(o.tabs, `${at}.tabs`),
     tasks: list(num)(o.tasks, `${at}.tasks`),
     front: orNull(num)(o.front, `${at}.front`),
-    strip: list(num)(o.strip, `${at}.strip`),
     worktree: orNull(str)(o.worktree, `${at}.worktree`),
     glyph: glyph(o.glyph, `${at}.glyph`),
   };
@@ -890,6 +919,7 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
   };
   return {
     body: orNull(rect)(o.body, `${at}.body`),
+    rail: list(railRow)(o.rail, `${at}.rail`),
     width: num(o.width, `${at}.width`),
     agents: map(agent)(o.agents, `${at}.agents`),
     native: native(o.native, `${at}.native`),
@@ -942,6 +972,7 @@ function reposGroup(value: unknown, at: string): ReposGroup {
   return {
     name: str(o.name, `${at}.name`),
     path: str(o.path, `${at}.path`),
+    group: orNull(str)(o.group, `${at}.group`),
     header: orNull(rect)(o.header, `${at}.header`),
     folded: bool(o.folded, `${at}.folded`),
     rows: list(checkoutRow)(o.rows, `${at}.rows`),
@@ -1027,7 +1058,7 @@ function repoDirs(value: unknown, at: string): RepoDirs {
   const o = fields(value, at);
   const dir = (value: unknown, at: string) => {
     const d = fields(value, at);
-    return { text: str(d.text, `${at}.text`), path: str(d.path, `${at}.path`) };
+    return { text: str(d.text, `${at}.text`), path: str(d.path, `${at}.path`), pinned: bool(d.pinned, `${at}.pinned`) };
   };
   return { dirs: list(dir)(o.dirs, `${at}.dirs`), fixed: bool(o.fixed, `${at}.fixed`) };
 }
@@ -1087,7 +1118,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 }
 
 function feature(value: unknown, at: string): Feature {
-  if (value === "marks" || value === "apps_section" || value === "transcripts") return value;
+  if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots") return value;
   throw wrong(at, "a feature", value);
 }
 
@@ -1300,12 +1331,15 @@ function rowMenu(value: unknown, at: string): RowMenu {
   const item = (value: unknown, at: string): RowMenu["items"][number] => {
     const i = fields(value, at);
     const kind = i.item;
-    if (kind !== "rename" && kind !== "delete" && kind !== "remove") throw wrong(`${at}.item`, "a menu item", kind);
-    return { item: kind, label: str(i.label, `${at}.label`), rect: orNull(rect)(i.rect, `${at}.rect`) };
+    const kinds = ["rename", "delete", "remove", "pause", "resume"] as const;
+    const known = kinds.find((k) => k === kind);
+    if (known === undefined) throw wrong(`${at}.item`, "a menu item", kind);
+    return { item: known, label: str(i.label, `${at}.label`), rect: orNull(rect)(i.rect, `${at}.rect`) };
   };
   return {
     workbook: orNull(num)(o.workbook, `${at}.workbook`),
     tab: orNull(num)(o.tab, `${at}.tab`),
+    transcript: bool(o.transcript, `${at}.transcript`),
     selected: orNull(num)(o.selected, `${at}.selected`),
     items: list(item)(o.items, `${at}.items`),
   };
@@ -1332,6 +1366,7 @@ function model(value: unknown, at: string): Model {
     rail_focus: orNull(railFocus)(o.rail_focus, `${at}.rail_focus`),
     repos: list(repo)(o.repos, `${at}.repos`),
     repo_dirs: repoDirs(o.repo_dirs, `${at}.repo_dirs`),
+    repos_open: list(str)(o.repos_open, `${at}.repos_open`),
     tasks: { list: list(task)(fields(o.tasks, `${at}.tasks`).list, `${at}.tasks.list`) },
     collapsed: list(heading)(o.collapsed, `${at}.collapsed`),
     tasks_view: tasksView(o.tasks_view, `${at}.tasks_view`),
@@ -1355,6 +1390,16 @@ function model(value: unknown, at: string): Model {
     agents: list(subject)(o.agents, `${at}.agents`),
     features: list(feature)(o.features, `${at}.features`),
     listen: orNull(listen)(o.listen, `${at}.listen`),
+    slots: map(slot)(o.slots, `${at}.slots`),
+  };
+}
+
+function slot(value: unknown, at: string): Slot {
+  const o = fields(value, at);
+  return {
+    status: oneOf(["absent", "empty", "offered", "filled", "away"] as const, "a slot's status")(o.status, `${at}.status`),
+    matches: num(o.matches, `${at}.matches`),
+    matching: oneOf(["manual", "automatic"] as const, "a slot's matching")(o.matching, `${at}.matching`),
   };
 }
 
@@ -1773,6 +1818,20 @@ export function traceReply(value: unknown): TraceReply {
 
 export function recordReply(value: unknown): RecordReply {
   return { ok: true, frames: num(fields(value, "reply").frames, "frames") };
+}
+
+function probeBuffer(value: unknown, at: string): ProbeBuffer {
+  const o = fields(value, at);
+  return {
+    pts_ms: orNull(num)(o.pts_ms, `${at}.pts_ms`),
+    samples: num(o.samples, `${at}.samples`),
+    rms: num(o.rms, `${at}.rms`),
+  };
+}
+
+export function audioProbeReply(value: unknown): AudioProbeReply {
+  const o = fields(value, "reply");
+  return { ok: true, buffers: list(probeBuffer)(o.buffers, "buffers"), failed: orNull(str)(o.failed, "failed") };
 }
 
 function scrollbar(value: unknown, at: string): Scrollbar {

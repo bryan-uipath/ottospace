@@ -888,6 +888,13 @@ mod tests {
         let kept = write(&m.layout_file(&[], &[(1, history)], 500));
         assert!(kept.contains("TOKEN-ish") && kept.contains("npm run dev"));
         assert!(!kept.contains("alice") && kept.contains("com.slack"));
+        // The exception: a slot's pattern, the user's own, cut down from the title (slots.md §4).
+        let mut m = m;
+        let pane = m.panes.iter().find(|p| matches!(p.kind, Kind::App { .. })).map(|p| p.id).unwrap_or_default();
+        let select = crate::rules::Selector { title: Some("*the plan*".into()), ..Default::default() };
+        m.update(Action::SlotMake { pane, pid: 1, slot: crate::slot::Slot { select, ..Default::default() } });
+        let slot = write(&m.layout_file(&[], &[], 0));
+        assert!(slot.contains("*the plan*") && !slot.contains("alice"), "{slot}");
     }
 
     #[test]

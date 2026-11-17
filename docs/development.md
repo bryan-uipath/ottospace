@@ -182,7 +182,7 @@ answers in a test run only. Made-up content only.
 - The Rust build cache: the `e2e` job of `ci.yml` saves one, on `main` only; `app-windows.yml`,
   `shots.yml` and `reliability.yml` read it (`shared-key: e2e`) and save none. `check` and
   `build` keep their own.
-- `.github/workflows/shots.yml`, on pull requests that change the app's or core's sources or the
+- `.github/workflows/shots.yml`, on pull requests that change the app's, core's or mac crate's sources or the
   scenarios: before and after pictures, an artifact (see "Screenshots and recordings").
 - `.github/workflows/release.yml`, on a `v*` tag: the GitHub Release.
 - `.github/workflows/pages.yml`, on pushes to `main` that change `site/`: deploys `site/` to

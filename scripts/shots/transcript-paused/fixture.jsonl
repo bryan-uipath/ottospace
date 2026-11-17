@@ -1,0 +1,9 @@
+{"after_ms":200,"from":"them","text":"Morning everyone, let's start","final":false}
+{"after_ms":200,"from":"them","text":"Morning everyone, let's start with the release.","final":true}
+{"after_ms":200,"from":"me","text":"The build is green since yesterday.","final":true}
+{"after_ms":200,"from":"them","text":"Great. Any open questions on the docs?","final":true}
+{"after_ms":200,"from":"me","text":"Two pages left, done by Friday.","final":true}
+{"after_ms":200,"from":"them","text":"Sounds good. Next item is the","final":false}
+{"after_ms":200,"from":"them","text":"Sounds good. Next item is the demo.","final":true}
+{"after_ms":200,"from":"them","text":"Who wants to","final":false}
+{"after_ms":600000,"from":"them","text":"never heard in the picture","final":true}

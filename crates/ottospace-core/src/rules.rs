@@ -1,8 +1,8 @@
 //! Window rules: which windows of other apps ottospace leaves alone. A rule is a selector over a
 //! few facts of a window, and what to do with a window it selects. The settings file holds the
-//! user's rules; the scripting SDK will use the same selectors.
+//! user's rules; slots (`docs/ai/slots.md`) use the same selector.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// What is known of a window when it is first seen.
 #[derive(Clone, Copy, Debug)]
@@ -15,22 +15,69 @@ pub struct Facts<'a> {
     pub title: &'a str,
     /// The accessibility subrole: `AXStandardWindow`, `AXSystemDialog`, ...
     pub subrole: &'a str,
+    /// The app's own name for the window (`AXIdentifier`), if it gives one: Zoom's main meeting
+    /// window is `zm.meeting.window.main`; its share viewer, of the same title, has none.
+    pub identifier: Option<&'a str>,
 }
 
-/// `{ "app": "us.zoom.xos", "title": "zoom share*", "do": "ignore" }`. Every field given must
-/// match. `*` stands for any run of characters; letters match whatever their case.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+/// Which windows: `{ "app": "us.zoom.xos", "identifier": "zm.meeting.window.main" }`. Every
+/// field given must match; none given selects every window. Each is a `glob`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Rule {
+pub struct Selector {
     /// The app's name or its bundle id.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    #[serde(default)]
+    /// A window with no identifier has empty text here: only a pattern such as `*` matches it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subrole: Option<String>,
-    #[serde(rename = "do")]
+}
+
+impl Selector {
+    pub fn selects(&self, window: &Facts) -> bool {
+        let app = |pattern: &String| glob(pattern, window.app) || window.bundle.is_some_and(|b| glob(pattern, b));
+        let field = |pattern: &Option<String>, text: &str| pattern.as_ref().is_none_or(|p| glob(p, text));
+        self.app.as_ref().is_none_or(app)
+            && field(&self.title, window.title)
+            && field(&self.identifier, window.identifier.unwrap_or_default())
+            && field(&self.subrole, window.subrole)
+    }
+}
+
+/// `{ "app": "us.zoom.xos", "title": "zoom share*", "do": "ignore" }`: a selector's fields beside
+/// what to do. `*` stands for any run of characters; letters match whatever their case.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(from = "RuleFields")]
+pub struct Rule {
+    pub select: Selector,
     pub action: Action,
+}
+
+/// A rule as written. Its own struct, not `#[serde(flatten)]`, which serde refuses beside
+/// `deny_unknown_fields`: a misspelt key must stay an error.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, expecting = "struct Rule")]
+struct RuleFields {
+    #[serde(default)]
+    app: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    identifier: Option<String>,
+    #[serde(default)]
+    subrole: Option<String>,
+    #[serde(rename = "do")]
+    action: Action,
+}
+
+impl From<RuleFields> for Rule {
+    fn from(RuleFields { app, title, identifier, subrole, action }: RuleFields) -> Self {
+        Rule { select: Selector { app, title, identifier, subrole }, action }
+    }
 }
 
 /// What a rule does with a window it selects.
@@ -43,21 +90,12 @@ pub enum Action {
     Manage,
 }
 
-impl Rule {
-    pub fn selects(&self, window: &Facts) -> bool {
-        let app = |pattern: &String| glob(pattern, window.app) || window.bundle.is_some_and(|b| glob(pattern, b));
-        self.app.as_ref().is_none_or(app)
-            && self.title.as_ref().is_none_or(|pattern| glob(pattern, window.title))
-            && self.subrole.as_ref().is_none_or(|pattern| glob(pattern, window.subrole))
-    }
-}
-
 /// True if ottospace may put this window in a pane. The first rule that selects the window
 /// decides, the user's rules before the built-in ones. With no rule: only a standard window,
 /// which leaves out panels, pop-ups and an app's floating controls.
 pub fn manages(user: &[Rule], window: &Facts) -> bool {
     let built_in = built_in();
-    match user.iter().chain(&built_in).find(|rule| rule.selects(window)) {
+    match user.iter().chain(&built_in).find(|rule| rule.select.selects(window)) {
         Some(rule) => rule.action == Action::Manage && window.subrole == "AXStandardWindow",
         None => window.subrole == "AXStandardWindow",
     }
@@ -67,9 +105,7 @@ pub fn manages(user: &[Rule], window: &Facts) -> bool {
 /// `docs/ai/1-initial-brainstorm/zoom-ax.md`.
 pub fn built_in() -> Vec<Rule> {
     let zoom = |title: &str| Rule {
-        app: Some("us.zoom.xos".into()),
-        title: Some(title.into()),
-        subrole: None,
+        select: Selector { app: Some("us.zoom.xos".into()), title: Some(title.into()), ..Selector::default() },
         action: Action::Ignore,
     };
     // Zoom's floating controls while sharing, its annotation layer, and its pop-ups.
@@ -110,7 +146,7 @@ mod tests {
     use super::*;
 
     fn zoom<'a>(title: &'a str, subrole: &'a str) -> Facts<'a> {
-        Facts { app: "zoom.us", bundle: Some("us.zoom.xos"), title, subrole }
+        Facts { app: "zoom.us", bundle: Some("us.zoom.xos"), title, subrole, identifier: None }
     }
 
     #[test]
@@ -123,8 +159,13 @@ mod tests {
 
     #[test]
     fn with_no_rule_only_standard_windows_are_managed() {
-        let other =
-            Facts { app: "Safari", bundle: Some("com.apple.Safari"), title: "Start Page", subrole: "AXStandardWindow" };
+        let other = Facts {
+            app: "Safari",
+            bundle: Some("com.apple.Safari"),
+            title: "Start Page",
+            subrole: "AXStandardWindow",
+            identifier: None,
+        };
         assert!(manages(&[], &other));
         assert!(!manages(&[], &Facts { subrole: "AXDialog", ..other }));
     }
@@ -157,6 +198,43 @@ mod tests {
         // A rule with no selector selects every window. A misspelt key is refused.
         assert!(!manages(&[rule(r#"{"do": "ignore"}"#)], &zoom("Zoom Meeting", "AXStandardWindow")));
         assert!(serde_json::from_str::<Rule>(r#"{"ap": "zoom.us", "do": "ignore"}"#).is_err());
+        // The settings' notice names a rule, not the struct it is read through.
+        assert!(serde_json::from_str::<Rule>("5").unwrap_err().to_string().contains("expected struct Rule at"));
         assert!(serde_json::from_str::<Rule>(r#"{"app": "zoom.us"}"#).is_err(), "a rule must say what to do");
+    }
+
+    #[test]
+    fn an_identifier_tells_windows_of_one_title_apart() {
+        // zoom-ax.md: the main meeting window and the share viewer share a title.
+        let main = Facts { identifier: Some("zm.meeting.window.main"), ..zoom("Zoom Meeting", "AXStandardWindow") };
+        let viewer = zoom("Zoom Meeting", "AXStandardWindow");
+        let select = |text: &str| serde_json::from_str::<Selector>(text).unwrap();
+        let by_id = select(r#"{"app": "us.zoom.xos", "identifier": "zm.meeting.window.main"}"#);
+        assert!(by_id.selects(&main) && !by_id.selects(&viewer));
+        // The same glob as every field: `*x*` contains, letters in either case.
+        assert!(select(r#"{"identifier": "*MEETING*"}"#).selects(&main));
+        // No identifier is empty text: `""` and `*` match it, a name does not.
+        assert!(select(r#"{"identifier": ""}"#).selects(&viewer) && !select(r#"{"identifier": ""}"#).selects(&main));
+        assert!(
+            select(r#"{"identifier": "*"}"#).selects(&viewer) && !select(r#"{"identifier": "x"}"#).selects(&viewer)
+        );
+        // Title and identifier together: both must match. No field: every window.
+        assert!(!select(r#"{"title": "Zoom Workplace", "identifier": "zm.*"}"#).selects(&main));
+        assert!(select("{}").selects(&main) && select("{}").selects(&viewer));
+        assert!(serde_json::from_str::<Selector>(r#"{"identifer": "x"}"#).is_err(), "a misspelt key is refused");
+        // Written back without the fields not given.
+        let written = serde_json::to_string(&by_id).unwrap();
+        assert_eq!(written, r#"{"app":"us.zoom.xos","identifier":"zm.meeting.window.main"}"#);
+    }
+
+    #[test]
+    fn a_rule_can_ignore_a_window_by_identifier() {
+        let text = r#"{"app": "zoom.us", "identifier": "zm.meeting.window.main", "do": "ignore"}"#;
+        let rule = serde_json::from_str::<Rule>(text).unwrap();
+        let main = Facts { identifier: Some("zm.meeting.window.main"), ..zoom("Zoom Meeting", "AXStandardWindow") };
+        assert!(!manages(std::slice::from_ref(&rule), &main));
+        assert!(manages(&[rule], &zoom("Zoom Meeting", "AXStandardWindow")));
+        // The fields sit beside `do`, not under a key of their own.
+        assert!(serde_json::from_str::<Rule>(r#"{"select": {}, "do": "ignore"}"#).is_err());
     }
 }

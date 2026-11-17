@@ -15,10 +15,11 @@ use crate::ics::Show;
 use crate::layout_file;
 use crate::listen::Heard;
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
+use crate::model::rail::RailItem;
 use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
+use crate::row_menu::MenuOf;
 use crate::sessions::{Link, Seen};
-use crate::settings::ListChange;
 use crate::sneak_apps;
 use crate::transcript::{Event as Said, Outcome, Text, View};
 use crate::workbook::{self, History, Workbook, WorkbookId};
@@ -41,6 +42,8 @@ const SESSIONS: &[&str] = &["s1", "s2", "s3", "8f14e45f-ceea-467f-a8d3-0242ac130
 const SAVED: &str = "SAVEDHISTORY";
 /// What a transcript heard: never in the state.
 const HEARD: &str = "HEARDWORDS";
+/// In every title and identifier a slot's look found: never in the state.
+const SLOT_SEEN: &str = "SLOTSEEN";
 const LISTEN_IDS: &[&str] = &["t1", "t2", ""];
 const CONTROLS: &[&str] = &["rail:apps", "pane:1", "close:1", "tab:1", "tab-close:1", "mark-remove:1", "c0", "c1"];
 
@@ -64,6 +67,71 @@ impl Gen<'_> {
     fn pane(&mut self) -> PaneId {
         let real: Vec<PaneId> = self.m.panes.iter().map(|p| p.id).collect();
         self.one_of(&real, Self::stray)
+    }
+
+    /// A slot pane half the time, if there is one.
+    fn slot_pane(&mut self) -> PaneId {
+        let real: Vec<PaneId> = self.m.slots.keys().copied().collect();
+        self.one_of(&real, Self::pane)
+    }
+
+    /// What a slot asks for: by title, by identifier, by both or neither, each pick.
+    fn slot(&mut self) -> crate::slot::Slot {
+        use crate::slot::{Matching, Pick};
+        let title = self.rng.maybe(|rng| rng.pick(&["*w1", "*", "*general*", "other"]).to_string());
+        let identifier = self.rng.maybe(|rng| rng.pick(&["*.main", "*", ""]).to_string());
+        let select = crate::rules::Selector { title, identifier, ..Default::default() };
+        let pick = self.rng.pick(&[Pick::Any, Pick::Largest, Pick::Smallest, Pick::Display(1), Pick::Display(2)]);
+        let matching = self.rng.pick(&[Matching::Manual, Matching::Automatic]);
+        crate::slot::Slot { select, pick, matching, ..Default::default() }
+    }
+
+    /// What a look at one app found: a few windows, their ids those panes hold too.
+    fn look(&mut self) -> crate::slot::Look {
+        // Of a slot's app half the time, if there is a slot.
+        let apps: Vec<(Option<String>, String)> =
+            self.m.slots.values().map(|run| (run.bundle.clone(), run.name.clone())).collect();
+        let (bundle, name) = self
+            .one_of(&apps, |g| (g.rng.maybe(|rng| rng.pick(&["com.slack", "com.safari"]).to_string()), g.name(APPS)));
+        let windows: Vec<crate::slot::Seen> = (0..self.rng.below(4)).map(|_| self.seen()).collect();
+        let displays = vec![Frame::new(0., 0., 1920., 1080.), Frame::new(1920., 0., 1920., 1080.)];
+        // Often one of its own windows: the one the user is in.
+        let ids: Vec<u32> = windows.iter().map(|seen| seen.window).collect();
+        let frontmost = self.rng.maybe(|rng| if ids.is_empty() { rng.below(5) as u32 } else { rng.pick(&ids) });
+        crate::slot::Look { bundle, name, running: !self.rng.one_in(6), windows, displays, frontmost }
+    }
+
+    /// A window a look found: some that panes hold (theirs are 0 to 4), some none does.
+    fn seen(&mut self) -> crate::slot::Seen {
+        let frame = self.rng.pick(&[Frame::new(0., 0., 800., 600.), Frame::new(2000., 0., 400., 300.)]);
+        crate::slot::Seen {
+            pid: self.rng.below(3) as i32,
+            window: self.rng.pick(&[1, 2, 10, 11, 12]),
+            title: format!("{SLOT_SEEN} {}", self.name(&["w1", "general"])),
+            identifier: self.rng.maybe(|rng| rng.pick(&["slotseen.main", "slotseen.other"]).to_string()),
+            subrole: self.rng.pick(&["AXStandardWindow", "AXStandardWindow", "AXDialog"]).into(),
+            frame,
+        }
+    }
+
+    /// A new window the shell adopts, of a slot's app half the time, with its facts.
+    fn adopt(&mut self) -> Action {
+        let apps: Vec<(Option<String>, String)> =
+            self.m.slots.values().map(|run| (run.bundle.clone(), run.name.clone())).collect();
+        let (bundle, name) = self.one_of(&apps, |g| (None, g.name(APPS)));
+        let seen = self.seen();
+        let kind = Kind::App { window: seen.window, title: seen.title.clone(), bundle, name };
+        Action::Adopt { kind, beside: self.rng.coin().then(|| self.pane()), seen: Some(seen) }
+    }
+
+    /// What the shell says it hosted: the window a slot asked for half the time.
+    fn slot_hosted(&mut self) -> Action {
+        let asked: Vec<(PaneId, u32)> = self.m.slots.iter().filter_map(|(id, run)| Some((*id, run.pending?))).collect();
+        let (pane, window) = self.one_of(&asked, |g| (g.pane(), g.rng.below(5) as u32));
+        let run = self.m.slots.get(&pane);
+        let (bundle, name) = run.map(|run| (run.bundle.clone(), run.name.clone())).unwrap_or_default();
+        let kind = Kind::App { window, title: format!("{SLOT_SEEN} w1"), bundle, name };
+        Action::SlotHosted { pane, kind: (!self.rng.one_in(5)).then_some(kind) }
     }
 
     /// How much a clipboard holds: nothing, a word, lines, a command that would run.
@@ -112,12 +180,13 @@ impl Gen<'_> {
         }
     }
 
-    /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not.
-    fn menu_row(&mut self) -> ListRow {
-        match self.rng.below(4) {
-            0 => ListRow::Task(self.task()),
-            1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)),
-            _ => ListRow::Workbook(self.workbook()),
+    /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not; or the transcript's header.
+    fn menu_row(&mut self) -> MenuOf {
+        match self.rng.below(5) {
+            0 => ListRow::Task(self.task()).into(),
+            1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)).into(),
+            2 => MenuOf::Transcript,
+            _ => ListRow::Workbook(self.workbook()).into(),
         }
     }
 
@@ -135,6 +204,11 @@ impl Gen<'_> {
     fn task(&mut self) -> TaskId {
         let real: Vec<TaskId> = self.m.tasks.list.iter().map(|t| t.id).collect();
         self.one_of(&real, Self::stray)
+    }
+
+    /// An item of the drawer's rail: the transcript, or a task (on the rail or not).
+    fn rail_item(&mut self) -> RailItem {
+        if self.rng.below(3) == 0 { RailItem::Transcript } else { RailItem::Task { id: self.task() } }
     }
 
     /// A runner's event: turns, text, calls, requests (cut or not) and their end, an exit.
@@ -339,8 +413,10 @@ impl Gen<'_> {
     }
 
     fn repo_dirs(&mut self) -> RepoDirs {
-        let dir = |g: &mut Self| g.name(DIRS);
-        let dirs = (0..self.rng.below(3)).map(|_| dir(self)).map(|path| RepoDir { text: path.clone(), path }).collect();
+        // `/code`: a folder of repositories, from the old settings: a group.
+        let dir = |g: &mut Self| if g.rng.one_in(4) { "/code".to_string() } else { g.name(DIRS) };
+        let entry = |g: &mut Self| RepoDir { pinned: g.rng.one_in(3), ..RepoDir::new(&dir(g), "") };
+        let dirs = (0..self.rng.below(4)).map(|_| entry(self)).map(|d| RepoDir { path: d.text.clone(), ..d }).collect();
         RepoDirs { dirs, fixed: self.rng.below(4) == 0, worktrees: self.rng.coin().then(|| "/w".into()) }
     }
 
@@ -709,7 +785,7 @@ type Make = fn(&mut Gen) -> Action;
 const MAKERS: &[Make] = &[
     |g| Action::Split { axis: g.axis(), kind: g.kind() },
     |g| Action::Open { kind: g.kind(), axis: g.axis(), beside: g.rng.coin().then(|| g.pane()) },
-    |g| Action::Adopt { kind: g.kind(), beside: g.rng.coin().then(|| g.pane()) },
+    |g| Action::Adopt { kind: g.kind(), beside: g.rng.coin().then(|| g.pane()), seen: None },
     |g| Action::Close { pane: g.rng.coin().then(|| g.pane()) },
     |g| Action::Focus { pane: g.pane() },
     |g| Action::FocusDir { dir: g.dir() },
@@ -799,9 +875,21 @@ const MAKERS: &[Make] = &[
     |_| Action::KeysKnown,
     |g| {
         use crate::notice::Kind::*;
-        let kinds =
-            [Failed, Refused, Unsaved, Told, SettingsProblem, SettingsRetired, SettingsRestart, Start, Keys, Meeting];
-        let said = g.m.settings_line().filter(|_| g.rng.coin());
+        let kinds = [
+            Failed,
+            Refused,
+            Unsaved,
+            Told,
+            SettingsProblem,
+            SettingsRetired,
+            SettingsRestart,
+            Start,
+            Keys,
+            Meeting,
+            Undo,
+        ];
+        let offered = g.m.workbooks.notice().map(|notice| notice.text);
+        let said = g.m.settings_line().or(offered).filter(|_| g.rng.coin());
         Action::NoticeDismiss { notice: g.rng.pick(&kinds), text: said.unwrap_or_else(|| g.text()) }
     },
     |g| {
@@ -884,6 +972,7 @@ const MAKERS: &[Make] = &[
     |g| Action::SpaceCycle { delta: g.delta() },
     |g| Action::TalkFront { task: g.task() },
     |g| Action::TalkCycle { delta: g.delta() },
+    |g| Action::RailSelect { item: g.rail_item() },
     |g| Action::SpaceHide { index: g.rng.coin().then(|| g.index(g.m.shown_spaces().len())) },
     |g| Action::SpaceOpen { space: g.owner() },
     |g| Action::SelectVisibleTab { index: g.index(g.m.tabs.len()) },
@@ -1314,11 +1403,40 @@ const MAKERS: &[Make] = &[
         why: g.rng.pick(&[crate::listen::Ended::AppQuit, crate::listen::Ended::StreamFailed]),
         at: g.time(),
     },
+    SLOT_MAKERS[0],
+    SLOT_MAKERS[1],
+    SLOT_MAKERS[2],
+    SLOT_MAKERS[3],
+    SLOT_MAKERS[4],
+    SLOT_MAKERS[5],
+    SLOT_MAKERS[6],
+    SLOT_MAKERS[7],
+    SLOT_MAKERS[8],
+    SLOT_MAKERS[9],
+    SLOT_MAKERS[10],
     // Random flags: what a feature turned off shows goes, and its actions do nothing (`Run::step`).
     |g| {
         let on: Vec<&str> = features::ALL.into_iter().filter(|_| g.rng.coin()).map(Feature::name).collect();
         set_features(&on)
     },
+];
+
+/// A slot's actions, also picked one time in 8 while there is a slot: among all the others, the
+/// chain from a look to an offer to a fill would hardly ever be met.
+const SLOT_MAKERS: [Make; 12] = [
+    |g| Action::SlotMake { pane: g.pane(), pid: g.rng.below(3) as i32, slot: g.slot() },
+    |g| Action::SlotClear { pane: g.slot_pane() },
+    |g| Action::SlotAccept { pane: g.slot_pane() },
+    |g| Action::SlotDecline { pane: g.slot_pane() },
+    |g| Action::SlotNext { pane: g.slot_pane() },
+    |g| Action::SlotLookAgain { pane: g.slot_pane() },
+    |g| Action::SlotGiveBack { pane: g.slot_pane() },
+    |g| Action::SlotWindows { look: g.look() },
+    |g| g.slot_hosted(),
+    |g| Action::SlotTick { at: g.time() },
+    |g| Action::WindowGone { pane: g.slot_pane(), app_running: g.rng.coin(), at: g.time() },
+    // Not in `MAKERS`, which has its own `Adopt`.
+    |g| g.adopt(),
 ];
 
 /// The way out of each box and mode. Picked one time in 8: with every action as likely as any
@@ -1343,6 +1461,10 @@ fn random(rng: &mut Rng, m: &Model) -> Envelope {
         0 => rng.pick(WAYS_OUT),
         // Straight after a mark is removed: put it back, so `Run::step` can compare.
         1 if m.marks.removed().is_some() => Action::MarkUndo,
+        2 if !m.slots.is_empty() => rng.pick(&SLOT_MAKERS)(&mut Gen { rng, m }),
+        // The shell's look as the shell sends it: from anyone else it is refused or ignored, and a
+        // slot would hardly ever take a window.
+        3 if !m.slots.is_empty() => return Action::SlotWindows { look: Gen { rng, m }.look() }.sent_by(Origin::System),
         _ => rng.pick(MAKERS)(&mut Gen { rng, m }),
     };
     action.sent_by(rng.pick(&[Origin::User, Origin::User, Origin::Socket, Origin::System]))
@@ -1420,6 +1542,14 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 }
 
 fn check(m: &Model) -> Result<(), String> {
+    check_slots(m)?;
+    // The Repos list: each entry once, pinned ones first; the repositories in its order.
+    let dirs = &m.repo_dirs.dirs;
+    let once = dirs.iter().enumerate().all(|(i, d)| dirs[..i].iter().all(|e| e.path != d.path));
+    ensure!(once && dirs.is_sorted_by_key(|d| !d.pinned), "the Repos entries: {dirs:?}");
+    let places: Vec<usize> = m.repos.iter().map(|r| m.repo_dirs.place(&r.path).unwrap_or(usize::MAX)).collect();
+    ensure!(places.is_sorted(), "the repositories are out of the list's order: {places:?}");
+    ensure!(m.repos_open.iter().all(|open| dirs.iter().any(|d| d.path == *open)), "an open group with no entry");
     // A dismissed notice is kept only of a kind that stays until fixed, one of each.
     let kinds: Vec<crate::notice::Kind> = m.notice_hidden.iter().map(|n| n.kind).collect();
     let once = kinds.iter().enumerate().all(|(i, kind)| !kind.held() && !kinds[..i].contains(kind));
@@ -1546,10 +1676,10 @@ fn check(m: &Model) -> Result<(), String> {
         m.space()
     );
     // The agent chip is there exactly while the selected space has a conversation and nothing
-    // is in the drawer's place: no conversation open, new task, draft, brief or inspector. It
-    // is that conversation's, and names its space's place on the row.
+    // is in the drawer's place: no conversation open, new task, draft, brief, inspector or
+    // transcript. It is that conversation's, and names its space's place on the row.
     let busy = m.talk.as_ref().is_some_and(|talk| talk.open) || m.compose.is_some() || m.capture.is_some();
-    let busy = busy || m.brief.is_some() || m.inspector.is_some();
+    let busy = busy || m.brief.is_some() || m.inspector.is_some() || m.listen.shown;
     let chip = m.agent_chip();
     ensure!(
         chip.is_some() == (m.space_subject(m.space()).is_some() && !busy),
@@ -1995,7 +2125,7 @@ fn check(m: &Model) -> Result<(), String> {
             (marks::Target::Pane(PaneRecord { kind: RecordKind::Terminal, .. }), Kind::Terminal) => true,
             (
                 marks::Target::Pane(PaneRecord { kind: RecordKind::App { bundle, name, .. }, .. }),
-                Kind::App { bundle: b, name: n, .. },
+                Kind::App { bundle: b, name: n, .. } | Kind::Slot { bundle: b, name: n },
             ) => marks::same_app((bundle.as_deref(), name), (b.as_deref(), n)),
             _ => false,
         };
@@ -2021,7 +2151,11 @@ fn check(m: &Model) -> Result<(), String> {
 
     // A row's menu is of a row the open section lists, on one of its items.
     if let Some((menu, items)) = m.row_menu() {
-        ensure!(m.list_rows().contains(&menu.row), "a menu of {:?}, which is not listed", menu.row);
+        let listed = match &menu.row {
+            MenuOf::Row(row) => m.list_rows().contains(row),
+            MenuOf::Transcript => m.listen.shown && !items.is_empty(),
+        };
+        ensure!(listed, "a menu of {:?}, which is not listed", menu.row);
         let on = menu.selected.is_none_or(|at| at < items.len());
         ensure!(on, "a menu on item {:?} of {}", menu.selected, items.len());
     }
@@ -2092,6 +2226,73 @@ fn tab_panes_by_id(m: &Model) -> Vec<(u32, Vec<PaneId>)> {
 }
 
 /// The keyboard is on one place there is: a pane on show, a row of the list, a rail's cell.
+/// The state with app panes' titles left out: what a slot's look found must be nowhere else.
+struct StateWithoutApps<'a>(&'a Model);
+
+impl Serialize for StateWithoutApps<'_> {
+    fn serialize<S: serde::Serializer>(&self, to: S) -> Result<S::Ok, S::Error> {
+        let mut state = serde_json::to_value(self.0).map_err(serde::ser::Error::custom)?;
+        for pane in state.get_mut("panes").and_then(serde_json::Value::as_array_mut).into_iter().flatten() {
+            if let Some(title) = pane.pointer_mut("/kind/title") {
+                *title = serde_json::Value::Null;
+            }
+        }
+        // A capture's record of open windows names app panes by title too.
+        state.as_object_mut().map(|state| state.remove("capture"));
+        state.serialize(to)
+    }
+}
+
+/// Slots: each is a pane; one that waits is a slot pane, one filled holds a window of its app;
+/// a window is offered by one slot at most, never one in a pane or passed over; a slot on a
+/// hidden tab offers nothing.
+fn check_slots(m: &Model) -> Result<(), String> {
+    use crate::marks::same_app;
+    if !m.features.on(Feature::Slots) {
+        ensure!(m.slots.is_empty(), "slots with the flag off");
+    }
+    for pane in &m.panes {
+        let slot = m.slots.get(&pane.id);
+        match &pane.kind {
+            Kind::Slot { name, bundle } => {
+                let run = slot.ok_or(format!("slot pane {} with no slot", pane.id))?;
+                ensure!((&run.name, &run.bundle) == (name, bundle), "slot {} names another app", pane.id);
+                ensure!(run.status != crate::slot::Status::Filled, "slot {} filled with no window", pane.id);
+            }
+            Kind::App { bundle, name, .. } if let Some(run) = slot => {
+                let app = same_app((bundle.as_deref(), name), (run.bundle.as_deref(), &run.name));
+                ensure!(app && run.status == crate::slot::Status::Filled, "slot {} holds {name}'s window", pane.id);
+            }
+            _ => ensure!(slot.is_none(), "pane {} is a slot of kind {:?}", pane.id, pane.kind),
+        }
+    }
+    ensure!(m.slots.keys().all(|id| m.pane(*id).is_some()), "a slot with no pane");
+    let in_pane = |w: u32| m.panes.iter().any(|p| matches!(p.kind, Kind::App { window, .. } if window == w));
+    let shown = m.layout.as_ref().map(Node::leaves).unwrap_or_default();
+    let offered: Vec<u32> = m.slots.values().filter_map(|run| run.offered).collect();
+    let mut once = offered.clone();
+    once.sort_unstable();
+    once.dedup();
+    ensure!(once.len() == offered.len(), "a window offered by two slots: {offered:?}");
+    for (id, run) in &m.slots {
+        if let Some(window) = run.offered {
+            ensure!(
+                !in_pane(window) && !run.declined.contains(&window),
+                "slot {id} offers {window}, taken or passed over"
+            );
+            ensure!(shown.contains(id), "slot {id} on a hidden tab offers {window}");
+            ensure!(
+                run.status == crate::slot::Status::Offered || run.status == crate::slot::Status::Away,
+                "slot {id} offers as {:?}",
+                run.status
+            );
+        }
+        ensure!(run.offered.is_none() || run.offered != run.pending, "slot {id} offers what it asked for");
+        ensure!(run.matching == run.slot.matching, "slot {id}'s matching");
+    }
+    Ok(())
+}
+
 fn check_zones(m: &Model) -> Result<(), String> {
     use crate::model::zones::Target;
     let leaves = m.layout.as_ref().map(Node::leaves).unwrap_or_default();
@@ -2104,6 +2305,29 @@ fn check_zones(m: &Model) -> Result<(), String> {
     }
     if m.rail_focus.is_some() {
         ensure!(m.list.is_none() && m.mode() == Mode::List, "a rail and {:?} have the keyboard", m.mode());
+    }
+    if let Some(crate::model::zones::RailFocus::Right(item)) = m.rail_focus {
+        ensure!(m.rail().contains(&item) && m.rail_drawn(), "the keyboard on {item:?}, not on a drawn rail");
+    }
+    // The drawer's rail: two items or none; the transcript first while one is on, then the tasks
+    // by urgency, each once; the transcript selected while it is shown.
+    let rail = m.rail();
+    ensure!(rail.len() != 1, "a rail of one item");
+    let task = |item: &RailItem| match item {
+        RailItem::Task { id } => Some(*id),
+        RailItem::Transcript => None,
+    };
+    let tasks: Vec<TaskId> = rail.iter().filter_map(task).collect();
+    let transcript = rail.iter().position(|item| *item == RailItem::Transcript);
+    let placed = transcript.is_none_or(|at| at == 0);
+    ensure!(
+        placed && transcript.is_some() == (m.listen.on.is_some() && !rail.is_empty()),
+        "the transcript on {rail:?}"
+    );
+    let ordered = tasks.windows(2).all(|two| m.urgency(two[0]) <= m.urgency(two[1]));
+    ensure!(unique(&tasks) && ordered, "the rail's tasks out of order: {tasks:?}");
+    if m.listen.shown && !rail.is_empty() {
+        ensure!(m.rail_selected() == Some(RailItem::Transcript), "the transcript shown, the rail on {rail:?}");
     }
     Ok(())
 }
@@ -2189,8 +2413,12 @@ fn check_layout(m: &Model) -> Result<(), String> {
     ensure!(!bare.contains(SAVED), "terminal text is kept with no lines to keep: {bare}");
     let file = m.layout_file(&[], &marked, 500);
     let records = || file.tabs.iter().flat_map(|saved| saved.tab.panes.iter());
+    // Only a slot keeps a title: the user's own pattern, under `slot`, never a window's.
     let titled = |pane: &PaneRecord| match &pane.kind {
-        RecordKind::App { title, extra, .. } => !title.is_empty() || !extra.is_empty(),
+        RecordKind::App { title, extra, .. } => {
+            let slot = extra.get("slot").is_some_and(|slot| !slot.to_string().contains(SLOT_SEEN));
+            !title.is_empty() || extra.keys().any(|key| key != "slot") || (extra.contains_key("slot") && !slot)
+        }
         _ => false,
     };
     ensure!(!records().any(titled), "an app's title is kept in the layout file");
@@ -2272,6 +2500,10 @@ fn check_state(m: &Model) -> Result<(), String> {
     let rows = serde_json::to_string(&m.workbook_rows()).unwrap_or_default();
     ensure!(!state.to_string().contains(SAVED) && !rows.contains(SAVED), "a saved history reached the state");
     ensure!(!state.to_string().contains(HEARD), "what a transcript heard reached the state");
+    // Nor a title or identifier a slot's look found; a filled slot's pane carries its window's title,
+    // as every app pane does, and nothing more.
+    let state = serde_json::to_value(StateWithoutApps(m)).unwrap_or_default().to_string();
+    ensure!(!state.to_lowercase().contains(&SLOT_SEEN.to_lowercase()), "a slot's look reached the state");
     let _ = (
         m.draft(m.compose_line().map(String::as_str).unwrap_or_default()),
         m.mark_refusal(MarkOf::Pane(None)),
@@ -2441,6 +2673,7 @@ impl Run {
                 | Action::SpaceCycle { .. }
                 | Action::TalkFront { .. }
                 | Action::TalkCycle { .. }
+                | Action::RailSelect { .. }
                 | Action::SpaceHide { .. }
                 | Action::SpaceOpen { .. }
         );
@@ -2461,6 +2694,7 @@ impl Run {
         };
         let task_worktrees_before = task_worktrees(m);
         let menu_before = m.row_menu.clone();
+        let rail_before = (m.space().clone(), m.rail_selected());
         let fronts_before: Vec<(Owner, TaskId)> =
             m.spaces().iter().filter_map(|space| Some((space.of.clone(), m.front(&space.of)?))).collect();
         let joined_before: Vec<(Owner, TaskId)> =
@@ -2484,14 +2718,60 @@ impl Run {
             m.palette.iter().flat_map(|p| p.feature_matches()).map(|c| (c.feature, c.on)).collect();
         let key_use = m.key_use.clone();
         let hidden = m.notice_hidden.clone();
+        let offer_before = m.workbooks.notice();
         // The new task in the drawer with the keyboard, the bar beside it, and the user's line.
         let beside = (m.compose_modal() && m.mode() == Mode::Compose && !m.keys && gated.is_none())
             .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty() && !m.compose_theirs)));
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
         let filled_before = m.fill_display;
+        let slots_before = m.slots.clone();
+        let ids_before: Vec<PaneId> = m.panes.iter().map(|p| p.id).collect();
+        let held_before: Vec<(PaneId, u32)> = m
+            .panes
+            .iter()
+            .filter_map(|p| match p.kind {
+                Kind::App { window, .. } => Some((p.id, window)),
+                _ => None,
+            })
+            .collect();
         let effects = m.update(sent);
         check(m)?;
+        // A slot is the user's: only they make, change or clear one, and a client fills none.
+        let made: Vec<PaneId> = m.slots.keys().filter(|id| !slots_before.contains_key(id)).copied().collect();
+        let users = origin == Origin::User;
+        // Else a restore of the user's own (a layout, a tab's mark): new panes, waiting.
+        let restored =
+            made.iter().all(|id| m.slots[id].status != crate::slot::Status::Filled && !ids_before.contains(id));
+        ensure!(
+            made.is_empty() || (users && matches!(action, Action::SlotMake { .. })) || restored,
+            "{origin:?}'s {action:?} made slot {made:?}"
+        );
+        for (id, run) in &slots_before {
+            let now = m.slots.get(id);
+            // Cleared, or gone with its pane: never by a client.
+            let gone = now.is_none() && m.features.on(Feature::Slots);
+            ensure!(!gone || origin != Origin::Socket, "{origin:?}'s {action:?} cleared slot {id}");
+            ensure!(!gone || m.pane(*id).is_none() || users, "{origin:?}'s {action:?} cleared slot {id}");
+            let Some(now) = now else { continue };
+            ensure!(users || now.slot == run.slot, "{origin:?}'s {action:?} changed slot {id}");
+            ensure!(
+                origin != Origin::Socket || now.declined == run.declined,
+                "a client's {action:?} passed over a window in {id}"
+            );
+            let filled = run.status != crate::slot::Status::Filled && now.status == crate::slot::Status::Filled;
+            let hosted = origin == Origin::System
+                && matches!(action, Action::SlotHosted { .. } | Action::Adopt { seen: Some(_), .. });
+            ensure!(!filled || hosted, "{origin:?}'s {action:?} filled slot {id}");
+            // An adopted window goes straight in only as Away's return: a new one waits for a look.
+            let adopted = matches!(action, Action::Adopt { .. });
+            ensure!(!filled || !adopted || run.away.is_some(), "{action:?} took a new window into slot {id}");
+            // A window is in one pane at most: a slot takes none another pane holds.
+            let window =
+                m.pane(*id).and_then(|p| if let Kind::App { window, .. } = p.kind { Some(window) } else { None });
+            let twice = held_before.iter().any(|(pane, held)| pane != id && Some(*held) == window);
+            ensure!(!filled || !twice, "slot {id} filled with {window:?}, which another pane holds");
+        }
         // Only the user starts a transcript: their click, or their key.
         let listen_now = m.listen.on.as_ref().map(|on| on.id.clone());
         let starts = matches!(action, Action::ListenStart { .. } | Action::ListenToggle { .. });
@@ -2513,6 +2793,13 @@ impl Run {
             "{origin:?} changed the dismissed notices: {action:?}"
         );
         ensure!(!reads || m.notice_hidden.iter().all(|n| hidden.contains(n)), "a read dismissed a notice");
+        // The offer on the bar: only the user's × on it ends it early.
+        if let (Action::NoticeDismiss { notice: crate::notice::Kind::Undo, text }, Some(said)) =
+            (&action, &offer_before)
+        {
+            let ended = m.workbooks.notice().is_none();
+            ensure!(ended == (origin == Origin::User && *text == said.text), "{origin:?}'s dismissal: {ended}");
+        }
         if let Action::NoticeDismiss { notice, .. } = &action {
             let told = if origin == Origin::User { vec![Effect::NoticeDismissed { kind: *notice }] } else { vec![] };
             ensure!(effects == told, "a notice's dismissal by {origin:?} made {effects:?}");
@@ -2562,6 +2849,7 @@ impl Run {
                     | Action::SpaceCycle { .. }
                     | Action::TalkFront { .. }
                     | Action::TalkCycle { .. }
+                    | Action::RailSelect { .. }
                     | Action::SpaceHide { .. }
                     | Action::SpaceOpen { .. }
                     | Action::WorkbookNew { .. }
@@ -2676,6 +2964,18 @@ impl Run {
         // Only the user opens a row's menu or moves in it: another's step leaves it, or its row went.
         let menu_kept = m.row_menu.is_none() || m.row_menu == menu_before;
         ensure!(origin == Origin::User || menu_kept, "{origin:?}'s {action:?} opened or moved a row's menu");
+        // Only the user changes what the drawer's rail has selected: after another's step in the
+        // same space, an item still on the rail stays selected, unless a new-task box or the
+        // editor took the drawer from the transcript.
+        if let (of, Some(item)) = &rail_before
+            && origin != Origin::User
+            && m.space() == of
+            && m.rail().contains(item)
+            && m.compose.is_none()
+            && m.editing.is_none()
+        {
+            ensure!(m.rail_selected() == Some(*item), "{origin:?}'s {action:?} moved the rail from {item:?}");
+        }
         // Only the user says which conversation is in front: after another's step, a task that
         // was in front and is still there to be, is. And only the user's ↵ on a new task (or
         // their undo of its dismissal) puts a task in a workspace that has one.
@@ -3216,6 +3516,46 @@ impl Run {
                         }
                     }
                 }
+                // A window goes in a slot by the user's Bring it here, or a look (the shell's) that
+                // found its window back or a new one for an Automatic slot: never a client's.
+                Effect::HostSlot { pane, window, .. } => {
+                    let run = m.slots.get(pane);
+                    ensure!(origin != Origin::Socket, "a client's {action:?} filled slot {pane}");
+                    ensure!(
+                        run.is_some_and(|run| run.pending == Some(*window)),
+                        "{action:?} hosts {window} in {pane}, not asked"
+                    );
+                    let users = origin == Origin::User && matches!(action, Action::SlotAccept { .. });
+                    ensure!(
+                        users || matches!(action, Action::SlotWindows { .. }),
+                        "{origin:?}'s {action:?} filled a slot"
+                    );
+                    // A look takes only for Away's return or Automatic, on the tab on show, never
+                    // the window the user is in.
+                    if let Action::SlotWindows { look } = &action {
+                        let before = slots_before.get(pane);
+                        let may = before.is_some_and(|run| {
+                            run.away.is_some() || run.slot.matching == crate::slot::Matching::Automatic
+                        });
+                        let shown = m.layout.as_ref().is_some_and(|l| l.leaves().contains(pane));
+                        let front = before.is_some_and(|run| run.away.is_none()) && look.frontmost == Some(*window);
+                        // Automatic takes only a window first listed after the slot's first look.
+                        let old = before.is_some_and(|run| {
+                            run.away.is_none() && run.known.as_ref().is_none_or(|known| known.contains(window))
+                        });
+                        ensure!(may && shown && !front && !old, "a look took {window} into slot {pane}");
+                    }
+                }
+                Effect::GiveBack { pane } => {
+                    ensure!(origin == Origin::User, "{origin:?}'s {action:?} gave back {pane}'s window");
+                    let waits = m.pane(*pane).is_some_and(|p| matches!(p.kind, Kind::Slot { .. }));
+                    ensure!(waits, "{action:?} gave back the window of {pane}, which is no slot that waits");
+                }
+                Effect::WatchSlots { apps } => {
+                    let mut names: Vec<&String> = apps.iter().map(|(_, name)| name).collect();
+                    names.dedup();
+                    ensure!(names.len() == apps.len(), "an app looked at twice: {apps:?}");
+                }
                 Effect::ListenPauseStreams { id } | Effect::ListenResumeStreams { id } => {
                     let users = origin == Origin::User;
                     ensure!(users && listen_before.as_ref() == Some(id), "{origin:?}'s {action:?} paused or resumed")
@@ -3425,11 +3765,14 @@ impl Run {
                         "a change names no list or no app: {changes:?}"
                     );
                 }
-                Effect::SaveRepos { changes } => {
-                    ensure!(user && !m.repo_dirs.fixed, "{origin:?} wrote the settings: {changes:?}");
-                    let named = |change: &ListChange| change.key == "repos" && !change.text.is_empty();
-                    ensure!(changes.len() == 1 && changes.iter().all(named), "not one directory: {changes:?}");
-                    ensure!(m.repo_dirs.dirs.len() <= MAX_DIRS, "more directories than the settings may name");
+                Effect::SaveRepos { dirs } => {
+                    // Only the user adds, removes, moves or pins: what is written is what the list holds.
+                    ensure!(user && !m.repo_dirs.fixed, "{origin:?} wrote the settings: {dirs:?}");
+                    let acts =
+                        matches!(action, Action::RepoAdd { .. } | Action::RepoRemove { .. } | Action::QuitConfirm);
+                    ensure!(acts, "{action:?} wrote the Repos list");
+                    ensure!(*dirs == m.repo_dirs.dirs, "written {dirs:?}, held {:?}", m.repo_dirs.dirs);
+                    ensure!(dirs.len() <= MAX_DIRS, "more repositories than the settings may name");
                 }
                 // A worktree is the user's own ↵ in its field, or on a new task with the box's choice
                 // (a new branch, and the task waits for it): a branch git takes, in a folder of `root`.
@@ -3741,6 +4084,28 @@ const BASES: &[(&str, Setup)] = &[
             |_| Action::MarkRemove { mark: MarkRef::Key('d') },
         ],
     ),
+    // An app pane kept as a slot for any of its windows.
+    (
+        "slot",
+        &[
+            |_| Action::Split { axis: Axis::Right, kind: Kind::Terminal },
+            |_| Action::Open { kind: app(1), axis: Axis::Right, beside: None },
+            |m| Action::SlotMake { pane: m.focused.unwrap_or(0), pid: 1, slot: crate::slot::Slot::default() },
+        ],
+    ),
+    // An Automatic slot that waits, its window given back: the next looks may take a new one.
+    (
+        "automatic slot",
+        &[
+            |_| Action::Split { axis: Axis::Right, kind: Kind::Terminal },
+            |_| Action::Open { kind: app(1), axis: Axis::Right, beside: None },
+            |m| {
+                let slot = crate::slot::Slot { matching: crate::slot::Matching::Automatic, ..Default::default() };
+                Action::SlotMake { pane: m.focused.unwrap_or(0), pid: 1, slot }
+            },
+            |m| Action::SlotGiveBack { pane: m.focused.unwrap_or(0) },
+        ],
+    ),
 ];
 
 const MODES: &[(Mode, Setup)] = &[
@@ -3937,6 +4302,7 @@ fn code(sent: &Envelope) -> String {
         ("notice", "crate::notice::Kind"),
         ("space", "Owner"),
         ("row", "ListRow"),
+        ("item", "RailItem"),
         ("dots", "Rect"),
         ("show", "Show"),
         ("step", "DayStep"),
@@ -3999,6 +4365,24 @@ fn code(sent: &Envelope) -> String {
     if let Action::RestoreWorkbooks { workbooks } = &sent.action {
         let workbooks = serde_json::to_string(workbooks).unwrap_or_default();
         return format!("restore_workbooks({workbooks:?}).sent_by(Origin::{:?})", sent.origin);
+    }
+    // A slot and a look as JSON: their types' names are taken here by others (`Seen`).
+    if let Action::SlotMake { pane, pid, slot } = &sent.action {
+        let slot = serde_json::to_string(slot).unwrap_or_default();
+        return format!("slot_make({pane}, {pid}, {slot:?}).sent_by(Origin::{:?})", sent.origin);
+    }
+    if let Action::SlotWindows { look } = &sent.action {
+        let look = serde_json::to_string(look).unwrap_or_default();
+        return format!("slot_windows({look:?}).sent_by(Origin::{:?})", sent.origin);
+    }
+    if let Action::Adopt { kind, beside, seen: Some(seen) } = &sent.action {
+        let (kind, seen) =
+            (serde_json::to_string(kind).unwrap_or_default(), serde_json::to_string(seen).unwrap_or_default());
+        return format!("adopt({kind:?}, {beside:?}, {seen:?}).sent_by(Origin::{:?})", sent.origin);
+    }
+    if let Action::SlotHosted { pane, kind } = &sent.action {
+        let kind = serde_json::to_string(kind).unwrap_or_default();
+        return format!("slot_hosted({pane}, {kind:?}).sent_by(Origin::{:?})", sent.origin);
     }
     let text: Vec<char> = format!("{:?}", sent.action).chars().collect();
     let (mut out, mut at) = (String::new(), 0);
@@ -4148,6 +4532,27 @@ fn restore_layout(layout: &str, gone: &str, home: &str, launch: bool) -> Action 
     Action::RestoreLayout { layout, gone, home, launch }
 }
 
+/// `SlotMake` with its slot's JSON, as `code` writes it.
+fn slot_make(pane: PaneId, pid: i32, slot: &str) -> Action {
+    Action::SlotMake { pane, pid, slot: serde_json::from_str(slot).expect("a regression's slot is JSON") }
+}
+
+/// `SlotWindows` from the JSON of its look, as `code` writes it.
+fn slot_windows(look: &str) -> Action {
+    Action::SlotWindows { look: serde_json::from_str(look).expect("a regression's look is JSON") }
+}
+
+/// `Adopt` with its kind's and its facts' JSON, as `code` writes it.
+fn adopt(kind: &str, beside: Option<PaneId>, seen: &str) -> Action {
+    let kind = serde_json::from_str(kind).expect("a regression's kind is JSON");
+    Action::Adopt { kind, beside, seen: Some(serde_json::from_str(seen).expect("a regression's window is JSON")) }
+}
+
+/// `SlotHosted` with its kind's JSON, as `code` writes it.
+fn slot_hosted(pane: PaneId, kind: &str) -> Action {
+    Action::SlotHosted { pane, kind: serde_json::from_str(kind).expect("a regression's kind is JSON") }
+}
+
 /// `RestoreWorkbooks` from the JSON of its workbooks, as `code` writes it.
 fn restore_workbooks(workbooks: &str) -> Action {
     Action::RestoreWorkbooks { workbooks: serde_json::from_str(workbooks).expect("a regression's workbooks are JSON") }
@@ -4182,6 +4587,49 @@ fn every_start_is_in_its_mode() {
     assert_eq!((tasks.tasks.list.len(), tasks.sessions_bar().count, tasks.sidebar), (3, 2, Some(Section::Tasks)));
     assert!(hosted.pane(1).is_some_and(|pane| pane.fit.is_some()));
     assert_eq!((marks.marks.list.len(), marks.marks.unfilled().len(), marks.marks.removed().is_some()), (3, 1, true));
+}
+
+/// A slot, a look and a hosted kind are written as JSON, and read back as they were.
+#[test]
+fn a_slots_actions_are_written_as_code_that_builds_them() {
+    let (mut rng, mut run) = (Rng::new(3), Run::default());
+    start(BASES.len() as u64 - 1).2.for_each(|make| drop(run.m.update(make(&run.m))));
+    for make in SLOT_MAKERS {
+        let action = make(&mut Gen { rng: &mut rng, m: &run.m });
+        let written = code(&action.clone().sent_by(Origin::System));
+        // Its string literals: Debug text, which is JSON's but for an escape such as `\u{200b}`.
+        let (mut texts, mut chars): (Vec<String>, _) = (Vec::new(), written.chars());
+        while let Some(c) = chars.next() {
+            if c != '"' {
+                continue;
+            }
+            let mut text = String::from('"');
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' if chars.as_str().starts_with("u{") => {
+                        let hex: String = chars.by_ref().skip(2).take_while(|c| *c != '}').collect();
+                        let c = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32).unwrap_or_default();
+                        c.encode_utf16(&mut [0; 2]).iter().for_each(|unit| text.push_str(&format!("\\u{unit:04x}")));
+                    }
+                    '\\' => text.extend([c].into_iter().chain(chars.next())),
+                    '"' => break,
+                    _ => text.push(c),
+                }
+            }
+            text.push('"');
+            texts.push(text);
+        }
+        let json: Vec<String> = texts.iter().map(|text| serde_json::from_str(text).unwrap_or_default()).collect();
+        let json = |at: usize| json.get(at).cloned().unwrap_or_default();
+        let rebuilt = match &action {
+            Action::SlotMake { pane, pid, .. } => slot_make(*pane, *pid, &json(0)),
+            Action::SlotWindows { .. } => slot_windows(&json(0)),
+            Action::SlotHosted { pane, .. } => slot_hosted(*pane, &json(0)),
+            Action::Adopt { beside, .. } => adopt(&json(0), *beside, &json(1)),
+            _ => continue,
+        };
+        assert_eq!(rebuilt, action, "{written}");
+    }
 }
 
 /// What `code` writes builds the action it was given: here for one of each, by eye for the
@@ -4467,10 +4915,8 @@ fn one_key_never_presses_in_an_app() {
 #[test]
 fn a_directory_with_no_text_is_not_removed() {
     replay(&[
-        Action::SetRepoDirs {
-            dirs: RepoDirs { dirs: vec![RepoDir { text: "".into(), path: "".into() }], fixed: false, worktrees: None },
-        }
-        .sent_by(Origin::Socket),
+        Action::SetRepoDirs { dirs: RepoDirs { dirs: vec![RepoDir::new("", "")], fixed: false, worktrees: None } }
+            .sent_by(Origin::Socket),
         Action::RepoRemove { path: "".into() }.sent_by(Origin::User),
     ])
     .unwrap();
@@ -4786,8 +5232,8 @@ fn a_pane_closed_from_a_long_even_row_leaves_every_side_its_share() {
         Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: Some(7) }.sent_by(Origin::User),
         Action::Open { kind: app(2, "Safari"), axis: Axis::Right, beside: Some(3) }.sent_by(Origin::User),
         Action::DropPane { source: 1, target: 3, zone: Zone::Left }.sent_by(Origin::Socket),
-        Action::Adopt { kind: app(3, "Slack"), beside: Some(5) }.sent_by(Origin::User),
-        Action::Adopt { kind: Kind::Empty, beside: Some(9) }.sent_by(Origin::User),
+        Action::Adopt { kind: app(3, "Slack"), beside: Some(5), seen: None }.sent_by(Origin::User),
+        Action::Adopt { kind: Kind::Empty, beside: Some(9), seen: None }.sent_by(Origin::User),
         Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
         Action::Open { kind: Kind::Empty, axis: Axis::Right, beside: Some(1) }.sent_by(Origin::Socket),
         Action::Equalize.sent_by(Origin::System),
@@ -4973,6 +5419,7 @@ fn closing_a_tab_by_the_system_leaves_a_drafts_title_and_drawings_as_they_are() 
                 name: "Slack".into(),
             },
             beside: None,
+            seen: None,
         }
         .sent_by(Origin::Socket),
         Action::CaptureStart {
@@ -4999,10 +5446,7 @@ fn a_repository_is_never_removed_by_a_path_that_is_no_directory() {
     replay(&[
         Action::SetRepoDirs {
             dirs: RepoDirs {
-                dirs: vec![
-                    RepoDir { text: "".into(), path: "".into() },
-                    RepoDir { text: "  S'".into(), path: "  S'".into() },
-                ],
+                dirs: vec![RepoDir::new("", ""), RepoDir::new("  S'", "  S'")],
                 fixed: false,
                 worktrees: None,
             },
@@ -5447,6 +5891,22 @@ fn a_dismissed_tasks_heir_takes_its_link() {
         Action::AgentExited { task: Subject::Task(1) }.sent_by(Origin::System),
         Action::ComposeEnter.sent_by(Origin::User),
         Action::TaskDismiss { id: 1 }.sent_by(Origin::System),
+    ])
+    .unwrap();
+}
+
+/// A live slot whose window went gives the keyboard back as the shell is told: the model let go
+/// of it with no `Parked` (seed 1835).
+#[test]
+fn a_live_slots_window_going_parks_it() {
+    let app = Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() };
+    let any = r#"{"select":{},"pick":"any","matching":"manual","absent":"wait","closed":"keep"}"#;
+    replay(&[
+        split(Axis::Right, Kind::Terminal),
+        Action::Open { kind: app, axis: Axis::Right, beside: None }.into(),
+        slot_make(2, 1, any).into(),
+        Action::Enter { pane: 2 }.into(),
+        by(Origin::System, Action::WindowGone { pane: 2, app_running: true, at: 1 }),
     ])
     .unwrap();
 }

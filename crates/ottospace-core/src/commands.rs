@@ -66,7 +66,7 @@ macro_rules! commands {
             pub fn feature(self) -> Option<Feature> {
                 match (self, self.group()) {
                     (_, Group::Marks) => Some(Feature::Marks),
-                    (Command::Transcribe, _) => Some(Feature::Transcripts),
+                    (Command::Transcribe | Command::PauseTranscript, _) => Some(Feature::Transcripts),
                     _ => None,
                 }
             }
@@ -107,8 +107,8 @@ commands! {
     // After Next Task: a query of its name ranks a later tie lower.
     NextSpace: "Next Tab Group", Tabs;
     PrevSpace: "Previous Tab Group", Tabs;
-    NextChat: "Next Conversation in This Workspace", Tabs;
-    PrevChat: "Previous Conversation in This Workspace", Tabs;
+    NextChat: "Next in the Drawer's Rail", Tabs;
+    PrevChat: "Previous in the Drawer's Rail", Tabs;
     HideSpace: "Hide", Tabs;
     GoHome: "Go to Home", Tabs;
     CapturePane: "Capture the Pane", Tasks;
@@ -120,6 +120,7 @@ commands! {
     SaveWorkbook: "Save Tab as Workspace", Workbook;
     AddTabToWorkbook: "Add Tab to Workspace…", Workbook;
     SaveAllWorkbook: "Save All Tabs as Workspace", Workbook;
+    AddToRepos: "Add Folder to Repos", Panes;
     StartFresh: "Start Fresh", App;
     Features: "Features…", App;
     MarkPane: "Mark Pane", Marks;
@@ -135,6 +136,7 @@ commands! {
     CalendarForward: "Next Day in Calendar", View;
     CalendarToday: "Today in Calendar", View;
     Transcribe: "Start or Stop Transcribing", View;
+    PauseTranscript: "Pause or Resume Transcribing", View;
     AxOverlay: "Accessibility Overlay", Developer;
     AxInspector: "Accessibility Inspector", Developer;
     InspectorFilter: "Filter the Accessibility Inspector", Developer;

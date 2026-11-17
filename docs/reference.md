@@ -41,7 +41,7 @@ running, and the rest of the design is not built: see the
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar | Works today |
 | The Apps section: the Dock's apps, pins, "Not running" and "All apps" | Works today, behind the `apps_section` [flag](#features), off by default |
-| Repos: each repository's name over its checkouts, one line each (the branch; a dot for the repository's own folder; its open pull request's mark; a task's badge). The chevron folds a repository (a count while folded; kept in `layout.json`; shown while a task there runs or needs you). Open a terminal in one. + in the bar's header adds a directory to `repos`; on a name under the pointer, + makes a worktree (`worktrees_dir`) and the trash stops listing it (asked first while a task works there; the status bar says nothing on disk changed) | Works today |
+| Repos: each repository's name over its checkouts, one line each (the branch; a dot for the repository's own folder; its open pull request's mark; a task's badge). The chevron folds a repository (a count while folded; kept in `layout.json`; shown while a task there runs or needs you). Open a terminal in one. Opt-in, in your order: + in the bar's header, a dropped folder or Add Folder to Repos adds a repository to the end of `repos`; a folder of repositories from older settings is one folded group. On a name under the pointer, + makes a worktree (`worktrees_dir`) and the trash stops listing it (asked first while a task works there; the status bar says nothing on disk changed) | Works today |
 | List mode (⌘⌃E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls, and on the buttons and text fields of the focused app pane; typing it clicks the control, presses the app's button, or focuses its text field | Works today |
 | The wheel over an app pane you are not in brings its window up for the scroll (a peek): `PEEK` in the status bar, parked again when the pointer leaves or the wheel is quiet | Partly verified: on CI the window comes up, the app is in front and the scrolls after the first reach it. The first scroll is lost. The window parking again by itself is unit-tested, not yet seen on CI |
@@ -111,7 +111,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab of the selected task |
 | ⌘⌃1 … ⌘⌃9 | Select a space of the top row: the first, Home, then each open task and workspace. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
 | ⌘⌃] / ⌘⌃[ | Next / previous space of the top row |
-| ⌘⌥] / ⌘⌥[ | Next / previous conversation of this workspace (the drawer's strip) |
+| ⌘⌥] / ⌘⌥[ | Next / previous item of the drawer's rail: the transcript on, then this workspace's tasks |
 | ⌘⌃W | Hide the selected task or workspace (Hide): it leaves the top row and nothing in it stops; its row in Tasks or Workspaces opens it again. Not Home |
 | ⌘⇧W | Close the tab and its panes |
 | ⌘⇧S | Save the tab on show into the [workspace](#workspaces) it is in; in a task's space, as a new one. On a tab that came from one, or was saved into one: update its tab there |
@@ -125,11 +125,11 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘N | New task, in the drawer. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task and starts its agent; ⇧↵ adds it for later; Esc closes. [Its keys](#keys) |
 | ⌘L | The keyboard into the drawer's conversation, or back to the workspace |
 | ⌃G | In the composer or the new-task box: its text in your editor (`$VISUAL`, else `$EDITOR`, else `vi`, as Open Settings runs it), in the drawer: the editor takes the conversation's place (the drawer widens to 60 columns if it is narrower). Save and quit: the text is back in the composer (one trailing newline dropped; the new-task line takes it as one line), nothing sent; quit with an error, or save nothing new: as it was. ⌃G again while it runs goes back to it. A permission card that arrives meanwhile shows under the editor, which keeps the keyboard: click the card to answer it (`a`, `d`), ⌃G to go back. The text goes back to the conversation it came from, wherever you went; its task dismissed, it is put on the clipboard and the status bar says so. Also Edit Message in Editor (Tasks, the palette). Only yours: a socket client's ⌃G opens nothing, and its keys reach neither the editor nor a card. See [Compose in your editor](#compose-in-your-editor) |
-| ⌘⇧L | Close the chat, or open it again. The agent goes on. Closed, the [agent chip](#the-agent-chip) at the row's end opens it too |
+| ⌘⇧L | Close the chat, or open it again (on a transcript: close the drawer). The agent goes on. Closed, the [agent chip](#the-agent-chip) at the row's end opens it too |
 | ⌘⇧A | Collapse the conversation's [dial](#the-agent-dial) to its marker beside the badge, or open it again (a click on either does the same). Kept per task |
 | ⌘⇧N | Next task: the space and chat of the first task that needs you |
 | ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
-| ⌘⌃T | With the `transcripts` [flag](#features) on: stop the transcript that is on, from any pane; else start one of the focused app pane. With focus on no such pane, the status bar says "focus an app pane to transcribe it". Also Start or Stop Transcribing (View, the palette). The app's audio is heard by ScreenCaptureKit (Screen Recording covers it) and transcribed by Apple's on-device recogniser: nothing leaves the Mac. The first start may ask the system for its speech model ("Downloading speech model…"). Below macOS 26 it says "transcripts need macOS 26". While one is on, a red dot in the menu bar has Stop and Show. Only yours: a socket client's ⌘⌃T, click or label starts and stops nothing |
+| ⌘⌃T | With the `transcripts` [flag](#features) on: stop the transcript that is on, from any pane; else start one of the focused app pane. With focus on no such pane, the status bar says "focus an app pane to transcribe it". Also Start or Stop Transcribing (View, the palette). The app's audio is heard by ScreenCaptureKit (Screen Recording covers it) and transcribed by Apple's on-device recogniser: nothing leaves the Mac. The first start may ask the system for its speech model ("Downloading speech model…"). Below macOS 26 it says "transcripts need macOS 26". While one is on: the source pane's header shows a red dot and the time (a click shows the transcript in the drawer); the drawer's transcript header has the level, the time, Stop, and ⋯ with Pause or Resume (paused: "Paused" and Resume where the level was); ⌘⇧L closes the drawer on it. Pause or Resume Transcribing is also in the palette and the View menu, and the menu bar's red dot has Stop, Pause or Resume, and Show. Only yours: a socket client's ⌘⌃T, click or label starts and stops nothing |
 | ⌘B / ⌘⇧B | With the `marks` [flag](#features) on (so for the next two rows): mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
 | ⌘⌥1 … ⌘⌥9 | Go to one of the first nine marks, in the order of the Marks section |
@@ -299,12 +299,15 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    started with ↵ is in the workspace you are in: one you made, or a task's. No space is made
    and nothing moves (the box says "↵ starts it in this workspace" when there is something in
    it). A workspace may hold several tasks: a later one works in the same folder unless its
-   line names another. One conversation is in front, the drawer's: with two tasks or more a
-   strip over it has a tab for each (its badge, the dot at its corner in its state's colour),
-   the front one wide with its title, and + for another task here. A click on a tab, ⌘⌥] / ⌘⌥[,
-   a task's row or ⌘⇧N puts a conversation in front; nothing but you does. The top row shows
-   the workspace's badges stacked, the most urgent first. A task dismissed (or one you mark
-   done) leaves the strip and the most urgent remaining is in front; the last one gone, a
+   line names another. One conversation is in front, the drawer's. With two items or more (the
+   workspace's tasks, and a transcript while one runs) the drawer has a rail at its right edge:
+   the running transcript first (its waveform, a red dot while it records), then the tasks, the
+   most urgent first (each its badge, the dot at its corner in its state's colour), and + for
+   another task here. The selected item is lifted with an accent edge. A click on an item,
+   ⌘⌥] / ⌘⌥[, list mode (→ past the drawer, ↑ ↓, ↵), a task's row or ⌘⇧N switches it; nothing
+   but you does. The transcript, stopped, leaves it; with one item left the rail goes. The top
+   row shows the workspace's badges stacked, the most urgent first. A task dismissed (or one you
+   mark done) leaves the rail and the most urgent remaining is in front; the last one gone, a
    workspace you made is its own again, with its tabs. From Home, the task gets
    a space of its own with one empty tab. ⇧↵ files it for later, in no workspace: started from
    its row, it gets its own. ⌘T makes a tab in the
@@ -317,7 +320,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    own folder: for the repository), that checkout its default worktree, a terminal there. A
    workspace's new terminals (⌘D, a split, a new tab's) and new tasks start in its default
    worktree, unless the task's line names another (`>repo`, `/path`); where a workspace's tasks
-   work in different worktrees, each task's row and its strip tab's hover name its worktree. A
+   work in different worktrees, each task's row and its rail item's hover name its worktree. A
    Claude Code task whose agent moves into another worktree of its repository (one it made; never
    a sub-agent's `.claude/worktrees/agent-*`) works there from then on, and so does its
    workspace's default when it is the workspace's one task. A
@@ -601,9 +604,11 @@ once, read-only: nothing in the app is pressed or set), for a terminal the rows.
   `brief.json`, and for each capture `1.png`, `1.annotated.png`, `1.json`. They are never in the
   tasks folder. A cancelled draft leaves nothing.
 - An agent ottospace starts for a task reads its brief with `ottospace ctl '{"cmd":"task_brief"}'`:
-  it has a pass of its own in its environment (`OTTOSPACE_TASK_PASS`), which `ottospace ctl` and
-  the SDK send with each request. The pass dies with the agent's process; a new start has a new one.
-  ottospace never writes it to the state, a log or a file; an agent that prints it puts it in its own transcript.
+  it has a pass of its own, in a file whose path its environment holds (`OTTOSPACE_TASK_PASS_FILE`;
+  the file is 0600, in a 0700 folder beside the control socket), which `ottospace ctl` and the SDK
+  read and send with each request. `env` shows the path, never the pass. The pass and its file die
+  with the agent's process; a new start has a new one. ottospace never writes it to the state or a
+  log, and a pass printed anyway reads `[hidden]` in every reply.
 - A terminal opened in a task's tab has `OTTOSPACE_TASK`, not the pass; an agent there reads the brief with
   `ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"`.
 - In the brief, everything that came from another app or a terminal is quoted and labelled as
@@ -720,7 +725,7 @@ workspace.
   name selected: type over it, ↵ keeps it, Esc keeps it as it is. No two workspaces share a name
   (`DRI`, `DRI 2`).
 - **Save again** on a tab that came from a workspace, or was saved into one, updates that tab of
-  it. The section says `Updated · Undo` for six seconds.
+  it. The notice bar says what it kept, with Undo, for six seconds.
 - **Open**: click its row, or ⌘⌃E and ↵. Its space comes back on the top row, selected. Each of
   its saved tabs that is not open opens in a new tab, in order, and the
   first is selected; a tab of it that is open already is kept, not opened twice. With none saved
@@ -743,8 +748,8 @@ workspace.
   pointer on it (or list mode's selection) shows one …: its menu has Rename and Delete.
   In the menu ↓ ↑ move, ↵ takes the item the keys are on; Esc, any other key or a click
   outside closes it. In list mode `r` and `x` rename and delete with no menu. Deleting leaves the open
-  tabs alone; `Workspace deleted · Undo` shows for six
-  seconds (`u` in list mode).
+  tabs alone; `Workspace deleted` shows on the [notice bar](#notice-bar) for six seconds, with
+  Undo (`u` in list mode) and ×, which ends the offer. Nothing in the section moves.
 - Kept lines and commands can hold secrets a tool printed, or a token in a command line. They
   stay in your workspace files, plain text with escape sequences taken out, at most 64 KB a
   terminal and 1 MB a workspace. Credential-shaped text is hidden as `[hidden]` (tokens, `key=`
@@ -1027,7 +1032,8 @@ once under the system's Reduce Motion. A live app window in a bottom pane stops 
 - **One at a time**: the most pressing, and of those the newest. An error is not replaced by
   information; when it goes, what it covered shows.
 - **One line**: text too long is cut with an ellipsis, and the hover shows all of it. A settings
-  problem offers **Open settings**; a meeting with a link, **Join**.
+  problem offers **Open settings**; a meeting with a link, **Join**; a workspace deleted or updated,
+  **Undo** (only your click takes it back).
 - **Dismiss**: × on the bar, or Esc when no mode and no terminal takes it. Only you dismiss a
   notice: a socket client cannot, and its failure never takes the place of what your own step
   said. A dismissed settings line comes back when it says something else.
@@ -1050,6 +1056,7 @@ once under the system's Reduce Motion. A live app window in a bottom pane stops 
 | `keys` | warning | the app: a global key not registered | yes |
 | `editor` | information | the app: your editor gave its text back | yes |
 | `meeting` | meeting | the app: a meeting started and you are in no call; × is its Dismiss, Join its link | yes; its title never in the state |
+| `undo` | information | the sender: a workspace you deleted or updated, offered back for six seconds; × ends the offer | no; only you delete one |
 
 A copy's "Copied 3 lines", the mode and the count of tasks that need you stay in the status bar.
 
@@ -1071,7 +1078,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 ```json
 {
   "terminal": { "font": "JetBrains Mono", "font_size": 14 },
-  "repos": ["~/code", "~/notes"],
+  "repos": ["~/code/app", "~/code/web"],
   "tasks": "~/notes/tasks",
   "sessions": true,
   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
@@ -1098,7 +1105,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 |---|---|---|
 | `terminal.font` | The terminal's font, by family name. Use a monospaced one | `Menlo` |
 | `terminal.font_size` | In points, 6 to 72 | `13` |
-| `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it. The section's + adds the folder you pick (a repository, or one that holds some), by its full path; if the file named none, `~/code` and `~/notes` are written with it. Remove, on a repository's name under the pointer, takes off a directory listed as itself; one that comes from a folder holding several is yours to edit. At most 64 through + | `~/code`, `~/notes` |
+| `repos` | The repositories the Repos section lists, in its order: each a path, or `{"path": …, "pinned": true}`. Opt-in: the section's + (the folder you pick, or one inside a repository), a folder dropped on the section, and Add Folder to Repos (⌘P: the focused terminal's folder, else the tab's task's) add one at the end, by its full path; a folder that is no repository is refused. The trash on a name takes it off; nothing on disk is touched. An entry that is a folder of repositories (older settings named folders to look in) lists them as one group, folded until you unfold it, removed whole; one of them added by itself leaves the group. `OTTOSPACE_REPOS` (`:` between directories) wins over it, and lists what they hold flat. At most 64 | none (before: `~/code`, `~/notes`) |
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
 | `worktrees_dir` | Where + on a repository's name makes worktrees: `<dir>/<repo>/<branch>`, slashes in the branch as `-`; a repository whose folder name another listed one shares gets a short hash of its path after it (`app-1f2e3d`). A relative path is inside `~/.ottospace`. Read each time | `worktrees` in `~/.ottospace` |
 | `transcripts_dir` | Where transcripts are kept (the `transcripts` flag): one Markdown file each, `YYYY-MM-DD-HHMM-<app>.md`, written as lines come. A folder ottospace makes is private to you (0700), each file too (0600). A relative path is inside `~/.ottospace`. Read at each start | `transcripts` in `~/.ottospace` |
@@ -1117,7 +1124,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |
-| `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; a changed rule applies to windows seen after it | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
+| `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title`, `identifier` (the app's own name for the window, its `AXIdentifier`: Zoom's main meeting window is `zm.meeting.window.main`; a window without one has empty text: `""` or `*` matches it) and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; a changed rule applies to windows seen after it | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
 | `apps` | The pinned apps: listed first under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. Each is the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`), looked for in `/Applications`, `~/Applications` and `/System/Applications` (and their `Utilities`), or the path of its bundle (`~/Tools/Lumen.app`). One that is not found is left out of the list and kept in the file. Pin and Unpin in the Apps section write this list: the name if it means that same bundle when read back (the first of that name in those folders, in that order), else its path. A name that is found only once ottospace runs (the app was installed since) is listed from the next scan. (Once you type in the picker it offers every installed app in those folders, these first) | none |
 | `apps_hidden` | Apps of the Dock not to suggest in Apps, written as `apps` is. Hide in the Apps section writes this list | none |
 | `wheel_to_apps` | The wheel or trackpad over an app pane you are not in brings its window up for the scroll (a peek). `false`: the wheel there does nothing | `true` |
@@ -1154,6 +1161,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 | `marks` | Experimental | off | Marks: name a pane or a tab, and go back to it with a letter |
 | `apps_section` | Experimental | off | The Apps section: the Dock's apps, pins, Not running and All apps |
 | `transcripts` | Experimental | off | Transcripts (⌘⌃T): an app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file |
+| `slots` | Experimental | off | Slots: a pane that keeps its place and waits for a window you name. In progress: not on screen yet |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1164,9 +1172,11 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   picker (⌘E, ⌘⇧E) and its installed apps, sneak labels in apps, peeks, restore and rescue all
   still work. The state's `apps_bar` is empty.
 - `transcripts` off: no `Transcribe` in a pane's header, no red dot on the top row, ⌘⌃T does
-  nothing, no Transcribe command or menu item, and the state's `listen` is null. Turning it off
+  nothing, no Transcribe or Pause command or menu item, and the state's `listen` is null. Turning it off
   ends a transcript that is on. On, an app pane's header offers `Transcribe` on macOS 26 (design:
   [transcripts.md](ai/transcripts.md)).
+- `slots` off: a slot, restored or turned off mid-run, is a plain app pane of its app that keeps
+  the slot on its record for the flag's return. In progress: the model only (design: [slots.md](ai/slots.md)).
 
 ## Driving it from outside
 
@@ -1194,6 +1204,36 @@ ottospace ctl '{"cmd":"trace"}'                      # the last 2,000 events: na
 
 `OTTOSPACE_TRACE=1` also writes the trace to `~/.ottospace/trace.jsonl` when the app panics or gets
 `kill -USR1`.
+
+### The log
+
+`<home>/log` (`~/.ottospace/log`, or in `OTTOSPACE_HOME`) keeps what happened to the app, to read after a problem: one JSON line an
+event, in local time, e.g. `{"at":"2026-11-16T17:51:03-08:00","ev":"displays","count":1,"sizes":["1728x1117"]}`.
+Only you can read it (0600). At 1 MB it becomes `log.1` and the one before goes: 2 MB at most.
+
+| Event | Fields |
+|---|---|
+| `start` | `pid`, `version`, `commit`, `hosting`, `displays` (`count`, `sizes`) |
+| `quit` | `hosted`: windows given back |
+| `displays` | The displays changed (one plugged in or taken away): `count`, `sizes` in points |
+| `window_display` | The window is on another display: its number and size |
+| `stall` | The window had something to draw for `stalled_ms` and drew nothing; ottospace has it draw again. `n`: stalls in a row (a minute with none starts over), written the 1st, 2nd, 4th, 8th.. |
+| `redrawn` | Frames came again after a written stall: `kicks`, `lasted_ms`, its `n` |
+| `host_failed` | A window could not be hosted: its number |
+| `give_back_failed` | A hosted window could not be put back on a screen: its number |
+| `gpui` | An error or warning of GPUI's macOS layer: `level`, `src` (`gpui-0.2.2/src/platform/mac/window.rs:489`), `said` only when fixed words and a code (`could not create display link, code: -6661`), and `n`: one from the same place is written its 1st, 2nd, 4th, 8th.. time |
+| `panic` | `src` (`crate/src/file.rs:line`) and `thread`; never the message |
+
+Never in it: terminal or transcript text, titles, meetings, passes, paths or file contents. Each event
+keeps only the fields listed here.
+The same lines go to the unified log, subsystem `dev.ottospace` (in zsh, `log` is a builtin, so
+name `/usr/bin/log`):
+
+```sh
+/usr/bin/log show --predicate 'subsystem == "dev.ottospace"' --last 1d
+```
+
+A test run writes neither: the file only in a folder it names with `OTTOSPACE_HOME`.
 
 `ottospace skill` prints every request with an example, and what the state fields mean. Fields are
 in `Request` in [`crates/ottospace/src/control.rs`](../crates/ottospace/src/control.rs). Unknown commands and
@@ -1291,11 +1331,11 @@ first brainstorm:
 
 [transcripts.md](ai/transcripts.md): an app's audio transcribed on the Mac, live, started and stopped by the user alone. Slice 1 is in (behind `transcripts`): the model, ⌘⌃T, the indicator and the drawer's lines, fed only by a test fixture. Then the file in `transcripts_dir`, heard lines handed over on a fixed tick, and the level meter with its label (Hearing speech, Listening, No sound for 30 s), drawn only. Then the app's real audio (ScreenCaptureKit) and Apple's on-device recogniser, the model's download, the menu bar's dot and the start reminder.
 
-[slots.md](ai/slots.md): slots, panes that wait for a window (one window selector for slots, `windows` rules and transcripts' `meeting`), offer it, and empty when it closes. Not built.
+[slots.md](ai/slots.md): slots, panes that wait for a window (one window selector for slots, `windows` rules and transcripts' `meeting`), offer it, and empty when it closes. In: the selector (`windows` rules take `identifier`) and, behind `slots`, the model: its states, who may, and the record in `layout.json`. Not on screen yet.
 
 [multi-monitor.md](ai/multi-monitor.md): a tab folded out to another display (⌘⇧O), focus arrows across displays, unplug folds it back in; behind `multi_monitor`. Not built.
 
-[repos.md](ai/repos.md): the Repos section: folding, the default folder's dot, and how + makes a worktree (the git it runs, what it refuses).
+[repos.md](ai/repos.md): the Repos section: the opt-in list and its order, groups from older settings, folding, the default folder's dot, and how + makes a worktree (the git it runs, what it refuses).
 
 [`docs/ai/backlog.md`](ai/backlog.md) is an older backlog. `docs/ideas/` holds the owner's own
 notes.

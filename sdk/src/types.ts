@@ -115,7 +115,7 @@ export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
 export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
 /** A feature flag (`features` in `settings.json`). Off, its requests answer "feature off: <name>". */
-export type Feature = "marks" | "apps_section" | "transcripts";
+export type Feature = "marks" | "apps_section" | "transcripts" | "slots";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
@@ -151,12 +151,16 @@ export type Focus =
   | { pane: PaneId }
   | { list: number }
   | { rail: Section }
+  | { drawer_rail: RailItem }
   | "drawer"
   | "inspector"
   | "nothing";
 
-/** The rail cell that has the keyboard (in list mode): a section. */
-export type RailFocus = { left: Section };
+/** The rail cell that has the keyboard (in list mode): a section, or an item of the drawer's rail. */
+export type RailFocus = { left: Section } | { right: RailItem };
+
+/** An item of the drawer's rail: the transcript on, or a task. */
+export type RailItem = { kind: "transcript" } | { kind: "task"; id: TaskId };
 
 /** A heading of the Tasks section, in the order drawn. `open`: tasks with tabs open that do not need the user. */
 export type Heading = "needs_you" | "running" | "later" | "done" | "sessions";
@@ -196,7 +200,9 @@ export type PaneKind =
   | { type: "empty" }
   | { type: "terminal" }
   /** `window`: the window-server id of the hosted window. `bundle`, `name`: whose it is. */
-  | { type: "app"; window: number; title: string; bundle?: string; name: string };
+  | { type: "app"; window: number; title: string; bundle?: string; name: string }
+  /** A slot that waits for a window of this app (the `slots` flag). Where it is: `slots`. */
+  | { type: "slot"; name: string; bundle?: string };
 
 export interface Pane {
   id: PaneId;
@@ -242,8 +248,6 @@ export interface SpaceRow {
   tasks: TaskId[];
   /** The task whose conversation is in front there (the drawer's, the dial's, the agent chip's), or null: it has no task. Only the user changes it. */
   front: TaskId | null;
-  /** The tabs of the drawer's strip while this space is selected, in the order the tasks came; empty with fewer than two. */
-  strip: TaskId[];
   /** Its default worktree (a listed checkout's path), where its new terminals and tasks start; null: none. Set by the user's click on a Repos row. */
   worktree: string | null;
   /** What its item on the top row shows before its name. */
@@ -530,6 +534,8 @@ export interface SessionsBar {
 export interface ReposGroup {
   name: string;
   path: string;
+  /** The folder entry it is drawn under (older settings), or null: an entry of its own. */
+  group: string | null;
   /** Where the heading was laid out, scrolled out of view or not. Null while the section is not drawn. */
   header: Rect | null;
   /** Its checkouts are folded under its name: not drawn, not rows of list mode. */
@@ -665,9 +671,10 @@ export interface Repo extends Worktree {
 
 /** Where the Repos list is read from. */
 export interface RepoDirs {
-  /** Each directory as the settings name it (`~/code`) and resolved (`/Users/me/code`). */
-  dirs: { text: string; path: string }[];
-  /** True while `OTTOSPACE_REPOS` names them: none is added or removed. */
+  /** The Repos list's entries, in the user's order, pinned ones first: each as the settings name it
+   * (`~/code/app`) and resolved (`/Users/me/code/app`). A folder of repositories (old settings) is a group. */
+  dirs: { text: string; path: string; pinned: boolean }[];
+  /** True while `OTTOSPACE_REPOS` names them: none is added, removed or moved, and the list is flat. */
   fixed: boolean;
 }
 
@@ -878,14 +885,16 @@ export interface WorkbookTab {
   buttons: { menu: Rect | null };
 }
 
-/** The open menu of a row of the bar (its …): whose row, the item the keys are on, and its items. Only the user opens one or chooses from it. */
+/** The open menu of a row of the bar (its …), or of the drawer's transcript header (its ⋯): whose, the item the keys are on, and its items. Only the user opens one or chooses from it. */
 export interface RowMenu {
   /** The workspace whose row it is of; `tab`: that tab's row, by place. */
   workbook: number | null;
   tab: number | null;
+  /** The transcript header's: Pause, or Resume while paused. */
+  transcript: boolean;
   /** The item the keys are on; null: none (a click opened it). */
   selected: number | null;
-  items: { item: "rename" | "delete" | "remove"; label: string; rect: Rect | null }[];
+  items: { item: "rename" | "delete" | "remove" | "pause" | "resume"; label: string; rect: Rect | null }[];
 }
 
 /** A workspace of the user's (the user reads "workspace"; the state keeps `workbook`): a named set of saved tabs, none in a new one. No directory is listed: `panes` names kinds only. */
@@ -956,6 +965,8 @@ export interface Model {
   rail_focus: RailFocus | null;
   repos: Repo[];
   repo_dirs: RepoDirs;
+  /** Groups of the Repos list (folders of repositories) the user unfolded, by path. */
+  repos_open: string[];
   tasks: { list: Task[] };
   /** Headings of the Tasks section that are folded. */
   collapsed: Heading[];
@@ -997,6 +1008,19 @@ export interface Model {
   features: Feature[];
   /** The transcript on, or null. Times only: never what was heard. Only the user starts or stops one. */
   listen: Listen | null;
+  /**
+   * Each slot, by its pane's id, filled or not. Never what it selects or a window's title. A slot
+   * is the user's: a client cannot make, fill, clear, close, move or swap one.
+   */
+  slots: Record<string, Slot>;
+}
+
+/** A slot: a pane that keeps its place and waits for a window the user named. */
+export interface Slot {
+  status: "absent" | "empty" | "offered" | "filled" | "away";
+  /** How many windows it could offer now. */
+  matches: number;
+  matching: "manual" | "automatic";
 }
 
 /** A transcript of an app pane's sound: its status, source and times. */
@@ -1151,12 +1175,12 @@ export type NoticeLevel = "info" | "warning" | "meeting" | "error";
 
 /** The notice bar: one message, full width at the window's foot. */
 export interface NoticeBar {
-  /** What it is about: `failed`, `refused`, `unsaved`, `told`, `settings_problem`, `settings_retired`, `settings_restart`, `start`, `keys`, `editor`, `meeting`. */
+  /** What it is about: `failed`, `refused`, `unsaved`, `told`, `settings_problem`, `settings_retired`, `settings_restart`, `start`, `keys`, `editor`, `meeting`, `undo`. */
   kind: string;
   level: NoticeLevel;
   /** A meeting's is `Meeting started`: its title is never in the state. */
   text: string;
-  /** What it offers beside the text: `open_settings`, `join` (a meeting's link), or null. */
+  /** What it offers beside the text: `open_settings`, `join` (a meeting's link), `undo` (a workspace deleted or updated), or null. */
   offer: string | null;
   offer_rect: Rect | null;
   /** Its ×. Only the user's click dismisses. */
@@ -1291,7 +1315,7 @@ export interface Snapshot {
   /** Test runs only: the transcript drawer's rows, the volatile lines last. Else null. */
   listen_lines: ListenLine[] | null;
   /** Test runs only: where a transcript's controls were drawn, by id (`listen-start:3`,
-   * `listen-header`, `listen-stop:header`, `listen-top:`, `listen-view`). Else null. */
+   * `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-top:`, `listen-view`). Else null. */
   listen_rects: Record<string, Rect> | null;
   /** The marks, in the user's order. */
   marks: Mark[];
@@ -1301,7 +1325,7 @@ export interface Snapshot {
   unfilled: Array<{ pane: PaneId; why: string; open: Rect | null }>;
   /** The user's workspaces, by name. Only the user makes, saves, opens, renames or deletes one. */
   workbooks: Workbook[];
-  /** What the Workspaces section offers to take back, while it offers. */
+  /** What the notice bar offers to take back (`kind` `undo`), while it offers. */
   workbook_offer: "deleted" | "updated" | null;
   /** The open menu of a row of the bar, or null. */
   row_menu: RowMenu | null;
@@ -1329,6 +1353,12 @@ export interface Snapshot {
   badges: Record<string, string>;
   drawer: {
     body: Rect | null;
+    /**
+     * The drawer's rail, in order: the transcript on first, then this workspace's tasks, the most
+     * urgent first. Empty with fewer than two. `selected`: what the drawer shows (only the user
+     * changes it); `rect`: where it was drawn, or null. Never what was heard.
+     */
+    rail: { kind: "transcript" | "task"; id: TaskId | null; selected: boolean; rect: Rect | null }[];
     /** Its width in points as last drawn. */
     width: number;
     agents: Record<string, { model: string; ended: boolean; cols: number; rows: number; lines: string[] }>;
@@ -1430,6 +1460,20 @@ export interface TraceReply {
 export interface RecordReply {
   ok: true;
   frames: number;
+}
+
+/** One sound buffer `audio_probe_stop` heard: its presentation time (null: none), length, level. */
+export interface ProbeBuffer {
+  pts_ms: number | null;
+  samples: number;
+  rms: number;
+}
+
+/** `audio_probe_stop`'s reply: the buffers heard, in order; why the system stopped it, if it did. */
+export interface AudioProbeReply {
+  ok: true;
+  buffers: ProbeBuffer[];
+  failed: string | null;
 }
 
 /** A scroll area's bar, in window points. `opacity` 0: faded out, and it takes no press. */

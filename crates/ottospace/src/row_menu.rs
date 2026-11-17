@@ -4,7 +4,7 @@
 use gpui::{Context, ElementId, MouseDownEvent, Stateful, Window, div, prelude::*, px, rgb};
 use ottospace_core::layout::Rect;
 use ottospace_core::list::ListRow;
-use ottospace_core::row_menu::menu_key;
+use ottospace_core::row_menu::{MenuOf, menu_key};
 use ottospace_core::{Action, Origin, theme};
 
 use crate::{Workspace, dialog, rect};
@@ -20,11 +20,12 @@ fn item_control(index: usize) -> String {
     format!("row-menu:{index}")
 }
 
-/// The control that opens a row's menu: its ….
-fn dots_control(row: &ListRow) -> Option<String> {
+/// The control that opens a menu: its … (the transcript header's ⋯).
+fn dots_control(row: &MenuOf) -> Option<String> {
     match row {
-        ListRow::Workbook(id) => Some(format!("workbook-menu:{id}")),
-        ListRow::WorkbookTab(id, at) => Some(format!("workbook-tab-menu:{id}:{at}")),
+        MenuOf::Row(ListRow::Workbook(id)) => Some(format!("workbook-menu:{id}")),
+        MenuOf::Row(ListRow::WorkbookTab(id, at)) => Some(format!("workbook-tab-menu:{id}:{at}")),
+        MenuOf::Transcript => Some("listen-menu".into()),
         _ => None,
     }
 }
@@ -33,6 +34,7 @@ impl Workspace {
     /// The … of `row`: shown while `shown` (the pointer is on its row, list mode's selection is,
     /// or its menu is open), there for a label always.
     pub(crate) fn row_dots(&self, row: ListRow, shown: bool, cx: &Context<Self>) -> Option<Stateful<gpui::Div>> {
+        let row = MenuOf::Row(row);
         let control = dots_control(&row)?;
         let open = self.model.row_menu().is_some_and(|(menu, _)| menu.row == row);
         let dots = div()
@@ -56,14 +58,14 @@ impl Workspace {
     }
 
     /// Where a row's … was last painted.
-    fn dots_at(&self, row: &ListRow) -> Option<Rect> {
+    fn dots_at(&self, row: &MenuOf) -> Option<Rect> {
         let [x, y, w, h] = rect(self.controls.bounds(&dots_control(row)?)?);
         Some(Rect { x, y, w, h })
     }
 
     /// Opens a row's menu (on the row whose menu is open: closes it). `keys`: by a key or a
     /// label, so the keys are on its first item.
-    pub(crate) fn open_row_menu(&mut self, row: ListRow, keys: bool, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_row_menu(&mut self, row: MenuOf, keys: bool, window: &Window, cx: &mut Context<Self>) {
         let dots = self.dots_at(&row);
         self.row_menu_act(Action::RowMenu { row, dots, keys }, window, cx);
     }
@@ -102,8 +104,13 @@ impl Workspace {
                 cx.notify();
             }
             None => {
-                // An undo it offers counts its seconds from now.
+                // An undo it offers counts its seconds from now; a pause pauses now.
                 self.model.update(Action::Tick { now: crate::now_ms() }.sent_by(Origin::System));
+                // What was heard before the user's pause is kept.
+                let pause = matches!(self.model.row_menu_action(index), Some(Action::ListenPause { .. }));
+                if pause && self.input == Origin::User {
+                    self.listen_flush(window, cx);
+                }
                 self.row_menu_act(Action::RowMenuChoose { index }, window, cx);
             }
         }
@@ -181,16 +188,19 @@ impl Workspace {
     pub(crate) fn row_menu_json(&self) -> serde_json::Value {
         let Some((menu, items)) = self.model.row_menu() else { return serde_json::Value::Null };
         let (workbook, tab) = match menu.row {
-            ListRow::Workbook(id) => (Some(id), None),
-            ListRow::WorkbookTab(id, at) => (Some(id), Some(at)),
+            MenuOf::Row(ListRow::Workbook(id)) => (Some(id), None),
+            MenuOf::Row(ListRow::WorkbookTab(id, at)) => (Some(id), Some(at)),
             _ => (None, None),
         };
+        let transcript = menu.row == MenuOf::Transcript;
         let item = |(index, item): (usize, &ottospace_core::row_menu::Item)| {
             let drawn = self.controls.bounds(&item_control(index)).map(rect);
             serde_json::json!({"item": item, "label": item.label(), "rect": drawn})
         };
         let items: Vec<serde_json::Value> = items.iter().enumerate().map(item).collect();
-        serde_json::json!({"workbook": workbook, "tab": tab, "selected": menu.selected, "items": items})
+        serde_json::json!({
+            "workbook": workbook, "tab": tab, "transcript": transcript, "selected": menu.selected, "items": items
+        })
     }
 
     /// A sneak label on an item of the menu: `row-menu:1`.

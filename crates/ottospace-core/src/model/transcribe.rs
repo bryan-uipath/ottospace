@@ -26,9 +26,19 @@ impl Model {
             && self.listen_refusal(Some(pane)).is_none()
     }
 
+    /// What Pause or Resume (the palette, the menu bar's dot) does now: Pause while it runs,
+    /// Resume while paused; nothing while it starts, or with none on.
+    pub fn listen_pause_action(&self, at: u64) -> Option<Action> {
+        match self.listen.on.as_ref()?.status {
+            Status::On => Some(Action::ListenPause { at }),
+            Status::Paused => Some(Action::ListenResume { at }),
+            Status::Starting => None,
+        }
+    }
+
     /// The drawer shows the transcript only while nothing that takes keys is in it: the new-task
     /// box, the conversation with the keyboard and the editor take it back, so no key goes unseen.
-    pub(super) fn listen_hidden(&self) -> bool {
+    pub(crate) fn listen_hidden(&self) -> bool {
         self.compose.is_some() || self.talk.as_ref().is_some_and(|talk| talk.keys) || self.editing.is_some()
     }
 
@@ -50,7 +60,7 @@ impl Model {
         }
     }
 
-    pub(super) fn listen_act(&mut self, action: Action, effects: &mut Vec<Effect>) {
+    pub(crate) fn listen_act(&mut self, action: Action, effects: &mut Vec<Effect>) {
         match action {
             Action::ListenStart { source, mic, id, at } => self.listen_start(source, mic, id, at, effects),
             // One key to stop, from any pane: worth more than symmetry.
@@ -421,6 +431,53 @@ mod tests {
         m.update(Action::ListenShow { on: true });
         assert!(m.listen.shown && m.active != tab);
         assert!(m.layout.as_ref().is_some_and(|l| l.leaves().contains(&2)));
+    }
+
+    /// The transcript's header has no ×: ⌘⇧L closes the drawer on it, as on a conversation.
+    #[test]
+    fn the_drawers_key_closes_the_drawer_on_the_transcript() {
+        let mut m = model();
+        m.update(start(2));
+        m.update(Action::TalkToggle);
+        assert!(!m.listen.shown && m.listen.on.is_some(), "closed, and still on");
+        m.update(Action::ListenShow { on: true });
+        assert!(m.listen.shown);
+    }
+
+    /// Pause and Resume are in the header's ⋯: one item, the one that fits its status, the user's alone.
+    #[test]
+    fn the_headers_menu_pauses_and_resumes() {
+        use crate::row_menu::{Item, MenuOf};
+        let open = Action::RowMenu { row: MenuOf::Transcript, dots: None, keys: true };
+        let items = |m: &Model| m.row_menu().map(|(_, items)| items.to_vec());
+        let mut m = model();
+        // Starting: nothing to pause, so no menu, and the palette's Pause or Resume does nothing.
+        assert_eq!(m.listen_pause_action(5), None);
+        m.update(start(2));
+        m.update(open.clone());
+        assert_eq!((items(&m), m.listen_pause_action(5)), (None, None));
+        m.update(Action::ListenBegan { id: "t2".into(), at: 1_200 }.sent_by(Origin::System));
+        m.update(open.clone());
+        assert_eq!(items(&m), Some(vec![Item::Pause]));
+        assert_eq!(m.listen_pause_action(5), Some(Action::ListenPause { at: 5 }));
+        m.update(Action::Tick { now: 2_000 }.sent_by(Origin::System));
+        let effects = m.update(Action::RowMenuChoose { index: None });
+        assert!(effects.contains(&Effect::ListenPauseStreams { id: "t2".into() }), "{effects:?}");
+        assert_eq!((status(&m), m.row_menu.is_none()), (Some(Status::Paused), true));
+        m.update(open.clone());
+        assert_eq!(items(&m), Some(vec![Item::Resume]));
+        assert_eq!(m.listen_pause_action(5), Some(Action::ListenResume { at: 5 }));
+        // A client neither chooses from it nor closes it.
+        let choose = Action::RowMenuChoose { index: None };
+        assert_eq!(m.refusal(&choose, Origin::Socket), Some(crate::workbook::USERS_ALONE));
+        m.update(choose.sent_by(Origin::Socket));
+        assert_eq!(status(&m), Some(Status::Paused));
+        m.update(Action::RowMenuChoose { index: Some(0) });
+        assert_eq!(status(&m), Some(Status::On));
+        // The transcript put away: its menu goes with it.
+        m.update(open);
+        m.update(Action::TalkToggle);
+        assert!(m.row_menu.is_none());
     }
 
     #[test]
