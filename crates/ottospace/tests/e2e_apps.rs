@@ -1825,3 +1825,121 @@ fn a_window_in_a_bottom_pane_stops_above_the_notice_bar() {
     wait_for("the pane back down", || pane().filter(|b| close(b[1], body[1]) && close(b[3], body[3])));
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn the_window_fills_its_display_an_apps_window_stops_at_the_dock_and_every_end_brings_the_bars_back() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-fill", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || global_frame(&canary, 0));
+    let mut otto = otto_for(&canary, "otto-fill", &[]);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let fill = || drop(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-f", "as": "user"})));
+    // As another app sees the system: whether the bars are away, and what they leave when they show.
+    let bars_hidden = |hidden: bool| (canary.call(json!({"cmd": "state"}))["bars_hidden"] == hidden).then_some(());
+    let visible = rect(&canary.call(json!({"cmd": "state"}))["visible"]).expect("the visible frame");
+    host_and_park(&otto);
+    bring_forward(otto.child.id(), "ottospace");
+    let window = || rect(&state()["window"]);
+    let before = window().expect("ottospace's window frame");
+    let small = rect(&state()["bounds"]["1"]).expect("the pane");
+    // The display the window's middle is on.
+    let [x, y] = middle(before);
+    let on = |d: &&objc2_core_foundation::CGRect| {
+        x >= d.origin.x && x < d.origin.x + d.size.width && y >= d.origin.y && y < d.origin.y + d.size.height
+    };
+    let displays = ottospace_mac::display::all();
+    let d = displays.iter().find(on).expect("the window's display");
+    let display = [d.origin.x, d.origin.y, d.size.width, d.size.height];
+    let at = |to: [f64; 4]| move |w: &[f64; 4]| (0..4).all(|i| close(w[i], to[i]));
+
+    // On: the display's whole frame, the bars away, and the layout as large as the window.
+    fill();
+    assert_eq!(state()["state"]["fill_display"], true);
+    wait_for("the window to fill its display", || window().filter(at(display)));
+    wait_for("the bars to go", || bars_hidden(true));
+    let body = wait_for("the layout to follow", || rect(&state()["bounds"]["1"]).filter(|b| b[3] > small[3] + 20.0));
+    let frames = || {
+        let s = state();
+        let fit = &s["state"]["panes"][0]["fit"];
+        format!("window {}, pane {}, app's window {}, misfit {fit}", s["window"], s["bounds"]["1"], s["hosted"]["1"])
+    };
+    // ottospace in front, the Dock away: the app's picture goes below the Dock's top, as far as
+    // macOS lets a window grow (no taller than what the bars leave, measured: 679 of 700 asked),
+    // and no misfit is named.
+    let crop = state()["crop"]["1"].as_f64().expect("the crop");
+    let covers = |pane: [f64; 4]| move |f: &[f64; 4]| f[3] - crop >= pane[3].min(visible[3] - crop) - 4.0;
+    let filled = || {
+        let s = state();
+        let parked = rect(&s["hosted"]["1"]).filter(covers(body)).filter(|_| s["state"]["panes"][0]["fit"].is_null());
+        parked.filter(|_| rect(&s["window"]).as_ref().is_some_and(at(display)))
+    };
+    let parked = wait_or("the app's picture to fill its pane", frames, filled);
+    std::thread::sleep(Duration::from_millis(1200));
+    report(&format!("fill, ottospace in front, 1.2 s on: {}", frames()));
+    assert!(filled().is_some(), "after a second: {}", frames());
+
+    // In the app: its bars come back over ottospace's edges, and ottospace's window stays. The
+    // app's window covers its pane down to the Dock's top, no further, and is not named a misfit.
+    let bottom = (display[1] + body[1] + body[3]).min(visible[1] + visible[3]);
+    let fits = |f: &[f64; 4]| (f[1] + f[3] - bottom).abs() <= 4.0;
+    assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
+    let live = wait_for("the app's window over its pane, above the Dock", || {
+        rect(&state()["hosted"]["1"]).filter(|f| close(f[1], display[1] + body[1] - crop) && fits(f))
+    });
+    wait_or("the canary to be the front app", in_front, || {
+        ask_forward(canary.child.id());
+        (front_app().0 == canary.child.id()).then_some(())
+    });
+    wait_for("the bars to come back for the app", || bars_hidden(false));
+    // Past a check of the window's size (every 500 ms).
+    std::thread::sleep(Duration::from_millis(1200));
+    report(&format!("fill, in the app pane: {}", frames()));
+    let now = state();
+    assert_eq!(
+        (&now["state"]["panes"][0]["fit"], &now["state"]["fill_display"]),
+        (&Value::Null, &json!(true)),
+        "{now}"
+    );
+    assert_eq!(rect(&now["window"]).filter(at(display)).is_some(), true, "ottospace's window moved: {}", now["window"]);
+    assert_eq!(rect(&now["bounds"]["1"]), Some(body), "the layout moved under the app");
+    // Back in ottospace: parked as before, the picture to the pane's foot again.
+    assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
+    bring_forward(otto.child.id(), "ottospace");
+    wait_for("the bars to go again", || bars_hidden(true));
+    let again =
+        wait_or("the window to park", frames, || rect(&state()["hosted"]["1"]).filter(|f| !close(f[0], live[0])));
+    assert!(close(again[2], parked[2]) && close(again[3], parked[3]), "parked {again:?}, first {parked:?}");
+    std::thread::sleep(Duration::from_millis(1200));
+    report(&format!("fill, back in ottospace: {}", frames()));
+    assert!(filled().is_some(), "back in ottospace: {}", frames());
+
+    // The pane resized (a split beside it, then closed): the window keeps the display's frame.
+    otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
+    let narrow =
+        wait_or("the pane to narrow", frames, || rect(&state()["bounds"]["1"]).filter(|b| b[2] < body[2] - 20.0));
+    wait_or("the narrow pane's picture to its foot", frames, || {
+        rect(&state()["hosted"]["1"]).filter(|f| close(f[2], narrow[2]) && covers(narrow)(f))
+    });
+    assert!(window().as_ref().is_some_and(at(display)), "split: {}", frames());
+    otto.call(json!({"cmd": "close"}));
+    wait_or("the pane to widen", frames, || rect(&state()["bounds"]["1"]).filter(|b| close(b[2], body[2])));
+    wait_or("the picture to fill its pane again", frames, filled);
+    std::thread::sleep(Duration::from_millis(1200));
+    report(&format!("fill, after the split closed: {}", frames()));
+    assert!(filled().is_some(), "after the split closed: {}", frames());
+
+    // Off: the window where it was, the bars as the system has them.
+    fill();
+    let held =
+        || format!("the window is at {:?}, it was at {before:?}; {}", window(), state()["state"]["fill_display"]);
+    wait_or("the window back where it was", held, || window().filter(at(before)));
+    wait_for("the bars back", || bars_hidden(false));
+    assert_eq!(state()["state"]["fill_display"], false);
+
+    // On, and ottospace is killed: nothing of the mode outlives it.
+    fill();
+    wait_for("the bars to go once more", || bars_hidden(true));
+    otto.child.kill().expect("kill -9");
+    let _ = otto.child.wait();
+    wait_for("the bars back after the kill", || bars_hidden(false));
+}
