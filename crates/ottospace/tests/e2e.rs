@@ -9531,7 +9531,9 @@ fn stand_in_editor(dir: &Path) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let editor = dir.join("edit");
     let script = format!(
-        "#!/bin/sh\nctl='{0}'\nprintf '%s\\n' \"$1\" >\"$ctl/path\"\ncp \"$1\" \"$ctl/given\"\n\
+        // `path` is the test's signal: written last, by rename, so `given` is whole when it shows.
+        "#!/bin/sh\nctl='{0}'\ncp \"$1\" \"$ctl/given\"\n\
+         printf '%s\\n' \"$1\" >\"$ctl/path.part\"\nmv \"$ctl/path.part\" \"$ctl/path\"\n\
          printf 'stand-in editor\\n'\ncat -n \"$1\"\n\
          while [ ! -e \"$ctl/go\" ]; do sleep 0.1; done\ncode=$(cat \"$ctl/go\")\nrm -f \"$ctl/go\" \"$ctl/path\"\n\
          [ -f \"$ctl/new\" ] && cp \"$ctl/new\" \"$1\"\nexit \"$code\"\n",
