@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::edit::{Edit, Field};
 use crate::layout::Node;
 use crate::marks::{self, Extra, MAX_NAME, MarkInput, Need, PaneRecord, RecordKind, TabRecord};
-use crate::model::{Action, Effect, Kind, Model, Owner, PaneId, Section, Space, Tab};
+use crate::model::{Action, Effect, Kind, Model, Owner, PaneId, Section, Space, Tab, TabAt};
 use crate::notice::{self, Notice};
 use crate::tasks::{NOTICE_MS, TaskId};
 
@@ -1287,17 +1287,31 @@ impl Model {
         self.workbooks.unfolded.retain(|book| *book != id);
     }
 
-    /// Whether `action` would put a closing workspace back on the row: a tab of it selected, a pane
-    /// of it focused or entered, a mark in it gone to. Refused from a client (`CLOSING`).
-    pub(crate) fn revives_closing(&self, action: &Action) -> bool {
-        let closing = |index: Option<usize>| {
-            let space = index.and_then(|at| self.tabs.get(at)).map(|tab| &tab.space);
-            matches!(space, Some(Owner::Workbook { id }) if self.workbooks.closing(*id))
-        };
+    /// Whether `action` would bring a closing workspace back or change what it keeps for its Undo:
+    /// a tab of it selected, closed or given a tab; a pane of it focused, entered, closed or moved,
+    /// or one moved into it; a mark in it gone to. Refused from a client (`CLOSING`); any other
+    /// step not the user's that puts it on the row is undone (`keep_closing`).
+    pub(crate) fn touches_closing(&self, action: &Action) -> bool {
+        let closing_space = |of: &Owner| matches!(of, Owner::Workbook { id } if self.workbooks.closing(*id));
+        let closing =
+            |index: Option<usize>| index.and_then(|at| self.tabs.get(at)).is_some_and(|t| closing_space(&t.space));
         let of_pane = |pane: PaneId| self.tab_of(pane).and_then(|tab| self.tabs.iter().position(|t| t.id == tab));
+        let of_tab = |tab: u32| self.tabs.iter().position(|t| t.id == tab);
         match action {
             Action::SelectTab { index } => closing(Some(*index)),
+            Action::CloseTab { index } => closing(Some(index.unwrap_or(self.active))),
             Action::Focus { pane } | Action::Enter { pane } => closing(of_pane(*pane)),
+            Action::Close { pane } => closing(pane.or(self.focused).and_then(of_pane)),
+            Action::MovePane { pane, tab } => closing(Some(*tab)) || closing(pane.or(self.focused).and_then(of_pane)),
+            Action::DropPane { source, target, .. } => closing(of_pane(*source)) || closing(of_pane(*target)),
+            Action::TabPlace { tab, at } => {
+                let moved = closing(tab.and_then(of_tab).or(Some(self.active)));
+                moved
+                    || match at {
+                        TabAt::End(of) => closing_space(of),
+                        TabAt::Before(tab) => closing(of_tab(*tab)),
+                    }
+            }
             Action::MarkGo { mark, .. } => {
                 let Some(mark) = self.marks.find(mark).and_then(|id| self.marks.get(id)) else { return false };
                 closing(self.mark_pane(mark).and_then(of_pane).or_else(|| self.mark_tab(mark)))
@@ -1384,7 +1398,8 @@ impl Model {
         let of = Owner::Workbook { id };
         if *self.space() == of {
             let before = self.tabs.iter().position(|tab| Some(tab.id) == on_show && tab.space != of);
-            let other = || self.tabs.iter().position(|tab| tab.space != of);
+            // Else Home's own tab, always there and on the row.
+            let other = || self.tabs.iter().position(|tab| tab.id == crate::model::spaces::HOME_TAB);
             if let Some(at) = before.or_else(|| self.space_after(&of)).or_else(other) {
                 self.select_tab(at, effects);
             }
@@ -2389,6 +2404,25 @@ mod tests {
                 assert!(!kept || m.tabs[m.active].id == on_show, "{origin:?} {action:?}");
             }
         }
+        // A client's move of a pane into or out of it, or its close of its tab or pane, is refused:
+        // the user's pane stays where it was, and what the Undo would bring back is all there.
+        let mut m = setup();
+        let a = tab_of_a(&m);
+        let theirs = [
+            Action::MovePane { pane: Some(2), tab: a },
+            Action::MovePane { pane: Some(1), tab: m.active },
+            Action::DropPane { source: 2, target: 1, zone: crate::layout::Zone::Right },
+            Action::CloseTab { index: Some(a) },
+            Action::Close { pane: Some(1) },
+        ];
+        for action in theirs {
+            assert_eq!(m.refusal(&action, Origin::Socket), Some(CLOSING), "{action:?}");
+            m.update(action.sent_by(Origin::Socket));
+        }
+        let tab_of = |m: &Model, pane| {
+            m.tab_of(pane).and_then(|id| m.tabs.iter().find(|tab| tab.id == id)).map(|t| t.space.clone())
+        };
+        assert_eq!((tab_of(&m, 1), tab_of(&m, 2)), (Some(of.clone()), Some(Owner::Workbook { id: 2 })));
     }
 
     /// The user's close of the last tab of a temporary workspace whose terminal runs asks, as its

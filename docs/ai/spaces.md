@@ -65,7 +65,8 @@ need to persist by default. maybe we need a way to differentiate persisted vs no
   terminals and windows with them, and it is gone. Only time passing ends one, so no other step
   ends a pane by it. A tab of it selected meanwhile (a mark, a client's `select_tab`) puts it back
   on the row, temporary still, and the offer goes, only by the user's step: a client's
-  `select_tab`, focus or mark into it is refused (`CLOSING`, `revives_closing`), and any other
+  `select_tab`, focus or mark into it, a pane moved into or out of it, or its tab or pane closed, is
+  refused (`CLOSING`, `touches_closing`), and any other
   step not the user's that puts it on the row is undone in `settle_closing` (its space hidden
   again, the tab on show before back: `keep_closing`). A second close while one is offered takes
   the bar; the first still goes at its own time, and keeps its own Undo: each closing workspace

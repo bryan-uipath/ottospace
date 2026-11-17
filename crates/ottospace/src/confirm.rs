@@ -38,7 +38,7 @@ impl Workspace {
         self.dispatch(Action::SpaceHideAsked { index, running }, self.input, window, cx);
     }
 
-    /// ⌘W, a tab's × or its label on the tab at `index` (default: the one on show): the core asks
+    /// ⌘⇧W, a tab's × or its label on the tab at `index` (default: the one on show): the core asks
     /// first if it is the last tab of a temporary workspace whose terminals run something.
     pub fn ask_close_tab(&mut self, index: Option<usize>, window: &Window, cx: &mut Context<Self>) {
         let running = self.running();

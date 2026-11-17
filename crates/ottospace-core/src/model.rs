@@ -561,7 +561,7 @@ pub enum Action {
     CloseTab {
         index: Option<usize>,
     },
-    /// The user's ⌘W, a tab's × or its label: `CloseTab`, but the last tab of a temporary workspace
+    /// The user's ⌘⇧W, a tab's × or its label: `CloseTab`, but the last tab of a temporary workspace
     /// whose terminals run something (`running`, as for `QuitAsked`) asks first, as its × does.
     /// Anyone else's: `CloseTab`. Never acted on: `close_tab_asked` turns it into one of those.
     CloseTabAsked {
@@ -3327,8 +3327,8 @@ impl Model {
         let boxed = self.picker.is_some() || self.compose_keys();
         match action {
             _ if origin == Origin::User => None,
-            // Only the user's Undo brings a closing workspace back: no client selects its tab.
-            _ if self.revives_closing(action) => Some(workbook::CLOSING),
+            // Only the user's Undo brings a closing workspace back: no client selects its tab or moves its panes.
+            _ if origin == Origin::Socket && self.touches_closing(action) => Some(workbook::CLOSING),
             // Only ottospace records what a task did in an app: no client forges or hides a row.
             // The user's is ignored (`app_used`): the shell sends it as its own.
             Action::AppUsed { .. } if origin == Origin::Socket => Some(crate::agent_mode::SHELLS_ALONE),

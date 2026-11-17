@@ -727,7 +727,7 @@ workspace.
   ("Close this workspace?": ↵ closes it, with its Undo; Esc keeps it). A temporary workspace open when you quit comes back
   with the [layout](#restoring-the-layout); once closed it never does. Only your own acts keep or close one:
   a client's `hide_space` or `close_tab` leaves it listed, and no client's step brings a closing
-  one back (its `select_tab` is refused).
+  one back or changes what its Undo keeps (its `select_tab`, a pane moved into or out of it, a close of its tab or pane: refused).
 - **Save**: ⌘⇧S, or File ▸ Save Tab as Workspace. In a workspace, the tab on show is saved into
   it; in the first space or a task's, as a new workspace of that tab. It records
   the tab's splits and their sizes, and each app pane's app (bundle id and name); for each
