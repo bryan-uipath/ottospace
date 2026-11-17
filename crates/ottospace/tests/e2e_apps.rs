@@ -2182,6 +2182,41 @@ fn windows_above(id: u32) -> Vec<String> {
     list.iter().filter_map(|d| row(&d)).collect()
 }
 
+struct Discard;
+
+impl screencapturekit::prelude::SCStreamOutputTrait for Discard {
+    fn did_output_sample_buffer(
+        &self,
+        _: screencapturekit::prelude::CMSampleBuffer,
+        _: screencapturekit::prelude::SCStreamOutputType,
+    ) {
+    }
+}
+
+/// A stream of window `id` as ottospace starts one (60 fps, 420f), its frames dropped. Stops on drop.
+struct Captured(screencapturekit::prelude::SCStream);
+
+impl Drop for Captured {
+    fn drop(&mut self) {
+        let _ = self.0.stop_capture();
+    }
+}
+
+fn captured(id: u32) -> Captured {
+    use screencapturekit::prelude::*;
+    let window = ottospace_mac::capture::sc_window(id).expect("the window to capture");
+    let filter = SCContentFilter::create().with_window(&window).build().expect("filter");
+    let config = SCStreamConfiguration::new()
+        .with_width(1404)
+        .with_height(1152)
+        .with_pixel_format(PixelFormat::YCbCr_420f)
+        .with_fps(60);
+    let mut stream = SCStream::new(&filter, &config).expect("stream");
+    stream.add_output_handler(Discard, SCStreamOutputType::Screen).expect("handler");
+    stream.start_capture().expect("start capture");
+    Captured(stream)
+}
+
 /// Closes Finder's windows of these names on drop, pass or fail: Finder is the user's, and the
 /// test opened them. Declared before ottospace, so it runs after ottospace is gone.
 struct CloseFinderWindows(Vec<String>);
@@ -2305,6 +2340,16 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
     report(&format!("finder, moved, not hosted: lost releases {:?}", lost_releases(bx, by)));
     moved((original[0], original[1]));
     wait_for("the window back", || frame().filter(|f| close(f[0], original[0])));
+    // Bisect: the window captured as ottospace captures it, by the test, not hosted.
+    let (bx, by) = blank(original);
+    for round in 0..2 {
+        let stream = captured(finder_window);
+        std::thread::sleep(Duration::from_millis(500));
+        report(&format!("finder, captured {round}: lost {:?}", [lost_releases(bx, by), lost_releases(bx, by)]));
+        drop(stream);
+        std::thread::sleep(Duration::from_millis(500));
+        report(&format!("finder, uncaptured {round}: lost {:?}", [lost_releases(bx, by), lost_releases(bx, by)]));
+    }
 
     let pid_text = pid.to_string();
     let env = [("OTTOSPACE_E2E", "1"), ("OTTOSPACE_HOST_ONLY", pid_text.as_str()), ("OTTOSPACE_RETURN_KEY", "f19")];
@@ -2352,31 +2397,8 @@ fn a_hosted_finder_window_takes_the_users_clicks() {
     }));
     report(&format!("finder, after the double-click: {}", opened()));
 
-    // Bisect: ottospace killed (its stream ends, the window stays), then the window's size.
-    let otto_id = otto.child.id().to_string();
-    let _ = Command::new("kill").args(["-KILL", &otto_id]).status();
-    // SIGKILL ends it at once (a zombie until reaped, which `kill -0` would still find).
-    std::thread::sleep(Duration::from_millis(1000));
-    report(&format!(
-        "finder, ottospace killed: lost {:?}; {:?}",
-        [lost_releases(bx, by), lost_releases(bx, by)],
-        frame()
-    ));
-    let sized = |w: f64, h: f64| {
-        let win = ottospace_mac::ax::Window::find(pid, finder_window).expect("the window");
-        let _ = win.set_size(objc2_core_foundation::CGSize::new(w, h));
-        wait_for("the window sized", || frame().filter(|f| close(f[2], w)))
-    };
-    let f = sized(original[2], original[3]);
-    let (sx, sy) = blank(f);
-    report(&format!("finder, killed, first size: lost {:?}; {f:?}", [lost_releases(sx, sy), lost_releases(sx, sy)]));
-    let f = sized(live[2], live[3]);
-    report(&format!(
-        "finder, killed, pane size again: lost {:?}; {f:?}",
-        [lost_releases(bx, by), lost_releases(bx, by)]
-    ));
-    sized(original[2], original[3]);
-    moved((original[0], original[1]));
+    // Quit: the window goes back where it was.
+    otto.call(json!({"cmd": "quit"}));
     wait_for("the Finder window back", || frame().filter(|f| (0..4).all(|i| close(f[i], original[i]))));
     drop(otto);
     // The control: given back, a double-click on a folder opens it.
