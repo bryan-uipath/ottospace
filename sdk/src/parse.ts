@@ -6,6 +6,7 @@ import type {
   AgentChip,
   AgentDial,
   AgentLine,
+  CalendarFetch,
   NoticeBar,
   NoticeLevel,
   AppEntry,
@@ -1771,7 +1772,28 @@ function calendar(value: unknown, at: string): Snapshot["calendar"] {
     all_day_line: orNull(rect)(o.all_day_line, `${at}.all_day_line`),
     first_row: orNull(rect)(o.first_row, `${at}.first_row`),
     nav: nav(o.nav, `${at}.nav`),
+    fetch: calendarFetch(o.fetch, `${at}.fetch`),
+    fetch_line: str(o.fetch_line, `${at}.fetch_line`),
+    empty_note: orNull(str)(o.empty_note, `${at}.empty_note`),
+    fetch_rect: orNull(rect)(o.fetch_rect, `${at}.fetch_rect`),
+    retry: orNull(rect)(o.retry, `${at}.retry`),
+    retries: num(o.retries, `${at}.retries`),
   };
+}
+
+function calendarFetch(value: unknown, at: string): CalendarFetch {
+  const o = fields(value, at);
+  const state = oneOf(["idle", "loading", "read", "failed"] as const, "a fetch's state")(o.state, `${at}.state`);
+  switch (state) {
+    case "idle":
+      return { state };
+    case "loading":
+      return { state, since: num(o.since, `${at}.since`), bytes: num(o.bytes, `${at}.bytes`) };
+    case "read":
+      return { state, at: num(o.at, `${at}.at`), events: num(o.events, `${at}.events`) };
+    case "failed":
+      return { state, at: num(o.at, `${at}.at`), error: str(o.error, `${at}.error`), code: orNull(num)(o.code, `${at}.code`) };
+  }
 }
 
 function frameNumbers(value: unknown, at: string): Snapshot["frame"] {

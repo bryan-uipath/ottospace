@@ -1431,6 +1431,20 @@ export interface Snapshot {
     first_row: Rect | null;
     /** Its header's ‹ and ›, and Today while on another day. */
     nav: { back: Rect | null; forward: Rect | null; today: Rect | null };
+    /**
+     * The feed's fetch: `loading` since (ms) with bytes so far, `read` at with its VEVENTs,
+     * `failed` at with a kind (`timed_out`, `unreachable`, `http`, `moved`, `not_public`,
+     * `too_big`, `not_calendar`, `file`, `curl`) and the HTTP status or curl's exit code. Never the link.
+     */
+    fetch: CalendarFetch;
+    /** The section's fetch line and its empty day's note (null before a good read), as drawn. */
+    fetch_line: string;
+    empty_note: string | null;
+    /** Where the fetch line and its Retry (only after a failure) are drawn. */
+    fetch_rect: Rect | null;
+    retry: Rect | null;
+    /** Retries the user's clicks carried out. */
+    retries: number;
   };
   /**
    * Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last frame drew
@@ -1521,6 +1535,13 @@ export interface WaitReply {
   /** The first line that matched. */
   line: string;
 }
+
+/** The calendar feed's fetch, as the state gives it. */
+export type CalendarFetch =
+  | { state: "idle" }
+  | { state: "loading"; since: number; bytes: number }
+  | { state: "read"; at: number; events: number }
+  | { state: "failed"; at: number; error: string; code: number | null };
 
 /** `calendar`'s reply with no feed set (`calendar_ics`). */
 export interface CalendarOff {

@@ -8,12 +8,17 @@
 
 use std::net::IpAddr;
 
+pub mod fetch;
 pub mod reply;
 
 use crate::ics::{Occurrence, Show};
 
 /// Why a client's Join or Dismiss did nothing.
 pub const USERS_ALONE: &str = "only the user joins or dismisses a meeting";
+/// curl's `max-time` for one fetch, in seconds.
+pub const MAX_SECS: u32 = 30;
+/// The Retry fetches the feed: no client makes the app reach the network.
+pub const USERS_RETRY: &str = "only the user reads the calendar again";
 
 const MINUTE: u64 = 60_000;
 /// From here before its start a meeting pulses slowly; from `IMMINENT` faster.
@@ -666,7 +671,7 @@ pub fn curl_config(url: &str, pin: Option<IpAddr>) -> Option<String> {
     // `joinable` leaves no quote, backslash or space in the link to escape.
     Some(format!(
         "silent\nfail\ngloboff\nproto = \"=https\"\nmax-redirs = 0\nmax-filesize = {}\nconnect-timeout = 10\n\
-         max-time = 30\nwrite-out = \"%{{stderr}}%{{http_code}}\"\n{resolve}url = \"{url}\"\n",
+         max-time = {MAX_SECS}\nwrite-out = \"%{{stderr}}%{{http_code}}\"\n{resolve}url = \"{url}\"\n",
         crate::ics::MAX_BYTES
     ))
 }
@@ -754,6 +759,8 @@ pub struct Calendar {
     pub updated: Option<u64>,
     /// The last read failed: `events` are of the one before.
     pub stale: bool,
+    /// The feed's fetch as it goes: loading, read or failed.
+    pub fetch: fetch::Fetch,
     /// Whether the user is in a call (a microphone is in use), as last seen. `None`: not known.
     pub in_call: Option<bool>,
     /// When the call that is on was first seen (ms).
@@ -943,6 +950,19 @@ impl Calendar {
             (Some(at), true) => format!("not updated since {}", clock(at, offset)),
             (None, _) => "not read yet".to_string(),
         }
+    }
+
+    /// What the Calendar section says with no rows. An empty day only once a read succeeded: before
+    /// it, the fetch's line says loading or what failed.
+    pub fn empty_note(&self) -> Option<&'static str> {
+        self.updated?;
+        Some(if self.day == 0 { "No meetings today" } else { "No meetings" })
+    }
+
+    /// The section's muted line: the fetch as it goes (`fetch::Fetch::line`), the last good read's
+    /// time after a failure. `offset`: the local zone's, for that time.
+    pub fn fetch_line(&self, now: u64, offset: i64) -> String {
+        self.fetch.line(now, self.updated.map(|at| clock(at, offset)))
     }
 
     /// Whether the shell should look for a call now: an alert could come soon or is up, or a call

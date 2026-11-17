@@ -1490,6 +1490,21 @@ pub enum Action {
     CalendarDay {
         step: calendar::DayStep,
     },
+    /// The feed's fetch runs since `since` (ms), `bytes` received so far.
+    CalendarFetching {
+        since: u64,
+        bytes: u64,
+    },
+    /// The feed's fetch ended at `at`: read, holding `events` VEVENTs, or `failure`. A good one's
+    /// `CalendarRead` follows.
+    CalendarFetched {
+        at: u64,
+        events: u32,
+        failure: Option<calendar::fetch::Failure>,
+    },
+    /// The Calendar section's Retry: fetch the feed now. Only the user's: no client makes the app
+    /// reach the network.
+    CalendarRetry,
     /// The features that are on, as the settings say (`features`). What a feature turned off
     /// shows goes from view; what it keeps (marks, pins) stays as it is.
     SetFeatures {
@@ -1961,6 +1976,9 @@ impl Action {
             | Action::CalendarDismiss { .. }
             | Action::CalendarJoin { .. }
             | Action::CalendarDay { .. }
+            | Action::CalendarFetching { .. }
+            | Action::CalendarFetched { .. }
+            | Action::CalendarRetry
             | Action::AgentEvents { .. }
             | Action::TalkSend
             | Action::TalkAnswer { .. }
@@ -2270,6 +2288,9 @@ impl Action {
             | Action::CalendarDismiss { .. }
             | Action::CalendarJoin { .. }
             | Action::CalendarDay { .. }
+            | Action::CalendarFetching { .. }
+            | Action::CalendarFetched { .. }
+            | Action::CalendarRetry
             | Action::EditSettings
             | Action::SettingsRead { .. }
             | Action::Copied { .. }
@@ -2618,6 +2639,8 @@ pub enum Effect {
     OpenLink {
         url: String,
     },
+    /// Fetch the calendar feed now: the user's Retry.
+    CalendarRetry,
     /// The user's Features… choice: write `features.<name>` in the settings file, then send
     /// `SetFeatures` with what it holds.
     SaveFeature {
@@ -3277,6 +3300,7 @@ impl Model {
             // A meeting's link opens only by the user's own click or key; nor does a client
             // silence an alert meant for the user.
             Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
+            Action::CalendarRetry => Some(calendar::USERS_RETRY),
             Action::ListDismiss | Action::ListUndo if self.sidebar == Some(Section::Apps) => Some(apps::USERS_ALONE),
             // The layout file is read by the shell at start, and its app panes start the user's apps.
             Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
@@ -5529,6 +5553,18 @@ impl Model {
                 }
             }
             Action::CalendarJoin { id } => effects.extend(self.calendar.join(id).map(|url| Effect::OpenLink { url })),
+            Action::CalendarFetching { since, bytes } => self.calendar.fetch = calendar::fetch::Fetch::Loading { since, bytes },
+            Action::CalendarFetched { at, events, failure } => {
+                self.calendar.fetch = match failure {
+                    None => calendar::fetch::Fetch::Read { at, events },
+                    Some(why) => calendar::fetch::Fetch::Failed { at, why },
+                }
+            }
+            // Not while one runs: a second would only wait behind it.
+            Action::CalendarRetry if self.calendar.on && !matches!(self.calendar.fetch, calendar::fetch::Fetch::Loading { .. }) => {
+                effects.push(Effect::CalendarRetry)
+            }
+            Action::CalendarRetry => {}
             Action::SetFeatures { features } => self.set_features(features, effects),
             action @ (Action::ListenStart { .. }
             | Action::ListenToggle { .. }
@@ -8525,6 +8561,9 @@ mod tests {
         Action::CalendarDismiss { .. },
         Action::CalendarJoin { .. },
         Action::CalendarDay { .. },
+        Action::CalendarFetching { .. },
+        Action::CalendarFetched { .. },
+        Action::CalendarRetry,
         Action::AgentEvents { .. },
         Action::TalkSend,
         Action::TalkAnswer { .. },
@@ -8811,6 +8850,9 @@ mod tests {
             Action::CalendarDismiss { id: 1 },
             Action::CalendarJoin { id: 1 },
             Action::CalendarDay { step: calendar::DayStep::Back },
+            Action::CalendarFetching { since: 0, bytes: 0 },
+            Action::CalendarFetched { at: 0, events: 0, failure: None },
+            Action::CalendarRetry,
             Action::AgentEvents { task: Subject::Task(1), events: Vec::new(), at: 0 },
             Action::TalkSend,
             Action::TalkAnswer { allow: false, ticket: 1 },
@@ -9085,6 +9127,7 @@ mod tests {
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
+                    Action::CalendarRetry => Some(calendar::USERS_RETRY),
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::DialToggle => Some(chat::DIAL_USERS),
                     Action::FillDisplay => Some(crate::fill::USERS_ALONE),
@@ -15030,6 +15073,7 @@ mod tests {
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
+                    Action::CalendarRetry => Some(calendar::USERS_RETRY),
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::DialToggle => Some(chat::DIAL_USERS),
                     Action::FillDisplay => Some(crate::fill::USERS_ALONE),

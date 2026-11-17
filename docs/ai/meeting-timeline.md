@@ -174,6 +174,42 @@ rail's keyboard to Tasks.
 - Fixed with it: a layout restored after the user had opened the drawer's task listed that task
   twice on the right rail (found by the property test once its makers changed; `layout_file`).
 
+## The fetch, said
+
+Bryan, 2026-11-17: "just opened up ottospace, shows no meetings but i definitely have some
+today", then "it loaded up now", and "can we show progress or some details if its fetch (vs
+just showing no events)".
+
+- **Cause.** His feed (Outlook's, 1.5 MB, 1,858 VEVENTs, Windows TZIDs, measured with counts
+  only): fetched with the app's curl config in 4 to 6 s, parsed in 5 ms, worked out in 2 ms; the
+  app's reader, run on a copy, held 17 meetings for that day. So nothing in the reader or the
+  model dropped them. The first fetch starts at once; what the 30 s and 11 s runs saw was a fetch
+  that had not landed or had failed, and the section said "No meetings" both before a read and
+  after a failed one, with nothing logged. A failed read was tried again only
+  `calendar_refresh_minutes` later (5). Which way those two fetches went is not known: nothing
+  recorded it, so the app's log does now.
+- **States** (`calendar::fetch`, pure): `Fetch` is `Idle` (no word yet), `Loading { since, bytes }`,
+  `Read { at, events }` or `Failed { at, why }`. The shell tells the core with `CalendarFetching`
+  (at the start, the first bytes, then at most every 200 ms) and `CalendarFetched`; `CalendarRead`
+  follows as before. `Failure`: timed out (curl's 28, after `MAX_SECS`), unreachable (a lookup,
+  curl's 6 or 7), an HTTP status of 400 and up, moved, not public, too big, not a calendar (no
+  `BEGIN:VCALENDAR`: a sign-in page read as an empty feed would have said "No meetings"), the
+  file, or curl's exit code. No line number: the reader leaves out what it cannot read and never
+  fails at a line.
+- **The section**: under the rows, `Fetch::line` (`Loading the calendar… 412 KB`, `… 3 s` before
+  a byte, `Updated 2 min ago · 1858 events`, or the failure's words and `· last read 09:40`) and,
+  after a failure, `Retry`. "No meetings today" only once a read succeeded
+  (`Calendar::empty_note`). The band has no empty state: it is not drawn before the first read.
+- **Retry soon**: after a failure 15 s, 30 s, doubling to the refresh interval
+  (`fetch::retry_after`). The user's Retry (`CalendarRetry`, refused for any other origin: no
+  client makes the app reach the network) wakes the thread at once; not while a fetch runs.
+- **No cache on disk**: the parsed events hold titles, and the raw feed the link's data; both stay
+  in memory. A start reads afresh, at once.
+- **The log** (`event_log`): `calendar_fetch` (`try`), `calendar_read` (`bytes`, `vevents`, `held`,
+  `ms`, `parse_ms`), `calendar_failed` (`error`, `curl_exit`, `http`, `ms`, `try`).
+- **State**: `calendar.fetch` (its state, times, bytes, events, the error's kind and code),
+  `fetch_line`, `empty_note`, `fetch_rect`, `retry` and `retries`. No link, no title.
+
 ## Is the user in a call?
 
 The alert wants "you are not in the meeting that just started". Signals tried, least invasive

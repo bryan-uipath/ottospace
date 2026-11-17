@@ -869,7 +869,10 @@ the way.
   checked, and curl pinned to that address), at most 5 MB, 30 seconds. A proxy set in your
   environment (`https_proxy`) applies. With `gh` for pull requests (`repos_prs`), it is ottospace's only network access. The link is handed to curl on its standard input, not in
   its arguments, and is never shown, logged or put in the state. A read that fails keeps the
-  events of the last one. Recurring meetings, time zones, cancelled meetings and moved
+  events of the last one, and is tried again 15 seconds later, then 30, doubling up to
+  `calendar_refresh_minutes`. Each fetch is in the app's log (`<home>/log`): its try, then its
+  size, events and time, or what failed (`timed_out`, `http` and the status, …); never the link
+  or a title. Recurring meetings, time zones, cancelled meetings and moved
   occurrences are followed; see [meeting-timeline.md](ai/meeting-timeline.md) for what is not.
 - **Declined meetings**: set `calendar_email` to your address as the feed lists you among a
   meeting's attendees, and a meeting (or one occurrence) you declined is left out everywhere: the
@@ -885,7 +888,12 @@ the way.
   title, and at most one quiet fact at the end (`now`, or `in 12m` for the next within the hour).
   Hover a row for the band's card. Past meetings are faded; the one that runs is stronger, with a
   white bar at its edge, as now's tick. `Join` shows on hover or selection for a meeting with an
-  `https:` link. "No meetings" when the day is empty. The header: `‹ Today ›`, or `‹ Mon 16 Nov ›`
+  `https:` link. Under the rows a muted line says how the feed's fetch goes: `Loading the
+  calendar… 412 KB` (or the seconds before a byte), `Updated 2 min ago · 1858 events`, or what
+  failed in plain words (`Couldn't reach the calendar (timed out after 30 s)`, `The calendar
+  answered 403`, `Couldn't read the calendar: not an iCalendar feed`) with the time of the last
+  good read and `Retry`, which fetches at once (your click only). "No meetings today" ("No
+  meetings" on another day) only once a read succeeded. The header: `‹ Today ›`, or `‹ Mon 16 Nov ›`
   and `Today` on another day, from 7 days back to 7 on; its date's tooltip says when the feed was
   read. The section goes back to today when the day turns and at start; the band, the alerts and
   now's tick are always of today. The rail cell shows a steady amber dot while a meeting is 2

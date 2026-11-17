@@ -835,6 +835,46 @@ fn the_read_status_says_when() {
     assert_eq!(Calendar::default().read_status(0), "not read yet");
 }
 
+/// Bryan, 2026-11-17: "shows no meetings but i definitely have some today". Before the first
+/// read landed, and after a first read failed, the section said "No meetings", as for an empty day.
+#[test]
+fn the_section_says_loading_or_what_failed_and_no_meetings_only_after_a_good_read() {
+    use crate::model::Model;
+    use crate::{Action, Origin};
+    use fetch::{Failure, Fetch};
+    let mut m = Model::default();
+    m.update(Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() });
+    let line = |m: &Model, now: u64| (m.calendar.empty_note(), m.calendar.fetch_line(now, 0));
+    assert_eq!(line(&m, NINE), (None, "Loading the calendar…".into()), "before the thread's first word");
+    m.update(Action::CalendarFetching { since: NINE, bytes: 0 });
+    assert_eq!(line(&m, NINE + 3_000), (None, "Loading the calendar… 3 s".into()));
+    m.update(Action::CalendarFetching { since: NINE, bytes: 300 * 1024 });
+    assert_eq!(line(&m, NINE + 4_000), (None, "Loading the calendar… 300 KB".into()));
+    // A first read that fails says why, and no "No meetings".
+    m.update(Action::CalendarFetched { at: NINE + 30_000, events: 0, failure: Some(Failure::TimedOut { secs: 30 }) });
+    m.update(Action::CalendarRead { events: None, days: days_of(NINE), at: NINE + 30_000, held_from: 0 });
+    let failed = "Couldn't reach the calendar (timed out after 30 s)".to_string();
+    assert_eq!(line(&m, NINE + 31_000), (None, failed));
+    // The user's Retry fetches; a client's, or the system's, does not.
+    for origin in [Origin::Socket, Origin::System] {
+        assert_eq!(m.refusal(&Action::CalendarRetry, origin), Some(USERS_RETRY));
+    }
+    assert_eq!(m.update(Action::CalendarRetry.sent_by(Origin::User)), [crate::Effect::CalendarRetry]);
+    // Read: an empty day says so, with when and how many.
+    m.update(Action::CalendarFetching { since: NINE + 40_000, bytes: 0 });
+    assert!(m.update(Action::CalendarRetry.sent_by(Origin::User)).is_empty(), "not while one runs");
+    m.update(Action::CalendarFetched { at: NINE + 45_000, events: 1858, failure: None });
+    m.update(Action::CalendarRead { events: Some(Vec::new()), days: days_of(NINE), at: NINE + 45_000, held_from: 0 });
+    assert_eq!(m.calendar.fetch, Fetch::Read { at: NINE + 45_000, events: 1858 });
+    let read = (Some("No meetings today"), "Updated 2 min ago · 1858 events".to_string());
+    assert_eq!(line(&m, NINE + 45_000 + 2 * M), read);
+    // A later failure keeps what was read, and says when that was.
+    m.update(Action::CalendarFetched { at: NINE + H, events: 0, failure: Some(Failure::Http(403)) });
+    m.update(Action::CalendarRead { events: None, days: days_of(NINE), at: NINE + 45_000, held_from: 0 });
+    let after = (Some("No meetings today"), "The calendar answered 403 · last read 09:00".to_string());
+    assert_eq!(line(&m, NINE + H), after);
+}
+
 #[test]
 fn spans_round_up_to_the_minute() {
     assert_eq!(span(1), "1m");
