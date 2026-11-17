@@ -50,13 +50,15 @@ pub enum RecordKind {
 }
 
 impl RecordKind {
-    /// True if a pane showing `kind` is what this records: a terminal, or a window of the same app.
+    /// True if a pane showing `kind` is what this records: a terminal, or a window of the same app,
+    /// or a slot for one (its window away: the mark keeps the place).
     fn is(&self, kind: &Kind) -> bool {
         match (self, kind) {
             (RecordKind::Terminal, Kind::Terminal) => true,
-            (RecordKind::App { bundle, name, .. }, Kind::App { bundle: b, name: n, .. }) => {
-                same_app((bundle.as_deref(), name), (b.as_deref(), n))
-            }
+            (
+                RecordKind::App { bundle, name, .. },
+                Kind::App { bundle: b, name: n, .. } | Kind::Slot { bundle: b, name: n },
+            ) => same_app((bundle.as_deref(), name), (b.as_deref(), n)),
             _ => false,
         }
     }
@@ -251,6 +253,8 @@ pub struct Window {
     pub main: bool,
     /// The pane that holds it already.
     pub pane: Option<PaneId>,
+    /// A slot that waits selects it (`Model::slot_selects`): no other pane takes it.
+    pub slot: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -272,7 +276,7 @@ pub fn pick_window(title: &str, windows: &[Window]) -> Pick {
     fn only<'a>(list: &[&'a Window]) -> Option<&'a Window> {
         if list.len() == 1 { list.first().copied() } else { None }
     }
-    let free: Vec<&Window> = windows.iter().filter(|w| w.pane.is_none()).collect();
+    let free: Vec<&Window> = windows.iter().filter(|w| w.pane.is_none() && !w.slot).collect();
     let held: Vec<&Window> = windows.iter().filter(|w| w.pane.is_some()).collect();
     if let Some(window) = titled(&free, title).or(only(&free)).or(free.iter().find(|w| w.main).copied()) {
         return Pick::Host(window.id);
@@ -821,12 +825,17 @@ impl Model {
     }
 
     pub(crate) fn record(&self, pane: &Pane, cwds: &[(PaneId, String)]) -> PaneRecord {
+        // A slot is an app pane's record with a `slot` key: an older build reads a plain app pane.
+        let extra: Extra = self.slot_record(pane.id).map(|slot| ("slot".to_string(), slot)).into_iter().collect();
         let kind = match &pane.kind {
             Kind::Empty => RecordKind::Empty,
             Kind::Terminal => RecordKind::Terminal,
             Kind::App { title, bundle, name, .. } => {
                 let (bundle, name, title) = (bundle.clone(), name.clone(), kept_title(title, 512));
-                RecordKind::App { bundle, name, title, extra: Extra::new() }
+                RecordKind::App { bundle, name, title, extra }
+            }
+            Kind::Slot { name, bundle } => {
+                RecordKind::App { bundle: bundle.clone(), name: name.clone(), title: String::new(), extra }
             }
         };
         // Where the shell is now, as the shell crate read it; else where it started.
@@ -1049,6 +1058,10 @@ impl Model {
             let id = self.next_id;
             ids.push((pane.id, id));
             self.panes.push(Pane { id, kind: Kind::Empty, cwd: None, fit: None });
+            // A slot waits for its own look, never for an old window id.
+            if self.restore_slot(id, &pane.kind) {
+                continue;
+            }
             if pane.kind != RecordKind::Empty {
                 let why = "not opened yet".to_string();
                 self.marks.unfilled.push(Unfilled { pane: id, record: pane.clone(), why });
@@ -1078,6 +1091,10 @@ impl Model {
                         (opened.kind, opened.cwd) = (Kind::Terminal, empty.record.cwd.clone());
                         effects.push(Effect::Opened(pane));
                     }
+                }
+                // A slot on show names its app: its first look comes first, so this pane does not
+                // take the window the slot is for (`Window::slot`).
+                (RecordKind::App { bundle, name, .. }, None) if self.waits_for_slot_look((bundle.as_deref(), name)) => {
                 }
                 (RecordKind::App { bundle, name, title, .. }, None) => {
                     let (bundle, name, title) = (bundle.clone(), name.clone(), title.clone());
@@ -1489,7 +1506,7 @@ mod tests {
     }
 
     fn window(id: u32, title: &str, main: bool, pane: Option<PaneId>) -> Window {
-        Window { id, title: title.into(), main, pane }
+        Window { id, title: title.into(), main, pane, slot: false }
     }
 
     #[test]

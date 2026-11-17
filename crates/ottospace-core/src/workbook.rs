@@ -728,6 +728,8 @@ impl Model {
             if let RecordKind::App { title, extra, .. } = &mut pane.kind {
                 title.clear();
                 extra.clear();
+                // A slot's own: what it selects (its title pattern is the user's, cut down by them).
+                extra.extend(self.slot_record(pane.id).map(|slot| ("slot".to_string(), slot)));
             }
             let history =
                 histories.iter().find(|(id, _)| *id == pane.id).map(|(_, history)| history.kept(MAX_HISTORY_LINES));
