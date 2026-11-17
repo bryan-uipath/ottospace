@@ -158,8 +158,8 @@ A small script printed the variable and tried to connect.
   (`OTTOSPACE_HOST_ONLY`: it hosts only the canary, and has no user to grant a level) still reads
   `ax_tree` as before: `e2e_apps.rs` uses it to find the canary's controls.
 - **On screen.** The robot in an app pane's header (`agent:<pane>`): glyph, `Off`/`See`/`Act`, caret;
-  muted at Off, dimmed with no task, the app's blue at See, amber at Act with the pane's border in
-  it. A click, ⌘⌃V, the palette (Agent Mode…, Agent Mode: Off / See / See and Act) or a label
+  muted at Off, dimmed with no task, the app's blue at See, amber at Act; the pane's header line
+  (`theme::focus_line`'s) in the level's colour at See and at Act. A click, ⌘⌃V, the palette (Agent Mode…, Agent Mode: Off / See / See and Act) or a label
   (`agent:<pane>`, `agent-item:<n>`). See and act's item says "Pressing arrives later": it grants
   what See does. Every use and refusal is a row in the task's conversation (`Notice::AppUsed`) and a
   use of the dial's twelfth station, Apps. Not yet: the pulse while a read runs, the tip's "read 4 s
@@ -233,8 +233,8 @@ in the pane's header beside `fit`.
   this into a dropdown - maybe with a robot icon … to show that it relates to automation"): a robot
   glyph, the level's word (`Off`, `See`, `Act`) and a caret. Off: muted, and always shown on an app
   pane, so the switch can be found. See: the control in the see colour (the app's primary), with the
-  task's badge beside it. See and act: the act colour (the needs-you amber) and a 1 pt border of the
-  pane in it, so act is visible from across the screen. While a read or an action runs: the glyph
+  task's badge beside it. See and act: the act colour (the needs-you amber). At See and at Act the
+  pane's 2 pt header line is in the level's colour, on any pane, so act is visible from across the screen. While a read or an action runs: the glyph
   pulses (the clip's glow, `main.rs:4940-4944`), and at act the control about to be pressed is
   outlined; reduce motion: filled, no pulse. A tooltip says "Task 7 can see this window" /
   "… and press its controls".

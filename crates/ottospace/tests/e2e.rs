@@ -9184,6 +9184,11 @@ fn the_dial_counts_calls_by_station_and_keeps_the_users_collapse() {
     }
     assert_eq!((&first["pulse"], &first["failed"], &first["lit"]), (&json!("idle"), &json!(true), &json!(false)));
     assert_eq!((&first["context"], &first["collapsed"]), (&json!(0.75), &json!(false)), "open while it runs");
+    // Centred in the drawer.
+    let (face, body) = (otto.control("talk:dial"), otto.call(json!({"cmd": "state"}))["drawer"]["body"].clone());
+    let body: Vec<f64> = body.as_array().expect("the drawer is drawn").iter().filter_map(Value::as_f64).collect();
+    let off = (face[0] + face[2] / 2.) - (body[0] + body[2] / 2.);
+    assert!(off.abs() <= 2., "{face:?} in {body:?}");
     // Counts and stations only: no command, path or host.
     let said = first.to_string();
     assert!(!said.contains("cargo") && !said.contains("auth.rs") && !said.contains("example.com"), "{said}");

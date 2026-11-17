@@ -885,7 +885,6 @@ function agentDial(value: unknown, at: string): AgentDial {
       running: num(s.running, `${at}.running`),
     };
   };
-  const leg = (value: unknown, at: string) => ({ station: station(fields(value, at).station, `${at}.station`) });
   return {
     pulse: pulse(o.pulse, `${at}.pulse`),
     stations: list(spot)(o.stations, `${at}.stations`),
@@ -893,7 +892,6 @@ function agentDial(value: unknown, at: string): AgentDial {
     level: level(o.level, `${at}.level`),
     failed: bool(o.failed, `${at}.failed`),
     lit: bool(o.lit, `${at}.lit`),
-    route: list(leg)(o.route, `${at}.route`),
     timed: bool(o.timed, `${at}.timed`),
     collapsed: bool(o.collapsed, `${at}.collapsed`),
     animating: bool(o.animating, `${at}.animating`),

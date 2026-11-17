@@ -18,14 +18,14 @@ the transcript's own events and times (ms, passed in; no clock):
 | `TurnFinished`, `Exited` | running calls end; a failed turn, or an end the user did not ask for (`exit 1`, `signal 9`), is the error |
 
 Each use adds 1 to its station's weight, halved every 10 minutes (`HALF_LIFE_MS`); a spoke is
-drawn by weight against the heaviest. The route keeps the last 6 stations (a station once in a
-row) and shows those under a minute old. `Transcript::dial(now)` gives the `Dial`: per station
+drawn by weight against the heaviest. `Transcript::dial(now)` gives the `Dial`: per station
 calls, failed, failing, lit and how long; the centre's state (running, needs you, idle, ended,
-error); the context fraction and its level (amber ≥ 0.7, red ≥ 0.9); the route; the lines
-(what it does now, the context, turns and time); the hovers. The shell draws only that.
+error); the context fraction and its level (amber ≥ 0.7, red ≥ 0.9); the lines (what it
+does now, turns and time) and the timer under the centre; the hovers (the ring's: the context
+used and the tokens). The shell draws only that.
 
 A watched session (read from its file a message at a time) has no times: lit stations have no
-arcs and the now line no clock. The collapse is the model's: `Model::dial_collapsed` is the
+arcs and no timer. The collapse is the model's: `Model::dial_collapsed` is the
 user's pick (`DialToggle`, the user's alone), else open while the agent runs or is watched.
 Picks are kept with the layout (`Drawer::dials`). The property test checks that no action but
 an agent's events, a message, or a start or end moves any dial.
@@ -55,8 +55,8 @@ Differences from the mock: an MCP server that is not a browser or memory one goe
 ## Drawing
 
 `crates/ottospace/src/dial.rs`: paths and quads in one canvas, built each paint. The app paints
-on a change, and on a 1 s tick only while a station is lit or the route fades (`dial_moves`).
-Reduce motion: the route keeps one opacity until it expires. Below 360 pt the lines are hidden.
+on a change, and on a 1 s tick only while a station is lit (`dial_moves`). The dial is
+centred, its lines under it; below 360 pt they are hidden.
 
 ## Motion
 

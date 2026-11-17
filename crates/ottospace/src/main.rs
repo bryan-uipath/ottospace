@@ -1244,7 +1244,7 @@ impl Workspace {
                         if runs && tick % 30 == 0 {
                             cx.notify();
                         }
-                        // A dial lit or fading is drawn again each second; at rest only on a change.
+                        // A dial lit is drawn again each second; at rest only on a change.
                         if tick % 60 == 0 && this.dial_moves() {
                             cx.notify();
                         }
@@ -5532,6 +5532,20 @@ impl Workspace {
         let marked = self.model.mark_of(MarkOf::Pane(Some(id))).filter(|_| self.on(Feature::Marks));
         let marked = marked.and_then(|mark| self.model.marks.get(mark));
         let marked = marked.map(|mark| mark.key.map_or("◆".to_string(), |key| format!("◆ {}", key.to_uppercase())));
+        // Focus: a line in the mode's accent over the header's foot and its 1pt border, taking no room.
+        // A raised window with a title bar covers the header: the line goes in the 2pt gap above it.
+        // Agent mode's level, where a task may use the pane, takes the line's place on any pane.
+        let focus = theme::focus_line(self.model.focused == Some(id), self.model.mode());
+        let accent = self.agent_header_line(id).or(focus);
+        // A peek raises the window as entering does.
+        let raised = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
+        let covered = bar > 0.0 && raised == Some(id);
+        let line = |d: Div| d.absolute().left_0().right_0().h(px(theme::FOCUS_LINE));
+        let (line, top_line) = match accent {
+            Some(colour) if covered => (None, Some(line(div()).top_0().bg(rgb(colour)))),
+            Some(colour) => (Some(line(div()).bottom(px(-1.)).bg(rgb(colour))), None),
+            None => (None, None),
+        };
         // The header is the pane's handle: a drag of it carries the pane to a drop zone or a tab.
         let workspace = cx.weak_entity();
         let header = div()
@@ -5549,6 +5563,7 @@ impl Workspace {
             .flex()
             .items_center()
             .justify_between()
+            .relative()
             .bg(rgb(theme::RAISED))
             .border_b_1()
             .border_color(rgb(theme::BORDER))
@@ -5605,7 +5620,8 @@ impl Workspace {
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _, window, cx| this.close_pane(id, window, cx))),
                     ),
-            );
+            )
+            .children(line);
         // Once its picture is taken. Until then the pane draws as ever, beside the bar.
         let taken = |material: &&ottospace_core::capture::Material| self.shots.contains_key(&material.n);
         let annotated = self.model.annotated().filter(|material| material.pane == id).filter(taken);
@@ -5714,7 +5730,7 @@ impl Workspace {
             }
         };
         // The content sits 2pt inside the pane. A live app window is placed over it, and without
-        // the gap that window's own edge covers the pane's accent border.
+        // the gap that window's own edge covers the pane's border.
         let inner = div()
             .relative()
             .size_full()
@@ -5737,7 +5753,6 @@ impl Workspace {
 
         // While another pane is live, fade this one: input goes to the live app, not here.
         let faded = self.model.live.is_some_and(|live| live != id);
-        let focused = self.model.focused == Some(id);
         div()
             .flex_1()
             .size_full()
@@ -5745,14 +5760,8 @@ impl Workspace {
             .flex()
             .flex_col()
             .border_1()
-            // In list mode the bar has the keyboard: the focused pane is only where a row would open.
-            .border_color(rgb(match (focused, self.model.mode()) {
-                (true, Mode::List) => theme::BORDER_STRONG,
-                (true, mode) => theme::accent(mode),
-                (false, _) => theme::BORDER,
-            }))
-            // See and act: the border in the act colour, seen from across the screen.
-            .when(self.agent_acts(id), |d| d.border_color(rgb(theme::AGENT_ACT)))
+            // Neutral on every pane: the header's line marks focus (`theme::focus_line`).
+            .border_color(rgb(theme::BORDER))
             .when(faded, |d| d.opacity(0.5))
             .relative()
             .when(bar > 0.0, |d| d.p(px(2.)))
@@ -5761,6 +5770,7 @@ impl Workspace {
             )
             .child(header)
             .child(body)
+            .children(top_line)
             // The pulse: the border and a tint in the focus colour, over the pane, taking no clicks.
             .when(glow > 0., |d| {
                 let color = gpui::Hsla::from(rgb(theme::PRIMARY));
@@ -6240,7 +6250,7 @@ impl Workspace {
             // The app is up for a scroll: it has the keyboard until the peek ends.
             _ if peek_hint.is_some() => ("PEEK", peek_hint.as_deref().unwrap_or_default()),
             // A key, not the key list: ⌘/ shows the keys of every mode. A mode you can be in by
-            // accident names its way out. Normal is the focus border's colour alone: no chip.
+            // accident names its way out. Normal is the focus line's colour alone: no chip.
             Mode::Normal => ("", ""),
             Mode::Pick => ("PICK", ""),
             Mode::Palette => ("COMMAND", ""),

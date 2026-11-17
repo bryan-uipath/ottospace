@@ -209,7 +209,6 @@ function replyWith(overlay: unknown): Record<string, unknown> {
               level: "amber",
               failed: true,
               lit: true,
-              route: [{ station: "model" }, { station: "shell" }],
               timed: true,
               collapsed: false,
               animating: true,
