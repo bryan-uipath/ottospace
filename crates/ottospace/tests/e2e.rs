@@ -5759,6 +5759,84 @@ fn agent_argv(dir: &Path, name: &str) -> Option<Vec<String>> {
     Some(text.split_terminator('\0').map(str::to_string).collect())
 }
 
+/// The owner's report: "Workspace deleted" showed above the section's rows and pushed them down.
+/// It is on the notice bar at the foot: nothing above it moves, Undo is the user's alone, × ends it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_deleted_workspace_is_offered_back_on_the_notice_bar_and_nothing_above_it_moves() {
+    let home = user_folder("workspace-deleted", r#"{"repos": [], "restore_layout": false}"#);
+    let otto = Otto::launch_with("workspace-deleted", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let names = |reply: &Value| -> Vec<String> {
+        let rows = reply["workbooks"].as_array().cloned().unwrap_or_default();
+        rows.iter().filter_map(|row| row["name"].as_str().map(str::to_string)).collect()
+    };
+    // The bar fully open with the offer, or gone: it grows and shrinks over a few frames.
+    let bar = |open: bool| {
+        let met = move |o: &Otto| {
+            let reply = o.drawn();
+            let drawn = &reply["notice_bar"];
+            let shown = drawn["height"] == 28.0 && drawn["kind"] == "undo";
+            (if open { shown } else { drawn.is_null() }).then_some(reply)
+        };
+        otto.wait_for("the notice bar", met)
+    };
+    // The rows of the first two workspaces, and the section's header.
+    let above = |reply: &Value| (reply["workbooks"][0]["row"].clone(), reply["workbooks"][1]["row"].clone());
+    for _ in 0..3 {
+        otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    }
+    otto.call(json!({"cmd": "select_space", "index": 0}));
+    otto.call(json!({"cmd": "section", "section": "workbook"}));
+    otto.user_key("cmd-ctrl-e");
+    otto.user_key("j j");
+    let before = bar(false);
+    assert_eq!(names(&before), ["Workspace 2", "Workspace 3", "Workspace 4"]);
+
+    // The user's `x` deletes the last: information at the foot, with Undo and ×.
+    otto.user_key("x");
+    let shown = bar(true);
+    let drawn = &shown["notice_bar"];
+    assert_eq!(
+        (names(&shown).len(), &shown["workbook_offer"], &drawn["level"], &drawn["text"], &drawn["offer"]),
+        (2, &json!("deleted"), &json!("info"), &json!("Workspace deleted"), &json!("undo"))
+    );
+    let (window, at_rest) = (rect(&shown["window"]), rect(&drawn["rect"]));
+    assert_eq!(at_rest[1] + at_rest[3], window[3] - 24.0, "{at_rest:?} in {window:?}");
+    // Nothing above it moves: the rows that stay and the section's header.
+    assert_eq!((above(&shown), &shown["bar_header"]), (above(&before), &before["bar_header"]));
+    assert!(rect(&shown["workbooks"][1]["row"])[1] < at_rest[1]);
+
+    // A client's click on Undo, its label on it, and its click on × are refused: the offer stands.
+    let (undo, close) = (at(rect(&drawn["offer_rect"]), 0.5, 0.5), at(rect(&drawn["close"]), 0.5, 0.5));
+    otto.click(undo, 1);
+    sneak_to(&otto, "notice:offer");
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    otto.click(close, 1);
+    let stands = bar(true);
+    assert_eq!((names(&stands).len(), &stands["workbook_offer"]), (2, &json!("deleted")));
+    // The user's click on Undo puts it back, and the bar goes.
+    otto.user_click(undo);
+    let back = bar(false);
+    assert_eq!((names(&back), &back["workbook_offer"]), (names(&before), &Value::Null));
+    assert_eq!(above(&back), above(&before));
+
+    // Deleted again, the user's × ends the offer: `u` puts nothing back.
+    let list = || {
+        if otto.call(json!({"cmd": "state"}))["mode"] == "list" {
+            otto.user_key("cmd-ctrl-e");
+        }
+        otto.user_key("cmd-ctrl-e")
+    };
+    list();
+    otto.user_key("j j x");
+    assert_eq!(bar(true)["workbook_offer"], "deleted");
+    let dismissed = otto.dismiss_notice();
+    assert_eq!((&dismissed["workbook_offer"], names(&dismissed).len()), (&Value::Null, 2));
+    bar(false);
+    list();
+    assert_eq!(names(&otto.user_key("u")).len(), 2);
+}
+
 /// The owner's report: the section's + took the tab on show (another session's), and a second +
 /// said "Updated". + makes a new, empty workspace each time, on the top row and in the section.
 #[test]
@@ -5934,18 +6012,18 @@ fn a_workspaces_row_opens_on_a_click_and_its_dots_rename_and_delete() {
     let deleted = otto.user_click(at(rect(&open["row_menu"]["items"][1]["rect"]), 0.5, 0.5));
     assert_eq!((names(&deleted), &deleted["workbook_offer"]), (vec!["Workspace 3".to_string()], &json!("deleted")));
     assert_eq!(deleted["row_menu"], Value::Null);
-    // The menu does not hang where its … was: the line that offers the undo runs out (six
-    // seconds), the row under it moves up, and the menu closes. A label opened it: the keys are
-    // on its first item.
+    // The undo is offered on the notice bar, not above the rows: when it runs out (six seconds)
+    // no row moves, and the menu stays under its …. A label opened it: the keys are on its first item.
     otto.drawn();
     let (_, labels) = sneak(&otto);
     let open = otto.user_key(&letters(&labels["workbook-menu:2"]));
     assert_eq!((&open["row_menu"]["workbook"], &open["row_menu"]["selected"]), (&json!(2), &json!(0)));
-    let moved = otto.wait_for("the undo line to go, and the menu with it", |otto| {
-        let state = otto.call(json!({"cmd": "state"}));
-        (state["workbook_offer"].is_null() && state["row_menu"].is_null()).then_some(state)
+    let gone = otto.wait_for("the offer to run out", |otto| {
+        let state = otto.drawn();
+        (state["workbook_offer"].is_null() && state["notice_bar"].is_null()).then_some(state)
     });
-    assert_eq!(names(&moved), ["Workspace 3"]);
+    assert_eq!((names(&gone), &gone["row_menu"]["workbook"]), (vec!["Workspace 3".to_string()], &json!(2)));
+    otto.user_key("escape");
     // A click on the body opens it: selected if it is on the row, back on the row if hidden.
     let rows = otto.drawn();
     assert_eq!(selected(&otto.user_click(body(&rows, 0))), json!({"kind": "workbook", "id": 2}));
@@ -6654,11 +6732,20 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
         (&updated["workbooks"][0]["summary"], &updated["workbook_offer"], &updated["mode"]),
         (&json!("3 terminals"), &json!("updated"), &json!("normal"))
     );
+    // The bar offers it back, saying what the save kept.
+    let offered = otto.wait_for("the offer on the bar", |o| {
+        let bar = o.drawn()["notice_bar"].clone();
+        (bar["kind"] == "undo").then_some(bar)
+    });
+    assert!(offered["text"].as_str().is_some_and(|text| text.starts_with("Saved \"dri\": ")), "{offered}");
+    assert_eq!(offered["offer"], "undo");
     assert_eq!((names(&updated), workbook_files(&home).len()), (vec!["dri".to_string()], 1));
     // List mode: U takes it back, R renames, X deletes and U puts back. Not for a client's keys.
     assert_eq!(otto.user_key("cmd-ctrl-e")["state"]["list"], 0);
     let undone = otto.user_key("u");
     assert_eq!((&undone["workbooks"][0]["summary"], &undone["workbook_offer"]), (&json!("2 terminals"), &Value::Null));
+    // Taken back, the save's note goes with the offer: no "Saved" left saying it.
+    assert_eq!(undone["notice"], Value::Null, "{}", undone["notice"]);
     assert_eq!(otto.user_key("r")["state"]["mark_input"]["type"], "workbook");
     let renamed = otto.user_key("o p s enter");
     assert_eq!(

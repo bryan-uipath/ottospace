@@ -87,12 +87,16 @@ pub fn names(head: &Head, offset: i64) -> impl Iterator<Item = String> {
 }
 
 /// `text` with Markdown's active characters escaped, on one plain line. `:` and `@` too, and the
-/// `.` of `www.`: previews that find links in bare text (GitHub's) find none.
+/// `.` of `www.`: previews that find links in bare text (GitHub's) find none. And Obsidian's and
+/// GitHub's own: `$` math, `%%` comments, `==` highlights, `^` superscripts and footnotes.
 pub fn escape(text: &str, max: usize) -> String {
     let mut out = String::new();
     for c in crate::capture::plain(text, max).chars() {
         let www = c == '.' && out.to_lowercase().ends_with("www");
-        if www || matches!(c, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '#' | '|' | '!' | '&' | '~' | ':' | '@')
+        let obsidian = matches!(c, '$' | '%' | '=' | '^');
+        if www
+            || obsidian
+            || matches!(c, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>' | '#' | '|' | '!' | '&' | '~' | ':' | '@')
         {
             out.push('\\');
         }
@@ -245,7 +249,7 @@ mod tests {
             // Every active character is escaped: none stands bare.
             let mut chars = escaped.chars();
             while let Some(c) = chars.next() {
-                assert!(!"[]<>#|`*_!&~:@".contains(c), "{c:?} bare in {escaped:?}");
+                assert!(!"[]<>#|`*_!&~:@$%=^".contains(c), "{c:?} bare in {escaped:?}");
                 if c == '\\' {
                     chars.next();
                 }
@@ -255,5 +259,24 @@ mod tests {
         let app = header(&Head { app: "[Zoom](http://x)\n# h".into(), ..head() }, None, &paris);
         assert!(app.starts_with("# Transcript: \\[Zoom\\](http\\://x) \\# h, "), "{app}");
         assert_eq!(escape("WWW.x and www", 50), "WWW\\.x and www");
+    }
+
+    /// Obsidian's and GitHub's syntax that plain words could make, one case each.
+    #[test]
+    fn obsidian_and_github_syntax_stays_text() {
+        let cases = [
+            ("costs $5 or $x$", r"costs \$5 or \$x\$"),
+            ("$$e$$", r"\$\$e\$\$"),
+            ("%%hidden%%", r"\%\%hidden\%\%"),
+            ("==marked==", r"\=\=marked\=\="),
+            ("~~gone~~", r"\~\~gone\~\~"),
+            ("x^2^ and ^block", r"x\^2\^ and \^block"),
+            ("[[Note]] ![[embed]]", r"\[\[Note\]\] \!\[\[embed\]\]"),
+            ("a #tag here", r"a \#tag here"),
+            ("a note[^1]", r"a note\[\^1\]"),
+        ];
+        for (heard, file) in cases {
+            assert_eq!(escape(heard, 200), file, "{heard:?}");
+        }
     }
 }

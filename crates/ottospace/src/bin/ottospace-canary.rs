@@ -275,7 +275,11 @@ fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mu
                 }
             }
             Request::Play { path, child: false } => {
-                ottospace_mac::app_audio::play(&path);
+                // A sound that does not play fails the request, not the test's measure later.
+                if !ottospace_mac::app_audio::play(&path) {
+                    let _ = reply.send(json!({ "ok": false, "error": "the sound did not play" }).to_string());
+                    continue;
+                }
             }
             Request::Play { path, child: true } => {
                 let _ = std::process::Command::new("/usr/bin/afplay").arg(&path).spawn();

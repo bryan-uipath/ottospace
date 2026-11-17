@@ -97,10 +97,10 @@ workspace; tabs of nothing (a dismissed task's, a client's) go to the workspace 
 | Save the tab on show | ⌘⇧S. In a workspace: into that one. Elsewhere: as a new one; type its name, ↵ |
 | Add the tab on show to one | ⌘⌃E, then `a` on its row. Or File ▸ Add Tab to Workspace… |
 | Save every tab on the bar as one | File ▸ Save All Tabs as Workspace |
-| Update a tab of it after changing it | ⌘⇧S again on that tab. Undo on the line at the top (six seconds) |
+| Update a tab of it after changing it | ⌘⇧S again on that tab. Undo on the notice bar at the foot (six seconds) |
 | Open it | Workspaces, click it. Or ⌘⌃E, ↵. Its saved tabs open in order; one already open is kept. None saved: one empty tab |
 | See, open, rename or remove one of its tabs | ▸ on its row (⌘⌃E: space), then the tab's row: click opens it; its … has Rename, Remove |
-| Rename or delete it | Point at its row: … opens a menu with Rename, Delete. Or ⌘⌃E, then `r`, `x`; `u` puts a deleted one back |
+| Rename or delete it | Point at its row: … opens a menu with Rename, Delete. Or ⌘⌃E, then `r`, `x`. Undo on the notice bar at the foot (six seconds), or `u`, puts a deleted one back |
 
 A saved tab keeps the splits, each app, and each terminal's directory, last 500 lines and the command
 running in it. Opened, a terminal shows those lines above its prompt with the command typed on
