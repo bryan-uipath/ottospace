@@ -9884,7 +9884,7 @@ fn the_notice_bar_sits_at_the_foot_moves_nothing_above_and_only_the_user_dismiss
     let plain = home.canonicalize().unwrap().to_string_lossy().into_owned();
     otto.call(json!({"cmd": "repo_add", "path": plain}));
     let warned = bar(Some("warning"));
-    assert_eq!(warned["notice"].as_str(), Some(format!("No repository in {plain}").as_str()));
+    assert_eq!(warned["notice"].as_str(), Some(format!("Not a repository: {plain}").as_str()));
     // A client's failure does not take its place: the client reads its own in `notice`.
     let failed = otto.raw(r#"{"cmd":"open_app","name":"Finder"}"#);
     assert!(failed["error"].is_string(), "{failed}");
