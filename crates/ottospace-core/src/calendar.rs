@@ -655,7 +655,7 @@ pub fn pin_address(found: &[IpAddr]) -> Option<IpAddr> {
 /// The config `curl --config -` reads on its standard input: the link is not in its arguments,
 /// so `ps` does not show it. `https:` only, no redirect (one could lead to this machine's
 /// network), no globbing of `[]{}`, a size cap and time limits. The status code goes to stderr
-/// (`feed_answer`). `pin`: the address the host was resolved to and checked (`public_address`),
+/// (`fetch::Failure::of_curl`). `pin`: the address the host was resolved to and checked (`public_address`),
 /// which curl then connects to, so a second lookup cannot answer otherwise. `None` for a link
 /// `feed_refusal` refuses.
 pub fn curl_config(url: &str, pin: Option<IpAddr>) -> Option<String> {
@@ -674,23 +674,6 @@ pub fn curl_config(url: &str, pin: Option<IpAddr>) -> Option<String> {
          max-time = {MAX_SECS}\nwrite-out = \"%{{stderr}}%{{http_code}}\"\n{resolve}url = \"{url}\"\n",
         crate::ics::MAX_BYTES
     ))
-}
-
-/// What curl's status code (`write-out`) says of a read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Answer {
-    Read,
-    /// The feed moved: its final address belongs in the settings.
-    Moved,
-    Failed,
-}
-
-pub fn feed_answer(code: &str) -> Answer {
-    match code.trim().parse::<u16>() {
-        Ok(200..=299) => Answer::Read,
-        Ok(300..=399) => Answer::Moved,
-        _ => Answer::Failed,
-    }
 }
 
 /// The alert of one occurrence: how many were given (at most 2) and when the last was.

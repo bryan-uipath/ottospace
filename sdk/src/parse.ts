@@ -1777,7 +1777,7 @@ function calendar(value: unknown, at: string): Snapshot["calendar"] {
     empty_note: orNull(str)(o.empty_note, `${at}.empty_note`),
     fetch_rect: orNull(rect)(o.fetch_rect, `${at}.fetch_rect`),
     retry: orNull(rect)(o.retry, `${at}.retry`),
-    retries: num(o.retries, `${at}.retries`),
+    retries: orNull(num)(o.retries, `${at}.retries`),
   };
 }
 

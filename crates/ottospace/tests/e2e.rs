@@ -8323,7 +8323,7 @@ fn the_calendar_says_it_loads_what_failed_and_tries_again() {
     let loading = fetching(&otto, "loading", "Loading the calendar…");
     assert_eq!((&loading["empty_note"], loading["fetch_rect"].is_array()), (&Value::Null, true), "{loading}");
     // Timed out: what failed, a Retry, still no "No meetings".
-    let failed = fetching(&otto, "failed", "Couldn't reach the calendar (timed out after 30 s)");
+    let failed = fetching(&otto, "failed", "Couldn't reach the calendar (timed out after 1 s)");
     assert_eq!((&failed["fetch"]["error"], &failed["empty_note"]), (&json!("timed_out"), &Value::Null), "{failed}");
     // A client's click on Retry fetches nothing.
     otto.click(centre(&failed["retry"]), 1);

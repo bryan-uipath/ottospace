@@ -191,7 +191,7 @@ just showing no events)".
 - **States** (`calendar::fetch`, pure): `Fetch` is `Idle` (no word yet), `Loading { since, bytes }`,
   `Read { at, events }` or `Failed { at, why }`. The shell tells the core with `CalendarFetching`
   (at the start, the first bytes, then at most every 200 ms) and `CalendarFetched`; `CalendarRead`
-  follows as before. `Failure`: timed out (curl's 28, after `MAX_SECS`), unreachable (a lookup,
+  follows as before. `Failure`: timed out (curl's 28, with the seconds it took), unreachable (a lookup,
   curl's 6 or 7), an HTTP status of 400 and up, moved, not public, too big, not a calendar (no
   `BEGIN:VCALENDAR`: a sign-in page read as an empty feed would have said "No meetings"), the
   file, or curl's exit code. No line number: the reader leaves out what it cannot read and never

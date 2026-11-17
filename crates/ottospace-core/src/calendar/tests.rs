@@ -741,8 +741,6 @@ fn only_a_public_address_is_fetched_from_and_a_redirect_is_no_read() {
     }
     assert_eq!(feed_host("https://calendar.example.com:8443/x"), Some(("calendar.example.com", 8443)));
     assert_eq!(feed_host("https://calendar.example.com/x"), Some(("calendar.example.com", 443)));
-    let answers = [feed_answer("200"), feed_answer("302"), feed_answer("404"), feed_answer("")];
-    assert_eq!(answers, [Answer::Read, Answer::Moved, Answer::Failed, Answer::Failed]);
 }
 
 #[test]

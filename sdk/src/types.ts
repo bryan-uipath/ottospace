@@ -1443,8 +1443,8 @@ export interface Snapshot {
     /** Where the fetch line and its Retry (only after a failure) are drawn. */
     fetch_rect: Rect | null;
     retry: Rect | null;
-    /** Retries the user's clicks carried out. */
-    retries: number;
+    /** In a test run, retries the user's clicks carried out (null otherwise). */
+    retries: number | null;
   };
   /**
    * Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last frame drew

@@ -19,7 +19,7 @@ pub fn retry_after(failures: u32, every: u64) -> u64 {
 /// Why a fetch failed. Never the link, never curl's own message (it may quote the link).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
-    /// curl's `max-time` passed (exit 28).
+    /// curl's `connect-timeout` or `max-time` passed (exit 28), after `secs`.
     TimedOut { secs: u32 },
     /// The host was not found or did not answer (a lookup that failed, curl's exit 6 or 7).
     Unreachable,
@@ -70,13 +70,13 @@ impl Failure {
         }
     }
 
-    /// From curl's exit code and the status it wrote (`write-out`). `None`: no failure.
-    pub fn of_curl(exit: Option<i32>, http: Option<u16>, max_secs: u32) -> Option<Failure> {
+    /// From curl's exit code and the status it wrote (`write-out`), after `secs`. `None`: no failure.
+    pub fn of_curl(exit: Option<i32>, http: Option<u16>, secs: u32) -> Option<Failure> {
         match (exit, http) {
             (_, Some(300..=399)) => Some(Failure::Moved),
             (_, Some(code @ 400..)) => Some(Failure::Http(code)),
             (Some(0), Some(200..=299)) => None,
-            (Some(28), _) => Some(Failure::TimedOut { secs: max_secs }),
+            (Some(28), _) => Some(Failure::TimedOut { secs }),
             (Some(6 | 7), _) => Some(Failure::Unreachable),
             (Some(63), _) => Some(Failure::TooBig),
             (Some(code), _) => Some(Failure::Curl(code)),
@@ -163,7 +163,7 @@ mod tests {
     fn curl_says_what_failed() {
         let of = |exit, http| Failure::of_curl(Some(exit), http, 30);
         assert_eq!(of(0, Some(200)), None);
-        assert_eq!(of(28, Some(0)), Some(Failure::TimedOut { secs: 30 }));
+        assert_eq!(of(28, Some(0)), Some(Failure::TimedOut { secs: 30 }), "the time it took");
         assert_eq!(of(22, Some(403)), Some(Failure::Http(403)));
         assert_eq!(of(0, Some(302)), Some(Failure::Moved));
         assert_eq!(of(6, Some(0)), Some(Failure::Unreachable));

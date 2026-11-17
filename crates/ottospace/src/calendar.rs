@@ -115,11 +115,12 @@ impl Timeline {
             let (mut next, mut failures) = (Instant::now(), 0u32);
             // When the feed was last read whole, and whether the last fetch failed: a new day's
             // re-evaluation is no read, so it changes neither.
-            let (mut read_at, mut failed) = (None::<u64>, false);
+            let (mut read_at, mut failed, mut last_failure) = (None::<u64>, false, None::<Failure>);
             loop {
                 let now = now_ms();
                 let due = Instant::now() >= next;
-                let (mut problem, mut fetched) = (None, None);
+                // The fetch's end is told after its read: a frame never shows it read with nothing held.
+                let (mut problem, mut fetched, mut outcome) = (None, None, None);
                 if due {
                     event_log::event("calendar_fetch", json!({ "try": failures + 1 }));
                     let began = Instant::now();
@@ -143,13 +144,17 @@ impl Timeline {
                                 (ics::parse_for(&text, me.as_deref()), Some(now), false, 0);
                             let events = u32::try_from(feed.events.len()).unwrap_or(u32::MAX);
                             fetched = Some((text.len(), took, parsed.elapsed().as_millis() as u64));
-                            let _ = tx.send(Heard::Fetched { at, events, failure: None });
+                            last_failure = None;
+                            // As `read_at`: one clock for "updated" and "last read".
+                            outcome = Some(Heard::Fetched { at: now, events, failure: None });
                         }
                         Err(why) => {
                             (failed, failures) = (true, failures.saturating_add(1));
+                            // Once a run of failures, or when it changes: a dismissed notice stays gone.
+                            let new = last_failure.replace(why) != Some(why);
                             problem = match why {
-                                Failure::Moved => Some(MOVED),
-                                Failure::NotPublic => Some(PRIVATE),
+                                Failure::Moved if new => Some(MOVED),
+                                Failure::NotPublic if new => Some(PRIVATE),
                                 _ => None,
                             };
                             let (exit, http) = match why {
@@ -159,10 +164,12 @@ impl Timeline {
                             };
                             let fields = json!({ "error": why.kind(), "curl_exit": exit, "http": http, "ms": took, "try": failures });
                             event_log::event("calendar_failed", fields);
-                            let _ = tx.send(Heard::Fetched { at, events: 0, failure: Some(why) });
+                            outcome = Some(Heard::Fetched { at, events: 0, failure: Some(why) });
                         }
                     }
                     next = Instant::now() + Duration::from_millis(fetch::retry_after(failures, every));
+                    // Retries asked for while this one ran: it was the fetch they asked for.
+                    while wake.try_recv().is_ok() {}
                 }
                 if due || now >= days[calendar::BACK + 1] {
                     let (events, today, held_from) = evaluate(&feed, now);
@@ -178,6 +185,9 @@ impl Timeline {
                     if tx.send(Heard::Read(read)).is_err() {
                         return;
                     }
+                }
+                if let Some(outcome) = outcome {
+                    let _ = tx.send(outcome);
                 }
                 // Asleep until the next fetch, a new day's look (`WAKE`), or the user's Retry.
                 match wake.recv_timeout(WAKE.min(next.saturating_duration_since(Instant::now()))) {
@@ -226,6 +236,7 @@ fn read_capped(from: impl std::io::Read, progress: &mut dyn FnMut(u64)) -> std::
 /// config and is given no pinned address (a test looks nothing up).
 fn curl(link: &str, progress: &mut dyn FnMut(u64)) -> Result<String, Failure> {
     progress(0);
+    let began = Instant::now();
     let test = std::env::var_os("OTTOSPACE_E2E").and(std::env::var_os("OTTOSPACE_CURL"));
     let pin = match test {
         Some(_) => None,
@@ -258,10 +269,12 @@ fn curl(link: &str, progress: &mut dyn FnMut(u64)) -> Result<String, Failure> {
     let exit = child.wait().ok().and_then(|status| status.code());
     match read {
         Ok(bytes) if bytes.len() > ics::MAX_BYTES => Err(Failure::TooBig),
-        Ok(bytes) => match Failure::of_curl(exit, code.trim().parse().ok(), calendar::MAX_SECS) {
-            None => Ok(String::from_utf8_lossy(&bytes).into_owned()),
-            Some(why) => Err(why),
-        },
+        Ok(bytes) => {
+            match Failure::of_curl(exit, code.trim().parse().ok(), began.elapsed().as_secs_f32().round() as u32) {
+                None => Ok(String::from_utf8_lossy(&bytes).into_owned()),
+                Some(why) => Err(why),
+            }
+        }
         Err(_) => Err(Failure::Curl(-1)),
     }
 }
@@ -622,7 +635,7 @@ impl Workspace {
             "empty_note": calendar.empty_note(),
             "fetch_rect": drawn(Mark::CalendarFetch),
             "retry": at("calendar-retry".into()),
-            "retries": self.timeline.retries,
+            "retries": std::env::var_os("OTTOSPACE_E2E").map(|_| self.timeline.retries),
             "nav": serde_json::json!({
                 "back": at("calendar-day:back".into()),
                 "forward": at("calendar-day:forward".into()),
