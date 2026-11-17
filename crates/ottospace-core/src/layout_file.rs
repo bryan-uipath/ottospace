@@ -311,14 +311,7 @@ impl Model {
             if record.unsound().is_some() {
                 continue;
             }
-            // A level the user picked for an app pane, and for which task; no other.
-            for pane in &mut record.panes {
-                pane.extra.remove(crate::agent_mode::KEY);
-                let kept = self.agent.kept(pane.id).filter(|_| matches!(pane.kind, RecordKind::App { .. }));
-                if let Some(kept) = kept.and_then(|kept| serde_json::to_value(kept).ok()) {
-                    pane.extra.insert(crate::agent_mode::KEY.into(), kept);
-                }
-            }
+            self.keep_levels(&mut record);
             // Panes by their place in reading order, from 1: the file says nothing of this run's ids.
             let ids: Vec<(u32, PaneId)> = record.panes.iter().zip(1..).map(|(pane, new)| (pane.id, new)).collect();
             let new_id = |old: u32| ids.iter().find(|(from, _)| *from == old).map(|(_, to)| *to);
@@ -502,17 +495,9 @@ impl Model {
             }
             // As a workbook's: each terminal that started shows its history, typed command and all.
             let panes: Vec<PaneId> = (base + 1..).take(record.shown().len()).collect();
+            // A level the user picked, for a task still there: it waits for the window.
+            self.wait_for_kept(&panes, &record);
             for (pane, kept) in panes.iter().zip(record.shown()) {
-                // A level the user picked, for a task still there: it waits for the window.
-                let picked = kept.extra.get(crate::agent_mode::KEY).cloned();
-                let picked = picked.and_then(|value| serde_json::from_value::<crate::agent_mode::Kept>(value).ok());
-                if let (Some(kept), RecordKind::App { bundle, name, .. }) = (picked, &kept.kind)
-                    && self.tasks.live(kept.task).is_some()
-                    && self.pane(*pane).is_some_and(|open| open.kind == Kind::Empty)
-                {
-                    let waiting = crate::agent_mode::Waiting { kept, bundle: bundle.clone(), name: name.clone() };
-                    self.agent.restored.insert(*pane, waiting);
-                }
                 let started = self.pane(*pane).is_some_and(|open| open.kind == Kind::Terminal);
                 // The Settings tab's terminal: the editor again, once, with no history. Its title
                 // is the one kept ("Settings").
