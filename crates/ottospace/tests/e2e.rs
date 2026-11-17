@@ -6301,8 +6301,8 @@ fn several_tasks_share_a_workspace_and_the_drawers_rail_switches_between_them() 
         otto.user_key("o n e");
         let first = otto.user_key("enter");
         let one = first["state"]["talk"]["task"].as_u64().expect("the drawer is on the first task");
-        assert_eq!((rail_tasks(&first), &space(&first)["front"]), (vec![], &json!(one)));
-        assert_eq!(otto.control_opt(&format!("drawer-rail:{one}")), None, "one task: no rail");
+        assert_eq!((rail_tasks(&first), &space(&first)["front"]), (vec![one], &json!(one)));
+        otto.control(&format!("drawer-rail:{one}"));
         // A second task, started here: in the same space, in front; nothing moved.
         otto.user_key("cmd-n");
         let typed = otto.user_key("t w o");
@@ -6362,7 +6362,7 @@ fn several_tasks_share_a_workspace_and_the_drawers_rail_switches_between_them() 
     assert_eq!((rail_tasks(&again), &space(&again)["front"]), (vec![one, two], &json!(two)));
     let tabs = space(&again)["tabs"].clone();
     let left = otto.call(json!({"cmd": "task_dismiss", "id": two}));
-    assert_eq!((rail_tasks(&left), &space(&left)["front"], &space(&left)["tabs"]), (vec![], &json!(one), &tabs));
+    assert_eq!((rail_tasks(&left), &space(&left)["front"], &space(&left)["tabs"]), (vec![one], &json!(one), &tabs));
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -6703,12 +6703,12 @@ fn the_rail_of_five_tasks_is_one_column_at_the_drawers_right_edge() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
-/// The drawer's rail with a transcript: it comes at two items (a task and the transcript, the
-/// transcript first) and goes at one; a click, ⌘⌥] / ⌘⌥[ and list mode switch it, a client's
-/// click does not; the transcript leaves it when it stops.
+/// The drawer's rail always shows: one task on top, +, and below a divider the transcript, idle
+/// (grey) or recording; a click, ⌘⌥] / ⌘⌥[ and list mode switch it, a client's click does not;
+/// stopped, the transcript stays, idle, and so does the drawer on it.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn the_rail_holds_the_running_transcript_and_the_tasks_and_only_the_user_switches_it() {
+fn the_rail_holds_the_tasks_then_the_transcript_always_and_only_the_user_switches_it() {
     let root = support::temp(&format!("ottospace-e2e-rail-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let (bin, sessions) = (root.join("bin"), root.join("sessions"));
@@ -6739,12 +6739,26 @@ fn the_rail_holds_the_running_transcript_and_the_tasks_and_only_the_user_switche
     otto.user_key("cmd-n");
     otto.user_key("o n e");
     let one = otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the first task");
-    // One item: no rail.
-    assert_eq!(kinds(&otto.drawn()), Vec::<String>::new());
-    // A transcript: two items, the transcript first.
+    // One task: the rail, the task on top, + under it, the transcript idle at the foot.
+    let idle = otto.drawn();
+    assert_eq!(kinds(&idle), ["task", "transcript"], "{}", idle["drawer"]["rail"]);
+    let sections: Vec<&Value> = idle["drawer"]["rail"].as_array().unwrap().iter().map(|i| &i["section"]).collect();
+    assert_eq!(sections, [&json!("workspace"), &json!("everywhere")]);
+    assert_eq!(idle["state"]["listen"], Value::Null);
+    let (task, new, transcript) = (
+        otto.control(&format!("drawer-rail:{one}")),
+        otto.control("drawer-rail:new"),
+        otto.control("drawer-rail:transcript"),
+    );
+    assert!(task[1] < new[1] && new[1] + new[3] < transcript[1], "{task:?} {new:?} {transcript:?}");
+    // Idle, a click shows the transcript's idle view.
+    otto.user_click(at(transcript, 0.5, 0.5));
+    otto.listen_rect("listen-idle");
+    otto.user_click(at(otto.control(&format!("drawer-rail:{one}")), 0.5, 0.5));
+    // A transcript: still the task, then the transcript.
     otto.user_click(at(otto.listen_rect("listen-start:1"), 0.5, 0.5));
     let two_items = otto.drawn();
-    assert_eq!(kinds(&two_items), ["transcript", "task"], "{}", two_items["drawer"]["rail"]);
+    assert_eq!(kinds(&two_items), ["task", "transcript"], "{}", two_items["drawer"]["rail"]);
     assert_eq!(rail_tasks(&two_items), [one]);
     // The user's click on the transcript shows it here; a client's on the task does nothing.
     let shown = otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
@@ -6762,17 +6776,20 @@ fn the_rail_holds_the_running_transcript_and_the_tasks_and_only_the_user_switche
     let keyed = otto.user_key("cmd-ctrl-right");
     assert_eq!(keyed["focus"], json!({"drawer_rail": {"kind": "transcript"}}), "{}", keyed["focus"]);
     otto.user_key("escape");
-    // The transcript, stopped, leaves the rail: one item left, the rail goes.
+    // Stopped, the transcript stays on the rail, idle, and the drawer on its idle view.
     otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
     otto.user_click(at(otto.listen_rect("listen-stop:view"), 0.5, 0.5));
-    let alone = otto.drawn();
-    assert!(kinds(&alone).is_empty() && otto.control_opt("drawer-rail").is_none(), "{}", alone["drawer"]["rail"]);
-    // A second task brings it back, of tasks alone.
+    let stopped = otto.drawn();
+    assert_eq!(kinds(&stopped), ["task", "transcript"], "{}", stopped["drawer"]["rail"]);
+    assert_eq!((&stopped["state"]["listen"], picked(&stopped).as_deref()), (&Value::Null, Some("transcript")));
+    otto.listen_rect("listen-idle");
+    // A second task joins the top, the transcript still last.
     otto.user_key("cmd-n");
     otto.user_key("t w o");
     let two = otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the second task");
     let both = otto.drawn();
-    assert_eq!((kinds(&both), rail_tasks(&both)), (vec!["task".into(), "task".into()], vec![one, two]));
+    assert_eq!(kinds(&both), ["task", "task", "transcript"], "{}", both["drawer"]["rail"]);
+    assert_eq!(rail_tasks(&both), [one, two]);
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -10906,7 +10923,7 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     let key = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-t"}));
     assert_eq!(key["state"]["listen"], Value::Null, "{key}");
 
-    // The user's click does: the indicator in the header and on the top row, the lines in the drawer.
+    // The user's click does: the dot in the header (no time, no top row mark), the lines in the drawer.
     let on = otto.user_click(at(start, 0.5, 0.5));
     assert_eq!(on["state"]["listen"]["source"], json!({"pane": 1}), "{on}");
     let lines = otto.listen_finals(2);
@@ -10915,8 +10932,9 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     assert_eq!(texts, [("them", "made-up words one"), ("me", "made-up words two")]);
     let indicator = otto.listen_rect("listen-header");
     assert!(indicator[1] >= header[1] && indicator[1] < header[1] + header[3], "{indicator:?} in {header:?}");
-    let top = otto.listen_rect("listen-top:");
-    assert!(top[1] < header[1], "the top row's mark {top:?} is above the panes");
+    assert!(indicator[2] <= 24.0, "the header's mark is the dot alone: {indicator:?}");
+    let drawn = otto.drawn();
+    assert!(drawn["listen_rects"].get("listen-top:").is_none(), "{}", drawn["listen_rects"]);
     otto.listen_rect("listen-view");
     // What was heard is in no client's state: only this test run's `listen_lines` has it.
     let mut state = otto.call(json!({"cmd": "state"}));
@@ -10926,7 +10944,7 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     // The pane's header is the source's mark alone: the controls are the drawer's, one Stop and ⋯.
     let drawn = otto.drawn()["listen_rects"].clone();
     let ids: Vec<&str> = drawn.as_object().unwrap().keys().map(String::as_str).collect();
-    let button = |id: &&&str| id.contains(':') && !id.starts_with("listen-top") && !id.starts_with("listen-hearing");
+    let button = |id: &&&str| id.contains(':') && !id.starts_with("listen-hearing");
     let controls: Vec<&&str> = ids.iter().filter(button).collect();
     assert_eq!((controls, ids.contains(&"listen-menu")), (vec![&"listen-stop:view"], true), "{drawn}");
 
@@ -10961,16 +10979,17 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     assert_eq!((&stopped["state"]["listen"], &stopped["listen_lines"]), (&Value::Null, &json!([])), "{stopped}");
     otto.call(json!({"cmd": "focus", "pane": 1}));
     assert_eq!(otto.user_key("cmd-ctrl-t")["state"]["listen"]["source"], json!({"pane": 1}));
-    // In a narrower pane the indicator gives way, or goes: × stays in its header, and the top
-    // row still shows it.
+    // In a narrower pane the dot stays left of × while there is room (150 points), else gives
+    // way: × always stays in its header.
     otto.call(json!({"cmd": "split"}));
     let drawn = otto.drawn();
     let (header, close) = (rect(&drawn["headers"]["1"]), rect(&drawn["closes"]["1"]));
     assert!(close[0] + close[2] <= header[0] + header[2] + 1.0, "{drawn}");
-    if let Some(indicator) = drawn["listen_rects"].get("listen-header") {
-        assert!(rect(indicator)[0] + rect(indicator)[2] <= close[0], "{drawn}");
+    let indicator = drawn["listen_rects"].get("listen-header").map(rect);
+    assert_eq!(indicator.is_some(), header[2] >= 150.0, "{drawn}");
+    if let Some(indicator) = indicator {
+        assert!(indicator[0] + indicator[2] <= close[0] && indicator[0] >= header[0], "{drawn}");
     }
-    assert!(drawn["listen_rects"].get("listen-top:").is_some(), "{drawn}");
     let closed = otto.user_click(at(close, 0.5, 0.5));
     assert_eq!((&closed["state"]["listen"], pane_ids(&closed)), (&Value::Null, vec![2, 3]), "{closed}");
 }
@@ -11007,6 +11026,151 @@ fn transcripts_are_absent_with_the_flag_off_and_silent_with_no_source() {
     assert_eq!(split["listen_rects"], json!({}), "{split}");
     let key = on.user_key("cmd-ctrl-t");
     assert_eq!((&key["state"]["listen"], &key["notice"]), (&Value::Null, &json!("focus an app pane to transcribe it")));
+}
+
+/// The owner: "we show the record + time in 3 spots". No top row mark; the pane's header has the
+/// dot while its tab is on show; off show, a dot on its tab, or on its space in the top row; the
+/// user's click on that dot (not a client's) brings the pane back.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_dot_of_the_pane_heard_is_on_its_tab_or_space_only_while_off_show() {
+    let otto = listen_otto("dot");
+    otto.call(json!({"cmd": "split"}));
+    otto.user_key("cmd-ctrl-t");
+    let dots = |otto: &Otto| -> Vec<String> {
+        let drawn = otto.drawn()["listen_rects"].clone();
+        let ids = drawn.as_object().map(|ids| ids.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
+        ids.into_iter().filter(|id| id.starts_with("listen-dot") || id.starts_with("listen-top")).collect()
+    };
+    // On show: the header's dot alone.
+    otto.listen_rect("listen-header");
+    assert_eq!(dots(&otto), Vec::<String>::new());
+    // Another tab on show: the first tab has the dot, inside it.
+    let first = otto.call(json!({"cmd": "state"}))["state"]["tabs"][0]["id"].as_u64().unwrap();
+    otto.user_key("cmd-t");
+    let id = format!("listen-dot:tab:{first}");
+    assert_eq!(dots(&otto), [id.clone()]);
+    let (dot, tab) = (otto.listen_rect(&id), otto.control(&format!("tab:{first}")));
+    assert!(dot[0] >= tab[0] && dot[0] + dot[2] <= tab[0] + tab[2] + 0.5 && dot[1] >= tab[1], "{dot:?} in {tab:?}");
+    // Another workspace: the dot on the first one's item in the top row.
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    let on = dots(&otto);
+    assert!(on.len() == 1 && on[0].starts_with("listen-dot:space:"), "{on:?}");
+    // A client's click on it does nothing; the user's shows the pane, and the dot goes.
+    let dot = otto.listen_rect(&on[0]);
+    let theirs = otto.click(at(dot, 0.5, 0.5), 1);
+    assert_eq!(dots(&otto), on, "{} {} {}", theirs["notice"], theirs["spaces"], theirs["state"]["active"]);
+    otto.user_click(at(dot, 0.5, 0.5));
+    assert_eq!(dots(&otto), Vec::<String>::new());
+    otto.listen_rect("listen-header");
+}
+
+/// The owner: opened idle, "Transcribe a window…" and today's finished transcripts, each read-only
+/// in the drawer; the picker lists apps that can play sound, the one playing first; only the
+/// user's pick starts one, of an app in no pane. Made-up apps (`OTTOSPACE_LISTEN_APPS`), the
+/// fixture's lines, a made-up file in the test's own folder.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_idle_transcript_lists_today_and_only_the_users_pick_starts_one_of_an_app() {
+    let home = user_folder("listen-idle", r#"{"repos": [], "restore_layout": false}"#);
+    let today = std::process::Command::new("/bin/date").arg("+%Y-%m-%d").output().unwrap();
+    let today = String::from_utf8(today.stdout).unwrap().trim().to_string();
+    let name = format!("{today}-0900-zoom.md");
+    std::fs::create_dir_all(home.join("transcripts")).unwrap();
+    let file = format!(
+        "# Transcript: Zoom, {today} 09:00\n\n- Started: {today} 09:00 (+00:00)\n- Ended: 09:42, 42 minutes\n\
+         - App: Zoom (us.zoom.xos)\n- Microphone: off\n- Started by: you\n\n> Heard on this Mac.\n\n\
+         - 09:00:12 **them**: made-up words in the file\n"
+    );
+    std::fs::write(home.join("transcripts").join(&name), &file).unwrap();
+    std::fs::write(home.join("transcripts").join(format!("{today}-1000-x.md")), "still being written").unwrap();
+    // A link to a finished one outside the folder, and a FIFO: neither listed, neither blocks.
+    std::fs::write(home.join("outside.md"), &file).unwrap();
+    std::os::unix::fs::symlink(home.join("outside.md"), home.join("transcripts").join(format!("{today}-0800-link.md")))
+        .unwrap();
+    let fifo = home.join("transcripts").join(format!("{today}-0700-fifo.md"));
+    assert!(std::process::Command::new("/usr/bin/mkfifo").arg(&fifo).status().unwrap().success());
+    let (fixture, apps) = (home.join("fixture.jsonl"), home.join("apps.json"));
+    std::fs::write(&fixture, LISTEN_FIXTURE).unwrap();
+    let made_up = json!([
+        {"pid": 101, "name": "Chrome", "windows": ["made-up tab one", "made-up tab two"]},
+        {"pid": 102, "name": "Zoom", "windows": ["made-up meeting"], "playing": true},
+    ]);
+    std::fs::write(&apps, made_up.to_string()).unwrap();
+    let env = [
+        ("OTTOSPACE_FEATURES", "transcripts"),
+        ("OTTOSPACE_LISTEN_FIXTURE", fixture.to_str().unwrap()),
+        ("OTTOSPACE_LISTEN_APPS", apps.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+    ];
+    let otto = Otto::launch_with("listen-idle", &env);
+    otto.call(json!({"cmd": "split"}));
+    // No conversation: ⌘⇧L opens the transcript, idle; Today lists the finished file alone.
+    otto.user_key("cmd-shift-l");
+    otto.listen_rect("listen-idle");
+    let listed = otto.wait_for("today's transcripts", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        let today = state["state"]["transcripts"]["today"].as_array().cloned().unwrap_or_default();
+        (!today.is_empty()).then_some(today)
+    });
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!((&listed[0]["name"], &listed[0]["length_ms"]), (&json!(name), &json!(42 * 60_000)));
+    // Opened read-only by the user's click, not a client's; its words never in a client's state.
+    let row = otto.listen_rect("listen-past:0");
+    let theirs = otto.click(at(row, 0.5, 0.5), 1);
+    assert_eq!(theirs["state"]["transcripts"]["open"], Value::Null);
+    let open = otto.user_click(at(row, 0.5, 0.5));
+    assert_eq!(open["state"]["transcripts"]["open"], json!(name));
+    otto.listen_rect("listen-past-view");
+    let lines = otto.wait_for("the file's lines", |o| {
+        let lines = o.call(json!({"cmd": "state"}))["listen_lines"].clone();
+        (lines.as_array().is_some_and(|l| !l.is_empty())).then_some(lines)
+    });
+    assert_eq!(lines[0]["text"], "made-up words in the file", "{lines}");
+    let mut state = otto.call(json!({"cmd": "state"}));
+    state["listen_lines"] = Value::Null;
+    assert!(!state.to_string().contains("made-up words"), "the file's text reached the state");
+    otto.user_click(at(otto.listen_rect("listen-back"), 0.5, 0.5));
+    // Put away, the file gone meanwhile, opened again: Today is read anew, not what it last listed.
+    otto.user_key("cmd-shift-l");
+    assert!(otto.drawn()["listen_rects"].get("listen-idle").is_none(), "{}", otto.drawn()["listen_rects"]);
+    std::fs::remove_file(home.join("transcripts").join(&name)).unwrap();
+    std::thread::sleep(Duration::from_millis(1_500));
+    otto.user_key("cmd-shift-l");
+    otto.listen_rect("listen-idle");
+    otto.wait_for("Today without the file", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        state["state"]["transcripts"]["today"].as_array().is_some_and(Vec::is_empty).then_some(())
+    });
+    // The picker: a client's click opens none; the user's lists Zoom (playing) first, each window a
+    // row, no title in the state.
+    let pick = otto.listen_rect("listen-pick");
+    assert!(otto.click(at(pick, 0.5, 0.5), 1)["state"]["picker"].is_null());
+    let picker = otto.user_click(at(pick, 0.5, 0.5))["state"]["picker"].clone();
+    let rows: Vec<(String, bool)> = picker["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| (item["name"].as_str().unwrap().to_string(), item["playing"] == true))
+        .collect();
+    let want = [("Zoom", true), ("Chrome", false), ("Chrome", false)].map(|(n, p)| (n.to_string(), p));
+    assert_eq!((rows, &picker["transcribe"]), (want.to_vec(), &json!(true)));
+    assert!(!picker.to_string().contains("made-up"), "{picker}");
+    // A client's typing, ↓ and ↵ filter and pick nothing; the user's ↵ hears Zoom, in no pane.
+    let typed = otto.call(json!({"cmd": "key", "keys": "c h r"}));
+    assert_eq!(typed["state"]["picker"]["query"], "", "{}", typed["state"]["picker"]);
+    otto.call(json!({"cmd": "key", "keys": "down"}));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["picker"]["selected"], 0);
+    let theirs = otto.call(json!({"cmd": "key", "keys": "enter"}));
+    assert!(theirs["state"]["listen"].is_null() && theirs["state"]["picker"].is_object(), "{theirs}");
+    let on = otto.user_key("enter");
+    assert_eq!((&on["state"]["listen"]["source"], &on["state"]["picker"]), (&json!({"app": true}), &Value::Null));
+    otto.listen_finals(1);
+    otto.user_key("cmd-t");
+    let ids = otto.drawn()["listen_rects"].clone();
+    assert!(ids.as_object().unwrap().keys().all(|id| !id.starts_with("listen-dot")), "{ids}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// The files in `dir`, by name.

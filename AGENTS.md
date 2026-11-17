@@ -71,6 +71,8 @@ Rules:
   An E2E run that names none lists none, and never starts an app. `OTTOSPACE_DOCK_APPS` (bundle
   paths, `:` between them) stands for the Dock's apps; a test run that names none has none, and
   never reads the user's Dock.
+- `OTTOSPACE_LISTEN_APPS` (a JSON file of made-up apps) stands for the apps the transcript's picker
+  lists, read only under `OTTOSPACE_E2E`; a test run that names none lists none, never the user's.
 - `OTTOSPACE_GH` (a program) stands for `gh` in a test run: a stand-in script with fixture JSON. A test run
   that names none runs no gh, and never the user's. The state's `counts.pr_opens` (test runs only) counts
   the pull requests the user's click opened; a test run opens none.

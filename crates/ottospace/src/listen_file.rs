@@ -18,6 +18,54 @@ use crate::calendar::zone_offset;
 /// A clash this many times over is no clash: something else is wrong.
 const TRIES: usize = 100;
 
+/// The most of a file read for Today's list (its header), and for one opened read-only.
+const HEAD_BYTES: u64 = 2_048;
+const OPEN_BYTES: u64 = 4 << 20;
+
+/// The start of `path`, at most `bytes`, as text (a cut character dropped). None: unreadable, or
+/// not a plain file (a symlink out of the folder, a FIFO that would block).
+fn read_start(path: &Path, bytes: u64) -> Option<String> {
+    use std::io::Read;
+    let file = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut text = Vec::new();
+    file.take(bytes).read_to_end(&mut text).ok()?;
+    Some(String::from_utf8_lossy(&text).into_owned())
+}
+
+/// Today's files in `dir`, each its name and its header's text: `today` (`2026-11-17`) and a
+/// `-` begin the name, `.md` ends it. Sorted by name. The core reads them (`file::today`).
+pub(crate) fn today(dir: &Path, today: &str) -> Vec<(String, String)> {
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    let mut files: Vec<(String, String)> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".md") && name.strip_prefix(today).is_some_and(|rest| rest.starts_with('-')))
+        .filter_map(|name| Some((name.clone(), read_start(&dir.join(&name), HEAD_BYTES)?)))
+        .collect();
+    files.sort();
+    files
+}
+
+/// The lines of `name` in `dir`, read back (`file::read_lines`). A name with a `/` reads nothing.
+pub(crate) fn read_lines(dir: &Path, name: &str) -> Vec<file::PastLine> {
+    if name.contains('/') || name.starts_with('.') {
+        return Vec::new();
+    }
+    read_start(&dir.join(name), OPEN_BYTES).map(|text| file::read_lines(&text)).unwrap_or_default()
+}
+
+/// A file's length and change time: read again only when either moved.
+pub(crate) type Stamp = Option<(u64, std::time::SystemTime)>;
+
+/// The stamp of `name` in `dir`; none if it cannot be read.
+pub(crate) fn stamp(dir: &Path, name: &str) -> Stamp {
+    let meta = fs::symlink_metadata(dir.join(name)).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
 /// The file of the transcript on, written on its thread.
 pub(crate) struct Writer {
     sender: mpsc::Sender<Vec<Record>>,

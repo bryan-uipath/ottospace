@@ -158,8 +158,11 @@ export type Focus =
 /** The rail cell that has the keyboard (in list mode): a section, or an item of the drawer's rail. */
 export type RailFocus = { left: Section } | { right: RailItem };
 
-/** An item of the drawer's rail: the transcript on, or a task. */
+/** An item of the drawer's rail: the transcript (idle or on), or a task. */
 export type RailItem = { kind: "transcript" } | { kind: "task"; id: TaskId };
+
+/** The drawer rail's parts: this workspace's tasks on top, what every workspace shows below. */
+export type RailSection = "workspace" | "everywhere";
 
 /** A heading of the Tasks section, in the order drawn. `open`: tasks with tabs open that do not need the user. */
 export type Heading = "needs_you" | "running" | "later" | "done" | "sessions";
@@ -721,7 +724,10 @@ export type PickItem =
   | { type: "file" }
   | { type: "app"; name: string }
   /** An installed app that is not running, by its bundle's path. Choosing it starts it. */
-  | { type: "closed"; name: string; path: string };
+  | { type: "closed"; name: string; path: string }
+  /** In the transcript's picker: an app that can play sound (one row per window; titles are
+   * never in the state), and whether it plays now. Only the user picks one. */
+  | { type: "sound"; name: string; playing: boolean };
 
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
@@ -748,6 +754,8 @@ export interface Picker {
   query: string;
   /** An index into the items that match `query`. */
   selected: number;
+  /** The transcript's picker ("Transcribe a window…"): only the user moves, filters or picks. */
+  transcribe: boolean;
 }
 
 /** The command palette, while it is open. Only the user types, moves or runs in it. */
@@ -1051,6 +1059,9 @@ export interface Model {
   features: Feature[];
   /** The transcript on, or null. Times only: never what was heard. Only the user starts or stops one. */
   listen: Listen | null;
+  /** Today's finished transcripts (`transcripts_dir`), newest first: file name, start, length;
+   * never their text. `open`: the one the user opened read-only in the drawer, or null. */
+  transcripts: { today: PastTranscript[]; open: string | null };
   /** Agent mode: each app pane's level and the task it is given to. Only the user sets a level. */
   agent_mode: AgentMode;
   /**
@@ -1083,9 +1094,19 @@ export interface AgentMode {
 }
 
 /** A transcript of an app pane's sound: its status, source and times. */
+export interface PastTranscript {
+  /** The file's name: `2026-11-17-0900-zoom.md`. */
+  name: string;
+  /** Epoch ms. */
+  started_ms: number;
+  /** To the minute. */
+  length_ms: number;
+}
+
 export interface Listen {
   status: "starting" | "on" | "paused";
-  source: { pane: PaneId };
+  /** The pane heard, or an app the user picked (which one is not said). */
+  source: { pane: PaneId } | { app: true };
   mic: boolean;
   /** Started by an app rule of the user's, not their click. */
   auto: boolean;
@@ -1376,7 +1397,8 @@ export interface Snapshot {
   /** Test runs only: the transcript drawer's rows, the volatile lines last. Else null. */
   listen_lines: ListenLine[] | null;
   /** Test runs only: where a transcript's controls were drawn, by id (`listen-start:3`,
-   * `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-top:`, `listen-view`). Else null. */
+   * `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-view`,
+   * `listen-idle`, the off-show dot `listen-dot:space:<place>` or `listen-dot:tab:<id>`). Else null. */
   listen_rects: Record<string, Rect> | null;
   /** The marks, in the user's order. */
   marks: Mark[];
@@ -1415,11 +1437,18 @@ export interface Snapshot {
   drawer: {
     body: Rect | null;
     /**
-     * The drawer's rail, in order: the transcript on first, then this workspace's tasks, the most
-     * urgent first. Empty with fewer than two. `selected`: what the drawer shows (only the user
-     * changes it); `rect`: where it was drawn, or null. Never what was heard.
+     * The drawer's rail, top to bottom: this workspace's tasks, the most urgent first (`section`
+     * `workspace`), then below a divider the transcript, idle or on (`section` `everywhere`), while
+     * the `transcripts` flag is on and something could be heard. `selected`: what the drawer shows
+     * (only the user changes it); `rect`: where it was drawn, or null. Never what was heard.
      */
-    rail: { kind: "transcript" | "task"; id: TaskId | null; selected: boolean; rect: Rect | null }[];
+    rail: {
+      kind: "transcript" | "task";
+      id: TaskId | null;
+      section: RailSection;
+      selected: boolean;
+      rect: Rect | null;
+    }[];
     /** Its width in points as last drawn. */
     width: number;
     agents: Record<string, { model: string; ended: boolean; cols: number; rows: number; lines: string[] }>;

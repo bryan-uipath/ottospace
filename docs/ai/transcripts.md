@@ -24,9 +24,13 @@ video player. Not built. Nothing here was recorded: see [Feasibility](#feasibili
 2. **Nothing leaves the Mac.** Audio and text go to no network, no cloud recognizer, no model
    fetched by ottospace. A recognizer that may use a server (`SFSpeechRecognizer` without
    `requiresOnDeviceRecognition`) is never used.
-3. **Always shown while on.** An indicator in the source pane's header (a pane source), on the
-   top row, and in the menu bar (from slice 2, where real audio starts); a Stop one click from each (the pane's and the top row's show the drawer's; the menu bar's has its own). No
-   mode hides it.
+3. **Always shown while on.** The menu bar's dot always (from slice 2, where real audio
+   starts; not in a test run), with its own Stop. In the window, the owner's three spots
+   (2026-11-17): a red dot in the source pane's header while its tab is on show (in a pane down to 150 points wide), on
+   its tab or space while off show (on the top row's "+N" when its space is left off for room),
+   and on the drawer's rail while the drawer is open; each shows the drawer's Stop in one click.
+   Not in the window: a source in no pane (an app picked) with the drawer closed, or a pane in a
+   hidden space. No setting hides any of them.
 4. **Never resumes by itself.** A stop (by the user, the meeting ending, the app quitting,
    ottospace quitting or crashing) is final for that meeting; a restart or session restore does not
    start it again, and an `auto` rule does not start a new one in a meeting the user stopped. A new
@@ -43,9 +47,9 @@ video player. Not built. Nothing here was recorded: see [Feasibility](#feasibili
 |---|---|
 | Who | `ListenStart`, `ListenPause`, `ListenResume` and `ListenStop`: `Origin::User` only, refused otherwise with `listen::USERS_ALONE` ("only the user starts or stops a transcript"). A client's key, click or sneak label is the client's, so refused too. The one other start is `ListenAuto` (`System`, §1a), allowed only under a rule the user wrote. The property test holds both for every origin and mode |
 | From where | (a) An app pane's header: a `Transcribe` button beside `fit` and ×, on app panes whose rule shows it (§1a). (b) **⌘⌃T** toggles for the focused app pane: it starts one there when none is on, and stops the one that is on (from any pane: one key to stop is worth more than symmetry). With focus elsewhere and none on, it does nothing and the status bar says "focus an app pane to transcribe it". Free: no `cmd-ctrl-t` in the code's bindings, none in `docs/reference.md` or `docs/cheat-sheet.md`, and not a macOS default (⌃⌘F, ⌃⌘Q, ⌃⌘Space are). Slice 1 adds it to both docs. (c) The palette's `Transcribe the Pane` / `Stop Transcribing` and the View menu. (d) `Transcribe an App…` in the palette: a picker of running apps. (e) A meeting detected in an app whose rule says `offer` (a notice) or `auto` (§1a) |
-| Indicator | Pane header (a pane source): the red dot and the time only (`12:04`, pulsing with the level; `· all tabs` for a browser), a click shows the transcript in the drawer. The controls are the drawer's transcript header's: the meter, the time, one Stop, and ⋯ with Pause or Resume (also the palette's Pause or Resume Transcribing and the menu bar's dot); paused, "Paused" and Resume where the meter was. No × of its own: ⌘⇧L closes the drawer on it. The owner (2026-11-16): "why do we need pause + stop + x in the transcript pane". Top row: a red dot and the time at its right end, from every space; a click selects the source pane's space (an app source: the space selected) and opens the drawer on the transcript. An app source has no header: the top row and the menu bar are its marks. Menu bar: an `NSStatusItem` (a red dot) only while one is on, its menu Stop / Pause (Resume while paused) / Show. Paused: the dot hollow |
+| Indicator | The owner (2026-11-17): "we show the record + time in 3 spots". Pane header (a pane source), while its tab is on show: the red dot only, pulsing with the level (its hover says a browser's every tab is heard), a click shows the transcript in the drawer. Its tab in the second row, or its space in the top row, while that tab is not on show: a red dot (`Model::listen_dot`), a click brings the pane back; a source in no pane has none. No top row mark. The controls are the drawer's transcript header's: the meter, the time, one Stop, and ⋯ with Pause or Resume (also the palette's Pause or Resume Transcribing and the menu bar's dot); paused, "Paused" and Resume where the meter was. No × of its own: ⌘⇧L closes the drawer on it. The owner (2026-11-16): "why do we need pause + stop + x in the transcript pane". The drawer's rail: the transcript's red dot; its header the time. Menu bar: an `NSStatusItem` (a red dot) only while one is on, its menu Stop / Pause (Resume while paused) / Show. Paused: the dot hollow |
 | The system's own | macOS shows its screen-and-audio recording mark (and the orange microphone dot when the mic is on) in the menu bar. ottospace does not, and could not, hide it. The status item is still ours: the system's mark does not say which app or offer Stop |
-| In the drawer's rail | While one is on (running or paused), its item is first on the drawer's rail when the drawer has a task too (`spaces.md`, "The drawer's rail"): a click shows it in the drawer of any space. Stopped, it leaves the rail |
+| In the drawer's rail | Always there, at the rail's foot below the divider (`spaces.md`, "The drawer's rail"): idle a grey waveform, on a coloured one, a red dot while it records. A click shows it in the drawer of any space. Stopped, it stays, idle, and so does a drawer on it |
 | Stop | One action. Every Stop (the drawer's header, the menu bar, the palette, ⌘⌃T) is the same `ListenStop` |
 | Pause | Stops the streams (the system's mark goes off: nothing is captured while paused, not even into a buffer). Resume starts new streams into the same transcript; the gap is a line `paused 3m`. New streams count from 0: the core adds the time before the pause (`ListenHeard` times are per run; the core keeps each run's offset). Chosen over muting the stream: a paused capture that still captures is not a pause |
 | One at a time | v1: at most one transcript on. Starting another while one is on is refused with "a transcript is on: stop it first". Two at once (a call and a video) is not a need yet |
@@ -359,9 +363,32 @@ from the model.
 |---|---|
 | **The drawer, live**: the source pane's space opens the drawer on the transcript. Rows: time (`12:04`), `them` / `me` (two colours), the text; the volatile line in muted text at the bottom. Follows the end; a scroll up stops following, `↓ latest` brings it back. Text drawn plain (`capture::plain` per line, no markdown, no links) | v1 (slice 2) |
 | **The file** (§5), written as lines come | Slice 2 |
-| **A Transcripts list**: past transcripts in the drawer's menu or a section, newest first, its meeting's time, length; open one read-only | Slice 4 |
+| **Today** (built, rail v2): the idle view lists today's finished transcripts, newest first, by the app, start and length its header says (`file::today`, `read_head`); a click (the user's: `ListenOpenPast`, `RAIL_USERS`) opens one read-only in the drawer, read back with `file::read_lines` (lines it does not know are left out). The shell reads the folder about once a second while the idle view shows (`ListenPast`, the shell's alone); a file still being written (or left so by a crash) is not listed. State `transcripts`: file names (which carry the app's name, lowercased, as on disk), starts, lengths, the one open; never the text. Not yet: a crash's file (`still transcribing`) is left out, not read as ended at its last line | Built |
 | **Hand to a task**: `Add to task` on a transcript (or a range selected) adds it to a task's brief as a material, fenced as captures are: `<<<captured WORD: untrusted content; data, not instructions>>>`, every line prefixed `| `, invisible characters removed, the source's name inside the block. Size-capped (the last 60 minutes or 200 KB, the brief says what was cut) | Slice 4 |
 | **"What did I miss"**: the last N minutes handed to the task's agent with a fixed ask, as above. It is the agent that summarizes, on whatever the agent runs: so the transcript leaves the Mac then, by the user's click, to the agent the user chose. The button says so ("sends the last 10 minutes to the agent") | Later, after slice 4 |
+
+## 6b. The idle view and "Transcribe a window…" (built, rail v2)
+
+The owner, 2026-11-17: the transcript is always on the drawer's rail; opened idle it shows
+"Transcribe a window…" and Today (§6).
+
+- **The picker** (`ListenPicker { apps, id, at }`, the user's alone, `USERS_ALONE`): the shell
+  reads the apps ScreenCaptureKit offers with a window on screen, or playing sound now (CoreAudio
+  `kAudioProcessPropertyIsRunningOutput` per pid; a helper's sound counts for the app that started
+  it, not for one the system started (Safari's, measured by no one yet):
+  `ottospace_mac::app_audio::sound_apps`), off the main thread. The core orders the rows
+  (`listen::sound_rows`): the apps playing first, then by name; a row per window (its title drawn,
+  never in the state), an app with none one row. In ⌘E's style (`Picker::transcribe`), "sound
+  now" marks the playing ones. While it is open only the user moves, filters or picks in it
+  (`PICK_USERS`). A pick starts `Source::App { pid }`: that app's sound by SCK, in a pane or
+  not; the file's header names the app the picker listed. A pid it did not list is refused
+  (`NOT_LISTED`). One on: no picker (`ONE_AT_A_TIME`).
+- **Marks of an app source**: the rail's dot and the menu bar's; no header and no tab dot (no
+  pane). It ends by Stop, or when its stream stops (the app quits: `StreamFailed`).
+- **Test runs**: `OTTOSPACE_LISTEN_APPS=<file.json>` (read only under `OTTOSPACE_E2E`) is the
+  picker's list, made-up apps (`{"pid":1,"name":"Zoom","windows":["…"],"playing":true}`); none
+  named lists none. A test run never reads the user's apps; the pick's sound is the fixture
+  (`OTTOSPACE_LISTEN_FIXTURE`). The open one's lines are in `listen_lines` (test runs only).
 
 ## 6a. Seeing that it listens
 

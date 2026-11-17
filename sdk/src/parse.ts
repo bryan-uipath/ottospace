@@ -259,9 +259,14 @@ function railRow(value: unknown, at: string): Snapshot["drawer"]["rail"][number]
   const o = fields(value, at);
   const kind = o.kind;
   if (kind !== "transcript" && kind !== "task") throw wrong(`${at}.kind`, "transcript or task", kind);
+  const section = o.section;
+  if (section !== "workspace" && section !== "everywhere") {
+    throw wrong(`${at}.section`, "workspace or everywhere", section);
+  }
   return {
     kind,
     id: orNull(num)(o.id, `${at}.id`),
+    section,
     selected: bool(o.selected, `${at}.selected`),
     rect: orNull(rect)(o.rect, `${at}.rect`),
   };
@@ -1117,6 +1122,9 @@ function pickItem(value: unknown, at: string): PickItem {
   if (o.type === "closed") {
     return { type: "closed", name: str(o.name, `${at}.name`), path: str(o.path, `${at}.path`) };
   }
+  if (o.type === "sound") {
+    return { type: "sound", name: str(o.name, `${at}.name`), playing: bool(o.playing, `${at}.playing`) };
+  }
   throw wrong(`${at}.type`, "a picker item", o.type);
 }
 
@@ -1146,6 +1154,7 @@ function picker(value: unknown, at: string): Picker {
     items: list(pickItem)(o.items, `${at}.items`),
     query: str(o.query, `${at}.query`),
     selected: num(o.selected, `${at}.selected`),
+    transcribe: bool(o.transcribe, `${at}.transcribe`),
   };
 }
 
@@ -1441,6 +1450,7 @@ function model(value: unknown, at: string): Model {
     agents: list(subject)(o.agents, `${at}.agents`),
     features: list(feature)(o.features, `${at}.features`),
     listen: orNull(listen)(o.listen, `${at}.listen`),
+    transcripts: transcripts(o.transcripts, `${at}.transcripts`),
     agent_mode: agentMode(o.agent_mode, `${at}.agent_mode`),
     slots: map(slot)(o.slots, `${at}.slots`),
     viewers: map(viewer)(o.viewers, `${at}.viewers`),
@@ -1472,12 +1482,26 @@ function agentMode(value: unknown, at: string): AgentMode {
   return { panes, default: agentLevel(o.default, `${at}.default`), menu: orNull(menu)(o.menu, `${at}.menu`) };
 }
 
+function transcripts(value: unknown, at: string): Snapshot["state"]["transcripts"] {
+  const o = fields(value, at);
+  const past = (value: unknown, at: string) => {
+    const p = fields(value, at);
+    return {
+      name: str(p.name, `${at}.name`),
+      started_ms: num(p.started_ms, `${at}.started_ms`),
+      length_ms: num(p.length_ms, `${at}.length_ms`),
+    };
+  };
+  return { today: list(past)(o.today, `${at}.today`), open: orNull(str)(o.open, `${at}.open`) };
+}
+
 function listen(value: unknown, at: string): Listen {
   const o = fields(value, at);
   const source = fields(o.source, `${at}.source`);
+  const from = source.app === true ? { app: true as const } : { pane: num(source.pane, `${at}.source.pane`) };
   return {
     status: oneOf(["starting", "on", "paused"] as const, "a transcript's status")(o.status, `${at}.status`),
-    source: { pane: num(source.pane, `${at}.source.pane`) },
+    source: from,
     mic: bool(o.mic, `${at}.mic`),
     auto: bool(o.auto, `${at}.auto`),
     started_ms: num(o.started_ms, `${at}.started_ms`),

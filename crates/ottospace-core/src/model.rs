@@ -329,14 +329,32 @@ pub enum PickItem {
         name: String,
         path: String,
     },
+    /// In the transcript's picker: an app that can play sound, and one of its windows (its
+    /// title drawn, never in the state). Choosing it starts a transcript of the app.
+    Sound {
+        #[serde(skip)]
+        pid: i32,
+        name: String,
+        #[serde(skip)]
+        window: Option<String>,
+        playing: bool,
+    },
 }
 
 impl PickItem {
+    /// What the filter matches: the label, and a sound app's window as its row shows it.
+    fn filter_text(&self) -> String {
+        match self {
+            PickItem::Sound { name, window: Some(window), .. } => format!("{name} · {window}"),
+            _ => self.label().to_string(),
+        }
+    }
+
     pub fn label(&self) -> &str {
         match self {
             PickItem::Terminal => "Terminal",
             PickItem::File => "File…",
-            PickItem::App { name } | PickItem::Closed { name, .. } => name,
+            PickItem::App { name } | PickItem::Closed { name, .. } | PickItem::Sound { name, .. } => name,
         }
     }
 }
@@ -356,6 +374,11 @@ pub struct Picker {
     /// Every other installed app that is not running, by name. Offered once something is typed.
     #[serde(skip)]
     pub installed: Vec<PickItem>,
+    /// The transcript's picker ("Transcribe a window…"): its rows are apps that can play sound.
+    pub transcribe: bool,
+    /// Its pick's transcript id and the time it was opened.
+    #[serde(skip)]
+    pub start: Option<(String, u64)>,
 }
 
 impl Picker {
@@ -379,7 +402,7 @@ impl Picker {
             let hit = |starts: bool| {
                 let query = &query;
                 group.iter().copied().filter(move |item| {
-                    let label = item.label().to_lowercase();
+                    let label = item.filter_text().to_lowercase();
                     label.contains(query) && label.starts_with(query) == starts
                 })
             };
@@ -1589,7 +1612,7 @@ pub enum Action {
     ListenStop {
         at: u64,
     },
-    /// The drawer on the transcript (the top row's mark selects its pane's tab), or off it.
+    /// The drawer on the transcript, idle or on (one on: its pane's tab selected), or off it.
     ListenShow {
         on: bool,
     },
@@ -1620,6 +1643,23 @@ pub enum Action {
         id: String,
         why: listen::Ended,
         at: u64,
+    },
+    /// The user's "Transcribe a window…": the picker lists `apps` (the shell's reading of the
+    /// apps that can play sound), and a pick starts transcript `id` at `at`, or later.
+    ListenPicker {
+        apps: Vec<listen::SoundApp>,
+        id: String,
+        at: u64,
+    },
+    /// The shell's: the files of `transcripts_dir` (each its name and the start of its text),
+    /// and today's local date (`2026-11-17`), for the idle view's Today list.
+    ListenPast {
+        files: Vec<(String, String)>,
+        today: String,
+    },
+    /// The user's click on a row of Today: that transcript read-only in the drawer; none: back.
+    ListenOpenPast {
+        name: Option<String>,
     },
     /// The user's level for an app pane (default: the focused one): what the task of its
     /// workspace may do there (`agent_mode`). Only the user's: a client's is refused.
@@ -2115,6 +2155,9 @@ impl Action {
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
             | Action::ListenEnded { .. }
+            | Action::ListenPicker { .. }
+            | Action::ListenPast { .. }
+            | Action::ListenOpenPast { .. }
             | Action::AgentLevel { .. }
             | Action::AgentMenu { .. }
             | Action::AgentMenuMove { .. }
@@ -2173,7 +2216,10 @@ impl Action {
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
-            | Action::ListenEnded { .. } => Some(Feature::Transcripts),
+            | Action::ListenEnded { .. }
+            | Action::ListenPicker { .. }
+            | Action::ListenPast { .. }
+            | Action::ListenOpenPast { .. } => Some(Feature::Transcripts),
             Action::AgentLevel { .. }
             | Action::AgentMenu { .. }
             | Action::AgentMenuMove { .. }
@@ -3154,6 +3200,8 @@ pub struct Model {
     editor_note: Option<(String, u64)>,
     /// The transcript on, if one is. In the state: its status and times, never its text.
     pub listen: Listening,
+    /// Today's finished transcripts, and the one open read-only (`listen::Today`).
+    pub transcripts: listen::Today,
     /// Each app pane's agent mode level and the task it is given to, the default, the menu.
     #[serde(rename = "agent_mode")]
     pub agent: crate::agent_mode::AgentMode,
@@ -3291,6 +3339,7 @@ impl Default for Model {
             editing: None,
             editor_note: None,
             listen: Listening::default(),
+            transcripts: listen::Today::default(),
             agent: crate::agent_mode::AgentMode::default(),
             slots: Default::default(),
             slot_looks: Vec::new(),
@@ -3417,16 +3466,30 @@ impl Model {
             | Action::ListenToggle { .. }
             | Action::ListenPause { .. }
             | Action::ListenResume { .. }
-            | Action::ListenStop { .. } => Some(listen::USERS_ALONE),
+            | Action::ListenStop { .. }
+            | Action::ListenPicker { .. } => Some(listen::USERS_ALONE),
             Action::ListenFixture
             | Action::ListenAvailable { .. }
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
             | Action::ListenEnded { .. }
+            | Action::ListenPast { .. }
                 if origin == Origin::Socket =>
             {
                 Some(listen::SHELLS_ALONE)
+            }
+            // The transcript's picker: only the user moves, filters or picks in it; a client
+            // neither types in its filter nor closes or replaces it.
+            Action::PickerMove { .. } | Action::PickerQuery { .. } | Action::PickerChoose { .. }
+                if self.picker.as_ref().is_some_and(|picker| picker.transcribe) =>
+            {
+                Some(listen::PICK_USERS)
+            }
+            Action::FieldEdit { .. } | Action::OpenPicker { .. } | Action::ClosePicker
+                if origin == Origin::Socket && self.picker.as_ref().is_some_and(|picker| picker.transcribe) =>
+            {
+                Some(listen::PICK_USERS)
             }
             // Only the user lets a task see an app, or opens the menu that does: a client's key,
             // click or label is the client's, and a timer grants nothing.
@@ -3606,7 +3669,9 @@ impl Model {
             // So is which of a workspace's conversations is in front.
             Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
             // What the drawer shows is the user's choice: its rail, the transcript's mark.
-            Action::RailSelect { .. } | Action::ListenShow { .. } => Some(rail::RAIL_USERS),
+            Action::RailSelect { .. } | Action::ListenShow { .. } | Action::ListenOpenPast { .. } => {
+                Some(rail::RAIL_USERS)
+            }
             // A client changes no space under the user's keys in the chat, nor takes them.
             action if self.space_refusal(action, origin).is_some() => self.space_refusal(action, origin),
             action
@@ -3743,7 +3808,7 @@ impl Model {
     /// act behind. `None`: nothing is in its way. The shell answers a socket request with it.
     pub fn waits(&self, action: &Action) -> Option<&'static str> {
         let for_panes = action.for_panes();
-        let picker = matches!(action, Action::OpenPicker { .. });
+        let picker = matches!(action, Action::OpenPicker { .. } | Action::ListenPicker { .. });
         // A close of a named pane still runs: the shell sends it when a window or shell is
         // gone, and must not leave a dead pane.
         let named_close = matches!(action, Action::Close { pane: Some(_) });
@@ -4999,13 +5064,14 @@ impl Model {
             Action::OpenPicker { axis, new_tab, items } => {
                 self.leave(effects);
                 let installed = offered(&self.installed.0, &self.installed.1, &items);
-                self.picker =
-                    Some(Picker { axis, new_tab, items, query: Field::new("", MAX_FILTER), selected: 0, installed });
+                let (query, transcribe, start) = (Field::new("", MAX_FILTER), false, None);
+                self.picker = Some(Picker { axis, new_tab, items, query, selected: 0, installed, transcribe, start });
             }
             Action::SetInstalled { apps, running } => {
                 self.app_lists.resolve(&apps);
                 self.installed = (apps, running);
-                if let Some(picker) = &mut self.picker {
+                // The transcript's picker lists sound apps alone: no installed app joins it.
+                if let Some(picker) = self.picker.as_mut().filter(|picker| !picker.transcribe) {
                     // The rows change under the selection: it stays on its item, so ↵ opens
                     // what was highlighted. If the item is gone, on a row.
                     let chosen = picker.matches().get(picker.selected).copied().cloned();
@@ -5032,6 +5098,17 @@ impl Model {
             }
             Action::PickerChoose { index } => {
                 let Some(picker) = self.picker.take() else { return };
+                if let Some((id, at)) = picker.start.clone() {
+                    let choice = picker.matches().get(index.unwrap_or(picker.selected)).copied().cloned();
+                    match choice {
+                        Some(PickItem::Sound { pid, .. }) => {
+                            let at = at.max(self.now);
+                            self.listen_start(listen::Source::App { pid }, false, id, at, effects);
+                        }
+                        _ => self.picker = Some(picker),
+                    }
+                    return;
+                }
                 let choice = picker.matches().get(index.unwrap_or(picker.selected)).copied().cloned();
                 match choice {
                     // Same rule as an app: fill the focused pane if it is empty, else split it.
@@ -5056,6 +5133,8 @@ impl Model {
                     Some(PickItem::Closed { name, path }) => {
                         effects.push(Effect::LaunchApp { name, path, axis: picker.axis, new_tab: picker.new_tab })
                     }
+                    // Only the transcript's picker lists these; it is handled above.
+                    Some(PickItem::Sound { .. }) => {}
                     // Nothing matches: keep the picker open so the user can fix the query.
                     None => self.picker = Some(picker),
                 }
@@ -5742,6 +5821,10 @@ impl Model {
                     talk.open = false;
                 }
             }
+            // No conversation here: ⌘⇧L opens the drawer on the transcript, the rail beside it.
+            Action::TalkToggle if self.talk.is_none() && self.by_user => {
+                self.listen_act(Action::ListenShow { on: true }, effects)
+            }
             Action::TalkToggle => {
                 if let Some(open) = self.talk.as_ref().map(|talk| !talk.open) {
                     self.talk_keys(open, effects);
@@ -5822,7 +5905,10 @@ impl Model {
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
-            | Action::ListenEnded { .. }) => self.listen_act(action, effects),
+            | Action::ListenEnded { .. }
+            | Action::ListenPicker { .. }
+            | Action::ListenPast { .. }
+            | Action::ListenOpenPast { .. }) => self.listen_act(action, effects),
             action @ (Action::AgentLevel { .. }
             | Action::AgentMenu { .. }
             | Action::AgentMenuMove { .. }
@@ -5851,6 +5937,9 @@ impl Model {
         if !self.features.on(Feature::Transcripts) {
             self.listen_end(None, None, effects);
             self.listen.lost = None;
+            // Its picker goes too: a pick would start one with the flag off.
+            self.picker = self.picker.take().filter(|picker| !picker.transcribe);
+            self.listen.apps.clear();
         }
         let sections = self.sections();
         if self.sidebar.is_some_and(|section| !sections.contains(&section)) {
@@ -8874,6 +8963,9 @@ mod tests {
         Action::ListenFailed { .. },
         Action::ListenHeard { .. },
         Action::ListenEnded { .. },
+        Action::ListenPicker { .. },
+        Action::ListenPast { .. },
+        Action::ListenOpenPast { .. },
         Action::AgentLevel { .. },
         Action::AgentMenu { .. },
         Action::AgentMenuMove { .. },
@@ -9175,6 +9267,9 @@ mod tests {
             Action::ListenFailed { id: text(), why: text() },
             Action::ListenHeard { id: text(), lines: Vec::new() },
             Action::ListenEnded { id: text(), why: listen::Ended::AppQuit, at: 0 },
+            Action::ListenPicker { apps: Vec::new(), id: text(), at: 0 },
+            Action::ListenPast { files: Vec::new(), today: text() },
+            Action::ListenOpenPast { name: None },
             Action::AgentLevel { pane: Some(1), level: crate::agent_mode::Level::See },
             Action::AgentMenu { pane: None, keys: true },
             Action::AgentMenuMove { delta: 1 },
@@ -9221,13 +9316,15 @@ mod tests {
             | Action::ListenToggle { .. }
             | Action::ListenPause { .. }
             | Action::ListenResume { .. }
-            | Action::ListenStop { .. } => Some(listen::USERS_ALONE),
+            | Action::ListenStop { .. }
+            | Action::ListenPicker { .. } => Some(listen::USERS_ALONE),
             Action::ListenFixture
             | Action::ListenAvailable { .. }
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
             | Action::ListenEnded { .. }
+            | Action::ListenPast { .. }
                 if origin == Origin::Socket =>
             {
                 Some(listen::SHELLS_ALONE)
@@ -9448,7 +9545,9 @@ mod tests {
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
-                    Action::RailSelect { .. } | Action::ListenShow { .. } => Some(rail::RAIL_USERS),
+                    Action::RailSelect { .. } | Action::ListenShow { .. } | Action::ListenOpenPast { .. } => {
+                        Some(rail::RAIL_USERS)
+                    }
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     Action::CalendarRetry => Some(calendar::USERS_RETRY),
                     _ if talks(action) => Some(chat::USERS_ALONE),
@@ -10622,8 +10721,8 @@ mod tests {
             (m.members(&of), m.front(&of), m.task_space(4), m.task_space(5)),
             (vec![1, 2, 3], Some(3), task_space(4), task_space(5))
         );
-        // A workspace of one task has no rail.
-        assert_eq!(rail_tasks(&workspace_of_one_task()), Vec::<TaskId>::new());
+        // A workspace of one task: the rail still shows it.
+        assert_eq!(rail_tasks(&workspace_of_one_task()), [1]);
     }
 
     #[test]
@@ -10683,7 +10782,7 @@ mod tests {
         m.update(Action::TalkFront { task: 2 });
         assert_eq!(rail_tasks(&m), [1, 2]);
         m.update(Action::TaskSetState { id: 2, state: State::Done });
-        assert_eq!((m.front(&of), rail_tasks(&m)), (Some(1), vec![]));
+        assert_eq!((m.front(&of), rail_tasks(&m)), (Some(1), vec![1]));
         m.update(state(2, State::Running));
         // The front one dismissed, by anyone: the most urgent remaining.
         m.update(Action::TalkFront { task: 2 });
@@ -13254,6 +13353,22 @@ mod tests {
         Effect::StartAgent { task: subject, start, cwd: Some(cwd.into()), brief: None }
     }
 
+    /// A session's space: no task, so nothing in front; ⌘⌥] / ⌘⌥[ still reach the transcript.
+    #[test]
+    fn in_a_sessions_space_the_rail_keys_start_from_the_top_or_the_foot() {
+        use crate::model::rail::RailItem;
+        let mut m = conversations();
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::ListenFixture.sent_by(Origin::System));
+        m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() });
+        assert_eq!((m.rail(), m.rail_selected(), m.rail_drawn()), (vec![RailItem::Transcript], None, true));
+        m.update(Action::TalkCycle { delta: 1 });
+        assert_eq!(m.rail_selected(), Some(RailItem::Transcript));
+        m.listen.shown = false;
+        m.update(Action::TalkCycle { delta: -1 });
+        assert_eq!(m.rail_selected(), Some(RailItem::Transcript));
+    }
+
     /// A session another terminal holds is watched, read-only: what it did, no card, no turn;
     /// once idle it may be taken over, by the user's click.
     #[test]
@@ -15542,7 +15657,9 @@ mod tests {
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
-                    Action::RailSelect { .. } | Action::ListenShow { .. } => Some(rail::RAIL_USERS),
+                    Action::RailSelect { .. } | Action::ListenShow { .. } | Action::ListenOpenPast { .. } => {
+                        Some(rail::RAIL_USERS)
+                    }
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     Action::CalendarRetry => Some(calendar::USERS_RETRY),
                     _ if talks(action) => Some(chat::USERS_ALONE),
