@@ -89,8 +89,6 @@ export interface AgentDial {
   /** A call failed since the user's last message: the red dot. */
   failed: boolean;
   lit: boolean;
-  /** The last stations gone to within a minute, oldest first. */
-  route: { station: Station }[];
   /** False for a watched session: it steps a message at a time, with no clocks. */
   timed: boolean;
   /** Shown as the header's marker, by the user's choice or because its agent ended. */
