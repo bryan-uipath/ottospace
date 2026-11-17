@@ -5472,9 +5472,16 @@ impl Workspace {
         let marked = self.model.mark_of(MarkOf::Pane(Some(id))).filter(|_| self.on(Feature::Marks));
         let marked = marked.and_then(|mark| self.model.marks.get(mark));
         let marked = marked.map(|mark| mark.key.map_or("◆".to_string(), |key| format!("◆ {}", key.to_uppercase())));
-        // Focus: a line in the mode's accent over the header's foot, taking no room.
-        let line = theme::focus_line(self.model.focused == Some(id), self.model.mode())
-            .map(|colour| div().absolute().bottom_0().left_0().right_0().h(px(theme::FOCUS_LINE)).bg(rgb(colour)));
+        // Focus: a line in the mode's accent over the header's foot and its 1pt border, taking no room.
+        // A live window with a title bar covers the header: the line goes in the 2pt gap above it.
+        let accent = theme::focus_line(self.model.focused == Some(id), self.model.mode());
+        let covered = bar > 0.0 && self.model.live == Some(id);
+        let line = |d: Div| d.absolute().left_0().right_0().h(px(theme::FOCUS_LINE));
+        let (line, top_line) = match accent {
+            Some(colour) if covered => (None, Some(line(div()).top_0().bg(rgb(colour)))),
+            Some(colour) => (Some(line(div()).bottom(px(-1.)).bg(rgb(colour))), None),
+            None => (None, None),
+        };
         // The header is the pane's handle: a drag of it carries the pane to a drop zone or a tab.
         let workspace = cx.weak_entity();
         let header = div()
@@ -5697,6 +5704,7 @@ impl Workspace {
             )
             .child(header)
             .child(body)
+            .children(top_line)
             // The pulse: the border and a tint in the focus colour, over the pane, taking no clicks.
             .when(glow > 0., |d| {
                 let color = gpui::Hsla::from(rgb(theme::PRIMARY));
@@ -6130,7 +6138,7 @@ impl Workspace {
             // The app is up for a scroll: it has the keyboard until the peek ends.
             _ if peek_hint.is_some() => ("PEEK", peek_hint.as_deref().unwrap_or_default()),
             // A key, not the key list: ⌘/ shows the keys of every mode. A mode you can be in by
-            // accident names its way out. Normal is the focus border's colour alone: no chip.
+            // accident names its way out. Normal is the focus line's colour alone: no chip.
             Mode::Normal => ("", ""),
             Mode::Pick => ("PICK", ""),
             Mode::Palette => ("COMMAND", ""),

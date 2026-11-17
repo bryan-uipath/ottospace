@@ -152,11 +152,11 @@ pub fn accent(mode: Mode) -> u32 {
 pub const FOCUS_LINE: f32 = 2.0;
 
 /// The colour of that line: the mode's accent on the focused pane; none while the keyboard is in
-/// the bar or the drawer (list mode, a conversation, the new-task box).
+/// the bar or the drawer (list mode, a conversation, the new-task box, the inspector).
 pub fn focus_line(focused: bool, mode: Mode) -> Option<u32> {
     match mode {
         _ if !focused => None,
-        Mode::List | Mode::Talk | Mode::Compose => None,
+        Mode::List | Mode::Talk | Mode::Compose | Mode::Inspect => None,
         mode => Some(accent(mode)),
     }
 }
@@ -171,7 +171,7 @@ mod tests {
         assert_eq!(focus_line(true, Mode::App), Some(APP));
         assert_eq!(focus_line(true, Mode::Sneak), Some(SNEAK));
         assert_eq!(focus_line(false, Mode::Normal), None);
-        for mode in [Mode::List, Mode::Talk, Mode::Compose] {
+        for mode in [Mode::List, Mode::Talk, Mode::Compose, Mode::Inspect] {
             assert_eq!(focus_line(true, mode), None, "{mode:?}");
         }
     }
