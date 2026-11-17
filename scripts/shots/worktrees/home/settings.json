@@ -1,1 +1,1 @@
-{"repos": ["{ROOT}/repos"], "restore_layout": false}
+{"repos": ["{ROOT}/repos/canvas", "{ROOT}/repos/design-system", "{ROOT}/repos/notes"], "restore_layout": false}

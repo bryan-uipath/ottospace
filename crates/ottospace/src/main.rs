@@ -638,6 +638,8 @@ actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, 
 actions!(ottospace, [MarkPane, MarkTab, MarkJump]);
 // Save the tab on show as a workbook, add it to one, or save all the tabs as one.
 actions!(ottospace, [SaveWorkbook, AddTabToWorkbook, SaveAllWorkbook]);
+// The repository of the focused pane's folder, to the Repos list.
+actions!(ottospace, [AddToRepos]);
 // The next start is empty: the layout is not kept this run.
 actions!(ottospace, [StartFresh]);
 // What the capture key does, from the menu.
@@ -1660,9 +1662,9 @@ impl Workspace {
                 }
                 // Later reads of the list look where the model now does (also after "Unlist?" is
                 // answered); a file not written leaves them as the settings are.
-                Effect::SaveRepos { changes } => {
+                Effect::SaveRepos { dirs } => {
                     let said = self.error.take();
-                    self.save_apps(changes);
+                    self.save_list(|| config::save_repos(dirs));
                     let failed = self.error.as_ref().is_some_and(|error| error.starts_with(Self::NOT_WRITTEN));
                     self.error = self.error.take().or(said);
                     if failed {
@@ -2616,7 +2618,11 @@ impl Workspace {
             };
             let rows: Vec<serde_json::Value> = repo.checkouts().into_iter().map(row).collect();
             let (header, folded) = (drawn(Mark::Repo(n)), self.model.repo_folded(repo));
-            serde_json::json!({ "name": repo.name, "path": repo.path, "header": header, "folded": folded, "rows": rows })
+            // The group's folder it is drawn under, if any.
+            let group = self.model.repo_dirs.group_of(&repo.path).map(|dir| &dir.path);
+            serde_json::json!({
+                "name": repo.name, "path": repo.path, "group": group, "header": header, "folded": folded, "rows": rows,
+            })
         };
         self.model.repos.iter().enumerate().map(group).collect()
     }
@@ -4561,10 +4567,24 @@ impl Workspace {
         .detach();
     }
 
-    /// A folder for the Repos list: resolved first (links, `..`), and only a directory. The
+    /// "Add Folder to Repos": the focused terminal's folder, else the folder the tab's task works
+    /// in; its repository joins the list.
+    fn add_focused_folder(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let cwd = self.model.focused.and_then(|id| self.terminals.get(&id)).and_then(|t| t.cwd());
+        let task = || self.model.tab_task().and_then(|id| self.model.task_worktree(id)).map(PathBuf::from);
+        match cwd.map(PathBuf::from).or_else(task) {
+            Some(dir) => self.add_repo(&dir, self.input, window, cx),
+            None => self.error = Some("No folder here: focus a terminal, or a task's tab".into()),
+        }
+        cx.notify();
+    }
+
+    /// A folder for the Repos list: resolved first (links, `..`), only a directory, then the
+    /// repository it is in (`/code/app/src` → `/code/app`; a worktree's → its repository's). The
     /// core decides what to do with what is found there.
     fn add_repo(&mut self, path: &Path, origin: Origin, window: &Window, cx: &mut Context<Self>) {
-        let dir = path.canonicalize().ok().filter(|dir| dir.is_dir());
+        let dir =
+            path.canonicalize().ok().filter(|dir| dir.is_dir()).map(|dir| repos::repository_of(&dir).unwrap_or(dir));
         let Some(dir) = dir.as_deref().and_then(Path::to_str) else {
             self.error = Some(format!("Not a directory: {}", path.display()));
             return;
@@ -4652,6 +4672,7 @@ impl Workspace {
             self.dispatch(action, origin, window, cx);
             return;
         }
+        config::reread_repos();
         self.model.update(Action::SetRepoDirs { dirs: config::repo_dirs() }.sent_by(Origin::System));
         let before = self.model.repo_dirs.clone();
         self.error = None; // what the last try said is not about this one
@@ -5078,11 +5099,25 @@ impl Workspace {
                 }))
         };
         // Each repository's name (a list row of its own), then its checkouts unless folded: its
-        // own folder first. `index` counts checkouts, drawn or not; `at` the list's rows.
+        // own folder first. A group's folder over its repositories, drawn while it is unfolded.
+        // `index` counts checkouts, drawn or not; `at` the list's rows.
         let mut items: Vec<AnyElement> = Vec::new();
         let (mut index, mut at) = (0, 0);
+        let mut group: Option<String> = None;
         for (n, repo) in self.model.repos.iter().enumerate() {
             let checkouts = repo.checkouts();
+            let of = self.model.repo_dirs.group_of(&repo.path).cloned();
+            if of.as_ref().map(|dir| &dir.path) != group.as_ref() {
+                group = of.as_ref().map(|dir| dir.path.clone());
+                if let Some(dir) = &of {
+                    items.push(self.repo_group(at, dir, cx).into_any_element());
+                    at += 1;
+                }
+            }
+            if group.as_ref().is_some_and(|path| !self.model.repos_open.contains(path)) {
+                index += checkouts.len();
+                continue;
+            }
             let folded = self.model.repo_folded(repo);
             items.push(self.repo_heading(n, at, repo, folded, checkouts.len(), cx).into_any_element());
             at += 1;
@@ -5103,15 +5138,45 @@ impl Workspace {
             }
             items.extend(well(group, 0.));
         }
-        let empty = self.model.repos.is_empty().then(|| {
-            let roots: Vec<String> = repos::roots().iter().map(|root| root.display().to_string()).collect();
-            let hint = format!(
-                "No repositories in: {}. Set OTTOSPACE_REPOS to the directories that hold yours.",
-                if roots.is_empty() { "(no directories)".to_string() } else { roots.join(", ") }
-            );
-            div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(hint)
+        // Opt-in: none until the user adds one, by the + here or in the header, or by a drop.
+        let empty = self.model.repos.is_empty().then(|| match self.model.repo_dirs.fixed {
+            true => div()
+                .px_2()
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child("No repositories in the folders OTTOSPACE_REPOS names.")
+                .into_any_element(),
+            false => div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    list_row("repos-empty-add", false)
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(svg().path("icons/plus.svg").size(px(12.)).text_color(rgb(theme::PRIMARY)))
+                        .child("Add a repository")
+                        .child(self.controls.mark("repos-empty:add"))
+                        .on_click(cx.listener(|this, _, window, cx| this.bar_add(Section::Repos, window, cx))),
+                )
+                .child(div().px_2().text_xs().text_color(rgb(theme::MUTED)).child("Or drop its folder here."))
+                .into_any_element(),
         });
-        let list = div().id("repos").flex_1().flex().flex_col().p_2().overflow_y_scroll();
+        let list = div()
+            .id("repos")
+            .flex_1()
+            .flex()
+            .flex_col()
+            .p_2()
+            .overflow_y_scroll()
+            .drag_over::<gpui::ExternalPaths>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+            .on_drop(cx.listener(|this, dropped: &gpui::ExternalPaths, window, cx| {
+                for path in dropped.paths() {
+                    this.add_repo(path, this.input, window, cx);
+                }
+                cx.notify();
+            }));
         self.bars.tracked(
             "repos",
             list.track_scroll(&self.list_scroll).children(empty).children(items).children(self.pr_note.map(|note| {
@@ -5161,6 +5226,48 @@ impl Workspace {
                 this.dispatch(Action::PrOpen { path: path.clone() }, this.input, window, cx);
             }));
         Some((marker, width))
+    }
+
+    /// A group's folder (an entry of the old settings that holds repositories): a chevron that
+    /// folds them, its name as the settings write it, how many; under the pointer, the trash
+    /// (stop listing all of them). `at`: its place among the list's rows.
+    fn repo_group(&self, at: usize, dir: &ottospace_core::repos::RepoDir, cx: &mut Context<Self>) -> Stateful<Div> {
+        let selected = self.model.list == Some(at);
+        let open = self.model.repos_open.contains(&dir.path);
+        let count = self.model.group_repos(&dir.path).len();
+        let path = dir.path.clone();
+        let remove = {
+            let path = path.clone();
+            let click =
+                move |this: &mut Self, window: &Window, cx: &mut Context<Self>| this.remove_repo(&path, window, cx);
+            let tip = ("icons/trash.svg", "Stop listing this folder's repositories (nothing on disk is touched)");
+            self.icon_word(format!("repo-remove:{}", dir.path), tip, click, cx)
+        };
+        let tip =
+            format!("{} · a folder of repositories from your old settings: remove it, add the ones you use", dir.path);
+        list_row(("repo-group", at), selected)
+            .group("repo-name")
+            .when(at > 0, |d| d.mt_2())
+            .h(px(26.))
+            .px_2()
+            .py_0()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .child(div().flex_none().w(px(10.)).text_xs().text_color(rgb(theme::MUTED)).child(if open {
+                "▾"
+            } else {
+                "▸"
+            }))
+            .child(cut_text(format!("{}/", dir.text.trim_end_matches('/'))).flex_shrink().text_xs())
+            .child(div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(format!("· {count}")))
+            .child(div().flex_1())
+            .child(words::words("repo-name", selected).top(px(3.)).child(remove))
+            .child(self.controls.mark(format!("repo-fold:{path}")))
+            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.dispatch(Action::RepoFold { path: path.clone(), fold: None }, this.input, window, cx);
+            }))
     }
 
     /// A repository's name: a chevron that folds its rows (a click anywhere on the line does),
@@ -6543,6 +6650,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &SaveWorkbook, window, cx| this.save_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &AddTabToWorkbook, window, cx| this.pick_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &SaveAllWorkbook, window, cx| this.save_all_workbook(window, cx)))
+            .on_action(cx.listener(|this, _: &AddToRepos, window, cx| this.add_focused_folder(window, cx)))
             .on_action(cx.listener(|this, _: &StartFresh, window, cx| {
                 drop(this.dispatch(Action::StartFresh, this.input, window, cx))
             }))
