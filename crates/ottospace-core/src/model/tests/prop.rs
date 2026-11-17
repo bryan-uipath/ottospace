@@ -19,7 +19,6 @@ use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::row_menu::MenuOf;
 use crate::sessions::{Link, Seen};
-use crate::settings::ListChange;
 use crate::sneak_apps;
 use crate::transcript::{Event as Said, Outcome, Text, View};
 use crate::workbook::{self, History, Workbook, WorkbookId};
@@ -341,8 +340,10 @@ impl Gen<'_> {
     }
 
     fn repo_dirs(&mut self) -> RepoDirs {
-        let dir = |g: &mut Self| g.name(DIRS);
-        let dirs = (0..self.rng.below(3)).map(|_| dir(self)).map(|path| RepoDir { text: path.clone(), path }).collect();
+        // `/code`: a folder of repositories, from the old settings: a group.
+        let dir = |g: &mut Self| if g.rng.one_in(4) { "/code".to_string() } else { g.name(DIRS) };
+        let entry = |g: &mut Self| RepoDir { pinned: g.rng.one_in(3), ..RepoDir::new(&dir(g), "") };
+        let dirs = (0..self.rng.below(4)).map(|_| entry(self)).map(|d| RepoDir { path: d.text.clone(), ..d }).collect();
         RepoDirs { dirs, fixed: self.rng.below(4) == 0, worktrees: self.rng.coin().then(|| "/w".into()) }
     }
 
@@ -1434,6 +1435,13 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 }
 
 fn check(m: &Model) -> Result<(), String> {
+    // The Repos list: each entry once, pinned ones first; the repositories in its order.
+    let dirs = &m.repo_dirs.dirs;
+    let once = dirs.iter().enumerate().all(|(i, d)| dirs[..i].iter().all(|e| e.path != d.path));
+    ensure!(once && dirs.is_sorted_by_key(|d| !d.pinned), "the Repos entries: {dirs:?}");
+    let places: Vec<usize> = m.repos.iter().map(|r| m.repo_dirs.place(&r.path).unwrap_or(usize::MAX)).collect();
+    ensure!(places.is_sorted(), "the repositories are out of the list's order: {places:?}");
+    ensure!(m.repos_open.iter().all(|open| dirs.iter().any(|d| d.path == *open)), "an open group with no entry");
     // A dismissed notice is kept only of a kind that stays until fixed, one of each.
     let kinds: Vec<crate::notice::Kind> = m.notice_hidden.iter().map(|n| n.kind).collect();
     let once = kinds.iter().enumerate().all(|(i, kind)| !kind.held() && !kinds[..i].contains(kind));
@@ -3451,11 +3459,14 @@ impl Run {
                         "a change names no list or no app: {changes:?}"
                     );
                 }
-                Effect::SaveRepos { changes } => {
-                    ensure!(user && !m.repo_dirs.fixed, "{origin:?} wrote the settings: {changes:?}");
-                    let named = |change: &ListChange| change.key == "repos" && !change.text.is_empty();
-                    ensure!(changes.len() == 1 && changes.iter().all(named), "not one directory: {changes:?}");
-                    ensure!(m.repo_dirs.dirs.len() <= MAX_DIRS, "more directories than the settings may name");
+                Effect::SaveRepos { dirs } => {
+                    // Only the user adds, removes, moves or pins: what is written is what the list holds.
+                    ensure!(user && !m.repo_dirs.fixed, "{origin:?} wrote the settings: {dirs:?}");
+                    let acts =
+                        matches!(action, Action::RepoAdd { .. } | Action::RepoRemove { .. } | Action::QuitConfirm);
+                    ensure!(acts, "{action:?} wrote the Repos list");
+                    ensure!(*dirs == m.repo_dirs.dirs, "written {dirs:?}, held {:?}", m.repo_dirs.dirs);
+                    ensure!(dirs.len() <= MAX_DIRS, "more repositories than the settings may name");
                 }
                 // A worktree is the user's own ↵ in its field, or on a new task with the box's choice
                 // (a new branch, and the task waits for it): a branch git takes, in a folder of `root`.
@@ -4493,10 +4504,8 @@ fn one_key_never_presses_in_an_app() {
 #[test]
 fn a_directory_with_no_text_is_not_removed() {
     replay(&[
-        Action::SetRepoDirs {
-            dirs: RepoDirs { dirs: vec![RepoDir { text: "".into(), path: "".into() }], fixed: false, worktrees: None },
-        }
-        .sent_by(Origin::Socket),
+        Action::SetRepoDirs { dirs: RepoDirs { dirs: vec![RepoDir::new("", "")], fixed: false, worktrees: None } }
+            .sent_by(Origin::Socket),
         Action::RepoRemove { path: "".into() }.sent_by(Origin::User),
     ])
     .unwrap();
@@ -5025,10 +5034,7 @@ fn a_repository_is_never_removed_by_a_path_that_is_no_directory() {
     replay(&[
         Action::SetRepoDirs {
             dirs: RepoDirs {
-                dirs: vec![
-                    RepoDir { text: "".into(), path: "".into() },
-                    RepoDir { text: "  S'".into(), path: "  S'".into() },
-                ],
+                dirs: vec![RepoDir::new("", ""), RepoDir::new("  S'", "  S'")],
                 fixed: false,
                 worktrees: None,
             },

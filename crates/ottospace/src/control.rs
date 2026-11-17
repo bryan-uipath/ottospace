@@ -448,6 +448,10 @@ pub enum Request {
     /// For tests (`test_refusal`): the window's green button, pressed as the user would: a zoom,
     /// which fills the display instead. Refused outside a test run: only the user's hand fills it.
     ZoomPress,
+    /// For tests (`test_refusal`): the displays changed, as macOS says when one is plugged in or
+    /// taken away (a test cannot unplug one). The shell kicks GPUI to draw again, as it then
+    /// does (`stall`). Never for an agent: it makes the window draw by paths of its own.
+    DisplayChange,
     /// The user's meetings of `day` (`today`, the default, `tomorrow` or `YYYY-MM-DD`) and the
     /// `days` (1 to 7) from it, busy and free time: `{"ok":true,"configured":true,"meetings":[..],..}`,
     /// not the state. Only what the app holds (today and the next 7 days), never a fetch. Titles
@@ -559,6 +563,7 @@ pub enum Modifier {
 /// would raise or silence the user's meeting alert. `record_start`: it would film the window.
 /// `listen_end`: it would end the user's transcript. `audio_probe_start`: it would hear an app.
 /// `zoom_press`: it would put the window over the menu bar and the Dock as the user.
+/// `display_change`: no client needs it, and it makes the window draw by GPUI's own paths.
 pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
     match request {
         _ if e2e => None,
@@ -594,6 +599,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         }
         Request::ZoomPress => {
             Some("zoom_press is for tests (OTTOSPACE_E2E): only the user's green button fills the display")
+        }
+        Request::DisplayChange => {
+            Some("display_change is for tests (OTTOSPACE_E2E): macOS says when the displays change")
         }
         _ => None,
     }
@@ -887,7 +895,10 @@ mod tests {
         assert_eq!(test_refusal(&add, true), None);
         // Nor a recording of the window, nor hearing an app.
         let probe = [r#"{"cmd":"audio_probe_start"}"#, r#"{"cmd":"audio_probe_stop"}"#];
-        for line in [r#"{"cmd":"record_start","dir":"/tmp/rec"}"#, r#"{"cmd":"record_stop"}"#].into_iter().chain(probe)
+        for line in
+            [r#"{"cmd":"record_start","dir":"/tmp/rec"}"#, r#"{"cmd":"record_stop"}"#, r#"{"cmd":"display_change"}"#]
+                .into_iter()
+                .chain(probe)
         {
             assert!(test_refusal(&parse(line), false).expect(line).contains("for tests"));
             assert_eq!(test_refusal(&parse(line), true), None);

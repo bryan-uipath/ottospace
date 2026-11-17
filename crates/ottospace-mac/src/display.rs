@@ -1,3 +1,6 @@
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use objc2_core_foundation::{CGPoint, CGRect};
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -5,6 +8,37 @@ unsafe extern "C" {
     fn CGMainDisplayID() -> u32;
     fn CGDisplayBounds(display: u32) -> CGRect;
     fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGDisplayRegisterReconfigurationCallback(
+        callback: extern "C" fn(u32, u32, *mut c_void),
+        user_info: *mut c_void,
+    ) -> i32;
+}
+
+/// Set when the displays were reconfigured (plugged, unplugged, mirrored, a lid shut), taken by `take_change`.
+static CHANGED: AtomicBool = AtomicBool::new(false);
+
+/// `kCGDisplayBeginConfigurationFlag`: the call before a change, which says nothing of the new setup.
+const BEGIN: u32 = 1;
+
+extern "C" fn on_reconfigure(_display: u32, flags: u32, _: *mut c_void) {
+    if flags & BEGIN == 0 {
+        CHANGED.store(true, Ordering::SeqCst);
+    }
+}
+
+/// From now on, a change of the displays is noted for `take_change`. Once per run.
+pub fn watch() {
+    unsafe { CGDisplayRegisterReconfigurationCallback(on_reconfigure, std::ptr::null_mut()) };
+}
+
+/// Notes a change as `watch` does: for a test, which cannot unplug a display.
+pub fn note_change() {
+    CHANGED.store(true, Ordering::SeqCst);
+}
+
+/// True once after each change of the displays.
+pub fn take_change() -> bool {
+    CHANGED.swap(false, Ordering::SeqCst)
 }
 
 /// Display bounds in global top-left-origin coordinates (same space as AX).
