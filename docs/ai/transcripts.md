@@ -209,7 +209,7 @@ Rejected:
 
 **Recommendation: `SpeechTranscriber`** (preset `timeIndexedProgressiveTranscription`: volatile
 results, final ones, audio time ranges), one `SpeechAnalyzer` per stream (`them`, `me`). The
-locale: the system's, matched with `supportedLocale(equivalentTo:)`; a `transcripts_locale`
+locale: the system's, matched with `supportedLocale(equivalentTo:)`, else the first of the user's preferred languages that matches (built: CI's runner has a system locale that matches none); a `transcripts_locale`
 setting overrides it. If its assets are not installed, Start says so and offers to install them
 (`AssetInventory.assetInstallationRequest`): the system downloads Apple's model, by the user's
 click, once; that is the OS's own model store, not ottospace sending audio anywhere.

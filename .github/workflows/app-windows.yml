@@ -63,7 +63,10 @@ jobs:
       # into its own store, on this runner only (a test run downloads none). If it cannot, the
       # test says it skipped.
       - name: Speech model
-        run: cargo run -p ottospace-mac --example speech_status -- --install || true
+        run: |
+          defaults read -g AppleLocale || true
+          defaults read -g AppleLanguages || true
+          cargo run -p ottospace-mac --example speech_status -- --install || true
       - name: App-window tests
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.repeat == '0' }}
         run: cargo e2e-apps --skip canarys

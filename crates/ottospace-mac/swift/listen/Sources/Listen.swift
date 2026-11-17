@@ -35,10 +35,28 @@ private func say(_ text: String, _ f: (UnsafePointer<CChar>) -> Void) {
     text.withCString(f)
 }
 
-/// The locale to transcribe: `named` (a BCP 47 identifier) or the system's.
-private func wanted(_ named: UnsafePointer<CChar>?) -> Locale {
-    named.map { Locale(identifier: String(cString: $0)) } ?? Locale.current
+/// The name given, as Swift holds it: a C string does not cross into a task.
+private func named(_ name: UnsafePointer<CChar>?) -> String? {
+    name.map { String(cString: $0) }
 }
+
+#if OTTOSPACE_SPEECH_SDK
+/// The locale to transcribe that the recogniser supports: `name` (a BCP 47 identifier) if given;
+/// else the system's, then each of the user's preferred languages in turn (a system locale such
+/// as `en_US_POSIX` matches none).
+@available(macOS 26, *)
+private func chosen(_ name: String?) async -> Locale? {
+    if let name {
+        return await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: name))
+    }
+    for want in [Locale.current] + Locale.preferredLanguages.map({ Locale(identifier: $0) }) {
+        if let locale = await SpeechTranscriber.supportedLocale(equivalentTo: want) {
+            return locale
+        }
+    }
+    return nil
+}
+#endif
 
 /// 0: no recogniser here (below macOS 26, or built without its SDK). 1: supported, its model not
 /// installed. 2: installed. 3: being downloaded. 4: this locale is not supported.
@@ -46,11 +64,9 @@ private func wanted(_ named: UnsafePointer<CChar>?) -> Locale {
 public func ottospace_listen_status(_ locale: UnsafePointer<CChar>?) -> Int32 {
     #if OTTOSPACE_SPEECH_SDK
     if #available(macOS 26, *) {
-        let want = wanted(locale)
+        let name = named(locale)
         return blocking {
-            guard SpeechTranscriber.isAvailable,
-                let locale = await SpeechTranscriber.supportedLocale(equivalentTo: want)
-            else { return 4 }
+            guard SpeechTranscriber.isAvailable, let locale = await chosen(name) else { return 4 }
             let module = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
             switch await AssetInventory.status(forModules: [module]) {
             case .installed: return 2
@@ -73,11 +89,11 @@ public func ottospace_listen_install(
     let raw = UInt(bitPattern: context)
     #if OTTOSPACE_SPEECH_SDK
     if #available(macOS 26, *) {
-        let want = wanted(locale)
+        let name = named(locale)
         Task.detached {
             let context = UnsafeMutableRawPointer(bitPattern: raw)
             do {
-                guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: want) else {
+                guard let locale = await chosen(name) else {
                     return say("this language is not supported") { done(context, false, $0) }
                 }
                 let module = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
@@ -158,10 +174,10 @@ public func ottospace_listen_new(
 ) -> UnsafeMutableRawPointer? {
     #if OTTOSPACE_SPEECH_SDK
     if #available(macOS 26, *) {
-        let want = wanted(locale)
+        let name = named(locale)
         let raw = UInt(bitPattern: context)
         let made: Recogniser? = blocking {
-            guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: want) else { return nil }
+            guard let locale = await chosen(name) else { return nil }
             let transcriber = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
             guard await AssetInventory.status(forModules: [transcriber]) == .installed,
                 let target = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]),
