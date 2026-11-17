@@ -1296,6 +1296,7 @@ const MAKERS: &[Make] = &[
     |g| Action::ListenStop { at: g.time() },
     |g| Action::ListenShow { on: g.rng.coin() },
     |_| Action::ListenFixture,
+    |g| Action::ListenAvailable { on: g.rng.coin() },
     |g| Action::ListenBegan { id: g.listen_id(), at: g.time() },
     |g| Action::ListenFailed { id: g.listen_id(), why: g.text() },
     |g| {
@@ -4311,6 +4312,26 @@ fn a_clients_list_of_workspaces_is_refused() {
         split(Axis::Right, Kind::Terminal),
         Action::OpenCompose { text: "x".into() }.into(),
         restore_workbooks("[]").sent_by(Origin::Socket),
+    ])
+    .unwrap();
+}
+
+/// The system's read of the workspaces while the user typed in the new-task box took the box
+/// with the workspace it was in (seed 637, once the recogniser's maker shifted the runs). A read
+/// is at start: one then is refused.
+#[test]
+fn a_read_of_the_workspaces_while_the_user_types_a_task_is_refused() {
+    let assign = || Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] };
+    let known = Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] };
+    replay(&[
+        Action::TaskAdd { title: "a".into(), priority: 2, state: State::Running, tab: None, assign: assign() }.into(),
+        Action::TaskAdd { title: "b".into(), priority: 1, state: State::NeedsYou, tab: None, assign: assign() }.into(),
+        Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known, open: false }.into(),
+        Action::SpaceOpen { space: Owner::Task { id: 3 } }.into(),
+        Action::SelectTab { index: 1 }.into(),
+        split(Axis::Right, Kind::Terminal),
+        Action::OpenCompose { text: "/src/export >app p1 >2048".into() }.into(),
+        restore_workbooks("[]").sent_by(Origin::System),
     ])
     .unwrap();
 }
