@@ -182,8 +182,13 @@ A small script printed the variable and tried to connect.
   with a test-only `app_fixture` (an app pane with no window, as the user's pick or a client's):
   no pass, a made-up pass, a dead one (`GONE`), another task's, Off, a client's pane at Off, the
   limit, the rows; a client's click, key and ⌘⌃V refused; the user's click and ⌘⌃V set a level; the
-  flag off refuses all. `e2e-apps` cannot grant a level (no user acts outside `OTTOSPACE_E2E`):
-  `app_read` and `app_look` of the canary at See wait for a seam for that.
+  flag off refuses all. `agent_mode_brings_a_kept_level_back_only_as_an_offer_the_user_takes`:
+  the user's pick is kept in `layout.json`, the default is not; a level planted there comes back
+  Off, a client's fill offers nothing, a client's click on the offer gives nothing, the user's does.
+  `e2e-apps` (`OTTOSPACE_E2E` too, so `"as":"user"` keys work):
+  `a_task_reads_and_looks_at_the_canary_only_while_the_user_lets_it`, with the stand-in `claude`'s
+  pass: a client's `open_app` at Off refused; the user's See gives the tree (the canary's button
+  in it, `untrusted`) and a 0600 PNG; the user's Off refuses the next read and removes the folder.
 
 ## What exists today
 

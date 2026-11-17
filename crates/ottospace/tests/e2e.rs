@@ -9418,6 +9418,103 @@ fn agent_mode_lets_only_the_workspaces_task_read_an_app_pane_and_only_the_user_s
     assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["agent_mode"]["panes"], json!({}));
 }
 
+/// Agent mode over a restart: only a level the user picked is kept in `layout.json`, and read back
+/// it is an offer, never a grant (an agent of the same user can write the file). A level planted
+/// there for a pane the user never picked is offered the same way, and gives nothing by itself; a
+/// client's fill offers nothing; only the user's click on the offer gives the level.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn agent_mode_brings_a_kept_level_back_only_as_an_offer_the_user_takes() {
+    let extra = [("FAKE_SAY_PASS", "1"), ("OTTOSPACE_FEATURES", "agent_mode")];
+    let (root, record, env) = native_setup("agent-kept", &[], &extra);
+    let home = PathBuf::from(&env.iter().find(|(k, _)| k == "OTTOSPACE_HOME").unwrap().1);
+    let file = record.join("pass");
+    let pass_of = |o: &Otto| -> String {
+        let _ = std::fs::remove_file(&file);
+        o.start_task(1);
+        o.wait_for("its pass", |_| {
+            std::fs::read_to_string(&file).ok().filter(|t| t.ends_with('\n')).map(|t| t.trim().to_string())
+        })
+    };
+    let panes = |o: &Otto| o.call(json!({"cmd": "state"}))["state"]["agent_mode"]["panes"].clone();
+    let mut otto = launch_env("agent-kept", &env);
+    otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    pass_of(&otto);
+    // Mail at the default (Act, not picked), Notes at See by the user's pick (⌘⌃V, ↓, ↵).
+    otto.call(json!({"cmd": "app_fixture", "name": "Mail", "user": true}));
+    otto.call(json!({"cmd": "app_fixture", "name": "Notes", "user": true}));
+    otto.user_key("cmd-ctrl-v");
+    otto.user_key("down");
+    otto.user_key("enter");
+    let grants = panes(&otto);
+    let mut ids: Vec<u64> = grants.as_object().unwrap().keys().map(|id| id.parse().unwrap()).collect();
+    ids.sort();
+    let levels: Vec<Value> = ids.iter().map(|id| grants[id.to_string()]["level"].clone()).collect();
+    assert_eq!(levels, [json!("act"), json!("see")], "Mail, then Notes");
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+
+    // Kept: the pick, never the default. Then a level planted for Mail, as an agent could write it.
+    fn apps(value: &mut Value, each: &mut dyn FnMut(&mut serde_json::Map<String, Value>)) {
+        match value {
+            Value::Object(map) if map.get("kind").and_then(|kind| kind.get("type")) == Some(&json!("app")) => each(map),
+            Value::Object(map) => map.values_mut().for_each(|value| apps(value, each)),
+            Value::Array(list) => list.iter_mut().for_each(|value| apps(value, each)),
+            _ => {}
+        }
+    }
+    let layout = home.join("layout.json");
+    let mut kept: Value = serde_json::from_str(&std::fs::read_to_string(&layout).unwrap()).unwrap();
+    let mut found = Vec::new();
+    apps(&mut kept, &mut |pane| {
+        found.push((pane["kind"]["name"].clone(), pane.get("agent_mode").cloned()));
+        if pane["kind"]["name"] == "Mail" {
+            pane.insert("agent_mode".into(), json!({"level": "act", "task": 1}));
+        }
+    });
+    let see = json!({"level": "see", "task": 1});
+    assert_eq!(found, [(json!("Mail"), None), (json!("Notes"), Some(see))]);
+    std::fs::write(&layout, kept.to_string()).unwrap();
+
+    // Read back: both panes wait empty (a test run hosts no window), and grant nothing.
+    let again = launch_env("agent-kept-2", &env);
+    let waiting = again.wait_for("the app panes back", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        let ids: Vec<u64> = state["unfilled"].as_array()?.iter().filter_map(|u| u["pane"].as_u64()).collect();
+        (ids.len() == 2).then_some(ids)
+    });
+    let (mail, notes) = (waiting[0].min(waiting[1]), waiting[0].max(waiting[1]));
+    assert_eq!(panes(&again), json!({}));
+    let pass = pass_of(&again);
+    let offer = |o: &Otto, pane: u64| o.control_opt(&format!("agent-offer:{pane}"));
+    // A client's fill of Notes, the same app: Off, and no offer.
+    again.call(json!({"cmd": "focus", "pane": notes}));
+    again.call(json!({"cmd": "app_fixture", "name": "Notes"}));
+    assert_eq!(panes(&again)[notes.to_string()], json!({"level": "off", "task": 1}));
+    assert_eq!(offer(&again, notes), None, "a client's fill offers nothing");
+    // The user's fill of Mail: Off, and the planted level only offered.
+    again.call(json!({"cmd": "focus", "pane": mail}));
+    again.call(json!({"cmd": "app_fixture", "name": "Mail", "user": true}));
+    assert_eq!(panes(&again)[mail.to_string()], json!({"level": "off", "task": 1}));
+    let read = |o: &Otto| {
+        let line = json!({"cmd": "app_read", "pane": mail, "pass": pass});
+        o.raw(&line.to_string())["error"].as_str().unwrap_or_default().to_string()
+    };
+    assert!(read(&again).contains("agent mode is off on pane"), "{}", read(&again));
+    let button = offer(&again, mail).expect("the offer on the user's fill");
+    // A client's click on it gives nothing; the user's gives the level, and the offer goes.
+    again.click(at(button, 0.5, 0.5), 1);
+    assert_eq!(panes(&again)[mail.to_string()]["level"], "off", "a client's click on the offer");
+    again.user_click(at(button, 0.5, 0.5));
+    assert_eq!(panes(&again)[mail.to_string()], json!({"level": "act", "task": 1}));
+    assert_eq!(offer(&again, mail), None);
+    // Granted now: the read is let through, and finds no window.
+    assert!(read(&again).contains("no window"), "{}", read(&again));
+    drop(again);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The recorded 2.1.325 turn is read whole ("ok", once); once its agent is stopped, the
 /// composer still takes the user's words, and ↵ starts it again and sends them.
 #[test]

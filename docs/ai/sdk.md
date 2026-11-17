@@ -368,7 +368,8 @@ const muted = await rows.filter({ has: meeting.getByRole("image", { description:
 Both `Zoom Meeting` windows match `meeting`; the search runs in both and finds the outline in
 the one that has it. That is why `window()` is "every window selected", not "exactly one".
 
-**Read and act.** Reading is what is agreed today (`ax_tree` reads). `click`, `press` and
+**Read and act.** Reading is what is agreed today, behind agent mode ([agent-mode.md](agent-mode.md)):
+`appRead`, `appLook` and `axTree` answer only the task the user let see the pane. `click`, `press` and
 `fill` act in another app, which is the separate decision in `accessibility.md`: ottospace would
 lend its Accessibility grant to any client of its socket. Proposal:
 
