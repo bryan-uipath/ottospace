@@ -193,11 +193,6 @@ impl Workspace {
         self.error = Some(self.error.take().map_or(gone.clone(), |unhosted| format!("{gone}; {unhosted}")));
     }
 
-    /// A click on "Updated · Undo" or "Workspace deleted · Undo", or its label.
-    pub(crate) fn undo_workbook(&mut self, window: &Window, cx: &mut Context<Self>) {
-        self.workbook_act(Action::WorkbookUndo, window, cx);
-    }
-
     /// The workbooks as the state lists them: each row, and where it, its tabs' rows and their
     /// words were drawn.
     pub(crate) fn workbooks_json(&self) -> Vec<serde_json::Value> {
@@ -369,13 +364,9 @@ impl Workspace {
             }
             children.extend(crate::well(tabs, 4.));
         }
-        // After a delete or an update, a line at the top offers to take it back, as Tasks does.
-        let notice = self.model.workbooks.offered().map(|change| {
-            self.undo_line("workbook-undo", change.title())
-                .on_click(cx.listener(|this, _, window, cx| this.undo_workbook(window, cx)))
-        });
+        // A delete or an update is offered back on the notice bar: nothing here moves.
         let list = div().id("workbooks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
-        let list = list.track_scroll(&self.list_scroll).children(notice).children(empty).children(children);
+        let list = list.track_scroll(&self.list_scroll).children(empty).children(children);
         self.bars.tracked("workbooks", list, &self.list_scroll)
     }
 }

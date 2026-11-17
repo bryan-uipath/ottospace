@@ -7,6 +7,7 @@ use crate::edit::{Edit, Field};
 use crate::layout::Node;
 use crate::marks::{self, Extra, MAX_NAME, MarkInput, Need, PaneRecord, RecordKind, TabRecord};
 use crate::model::{Effect, Kind, Model, Owner, PaneId, Section, Space, Tab};
+use crate::notice::{self, Notice};
 use crate::tasks::{NOTICE_MS, TaskId};
 
 pub type WorkbookId = u32;
@@ -365,7 +366,7 @@ impl Change {
     pub fn title(self) -> &'static str {
         match self {
             Change::Deleted => "Workspace deleted",
-            Change::Updated => "Updated",
+            Change::Updated => "Workspace updated",
         }
     }
 }
@@ -554,6 +555,16 @@ impl Workbooks {
     /// The change the section offers to take back, while it offers.
     pub fn offered(&self) -> Option<Change> {
         self.offer.as_ref().map(|offer| offer.change)
+    }
+
+    /// The offer as the notice bar says it, at the window's foot: nothing in the section moves.
+    pub fn notice(&self) -> Option<Notice> {
+        self.offered().map(|change| Notice { kind: notice::Kind::Undo, text: change.title().into() })
+    }
+
+    /// × on the bar: the offer it says ends, as when its time is up. One said since stays.
+    pub(crate) fn dismiss(&mut self, text: &str) {
+        self.offer = self.offer.take().filter(|offer| offer.change.title() != text);
     }
 
     /// True if the offer's time is up at `now`.
@@ -1582,6 +1593,45 @@ mod tests {
         m.update(Action::WorkbookUndo);
         let book = m.workbooks.get(1).map(|book| book.live.clone());
         assert_eq!((book, m.workbook_of_tab()), (Some(vec![None]), None));
+    }
+
+    #[test]
+    fn a_delete_is_offered_back_on_the_notice_bar_and_only_the_user_takes_it_or_dismisses_it() {
+        use crate::notice::{Kind as Notices, Level, Offer};
+        let dismiss = |text: &str| Action::NoticeDismiss { notice: Notices::Undo, text: text.into() };
+        let mut m = saved();
+        m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        // Information at the window's foot, with Undo beside it: no line in the section.
+        let said = m.workbooks.notice().expect("offered");
+        assert_eq!(
+            (said.text.as_str(), said.level(), said.kind.offer()),
+            ("Workspace deleted", Level::Info, Some(Offer::Undo))
+        );
+        // A client's Undo or × is refused: the offer stands.
+        for action in [Action::WorkbookUndo, dismiss("Workspace deleted")] {
+            assert!(m.refusal(&action, Origin::Socket).is_some(), "{action:?}");
+            m.update(action.sent_by(Origin::Socket));
+        }
+        assert_eq!((names(&m), m.workbooks.notice()), (vec!["Workspace 3"], Some(said.clone())));
+        // The user's × on an offer said before ends none; on this one, it ends it: no undo after.
+        m.update(dismiss("Workspace updated"));
+        assert_eq!(m.workbooks.notice(), Some(said));
+        m.update(dismiss("Workspace deleted"));
+        m.update(Action::WorkbookUndo);
+        assert_eq!((names(&m), m.workbooks.notice()), (vec!["Workspace 3"], None));
+        // A tab added: "Workspace updated". The user's Undo takes it back; its time up, it goes.
+        let mut m = saved();
+        m.update(Action::MarkCancel);
+        m.update(Action::NewTab);
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        m.update(Action::WorkbookAddTab { workbook: 1, cwds: vec![], histories: Vec::new() });
+        assert_eq!(m.workbooks.notice().map(|n| n.text), Some("Workspace updated".into()));
+        m.update(Action::WorkbookUndo);
+        assert_eq!(m.workbooks.notice(), None);
+        m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        assert!(m.workbooks.notice().is_some());
+        m.update(Action::Tick { now: m.now + NOTICE_MS }.sent_by(Origin::System));
+        assert_eq!(m.workbooks.notice(), None);
     }
 
     #[test]

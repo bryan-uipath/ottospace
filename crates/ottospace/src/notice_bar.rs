@@ -41,8 +41,8 @@ impl Default for Bar {
 
 impl Workspace {
     /// Every notice there is to show, newest and most pressing first: a meeting that started,
-    /// `line` (the last step that failed), what is not saved, what a step did, the settings'
-    /// line, a problem found at start, a key not registered, the editor's note.
+    /// `line` (the last step that failed), what is not saved, a workspace's change offered
+    /// back, what a step did, the settings' line, a problem found at start, a key not registered, the editor's note.
     fn notices(&self, line: Option<Notice>) -> Vec<Notice> {
         let said = |kind: Kind, text: Option<String>| text.map(|text| Notice { kind, text });
         let unsaved = self.unsaved.clone().or(self.kept_marks.unsaved.clone()).or(self.kept_workbooks.unsaved.clone());
@@ -57,6 +57,7 @@ impl Workspace {
             said(Kind::Meeting, meeting),
             line,
             said(Kind::Unsaved, unsaved),
+            self.model.workbooks.notice(),
             said(Kind::Told, told),
             said(self.model.settings_kind(), self.model.settings_line()),
             said(Kind::Start, start),
@@ -129,6 +130,7 @@ impl Workspace {
     pub(crate) fn notice_offer(&self, shown: &Notice) -> Option<(Offer, Action)> {
         match shown.kind.offer()? {
             Offer::OpenSettings => Some((Offer::OpenSettings, Action::EditSettings)),
+            Offer::Undo => Some((Offer::Undo, Action::WorkbookUndo)),
             Offer::Join => {
                 let (id, link) = self.meeting_shown(shown)?;
                 link.then_some((Offer::Join, Action::CalendarJoin { id }))

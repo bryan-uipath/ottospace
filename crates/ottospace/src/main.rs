@@ -3934,7 +3934,6 @@ impl Workspace {
             Some(Section::Apps) => return Some(self.apps_child(at)),
             // The offer to put a mark back, if it shows, is above the rows.
             Some(Section::Marks) => return Some(at + usize::from(self.mark_offered().is_some())),
-            Some(Section::Workbook) => return Some(at + usize::from(self.model.workbooks.offered().is_some())),
             // The day's all-day line is above the rows.
             Some(Section::Calendar) => {
                 let calendar = &self.model.calendar;

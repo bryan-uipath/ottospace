@@ -428,10 +428,6 @@ impl Workspace {
                 self.click_row_menu(name, window, cx);
                 None
             }
-            ("workbook-undo", _) => {
-                self.undo_workbook(window, cx);
-                None
-            }
             ("top", "fill") => Some(Action::FillDisplay),
             ("top", _) => {
                 if let Some((.., axis, new_tab)) = SPLITS.iter().find(|(top, ..)| *top == name) {

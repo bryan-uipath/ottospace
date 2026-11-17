@@ -720,7 +720,7 @@ workspace.
   name selected: type over it, ↵ keeps it, Esc keeps it as it is. No two workspaces share a name
   (`DRI`, `DRI 2`).
 - **Save again** on a tab that came from a workspace, or was saved into one, updates that tab of
-  it. The section says `Updated · Undo` for six seconds.
+  it. The notice bar says `Workspace updated` with Undo for six seconds.
 - **Open**: click its row, or ⌘⌃E and ↵. Its space comes back on the top row, selected. Each of
   its saved tabs that is not open opens in a new tab, in order, and the
   first is selected; a tab of it that is open already is kept, not opened twice. With none saved
@@ -743,8 +743,8 @@ workspace.
   pointer on it (or list mode's selection) shows one …: its menu has Rename and Delete.
   In the menu ↓ ↑ move, ↵ takes the item the keys are on; Esc, any other key or a click
   outside closes it. In list mode `r` and `x` rename and delete with no menu. Deleting leaves the open
-  tabs alone; `Workspace deleted · Undo` shows for six
-  seconds (`u` in list mode).
+  tabs alone; `Workspace deleted` shows on the [notice bar](#notice-bar) for six seconds, with
+  Undo (`u` in list mode) and ×, which ends the offer. Nothing in the section moves.
 - Kept lines and commands can hold secrets a tool printed, or a token in a command line. They
   stay in your workspace files, plain text with escape sequences taken out, at most 64 KB a
   terminal and 1 MB a workspace. Credential-shaped text is hidden as `[hidden]` (tokens, `key=`
@@ -1027,7 +1027,8 @@ once under the system's Reduce Motion. A live app window in a bottom pane stops 
 - **One at a time**: the most pressing, and of those the newest. An error is not replaced by
   information; when it goes, what it covered shows.
 - **One line**: text too long is cut with an ellipsis, and the hover shows all of it. A settings
-  problem offers **Open settings**; a meeting with a link, **Join**.
+  problem offers **Open settings**; a meeting with a link, **Join**; a workspace deleted or updated,
+  **Undo** (only your click takes it back).
 - **Dismiss**: × on the bar, or Esc when no mode and no terminal takes it. Only you dismiss a
   notice: a socket client cannot, and its failure never takes the place of what your own step
   said. A dismissed settings line comes back when it says something else.
@@ -1050,6 +1051,7 @@ once under the system's Reduce Motion. A live app window in a bottom pane stops 
 | `keys` | warning | the app: a global key not registered | yes |
 | `editor` | information | the app: your editor gave its text back | yes |
 | `meeting` | meeting | the app: a meeting started and you are in no call; × is its Dismiss, Join its link | yes; its title never in the state |
+| `undo` | information | the sender: a workspace you deleted or updated, offered back for six seconds; × ends the offer | no; only you delete one |
 
 A copy's "Copied 3 lines", the mode and the count of tasks that need you stay in the status bar.
 
