@@ -5,6 +5,7 @@
 //! `OTTOSPACE_PROP_SEED=<n>` runs that one sequence again.
 
 use super::*;
+use crate::agent_mode::{AppUse, Level};
 use crate::ax::{Frame, Source};
 use crate::calendar::fetch::Failure;
 use crate::calendar::{ColorRule, DayStep, Event};
@@ -68,6 +69,12 @@ impl Gen<'_> {
     fn pane(&mut self) -> PaneId {
         let real: Vec<PaneId> = self.m.panes.iter().map(|p| p.id).collect();
         self.one_of(&real, Self::stray)
+    }
+
+    /// An app pane agent mode knows, more often than not.
+    fn app_pane(&mut self) -> PaneId {
+        let real: Vec<PaneId> = self.m.agent.panes.keys().copied().collect();
+        self.one_of(&real, Self::pane)
     }
 
     /// A slot pane half the time, if there is one.
@@ -1411,6 +1418,19 @@ const MAKERS: &[Make] = &[
         why: g.rng.pick(&[crate::listen::Ended::AppQuit, crate::listen::Ended::StreamFailed]),
         at: g.time(),
     },
+    |g| Action::AgentLevel { pane: g.rng.coin().then(|| g.app_pane()), level: g.rng.pick(&Level::ALL) },
+    |g| Action::AgentMenu { pane: g.rng.coin().then(|| g.app_pane()), keys: g.rng.coin() },
+    |g| Action::AgentMenuMove { delta: g.delta() },
+    |g| Action::AgentMenuChoose { index: g.rng.coin().then(|| g.rng.below(4)) },
+    |_| Action::AgentMenuClose,
+    |g| Action::AgentOfferAccept { pane: g.app_pane() },
+    |g| Action::AppUsed {
+        task: g.task(),
+        pane: g.app_pane(),
+        what: g.rng.pick(&[AppUse::Read, AppUse::Look]),
+        refused: g.rng.coin().then(|| g.text()),
+        at: g.time(),
+    },
     SLOT_MAKERS[0],
     SLOT_MAKERS[1],
     SLOT_MAKERS[2],
@@ -1574,6 +1594,41 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(!waits, "a mark waits with marks off: {:?}", m.mark_input);
         let listed = m.palette.iter().flat_map(Palette::matches).any(|c| c.feature() == Some(Feature::Marks));
         ensure!(!listed, "the palette lists a mark command with marks off");
+    }
+    // Agent mode: every app pane has a grant, and only it, the flag on or off. One above Off is to
+    // a task that works in the pane's workspace; a pane in no task's is Off. Off, no menu is open.
+    ensure!(m.features.on(Feature::AgentMode) || m.agent.menu.is_none(), "the agent menu open with its flag off");
+    {
+        let apps: Vec<PaneId> = m
+            .tab_panes()
+            .into_iter()
+            .flatten()
+            .filter(|id| matches!(m.pane(*id).map(|p| &p.kind), Some(Kind::App { .. })))
+            .collect();
+        let known: Vec<PaneId> = m.agent.panes.keys().copied().collect();
+        ensure!(
+            apps.iter().all(|id| known.contains(id)) && known.len() == apps.len(),
+            "grants {known:?} for app panes {apps:?}"
+        );
+        for (pane, grant) in &m.agent.panes {
+            let working = m.pane_tasks(*pane);
+            ensure!(
+                grant.task.is_none_or(|task| working.contains(&task)),
+                "pane {pane} granted to {grant:?}, working {working:?}"
+            );
+            ensure!(
+                grant.level == crate::agent_mode::Level::Off || grant.task.is_some(),
+                "pane {pane} above Off with no task"
+            );
+        }
+        ensure!(m.agent.menu.is_none_or(|menu| known.contains(&menu.pane)), "the agent menu on no app pane");
+        // A pick is kept only for a pane with a grant; a restored one waits only in an empty pane.
+        ensure!(m.agent.chosen.iter().all(|pane| known.contains(pane)), "a pick {:?} of no app pane", m.agent.chosen);
+        let empty = |pane: &PaneId| m.pane(*pane).is_some_and(|pane| pane.kind == Kind::Empty);
+        ensure!(m.agent.restored.keys().all(empty), "a kept level waits on a pane that is not empty");
+        ensure!(m.agent.from_record.iter().all(empty), "a record's app pane waits on a pane that is not empty");
+        let off = |pane: &PaneId| m.agent.level(*pane) == crate::agent_mode::Level::Off && known.contains(pane);
+        ensure!(m.agent.offers.keys().all(off), "an offer on a pane above Off, or on no app pane");
     }
     if !m.features.on(Feature::AppsSection) {
         ensure!(!shown(Section::Apps), "the Apps section with it off");
@@ -2733,6 +2788,8 @@ impl Run {
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
         let filled_before = m.fill_display;
+        let grants_before = m.agent.panes.clone();
+        let (default, last_before) = (m.agent.default, m.agent.last.clone());
         let slots_before = m.slots.clone();
         let ids_before: Vec<PaneId> = m.panes.iter().map(|p| p.id).collect();
         let held_before: Vec<(PaneId, u32)> = m
@@ -2745,6 +2802,40 @@ impl Run {
             .collect();
         let effects = m.update(sent);
         check(m)?;
+        // A level rises only by the user's own choice. A pane kept by its task keeps its level but
+        // for the user's; a pane new to it starts at the default, or Off.
+        let users_level = origin == Origin::User
+            && matches!(
+                action,
+                Action::AgentLevel { .. } | Action::AgentMenuChoose { .. } | Action::AgentOfferAccept { .. }
+            );
+        for (pane, grant) in &m.agent.panes {
+            use crate::agent_mode::Level::Off;
+            match grants_before.get(pane) {
+                Some(was) if was.task == grant.task => ensure!(
+                    users_level || grant.level == was.level,
+                    "{origin:?}'s {action:?} moved pane {pane} from {was:?} to {grant:?}"
+                ),
+                // The user's click on an offer gives its task, which may not be the one in front.
+                Some(was) => ensure!(
+                    grant.level == Off || (users_level && matches!(action, Action::AgentOfferAccept { .. })),
+                    "pane {pane} carried {was:?} to {grant:?}"
+                ),
+                None => ensure!(
+                    grant.level == Off
+                        || (m.agent.by_user.get(pane) == Some(&true)
+                            && (grant.level == default || grant.level == m.agent.default)),
+                    "new pane {pane} at {grant:?}, the default {default:?}: only one the user filled starts above Off"
+                ),
+            }
+        }
+        // Only ottospace records a use of an app.
+        ensure!(
+            m.agent.last == last_before
+                || (origin == Origin::System && matches!(action, Action::AppUsed { .. }))
+                || m.agent.last.iter().all(|(pane, uses)| last_before.get(pane) == Some(uses)),
+            "{origin:?}'s {action:?} changed when an app was last read"
+        );
         // A slot is the user's: only they make, change or clear one, and a client fills none.
         let made: Vec<PaneId> = m.slots.keys().filter(|id| !slots_before.contains_key(id)).copied().collect();
         let users = origin == Origin::User;
@@ -4285,6 +4376,8 @@ fn code(sent: &Envelope) -> String {
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("verb", "Verb"),
+        ("level", "Level"),
+        ("what", "AppUse"),
         ("axis", "Axis"),
         ("at", "TabAt"),
         ("dir", "Dir"),

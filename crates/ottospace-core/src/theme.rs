@@ -38,6 +38,10 @@ pub const INSPECT: u32 = 0x8ec5ff;
 pub const ERROR: u32 = 0xff8484;
 /// A transcript is on: its dot and time.
 pub const RECORDING: u32 = 0xff6467;
+/// Agent mode at See: the app's primary. At See and act: the needs-you amber, and the pane's
+/// border in it, so act shows from across the screen.
+pub const AGENT_SEE: u32 = PRIMARY;
+pub const AGENT_ACT: u32 = SNEAK;
 /// Selected terminal text: a muted cyan, dark enough for light text on it.
 pub const SELECTION: u32 = 0x155e75;
 /// Sneak labels: a solid amber pill with dark text, readable over any app.
@@ -95,6 +99,7 @@ pub fn station(station: Station) -> u32 {
         Station::Shell => APP,
         Station::Network => PRIMARY,
         Station::Browser => INSPECT,
+        Station::Apps => AGENT_SEE,
         Station::Agents => COMMAND,
         Station::Skills => COMPOSE,
         Station::Memory => LIST,

@@ -1519,6 +1519,11 @@ fn notice_text(notice: &Notice) -> String {
         }
         Notice::MessageElsewhere => "A message, in the other terminal.".into(),
         Notice::MessageBefore => "A message. Its words are in the session's file: Terminal shows them.".into(),
+        // ottospace's own record of what the task did in an app pane (agent mode).
+        Notice::AppUsed { what, app, pane, refused: None } => format!("The task {} {app} (pane {pane}).", what.verb()),
+        Notice::AppUsed { what, app, pane, refused: Some(why) } => {
+            format!("Refused: the task {} {app} (pane {pane}): {why}", what.verb())
+        }
         Notice::Ended { by_user: true, .. } => "Stopped.".into(),
         Notice::Ended { code, signal, replied, .. } => {
             let how = how(*code, *signal).map_or(String::new(), |how| format!(" ({how})"));

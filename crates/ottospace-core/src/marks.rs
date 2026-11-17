@@ -1058,6 +1058,9 @@ impl Model {
             let id = self.next_id;
             ids.push((pane.id, id));
             self.panes.push(Pane { id, kind: Kind::Empty, cwd: None, fit: None });
+            if matches!(pane.kind, RecordKind::App { .. }) {
+                self.agent.from_record.insert(id);
+            }
             // A slot waits for its own look, never for an old window id.
             if self.restore_slot(id, &pane.kind) {
                 continue;
@@ -1641,6 +1644,29 @@ mod tests {
         restore(&mut m, kept);
         go(&mut m, "fix zoom");
         assert_eq!((m.tab_task(), m.panes.len()), (None, 1));
+    }
+
+    /// A tab mark's record is a same-user file: an app pane it rebuilds starts at Off for the
+    /// task, even filled by the user's own step, not at the default.
+    #[test]
+    fn a_tab_marks_app_pane_starts_at_off_whoever_fills_it() {
+        use crate::agent_mode::Level;
+        let mut m = Model::default();
+        let assign = Default::default();
+        m.update(Action::TaskAdd { title: "fix zoom".into(), priority: 3, state: State::Running, tab: None, assign });
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
+        let picked = open(&mut m, slack(7, "general"));
+        assert_eq!(m.agent.level(picked), Level::Act, "the user's pick: the default");
+        mark(&mut m, MarkOf::Tab(None), &[]);
+        m.update(Action::CloseTab { index: None });
+        let into = go(&mut m, "fix zoom").iter().find_map(|effect| match effect {
+            Effect::HostWindow { into: Some(pane), .. } => Some(*pane),
+            _ => None,
+        });
+        let pane = into.expect("the app pane waits for its window");
+        m.update(Action::Fill { pane, kind: slack(8, "general") });
+        assert_eq!((m.agent.level(pane), m.tab_task()), (Level::Off, Some(1)));
+        assert!(m.agent.from_record.is_empty(), "filled: no longer waiting");
     }
 
     #[test]
