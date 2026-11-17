@@ -11342,6 +11342,8 @@ fn a_file_opens_in_a_viewer_moves_by_counts_reloads_and_edits_beside() {
         let reply = otto.raw(&json!({"cmd": "open_file", "path": bad}).to_string());
         assert_eq!(reply["ok"], false, "{bad}: {reply}");
     }
+    let reply = otto.raw(&json!({"cmd": "open_file", "path": picture, "beside": 99}).to_string());
+    assert_eq!(reply["error"], "no pane 99");
 
     // The picker's "File…" asks for a file: a test run shows no panel and counts the ask.
     otto.call(json!({"cmd": "picker"}));

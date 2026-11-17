@@ -89,6 +89,13 @@ impl Keys {
         Press::Move { motion, count }
     }
 
+    /// True if `key` is one of these: it waits, clears or moves. Else it is the caller's (a
+    /// shortcut, say), and drops what was typed.
+    pub fn takes(&self, key: &str) -> bool {
+        let mut probe = *self;
+        probe.press(key) != Press::Unbound
+    }
+
     /// What the status bar shows while a move waits: `10`, `g`, `3g`. `None`: nothing typed.
     pub fn pending(&self) -> Option<String> {
         let count = self.count.map(|n| n.to_string()).unwrap_or_default();
@@ -160,6 +167,8 @@ mod tests {
     #[test]
     fn a_count_then_an_unbound_key_is_dropped_with_it() {
         let mut keys = Keys::default();
+        assert!(keys.takes("7") && keys.takes("j") && !keys.takes("x") && !keys.takes("ctrl-tab"));
+        assert!(!keys.takes("escape") && !keys.takes("0"), "with nothing typed, Esc and 0 are not these");
         assert_eq!(typed(&mut keys, &["7", "x"]), [Press::Pending, Press::Unbound]);
         assert_eq!(keys.press("j"), Press::Move { motion: Motion::Down, count: None });
         // A `g` waiting for its second takes no other key.

@@ -24,6 +24,12 @@ impl Model {
         matches!(self.pane(id)?.kind, Kind::File { .. }).then_some(id)
     }
 
+    /// True if `key` is the focused viewer's: a count, a move, or ⌃G. Else it is a shortcut's.
+    pub fn viewer_takes(&self, key: &str) -> bool {
+        let view = self.keyboard_viewer().and_then(|id| self.viewer(id));
+        view.is_some_and(|view| key == "ctrl-g" || view.pending.takes(key))
+    }
+
     /// What is typed of a move in the focused viewer (`10`, `g`), for the status bar.
     pub fn viewer_pending(&self) -> Option<String> {
         self.viewer(self.keyboard_viewer()?)?.pending.pending()

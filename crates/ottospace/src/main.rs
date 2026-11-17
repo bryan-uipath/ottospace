@@ -2483,6 +2483,10 @@ impl Workspace {
                 Request::OpenRepo { path, axis } => Some(Action::OpenRepo { path, axis }),
                 // Judged before the core: one line, absolute, and on disk a regular file (the
                 // viewer reads it again itself, and shows what it finds).
+                Request::OpenFile { beside: Some(pane), .. } if self.model.pane(pane).is_none() => {
+                    failure = Some(format!("no pane {pane}"));
+                    None
+                }
                 Request::OpenFile { path, beside } => match viewer::open_refusal(&path) {
                     Some(why) => {
                         failure = Some(why);

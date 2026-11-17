@@ -48,6 +48,8 @@ enum Body {
 /// What a read thread hands back: the outcome, and the bytes a picture is drawn from or the text.
 enum Loaded {
     Text(String),
+    /// Markdown, parsed off the main thread: a large file does not stall the window.
+    Markdown(Vec<Block>),
     Image(gpui::ImageFormat, Vec<u8>),
 }
 
@@ -90,8 +92,16 @@ impl FileView {
         let (send, read) = channel();
         let path = self.path.clone();
         std::thread::spawn(move || {
-            let (read, loaded) = read_file(Path::new(&path), shows);
-            let _ = send.send((read, loaded, stamp(&path)));
+            // Before the read: a write during it changes the stamp, and the next look reads again.
+            let at = stamp(&path);
+            let (read, loaded) = match read_file(Path::new(&path), shows) {
+                (read, Some(Loaded::Text(text))) if shows == Shows::Markdown => {
+                    let dir = name_and_dir(&path).1;
+                    (read, Some(Loaded::Markdown(markdown::parse_with(&text, Some(&dir), markdown::FILE))))
+                }
+                read => read,
+            };
+            let _ = send.send((read, loaded, at));
         });
         self.reading = Some(read);
     }
@@ -220,18 +230,16 @@ impl Workspace {
                 view.stamp = at;
                 let (_, dir) = name_and_dir(path);
                 view.body = match loaded {
-                    Some(Loaded::Text(text)) if *shows == Shows::Markdown => {
-                        let blocks = markdown::parse_with(&text, Some(&dir), markdown::FILE);
-                        Body::Markdown(Rc::new(blocks))
-                    }
+                    Some(Loaded::Markdown(blocks)) => Body::Markdown(Rc::new(blocks)),
                     Some(Loaded::Text(text)) => Body::Lines(Rc::new(text.lines().map(str::to_string).collect())),
                     Some(Loaded::Image(format, bytes)) => Body::Image(Arc::new(gpui::Image::from_bytes(format, bytes))),
                     None => Body::None,
                 };
                 if let Body::Markdown(blocks) = &view.body {
                     crate::conversation::images(blocks, &mut |image| {
-                        let read = || crate::conversation::read_thumb(image.to_string(), Some(dir.clone()));
-                        self.drawer.thumbs.entry(image.to_string()).or_insert_with(read);
+                        // Read again with the file: a picture beside it may have changed too.
+                        let thumb = crate::conversation::read_thumb(image.to_string(), Some(dir.clone()));
+                        self.drawer.thumbs.insert(image.to_string(), thumb);
                     });
                 }
                 view.place = true;
@@ -352,17 +360,18 @@ impl Workspace {
         }
     }
 
-    /// A key while the focused viewer has the keyboard. Esc with nothing typed is left for the
-    /// notice bar; a ⌘ shortcut for its binding.
+    /// A key while the focused viewer has the keyboard. True: it was the viewer's. Esc with
+    /// nothing typed is left for the notice bar, a shortcut for its binding.
     pub(crate) fn viewer_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) -> bool {
         let Some(key) = key_name(event) else { return false };
-        let typed = self.model.viewer_pending().is_some();
-        if key == "escape" && !typed {
+        // Not the viewer's (a shortcut such as ⌃Tab): it goes on to its binding, and drops a count.
+        let takes = self.model.viewer_takes(&key);
+        if !takes && self.model.viewer_pending().is_none() {
             return false;
         }
         self.dispatch(Action::ViewerKey { key }, self.input, window, cx);
         cx.notify();
-        true
+        takes
     }
 
     /// A viewer pane's body: what the file is, else why it is not shown.
