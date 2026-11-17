@@ -5930,7 +5930,7 @@ impl Workspace {
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
-                        this.dispatch(Action::SpaceHide { index: Some(place) }, this.input, window, cx);
+                        this.hide_space(Some(place), window, cx);
                     }))
             });
             // A temporary workspace's …: its menu, Keep (`MenuOf::Space`).
@@ -6257,6 +6257,7 @@ impl Workspace {
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.dismiss.is_some()) => ("DISMISS?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.unlist.is_some()) => ("UNLIST?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.paste.is_some()) => ("PASTE?", ""),
+            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.close.is_some()) => ("CLOSE?", ""),
             Mode::Confirm => ("QUIT?", ""),
             // The capture bar lists the annotate keys.
             Mode::Annotate => ("ANNOTATE", ""),
@@ -6943,7 +6944,7 @@ impl Render for Workspace {
                 this.dispatch(Action::TalkCycle { delta: -1 }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &HideSpace, window, cx| {
-                this.dispatch(Action::SpaceHide { index: None }, this.input, window, cx);
+                this.hide_space(None, window, cx);
             }))
             .on_action(cx.listener(|this, _: &GoHome, window, cx| {
                 this.dispatch(Action::SpaceSelect { index: 0 }, this.input, window, cx);

@@ -95,7 +95,7 @@ workspace; tabs of nothing (a dismissed task's, a client's) go to the workspace 
 |---|---|
 | Make a new, empty one | + on the top row, or in the Workspaces section's header: "Workspace 2", one empty tab, selected. It never takes the tab on show |
 | Take it off the top row | Its ×, or ⌘⌃W. Nothing in it stops; it stays listed, and its row opens it again |
-| Close a temporary one for good | Its ×, ⌘⌃W, or close its last tab: off the list; Undo on the notice bar for six seconds |
+| Close a temporary one for good | Its ×, ⌘⌃W, or close its last tab: off the list; Undo on the notice bar for six seconds. A terminal in it runs a program: asked first |
 | Keep a temporary one | Its row's … ▸ Keep, the … on its item on the top row, File ▸ Keep Workspace, or rename it. A task or a Repos click keeps it too |
 | Save the tab on show | ⌘⇧S. In a workspace: into that one. Elsewhere: as a new one; type its name, ↵ |
 | Add the tab on show to one | ⌘⌃E, then `a` on its row. Or File ▸ Add Tab to Workspace… |

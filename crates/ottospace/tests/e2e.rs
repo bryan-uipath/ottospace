@@ -5883,6 +5883,31 @@ fn a_temporary_workspaces_dots_on_the_top_row_keep_it() {
     assert!(otto.control_opt("space-menu:1").is_none(), "a kept one has no …");
 }
 
+/// × on a temporary workspace whose terminal runs something asks first, as ⌘Q does: closed, the
+/// program ends once its Undo runs out. Esc: still on the row. ↵: closed, Undo offered.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn closing_a_temporary_workspace_whose_terminal_runs_asks_first() {
+    let otto = Otto::launch("workspace-close-asks");
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    let pane = otto.user_key("cmd-d")["state"]["focused"].clone();
+    otto.call(json!({"cmd": "type", "pane": pane, "text": "sh -c 'echo go; exec sleep 30'\r"}));
+    otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^go$", "timeout_ms": 30000}));
+    // `go` came from the inner `sh`, in front of the shell: something runs.
+    let asked = otto.user_key("cmd-ctrl-w");
+    assert_eq!((&asked["mode"], &asked["state"]["confirm"]["close"]), (&json!("confirm"), &json!(1)), "{asked}");
+    assert_eq!((&asked["workbook_offer"], space_kept(&asked, 1)), (&Value::Null, json!(false)));
+    // A client's answer is refused.
+    let refused = otto.raw(&json!({"cmd": "key", "keys": "enter"}).to_string());
+    assert!(refused["error"].as_str().is_some_and(|why| why.contains("only the user")), "{refused}");
+    let kept = otto.user_key("escape");
+    assert_eq!((&kept["mode"], &kept["workbook_offer"]), (&json!("normal"), &Value::Null), "{kept}");
+    otto.user_key("cmd-ctrl-w");
+    let closed = otto.user_key("enter");
+    assert_eq!((&closed["mode"], &closed["workbook_offer"]), (&json!("normal"), &json!("closed")), "{closed}");
+    assert_eq!(pane_ids(&closed), vec![pane.as_u64().unwrap_or(0)], "it runs until the Undo runs out");
+}
+
 /// The owner's report: the section's + took the tab on show (another session's), and a second +
 /// said "Updated". + makes a new, empty workspace each time, on the top row and in the section.
 /// Temporary: closing it discards it (Undo aside); open at quit, it comes back.

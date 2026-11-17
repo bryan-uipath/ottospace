@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Action, Effect, Envelope, Host, Kind, Model, Origin, Tab};
+use super::{Action, Confirm, Effect, Envelope, Host, Kind, Model, Origin, PaneId, Running, Tab};
 use crate::talk::{Subject, Talk};
 use crate::tasks::TaskId;
 use crate::workbook::WorkbookId;
@@ -377,11 +377,7 @@ impl Model {
     /// Takes the space at `place` (default: the selected one) off the row. Home stays. A
     /// selected one gives way to its right neighbour, else its left.
     pub(crate) fn hide_space(&mut self, place: Option<usize>, effects: &mut Vec<Effect>) {
-        let shown = self.shown_spaces();
-        let at = place.unwrap_or_else(|| shown.iter().position(|space| space.of == *self.space()).unwrap_or(0));
-        let Some(of) = shown.get(at).map(|space| space.of.clone()).filter(|of| *of != Owner::Home) else {
-            return;
-        };
+        let Some(of) = self.space_to_hide(place) else { return };
         if *self.space() == of
             && let Some(tab) = self.space_after(&of)
         {
@@ -390,6 +386,39 @@ impl Model {
         if let Some(space) = self.spaces.iter_mut().find(|space| space.of == of) {
             space.hidden = true;
         }
+    }
+
+    /// The space `hide_space` takes off the row: at `place`, else the selected one. Never Home.
+    fn space_to_hide(&self, place: Option<usize>) -> Option<Owner> {
+        let shown = self.shown_spaces();
+        let at = place.unwrap_or_else(|| shown.iter().position(|space| space.of == *self.space()).unwrap_or(0));
+        shown.get(at).map(|space| space.of.clone()).filter(|of| *of != Owner::Home)
+    }
+
+    /// The user's × or ⌘⌃W. A temporary workspace whose terminals run something (`running`) is
+    /// asked about first, as quit is: closed, they end once its Undo runs out. Else `hide_space`.
+    pub(crate) fn hide_space_asked(
+        &mut self,
+        place: Option<usize>,
+        mut running: Vec<Running>,
+        effects: &mut Vec<Effect>,
+    ) {
+        let id = match self.space_to_hide(place) {
+            Some(Owner::Workbook { id }) if self.closable(id) => id,
+            _ => return self.hide_space(place, effects),
+        };
+        let of = Owner::Workbook { id };
+        let panes: Vec<PaneId> = (self.tabs.iter().zip(self.tab_panes()))
+            .filter_map(|(tab, panes)| (tab.space == of).then_some(panes))
+            .flatten()
+            .collect();
+        running.retain(|r| panes.contains(&r.pane));
+        if running.is_empty() {
+            return self.hide_space(place, effects);
+        }
+        // The question is ottospace's own UI: a live window would cover it.
+        self.leave(effects);
+        self.confirm = Some(Confirm { running, dismiss: None, paste: None, unlist: None, close: Some(id) });
     }
 
     /// A space's place on the row: the order tabs keep. One not on the row goes last, and

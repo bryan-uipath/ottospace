@@ -720,7 +720,8 @@ workspace.
   too. A temporary one closed (×, ⌘⌃W, its last tab closed or moved away) leaves the list at
   once: `Workspace closed` shows on the [notice bar](#notice-bar) for six seconds with Undo,
   which brings it back on the row as it was; its terminals and apps run until then, and close
-  when the offer ends (× ends it at once). A temporary workspace open when you quit comes back
+  when the offer ends (× ends it at once). If a terminal in it runs a program, × and ⌘⌃W ask
+  first, as ⌘Q does ("Close this workspace?": ↵ closes, Esc keeps it). A temporary workspace open when you quit comes back
   with the [layout](#restoring-the-layout); once closed it never does. Only your own acts keep or close one:
   a client's `hide_space` or `close_tab` leaves it listed.
 - **Save**: ⌘⇧S, or File ▸ Save Tab as Workspace. In a workspace, the tab on show is saved into

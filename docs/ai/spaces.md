@@ -57,7 +57,8 @@ need to persist by default. maybe we need a way to differentiate persisted vs no
   its last tab closed or moved away) closes it (`settle_closing`, after `act`): it leaves the list
   at once, its space hidden with its tabs, and the notice bar offers `Workspace closed` with Undo
   for `NOTICE_MS` (#208's offer, `Change::Closed`). The user's Undo brings it back on the row,
-  selected, as it was. Its time up (a `Tick`; × on the bar sets it up now, and the shell ticks then): its tabs close, their
+  selected, as it was. The user's × or ⌘⌃W on one whose terminal runs a program asks first
+  (`SpaceHideAsked`, `Confirm::close`), as ⌘Q does: closed, the program ends with the Undo. Its time up (a `Tick`; × on the bar sets it up now, and the shell ticks then): its tabs close, their
   terminals and windows with them, and it is gone. Only time passing ends one, so no other step
   ends a pane by it. A tab of it selected meanwhile (a mark, a client's `select_tab`) puts it back
   on the row, temporary still, and the offer goes. A second close while one is offered takes the

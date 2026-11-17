@@ -984,6 +984,12 @@ const MAKERS: &[Make] = &[
     |g| Action::TalkCycle { delta: g.delta() },
     |g| Action::RailSelect { item: g.rail_item() },
     |g| Action::SpaceHide { index: g.rng.coin().then(|| g.index(g.m.shown_spaces().len())) },
+    |g| {
+        // The terminals running, as the shell sees them: some of the panes.
+        let running = g.m.panes.iter().filter(|_| g.rng.coin()).map(|p| p.id).collect::<Vec<_>>();
+        let running = running.into_iter().map(|pane| Running { pane, program: None, background: false }).collect();
+        Action::SpaceHideAsked { index: g.rng.coin().then(|| g.index(g.m.shown_spaces().len())), running }
+    },
     |g| Action::SpaceOpen { space: g.owner() },
     |g| Action::SelectVisibleTab { index: g.index(g.m.tabs.len()) },
     |g| Action::Tick { now: g.time() },
@@ -1521,6 +1527,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::TalkFront { .. }
             | Action::TalkCycle { .. }
             | Action::SpaceHide { .. }
+            | Action::SpaceHideAsked { .. }
             | Action::SpaceOpen { .. }
             | Action::WorkbookNew { .. }
             | Action::TaskTalk { .. }
@@ -2762,9 +2769,10 @@ impl Run {
                 | Action::TalkCycle { .. }
                 | Action::RailSelect { .. }
                 | Action::SpaceHide { .. }
+                | Action::SpaceHideAsked { .. }
                 | Action::SpaceOpen { .. }
         );
-        let hides = matches!(action, Action::SpaceHide { .. });
+        let hides = matches!(action, Action::SpaceHide { .. } | Action::SpaceHideAsked { .. });
         let owners_before: Vec<(u32, Owner)> = m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect();
         let books_before: Vec<String> = m.workbooks.list.iter().map(workbook::write).collect();
         let uids_before: Vec<String> = m.workbooks.list.iter().map(|book| book.uid.clone()).collect();
@@ -2978,6 +2986,7 @@ impl Run {
                     | Action::TalkCycle { .. }
                     | Action::RailSelect { .. }
                     | Action::SpaceHide { .. }
+                    | Action::SpaceHideAsked { .. }
                     | Action::SpaceOpen { .. }
                     | Action::WorkbookNew { .. }
             );

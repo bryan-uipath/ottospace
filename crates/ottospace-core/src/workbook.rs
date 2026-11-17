@@ -1272,6 +1272,11 @@ impl Model {
         (shown && self.tabs.iter().any(|tab| tab.space == of)) || *self.space() == of
     }
 
+    /// Whether the user's step taking workspace `id` off the row would close it: temporary, on the row.
+    pub(crate) fn closable(&self, id: WorkbookId) -> bool {
+        self.workbooks.get(id).is_some_and(|book| !book.kept && book.closing.is_none()) && self.on_row(id)
+    }
+
     /// A temporary workspace read back from `layout.json`, which alone keeps it: named `name`,
     /// its file name `uid`. None if `uid` is no file name or is taken.
     pub(crate) fn temporary_workspace(&mut self, uid: &str, name: &str) {
@@ -1361,7 +1366,7 @@ impl Model {
 mod tests {
     use super::*;
     use crate::Axis::{Down, Right};
-    use crate::model::{Action, Kind, Mode, Origin};
+    use crate::model::{Action, Kind, Mode, Origin, Running};
 
     const UID: &str = "9f3a61c2d4e5b708";
     const UID_2: &str = "1b7c0e9a55d2f346";
@@ -2204,6 +2209,46 @@ mod tests {
         m.update(Action::WorkbookOpen { workbook: 2, tab: None, home: None });
         m.update(Action::SpaceHide { index: None });
         assert_eq!((names(&m), m.workbooks.offered()), (vec!["Workspace 3"], None));
+    }
+
+    /// Review: × on a temporary workspace whose terminal ran vim ended vim once the Undo ran
+    /// out, unasked. The user's × asks first, as quit does; a kept one, or nothing running, does not.
+    #[test]
+    fn closing_a_temporary_workspace_whose_terminal_runs_asks_first() {
+        let vim = |pane| vec![Running { pane, program: Some("vim".into()), background: false }];
+        let ask = |running| Action::SpaceHideAsked { index: None, running };
+        let mut m = Model::default();
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        // A client's × hides it: listed, nothing asked.
+        m.update(ask(vim(1)).sent_by(Origin::Socket));
+        assert_eq!((m.mode(), names(&m), m.workbooks.offered()), (Mode::Normal, vec!["Workspace 2"], None));
+        m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
+        // The user's: asked, nothing closed yet. Esc: still on the row.
+        m.update(ask(vim(1)));
+        let asked = m.confirm.as_ref().map(|confirm| (confirm.close, confirm.running.clone(), confirm.title()));
+        assert_eq!(asked, Some((Some(1), vim(1), "Close this workspace?".into())));
+        assert_eq!((m.mode(), names(&m), m.workbooks.offered()), (Mode::Confirm, vec!["Workspace 2"], None));
+        assert_eq!(m.refusal(&Action::QuitConfirm, Origin::Socket), Some(USERS_ALONE));
+        m.update(Action::QuitCancel);
+        assert_eq!(
+            (m.confirm.is_none(), m.space(), names(&m)),
+            (true, &Owner::Workbook { id: 1 }, vec!["Workspace 2"])
+        );
+        // ↵: closed as by ×, Undo offered, vim running until it runs out.
+        m.update(ask(vim(1)));
+        let effects = m.update(Action::QuitConfirm);
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Quit | Effect::Closed(_))), "{effects:?}");
+        assert_eq!((names(&m), m.workbooks.offered(), m.panes.len()), (Vec::<&str>::new(), Some(Change::Closed), 1));
+        // A program in no pane of it: closed at once.
+        m.update(Action::WorkbookUndo);
+        m.update(ask(vim(9)));
+        assert_eq!((m.confirm.is_none(), m.workbooks.offered()), (true, Some(Change::Closed)));
+        // A kept one: hidden as before, nothing asked.
+        m.update(Action::WorkbookUndo);
+        m.update(Action::WorkbookKeep { workbook: 1 });
+        m.update(ask(vim(1)));
+        assert_eq!((m.confirm.is_none(), names(&m), m.workbooks.offered()), (true, vec!["Workspace 2"], None));
     }
 
     /// Review: its time up, the closed workspace's tabs closed as ⌘⇧W does, which parked the

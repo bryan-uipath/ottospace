@@ -851,6 +851,8 @@ export interface Confirm {
   paste: PasteAsk | null;
   /** Not the quit question: "Unlist this repository?" for the one at this path, which a task works in. Only the user answers it. */
   unlist: string | null;
+  /** Not the quit question: "Close this workspace?" for this temporary one, whose terminals in `running` end once its Undo runs out. Only the user answers it. */
+  close: number | null;
 }
 
 /** What a mark waits for while it has the keyboard (`mode` is `mark`). */

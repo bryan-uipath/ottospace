@@ -1240,6 +1240,7 @@ function confirm(value: unknown, at: string): Confirm {
     dismiss: orNull(num)(o.dismiss, `${at}.dismiss`),
     paste: orNull(pasteAsk)(o.paste, `${at}.paste`),
     unlist: orNull(str)(o.unlist, `${at}.unlist`),
+    close: orNull(num)(o.close, `${at}.close`),
   };
 }
 

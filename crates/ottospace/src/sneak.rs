@@ -366,7 +366,12 @@ impl Workspace {
             ("task" | "home-row" | "home-node", _) => number.map(|id| Action::TaskGo { id: Some(id) }),
             ("space", _) => name.parse().ok().map(|index| Action::SpaceClick { index }),
             ("agent-chip", _) => self.model.agent_chip().map(|chip| Action::SpaceClick { index: chip.space }),
-            ("space-hide", _) => name.parse().ok().map(|index| Action::SpaceHide { index: Some(index) }),
+            ("space-hide", _) => {
+                if let Ok(index) = name.parse() {
+                    self.hide_space(Some(index), window, cx);
+                }
+                None
+            }
             ("space-menu", _) => {
                 if let Some(id) = number {
                     self.open_row_menu(ottospace_core::row_menu::MenuOf::Space(id), true, window, cx);
