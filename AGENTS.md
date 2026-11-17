@@ -48,6 +48,8 @@ Rules:
   drop. `a_test_leaves_nothing_in_the_temp_dir` checks it.
 - An E2E run reads no `settings.json` and keeps no tasks on disk, unless the test names its own
   folder with `OTTOSPACE_HOME`. Tests must never read or write the user's `~/.ottospace`.
+  The event log (`event_log.rs`, `<home>/log`) follows the same rule, and a test run writes none
+  of it to the unified log.
 - E2E runs set `OTTOSPACE_E2E`, which turns window hosting off. Tests must never move the
   user's real windows.
 - A `cargo e2e` run stays out of the user's way: the app is a background app (no Dock icon,
