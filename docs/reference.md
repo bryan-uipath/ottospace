@@ -1199,6 +1199,36 @@ ottospace ctl '{"cmd":"trace"}'                      # the last 2,000 events: na
 `OTTOSPACE_TRACE=1` also writes the trace to `~/.ottospace/trace.jsonl` when the app panics or gets
 `kill -USR1`.
 
+### The log
+
+`<home>/log` (`~/.ottospace/log`, or in `OTTOSPACE_HOME`) keeps what happened to the app, to read after a problem: one JSON line an
+event, in local time, e.g. `{"at":"2026-11-16T17:51:03-08:00","ev":"displays","count":1,"sizes":["1728x1117"]}`.
+Only you can read it (0600). At 1 MB it becomes `log.1` and the one before goes: 2 MB at most.
+
+| Event | Fields |
+|---|---|
+| `start` | `pid`, `version`, `commit`, `hosting`, `displays` (`count`, `sizes`) |
+| `quit` | `hosted`: windows given back |
+| `displays` | The displays changed (one plugged in or taken away): `count`, `sizes` in points |
+| `window_display` | The window is on another display: its number and size |
+| `stall` | The window had something to draw for `stalled_ms` and drew nothing; ottospace has it draw again. `n`: stalls in a row (a minute with none starts over), written the 1st, 2nd, 4th, 8th.. |
+| `redrawn` | Frames came again after a written stall: `kicks`, `lasted_ms`, its `n` |
+| `host_failed` | A window could not be hosted: its number |
+| `give_back_failed` | A hosted window could not be put back on a screen: its number |
+| `gpui` | An error or warning of GPUI's macOS layer: `level`, `src` (`gpui-0.2.2/src/platform/mac/window.rs:489`), `said` only when fixed words and a code (`could not create display link, code: -6661`), and `n`: one from the same place is written its 1st, 2nd, 4th, 8th.. time |
+| `panic` | `src` (`crate/src/file.rs:line`) and `thread`; never the message |
+
+Never in it: terminal or transcript text, titles, meetings, passes, paths or file contents. Each event
+keeps only the fields listed here.
+The same lines go to the unified log, subsystem `dev.ottospace` (in zsh, `log` is a builtin, so
+name `/usr/bin/log`):
+
+```sh
+/usr/bin/log show --predicate 'subsystem == "dev.ottospace"' --last 1d
+```
+
+A test run writes neither: the file only in a folder it names with `OTTOSPACE_HOME`.
+
 `ottospace skill` prints every request with an example, and what the state fields mean. Fields are
 in `Request` in [`crates/ottospace/src/control.rs`](../crates/ottospace/src/control.rs). Unknown commands and
 fields are refused.
