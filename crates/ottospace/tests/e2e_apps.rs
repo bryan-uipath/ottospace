@@ -1945,14 +1945,22 @@ fn the_canarys_silence_comes_as_samples_not_as_a_gap_in_time() {
     let home = support::temp(&format!("otto-apps-probe-{}", std::process::id()));
     std::fs::create_dir_all(&home).expect("make the folder");
     std::fs::write(home.join("settings.json"), json!({"restore_layout": false}).to_string()).expect("settings");
-    let say = |name: &str, words: &str| {
+    // CI's `say -o` once wrote under a second of silence and succeeded: try again, up to three times.
+    let say = |name: &str, words: &str, least: f64| {
         let file = home.join(name);
-        let said = Command::new("/usr/bin/say").arg("-o").arg(&file).arg(words).status().expect("say");
-        assert!(said.success(), "say -o");
-        file
+        for _ in 0..3 {
+            let said = Command::new("/usr/bin/say").arg("-o").arg(&file).arg(words).status().expect("say");
+            assert!(said.success(), "say -o");
+            let length = seconds(&file);
+            if length >= least {
+                return (file, length);
+            }
+            eprintln!("say -o wrote {length:.2} s of {name}, at least {least} s wanted");
+        }
+        panic!("say -o wrote under {least} s of {name} three times");
     };
-    let gap = say("gap.aiff", "The orange canary sings. [[slnc 8000]] The orange canary sings again.");
-    let short = say("short.aiff", "The orange canary is done.");
+    let (gap, gap_s) = say("gap.aiff", "The orange canary sings. [[slnc 8000]] The orange canary sings again.", 9.);
+    let (short, short_s) = say("short.aiff", "The orange canary is done.", 1.);
 
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-probe", "CANARY_SOCKET", &[]);
     wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
@@ -1969,11 +1977,11 @@ fn the_canarys_silence_comes_as_samples_not_as_a_gap_in_time() {
     otto.call(json!({"cmd": "audio_probe_start"}));
     std::thread::sleep(Duration::from_secs(1));
     canary.call(json!({"cmd": "play", "path": gap}));
-    std::thread::sleep(Duration::from_secs_f64(seconds(&gap) + 0.5));
+    std::thread::sleep(Duration::from_secs_f64(gap_s + 0.5));
     // Nothing playing.
     std::thread::sleep(Duration::from_secs(8));
     canary.call(json!({"cmd": "play", "path": short}));
-    std::thread::sleep(Duration::from_secs_f64(seconds(&short) + 1.0));
+    std::thread::sleep(Duration::from_secs_f64(short_s + 1.0));
     let reply = otto.call(json!({"cmd": "audio_probe_stop"}));
     let _ = std::fs::remove_dir_all(&home);
 
@@ -1985,11 +1993,12 @@ fn the_canarys_silence_comes_as_samples_not_as_a_gap_in_time() {
         .filter_map(|b| Some((b["pts_ms"].as_f64()?, b["samples"].as_f64()? / 16., b["rms"].as_f64()?)))
         .collect();
     let given = reply["buffers"].as_array().map_or(0, Vec::len);
-    if buffers.is_empty() {
+    if given == 0 && reply["failed"].is_null() {
         // A Mac with no audio output gives none: nothing to measure.
-        eprintln!("skipped: no buffer with a time of {given}; the stream said {}", reply["failed"]);
+        eprintln!("skipped: no buffer");
         return;
     }
+    assert!(!buffers.is_empty(), "no buffer with a time of {given}; the stream said {}", reply["failed"]);
     let (first, last) = (buffers[0], buffers[buffers.len() - 1]);
     let span = last.0 + last.1 - first.0;
     let sampled: f64 = buffers.iter().map(|b| b.1).sum();
@@ -2005,7 +2014,8 @@ fn the_canarys_silence_comes_as_samples_not_as_a_gap_in_time() {
     );
     // The largest step from one buffer's time to the next: needs no sample rate.
     let step = buffers.windows(2).map(|w| w[1].0 - w[0].0).fold(0., f64::max);
-    let played = (seconds(&gap) + 8. + seconds(&short) - 1.) * 1_000.;
+    let played = (gap_s + 8. + short_s - 1.) * 1_000.;
+    assert!(quiet < buffers.len(), "every buffer silent: the canary's words were not heard");
     assert!(span > played, "the canary played for {played:.0} ms, buffers span {span:.0} ms");
     assert!(step < 1_000., "{step:.0} ms between two buffers: {gaps:.0?}");
     assert!((span - sampled).abs() < 500., "{:.0} ms presented, not sampled: {gaps:.0?}", span - sampled);
