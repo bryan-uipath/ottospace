@@ -224,6 +224,50 @@ fn a_window_the_rules_ignore_never_becomes_a_pane() {
 
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_still_splits() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-popup", "CANARY_SOCKET", &[]);
+    let frame = |index: usize| rect(&canary.call(json!({"cmd": "state"}))["windows"][index]["bounds"]);
+    wait_for("the canary window", || frame(0));
+    let otto = otto_for(&canary, "otto-popup", &[]);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let pane = |id: u64| rect(&state()["bounds"][id.to_string()]).filter(|b| b[2] > 1.0);
+    let hosted = || state()["hosted"].as_object().map_or(0, |hosted| hosted.len());
+    let spot = host_and_park(&otto);
+    let body = wait_for("the pane layout", || pane(1));
+    // The pane's content on the canary's screen.
+    let window = rect(&state()["window"]).expect("ottospace window frame");
+    let over_pane = |f: [f64; 4]| {
+        let [x, y] = middle(f);
+        x > window[0] + body[0]
+            && x < window[0] + body[0] + body[2]
+            && y > window[1] + body[1]
+            && y < window[1] + body[1] + body[3]
+    };
+
+    // A dialog the app opens over its parked window, off screen, as macOS places one by its
+    // parent: no pane, the app's pane as it was, the dialog over it at its own size.
+    canary.call(json!({"cmd": "dialog", "at": spot}));
+    let dialog = wait_for("the dialog over the pane", || frame(1).filter(|f| over_pane(*f)));
+    assert!(close(dialog[2], 360.0) && close(dialog[3], 200.0), "its own size: {dialog:?}");
+    // A small standard window: the same.
+    canary.call(json!({"cmd": "open_window", "fixed": [420.0, 300.0]}));
+    let small = wait_for("the small window", || frame(2));
+    std::thread::sleep(Duration::from_millis(1200));
+    assert_eq!(state()["tab_panes"], json!([[1]]), "no pane for either");
+    assert_eq!(hosted(), 1);
+    assert_eq!(pane(1), Some(body), "the app's pane kept its rect");
+    assert_eq!(frame(1), Some(dialog), "the dialog stays where it was put");
+    assert!(close(frame(2).expect("small")[2], small[2]) && reachable(small), "the small one stays: {small:?}");
+
+    // A big standard window still gets a pane of its own, to the right.
+    canary.call(json!({"cmd": "open_window", "min": [body[2] * 0.6, body[3] * 0.6]}));
+    wait_for("the big window's pane", || (state()["tab_panes"] == json!([[1, 2]])).then_some(()));
+    assert_eq!(hosted(), 2);
+    assert_eq!(state()["state"]["panes"][1]["kind"]["title"], "Canary 4");
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
 fn a_canary_window_is_hosted_entered_left_and_restored() {
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary", "CANARY_SOCKET", &[]);
     let frame = |index: usize| rect(&canary.call(json!({"cmd": "state"}))["windows"][index]["bounds"]);
