@@ -1,0 +1,9 @@
+# The Calendar section's rows (made up): one past, one running, a call later, a tentative one, a
+# free block. Each row's tint in its colour, the running one's stronger. In a call: no notice.
+# All within an hour of now: the list is today only, so only a run in the last hour before midnight loses one.
+{"cmd":"split","kind":"empty"}
+{"until":"calendar.updated"}
+{"cmd":"calendar_call","in_call":true}
+{"cmd":"section","section":"calendar"}
+{"settle":500}
+{"shot":"rows"}
