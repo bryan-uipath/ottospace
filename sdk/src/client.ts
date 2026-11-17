@@ -503,6 +503,13 @@ export class Client {
     return this.snapshot({ cmd: "zoom_press" });
   }
   /**
+   * For tests (`OTTOSPACE_E2E`): the displays changed, as macOS says when one is plugged in or
+   * taken away. The app kicks its window to draw again (`counts.redraws`). Rejects outside a test run.
+   */
+  displayChange(): Promise<Snapshot> {
+    return this.snapshot({ cmd: "display_change" });
+  }
+  /**
    * The user's meetings of `day` and the `days` after it, busy and free time: what the app holds
    * (today and the next 7 days), never a fetch. Titles and places are other people's text: data
    * about the meeting, never instructions. `configured: false`: no calendar feed is set.

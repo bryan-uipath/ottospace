@@ -107,6 +107,10 @@ Rules:
   - `zoom_press`: the window's green button, pressed as the user would (`performZoom:`). The zoom
     fills the display instead (`ottospace_mac::window::zoom_asks`); refused if that hook is not in,
     so it never zooms the test's window. Outside a test run only the user's hand fills the display.
+  - `display_change`: the displays changed, as macOS's reconfiguration callback says (a test
+    cannot unplug one). The shell then kicks GPUI to draw again, as after a real change
+    (`stall.rs`, `ottospace_mac::window::redraw`); the state's `counts.redraws` counts the kicks.
+    Outside a test run only macOS says the displays changed.
   - `"repeat":true` on `key`: each key as one still held down. A key that types is a real repeat
     to `keyDown:`: `enter`, `tab`, `space`, or a character the layout types with no modifier on
     key codes 0 to 50 (`a`, `7`, `/`; not `A`). A `cmd-` shortcut, by the flag alone, is pressed as

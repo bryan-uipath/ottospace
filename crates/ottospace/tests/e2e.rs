@@ -10483,3 +10483,26 @@ fn a_lost_stream_greys_the_dot_and_the_bar_says_why_until_the_user_puts_it_away(
         drawn["listen_rects"]
     );
 }
+
+/// A change of the displays (a laptop taken off its monitors) has the shell kick GPUI to draw
+/// again, by GPUI's own `windowDidChangeScreen:` and `displayLayer:`, and the window goes on
+/// drawing after it. A test cannot unplug a display, so its display link never breaks here:
+/// this proves the kicks happen, as planned, and draw, not that they mend a broken link.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_window_draws_on_after_the_displays_change() {
+    let otto = Otto::launch("display-change");
+    let redraws = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["redraws"].as_u64().expect("redraws");
+    assert_eq!(redraws(&otto), 0, "a window that draws is not kicked");
+    otto.call(json!({"cmd": "display_change"}));
+    // At once, then as the new setup settles: four within 3 s.
+    otto.wait_for("the kicks after the change", |o| (redraws(o) >= 4).then_some(()));
+    for _ in 0..3 {
+        let before = otto.call(json!({"cmd": "state"}))["frame"]["number"].as_u64().expect("frame");
+        let after = otto.call(json!({"cmd": "split", "axis": "down"}));
+        let drawn = after["frame"]["number"].as_u64().expect("frame");
+        assert!(drawn > before && after["stale"].is_null(), "{before} {after}");
+    }
+    // Frames come, so nothing more is kicked.
+    assert_eq!(redraws(&otto), 4);
+}
