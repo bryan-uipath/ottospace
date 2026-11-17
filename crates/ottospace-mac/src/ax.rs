@@ -80,14 +80,6 @@ impl Window {
         Self { element, pid }.id()
     }
 
-    /// As `main_id`, for the window that has the app's keyboard (`AXFocusedWindow`): Finder's
-    /// may be its desktop while a folder window is main.
-    pub fn focused_id(pid: i32) -> Option<u32> {
-        let app = unsafe { AXUIElement::new_application(pid) };
-        let element = copy_attr(&app, "AXFocusedWindow")?.downcast::<AXUIElement>().ok()?;
-        Self { element, pid }.id()
-    }
-
     /// As `main_of`, among the standard windows that `keep` accepts.
     pub fn main_where(pid: i32, keep: impl Fn(&Self) -> bool) -> Option<Self> {
         let app = unsafe { AXUIElement::new_application(pid) };

@@ -63,6 +63,9 @@ the on-screen rate while parked.
 
 ## Risks
 
+- Capture costs input: while ScreenCaptureKit streams a Finder window, macOS loses a release of
+  most quick double-clicks on it (CI, 2026-11-17: 28 of 48 captured, 0 of 48 not), so Finder opens
+  nothing. The stream stops while the pane is live and starts again as it parks.
 - Capturable ≠ still rendering. Apps may throttle parked/occluded windows; must be measured per app.
 - Parked windows must not overlap each other, or they occlude and throttle.
 - AX moves/resizes are synchronous IPC to the target app's main thread: busy apps stall; drag-follow lags.

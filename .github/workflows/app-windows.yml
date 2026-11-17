@@ -88,7 +88,7 @@ jobs:
           failed=0
           for i in $(seq 1 "$REPEAT"); do
             echo "== attempt $i of $REPEAT"
-            cargo e2e-apps "$TEST" --nocapture || { failed=$((failed + 1)); echo "== FAILED attempt $i"; }
+            cargo e2e-apps "$TEST" || { failed=$((failed + 1)); echo "== FAILED attempt $i"; }
           done
           echo "== $failed of $REPEAT failed"
           test "$failed" -eq 0

@@ -64,6 +64,8 @@ Rules:
   built from this package (`src/bin`). `OTTOSPACE_HOST_ONLY=<pid>` limits hosting (and `ottospace rescue`) to that process. A test
   run keeps the record of hosted windows (`hosted.json`) only in a folder it names with
   `OTTOSPACE_HOME`, and starts the guardian only with `OTTOSPACE_GUARD` set.
+  `OTTOSPACE_E2E_FINDER` lets a test host a Finder window it opens (CI only: there Finder has no
+  windows of anyone's); without it, and while Finder has any window open, the test hosts none.
   The run takes keyboard focus while it lasts. Needs
   Accessibility and Screen Recording for the terminal. Use it for anything that moves, parks,
   adopts or restores a real window.
