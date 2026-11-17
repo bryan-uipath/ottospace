@@ -13,10 +13,7 @@ use std::thread::JoinHandle;
 use ottospace_core::listen::Record;
 use ottospace_core::listen::file::{self, Head};
 
-/// The zone east of UTC, in seconds, at `ms`.
-fn offset(ms: u64) -> i64 {
-    ottospace_mac::time::utc_offset((ms / 1_000) as i64)
-}
+use crate::calendar::zone_offset;
 
 /// A clash this many times over is no clash: something else is wrong.
 const TRIES: usize = 100;
@@ -34,7 +31,7 @@ pub(crate) fn begin(dir: &Path, head: Head) -> Result<Writer, String> {
         DirBuilder::new().recursive(true).mode(0o700).create(dir).map_err(|err| err.to_string())?;
     }
     let (path, mut made) = make(dir, &head)?;
-    made.write_all(file::header(&head, None, &offset).as_bytes()).map_err(|err| err.to_string())?;
+    made.write_all(file::header(&head, None, &zone_offset).as_bytes()).map_err(|err| err.to_string())?;
     let (sender, receiver) = mpsc::channel();
     let thread = std::thread::Builder::new()
         .name("transcript-file".into())
@@ -45,9 +42,10 @@ pub(crate) fn begin(dir: &Path, head: Head) -> Result<Writer, String> {
 
 /// The first free name of the transcript's, made new with mode 0600.
 fn make(dir: &Path, head: &Head) -> Result<(PathBuf, File), String> {
-    for name in file::names(head, offset(head.started)).take(TRIES) {
+    for name in file::names(head, zone_offset(head.started)).take(TRIES) {
         let path = dir.join(name);
-        match OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path) {
+        // Appended: a line goes at the file's end, wherever an editor left it.
+        match OpenOptions::new().append(true).create_new(true).mode(0o600).open(&path) {
             Ok(made) => return Ok((path, made)),
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(err.to_string()),
@@ -62,6 +60,11 @@ impl Writer {
         if !records.is_empty() {
             let _ = self.sender.send(records);
         }
+    }
+
+    /// Its thread ended: all it was sent is written.
+    pub(crate) fn done(&self) -> bool {
+        self.thread.is_finished()
     }
 
     /// Waits for what was sent to be written: ottospace is quitting.
@@ -102,7 +105,7 @@ fn write(receiver: mpsc::Receiver<Vec<Record>>, mut made: File, path: PathBuf, h
             }
             // A line that fails to write is not traced: when one is written says when someone spoke.
             record => {
-                let Some(line) = file::line(&record, &offset) else { continue };
+                let Some(line) = file::line(&record, &zone_offset) else { continue };
                 let _ = made.write_all(line.as_bytes()).and_then(|()| made.flush());
                 body += &line;
             }
@@ -117,7 +120,7 @@ fn rewrite(path: &Path, head: &Head, at: u64, body: &str) -> io::Result<()> {
     // A temporary file a crash left keeps its mode: made new, so it is 0600.
     let _ = fs::remove_file(&temp);
     let mut out = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temp)?;
-    out.write_all(file::header(head, Some(at), &offset).as_bytes())?;
+    out.write_all(file::header(head, Some(at), &zone_offset).as_bytes())?;
     out.write_all(body.as_bytes())?;
     out.sync_all()?;
     fs::rename(&temp, path)

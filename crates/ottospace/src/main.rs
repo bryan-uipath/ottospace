@@ -959,6 +959,8 @@ struct Workspace {
     listen_feed: Option<listen::Feed>,
     /// The file of the transcript on, if one is kept.
     listen_file: Option<listen::File>,
+    /// Files of transcripts that ended, until their end is written.
+    listen_ending: Vec<listen_file::Writer>,
     /// What the transcript on hears now, for the meter and its label alone.
     listen_meter: Option<listen_meter::Meter>,
     focus: FocusHandle,
@@ -1371,6 +1373,7 @@ impl Workspace {
             timeline: calendar::Timeline::start(),
             listen_feed: None,
             listen_file: None,
+            listen_ending: Vec::new(),
             listen_meter: None,
             focus,
             _subscriptions: subscriptions,
