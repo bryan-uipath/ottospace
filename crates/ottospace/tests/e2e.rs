@@ -8294,13 +8294,14 @@ fn the_calendar_says_it_loads_what_failed_and_tries_again() {
     let text = feed(&[("a", "Offsite prep", 2 * 86_400, 2 * 86_400 + 1_800, &notes)]);
     let home = calendar_folder("calendar-fetch", &text, Some(link));
     let dir = home.to_str().unwrap();
-    // A stand-in for curl: each call takes the next line of `modes`. A timeout after a second;
-    // a 403; a sign-in page in place of the feed; the feed slowly, 2 KB then the rest.
+    // A stand-in for curl: each call takes the next line of `modes`. A timeout once the test saw
+    // it load (`go`: a slow launch would miss a fixed wait); a 403; a sign-in page in place of the
+    // feed; the feed slowly, 2 KB then the rest.
     std::fs::write(home.join("modes"), "timeout\nforbidden\npage\nslow\n").unwrap();
     let script = format!(
         "#!/bin/sh\n/bin/cat > /dev/null\nn=$(( $(/bin/cat '{dir}/n' 2>/dev/null || echo 0) + 1 ))\necho $n > '{dir}/n'\n\
          case $(/usr/bin/sed -n \"${{n}}p\" '{dir}/modes') in\n\
-         timeout) /bin/sleep 1; printf 000 >&2; exit 28 ;;\n\
+         timeout) while [ ! -e '{dir}/go' ]; do /bin/sleep 0.1; done; printf 000 >&2; exit 28 ;;\n\
          forbidden) printf Forbidden; printf 403 >&2; exit 22 ;;\n\
          page) printf '<html>Sign in</html>'; printf 200 >&2 ;;\n\
          *) /usr/bin/head -c 2048 '{dir}/today.ics'; /bin/sleep 2; /usr/bin/tail -c +2049 '{dir}/today.ics'; printf 200 >&2 ;;\n\
@@ -8322,8 +8323,9 @@ fn the_calendar_says_it_loads_what_failed_and_tries_again() {
     // At once at start: loading, and no "No meetings".
     let loading = fetching(&otto, "loading", "Loading the calendar…");
     assert_eq!((&loading["empty_note"], loading["fetch_rect"].is_array()), (&Value::Null, true), "{loading}");
+    std::fs::write(home.join("go"), "").unwrap();
     // Timed out: what failed, a Retry, still no "No meetings".
-    let failed = fetching(&otto, "failed", "Couldn't reach the calendar (timed out after 1 s)");
+    let failed = fetching(&otto, "failed", "Couldn't reach the calendar (timed out after");
     assert_eq!((&failed["fetch"]["error"], &failed["empty_note"]), (&json!("timed_out"), &Value::Null), "{failed}");
     // A client's click on Retry fetches nothing.
     otto.click(centre(&failed["retry"]), 1);
