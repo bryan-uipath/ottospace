@@ -48,8 +48,10 @@ enum Body {
 /// What a read thread hands back: the outcome, and the bytes a picture is drawn from or the text.
 enum Loaded {
     Text(String),
-    /// Markdown, parsed off the main thread: a large file does not stall the window.
+    /// Markdown parsed, or text split into lines, off the main thread: a large file does not
+    /// stall the window.
     Markdown(Vec<Block>),
+    Lines(Vec<String>),
     Image(gpui::ImageFormat, Vec<u8>),
 }
 
@@ -62,6 +64,8 @@ pub struct FileView {
     stamp: Stamp,
     seen: Option<(Stamp, Instant)>,
     looked: Instant,
+    /// A look in progress, off the main thread: a stat on a share that stopped answering waits.
+    looking: Option<Receiver<Stamp>>,
     scroll: ScrollHandle,
     lines: UniformListScrollHandle,
     /// The view goes to the core's line once the read is laid out (a restore, a reload).
@@ -79,6 +83,7 @@ impl FileView {
             stamp: None,
             seen: None,
             looked: Instant::now(),
+            looking: None,
             scroll: ScrollHandle::new(),
             lines: UniformListScrollHandle::new(),
             place: true,
@@ -98,6 +103,9 @@ impl FileView {
                 (read, Some(Loaded::Text(text))) if shows == Shows::Markdown => {
                     let dir = name_and_dir(&path).1;
                     (read, Some(Loaded::Markdown(markdown::parse_with(&text, Some(&dir), markdown::FILE))))
+                }
+                (read, Some(Loaded::Text(text))) => {
+                    (read, Some(Loaded::Lines(text.lines().map(str::to_string).collect())))
                 }
                 read => read,
             };
@@ -231,16 +239,20 @@ impl Workspace {
                 let (_, dir) = name_and_dir(path);
                 view.body = match loaded {
                     Some(Loaded::Markdown(blocks)) => Body::Markdown(Rc::new(blocks)),
-                    Some(Loaded::Text(text)) => Body::Lines(Rc::new(text.lines().map(str::to_string).collect())),
+                    Some(Loaded::Lines(lines)) => Body::Lines(Rc::new(lines)),
                     Some(Loaded::Image(format, bytes)) => Body::Image(Arc::new(gpui::Image::from_bytes(format, bytes))),
-                    None => Body::None,
+                    // The read thread made any text lines or markdown.
+                    Some(Loaded::Text(_)) | None => Body::None,
                 };
                 if let Body::Markdown(blocks) = &view.body {
-                    crate::conversation::images(blocks, &mut |image| {
+                    // Each picture once, however often it is named: one read thread each.
+                    let mut wanted = std::collections::BTreeSet::new();
+                    crate::conversation::images(blocks, &mut |image| drop(wanted.insert(image.to_string())));
+                    for image in wanted {
                         // Read again with the file: a picture beside it may have changed too.
-                        let thumb = crate::conversation::read_thumb(image.to_string(), Some(dir.clone()));
-                        self.drawer.thumbs.insert(image.to_string(), thumb);
-                    });
+                        let thumb = crate::conversation::read_thumb(image.clone(), Some(dir.clone()));
+                        self.drawer.thumbs.insert(image, thumb);
+                    }
                 }
                 view.place = true;
                 actions.push(Action::ViewerRead { pane: *id, path: path.clone(), read });
@@ -249,9 +261,16 @@ impl Workspace {
             // A change on disk: read again once it has held still for `SETTLE` (an editor's save
             // may write twice). Looked at more often while a change settles.
             let every = if view.seen.is_some() { SETTLE / 2 } else { LOOK };
-            if view.reading.is_none() && view.looked.elapsed() >= every {
+            if view.reading.is_none() && view.looking.is_none() && view.looked.elapsed() >= every {
                 view.looked = Instant::now();
-                let now = stamp(path);
+                let (send, looking) = channel();
+                let path = path.clone();
+                std::thread::spawn(move || drop(send.send(stamp(&path))));
+                view.looking = Some(looking);
+            }
+            let looked = view.looking.as_ref().map(Receiver::try_recv);
+            if let Some(Ok(now)) = looked {
+                view.looking = None;
                 match &view.seen {
                     _ if now == view.stamp => view.seen = None,
                     Some((seen, since)) if *seen == now => {

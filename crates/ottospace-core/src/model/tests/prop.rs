@@ -2447,7 +2447,6 @@ fn check(m: &Model) -> Result<(), String> {
     Ok(())
 }
 
-/// Each tab that holds a pane, by id, with its panes: where every pane is.
 /// One view for each viewer pane and none for another; its file by a path it opens; its line no
 /// further than the shell says it goes; a count typed only where the keys go now.
 fn check_viewers(m: &Model) -> Result<(), String> {
@@ -2468,6 +2467,7 @@ fn check_viewers(m: &Model) -> Result<(), String> {
     Ok(())
 }
 
+/// Each tab that holds a pane, by id, with its panes: where every pane is.
 fn tab_panes_by_id(m: &Model) -> Vec<(u32, Vec<PaneId>)> {
     let held = m.tabs.iter().zip(m.tab_panes()).filter(|(_, panes)| !panes.is_empty());
     held.map(|(tab, panes)| (tab.id, panes)).collect()

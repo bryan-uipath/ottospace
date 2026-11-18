@@ -377,14 +377,15 @@ impl Workspace {
             self.dispatch(Action::AgentExited { task }, Origin::System, window, cx);
         }
         let changed = self.sync_watch(window, cx) || changed;
-        self.lay_out();
+        let changed = self.lay_out() || changed;
         if changed {
             cx.notify();
         }
     }
 
-    /// Parses the replies whose text changed, and reads the local images they show.
-    fn lay_out(&mut self) {
+    /// Parses the replies whose text changed, and reads the local images they show. True if a
+    /// picture was read: it is drawn now (a viewer's too).
+    fn lay_out(&mut self) -> bool {
         let mut wanted: Vec<(String, Option<String>)> = Vec::new();
         let subjects: Vec<Subject> = self.drawer.looks.keys().cloned().collect();
         for subject in subjects.iter().chain(self.model.talk.as_ref().map(|talk| &talk.task)) {
@@ -406,13 +407,16 @@ impl Workspace {
         for (path, repo) in wanted {
             self.drawer.thumbs.entry(path.clone()).or_insert_with(|| read_thumb(path, repo));
         }
+        let mut read_one = false;
         for thumb in self.drawer.thumbs.values_mut() {
             if let Thumb::Reading(read) = thumb
                 && let Ok(image) = read.try_recv()
             {
                 *thumb = image.map_or(Thumb::None, Thumb::Ready);
+                read_one = true;
             }
         }
+        read_one
     }
 
     /// Follows the session the core says to watch, read-only, from its file: starts or ends the
