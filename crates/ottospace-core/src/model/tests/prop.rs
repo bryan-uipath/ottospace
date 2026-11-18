@@ -6744,3 +6744,29 @@ fn seed_7205_a_level_leaves_the_marks_while_they_are_off() {
     ])
     .unwrap();
 }
+
+/// A stray tab goes to the workspace selected last; a file read had bound that one to a task
+/// since, so its tabs are the task's. Settling Home put the tab in the workspace's own space
+/// (seeds 28003 and 190214).
+#[test]
+fn seed_28003_a_stray_tab_goes_to_a_bound_workspaces_task() {
+    let task = r#"[{"id":7,"title":"fix","state":"parked","priority":0,"snoozed_until":null,"dismissed":false,"project":null,"repo":null,"agent":null,"paths":[],"resolved":[],"skills":[],"created":null,"session":null,"title_generated":false,"materials":[],"refs":[]}]"#;
+    let worktree = Worktree { name: "canvas".into(), path: "/code/canvas".into(), branch: Some("main".into()) };
+    let repo =
+        Repo { name: "app".into(), path: "/code/app-2".into(), branch: Some("main".into()), worktrees: vec![worktree] };
+    replay(&[
+        split(Axis::Down, Kind::Empty),
+        Action::WorkbookNew { uid: "00000000000000a2".into() }.into(),
+        Action::WorkbookKeep { workbook: 2 }.into(),
+        by(Origin::System, Action::SetRepos { repos: vec![repo] }),
+        Action::SpaceSelect { index: 1 }.into(),
+        by(Origin::System, Action::SpaceHideAsked { index: None, running: vec![] }),
+        Action::PaletteTasks.into(),
+        Action::PaletteChoose { index: None }.into(),
+        by(Origin::Socket, restore_tasks(task, 8)),
+        by(Origin::System, Action::OpenRepo { path: "/code/app-2".into(), axis: Axis::Down }),
+        Action::WorkbookSave { uid: "../../x".into(), cwds: vec![], histories: vec![] }.into(),
+        restore_workbooks(r#"[{"version":2,"id":"00000000000000a2","name":"x","tabs":[],"task":7}]"#).into(),
+    ])
+    .unwrap();
+}
