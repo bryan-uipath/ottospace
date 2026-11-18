@@ -2950,6 +2950,9 @@ pub struct Model {
     joined_before: Vec<(TaskId, Owner)>,
     /// Rail section shown in the secondary bar. `None`: the bar is closed.
     pub sidebar: Option<Section>,
+    /// The section open last: where ⌘⇧L opens the bar again.
+    #[serde(skip)]
+    sidebar_last: Option<Section>,
     /// The text in the new-task box, while it is open.
     pub compose: Option<Field>,
     /// The selected row, while the secondary bar has the keyboard.
@@ -3234,6 +3237,7 @@ impl Default for Model {
             peek: None,
             fill_display: false,
             sidebar: None,
+            sidebar_last: None,
             compose: None,
             list: None,
             rail_focus: None,
@@ -3460,6 +3464,9 @@ impl Model {
             }
             // Nor puts the transcript the user has in the drawer away, or the keys over it.
             Action::TalkToggle | Action::TalkKeys { on: true } if self.listen.shown => Some(rail::RAIL_USERS),
+            // Nor collapses the drawer into its rail, or opens it from there.
+            Action::TalkToggle => Some(rail::DRAWER_USERS),
+            Action::TalkKeys { on: true } if self.drawer_collapsed() => Some(rail::DRAWER_USERS),
             // Only the user starts, pauses, resumes or stops a transcript; only the shell reports
             // what it heard. A client's key, click or label is the client's.
             Action::ListenStart { .. }
@@ -3994,6 +4001,7 @@ impl Model {
         if self.list.is_none() && listed.is_some() {
             self.list_kept = zones::KeptRow(listed);
         }
+        self.sidebar_last = self.sidebar.or(self.sidebar_last);
         self.settle_zone();
         self.keep_path_rows();
         // A line anyone but the user changed is theirs until it is empty or gone.
@@ -5813,7 +5821,7 @@ impl Model {
             }
             Action::TalkCycle { delta } => self.rail_cycle(delta, effects),
             Action::RailSelect { item } => self.rail_select(item, effects),
-            // The drawer on the transcript has no × of its own: ⌘⇧L closes the drawer, whatever it shows.
+            // The drawer on the transcript: ⌘⇧R or its → collapses the drawer into its rail, whatever it shows.
             Action::TalkToggle if self.listen.shown && self.by_user => {
                 self.listen.shown = false;
                 self.talk_keys(false, effects);
@@ -5821,7 +5829,7 @@ impl Model {
                     talk.open = false;
                 }
             }
-            // No conversation here: ⌘⇧L opens this drawer on the transcript, as a rail click (no jump to its pane).
+            // No conversation here: ⌘⇧R opens this drawer on the transcript, as a rail click (no jump to its pane).
             Action::TalkToggle if self.talk.is_none() && self.by_user => {
                 self.rail_select(rail::RailItem::Transcript, effects)
             }
@@ -6944,6 +6952,13 @@ impl Model {
     pub fn sections(&self) -> Vec<Section> {
         let flagged = |s: &Section| s.feature().is_none_or(|feature| self.features.on(feature));
         zones::SECTIONS.into_iter().filter(|s| (*s != Section::Calendar || self.calendar.on) && flagged(s)).collect()
+    }
+
+    /// The section ⌘⇧L and the left rail's → toggle (`ToggleSection`): the open one, which closes
+    /// the bar; else the one open last, else the rail's first.
+    pub fn sidebar_toggled(&self) -> Section {
+        let sections = self.sections();
+        self.sidebar.or(self.sidebar_last).filter(|s| sections.contains(s)).unwrap_or(Section::Repos)
     }
 
     /// True if a `Tick` now would change what shows: a snoozed task's time has come, or the
@@ -9586,6 +9601,8 @@ mod tests {
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
                     Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
+                    Action::TalkToggle => Some(rail::DRAWER_USERS),
+                    Action::TalkKeys { on: true } if m.drawer_collapsed() => Some(rail::DRAWER_USERS),
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -13361,7 +13378,7 @@ mod tests {
         m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
         m.update(Action::ListenFixture.sent_by(Origin::System));
         m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() });
-        assert_eq!((m.rail(), m.rail_selected(), m.rail_drawn()), (vec![RailItem::Transcript], None, true));
+        assert_eq!((m.rail(), m.rail_selected(), m.drawer_collapsed()), (vec![RailItem::Transcript], None, false));
         m.update(Action::TalkCycle { delta: 1 });
         assert_eq!(m.rail_selected(), Some(RailItem::Transcript));
         m.listen.shown = false;
@@ -15701,6 +15718,8 @@ mod tests {
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
                     Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
+                    Action::TalkToggle => Some(rail::DRAWER_USERS),
+                    Action::TalkKeys { on: true } if m.drawer_collapsed() => Some(rail::DRAWER_USERS),
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");

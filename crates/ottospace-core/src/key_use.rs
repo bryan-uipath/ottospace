@@ -36,7 +36,9 @@ pub enum Binding {
     NewTask,
     NextTask,
     TalkFocus,
-    TalkToggle,
+    /// ⌘⇧R. `talk_toggle` was ⌘⇧L's: its count is of the old key, so it is not read.
+    DrawerToggle,
+    SidebarToggle,
     DialToggle,
     SpaceNumber,
     NextSpace,
@@ -85,7 +87,8 @@ pub const ALL: &[Binding] = &[
     Binding::NewTask,
     Binding::NextTask,
     Binding::TalkFocus,
-    Binding::TalkToggle,
+    Binding::DrawerToggle,
+    Binding::SidebarToggle,
     Binding::DialToggle,
     Binding::SpaceNumber,
     Binding::NextSpace,
@@ -133,7 +136,8 @@ impl Binding {
             Binding::NewTask => &[C::NewTask],
             Binding::NextTask => &[C::NextTask],
             Binding::TalkFocus => &[C::TalkFocus],
-            Binding::TalkToggle => &[C::TalkToggle],
+            Binding::DrawerToggle => &[C::DrawerToggle],
+            Binding::SidebarToggle => &[C::SidebarToggle],
             Binding::DialToggle => &[C::DialToggle],
             Binding::NextSpace => &[C::NextSpace, C::PrevSpace],
             Binding::NextChat => &[C::NextChat, C::PrevChat],
@@ -198,13 +202,13 @@ impl Binding {
             B::NewTask
             | B::NextTask
             | B::TalkFocus
-            | B::TalkToggle
+            | B::DrawerToggle
             | B::DialToggle
             | B::CaptureKey
             | B::Transcribe
             | B::AgentMenu => Group::Tasks,
             B::Copy | B::Paste => Group::Text,
-            B::VisualMode | B::ListMode | B::SneakMode => Group::Modes,
+            B::VisualMode | B::ListMode | B::SneakMode | B::SidebarToggle => Group::Modes,
             B::Palette | B::ShowKeys | B::EditSettings | B::FillDisplay | B::ReturnKey | B::Hide | B::Quit => {
                 Group::App
             }
@@ -237,7 +241,8 @@ impl Binding {
             B::NewTask => "New task",
             B::NextTask => "Next that needs you",
             B::TalkFocus => "Type to the agent",
-            B::TalkToggle => "Open / close chat",
+            B::DrawerToggle => "Open / collapse the drawer",
+            B::SidebarToggle => "Open / collapse the sidebar",
             B::DialToggle => "Open / close agent dial",
             B::SpaceNumber => "Go to tab group",
             B::NextSpace => "Next / previous group",

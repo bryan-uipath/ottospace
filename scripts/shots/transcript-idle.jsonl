@@ -6,7 +6,7 @@
 {"write":"home/transcripts/{DATE}-1100-google-chrome.md","text":"# Transcript: Google Chrome, {DATE} 11:00\n\n- Started: {DATE} 11:00 (+00:00)\n- Ended: 11:25, 25 minutes\n- App: Google Chrome (com.google.Chrome)\n- Microphone: off\n- Started by: you\n\n> Heard on this Mac.\n\n- 11:00:09 **them**: Design review: the new rail.\n"}
 {"click":"top:new_workspace"}
 {"cmd":"key","keys":"cmd-d","as":"user"}
-{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
 {"until":"state.transcripts.today","len":2}
 {"settle":300}
 {"shot":"idle"}

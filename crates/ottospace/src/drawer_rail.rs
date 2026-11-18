@@ -1,7 +1,7 @@
-//! The drawer's right rail in the shell: a narrow column at the drawer's right edge. On top an
-//! item for each task of the workspace and + for a new task here; at the foot, below a divider,
-//! the transcript, idle or recording. Which items, their order and which is selected are the
-//! core's (`ottospace_core::model::rail`).
+//! The drawer's right rail in the shell: a narrow column at the window's right edge, always
+//! shown. On top an item for each task of the workspace and + for a new task here; at the foot,
+//! below a divider, the transcript, idle or recording; the drawer collapsed, ← to open it. Which
+//! items, their order and which is selected are the core's (`ottospace_core::model::rail`).
 
 use gpui::{AnyElement, AnyView, Context, Div, ElementId, Stateful, Window, canvas, div, prelude::*, px, rgb, svg};
 use ottospace_core::listen::Status;
@@ -10,7 +10,7 @@ use ottospace_core::model::rail::{RailItem, RailSection};
 use ottospace_core::model::zones::RailFocus;
 use ottospace_core::{Action, theme};
 
-use crate::{Tooltip, Workspace, rect};
+use crate::{Tooltip, Workspace, rect, slide};
 
 /// The rail's width, and an item's side, in points.
 pub(crate) const WIDTH: f32 = 48.;
@@ -29,20 +29,23 @@ fn control(item: RailItem) -> String {
 }
 
 impl Workspace {
-    /// The drawer, `width` wide, with its rail at the right edge when it has one: the transcript
-    /// or the conversation in what is left of the width.
-    pub(crate) fn render_railed_drawer(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.model.rail_drawn() {
-            return self.render_listen_view(width, cx).or_else(|| self.render_drawer(width, cx));
-        }
+    /// Right of the panes: the drawer's place, `width` wide with its rail at the right edge, always
+    /// shown. In the place, what the core says is there: the inspector, a capture's draft, the
+    /// transcript, the new-task box, the conversation or a brief. Nothing: the drawer is collapsed,
+    /// the rail alone. With the width drawn.
+    pub(crate) fn render_right(&self, width: f32, cx: &mut Context<Self>) -> (AnyElement, f32) {
         let inner = (width - WIDTH).max(0.);
-        let body = self.render_listen_view(inner, cx).or_else(|| self.render_drawer(inner, cx))?;
-        Some(div().flex_none().h_full().flex().child(body).child(self.drawer_rail(cx)).into_any_element())
+        let body = self.render_inspector(inner, cx).or_else(|| self.render_draft(cx));
+        let body = body.or_else(|| self.render_listen_view(inner, cx)).or_else(|| self.render_drawer(inner, cx));
+        let drawn = if body.is_some() { width } else { WIDTH };
+        (div().flex_none().h_full().flex().children(body).child(self.drawer_rail(cx)).into_any_element(), drawn)
     }
 
     /// The column: the tasks and + scroll; at the foot a divider, then the transcript, always in view.
     fn drawer_rail(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let selected = self.model.rail_selected();
+        // Collapsed, no item is lifted: the drawer shows none.
+        let lifted = selected.filter(|_| !self.model.drawer_collapsed());
         let keyed = match self.model.rail_focus {
             Some(RailFocus::Right(item)) => Some(item),
             _ => None,
@@ -61,7 +64,7 @@ impl Workspace {
             .border_color(rgb(theme::BORDER));
         let item = |item: RailItem| {
             let face = self.rail_face(item)?;
-            Some((item, self.rail_item(item, face, selected == Some(item), keyed == Some(item), cx)))
+            Some((item, self.rail_item(item, face, lifted == Some(item), keyed == Some(item), cx)))
         };
         let (top, foot): (Vec<RailItem>, Vec<RailItem>) =
             items.iter().partition(|it| it.section() == RailSection::Workspace);
@@ -117,7 +120,16 @@ impl Workspace {
         let divider = div().flex_none().w(px(20.)).h(px(1.)).my(px(8.)).bg(rgb(theme::BORDER));
         let foot = (!foot.is_empty())
             .then(|| div().flex_none().flex().flex_col().items_center().child(divider).children(foot));
-        column.child(tasks).child(self.rail_follow()).children(foot).pb_2().child(self.controls.mark("drawer-rail"))
+        // Collapsed: ← opens the drawer again on what it showed.
+        let open = self.model.drawer_opens().then(|| {
+            let open = self.slide_button("drawer-rail:open", (slide::LEFT, slide::DRAWER_KEY), "Open the drawer", true);
+            div()
+                .flex_none()
+                .pt_2()
+                .child(open.on_click(cx.listener(|this, _, window, cx| this.drawer_toggle(window, cx))))
+        });
+        let column = column.child(tasks).child(self.rail_follow()).children(foot).children(open);
+        column.pb_2().child(self.controls.mark("drawer-rail"))
     }
 
     /// After the tasks are laid out: the pending item wholly in view, else scrolled to and checked
@@ -224,7 +236,8 @@ impl Workspace {
         self.dispatch(Action::RailSelect { item }, self.input, window, cx);
     }
 
-    /// A sneak label on the rail: `drawer-rail:transcript`, `drawer-rail:3`, `drawer-rail:new`.
+    /// A sneak label on the rail: `drawer-rail:transcript`, `drawer-rail:3`, `drawer-rail:new`,
+    /// `drawer-rail:open` (the collapsed drawer's ←).
     /// False: not the rail's.
     pub(crate) fn click_drawer_rail(
         &mut self,
@@ -238,6 +251,7 @@ impl Workspace {
         }
         match name {
             "new" => self.new_task(window, cx),
+            "open" => self.drawer_toggle(window, cx),
             "transcript" => self.rail_click(RailItem::Transcript, window, cx),
             id => {
                 if let Ok(id) = id.parse() {

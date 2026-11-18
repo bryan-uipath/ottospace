@@ -1,10 +1,10 @@
 # Where a transcript shows: the source pane's header has a red dot only (no time, no top row
 # mark) while its tab is on show; off show, a dot on its tab, then on its workspace in the top
-# row. With no task, ⌘⇧L opens the drawer on the transcript idle. Made-up lines from the fixture.
+# row. With no task, ⌘⇧R opens the drawer on the transcript idle. Made-up lines from the fixture.
 {"env":{"OTTOSPACE_FEATURES":"transcripts","OTTOSPACE_LISTEN_FIXTURE":"{ROOT}/fixture.jsonl"}}
 {"click":"top:new_workspace"}
 {"cmd":"key","keys":"cmd-d","as":"user"}
-{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
 {"settle":500}
 {"shot":"idle"}
 {"click":"listen-start:1"}

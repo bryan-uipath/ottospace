@@ -117,7 +117,7 @@ commands! {
     CapturePane: "Capture the Pane", Tasks;
     TalkFocus: "Type in the Conversation", Tasks;
     EditMessage: "Edit Message in Editor", Tasks;
-    TalkToggle: "Open or Close the Conversation", Tasks;
+    DrawerToggle: "Open or Collapse the Drawer", Tasks;
     StopAgent: "Stop the Agent", Tasks;
     DialToggle: "Toggle Agent Dial", Tasks;
     SaveWorkbook: "Save Tab as Workspace", Workbook;
@@ -130,6 +130,7 @@ commands! {
     MarkPane: "Mark Pane", Marks;
     MarkTab: "Mark Tab", Marks;
     MarkJump: "Go to Mark…", Marks;
+    SidebarToggle: "Open or Collapse the Sidebar", View;
     ListMode: "Drive the Bar with the Keyboard", View;
     SneakMode: "Label the Controls", View;
     VisualMode: "Select with the Keyboard", View;

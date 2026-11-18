@@ -170,6 +170,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
         { kind: "transcript", id: null, section: "everywhere", selected: true, rect: [1360, 800, 36, 36] },
       ],
       width: 470,
+      collapsed: false,
       agents: { "1": { model: "claude", ended: false, cols: 60, rows: 45, lines: ["fake claude ready"] } },
       // A native conversation: its shape, never its text.
       native: {

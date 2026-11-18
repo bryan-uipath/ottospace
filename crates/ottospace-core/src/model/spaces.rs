@@ -358,7 +358,7 @@ impl Model {
     }
 
     /// A click on a space of the top row. The user's on the selected one, its conversation
-    /// closed, opens it, as ⌘⇧L does; any other click only selects.
+    /// closed, opens it, as ⌘⇧R does; any other click only selects.
     pub(crate) fn space_click(&self, sent: Envelope) -> Envelope {
         let Action::SpaceClick { index } = sent.action else { return sent };
         let opens = sent.origin == Origin::User && self.agent_chip().is_some_and(|chip| chip.space == index);

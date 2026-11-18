@@ -578,9 +578,8 @@ impl Workspace {
                     this.dispatch(Action::TaskStop { id: id.clone() }, this.input, window, cx);
                 }))
         });
-        let close = self.talk_button("talk-close", "×", "Close the chat (⌘⇧L); the agent goes on").on_click(
-            cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkToggle, this.input, window, cx))),
-        );
+        // The agent goes on, its rail item with it.
+        let close = self.drawer_collapse("talk:talk-close", cx);
         Some(
             // As high as the top row above it.
             div()
@@ -858,6 +857,8 @@ impl Workspace {
         serde_json::json!({
             "body": shown.then(|| crate::rect(self.drawer.body.get())),
             "width": self.drawer.width,
+            // Folded into its rail: nothing in its place (`Model::drawer_collapsed`).
+            "collapsed": self.model.drawer_collapsed(),
             "agents": agents,
             "native": self.chats_snapshot(),
             // The shown conversation's foot, header folder and title hover (`talk::agent_line`).

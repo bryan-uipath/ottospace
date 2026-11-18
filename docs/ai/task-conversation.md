@@ -46,8 +46,8 @@ selection, from any origin, makes a start or changes a transcript.
 The tab on show does not change. The header offers `Go to its tabs` (⌘↵); a task with no tab
 is offered `Claim this tab` (the tab on show is no task's) or `New tab`. See "Tasks and tabs".
 
-↵ in the composer files the task and starts it. ⇧↵ files it for later. × on the drawer, or
-⌘⇧L, closes it to the rail; the agent goes on. ⌘L moves the keyboard into the conversation and
+↵ in the composer files the task and starts it. ⇧↵ files it for later. → on the drawer, or
+⌘⇧R, collapses it into the rail; the agent goes on. ⌘L moves the keyboard into the conversation and
 back.
 
 ## The composer

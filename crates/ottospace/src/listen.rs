@@ -248,6 +248,8 @@ impl Workspace {
                 Action::ListenOpenPast { name: past }
             }
             "listen-back" => Action::ListenOpenPast { name: None },
+            // The header's →, as ⌘⇧R.
+            "listen-collapse" => Action::TalkToggle,
             // Only a label comes here (a click opens it itself): the keys on its first item.
             "listen-menu" => {
                 self.open_row_menu(MenuOf::Transcript, true, window, cx);
@@ -863,11 +865,13 @@ impl Workspace {
             .children(empty)
             .children(rows)
             .children(volatile);
-        Some(self.listen_panel(width, header, body))
+        Some(self.listen_panel(width, header, body, cx))
     }
 
     /// The drawer's transcript view, `width` wide: its header over its body.
-    fn listen_panel(&self, width: f32, header: Div, body: impl IntoElement) -> AnyElement {
+    fn listen_panel(&self, width: f32, header: Div, body: impl IntoElement, cx: &mut Context<Self>) -> AnyElement {
+        // At the header's right end: collapsed into the rail, the transcript goes on.
+        let header = header.child(self.drawer_collapse("listen-collapse", cx).ml_auto());
         div()
             .id("listen")
             .w(px(width))
@@ -956,7 +960,7 @@ impl Workspace {
             .child(pick)
             .child(div().text_xs().text_color(rgb(theme::MUTED)).child(about))
             .children(today);
-        self.listen_panel(width, header, body)
+        self.listen_panel(width, header, body, cx)
     }
 
     /// The past transcript open, read-only: its lines as the file has them, plain; ‹ goes back.
@@ -1016,7 +1020,7 @@ impl Workspace {
             .flex_col()
             .gap_1()
             .children(rows);
-        Some(self.listen_panel(width, header, body))
+        Some(self.listen_panel(width, header, body, cx))
     }
 
     /// "Transcribe a window…": the apps that can play sound, read off the main thread (in a test

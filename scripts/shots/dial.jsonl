@@ -17,10 +17,10 @@
 {"until":"drawer.native.chats.1.dial.level","is":"red"}
 {"settle":1500}
 {"shot":"running"}
-{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
 {"settle":300}
 {"shot":"closed-working"}
-{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
 {"click":"talk:chat-stop"}
 {"until":"drawer.native.chats.1.transcript.turn","is":null}
 {"settle":2000}
@@ -41,12 +41,12 @@
 {"sleep_ms":2500}
 {"shot":"settled"}
 {"record":"stop"}
-{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
 {"cmd":"key","keys":"cmd-t","as":"user"}
 {"settle":300}
 {"shot":"closed-tabs"}
 {"cmd":"key","keys":"cmd-shift-w","as":"user"}
-{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
 {"cmd":"key","keys":"cmd-p","as":"user"}
 {"cmd":"key","keys":"s t o p space t h e space a g e n t","as":"user"}
 {"cmd":"key","keys":"enter","as":"user"}

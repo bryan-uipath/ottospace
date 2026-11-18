@@ -659,7 +659,7 @@ mod tests {
         assert!(m.layout.as_ref().is_some_and(|l| l.leaves().contains(&2)));
     }
 
-    /// The transcript's header has no ×: ⌘⇧L closes the drawer on it, as on a conversation.
+    /// The transcript's header has no ×: its → (⌘⇧R) collapses the drawer into its rail, as on a conversation.
     #[test]
     fn the_drawers_key_closes_the_drawer_on_the_transcript() {
         let mut m = model();

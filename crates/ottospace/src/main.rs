@@ -106,6 +106,7 @@ mod running;
 mod scratch;
 mod scrollbar;
 mod sessions;
+mod slide;
 mod sneak;
 mod sneak_apps;
 mod stall;
@@ -484,6 +485,8 @@ impl AssetSource for Assets {
             "icons/fill-expand.svg" => Some(include_bytes!("../assets/icons/fill-expand.svg")),
             "icons/fill-collapse.svg" => Some(include_bytes!("../assets/icons/fill-collapse.svg")),
             "icons/dismiss.svg" => Some(include_bytes!("../assets/icons/dismiss.svg")),
+            "icons/slide-left.svg" => Some(include_bytes!("../assets/icons/slide-left.svg")),
+            "icons/slide-right.svg" => Some(include_bytes!("../assets/icons/slide-right.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             "icons/runner-claude.svg" => Some(include_bytes!("../assets/icons/runner-claude.svg")),
             "icons/runner-codex.svg" => Some(include_bytes!("../assets/icons/runner-codex.svg")),
@@ -727,7 +730,7 @@ actions!(ottospace, [StartFresh]);
 // What the capture key does, from the menu.
 actions!(ottospace, [CapturePane]);
 // The right drawer: the keyboard in or out, closed or open, the task's workspace, its dial.
-actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent, EditMessage, DialToggle]);
+actions!(ottospace, [TalkFocus, TalkToggle, SidebarToggle, TalkGo, StopAgent, EditMessage, DialToggle]);
 // A tab of no task, and the tab on show taken out of its task or moved to another.
 actions!(ottospace, [MoveTabToTask]);
 // App menu.
@@ -809,7 +812,8 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-n", NewTask, None),
         KeyBinding::new("cmd-shift-n", NextTask, None),
         KeyBinding::new("cmd-l", TalkFocus, None),
-        KeyBinding::new("cmd-shift-l", TalkToggle, None),
+        KeyBinding::new("cmd-shift-r", TalkToggle, None),
+        KeyBinding::new("cmd-shift-l", SidebarToggle, None),
         KeyBinding::new("cmd-enter", TalkGo, None),
         KeyBinding::new("cmd-shift-a", DialToggle, None),
         KeyBinding::new("cmd-ctrl-t", listen::Transcribe, None),
@@ -1630,10 +1634,13 @@ impl Workspace {
             self.refresh_apps();
             self.offer_installed(cx);
         }
-        // A client's key, click or label at the user's draft: its reply's `notice` says why it did nothing.
-        let draft = ottospace_core::capture::DRAFT_USERS;
-        if origin == Origin::Socket && self.model.refusal(&action, origin) == Some(draft) {
-            self.error = Some(draft.into());
+        // A client's key, click or label at the user's draft, or at the drawer's ⌘⇧R, → or ←: its
+        // reply's `notice` says why it did nothing.
+        let said = [ottospace_core::capture::DRAFT_USERS, ottospace_core::model::rail::DRAWER_USERS];
+        if let Some(why) =
+            self.model.refusal(&action, origin).filter(|why| origin == Origin::Socket && said.contains(why))
+        {
+            self.error = Some(why.into());
         }
         let line = self.model.compose_line().cloned().map(|line| (line, self.model.compose_typing()));
         let field = self.model.field().map(|(of, _)| of);
@@ -4852,6 +4859,19 @@ impl Workspace {
                 },
             ))
             .child(div().flex_1().border_r_1().border_color(rgb(theme::BORDER)))
+            // The bar collapsed: → opens it again, on the section open last.
+            .children(open.is_none().then(|| {
+                let open = self.slide_button("rail:open", (slide::RIGHT, slide::SIDEBAR_KEY), "Open the sidebar", true);
+                let open = open.on_click(cx.listener(|this, _, window, cx| this.sidebar_toggle(window, cx)));
+                div()
+                    .flex_none()
+                    .pb_2()
+                    .flex()
+                    .justify_center()
+                    .border_r_1()
+                    .border_color(rgb(theme::BORDER))
+                    .child(open)
+            }))
     }
 
     /// The strip over the rail and the section list: the traffic lights, and room to drag the
@@ -4871,7 +4891,7 @@ impl Workspace {
     }
 
     /// The bar's header, the same for every section: its name, + where the section can add
-    /// something, and × to close the bar.
+    /// something, and ← to collapse the bar into the rail.
     fn bar_header(&self, section: Section, cx: &mut Context<Self>) -> Div {
         let title = SECTIONS.iter().find(|(s, ..)| *s == section).map_or("", |(_, _, label)| label);
         let button = |id: &'static str, icon: &'static str, tip: &'static str| {
@@ -4924,11 +4944,12 @@ impl Workspace {
                     .child(self.controls.mark(mark))
                     .on_click(cx.listener(move |this, _, window, cx| this.bar_add(section, window, cx)))
             }))
-            .child(button("bar-close", "icons/dismiss.svg", "Close").child(self.controls.mark("bar:close")).on_click(
-                cx.listener(|this, _, window, cx| {
-                    this.dispatch(Action::CloseSidebar, this.input, window, cx);
-                }),
-            ))
+            .child(
+                self.slide_button("bar:close", (slide::LEFT, slide::SIDEBAR_KEY), "Collapse into the rail", false)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.dispatch(Action::CloseSidebar, this.input, window, cx);
+                    })),
+            )
     }
 
     /// The header's +: a new task in Tasks, a repository to list in Repos, a new workspace in Workspaces.
@@ -7028,10 +7049,8 @@ impl Render for Workspace {
         let columns = ottospace_core::model::editor::COLUMNS as f32 * f32::from(self.cell.width) + 10.;
         let drawer = if self.model.editor_shown() { drawer.max(columns.min(half.max(MIN_DRAWER))) } else { drawer };
         self.drawer.width = drawer;
-        // The inspector takes the drawer's place while it is open; the drawer keeps its state.
-        let right = self.render_inspector(drawer, cx);
-        let right = right.or_else(|| self.render_draft(cx)).or_else(|| self.render_railed_drawer(drawer, cx));
-        let right_width = if right.is_some() { drawer } else { 0. };
+        // The drawer's place and its rail, always: the rail alone while it is collapsed.
+        let (right, right_width) = self.render_right(drawer, cx);
         // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
         // the buttons and the agent chip's badge.
         let centre = f32::from(window.viewport_size().width) - left;
@@ -7128,6 +7147,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &TalkToggle, window, cx| {
                 this.dispatch(Action::TalkToggle, this.input, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &SidebarToggle, window, cx| this.sidebar_toggle(window, cx)))
             .on_action(cx.listener(|this, _: &DialToggle, window, cx| {
                 this.dispatch(Action::DialToggle, this.input, window, cx);
             }))
@@ -7371,7 +7391,7 @@ impl Render for Workspace {
                                             ),
                                     )
                                     // The drawer (the draft being collected, a conversation, or a brief).
-                                    .children(right),
+                                    .child(right),
                             ),
                     )
                     // The side zones sit above the workspace: each casts a soft shadow onto it.

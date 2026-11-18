@@ -1451,6 +1451,8 @@ export interface Snapshot {
     }[];
     /** Its width in points as last drawn. */
     width: number;
+    /** Collapsed into its rail, which always shows: nothing in its place. Only the user collapses or opens it (⌘⇧R, its → and ←). */
+    collapsed: boolean;
     agents: Record<string, { model: string; ended: boolean; cols: number; rows: number; lines: string[] }>;
     /**
      * Native conversations, by task id (a session's: `<runner>:<id>`): their view, structure,
