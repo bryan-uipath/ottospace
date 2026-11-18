@@ -2478,6 +2478,8 @@ fn window_pixels(window: u64, path: &std::path::Path) -> (usize, usize, Vec<u8>)
     let le = |at: usize| u32::from_le_bytes(bmp[at..at + 4].try_into().expect("4 bytes"));
     let (start, width, height) = (le(10) as usize, le(18) as usize, le(22) as i32);
     assert_eq!(u16::from_le_bytes([bmp[28], bmp[29]]), 32, "32 bits a pixel");
+    // Bit fields red, green, blue: bytes B, G, R, A.
+    assert_eq!((le(30), le(54), le(58), le(62)), (3, 0xff0000, 0xff00, 0xff), "BGRA");
     let rows = height.unsigned_abs() as usize;
     let mut rgba = Vec::with_capacity(width * rows * 4);
     for row in 0..rows {
@@ -2583,7 +2585,9 @@ fn a_parked_panes_picture_is_its_window_pixel_for_pixel() {
     ));
     assert_eq!(count(&s, "stream_scale_1"), scale, "the stream captures at ottospace's scale");
 
-    // What ottospace draws: its own window, the preview's rect in pixels.
+    // What ottospace draws: its own window, the preview's rect in pixels. This reply waits for a
+    // frame drawn after the one held came.
+    state();
     let otto_window = s["frame"]["window"].as_u64().expect("ottospace's window number");
     let drawn = window_pixels(otto_window, &support::temp(&format!("otto-sharp-{}.bmp", std::process::id())));
     let px = |v: f64| (v * scale).round() as usize;
@@ -2594,7 +2598,13 @@ fn a_parked_panes_picture_is_its_window_pixel_for_pixel() {
     let crop = s["crop"]["1"].as_f64().unwrap_or(0.0);
     let canary_window = s["state"]["panes"][0]["kind"]["window"].as_u64().expect("the canary's window number");
     assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
-    wait_for("the window to go live", || (count(&state(), "live") >= 1.0).then_some(()));
+    // Over its pane and drawn at ottospace's scale: it may have been parked on another display.
+    let spot = point(&s["parking"]).expect("parking spot");
+    wait_for("the window to go live at ottospace's scale", || {
+        let away = rect(&state()["hosted"]["1"]).is_some_and(|f| !close(f[0], spot[0]));
+        let at = canary.call(json!({"cmd": "state"}))["windows"][0]["scale"].as_f64() == Some(scale);
+        (away && at).then_some(())
+    });
     std::thread::sleep(Duration::from_millis(500));
     let live = window_pixels(canary_window, &support::temp(&format!("canary-sharp-{}.bmp", std::process::id())));
     let real = grey(&live, 0, px(crop), w, h);
@@ -2604,11 +2614,13 @@ fn a_parked_panes_picture_is_its_window_pixel_for_pixel() {
     // The rows below the columns too.
     let sh = (2 * sh).min(h - y);
     let part = |g: &[f64]| -> Vec<f64> { (y..y + sh).flat_map(|row| g[row * w + x..][..sw].to_vec()).collect() };
-    let (sharp_picture, sharp_real) = (sharpness(&part(&picture), sw), sharpness(&part(&real), sw));
-    let same = picture.iter().zip(&real).filter(|(a, b)| (*a - *b).abs() <= 8.0).count() as f64 / real.len() as f64;
+    let (stripes_picture, stripes_real) = (part(&picture), part(&real));
+    let close_to = stripes_picture.iter().zip(&stripes_real).filter(|(a, b)| (*a - *b).abs() <= 8.0).count();
+    let same = close_to as f64 / stripes_real.len() as f64;
+    let (sharp_picture, sharp_real) = (sharpness(&stripes_picture, sw), sharpness(&stripes_real, sw));
     report(&format!(
         "sharp: stripes {sw}×{sh} px at {x},{y}; sharpness picture {sharp_picture:.1}, window {sharp_real:.1}; \
-         {:.1}% of the preview's pixels within 8 levels of the window's",
+         {:.1}% of the stripes' pixels within 8 levels of the window's",
         same * 100.0
     ));
     // The stripes and the text above them, from each.

@@ -62,11 +62,6 @@ jobs:
       # Apple's on-device speech model, for the canary's transcript test: the system downloads it
       # into its own store, on this runner only (a test run downloads none). If it cannot, the
       # test says it skipped.
-      - name: Displays (temporary)
-        run: |
-          system_profiler SPDisplaysDataType || true
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install jakehilborn/jakehilborn/displayplacer || true
-          displayplacer list || true
       - name: Speech model
         run: |
           defaults read -g AppleLocale || true

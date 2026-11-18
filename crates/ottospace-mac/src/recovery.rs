@@ -28,8 +28,9 @@ pub struct Screens {
     pub displays: Vec<Frame>,
     /// The visible frame of the screen with the menu bar.
     pub main: Frame,
-    /// Where ottospace parks a window (`display::parking_spot`).
-    pub spot: (f64, f64),
+    /// Where ottospace may park a window: each free corner (`hosted::parking_corners`), the one
+    /// `display::parking_spot` picks depending on the scale of the window's pane.
+    pub spots: Vec<(f64, f64)>,
 }
 
 pub fn screens() -> Screens {
@@ -51,8 +52,13 @@ pub fn screens() -> Screens {
     };
     let fallback = Frame::new(0.0, 25.0, 1280.0, 775.0);
     let main = visible.first().copied().unwrap_or(fallback);
-    let spot = display::parking_spot();
-    Screens { visible, displays, main, spot: (spot.x, spot.y) }
+    let mut spots = ottospace_core::hosted::parking_corners(&displays);
+    // With no free corner, `parking_spot` uses the main display's.
+    if spots.is_empty() {
+        let spot = display::parking_spot(1.0);
+        spots.push((spot.x, spot.y));
+    }
+    Screens { visible, displays, main, spots }
 }
 
 /// Moves the window to `frame`: position, size, position again. Position first: resized at the
@@ -83,7 +89,7 @@ pub fn put_back(window: &ax::Window, original: Frame, screens: &Screens) -> Opti
 /// True when the user cannot get at the window: it sits in ottospace's parking spot, or wholly
 /// off every display.
 pub fn stranded(frame: Frame, screens: &Screens) -> bool {
-    restore::parked(frame, screens.spot) || restore::off_every(frame, &screens.displays)
+    screens.spots.iter().any(|spot| restore::parked(frame, *spot)) || restore::off_every(frame, &screens.displays)
 }
 
 /// The app's standard windows that are stranded, with their frames.

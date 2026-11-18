@@ -73,9 +73,9 @@ pub fn scale(display: u32) -> f64 {
     if points == 0 { 1.0 } else { pixels as f64 / points as f64 }
 }
 
-/// The scale of the display a parked window is on (`parking_spot`).
-pub fn parking_scale() -> f64 {
-    let spot = parking_spot();
+/// The scale of the display a window parked for a pane of `want` is on (`parking_spot`).
+pub fn parking_scale(want: f64) -> f64 {
+    let spot = parking_spot(want);
     let on = |id: &u32| {
         let b = bounds(*id);
         (b.origin.x..b.origin.x + b.size.width).contains(&spot.x)
@@ -85,9 +85,10 @@ pub fn parking_scale() -> f64 {
 }
 
 /// Where to park a window so only its top-left pixel is on-screen (AeroSpace-style): a display's
-/// bottom-right corner with no other display to its right or below, the sharpest such display
-/// (`ottospace_core::hosted::parking_corner`), e.g. the right-hand monitor's in a side-by-side setup.
-pub fn parking_spot() -> CGPoint {
+/// bottom-right corner with no other display to its right or below, e.g. the right-hand monitor's
+/// in a side-by-side setup; of those, one with `want` pixels a point, the scale its pane is drawn
+/// at (`ottospace_core::hosted::parking_corner`). `f64::INFINITY`: the sharpest.
+pub fn parking_spot(want: f64) -> CGPoint {
     let displays: Vec<(Frame, f64)> = ids()
         .into_iter()
         .map(|id| {
@@ -95,7 +96,7 @@ pub fn parking_spot() -> CGPoint {
             (Frame::new(b.origin.x, b.origin.y, b.size.width, b.size.height), scale(id))
         })
         .collect();
-    match ottospace_core::hosted::parking_corner(&displays) {
+    match ottospace_core::hosted::parking_corner(&displays, want) {
         Some((x, y)) => CGPoint::new(x, y),
         None => {
             let main = bounds(unsafe { CGMainDisplayID() });
