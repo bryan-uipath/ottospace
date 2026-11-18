@@ -605,7 +605,7 @@ impl Workspace {
             &format!("chat:{key}"),
             crate::scrollbar::Axis::Down,
             &scroll,
-            theme::BACKGROUND,
+            (theme::BACKGROUND, (0., 0.)),
             !away,
             moved,
         );

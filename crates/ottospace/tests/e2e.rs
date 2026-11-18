@@ -4841,6 +4841,18 @@ fn a_long_list_fades_where_more_lies_beyond_and_a_short_one_nowhere() {
     let first = tabs.iter().position(|(_, space)| Some(space) == tabs.last().map(|(_, space)| space)).unwrap();
     otto.call(json!({"cmd": "select_tab", "index": first}));
     assert_eq!(fades(&otto.drawn(), "tabs"), json!({"left": false, "right": true}));
+    // The last tab on show, the row wheeled back to its start, Home and back: in view again.
+    otto.call(json!({"cmd": "select_tab", "index": tabs.len() - 1}));
+    let end = otto.drawn();
+    assert_eq!(fades(&end, "tabs"), json!({"left": true, "right": false}));
+    let (track, ..) = scrollbar(&end, "tabs").expect("the row's bar");
+    assert_eq!(fades(&otto.wheel(at(track, 0.5, 0.5), 50_000.0, true), "tabs"), json!({"left": false, "right": true}));
+    let row: Vec<Value> =
+        end["spaces"].as_array().into_iter().flatten().filter(|s| s["hidden"] == false).cloned().collect();
+    let back = row.iter().position(|s| s["selected"] == true).expect("a workspace selected");
+    otto.call(json!({"cmd": "select_space", "index": 0}));
+    otto.call(json!({"cmd": "select_space", "index": back}));
+    assert_eq!(fades(&otto.drawn(), "tabs"), json!({"left": true, "right": false}));
 }
 
 #[test]

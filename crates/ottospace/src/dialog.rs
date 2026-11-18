@@ -92,8 +92,8 @@ impl Workspace {
             .overflow_hidden()
             .child(header.px_3().flex().items_center().gap_2().border_b_1().border_color(rgb(theme::BORDER)))
             .when(none, |d| d.child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child(empty)))
-            // Long lists scroll inside the panel.
-            .child(self.bars.area(name, list, theme::RAISED))
+            // Long lists scroll inside the panel, their foot in its rounded corners.
+            .child(self.bars.rounded(name, list, theme::RAISED, (0., RADIUS - 1.)))
     }
 
     /// A key while a filtered list is open: `action` is what a list key does (`keys::filter_key`),

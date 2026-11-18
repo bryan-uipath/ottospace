@@ -9,8 +9,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, App, Bounds, DispatchPhase, Div, HitboxBehavior, Hsla, IntoElement, MouseButton, MouseDownEvent,
-    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, ScrollHandle, Stateful,
+    AnyElement, App, Bounds, Corners, DispatchPhase, Div, HitboxBehavior, Hsla, IntoElement, MouseButton,
+    MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, ScrollHandle, Stateful,
     StatefulInteractiveElement, Styled, Window, canvas, div, fill, linear_color_stop, linear_gradient, point, px, rgb,
     size,
 };
@@ -91,13 +91,23 @@ impl Bars {
     /// `list` (an `overflow_y_scroll` element that fills its parent) with its bar over it, its
     /// edges fading into `bg`, the colour behind it.
     pub fn area(&self, id: &str, list: Stateful<Div>, bg: u32) -> Div {
+        self.rounded(id, list, bg, (0., 0.))
+    }
+
+    /// As `area`, against a panel's corners rounded by `radius` at its start and its end (top,
+    /// bottom): the fades round with them.
+    pub fn rounded(&self, id: &str, list: Stateful<Div>, bg: u32, radius: (f32, f32)) -> Div {
         let handle = self.0.borrow_mut().entry(id.into()).or_default().handle.clone();
-        self.tracked(id, list.track_scroll(&handle), &handle, bg)
+        self.down(id, list.track_scroll(&handle), &handle, (bg, radius))
     }
 
     /// As `area`, for a list that already scrolls under `handle`.
     pub fn tracked(&self, id: &str, list: impl IntoElement, handle: &ScrollHandle, bg: u32) -> Div {
-        let bar = self.follow(id, Axis::Down, handle, bg, false, |_| {});
+        self.down(id, list, handle, (bg, (0., 0.)))
+    }
+
+    fn down(&self, id: &str, list: impl IntoElement, handle: &ScrollHandle, fade: Fade) -> Div {
+        let bar = self.follow(id, Axis::Down, handle, fade, false, |_| {});
         div().relative().flex_1().min_h_0().flex().flex_col().child(list).child(bar)
     }
 
@@ -105,11 +115,12 @@ impl Bars {
     /// bottom: as wide as the row's content, narrower when its parent has less room. The bar only
     /// shows: a press on it is the row's (a tab's), and the wheel scrolls it.
     pub fn tracked_row(&self, id: &str, row: impl IntoElement, handle: &ScrollHandle, bg: u32) -> Div {
-        let bar = self.follow(id, Axis::Across, handle, bg, false, |_| {});
+        let bar = self.follow(id, Axis::Across, handle, (bg, (0., 0.)), false, |_| {});
         div().relative().flex_shrink().min_w_0().h_full().flex().child(row).child(bar)
     }
 
-    /// The bar and fades of a list under `handle`, alone, over its parent. `pinned`: the list
+    /// The bar and fades of a list under `handle`, alone, over its parent. `fade`: the colour
+    /// behind it and the radius of its container's corners at its start and end. `pinned`: the list
     /// keeps to its end (a chat on its latest), so growing there is no scroll that shows the bar.
     /// `moved`: after the bar scrolled it (a drag, a page).
     pub fn follow(
@@ -117,7 +128,7 @@ impl Bars {
         id: &str,
         axis: Axis,
         handle: &ScrollHandle,
-        bg: u32,
+        fade: Fade,
         pinned: bool,
         moved: impl Fn(&mut App) + 'static,
     ) -> AnyElement {
@@ -130,7 +141,7 @@ impl Bars {
             scroll_to(&write, axis, offset);
             moved(cx);
         };
-        self.overlay(id, axis, true, Some(bg), read, scroll)
+        self.overlay(id, axis, true, Some(fade), read, scroll)
     }
 
     /// Scrolls an `area`'s list so its child `ix` is in view.
@@ -151,13 +162,13 @@ impl Bars {
     /// and a number that changes when the user scrolls (a change of it shows the bar). `scroll`
     /// moves the area to an offset. `pages`: a press on the track beside the thumb pages;
     /// without it, that press goes to what is under the track. `fade`: the colour behind the
-    /// area, which its edges fade into where more lies beyond; `None`, no fade.
+    /// area, which its edges fade into where more lies beyond, and its corners' radii; `None`, no fade.
     pub fn overlay(
         &self,
         id: &str,
         axis: Axis,
         pages: bool,
-        fade: Option<u32>,
+        fade: Option<Fade>,
         read: impl Fn() -> (Extent, f32) + 'static,
         scroll: impl Fn(f32, &mut App) + 'static,
     ) -> AnyElement {
@@ -168,7 +179,8 @@ impl Bars {
             move |area, window, _| {
                 let (extent, moved_by) = read();
                 let edges = extent.beyond();
-                if let Some(bar) = laid.0.borrow_mut().get_mut(&laid_id) {
+                // Only an area that fades is listed: a terminal's lines run to its edges.
+                if let Some(bar) = laid.0.borrow_mut().get_mut(&laid_id).filter(|_| fade.is_some()) {
                     bar.faded = Some((axis, edges.0, edges.1));
                 }
                 let inset = px(rules::INSET);
@@ -191,8 +203,8 @@ impl Bars {
             },
             move |area, laid_out, window, cx| {
                 let Some((extent, moved_by, (start, length), over, hitbox, edges)) = laid_out else { return };
-                if let Some(bg) = fade {
-                    paint_fades(area, axis, edges, bg, window);
+                if let Some(fade) = fade {
+                    paint_fades(area, axis, edges, fade, window);
                 }
                 let track = hitbox.bounds;
                 let (track_start, track_length) =
@@ -363,28 +375,35 @@ impl Bars {
     }
 }
 
+/// The colour behind an area, and the radius of its container's corners at its start and end.
+pub type Fade = (u32, (f32, f32));
+
 /// The fades at an area's edges with more beyond them (`edges`: start, end): `bg`, the colour
-/// behind the area, clearing into the area over `EDGE_FADE` (at most a quarter of it). Drawn
-/// only: a press or hover goes through to the row under it.
-fn paint_fades(area: Bounds<Pixels>, axis: Axis, edges: (bool, bool), bg: u32, window: &mut Window) {
+/// behind the area, clearing into the area over `EDGE_FADE` (at most a quarter of it), its outer
+/// corners rounded by `radius` (start, end) as its panel's. Drawn only: a press or hover goes through to the row under it.
+fn paint_fades(area: Bounds<Pixels>, axis: Axis, edges: (bool, bool), (bg, radius): Fade, window: &mut Window) {
     let (solid, clear) = (Hsla::from(rgb(bg)), Hsla::from(rgb(bg)).opacity(0.));
     let (w, h) = (area.size.width, area.size.height);
     let depth = px(EDGE_FADE).min(if axis == Axis::Down { h } else { w } / 4.);
-    // Each edge's band and its gradient's angle, solid at the edge (180°: top to bottom).
+    let (s, e) = (px(radius.0).min(depth), px(radius.1).min(depth));
+    let corners =
+        |top_left, top_right, bottom_right, bottom_left| Corners { top_left, top_right, bottom_right, bottom_left };
+    let none = px(0.);
+    // Each edge's band, its gradient's angle, solid at the edge (180°: top to bottom), and its corners.
     let (start, end) = match axis {
         Axis::Down => (
-            (Bounds::new(area.origin, size(w, depth)), 180.),
-            (Bounds::new(point(area.left(), area.bottom() - depth), size(w, depth)), 0.),
+            (Bounds::new(area.origin, size(w, depth)), 180., corners(s, s, none, none)),
+            (Bounds::new(point(area.left(), area.bottom() - depth), size(w, depth)), 0., corners(none, none, e, e)),
         ),
         Axis::Across => (
-            (Bounds::new(area.origin, size(depth, h)), 90.),
-            (Bounds::new(point(area.right() - depth, area.top()), size(depth, h)), 270.),
+            (Bounds::new(area.origin, size(depth, h)), 90., corners(s, none, none, s)),
+            (Bounds::new(point(area.right() - depth, area.top()), size(depth, h)), 270., corners(none, e, e, none)),
         ),
     };
-    for (on, (band, angle)) in [(edges.0, start), (edges.1, end)] {
+    for (on, (band, angle, round)) in [(edges.0, start), (edges.1, end)] {
         if on {
             let shade = linear_gradient(angle, linear_color_stop(solid, 0.), linear_color_stop(clear, 1.));
-            window.paint_quad(fill(band, shade));
+            window.paint_quad(fill(band, shade).corner_radii(round));
         }
     }
 }

@@ -1416,7 +1416,7 @@ export interface Snapshot {
   row_menu: RowMenu | null;
   /** Each scroll area whose content does not fit, by id (`tasks`, `picker`, `keys`, `terminal:1`). */
   scrollbars: Record<string, Scrollbar>;
-  /** Test runs only: each scroll area laid out, also one that fits, and which edges fade:
+  /** Test runs only: each scroll area laid out (not a terminal), also one that fits, and which edges fade:
    * `top`, `bottom` down a list, `left`, `right` across the tab row. Else null. */
   overflow: Record<string, Record<string, boolean>> | null;
   /** The capture key, and what was drawn of the draft or the brief in the right bar. */

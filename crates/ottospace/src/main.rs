@@ -675,6 +675,18 @@ fn mark(marks: &Marks, key: Mark) -> impl IntoElement + use<> {
     canvas(note, |_, _, _, _| {}).absolute().top_0().left_0().size_full()
 }
 
+/// As `mark`, only the part that shows: a tab scrolled out of its row is not noted.
+fn shown_mark(marks: &Marks, key: Mark) -> impl IntoElement + use<> {
+    let marks = marks.clone();
+    let note = move |bounds: Bounds<Pixels>, window: &mut Window, _: &mut App| {
+        let shown = bounds.intersect(&window.content_mask().bounds);
+        if shown.size.width > px(1.) && shown.size.height > px(1.) {
+            marks.borrow_mut().insert(key, shown);
+        }
+    };
+    canvas(note, |_, _, _, _| {}).absolute().top_0().left_0().size_full()
+}
+
 /// `[x, y, w, h]` in window points.
 pub(crate) fn rect(b: Bounds<Pixels>) -> [f32; 4] {
     [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()]
@@ -3603,7 +3615,7 @@ impl Workspace {
             // `marks`, `picker`, `keys`, `terminal:<pane>`): its bar's `track` and `thumb` in
             // window points, and the bar's `opacity` (0 once it has faded).
             "scrollbars": self.bars.snapshot(),
-            // Test runs only: each scroll area laid out, also one that fits, and which of its edges
+            // Test runs only: each scroll area laid out (not a terminal), also one that fits, and which of its edges
             // fade (`top`, `bottom`; the tab row's `left`, `right`). Null outside a test run.
             "overflow": std::env::var_os("OTTOSPACE_E2E").map(|_| self.bars.overflow()),
             // The capture key, and what was drawn of the draft or the brief in the right bar.
@@ -4646,7 +4658,8 @@ impl Workspace {
         let panel = dialog::panel(theme::BORDER_STRONG).min_h_0().max_w_full().flex().flex_col().overflow_hidden();
         // The columns keep their height inside the list: a flex row would stretch them to its own.
         let list = div().id("keys-rows").flex_1().overflow_y_scroll().child(body);
-        let panel = panel.child(self.bars.area("keys", list, theme::RAISED));
+        let panel =
+            panel.child(self.bars.rounded("keys", list, theme::RAISED, (dialog::RADIUS - 1., dialog::RADIUS - 1.)));
         dialog::backdrop("keys-backdrop", 0.5, Action::CloseKeys, cx)
             .p_6()
             .flex()
@@ -6512,20 +6525,26 @@ impl Workspace {
         let of = self.model.space().clone();
         let places = self.model.space_tabs(&of);
         if places.len() < 2 {
+            // Back on this row (e.g. from Home), its tab on show scrolls into view again.
+            self.tabs_shown.set(None);
             return None;
         }
         let colour = self.space_colour(&of);
         let chip = self.agent_chip(SPACE_TABS, cx);
         let dot = self.model.listen_dot();
         // The tab on show scrolls into view once, when it changes: a scroll may move it out again.
-        let drawn = || places.iter().filter_map(|place| Some((*place, self.model.tabs.get(*place)?.id)));
-        let shown = drawn().position(|(place, _)| place == self.model.active);
-        let on_show = drawn().find(|(place, _)| *place == self.model.active).map(|(_, id)| id);
-        if self.tabs_shown.replace(on_show) != on_show
-            && let Some(at) = shown
-        {
-            self.tabs_scroll.scroll_to_item(at);
-        }
+        // Asked after the row's layout: `scroll_to_item` reads the row's bounds of the frame before.
+        let at = places.iter().position(|place| *place == self.model.active);
+        let on_show = at.and_then(|_| self.model.tabs.get(self.model.active)).map(|tab| tab.id);
+        let changed = self.tabs_shown.replace(on_show) != on_show;
+        let follow = at.filter(|_| changed).map(|at| {
+            let handle = self.tabs_scroll.clone();
+            let ask = move |_, window: &mut Window, _: &mut App| {
+                handle.scroll_to_item(at);
+                window.request_animation_frame();
+            };
+            canvas(ask, |_, _, _, _| {}).absolute().size_0()
+        });
         let tabs =
             places.into_iter().filter_map(|place| Some((place, self.model.tabs.get(place)?))).map(|(place, tab)| {
                 let (active, id) = (place == self.model.active, tab.id);
@@ -6568,7 +6587,7 @@ impl Workspace {
                     // A tab not on show sits below the one that is.
                     .when(!active, |d| d.child(inner_shade(false, 6.)))
                     .hover(|s| s.text_color(rgb(theme::TEXT)))
-                    .child(mark(&self.marks, Mark::Tab(place)))
+                    .child(shown_mark(&self.marks, Mark::Tab(place)))
                     // The pane being heard is in this tab, off show.
                     .children(
                         (dot == Some(ottospace_core::listen::Dot::Tab(id)))
@@ -6626,12 +6645,13 @@ impl Workspace {
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .overflow_hidden()
-                .child(
-                    self.bars.tracked_row("tabs", row, &self.tabs_scroll, theme::BACKGROUND).mr(px(self.chip_badge())),
-                )
-                // The agent chip, in the room the tabs leave: its badge over the row's end.
+                .child(self.bars.tracked_row("tabs", row, &self.tabs_scroll, theme::BACKGROUND))
+                .children(follow)
+                // The agent chip, in the room the tabs leave, at least its badge's: over the row's end.
                 .relative()
-                .children(chip.into_iter().flat_map(|(badge, whole)| [badge, whole])),
+                .children(chip.map(|(badge, whole)| {
+                    div().relative().flex_1().min_w(px(self.chip_badge())).h_full().flex().child(badge).child(whole)
+                })),
         )
     }
 

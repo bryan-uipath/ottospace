@@ -1074,12 +1074,12 @@ impl Workspace {
     /// A task's brief in the right bar, read-only: how an agent gets it, each capture's picture,
     /// then the brief as it is written.
     pub(crate) fn render_brief(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let content = self.brief_content(cx)?;
+        let content = self.brief_content(theme::RAISED, cx)?;
         Some(self.right_bar(cx).p_0().child(content).into_any_element())
     }
 
-    /// The brief itself, for the right bar or the drawer.
-    pub(crate) fn brief_content(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The brief itself, for the right bar or the drawer: `bg`, the colour behind it.
+    pub(crate) fn brief_content(&self, bg: u32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let id = self.model.brief?;
         let shown = self.briefs.get(&id)?;
         let muted = |text: String| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
@@ -1142,7 +1142,7 @@ impl Workspace {
                         .child(
                             div().pt_2().text_xs().font_family("Menlo").text_color(rgb(theme::MUTED)).children(lines),
                         ),
-                    theme::RAISED,
+                    bg,
                 ),
             );
         Some(bar.into_any_element())
