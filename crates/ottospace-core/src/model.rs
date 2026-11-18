@@ -3076,6 +3076,9 @@ pub struct Model {
     /// whatever is on show since (`compose_space`).
     #[serde(skip)]
     pub(crate) compose_to: Option<(u32, Owner)>,
+    /// The box was opened while the keyboard was in the drawer's conversation.
+    #[serde(skip)]
+    pub(crate) compose_talked: bool,
     #[serde(skip)]
     terminals: Vec<TerminalInfo>,
     #[serde(skip)]
@@ -3315,6 +3318,7 @@ impl Default for Model {
             compose_worktree: false,
             compose_kept: None,
             compose_to: None,
+            compose_talked: false,
             terminals: Vec::new(),
             home: None,
             // Done is at the bottom, folded: what is finished is counted, not listed.
@@ -4784,10 +4788,12 @@ impl Model {
             Action::ComposeHere if self.compose_elsewhere() => self.compose_here(),
             Action::ComposeHere => {}
             Action::OpenCompose { text } => {
-                self.leave(effects);
                 if self.compose.is_none() {
                     self.compose_to = Some((self.tabs[self.active].id, self.space().clone()));
+                    // Opened from the conversation's keys: Esc gives them back (`keys_back`).
+                    self.compose_talked = self.talk.as_ref().is_some_and(|talk| talk.open && talk.keys);
                 }
+                self.leave(effects);
                 self.compose = Some(Field::new(&text, MAX_TITLE));
                 // Paths read for another line say nothing of this one.
                 (self.known.paths, self.known.entries, self.known_line) = (Vec::new(), Vec::new(), None);
@@ -4888,6 +4894,7 @@ impl Model {
                 } else {
                     self.compose = None;
                     self.compose_reset();
+                    self.keys_back(effects);
                 }
             }
             Action::ComposeSubmit { open } => {
@@ -4975,6 +4982,7 @@ impl Model {
             Action::CloseCompose => {
                 self.compose = None;
                 self.compose_reset();
+                self.keys_back(effects);
             }
             Action::TaskFromLine { line, known, open } => {
                 if let Some(id) = self.file_line(&line, Some(known)) {
@@ -11533,6 +11541,35 @@ mod tests {
             Effect::StartAgent { task: Subject::Task(task), cwd, .. } if *task == id => Some(cwd.clone()),
             _ => None,
         })
+    }
+
+    /// Review of the pinned box: closed by Esc after the user's switch of space, the keyboard is
+    /// in the conversation on show, as when it closes in the space it was opened in.
+    #[test]
+    fn esc_after_a_switch_gives_the_keys_to_the_conversation_on_show() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        for (uid, title) in [("9f3a61c2d4e5b708", "one >app"), ("1b7c0e9a55d2f346", "two >app")] {
+            m.update(Action::WorkbookNew { uid: uid.into() });
+            term(&mut m);
+            m.update(Action::OpenCompose { text: title.into() });
+            m.update(Action::ComposeEnter);
+        }
+        for id in [1, 2] {
+            m.update(Action::AgentStarted { task: Subject::Task(id), session: None, at: 1 }.sent_by(Origin::System));
+        }
+        let keys = |m: &Model| m.talk.as_ref().map(|talk| (talk.task.clone(), talk.open, talk.keys));
+        // In its own space: Esc, and the keys are the conversation's.
+        m.update(Action::OpenCompose { text: "x".into() });
+        m.update(Action::ComposeEscape);
+        let own = keys(&m);
+        assert_eq!(own, Some((Subject::Task(2), true, true)));
+        // Opened in task 2's, the user goes to task 1's, then Esc: task 1's has them.
+        m.update(Action::OpenCompose { text: "y".into() });
+        m.update(Action::SpaceOpen { space: task_space(1) });
+        assert!(m.compose_elsewhere());
+        m.update(Action::ComposeEscape);
+        assert_eq!((m.compose.is_none(), keys(&m)), (true, Some((Subject::Task(1), true, true))));
     }
 
     /// The owner: the new-task box is pinned to where it was opened. The user's switch of space

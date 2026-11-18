@@ -7147,6 +7147,23 @@ fn the_new_task_box_starts_its_task_where_it_was_opened_or_where_switch_brings_i
     assert!(switched["compose_target"]["switch"].is_null(), "no line");
     let second = otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the second task");
     assert_eq!(of(&otto.drawn(), 2), json!({"kind": "task", "id": second}));
+    // Opened from B's conversation, the user goes to A, then Esc: A's conversation has the keys,
+    // and what they type reaches its agent.
+    let talk = otto.drawn()["state"]["talk"].clone();
+    if talk["keys"] != true {
+        otto.user_key("cmd-l");
+    }
+    otto.user_key("cmd-n");
+    otto.user_key("x");
+    otto.user_click(at(rect(&otto.drawn()["space_rects"][1]), 0.5, 0.5));
+    let back = otto.user_key("escape");
+    let talk = &back["state"]["talk"];
+    assert_eq!((&back["state"]["compose"], &talk["task"], &talk["keys"]), (&Value::Null, &json!(task), &json!(true)));
+    otto.user_key("h i enter");
+    otto.wait_for("A's agent to echo", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        state["drawer"]["agents"][task.to_string()]["lines"].as_array()?.iter().any(|l| l == "hi").then_some(())
+    });
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }

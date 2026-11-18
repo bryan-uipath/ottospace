@@ -352,6 +352,8 @@ could add a note 'This task will be dispatched in Workspace A. Switch To B?'"
 - **The user's switch of space keeps the box open** (`beside_box`: a space picked on the row, ⌘⌃1–9,
   ⌘⌃] / ⌘⌃[, `SpaceOpen`, a workspace of the list, a repository with a workspace). A click on a tab
   or a pane puts the line aside as before; a client's switch waits behind the box, as before.
+- **Esc** (or ×) on a box the user opened from the conversation's keys gives the keys back to the
+  conversation on show (`keys_back`): its own space's, or the one they switched to.
 - **The view moved** while it is open: the box says "This task goes to <A> · Switch to <B>" (`compose_elsewhere`). Switch
   (`ComposeHere`, the user's alone: `PIN_USERS`) brings it to the space on show, and checks the
   new-worktree choice again there: cleared if it has no repository to make one of. The user's

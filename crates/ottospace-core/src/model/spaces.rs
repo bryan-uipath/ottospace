@@ -712,10 +712,20 @@ impl Model {
         }
     }
 
+    /// The user closed the box they opened from the conversation's keys: the keys go back to the
+    /// conversation on show, the one they switched to too, if its agent is there to take them.
+    pub(crate) fn keys_back(&mut self, effects: &mut Vec<Effect>) {
+        let open = self.talk.as_ref().filter(|talk| talk.open).map(|talk| talk.task.clone());
+        let free = self.live.is_none() && self.list.is_none() && self.visual.is_none();
+        if self.by_user && self.compose_talked && free && open.is_some_and(|task| self.talk_live(&task)) {
+            self.talk_keys(true, effects);
+        }
+    }
+
     /// After every step: no box, no pin; its space gone, it goes where the user is.
     pub(crate) fn settle_compose_to(&mut self) {
         if self.compose.is_none() {
-            self.compose_to = None;
+            (self.compose_to, self.compose_talked) = (None, false);
         } else if let Some(of) = self.compose_space() {
             if let Some((_, was)) = &mut self.compose_to {
                 *was = of;
