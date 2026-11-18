@@ -666,6 +666,8 @@ enum Mark {
     NoticeUndo,
     /// The key reference's `Known · n`.
     KeysKnown,
+    /// The new-task box's Switch, while it is pinned to another space.
+    ComposeSwitch,
 }
 
 type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
@@ -3515,6 +3517,15 @@ impl Workspace {
             "compose_plan_line": self.model.compose_plan_line(),
             "compose_hint": self.model.compose_hint(),
             "compose_picks": self.model.compose_picks(),
+            // Where the open box's ↵ starts its task (`space`, `name`), and whether that is not the
+            // space on show (`elsewhere`); null while it is closed.
+            "compose_target": self.model.compose.as_ref().and_then(|_| self.model.compose_space()).map(|of| serde_json::json!({
+                "space": of,
+                "name": self.model.space_title(&of),
+                "elsewhere": self.model.compose_elsewhere(),
+                // Where its Switch is drawn, while it is.
+                "switch": marks.get(&Mark::ComposeSwitch).copied().map(rect).filter(|_| self.model.compose_elsewhere()),
+            })),
             // Nothing is open yet: the drawer shows the new task by itself.
             "welcome": self.model.welcome(),
             // The dropdown that finishes the tag at the cursor, or null: its `mark`, what is
@@ -7288,7 +7299,13 @@ impl Render for Workspace {
         let drawn_anew = |mark: &Mark| {
             matches!(
                 mark,
-                Mark::Repo(_) | Mark::Checkout(_) | Mark::BarHeader | Mark::Tab(_) | Mark::Space(_) | Mark::KeysKnown
+                Mark::Repo(_)
+                    | Mark::Checkout(_)
+                    | Mark::BarHeader
+                    | Mark::Tab(_)
+                    | Mark::Space(_)
+                    | Mark::KeysKnown
+                    | Mark::ComposeSwitch
             )
         };
         self.marks.borrow_mut().retain(|mark, _| !drawn_anew(mark));

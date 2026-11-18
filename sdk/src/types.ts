@@ -1374,6 +1374,8 @@ export interface Snapshot {
   compose_picks: { wheres: string[]; whos: string[] };
   /** Where the box offers a choice of where the task works: in its checkout, or (`new`, the user's choice) a new worktree of the repository `repo` on `branch`. Null where there is no repository to make one of. */
   compose_worktree: { new: boolean; repo: string; branch: string } | null;
+  /** Where the open box's ↵ starts its task: the space it was opened in (or the user switched it to), its name, and whether that is not the space on show (the box then says so, with Switch). Null while the box is closed. */
+  compose_target: { space: Owner; name: string; elsewhere: boolean; switch: Rect | null } | null;
   /** Nothing is open yet (no pane, task or conversation): the drawer shows the new task by itself. */
   welcome: boolean;
   compose_menu: ComposeMenu | null;

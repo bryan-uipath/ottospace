@@ -1,0 +1,14 @@
+# The new-task box pinned to the workspace it was opened in: typed in Workspace 2, then the
+# user's click on Workspace 3 keeps it open. It says where the task goes, with Switch. Made-up task.
+{"click":"top:new_workspace"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"click":"top:new_workspace"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"select_space","index":1}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"f i x space t h e space l o g i n space l o o p","as":"user"}
+{"settle":300}
+{"shot":"here"}
+{"click":{"rect":"space_rects.2"}}
+{"settle":300}
+{"shot":"elsewhere"}

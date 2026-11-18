@@ -1051,6 +1051,7 @@ const MAKERS: &[Make] = &[
     |g| Action::ComposeAccept { index: g.index(4) },
     |_| Action::ComposeFolderClear,
     |g| Action::ComposeWorktree { new: g.rng.pick(&[None, Some(true), Some(false)]) },
+    |_| Action::ComposeHere,
     // Every mark a cap types, and one no cap does.
     |g| Action::ComposeTag { mark: g.rng.pick(&['#', '>', '@', '/', '$', '^', 'p']) },
     |g| {
@@ -1856,6 +1857,12 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(paused == on.paused_at.is_some(), "{:?} with a pause at {:?}", on.status, on.paused_at);
     }
     ensure!(!m.listen.shown || m.listen_item(), "the drawer on a transcript the rail does not hold");
+    // The open box is pinned to a space on the row, shown: its ↵ has somewhere to go.
+    ensure!(
+        m.compose.is_none() || m.compose_space().is_some(),
+        "the new-task box is pinned to no space: {:?}",
+        m.compose_to
+    );
     // Today: newest first; the one open is listed, and only on the idle view.
     let today = &m.transcripts.today;
     ensure!(today.windows(2).all(|two| two[0].started_ms >= two[1].started_ms), "Today out of order");
@@ -3048,6 +3055,7 @@ impl Run {
         let composing_before = m.composing() && written && !m.compose_theirs && origin != Origin::User;
         // The drawer the user collapsed: no client opens the new-task box in it.
         let folded_before = m.folded.is_some() && m.compose.is_none() && origin != Origin::User;
+        let pin_before = m.compose_to.clone().filter(|_| m.compose.is_some() && origin != Origin::User);
         let agents_before = (m.agents.clone(), m.starting.clone());
         let spaces_before: Vec<Owner> = m.spaces.iter().map(|space| space.of.clone()).collect();
 
@@ -3346,6 +3354,15 @@ impl Run {
             !folded_before || m.compose.is_none(),
             "{origin:?}'s {action:?} opened the new-task box in the drawer the user collapsed"
         );
+        // The box stays pinned where it was opened: only the user moves it, or its space going (closed or hidden).
+        let shown = |tab: &u32| {
+            let of = m.tabs.iter().find(|t| t.id == *tab).map(|t| &t.space);
+            of.is_some_and(|of| m.spaces.iter().any(|s| s.of == *of && !s.hidden))
+        };
+        if let Some((tab, _)) = pin_before.filter(|(tab, _)| m.compose.is_some() && shown(tab)) {
+            let now = m.compose_to.as_ref().map(|(at, _)| *at);
+            ensure!(now == Some(tab), "{origin:?}'s {action:?} moved the new-task box from tab {tab} to {now:?}");
+        }
         // A tab changes space only by a move of the user's, a task started from it, its space
         // gone, an undo of a dismissal or a workspace's delete, or a session made a task.
         for (id, was) in &owners_before {

@@ -870,6 +870,9 @@ pub enum Action {
     ComposeWorktree {
         new: Option<bool>,
     },
+    /// The box's Switch, or the user's ⌘N while the box is pinned to another workspace: the task
+    /// in it goes to the space on show (`compose_space`). Only the user's.
+    ComposeHere,
     /// A click on a tag's cap under the box: its mark goes in at the cursor, as typed, with a
     /// space before it inside a word, so its dropdown opens. Only a mark of `TAG_KEYS`.
     ComposeTag {
@@ -2011,6 +2014,7 @@ impl Action {
             | Action::ComposeAccept { .. }
             | Action::ComposeFolderClear
             | Action::ComposeWorktree { .. }
+            | Action::ComposeHere
             | Action::ComposeTag { .. }
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
@@ -2388,6 +2392,7 @@ impl Action {
             | Action::ComposeAccept { .. }
             | Action::ComposeFolderClear
             | Action::ComposeWorktree { .. }
+            | Action::ComposeHere
             | Action::ComposeTag { .. }
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
@@ -3067,6 +3072,10 @@ pub struct Model {
     /// The new-task line a conversation's opening put aside: back when the box opens empty.
     #[serde(skip)]
     compose_kept: Option<KeptDraft>,
+    /// Where the box was opened (a tab of its space, and the space): its ↵ starts the task there,
+    /// whatever is on show since (`compose_space`).
+    #[serde(skip)]
+    pub(crate) compose_to: Option<(u32, Owner)>,
     #[serde(skip)]
     terminals: Vec<TerminalInfo>,
     #[serde(skip)]
@@ -3305,6 +3314,7 @@ impl Default for Model {
             compose_theirs: false,
             compose_worktree: false,
             compose_kept: None,
+            compose_to: None,
             terminals: Vec::new(),
             home: None,
             // Done is at the bottom, folded: what is finished is counted, not listed.
@@ -3733,6 +3743,8 @@ impl Model {
             Action::TabPlace { .. } => Some(TABS_USERS),
             // So is which of a workspace's conversations is in front.
             Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
+            // And which workspace the new task the user writes goes to.
+            Action::ComposeHere => Some(spaces::PIN_USERS),
             // What the drawer shows is the user's choice: its rail, the transcript's mark.
             Action::RailSelect { .. } | Action::ListenShow { .. } | Action::ListenOpenPast { .. } => {
                 Some(rail::RAIL_USERS)
@@ -3939,6 +3951,14 @@ impl Model {
             Action::ToggleSection { .. } | Action::CloseSidebar | Action::WorkbookAddTab { .. } => Some(false),
             // The user's editor has the line: there is none to put aside until it is back.
             _ if self.edits_compose() => None,
+            // A change of space keeps the box open, pinned where it was opened (`compose_space`).
+            Action::SpaceSelect { .. } | Action::SpaceClick { .. } | Action::SpaceCycle { .. } | Action::SpaceOpen { .. }
+                if self.changes_space(action) =>
+            {
+                Some(false)
+            }
+            Action::WorkbookOpen { .. } => Some(false),
+            Action::RepoClick { path, .. } if self.repo_space(path, true).is_some() => Some(false),
             // A mark that opens nothing takes no keyboard.
             Action::MarkGo { mark, .. } if !self.mark_goes(mark) => None,
             // Nor does a branch's field that would not open: no such repository, no folder for it.
@@ -3961,7 +3981,6 @@ impl Model {
             | Action::OpenRepo { .. }
             | Action::RepoClick { .. }
             | Action::MarkGo { .. }
-            | Action::WorkbookOpen { .. }
             | Action::AppsFilter { on: true }
             | Action::MarkEdit { .. }
             | Action::WorkbookEdit { .. }
@@ -3977,7 +3996,9 @@ impl Model {
 
     /// `waits`, for who sent it: the user's own click beside the new task does not (`beside_box`).
     pub fn waits_for(&self, action: &Action, origin: Origin) -> Option<&'static str> {
-        self.waits(action).filter(|_| origin != Origin::User || self.beside_box(action).is_none())
+        // Nor their ⌘N while the box is pinned elsewhere: it brings the box here.
+        let here = origin == Origin::User && matches!(action, Action::OpenCompose { .. }) && self.compose_elsewhere();
+        self.waits(action).filter(|_| !here && (origin != Origin::User || self.beside_box(action).is_none()))
     }
 
     /// The feature that is off which `action` is of: it does nothing, whoever sent it.
@@ -4063,6 +4084,7 @@ impl Model {
         if !self.drawer_collapsed() || !self.drawer_opens() {
             self.folded = None;
         }
+        self.settle_compose_to();
         self.settle_agent(origin);
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
         if self.list.is_none() && listed.is_some() {
@@ -4755,8 +4777,15 @@ impl Model {
                 self.sidebar = (self.sidebar != Some(section)).then_some(section);
                 self.list = self.list.map(|_| self.first_row());
             }
+            // The user's ⌘N where they are, the box pinned elsewhere: it comes here, line and all.
+            Action::OpenCompose { .. } if self.by_user && self.compose_elsewhere() => self.compose_here(),
+            Action::ComposeHere if self.compose_elsewhere() => self.compose_here(),
+            Action::ComposeHere => {}
             Action::OpenCompose { text } => {
                 self.leave(effects);
+                if self.compose.is_none() {
+                    self.compose_to = Some((self.tabs[self.active].id, self.space().clone()));
+                }
                 self.compose = Some(Field::new(&text, MAX_TITLE));
                 // Paths read for another line say nothing of this one.
                 (self.known.paths, self.known.entries, self.known_line) = (Vec::new(), Vec::new(), None);
@@ -6739,7 +6768,8 @@ impl Model {
         let plan = self.compose_plan()?;
         let default = plan.starts && plan.dir.is_none() && plan.agent.eq_ignore_ascii_case(self.default_agent());
         // A workspace with something in it is about to be the task's: said, whatever else is.
-        let binds = self.compose_binds();
+        // Not "this workspace" while the box goes to another: its pinned line names that one.
+        let binds = self.compose_binds() && !self.compose_elsewhere();
         if default {
             return binds.then(|| BINDS.into());
         }
@@ -7220,10 +7250,10 @@ impl Model {
         self.tabs.iter().zip(self.tab_panes()).any(|(tab, panes)| tab.space == *of && !panes.is_empty())
     }
 
-    /// The workspace a task started now by the user's ↵ would be in: the selected space, if it
-    /// is a kept workspace or a task's. Not the first "Workspace", nor a session's.
+    /// The workspace a task started now by the user's ↵ would be in: the box's space
+    /// (`box_space`), if it is a kept workspace or a task's. Not the first "Workspace", nor a session's.
     pub fn joins(&self) -> Option<Owner> {
-        let of = self.space();
+        let of = &self.box_space();
         let kept = |id: &WorkbookId| self.workbooks.get(*id).is_some_and(|book| book.task.is_none());
         match of {
             Owner::Workbook { id } if kept(id) => Some(of.clone()),
@@ -8904,6 +8934,7 @@ mod tests {
         Action::ComposeAccept { .. },
         Action::ComposeFolderClear,
         Action::ComposeWorktree { .. },
+        Action::ComposeHere,
         Action::ComposeTag { .. },
         Action::ComposeAttach { .. },
         Action::ComposeRef { .. },
@@ -9207,6 +9238,7 @@ mod tests {
             Action::ComposeAccept { index: 0 },
             Action::ComposeFolderClear,
             Action::ComposeWorktree { new: None },
+            Action::ComposeHere,
             Action::ComposeTag { mark: '>' },
             Action::ComposeAttach { paths: Vec::new(), home: None, unreadable: 0 },
             Action::ComposeRef { target: Pointed::Tab(1) },
@@ -9689,6 +9721,7 @@ mod tests {
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
+                    Action::ComposeHere => Some(spaces::PIN_USERS),
                     Action::RailSelect { .. } | Action::ListenShow { .. } | Action::ListenOpenPast { .. } => {
                         Some(rail::RAIL_USERS)
                     }
@@ -11127,13 +11160,14 @@ mod tests {
         assert_eq!((m.active, m.compose_line()), (0, None));
         m.update(Action::OpenCompose { text: String::new() });
         assert_eq!(m.compose_line().cloned(), Some("half".into()), "kept");
-        // So for a space.
+        // Not for a space: the box stays open, pinned where it was opened.
         let a = add_task(&mut m, "a", State::Captured);
         m.update(Action::CloseCompose);
         m.update(Action::SpaceOpen { space: task_space(a) });
         m.update(Action::OpenCompose { text: "more".into() });
         m.update(Action::SpaceSelect { index: 0 });
-        assert_eq!((m.space(), m.compose_line()), (&Owner::Home, None));
+        assert_eq!((m.space(), m.compose_line().map(String::as_str)), (&Owner::Home, Some("more")));
+        assert_eq!(m.compose_space(), Some(task_space(a)));
     }
 
     #[test]
@@ -11277,7 +11311,7 @@ mod tests {
         assert_eq!((m.tabs.len(), m.settings_pane.is_some(), line(&m), m.mode()), (3, true, "<closed>", Mode::Normal));
         m.update(Action::OpenCompose { text: String::new() });
         assert_eq!((line(&m), cursor(&m)), ("mine", Some(3)));
-        // The top row's + makes a workspace as a space pick does: the line is put aside.
+        // The top row's + makes a workspace: the line is put aside.
         let mut m = boxed();
         m.update(Action::WorkbookNew { uid: "00000000000000a1".into() });
         assert_eq!((line(&m), m.tabs.len()), ("<closed>", 3));
@@ -11497,6 +11531,62 @@ mod tests {
             Effect::StartAgent { task: Subject::Task(task), cwd, .. } if *task == id => Some(cwd.clone()),
             _ => None,
         })
+    }
+
+    /// The owner: the new-task box is pinned to where it was opened. The user's switch of space
+    /// keeps it open there (a client's waits): ↵ starts the task in that workspace, with its new
+    /// worktree. The user's Switch (or ⌘N) brings it to the one on show, the worktree choice
+    /// checked again there. Its space hidden: it goes where the user is.
+    #[test]
+    fn the_new_task_box_is_pinned_to_the_workspace_it_was_opened_in() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: branched() });
+        let dirs = repos::RepoDirs { worktrees: Some("/home/.ottospace/worktrees".into()), ..Default::default() };
+        m.update(Action::SetRepoDirs { dirs });
+        m.update(Action::WorkbookNew { uid: "9f3a61c2d4e5b708".into() });
+        let b = m.space().clone();
+        m.update(Action::RepoClick { path: "/code/app".into(), axis: Right });
+        let a = m.space().clone();
+        m.update(Action::OpenCompose { text: "Fix the zoom".into() });
+        m.update(Action::ComposeWorktree { new: Some(true) });
+        m.update(Action::SpaceOpen { space: b.clone() }.sent_by(Origin::Socket));
+        assert_eq!((m.space(), m.compose_elsewhere()), (&a, false), "a client's waits");
+        let go = |m: &mut Model, of: &Owner| m.update(Action::SpaceOpen { space: of.clone() });
+        go(&mut m, &b);
+        assert_eq!((m.space(), m.compose_space(), m.compose_elsewhere()), (&b, Some(a.clone()), true));
+        assert_eq!(m.refusal(&Action::ComposeHere, Origin::Socket), Some(spaces::PIN_USERS));
+        m.update(Action::ComposeHere.sent_by(Origin::Socket));
+        assert_eq!(m.compose_space(), Some(a.clone()));
+        // ↵: in A, its new worktree asked for; the view goes with it.
+        let effects = m.update(Action::ComposeEnter);
+        assert!(effects.iter().any(|e| matches!(e, Effect::AddWorktree { repo, .. } if repo == "/code/app")));
+        assert_eq!((m.task_space(1), m.space()), (task_space(1), &task_space(1)));
+        assert!(matches!(m.workbooks.space_of(&b), Owner::Workbook { .. }), "B is not bound");
+        // Pinned to task 1's, the view moved to B: the user's Switch brings it to B, which has no
+        // repository, so no new worktree.
+        m.update(Action::OpenCompose { text: "Second".into() });
+        m.update(Action::ComposeWorktree { new: Some(true) });
+        assert!(m.compose_worktree);
+        go(&mut m, &b);
+        m.update(Action::ComposeHere);
+        assert_eq!((m.compose_space(), m.compose_elsewhere(), m.compose_worktree), (Some(b.clone()), false, false));
+        m.update(Action::ComposeEnter);
+        assert_eq!(m.task_space(2), task_space(2));
+        assert_ne!(m.task_space(2), m.task_space(1));
+        // The user's ⌘N while the box is pinned elsewhere: here, the line kept.
+        m.update(Action::OpenCompose { text: "third".into() });
+        go(&mut m, &task_space(1));
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!((m.compose_space(), m.compose_line().map(String::as_str)), (Some(task_space(1)), Some("third")));
+        m.update(Action::ComposeEnter);
+        assert_eq!(m.task_space(3), task_space(1));
+        // Pinned to a space hidden since: the box goes where the user is, with no line.
+        m.update(Action::OpenCompose { text: "fourth".into() });
+        go(&mut m, &task_space(2));
+        // (A space hides under the box by no request: set as a file read or a shell step could leave it.)
+        m.spaces.iter_mut().filter(|space| space.of == task_space(1)).for_each(|space| space.hidden = true);
+        m.update(Action::Tick { now: 1 }.sent_by(Origin::System));
+        assert_eq!((m.compose_space(), m.compose_elsewhere()), (Some(m.space().clone()), false));
     }
 
     /// The owner's canvas: "⌘N here joins this workspace and shares its checkout; the new-task box
@@ -15810,6 +15900,7 @@ mod tests {
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
+                    Action::ComposeHere => Some(spaces::PIN_USERS),
                     Action::RailSelect { .. } | Action::ListenShow { .. } | Action::ListenOpenPast { .. } => {
                         Some(rail::RAIL_USERS)
                     }

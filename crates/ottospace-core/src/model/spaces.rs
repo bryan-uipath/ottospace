@@ -129,6 +129,8 @@ pub const CHAT_TYPING: &str = "the user is typing in the chat";
 pub const BOX_TYPING: &str = "the user is writing a new task";
 /// Why a client may not say which of a workspace's conversations is in front.
 pub const FRONT_USERS: &str = "only the user says which conversation is in front";
+/// Why a client may not move the new task the user writes to another workspace.
+pub const PIN_USERS: &str = "only the user moves the new task to another workspace";
 
 impl Model {
     /// The selected space: the one of the tab on show.
@@ -463,7 +465,7 @@ impl Model {
 
     /// Whether a selection would change the selected space: what a client may not do while the
     /// user types in the chat.
-    fn changes_space(&self, action: &Action) -> bool {
+    pub(crate) fn changes_space(&self, action: &Action) -> bool {
         let shown = self.shown_spaces();
         let selected = shown.iter().position(|space| space.of == *self.space());
         let other = |of: Option<&Owner>| of.is_some_and(|of| of != self.space());
@@ -663,16 +665,58 @@ impl Model {
             return;
         }
         let open = self.drawer_open || self.compose_host() == Some(Host::Drawer);
-        // Only the user's change takes the box they write in (seed 158804).
-        if open && self.compose_host() == Some(Host::Drawer) && origin == Origin::User {
-            self.put_compose_aside();
-        }
+        // The box stays over it, pinned where it was opened (`compose_space`): a change of space takes no line.
         // Not under an app, the list, visual mode or a picture being drawn on.
         let free = self.live.is_none() && self.list.is_none() && self.visual.is_none() && self.annotated().is_none();
-        let keys = open && drawer_keys && free && origin == Origin::User && self.talk_live(&subject);
+        let keys =
+            open && drawer_keys && free && origin == Origin::User && self.talk_live(&subject) && self.compose.is_none();
         self.talk = Some(Talk { task: subject.clone(), open, keys });
         self.drawer_open = open;
         self.opened.retain(|seen| *seen != subject);
         self.opened.push(subject);
+    }
+}
+
+/// The new-task box is pinned to the space it was opened in (`docs/ai/spaces.md`, "Pinned").
+impl Model {
+    /// The space the box's ↵ starts its task in: the one it was opened in (or switched to),
+    /// followed by a tab of it through renames. None while nothing pins it.
+    pub fn compose_space(&self) -> Option<Owner> {
+        let (tab, of) = self.compose_to.as_ref()?;
+        let by_tab = self.tabs.iter().find(|t| t.id == *tab).map(|t| t.space.clone());
+        let of = by_tab.unwrap_or_else(|| of.clone());
+        // Closed or hidden: it pins nothing.
+        self.spaces.iter().any(|s| s.of == of && !s.hidden).then_some(of)
+    }
+
+    /// The box's space, else the one on show.
+    pub(crate) fn box_space(&self) -> Owner {
+        self.compose_space().unwrap_or_else(|| self.space().clone())
+    }
+
+    /// The box in the drawer goes to another space than the one on show: it says so, and offers Switch.
+    pub fn compose_elsewhere(&self) -> bool {
+        self.compose_host() == Some(Host::Drawer) && self.compose_space().is_some_and(|of| of != *self.space())
+    }
+
+    /// The box now goes to the space on show; a new worktree only while this one's repository offers one.
+    pub(crate) fn compose_here(&mut self) {
+        self.compose_to = Some((self.tabs[self.active].id, self.space().clone()));
+        if self.box_worktree().is_none() {
+            self.compose_worktree = false;
+        }
+    }
+
+    /// After every step: no box, no pin; its space gone, it goes where the user is.
+    pub(crate) fn settle_compose_to(&mut self) {
+        if self.compose.is_none() {
+            self.compose_to = None;
+        } else if let Some(of) = self.compose_space() {
+            if let Some((_, was)) = &mut self.compose_to {
+                *was = of;
+            }
+        } else {
+            self.compose_to = Some((self.tabs[self.active].id, self.space().clone()));
+        }
     }
 }
