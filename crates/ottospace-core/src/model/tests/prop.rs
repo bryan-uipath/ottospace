@@ -258,7 +258,11 @@ impl Gen<'_> {
             5 => Said::ToolEnd { id, failed: self.rng.coin(), output: self.rng.coin().then_some(text) },
             6 | 7 => {
                 let (ticket, cut) = (self.rng.below(3) as u64, self.rng.coin());
-                Said::Permission { ticket, tool, label, detail: text, len: 9, cut, claim: Text::default() }
+                // Half of them question cards: one or two questions of 0 to 3 options.
+                let asks = self.rng.coin().then(|| 1 + self.rng.below(2)).unwrap_or(0);
+                let questions =
+                    (0..asks).map(|_| crate::ask::tests::question(self.rng.below(4), self.rng.coin())).collect();
+                Said::Permission { ticket, tool, label, detail: text, len: 9, cut, claim: Text::default(), questions }
             }
             8 => Said::PermissionClosed { ticket: self.rng.below(3) as u64 },
             9 => Said::TurnFinished {
@@ -1386,6 +1390,18 @@ const MAKERS: &[Make] = &[
     |_| Action::TalkSend,
     |g| Action::TalkAnswer { allow: g.rng.coin(), ticket: g.card() },
     |g| Action::TalkExpand { ticket: g.card() },
+    |g| {
+        use crate::ask::Act;
+        let act = match g.rng.below(6) {
+            0 => Act::Move { down: g.rng.coin() },
+            1 => Act::Toggle,
+            2 => Act::Number { n: g.rng.below(6) },
+            3 => Act::Row { question: g.rng.below(3), row: g.rng.below(5) },
+            4 => Act::Submit,
+            _ => Act::Decline,
+        };
+        Action::TalkAsk { ticket: g.card(), act }
+    },
     |_| Action::TalkDenyNote,
     |_| Action::TalkEscape,
     |_| Action::TalkInterrupt,
@@ -1801,6 +1817,13 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(!t.live || m.agent_runs(subject), "{subject:?} is live with no agent");
         ensure!(t.cards.is_empty() || t.live, "{subject:?} has a card and no agent");
         ensure!(!chat.deny || !t.cards.is_empty(), "{subject:?} writes a Deny with no card");
+        // A question card's cursor is on one of its rows, and it is never allowed as it came.
+        for card in t.cards.iter().filter(|card| card.ask.is_some()) {
+            let form = card.ask.as_ref().ok_or("no form")?;
+            let (q, r) = form.cursor;
+            ensure!(r < form.rows(q), "{subject:?} has a question card's cursor off its rows");
+            ensure!(!card.allowable(), "{subject:?} may allow a question card unanswered");
+        }
         // A watched transcript is read-only: no turn to stop.
         ensure!(t.live || t.turn.is_none(), "{subject:?} has a turn and no agent");
         ensure!(!chat.armed || t.turn.is_some(), "{subject:?} waits for a second Esc with no turn");
@@ -4138,7 +4161,10 @@ impl Run {
                     ensure!(user && m.agent_runs(task), "{origin:?} stops the agent of {task:?}, or none runs");
                 }
                 // A message, an answer or an interrupt is the user's, to the conversation shown.
-                Effect::AgentSend { task, .. } | Effect::AgentAnswer { task, .. } | Effect::AgentInterrupt { task } => {
+                Effect::AgentSend { task, .. }
+                | Effect::AgentAnswer { task, .. }
+                | Effect::AgentAnswers { task, .. }
+                | Effect::AgentInterrupt { task } => {
                     let shown = m.talk.as_ref().is_some_and(|talk| talk.open && talk.task == *task);
                     ensure!(
                         user && shown && m.agent_runs(task),
@@ -4728,6 +4754,7 @@ fn code(sent: &Envelope) -> String {
         ("task", "Subject"),
         ("id", "Subject"),
         ("shows", "View"),
+        ("act", "crate::ask::Act"),
         ("binding", "Binding"),
         ("notice", "crate::notice::Kind"),
         ("space", "Owner"),
@@ -4934,11 +4961,16 @@ fn event_code(event: &Said) -> String {
         Said::ModelFallback { from, to } => {
             format!("Said::ModelFallback {{ from: {:?}.map(str::to_string), to: {to:?}.into() }}", from.as_deref())
         }
-        Said::Permission { ticket, tool, label, detail, len, cut, claim } => format!(
+        Said::Permission { ticket, tool, label, detail, len, cut, claim, questions } => format!(
             "Said::Permission {{ ticket: {ticket}, tool: {tool:?}.into(), label: {label:?}.into(), detail: {}, \
-             len: {len}, cut: {cut}, claim: {} }}",
+             len: {len}, cut: {cut}, claim: {}, questions: vec![{}] }}",
             text(detail),
-            text(claim)
+            text(claim),
+            questions
+                .iter()
+                .map(|q| format!("crate::ask::tests::question({}, {})", q.options.len(), q.multi))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         Said::PermissionClosed { ticket } => format!("Said::PermissionClosed {{ ticket: {ticket} }}"),
         Said::AutoDenied { tool, label, reason, detail } => format!(
@@ -5326,6 +5358,7 @@ fn a_permission_after_its_agent_exited_puts_up_no_card() {
         len: 9,
         cut: true,
         claim: Text::new(""),
+        questions: Vec::new(),
     };
     replay(&[
         Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),

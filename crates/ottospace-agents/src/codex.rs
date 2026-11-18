@@ -559,6 +559,7 @@ impl Wire for Codex {
                 let decision = match answer {
                     Answer::Allow => "accept",
                     Answer::Deny { .. } => "decline",
+                    Answer::Questions(_) => return Err(Refused("Codex asks no questions here")),
                 };
                 Ok(vec![json!({"id": ticket.id, "result": {"decision": decision}}).to_string()])
             }

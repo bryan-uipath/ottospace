@@ -6,6 +6,7 @@
 use super::{Action, Effect, Model};
 use crate::activity::Pulse;
 use crate::agents;
+use crate::ask::{self, Act, Form};
 use crate::edit::Field;
 use crate::runner::{RunnerId, Status, Support};
 use crate::talk::{self, Chip, Subject};
@@ -44,6 +45,25 @@ impl Chat {
     /// True if `ticket` is the card shown: an answer or Show all is for what the user saw.
     pub fn front_is(&self, ticket: u64) -> bool {
         self.transcript.cards.front().is_some_and(|card| card.ticket == ticket)
+    }
+
+    /// The question card shown, unless a Deny's message is written under it.
+    pub fn form(&self) -> Option<&Form> {
+        self.transcript.cards.front().and_then(|card| card.ask.as_ref()).filter(|_| !self.deny)
+    }
+
+    /// The cursor of the question card shown is on "Other…": typing goes there.
+    pub fn answers_other(&self) -> bool {
+        self.form().is_some_and(Form::on_other)
+    }
+
+    /// What `key` does in it: a question card's keys while one is shown, else `key`'s.
+    pub fn key(&self, key: &str, mods: crate::keys::Mods) -> Key {
+        let ticket = self.transcript.cards.front().map(|card| card.ticket).filter(|_| !self.deny);
+        match (ticket, self.form()) {
+            (Some(ticket), Some(form)) => ask_key(key, mods, ticket, form.on_other()),
+            (ticket, _) => self::key(key, mods, ticket),
+        }
     }
 
     fn new(subject: Subject) -> Self {
@@ -113,6 +133,30 @@ pub fn key(key: &str, mods: crate::keys::Mods, card: Option<u64>) -> Key {
     }
 }
 
+/// A key on a question card (`typing`: the cursor is on an "Other…" row, whose words take the
+/// letters, digits and space). ↑/↓ or j/k move, space picks, 1 to 9 pick that row, ↵ sends the
+/// answers, Esc declines.
+pub fn ask_key(key: &str, mods: crate::keys::Mods, ticket: u64, typing: bool) -> Key {
+    if mods.cmd {
+        return Key::Pass;
+    }
+    let bare = !mods.ctrl && !mods.alt && !mods.shift;
+    let act = |act| Key::Act(Action::TalkAsk { ticket, act });
+    let digit = key.parse::<usize>().ok().filter(|n| key.len() == 1 && *n > 0);
+    match key {
+        "escape" => act(Act::Decline),
+        "enter" if bare => act(Act::Submit),
+        "up" => act(Act::Move { down: false }),
+        "down" => act(Act::Move { down: true }),
+        _ if typing => Key::Field,
+        "k" if bare => act(Act::Move { down: false }),
+        "j" if bare => act(Act::Move { down: true }),
+        "space" if bare => act(Act::Toggle),
+        _ if let Some(n) = digit.filter(|_| bare) => act(Act::Number { n }),
+        _ => Key::Swallow,
+    }
+}
+
 impl Model {
     pub fn chat(&self, subject: &Subject) -> Option<&Chat> {
         self.chats.iter().find(|chat| chat.subject == *subject)
@@ -156,18 +200,42 @@ impl Model {
 
     /// The composer takes keys: the shown native conversation has the keyboard, no card waits
     /// (or the user writes a Deny's message), and the user's editor does not have its draft.
+    /// Or a question card's "Other…" does: the editor has the draft, not it.
     pub fn talk_typing(&self) -> bool {
         let keys = self.talk.as_ref().is_some_and(|talk| talk.keys);
-        let free = |chat: &Chat| (chat.transcript.cards.is_empty() || chat.deny) && !self.edits(&chat.subject);
+        let free = |chat: &Chat| {
+            chat.answers_other() || ((chat.transcript.cards.is_empty() || chat.deny) && !self.edits(&chat.subject))
+        };
         keys && self.shown_draft_chat().is_some_and(free)
     }
 
-    pub(super) fn talk_draft(&self) -> Option<&Field> {
-        self.shown_draft_chat().map(|chat| &chat.draft)
+    /// The field "talk" holds the user's words to a question card: never in the state.
+    pub fn talk_answers(&self) -> bool {
+        self.shown_draft_chat().is_some_and(Chat::answers_other)
     }
 
-    pub(super) fn talk_draft_mut(&mut self) -> Option<&mut Field> {
-        self.shown_draft_chat_mut().map(|chat| &mut chat.draft)
+    /// The composer's draft; while a question card's cursor is on "Other…", its words.
+    pub(super) fn talk_draft(&self) -> Option<&Field> {
+        let chat = self.shown_draft_chat()?;
+        match chat.form().filter(|form| form.on_other()) {
+            Some(form) => form.other(form.cursor.0),
+            None => Some(&chat.draft),
+        }
+    }
+
+    /// An edit of `talk_draft`. Words typed on "Other…" pick it.
+    pub(super) fn talk_edit(&mut self, edit: crate::edit::Edit) {
+        let Some(chat) = self.shown_draft_chat_mut() else { return };
+        let other = chat.answers_other();
+        match chat.transcript.form_mut().filter(|_| other) {
+            Some(form) => {
+                if let Some(field) = form.typing() {
+                    field.apply(edit);
+                }
+                form.typed();
+            }
+            None => drop(chat.draft.apply(edit)),
+        }
     }
 
     /// The runner a conversation's agent is or would be: its session's, else its `@agent`'s.
@@ -584,6 +652,30 @@ impl Model {
                     chat.transcript.expand();
                 }
             }
+            Action::TalkAsk { ticket, act } => {
+                let Some(chat) = self.shown_chat_mut().filter(|chat| chat.front_is(ticket) && !chat.deny) else {
+                    return;
+                };
+                let subject = chat.subject.clone();
+                match act {
+                    Act::Decline if chat.transcript.form_mut().is_some() => {
+                        chat.transcript.answer(false);
+                        let message = Some(ask::DECLINED.to_string());
+                        effects.push(Effect::AgentAnswer { task: subject.clone(), ticket, allow: false, message });
+                    }
+                    Act::Submit => {
+                        let Some((_, answers)) = chat.transcript.reply() else { return };
+                        effects.push(Effect::AgentAnswers { task: subject.clone(), ticket, answers });
+                    }
+                    act => {
+                        if let Some(form) = chat.transcript.form_mut() {
+                            form.act(act);
+                        }
+                        return;
+                    }
+                }
+                self.chat_state(&subject);
+            }
             // Not while the editor has the draft: the message would have nowhere to be typed.
             Action::TalkDenyNote if shown.as_ref().is_some_and(|subject| self.edits(subject)) => {}
             Action::TalkDenyNote => {
@@ -643,6 +735,7 @@ impl Model {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::chat::Key;
     use crate::model::tests::started;
     use crate::model::{Action, Effect, Model, Origin};
     use crate::talk::Subject;
@@ -691,7 +784,7 @@ mod tests {
 
     fn card(ticket: u64, cut: bool) -> Event {
         let (tool, label, detail) = ("Bash".into(), "git".into(), Text::new("command: git"));
-        Event::Permission { ticket, tool, label, detail, len: 12, cut, claim: Text::default() }
+        Event::Permission { ticket, tool, label, detail, len: 12, cut, claim: Text::default(), questions: Vec::new() }
     }
 
     /// The dial follows its agent's calls and the user's message; it is open while the agent
@@ -1039,6 +1132,142 @@ mod tests {
         let ctrl = Mods { ctrl: true, ..Mods::default() };
         let edit = Key::Act(Action::EditorOpen);
         assert_eq!((key("g", ctrl, None), key("g", ctrl, card)), (edit.clone(), edit));
+    }
+
+    #[test]
+    fn a_question_card_has_its_own_keys() {
+        use super::{Key, ask_key};
+        use crate::ask::Act;
+        use crate::keys::Mods;
+        let (none, shift) = (Mods::default(), Mods { shift: true, ..Mods::default() });
+        let act = |act| Key::Act(Action::TalkAsk { ticket: 4, act });
+        let keys = |typing| {
+            ["up", "k", "down", "j", "space", "3", "0", "enter", "escape", "a"].map(|k| ask_key(k, none, 4, typing))
+        };
+        let (down, up) = (act(Act::Move { down: true }), act(Act::Move { down: false }));
+        let (submit, decline) = (act(Act::Submit), act(Act::Decline));
+        assert_eq!(
+            keys(false),
+            [
+                up.clone(),
+                up.clone(),
+                down.clone(),
+                down.clone(),
+                act(Act::Toggle),
+                act(Act::Number { n: 3 }),
+                Key::Swallow,
+                submit.clone(),
+                decline.clone(),
+                Key::Swallow
+            ]
+        );
+        // On "Other…": letters, digits and space are its words; arrows, ↵ and Esc are still the card's.
+        let field = Key::Field;
+        assert_eq!(
+            keys(true),
+            [
+                up,
+                field.clone(),
+                down,
+                field.clone(),
+                field.clone(),
+                field.clone(),
+                field.clone(),
+                submit,
+                decline,
+                field
+            ]
+        );
+        assert_eq!(ask_key("enter", shift, 4, false), Key::Swallow);
+        assert_eq!(ask_key("q", Mods { cmd: true, ..none }, 4, false), Key::Pass);
+    }
+
+    fn ask(ticket: u64) -> Event {
+        use crate::ask::tests::question;
+        let (tool, label) = ("AskUserQuestion".to_string(), "AskUserQuestion".to_string());
+        let questions = vec![question(2, false), question(2, true)];
+        Event::Permission {
+            ticket,
+            tool,
+            label,
+            detail: Text::default(),
+            len: 0,
+            cut: false,
+            claim: Text::default(),
+            questions,
+        }
+    }
+
+    /// The user picks, types under "Other…" and sends with ↵: one answer per question, by index
+    /// and in their own words, never allowed as it came. A client moves, picks, types or sends
+    /// nothing. The state has the card's shape alone.
+    #[test]
+    fn a_question_card_is_answered_by_the_user_alone() {
+        use crate::ask::{Act, Chosen};
+        let mut m = two_live();
+        let one = first(&m);
+        typed(&mut m, "go");
+        m.update(Action::TalkSend);
+        events(&mut m, &one, vec![Event::TurnStarted, ask(1)]);
+        let shape = |m: &Model| m.chat(&one).map(|chat| serde_json::to_value(chat.transcript.summary().cards).unwrap());
+        let ask_of = |m: &Model| shape(m).map(|cards| cards[0]["ask"].clone());
+        assert_eq!(
+            ask_of(&m),
+            Some(serde_json::json!({"questions": [{"options": 2, "multi": false, "picked": []},
+                {"options": 2, "multi": true, "picked": []}], "cursor": [0, 0]}))
+        );
+        let act = |act| Action::TalkAsk { ticket: 1, act };
+        assert_eq!(m.refusal(&act(Act::Submit), Origin::Socket), Some(super::USERS_ALONE));
+        for act in [act(Act::Number { n: 2 }), act(Act::Submit), act(Act::Decline)] {
+            assert_eq!(m.update(act.sent_by(Origin::Socket)), []);
+        }
+        assert_eq!(m.update(Action::TalkAnswer { allow: true, ticket: 1 }), [], "never allowed as it came");
+        let none = crate::keys::Mods::default();
+        assert_eq!(m.chat(&one).map(|chat| chat.key("enter", none)), Some(Key::Act(act(Act::Submit))));
+        m.update(act(Act::Number { n: 2 }));
+        // ↵ with the second question open: nothing goes, the cursor goes there.
+        assert_eq!(m.update(act(Act::Submit)), []);
+        assert_eq!(ask_of(&m).map(|a| a["cursor"].clone()), Some(serde_json::json!([1, 0])));
+        m.update(act(Act::Toggle));
+        m.update(act(Act::Move { down: true }));
+        m.update(act(Act::Move { down: true }));
+        assert!(m.talk_typing() && m.field().is_some_and(|(of, _)| of == "talk"), "typing on Other…");
+        let edit = Action::FieldEdit { edit: crate::edit::Edit::Insert("big one".into()) };
+        assert_eq!(m.refusal(&edit, Origin::Socket), Some(super::USERS_ALONE));
+        m.update(edit.clone().sent_by(Origin::Socket));
+        m.update(edit);
+        assert_eq!(m.chat(&one).map(|chat| chat.draft.text()), Some(""), "Other's words are not the draft");
+        let said = shape(&m).map(|cards| cards.to_string()).unwrap_or_default();
+        assert!(said.contains(r#""picked":[0,2]"#) && !said.contains("big"), "{said}");
+        let answers =
+            vec![Chosen { options: vec![1], other: None }, Chosen { options: vec![0], other: Some("big one".into()) }];
+        assert_eq!(m.update(act(Act::Submit)), [Effect::AgentAnswers { task: one.clone(), ticket: 1, answers }]);
+        let t = m.chat(&one).map(|chat| chat.transcript.summary());
+        assert!(t.as_ref().is_some_and(|t| t.cards.is_empty()), "answered once");
+        let last = t.and_then(|t| t.entries.last().cloned());
+        assert_eq!(last, Some(crate::transcript::Shape::Notice(crate::transcript::Notice::Answered)));
+        assert_eq!(m.tasks.get(one.task().unwrap_or_default()).map(|t| t.state), Some(State::Running));
+        assert_eq!(m.update(act(Act::Submit)), []);
+    }
+
+    /// Esc declines: a Deny with fixed words, so the agent goes on.
+    #[test]
+    fn a_declined_question_card_tells_the_agent() {
+        use crate::ask::Act;
+        let mut m = two_live();
+        let one = first(&m);
+        typed(&mut m, "go");
+        m.update(Action::TalkSend);
+        events(&mut m, &one, vec![Event::TurnStarted, ask(2)]);
+        let none = crate::keys::Mods::default();
+        let Some(Key::Act(decline)) = m.chat(&one).map(|chat| chat.key("escape", none)) else { panic!() };
+        let message = Some(crate::ask::DECLINED.to_string());
+        assert_eq!(m.update(decline), [Effect::AgentAnswer { task: one.clone(), ticket: 2, allow: false, message }]);
+        let last = m.chat(&one).and_then(|chat| chat.transcript.summary().entries.last().cloned());
+        assert_eq!(last, Some(crate::transcript::Shape::Notice(crate::transcript::Notice::Declined)));
+        // A permission card is not declined by it.
+        events(&mut m, &one, vec![card(3, false)]);
+        assert_eq!(m.update(Action::TalkAsk { ticket: 3, act: Act::Decline }), []);
     }
 
     #[test]

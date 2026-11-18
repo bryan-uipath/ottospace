@@ -5,8 +5,9 @@
 //! `system/compact_boundary`. Permission prompts and interrupts go by `control_request` and
 //! `control_response` lines, whose shape the docs do not print: UNVERIFIED, see the design note.
 
+use ottospace_core::ask::{self, Choice, Chosen, Question};
 use ottospace_core::runner::{RunnerId, SessionId};
-use ottospace_core::transcript::{By, Outcome, Status};
+use ottospace_core::transcript::{By, Outcome, Status, Text};
 use ottospace_sessions::claude::describe;
 use ottospace_sessions::station;
 use serde_json::{Value, json};
@@ -235,10 +236,16 @@ impl Claude {
         let tool_label = station::tool_label(tool);
         let unreadable = !request["blocked_path"].is_null() && !request["blocked_path"].is_string();
         let ask = crate::Ask { tool: tool_label, station, label, payload, claim: &claim };
-        let event = match unreadable {
+        let asks = RunnerId::Claude.spec().structured.asks == Some(tool);
+        let shown = asks.then(|| questions(&input)).flatten();
+        let mut event = match unreadable {
             true => ask.denied(UNREADABLE),
             false => ask.event(Ticket::new(id.clone(), TicketKind::Claude { input })),
         };
+        // The agent asks the user: a question card. One a card cannot show is a permission card.
+        if let (Event::Permission { questions, .. }, Some(shown)) = (&mut event, shown) {
+            *questions = shown;
+        }
         if let Event::AutoDenied { reason, .. } = &event {
             let deny = json!({"behavior": "deny", "message": format!("ottospace denied this tool call: {reason}.")});
             let reply = json!({"type": "control_response",
@@ -251,6 +258,66 @@ impl Claude {
 
 /// Why a request is denied when a field that says what it does cannot be read.
 const UNREADABLE: &str = "a field of it cannot be read";
+
+/// An `AskUserQuestion` input's questions (`question`, `header`, `options` of `label` and
+/// `description`, `multiSelect`), as a card shows them. `None`: not one a card can show: no
+/// question or too many, too many options, a question or label that is not text or too long
+/// to show whole, or two questions alike (its answers are keyed by the question's text). Core
+/// `Text` from here, as `Untrusted` is: drawn, never in the state.
+fn questions(input: &Value) -> Option<Vec<Question>> {
+    let all = input["questions"].as_array().filter(|all| (1..=ask::MAX_QUESTIONS).contains(&all.len()))?;
+    // Shown whole or not at all: two labels cut alike could not be told apart.
+    let text = |value: &Value| value.as_str().filter(|text| text.len() <= MAX_DETAIL).map(Text::new);
+    let read = |q: &Value| {
+        let options = q["options"].as_array().map_or(&[][..], Vec::as_slice);
+        let choice = |o: &Value| {
+            let description = text(&o["description"]).unwrap_or_default();
+            Some(Choice { label: text(&o["label"]).filter(|label| !label.is_empty())?, description })
+        };
+        let options = options.iter().map(choice).collect::<Option<Vec<Choice>>>()?;
+        let (header, question) = (text(&q["header"]).unwrap_or_default(), text(&q["question"])?);
+        (options.len() <= ask::MAX_OPTIONS).then_some(Question {
+            header,
+            question,
+            options,
+            multi: q["multiSelect"] == true,
+        })
+    };
+    let read: Vec<Question> = all.iter().map(read).collect::<Option<_>>()?;
+    let alike = read.iter().enumerate().any(|(i, q)| read[..i].iter().any(|other| other.question == q.question));
+    (!alike).then_some(read)
+}
+
+/// `updatedInput` for an answered question request: its input as it came, and `answers`: each
+/// question's text → the label picked, or the user's words; in a multi-select question each
+/// joined by `", "`, one holding `", "` or `"` quoted as JSON, as the CLI joins and splits them.
+/// Seen in a probe of 2.1.327 (`docs/ai/agent-runners.md`).
+fn answered(input: &Value, chosen: &[Chosen]) -> Result<Value, Refused> {
+    let all = input["questions"].as_array().filter(|all| all.len() == chosen.len());
+    let all = all.ok_or(Refused("not one answer per question"))?;
+    let mut answers = serde_json::Map::new();
+    for (q, chosen) in all.iter().zip(chosen) {
+        let label = |at: &usize| q["options"][*at]["label"].as_str().map(str::to_string);
+        let labels = chosen.options.iter().map(label).collect::<Option<Vec<String>>>();
+        let mut parts = labels.ok_or(Refused("no such option"))?;
+        parts.extend(chosen.other.clone());
+        let quoted = |part: &String| match part.contains(", ") || part.contains('"') {
+            true => Value::from(part.as_str()).to_string(),
+            false => part.clone(),
+        };
+        let value = match (q["multiSelect"] == true, &parts[..]) {
+            (_, []) => return Err(Refused("a question with no answer")),
+            (false, [one]) => one.clone(),
+            (false, _) => return Err(Refused("one answer to a single-select question")),
+            (true, _) => parts.iter().map(quoted).collect::<Vec<String>>().join(", "),
+        };
+        let question = q["question"].as_str().ok_or(Refused("a question that is not text"))?;
+        answers.insert(question.to_string(), Value::from(value));
+    }
+    let mut updated = input.clone();
+    updated["answers"] = Value::Object(answers);
+    Ok(updated)
+}
 
 /// What a `can_use_tool` request asks to approve, a line per field, and the model's own
 /// description of it. A shell command and every option besides its description (`option: key =
@@ -411,6 +478,9 @@ impl Wire for Claude {
                 // This call, its input as it came: never `updatedPermissions`, never a mode.
                 let result = match answer {
                     Answer::Allow => json!({"behavior": "allow", "updatedInput": input}),
+                    Answer::Questions(chosen) => {
+                        json!({"behavior": "allow", "updatedInput": answered(&input, &chosen)?})
+                    }
                     Answer::Deny { message } => {
                         json!({"behavior": "deny", "message": message.unwrap_or_else(|| DENIED.to_string())})
                     }
@@ -508,6 +578,77 @@ mod tests {
         assert_eq!(denied["response"]["response"], json!({"behavior": "deny", "message": "Use git diff"}));
         let denied = answered(&mut Claude::new(), &out, Answer::Deny { message: None }).unwrap();
         assert_eq!(denied["response"]["response"]["message"], DENIED);
+    }
+
+    /// The request as 2.1.327 sent it in a probe (`docs/ai/agent-runners.md`), labels made up.
+    fn asked() -> Value {
+        json!({"questions": [
+            {"question": "Which colour?", "header": "Colour", "multiSelect": false,
+             "options": [{"label": "Red", "description": "warm"}, {"label": "Blue", "description": "cool"}]},
+            {"question": "Which sizes?", "header": "Sizes", "multiSelect": true,
+             "options": [{"label": "Small", "description": "s"}, {"label": "Large, wide", "description": "l"}]}]})
+    }
+
+    fn chosen(options: &[usize], other: Option<&str>) -> Chosen {
+        Chosen { options: options.to_vec(), other: other.map(str::to_string) }
+    }
+
+    /// The runner's asking tool is a question card; its answers go back as `updatedInput.answers`,
+    /// the input otherwise as it came: question → label, several joined as the CLI joins them
+    /// (one holding `", "` quoted), or the user's words. The CLI's reply to exactly these, in
+    /// the probe: "Which colour?"="Blue", "Which sizes?"="Small, \"Large, wide\"".
+    #[test]
+    fn a_question_request_is_answered_with_the_picks() {
+        let out = ask("AskUserQuestion", asked(), json!([]));
+        let Some(Event::Permission { questions, .. }) = out.events.first() else { panic!("{out:?}") };
+        let shown: Vec<(&str, &str, usize, bool)> =
+            questions.iter().map(|q| (q.header.text(), q.question.text(), q.options.len(), q.multi)).collect();
+        assert_eq!(shown, [("Colour", "Which colour?", 2, false), ("Sizes", "Which sizes?", 2, true)]);
+        assert_eq!(questions[1].options[1].label.text(), "Large, wide");
+        let answers = |chosen: Vec<Chosen>| answered(&mut Claude::new(), &out, Answer::Questions(chosen));
+        let allowed = answers(vec![chosen(&[1], None), chosen(&[0, 1], None)]).unwrap();
+        let mut input = asked();
+        input["answers"] = json!({"Which colour?": "Blue", "Which sizes?": "Small, \"Large, wide\""});
+        assert_eq!(allowed["response"]["response"], json!({"behavior": "allow", "updatedInput": input}));
+        let words = answers(vec![chosen(&[], Some("Green please")), chosen(&[], Some("huge"))]).unwrap();
+        let said = &words["response"]["response"]["updatedInput"]["answers"];
+        assert_eq!(said, &json!({"Which colour?": "Green please", "Which sizes?": "huge"}));
+        // Words beside picks in a multi-select question; a quote in them quoted too.
+        let both = answers(vec![chosen(&[0], None), chosen(&[0], Some(r#"a "b""#))]).unwrap();
+        let said = &both["response"]["response"]["updatedInput"]["answers"]["Which sizes?"];
+        assert_eq!(said, &json!(r#"Small, "a \"b\"""#));
+        let wrong = [
+            vec![chosen(&[0], None)],
+            vec![chosen(&[0], None), chosen(&[], None)],
+            vec![chosen(&[5], None), chosen(&[0], None)],
+            vec![chosen(&[0, 1], None), chosen(&[0], None)],
+        ];
+        for wrong in wrong {
+            assert!(answers(wrong).is_err());
+        }
+    }
+
+    /// A question request a card cannot show is an ordinary permission card; another tool's
+    /// `questions` field is only its input.
+    #[test]
+    fn a_question_request_a_card_cannot_show_is_a_permission() {
+        let questions = |tool: &str, input: Value| match ask(tool, input, json!([])).events.first() {
+            Some(Event::Permission { questions, .. }) => questions.len(),
+            other => panic!("{other:?}"),
+        };
+        let mut bad = asked();
+        bad["questions"][0]["options"][0]["label"] = json!(7);
+        let mut alike = asked();
+        alike["questions"][1]["question"] = json!("Which colour?");
+        let many = json!({"questions": vec![asked()["questions"][0].clone(); ask::MAX_QUESTIONS + 1]});
+        let mut long = asked();
+        long["questions"][0]["options"][0]["label"] = json!("a".repeat(MAX_DETAIL + 1));
+        for input in [bad, alike, many, long, json!({"questions": []}), json!({"questions": "pick"})] {
+            assert_eq!(questions("AskUserQuestion", input.clone()), 0, "{input}");
+        }
+        assert_eq!(questions("Write", asked()), 0);
+        // No options: "Other…" alone takes the answer.
+        assert_eq!(questions("AskUserQuestion", json!({"questions": [{"question": "Why?"}]})), 1);
     }
 
     /// What is approved is shown whole, or marked cut with its full text on the ticket; past the

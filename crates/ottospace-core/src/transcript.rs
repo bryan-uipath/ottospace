@@ -9,6 +9,7 @@ use std::fmt;
 use serde::Serialize;
 
 use crate::activity::{Activity, Dial, Is, Pulse, Station};
+use crate::ask::{Chosen, Form, FormShape, Question};
 use crate::diff::{Diff, DiffShape};
 use crate::gist::{self, Gist};
 
@@ -172,6 +173,7 @@ pub enum Event {
         to: String,
     },
     /// `ticket`: the shell's number for the runner's request. `cut`: `detail` is the first part.
+    /// `questions`: the agent asks the user (`RunnerSpec::structured.asks`): a question card.
     Permission {
         ticket: u64,
         tool: String,
@@ -180,6 +182,7 @@ pub enum Event {
         len: usize,
         cut: bool,
         claim: Text,
+        questions: Vec<Question>,
     },
     PermissionClosed {
         ticket: u64,
@@ -272,6 +275,9 @@ pub enum Notice {
         tool: String,
         label: String,
     },
+    /// A question card answered, or declined, by the user.
+    Answered,
+    Declined,
     /// A call the CLI denied without asking the user, `by` what (its settings, its mode, …).
     DeniedBy {
         tool: String,
@@ -457,7 +463,8 @@ pub struct Item {
 }
 
 /// A permission request waiting for the user. Allow is refused on a `cut` card until it was
-/// `expanded`: what cannot be shown in full is not approvable in one step.
+/// `expanded`: what cannot be shown in full is not approvable in one step. A question card
+/// (`ask`) is never allowed as it came: only answered (`Transcript::reply`) or declined.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Card {
     pub ticket: u64,
@@ -468,12 +475,13 @@ pub struct Card {
     pub cut: bool,
     pub claim: Text,
     pub expanded: bool,
+    pub ask: Option<Form>,
 }
 
 impl Card {
     /// True if Allow may be given now.
     pub fn allowable(&self) -> bool {
-        !self.cut || self.expanded
+        (!self.cut || self.expanded) && self.ask.is_none()
     }
 }
 
@@ -645,8 +653,27 @@ impl Transcript {
         let card = self.cards.front().filter(|card| !allow || card.allowable())?.clone();
         self.cards.pop_front();
         let (tool, label) = (card.tool, card.label);
-        self.push(Entry::Notice(if allow { Notice::Allowed { tool, label } } else { Notice::Denied { tool, label } }));
+        let notice = match (allow, card.ask.is_some()) {
+            (_, true) => Notice::Declined,
+            (true, false) => Notice::Allowed { tool, label },
+            (false, false) => Notice::Denied { tool, label },
+        };
+        self.push(Entry::Notice(notice));
         Some(card.ticket)
+    }
+
+    /// The first card's question form, to move or pick in.
+    pub fn form_mut(&mut self) -> Option<&mut Form> {
+        self.cards.front_mut()?.ask.as_mut()
+    }
+
+    /// ↵ on the first card, a question card: its ticket and the answers, once each question has
+    /// one; it is gone after. Else `None`, and the cursor on the question unanswered.
+    pub fn reply(&mut self) -> Option<(u64, Vec<Chosen>)> {
+        let chosen = self.form_mut()?.submit()?;
+        let card = self.cards.pop_front()?;
+        self.push(Entry::Notice(Notice::Answered));
+        Some((card.ticket, chosen))
     }
 
     /// How many lines were not understood.
@@ -759,10 +786,11 @@ impl Transcript {
                 self.model = Some(to.clone());
                 self.aside(Entry::Notice(Notice::ModelFallback { from, to }));
             }
-            Event::Permission { ticket, tool, label, detail, len, cut, claim } => {
+            Event::Permission { ticket, tool, label, detail, len, cut, claim, questions } => {
                 if !self.cards.iter().any(|card| card.ticket == ticket) && self.cards.len() < MAX_CARDS {
                     self.settle();
-                    self.cards.push_back(Card { ticket, tool, label, detail, len, cut, claim, expanded: false });
+                    let ask = Form::new(questions);
+                    self.cards.push_back(Card { ticket, tool, label, detail, len, cut, claim, expanded: false, ask });
                 }
             }
             Event::PermissionClosed { ticket } => self.cards.retain(|card| card.ticket != ticket),
@@ -855,6 +883,7 @@ impl Transcript {
             cut: card.cut,
             expanded: card.expanded,
             len: card.len,
+            ask: card.ask.as_ref().map(Form::shape),
         });
         Summary {
             entries,
@@ -953,6 +982,8 @@ pub struct CardShape {
     pub cut: bool,
     pub expanded: bool,
     pub len: usize,
+    /// A question card's shape: counts, picks and the cursor. Null for a permission.
+    pub ask: Option<FormShape>,
 }
 
 #[cfg(test)]
@@ -980,7 +1011,8 @@ mod tests {
 
     fn permission(ticket: u64, cut: bool) -> Event {
         let (tool, label) = ("Bash".into(), "git".into());
-        Event::Permission { ticket, tool, label, detail: text("command: git"), len: 12, cut, claim: Text::default() }
+        let (detail, claim) = (text("command: git"), Text::default());
+        Event::Permission { ticket, tool, label, detail, len: 12, cut, claim, questions: Vec::new() }
     }
 
     #[test]

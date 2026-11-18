@@ -360,6 +360,24 @@ impl Workspace {
                 }
             }
             ("talk", "chat-deny-note", _) => Action::TalkDenyNote,
+            // A question card's rows and buttons: `chat-ask:<question>:<row>`.
+            ("talk", _, _) if name.starts_with("chat-ask") => {
+                let shown = self.model.shown_chat().and_then(|chat| chat.transcript.cards.front());
+                let Some(ticket) = shown.map(|card| card.ticket) else { return true };
+                let row = name.strip_prefix("chat-ask:").and_then(|at| at.split_once(':'));
+                let row = row.and_then(|(q, r)| {
+                    Some(ottospace_core::ask::Act::Row { question: q.parse().ok()?, row: r.parse().ok()? })
+                });
+                let act = match name {
+                    "chat-ask-send" => ottospace_core::ask::Act::Submit,
+                    "chat-ask-decline" => ottospace_core::ask::Act::Decline,
+                    _ => match row {
+                        Some(act) => act,
+                        None => return true,
+                    },
+                };
+                Action::TalkAsk { ticket, act }
+            }
             // The editor and the card under it: the keyboard goes there.
             ("talk", "editor-terminal" | "editor-card", _) => {
                 self.editor_click(name == "editor-terminal", window, cx);

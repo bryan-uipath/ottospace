@@ -213,6 +213,7 @@ The table, written by a test from the specs (`runner::tests`): every capability 
 | structured mode | Verified | Experimental |
 | permission answers | [AllowOnce, Deny] | [AllowOnce, Deny] |
 | interrupt | true | true |
+| asks the user | Some("AskUserQuestion") | None |
 | held (live holder on disk) | true | false |
 | cwd on disk | true | true |
 | cwd moves with the agent | true | false |
@@ -239,6 +240,12 @@ What is verified, and how:
   `--resume` from elsewhere does not join it, it branches the same file (Probes, 4). Only a
   `--bg` session is joined, by `claude attach <id>`. Codex: a thread on the shared app-server
   daemon (where the TUI runs by default) is joined by a second daemon client, live (Probes, 1).
+- Asks the user: Claude Code 2.1.327, `claude -p` against a stand-in API that called
+  `AskUserQuestion`: its `can_use_tool` request carries `input.questions`; allowed with
+  `updatedInput` = that input plus `answers` (question text → the label; several labels joined
+  by `", "`, one that holds `", "` or `"` quoted as JSON; or the user's own words), the tool
+  result reads "Your questions have been answered: …". Allowed unchanged it reads "The user did
+  not answer the questions." Codex's `item/tool/requestUserInput` is not read yet.
 
 Where the UI asks the spec today: a new session's id (`chooses_session`: the task is linked at
 once, or its session is sought), the sessions sought and read (`reader`), the held check
@@ -249,7 +256,8 @@ once, or its session is sought), the sessions sought and read (`reader`), the he
   runners' specs say so.
 - `display`: the drawer header and rows still show `name`, as before.
 
-Wired with the native view: `structured.status` (`Verified` → the drawer may draw it natively,
+Wired with the native view: `structured.asks` (a request for that tool is a question card,
+`ask::Form`), `structured.status` (`Verified` → the drawer may draw it natively,
 `Model::drawable`; Codex is `Experimental` and stays in a terminal), `attach.watch` (`Yes` → a
 session at work elsewhere is watched read-only, `Model::watch_target`) and
 `take_over_when_idle` (`Yes` → Take over once it is idle, `Model::take_over_ready`).

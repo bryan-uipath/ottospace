@@ -1776,6 +1776,10 @@ impl Workspace {
                     let answer = NativeInput::Answer { ticket: *ticket, allow: *allow, message: message.clone() };
                     self.native_input(task, answer);
                 }
+                Effect::AgentAnswers { task, ticket, answers } => {
+                    let answers = NativeInput::Answers { ticket: *ticket, answers: answers.clone() };
+                    self.native_input(task, answers);
+                }
                 Effect::AgentInterrupt { task } => self.native_input(task, NativeInput::Interrupt),
                 Effect::AgentMoved { from, to } => self.move_agent(from, to),
                 Effect::MeetingAlert { .. } | Effect::OpenLink { .. } | Effect::CalendarRetry => {
