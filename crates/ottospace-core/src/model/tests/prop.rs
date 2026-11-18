@@ -130,7 +130,9 @@ impl Gen<'_> {
             self.m.slots.values().map(|run| (run.bundle.clone(), run.name.clone())).collect();
         let (bundle, name) = self.one_of(&apps, |g| (None, g.name(APPS)));
         let seen = self.seen();
-        let kind = Kind::App { window: seen.window, title: seen.title.clone(), bundle, name };
+        // The pane's title is the shell's, not the look's: a user's `^reference` may copy it (seed 9000).
+        let title = seen.title.trim_start_matches(SLOT_SEEN).trim_start().to_string();
+        let kind = Kind::App { window: seen.window, title, bundle, name };
         Action::Adopt { kind, beside: self.rng.coin().then(|| self.pane()), seen: Some(seen) }
     }
 
@@ -140,7 +142,7 @@ impl Gen<'_> {
         let (pane, window) = self.one_of(&asked, |g| (g.pane(), g.rng.below(5) as u32));
         let run = self.m.slots.get(&pane);
         let (bundle, name) = run.map(|run| (run.bundle.clone(), run.name.clone())).unwrap_or_default();
-        let kind = Kind::App { window, title: format!("{SLOT_SEEN} w1"), bundle, name };
+        let kind = Kind::App { window, title: "w1".into(), bundle, name };
         Action::SlotHosted { pane, kind: (!self.rng.one_in(5)).then_some(kind) }
     }
 
@@ -6697,6 +6699,28 @@ fn seed_23315_a_closed_workspace_ending_ends_its_panes_transcript() {
         by(Origin::System, Action::ToggleKeys),
         Action::SpaceHide { index: Some(1) }.into(),
         by(Origin::Socket, Action::Tick { now: 60000 }),
+    ])
+    .unwrap();
+}
+
+/// A user's `^reference` to an app pane copies its title, the shell's: the maker gave an adopted
+/// pane the look's title, so the check took the copy for the look leaking (seeds 9000, 26837,
+/// 63117, 129547, 150260, 150464, 155817).
+#[test]
+fn seed_150464_a_reference_copies_a_panes_title_not_the_look() {
+    let seen = r#"{"pid":0,"window":2,"title":"SLOTSEEN w1","identifier":"slotseen.other","subrole":"AXStandardWindow","frame":{"x":0.0,"y":0.0,"w":800.0,"h":600.0}}"#;
+    replay(&[
+        split(Axis::Right, Kind::Terminal),
+        Action::Open {
+            kind: Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: None,
+        }
+        .into(),
+        adopt(r#"{"type":"app","window":2,"title":"w1","name":"app"}"#, None, seen).into(),
+        by(Origin::Socket, Action::OpenCompose { text: "flicker".into() }),
+        by(Origin::System, Action::ComposeRef { target: Pointed::Pane(3) }),
+        Action::ComposeSubmit { open: true }.into(),
     ])
     .unwrap();
 }
