@@ -3378,7 +3378,8 @@ impl Default for Model {
             ending: Vec::new(),
             by_user: false,
             next_id: 0,
-            spaces: vec![Space::new(Owner::Home)],
+            // Born settled: Home's tab is its last, as `settle_spaces` leaves it after any step.
+            spaces: vec![Space { last: Some(HOME_TAB), ..Space::new(Owner::Home) }],
             drawer_open: false,
             folded: None,
             unlinked: Vec::new(),
@@ -4495,7 +4496,7 @@ impl Model {
                         self.worktree_made(making.task, path, effects);
                     }
                     // The user's + made it: it opens as their click on its row would.
-                    None => self.repo_click(path, Axis::Right, true, effects),
+                    None => self.repo_open(path, Axis::Right, true, self.by_user, effects),
                 }
             }
             Action::WorktreeFailed { asked, fresh, repos } => {

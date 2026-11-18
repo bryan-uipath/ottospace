@@ -327,13 +327,19 @@ impl Model {
     /// new kept workspace for it (named by `checkout_title`, the checkout its default) with a
     /// terminal there, selected. A client's opens a terminal as `OpenRepo` does.
     pub(crate) fn repo_click(&mut self, path: String, axis: Axis, user: bool, effects: &mut Vec<Effect>) {
+        self.repo_open(path, axis, user, user, effects)
+    }
+
+    /// `repo_click`, the task in front changed only if `front`: an answer of git's opens the
+    /// checkout as the user's click would, but only the user's step says who is in front.
+    pub(crate) fn repo_open(&mut self, path: String, axis: Axis, user: bool, front: bool, effects: &mut Vec<Effect>) {
         match self.repo_space(&path, user) {
             Some((Owner::Workbook { id }, _)) if !self.spaces.iter().any(|s| s.of == Owner::Workbook { id }) => {
                 self.workbook_open(id, None, self.home.clone(), effects)
             }
             Some((of, task)) => {
                 self.open_space(of, effects);
-                if let Some(task) = task.filter(|_| user) {
+                if let Some(task) = task.filter(|_| front) {
                     self.set_front(task);
                 }
             }
