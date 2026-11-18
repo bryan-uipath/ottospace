@@ -163,14 +163,21 @@ class Instance:
             self.close()
             raise
 
+    # How often a wait looks again; scripts/bench times starts, so looks more often.
+    poll = 0.05
+
     def start(self, binary, scenario, env):
         for folder in ["home", "user", "agent-record", "fixtures"]:
             os.makedirs(os.path.join(self.root, folder), exist_ok=True)
-        copy_fixtures(scenario, self.root)
-        self.steps = read_steps(scenario, self.root)
+        # No scenario (scripts/bench): an instance with no steps.
+        if scenario:
+            copy_fixtures(scenario, self.root)
+        self.steps = read_steps(scenario, self.root) if scenario else []
         # A first line `{"env":{..}}`: what the scenario adds to the instance's environment.
         extra = self.steps.pop(0)["env"] if self.steps and "env" in self.steps[0] else {}
-        clean = {k: v for k, v in os.environ.items() if not k.startswith(("OTTOSPACE_", "FAKE_", "CLAUDE", "CODEX"))}
+        # `ENV`: a script of the user's that an interactive /bin/sh would read.
+        clean = {k: v for k, v in os.environ.items()
+                 if k != "ENV" and not k.startswith(("OTTOSPACE_", "FAKE_", "CLAUDE", "CODEX"))}
         clean.update(
             {
                 "OTTOSPACE_E2E": "1",
@@ -189,10 +196,14 @@ class Instance:
         )
         clean.update({k: fill(str(v), self.root) for k, v in {**env, **extra}.items()})
         self.log = open(os.path.join(self.root, "app.log"), "w")
+        self.started = started = time.perf_counter()
         self.proc = subprocess.Popen([binary], env=clean, cwd=os.path.join(self.root, "user"),
                                      stdout=self.log, stderr=subprocess.STDOUT)
         self.wait("the control socket", lambda: os.path.exists(self.socket) and self.state())
+        # Seconds from the start of the process: its socket answered, then it had drawn a frame.
+        self.answered = time.perf_counter() - started
         drawn = self.wait("the first frame", lambda: (path_get(self.state(), "frame.number") or 0) > 0, fail=False)
+        self.drawn = time.perf_counter() - started
         if not drawn:
             raise Failed(
                 "the window drew no frame in 60 s. Is the screen locked or asleep? A locked screen draws "
@@ -209,7 +220,7 @@ class Instance:
                     return True
             except (OSError, ValueError):
                 pass
-            time.sleep(0.05)
+            time.sleep(self.poll)
         if fail:
             raise Failed(f"timed out after {timeout} s waiting for {what}")
         return False
@@ -478,12 +489,14 @@ def target_dir():
     return json.loads(out.stdout)["target_directory"]
 
 
-def build(tree, dest, target=None):
-    """`cargo build` of the app in `tree`; the binary is copied to `dest`, so later builds keep it."""
+def build(tree, dest, target=None, args=()):
+    """`cargo build` of the app in `tree` (`args`: e.g. `--release`); the binary is copied to `dest`,
+    so later builds keep it."""
     say(f"building {tree} ...")
     env = dict(os.environ, **({"CARGO_TARGET_DIR": target} if target else {}))
     out = subprocess.run(
-        ["cargo", "build", "-p", "ottospace", "--bin", "ottospace", "--message-format=json-render-diagnostics"],
+        ["cargo", "build", "-p", "ottospace", "--bin", "ottospace", "--message-format=json-render-diagnostics",
+         *args],
         cwd=tree, stdout=subprocess.PIPE, text=True, env=env,
     )
     if out.returncode != 0:
@@ -499,33 +512,37 @@ def build(tree, dest, target=None):
     return dest
 
 
+def build_ref(ref, scratch, args=()):
+    """`cargo build` of commit `ref` in a temporary worktree under `scratch`, with its own target
+    folder there; returns the binary (also used by scripts/bench)."""
+    sha = subprocess.run(["git", "-C", REPO, "rev-parse", "--verify", ref + "^{commit}"],
+                         capture_output=True, text=True)
+    if sha.returncode != 0:
+        raise Failed(f"no commit {ref}")
+    tree = os.path.join(scratch, "base")
+    subprocess.run(["git", "-C", REPO, "worktree", "add", "--detach", "-q", tree, sha.stdout.strip()], check=True)
+    # A target folder of its own: the workspace's crates hash alike in both trees, and one
+    # folder would leave the other tree's build of them looking fresh. A clone costs no space.
+    target = os.path.join(scratch, "target")
+    if os.path.isdir(target_dir()):
+        subprocess.run(["cp", "-Rc", target_dir(), target], check=False)
+        # Swift's module cache records its path and fails once moved ("missing required
+        # module 'SwiftShims'"): drop ottospace-mac's build folders, so its shim builds here.
+        # Cargo names them build/ottospace-mac-<hash> or, newer, build/ottospace-mac/<hash>.
+        for profile in ["debug", "release"]:
+            build_dir = os.path.join(target, profile, "build")
+            for name in os.listdir(build_dir) if os.path.isdir(build_dir) else []:
+                if name == "ottospace-mac" or name.startswith("ottospace-mac-"):
+                    shutil.rmtree(os.path.join(build_dir, name), ignore_errors=True)
+    try:
+        return build(tree, os.path.join(scratch, "ottospace-before"), target, args)
+    finally:
+        subprocess.run(["git", "-C", REPO, "worktree", "remove", "--force", tree], check=False)
+
+
 def compare(args, scratch):
     """Before and after of each scenario. Returns the scenarios that failed on this tree."""
-    before = args.bin_before
-    if not before:
-        sha = subprocess.run(["git", "-C", REPO, "rev-parse", "--verify", args.compare + "^{commit}"],
-                             capture_output=True, text=True)
-        if sha.returncode != 0:
-            raise Failed(f"no commit {args.compare}")
-        tree = os.path.join(scratch, "base")
-        subprocess.run(["git", "-C", REPO, "worktree", "add", "--detach", "-q", tree, sha.stdout.strip()], check=True)
-        # A target folder of its own: the workspace's crates hash alike in both trees, and one
-        # folder would leave the other tree's build of them looking fresh. A clone costs no space.
-        target = os.path.join(scratch, "target")
-        if os.path.isdir(target_dir()):
-            subprocess.run(["cp", "-Rc", target_dir(), target], check=False)
-            # Swift's module cache records its path and fails once moved ("missing required
-            # module 'SwiftShims'"): drop ottospace-mac's build folders, so its shim builds here.
-            # Cargo names them build/ottospace-mac-<hash> or, newer, build/ottospace-mac/<hash>.
-            for profile in ["debug", "release"]:
-                build_dir = os.path.join(target, profile, "build")
-                for name in os.listdir(build_dir) if os.path.isdir(build_dir) else []:
-                    if name == "ottospace-mac" or name.startswith("ottospace-mac-"):
-                        shutil.rmtree(os.path.join(build_dir, name), ignore_errors=True)
-        try:
-            before = build(tree, os.path.join(scratch, "ottospace-before"), target)
-        finally:
-            subprocess.run(["git", "-C", REPO, "worktree", "remove", "--force", tree], check=False)
+    before = args.bin_before or build_ref(args.compare, scratch)
     after = args.bin_after or build(REPO, os.path.join(scratch, "ottospace-after"))
     for side in ["before", "after", "compare"]:
         shutil.rmtree(os.path.join(args.out, side), ignore_errors=True)
