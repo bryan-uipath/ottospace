@@ -29,7 +29,7 @@ has_label='([.labels[].name] | index("'"$build_label"'") != null | tostring)'
 marker="# ottospace-installer"
 # Bump on every change to this file: an install replaces an older installed osi with the one
 # its build carries, never with an older or equal one.
-OSI_VERSION=1
+OSI_VERSION=2
 
 tmp=""
 bg=""
@@ -448,6 +448,100 @@ note_behind() {
   fi
 }
 
+# Untrusted text as one line the terminal only shows: escape sequences dropped, then control
+# characters (C0, DEL, C1) and bidi controls; at most 100 characters.
+plain() {
+  e="$(printf '\033')"
+  b="$(printf '\007')"
+  c1="$(printf '\302')"
+  line="$(head -n 1 | LC_ALL=C sed -E \
+    -e "s#($e\[|$c1$(printf '\233'))[0-?]*[ -/]*[@-~]##g" \
+    -e "s#${e}[]P_^X][^$b$e]*($b|$e\\\\)?##g" \
+    -e "s#${e}[ -/]*[0-~]##g" \
+    -e "s/${c1}[$(printf '\200')-$(printf '\237')]//g" \
+    -e "s/$(printf '\342\200')[$(printf '\216\217\250-\256')]//g" \
+    -e "s/$(printf '\342\201')[$(printf '\246-\251')]//g" \
+    -e "s/$(printf '\330\234')//g" |
+    LC_ALL=C tr -d '\000-\010\012-\037\177' | LC_ALL=C tr '\011' ' ')" || line=""
+  if [ "$(printf '%s' "$line" | LC_ALL=en_US.UTF-8 wc -m | tr -d ' ')" -gt 100 ]; then
+    line="$(printf '%s' "$line" | LC_ALL=en_US.UTF-8 cut -c 1-99)…" || line=""
+  fi
+  printf '%s' "$line"
+}
+
+# Lists the commits of main from $1, the commit installed before (empty: none, or another
+# channel), to $2, the build just installed; oldest first, at most 30. One line when there are
+# none or the lookup fails: it never fails an install. OSI_COMPARE_URL names another source, for
+# tests.
+note_new_commits() {
+  if [ -z "$1" ]; then
+    say "first install of main"
+    return 0
+  fi
+  if [ "$1" = "$2" ]; then
+    say "no new commits"
+    return 0
+  fi
+  web="https://github.com/$repo/compare/$(short "$1")...$(short "$2")"
+  compare_url="${OSI_COMPARE_URL:-https://api.github.com/repos/$repo/compare}/$1...$2?per_page=30"
+  case "$compare_url" in
+    https://*) proto='=https' ;;
+    file://*) proto='=file' ;;
+    *) compare_url="" ;;
+  esac
+  # Read with plutil, the system's JSON reader: no jq or python on every Mac.
+  field() { plutil -extract "$1" raw -o - "$2" 2>/dev/null; }
+  if [ -z "$compare_url" ] ||
+    ! curl -fsS --proto "$proto" --tlsv1.2 --max-time 5 -H 'Accept: application/vnd.github+json' \
+      -o "$tmp/compare.json" "$compare_url" 2>/dev/null ||
+    ! plutil -extract commits json -o "$tmp/commits.json" "$tmp/compare.json" 2>/dev/null; then
+    say "could not list new commits"
+    return 0
+  fi
+  c_status="$(field status "$tmp/compare.json")" || c_status=""
+  c_total="$(field total_commits "$tmp/compare.json")" || c_total=""
+  c_listed="$(field commits "$tmp/compare.json")" || c_listed=""
+  if ! is_number "$c_total" || ! is_number "$c_listed"; then c_status=""; fi
+  case "$c_status" in
+    identical)
+      say "no new commits"
+      return 0
+      ;;
+    ahead) ;;
+    behind | diverged)
+      c_ahead="$(field ahead_by "$tmp/compare.json")" || c_ahead=""
+      c_behind="$(field behind_by "$tmp/compare.json")" || c_behind=""
+      if ! is_number "$c_ahead" || ! is_number "$c_behind"; then
+        say "could not list new commits"
+      elif [ "$c_status" = behind ]; then
+        say "this build is $c_behind commits behind the one installed before: $web"
+      else
+        say "main diverged from the build installed before ($c_ahead new, $c_behind not on main): $web"
+      fi
+      return 0
+      ;;
+    *)
+      say "could not list new commits"
+      return 0
+      ;;
+  esac
+  # Every line is read before any is said: a bad entry says only that the list failed.
+  : >"$tmp/new-commits"
+  i=0
+  while [ "$i" -lt "$c_listed" ] && [ "$i" -lt 30 ]; do
+    c_sha="$(field "$i.sha" "$tmp/commits.json")" || c_sha=""
+    if ! is_sha "$c_sha" 40; then
+      say "could not list new commits"
+      return 0
+    fi
+    c_subject="$(field "$i.commit.message" "$tmp/commits.json" | plain)" || c_subject=""
+    printf '  %.8s %s\n' "$c_sha" "$c_subject" >>"$tmp/new-commits"
+    i=$((i + 1))
+  done
+  cat "$tmp/new-commits"
+  if [ "$c_total" -gt "$i" ]; then say "  … and $((c_total - i)) more: $web"; fi
+}
+
 # Installs channel $1 (main, stable, version, pr) with ref $2 (a tag or a pull request number).
 install_build() {
   channel="$1"
@@ -564,10 +658,15 @@ install_build() {
   # A first install says how to run ottospace; later ones do not.
   first=0
   if [ ! -f "$state_dir/current" ]; then first=1; fi
+  # The commit installed before, to list what is new: only from the same channel.
+  was_commit=""
+  if [ "$(get channel "$state_dir/current")" = "$channel" ]; then was_commit="$(get commit "$state_dir/current")"; fi
+  is_sha "$was_commit" 40 || was_commit=""
   write_state "$state_dir/current" "channel=$channel" "ref=$ref" "version=$b_version" "commit=$b_commit" \
     "date=$b_date" "binary_sha256=$(sha256_of "$cmd")" "installed=$(now)"
 
   say "Installed ottospace $b_version ($(printf '%.7s' "$b_commit")) from $(describe "$channel" "$ref")"
+  if [ "$channel" = main ]; then note_new_commits "$was_commit" "$b_commit"; fi
   if [ "$want_app" = 1 ]; then
     if [ "$owned" != 1 ]; then
       say "The app is a new identity to macOS with every build: grant it Accessibility and Screen Recording after each install."

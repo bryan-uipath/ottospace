@@ -123,8 +123,8 @@ A pull request build is that pull request's code, run with the terminal's permis
 
 ## osi
 
-POSIX `sh`, at `scripts/osi`. Needs `curl`, `shasum`, `tar`; `gh` only for pull requests; `ditto`
-and `codesign` only for `--app`. All ship with macOS except `gh`.
+POSIX `sh`, at `scripts/osi`. Needs `curl`, `shasum`, `tar`, `plutil`; `gh` only for pull requests;
+`ditto` and `codesign` only for `--app`. All ship with macOS except `gh`.
 
 | Command | Does |
 |---|---|
@@ -173,8 +173,9 @@ and `codesign` only for `--app`. All ship with macOS except `gh`.
   `GH_HOST` and `GH_REPO` are dropped, so an enterprise host cannot stand in for the repository.
 - **Overrides**, for tests: `HOME`, `OSI_BIN_DIR`, `OSI_APP_DIR`, `OTTOSPACE_HOME`,
   `OSI_RELEASES_URL` and `OSI_SELF_URL` (`file://` allowed), `OSI_GH`; `OSI_POLL`,
-  `OSI_WAIT_MAX` and `OSI_START_MAX` (seconds) for the waits; `OSI_MAIN_URL` (main's tip) and
-  `OSI_PS` (prints a pid's executable).
+  `OSI_WAIT_MAX` and `OSI_START_MAX` (seconds) for the waits; `OSI_MAIN_URL` (main's tip),
+  `OSI_COMPARE_URL` (the compare base; `/<old>...<new>` is added) and `OSI_PS` (prints a pid's
+  executable).
 
 `install.sh` downloads `scripts/osi` from `main`, installs it as `~/.local/bin/osi`, and runs
 `osi install main`. `OTTOSPACE_CHANNEL=stable` or `=v0.1.0` picks another build;
@@ -200,11 +201,30 @@ file of 4 KiB at most) and counts the app as running when the pid is alive, its 
 A stale file (pid gone, or reused by another program) does not count. No socket connection, no
 argument parsing.
 
-An install prints at most three lines: the build (`Installed ottospace 0.1.0 (05e8136) from
-main`), "main has newer commits (<tip>) than this build." when `main` has moved past the
+An install prints the build (`Installed ottospace 0.1.0 (05e8136) from
+main`), for `main` the commits new since the last install (below), "main has newer commits (<tip>) than this build." when `main` has moved past the
 installed `main` build (one unauthenticated `commits/main` call; silent when it fails), and the
 running line. The permissions note shows on a first install only; it and `osi rollback` are in
 `osi help`. A docs-only commit on `main` counts too: true, and harmless, since it promises no build.
+
+**New commits** (2026-11-18). After `osi install main` or `osi update` on `main` verifies and
+installs a build, osi takes the commit of the `main` build installed before from `current` (read
+with `get`, before it is rewritten) and the new one from `BUILD`, and asks
+`https://api.github.com/repos/<repo>/compare/<old>...<new>?per_page=30`: unauthenticated `curl`,
+`--proto =https`, TLS 1.2, 5 seconds, as the `commits/main` check. Page one is the oldest 30;
+`total_commits` gives the rest, said as `  … and N more: https://github.com/<repo>/compare/<old>...<new>`.
+Each line is `  <8-char sha> <subject>`. The JSON is read with `plutil -extract` (macOS's own,
+handles JSON with nulls): osi has no jq or python, and gh is not needed for `main`. A subject is
+the message's first line, untrusted: escape sequences (CSI, OSC and other `ESC` sequences, C1
+CSI) are dropped, then every C0, DEL and C1 control and bidi control; UTF-8 text such as `⌘` is
+kept; it is cut to 100 characters (99 and `…`). A sha that is not 40 hex fails the whole list.
+One line instead, never fatal: `first install of main` (no record, or another channel),
+`no new commits` (same commit, or `identical`; no network for the first), `could not list new
+commits` (offline, an error, not JSON), and for history that is not a fast-forward the compare's
+`status`: `this build is N commits behind the one installed before` or `main diverged from the
+build installed before (N new, M not on main)`, with the compare page. The answer carries every
+changed file's patch too (about 100 KB a commit here), so a long gap can hit the 5 seconds and
+say it could not list them.
 
 **Proposed, not built: a notice in the app.** ottospace knows its own commit
 (`OTTOSPACE_COMMIT`). If the shell read `commit=` from `~/.ottospace/install/current` now and
@@ -244,6 +264,11 @@ so one commit always gives one line.
   mismatch, changed `BUILD`, pull request install and update, a build of the wrong commit, fork
   refusal and `--allow-fork`, releases, `--app`, self-update, uninstall, a foreign `ottospace`,
   overrides. Fixture builds, a fake `gh`, a temp `HOME`.
+- `scripts/test-osi.sh` also covers the new commits: a list, more than 30, the same commit, a
+  first install and another channel, a failed lookup, not JSON, diverged, and a subject with
+  escape sequences, C1 and bidi controls, and one longer than 100 characters.
+- `plutil -extract` against a real compare answer of this repository (2026-11-18): `status`,
+  `total_commits`, the oldest commits on page one with `per_page`, nulls in the JSON.
 - `shellcheck` is clean on the four scripts.
 - `ottospace --version`, with and without the two variables, in a debug build; a unit test.
 
