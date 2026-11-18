@@ -290,7 +290,16 @@ impl Codex {
         let Some(id) = opaque(&item["id"]) else { return };
         let diff = (item["type"] == "fileChange").then(|| ottospace_core::diff::codex_changes(&item["changes"]));
         // A sub-agent thread's calls count too. Codex names no parent call, so none is given.
-        emit.push(Event::ToolStart { id, parent: None, tool, station, label, detail, diff: diff.flatten() });
+        emit.push(Event::ToolStart {
+            id,
+            parent: None,
+            tool,
+            station,
+            label,
+            detail,
+            diff: diff.flatten(),
+            gist: None,
+        });
     }
 
     /// Keeps a file-change item's changes until its approval. A patch update (`label` `None`)
@@ -450,7 +459,7 @@ fn item_completed(item: &Value, ours: bool, emit: &mut Vec<Event>) {
         _ if describe(item).is_some() => {
             let Some(id) = opaque(&item["id"]) else { return };
             let failed = matches!(item["status"].as_str(), Some("failed" | "declined")) || item["success"] == false;
-            emit.push(Event::ToolEnd { id, failed });
+            emit.push(Event::ToolEnd { id, failed, output: Untrusted::default() });
         }
         _ => {}
     }
