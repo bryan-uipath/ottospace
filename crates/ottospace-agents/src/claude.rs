@@ -6,7 +6,7 @@
 //! `control_response` lines, whose shape the docs do not print: UNVERIFIED, see the design note.
 
 use ottospace_core::runner::{RunnerId, SessionId};
-use ottospace_core::transcript::Outcome;
+use ottospace_core::transcript::{By, Outcome, Status};
 use ottospace_sessions::claude::describe;
 use ottospace_sessions::station;
 use serde_json::{Value, json};
@@ -115,6 +115,37 @@ impl Claude {
                 Some("api_retry") => {
                     emit.push(Event::Error { kind: code(&record["error"], "api_error"), retrying: true })
                 }
+                // Seen in 2.1.326's own code: `task_started` {task_id, tool_use_id, description,
+                // task_type, …}, `task_notification` {task_id, tool_use_id, status, summary, …},
+                // `permission_denied` {tool_name, tool_use_id, decision_reason_type, …},
+                // `notification` {key, text, priority, color}.
+                Some("task_started") => emit.push(Event::Subtask {
+                    id: opaque(&record["tool_use_id"]),
+                    description: Untrusted::new(record["description"].as_str().unwrap_or(""), MAX_DETAIL),
+                }),
+                Some("task_notification") => emit.push(Event::SubtaskEnded {
+                    status: Status::named(record["status"].as_str()),
+                    summary: Untrusted::new(record["summary"].as_str().unwrap_or(""), MAX_DETAIL),
+                }),
+                Some("permission_denied") => {
+                    if let Some(by) = By::claude(record["decision_reason_type"].as_str()) {
+                        let tool = station::tool_label(record["tool_name"].as_str().unwrap_or(""));
+                        emit.push(Event::DeniedBy { tool, by });
+                    }
+                }
+                Some("notification") if record["text"].is_string() => {
+                    emit.push(Event::Note { text: Untrusted::new(record["text"].as_str().unwrap_or(""), MAX_DETAIL) })
+                }
+                Some("model_fallback" | "model_refusal_fallback" | "model_consent_fallback") => {
+                    let name = |a: &str, b: &str| model_of(&record[a]).or_else(|| model_of(&record[b]));
+                    match name("fallbackModel", "fallback_model") {
+                        Some(to) => {
+                            emit.push(Event::ModelFallback { from: name("originalModel", "original_model"), to })
+                        }
+                        None => emit
+                            .push(Event::Unknown { kind: format!("system.{}", kind_of(record["subtype"].as_str())) }),
+                    }
+                }
                 other => emit.push(unread(record, format!("system.{}", kind_of(other)))),
             },
             // Raw API stream events. Only text deltas are read: the whole message follows.
@@ -136,7 +167,9 @@ impl Claude {
                     if block["type"] == "tool_result"
                         && let Some(id) = opaque(&block["tool_use_id"])
                     {
-                        emit.push(Event::ToolEnd { id, failed: block["is_error"] == true });
+                        let output = ottospace_core::gist::output(&block["content"]);
+                        let output = Untrusted::new(output.text(), ottospace_core::gist::MAX_OUTPUT);
+                        emit.push(Event::ToolEnd { id, failed: block["is_error"] == true, output });
                     }
                 }
             }
@@ -276,6 +309,7 @@ fn assistant(record: &Value, main: bool, emit: &mut Vec<Event>) -> Option<String
                     label,
                     detail,
                     diff: ottospace_core::diff::claude(tool, &block["input"]),
+                    gist: ottospace_core::gist::claude(tool, &block["input"]),
                 });
             }
             _ => {}
@@ -677,5 +711,61 @@ mod tests {
         assert_eq!((diff.files[0].added, diff.files[0].removed), (1, 1));
         let out = Claude::new().read(&line("Read", json!({"file_path": "/a/b.rs"})));
         assert!(matches!(out.events.get(1), Some(Event::ToolStart { diff: None, .. })), "{out:?}");
+    }
+    /// Rows for what the CLI says besides replies and calls: a subtask's start (by its call),
+    /// a sub-agent's call under it, its end, a denial by settings, a notification and a model
+    /// fallback. A permission check and a subtask's progress say nothing; nothing is unread.
+    #[test]
+    fn subtasks_denials_notes_and_fallbacks_are_events() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/claude/synthetic-2.1.326-rows.jsonl");
+        let mut claude = Claude::new();
+        let events: Vec<Event> = std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .skip(1)
+            .flat_map(|line| claude.read(line).events)
+            .filter(|event| !matches!(event, Event::TurnStarted))
+            .filter(|event| !matches!(event, Event::Unknown { kind } if crate::is_quiet(kind)))
+            .collect();
+        let agent = opaque(&json!("toolu_agent"));
+        let shown: Vec<String> = events
+            .iter()
+            .map(|event| match event {
+                Event::ToolStart { tool, parent, gist, .. } => {
+                    let line = gist.as_ref().map(|gist| gist.line(Some("/made/up"))).unwrap_or_default();
+                    format!("call {tool} {line} under:{}", *parent == agent)
+                }
+                Event::Subtask { id, description } => format!("subtask {} {}", *id == agent, description.text()),
+                Event::SubtaskEnded { status, summary } => format!("ended {status:?} {}", summary.text()),
+                Event::DeniedBy { tool, by } => format!("denied {tool} {by:?}"),
+                Event::Note { text } => format!("note {}", text.text()),
+                Event::ModelFallback { from, to } => format!("fallback {from:?} {to}"),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                "call Agent Find the redirect under:false",
+                "subtask true Find the redirect",
+                "call Grep redirect in src under:true",
+                "ended Completed Found it in auth.rs",
+                "denied Bash Settings",
+                "note Fast mode is off for now",
+                r#"fallback Some("claude-opus-5-5") claude-sonnet-5"#,
+            ]
+        );
+        // The user's own answer through this client is the card's notice: no second row.
+        let ours = r#"{"type":"system","subtype":"permission_denied","tool_name":"Bash","decision_reason_type":"permissionPromptTool"}"#;
+        assert_eq!(Claude::new().read(ours).events, []);
+    }
+
+    #[test]
+    fn a_results_text_ends_its_call() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":[{"type":"text","text":"M src/a.rs"}],"is_error":false}]}}"#;
+        let Some(Event::ToolEnd { output, failed: false, .. }) = Claude::new().read(line).events.pop() else {
+            panic!()
+        };
+        assert_eq!(output.text(), "M src/a.rs");
     }
 }

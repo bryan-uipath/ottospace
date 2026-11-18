@@ -19,7 +19,7 @@ ottospace            # opens on the Repos list
 | I want to | Press |
 |---|---|
 | Split with a new terminal | ⌘D right · ⌘⇧D down |
-| Choose what goes in a new pane (terminal or app) | ⌘E (right) or ⌘⇧E (below), type to filter, ↵. Typing also offers installed apps that are not running |
+| Choose what goes in a new pane (terminal, file or app) | ⌘E (right) or ⌘⇧E (below), type to filter, ↵. Typing also offers installed apps that are not running |
 | Edit the picker's filter or the new-task line | As any Mac text field: ⌥←/→ words, ⌘←/→ line, ⇧ selects, ⌘A, ⌘C/⌘X/⌘V, ⌘Z/⇧⌘Z, ⌥⌫ a word, ⌘⌫ the line; click, drag, double click |
 | Move between panes | ⌘⌃ arrows or ⌘⌃ H J K L · ⌘] ⌘[ cycle |
 | Move to the rails and back | The keys of the row above, on past the panes: left to the section list, then the rail; right to the conversation. On the rail ↑↓ move, ↵ opens, Esc goes back |
@@ -27,6 +27,7 @@ ottospace            # opens on the Repos list
 | Give an app the room its window needs | ⌘⌃0, or `fit` in the pane header: shown when the app refused the pane's size and a split can move |
 | Swap the pane with its neighbour | ⌘⇧⌥ arrows or ⌘⇧⌥ H J K L |
 | Move the pane to another tab | ⌘⇧⌥1 … ⌘⇧⌥9. US keyboard layout only (US, ABC): on others the keys do nothing |
+| Read a file | ⌘E, File…; ⌘-click a path in a terminal or a file link in the chat; `open_file`. `j`/`k`, `10j`, `gg`/`G`, `3G`, ⌃D/⌃U · ⌃G or Edit: your editor beside it. It reloads when the file changes |
 | Read a pane's header | A terminal's directory, and its program while one runs (`app-api · cargo test`); an app's icon and window title |
 | Rearrange with the mouse | Drag a pane by its header: onto another pane's edge to split there, its centre to swap, a tab to move there. Esc cancels. Dragging an app you are in parks it: click it to go back in |
 | Close the pane | ⌘W |

@@ -286,10 +286,17 @@ fn record_events(record: &Value, cursor: &mut Cursor, events: &mut Vec<Event>) {
             let (station, summary) = describe(tool, payload);
             let patch = payload["input"].as_str().filter(|_| cursor.edits && tool == "apply_patch");
             let diff = patch.and_then(ottospace_core::diff::codex_patch);
-            emit(What::ToolStart { id: id.clone(), tool: station::tool_label(tool), station, summary, diff });
+            emit(What::ToolStart {
+                id: id.clone(),
+                tool: station::tool_label(tool),
+                station,
+                summary,
+                diff,
+                gist: None,
+            });
             if kind == "web_search_call" {
                 // A web search is written once, when it is over.
-                emit(What::ToolEnd { id, failed: false, station: None, summary: None });
+                emit(What::ToolEnd { id, failed: false, station: None, summary: None, output: None });
             } else if tool == "exec" {
                 track(&mut cursor.open, id);
             }
@@ -304,7 +311,7 @@ fn record_events(record: &Value, cursor: &mut Cursor, events: &mut Vec<Event>) {
             let refined = cursor.refined.remove(&id);
             let (failed, station, summary) =
                 refined.map_or((false, None, None), |r| (r.failed, Some(r.station), Some(r.summary)));
-            emit(What::ToolEnd { id, failed, station, summary });
+            emit(What::ToolEnd { id, failed, station, summary, output: None });
         }
         _ => {}
     }

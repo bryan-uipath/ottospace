@@ -1,0 +1,7 @@
+# A source file in a file viewer: lines with their numbers, and a count typed (`12`) in the status bar.
+{"cmd":"open_file","path":"{REPO}/crates/ottospace-core/src/vim.rs"}
+{"until":"state.viewers.1.most","exists":true}
+{"cmd":"key","keys":"1 2"}
+{"shot":"pending"}
+{"cmd":"key","keys":"j"}
+{"shot":"moved"}

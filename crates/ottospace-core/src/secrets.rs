@@ -20,9 +20,29 @@ const KEYS: &[&str] = &[
     "private-key",
 ];
 
-/// Well-known token prefixes: GitHub, OpenAI and others, Slack, AWS access keys, JWTs.
-const PREFIXES: &[&str] =
-    &["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "sk-", "xoxa-", "xoxb-", "xoxp-", "AKIA", "eyJ"];
+/// Well-known token prefixes: GitHub, GitLab, npm, OpenAI and others, Stripe, Slack, AWS access
+/// keys, Google, Atlassian, SendGrid, JWTs.
+const PREFIXES: &[&str] = &[
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "github_pat_",
+    "glpat-",
+    "npm_",
+    "sk-",
+    "sk_live_",
+    "xoxa-",
+    "xoxb-",
+    "xoxp-",
+    "AKIA",
+    "ASIA",
+    "AIza",
+    "ATATT",
+    "SG.",
+    "eyJ",
+];
 
 /// Clients that take a password glued to `-p`: `mysql -phunter2`.
 const GLUED_P: &[&str] = &["mysql", "mysqldump", "mysqladmin", "mariadb"];
@@ -32,10 +52,20 @@ fn secret_key(key: &str) -> bool {
     !key.is_empty() && KEYS.iter().any(|secret| key.contains(secret))
 }
 
+/// A `key:` whose value is a secret (`password: x`, `"token":"x"`); not git's `Author:`.
+fn secret_label(key: &str) -> bool {
+    secret_key(key) && !key.to_ascii_lowercase().contains("author")
+}
+
+/// A token's alphabet.
+fn token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "+/=_-.".contains(c)
+}
+
 /// A word that is a token by itself: a known prefix with something after it, or 32 or more
 /// characters of a token's alphabet with upper case, lower case and digits (not a git hash).
 fn token(word: &str) -> bool {
-    let alphabet = |c: char| c.is_ascii_alphanumeric() || "+/=_-.".contains(c);
+    let alphabet = token_char;
     let prefixed = PREFIXES.iter().any(|prefix| word.starts_with(prefix) && word.len() >= prefix.len() + 8);
     let mixed = word.len() >= 32
         && word.chars().all(alphabet)
@@ -48,10 +78,17 @@ fn token(word: &str) -> bool {
 /// One word with its secret part hidden. `before`: the words before it on the line.
 fn hide_word(word: &str, before: &[&str]) -> String {
     let bare = word.trim_matches(|c| c == '\'' || c == '"');
-    let previous = before.last().map(|word| word.trim_matches(|c| c == '\'' || c == '"')).unwrap_or_default();
+    // `Bearer  x`: two spaces make an empty word between.
+    let previous = before.iter().rev().find(|word| !word.is_empty());
+    let previous = previous.map(|word| word.trim_matches(|c| c == '\'' || c == '"')).unwrap_or_default();
     // `--password hunter2`, `Bearer abc`: the word after a secret flag.
     let flag = previous.starts_with('-') && !previous.contains('=') && secret_key(previous);
-    if (flag || previous.eq_ignore_ascii_case("bearer")) && !bare.starts_with('-') && !bare.is_empty() && bare != HIDDEN
+    // `password: hunter2`, `"token": "x"`: the word after a secret label.
+    let label = previous.strip_suffix(':').is_some_and(|key| secret_label(key.trim_matches(|c| c == '\'' || c == '"')));
+    if (flag || label || previous.eq_ignore_ascii_case("bearer"))
+        && !bare.starts_with('-')
+        && !bare.is_empty()
+        && bare != HIDDEN
     {
         return HIDDEN.into();
     }
@@ -63,8 +100,9 @@ fn hide_word(word: &str, before: &[&str]) -> String {
     {
         return format!("{scheme}://{HIDDEN}@{host}");
     }
+    // `KEY=sk-…`: a secret key's value, or a token's.
     if let Some((key, value)) = bare.split_once('=')
-        && secret_key(key)
+        && (secret_key(key) || token(value))
         && !value.is_empty()
     {
         return format!("{key}={HIDDEN}");
@@ -76,7 +114,43 @@ fn hide_word(word: &str, before: &[&str]) -> String {
     if token(bare) {
         return HIDDEN.into();
     }
-    word.to_string()
+    hide_parts(word)
+}
+
+/// A word's parts between quotes, brackets and other marks, each a token or a secret label's
+/// value hidden: `{"token":"ghp_…"}` → `{"token":"[hidden]"}`, `(ghp_…)` → `([hidden])`.
+fn hide_parts(word: &str) -> String {
+    let mut out = String::with_capacity(word.len());
+    // The last part was a secret label: `Some(true)` once a `:` follows it.
+    let mut label: Option<bool> = None;
+    let mut rest = word;
+    while let Some(first) = rest.chars().next() {
+        let end = rest.find(|c| token_char(c) != token_char(first)).unwrap_or(rest.len());
+        let (part, after) = rest.split_at(end);
+        if token_char(first) {
+            if label == Some(true) || token(part) {
+                out.push_str(HIDDEN);
+                label = None;
+            } else if let Some((key, value)) = part.split_once('=')
+                && secret_key(key)
+                && !value.is_empty()
+            {
+                // `User Id=sa;Password=hunter2;`
+                out.push_str(&format!("{key}={HIDDEN}"));
+                label = None;
+            } else {
+                out.push_str(part);
+                label = secret_label(part).then_some(false);
+            }
+        } else {
+            out.push_str(part);
+            // Only quotes and a `:` between a label and its value.
+            let joins = part.chars().all(|c| matches!(c, '"' | '\'' | ':')) && part.contains(':');
+            label = label.filter(|_| joins).map(|_| true);
+        }
+        rest = after;
+    }
+    out
 }
 
 /// `line` with each credential-shaped part replaced by `[hidden]`; the rest stays. Hiding again
@@ -141,14 +215,31 @@ mod tests {
             ("xoxb-1234-5678-abcdef ok", "[hidden] ok"),
             ("jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig", "jwt [hidden]"),
             ("raw Zx9Qm2Lp8Rt4Vw6Yb1Nc3Kd5Hf7Jg0Ts", "raw [hidden]"),
+            (r#"{"token":"ghp_0123456789abcdefghij"}"#, r#"{"token":"[hidden]"}"#),
+            (r#"{"password":"hunter2","user":"me"}"#, r#"{"password":"[hidden]","user":"me"}"#),
+            (r#"export GH="ghp_0123456789abcdefghij""#, r#"export GH="[hidden]""#),
+            ("(ghp_0123456789abcdefghij)", "([hidden])"),
+            ("password: hunter2", "password: [hidden]"),
+            (r#""api_key": "k1","#, r#""api_key": [hidden]"#),
+            ("x-api-key: k1", "x-api-key: [hidden]"),
+            ("npm_0123456789abcdef glpat-0123456789abcdef", "[hidden] [hidden]"),
+            ("KEY=sk-ant-api03-abcdefghijk", "KEY=[hidden]"),
+            ("Server=x;User Id=sa;Password=hunter2;", "Server=x;User Id=sa;Password=[hidden];"),
+            ("echo Bearer  abc", "echo Bearer  [hidden]"),
         ];
         for (line, shown) in cases {
             assert_eq!(hide(line), shown, "{line}");
             assert_eq!(hide(shown), shown, "hiding again changes nothing: {shown}");
         }
         // Not secrets: a git hash, a port, plain words, a path.
-        for plain in ["commit 9f3a61c2d4e5b7089f3a61c2d4e5b7089f3a61c2", "psql -p 5432", "npm run dev", "cd ~/code/app"]
-        {
+        for plain in [
+            "commit 9f3a61c2d4e5b7089f3a61c2d4e5b7089f3a61c2",
+            "psql -p 5432",
+            "npm run dev",
+            "cd ~/code/app",
+            "Author: Bryan <b@example.com>",
+            r#"{"author":"me","state":"open"}"#,
+        ] {
             assert_eq!(hide(plain), plain);
         }
     }
@@ -177,6 +268,9 @@ mod tests {
             "mysql",
             "'",
             "Authorization:",
+            "{\"token\":\"",
+            "password: ",
+            "(ghp_0123456789ab",
         ];
         for _ in 0..5000 {
             let words: Vec<String> = (0..rng.below(6))
