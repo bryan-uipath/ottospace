@@ -8914,6 +8914,12 @@ fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in
     std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
     let otto = Otto::launch_with("status-bar", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     let bar = |o: &Otto| o.drawn()["status_bar"].clone();
+    // The place says `dir` and then `rest`: whole, or by the folder's name if the window is narrow
+    // for a long path (a runner's is smaller).
+    let says = |b: &Value, dir: &str, rest: &str| {
+        let name = Path::new(dir).file_name().unwrap().to_string_lossy().into_owned();
+        [format!("{dir}{rest}"), format!("{name}{rest}")].iter().any(|t| b["place"]["text"] == t.as_str())
+    };
     // Home: nowhere, no meeting yet read, no agents.
     assert_eq!((&bar(&otto)["place"], &bar(&otto)["agents"]["text"]), (&Value::Null, &json!("No agents")));
     otto.call(json!({"cmd": "split"}));
@@ -8921,24 +8927,20 @@ fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in
     // Outside Repos: the folder and its branch, no dot, and no git run there.
     otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", cloned.display())}));
     let elsewhere = cloned.canonicalize().unwrap().to_string_lossy().into_owned();
-    otto.wait_for("the branch alone", |o| (bar(o)["place"]["text"] == format!("{elsewhere} · develop")).then_some(()));
+    otto.wait_for("the branch alone", |o| says(&bar(o), &elsewhere, " · develop").then_some(()));
     // A repository nested in a listed one is not listed, nor is a link out of it.
     otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", nested.display())}));
     let inner = nested.canonicalize().unwrap().to_string_lossy().into_owned();
-    otto.wait_for("the nested one's branch alone", |o| {
-        (bar(o)["place"]["text"] == format!("{inner} · develop")).then_some(())
-    });
+    otto.wait_for("the nested one's branch alone", |o| says(&bar(o), &inner, " · develop").then_some(()));
     otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", repo.join("link").display())}));
-    otto.wait_for("the linked one's branch alone", |o| {
-        (bar(o)["place"]["text"] == format!("{elsewhere} · develop")).then_some(())
-    });
+    otto.wait_for("the linked one's branch alone", |o| says(&bar(o), &elsewhere, " · develop").then_some(()));
     assert!(!marker.exists(), "git ran in a repository not listed");
     // A listed checkout: its changes too, read without running the repository's fsmonitor.
     otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", repo.display())}));
     let plain = repo.canonicalize().unwrap().to_string_lossy().into_owned();
     otto.wait_for("the folder, its branch and its changes", |o| {
         let b = bar(o);
-        (b["place"]["text"] == format!("{plain} · develop ●") && b["meeting"].is_object()).then_some(())
+        (says(&b, &plain, " · develop ●") && b["meeting"].is_object()).then_some(())
     });
     assert!(!marker.exists(), "a repository's fsmonitor ran");
     for (task, state) in [("a", "running"), ("b", "running"), ("c", "needs_you")] {
@@ -8961,7 +8963,8 @@ fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in
     for r in [place, meeting, agents] {
         assert!(r[1] >= status[1] && r[1] + r[3] <= status[1] + status[3] + 0.5, "in the bar {status:?}: {r:?}");
     }
-    assert_eq!(shown["shrink"], 0);
+    // Wide enough for all whole, or (a runner's smaller window, a long temp path) the folder alone shortened.
+    assert!(shown["shrink"].as_u64() <= Some(1), "{shown}");
     // The meeting's title is drawn, never in the state.
     assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Team sync"));
     // A client's click copies nothing and joins nothing; the user's copies the path and joins.
