@@ -655,6 +655,11 @@ printf '40\t%s\tfalse\ttrue\tBad \033[31m\302\233title \342\200\256x\n' "$(commi
 out="$("$osi" list 2>&1)" || true
 only_plain() { ! printf '%s' "$out" | LC_ALL=C grep -q '[^[:print:][:space:]]'; }
 check "a title cannot send escape, C1 or bidi bytes to the terminal" only_plain
+# No "[31m" left over; the C1 CSI takes "t" as its final byte, as a terminal would.
+check "a title's escape sequences leave nothing behind" says "Bad itle x"
+printf '42\t%s\tfalse\ttrue\tKeys \342\214\230\342\207\247R\n' "$(commit 6)" >"$FAKE_GH_DIR/prs"
+run "$osi" list
+check "a title keeps its UTF-8" says "Keys ⌘⇧R"
 make_pr 35 "$(commit 7)" bryan-uipath/ottospace false bryan-uipath
 printf '77\tin_progress\tnone\n' >"$FAKE_GH_DIR/run-$(commit 7)"
 run "$osi" update --no-wait

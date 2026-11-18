@@ -227,9 +227,32 @@ spin_quiet() {
 # "1m 05s" for $1 seconds.
 elapsed() { printf '%dm %02ds' $(($1 / 60)) $(($1 % 60)); }
 
-# Keeps tabs and printable ASCII only. Text from GitHub (titles, job names, states) is written
-# by whoever opened the pull request: nothing else may reach the terminal.
-clean() { LC_ALL=C tr -cd '\011\040-\176'; }
+# Text from GitHub (titles, job names, states, commit subjects) is written by whoever opened the
+# pull request or the commit: only what a terminal shows may reach it. Invalid UTF-8 is dropped,
+# then escape sequences, then control characters (all but tab: C0, DEL, C1) and bidi controls.
+clean() {
+  x_esc="$(printf '\033')"
+  x_bel="$(printf '\007')"
+  x_c1="$(printf '\302')"
+  iconv -c -f UTF-8 -t UTF-8 2>/dev/null | LC_ALL=C sed -E \
+    -e "s#($x_esc\[|$x_c1$(printf '\233'))[0-?]*[ -/]*[@-~]##g" \
+    -e "s#(${x_esc}[]P_^X]|${x_c1}[$(printf '\220\230\235\236\237')])[^$x_bel$x_esc$x_c1]*($x_bel|$x_esc\\\\|$x_c1$(printf '\234'))?##g" \
+    -e "s#${x_esc}[ -/]*[0-~]##g" \
+    -e "s/${x_c1}[$(printf '\200')-$(printf '\237')]//g" \
+    -e "s/$(printf '\342\200')[$(printf '\216\217\250-\256')]//g" \
+    -e "s/$(printf '\342\201')[$(printf '\246-\251')]//g" \
+    -e "s/$(printf '\330\234')//g" |
+    LC_ALL=C tr -d '\000-\010\012-\037\177'
+}
+
+# The text on stdin cut to $1 characters, the last one … when it is longer.
+fit() {
+  fit_text="$(cat)"
+  if [ "$(printf '%s' "$fit_text" | LC_ALL=en_US.UTF-8 wc -m | tr -d ' ')" -gt "$1" ]; then
+    fit_text="$(printf '%s' "$fit_text" | LC_ALL=en_US.UTF-8 cut -c "1-$(($1 - 1))")…"
+  fi
+  printf '%s' "$fit_text"
+}
 
 # One build of commit $1 as "id<TAB>status<TAB>conclusion" in $tmp/run. $2..: more gh options.
 # A run whose jobs were skipped (a pull request without the label) is not a build.
@@ -342,7 +365,7 @@ pr_build() {
       # Which jobs are done, when gh can say.
       is_number "$run" && jobs="$(gh_run run view "$run" -R "github.com/$repo" --json jobs \
         --jq '[.jobs[] | "\(.name) \(if (.conclusion // "") == "" then .status else .conclusion end)"] | join(", ")' 2>/dev/null |
-        clean | cut -c 1-80)" || jobs=""
+        clean | fit 80)" || jobs=""
       i=0
       while [ "$i" -lt $((poll * 10)) ]; do
         spin "Build $state${jobs:+ ($jobs)} · $(elapsed $(($(date +%s) - began))) · ^C stops"
@@ -432,41 +455,25 @@ note_running() {
   if [ "$was_running" = 1 ]; then say "ottospace is running the old build: quit it and start it again."; fi
 }
 
+# Writes $1 to stdout, asked for as $2 (an Accept type), within 5 seconds: for a lookup that never
+# fails an install. HTTPS only; file:// is for tests.
+lookup() {
+  case "$1" in
+    https://*) lookup_proto='=https' ;;
+    file://*) lookup_proto='=file' ;;
+    *) return 1 ;;
+  esac
+  curl -fsS --proto "$lookup_proto" --tlsv1.2 --max-time 5 -H "Accept: $2" "$1" 2>/dev/null
+}
+
 # Says when main has a newer commit than the build installed, commit $1. Silent when the lookup
 # fails: it never fails an install. OSI_MAIN_URL names another source, for tests.
 note_behind() {
   main_url="${OSI_MAIN_URL:-https://api.github.com/repos/$repo/commits/main}"
-  case "$main_url" in
-    https://*) proto='=https' ;;
-    file://*) proto='=file' ;;
-    *) return 0 ;;
-  esac
-  tip="$(curl -fsS --proto "$proto" --tlsv1.2 --max-time 5 -H 'Accept: application/vnd.github.sha' "$main_url" 2>/dev/null |
-    head -c 40)" || return 0
+  tip="$(lookup "$main_url" application/vnd.github.sha | head -c 40)" || return 0
   if is_sha "$tip" 40 && [ "$tip" != "$1" ]; then
     say "main has newer commits ($(printf '%.7s' "$tip")) than this build."
   fi
-}
-
-# Untrusted text as one line the terminal only shows: escape sequences dropped, then control
-# characters (C0, DEL, C1) and bidi controls; at most 100 characters.
-plain() {
-  e="$(printf '\033')"
-  b="$(printf '\007')"
-  c1="$(printf '\302')"
-  line="$(head -n 1 | LC_ALL=C sed -E \
-    -e "s#($e\[|$c1$(printf '\233'))[0-?]*[ -/]*[@-~]##g" \
-    -e "s#(${e}[]P_^X]|${c1}[$(printf '\220\230\235\236\237')])[^$b$e$c1]*($b|$e\\\\|$c1$(printf '\234'))?##g" \
-    -e "s#${e}[ -/]*[0-~]##g" \
-    -e "s/${c1}[$(printf '\200')-$(printf '\237')]//g" \
-    -e "s/$(printf '\342\200')[$(printf '\216\217\250-\256')]//g" \
-    -e "s/$(printf '\342\201')[$(printf '\246-\251')]//g" \
-    -e "s/$(printf '\330\234')//g" |
-    LC_ALL=C tr -d '\000-\010\012-\037\177' | LC_ALL=C tr '\011' ' ')" || line=""
-  if [ "$(printf '%s' "$line" | LC_ALL=en_US.UTF-8 wc -m | tr -d ' ')" -gt 100 ]; then
-    line="$(printf '%s' "$line" | LC_ALL=en_US.UTF-8 cut -c 1-99)…" || line=""
-  fi
-  printf '%s' "$line"
 }
 
 # Lists the commits of main from $1, the commit installed before (empty: none, or another
@@ -484,17 +491,10 @@ note_new_commits() {
   fi
   web="https://github.com/$repo/compare/$(short "$1")...$(short "$2")"
   compare_url="${OSI_COMPARE_URL:-https://api.github.com/repos/$repo/compare}/$1...$2?per_page=30"
-  case "$compare_url" in
-    https://*) proto='=https' ;;
-    file://*) proto='=file' ;;
-    *) compare_url="" ;;
-  esac
   # Read with plutil, the system's JSON reader: no jq or python on every Mac.
   # field <keypath> <type> <file>: a count is a decimal integer (no "08"), an array its length.
   field() { plutil -extract "$1" raw -expect "$2" -o - "$3" 2>/dev/null; }
-  if [ -z "$compare_url" ] ||
-    ! curl -fsS --proto "$proto" --tlsv1.2 --max-time 5 -H 'Accept: application/vnd.github+json' \
-      -o "$tmp/compare.json" "$compare_url" 2>/dev/null ||
+  if ! lookup "$compare_url" application/vnd.github+json >"$tmp/compare.json" ||
     ! plutil -extract commits json -o "$tmp/commits.json" "$tmp/compare.json" 2>/dev/null; then
     say "could not list new commits"
     return 0
@@ -540,7 +540,7 @@ note_new_commits() {
       say "could not list new commits"
       return 0
     fi
-    c_subject="$(printf '%s\n' "$c_message" | plain)" || c_subject=""
+    c_subject="$(printf '%s\n' "$c_message" | head -n 1 | clean | tr '\011' ' ' | fit 100)" || c_subject=""
     c_lines="$c_lines$(printf '  %.8s %s' "$c_sha" "$c_subject")
 "
     i=$((i + 1))
@@ -824,7 +824,7 @@ cmd_list() {
   while IFS="$(printf '\t')" read -r number sha cross labelled title; do
     is_number "$number" || continue
     is_sha "$sha" 40 || continue
-    title="$(printf '%s' "$title" | clean | cut -c 1-60)"
+    title="$(printf '%s' "$title" | clean | fit 60)"
     listed=$((listed + 1))
     if [ "$listed" -gt 50 ]; then
       say "…and more: gh pr list -R $repo"

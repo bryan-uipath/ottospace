@@ -123,7 +123,7 @@ A pull request build is that pull request's code, run with the terminal's permis
 
 ## osi
 
-POSIX `sh`, at `scripts/osi`. Needs `curl`, `shasum`, `tar`, `plutil`; `gh` only for pull requests;
+POSIX `sh`, at `scripts/osi`. Needs `curl`, `shasum`, `tar`, `plutil`, `iconv`; `gh` only for pull requests;
 `ditto` and `codesign` only for `--app`. All ship with macOS except `gh`.
 
 | Command | Does |
@@ -215,9 +215,12 @@ with `get`, before it is rewritten) and the new one from `BUILD`, and asks
 `total_commits` gives the rest, said as `  … and N more: https://github.com/<repo>/compare/<old>...<new>`.
 Each line is `  <8-char sha> <subject>`. The JSON is read with `plutil -extract` (macOS's own,
 handles JSON with nulls): osi has no jq or python, and gh is not needed for `main`. A subject is
-the message's first line, untrusted: escape sequences (CSI, OSC, DCS and other `ESC` sequences, and their
-C1 forms) are dropped, then every C0, DEL and C1 control and bidi control; UTF-8 text such as `⌘` is
-kept; it is cut to 100 characters (99 and `…`). A sha that is not 40 hex, a count that is not an integer
+the message's first line, untrusted, and goes through `clean`, as pull request titles, job names
+and gh's fields do: invalid UTF-8 is dropped (`iconv -c`), then escape sequences (CSI, OSC, DCS
+and other `ESC` sequences, and their C1 forms), then every C0 (but tab), DEL and C1 control and
+bidi control; UTF-8 text such as `⌘` is kept. `fit` cuts by characters, the last one `…`: a subject
+to 100, a title to 60, job names to 80. Before, `clean` kept printable ASCII only, so a title's
+`ESC[31m` left `[31m` behind and `⌘` was dropped. Both lookups go through `lookup`. A sha that is not 40 hex, a count that is not an integer
 (`-expect integer`), or a commit without a message fails the whole list: nothing partial is said.
 One line instead, never fatal: `first install of main` (no record, or another channel),
 `no new commits` (same commit, or `identical`; no network for the first), `could not list new
@@ -268,7 +271,8 @@ so one commit always gives one line.
 - `scripts/test-osi.sh` also covers the new commits: a list, more than 30, the same commit, a
   first install and another channel, a failed lookup, not JSON, a count that is not an integer, a commit without a message,
   diverged, and a subject with
-  escape sequences, C1 and bidi controls, and one longer than 100 characters.
+  escape sequences, C1 and bidi controls, and one longer than 100 characters; a pull request
+  title's escape sequence leaves nothing behind, and its UTF-8 is kept.
 - `plutil -extract` against a real compare answer of this repository (2026-11-18): `status`,
   `total_commits`, the oldest commits on page one with `per_page`, nulls in the JSON.
 - `shellcheck` is clean on the four scripts.
