@@ -6956,6 +6956,14 @@ impl Model {
             || self.calendar.due(now)
     }
 
+    /// When `due` turns true next, but for the calendar's alerts: the shell looks at those on its
+    /// slow step while the calendar is on. Its loop sleeps until then.
+    pub fn next_due(&self) -> Option<u64> {
+        let offer = self.undo_offer.as_ref().map(|offer| offer.until);
+        let clip = self.clip.as_ref().map(|clip| clip.at.saturating_add(crate::clip::NOTICE_MS));
+        [self.tasks.next_due(), offer, clip, self.workbooks.next_due()].into_iter().flatten().min()
+    }
+
     /// Everything the marks and the workbooks need, each once: what the shell looks for on
     /// this machine (`Action::MarksChecked` says what it did not find).
     pub fn needs(&self) -> Vec<Need> {

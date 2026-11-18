@@ -52,7 +52,7 @@ use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, State, Task, Task
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, clears_selection, edge_scroll, press, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Origin, Pane, PaneId, PickItem, Picker, Rect, Section, Zone,
-    theme,
+    cadence, theme,
     titlebar::{self, TitleBar},
 };
 use ottospace_mac::window::{Mouse, MouseKind};
@@ -106,6 +106,7 @@ mod running;
 mod scratch;
 mod scrollbar;
 mod sessions;
+mod signal_pipe;
 mod sneak;
 mod sneak_apps;
 mod stall;
@@ -960,6 +961,8 @@ struct Workspace {
     /// What a tick with no window brought (`tick_now`), carried out at the next dispatch: a
     /// closed temporary workspace's panes, its Undo run out.
     held_effects: Vec<Effect>,
+    /// Runs of the tick so far, for a test run's state.
+    ticks: u64,
     kept_layout: layout_file::Kept,
     /// `keys.json` as last read and written.
     kept_keys: key_use::Kept,
@@ -1192,8 +1195,6 @@ impl Workspace {
             }),
         ];
 
-        // ~60Hz tick: answer control calls, redraw on new frames, keep windows matched to panes.
-        // Every ~500ms, also look for new and closed windows of hosted apps.
         // Whether this Mac has the recogniser, asked once: then an app pane may be transcribed.
         cx.spawn_in(window, async move |this, cx| {
             let on = cx.background_executor().spawn(async { listen_live::available() }).await;
@@ -1204,10 +1205,25 @@ impl Workspace {
             }
         })
         .detach();
+        // The tick: answer control calls, redraw on new output, keep windows matched to panes;
+        // every ~500ms, also look for new and closed windows of hosted apps. Each frame while
+        // something moves or waits, or just happened; else asleep until woken, or the next slow
+        // look or thing due (`cadence`).
         cx.spawn_in(window, async move |this, cx| {
-            for tick in 0u64.. {
-                cx.background_executor().timer(Duration::from_millis(16)).await;
-                let alive = this.update_in(cx, |this, window, cx| {
+            let mut clock = cadence::Clock::default();
+            let mut wait = cadence::Wait::For(cadence::FRAME_MS);
+            loop {
+                match wait {
+                    // One frame: a wakeup does not cut it short, so the loop runs at most each frame.
+                    cadence::Wait::For(ms) if ms <= cadence::FRAME_MS => {
+                        cx.background_executor().timer(Duration::from_millis(ms)).await
+                    }
+                    cadence::Wait::For(ms) => woken_or(cx.background_executor().timer(Duration::from_millis(ms))).await,
+                    cadence::Wait::Woken => ottospace_mac::wake::woken().await,
+                }
+                let ticks = clock.step(loop_ms(), ottospace_mac::wake::take());
+                let load = this.update_in(cx, |this, window, cx| {
+                    this.ticks += 1;
                     if give_back::signalled() {
                         cx.quit();
                     }
@@ -1216,12 +1232,12 @@ impl Workspace {
                     this.take_tags(window, cx);
                     this.store_layout(false);
                     this.store_key_use(false);
-                    if tick % 15 == 0 {
+                    if ticks.every(15, 0) {
                         this.poll_sessions(window, cx);
                         this.read_titles(cx);
                     }
                     this.listen_menu_bar(window, cx);
-                    if tick % 60 == 0 {
+                    if ticks.every(60, 0) {
                         this.listen_read_past(window, cx);
                     }
                     // The green button, Window ▸ Zoom or a title bar double-click: only the user's hand.
@@ -1240,7 +1256,7 @@ impl Workspace {
                         cx.notify();
                     }
                     this.with_origin(Origin::System, |this| {
-                        if tick % 30 == 0 {
+                        if ticks.every(30, 0) {
                             this.adopt_new_windows(window, cx);
                             this.drop_closed(window, cx);
                             this.follow_front_app(window, cx);
@@ -1271,17 +1287,17 @@ impl Workspace {
                         // the sizes are those of the layout before it.
                         let drawn = this.renders > this.dispatched_at;
                         // A display that changed moves no window: looked at, not told.
-                        if tick % 30 == 15 {
+                        if ticks.every(30, 15) {
                             this.fill_holds(window, cx);
                         }
-                        for (pane, content, outer, kept) in this.sync_layout(window, cx, tick % 30 == 15) {
+                        for (pane, content, outer, kept) in this.sync_layout(window, cx, ticks.every(30, 15)) {
                             if drawn && this.model.wants_changed(pane, content, outer, kept) {
                                 let wants = Action::PaneWants { pane, content, outer, window: kept };
                                 this.dispatch(wants, Origin::System, window, cx);
                             }
                         }
                         this.sync_terminals(window, cx);
-                        if tick % 3 == 0 {
+                        if ticks.every(3, 0) {
                             this.drag_scroll(cx);
                         }
                         // A pulse after a copy or paste is drawn frame by frame, and once more as it ends.
@@ -1291,29 +1307,29 @@ impl Workspace {
                         }
                         this.sync_agents(window, cx);
                         // A notice whose time is up, or one that came with no frame asked for.
-                        if tick % 6 == 0 && this.notice_changed() {
+                        if ticks.every(6, 0) && this.notice_changed() {
                             cx.notify();
                         }
                         // The header's time goes on while an agent runs.
                         let runs = this.model.talk.as_ref().is_some_and(|t| t.open && this.model.agent_runs(&t.task));
-                        if runs && tick % 30 == 0 {
+                        if runs && ticks.every(30, 0) {
                             cx.notify();
                         }
                         // A dial lit is drawn again each second; at rest only on a change.
-                        if tick % 60 == 0 && this.dial_moves() {
+                        if ticks.every(60, 0) && this.dial_moves() {
                             cx.notify();
                         }
-                        if tick % 60 == 0 {
+                        if ticks.every(60, 0) {
                             this.seek_sessions(window, cx);
                         }
-                        if tick % 15 == 7 {
+                        if ticks.every(15, 7) {
                             this.watch_settings(window, cx);
                         }
                         this.sync_sneak(window, cx);
                         this.sync_row_menu(window, cx);
                         this.sync_agent_looks();
                         this.read_sneak_app(window, cx);
-                        if tick % 4 == 0 {
+                        if ticks.every(4, 0) {
                             this.check_peek(window, cx);
                         }
                         this.tick_timeline(window, cx);
@@ -1326,10 +1342,10 @@ impl Workspace {
                         cx.notify();
                     }
                     this.watch_frames(window, cx);
+                    this.load(cx)
                 });
-                if alive.is_err() {
-                    break;
-                }
+                let Ok(load) = load else { break };
+                wait = clock.wait(loop_ms(), load);
             }
         })
         .detach();
@@ -1495,6 +1511,7 @@ impl Workspace {
             row_hovered: None,
             row_menu_spent: false,
             held_effects: Vec::new(),
+            ticks: 0,
             kept_layout: layout_file::Kept::default(),
             kept_keys: key_use::Kept::default(),
             caps_drawn: Cell::default(),
@@ -1584,6 +1601,8 @@ impl Workspace {
     /// The one path that changes state: updates the model, then carries out its effects.
     /// `origin`: who sent the action. The person's own keys and clicks pass `self.input`.
     fn dispatch(&mut self, action: Action, origin: Origin, window: &Window, cx: &mut Context<Self>) -> Vec<Effect> {
+        // What follows an action is the tick's: it runs each frame for a while.
+        ottospace_mac::wake::post();
         // The time it happens at: a task done now is done now, not at the last read.
         let now = now_ms();
         if now.saturating_sub(self.model.now()) >= 1_000 && !matches!(action, Action::Tick { .. }) {
@@ -2092,6 +2111,56 @@ impl Workspace {
         self.settle(false, window, cx);
         // What a request reaches through a shared method (`open_app`, a click) is the client's too.
         self.with_origin(Origin::Socket, |this| this.serve_calls(window, cx));
+    }
+
+    /// After a tick: what the next must look at (`cadence`). Busy: something moves, or waits for
+    /// what no event announces. Slow: a look with no event of its own. Due: the next write or read.
+    fn load(&self, cx: &App) -> cadence::Load {
+        let model = &self.model;
+        let now = now_ms();
+        let clip = model.clip.as_ref().filter(|clip| clip.pane.is_some());
+        let talk = model.talk.as_ref().filter(|talk| talk.open);
+        let busy = !self.hosted.is_empty()
+            || !self.known.is_empty()
+            || !self.launching.is_empty()
+            || !self.settling.is_empty()
+            || !self.filing.is_empty()
+            || !self.pending.is_empty()
+            || !self.held_effects.is_empty()
+            || self.dragging.is_some()
+            || cx.has_active_drag()
+            || model.sneak.is_some()
+            || model.row_menu().is_some()
+            || model.agent.menu.is_some()
+            || model.peek.is_some()
+            || clip.is_some_and(|clip| now.saturating_sub(clip.at) < clip::PULSE_MS + 100)
+            || self.bar.moves()
+            || self.notice_changed()
+            || talk.is_some_and(|talk| model.agent_runs(&talk.task))
+            || self.stall.watching()
+            || !self.drawer.native.is_empty()
+            || !self.drawer.stopping.is_empty()
+            || model.calendar.on && self.timeline.pulse;
+        let slow = !self.terminals.is_empty()
+            || config::get().home.is_some()
+            || model.calendar.on
+            || model.inspector.is_some()
+            || matches!(model.sidebar, Some(Section::Marks | Section::Workbook | Section::Repos | Section::Tasks))
+            || talk.is_some()
+            || !model.seeking().is_empty()
+            || model.listen.shown
+            || model.fill_display
+            || self.drawer.editor.is_some()
+            || self.notice_shown().is_some();
+        // In the loop's ms: a time of the wall clock, or an instant.
+        let (ms, instant) = (loop_ms(), Instant::now());
+        let wall = |at: u64| ms + at.saturating_sub(now);
+        let soon = |at: Instant| ms + at.saturating_duration_since(instant).as_millis() as u64;
+        let instants = [self.kept_layout.due, self.kept_keys.due, self.told.as_ref().map(|(_, at)| *at + TOLD_FOR)];
+        let walls = [model.next_due(), self.sessions.as_ref().and_then(sessions::Poller::next_ask)];
+        let due = instants.into_iter().chain([self.viewers_due()]).flatten().map(soon);
+        let due = due.chain(walls.into_iter().flatten().map(wall)).min();
+        cadence::Load { busy, slow, due }
     }
 
     /// Each tick: after a change of the displays, or while the shown window has something to draw
@@ -3444,6 +3513,8 @@ impl Workspace {
                 // How often GPUI's own handlers were kicked to draw again (`stall`): after a change
                 // of the displays, or frames that stopped.
                 "redraws": self.redraws,
+                // Runs of the tick (`cadence`): each frame just after a change, else few at rest.
+                "ticks": self.ticks,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
                 // Scrolls over an app pane's picture, peeks they started, and the one on now (its pane; 0:
                 // none).
@@ -6754,6 +6825,26 @@ fn now_ms() -> u64 {
     since.map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
+/// The main loop's clock (`cadence`): ms since it was first read. Monotonic, unlike `now_ms`.
+fn loop_ms() -> u64 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// Ready when `timer` is, or sooner when something posts a wakeup.
+async fn woken_or(mut timer: gpui::Task<()>) {
+    let mut woken = ottospace_mac::wake::woken();
+    std::future::poll_fn(|cx| {
+        let woke = std::pin::Pin::new(&mut woken).poll(cx).is_ready();
+        if woke || std::pin::Pin::new(&mut timer).poll(cx).is_ready() {
+            std::task::Poll::Ready(())
+        } else {
+            std::task::Poll::Pending
+        }
+    })
+    .await
+}
+
 /// A key's modifiers as the core names them.
 fn mods(m: gpui::Modifiers) -> Mods {
     Mods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform }
@@ -6900,6 +6991,8 @@ fn on_screen(body: Bounds<Pixels>, window: &Window, cx: &App) -> CGRect {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        // A frame: the tick runs each frame for a while, to take what follows it.
+        ottospace_mac::wake::post();
         // Every task's letters, worked out once a frame for each badge drawn (`task_badge`).
         *self.badges.borrow_mut() = self.model.badges();
         // This frame draws every action so far: the replies held for it can go (`settle`).

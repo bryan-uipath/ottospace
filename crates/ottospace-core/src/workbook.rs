@@ -622,6 +622,12 @@ impl Workbooks {
         closed || self.offer.as_ref().is_some_and(|offer| offer.until <= now)
     }
 
+    /// When `due` turns true next.
+    pub(crate) fn next_due(&self) -> Option<u64> {
+        let closing = self.list.iter().filter_map(|book| book.closing);
+        closing.chain(self.offer.as_ref().map(|offer| offer.until)).min()
+    }
+
     pub(crate) fn tick(&mut self, now: u64) {
         self.offer = self.offer.take().filter(|offer| offer.until > now);
     }

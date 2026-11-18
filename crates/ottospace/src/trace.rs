@@ -7,9 +7,9 @@
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Write as _};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicI32, Ordering::SeqCst};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde_json::{Value, json};
 
@@ -84,11 +84,12 @@ fn dump(why: &str) {
     let _ = std::fs::write(file(), jsonl());
 }
 
-static SIGNALLED: AtomicBool = AtomicBool::new(false);
+/// The pipe a SIGUSR1 rings: its thread writes the ring.
+static PIPE: AtomicI32 = AtomicI32::new(-1);
 
 extern "C" fn on_signal(_: libc::c_int) {
-    // Only an atomic store: a signal handler may not lock or allocate.
-    SIGNALLED.store(true, Relaxed);
+    // Only a write: a signal handler may not lock or allocate.
+    crate::signal_pipe::ring(&PIPE);
 }
 
 /// Test runs, or `OTTOSPACE_TRACE=1`: write the ring on a panic and on SIGUSR1. A thread does the
@@ -103,15 +104,10 @@ pub fn arm() {
         dump("panic");
         before(info);
     }));
+    if let Some(fd) = crate::signal_pipe::start("trace", || dump("signal")) {
+        PIPE.store(fd, SeqCst);
+    }
     unsafe { libc::signal(libc::SIGUSR1, on_signal as *const () as libc::sighandler_t) };
-    std::thread::spawn(|| {
-        loop {
-            std::thread::sleep(Duration::from_millis(50));
-            if SIGNALLED.swap(false, Relaxed) {
-                dump("signal");
-            }
-        }
-    });
 }
 
 #[cfg(test)]

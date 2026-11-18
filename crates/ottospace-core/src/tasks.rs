@@ -766,6 +766,11 @@ impl Tasks {
         self.list.iter().any(|t| t.snoozed_until.is_some_and(|until| until <= now))
     }
 
+    /// When `due` turns true next: the soonest snooze's end.
+    pub fn next_due(&self) -> Option<u64> {
+        self.list.iter().filter_map(|t| t.snoozed_until).min()
+    }
+
     /// Snoozed tasks whose time has come are listed again.
     pub fn tick(&mut self, now: u64) {
         for task in &mut self.list {

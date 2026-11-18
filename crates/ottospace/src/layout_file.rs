@@ -19,7 +19,7 @@ pub struct Kept {
     /// False: the file is not written this run (nothing is kept, a newer build's file, Start Fresh).
     writing: bool,
     /// When the next write is due.
-    due: Option<Instant>,
+    pub(crate) due: Option<Instant>,
     /// The text last read or written: the same text is not written again.
     stored: String,
     /// What was wrong with the file at start.

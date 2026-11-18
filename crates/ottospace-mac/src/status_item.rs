@@ -33,16 +33,19 @@ define_class!(
         #[unsafe(method(stop:))]
         fn stop(&self, _sender: Option<&AnyObject>) {
             CHOSEN.store(1, Ordering::Relaxed);
+            crate::wake::post();
         }
 
         #[unsafe(method(show:))]
         fn show(&self, _sender: Option<&AnyObject>) {
             CHOSEN.store(2, Ordering::Relaxed);
+            crate::wake::post();
         }
 
         #[unsafe(method(pause:))]
         fn pause(&self, _sender: Option<&AnyObject>) {
             CHOSEN.store(3, Ordering::Relaxed);
+            crate::wake::post();
         }
     }
 );

@@ -73,6 +73,7 @@ impl Reader {
                     if send.send(read(job, &models, agents_dir.as_deref(), &skill_dirs)).is_err() {
                         return;
                     }
+                    ottospace_mac::wake::post();
                 }
             }
         });

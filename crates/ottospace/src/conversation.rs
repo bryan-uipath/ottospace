@@ -153,13 +153,17 @@ impl Watch {
             if send.send(vec![Event::WatchFromStart]).is_err() {
                 return;
             }
+            ottospace_mac::wake::post();
             let mut cursor = ottospace_sessions::Cursor::with_edits();
             while !stopped.load(std::sync::atomic::Ordering::Relaxed) {
                 let Ok(batch) = reader.read(&session, cursor.clone(), WATCH_BUDGET) else { return };
                 cursor = batch.cursor;
                 let events: Vec<Event> = batch.events.iter().flat_map(watched).collect();
-                if !events.is_empty() && send.send(events).is_err() {
-                    return;
+                if !events.is_empty() {
+                    if send.send(events).is_err() {
+                        return;
+                    }
+                    ottospace_mac::wake::post();
                 }
                 if !batch.more {
                     std::thread::sleep(std::time::Duration::from_millis(WATCH_MS));
@@ -1461,6 +1465,7 @@ pub(crate) fn read_thumb(path: String, repo: Option<String>) -> Thumb {
             Some(Arc::new(gpui::Image::from_bytes(format, image.bytes)))
         })();
         let _ = send.send(image);
+        ottospace_mac::wake::post();
     });
     Thumb::Reading(read)
 }

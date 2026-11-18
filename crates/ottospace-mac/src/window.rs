@@ -253,6 +253,7 @@ static ZOOM_ASKED: AtomicBool = AtomicBool::new(false);
 /// `zoom:`: no zoom; the shell fills the display instead.
 extern "C-unwind" fn zoom_instead(_: &AnyObject, _: Sel, _: *mut AnyObject) {
     ZOOM_ASKED.store(true, Ordering::SeqCst);
+    crate::wake::post();
 }
 
 /// Makes a zoom of the window ask the shell (`take_zoom`) instead of resizing it: `zoom:` is

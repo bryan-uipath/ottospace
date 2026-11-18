@@ -52,6 +52,11 @@ impl Stall {
         Stall { renders: 0, waiting: None, ticks: 0, kicks: 0, next: None, planned: Vec::new() }
     }
 
+    /// Waiting for a frame, or kicks planned: the tick must go on each frame.
+    pub(crate) fn watching(&self) -> bool {
+        self.waiting.is_some() || !self.planned.is_empty()
+    }
+
     /// The displays changed at `now`: kicks follow at `AFTER_CHANGE`.
     pub(crate) fn displays_changed(&mut self, now: Instant) {
         self.planned = AFTER_CHANGE.iter().map(|after| now + *after).collect();

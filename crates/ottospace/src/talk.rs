@@ -216,6 +216,7 @@ impl Workspace {
         std::thread::spawn(move || {
             let found = crate::sessions::read_one(&runner, &id, crate::now_ms());
             let _ = send.send(Action::SessionRead { runner, id, found });
+            ottospace_mac::wake::post();
         });
         None
     }
@@ -815,6 +816,7 @@ impl Workspace {
                 }));
             }
             let _ = send.send(found);
+            ottospace_mac::wake::post();
         });
     }
 

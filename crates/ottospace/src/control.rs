@@ -776,6 +776,7 @@ fn handle(stream: UnixStream, calls: Sender<Call>) {
                 if calls.send(Call { request, reply, pass }).is_err() {
                     return;
                 }
+                ottospace_mac::wake::post();
                 let reply = answer.recv().unwrap_or_else(|_| error("ottospace is closing"));
                 // Top-level keys only: text inside the reply has its quotes escaped.
                 let (failed, stale) = (reply.contains(r#""ok":false"#), reply.contains(r#""stale":true"#));
