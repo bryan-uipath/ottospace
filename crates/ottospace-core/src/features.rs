@@ -241,8 +241,8 @@ mod tests {
         fn off_a_feature_has_no_rail_cell_section_key_or_command() {
             let mut m = terminal();
             m.update(set(Features::default()));
-            // Tasks, Workbook, Repos: no Apps, no Marks.
-            assert_eq!(m.sections(), [Section::Tasks, Section::Workbook, Section::Repos]);
+            // Repos, Tasks, Workbook: no Apps, no Marks.
+            assert_eq!(m.sections(), [Section::Repos, Section::Tasks, Section::Workbook]);
             for section in [Section::Marks, Section::Apps] {
                 assert!(m.update(Action::ToggleSection { section }).is_empty());
                 assert_eq!(m.sidebar, None);
@@ -256,7 +256,7 @@ mod tests {
             assert_eq!(m.disabled(&Action::MarkPrefix), Some(Feature::Marks));
             // ⌘⌃E drives the rail's first section, not the Apps section; a pin there does nothing.
             m.update(Action::FocusList);
-            assert_eq!((m.mode(), m.sidebar), (Mode::List, Some(Section::Tasks)));
+            assert_eq!((m.mode(), m.sidebar), (Mode::List, Some(Section::Repos)));
             assert!(m.update(Action::ListPin).is_empty());
             // The palette lists no mark command, and lists Features….
             m.update(Action::LeaveList);

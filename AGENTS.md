@@ -64,6 +64,8 @@ Rules:
   built from this package (`src/bin`). `OTTOSPACE_HOST_ONLY=<pid>` limits hosting (and `ottospace rescue`) to that process. A test
   run keeps the record of hosted windows (`hosted.json`) only in a folder it names with
   `OTTOSPACE_HOME`, and starts the guardian only with `OTTOSPACE_GUARD` set.
+  `OTTOSPACE_E2E_FINDER` lets a test host a Finder window it opens (CI only: there Finder has no
+  windows of anyone's); without it, and while Finder has any window open, the test hosts none.
   The run takes keyboard focus while it lasts. Needs
   Accessibility and Screen Recording for the terminal. Use it for anything that moves, parks,
   adopts or restores a real window.
@@ -71,6 +73,8 @@ Rules:
   An E2E run that names none lists none, and never starts an app. `OTTOSPACE_DOCK_APPS` (bundle
   paths, `:` between them) stands for the Dock's apps; a test run that names none has none, and
   never reads the user's Dock.
+- `OTTOSPACE_LISTEN_APPS` (a JSON file of made-up apps) stands for the apps the transcript's picker
+  lists, read only under `OTTOSPACE_E2E`; a test run that names none lists none, never the user's.
 - `OTTOSPACE_GH` (a program) stands for `gh` in a test run: a stand-in script with fixture JSON. A test run
   that names none runs no gh, and never the user's. The state's `counts.pr_opens` (test runs only) counts
   the pull requests the user's click opened; a test run opens none.
@@ -178,13 +182,18 @@ Rules:
   (`install.sh`, `scripts/osi`, `scripts/test-osi.sh`, `scripts/package.sh`): `scripts/test-osi.sh`.
   A file the test starts to read is added to its `paths`.
 - One Rust cache for the dev build: `ci.yml`'s `e2e` job saves it, on `main` only (`shared-key: e2e`);
-  `app-windows.yml`, `shots.yml` and `reliability.yml` restore it and save none (`save-if: false`).
+  `app-windows.yml`, `shots.yml`, `bench.yml` and `reliability.yml` restore it and save none (`save-if: false`).
   A job that builds the same dependencies joins it; one that saves from a pull request does not.
 - `.github/workflows/shots.yml`, on pull requests that change `crates/ottospace/src/**`,
   `crates/ottospace-core/src/**`, `crates/ottospace-mac/**`, `scripts/shot`, `scripts/shots/**` or `scripts/test-shot.sh`:
   `scripts/test-shot.sh`, then `scripts/shot --compare` of every scenario against the merge base;
   the pictures are the artifact `shots`. Read-only token, no comment on the pull request. Not a
   required check. (`test-shot.sh` needs a screen that draws, so it runs here, not in scripts.yml.)
+- `.github/workflows/bench.yml`, on pull requests that change `crates/**`, `Cargo.lock`, `scripts/bench`,
+  `scripts/shot`, the fixtures it copies or `bench.yml`: `scripts/bench --compare` against the base branch's tip, the pull request merged into it after (dev build, both sides on one
+  runner), the table in the job summary, the JSON as an artifact. Red past the thresholds in
+  `scripts/bench`; not a required check: whoever merges a red run says in the pull request whether
+  the regression is real and accepted. Nightly and by hand on `main`: the JSON alone, for trends.
 - `.github/workflows/release.yml`, on a `v*` tag: `scripts/package.sh`, GitHub Release.
 - `.github/workflows/pages.yml`, on pushes to `main` that touch `site/**`: deploys `site/` to GitHub
   Pages. Never on pull requests. Only its deploy job has `pages: write` and `id-token: write`.

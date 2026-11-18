@@ -1,0 +1,15 @@
+# The markdown fixture in a file viewer, at several places: what the renderer draws of every kind
+# of block (`crates/ottospace/tests/fixtures/markdown/fixture.md`). Before/after for a renderer change.
+{"cmd":"open_file","path":"{REPO}/crates/ottospace/tests/fixtures/markdown/fixture.md"}
+{"until":"state.viewers.1.most","exists":true}
+{"shot":"top"}
+{"cmd":"key","keys":"4 0 j"}
+{"shot":"lists-tables"}
+{"cmd":"key","keys":"4 0 j"}
+{"shot":"code"}
+{"cmd":"key","keys":"4 0 j"}
+{"shot":"more-code"}
+{"cmd":"key","keys":"4 0 j"}
+{"shot":"quotes-links"}
+{"cmd":"key","keys":"shift-g"}
+{"shot":"end"}

@@ -115,7 +115,7 @@ fn give_back(entries: &[Entry], only: Option<i32>, screens: &Screens, skip: &[(i
         if !process::alive(e.pid) {
             continue;
         }
-        // Only a standard window of that pid with that id: the file's numbers are untrusted.
+        // Only a standard window or dialog of that pid with that id: the file's numbers are untrusted.
         let back = match ax::Window::find(e.pid, e.window) {
             Some(window) => {
                 let now = window.frame().map(recovery::to_frame);

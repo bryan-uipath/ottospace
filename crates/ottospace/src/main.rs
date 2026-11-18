@@ -113,6 +113,7 @@ mod tags;
 mod talk;
 mod terminal;
 mod trace;
+mod viewer;
 mod words;
 mod workbook;
 mod worktree;
@@ -134,6 +135,11 @@ struct Latest {
     /// When the stream last said anything, a frame or "nothing changed" (milliseconds since
     /// 1970). It says nothing while its window is not drawn: minimised, or on another Space.
     seen: AtomicU64,
+    /// What the stream has sent, frames and "nothing changed": a test run shows that a live
+    /// window's stream sends none and starts again as it parks.
+    samples: AtomicU64,
+    /// The frame held is from before the stream last started: a capture waits for a new one.
+    old: AtomicBool,
 }
 
 impl Latest {
@@ -147,6 +153,7 @@ struct Output(Arc<Latest>);
 impl SCStreamOutputTrait for Output {
     fn did_output_sample_buffer(&self, sample: CMSampleBuffer, _: SCStreamOutputType) {
         self.0.seen.store(now_ms(), Relaxed);
+        self.0.samples.fetch_add(1, Relaxed);
         let ptr = sample.image_buffer_ptr_borrowed();
         if ptr.is_null() {
             return; // idle frames carry no image
@@ -158,6 +165,7 @@ impl SCStreamOutputTrait for Output {
         }
         if let Ok(mut slot) = self.0.frame.lock() {
             *slot = Some(Frame(buffer));
+            self.0.old.store(false, Relaxed);
             self.0.dirty.store(true, Relaxed);
         }
     }
@@ -194,6 +202,9 @@ struct Hosted {
     off_screen: bool,
     latest: Arc<Latest>,
     stream: SCStream,
+    /// The stream is stopped while the window is live: a captured window loses quick clicks
+    /// (Finder misses double-clicks). Holds what the stream was configured to show then.
+    paused: Option<(CGSize, f64)>,
     pid: i32,
     /// Window corner radius in points, for masking the stream's black corners.
     radius: f64,
@@ -219,6 +230,8 @@ struct Hosted {
     preview: Rc<Cell<Bounds<Pixels>>>,
     /// Last pane content rect the live window was placed over, to re-place only on change.
     placed: CGRect,
+    /// The width the window kept when its pane asked for less: no split may leave it narrower.
+    min_width: Option<f64>,
 }
 
 impl Hosted {
@@ -267,6 +280,7 @@ impl Hosted {
             window,
             original,
             latest,
+            paused: None,
             stream,
             pid,
             radius,
@@ -281,6 +295,7 @@ impl Hosted {
             refused: None,
             preview: Rc::default(),
             placed: CGRect::default(),
+            min_width: None,
         })
     }
 
@@ -336,6 +351,11 @@ impl Hosted {
         let content = CGSize::new(frame.size.width, frame.size.height - self.crop);
         let shown = CGSize::new(pane.width.min(content.width), pane.height.min(content.height));
         let asked = (shown, self.crop);
+        // Live: the click rule and the mask follow the window; `resume` configures the stream.
+        if self.paused.is_some() {
+            (self.shown, self.shown_crop, self.content) = (shown, self.crop, content);
+            return Some(content);
+        }
         if asked == (self.shown, self.shown_crop) {
             self.content = content;
             return Some(content);
@@ -386,6 +406,33 @@ impl Hosted {
         self.place(pane_rect(rect, keep, true, crop), crop);
         self.window.raise();
         self.show(window.scale_factor() as f64);
+    }
+
+    /// Stops the stream while the window is live: the real window is on screen, and a captured
+    /// one loses quick clicks.
+    fn pause(&mut self) {
+        if self.paused.is_some() {
+            return;
+        }
+        match self.stream.stop_capture() {
+            Ok(()) => self.paused = Some((self.shown, self.shown_crop)),
+            Err(_) => event_log::event("stream_stop_failed", serde_json::json!({ "window": self.window_id })),
+        }
+    }
+
+    /// Starts the stream again once the window is parked, configured for what the pane shows.
+    /// A failed start stays paused, and the next park tries again.
+    fn resume(&mut self, scale: f64) {
+        let Some(streamed) = self.paused else { return };
+        // Here, not in `pause`: a frame sent as the stream stopped may land after the stop.
+        self.latest.old.store(true, Relaxed);
+        if self.stream.start_capture().is_err() {
+            return event_log::event("stream_start_failed", serde_json::json!({ "window": self.window_id }));
+        }
+        self.paused = None;
+        // What the stream shows; `show` configures it for the pane now.
+        (self.shown, self.shown_crop) = streamed;
+        self.show(scale);
     }
 
     /// The crop for this window with its pane content at `rect`; see `titlebar::crop`.
@@ -506,11 +553,11 @@ pub(crate) fn rail_id(label: &str) -> String {
 
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 6] = [
+    (Section::Repos, "icons/repos.svg", "Repos"),
     (Section::Tasks, "icons/tasks.svg", "Tasks"),
     (Section::Calendar, "icons/calendar.svg", "Calendar"),
     (Section::Apps, "icons/apps.svg", "Apps"),
     (Section::Workbook, "icons/workbook.svg", "Workspaces"),
-    (Section::Repos, "icons/repos.svg", "Repos"),
     (Section::Marks, "icons/marks.svg", "Marks"),
 ];
 
@@ -779,6 +826,10 @@ struct Workspace {
     hosted: HashMap<PaneId, Hosted>,
     /// Shell half of each terminal pane.
     terminals: HashMap<PaneId, Terminal>,
+    /// Each file viewer's file as read and drawn (`viewer`), by pane.
+    viewers: HashMap<PaneId, viewer::FileView>,
+    /// "File…" choices that would have shown the open panel: a test run shows none.
+    file_prompts: u32,
     /// Each terminal's header, read from its processes a few times a second: `app-api · cargo test`.
     titles: HashMap<PaneId, String>,
     /// The right drawer: each task's agent, and where its conversation was drawn.
@@ -1005,6 +1056,8 @@ struct Workspace {
     listen_meter: Option<listen_meter::Meter>,
     /// The transcript whose speech model the system is downloading, for its label.
     listen_downloading: Option<String>,
+    /// Today's files of `transcripts_dir` as last handed to the core, and the one open read-only.
+    listen_past: listen::Past,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -1162,6 +1215,7 @@ impl Workspace {
                         cx.quit();
                     }
                     this.serve_control(window, cx);
+                    this.sync_viewers(window, cx);
                     this.take_tags(window, cx);
                     this.store_layout(false);
                     this.store_key_use(false);
@@ -1170,6 +1224,9 @@ impl Workspace {
                         this.read_titles(cx);
                     }
                     this.listen_menu_bar(window, cx);
+                    if tick % 60 == 0 {
+                        this.listen_read_past(window, cx);
+                    }
                     // The green button, Window ▸ Zoom or a title bar double-click: only the user's hand.
                     if ottospace_mac::window::take_zoom() {
                         this.dispatch(Action::FillDisplay, Origin::User, window, cx);
@@ -1338,6 +1395,8 @@ impl Workspace {
             model,
             hosted: HashMap::new(),
             terminals: HashMap::new(),
+            viewers: HashMap::new(),
+            file_prompts: 0,
             titles: HashMap::new(),
             drawer: talk::Drawer::default(),
             cell: terminal::cell_size(window),
@@ -1455,6 +1514,7 @@ impl Workspace {
             listen_ending: Vec::new(),
             listen_meter: None,
             listen_downloading: None,
+            listen_past: listen::Past::default(),
             focus,
             _subscriptions: subscriptions,
         };
@@ -1668,10 +1728,16 @@ impl Workspace {
                             _ => None,
                         });
                         let spawned = Instant::now();
-                        // Open Settings: the editor on the file, not a shell.
+                        // Open Settings, or ⌃G in a viewer: the editor on the file, not a shell.
+                        let edits = effects.iter().find_map(|effect| match effect {
+                            Effect::EditFile { pane, path } if pane == id => Some(path),
+                            _ => None,
+                        });
                         let started = if effects.contains(&Effect::EditSettings { pane: *id }) {
                             let file = config::settings_file().map_err(std::io::Error::other);
                             file.and_then(|file| Terminal::edit(&file.to_string_lossy(), &vars))
+                        } else if let Some(path) = edits {
+                            Terminal::edit(path, &vars)
                         } else {
                             Terminal::spawn(&vars, cwd, history)
                         };
@@ -1690,6 +1756,7 @@ impl Workspace {
                         .borrow_mut()
                         .retain(|mark, _| ![Mark::Header(pane.id), Mark::Close(pane.id)].contains(mark));
                     self.terminals.remove(&pane.id); // drop ends its shell
+                    self.viewers.remove(&pane.id);
                     if let Some(hosted) = self.hosted.remove(&pane.id) {
                         hosted.release();
                     }
@@ -1702,7 +1769,9 @@ impl Workspace {
                         let limit = top_limit(window, cx);
                         let rect = on_screen(hosted.bounds.get(), window, cx);
                         let crop = hosted.crop_at(rect, limit);
-                        hosted.park(pane_rect(rect, keep, false, crop).size, window.scale_factor() as f64, crop);
+                        let scale = window.scale_factor() as f64;
+                        hosted.park(pane_rect(rect, keep, false, crop).size, scale, crop);
+                        hosted.resume(scale);
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
                         // bar shows no mode. If the user moved to a third app, leave them there.
@@ -1784,7 +1853,11 @@ impl Workspace {
                     }
                 }
                 // Carried out with its pane's `Opened`, before the shell starts.
-                Effect::History { .. } | Effect::EditSettings { .. } => {}
+                Effect::History { .. } | Effect::EditSettings { .. } | Effect::EditFile { .. } => {}
+                // Read again from the start: the next tick does (`sync_viewers`).
+                Effect::ViewFile { pane } => drop(self.viewers.remove(pane)),
+                Effect::ViewerScroll { pane, top } => self.viewer_scroll(*pane, *top, cx),
+                Effect::ChooseFile { axis, new_tab } => self.choose_file(*axis, *new_tab, window, cx),
                 Effect::OpenEditor { text } => {
                     if let Err(why) = self.open_editor(text) {
                         self.error = Some(why);
@@ -1822,13 +1895,15 @@ impl Workspace {
                     .detach();
                 }
                 Effect::Live(id) => {
-                    self.live_since = Some(Instant::now());
                     self.went_live += 1;
                     let keep = self.bars_leave();
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("unpark", serde_json::json!({ "pane": id, "window": hosted.window_id }));
+                        hosted.pause();
                         hosted.bring_up(keep, window, cx);
                     }
+                    // After the blocking stop and AX calls: the activation they delay is still ignored.
+                    self.live_since = Some(Instant::now());
                 }
             }
         }
@@ -2317,7 +2392,7 @@ impl Workspace {
                             if self.model.visual.is_some() {
                                 self.dispatch(Action::LeaveVisual, Origin::Socket, window, cx);
                             }
-                            self.terminal_mouse_down(id, &event, cx);
+                            self.terminal_mouse_down(id, &event, window, cx);
                             self.click_pane(id, &event, window, cx);
                         }
                         Err(err) => failure = Some(err),
@@ -2462,6 +2537,19 @@ impl Workspace {
                     None
                 }
                 Request::OpenRepo { path, axis } => Some(Action::OpenRepo { path, axis }),
+                // Judged before the core: one line, absolute, and on disk a regular file (the
+                // viewer reads it again itself, and shows what it finds).
+                Request::OpenFile { beside: Some(pane), .. } if self.model.pane(pane).is_none() => {
+                    failure = Some(format!("no pane {pane}"));
+                    None
+                }
+                Request::OpenFile { path, beside } => match viewer::open_refusal(&path) {
+                    Some(why) => {
+                        failure = Some(why);
+                        None
+                    }
+                    None => Some(Action::OpenFile { path, axis: Axis::Right, beside, reuse: false }),
+                },
                 // A test run only (refused above otherwise): the folder the user's picker would give.
                 Request::RepoAdd { path } => {
                     // All of it the user's, what it says too.
@@ -3259,6 +3347,9 @@ impl Workspace {
             // Each hosted pane's title-bar crop in points (0: none).
             "crop": crop,
             "terminals": terminals,
+            // Each file viewer as drawn: `body` (`markdown` with its blocks' `shape`, `lines`, `image`,
+            // or null), never the file's text. Its path, kind, line and count are `state.viewers`.
+            "viewers": self.viewers_snapshot(),
             // A test run's stand-in clipboard: the last text copied. Null outside a test run.
             "copied": self.clipboard.test_text(),
             // The picker's rows as drawn, or null: `state.picker.items` narrowed by its filter,
@@ -3349,6 +3440,8 @@ impl Workspace {
                 "live": self.went_live,
                 // Pull requests the user's click opened (a test run opens none).
                 "pr_opens": self.pr_opens,
+                // "File…" choices: the open panel a test run does not show.
+                "file_prompts": self.file_prompts,
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
                 // How often GPUI's own handlers were kicked to draw again (`stall`): after a change
@@ -3423,6 +3516,13 @@ impl Workspace {
         });
         // Restored or rebuilt panes still empty: `pane`, `why`, and where its "Open <App>" is drawn, or null.
         state["unfilled"] = unfilled.into();
+        // Test runs only: what each app pane's stream has sent, `stream_samples_<pane>` (`counts`
+        // holds numbers only).
+        if let Some(counts) = state["counts"].as_object_mut() {
+            for (id, hosted) in &self.hosted {
+                counts.insert(format!("stream_samples_{id}"), hosted.latest.samples.load(Relaxed).into());
+            }
+        }
         // Where the box offers a choice of where the task works: `new` (a new worktree, the user's
         // choice), the repository's name and the `branch` it would make; else null.
         state["compose_worktree"] = serde_json::json!(self.model.compose_worktree());
@@ -3469,7 +3569,8 @@ impl Workspace {
     fn attach(&mut self, hosted: Hosted, action: Action, window: &Window, cx: &mut Context<Self>) -> Option<PaneId> {
         let pid = hosted.pid;
         if !self.known.iter().any(|(p, _)| *p == pid) {
-            let ids = ax::Window::standard_of(pid).iter().filter_map(ax::Window::id).collect();
+            // Its dialogs open now too: only those that open later are judged (`adopt_new_windows`).
+            let ids = ax::Window::all_of(pid).iter().filter(|w| w.judged()).filter_map(ax::Window::id).collect();
             self.known.push((pid, ids));
         }
         let effects = self.dispatch(action, self.input, window, cx);
@@ -3718,26 +3819,57 @@ impl Workspace {
         }
     }
 
-    /// Hosts windows that appeared since we started watching their app (e.g. undocked DevTools),
-    /// each to the right of its app's newest pane.
+    /// Hosts windows that appeared since we started watching their app (e.g. a second browser
+    /// window), each to the right of its app's newest pane. A pop-up stays a free window over that
+    /// pane (`rules::place`). Each window is judged once, when first seen as standard or a dialog.
     fn adopt_new_windows(&mut self, window: &Window, cx: &mut Context<Self>) {
         let mut fresh = Vec::new();
         for (pid, seen) in &mut self.known {
-            for window in ax::Window::standard_of(*pid) {
-                // A window the rules leave alone is seen once and never becomes a pane.
+            for window in ax::Window::all_of(*pid) {
+                // A toast or popover is looked at again next time: it may become a window.
                 if let Some(id) = window.id()
-                    && seen.insert(id)
-                    && window_managed(&window)
+                    && !seen.contains(&id)
+                    && window.quick(ax::Window::judged)
                 {
+                    seen.insert(id);
                     fresh.push(window);
                 }
             }
         }
+        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
         for ax_window in fresh {
-            if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
-                let beside = self.hosted.iter().filter(|(_, h)| h.pid == hosted.pid).map(|(id, _)| *id).max();
-                let action = Action::Adopt { kind: hosted.kind(), beside, seen: None };
-                self.attach(hosted, action, window, cx);
+            let pid = ax_window.pid();
+            let beside = self.hosted.iter().filter(|(_, h)| h.pid == pid).map(|(id, _)| *id).max();
+            // The pane it would split, if drawn: a background tab's bounds are stale.
+            let pane = beside.filter(|id| drawn.contains(id)).and_then(|id| self.hosted.get(&id));
+            let pane = pane.map(|h| (h.bounds.get(), h.min_width)).filter(|(b, _)| f32::from(b.size.width) >= 1.0);
+            // A short wait for each read: a hung app costs a blink, not seconds.
+            let (frame, modal, sheet) = ax_window.quick(|w| (w.frame(), w.modal(), w.sheet()));
+            let shape = rules::Shape {
+                modal,
+                sheet,
+                size: frame.map(|f| [f.size.width, f.size.height]),
+                pane: pane.map(|(b, _)| to_cg(b.size)).map(|s| [s.width, s.height]),
+                min_width: pane.and_then(|(_, min)| min),
+            };
+            match ax_window.quick(|w| window_place(w, &shape)) {
+                rules::Place::Split => {
+                    if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
+                        let action = Action::Adopt { kind: hosted.kind(), beside, seen: None };
+                        self.attach(hosted, action, window, cx);
+                    }
+                }
+                // Only while its app has a pane: an app given back is left alone.
+                rules::Place::Float if beside.is_some() => {
+                    let pane = pane.map(|(b, _)| recovery::to_frame(on_screen(b, window, cx)));
+                    let screens = recovery::screens();
+                    let to = frame
+                        .and_then(|f| rules::float_to(recovery::to_frame(f), pane, &screens.visible, screens.main));
+                    let moved = to.is_some_and(|(x, y)| ax_window.set_position(CGPoint::new(x, y)).is_ok());
+                    ax_window.raise_only();
+                    trace::record("float", serde_json::json!({ "window": ax_window.id(), "moved": moved }));
+                }
+                rules::Place::Float | rules::Place::Leave => {}
             }
         }
     }
@@ -3779,6 +3911,7 @@ impl Workspace {
                 && let Some(frame) = self.frames.get(id)
                 && drawn.contains(id)
             {
+                hosted.min_width = rules::refused_width(hosted.min_width, kept.width, rect.size.width);
                 let content = [rect.size.width as f32, rect.size.height as f32];
                 // The pane's size with its 1pt border.
                 let outer = frame.get().size;
@@ -3943,6 +4076,10 @@ impl Workspace {
         if self.model.mode() == Mode::Talk {
             return self.talk_key(event, window, cx);
         }
+        if self.model.keyboard_viewer().is_some() && self.viewer_key(event, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let Some(terminal) = self.model.focused.and_then(|id| self.terminals.get(&id)) else {
             // Esc that nothing else takes (no mode, no terminal to type it in) dismisses the notice.
             if key.key == "escape" && !key.modifiers.modified() && self.dismiss_notice(window, cx) {
@@ -3974,12 +4111,16 @@ impl Workspace {
     /// A press on a terminal starts a selection there: a drag, or a word or line by click count;
     /// with ⇧ it moves the far end of the one there (`press`).
     /// It also focuses the pane (`click_pane`), so the first click on an unfocused pane selects too.
-    fn terminal_mouse_down(&mut self, id: PaneId, event: &MouseDownEvent, cx: &mut Context<Self>) {
+    fn terminal_mouse_down(&mut self, id: PaneId, event: &MouseDownEvent, window: &Window, cx: &mut Context<Self>) {
         // While a picture is annotated a click on another pane captures it: it selects nothing.
         if self.model.annotated().is_some() {
             return;
         }
         let Some(at) = self.cell_under(id, event.position) else { return };
+        // ⌘-click on a text file's path: the viewer beside, reused for the next one.
+        if event.modifiers.platform && self.terminal_path_click(id, at, window, cx) {
+            return;
+        }
         if let Some(terminal) = self.terminals.get(&id) {
             terminal.select_start(at, press(event.click_count, event.modifiers.shift));
             (self.dragging, self.drag_at) = (Some(id), None);
@@ -4284,7 +4425,7 @@ impl Workspace {
         // What `refresh_apps` just listed: running apps, then the pinned ones that are not.
         let apps = self.apps.iter().map(|app| PickItem::App { name: app.name.clone() });
         let closed = self.pinned_closed().map(|app| PickItem::Closed { name: app.name, path: app.path });
-        let items = std::iter::once(PickItem::Terminal).chain(apps).chain(closed).collect();
+        let items = [PickItem::Terminal, PickItem::File].into_iter().chain(apps).chain(closed).collect();
         self.offer_installed(cx);
         self.dispatch(Action::OpenPicker { axis, new_tab, items }, self.input, window, cx);
     }
@@ -4392,13 +4533,18 @@ impl Workspace {
     }
 
     /// The picker dropdown, under the split buttons. A click outside it closes it.
-    fn render_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> AnyElement {
+        if picker.transcribe {
+            return self.render_sound_picker(picker, cx);
+        }
         let selected = picker.selected;
         let rows = picker.matches().into_iter().enumerate().map(|(i, item)| {
             let (tag, color) = match item {
                 PickItem::Terminal => ("TERM", theme::PRIMARY),
+                PickItem::File => ("FILE", theme::PRIMARY),
                 PickItem::App { .. } => ("APP", theme::APP),
                 PickItem::Closed { .. } => ("APP", theme::MUTED),
+                PickItem::Sound { .. } => ("APP", theme::APP),
             };
             dialog::filter_row(("pick", i), i == selected)
                 .child(match item {
@@ -4435,7 +4581,60 @@ impl Workspace {
             .child(div().text_color(rgb(theme::PICK)).child(title))
             .child(self.render_field("type to filter", cx));
         let panel = self.list_panel(panel, header, "picker", rows, "No match");
-        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel)
+        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel).into_any_element()
+    }
+
+    /// The transcript's picker ("Transcribe a window…"), in ⌘E's style: each app that can play
+    /// sound and its windows, the one playing now first and marked. A pick hears that app.
+    fn render_sound_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> AnyElement {
+        let selected = picker.selected;
+        let rows = picker.matches().into_iter().enumerate().filter_map(|(i, item)| {
+            let PickItem::Sound { name, window, playing, .. } = item else { return None };
+            let icon = match self.icons.contains_key(name) {
+                true => div().w(px(28.)).flex_none().child(self.app_icon(name)),
+                false => div().w(px(28.)).flex_none(),
+            };
+            let label = match window {
+                Some(window) => format!("{name} · {window}"),
+                None => name.clone(),
+            };
+            let now = playing.then(|| {
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(rgb(theme::RECORDING))
+                    .child(div().size(px(6.)).rounded_full().bg(rgb(theme::RECORDING)))
+                    .child("sound now")
+            });
+            let row = dialog::filter_row(("pick", i), i == selected)
+                .child(icon)
+                .child(div().flex_1().min_w_0().truncate().child(label))
+                .children(now)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.dispatch(Action::PickerChoose { index: Some(i) }, this.input, window, cx);
+                }));
+            Some(row.into_any_element())
+        });
+        let rows: Vec<AnyElement> = rows.collect();
+        let panel = dialog::floating(360.).absolute().top(px(TOP_BAR + 6.)).right(px(8.)).max_h(px(420.));
+        let header = div()
+            .h(px(34.))
+            .text_xs()
+            .child(div().text_color(rgb(theme::PICK)).child("Listen to…"))
+            .child(self.render_field("type to filter", cx));
+        let foot = div()
+            .px_3()
+            .py_2()
+            .border_t_1()
+            .border_color(rgb(theme::BORDER))
+            .text_xs()
+            .text_color(rgb(theme::MUTED))
+            .child("↵ listen · Esc cancel · needn't be in a pane");
+        let panel = self.list_panel(panel, header, "picker", rows, "No app to listen to").child(foot);
+        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel).into_any_element()
     }
 
     /// Carries out `Effect::FillDisplay`. A run with hosting off changes no window: its own
@@ -4891,6 +5090,7 @@ impl Workspace {
             // A window with no title says whose it is.
             Kind::App { title, name, .. } if title.is_empty() => name.clone(),
             Kind::App { title, .. } => title.clone(),
+            Kind::File { path } => viewer::name_and_dir(path).0,
         }
     }
 
@@ -5516,6 +5716,22 @@ impl Workspace {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.fit_pane(id, window, cx)))
         });
+        // A viewer's Edit: the user's editor on its file, beside it (⌃G).
+        let edit = matches!(pane.kind, Kind::File { .. }).then(|| {
+            div()
+                .id(("edit", id))
+                .flex_none()
+                .relative()
+                .cursor_pointer()
+                .text_color(rgb(theme::MUTED))
+                .hover(|s| s.text_color(rgb(theme::TEXT)))
+                .child("Edit")
+                .child(self.controls.mark(format!("viewer-edit:{id}")))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    drop(this.dispatch(Action::ViewerEdit { pane: Some(id) }, this.input, window, cx))
+                }))
+        });
         // After a copy from it or a paste into it: "Copied 3 lines" in the header, and one pulse.
         let now = now_ms();
         let clip = self.model.clip.as_ref().filter(|clip| clip.pane == Some(id) && clip.shows(now));
@@ -5531,6 +5747,7 @@ impl Workspace {
             Kind::Terminal => "Terminal".into(),
             Kind::Empty => "Empty pane".into(),
             Kind::Slot { name, .. } => format!("Slot · {name}").into(),
+            Kind::File { .. } => "File".into(),
         };
         // A marked pane says so, with its letter: ⌘B gives no other sign while the Marks list is shut.
         let marked = self.model.mark_of(MarkOf::Pane(Some(id))).filter(|_| self.on(Feature::Marks));
@@ -5609,6 +5826,7 @@ impl Workspace {
                     .children(clip)
                     .children(hint)
                     .children(word)
+                    .children(edit)
                     .children(strip)
                     .child(
                         div()
@@ -5671,6 +5889,8 @@ impl Workspace {
                 }
                 None => div().child("waiting for frames…").into_any_element(),
             }
+        } else if let Kind::File { path } = &pane.kind {
+            self.viewer_body(id, path, cx)
         } else if let Some(terminal) = self.terminals.get(&id) {
             let screen = terminal.screen();
             let cell = self.cell;
@@ -5705,7 +5925,9 @@ impl Workspace {
                 .on_scroll_wheel(cx.listener(move |this, e: &ScrollWheelEvent, _, cx| this.wheel(id, e.delta, cx)))
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this, e: &MouseDownEvent, _, cx| this.terminal_mouse_down(id, e, cx)),
+                    cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                        this.terminal_mouse_down(id, e, window, cx)
+                    }),
                 )
                 .child(grid)
                 .child(scrollbar)
@@ -5873,8 +6095,15 @@ impl Workspace {
             })
             .collect();
         let more = others - badges;
+        let dot = self.model.listen_dot();
+        // The heard pane's space left off for room: the count carries its dot.
+        let dot_in_more = matches!(&dot, Some(ottospace_core::listen::Dot::Space(of))
+            if !shown.iter().any(|(_, space)| space.of == *of));
         let spaces = shown.into_iter().map(|(place, space)| {
             let of = space.of.clone();
+            // The pane being heard is in this space, off show: a red dot at its corner.
+            let heard = (dot == Some(ottospace_core::listen::Dot::Space(of.clone())))
+                .then(|| self.off_show_dot(format!("listen-dot:space:{place}"), cx).top(px(5.)).left(px(3.)));
             let on = of == selected;
             let small = of == Owner::Home || (compact && !on);
             // A temporary workspace's name is muted and italic (selected or not); its tip says it closes without saving.
@@ -6005,6 +6234,7 @@ impl Workspace {
                 })
                 .hover(|s| s.text_color(rgb(theme::TEXT)))
                 .child(mark(&self.marks, Mark::Space(place)))
+                .children(heard)
                 .children(lead)
                 .children((!small).then(|| {
                     let name = cut_text(title).flex_1();
@@ -6031,6 +6261,10 @@ impl Workspace {
         let more = (more > 0).then(|| {
             div()
                 .id("more-spaces")
+                .relative()
+                .when(dot_in_more, |d| {
+                    d.child(self.off_show_dot("listen-dot:more".into(), cx).top(px(5.)).left(px(2.)))
+                })
                 .flex_none()
                 .px_2()
                 .h_full()
@@ -6105,8 +6339,6 @@ impl Workspace {
     /// New tab and split buttons: a new empty tab, or the picker for that split. Then Fill the
     /// Whole Display, its arrows out while off and in while on.
     fn render_top_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // A transcript's mark first, at the row's right end.
-        let listen = self.render_listen_mark(cx);
         // Each the same: an icon, its sneak label, its tip.
         let button = |id: ElementId, icon: &'static str, name: String, tip: &'static str| {
             div()
@@ -6135,7 +6367,7 @@ impl Workspace {
                 this.dispatch(Action::FillDisplay, this.input, window, cx);
             }),
         );
-        div().flex_none().ml_auto().mr_2().flex().items_center().gap_1().children(listen).children(splits).child(fill)
+        div().flex_none().ml_auto().mr_2().flex().items_center().gap_1().children(splits).child(fill)
     }
 
     /// The second row: the selected space's tabs, only while it has more than one. The one on
@@ -6148,6 +6380,7 @@ impl Workspace {
         }
         let colour = self.space_colour(&of);
         let chip = self.agent_chip(SPACE_TABS, cx);
+        let dot = self.model.listen_dot();
         let tabs =
             places.into_iter().filter_map(|place| Some((place, self.model.tabs.get(place)?))).map(|(place, tab)| {
                 let (active, id) = (place == self.model.active, tab.id);
@@ -6191,6 +6424,11 @@ impl Workspace {
                     .when(!active, |d| d.child(inner_shade(false, 6.)))
                     .hover(|s| s.text_color(rgb(theme::TEXT)))
                     .child(mark(&self.marks, Mark::Tab(place)))
+                    // The pane being heard is in this tab, off show.
+                    .children(
+                        (dot == Some(ottospace_core::listen::Dot::Tab(id)))
+                            .then(|| self.off_show_dot(format!("listen-dot:tab:{id}"), cx).top(px(6.)).left(px(3.))),
+                    )
                     .children(
                         self.model
                             .mark_of(MarkOf::Tab(Some(id)))
@@ -6304,6 +6542,10 @@ impl Workspace {
                 d.child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
             })
             .child(cut_text(hint))
+            // A count or `g` typed in the viewer, waiting for its move (`10j`).
+            .children(
+                self.model.viewer_pending().map(|typed| div().flex_none().text_color(rgb(theme::TEXT)).child(typed)),
+            )
             // Pushes what follows to the right (an auto margin there closed the gaps on the left).
             // Its hover names the build.
             .child(div().id("status-space").flex_1().h_full().tooltip(|_, cx| {
@@ -6600,6 +6842,16 @@ fn list_button(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
 
 /// True if the window rules (the user's, then the built-in ones) let this window be put in a pane.
 fn window_managed(window: &ax::Window) -> bool {
+    with_facts(window, |facts| rules::manages(&config::live().windows, facts))
+}
+
+/// Where a new window of a hosted app goes, by the window rules and its `shape`.
+fn window_place(window: &ax::Window, shape: &rules::Shape) -> rules::Place {
+    with_facts(window, |facts| rules::place(&config::live().windows, facts, shape))
+}
+
+/// `judge` given what the window rules select by, read from the window.
+fn with_facts<R>(window: &ax::Window, judge: impl FnOnce(&Facts) -> R) -> R {
     let (bundle, name) = ax::app_identity(window.pid());
     let (title, subrole) = (window.title().unwrap_or_default(), window.subrole().unwrap_or_default());
     let identifier = window.identifier();
@@ -6610,7 +6862,7 @@ fn window_managed(window: &ax::Window) -> bool {
         subrole: &subrole,
         identifier: identifier.as_deref(),
     };
-    rules::manages(&config::live().windows, &facts)
+    judge(&facts)
 }
 
 /// Apps that can be hosted right now. In a test run limited to one app, only that app.
@@ -6746,7 +6998,7 @@ impl Render for Workspace {
         // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
         // the buttons and the agent chip's badge.
         let centre = f32::from(window.viewport_size().width) - left;
-        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve() - self.listen_reserve();
+        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve();
         div()
             .size_full()
             .flex()

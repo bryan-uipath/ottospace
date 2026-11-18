@@ -102,7 +102,8 @@ pub struct Cursor {
     open: BTreeSet<String>,
     /// What a call's command turned out to be, by opaque call id, held until the call's output record.
     refined: BTreeMap<String, Refined>,
-    /// Edit calls carry their change (`What::ToolStart.diff`).
+    /// Edit calls carry their change (`What::ToolStart.diff`), every call its gist and a call's
+    /// end its output (`gist`, `output`).
     edits: bool,
     /// The folder the main loop last recorded working in (`What::Cwd`).
     cwd: Option<PathBuf>,
@@ -113,8 +114,9 @@ impl Cursor {
         self.offset
     }
 
-    /// A cursor from the start whose reads give edit calls their change: file contents, for
-    /// the watch view alone. Kept when a read starts over.
+    /// A cursor from the start whose reads give edit calls their change, calls their gist and
+    /// their ends the output: file contents and commands, for the watch view alone. Kept when a
+    /// read starts over.
     pub fn with_edits() -> Self {
         Self { edits: true, ..Self::default() }
     }
@@ -154,20 +156,23 @@ pub enum What {
         usage: Option<Usage>,
         window: Option<u64>,
     },
-    /// `diff`: an edit's change, only for a cursor `with_edits`.
+    /// `diff`: an edit's change, and `gist`: what its row shows, only for a cursor `with_edits`.
     ToolStart {
         id: String,
         tool: String,
         station: Station,
         summary: String,
         diff: Option<ottospace_core::diff::Diff>,
+        gist: Option<ottospace_core::gist::Gist>,
     },
     /// `station` and `summary` are set when the end says more than the start did (Codex `exec`).
+    /// `output`: the result's text, only for a cursor `with_edits`.
     ToolEnd {
         id: String,
         failed: bool,
         station: Option<Station>,
         summary: Option<String>,
+        output: Option<ottospace_core::transcript::Text>,
     },
     /// An API error, a refusal or an aborted turn. `kind` is a code from a fixed table, never a message.
     Error {

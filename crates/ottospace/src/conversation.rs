@@ -23,14 +23,25 @@ use ottospace_agents::{Answer, Event as Said, Input, Process, Ticket};
 use ottospace_core::activity::Station;
 use ottospace_core::agents::{self, Start};
 use ottospace_core::diff::{self, Change, Diff, Sign};
+use ottospace_core::gist;
 use ottospace_core::links::Target;
 use ottospace_core::model::chat::{self, Key, Primary};
 use ottospace_core::talk::Subject;
-use ottospace_core::transcript::{Call, Entry, Event, Item, MAX_CARDS, Notice, Text, View, clean};
+use ottospace_core::transcript::{
+    By, Call, Entry, Event, Item, MAX_CARDS, NoteKind, Notice, Status, Text, View, clean,
+};
 use ottospace_core::{Action, Origin, theme};
 
 use crate::markdown::{self, Block, Span};
 use crate::{Tooltip, Workspace};
+
+/// Whose markdown is drawn, for its links and pictures: a conversation's (inside its task's
+/// repository), or a file viewer's (inside the file's folder).
+#[derive(Clone)]
+pub(crate) enum Links {
+    Chat(Subject),
+    File { pane: ottospace_core::PaneId, dir: String },
+}
 
 /// A native agent: its process, the requests it waits on by our number, and when it started.
 pub struct Native {
@@ -179,11 +190,15 @@ fn watched(event: &ottospace_sessions::Event) -> Vec<Event> {
             let started = model.clone().map(|model| Event::Started { session: None, model: Some(model), mode: None });
             started.into_iter().chain([usage]).collect()
         }
-        What::ToolStart { id, tool, station, summary, diff } => {
-            let (tool, station, label, diff) = (tool.clone(), *station, summary.clone(), diff.clone());
-            vec![Event::ToolStart { id: id.clone(), sub: false, tool, station, label, detail: Text::default(), diff }]
+        What::ToolStart { id, tool, station, summary, diff, gist } => {
+            let (tool, station, label, diff, gist) =
+                (tool.clone(), *station, summary.clone(), diff.clone(), gist.clone());
+            let detail = Text::default();
+            vec![Event::ToolStart { id: id.clone(), sub: false, tool, station, label, detail, diff, gist }]
         }
-        What::ToolEnd { id, failed, .. } => vec![Event::ToolEnd { id: id.clone(), failed: *failed }],
+        What::ToolEnd { id, failed, output, .. } => {
+            vec![Event::ToolEnd { id: id.clone(), failed: *failed, output: output.clone() }]
+        }
         What::Error { kind } => vec![Event::Error { kind: kind.clone(), retrying: false }],
         What::SubAgentStart { id, label } => {
             let (tool, label, station) = ("Agent".to_string(), label.clone(), Station::Agents);
@@ -195,9 +210,10 @@ fn watched(event: &ottospace_sessions::Event) -> Vec<Event> {
                 label,
                 detail: Text::default(),
                 diff: None,
+                gist: None,
             }]
         }
-        What::SubAgentEnd { id } => vec![Event::ToolEnd { id: id.clone(), failed: false }],
+        What::SubAgentEnd { id } => vec![Event::ToolEnd { id: id.clone(), failed: false, output: None }],
         What::Compaction { .. } => vec![Event::Compaction],
         What::ModelChange { to, .. } => vec![Event::Started { session: None, model: Some(to.clone()), mode: None }],
         What::Cwd { .. } => Vec::new(),
@@ -369,14 +385,15 @@ impl Workspace {
             self.dispatch(Action::AgentExited { task }, Origin::System, window, cx);
         }
         let changed = self.sync_watch(window, cx) || changed;
-        self.lay_out();
+        let changed = self.lay_out() || changed;
         if changed {
             cx.notify();
         }
     }
 
-    /// Parses the replies whose text changed, and reads the local images they show.
-    fn lay_out(&mut self) {
+    /// Parses the replies whose text changed, and reads the local images they show. True if a
+    /// picture was read: it is drawn now (a viewer's too).
+    fn lay_out(&mut self) -> bool {
         let mut wanted: Vec<(String, Option<String>)> = Vec::new();
         let subjects: Vec<Subject> = self.drawer.looks.keys().cloned().collect();
         for subject in subjects.iter().chain(self.model.talk.as_ref().map(|talk| &talk.task)) {
@@ -398,13 +415,16 @@ impl Workspace {
         for (path, repo) in wanted {
             self.drawer.thumbs.entry(path.clone()).or_insert_with(|| read_thumb(path, repo));
         }
+        let mut read_one = false;
         for thumb in self.drawer.thumbs.values_mut() {
             if let Thumb::Reading(read) = thumb
                 && let Ok(image) = read.try_recv()
             {
                 *thumb = image.map_or(Thumb::None, Thumb::Ready);
+                read_one = true;
             }
         }
+        read_one
     }
 
     /// Follows the session the core says to watch, read-only, from its file: starts or ends the
@@ -460,10 +480,12 @@ impl Workspace {
         cx.stop_propagation();
     }
 
-    /// A click on a link: a web page in the default browser, a file of the repository revealed
-    /// in Finder. Only the user's click, and only what `links::target` gave; a file is checked
-    /// again with its links resolved, so a symlink cannot lead out of the repository.
-    fn open_link(&mut self, subject: &Subject, target: &Target, cx: &mut Context<Self>) {
+    /// A click on a link: a web page in the default browser, a file of the repository (or of the
+    /// viewed file's folder) revealed in Finder; with ⌘ (`cmd`), a text or markdown file opens in
+    /// the viewer instead (`viewer::opens_on_click`). Only the user's click, and only what
+    /// `links::target` gave; a file is checked again with its links resolved, so a symlink cannot
+    /// lead out of the folder.
+    fn open_link(&mut self, of: &Links, target: &Target, cmd: bool, window: &Window, cx: &mut Context<Self>) {
         if self.input != Origin::User {
             self.error = Some("only the user's click opens a link".into());
             return;
@@ -478,8 +500,23 @@ impl Workspace {
             }
             Target::File(path) => {
                 let real = std::fs::canonicalize(path).ok();
-                let root = self.repo_of(subject).and_then(|repo| std::fs::canonicalize(repo).ok());
+                let root = match of {
+                    Links::Chat(subject) => self.repo_of(subject),
+                    Links::File { dir, .. } => Some(dir.clone()),
+                };
+                let root = root.and_then(|root| std::fs::canonicalize(root).ok());
                 match real.zip(root).filter(|(real, root)| real.starts_with(root)) {
+                    Some((real, _)) if cmd && ottospace_core::viewer::opens_on_click(&real.to_string_lossy()) => {
+                        self.drawer.opened.push("viewer");
+                        let path = real.to_string_lossy().into_owned();
+                        // A viewer's link goes to the viewer it opened, beside it.
+                        let (beside, reuse) = match of {
+                            Links::File { pane, .. } => (Some(*pane), true),
+                            Links::Chat(_) => (None, false),
+                        };
+                        let open = Action::OpenFile { path, axis: ottospace_core::Axis::Right, beside, reuse };
+                        self.dispatch(open, Origin::User, window, cx);
+                    }
                     Some((real, _)) => {
                         self.drawer.opened.push("file");
                         if !test {
@@ -516,7 +553,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn toggle_row(&mut self, subject: &Subject, id: u64, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_row(&mut self, subject: &Subject, id: u64, cx: &mut Context<Self>) {
         let open = &mut self.drawer.looks.entry(subject.clone()).or_default().open;
         if !open.remove(&id) {
             open.insert(id);
@@ -740,24 +777,75 @@ impl Workspace {
                     self.drawer.looks.get(subject).and_then(|look| look.parsed.get(&id)).map(|(_, b)| b.clone());
                 let blocks = blocks.unwrap_or_else(|| Rc::new(markdown::parse(text.text(), None)));
                 let plain = markdown::plain(&blocks);
-                let at = format!("{key}:{id}");
+                let (at, of) = (format!("{key}:{id}"), Links::Chat(subject.clone()));
                 let body = div()
                     .flex()
                     .flex_col()
                     .gap_1p5()
                     .text_sm()
-                    .children(blocks.iter().enumerate().map(|(n, block)| self.block(subject, &at, n, block, cx)))
+                    .children(blocks.iter().enumerate().map(|(n, block)| self.block(&of, &at, n, block, cx)))
                     .children(streaming.then(|| div().text_xs().text_color(rgb(theme::MUTED)).child("…")));
                 self.with_copy(key, id, body, plain, text.text().to_string(), cx)
             }
-            Entry::Tool { sub, tool, label, detail, state, diff, .. } => {
+            Entry::Tool { sub, tool, label, detail, state, diff, gist, output, .. } => {
                 let (glyph, color) = match state {
                     Call::Running => ("●", theme::PRIMARY),
                     Call::Done => ("✓", theme::PICK),
                     Call::Failed => ("✕", theme::ERROR),
                 };
-                let line = format!("{}{tool} · {label}", if *sub { "↳ " } else { "" });
-                let row = self.row(subject, key, id, (glyph, color), line, detail, cx);
+                let open = self.drawer.looks.get(subject).is_some_and(|look| look.open.contains(&id));
+                let row = match gist {
+                    Some(gist) => {
+                        let repo = self.repo_of(subject);
+                        let line = gist.line(repo.as_deref());
+                        let words = match gist.kind {
+                            gist::Kind::Command => code_text(&line).truncate().text_color(rgb(theme::TEXT)),
+                            _ => div().truncate().child(line),
+                        };
+                        let head = div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_1p5()
+                                    .min_w_0()
+                                    .child(div().flex_none().child(gist.lead(tool)))
+                                    .child(words.min_w_0()),
+                            )
+                            .children(gist.note().map(|note| div().truncate().opacity(0.75).child(note)));
+                        // Open: the command whole and what it printed; another call, its detail.
+                        let body = open.then(|| match gist.command() {
+                            Some(command) => {
+                                // As an agent's stderr is shown: cleaned, credential-shaped parts hidden.
+                                let printed = output.as_ref().map(|output| {
+                                    let printed = ottospace_core::transcript::details(output.text());
+                                    // A tab drawn as four spaces: cut again to what was kept.
+                                    ottospace_core::transcript::cut(&printed, gist::MAX_OUTPUT).to_string()
+                                });
+                                div()
+                                    .id(ElementId::Name(format!("chat-row-body:{key}:{id}").into()))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .overflow_x_scroll()
+                                    .child(code_text(&command).text_color(rgb(theme::TEXT)))
+                                    .children(printed.map(|printed| code_text(&printed)))
+                            }
+                            None => div()
+                                .id(ElementId::Name(format!("chat-row-body:{key}:{id}").into()))
+                                .child(code_text(&clean(detail.text()))),
+                        });
+                        self.gist_row(subject, key, id, (glyph, color), head, body, cx)
+                    }
+                    None => {
+                        let line = format!("{tool} · {label}");
+                        self.row(subject, key, id, (glyph, color), line, detail, cx)
+                    }
+                };
+                // A sub-agent's calls sit under the row that started it.
+                let row = if *sub { div().ml_4().child(row).into_any_element() } else { row };
                 match diff {
                     Some(diff) => {
                         div().flex().flex_col().gap_1().child(row).child(self.diff_card(subject, key, id, diff, cx))
@@ -765,6 +853,28 @@ impl Workspace {
                     None => return row,
                 }
                 .into_any_element()
+            }
+            Entry::Note { note, text } => {
+                // Untrusted words on one line, after fixed ones.
+                let words = clean(text.text()).split_whitespace().collect::<Vec<_>>().join(" ");
+                let lead = match note {
+                    NoteKind::Subtask => "Started a subtask:",
+                    NoteKind::Ended { status: Status::Completed } => "Subtask done:",
+                    NoteKind::Ended { status: Status::Failed } => "Subtask failed:",
+                    NoteKind::Ended { status: Status::Stopped } => "Subtask stopped:",
+                    NoteKind::Ended { status: Status::Other } => "Subtask ended:",
+                    NoteKind::Notification => "Claude Code:",
+                };
+                div()
+                    .id(ElementId::Name(format!("chat-note:{key}:{id}").into()))
+                    .flex()
+                    .gap_1p5()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(rgb(theme::MUTED))
+                    .child(div().flex_none().child(lead))
+                    .child(div().truncate().min_w_0().child(words))
+                    .into_any_element()
             }
             Entry::AutoDenied { tool, label, reason, detail } => {
                 let line = format!("Denied without asking ({reason}): {tool} · {label}");
@@ -786,6 +896,45 @@ impl Workspace {
                 None => muted(notice_text(notice)).into_any_element(),
             },
         }
+    }
+
+    /// A call whose gist shows: its words as the core gave them, its body below while open. A
+    /// click (or its sneak label) opens and closes it; nothing in it is a link.
+    #[allow(clippy::too_many_arguments)]
+    fn gist_row(
+        &self,
+        subject: &Subject,
+        key: &str,
+        id: u64,
+        (glyph, color): (&str, u32),
+        head: Div,
+        body: Option<gpui::Stateful<Div>>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let subject = subject.clone();
+        let control = format!("chat-row:{key}:{id}");
+        div()
+            .id(ElementId::Name(control.clone().into()))
+            .relative()
+            .flex()
+            .flex_col()
+            .child(self.controls.mark(control.clone()))
+            // Its head opens and closes it: a click in what it printed leaves it open.
+            .child(
+                div()
+                    .id(ElementId::Name(format!("{control}:head").into()))
+                    .flex()
+                    .gap_1p5()
+                    .min_w_0()
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(rgb(theme::MUTED))
+                    .child(div().flex_none().text_color(rgb(color)).child(glyph.to_string()))
+                    .child(head.flex_1())
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_row(&subject, id, cx))),
+            )
+            .children(body.map(|body| body.ml_4().mt_0p5()))
+            .into_any_element()
     }
 
     /// A tool call as one compact row; a click opens its detail as plain text.
@@ -838,10 +987,12 @@ impl Workspace {
                 .child(file.shown(repo.as_deref()));
             let path = match target {
                 Some(target) => {
-                    let subject = subject.clone();
-                    path.cursor_pointer()
-                        .hover(|s| s.text_color(rgb(theme::PRIMARY)))
-                        .on_click(cx.listener(move |this, _, _, cx| this.open_link(&subject, &target, cx)))
+                    let of = Links::Chat(subject.clone());
+                    path.cursor_pointer().hover(|s| s.text_color(rgb(theme::PRIMARY))).on_click(cx.listener(
+                        move |this, e: &gpui::ClickEvent, window, cx| {
+                            this.open_link(&of, &target, e.modifiers().platform, window, cx)
+                        },
+                    ))
                 }
                 None => path,
             };
@@ -932,13 +1083,13 @@ impl Workspace {
         div().group("chat-msg").relative().child(body).child(words).into_any_element()
     }
 
-    /// One block of a reply.
-    fn block(&self, subject: &Subject, at: &str, n: usize, block: &Block, cx: &mut Context<Self>) -> AnyElement {
+    /// One block of a reply, or of a viewed markdown file.
+    pub(crate) fn block(&self, of: &Links, at: &str, n: usize, block: &Block, cx: &mut Context<Self>) -> AnyElement {
         let at = format!("{at}.{n}");
         match block {
-            Block::Para(spans) => self.spans(subject, &at, spans, cx),
+            Block::Para(spans) => self.spans(of, &at, spans, cx),
             Block::Heading(spans) => {
-                div().font_weight(FontWeight::SEMIBOLD).child(self.spans(subject, &at, spans, cx)).into_any_element()
+                div().font_weight(FontWeight::SEMIBOLD).child(self.spans(of, &at, spans, cx)).into_any_element()
             }
             Block::Code { label, shown, copy, more } => {
                 let copy = copy.clone();
@@ -983,7 +1134,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .children(inner.iter().enumerate().map(|(i, block)| self.block(subject, &at, i, block, cx)))
+                .children(inner.iter().enumerate().map(|(i, block)| self.block(of, &at, i, block, cx)))
                 .into_any_element(),
             Block::List { start, items } => div()
                 .flex()
@@ -999,7 +1150,7 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .children(item.iter().enumerate().map(|(j, b)| self.block(subject, &at, j, b, cx))),
+                            .children(item.iter().enumerate().map(|(j, b)| self.block(of, &at, j, b, cx))),
                     )
                 }))
                 .into_any_element(),
@@ -1017,7 +1168,7 @@ impl Workspace {
                         .when(r > 0, |d| d.border_t_1().border_color(rgb(theme::BORDER)))
                         .children(row.iter().enumerate().map(|(c, cell)| {
                             let at = format!("{at}.{r}.{c}");
-                            div().flex_1().min_w_0().px_1p5().py_0p5().child(self.spans(subject, &at, cell, cx))
+                            div().flex_1().min_w_0().px_1p5().py_0p5().child(self.spans(of, &at, cell, cx))
                         }))
                 }))
                 .into_any_element(),
@@ -1037,7 +1188,7 @@ impl Workspace {
     }
 
     /// A run of spans as one text: styles by range, links clickable with their target on hover.
-    fn spans(&self, subject: &Subject, at: &str, spans: &[Span], cx: &mut Context<Self>) -> AnyElement {
+    fn spans(&self, of: &Links, at: &str, spans: &[Span], cx: &mut Context<Self>) -> AnyElement {
         let mut text = String::new();
         let (mut styles, mut links) = (Vec::new(), Vec::new());
         for span in spans {
@@ -1069,13 +1220,13 @@ impl Workspace {
         }
         let ranges: Vec<_> = links.iter().map(|(range, _)| range.clone()).collect();
         let (targets, tips) = (Rc::new(links), ranges.clone());
-        let (workspace, subject) = (cx.entity().downgrade(), subject.clone());
+        let (workspace, of) = (cx.entity().downgrade(), of.clone());
         let clicked = targets.clone();
         InteractiveText::new(ElementId::Name(format!("chat-text:{at}").into()), styled)
-            .on_click(ranges, move |n, _, cx| {
+            .on_click(ranges, move |n, window, cx| {
                 let Some((_, link)) = clicked.get(n) else { return };
-                let target = link.target.clone();
-                let _ = workspace.update(cx, |this, cx| this.open_link(&subject, &target, cx));
+                let (target, cmd) = (link.target.clone(), window.modifiers().platform);
+                let _ = workspace.update(cx, |this, cx| this.open_link(&of, &target, cmd, window, cx));
             })
             .tooltip(move |index, _, cx| {
                 let n = tips.iter().position(|range| range.contains(&index))?;
@@ -1314,12 +1465,21 @@ impl Workspace {
                 .items()
                 .filter_map(|item| look?.parsed.get(&item.id).map(|(_, blocks)| shape(blocks)))
                 .collect();
+            // Each call's row says whether the user opened it.
+            let mut transcript = serde_json::to_value(chat.transcript.summary()).unwrap_or_default();
+            if let Some(entries) = transcript["entries"].as_array_mut() {
+                for (entry, item) in entries.iter_mut().zip(chat.transcript.items()) {
+                    if entry["kind"] == "tool" {
+                        entry["expanded"] = look.is_some_and(|look| look.open.contains(&item.id)).into();
+                    }
+                }
+            }
             out.insert(
                 crate::talk::key(&subject),
                 serde_json::json!({
                     "view": self.model.talk_view(&subject),
                     "native": self.drawer.native.contains_key(&subject),
-                    "transcript": chat.transcript.summary(),
+                    "transcript": transcript,
                     "replies": blocks,
                     "draft_chars": chat.draft.text().chars().count(),
                     // The user's editor has its draft (⌃G).
@@ -1371,10 +1531,17 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
         Said::TurnStarted => Event::TurnStarted,
         Said::TextDelta { text: t } => Event::TextDelta { text: text(&t) },
         Said::Text { text: t } => Event::Text { text: text(&t) },
-        Said::ToolStart { id, parent, tool, station, label, detail, diff } => {
-            Event::ToolStart { id, sub: parent.is_some(), tool, station, label, detail: text(&detail), diff }
+        Said::ToolStart { id, parent, tool, station, label, detail, diff, gist } => {
+            Event::ToolStart { id, sub: parent.is_some(), tool, station, label, detail: text(&detail), diff, gist }
         }
-        Said::ToolEnd { id, failed } => Event::ToolEnd { id, failed },
+        Said::ToolEnd { id, failed, output } => {
+            Event::ToolEnd { id, failed, output: Some(text(&output)).filter(|output| !output.is_empty()) }
+        }
+        Said::Subtask { id, description } => Event::Subtask { id, description: text(&description) },
+        Said::SubtaskEnded { status, summary } => Event::SubtaskEnded { status, summary: text(&summary) },
+        Said::Note { text: t } => Event::Note { text: text(&t) },
+        Said::DeniedBy { tool, by } => Event::DeniedBy { tool, by },
+        Said::ModelFallback { from, to } => Event::ModelFallback { from, to },
         // Past `MAX_CARDS` waiting, denied at once: no request is left waiting unseen.
         Said::Permission { ticket, tool, label, detail, .. } if native.tickets.len() >= MAX_CARDS => {
             let answer = Answer::Deny { message: Some("Too many requests at once: ask again.".into()) };
@@ -1411,7 +1578,7 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
 /// Reads a local image for a thumbnail, off the main thread: inside the repository once its
 /// links are resolved, a regular file of at most `MAX_THUMB`, a PNG, JPEG, GIF or WebP by its
 /// first bytes. Never a URL: nothing is fetched.
-fn read_thumb(path: String, repo: Option<String>) -> Thumb {
+pub(crate) fn read_thumb(path: String, repo: Option<String>) -> Thumb {
     let (send, read) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let image = (|| {
@@ -1435,7 +1602,7 @@ fn read_thumb(path: String, repo: Option<String>) -> Thumb {
 }
 
 /// The local images among `blocks`.
-fn images(blocks: &[Block], each: &mut impl FnMut(&str)) {
+pub(crate) fn images(blocks: &[Block], each: &mut impl FnMut(&str)) {
     for block in blocks {
         match block {
             Block::Image { path } => each(path),
@@ -1447,7 +1614,7 @@ fn images(blocks: &[Block], each: &mut impl FnMut(&str)) {
 }
 
 /// A reply's structure for the state: how many blocks of each kind, and links. No text.
-fn shape(blocks: &[Block]) -> serde_json::Value {
+pub(crate) fn shape(blocks: &[Block]) -> serde_json::Value {
     let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
     fn count<'a>(blocks: &'a [Block], counts: &mut std::collections::BTreeMap<&'a str, usize>) {
         for block in blocks {
@@ -1513,6 +1680,22 @@ fn notice_text(notice: &Notice) -> String {
         Notice::Compacted => "The context was compacted.".into(),
         Notice::Allowed { tool, label } => format!("You allowed {tool} · {label}."),
         Notice::Denied { tool, label } => format!("You denied {tool} · {label}."),
+        Notice::DeniedBy { tool, by } => {
+            let by = match by {
+                By::Settings => " by your settings",
+                By::Mode => " by the permission mode",
+                By::AutoMode => " by auto mode",
+                By::Hook => " by a hook",
+                By::Folder => ": outside the folders it may use",
+                By::Safety => " by a safety check",
+                By::Sandbox => " by the sandbox",
+                By::Nobody => ": nobody could be asked",
+                By::Other => "",
+            };
+            format!("Denied: {tool}{by}.")
+        }
+        Notice::ModelFallback { from: Some(from), to } => format!("The model changed: {from} → {to}."),
+        Notice::ModelFallback { from: None, to } => format!("The model changed to {to}."),
         Notice::Resumed { here: true, .. } => "Resumed.".into(),
         Notice::Resumed { here: false, .. } => {
             "Session resumed. Earlier turns are in its file: Terminal shows them.".into()
