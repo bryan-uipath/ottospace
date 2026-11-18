@@ -4300,7 +4300,7 @@ fn a_feature_that_is_off_is_absent_and_features_turns_it_on_live() {
         assert_eq!(otto.raw(&request.to_string())["error"], why, "{request}");
     }
     assert_eq!(otto.call(json!({"cmd": "section", "section": "repos"}))["state"]["sidebar"], "repos");
-    // No rail cell: Tasks, Workbook, Repos.
+    // No rail cell: Repos, Tasks, Workbook.
     let (_, labels) = sneak(&otto);
     let rails: Vec<&String> = labels.keys().filter(|id| id.starts_with("rail:")).collect();
     assert_eq!(rails, ["rail:repos", "rail:tasks", "rail:workbook"], "{labels:?}");
@@ -7527,7 +7527,7 @@ fn nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_open_or
         // Sneak mode, which says where controls are, does not start over the new-task box.
         let rails: &[&str] = match state["mode"] == "compose" {
             true => &[],
-            false => &["rail:tasks", "rail:apps", "rail:workbook", "rail:repos", "rail:marks"],
+            false => &["rail:repos", "rail:tasks", "rail:apps", "rail:workbook", "rail:marks"],
         };
         for rail in rails {
             let cell = otto.control(rail);
@@ -7536,7 +7536,7 @@ fn nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_open_or
                 "{what}: {rail} at {cell:?}, not {header:?} tall below the strip"
             );
         }
-        // Tasks, the first cell, joins the strip: no gap, no line of its own.
+        // Repos, the first cell, joins the strip: no gap, no line of its own.
         if let Some(first) = rails.first() {
             assert_eq!(otto.control(first)[1], strip[1] + strip[3], "{what}: {first} under the strip {strip:?}");
         }
@@ -7834,8 +7834,9 @@ fn focus_moves_across_the_zones_to_the_rails_and_back() {
     assert_eq!(focus(&otto.call(json!({"cmd": "key", "keys": FOCUS_LEFT}))), json!({"pane": 1}));
     // The user's goes on: the left rail (no section open), its cells by ↓, a section's list by →.
     let rail = otto.user_key(FOCUS_LEFT);
-    assert_eq!((focus(&rail), &rail["mode"]), (json!({"rail": "tasks"}), &json!("list")));
-    // With the flags off the rail is Tasks, Workbook, Repos: no Apps cell between.
+    assert_eq!((focus(&rail), &rail["mode"]), (json!({"rail": "repos"}), &json!("list")));
+    // With the flags off the rail is Repos, Tasks, Workbook: no Apps cell between.
+    assert_eq!(focus(&otto.user_key("down")), json!({"rail": "tasks"}));
     assert_eq!(focus(&otto.user_key("down")), json!({"rail": "workbook"}));
     let list = otto.user_key("right");
     assert_eq!((list["focus"].get("list").is_some(), &list["state"]["sidebar"]), (true, &json!("workbook")), "{list}");

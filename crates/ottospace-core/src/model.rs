@@ -11922,9 +11922,9 @@ mod tests {
         m.update(Action::SetApps { names: vec!["Notes".into(), "Safari".into()] });
         m.update(Action::ToggleSection { section: Section::Repos });
         m.update(Action::FocusList);
-        m.update(Action::ListSection { delta: 1 }); // after Repos comes Marks, with no rows yet
+        m.update(Action::ListSection { delta: -1 }); // Repos is first: before it, Marks, with no rows yet
         assert_eq!((m.sidebar, m.list_rows()), (Some(Section::Marks), vec![]));
-        m.update(Action::ListSection { delta: 2 }); // then Tasks again, and Apps
+        m.update(Action::ListSection { delta: 3 }); // then Repos again, Tasks, and Apps
         m.update(Action::ListMove { delta: 1 });
         assert_eq!((m.sidebar, m.list), (Some(Section::Apps), Some(1)));
         // The shell hosts the app; until it opens a pane, the list keeps the keyboard.

@@ -224,6 +224,59 @@ fn a_window_the_rules_ignore_never_becomes_a_pane() {
 
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_still_splits() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-popup", "CANARY_SOCKET", &[]);
+    let frame = |index: usize| rect(&canary.call(json!({"cmd": "state"}))["windows"][index]["bounds"]);
+    wait_for("the canary window", || frame(0));
+    let otto = otto_for(&canary, "otto-popup", &[]);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let pane = |id: u64| rect(&state()["bounds"][id.to_string()]).filter(|b| b[2] > 1.0);
+    let hosted = || state()["hosted"].as_object().map_or(0, |hosted| hosted.len());
+    let spot = host_and_park(&otto);
+    let body = wait_for("the pane layout", || pane(1));
+    // The pane's content on the canary's screen.
+    let window = rect(&state()["window"]).expect("ottospace window frame");
+    let over_pane = |f: [f64; 4]| {
+        let [x, y] = middle(f);
+        x > window[0] + body[0]
+            && x < window[0] + body[0] + body[2]
+            && y > window[1] + body[1]
+            && y < window[1] + body[1] + body[3]
+    };
+
+    // A dialog the app opens over its parked window, off screen, as macOS places one by its
+    // parent: no pane, the app's pane as it was, the dialog over it at its own size. 700×450 is
+    // no small window: only its subrole makes it a pop-up.
+    canary.call(json!({"cmd": "dialog", "at": spot}));
+    // Settled: where it is now is where it was a moment ago (the canary and ottospace both move it).
+    let dialog = wait_for("the dialog to settle over the pane", || {
+        let before = frame(1).filter(|f| over_pane(*f))?;
+        std::thread::sleep(Duration::from_millis(800));
+        (frame(1) == Some(before)).then_some(before)
+    });
+    // GPUI's bounds hold the title bar too.
+    assert!(close(dialog[2], 700.0) && (450.0..520.0).contains(&dialog[3]), "its own size: {dialog:?}");
+    // A small standard window: the same.
+    canary.call(json!({"cmd": "open_window", "fixed": [420.0, 300.0]}));
+    wait_for("the small window", || frame(2));
+    std::thread::sleep(Duration::from_millis(1200));
+    assert_eq!(state()["tab_panes"], json!([[1]]), "no pane for either");
+    assert_eq!(hosted(), 1);
+    assert_eq!(pane(1), Some(body), "the app's pane kept its rect");
+    assert_eq!(frame(1), Some(dialog), "the dialog stays where it was put");
+    let small = frame(2).expect("the small window");
+    assert!(close(small[2], 420.0) && reachable(small), "the small one, at its size, on screen: {small:?}");
+
+    // A big standard window still gets a pane of its own, to the right. Wider than half the
+    // pane and taller than 400: not small on any screen.
+    canary.call(json!({"cmd": "open_window", "min": [body[2] * 0.6, 420.0]}));
+    wait_for("the big window's pane", || (state()["tab_panes"] == json!([[1, 2]])).then_some(()));
+    assert_eq!(hosted(), 2);
+    assert_eq!(state()["state"]["panes"][1]["kind"]["title"], "Canary 4");
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
 fn a_canary_window_is_hosted_entered_left_and_restored() {
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary", "CANARY_SOCKET", &[]);
     let frame = |index: usize| rect(&canary.call(json!({"cmd": "state"}))["windows"][index]["bounds"]);
@@ -616,6 +669,7 @@ fn a_window_that_refuses_the_pane_size_is_shown_unscaled_at_the_pane_top_left() 
     let windows = || canary.call(json!({"cmd": "state"}))["windows"].clone();
     let frame = |index: usize| rect(&windows()[index]["bounds"]);
     wait_for("the canary window", || frame(0));
+    let home = splitting_home("size");
     let otto = Proc::launch(
         env!("CARGO_BIN_EXE_ottospace"),
         "otto-size",
@@ -624,6 +678,7 @@ fn a_window_that_refuses_the_pane_size_is_shown_unscaled_at_the_pane_top_left() 
             ("OTTOSPACE_E2E", "1"),
             ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
             ("OTTOSPACE_RETURN_KEY", "f19"),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
         ],
     );
     let state = || otto.call(json!({"cmd": "state"}));
@@ -783,6 +838,7 @@ fn a_window_that_refuses_the_pane_size_is_shown_unscaled_at_the_pane_top_left() 
 fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-fit", "CANARY_SOCKET", &[]);
     wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let home = splitting_home("fit");
     let otto = Proc::launch(
         env!("CARGO_BIN_EXE_ottospace"),
         "otto-fit",
@@ -791,6 +847,7 @@ fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
             ("OTTOSPACE_E2E", "1"),
             ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
             ("OTTOSPACE_RETURN_KEY", "f19"),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
         ],
     );
     let state = || otto.call(json!({"cmd": "state"}));
@@ -1352,6 +1409,16 @@ fn otto_for(canary: &Proc, name: &str, env: &[(&str, &str)]) -> Proc {
     let mut all = vec![("OTTOSPACE_E2E", "1"), ("OTTOSPACE_HOST_ONLY", pid.as_str()), ("OTTOSPACE_RETURN_KEY", "f19")];
     all.extend_from_slice(env);
     Proc::launch(env!("CARGO_BIN_EXE_ottospace"), name, "OTTOSPACE_SOCKET", &all)
+}
+
+/// A home of the test's own whose one rule splits every new canary window, however small.
+fn splitting_home(name: &str) -> PathBuf {
+    let home = support::temp(&format!("otto-apps-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("make the folder");
+    // Standard windows only: GPUI's own small panels would get panes too.
+    let settings = json!({"windows": [{"app": CANARY, "subrole": "AXStandardWindow", "do": "split"}]});
+    std::fs::write(home.join("settings.json"), settings.to_string()).expect("write settings");
+    home
 }
 
 /// Hosts the canary's first window and waits for it to park. Returns the parking spot.
@@ -2464,4 +2531,178 @@ fn a_task_reads_and_looks_at_the_canary_only_while_the_user_lets_it() {
     wait_for("the pictures gone", || (!folder.exists()).then_some(()));
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A window's picture by `screencapture -l`, no shadow: width, height and RGBA, top row first.
+fn window_pixels(window: u64, path: &std::path::Path) -> (usize, usize, Vec<u8>) {
+    let status = Command::new("/usr/sbin/screencapture")
+        .args(["-x", "-o", "-t", "bmp", "-l", &window.to_string()])
+        .arg(path)
+        .status()
+        .expect("screencapture");
+    assert!(status.success(), "screencapture -l {window}");
+    let bmp = std::fs::read(path).expect("the picture");
+    let le = |at: usize| u32::from_le_bytes(bmp[at..at + 4].try_into().expect("4 bytes"));
+    let (start, width, height) = (le(10) as usize, le(18) as usize, le(22) as i32);
+    assert_eq!(u16::from_le_bytes([bmp[28], bmp[29]]), 32, "32 bits a pixel");
+    // Bit fields red, green, blue: bytes B, G, R, A.
+    assert_eq!((le(30), le(54), le(58), le(62)), (3, 0xff0000, 0xff00, 0xff), "BGRA");
+    let rows = height.unsigned_abs() as usize;
+    let mut rgba = Vec::with_capacity(width * rows * 4);
+    for row in 0..rows {
+        // Negative: top row first.
+        let from = if height < 0 { row } else { rows - 1 - row };
+        for bgra in bmp[start + from * width * 4..][..width * 4].chunks_exact(4) {
+            rgba.extend([bgra[2], bgra[1], bgra[0], 255]);
+        }
+    }
+    (width, rows, rgba)
+}
+
+/// `w`×`h` pixels of a picture from `(x, y)`, as grey levels.
+fn grey(picture: &(usize, usize, Vec<u8>), x: usize, y: usize, w: usize, h: usize) -> Vec<f64> {
+    let (width, height, rgba) = picture;
+    assert!(x + w <= *width && y + h <= *height, "{w}×{h} at {x},{y} in {width}×{height}");
+    let mut out = Vec::with_capacity(w * h);
+    for row in y..y + h {
+        for p in rgba[(row * width + x) * 4..][..w * 4].chunks_exact(4) {
+            out.push(0.299 * p[0] as f64 + 0.587 * p[1] as f64 + 0.114 * p[2] as f64);
+        }
+    }
+    out
+}
+
+/// Mean difference of neighbouring pixels, across and down: high for a sharp picture of stripes
+/// or text, lower once it is resampled.
+fn sharpness(g: &[f64], w: usize) -> f64 {
+    let h = g.len() / w;
+    let (mut sum, mut n) = (0.0, 0.0);
+    for y in 0..h - 1 {
+        for x in 0..w - 1 {
+            sum += (g[y * w + x] - g[y * w + x + 1]).abs() + (g[y * w + x] - g[(y + 1) * w + x]).abs();
+            n += 2.0;
+        }
+    }
+    sum / n
+}
+
+/// The box of the canary's stripes in `g`: rows where 32 neighbouring pairs differ white to black.
+fn stripes_box(g: &[f64], w: usize) -> Option<[usize; 4]> {
+    let h = g.len() / w;
+    let alternates = |x: usize, y: usize| (g[y * w + x] - g[y * w + x + 1]).abs() > 160.0;
+    let rows: Vec<(usize, usize, usize)> = (0..h)
+        .filter_map(|y| {
+            let xs: Vec<usize> = (0..w - 1).filter(|&x| alternates(x, y)).collect();
+            (xs.len() >= 32).then(|| (y, xs[0], xs[xs.len() - 1] + 1))
+        })
+        .collect();
+    let (top, bottom) = (rows.first()?.0, rows.last()?.0 + 1);
+    let (left, right) = (rows.iter().map(|r| r.1).min()?, rows.iter().map(|r| r.2).max()?);
+    Some([left, top, right - left, bottom - top])
+}
+
+/// `OTTOSPACE_SHARP_OUT`: where CI keeps the crops it compared, as PNGs.
+fn keep_crop(name: &str, picture: &(usize, usize, Vec<u8>), at: [usize; 4]) {
+    let Some(dir) = std::env::var_os("OTTOSPACE_SHARP_OUT").map(PathBuf::from) else { return };
+    let (width, height, rgba) = picture;
+    let [x, y] = [at[0].min(width - 1), at[1].min(height - 1)];
+    let [w, h] = [at[2].min(width - x), at[3].min(height - y)];
+    let crop: Vec<u8> = (y..y + h).flat_map(|row| rgba[(row * width + x) * 4..][..w * 4].to_vec()).collect();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Some(png) = ottospace_mac::image::png_from_rgba(w, h, &crop) {
+        let _ = std::fs::write(dir.join(format!("{name}.png")), png);
+    }
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_parked_panes_picture_is_its_window_pixel_for_pixel() {
+    let canary = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace-canary"),
+        "canary-sharp",
+        "CANARY_SOCKET",
+        &[("CANARY_PATTERN", "1")],
+    );
+    wait_for("the canary window", || global_frame(&canary, 0));
+    let otto = otto_for(&canary, "otto-sharp", &[]);
+    host_and_park(&otto);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let count = |s: &Value, key: &str| s["counts"][key].as_f64().unwrap_or(0.0);
+    // The held frame has the pixels the pane is drawn with: points × the display's scale.
+    let s = wait_or(
+        "a frame of the pane's size in pixels",
+        || state()["counts"].to_string(),
+        || {
+            let s = state();
+            let shown = rect(&s["shown"]["1"]).filter(|r| r[2] > 100.0)?;
+            let scale = count(&s, "scale");
+            let size = [count(&s, "stream_width_1"), count(&s, "stream_height_1")];
+            (size == [(shown[2] * scale).round(), (shown[3] * scale).round()]).then_some(s)
+        },
+    );
+    let (scale, shown) = (count(&s, "scale"), rect(&s["shown"]["1"]).expect("shown"));
+    let canary_scale = canary.call(json!({"cmd": "state"}))["windows"][0]["scale"].as_f64().unwrap_or(0.0);
+    report(&format!(
+        "sharp: ottospace scale {scale}, parked display {}, canary window {canary_scale}, stream {}×{} px for {}×{} pt",
+        count(&s, "parking_scale"),
+        count(&s, "stream_width_1"),
+        count(&s, "stream_height_1"),
+        shown[2],
+        shown[3]
+    ));
+    assert_eq!(count(&s, "stream_scale_1"), scale, "the stream captures at ottospace's scale");
+    // No free corner of ottospace's scale (a 2× laptop, a 1× external to its right, lower): the
+    // window draws at 1× parked, and no picture of it matches the live one.
+    if count(&s, "parking_scale") < scale {
+        report("sharp: parked on a display of a lower scale, the pixels are not compared");
+        return;
+    }
+
+    // What ottospace draws: its own window, the preview's rect in pixels. This reply waits for a
+    // frame drawn after the one held came.
+    state();
+    let otto_window = s["frame"]["window"].as_u64().expect("ottospace's window number");
+    let drawn = window_pixels(otto_window, &support::temp(&format!("otto-sharp-{}.bmp", std::process::id())));
+    let px = |v: f64| (v * scale).round() as usize;
+    let (w, h) = (px(shown[2]), px(shown[3]));
+    let picture = grey(&drawn, px(shown[0]), px(shown[1]), w, h);
+
+    // The real window, live over its pane: its stream is stopped, so the window server gives all of it.
+    let crop = s["crop"]["1"].as_f64().unwrap_or(0.0);
+    let canary_window = s["state"]["panes"][0]["kind"]["window"].as_u64().expect("the canary's window number");
+    assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
+    // Over its pane and drawn at ottospace's scale: it may have been parked on another display.
+    let spot = point(&s["parking"]).expect("parking spot");
+    wait_for("the window to go live at ottospace's scale", || {
+        let away = rect(&state()["hosted"]["1"]).is_some_and(|f| !close(f[0], spot[0]));
+        let at = canary.call(json!({"cmd": "state"}))["windows"][0]["scale"].as_f64() == Some(scale);
+        (away && at).then_some(())
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    let live = window_pixels(canary_window, &support::temp(&format!("canary-sharp-{}.bmp", std::process::id())));
+    let real = grey(&live, 0, px(crop), w, h);
+    assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
+
+    let [x, y, sw, sh] = stripes_box(&real, w).expect("the canary's stripes in its window");
+    // The rows below the columns too.
+    let sh = (2 * sh).min(h - y);
+    let part = |g: &[f64]| -> Vec<f64> { (y..y + sh).flat_map(|row| g[row * w + x..][..sw].to_vec()).collect() };
+    let (stripes_picture, stripes_real) = (part(&picture), part(&real));
+    let close_to = stripes_picture.iter().zip(&stripes_real).filter(|(a, b)| (*a - *b).abs() <= 8.0).count();
+    let same = close_to as f64 / stripes_real.len() as f64;
+    let (sharp_picture, sharp_real) = (sharpness(&stripes_picture, sw), sharpness(&stripes_real, sw));
+    report(&format!(
+        "sharp: stripes {sw}×{sh} px at {x},{y}; sharpness picture {sharp_picture:.1}, window {sharp_real:.1}; \
+         {:.1}% of the stripes' pixels within 8 levels of the window's",
+        same * 100.0
+    ));
+    // The stripes and the text above them, from each.
+    let (left, top) = (x.saturating_sub(40), y.saturating_sub(120));
+    keep_crop("picture", &drawn, [px(shown[0]) + left, px(shown[1]) + top, sw + 80, sh + 140]);
+    keep_crop("window", &live, [left, px(crop) + top, sw + 80, sh + 140]);
+    assert!(
+        sharp_picture >= 0.95 * sharp_real,
+        "the picture is as sharp as the window: {sharp_picture} vs {sharp_real}"
+    );
+    assert!(same >= 0.98, "the picture is the window's pixels: {:.1}% within 8 levels", same * 100.0);
 }

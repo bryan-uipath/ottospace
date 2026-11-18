@@ -174,12 +174,14 @@ impl SCStreamOutputTrait for Output {
 
 /// Stream config showing `size` points of the window at `scale` (Retina = 2), from its top left
 /// below its top `crop` points (the title bar), never scaled: a window that refused the pane's
-/// size (Outlook's minimum) looks as it does when it is live.
+/// size (Outlook's minimum) looks as it does when it is live. `scale` is the pane's display's:
+/// the picture has the pixels the pane is drawn with (`hosted::capture_pixels`).
 fn stream_config(size: CGSize, crop: f64, scale: f64) -> SCStreamConfiguration {
+    let (width, height) = hosting::capture_pixels((size.width, size.height), scale);
     // 420f is the only format gpui's surface renderer accepts.
     SCStreamConfiguration::new()
-        .with_width((size.width * scale).max(1.0) as u32)
-        .with_height((size.height * scale).max(1.0) as u32)
+        .with_width(width)
+        .with_height(height)
         .with_scales_to_fit(true)
         .with_pixel_format(PixelFormat::YCbCr_420f)
         .with_fps(60)
@@ -221,16 +223,22 @@ struct Hosted {
     shown: CGSize,
     /// The title-bar crop the stream shows it with.
     shown_crop: f64,
+    /// The pixels a point the stream captures at: ottospace's display's when it was configured.
+    shown_scale: f64,
     /// The window's content size when `shown` was last worked out, for the corner mask.
     content: CGSize,
     /// How often `window_frame` read the window's frame.
     frame_reads: u64,
-    /// The last size and crop the stream refused, so the same one is not asked for every check.
-    refused: Option<(CGSize, f64)>,
+    /// The last size, crop and scale the stream refused, so the same one is not asked for every check.
+    refused: Option<(CGSize, f64, f64)>,
     /// Where the preview was last drawn, in window-content coordinates.
     preview: Rc<Cell<Bounds<Pixels>>>,
     /// Last pane content rect the live window was placed over, to re-place only on change.
     placed: CGRect,
+    /// Where it was last parked: it parks again when the spot moves (`display::parking_spot`).
+    parked_at: CGPoint,
+    /// The width the window kept when its pane asked for less: no split may leave it narrower.
+    min_width: Option<f64>,
 }
 
 impl Hosted {
@@ -289,11 +297,14 @@ impl Hosted {
             parked_size: CGSize::ZERO,
             shown: original.size,
             shown_crop: 0.0,
+            shown_scale: 2.0,
             content: original.size,
             frame_reads: 0,
             refused: None,
             preview: Rc::default(),
             placed: CGRect::default(),
+            parked_at: CGPoint::ZERO,
+            min_width: None,
         })
     }
 
@@ -325,17 +336,22 @@ impl Hosted {
     /// Sizes the window to the pane (so the stream matches) and parks it on the off-screen sliver.
     /// With a `crop`, the window is that much taller and the stream shows only the part below it.
     fn park(&mut self, size: CGSize, scale: f64, crop: f64) {
+        // On a display of the pane's scale, so the app draws the window at it.
+        let spot = display::parking_spot(scale);
         // Only resize/reconfigure when the pane changed; redoing it on every park flickers.
         if size != self.parked_size || crop != self.crop {
             // Move first. Resized where it stood, macOS clamps the window to what fits above the
             // Dock there (a pane 818pt tall parked at 805pt), and the stream no longer matches.
-            let _ = self.window.set_position(display::parking_spot());
+            let _ = self.window.set_position(spot);
             let _ = self.window.set_size(CGSize::new(size.width, size.height + crop));
         }
         self.parked_size = size;
         self.crop = crop;
         self.show(scale);
-        let _ = self.window.set_position(display::parking_spot());
+        // A refused move (a busy app) is tried again at the next check.
+        if self.window.set_position(spot).is_ok() {
+            self.parked_at = spot;
+        }
         self.placed = CGRect::default();
     }
 
@@ -354,23 +370,27 @@ impl Hosted {
             (self.shown, self.shown_crop, self.content) = (shown, self.crop, content);
             return Some(content);
         }
-        if asked == (self.shown, self.shown_crop) {
+        // Also on a new scale: ottospace moved to a display of another, and the old picture
+        // would be drawn up (blurred) or down.
+        if asked == (self.shown, self.shown_crop) && scale == self.shown_scale {
             self.content = content;
+            // Back to what it shows: a refusal of another is asked again when it comes back.
+            self.refused = None;
             return Some(content);
         }
-        if self.refused == Some(asked) {
+        if self.refused == Some((shown, self.crop, scale)) {
             return Some(content);
         }
         let config = stream_config(shown, self.crop, scale);
         // Frames of another size are dropped, so expect the new one only once it is set.
         if self.stream.update_configuration(&config).is_ok() {
             self.latest.expect(&config);
-            (self.shown, self.shown_crop) = asked;
+            (self.shown, self.shown_crop, self.shown_scale) = (shown, self.crop, scale);
             self.content = content;
             self.refused = None;
         } else {
             // `shown` keeps describing what the stream still shows.
-            self.refused = Some(asked);
+            self.refused = Some((shown, self.crop, scale));
             eprintln!("window {}: the stream refused {}×{}", self.window_id, shown.width, shown.height);
         }
         Some(content)
@@ -551,11 +571,11 @@ pub(crate) fn rail_id(label: &str) -> String {
 
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 6] = [
+    (Section::Repos, "icons/repos.svg", "Repos"),
     (Section::Tasks, "icons/tasks.svg", "Tasks"),
     (Section::Calendar, "icons/calendar.svg", "Calendar"),
     (Section::Apps, "icons/apps.svg", "Apps"),
     (Section::Workbook, "icons/workbook.svg", "Workspaces"),
-    (Section::Repos, "icons/repos.svg", "Repos"),
     (Section::Marks, "icons/marks.svg", "Marks"),
 ];
 
@@ -3286,7 +3306,7 @@ impl Workspace {
     }
 
     fn state(&self, window: &Window, cx: &App) -> serde_json::Value {
-        let parking = display::parking_spot();
+        let parking = display::parking_spot(window.scale_factor() as f64);
         let hosted: BTreeMap<PaneId, [f64; 4]> = self
             .hosted
             .iter()
@@ -3601,11 +3621,18 @@ impl Workspace {
         // Restored or rebuilt panes still empty: `pane`, `why`, and where its "Open <App>" is drawn, or null.
         state["unfilled"] = unfilled.into();
         // Test runs only: what each app pane's stream has sent, `stream_samples_<pane>` (`counts`
-        // holds numbers only).
+        // holds numbers only); the pixel size of the frame it holds and the scale it captures at;
+        // the scale of ottospace's display and of the parked windows' display.
         if let Some(counts) = state["counts"].as_object_mut() {
             for (id, hosted) in &self.hosted {
                 counts.insert(format!("stream_samples_{id}"), hosted.latest.samples.load(Relaxed).into());
+                let held = hosted.frame().map_or((0, 0), |f| (f.get_width(), f.get_height()));
+                counts.insert(format!("stream_width_{id}"), held.0.into());
+                counts.insert(format!("stream_height_{id}"), held.1.into());
+                counts.insert(format!("stream_scale_{id}"), hosted.shown_scale.into());
             }
+            counts.insert("scale".into(), (window.scale_factor() as f64).into());
+            counts.insert("parking_scale".into(), display::parking_scale(window.scale_factor() as f64).into());
         }
         // Where the box offers a choice of where the task works: `new` (a new worktree, the user's
         // choice), the repository's name and the `branch` it would make; else null.
@@ -3653,7 +3680,8 @@ impl Workspace {
     fn attach(&mut self, hosted: Hosted, action: Action, window: &Window, cx: &mut Context<Self>) -> Option<PaneId> {
         let pid = hosted.pid;
         if !self.known.iter().any(|(p, _)| *p == pid) {
-            let ids = ax::Window::standard_of(pid).iter().filter_map(ax::Window::id).collect();
+            // Its dialogs open now too: only those that open later are judged (`adopt_new_windows`).
+            let ids = ax::Window::all_of(pid).iter().filter(|w| w.judged()).filter_map(ax::Window::id).collect();
             self.known.push((pid, ids));
         }
         let effects = self.dispatch(action, self.input, window, cx);
@@ -3664,7 +3692,7 @@ impl Workspace {
             // window. Move it off screen now; it is sized when its tab is first shown.
             let drawn = self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(id));
             if !drawn {
-                let _ = hosted.window.set_position(display::parking_spot());
+                let _ = hosted.window.set_position(display::parking_spot(window.scale_factor() as f64));
             }
             if hosted.off_screen {
                 self.broke(format!("{}'s window was off screen: it goes back to the middle of the screen", hosted.app));
@@ -3902,26 +3930,57 @@ impl Workspace {
         }
     }
 
-    /// Hosts windows that appeared since we started watching their app (e.g. undocked DevTools),
-    /// each to the right of its app's newest pane.
+    /// Hosts windows that appeared since we started watching their app (e.g. a second browser
+    /// window), each to the right of its app's newest pane. A pop-up stays a free window over that
+    /// pane (`rules::place`). Each window is judged once, when first seen as standard or a dialog.
     fn adopt_new_windows(&mut self, window: &Window, cx: &mut Context<Self>) {
         let mut fresh = Vec::new();
         for (pid, seen) in &mut self.known {
-            for window in ax::Window::standard_of(*pid) {
-                // A window the rules leave alone is seen once and never becomes a pane.
+            for window in ax::Window::all_of(*pid) {
+                // A toast or popover is looked at again next time: it may become a window.
                 if let Some(id) = window.id()
-                    && seen.insert(id)
-                    && window_managed(&window)
+                    && !seen.contains(&id)
+                    && window.quick(ax::Window::judged)
                 {
+                    seen.insert(id);
                     fresh.push(window);
                 }
             }
         }
+        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
         for ax_window in fresh {
-            if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
-                let beside = self.hosted.iter().filter(|(_, h)| h.pid == hosted.pid).map(|(id, _)| *id).max();
-                let action = Action::Adopt { kind: hosted.kind(), beside, seen: None };
-                self.attach(hosted, action, window, cx);
+            let pid = ax_window.pid();
+            let beside = self.hosted.iter().filter(|(_, h)| h.pid == pid).map(|(id, _)| *id).max();
+            // The pane it would split, if drawn: a background tab's bounds are stale.
+            let pane = beside.filter(|id| drawn.contains(id)).and_then(|id| self.hosted.get(&id));
+            let pane = pane.map(|h| (h.bounds.get(), h.min_width)).filter(|(b, _)| f32::from(b.size.width) >= 1.0);
+            // A short wait for each read: a hung app costs a blink, not seconds.
+            let (frame, modal, sheet) = ax_window.quick(|w| (w.frame(), w.modal(), w.sheet()));
+            let shape = rules::Shape {
+                modal,
+                sheet,
+                size: frame.map(|f| [f.size.width, f.size.height]),
+                pane: pane.map(|(b, _)| to_cg(b.size)).map(|s| [s.width, s.height]),
+                min_width: pane.and_then(|(_, min)| min),
+            };
+            match ax_window.quick(|w| window_place(w, &shape)) {
+                rules::Place::Split => {
+                    if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
+                        let action = Action::Adopt { kind: hosted.kind(), beside, seen: None };
+                        self.attach(hosted, action, window, cx);
+                    }
+                }
+                // Only while its app has a pane: an app given back is left alone.
+                rules::Place::Float if beside.is_some() => {
+                    let pane = pane.map(|(b, _)| recovery::to_frame(on_screen(b, window, cx)));
+                    let screens = recovery::screens();
+                    let to = frame
+                        .and_then(|f| rules::float_to(recovery::to_frame(f), pane, &screens.visible, screens.main));
+                    let moved = to.is_some_and(|(x, y)| ax_window.set_position(CGPoint::new(x, y)).is_ok());
+                    ax_window.raise_only();
+                    trace::record("float", serde_json::json!({ "window": ax_window.id(), "moved": moved }));
+                }
+                rules::Place::Float | rules::Place::Leave => {}
             }
         }
     }
@@ -3935,6 +3994,8 @@ impl Workspace {
         // Only panes of the active tab are drawn; a background pane's bounds are stale.
         let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
         let scale = window.scale_factor() as f64;
+        // Only on a check, with windows hosted: it asks each display's mode, and this runs every frame.
+        let spot = (check && !self.hosted.is_empty()).then(|| display::parking_spot(scale));
         // A peeked window is kept over its pane as the live one is.
         let live = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
         // Under the notice bar as it is in this frame: the windows follow it as it opens and closes.
@@ -3952,7 +4013,11 @@ impl Workspace {
                 if hosted.placed != rect || drifted {
                     hosted.place(rect, crop);
                 }
-            } else if hosted.parked_size != rect.size || hosted.crop != crop {
+            // Also when the spot moved: displays changed, or ottospace is on one of another scale.
+            } else if hosted.parked_size != rect.size
+                || hosted.crop != crop
+                || spot.is_some_and(|spot| hosted.parked_at != spot)
+            {
                 hosted.park(rect.size, scale, crop);
             }
             // Only on a check: reading a window's size is a synchronous accessibility call.
@@ -3963,6 +4028,7 @@ impl Workspace {
                 && let Some(frame) = self.frames.get(id)
                 && drawn.contains(id)
             {
+                hosted.min_width = rules::refused_width(hosted.min_width, kept.width, rect.size.width);
                 let content = [rect.size.width as f32, rect.size.height as f32];
                 // The pane's size with its 1pt border.
                 let outer = frame.get().size;
@@ -6913,6 +6979,16 @@ fn list_button(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
 
 /// True if the window rules (the user's, then the built-in ones) let this window be put in a pane.
 fn window_managed(window: &ax::Window) -> bool {
+    with_facts(window, |facts| rules::manages(&config::live().windows, facts))
+}
+
+/// Where a new window of a hosted app goes, by the window rules and its `shape`.
+fn window_place(window: &ax::Window, shape: &rules::Shape) -> rules::Place {
+    with_facts(window, |facts| rules::place(&config::live().windows, facts, shape))
+}
+
+/// `judge` given what the window rules select by, read from the window.
+fn with_facts<R>(window: &ax::Window, judge: impl FnOnce(&Facts) -> R) -> R {
     let (bundle, name) = ax::app_identity(window.pid());
     let (title, subrole) = (window.title().unwrap_or_default(), window.subrole().unwrap_or_default());
     let identifier = window.identifier();
@@ -6923,7 +6999,7 @@ fn window_managed(window: &ax::Window) -> bool {
         subrole: &subrole,
         identifier: identifier.as_deref(),
     };
-    rules::manages(&config::live().windows, &facts)
+    judge(&facts)
 }
 
 /// Apps that can be hosted right now. In a test run limited to one app, only that app.
@@ -7615,7 +7691,7 @@ fn main() {
         if quiet {
             ottospace_mac::window::stay_in_background();
             if std::env::var_os("OTTOSPACE_E2E_SHOW").is_none() {
-                let corner = display::parking_spot();
+                let corner = display::parking_spot(f64::INFINITY);
                 bounds.origin = point(px(corner.x as f32 - E2E_SLIVER), px(corner.y as f32 - E2E_SLIVER));
             }
         }
