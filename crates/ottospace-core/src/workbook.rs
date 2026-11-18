@@ -1314,15 +1314,21 @@ impl Model {
         }
     }
 
-    /// Whether `action` from `origin` would open a pane in a closing workspace, or show another
-    /// file in one: split from, or fill, a pane of it (`Open`, `OpenFile`, ⌃G's editor; a client's
-    /// `Fill`: the shell's gives a waiting pane its window). Refused (`CLOSING_OPENS`):
-    /// `keep_closing` puts its tab away again, not a new pane.
+    /// Whether `action` from `origin` would open or put a pane in a closing workspace, or show
+    /// another file in one: split from, fill or drop on a pane of it, or move one to its tab
+    /// (`Open`, `OpenFile`, ⌃G's editor, `DropPane`, `MovePane`; a client's `Fill`: the shell's
+    /// gives a waiting pane its window). Refused (`CLOSING_OPENS`): `keep_closing` puts its tab
+    /// away again, not a new pane.
     pub(crate) fn opens_in_closing(&self, action: &Action, origin: Origin) -> bool {
         let pane = match action {
             Action::Open { beside, .. } | Action::OpenFile { beside, .. } => beside.or(self.focused),
             Action::ViewerEdit { pane } => pane.or(self.focused),
+            Action::DropPane { target, .. } => Some(*target),
             Action::Fill { pane, .. } if origin == Origin::Socket => Some(*pane),
+            Action::MovePane { tab, .. } => {
+                let space = self.tabs.get(*tab).map(|tab| &tab.space);
+                return space.is_some_and(|of| matches!(of, Owner::Workbook { id } if self.workbooks.closing(*id)));
+            }
             _ => None,
         };
         pane.is_some_and(|pane| self.in_closing(pane))
@@ -2454,6 +2460,11 @@ mod tests {
                 assert_eq!(m.refusal(action, origin), Some(CLOSING_OPENS), "{origin:?} {action:?}");
             }
         }
+        let into = [
+            Action::DropPane { source: 2, target: 1, zone: crate::layout::Zone::Center },
+            Action::MovePane { pane: Some(2), tab: a },
+        ];
+        assert!(into.iter().all(|action| m.refusal(action, Origin::System) == Some(CLOSING_OPENS)));
         let fill = Action::Fill { pane: 1, kind: Kind::Terminal };
         assert_eq!((m.refusal(&fill, Origin::Socket), m.refusal(&fill, Origin::System)), (Some(CLOSING_OPENS), None));
         assert_eq!(m.refusal(&file(Some(1), false), Origin::User), None);

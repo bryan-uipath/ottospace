@@ -6500,3 +6500,56 @@ fn seed_1254_the_users_talk_toggle_shows_the_transcripts_tab() {
     ])
     .unwrap();
 }
+
+/// The system's drop of a pane on the empty pane of a closing workspace put it there, and the
+/// Undo would have brought back a pane the user never had (seed 977 of the long run).
+#[test]
+fn seed_977_no_pane_is_dropped_into_a_closing_workspace() {
+    let wt = |name: &str, path: &str, branch: Option<&str>| Worktree {
+        name: name.into(),
+        path: path.into(),
+        branch: branch.map(Into::into),
+    };
+    let repos = vec![
+        Repo {
+            name: "canvas".into(),
+            path: "/code/app-2".into(),
+            branch: Some("main".into()),
+            worktrees: vec![wt("../..,>#123", "/tmp", Some("fix/zoom")), wt("canvas", "İ\\", Some("main"))],
+        },
+        Repo {
+            name: "app".into(),
+            path: "/code/canvas".into(),
+            branch: Some("fix/zoom".into()),
+            worktrees: vec![wt("Ottospace", "\\$", None), wt("Ottospace", "/code/app-2", None)],
+        },
+    ];
+    let missing = vec![Need::Dir("/code/app".into()), Need::App { bundle: None, name: "Safari".into() }];
+    let readme = Kind::File { path: "/w/app/README.md".into() };
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        Action::Open { kind: slack(7), axis: Axis::Right, beside: None }.into(),
+        Action::MarkAdd {
+            of: MarkOf::Tab(None),
+            name: None,
+            key: Some('c'),
+            uid: "u3".into(),
+            cwds: vec![(1, "/code/app".into())],
+        }
+        .into(),
+        Action::NewTab.into(),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        Action::CloseTab { index: Some(0) }.into(),
+        Action::MarkGo { mark: MarkRef::Key('c'), axis: Axis::Right }.into(),
+        Action::CloseTab { index: None }.into(),
+        Action::MarksChecked { missing }.into(),
+        by(Origin::System, Action::MarkGo { mark: MarkRef::Key('c'), axis: Axis::Down }),
+        Action::Adopt { kind: Kind::Terminal, beside: Some(6), seen: None }.into(),
+        Action::SpaceHide { index: None }.into(),
+        by(Origin::System, Action::SetRepos { repos }),
+        by(Origin::System, Action::Open { kind: readme, axis: Axis::Down, beside: None }),
+        Action::OpenRepo { path: "/code/canvas".into(), axis: Axis::Down }.into(),
+        by(Origin::System, Action::DropPane { source: 10, target: 6, zone: Zone::Center }),
+    ])
+    .unwrap();
+}

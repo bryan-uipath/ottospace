@@ -71,7 +71,8 @@ need to persist by default. maybe we need a way to differentiate persisted vs no
   again, the tab on show before back: `keep_closing`). A window the shell adopts beside a pane of
   it joins the tab on show instead (`Model::in_closing`). No step but the user's opens a pane
   in it, or another file in its viewer: `Open` or `OpenFile` beside a pane of it, ⌃G's editor
-  on its viewer, a client's `Fill` of its empty pane are refused (`CLOSING_OPENS`,
+  on its viewer, a pane dropped on one of it or moved to its tab, a client's `Fill` of its
+  empty pane are refused (`CLOSING_OPENS`,
   `opens_in_closing`). A second close while one is offered takes
   the bar; the first still goes at its own time, and keeps its own Undo: each closing workspace
   shows under the others in the section (`Workbooks::closing_rows`, state `workbooks_closing`),
