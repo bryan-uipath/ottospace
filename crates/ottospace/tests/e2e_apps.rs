@@ -2052,6 +2052,52 @@ fn wav(file: &std::path::Path, parts: &[(f64, bool)]) {
     std::fs::write(file, out).expect("write the sound");
 }
 
+/// Zoom plays a meeting from `aomhost`, its child: the stream of an app names each child that
+/// ScreenCaptureKit offers as an app (one with a window), and hears it. The canary's child is
+/// such an app, with a window never shown; the log says how many pids the stream heard.
+#[test]
+#[ignore = "hears the canary's child's tone; run with `cargo e2e-apps`"]
+fn a_tone_the_canarys_app_child_plays_is_heard() {
+    let home = support::temp(&format!("otto-apps-child-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("make the folder");
+    std::fs::write(home.join("settings.json"), json!({"restore_layout": false}).to_string()).expect("settings");
+    let tone = home.join("tone.wav");
+    wav(&tone, &[(8., true)]);
+
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-child", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto-child",
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
+        ],
+    );
+    canary.call(json!({"cmd": "play", "path": tone, "app": true}));
+    // The child's window reaches the window server, and SCK's list.
+    std::thread::sleep(Duration::from_secs(2));
+    otto.call(json!({"cmd": "audio_probe_start"}));
+    std::thread::sleep(Duration::from_secs(4));
+    let reply = otto.call(json!({"cmd": "audio_probe_stop"}));
+    let log = std::fs::read_to_string(home.join("log")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&home);
+
+    let started: Vec<Value> = log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|line| line["ev"] == "listen_audio")
+        .collect();
+    eprintln!("the log's starts: {started:?}");
+    assert_eq!(started.len(), 1, "{log}");
+    assert_eq!(started[0]["pids"], 2, "the canary and its child: {log}");
+    let buffers = reply["buffers"].as_array().expect("buffers");
+    let loud = buffers.iter().filter(|b| b["rms"].as_f64().is_some_and(|rms| rms >= 0.01)).count();
+    assert!(loud > 0, "no sound in {} buffers; the stream said {}", buffers.len(), reply["failed"]);
+}
+
 /// Whether ScreenCaptureKit sends buffers while an app is silent, or none: then the samples fed
 /// to the recogniser lose each silence and a line's time shrinks by it. The canary plays a tone
 /// with 8 s of silence inside the file, then plays nothing for 8 s, then a tone again; each

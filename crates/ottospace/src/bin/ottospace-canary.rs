@@ -13,7 +13,8 @@
 //! the app too busy to answer Accessibility calls for that long. `{"cmd":"minimize","index":0}`
 //! puts a window in the Dock: the app runs with none on screen. `{"cmd":"play","path":"x.aiff"}`
 //! plays a sound file in the canary's own process; with `"child":true` from a child process
-//! (`afplay`), as a browser's or an Electron app's helper plays it.
+//! (`afplay`), as a browser's or an Electron app's helper plays it; with `"app":true` from a child
+//! that is an app ScreenCaptureKit offers (this binary with `CANARY_PLAY`), as Zoom's `aomhost`.
 //!
 //! With `CANARY_BUTTON` set, the first window has a native button titled "Canary button" in
 //! its content: a control its accessibility tree names. Below it, a checkbox "Canary press"
@@ -79,11 +80,13 @@ enum Request {
     Minimize {
         index: usize,
     },
-    /// Plays a sound file: in this process, or in a child (`afplay`).
+    /// Plays a sound file: in this process, or in a child (`afplay`, or with `app` this binary).
     Play {
         path: String,
         #[serde(default)]
         child: bool,
+        #[serde(default)]
+        app: bool,
     },
     Quit,
 }
@@ -320,14 +323,18 @@ fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mu
                     let _ = handle.update(cx, |_, window, _| window.minimize_window());
                 }
             }
-            Request::Play { path, child: false } => {
+            Request::Play { path, app: true, .. } => {
+                let me = std::env::current_exe().expect("the canary's path");
+                let _ = std::process::Command::new(me).env_remove("CANARY_SOCKET").env("CANARY_PLAY", &path).spawn();
+            }
+            Request::Play { path, child: false, .. } => {
                 // A sound that does not play fails the request, not the test's measure later.
                 if !ottospace_mac::app_audio::play(&path) {
                     let _ = reply.send(json!({ "ok": false, "error": "the sound did not play" }).to_string());
                     continue;
                 }
             }
-            Request::Play { path, child: true } => {
+            Request::Play { path, child: true, .. } => {
                 let _ = std::process::Command::new("/usr/bin/afplay").arg(&path).spawn();
             }
             Request::Hang { ms } => {
@@ -384,6 +391,10 @@ fn handle(stream: UnixStream, calls: Sender<(Request, Sender<String>)>) {
 }
 
 fn main() {
+    // The child of a `play` with `app`: plays, then ends.
+    if let Ok(path) = std::env::var("CANARY_PLAY") {
+        std::process::exit(if ottospace_mac::app_audio::play_as_app(&path) { 0 } else { 1 });
+    }
     let (calls, requests) = channel();
     if let Ok(path) = std::env::var("CANARY_SOCKET") {
         listen(path, calls);
