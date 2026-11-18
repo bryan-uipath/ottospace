@@ -239,7 +239,7 @@ pub fn read_head(name: &str, text: &str) -> Option<Past> {
 /// Whether a finished transcript is worth a row: a minute or more, with a line heard. `text` is the
 /// file's start (its header and, if any, its first lines).
 fn worth_listing(past: &Past, text: &str) -> bool {
-    past.length_ms >= 60_000 && !read_lines(text).is_empty()
+    past.length_ms >= 60_000 && read_lines(text).iter().any(|line| matches!(line, PastLine::Heard { .. }))
 }
 
 /// Today's finished transcripts in `files` (each a name and its text), newest first: those whose
@@ -446,8 +446,10 @@ mod tests {
     #[test]
     fn todays_list_leaves_out_the_empty_ones() {
         let said = Record::Line { from: Speaker::Them, at: START + 1_000, text: "made-up".into() };
+        let pause = Record::Paused { at: START + 2_000, ms: 60_000 };
         let file = |long: u64, lines: bool| {
-            let text = header(&head(), Some(START + long), &paris);
+            // A pause alone is no line heard.
+            let text = header(&head(), Some(START + long), &paris) + &line(&pause, &paris).unwrap();
             if lines { text + &line(&said, &paris).unwrap() } else { text }
         };
         let files = vec![
