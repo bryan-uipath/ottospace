@@ -8,7 +8,7 @@
 use ottospace_core::ax::truncate as cap;
 use ottospace_core::links::{self, Target};
 use ottospace_core::transcript::{clean, cut as head};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pulldown_cmark::{Alignment, BlockQuoteKind, CodeBlockKind, Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
@@ -199,8 +199,9 @@ struct Builder<'a> {
     cut: usize,
     /// Characters on the drawn line so far (`budget`).
     line: usize,
-    /// Each heading slug so far, and how often: the next alike is `-1`, `-2` (GitHub's).
-    slugs: HashMap<String, usize>,
+    /// Each heading slug given, and each base's last suffix: the next alike is `-1`, `-2` (GitHub's).
+    slugs: HashSet<String>,
+    suffixes: HashMap<String, usize>,
     /// Footnotes by name: their numbers, in the order first referred to; their text once defined.
     numbers: HashMap<String, usize>,
     notes: Vec<(String, Vec<Block>)>,
@@ -229,7 +230,8 @@ pub fn parse_with(text: &str, repo: Option<&str>, caps: Caps) -> Vec<Block> {
         blocks: 0,
         cut: 0,
         line: 0,
-        slugs: HashMap::new(),
+        slugs: HashSet::new(),
+        suffixes: HashMap::new(),
         numbers: HashMap::new(),
         notes: Vec::new(),
     };
@@ -303,6 +305,10 @@ impl Builder<'_> {
                 let name = mention(&text).map(|(_, name)| name).unwrap_or_default();
                 self.span(name, Style { mention: true, ..self.style })
             }
+            // An HTML block's lines past its first count as blocks: a `<pre>` of a million lines is cut.
+            Event::Html(_)
+                if matches!(self.frames.last(), Some(Frame::Html(spans)) if !spans.is_empty())
+                    && !self.room_but_one() => {}
             // Raw HTML is the text it is: never a tag, nor an address or a mention.
             Event::Html(text) | Event::InlineHtml(text) => self.span(clean(&text), self.style),
             Event::SoftBreak => self.text(" "),
@@ -316,9 +322,10 @@ impl Builder<'_> {
                 }
             }
             Event::FootnoteReference(name) => {
+                let name = note_name(&name);
                 let n = self.number(&name);
                 let text = self.budget(&format!("[{n}]"));
-                let anchor = Some(format!("^{}", clean(&name)));
+                let anchor = Some(format!("^{name}")).filter(|_| name.len() <= MAX_ANCHOR);
                 self.push_span(Span { text, style: self.style, link: None, anchor });
             }
             Event::InlineMath(text) | Event::DisplayMath(text) => self.text(&text),
@@ -334,7 +341,7 @@ impl Builder<'_> {
             Tag::HtmlBlock => self.frames.push(Frame::Html(Vec::new())),
             Tag::Heading { level, .. } => self.frames.push(Frame::Heading(level as u8, Vec::new())),
             Tag::BlockQuote(kind) => self.open(Frame::Quote(kind.map(callout), Vec::new())),
-            Tag::FootnoteDefinition(name) => self.frames.push(Frame::Note(clean(&name), Vec::new())),
+            Tag::FootnoteDefinition(name) => self.frames.push(Frame::Note(note_name(&name), Vec::new())),
             Tag::CodeBlock(kind) => {
                 let label = match kind {
                     CodeBlockKind::Fenced(info) => info.split_whitespace().next().map(|word| cap(&clean(word), 40)),
@@ -360,7 +367,8 @@ impl Builder<'_> {
                 let raw = dest_url.to_string();
                 let link = links::target(&raw, self.repo).map(|target| Link { target, raw: clean(&raw) });
                 // `#tables`: a heading in this text.
-                let anchor = raw.strip_prefix('#').filter(|name| !name.is_empty()).map(clean);
+                let anchor =
+                    raw.strip_prefix('#').filter(|name| !name.is_empty() && name.len() <= MAX_ANCHOR).map(clean);
                 self.links.push(Open { link, anchor, raw, text: String::new() });
             }
             Tag::Image { dest_url, .. } => self.image = Some((dest_url.to_string(), String::new())),
@@ -442,8 +450,14 @@ impl Builder<'_> {
             Frame::Quote(callout, blocks) => self.block(Block::Quote { callout, blocks }),
             Frame::List { start, items } => self.block(Block::List { start, items }),
             Frame::Item(task, mut blocks, spans) => {
-                if !spans.is_empty() && self.room() {
+                if spans.iter().any(|span| !span.text.trim().is_empty()) && self.room() {
                     blocks.push(Block::Para(spans));
+                }
+                // A tight item's pictures stay in it.
+                for (path, alt) in std::mem::take(&mut self.pictures) {
+                    if self.room() {
+                        blocks.push(Block::Image { path, alt });
+                    }
                 }
                 match self.frames.last_mut() {
                     Some(Frame::List { items, .. }) => items.push(Item { task, blocks }),
@@ -497,18 +511,17 @@ impl Builder<'_> {
         }
     }
 
-    /// `slug` once: a second alike is `slug-1`, then `slug-2`.
+    /// `slug` once: a second alike is `slug-1`, then `slug-2`, past any already given (`# A-1`).
     fn unique(&mut self, slug: String) -> String {
-        let seen = self.slugs.entry(slug.clone()).or_insert(0);
-        *seen += 1;
-        match *seen {
-            1 => slug,
-            n => {
-                let again = format!("{slug}-{}", n - 1);
-                self.slugs.insert(again.clone(), 1);
-                again
-            }
+        let mut n = self.suffixes.get(&slug).copied().unwrap_or(0);
+        let mut out = slug.clone();
+        while self.slugs.contains(&out) {
+            n += 1;
+            out = format!("{slug}-{n}");
         }
+        self.suffixes.insert(slug, n);
+        self.slugs.insert(out.clone());
+        out
     }
 
     /// The pictures named in a block not drawn, alone.
@@ -543,6 +556,16 @@ impl Builder<'_> {
             Some(Frame::List { items, .. }) => items.push(Item { task: None, blocks: vec![block] }),
             // A block inside a run of text (a rule in a cell): its text, if it has any.
             Some(_) | None => {}
+        }
+    }
+
+    /// As `room`, keeping one block for the frame being read (an HTML block's line).
+    fn room_but_one(&mut self) -> bool {
+        if self.blocks + 1 < self.caps.blocks {
+            self.room()
+        } else {
+            self.cut += 1;
+            false
         }
     }
 
@@ -663,7 +686,7 @@ pub fn plain(blocks: &[Block]) -> String {
                 .map(|row| row.iter().map(|cell| spans(cell)).collect::<Vec<_>>().join("\t"))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            Block::Image { .. } => continue,
+            Block::Image { alt, .. } => format!("[image: {alt}]"),
             Block::Rule => "---".into(),
             Block::Footnotes(notes) => {
                 notes.iter().map(|note| format!("[{}] {}", note.n, plain(&note.blocks))).collect::<Vec<_>>().join("\n")
@@ -818,6 +841,14 @@ fn pieces(text: &str) -> Vec<Piece<'_>> {
     out
 }
 
+/// Footnote labels as the parser matches them: in any case (`[^A]` is `[^a]`).
+fn note_name(name: &str) -> String {
+    clean(name).to_lowercase()
+}
+
+/// The longest `#anchor` or footnote name kept: each span of a link's text holds a copy.
+const MAX_ANCHOR: usize = 256;
+
 /// The longest bare address read (`links::target` opens none longer), and the longest mention.
 const MAX_URL: usize = 2048;
 const MAX_MENTION: usize = 120;
@@ -830,7 +861,12 @@ fn url(text: &str) -> Option<usize> {
     }
     // Read no further than the longest address that opens: a long run is never scanned twice.
     let scan = head(text, MAX_URL + 1);
-    let mut end = scan.find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"')).unwrap_or(scan.len());
+    // No end within the window, and more after it: longer than any that opens.
+    let mut end = match scan.find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"')) {
+        Some(end) => end,
+        None if scan.len() == text.len() => text.len(),
+        None => return None,
+    };
     if end > MAX_URL {
         return None;
     }
@@ -982,6 +1018,15 @@ mod tests {
             })
             .collect();
         assert_eq!(heads, [(1, "top"), (2, "quotes-and-callouts"), (2, "top-1")]);
+        // A suffix already taken by a heading of its own is passed over.
+        let slugs: Vec<String> = parse("# A\n\n# A-1\n\n# A\n\n# A", None)
+            .into_iter()
+            .filter_map(|b| match b {
+                Block::Heading { slug, .. } => Some(slug),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(slugs, ["a", "a-1", "a-2", "a-3"]);
         let Block::Para(spans) = &blocks[4] else { panic!("{blocks:#?}") };
         let anchors: Vec<_> = spans.iter().filter_map(|s| s.anchor.as_deref()).collect();
         assert_eq!(anchors, ["quotes-and-callouts", "TOP-1"]);
@@ -1022,6 +1067,11 @@ mod tests {
             [(1, "b", "Second defined.".into()), (2, "a", "First defined.".into()), (3, "c", "Never used.".into())]
         );
         assert_eq!(anchor_at(&blocks, "^a"), Some(blocks.len() - 1));
+        // Labels in any case are one footnote, as the parser matches them.
+        let blocks = parse("See [^Note].\n\n[^note]: Details.", None);
+        let Some(Block::Footnotes(notes)) = blocks.last() else { panic!("{blocks:#?}") };
+        assert_eq!((plain(&blocks[..1]).as_str(), notes[0].n), ("See [1].", 1));
+        assert_eq!(anchor_at(&blocks, "^note"), Some(1));
         assert_eq!(
             column_widths(&[
                 vec![vec![]],
@@ -1061,6 +1111,11 @@ mod tests {
         assert_eq!(plain(&parse_with(&lt, None, FILE)).chars().count(), MAX_LINE + 1, "its line, capped");
         // An address longer than `MAX_URL` is text; one of brackets is trimmed by counts kept.
         assert_eq!(url(&format!("https://e.com/{}", "a".repeat(MAX_URL))), None);
+        // Longer than the window by a character that straddles its edge: not cut short there.
+        assert_eq!(url(&format!("https://e.com/{}é", "a".repeat(MAX_URL - 14))), None);
+        let long_anchor = format!("[x](#{})", "a".repeat(MAX_ANCHOR + 1));
+        let Block::Para(spans) = &parse(&long_anchor, None)[0] else { panic!() };
+        assert!(spans.iter().all(|s| s.anchor.is_none()));
         let brackets = format!("https://e.com/{}", ")".repeat(MAX_URL - 14));
         assert_eq!(url(&brackets), Some("https://e.com/".len()));
         let opens = format!("x https://e.com/{}", "(".repeat(100_000));
@@ -1074,7 +1129,7 @@ mod tests {
         let blocks = parse("Before.\n\n![shot](docs/shot.png)\n\nAfter.", REPO);
         assert_eq!(blocks.len(), 3, "{blocks:#?}");
         assert_eq!(blocks[1], Block::Image { path: "/w/app/docs/shot.png".into(), alt: "shot".into() });
-        assert!(!plain(&blocks).contains("[image"));
+        assert_eq!(plain(&blocks), "Before.\n\n[image: shot]\n\nAfter.", "Copy names it once");
         // Inside text it is drawn under it, its words gone from the line.
         let blocks = parse("See ![shot](docs/shot.png) here.", REPO);
         assert!(matches!(&blocks[..], [Block::Para(s), Block::Image { .. }] if texts(s) == "See  here."));
@@ -1083,6 +1138,15 @@ mod tests {
         assert_eq!(paras, ["<details><summary>Open</summary>", "Inside.", "</details>", "After."]);
         let blocks = parse("<div>\na\n</div>\n", None);
         assert_eq!(plain(&blocks), "<div>\na\n</div>");
+        // A tight item's picture stays in its item; an item of only a picture draws no empty line.
+        let blocks = parse("- ![a](a.png)\n- b\n  - c\n\nAfter.", REPO);
+        let Block::List { items, .. } = &blocks[0] else { panic!("{blocks:#?}") };
+        assert_eq!(items[0].blocks, [Block::Image { path: "/w/app/a.png".into(), alt: "a".into() }]);
+        assert!(!blocks.iter().any(|b| matches!(b, Block::Image { .. })), "none after the list: {blocks:#?}");
+        // An HTML block's lines are counted: a long `<pre>` is cut at the caps.
+        let pre = format!("<pre>\n{}</pre>\n", "x\n".repeat(MAX_BLOCKS * 10));
+        let Block::Para(spans) = &parse(&pre, None)[0] else { panic!() };
+        assert!(texts(spans).lines().count() <= MAX_BLOCKS + 1);
         // A block with no language has no label, and no colours.
         let blocks = parse("    indented\n\n```\nplain\n```", None);
         assert!(blocks.iter().all(|b| matches!(b, Block::Code { label: None, marks, .. } if marks.is_empty())));

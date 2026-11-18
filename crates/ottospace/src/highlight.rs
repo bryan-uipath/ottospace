@@ -28,8 +28,12 @@ pub type Mark = (Range<usize>, Token);
 
 /// `marks` of `text` split by line as `str::lines` splits it, each run's bytes within its line;
 /// a run over several lines (a block comment) is cut into one for each.
+/// None at all for no marks: plain text costs no list per line.
 pub fn by_line(text: &str, marks: &[Mark]) -> Vec<Vec<Mark>> {
     let mut out = Vec::new();
+    if marks.is_empty() {
+        return out;
+    }
     let (mut start, mut next) = (0, 0);
     for line in text.split_inclusive('\n') {
         let shown = line.trim_end_matches('\n').trim_end_matches('\r');
@@ -574,7 +578,7 @@ mod tests {
         assert_eq!(texts[0], [("let", Token::Keyword), ("1", Token::Number), ("/* one", Token::Comment)]);
         assert_eq!(texts[1], [("two */", Token::Comment), ("\"s\"", Token::String)]);
         assert_eq!((texts[2].len(), &texts[3][..]), (0, &[("fn", Token::Keyword)][..]));
-        assert_eq!(by_line("", &[]), Vec::<Vec<Mark>>::new());
+        assert_eq!(by_line("a\nb", &[]), Vec::<Vec<Mark>>::new());
     }
 
     #[test]

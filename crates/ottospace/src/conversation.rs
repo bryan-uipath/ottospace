@@ -111,7 +111,9 @@ const FOLD_LINES: usize = 6;
 pub(crate) fn question_blocks(text: &str) -> (Vec<Block>, Option<Block>) {
     let whole = text.lines().all(|line| line.chars().count() <= markdown::MAX_LINE);
     let mut blocks = if whole { markdown::parse(text, None) } else { Vec::new() };
-    let asked = blocks.pop();
+    // Footnotes are drawn last but are not the question: they stay with its context.
+    let at = blocks.iter().rposition(|block| !matches!(block, Block::Footnotes(_)));
+    let asked = at.map(|at| blocks.remove(at));
     (blocks, asked)
 }
 
@@ -2355,3 +2357,15 @@ enum Goes {
 
 /// About how wide a table's character is drawn, in points (`text_xs`).
 const TABLE_CHAR: f32 = 7.6;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_question_with_a_footnote_is_still_its_last_block() {
+        let (context, asked) = question_blocks("Some context.\n\nUse option A?[^1]\n\n[^1]: A keeps the cache.");
+        assert_eq!(asked.map(|asked| markdown::plain(&[asked])).as_deref(), Some("Use option A?[1]"));
+        assert!(matches!(&context[..], [Block::Para(_), Block::Footnotes(_)]), "{context:#?}");
+    }
+}

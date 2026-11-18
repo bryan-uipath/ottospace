@@ -494,10 +494,11 @@ impl Workspace {
                                     .get(at)
                                     .into_iter()
                                     .flatten()
-                                    .filter(|(range, _)| range.end <= line.len())
+                                    .take_while(|(range, _)| range.start < line.len())
                                     .map(|(range, token)| {
                                         let colour = rgb(highlight::colour(*token)).into();
-                                        (range.clone(), HighlightStyle { color: Some(colour), ..Default::default() })
+                                        let style = HighlightStyle { color: Some(colour), ..Default::default() };
+                                        (range.start..range.end.min(line.len()), style)
                                     })
                                     .collect();
                                 let text = StyledText::new(SharedString::from(line)).with_highlights(styles);
