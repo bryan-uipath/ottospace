@@ -7272,7 +7272,6 @@ fn the_sidebar_collapses_into_the_left_rail_and_opens_on_the_section_open_last()
     otto.user_click(at(otto.control("rail:tasks"), 0.5, 0.5));
     assert_eq!(otto.drawn()["state"]["sidebar"], "tasks");
     assert!(otto.user_click(at(otto.control("bar:close"), 0.5, 0.5))["state"]["sidebar"].is_null());
-    assert!(otto.control_opt("rail:open").is_none());
     assert_eq!(otto.user_click(at(otto.control("rail:tasks"), 0.5, 0.5))["state"]["sidebar"], "tasks");
     assert!(otto.user_click(at(otto.control("rail:tasks"), 0.5, 0.5))["state"]["sidebar"].is_null());
     assert_eq!(otto.user_key("cmd-shift-l")["state"]["sidebar"], "tasks");

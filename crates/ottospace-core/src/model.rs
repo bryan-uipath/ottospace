@@ -4116,6 +4116,14 @@ impl Model {
     fn step(&mut self, sent: Envelope) -> Vec<Effect> {
         let Envelope { action, origin } = sent;
         let user = origin == Origin::User;
+        // The user's click on the rail item the drawer shows is ⌘⇧R, as the left rail's open cell. Asked
+        // before the box's line is put aside, which would show the item under it; not over its brief.
+        let action = match action {
+            Action::RailSelect { item } if user && self.brief.is_none() && self.rail_shown() == Some(item) => {
+                Action::TalkToggle
+            }
+            action => action,
+        };
         let mut effects = Vec::new();
         // An edit is for the field that has the keyboard now. With none (a mark waits for a
         // letter over the filter), it ends the wait as any move of the user's does, and types nothing.
@@ -5947,8 +5955,6 @@ impl Model {
                 }
             }
             Action::TalkCycle { delta } => self.rail_cycle(delta, effects),
-            // The user's click on the item shown collapses the drawer into the rail, as ⌘⇧R; as the left rail's open cell.
-            Action::RailSelect { item } if self.rail_shown() == Some(item) => self.act(Action::TalkToggle, effects),
             Action::RailSelect { item } => self.rail_select(item, effects),
             // ⌘⇧R or a →: the drawer collapses into its rail, whatever it shows (a brief, the
             // inspector, the box's line put aside), but a capture's draft: the user's work in progress.

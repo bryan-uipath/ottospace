@@ -324,12 +324,20 @@ mod tests {
             m.update(Action::RailSelect { item });
             assert_eq!((m.drawer_collapsed(), m.rail_shown()), (false, Some(item)), "{item:?}");
         }
-        // Beside the inspector the item is selected, not shown: a click shows it.
+        // Beside the inspector, or the new-task box, the item is selected, not shown: a click shows it.
         m.update(Action::InspectorOpen { pane: 1, app: "Notes".into() });
         m.update(Action::RailSelect { item: task(1) });
         assert_eq!((m.inspector.is_none(), m.rail_shown()), (true, Some(task(1))));
-        // ↵ on the rail shows, never collapses: as ↵ on the left rail opens.
-        m.update(Action::ListChoose { axis: Axis::Right });
+        m.update(Action::OpenCompose { text: "later".into() });
+        m.update(Action::RailSelect { item: task(1) });
+        assert_eq!(
+            (m.rail_shown(), m.compose_kept.as_ref().map(|kept| kept.line.text())),
+            (Some(task(1)), Some("later"))
+        );
+        // Over its brief: the click leaves the drawer open.
+        m.tasks.list.iter_mut().for_each(|task| task.materials = vec!["shot.png".into()]);
+        m.update(Action::BriefShow { id: 1 });
+        m.update(Action::RailSelect { item: task(1) });
         assert!(!m.drawer_collapsed());
     }
 
@@ -512,6 +520,9 @@ mod tests {
         assert_eq!((m.focus_target(), m.rail_selected()), (Target::DrawerRail(order[0]), Some(RailItem::Transcript)));
         m.update(Action::ListChoose { axis: Axis::Right });
         assert_eq!((m.focus_target(), m.rail_selected()), (Target::DrawerRail(order[0]), Some(order[0])));
+        // ↵ on the item shown keeps it: ↵ only opens, as on the left rail; a click collapses.
+        m.update(Action::ListChoose { axis: Axis::Right });
+        assert_eq!((m.focus_target(), m.rail_shown()), (Target::DrawerRail(order[0]), Some(order[0])));
         // A client's key on it does nothing.
         assert!(m.refusal(&Action::ListMove { delta: 1 }, Origin::Socket).is_some());
         m.update(Action::FocusDir { dir: Dir::Left });

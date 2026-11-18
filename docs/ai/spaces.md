@@ -475,7 +475,7 @@ should have shortcut keys visible there"; "we should always have the right rail 
 - **A click on what is shown collapses it** (the owner: "how come clicking the transcript button
   doesn't toggle the right rail?"): the left rail's open section's cell closes the bar
   (`ToggleSection`); the drawer's rail item it shows (`rail_shown`) collapses the drawer, as ⌘⇧R
-  (`RailSelect` in the core). The user's alone, as every rail click. ↵ in list mode only opens,
+  (`RailSelect` in the core). The user's alone, as every click on the right rail (a client still opens and closes the sidebar). ↵ in list mode only opens,
   on both rails.
 - **Keys** (the owner): ⌘⇧R is the drawer's (all that ⌘⇧L did: collapse or open the
   conversation; on the transcript, collapse; with no conversation, the transcript). ⌘⇧L is the
