@@ -2702,6 +2702,25 @@ fn a_parked_panes_picture_is_its_window_pixel_for_pixel() {
     let (left, top) = (x.saturating_sub(40), y.saturating_sub(120));
     keep_crop("picture", &drawn, [px(shown[0]) + left, px(shown[1]) + top, sw + 80, sh + 140]);
     keep_crop("window", &live, [left, px(crop) + top, sw + 80, sh + 140]);
+    report(&format!("sharp diag: samples at wait {}", count(&s, "stream_samples_1")));
+    for i in 0..3 {
+        std::thread::sleep(Duration::from_millis(1000));
+        let s2 = state();
+        let again = window_pixels(otto_window, &support::temp(&format!("otto-sharp2-{}.bmp", std::process::id())));
+        let g = grey(&again, px(shown[0]), px(shown[1]), w, h);
+        let pg: Vec<f64> = (y..y + sh).flat_map(|row| g[row * w + x..][..sw].to_vec()).collect();
+        let w0 = &canary.call(json!({"cmd": "state"}))["windows"][0];
+        report(&format!(
+            "sharp diag {i}: +{}s sharpness {:.1}, samples {}, size {}x{}, canary painted {} shows {}",
+            i + 1,
+            sharpness(&pg, sw),
+            count(&s2, "stream_samples_1"),
+            count(&s2, "stream_width_1"),
+            count(&s2, "stream_height_1"),
+            w0["painted"],
+            w0["shows"]
+        ));
+    }
     assert!(
         sharp_picture >= 0.95 * sharp_real,
         "the picture is as sharp as the window: {sharp_picture} vs {sharp_real}"
