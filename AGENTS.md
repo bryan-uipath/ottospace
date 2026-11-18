@@ -198,8 +198,8 @@ Rules:
   the regression is real and accepted. Nightly and by hand on `main`: the JSON alone, for trends.
 - `.github/workflows/duped.yml`, on pull requests (not docs-only ones), on `ubuntu-latest`:
   `duped check --base origin/<base>` (the release binary, pinned by version and checksum) fails on an
-  added helper identical to one already there, or an identical file. A deliberate copy goes in
-  `duped.json` with a reason. A new release: change `DUPED_VERSION` and `DUPED_SHA256` together.
+  added helper identical to one already there, or an identical file of 10 lines or more. A deliberate
+  copy goes in `duped.toml` with a reason. A new release: change `DUPED_VERSION` and `DUPED_SHA256` together.
 - `.github/workflows/release.yml`, on a `v*` tag: `scripts/package.sh`, GitHub Release.
 - `.github/workflows/pages.yml`, on pushes to `main` that touch `site/**`: deploys `site/` to GitHub
   Pages. Never on pull requests. Only its deploy job has `pages: write` and `id-token: write`.
