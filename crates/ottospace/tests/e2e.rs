@@ -1547,6 +1547,11 @@ fn the_new_task_box_files_a_line() {
         reply["state"]["talk"]
     );
     otto.user_key("cmd-shift-r");
+    // Collapsed by the user: a client's box is refused, until something shows there again.
+    let refused = otto.raw(r#"{"cmd":"compose","text":"x"}"#);
+    assert_eq!(refused["error"], "only the user collapses or opens the drawer", "{refused}");
+    otto.user_key("cmd-n");
+    otto.user_key("escape");
 
     // What a line's tags may name is read off the window's thread: the box says when it is in.
     let compose = |text: &str| {
@@ -7017,6 +7022,70 @@ fn the_drawer_collapses_into_the_rail_from_the_transcript_or_a_task_and_only_the
     assert!(otto.control_opt("drawer-rail:open").is_none());
     let reopened = otto.user_click(at(otto.control(&format!("drawer-rail:{one}")), 0.5, 0.5));
     assert_eq!(reopened["drawer"]["collapsed"], false);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Follow-ups to the collapse: ⌘⇧R collapses the fresh start's box and opens it again; while
+/// the user collapsed the drawer, a client's ⌘N or + is refused and said; ⌘⇧R reopens the
+/// transcript it collapsed; a client's ⌘⇧R under the user's typing is said, not silent.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_drawer_reopens_what_it_collapsed_and_a_client_opens_no_box_in_it() {
+    let root = support::temp(&format!("ottospace-e2e-refold-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, sessions) = (root.join("bin"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    let fixture = root.join("fixture.jsonl");
+    std::fs::write(&fixture, LISTEN_FIXTURE).unwrap();
+    let settings =
+        json!({"repos": [], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("refold", &settings.to_string());
+    let env = [
+        ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "transcripts"),
+        ("OTTOSPACE_LISTEN_FIXTURE", fixture.to_str().unwrap()),
+    ];
+    let otto = Otto::launch_with("refold", &env);
+    let said = |reply: &Value| reply.to_string().contains("only the user collapses or opens the drawer");
+    // The fresh start's box: ⌘⇧R collapses it; a client's ⌘N is refused and said; ⌘⇧R opens it.
+    assert_eq!(otto.drawn()["drawer"]["collapsed"], false);
+    assert_eq!(otto.user_key("cmd-shift-r")["drawer"]["collapsed"], true);
+    let theirs = otto.call(json!({"cmd": "key", "keys": "cmd-n"}));
+    assert!(said(&theirs) && theirs["drawer"]["collapsed"] == true, "{theirs}");
+    assert_eq!(otto.user_key("cmd-shift-r")["drawer"]["collapsed"], false);
+    otto.user_key("escape");
+    // A workspace with a task and the transcript on: the transcript collapsed comes back.
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.user_key("cmd-d");
+    otto.user_key("cmd-n");
+    otto.user_key("o n e");
+    let one = otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the task");
+    otto.user_click(at(otto.listen_rect("listen-start:1"), 0.5, 0.5));
+    otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
+    assert_eq!(otto.user_key("cmd-shift-r")["drawer"]["collapsed"], true);
+    let theirs = otto.click(at(otto.control("drawer-rail:new"), 0.5, 0.5), 1);
+    assert!(said(&theirs) && theirs["drawer"]["collapsed"] == true, "{theirs}");
+    let back = otto.user_key("cmd-shift-r");
+    let transcript = |reply: &Value| {
+        let rail = reply["drawer"]["rail"].as_array().cloned().unwrap_or_default();
+        rail.iter().any(|item| item["kind"] == "transcript" && item["selected"] == true)
+    };
+    assert!(back["drawer"]["collapsed"] == false && transcript(&back), "{}", back["drawer"]);
+    // The user typing in the conversation: a client's ⌘⇧R is refused, and said.
+    let talk = otto.user_click(at(otto.control(&format!("drawer-rail:{one}")), 0.5, 0.5))["state"]["talk"].clone();
+    let talk = if talk["keys"] == true { talk } else { otto.user_key("cmd-l")["state"]["talk"].clone() };
+    assert_eq!(talk["keys"], true, "{talk}");
+    let theirs = otto.call(json!({"cmd": "key", "keys": "cmd-shift-r"}));
+    assert!(theirs["drawer"]["collapsed"] == false && said(&theirs), "{theirs}");
+    // Collapsed by the user, their own ⌘N opens the box.
+    otto.user_key("cmd-shift-r");
+    assert_eq!(otto.user_key("cmd-n")["drawer"]["collapsed"], false);
+    // The user writing a new task: a client's ⌘⇧R is refused, and said.
+    otto.user_key("t w o");
+    let theirs = otto.call(json!({"cmd": "key", "keys": "cmd-shift-r"}));
+    assert!(theirs["drawer"]["collapsed"] == false && said(&theirs), "{theirs}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }

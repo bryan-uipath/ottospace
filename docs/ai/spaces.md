@@ -451,9 +451,14 @@ should have shortcut keys visible there"; "we should always have the right rail 
   sidebar's: `ToggleSection` of `Model::sidebar_toggled`, the open section (it closes the bar),
   else the one open last, else Repos. The key reference lists both; `keys.json`'s `talk_toggle`
   (⌘⇧L's count) is not read: the key changed, so it is learned anew as `drawer_toggle`.
-- **Opened again** by the user's rail click, ⌘⇧R, ⌘⌥] / ⌘⌥[ or the agent chip.
+- **Opened again** by the user's rail click, ⌘⇧R, ⌘⌥] / ⌘⌥[ or the agent chip. ⌘⇧R opens
+  what was collapsed (`Model::folded`, the user's collapse until something shows there again):
+  the transcript if it was shown, the new-task box (its line back, or a fresh start's:
+  `welcome_shown`) if it was; else the conversation, else the transcript.
 - **Who.** The drawer: the user alone. A client's `TalkToggle` (its ⌘⇧R, a click on →) is
-  refused, and so is its ⌘L while collapsed (`DRAWER_USERS`); the reply's `notice` says so. The
+  refused, and so is its ⌘L while collapsed (`DRAWER_USERS`); the reply's `notice` says so.
+  While the user collapsed it, a client's `OpenCompose` (its ⌘N, the bar's or the rail's +, a
+  `compose` request) is refused too; the user's own opens the box. The
   sidebar stays a client's to open and close (`section`), as before.
 - **Kept**: `layout.json` keeps the conversation's `open` (the drawer collapsed on it or not) and
   the section; the sidebar's last section is not kept.

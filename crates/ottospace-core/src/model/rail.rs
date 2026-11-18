@@ -14,6 +14,17 @@ pub const RAIL_USERS: &str = "only the user switches what the drawer shows";
 /// Why a client's ⌘⇧R, or its click on the drawer's →, is refused.
 pub const DRAWER_USERS: &str = "only the user collapses or opens the drawer";
 
+/// What the user's collapse folded away, for ⌘⇧R to bring back (`Model::folded`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Folded {
+    /// The transcript was shown.
+    Transcript,
+    /// The new-task box: the user's line, put aside, or a fresh start's (`Model::welcome`).
+    Box,
+    /// A conversation, a brief or the inspector.
+    Rest,
+}
+
 /// What an item of the rail stands for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -70,7 +81,7 @@ impl Model {
     /// conversation, the new-task box, a brief, a capture's draft nor the inspector.
     pub fn drawer_collapsed(&self) -> bool {
         let talk = self.talk.as_ref().is_some_and(|talk| talk.open);
-        let boxed = self.compose.is_some() || self.welcome();
+        let boxed = self.compose.is_some() || self.welcome_shown();
         let elsewhere = self.inspector.is_some() || self.capture.is_some() || self.brief.is_some();
         !(self.listen.shown || talk || boxed || elsewhere)
     }
@@ -79,12 +90,23 @@ impl Model {
     /// inspector, a capture's draft or the new-task box is there. What the rail lifts.
     pub fn rail_shown(&self) -> Option<RailItem> {
         let taken = self.inspector.is_some() || self.capture.is_some();
-        let boxed = self.compose.is_some() || self.welcome();
+        let boxed = self.compose.is_some() || self.welcome_shown();
         let talk = self.talk.as_ref().is_some_and(|talk| talk.open);
         self.rail_selected().filter(|item| match item {
             RailItem::Transcript => self.listen.shown && !taken,
             RailItem::Task { .. } => !self.listen.shown && !taken && !boxed && talk,
         })
+    }
+
+    /// Collapsed, with something the user's ⌘⇧R would open: the conversation, else the transcript.
+    pub fn drawer_opens(&self) -> bool {
+        let boxed = self.folded == Some(Folded::Box);
+        self.drawer_collapsed() && (self.talk.is_some() || self.listen_item() || boxed)
+    }
+
+    /// The fresh start's new-task box is in the drawer: nothing is open yet and the user did not collapse it.
+    pub fn welcome_shown(&self) -> bool {
+        self.welcome() && self.folded.is_none()
     }
 
     /// The user's choice of an item: the drawer shows it, open. The transcript is shown here,
@@ -280,6 +302,69 @@ mod tests {
         // A client's ⌘⇧R does not collapse it either.
         m.update(Action::TalkToggle.sent_by(Origin::Socket));
         assert!(!m.drawer_collapsed());
+    }
+
+    /// The owner: reopening shows what was collapsed. The transcript collapsed beside a
+    /// conversation: ⌘⇧R brings the transcript back, not the conversation.
+    #[test]
+    fn the_toggle_reopens_the_transcript_it_collapsed() {
+        let mut m = three();
+        listen(&mut m);
+        m.update(Action::TalkToggle);
+        assert_eq!((m.drawer_collapsed(), m.folded), (true, Some(Folded::Transcript)));
+        m.update(Action::TalkToggle);
+        assert_eq!((m.drawer_collapsed(), m.rail_shown(), m.folded), (false, Some(RailItem::Transcript), None));
+        // A conversation collapsed: the conversation.
+        m.update(Action::RailSelect { item: task(2) });
+        m.update(Action::TalkToggle);
+        m.update(Action::TalkToggle);
+        assert_eq!(m.rail_shown(), Some(task(2)));
+    }
+
+    /// The owner: ⌘⇧R collapses the fresh start's box too, and opens it again. While the user
+    /// collapsed the drawer, a client's ⌘N (the bar's +, the rail's +) is refused: only the user
+    /// opens it. The user's own ⌘N opens the box.
+    #[test]
+    fn the_fresh_start_box_collapses_and_only_the_user_opens_the_drawer_again() {
+        let mut m = Model::default();
+        assert!(m.welcome_shown() && !m.drawer_collapsed());
+        m.update(Action::TalkToggle);
+        assert!(m.drawer_collapsed() && !m.welcome_shown() && m.drawer_opens());
+        let theirs = Action::OpenCompose { text: String::new() };
+        assert_eq!(m.refusal(&theirs, Origin::Socket), Some(DRAWER_USERS));
+        m.update(theirs.clone().sent_by(Origin::Socket));
+        assert!(m.drawer_collapsed() && m.compose.is_none());
+        m.update(Action::TalkToggle);
+        assert!(!m.drawer_collapsed() && m.compose.is_some() && m.folded.is_none());
+        // The box collapsed in a workspace: the client's ⌘N refused, the user's opens it.
+        m.update(Action::CloseCompose);
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(theirs.clone());
+        m.update(Action::TalkToggle);
+        assert!(m.drawer_collapsed() && m.compose.is_none());
+        m.update(theirs.clone().sent_by(Origin::Socket));
+        assert!(m.compose.is_none());
+        m.update(theirs.clone());
+        assert!(!m.drawer_collapsed() && m.compose.is_some());
+        // Not collapsed by the user: a client's ⌘N opens the box as before.
+        m.update(Action::CloseCompose);
+        assert_eq!(
+            (m.drawer_collapsed(), m.folded, m.refusal(&theirs, Origin::Socket), m.compose.is_some()),
+            (true, None, None, false)
+        );
+        // Review: the fresh start's box collapsed, then a pane opened: ⌘⇧R still opens the box.
+        let mut m = Model::default();
+        m.update(Action::TalkToggle);
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal }.sent_by(Origin::Socket));
+        assert!(!m.welcome() && m.drawer_opens() && m.refusal(&theirs, Origin::Socket).is_some());
+        m.update(Action::TalkToggle);
+        assert!(m.compose.is_some() && m.folded.is_none());
+        // Nothing left to reopen (a brief collapsed, no conversation, nothing heard): no fold to refuse by.
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::InspectorOpen { pane: 1, app: "Notes".into() });
+        m.update(Action::TalkToggle);
+        assert_eq!((m.drawer_collapsed(), m.drawer_opens(), m.folded), (true, false, None));
     }
 
     /// The rail shows beside whatever is in the drawer's place: a click on an item there closes

@@ -3046,6 +3046,8 @@ impl Run {
         let closed_to = m.talk.clone().filter(|talk| !talk.open && clicked);
         let written = m.compose_line().is_some_and(|line| !line.is_empty());
         let composing_before = m.composing() && written && !m.compose_theirs && origin != Origin::User;
+        // The drawer the user collapsed: no client opens the new-task box in it.
+        let folded_before = m.folded.is_some() && m.compose.is_none() && origin != Origin::User;
         let agents_before = (m.agents.clone(), m.starting.clone());
         let spaces_before: Vec<Owner> = m.spaces.iter().map(|space| space.of.clone()).collect();
 
@@ -3339,6 +3341,10 @@ impl Run {
         ensure!(
             !composing_before || m.compose.is_some(),
             "{origin:?}'s {action:?} took the new-task box from the user"
+        );
+        ensure!(
+            !folded_before || m.compose.is_none(),
+            "{origin:?}'s {action:?} opened the new-task box in the drawer the user collapsed"
         );
         // A tab changes space only by a move of the user's, a task started from it, its space
         // gone, an undo of a dismissal or a workspace's delete, or a session made a task.
