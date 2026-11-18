@@ -2651,6 +2651,8 @@ fn a_parked_panes_picture_is_its_window_pixel_for_pixel() {
         shown[3]
     ));
     assert_eq!(count(&s, "stream_scale_1"), scale, "the stream captures at ottospace's scale");
+    let w0 = &canary.call(json!({"cmd": "state"}))["windows"][0];
+    report(&format!("sharp diag: canary bounds {} painted {} shows {}", w0["bounds"], w0["painted"], w0["shows"]));
     // No free corner of ottospace's scale (a 2× laptop, a 1× external to its right, lower): the
     // window draws at 1× parked, and no picture of it matches the live one.
     if count(&s, "parking_scale") < scale {

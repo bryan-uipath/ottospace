@@ -116,6 +116,8 @@ struct Canary {
     focus: FocusHandle,
     /// Draws `CANARY_PATTERN`'s stripes.
     pattern: bool,
+    /// The window's size when it last drew, in points.
+    painted: [f32; 2],
 }
 
 /// `CANARY_PATTERN`'s stripes, in `bounds`: columns in its top half, rows in the bottom, one
@@ -137,7 +139,9 @@ fn stripes(bounds: Bounds<gpui::Pixels>, window: &mut Window) {
 }
 
 impl Render for Canary {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let size = window.viewport_size();
+        self.painted = [size.width.into(), size.height.into()];
         div()
             .size_full()
             .flex()
@@ -202,7 +206,7 @@ fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, at: O
             let focus = cx.focus_handle();
             window.focus(&focus);
             let pattern = number == 1 && std::env::var_os("CANARY_PATTERN").is_some();
-            Canary { title, keys: Vec::new(), clicks: Vec::new(), wheel: 0.0, focus, pattern }
+            Canary { title, keys: Vec::new(), clicks: Vec::new(), wheel: 0.0, focus, pattern, painted: [0.0; 2] }
         })
     });
     if let Ok(handle) = handle {
@@ -254,7 +258,8 @@ fn state(windows: &Windows, cx: &mut App) -> String {
             let active = window.is_window_active();
             // `frame`: as Accessibility has it, global, so a test can tell whether it is on a screen.
             let global = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::frame(view) });
-            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "wheel": canary.wheel, "bounds": frame, "frame": global, "active": active, "scale": scale })
+            let shows = ns_view(window).is_some_and(|view| unsafe { ottospace_mac::window::visible(view) });
+            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "wheel": canary.wheel, "bounds": frame, "frame": global, "active": active, "scale": scale, "painted": canary.painted, "shows": shows })
         });
         entry.map(|entry| open_windows.push(entry)).is_ok()
     });
