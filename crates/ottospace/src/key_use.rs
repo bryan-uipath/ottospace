@@ -20,8 +20,8 @@ const SETTLE: Duration = Duration::from_secs(5);
 #[derive(Default)]
 pub struct Kept {
     /// False: not written this run (nothing is kept, or it is a newer build's).
-    writing: bool,
-    due: Option<Instant>,
+    pub(crate) writing: bool,
+    pub(crate) due: Option<Instant>,
     /// The text last read or written: the same text is not written again.
     stored: String,
 }

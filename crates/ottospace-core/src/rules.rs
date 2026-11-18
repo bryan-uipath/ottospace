@@ -118,8 +118,13 @@ pub fn judged(subrole: &str) -> bool {
 }
 
 /// What the first rule that selects the window says, the user's rules before the built-in ones.
+/// A user's `split` or `float` never moves a window a built-in rule protects: only `manage` does.
 fn first(user: &[Rule], window: &Facts) -> Option<Action> {
-    user.iter().chain(&built_in()).find(|rule| rule.select.selects(window)).map(|rule| rule.action)
+    let of = |rules: &[Rule]| rules.iter().find(|rule| rule.select.selects(window)).map(|rule| rule.action);
+    match (of(user), of(&built_in())) {
+        (Some(Action::Split | Action::Float), Some(Action::Ignore)) => Some(Action::Ignore),
+        (mine, built) => mine.or(built),
+    }
 }
 
 /// What the shell read of a new window of a hosted app, and of the pane it would split. Points.
@@ -186,18 +191,61 @@ pub fn place(user: &[Rule], window: &Facts, shape: &Shape) -> Place {
     if small || squeezed { Place::Float } else { Place::Split }
 }
 
-/// Where a floating pop-up's top left goes (global frames), or `None` to leave it: centred over
-/// its app's `pane` unless its middle already is over it, never above or left of the pane. With
-/// no pane drawn, it moves only if the user could not reach it. Wherever it goes, out of reach
-/// (a pane partly off screen) becomes the middle of `main`.
-pub fn float_to(window: Frame, pane: Option<Frame>, screens: &[Frame], main: Frame) -> Option<(f64, f64)> {
-    let over = pane.filter(|pane| {
-        let (x, y) = (window.x + window.w / 2.0, window.y + window.h / 2.0);
-        !((pane.x..=pane.x + pane.w).contains(&x) && (pane.y..=pane.y + pane.h).contains(&y))
-    });
-    // At its own size: `centred` shrinks it to the pane, so its top left is never above or left of it.
-    let to = over.map_or(window, |pane| Frame { w: window.w, h: window.h, ..crate::restore::centred(window, pane) });
-    let to = crate::restore::destination(to, screens, main);
+/// Where a floating pop-up could be seen, as the shell read it. Global frames, points.
+#[derive(Clone, Copy, Debug)]
+pub struct Sight<'a> {
+    /// Each screen's visible frame: below the menu bar, beside the Dock.
+    pub screens: &'a [Frame],
+    /// The visible frame of the screen with the menu bar.
+    pub main: Frame,
+    /// ottospace's own window.
+    pub ottospace: Option<Frame>,
+    /// None of the app's panes is live: ottospace is in front of every window of the app.
+    pub parked: bool,
+    /// Where parked windows sit (`hosted::parking_corners`), each a top left.
+    pub spots: &'a [(f64, f64)],
+}
+
+/// True when the user can get at the pop-up where it is: `restore::GRIP` of its top on one screen
+/// and, while its app is parked, beside ottospace's window, unless it is over its app's `pane`
+/// (entering the pane brings it up). One over a parking spot is not: macOS put it by its parked
+/// parent, mostly off the screen's corner.
+pub fn reachable(window: Frame, pane: Option<Frame>, sight: &Sight) -> bool {
+    let at = |&(x, y): &(f64, f64)| {
+        (window.x..window.x + window.w).contains(&x) && (window.y..window.y + window.h).contains(&y)
+    };
+    if sight.spots.iter().any(at) {
+        return false;
+    }
+    let (x, y) = (window.x + window.w / 2.0, window.y + window.h / 2.0);
+    let over = pane.is_some_and(|p| (p.x..=p.x + p.w).contains(&x) && (p.y..=p.y + p.h).contains(&y));
+    let cover = sight.ottospace.filter(|_| sight.parked && !over);
+    crate::restore::reachable_beside(window, sight.screens, cover)
+}
+
+/// Where a floating pop-up's top left goes (global frames), or `None` to leave it: one the user
+/// can reach (`reachable`) is left where it is. Any other goes at its own size to the middle of
+/// its app's `pane` (no pane drawn: of the main screen), moved fully onto the visible frame of
+/// the pane's screen; a pop-up bigger than that screen at its top left.
+pub fn float_to(window: Frame, pane: Option<Frame>, sight: &Sight) -> Option<(f64, f64)> {
+    if reachable(window, pane, sight) {
+        return None;
+    }
+    let holds = |s: &&Frame, p: &Frame| {
+        let (x, y) = (p.x + p.w / 2.0, p.y + p.h / 2.0);
+        (s.x..s.x + s.w).contains(&x) && (s.y..s.y + s.h).contains(&y)
+    };
+    // A pane whose middle is on no screen: the main screen's middle instead.
+    let on = pane.and_then(|p| sight.screens.iter().find(|s| holds(s, &p)).map(|s| (*s, p)));
+    let (screen, around) = on.unwrap_or((sight.main, sight.main));
+    let middle = crate::restore::centred(window, around);
+    // At its own size: `centred` shrinks it to the pane, so one bigger starts at the pane's top left.
+    let clamp = |at: f64, size: f64, low: f64, span: f64| at.min(low + span - size).max(low);
+    let to = Frame {
+        x: clamp(middle.x, window.w, screen.x, screen.w),
+        y: clamp(middle.y, window.h, screen.y, screen.h),
+        ..window
+    };
     (to != window).then_some((to.x, to.y))
 }
 
@@ -412,22 +460,100 @@ mod tests {
     }
 
     #[test]
-    fn a_floating_pop_up_is_centred_over_its_pane_unless_it_is_over_it() {
-        let main = Frame::new(0.0, 0.0, 1920.0, 1080.0);
-        let pane = Frame::new(100.0, 100.0, 1000.0, 800.0);
-        // Put by macOS over its parked window, off screen: centred over the pane.
+    fn a_built_in_rule_beats_a_users_split_or_float() {
+        let rule = |text: &str| serde_json::from_str::<Rule>(text).unwrap();
+        let (split, float) =
+            (rule(r#"{"app": "zoom.us", "do": "split"}"#), rule(r#"{"app": "zoom.us", "do": "float"}"#));
+        let big = beside([1200.0, 900.0]);
+        for title in ["zoom share toolbar window", "Meeting chat", "Reactions"] {
+            let window = zoom(title, "AXStandardWindow");
+            for user in [&split, &float] {
+                assert_eq!(place(std::slice::from_ref(user), &window, &big), Place::Leave, "{title}");
+                assert!(!manages(std::slice::from_ref(user), &window), "{title}");
+            }
+        }
+        // Other windows of the app still follow the user's rule.
+        assert_eq!(place(&[split], &zoom("Settings", "AXDialog"), &big), Place::Split);
+        assert_eq!(place(&[float], &zoom("Zoom Workplace", "AXStandardWindow"), &big), Place::Float);
+        // Only a `manage` rule undoes the built-in one.
+        let manage = rule(r#"{"app": "zoom.us", "title": "Meeting chat", "do": "manage"}"#);
+        assert_eq!(place(&[manage], &zoom("Meeting chat", "AXStandardWindow"), &big), Place::Split);
+    }
+
+    /// One screen; ottospace's window over most of it, its app's pane in it.
+    const MAIN: Frame = Frame { x: 0.0, y: 25.0, w: 1920.0, h: 1055.0 };
+    const OTTO: Frame = Frame { x: 0.0, y: 25.0, w: 1400.0, h: 1000.0 };
+    const PANE: Frame = Frame { x: 100.0, y: 100.0, w: 1000.0, h: 800.0 };
+
+    fn sight(screens: &[Frame], parked: bool) -> Sight<'_> {
+        Sight { screens, main: screens[0], ottospace: Some(OTTO), parked, spots: &[] }
+    }
+
+    #[test]
+    fn a_pop_up_the_user_can_reach_is_left_where_it_is() {
+        let (parked, live) = (sight(&[MAIN], true), sight(&[MAIN], false));
+        // Beside ottospace's window, on screen: left there, parked or live.
+        let beside = Frame::new(1450.0, 200.0, 400.0, 300.0);
+        assert_eq!(float_to(beside, Some(PANE), &parked), None);
+        // Its title bar on screen, the rest off the bottom: still in reach.
+        let low = Frame::new(1450.0, 900.0, 400.0, 600.0);
+        assert_eq!(float_to(low, Some(PANE), &parked), None);
+        // Over its pane: entering the pane brings it up.
+        assert_eq!(float_to(Frame::new(150.0, 120.0, 400.0, 200.0), Some(PANE), &parked), None);
+        // Over ottospace while its app is live: the app is in front of ottospace.
+        let under = Frame::new(1200.0, 300.0, 400.0, 300.0);
+        assert_eq!(float_to(under, Some(PANE), &live), None);
+        // Part of its top under ottospace: 200 of it beside, enough to take hold of.
+        assert!(reachable(under, Some(PANE), &parked));
+    }
+
+    #[test]
+    fn a_pop_up_the_user_cannot_reach_lands_over_its_pane_on_screen() {
+        let screens = [MAIN];
+        let parked = sight(&screens, true);
+        // By its parked window, off screen: centred over the pane.
         let off = Frame::new(5000.0, 3000.0, 400.0, 200.0);
-        assert_eq!(float_to(off, Some(pane), &[main], main), Some((400.0, 400.0)));
-        // Already over the pane: left there.
-        assert_eq!(float_to(Frame::new(150.0, 120.0, 400.0, 200.0), Some(pane), &[main], main), None);
-        // Bigger than the pane: at its top left, not above or left of it.
-        assert_eq!(float_to(Frame::new(1500.0, 0.0, 1200.0, 900.0), Some(pane), &[main], main), Some((100.0, 100.0)));
-        // No pane drawn: moved only if out of reach.
-        assert_eq!(float_to(Frame::new(10.0, 40.0, 400.0, 200.0), None, &[main], main), None);
-        assert_eq!(float_to(off, None, &[main], main), Some((760.0, 440.0)));
-        // A pane mostly off screen: the middle of the main screen instead.
-        let away = Frame::new(1800.0, 1000.0, 1000.0, 800.0);
-        assert_eq!(float_to(off, Some(away), &[main], main), Some((760.0, 440.0)));
+        assert_eq!(float_to(off, Some(PANE), &parked), Some((400.0, 400.0)));
+        // Under ottospace, not over its pane, while its app is parked: behind ottospace.
+        let hidden = Frame::new(1250.0, 300.0, 140.0, 100.0);
+        assert!(!reachable(hidden, Some(PANE), &parked) && reachable(hidden, Some(PANE), &sight(&screens, false)));
+        assert_eq!(float_to(hidden, Some(PANE), &parked), Some((530.0, 450.0)));
+        // Its title bar's middle under ottospace's bottom edge: hidden; below it: in sight.
+        assert!(!reachable(Frame { y: 1010.0, ..hidden }, Some(PANE), &parked));
+        assert!(reachable(Frame { y: 1020.0, ..hidden }, Some(PANE), &parked));
+        // Its title bar above the screen's top: out of reach though most of it shows.
+        let high = Frame::new(1450.0, -100.0, 400.0, 600.0);
+        assert_eq!(float_to(high, Some(PANE), &parked), Some((400.0, 200.0)));
+        // Bigger than the pane: at its top left, its own size, never off the screen's bottom.
+        assert_eq!(float_to(Frame::new(5000.0, 0.0, 1200.0, 1000.0), Some(PANE), &parked), Some((100.0, 80.0)));
+        // Bigger than the screen: at the screen's top left.
+        assert_eq!(float_to(Frame::new(5000.0, 0.0, 2500.0, 1200.0), Some(PANE), &parked), Some((0.0, 25.0)));
+        // No pane drawn: the middle of the main screen.
+        assert_eq!(float_to(off, None, &parked), Some((760.0, 452.5)));
+        // Centred on its parent at a parking spot, 150×200 of it in the screen's corner: over the pane.
+        let spot = (1919.0, 1079.0);
+        let corner = Frame::new(spot.0 - 150.0, spot.1 - 200.0, 700.0, 600.0);
+        let spots = [spot];
+        let sight = Sight { ottospace: None, spots: &spots, ..parked };
+        assert!(reachable(corner, Some(PANE), &Sight { spots: &[], ..sight }));
+        assert_eq!(float_to(corner, Some(PANE), &sight), Some((250.0, 200.0)));
+    }
+
+    #[test]
+    fn an_unreachable_pop_up_goes_whole_onto_its_panes_screen() {
+        // Two screens side by side; the pane at the bottom right of the second.
+        let right = Frame::new(1920.0, 0.0, 1440.0, 900.0);
+        let screens = [MAIN, right];
+        let sight = Sight { ottospace: None, ..sight(&screens, true) };
+        let pane = Frame::new(2900.0, 500.0, 400.0, 380.0);
+        // Centred over the pane it would hang off the screen: moved up and left onto it, whole.
+        let far = Frame::new(9000.0, 9000.0, 700.0, 450.0);
+        assert_eq!(float_to(far, Some(pane), &sight), Some((2660.0, 450.0)));
+        // A pane whose middle is on no screen: the main screen's middle.
+        let away = Frame::new(3200.0, 800.0, 1000.0, 800.0);
+        assert_eq!(float_to(Frame::new(9000.0, 9000.0, 400.0, 200.0), Some(away), &sight), Some((760.0, 452.5)));
+        // Spanning both screens, its top on both: in reach, left there.
+        assert_eq!(float_to(Frame::new(1800.0, 100.0, 400.0, 300.0), Some(pane), &sight), None);
     }
 
     #[test]

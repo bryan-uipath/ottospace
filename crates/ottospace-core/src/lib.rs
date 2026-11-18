@@ -7,6 +7,7 @@ pub mod agents;
 pub mod app_wheel;
 pub mod apps;
 pub mod ax;
+pub mod cadence;
 pub mod calendar;
 pub mod capture;
 pub mod capture_model;

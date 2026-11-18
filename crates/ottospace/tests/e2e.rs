@@ -11795,6 +11795,33 @@ fn the_window_draws_on_after_the_displays_change() {
     assert_eq!(redraws(&otto), kicked);
 }
 
+/// At rest the tick sleeps: each frame only for a moment after something happened, then about
+/// once a second for the slow looks. It wakes for what happens with no request: a terminal's
+/// output, seconds later, is drawn.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn at_rest_the_tick_sleeps_and_wakes_for_output() {
+    let otto = Otto::launch("idle-tick");
+    otto.call(json!({"cmd": "split"}));
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    let ticks = |s: &Value| s["counts"]["ticks"].as_u64().expect("ticks");
+    std::thread::sleep(Duration::from_secs(2));
+    let before = ticks(&state(&otto));
+    std::thread::sleep(Duration::from_secs(4));
+    let after = ticks(&state(&otto));
+    // A second of frames after the request, then a few slow looks; each frame would be ~240.
+    assert!(after - before < 120, "{} ticks in 4 s at rest", after - before);
+
+    otto.call(json!({"cmd": "type", "text": "sleep 3; echo late-$((6*7))\r"}));
+    std::thread::sleep(Duration::from_millis(1500));
+    let asleep = state(&otto)["frame"]["number"].as_u64().expect("frame");
+    std::thread::sleep(Duration::from_secs(4));
+    let woken = state(&otto);
+    assert!(woken["frame"]["number"].as_u64().expect("frame") > asleep, "the output was not drawn");
+    let lines = woken["terminals"]["1"]["lines"].as_array().cloned().unwrap_or_default();
+    assert!(lines.iter().any(|l| l.as_str().is_some_and(|l| l.contains("late-42"))), "{lines:?}");
+}
+
 /// `<home>/log`: the start, the display the window is on, a change of the displays and the quit,
 /// private, in the folder the test named. Counts and sizes only.
 #[test]
