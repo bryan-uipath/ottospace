@@ -3862,8 +3862,13 @@ impl Workspace {
                 rules::Place::Float if beside.is_some() => {
                     let pane = pane.map(|(b, _)| recovery::to_frame(on_screen(b, window, cx)));
                     let screens = recovery::screens();
-                    let to = frame
-                        .and_then(|f| rules::float_to(recovery::to_frame(f), pane, &screens.visible, screens.main));
+                    // Parked: no pane of its app is live or peeked, so ottospace is in front of it.
+                    let peek = self.model.peek.as_ref().map(|peek| peek.pane);
+                    let up = |id: &PaneId| self.model.live == Some(*id) || peek == Some(*id);
+                    let parked = !self.hosted.iter().any(|(id, h)| h.pid == pid && up(id));
+                    let ottospace = Some(recovery::to_frame(own_frame(window, cx)));
+                    let sight = rules::Sight { screens: &screens.visible, main: screens.main, ottospace, parked };
+                    let to = frame.and_then(|f| rules::float_to(recovery::to_frame(f), pane, &sight));
                     let moved = to.is_some_and(|(x, y)| ax_window.set_position(CGPoint::new(x, y)).is_ok());
                     ax_window.raise_only();
                     trace::record("float", serde_json::json!({ "window": ax_window.id(), "moved": moved }));
@@ -6941,6 +6946,12 @@ fn on_screen(body: Bounds<Pixels>, window: &Window, cx: &App) -> CGRect {
     let x = screen.x + f32::from(frame.origin.x + body.origin.x) as f64;
     let y = screen.y + f32::from(frame.origin.y + titlebar + body.origin.y) as f64;
     CGRect { origin: CGPoint::new(x, y), size: to_cg(body.size) }
+}
+
+/// ottospace's own window, title bar too, in global top-left screen coordinates.
+fn own_frame(window: &Window, cx: &App) -> CGRect {
+    let size = window.bounds().size;
+    on_screen(Bounds { origin: point(px(0.), window.viewport_size().height - size.height), size }, window, cx)
 }
 
 impl Render for Workspace {

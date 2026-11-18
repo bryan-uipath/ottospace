@@ -55,6 +55,9 @@ pub struct Window {
     pid: i32,
 }
 
+/// `Window::quick`'s wait for each Accessibility call, in seconds.
+const QUICK: f32 = 0.25;
+
 impl Window {
     /// The app's standard windows (skips the desktop, panels, popovers).
     pub fn standard_of(pid: i32) -> Vec<Self> {
@@ -110,7 +113,7 @@ impl Window {
     /// puts the default back: for a question whose answer has a fallback, asked on the main
     /// thread. An app that hangs then costs the user a blink, not seconds.
     pub fn quick<R>(&self, ask: impl FnOnce(&Self) -> R) -> R {
-        unsafe { self.element.set_messaging_timeout(0.25) };
+        unsafe { self.element.set_messaging_timeout(QUICK) };
         let answer = ask(self);
         // 0: the default again.
         unsafe { self.element.set_messaging_timeout(0.0) };
@@ -172,6 +175,10 @@ impl Window {
     pub fn sheet(&self) -> bool {
         let role = |element: &AXUIElement| Some(copy_attr(element, "AXRole")?.downcast::<CFString>().ok()?.to_string());
         let parent = copy_attr(&self.element, "AXParent").and_then(|p| p.downcast::<AXUIElement>().ok());
+        // `quick`'s short wait for the parent too: a reference of its own, the wait goes with it.
+        if let Some(parent) = &parent {
+            unsafe { parent.set_messaging_timeout(QUICK) };
+        }
         role(&self.element).as_deref() == Some("AXSheet")
             || parent.is_some_and(|parent| matches!(role(&parent).as_deref(), Some("AXWindow" | "AXSheet")))
     }

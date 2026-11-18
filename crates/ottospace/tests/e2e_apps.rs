@@ -256,6 +256,11 @@ fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_still_spl
     });
     // GPUI's bounds hold the title bar too.
     assert!(close(dialog[2], 700.0) && (450.0..520.0).contains(&dialog[3]), "its own size: {dialog:?}");
+    let screens = ottospace_mac::recovery::screens().visible;
+    let whole = |f: [f64; 4]| {
+        screens.iter().any(|s| f[0] >= s.x && f[1] >= s.y && f[0] + f[2] <= s.x + s.w && f[1] + f[3] <= s.y + s.h)
+    };
+    assert!(whole(dialog), "moved wholly onto a screen: {dialog:?} {screens:?}");
     // A small standard window: the same.
     canary.call(json!({"cmd": "open_window", "fixed": [420.0, 300.0]}));
     wait_for("the small window", || frame(2));
@@ -267,12 +272,26 @@ fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_still_spl
     let small = frame(2).expect("the small window");
     assert!(close(small[2], 420.0) && reachable(small), "the small one, at its size, on screen: {small:?}");
 
+    // A dialog the app opens on screen beside ottospace's window, its title bar in sight: the
+    // user can reach it, so it is raised where it is, not moved over the pane.
+    let main = screens[0];
+    let (left, right) = (window[0] - main.x, main.x + main.w - (window[0] + window[2]));
+    assert!(left.max(right) >= 140.0, "no room beside ottospace's window: {window:?} {main:?}");
+    let x = if right >= left { window[0] + window[2] + 10.0 } else { window[0] - 710.0 };
+    let at = [x, window[1] + 100.0];
+    canary.call(json!({"cmd": "dialog", "at": at}));
+    wait_for("the dialog beside", || frame(3));
+    std::thread::sleep(Duration::from_millis(1200));
+    let beside = frame(3).expect("the dialog beside");
+    assert!(close(beside[0], at[0]) && close(beside[1], at[1]), "left where the app put it: {beside:?} {at:?}");
+    assert!(!over_pane(beside) && reachable(beside), "{beside:?}");
+
     // A big standard window still gets a pane of its own, to the right. Wider than half the
     // pane and taller than 400: not small on any screen.
     canary.call(json!({"cmd": "open_window", "min": [body[2] * 0.6, 420.0]}));
     wait_for("the big window's pane", || (state()["tab_panes"] == json!([[1, 2]])).then_some(()));
     assert_eq!(hosted(), 2);
-    assert_eq!(state()["state"]["panes"][1]["kind"]["title"], "Canary 4");
+    assert_eq!(state()["state"]["panes"][1]["kind"]["title"], "Canary 5");
 }
 
 #[test]
