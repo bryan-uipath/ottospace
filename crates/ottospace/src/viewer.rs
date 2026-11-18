@@ -15,8 +15,8 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use gpui::{
-    AnyElement, Context, ElementId, ImageSource, KeyDownEvent, ScrollHandle, SharedString, UniformListScrollHandle,
-    Window, div, img, point, prelude::*, px, rgb, uniform_list,
+    AnyElement, Context, ElementId, HighlightStyle, ImageSource, KeyDownEvent, ScrollHandle, SharedString, StyledText,
+    UniformListScrollHandle, Window, div, img, point, prelude::*, px, rgb, uniform_list,
 };
 use ottospace_core::terminal::CellPoint;
 use ottospace_core::viewer::{self, MAX_BYTES, Read, Shows};
@@ -24,6 +24,7 @@ use ottospace_core::{Action, Axis, Origin, PaneId, theme};
 
 use crate::Workspace;
 use crate::conversation::Links;
+use crate::highlight::{self, Mark};
 use crate::markdown::{self, Block};
 
 /// One line of code or text, and one step of a markdown view (`Viewer::top`), in points.
@@ -41,7 +42,8 @@ type Stamp = Option<(SystemTime, u64, u64)>;
 enum Body {
     None,
     Markdown(Rc<Vec<Block>>),
-    Lines(Rc<Vec<String>>),
+    /// Each line, and its coloured runs (`highlight`), by byte within it.
+    Lines(Rc<Vec<String>>, Rc<Vec<Vec<Mark>>>),
     Image(Arc<gpui::Image>),
 }
 
@@ -51,7 +53,7 @@ enum Loaded {
     /// Markdown parsed, or text split into lines, off the main thread: a large file does not
     /// stall the window.
     Markdown(Vec<Block>),
-    Lines(Vec<String>),
+    Lines(Vec<String>, Vec<Vec<Mark>>),
     Image(gpui::ImageFormat, Vec<u8>),
 }
 
@@ -104,8 +106,10 @@ impl FileView {
                     let dir = name_and_dir(&path).1;
                     (read, Some(Loaded::Markdown(markdown::parse_with(&text, Some(&dir), markdown::FILE))))
                 }
+                // A code file coloured as a fence of its extension would be (`rs`, `py`).
                 (read, Some(Loaded::Text(text))) => {
-                    (read, Some(Loaded::Lines(text.lines().map(str::to_string).collect())))
+                    let marks = highlight::by_line(&text, &highlight::marks(extension(&path), &text));
+                    (read, Some(Loaded::Lines(text.lines().map(str::to_string).collect(), marks)))
                 }
                 read => read,
             };
@@ -118,7 +122,7 @@ impl FileView {
     /// The scroll handle of what is drawn: a list keeps its offset in a plain one, shared.
     fn handle(&self) -> ScrollHandle {
         match self.body {
-            Body::Lines(_) => self.lines.0.borrow().base_handle.clone(),
+            Body::Lines(..) => self.lines.0.borrow().base_handle.clone(),
             _ => self.scroll.clone(),
         }
     }
@@ -167,6 +171,11 @@ fn read_file(path: &Path, shows: Shows) -> (Read, Option<Loaded>) {
         Ok(text) => (Read::Shown { lines: line_count(&text) }, Some(Loaded::Text(text))),
         Err(_) => (Read::Binary, None),
     }
+}
+
+/// The extension of the file at `path`: `rs` of `src/main.rs`, empty for none.
+fn extension(path: &str) -> &str {
+    Path::new(path).extension().and_then(|ext| ext.to_str()).unwrap_or("")
 }
 
 /// Lines as an editor numbers them: a last line with no newline counts, an empty file has none.
@@ -249,7 +258,7 @@ impl Workspace {
                 let (_, dir) = name_and_dir(path);
                 view.body = match loaded {
                     Some(Loaded::Markdown(blocks)) => Body::Markdown(Rc::new(blocks)),
-                    Some(Loaded::Lines(lines)) => Body::Lines(Rc::new(lines)),
+                    Some(Loaded::Lines(lines, marks)) => Body::Lines(Rc::new(lines), Rc::new(marks)),
                     Some(Loaded::Image(format, bytes)) => Body::Image(Arc::new(gpui::Image::from_bytes(format, bytes))),
                     // The read thread made any text lines or markdown.
                     Some(Loaded::Text(_)) | None => Body::None,
@@ -392,6 +401,17 @@ impl Workspace {
         }
     }
 
+    /// A `#heading` or footnote link clicked in viewer `pane`: its block to the top, as a wheel
+    /// would scroll it; the next frame tells the core where the view is.
+    pub(crate) fn viewer_anchor(&mut self, pane: PaneId, anchor: &str, cx: &mut Context<Self>) {
+        let Some(view) = self.viewers.get(&pane) else { return };
+        let Body::Markdown(blocks) = &view.body else { return };
+        if let Some(at) = markdown::anchor_at(blocks, anchor) {
+            view.scroll.scroll_to_top_of_item(at);
+            cx.notify();
+        }
+    }
+
     /// A key while the focused viewer has the keyboard. True: it was the viewer's. Esc with
     /// nothing typed is left for the notice bar, a shortcut for its binding.
     pub(crate) fn viewer_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) -> bool {
@@ -435,70 +455,85 @@ impl Workspace {
             Read::Shown { .. } => view.map(|view| &view.body),
         };
         let (_, dir) = name_and_dir(path);
-        let body =
-            match shown {
-                Some(Body::Markdown(blocks)) => {
-                    let of = Links::File { pane: id, dir };
-                    let at = format!("viewer:{id}");
-                    let blocks = blocks.clone();
-                    div()
-                        .id(ElementId::Name(format!("viewer-md:{id}").into()))
-                        .size_full()
-                        .overflow_y_scroll()
-                        .track_scroll(&view.map(|view| view.scroll.clone()).unwrap_or_default())
-                        .child(
-                            div().flex().flex_col().gap_2().p_3().max_w(px(820.)).text_sm().children(
-                                blocks.iter().enumerate().map(|(n, block)| self.block(&of, &at, n, block, cx)),
-                            ),
-                        )
-                        .into_any_element()
-                }
-                Some(Body::Lines(lines)) => {
-                    let lines = lines.clone();
-                    let digits = lines.len().max(1).to_string().len();
-                    let list = uniform_list(
-                        ElementId::Name(format!("viewer-lines:{id}").into()),
-                        lines.len(),
-                        move |range, _, _| {
-                            range
-                                .map(|at| {
-                                    let line = &lines[at];
-                                    let line: String = line.chars().take(MAX_DRAWN).collect();
-                                    div()
-                                        .h(px(LINE))
-                                        .flex()
-                                        .gap_3()
-                                        .whitespace_nowrap()
-                                        .child(
-                                            div()
-                                                .flex_none()
-                                                .w(px(digits as f32 * 7. + 8.))
-                                                .text_right()
-                                                .text_color(rgb(theme::MUTED))
-                                                .child(SharedString::from((at + 1).to_string())),
-                                        )
-                                        .child(div().text_color(rgb(theme::TEXT)).child(SharedString::from(line)))
-                                })
-                                .collect()
-                        },
-                    )
-                    .track_scroll(view.map(|view| view.lines.clone()).unwrap_or_default())
-                    .size_full()
-                    .px_2()
-                    .font_family(crate::terminal::font_family())
-                    .text_xs();
-                    list.into_any_element()
-                }
-                Some(Body::Image(image)) => div()
-                    .id(ElementId::Name(format!("viewer-img:{id}").into()))
+        let body = match shown {
+            Some(Body::Markdown(blocks)) => {
+                let of = Links::File { pane: id, dir };
+                let at = format!("viewer:{id}");
+                let blocks = blocks.clone();
+                // Each block a child of the scrolled list: a `#link` scrolls to its block.
+                let drawn = blocks
+                    .iter()
+                    .enumerate()
+                    .map(|(n, block)| div().max_w(px(796.)).child(self.block(&of, &at, n, block, cx)));
+                div()
+                    .id(ElementId::Name(format!("viewer-md:{id}").into()))
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&view.map(|view| view.scroll.clone()).unwrap_or_default())
+                    .flex()
+                    .flex_col()
+                    .gap_2()
                     .p_3()
-                    .child(img(ImageSource::Image(image.clone())).max_w_full())
-                    .into_any_element(),
-                _ => return said("Reading…".into()),
-            };
+                    .text_sm()
+                    .children(drawn)
+                    .into_any_element()
+            }
+            Some(Body::Lines(lines, marks)) => {
+                let (lines, marks) = (lines.clone(), marks.clone());
+                let digits = lines.len().max(1).to_string().len();
+                let list = uniform_list(
+                    ElementId::Name(format!("viewer-lines:{id}").into()),
+                    lines.len(),
+                    move |range, _, _| {
+                        range
+                            .map(|at| {
+                                let line = &lines[at];
+                                let line: String = line.chars().take(MAX_DRAWN).collect();
+                                // Runs past what is drawn of a long line are cut with it.
+                                let runs = marks.get(at).map_or(Vec::new(), |marks| highlight::within(marks, &line));
+                                let styles: Vec<_> = runs
+                                    .into_iter()
+                                    .map(|(range, token)| {
+                                        let colour = rgb(highlight::colour(token)).into();
+                                        (range, HighlightStyle { color: Some(colour), ..Default::default() })
+                                    })
+                                    .collect();
+                                let text = StyledText::new(SharedString::from(line)).with_highlights(styles);
+                                div()
+                                    .h(px(LINE))
+                                    .flex()
+                                    .gap_3()
+                                    .whitespace_nowrap()
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .w(px(digits as f32 * 7. + 8.))
+                                            .text_right()
+                                            .text_color(rgb(theme::MUTED))
+                                            .child(SharedString::from((at + 1).to_string())),
+                                    )
+                                    .child(div().text_color(rgb(theme::TEXT)).child(text))
+                            })
+                            .collect()
+                    },
+                )
+                .track_scroll(view.map(|view| view.lines.clone()).unwrap_or_default())
+                .size_full()
+                .px_2()
+                .font_family(crate::terminal::font_family())
+                .text_xs();
+                list.into_any_element()
+            }
+            Some(Body::Image(image)) => div()
+                .id(ElementId::Name(format!("viewer-img:{id}").into()))
+                .size_full()
+                .overflow_y_scroll()
+                .track_scroll(&view.map(|view| view.scroll.clone()).unwrap_or_default())
+                .p_3()
+                .child(img(ImageSource::Image(image.clone())).max_w_full())
+                .into_any_element(),
+            _ => return said("Reading…".into()),
+        };
         let handle = view.map(FileView::handle).unwrap_or_default();
         let body = self.bars.tracked(&format!("viewer:{id}"), body, &handle, theme::BACKGROUND).size_full();
         div().absolute().size_full().bg(rgb(theme::BACKGROUND)).child(body).into_any_element()
@@ -512,7 +547,7 @@ impl Workspace {
             Body::Markdown(blocks) => {
                 serde_json::json!({ "body": "markdown", "shape": crate::conversation::shape(blocks) })
             }
-            Body::Lines(lines) => serde_json::json!({ "body": "lines", "lines": lines.len() }),
+            Body::Lines(lines, _) => serde_json::json!({ "body": "lines", "lines": lines.len() }),
             Body::Image(_) => serde_json::json!({ "body": "image" }),
         };
         let all: serde_json::Map<String, serde_json::Value> =

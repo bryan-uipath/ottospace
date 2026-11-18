@@ -12804,6 +12804,35 @@ fn a_file_opens_in_a_viewer_moves_by_counts_reloads_and_edits_beside() {
     assert_eq!((reply["mode"].as_str(), reply["counts"]["file_prompts"].as_u64()), (Some("normal"), Some(1)));
 }
 
+/// The fixture's structure as drawn: callouts, footnotes at the foot, task boxes; a code line
+/// and a table wider than the pane scroll across, their right edge fading as the cue.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_markdown_viewer_draws_callouts_footnotes_tasks_and_wide_blocks_that_scroll_across() {
+    let dir = fixture_copy("viewer-structure");
+    let file = dir.join("fixture.md");
+    let otto = Otto::launch("viewer-structure");
+    // In the empty tab's only pane: pane 1.
+    otto.call(json!({"cmd": "open_file", "path": file}));
+    let state = viewer_read(&otto, 1, line_count(&file));
+    let blocks = &state["viewers"]["1"]["shape"]["blocks"];
+    let counts = ["quote", "callout", "footnotes", "task", "image"].map(|kind| blocks[kind].as_u64());
+    assert_eq!(counts, [Some(2), Some(3), Some(1), Some(5), Some(1)], "{blocks}");
+    // Seven web links: five written as links, and two bare (`https://example.com/bare`, the Slack one).
+    assert_eq!(state["viewers"]["1"]["shape"]["links"]["web"], 7, "{state}");
+    let across = |prefix: &str| {
+        let overflow = otto.drawn()["overflow"].clone();
+        let areas = overflow.as_object().cloned().unwrap_or_default();
+        areas.into_iter().filter(|(id, _)| id.starts_with(prefix)).map(|(_, edges)| edges).collect::<Vec<_>>()
+    };
+    let code = across("chat-code:viewer:1.");
+    assert!(code.contains(&json!({"left": false, "right": true})), "a long line fades at the right: {code:?}");
+    assert!(code.iter().filter(|edges| edges["right"] == true).count() == 1, "only the long one: {code:?}");
+    let tables = across("chat-table:viewer:1.");
+    assert_eq!(tables.len(), 2, "{tables:?}");
+    assert!(tables.contains(&json!({"left": false, "right": true})), "the wide table: {tables:?}");
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_viewer_comes_back_after_a_restart_at_its_line() {

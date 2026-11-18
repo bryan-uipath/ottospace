@@ -1,7 +1,7 @@
 # File viewer
 
 A pane that shows a file, read only. Owner-approved plan: A the viewer, B a markdown fixture
-(built); C a markdown pass, D an explorer, E comments (later).
+(built); C a markdown pass (built); D an explorer, E comments (later).
 
 ## Built (A, B)
 
@@ -46,9 +46,10 @@ blank lines.
 
 ## Next
 
-- **C, markdown pass**: fix the list above in `markdown.rs`; syntax colours for the viewer's code
-  lines and code blocks, by `Shows::Code` and the fence's label. Judge it with
-  `scripts/shot --compare <base> viewer-markdown viewer-code`.
+- **C, markdown pass** (built): the list above fixed in `markdown.rs` (structure: heading levels
+  and slugs, task boxes, table alignment and widths, callouts, footnotes, bare addresses, Slack
+  mentions, `#anchor` links); `highlight.rs` colours fences by label and code files by extension;
+  `picture.rs` sizes thumbnails. Left: GPUI wraps a long address before any `/`.
 - **D, explorer**: a tree pane of a folder; `j`/`k` with `vim::Keys`; each file it moves to goes
   to `OpenFile { beside: explorer, reuse: true }`.
 - **E, comments**: `V` in the viewer starts a line selection (a `Keys` motion extends it); a
