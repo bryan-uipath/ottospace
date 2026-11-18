@@ -1444,7 +1444,9 @@ impl Model {
         self.workbooks.offer = None;
         for mut book in books {
             let known = self.workbooks.list.iter().any(|other| other.uid == book.uid);
-            if !valid_uid(&book.uid) || known || book.version != VERSION || book.unsound().is_some() {
+            // A closing one stays as it is: only the user's Undo brings it back.
+            let closing = before.iter().any(|old| old.uid == book.uid && old.closing.is_some());
+            if !valid_uid(&book.uid) || known || closing || book.version != VERSION || book.unsound().is_some() {
                 continue;
             }
             let was = before.iter().find(|old| old.uid == book.uid);
