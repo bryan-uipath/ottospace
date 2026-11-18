@@ -366,6 +366,30 @@ impl Model {
         action.sent_by(sent.origin)
     }
 
+    /// The user's close of the last tab of a temporary workspace whose terminals there run
+    /// something asks first, as its × does (`SpaceHideAsked`): yes closes the workspace, with its
+    /// Undo. Any other `CloseTabAsked` is `CloseTab`.
+    pub(crate) fn close_tab_asked(&self, sent: Envelope) -> Envelope {
+        let Action::CloseTabAsked { index, running } = sent.action else { return sent };
+        let at = index.unwrap_or(self.active);
+        let panes = self.tab_panes().get(at).cloned().unwrap_or_default();
+        let asks = |tab: &Tab| match tab.space {
+            Owner::Workbook { id } => {
+                self.closable(id)
+                    && self.space_tabs(&tab.space).len() == 1
+                    && running.iter().any(|r| panes.contains(&r.pane))
+            }
+            _ => false,
+        };
+        let tab = self.tabs.get(at).filter(|tab| sent.origin == Origin::User && asks(tab));
+        let place = tab.and_then(|tab| self.shown_spaces().iter().position(|space| space.of == tab.space));
+        let action = match place {
+            Some(place) => Action::SpaceHideAsked { index: Some(place), running },
+            None => Action::CloseTab { index },
+        };
+        action.sent_by(sent.origin)
+    }
+
     /// The next (positive) or previous space on the row. It wraps.
     pub(crate) fn cycle_space(&mut self, delta: i32, effects: &mut Vec<Effect>) {
         let shown = self.shown_spaces();

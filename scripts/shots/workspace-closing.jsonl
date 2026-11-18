@@ -1,0 +1,10 @@
+# Two temporary workspaces closed one after the other: each keeps its own Undo on its row in the
+# Workspaces section (italic, "Closing"), the notice bar offers the latest; a third still open.
+{"click":"top:new_workspace"}
+{"click":"top:new_workspace"}
+{"click":"top:new_workspace"}
+{"cmd":"section","section":"workbook"}
+{"click":"space-hide:1"}
+{"click":"space-hide:1"}
+{"settle":300}
+{"shot":"two-closing"}
