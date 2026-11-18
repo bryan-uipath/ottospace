@@ -3426,7 +3426,7 @@ impl Run {
         // (Anyone's list read again may find the folder the session said: the agent chose it, not they.)
         let follows = match action {
             Action::SessionWork { .. } => origin != Origin::Socket,
-            Action::SetRepos { .. } | Action::WorktreeAdded { .. } => true,
+            Action::SetRepos { .. } | Action::WorktreeAdded { .. } | Action::WorktreeFailed { .. } => true,
             _ => false,
         };
         if defaults(m).iter().any(moved) {
@@ -3470,7 +3470,7 @@ impl Run {
             let read = matches!(action, Action::RestoreTasks { .. });
             let follows = match action {
                 Action::SessionWork { .. } => origin != Origin::Socket,
-                Action::SetRepos { .. } | Action::WorktreeAdded { .. } => true,
+                Action::SetRepos { .. } | Action::WorktreeAdded { .. } | Action::WorktreeFailed { .. } => true,
                 _ => false,
             };
             ensure!(read || follows, "{origin:?}'s {action:?} moved task {id} to {worktree:?}");
@@ -6741,6 +6741,44 @@ fn seed_7205_a_level_leaves_the_marks_while_they_are_off() {
         Action::MarkToggle { of: MarkOf::Tab(None), uid: "u4".into(), cwds: vec![(4, "/tmp".into())] }.into(),
         set_features(&["apps_section", "transcripts", "slots", "agent_mode"]).into(),
         Action::AgentLevel { pane: Some(4), level: Level::Act }.into(),
+    ])
+    .unwrap();
+}
+
+/// A failed worktree's answer carries the repositories read again, as `SetRepos` does: a task
+/// follows its agent to where its session said. The check let only `SetRepos` and `WorktreeAdded`
+/// move one (seeds 53188 and 146342).
+#[test]
+fn seed_53188_a_failed_worktrees_list_moves_a_task_with_its_agent() {
+    let found = |id: &str, last_activity, active| Found {
+        runner: "claude".into(),
+        id: id.into(),
+        cwd: "/code/app".into(),
+        repo: "/code/app".into(),
+        started: Some(1),
+        last_activity,
+        active,
+        station: None,
+        label: None,
+        title: None,
+        model: None,
+        held: false,
+    };
+    let work = r#"{"runner":"claude","session":"s2","clock":{"ms":0,"last":1,"day":6001,"day_ms":0},"tokens":[],"context":null,"window":null}"#;
+    let worktree =
+        |name: &str, path: &str| Worktree { name: name.into(), path: path.into(), branch: Some("main".into()) };
+    let repo = Repo {
+        name: "".into(),
+        path: "/tmp".into(),
+        branch: Some("fix/zoom".into()),
+        worktrees: vec![worktree("a", ""), worktree("app", "/code/app")],
+    };
+    replay(&[
+        Action::SetSessions { found: vec![found("s1", Some(999000), true), found("s2", Some(5), false)], day: 0 }
+            .into(),
+        by(Origin::System, Action::SessionAdopt { runner: "claude".into(), id: "s2".into() }),
+        session_work(work, Some("\r\n \0")).into(),
+        Action::WorktreeFailed { asked: "/code/app".into(), fresh: true, repos: vec![repo] }.into(),
     ])
     .unwrap();
 }
