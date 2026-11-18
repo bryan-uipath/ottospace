@@ -1,0 +1,34 @@
+{
+  "acknowledged": [
+    {
+      "a": "ottospace-sessions:Claude.read",
+      "b": "ottospace-sessions:Codex.read",
+      "reason": "Same skeleton (open, walk lines, record events), but each reads its own runner's saved session format, and Claude's also skips api-request lines and tracks finished subagents. The format-specific work is in each file's record_events; folding the skeletons would tie two formats that change with their own CLIs."
+    },
+    {
+      "a": "ottospace-core:plain",
+      "b": "ottospace-core:kept_text",
+      "reason": "Opposite on purpose: plain turns line breaks into spaces (one line, for labels); kept_text keeps them as newlines (what a capture stores). A shared helper would need a flag that hides which one a caller wants."
+    },
+    {
+      "a": "ottospace-core:station",
+      "b": "ottospace-core:accent",
+      "reason": "Colour tables for different things: station colours the dial's stations, accent is the one colour that follows the mode (status pill, focused pane). Changing one must not change the other."
+    },
+    {
+      "a": "ottospace-core:State.group",
+      "b": "ottospace-core:pulse",
+      "reason": "Coincidental shape: State.group picks a task's sidebar heading, pulse picks the dial centre's colour for an agent's state. Different decisions that happen to be small matches."
+    },
+    {
+      "a": "ottospace-mac:add_button",
+      "b": "ottospace-mac:add_checkbox",
+      "reason": "Two different native controls for the canary test app: a push button, and a checkbox that can be disabled and is returned so a test can read it. They share the view setup; the control, its enabled state and the return differ."
+    },
+    {
+      "a": "ottospace-mac:zoom_instead_of_fullscreen",
+      "b": "ottospace-mac:keep_on_top",
+      "reason": "Different window settings for different reasons: zoom_instead_of_fullscreen stops native full screen (so app windows can still be hosted); keep_on_top floats the e2e window on every Space and can let clicks through. Both start from the view's window, nothing more."
+    }
+  ]
+}
