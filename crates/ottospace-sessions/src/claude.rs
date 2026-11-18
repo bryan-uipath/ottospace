@@ -320,7 +320,9 @@ fn user(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
         let Some(id) = id_of(&result["tool_use_id"]) else { continue };
         // A background agent's call returns at once with `async_launched`; the agent works on.
         let ended = record["toolUseResult"]["status"] != "async_launched" && cursor.agents.remove(&id);
-        emit(What::ToolEnd { id: id.clone(), failed: result["is_error"] == true, station: None, summary: None });
+        let output = cursor.edits.then(|| ottospace_core::gist::output(&result["content"]));
+        let failed = result["is_error"] == true;
+        emit(What::ToolEnd { id: id.clone(), failed, station: None, summary: None, output });
         if ended {
             emit(What::SubAgentEnd { id });
         }
@@ -374,8 +376,9 @@ fn assistant(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
         };
         let (station, summary) = describe(tool, &block["input"]);
         let diff = cursor.edits.then(|| ottospace_core::diff::claude(tool, &block["input"])).flatten();
+        let gist = cursor.edits.then(|| ottospace_core::gist::claude(tool, &block["input"])).flatten();
         let label = station::tool_label(tool);
-        emit(What::ToolStart { id: id.clone(), tool: label, station, summary: summary.clone(), diff });
+        emit(What::ToolStart { id: id.clone(), tool: label, station, summary: summary.clone(), diff, gist });
         if matches!(tool, "Agent" | "Task") && track(&mut cursor.agents, id.clone()) {
             emit(What::SubAgentStart { id, label: summary });
         }
@@ -561,6 +564,33 @@ mod tests {
         assert_eq!(diff(Cursor::default()), Some(None));
         let shown = diff(Cursor::with_edits()).flatten().expect("a change");
         assert_eq!((shown.files[0].added, shown.files[0].removed), (1, 1));
+    }
+
+    /// A command and what it printed leave the crate only for the watch view's cursor.
+    #[test]
+    fn a_calls_gist_and_output_only_for_a_cursor_that_asks() {
+        let block =
+            serde_json::json!({ "type": "tool_use", "id": "t", "name": "Bash", "input": { "command": "echo secret" } });
+        let call = serde_json::json!({ "type": "assistant", "message": { "content": [block] } });
+        let result = serde_json::json!({ "type": "tool_result", "tool_use_id": "t", "content": "secret out" });
+        let end = serde_json::json!({ "type": "user", "message": { "content": [result] } });
+        let read = |mut cursor: Cursor| {
+            let mut events = Vec::new();
+            record_events(&call, false, &mut cursor, &mut events);
+            record_events(&end, false, &mut cursor, &mut events);
+            assert!(!format!("{events:?}").contains("secret"));
+            let gist = events.iter().find_map(|e| match &e.what {
+                What::ToolStart { gist, .. } => Some(gist.as_ref().map(|gist| gist.line(None))),
+                _ => None,
+            });
+            let output = events.iter().find_map(|e| match &e.what {
+                What::ToolEnd { output, .. } => Some(output.as_ref().map(|o| o.text().to_string())),
+                _ => None,
+            });
+            (gist.flatten(), output.flatten())
+        };
+        assert_eq!(read(Cursor::default()), (None, None));
+        assert_eq!(read(Cursor::with_edits()), (Some("echo secret".into()), Some("secret out".into())));
     }
 
     #[test]

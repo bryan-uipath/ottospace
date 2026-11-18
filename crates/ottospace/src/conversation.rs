@@ -23,10 +23,13 @@ use ottospace_agents::{Answer, Event as Said, Input, Process, Ticket};
 use ottospace_core::activity::Station;
 use ottospace_core::agents::{self, Start};
 use ottospace_core::diff::{self, Change, Diff, Sign};
+use ottospace_core::gist;
 use ottospace_core::links::Target;
 use ottospace_core::model::chat::{self, Key, Primary};
 use ottospace_core::talk::Subject;
-use ottospace_core::transcript::{Call, Entry, Event, Item, MAX_CARDS, Notice, Text, View, clean};
+use ottospace_core::transcript::{
+    By, Call, Entry, Event, Item, MAX_CARDS, NoteKind, Notice, Status, Text, View, clean,
+};
 use ottospace_core::{Action, Origin, theme};
 
 use crate::markdown::{self, Block, Span};
@@ -187,11 +190,15 @@ fn watched(event: &ottospace_sessions::Event) -> Vec<Event> {
             let started = model.clone().map(|model| Event::Started { session: None, model: Some(model), mode: None });
             started.into_iter().chain([usage]).collect()
         }
-        What::ToolStart { id, tool, station, summary, diff } => {
-            let (tool, station, label, diff) = (tool.clone(), *station, summary.clone(), diff.clone());
-            vec![Event::ToolStart { id: id.clone(), sub: false, tool, station, label, detail: Text::default(), diff }]
+        What::ToolStart { id, tool, station, summary, diff, gist } => {
+            let (tool, station, label, diff, gist) =
+                (tool.clone(), *station, summary.clone(), diff.clone(), gist.clone());
+            let detail = Text::default();
+            vec![Event::ToolStart { id: id.clone(), sub: false, tool, station, label, detail, diff, gist }]
         }
-        What::ToolEnd { id, failed, .. } => vec![Event::ToolEnd { id: id.clone(), failed: *failed }],
+        What::ToolEnd { id, failed, output, .. } => {
+            vec![Event::ToolEnd { id: id.clone(), failed: *failed, output: output.clone() }]
+        }
         What::Error { kind } => vec![Event::Error { kind: kind.clone(), retrying: false }],
         What::SubAgentStart { id, label } => {
             let (tool, label, station) = ("Agent".to_string(), label.clone(), Station::Agents);
@@ -203,9 +210,10 @@ fn watched(event: &ottospace_sessions::Event) -> Vec<Event> {
                 label,
                 detail: Text::default(),
                 diff: None,
+                gist: None,
             }]
         }
-        What::SubAgentEnd { id } => vec![Event::ToolEnd { id: id.clone(), failed: false }],
+        What::SubAgentEnd { id } => vec![Event::ToolEnd { id: id.clone(), failed: false, output: None }],
         What::Compaction { .. } => vec![Event::Compaction],
         What::ModelChange { to, .. } => vec![Event::Started { session: None, model: Some(to.clone()), mode: None }],
         What::Cwd { .. } => Vec::new(),
@@ -545,7 +553,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn toggle_row(&mut self, subject: &Subject, id: u64, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_row(&mut self, subject: &Subject, id: u64, cx: &mut Context<Self>) {
         let open = &mut self.drawer.looks.entry(subject.clone()).or_default().open;
         if !open.remove(&id) {
             open.insert(id);
@@ -779,14 +787,65 @@ impl Workspace {
                     .children(streaming.then(|| div().text_xs().text_color(rgb(theme::MUTED)).child("…")));
                 self.with_copy(key, id, body, plain, text.text().to_string(), cx)
             }
-            Entry::Tool { sub, tool, label, detail, state, diff, .. } => {
+            Entry::Tool { sub, tool, label, detail, state, diff, gist, output, .. } => {
                 let (glyph, color) = match state {
                     Call::Running => ("●", theme::PRIMARY),
                     Call::Done => ("✓", theme::PICK),
                     Call::Failed => ("✕", theme::ERROR),
                 };
-                let line = format!("{}{tool} · {label}", if *sub { "↳ " } else { "" });
-                let row = self.row(subject, key, id, (glyph, color), line, detail, cx);
+                let open = self.drawer.looks.get(subject).is_some_and(|look| look.open.contains(&id));
+                let row = match gist {
+                    Some(gist) => {
+                        let repo = self.repo_of(subject);
+                        let line = gist.line(repo.as_deref());
+                        let words = match gist.kind {
+                            gist::Kind::Command => code_text(&line).truncate().text_color(rgb(theme::TEXT)),
+                            _ => div().truncate().child(line),
+                        };
+                        let head = div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_1p5()
+                                    .min_w_0()
+                                    .child(div().flex_none().child(gist.lead(tool)))
+                                    .child(words.min_w_0()),
+                            )
+                            .children(gist.note().map(|note| div().truncate().opacity(0.75).child(note)));
+                        // Open: the command whole and what it printed; another call, its detail.
+                        let body = open.then(|| match gist.command() {
+                            Some(command) => {
+                                // As an agent's stderr is shown: cleaned, credential-shaped parts hidden.
+                                let printed = output.as_ref().map(|output| {
+                                    let printed = ottospace_core::transcript::details(output.text());
+                                    // A tab drawn as four spaces: cut again to what was kept.
+                                    ottospace_core::transcript::cut(&printed, gist::MAX_OUTPUT).to_string()
+                                });
+                                div()
+                                    .id(ElementId::Name(format!("chat-row-body:{key}:{id}").into()))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .overflow_x_scroll()
+                                    .child(code_text(&command).text_color(rgb(theme::TEXT)))
+                                    .children(printed.map(|printed| code_text(&printed)))
+                            }
+                            None => div()
+                                .id(ElementId::Name(format!("chat-row-body:{key}:{id}").into()))
+                                .child(code_text(&clean(detail.text()))),
+                        });
+                        self.gist_row(subject, key, id, (glyph, color), head, body, cx)
+                    }
+                    None => {
+                        let line = format!("{tool} · {label}");
+                        self.row(subject, key, id, (glyph, color), line, detail, cx)
+                    }
+                };
+                // A sub-agent's calls sit under the row that started it.
+                let row = if *sub { div().ml_4().child(row).into_any_element() } else { row };
                 match diff {
                     Some(diff) => {
                         div().flex().flex_col().gap_1().child(row).child(self.diff_card(subject, key, id, diff, cx))
@@ -794,6 +853,28 @@ impl Workspace {
                     None => return row,
                 }
                 .into_any_element()
+            }
+            Entry::Note { note, text } => {
+                // Untrusted words on one line, after fixed ones.
+                let words = clean(text.text()).split_whitespace().collect::<Vec<_>>().join(" ");
+                let lead = match note {
+                    NoteKind::Subtask => "Started a subtask:",
+                    NoteKind::Ended { status: Status::Completed } => "Subtask done:",
+                    NoteKind::Ended { status: Status::Failed } => "Subtask failed:",
+                    NoteKind::Ended { status: Status::Stopped } => "Subtask stopped:",
+                    NoteKind::Ended { status: Status::Other } => "Subtask ended:",
+                    NoteKind::Notification => "Claude Code:",
+                };
+                div()
+                    .id(ElementId::Name(format!("chat-note:{key}:{id}").into()))
+                    .flex()
+                    .gap_1p5()
+                    .min_w_0()
+                    .text_xs()
+                    .text_color(rgb(theme::MUTED))
+                    .child(div().flex_none().child(lead))
+                    .child(div().truncate().min_w_0().child(words))
+                    .into_any_element()
             }
             Entry::AutoDenied { tool, label, reason, detail } => {
                 let line = format!("Denied without asking ({reason}): {tool} · {label}");
@@ -815,6 +896,45 @@ impl Workspace {
                 None => muted(notice_text(notice)).into_any_element(),
             },
         }
+    }
+
+    /// A call whose gist shows: its words as the core gave them, its body below while open. A
+    /// click (or its sneak label) opens and closes it; nothing in it is a link.
+    #[allow(clippy::too_many_arguments)]
+    fn gist_row(
+        &self,
+        subject: &Subject,
+        key: &str,
+        id: u64,
+        (glyph, color): (&str, u32),
+        head: Div,
+        body: Option<gpui::Stateful<Div>>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let subject = subject.clone();
+        let control = format!("chat-row:{key}:{id}");
+        div()
+            .id(ElementId::Name(control.clone().into()))
+            .relative()
+            .flex()
+            .flex_col()
+            .child(self.controls.mark(control.clone()))
+            // Its head opens and closes it: a click in what it printed leaves it open.
+            .child(
+                div()
+                    .id(ElementId::Name(format!("{control}:head").into()))
+                    .flex()
+                    .gap_1p5()
+                    .min_w_0()
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(rgb(theme::MUTED))
+                    .child(div().flex_none().text_color(rgb(color)).child(glyph.to_string()))
+                    .child(head.flex_1())
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_row(&subject, id, cx))),
+            )
+            .children(body.map(|body| body.ml_4().mt_0p5()))
+            .into_any_element()
     }
 
     /// A tool call as one compact row; a click opens its detail as plain text.
@@ -1345,12 +1465,21 @@ impl Workspace {
                 .items()
                 .filter_map(|item| look?.parsed.get(&item.id).map(|(_, blocks)| shape(blocks)))
                 .collect();
+            // Each call's row says whether the user opened it.
+            let mut transcript = serde_json::to_value(chat.transcript.summary()).unwrap_or_default();
+            if let Some(entries) = transcript["entries"].as_array_mut() {
+                for (entry, item) in entries.iter_mut().zip(chat.transcript.items()) {
+                    if entry["kind"] == "tool" {
+                        entry["expanded"] = look.is_some_and(|look| look.open.contains(&item.id)).into();
+                    }
+                }
+            }
             out.insert(
                 crate::talk::key(&subject),
                 serde_json::json!({
                     "view": self.model.talk_view(&subject),
                     "native": self.drawer.native.contains_key(&subject),
-                    "transcript": chat.transcript.summary(),
+                    "transcript": transcript,
                     "replies": blocks,
                     "draft_chars": chat.draft.text().chars().count(),
                     // The user's editor has its draft (⌃G).
@@ -1402,10 +1531,17 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
         Said::TurnStarted => Event::TurnStarted,
         Said::TextDelta { text: t } => Event::TextDelta { text: text(&t) },
         Said::Text { text: t } => Event::Text { text: text(&t) },
-        Said::ToolStart { id, parent, tool, station, label, detail, diff } => {
-            Event::ToolStart { id, sub: parent.is_some(), tool, station, label, detail: text(&detail), diff }
+        Said::ToolStart { id, parent, tool, station, label, detail, diff, gist } => {
+            Event::ToolStart { id, sub: parent.is_some(), tool, station, label, detail: text(&detail), diff, gist }
         }
-        Said::ToolEnd { id, failed } => Event::ToolEnd { id, failed },
+        Said::ToolEnd { id, failed, output } => {
+            Event::ToolEnd { id, failed, output: Some(text(&output)).filter(|output| !output.is_empty()) }
+        }
+        Said::Subtask { id, description } => Event::Subtask { id, description: text(&description) },
+        Said::SubtaskEnded { status, summary } => Event::SubtaskEnded { status, summary: text(&summary) },
+        Said::Note { text: t } => Event::Note { text: text(&t) },
+        Said::DeniedBy { tool, by } => Event::DeniedBy { tool, by },
+        Said::ModelFallback { from, to } => Event::ModelFallback { from, to },
         // Past `MAX_CARDS` waiting, denied at once: no request is left waiting unseen.
         Said::Permission { ticket, tool, label, detail, .. } if native.tickets.len() >= MAX_CARDS => {
             let answer = Answer::Deny { message: Some("Too many requests at once: ask again.".into()) };
@@ -1544,6 +1680,22 @@ fn notice_text(notice: &Notice) -> String {
         Notice::Compacted => "The context was compacted.".into(),
         Notice::Allowed { tool, label } => format!("You allowed {tool} · {label}."),
         Notice::Denied { tool, label } => format!("You denied {tool} · {label}."),
+        Notice::DeniedBy { tool, by } => {
+            let by = match by {
+                By::Settings => " by your settings",
+                By::Mode => " by the permission mode",
+                By::AutoMode => " by auto mode",
+                By::Hook => " by a hook",
+                By::Folder => ": outside the folders it may use",
+                By::Safety => " by a safety check",
+                By::Sandbox => " by the sandbox",
+                By::Nobody => ": nobody could be asked",
+                By::Other => "",
+            };
+            format!("Denied: {tool}{by}.")
+        }
+        Notice::ModelFallback { from: Some(from), to } => format!("The model changed: {from} → {to}."),
+        Notice::ModelFallback { from: None, to } => format!("The model changed to {to}."),
         Notice::Resumed { here: true, .. } => "Resumed.".into(),
         Notice::Resumed { here: false, .. } => {
             "Session resumed. Earlier turns are in its file: Terminal shows them.".into()

@@ -109,7 +109,7 @@ impl Snapshot {
                     self.running.remove(0);
                 }
             }
-            What::ToolEnd { id, failed, station, summary } => {
+            What::ToolEnd { id, failed, station, summary, .. } => {
                 // An end without a start (the reader began mid-session) is dropped.
                 let Some(i) = self.running.iter().position(|c| c.id == *id) else { return };
                 let mut call = self.running.remove(i);
@@ -192,11 +192,11 @@ mod tests {
 
     fn start(time: u64, id: &str, station: Station) -> Event {
         let (id, tool, summary) = (id.to_string(), "Bash".to_string(), "cargo".to_string());
-        at(time, What::ToolStart { id, tool, station, summary, diff: None })
+        at(time, What::ToolStart { id, tool, station, summary, diff: None, gist: None })
     }
 
     fn end(time: u64, id: &str, failed: bool) -> Event {
-        at(time, What::ToolEnd { id: id.to_string(), failed, station: None, summary: None })
+        at(time, What::ToolEnd { id: id.to_string(), failed, station: None, summary: None, output: None })
     }
 
     #[test]
@@ -247,7 +247,7 @@ mod tests {
     fn an_end_can_move_the_call_to_another_station() {
         let mut s = Snapshot::fold(&[start(10, "a", Station::Shell)]);
         let (station, summary) = (Some(Station::Network), Some("git push".to_string()));
-        s.apply(&at(20, What::ToolEnd { id: "a".into(), failed: false, station, summary }));
+        s.apply(&at(20, What::ToolEnd { id: "a".into(), failed: false, station, summary, output: None }));
         assert_eq!(s.counts.get(&Station::Shell), Some(&0));
         assert_eq!(s.counts.get(&Station::Network), Some(&1));
         assert_eq!(s.recent[0].summary, "git push");

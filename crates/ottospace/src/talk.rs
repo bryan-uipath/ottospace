@@ -321,6 +321,16 @@ impl Workspace {
     pub(crate) fn activate_drawer(&mut self, kind: &str, name: &str, window: &Window, cx: &mut Context<Self>) -> bool {
         let shown = self.model.talk.as_ref().map(|talk| talk.task.clone());
         let task = shown.as_ref().and_then(Subject::task);
+        // A chat row's label, as its click: opens or closes it. `name`: `<subject's key>:<row id>`.
+        if kind == "chat-row" {
+            let row = name.rsplit_once(':').and_then(|(key, id)| Some((key, id.parse::<u64>().ok()?)));
+            if let (Some(subject), Some((key, id))) = (&shown, row)
+                && key == self::key(subject)
+            {
+                self.toggle_row(subject, id, cx);
+            }
+            return true;
+        }
         let action = match (kind, name, task) {
             ("drawer", "new_task", _) => {
                 self.new_task(window, cx);

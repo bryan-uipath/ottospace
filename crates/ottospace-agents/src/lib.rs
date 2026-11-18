@@ -221,6 +221,7 @@ pub enum Event {
         text: Untrusted,
     },
     /// `parent`: the sub-agent call this call runs under. `diff`: an edit's change, from its input.
+    /// `gist`: what its row shows (`ottospace_core::gist`).
     ToolStart {
         id: String,
         parent: Option<String>,
@@ -229,10 +230,37 @@ pub enum Event {
         label: String,
         detail: Untrusted,
         diff: Option<ottospace_core::diff::Diff>,
+        gist: Option<ottospace_core::gist::Gist>,
     },
+    /// `output`: the result's text, at most `gist::MAX_OUTPUT` bytes.
     ToolEnd {
         id: String,
         failed: bool,
+        output: Untrusted,
+    },
+    /// A sub-agent or background task started. `id`: the call that started it, if named.
+    Subtask {
+        id: Option<String>,
+        description: Untrusted,
+    },
+    /// A sub-agent or background task ended: how, and its summary.
+    SubtaskEnded {
+        status: ottospace_core::transcript::Status,
+        summary: Untrusted,
+    },
+    /// The CLI's own notification: its text.
+    Note {
+        text: Untrusted,
+    },
+    /// A call the CLI denied without asking. `tool` a label, `by` from a fixed table.
+    DeniedBy {
+        tool: String,
+        by: ottospace_core::transcript::By,
+    },
+    /// The CLI went on with another model. Both names, else `None`.
+    ModelFallback {
+        from: Option<String>,
+        to: String,
     },
     /// The CLI waits for the user. Only `Origin::User` answers it. `detail` is what is approved,
     /// from the request's payload: whole, or when `cut`, its first `MAX_DETAIL` bytes and
@@ -292,6 +320,19 @@ pub enum Event {
 /// `is_quiet`. Every other `Unknown` is a line not understood, and the drawer counts it.
 const QUIET: &[&str] = &[
     "system.status",
+    // A permission check under way and over (`checking`, `done`): it decides nothing shown. A
+    // denial says so by `permission_denied`, a question by `can_use_tool`.
+    "system.permission_check_status",
+    // A subtask's progress and changes: its start and end are rows.
+    "system.task_progress",
+    "system.task_updated",
+    "system.task_summary",
+    "system.background_tasks_changed",
+    // The session's own bookkeeping.
+    "system.session_state_changed",
+    "system.session_title_changed",
+    "system.session_metadata",
+    "system.post_turn_summary",
     "system.thinking_tokens",
     "rate_limit_event",
     "thread.status.changed",
@@ -446,7 +487,10 @@ fn model_of(value: &Value) -> Option<String> {
     let id = value.as_str()?;
     // `[1m]` marks a 1M-token window, as in `ottospace-sessions`: `claude-opus-5-5[1m]`.
     let bare = id.strip_suffix("[1m]").unwrap_or(id);
-    (ottospace_core::agents::is_name(bare) && ottospace_sessions::station::is_name(bare)).then(|| id.to_string())
+    // Not credential-shaped (`ghs_…`): a name goes to the state.
+    let plain = ottospace_core::secrets::hide(bare) == bare;
+    (ottospace_core::agents::is_name(bare) && ottospace_sessions::station::is_name(bare) && plain)
+        .then(|| id.to_string())
 }
 
 /// A session id as a label: a UUID, else `None`.
