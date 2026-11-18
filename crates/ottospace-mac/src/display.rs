@@ -28,6 +28,7 @@ const BEGIN: u32 = 1;
 extern "C" fn on_reconfigure(_display: u32, flags: u32, _: *mut c_void) {
     if flags & BEGIN == 0 {
         CHANGED.store(true, Ordering::SeqCst);
+        crate::wake::post();
     }
 }
 
@@ -39,6 +40,7 @@ pub fn watch() {
 /// Notes a change as `watch` does: for a test, which cannot unplug a display.
 pub fn note_change() {
     CHANGED.store(true, Ordering::SeqCst);
+    crate::wake::post();
 }
 
 /// True once after each change of the displays.

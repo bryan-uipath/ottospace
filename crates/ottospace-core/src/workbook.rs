@@ -640,6 +640,12 @@ impl Workbooks {
         closed || self.offer.as_ref().is_some_and(|offer| offer.until <= now)
     }
 
+    /// When `due` turns true next.
+    pub(crate) fn next_due(&self) -> Option<u64> {
+        let closing = self.list.iter().filter_map(|book| book.closing);
+        closing.chain(self.offer.as_ref().map(|offer| offer.until)).min()
+    }
+
     pub(crate) fn tick(&mut self, now: u64) {
         self.offer = self.offer.take().filter(|offer| offer.until > now);
     }
@@ -1317,17 +1323,19 @@ impl Model {
     /// Whether `action` from `origin` would open or put a pane in a closing workspace, or show
     /// another file in one: split from, fill or drop on a pane of it, or move one to its tab
     /// (`Open`, `OpenFile`, ⌃G's editor, `DropPane`, `MovePane`; a client's `Fill`: the shell's
-    /// gives a waiting pane its window). Refused (`CLOSING_OPENS`): `keep_closing` puts its tab
-    /// away again, not a new pane.
+    /// gives a waiting pane its window). Nor drop or move one of its panes out: a drop swaps.
+    /// Refused (`CLOSING_OPENS`): `keep_closing` puts its tab away again, not a new pane.
     pub(crate) fn opens_in_closing(&self, action: &Action, origin: Origin) -> bool {
         let pane = match action {
             Action::Open { beside, .. } | Action::OpenFile { beside, .. } => beside.or(self.focused),
             Action::ViewerEdit { pane } => pane.or(self.focused),
-            Action::DropPane { target, .. } => Some(*target),
+            Action::DropPane { source, target, .. } => return self.in_closing(*source) || self.in_closing(*target),
             Action::Fill { pane, .. } if origin == Origin::Socket => Some(*pane),
-            Action::MovePane { tab, .. } => {
+            Action::MovePane { pane, tab } => {
                 let space = self.tabs.get(*tab).map(|tab| &tab.space);
-                return space.is_some_and(|of| matches!(of, Owner::Workbook { id } if self.workbooks.closing(*id)));
+                let out = pane.or(self.focused).is_some_and(|pane| self.in_closing(pane));
+                return out
+                    || space.is_some_and(|of| matches!(of, Owner::Workbook { id } if self.workbooks.closing(*id)));
             }
             _ => None,
         };
@@ -2460,11 +2468,14 @@ mod tests {
                 assert_eq!(m.refusal(action, origin), Some(CLOSING_OPENS), "{origin:?} {action:?}");
             }
         }
-        let into = [
+        // Nor moves one in or out (seed 4049: a drop out swaps the target in).
+        let moves = [
             Action::DropPane { source: 2, target: 1, zone: crate::layout::Zone::Center },
             Action::MovePane { pane: Some(2), tab: a },
+            Action::DropPane { source: 1, target: 2, zone: crate::layout::Zone::Center },
+            Action::MovePane { pane: Some(1), tab: m.active },
         ];
-        assert!(into.iter().all(|action| m.refusal(action, Origin::System) == Some(CLOSING_OPENS)));
+        assert!(moves.iter().all(|action| m.refusal(action, Origin::System) == Some(CLOSING_OPENS)));
         let fill = Action::Fill { pane: 1, kind: Kind::Terminal };
         assert_eq!((m.refusal(&fill, Origin::Socket), m.refusal(&fill, Origin::System)), (Some(CLOSING_OPENS), None));
         assert_eq!(m.refusal(&file(Some(1), false), Origin::User), None);

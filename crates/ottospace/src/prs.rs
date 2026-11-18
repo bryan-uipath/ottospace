@@ -54,6 +54,7 @@ impl Reader {
                 if done.send(Read { repo: job.repo, result }).is_err() {
                     return;
                 }
+                ottospace_mac::wake::post();
             }
         });
         Self { jobs, reads, last: HashMap::new(), open: false }

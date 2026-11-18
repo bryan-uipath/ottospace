@@ -110,6 +110,7 @@ impl FileView {
                 read => read,
             };
             let _ = send.send((read, loaded, at));
+            ottospace_mac::wake::post();
         });
         self.reading = Some(read);
     }
@@ -217,6 +218,15 @@ fn key_name(event: &KeyDownEvent) -> Option<String> {
 }
 
 impl Workspace {
+    /// When `sync_viewers` next looks for a change on disk: the main loop sleeps until then.
+    pub(crate) fn viewers_due(&self) -> Option<Instant> {
+        let due = |view: &FileView| {
+            let every = if view.seen.is_some() { SETTLE / 2 } else { LOOK };
+            (view.reading.is_none() && view.looking.is_none()).then(|| view.looked + every)
+        };
+        self.viewers.values().filter_map(due).min()
+    }
+
     /// Each tick: a view for each viewer pane, the files read handed to the core, changes on
     /// disk read again once they settle, and the core told where each view on show is.
     pub(crate) fn sync_viewers(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -265,7 +275,10 @@ impl Workspace {
                 view.looked = Instant::now();
                 let (send, looking) = channel();
                 let path = path.clone();
-                std::thread::spawn(move || drop(send.send(stamp(&path))));
+                std::thread::spawn(move || {
+                    let _ = send.send(stamp(&path));
+                    ottospace_mac::wake::nudge();
+                });
                 view.looking = Some(looking);
             }
             let looked = view.looking.as_ref().map(Receiver::try_recv);

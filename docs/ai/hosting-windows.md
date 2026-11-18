@@ -97,10 +97,14 @@ its size, the app pane's size, the width that pane's window has refused to go be
 - **Split**: a standard window that is not small, or any window a `"do": "split"` rule selects.
 - **Float**: a dialog or panel subrole, a modal window, a standard window under 600×400 or under
   half the pane both ways, one whose split would leave the pane narrower than its window refused
-  to go, or a `"do": "float"` rule. No pane, no stream: the window is moved, at its own size, to
-  the middle of its app's pane (`rules::float_to`) unless its middle is already over it, and
-  `AXRaise`d once without activating the app.
-- **Leave**: a sheet or a child window (macOS keeps it on its parent), an `ignore` rule, a window
+  to go, or a `"do": "float"` rule. No pane, no stream: the window is `AXRaise`d once without
+  activating the app. It is moved first only if the user cannot reach it (`rules::reachable`):
+  its top has no 120×60 on a screen's visible frame, or, while no pane of the app is up and the
+  app is not active (ottospace is in front), no 120 of it beside ottospace's window and its middle
+  not over its app's pane, or it lies over a parking spot (put by its parked parent). A cover counts where it lies over the title bar's middle row. Then `rules::float_to` puts it, at its own size, in the middle of the pane, wholly on
+  the visible frame of the pane's screen (a pane whose middle is on no screen: the main one's).
+- **Leave**: a sheet or a child window (macOS keeps it on its parent), an `ignore` rule (a built-in
+  `ignore` beats a user's `split` or `float`; only `manage` undoes it), a window
   under 100×100 with no rule (the canary, a GPUI app, has a 66×20 one off screen). Any other
   subrole (a toast, a popover) is not judged at all, a `split` rule or not, and is looked at again
   each tick in case it becomes a window.
