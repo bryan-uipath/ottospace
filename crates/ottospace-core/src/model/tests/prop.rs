@@ -6835,4 +6835,3 @@ fn seed_150464_a_reference_copies_a_panes_title_not_the_look() {
     ])
     .unwrap();
 }
-
