@@ -1,6 +1,6 @@
 # The key reference (⌘/). A fresh home: nothing learned. Then the user's own keys, a second apart
 # (a press within a second is the same use): ⌘D, ⌘] and ⌘T five times each are known; ⌘⇧D and
-# ⌘⌃← a little. ↵ opens Known.
+# ⌘⌥← a little. ↵ opens Known.
 {"cmd":"split"}
 {"cmd":"key","keys":"cmd-/","as":"user"}
 {"shot":"fresh"}

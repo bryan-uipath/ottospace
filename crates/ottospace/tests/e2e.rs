@@ -6979,7 +6979,7 @@ fn the_rail_holds_the_tasks_then_the_transcript_always_and_only_the_user_switche
     assert_eq!(picked(&otto.user_key("cmd-alt-[")).as_deref(), Some("transcript"));
     // List mode: right of the panes, past the transcript (it takes no keys), the rail.
     otto.call(json!({"cmd": "focus", "pane": 1}));
-    let keyed = otto.user_key("cmd-alt-right");
+    let keyed = otto.user_key(FOCUS_RIGHT);
     assert_eq!(keyed["focus"], json!({"drawer_rail": {"kind": "transcript"}}), "{}", keyed["focus"]);
     otto.user_key("escape");
     // Stopped, the transcript stays on the rail, idle, and the drawer on its idle view.
