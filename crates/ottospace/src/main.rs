@@ -555,7 +555,7 @@ const RAIL: f32 = 56.;
 const SECTION: f32 = 260.;
 /// Height of every rail cell (left and right) and of the section panel's header: the open cell
 /// and the header end on one line.
-const RAIL_CELL: f32 = 40.;
+pub(crate) const RAIL_CELL: f32 = 40.;
 /// The drawer is never narrower than this, unless the window is.
 const MIN_DRAWER: f32 = ottospace_core::talk::MIN_WIDTH;
 /// Height of a pane's header (label and close button).
@@ -5036,7 +5036,7 @@ impl Workspace {
                         .when(active, |d| {
                             // Amber on Tasks while a task needs the user, as its dot is.
                             let tasks = section == Section::Tasks && needs_you;
-                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY })
+                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false)
                         })
                         .when(self.model.rail_focus == Some(RailFocus::Left(section)), |d| focus_ring(d.relative()))
                         .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
@@ -7059,16 +7059,17 @@ pub(crate) fn well(rows: Vec<AnyElement>, gap: f32) -> impl Iterator<Item = AnyE
     rows.into_iter().enumerate().map(move |(at, row)| in_well(row, at == 0, at == last, gap).into_any_element())
 }
 
-/// The rail's open cell, raised: the panel's background, a soft shadow below it, and an accent bar
-/// at the window's edge. No line or shadow above: every cell reads as the first one does, under one border.
-pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32) -> Stateful<Div> {
+/// A rail's open cell, raised: the panel's background, a soft shadow below it, and an accent bar
+/// at the window's edge (the right rail's: `right`). No line or shadow above: every cell reads as the first one does, under one border.
+pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool) -> Stateful<Div> {
     let shadow = BoxShadow {
         color: black().opacity(0.85),
         offset: point(px(0.), px(7.)),
         blur_radius: px(9.),
         spread_radius: px(-6.),
     };
-    let bar = div().absolute().top_0().left_0().w(px(2.)).h_full().bg(rgb(accent));
+    let bar = div().absolute().top_0().w(px(2.)).h_full().bg(rgb(accent));
+    let bar = if right { bar.right_0() } else { bar.left_0() };
     cell.relative().bg(rgb(theme::RAISED)).shadow(vec![shadow]).child(bar)
 }
 

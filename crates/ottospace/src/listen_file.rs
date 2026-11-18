@@ -68,6 +68,8 @@ pub(crate) fn stamp(dir: &Path, name: &str) -> Stamp {
 
 /// The file of the transcript on, written on its thread.
 pub(crate) struct Writer {
+    /// The file it writes, for the drawer to show.
+    pub(crate) path: PathBuf,
     sender: mpsc::Sender<Vec<Record>>,
     thread: JoinHandle<()>,
 }
@@ -83,9 +85,12 @@ pub(crate) fn begin(dir: &Path, head: Head) -> Result<Writer, String> {
     let (sender, receiver) = mpsc::channel();
     let thread = std::thread::Builder::new()
         .name("transcript-file".into())
-        .spawn(move || write(receiver, made, path, head))
+        .spawn({
+            let path = path.clone();
+            move || write(receiver, made, path, head)
+        })
         .map_err(|err| err.to_string())?;
-    Ok(Writer { sender, thread })
+    Ok(Writer { path, sender, thread })
 }
 
 /// The first free name of the transcript's, made new with mode 0600.
@@ -117,7 +122,7 @@ impl Writer {
 
     /// Waits for what was sent to be written: ottospace is quitting.
     pub(crate) fn finish(self) {
-        let Writer { sender, thread } = self;
+        let Writer { sender, thread, .. } = self;
         drop(sender);
         let _ = thread.join();
     }

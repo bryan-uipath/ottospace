@@ -11,9 +11,9 @@ use ottospace_core::model::zones::RailFocus;
 use ottospace_core::talk::Subject;
 use ottospace_core::{Action, theme};
 
-use crate::{Tooltip, Workspace, rect};
+use crate::{RAIL_CELL, Tooltip, Workspace, focus_ring, raised_cell, rect};
 
-/// The rail's width, and an item's side, in points.
+/// The rail's width, and +'s, in points.
 pub(crate) const WIDTH: f32 = 48.;
 const ITEM: f32 = 36.;
 /// Frames a pending scroll is asked for again before it gives up.
@@ -57,12 +57,11 @@ impl Workspace {
             .w(px(WIDTH))
             .flex_none()
             .h_full()
+            // The selected item's shadow falls on its neighbours, never over the drawer.
+            .overflow_hidden()
             .flex()
             .flex_col()
-            .items_center()
-            .bg(rgb(theme::BACKGROUND))
-            .border_l_1()
-            .border_color(rgb(theme::BORDER));
+            .bg(rgb(theme::BACKGROUND));
         let item = |item: RailItem| {
             let face = self.rail_face(item)?;
             Some((item, self.rail_item(item, face, lifted == Some(item), keyed == Some(item), cx)))
@@ -103,28 +102,26 @@ impl Workspace {
             .child(self.controls.mark("drawer-rail:new"))
             .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New task in this workspace (⌘N)".into()))))
             .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)));
+        // Cells flush, as the left rail's; the line toward the drawer on all but the selected one.
         let tasks = div()
             .id("drawer-rail-tasks")
             .flex_1()
             .min_h_0()
             .w_full()
-            .pt_2()
             .flex()
             .flex_col()
-            .items_center()
-            .gap(px(6.))
             .overflow_y_scroll()
             .track_scroll(&self.rail_scroll)
             .children(top)
-            .child(new);
+            .child(edged().flex_grow().pt(px(6.)).child(new));
         let foot = foot.into_iter().filter_map(item).map(|(_, it)| it).collect::<Vec<_>>();
-        let divider = div().flex_none().w(px(20.)).h(px(1.)).my(px(8.)).bg(rgb(theme::BORDER));
+        let divider = div().flex_none().w(px(20.)).h(px(1.)).bg(rgb(theme::BORDER));
         let foot = (!foot.is_empty())
-            .then(|| div().flex_none().flex().flex_col().items_center().child(divider).children(foot));
+            .then(|| div().flex_none().flex().flex_col().child(edged().py(px(8.)).child(divider)).children(foot));
         let tasks = self.bars.tracked_under("drawer-rail", tasks, &self.rail_scroll, theme::BACKGROUND).w_full();
         // Collapsed, a click on any item opens the drawer on it (the owner: no expand button).
         let column = column.child(tasks).child(self.rail_follow()).children(foot);
-        column.pb_2().child(self.controls.mark("drawer-rail"))
+        column.child(edged().h_2()).child(self.controls.mark("drawer-rail"))
     }
 
     /// After the tasks are laid out: the pending item wholly in view, else scrolled to and checked
@@ -196,7 +193,8 @@ impl Workspace {
         }
     }
 
-    /// One item: lifted with an accent edge while selected, ringed while the keys are on it.
+    /// One item, a cell as the left rail's: while selected, raised with an accent bar at the window's
+    /// edge and no line toward the drawer, joined to it; ringed while the keys are on it.
     fn rail_item(
         &self,
         item: RailItem,
@@ -205,7 +203,6 @@ impl Workspace {
         keyed: bool,
         cx: &Context<Self>,
     ) -> Stateful<Div> {
-        let edge = div().absolute().left_0().top(px(6.)).bottom(px(6.)).w(px(2.)).rounded_sm().bg(rgb(theme::PRIMARY));
         // A task's dim × on hover: Later.
         let group = control(item);
         let later = match item {
@@ -220,12 +217,12 @@ impl Workspace {
             .group(group)
             .relative()
             .flex_none()
-            .size(px(ITEM))
-            .rounded_lg()
+            .w_full()
+            .h(px(RAIL_CELL))
             .cursor_pointer()
-            .when(selected, |d| d.bg(rgb(theme::SELECTED)).child(edge))
-            .when(!selected, |d| d.hover(|s| s.bg(rgb(theme::RAISED))))
-            .when(keyed, |d| d.border_1().border_color(rgb(theme::LIST)))
+            .when(selected, |d| raised_cell(d, theme::PRIMARY, true))
+            .when(!selected, |d| d.border_l_1().border_color(rgb(theme::BORDER)).hover(|s| s.bg(rgb(theme::SELECTED))))
+            .when(keyed, focus_ring)
             .child(face)
             .child(self.controls.mark(control(item)))
             .children(later)
@@ -285,4 +282,9 @@ impl Workspace {
         };
         serde_json::Value::Array(self.model.rail().into_iter().map(row).collect())
     }
+}
+
+/// A stretch of the rail with its line toward the drawer, centred: under the cells, the divider, the foot.
+fn edged() -> Div {
+    div().flex_none().w_full().flex().flex_col().items_center().border_l_1().border_color(rgb(theme::BORDER))
 }
