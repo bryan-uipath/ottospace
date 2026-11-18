@@ -47,6 +47,8 @@ const HEARD: &str = "HEARDWORDS";
 /// In every title and identifier a slot's look found: never in the state.
 const SLOT_SEEN: &str = "SLOTSEEN";
 const LISTEN_IDS: &[&str] = &["t1", "t2", ""];
+/// Keys in a viewer: counts, moves, ⌃G, and others.
+const VIEWER_KEYS: &[&str] = &["j", "k", "g", "G", "0", "1", "9", "escape", "ctrl-d", "ctrl-u", "space", "ctrl-g", "x"];
 const CONTROLS: &[&str] = &["rail:apps", "pane:1", "close:1", "tab:1", "tab-close:1", "mark-remove:1", "c0", "c1"];
 
 /// Arguments for an action: from the model as it is half the time, else anything.
@@ -366,7 +368,29 @@ impl Gen<'_> {
         self.rng.pick(&[Captured, Triaged, Running, NeedsYou, Review, Stale, Parked, Done, Cleaned])
     }
 
+    /// A file a viewer may be asked for, or a path it refuses.
+    fn file_path(&mut self) -> String {
+        self.name(&[
+            "/w/app/README.md",
+            "/w/app/src/main.rs",
+            "/w/app/shot.png",
+            "/w/notes.txt",
+            "README.md",
+            "/w/a\nb",
+        ])
+    }
+
+    /// A viewer pane, else any.
+    fn file_pane(&mut self) -> PaneId {
+        let real: Vec<PaneId> = self.m.viewers.keys().copied().collect();
+        self.one_of(&real, |g| g.pane())
+    }
+
     fn kind(&mut self) -> Kind {
+        // A sound path only: an unsound one is no step at all (`makes_unsound_file`), as a slot's kind.
+        if self.rng.one_in(8) {
+            return Kind::File { path: self.rng.pick(&["/w/app/README.md", "/w/app/src/main.rs", "/w/x.png"]).into() };
+        }
         match self.rng.below(4) {
             0 => Kind::Empty,
             1 | 2 => Kind::Terminal,
@@ -590,7 +614,8 @@ impl Gen<'_> {
     }
 
     fn record(&mut self, id: u32) -> PaneRecord {
-        let kind = match self.rng.below(4) {
+        let kind = match self.rng.below(5) {
+            4 => RecordKind::File { path: self.file_path(), top: self.rng.pick(&[0, 12, u32::MAX]) },
             0 => RecordKind::Empty,
             1 | 2 => RecordKind::Terminal,
             _ => RecordKind::App {
@@ -828,6 +853,7 @@ const MAKERS: &[Make] = &[
     |_| Action::CloseSidebar,
     |g| {
         let item = |g: &mut Gen| match g.rng.coin() {
+            true if g.rng.one_in(4) => PickItem::File,
             true => PickItem::Terminal,
             false if g.rng.one_in(4) => PickItem::Closed { name: g.name(APPS), path: g.name(DIRS) },
             false => PickItem::App { name: g.name(APPS) },
@@ -1268,6 +1294,35 @@ const MAKERS: &[Make] = &[
     },
     |_| Action::StartFresh,
     |_| Action::EditSettings,
+    |g| Action::OpenFile {
+        path: g.file_path(),
+        axis: g.axis(),
+        beside: g.rng.coin().then(|| g.pane()),
+        reuse: g.rng.coin(),
+    },
+    |g| Action::ViewerKey { key: g.name(VIEWER_KEYS) },
+    |g| {
+        let (top, most, page) = (g.rng.below(300) as u32, g.rng.below(300) as u32, g.rng.below(60) as u32);
+        let odd = g.rng.one_in(8).then_some(u32::MAX);
+        Action::ViewerScrolled { pane: g.file_pane(), top: odd.unwrap_or(top), most, page }
+    },
+    |g| {
+        use crate::viewer::Read;
+        let read = match g.rng.below(6) {
+            0 => Read::Missing,
+            1 => Read::TooLarge { bytes: 6_000_000 },
+            2 => Read::NotFile,
+            3 => Read::Binary,
+            _ => Read::Shown { lines: g.rng.below(400) as u32 },
+        };
+        let path = g.file_path();
+        let path = match g.m.pane(g.file_pane()).map(|p| p.kind.clone()) {
+            Some(Kind::File { path: open }) if g.rng.coin() => open,
+            _ => path,
+        };
+        Action::ViewerRead { pane: g.file_pane(), path, read }
+    },
+    |g| Action::ViewerEdit { pane: g.rng.coin().then(|| g.file_pane()) },
     |g| Action::SettingsRead {
         text: g
             .rng
@@ -1581,6 +1636,9 @@ fn selects_tab(action: &Action) -> bool {
             | Action::RepoClick { .. }
             | Action::WorktreeAdded { .. }
             | Action::EditSettings
+            | Action::OpenFile { .. }
+            | Action::ViewerEdit { .. }
+            | Action::ViewerKey { .. }
             | Action::TaskGo { .. }
             | Action::DropPane { .. }
             | Action::MovePane { .. }
@@ -1618,6 +1676,7 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 
 fn check(m: &Model) -> Result<(), String> {
     check_slots(m)?;
+    check_viewers(m)?;
     // The Repos list: each entry once, pinned ones first; the repositories in its order.
     let dirs = &m.repo_dirs.dirs;
     let once = dirs.iter().enumerate().all(|(i, d)| dirs[..i].iter().all(|e| e.path != d.path));
@@ -2264,6 +2323,10 @@ fn check(m: &Model) -> Result<(), String> {
         let stands_for = |pane: &Pane| match (&mark.target, &pane.kind) {
             (marks::Target::Pane(PaneRecord { kind: RecordKind::Terminal, .. }), Kind::Terminal) => true,
             (
+                marks::Target::Pane(PaneRecord { kind: RecordKind::File { path, .. }, .. }),
+                Kind::File { path: open },
+            ) => path == open,
+            (
                 marks::Target::Pane(PaneRecord { kind: RecordKind::App { bundle, name, .. }, .. }),
                 Kind::App { bundle: b, name: n, .. } | Kind::Slot { bundle: b, name: n },
             ) => marks::same_app((bundle.as_deref(), name), (b.as_deref(), n)),
@@ -2381,6 +2444,26 @@ fn check(m: &Model) -> Result<(), String> {
         unique(&waiting) && waiting.iter().all(empty),
         "panes {waiting:?} wait to be filled; not each is one empty pane"
     );
+    Ok(())
+}
+
+/// One view for each viewer pane and none for another; its file by a path it opens; its line no
+/// further than the shell says it goes; a count typed only where the keys go now.
+fn check_viewers(m: &Model) -> Result<(), String> {
+    for pane in &m.panes {
+        if let Kind::File { path } = &pane.kind {
+            ensure!(crate::viewer::sound(path), "pane {} shows a file by {path:?}", pane.id);
+            ensure!(m.viewers.contains_key(&pane.id), "viewer {} has no view", pane.id);
+        }
+    }
+    for (id, view) in &m.viewers {
+        let file = m.pane(*id).is_some_and(|p| matches!(p.kind, Kind::File { .. }));
+        ensure!(file, "a view for pane {id}, no viewer");
+        ensure!(view.most.is_none_or(|most| view.top <= most), "viewer {id} at {} past {:?}", view.top, view.most);
+        ensure!(view.opener.is_none_or(|o| o != *id && m.pane(o).is_some()), "viewer {id} opened by {:?}", view.opener);
+        let typing = m.keyboard_viewer() == Some(*id);
+        ensure!(typing || view.pending.pending().is_none(), "viewer {id} keeps a count it has no keys for");
+    }
     Ok(())
 }
 
@@ -3821,6 +3904,26 @@ impl Run {
                         "{origin:?} ran the editor in pane {pane}: {action:?}"
                     );
                 }
+                // The user's editor on a viewer's file: in a terminal just opened beside it, by ⌃G or Edit.
+                Effect::EditFile { pane, path } => {
+                    let opened = effects.contains(&Effect::Opened(*pane));
+                    let terminal = m.pane(*pane).is_some_and(|p| p.kind == Kind::Terminal);
+                    let asked = matches!(&action, Action::ViewerEdit { .. })
+                        || matches!(&action, Action::ViewerKey { key } if key == "ctrl-g");
+                    let viewed = kinds_before.iter().any(|(_, kind)| *kind == Kind::File { path: path.clone() });
+                    ensure!(opened && terminal && asked && viewed, "{origin:?}'s {action:?} edited {path:?} in {pane}");
+                }
+                Effect::ChooseFile { .. } => {
+                    ensure!(matches!(action, Action::PickerChoose { .. }), "{action:?} asked for a file");
+                }
+                Effect::ViewFile { pane } => {
+                    let file = m.pane(*pane).is_some_and(|p| matches!(p.kind, Kind::File { .. }));
+                    ensure!(file && m.viewer(*pane).is_some(), "{action:?} reads a file into pane {pane}, no viewer");
+                }
+                Effect::ViewerScroll { pane, top } => {
+                    let at = m.viewer(*pane).map(|view| view.top);
+                    ensure!(at == Some(*top), "{action:?} scrolled viewer {pane} to {top}, the model says {at:?}");
+                }
                 // The editor opens only on the user's ⌃G, on the draft it then edits, one at a time.
                 Effect::OpenEditor { text } => {
                     let given = m.editing.as_ref().map(|editing| editing.given.as_str());
@@ -4551,6 +4654,7 @@ fn code(sent: &Envelope) -> String {
         ("failure", "Failure"),
         ("from", "crate::listen::Speaker"),
         ("why", "crate::listen::Ended"),
+        ("read", "crate::viewer::Read"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {
@@ -6235,6 +6339,17 @@ fn yes_to_closing_a_workspace_moves_the_tab_on_show() {
         split(Axis::Right, Kind::Terminal),
         Action::SpaceHideAsked { index: None, running }.into(),
         Action::QuitConfirm.into(),
+    ])
+    .unwrap();
+}
+
+#[test]
+fn seed_983_a_clients_hide_leaves_the_close_question_to_the_user() {
+    let running = |pane| Running { pane, program: None, background: false };
+    replay(&[
+        by(Origin::User, Action::Open { kind: slack(3), axis: Axis::Right, beside: None }),
+        by(Origin::User, Action::SpaceHideAsked { index: Some(1), running: (1..5).map(running).collect() }),
+        by(Origin::Socket, Action::SpaceHide { index: None }),
     ])
     .unwrap();
 }
