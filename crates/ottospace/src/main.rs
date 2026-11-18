@@ -3569,8 +3569,7 @@ impl Workspace {
         let pid = hosted.pid;
         if !self.known.iter().any(|(p, _)| *p == pid) {
             // Its dialogs open now too: only those that open later are judged (`adopt_new_windows`).
-            let judged = |w: &ax::Window| rules::judged(&w.subrole().unwrap_or_default());
-            let ids = ax::Window::all_of(pid).iter().filter(|w| judged(w)).filter_map(ax::Window::id).collect();
+            let ids = ax::Window::all_of(pid).iter().filter(|w| w.judged()).filter_map(ax::Window::id).collect();
             self.known.push((pid, ids));
         }
         let effects = self.dispatch(action, self.input, window, cx);
@@ -3827,10 +3826,9 @@ impl Workspace {
         for (pid, seen) in &mut self.known {
             for window in ax::Window::all_of(*pid) {
                 // A toast or popover is looked at again next time: it may become a window.
-                let judged = || window.quick(|w| rules::judged(&w.subrole().unwrap_or_default()));
                 if let Some(id) = window.id()
                     && !seen.contains(&id)
-                    && judged()
+                    && window.quick(ax::Window::judged)
                 {
                     seen.insert(id);
                     fresh.push(window);
@@ -3850,7 +3848,7 @@ impl Workspace {
                 modal,
                 sheet,
                 size: frame.map(|f| [f.size.width, f.size.height]),
-                pane: pane.map(|(b, _)| [f32::from(b.size.width) as f64, f32::from(b.size.height) as f64]),
+                pane: pane.map(|(b, _)| to_cg(b.size)).map(|s| [s.width, s.height]),
                 min_width: pane.and_then(|(_, min)| min),
             };
             match ax_window.quick(|w| window_place(w, &shape)) {
@@ -3866,11 +3864,9 @@ impl Workspace {
                     let screens = recovery::screens();
                     let to = frame
                         .and_then(|f| rules::float_to(recovery::to_frame(f), pane, &screens.visible, screens.main));
-                    if let Some((x, y)) = to {
-                        let _ = ax_window.set_position(CGPoint::new(x, y));
-                    }
+                    let moved = to.is_some_and(|(x, y)| ax_window.set_position(CGPoint::new(x, y)).is_ok());
                     ax_window.raise_only();
-                    trace::record("float", serde_json::json!({ "window": ax_window.id(), "moved": to.is_some() }));
+                    trace::record("float", serde_json::json!({ "window": ax_window.id(), "moved": moved }));
                 }
                 rules::Place::Float | rules::Place::Leave => {}
             }

@@ -195,10 +195,8 @@ pub fn float_to(window: Frame, pane: Option<Frame>, screens: &[Frame], main: Fra
         let (x, y) = (window.x + window.w / 2.0, window.y + window.h / 2.0);
         !((pane.x..=pane.x + pane.w).contains(&x) && (pane.y..=pane.y + pane.h).contains(&y))
     });
-    let to = over.map_or(window, |pane| {
-        let (x, y) = (pane.x + ((pane.w - window.w) / 2.0).max(0.0), pane.y + ((pane.h - window.h) / 2.0).max(0.0));
-        Frame { x, y, ..window }
-    });
+    // At its own size: `centred` shrinks it to the pane, so its top left is never above or left of it.
+    let to = over.map_or(window, |pane| Frame { w: window.w, h: window.h, ..crate::restore::centred(window, pane) });
     let to = crate::restore::destination(to, screens, main);
     (to != window).then_some((to.x, to.y))
 }
