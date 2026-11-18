@@ -718,7 +718,7 @@ impl Workspace {
         // The user's editor takes the conversation's place while it has its draft.
         let body = match brief {
             _ if editor => self.editor_body(cx),
-            true => self.brief_content(cx).unwrap_or_else(|| div().into_any_element()),
+            true => self.brief_content(theme::BACKGROUND, cx).unwrap_or_else(|| div().into_any_element()),
             false => self.talk_body(&talk.task, cx),
         };
         let drawer = div()

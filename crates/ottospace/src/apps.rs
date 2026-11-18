@@ -424,6 +424,6 @@ impl Workspace {
         }
         let list = div().id("apps").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         // The section's scrollbar, over all three groups.
-        self.bars.tracked("apps", list.track_scroll(&self.list_scroll).children(rows), &self.list_scroll)
+        self.bars.tracked("apps", list.track_scroll(&self.list_scroll).children(rows), &self.list_scroll, theme::RAISED)
     }
 }

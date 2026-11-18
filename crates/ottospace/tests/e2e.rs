@@ -4779,6 +4779,88 @@ fn a_long_list_has_a_scrollbar_that_drags_and_pages() {
     otto.faded("tasks");
 }
 
+/// Which edges of the scroll area `id` fade, as the state gives them: `{top, bottom}` or `{left, right}`.
+fn fades(reply: &Value, id: &str) -> Value {
+    reply["overflow"][id].clone()
+}
+
+/// The owner: every overflowing list fades at an edge with more beyond it, and only there.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_long_list_fades_where_more_lies_beyond_and_a_short_one_nowhere() {
+    let otto = Otto::launch("overflow");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.call(json!({"cmd": "task_add", "title": "task 0"}));
+    otto.bounds(&[1]);
+    // A list that fits: laid out, no fade.
+    assert_eq!(fades(&otto.drawn(), "tasks"), json!({"top": false, "bottom": false}));
+
+    for i in 1..60 {
+        otto.call(json!({"cmd": "task_add", "title": format!("task {i}")}));
+    }
+    let (track, ..) = otto.wait_for("the bar", |o| scrollbar(&o.drawn(), "tasks"));
+    // At the top: only the foot fades. Down a little: both. At the end: only the top.
+    assert_eq!(fades(&otto.drawn(), "tasks"), json!({"top": false, "bottom": true}));
+    let over = [track[0] - 100.0, track[1] + 200.0];
+    assert_eq!(fades(&otto.wheel(over, -60.0, true), "tasks"), json!({"top": true, "bottom": true}));
+    assert_eq!(fades(&otto.wheel(over, -50_000.0, true), "tasks"), json!({"top": true, "bottom": false}));
+    // Once the bar has faded out, a list at rest with its fades draws no more frames.
+    let frame = |reply: &Value| reply["frame"]["number"].as_u64().expect("a frame number");
+    // Twice at most: a minute's tick (the rows' ages) may draw one.
+    let still = || {
+        let rest = frame(&otto.faded("tasks"));
+        std::thread::sleep(Duration::from_millis(1500));
+        frame(&otto.call(json!({"cmd": "state"}))) == rest
+    };
+    assert!(still() || still(), "frames drawn at rest");
+
+    // The palette: every command overflows it; one that matches fits.
+    let reply = otto.user_key("cmd-p");
+    assert_eq!(fades(&reply, "palette"), json!({"top": false, "bottom": true}), "{}", reply["overflow"]);
+    let reply = otto.user_key("c o p y space s t a t e");
+    assert_eq!(fades(&reply, "palette"), json!({"top": false, "bottom": false}));
+    otto.user_key("escape");
+
+    // The tab row: two tabs fit; many scroll across, the newest (on show) brought into view.
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.call(json!({"cmd": "new_tab"}));
+    assert_eq!(fades(&otto.drawn(), "tabs"), json!({"left": false, "right": false}));
+    for _ in 0..30 {
+        otto.call(json!({"cmd": "new_tab"}));
+    }
+    let scrolled = otto.drawn();
+    assert_eq!(fades(&scrolled, "tabs"), json!({"left": true, "right": false}));
+    // Scrolled by code (the tab on show brought into view): no bar.
+    assert_eq!(scrollbar(&scrolled, "tabs").map(|(.., opacity)| opacity), Some(0.0), "{}", scrolled["scrollbars"]);
+    // The row's bar only shows: a click on a tab's foot, where the bar lies, selects that tab.
+    let tabs = otto.call(json!({"cmd": "state"}))["state"]["tabs"].as_array().cloned().unwrap();
+    let before = tabs.len() - 2;
+    let tab = otto.control(&format!("tab:{}", tabs[before]["id"]));
+    otto.mouse("move", at(tab, 0.5, 0.5));
+    assert_eq!(otto.user_click(at(tab, 0.5, 0.92))["state"]["active"].as_u64(), Some(before as u64));
+    // The workspace's first tab on show again: scrolled back to the row's start.
+    let tabs = tab_titles(&otto.call(json!({"cmd": "state"})));
+    let first = tabs.iter().position(|(_, space)| Some(space) == tabs.last().map(|(_, space)| space)).unwrap();
+    otto.call(json!({"cmd": "select_tab", "index": first}));
+    assert_eq!(fades(&otto.drawn(), "tabs"), json!({"left": false, "right": true}));
+    // The last tab on show, the row wheeled back to its start, Home and back: in view again.
+    otto.call(json!({"cmd": "select_tab", "index": tabs.len() - 1}));
+    let end = otto.drawn();
+    assert_eq!(fades(&end, "tabs"), json!({"left": true, "right": false}));
+    let (track, ..) = scrollbar(&end, "tabs").expect("the row's bar");
+    let wheeled = otto.wheel(at(track, 0.5, 0.5), 50_000.0, true);
+    assert_eq!(fades(&wheeled, "tabs"), json!({"left": false, "right": true}));
+    // The user's wheel shows it.
+    assert!(scrollbar(&wheeled, "tabs").is_some_and(|(.., opacity)| opacity > 0.0), "{}", wheeled["scrollbars"]);
+    let row: Vec<Value> =
+        end["spaces"].as_array().into_iter().flatten().filter(|s| s["hidden"] == false).cloned().collect();
+    let back = row.iter().position(|s| s["selected"] == true).expect("a workspace selected");
+    otto.call(json!({"cmd": "select_space", "index": 0}));
+    otto.call(json!({"cmd": "select_space", "index": back}));
+    assert_eq!(fades(&otto.drawn(), "tabs"), json!({"left": true, "right": false}));
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_terminal_scrollbar_shows_the_scrollback_and_drags_it() {
@@ -5035,6 +5117,7 @@ fn the_key_reference_fits_the_window_and_the_wheel_closes_nothing() {
     // What is not known yet fits a window of this size whole: no bar. (A smaller window scrolls
     // it with the shared scroll area, as the other lists.)
     assert!(scrollbar(&reply, "keys").is_none(), "{}", reply["scrollbars"]);
+    assert_eq!(fades(&reply, "keys"), json!({"top": false, "bottom": false}));
     let reply = otto.wheel([700.0, 450.0], -60.0, true);
     assert_eq!(reply["state"]["keys"], json!(true));
     assert_eq!(otto.call(json!({"cmd": "key", "keys": "escape"}))["state"]["keys"], json!(false));
@@ -11398,6 +11481,8 @@ fn a_rail_of_twenty_tasks_scrolls_and_keeps_the_transcript_in_the_window() {
     otto.call(wheel);
     let top = otto.drawn();
     assert!(task(&top, first).is_some() && task(&top, last).is_none(), "{}", top["drawer"]["rail"]);
+    // The tasks fade at the foot only, where more lie beyond.
+    assert_eq!(fades(&top, "drawer-rail"), json!({"top": false, "bottom": true}));
     otto.call(json!({"cmd": "focus", "pane": 1}));
     let mut keyed = otto.user_key(FOCUS_RIGHT);
     for _ in 0..2 {
@@ -11406,7 +11491,9 @@ fn a_rail_of_twenty_tasks_scrolls_and_keeps_the_transcript_in_the_window() {
         }
     }
     assert_eq!(keyed["focus"]["drawer_rail"]["id"], json!(last), "{}", keyed["focus"]);
-    check(&otto.drawn(), last);
+    let drawn = otto.drawn();
+    check(&drawn, last);
+    assert_eq!(fades(&drawn, "drawer-rail")["top"], json!(true), "{}", drawn["overflow"]);
     otto.user_key("escape");
     // A sneak label only on what shows: no label for a task scrolled out.
     let drawn = otto.drawn();
@@ -11545,6 +11632,8 @@ fn the_idle_transcript_lists_today_and_only_the_users_pick_starts_one_of_an_app(
         (!today.is_empty()).then_some(today)
     });
     assert_eq!(listed.len(), 1, "{listed:?}");
+    // One row fits: no fade.
+    assert_eq!(fades(&otto.drawn(), "listen-idle"), json!({"top": false, "bottom": false}));
     assert_eq!((&listed[0]["name"], &listed[0]["length_ms"]), (&json!(name), &json!(42 * 60_000)));
     // Opened read-only by the user's click, not a client's; its words never in a client's state.
     let row = otto.listen_rect("listen-past:0");
@@ -11929,6 +12018,8 @@ fn a_file_opens_in_a_viewer_moves_by_counts_reloads_and_edits_beside() {
     assert_eq!(view(&otto.call(json!({"cmd": "key", "keys": "g g 5 j"})), 2)["top"], 5);
     // The shell drew it there: its next report says the same line.
     otto.wait_for("the view at line 5", |o| (view(&o.call(json!({"cmd": "state"})), 2)["top"] == 5).then_some(()));
+    // Five lines down a long file: both edges fade.
+    assert_eq!(fades(&otto.drawn(), "viewer:2"), json!({"top": true, "bottom": true}));
 
     // Changed on disk: read again, at the same line.
     let mut text = std::fs::read_to_string(&file).unwrap();

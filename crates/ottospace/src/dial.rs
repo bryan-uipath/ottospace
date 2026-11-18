@@ -299,10 +299,16 @@ impl Workspace {
     /// The room the top row keeps for the chip's badge while the chip is there (a space of one
     /// tab has no second row): the badge, the marker of a native one, and its edges.
     pub(crate) fn chip_reserve(&self) -> f32 {
-        let Some(chip) = self.model.agent_chip() else { return 0. };
         if self.model.space_tabs(self.model.space()).len() > 1 {
             return 0.;
         }
+        self.chip_badge()
+    }
+
+    /// The room the chip's badge covers at a row's end, 0 with no chip: a row that scrolls ends
+    /// before it, so its last item, fade and bar are not under it.
+    pub(crate) fn chip_badge(&self) -> f32 {
+        let Some(chip) = self.model.agent_chip() else { return 0. };
         let both = chip.task.task().is_some() && self.dial_of(&chip.task).is_some();
         10. + MARK + if both { MARK + 4. } else { 0. } + 2. * CHIP_EDGE
     }
