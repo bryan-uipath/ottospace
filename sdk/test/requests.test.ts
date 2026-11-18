@@ -128,6 +128,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.appFixture({ name: "Mail", user: true }),
   (c) => c.audioProbeStart(),
   (c) => c.audioProbeStop(),
+  (c) => c.windowWidth({ width: 340 }),
   (c) => c.zoomPress(),
   (c) => c.displayChange(),
   (c) => c.calendar({ day: "tomorrow", days: 2 }),

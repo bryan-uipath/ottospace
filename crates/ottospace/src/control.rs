@@ -480,6 +480,11 @@ pub enum Request {
     /// For tests: stops it. The reply is `{"ok":true,"buffers":[{"pts_ms":..,"samples":..,"rms":..}],
     /// "failed":null}` (`failed`: why the system stopped the stream, if it did).
     AudioProbeStop,
+    /// For tests (`test_refusal`): the window `width` points wide, its top left where it is: a
+    /// narrow window's status bar. Never for an agent: it sizes the user's window.
+    WindowWidth {
+        width: f64,
+    },
     /// For tests (`test_refusal`): the window's green button, pressed as the user would: a zoom,
     /// which fills the display instead. Refused outside a test run: only the user's hand fills it.
     ZoomPress,
@@ -633,6 +638,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         Request::AppFixture { .. } => Some("app_fixture is for tests (OTTOSPACE_E2E): app panes hold real windows"),
         Request::AudioProbeStart | Request::AudioProbeStop => {
             Some("audio_probe_start and audio_probe_stop are for tests (OTTOSPACE_E2E): no client hears an app")
+        }
+        Request::WindowWidth { .. } => {
+            Some("window_width is for tests (OTTOSPACE_E2E): only the user sizes their window")
         }
         Request::ZoomPress => {
             Some("zoom_press is for tests (OTTOSPACE_E2E): only the user's green button fills the display")

@@ -1,0 +1,11 @@
+# The status bar's segments, made up: a terminal in a checkout with changes (where you are), a
+# meeting in 12 minutes (what's next), two tasks that run and one that needs you (who's working).
+{"cmd":"split"}
+{"cmd":"task_add","title":"Port the parser","state":"running"}
+{"cmd":"task_add","title":"Fix the flaky upload test","state":"running"}
+{"cmd":"task_add","title":"Approve the retry plan","state":"needs_you"}
+{"cmd":"wait","pattern":"^\\$"}
+{"cmd":"type","text":"mkdir -p code/flow-workbench && cd code/flow-workbench && git init -q -b develop && echo draft > notes.txt && clear\r"}
+{"until":"calendar.updated"}
+{"sleep_ms":1500}
+{"shot":"segments"}

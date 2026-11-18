@@ -114,6 +114,7 @@ mod slide;
 mod sneak;
 mod sneak_apps;
 mod stall;
+mod status_bar;
 mod tags;
 mod talk;
 mod terminal;
@@ -482,6 +483,7 @@ impl AssetSource for Assets {
             "icons/pull-request.svg" => Some(include_bytes!("../assets/icons/pull-request.svg")),
             "icons/marks.svg" => Some(include_bytes!("../assets/icons/marks.svg")),
             "icons/calendar.svg" => Some(include_bytes!("../assets/icons/calendar.svg")),
+            "icons/folder.svg" => Some(include_bytes!("../assets/icons/folder.svg")),
             "icons/waveform.svg" => Some(include_bytes!("../assets/icons/waveform.svg")),
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
@@ -1040,6 +1042,11 @@ struct Workspace {
     /// the user opened (a test run counts them and opens none).
     prs: prs::Reader,
     pr_note: Option<&'static str>,
+    /// The status bar: the focused folder's checkout, read off the main thread; how its segments
+    /// were last shortened; the meeting it last said (`id`, minutes to go, Join), to draw again on a change.
+    status_git: status_bar::Reader,
+    status_fit: Cell<ottospace_core::status_bar::Fit>,
+    status_said: Option<(u64, Option<u64>, bool)>,
     pr_opens: u32,
     /// Socket calls that file a task and wait for the reader: (the call's number, what to file, where to reply).
     filing: Vec<(u64, Filing, Sender<String>)>,
@@ -1285,6 +1292,7 @@ impl Workspace {
                     if ticks.every(15, 0) {
                         this.poll_sessions(window, cx);
                         this.read_titles(cx);
+                        this.read_status_checkout(cx);
                     }
                     this.listen_menu_bar(window, cx);
                     if ticks.every(60, 0) {
@@ -1327,6 +1335,12 @@ impl Workspace {
                                 cx.notify();
                             }
                             this.minute = minute;
+                            // The meeting's minutes to go, its start and its end: on the status bar.
+                            let said = this.status_meeting().map(|m| (m.id, m.in_min, m.join));
+                            if said != this.status_said {
+                                this.status_said = said;
+                                cx.notify();
+                            }
                             // The Marks list says what is missing as it is now.
                             if matches!(this.model.sidebar, Some(Section::Marks | Section::Workbook)) {
                                 this.check_marks(cx);
@@ -1535,6 +1549,9 @@ impl Workspace {
             told: None,
             prs: prs::Reader::new(),
             pr_note: None,
+            status_git: status_bar::Reader::new(),
+            status_fit: Cell::default(),
+            status_said: None,
             pr_opens: 0,
             filing: Vec::new(),
             calls: 0,
@@ -2861,6 +2878,22 @@ impl Workspace {
                     let _ = reply.send(answer);
                     continue;
                 }
+                // A test run only: the window narrower or wider. Later, as `fill_display` sizes it:
+                // GPUI drops a resize AppKit reports while the app is borrowed.
+                Request::WindowWidth { width } => {
+                    if let Some(view) = ns_view(window).map(|view| view as usize) {
+                        cx.spawn(async move |_, _| {
+                            let view = view as *mut std::ffi::c_void;
+                            // SAFETY: the window's own view, alive while its workspace is; the main thread.
+                            if let Some(at) = unsafe { ottospace_mac::window::placement(view) } {
+                                let frame = ottospace_core::ax::Frame { w: width.clamp(300., 4_000.), ..at.window };
+                                unsafe { ottospace_mac::window::set_frame(view, frame) };
+                            }
+                        })
+                        .detach();
+                    }
+                    None
+                }
                 // A test run only: the green button. The next tick takes the zoom it asks for.
                 Request::ZoomPress => {
                     match ns_view(window).filter(|_| self.zoom_asks) {
@@ -3667,6 +3700,10 @@ impl Workspace {
             "badges": self.model.badges().into_iter().filter_map(|(subject, mono)| Some((subject.task()?.to_string(), serde_json::Value::from(mono)))).collect::<serde_json::Map<String, serde_json::Value>>(),
             // The meeting timeline: counts, times and stages only, never a title or a place.
             "calendar": self.calendar_snapshot(),
+            // The status bar's segments: the place (`text`, `rect`), whether a meeting shows (its
+            // `rect` and its Join's, never its title), the agents (`text`, `rect`), and how many
+            // steps they were shortened (`shrink`, 0 to 3).
+            "status_bar": self.status_snapshot(),
             // Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last
             // frame drew (`drawn`); `waited_ms`: how long a test run's reply waited for that frame.
             // `window`: the window's number, for `screencapture -l`.
@@ -4487,11 +4524,18 @@ impl Workspace {
         self.model.undo_offer.filter(|offer| tasks(offer.moved) && !offer.moved.of_apps())
     }
 
+    /// ⌘⇧N: the next task that needs you.
+    fn next_task(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::Tick { now: now_ms() }, self.input, window, cx);
+        self.dispatch(Action::TaskGo { id: None }, self.input, window, cx);
+    }
+
     /// Reads the Apps and Repos lists again.
     fn refresh_lists(&mut self, cx: &mut Context<Self>) {
         self.refresh_apps();
         self.offer_installed(cx);
         self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
+        self.status_git.forget();
     }
 
     /// Visual mode takes every key but ⌘ shortcuts: vi keys move, select, copy and leave.
@@ -6790,7 +6834,7 @@ impl Workspace {
     }
 
     /// Bottom bar: who has the keyboard when it is not normal, and what needs saying.
-    fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_status(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let color = theme::accent(self.model.mode());
         // Name the return key only if it works: a wrong hint strands the user in the app.
         let app_hint = match RETURN_KEY.get() {
@@ -6837,6 +6881,20 @@ impl Workspace {
             Some(app) => format!("{hint} · {app}"),
             None => hint.to_string(),
         };
+        // After a capture from a live app, with the draft gone: the way back to that app.
+        let back = self.model.back_to.filter(|_| self.model.capture.is_none()).and_then(|pane| {
+            let Kind::App { name, .. } = &self.model.pane(pane)?.kind else { return None };
+            Some(format!("↩ back to {name}"))
+        });
+        // "Copied 3 lines", from anywhere: the status bar says each copy and paste.
+        let clip = self.model.clip.as_ref().filter(|clip| clip.shows(now_ms())).map(|clip| clip.text.clone());
+        let pending = self.model.viewer_pending();
+        // What the middle keeps whole (the hint is cut): the room left is the segments'.
+        let kept = [back.as_deref(), clip.as_deref(), pending.as_deref()];
+        let middle = kept.iter().flatten().map(|text| status_bar::width(window, text) + 12.).sum::<f32>()
+            + if mode.is_empty() { 0. } else { status_bar::width(window, mode) + 16. };
+        let segments = self.status_segments(middle, window, cx);
+        self.status_fit.set(segments.fit);
         div()
             .h(px(24.))
             .px_2()
@@ -6849,49 +6907,50 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(theme::MUTED))
             .child(mark(&self.marks, Mark::Status))
-            .when(!mode.is_empty(), |d| {
-                d.child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
-            })
-            .child(cut_text(hint))
-            // A count or `g` typed in the viewer, waiting for its move (`10j`).
-            .children(
-                self.model.viewer_pending().map(|typed| div().flex_none().text_color(rgb(theme::TEXT)).child(typed)),
-            )
-            // Pushes what follows to the right (an auto margin there closed the gaps on the left).
-            // Its hover names the build.
-            .child(div().id("status-space").flex_1().h_full().tooltip(|_, cx| {
-                let (commit, date) = (option_env!("OTTOSPACE_COMMIT"), option_env!("OTTOSPACE_BUILD_DATE"));
-                AnyView::from(cx.new(|_| Tooltip(version_line(env!("CARGO_PKG_VERSION"), commit, date).into())))
-            }))
-            // After a capture from a live app, with the draft gone: the way back to that app.
-            .children(self.model.back_to.filter(|_| self.model.capture.is_none()).and_then(|pane| {
-                let Kind::App { name, .. } = &self.model.pane(pane)?.kind else { return None };
-                let back = div().id("status-back").relative().flex_none().cursor_pointer().text_color(rgb(theme::APP));
-                Some(
-                    back.child(format!("↩ back to {name}"))
-                        .child(self.controls.mark("draft:back"))
-                        .on_click(cx.listener(|this, _, window, cx| this.click_capture("back", window, cx))),
-                )
-            }))
-            // The one thing tasks put here: how many wait for the user.
-            .children(Some(self.model.tasks.needs_you()).filter(|n| *n > 0).map(|n| {
-                let tip = |_: &mut Window, cx: &mut App| AnyView::from(cx.new(|_| Tooltip("Needs you".into())));
+            // Where you are: the focused pane's folder and branch, or its app.
+            .children(segments.place)
+            // The middle: the mode and what it says. Its hover names the build.
+            .child(
                 div()
-                    .id("status-needs-you")
-                    .flex_none()
-                    .text_color(rgb(theme::SNEAK))
-                    .child(format!("● {n}"))
-                    .tooltip(tip)
-            }))
-            // Shown here, not in the Apps list, so it is visible whichever section is open.
-            // "Copied 3 lines", from anywhere: the status bar says each copy and paste.
-            .children(
-                self.model
-                    .clip
-                    .as_ref()
-                    .filter(|clip| clip.shows(now_ms()))
-                    .map(|clip| div().flex_none().text_color(rgb(theme::PRIMARY)).child(clip.text.clone())),
+                    .id("status-space")
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap_3()
+                    .tooltip(|_, cx| {
+                        let (commit, date) = (option_env!("OTTOSPACE_COMMIT"), option_env!("OTTOSPACE_BUILD_DATE"));
+                        AnyView::from(cx.new(|_| Tooltip(version_line(env!("CARGO_PKG_VERSION"), commit, date).into())))
+                    })
+                    .when(!mode.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .flex_none()
+                                .px_2()
+                                .rounded_sm()
+                                .bg(rgb(color))
+                                .text_color(rgb(theme::BACKGROUND))
+                                .child(mode),
+                        )
+                    })
+                    .child(cut_text(hint))
+                    // A count or `g` typed in the viewer, waiting for its move (`10j`).
+                    .children(pending.map(|typed| div().flex_none().text_color(rgb(theme::TEXT)).child(typed)))
+                    .children(back.map(|text| {
+                        let back =
+                            div().id("status-back").relative().flex_none().cursor_pointer().text_color(rgb(theme::APP));
+                        back.child(text)
+                            .child(self.controls.mark("draft:back"))
+                            .on_click(cx.listener(|this, _, window, cx| this.click_capture("back", window, cx)))
+                    }))
+                    .children(clip.map(|clip| div().flex_none().text_color(rgb(theme::PRIMARY)).child(clip))),
             )
+            // What's next, and who's working.
+            .children(segments.meeting)
+            .child(div().flex_none().w(px(1.)).h(px(14.)).bg(rgb(theme::BORDER)))
+            .child(segments.agents)
     }
 }
 
@@ -7507,10 +7566,7 @@ impl Render for Workspace {
                 true => drop(this.dispatch(Action::MarkPrefix, this.input, window, cx)),
                 false => cx.propagate(),
             }))
-            .on_action(cx.listener(|this, _: &NextTask, window, cx| {
-                this.dispatch(Action::Tick { now: now_ms() }, this.input, window, cx);
-                this.dispatch(Action::TaskGo { id: None }, this.input, window, cx);
-            }))
+            .on_action(cx.listener(|this, _: &NextTask, window, cx| this.next_task(window, cx)))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
                 this.dispatch(Action::Split { axis: Axis::Right, kind: Kind::Terminal }, this.input, window, cx);
             }))
@@ -7697,7 +7753,7 @@ impl Render for Workspace {
             .children(self.render_notice_bar(cx))
             // The meeting timeline, directly above the status bar.
             .children(self.render_timeline(cx))
-            .child(self.render_status(cx))
+            .child(self.render_status(window, cx))
             // Only over a parked, drawn pane: a live window sits above ottospace and would cover it.
             .children(
                 self.ax_overlay
@@ -8030,7 +8086,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 13] = [
+        const TESTS_ONLY: [&str; 14] = [
             "capture_start",
             "repo_add",
             "inspector_fixture",
@@ -8043,6 +8099,7 @@ mod tests {
             "audio_probe_start",
             "audio_probe_stop",
             "zoom_press",
+            "window_width",
             "display_change",
         ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));

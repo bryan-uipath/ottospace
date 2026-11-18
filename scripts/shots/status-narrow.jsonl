@@ -1,0 +1,13 @@
+# The status bar of a narrow window: the folder shortens first, then the meeting (`12 min`), then
+# the agents (`● 2 ● 1`).
+{"cmd":"split"}
+{"cmd":"task_add","title":"Port the parser","state":"running"}
+{"cmd":"task_add","title":"Fix the flaky upload test","state":"running"}
+{"cmd":"task_add","title":"Approve the retry plan","state":"needs_you"}
+{"cmd":"wait","pattern":"^\\$"}
+{"cmd":"type","text":"mkdir -p code/flow-workbench && cd code/flow-workbench && git init -q -b develop && echo draft > notes.txt && clear\r"}
+{"until":"calendar.updated"}
+{"cmd":"window_width","width":340}
+{"until":"status_bar.shrink","is":3}
+{"sleep_ms":800}
+{"shot":"narrow"}

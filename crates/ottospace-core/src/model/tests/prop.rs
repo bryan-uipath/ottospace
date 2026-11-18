@@ -1491,6 +1491,7 @@ const MAKERS: &[Make] = &[
         Action::CalendarFetched { at: g.time(), events: g.rng.below(2_000) as u32, failure }
     },
     |_| Action::CalendarRetry,
+    |_| Action::CopyPath { path: "/code/app".into() },
     |g| Action::ListenStart {
         source: match g.rng.coin() {
             true => crate::listen::Source::Pane(g.pane()),
@@ -4073,10 +4074,12 @@ impl Run {
                     let opened = user && matches!(action, Action::EditorOpen) && editing_before.is_none();
                     ensure!(opened && given == Some(text.as_str()), "{origin:?}'s {action:?} opened the editor");
                 }
-                // Only what the editor saved goes to the clipboard, when the shell says it ended.
-                Effect::Clip { .. } => {
+                // Only what the editor saved goes to the clipboard, when the shell says it ended,
+                // and the folder the user's own click on the status bar copies.
+                Effect::Clip { text } => {
                     let ended = editing_before.is_some() && m.editing.is_none();
-                    ensure!(saved && ended, "{origin:?}'s {action:?} wrote the clipboard");
+                    let copied = matches!(&action, Action::CopyPath { path } if user && path == text);
+                    ensure!((saved && ended) || copied, "{origin:?}'s {action:?} wrote the clipboard");
                 }
                 // Only the shell's read of the file applies settings, and only one with no problem.
                 Effect::ApplySettings { .. } => {

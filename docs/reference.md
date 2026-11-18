@@ -22,6 +22,7 @@ running, and the rest of the design is not built: see the
 | Split panes mixing terminals and real app windows | Works today |
 | [File viewer](#file-viewer): a file read only in a pane (markdown drawn, code coloured and text with line numbers, pictures), reloaded when it changes, vim moves with counts, ⌃G edits it beside | Works today |
 | Key bindings and a status bar showing the mode (`APP`, `PICK`…; none when normal) | Works today |
+| [Status bar](#status-bar): where you are, what's next, who's working | Works today |
 | [Notice bar](#notice-bar): one app-level message, full width at the window's foot, red, amber or blue by level (error, warning, information) | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
 | Terminal scrollback, mouse selection, copy and paste | Works today |
@@ -1160,6 +1161,10 @@ once under the system's Reduce Motion. A live app window in a bottom pane stops 
 | `undo` | information | the sender: a workspace you deleted or updated, offered back for six seconds; × ends the offer | no; only you delete one |
 
 A copy's "Copied 3 lines", the mode and the count of tasks that need you stay in the status bar.
+
+## Status bar
+
+The status bar, left to right: where you are (the focused pane's folder, `~` for home, then its git branch, a dot when the checkout has changes not committed; an app pane's app; nothing on Home or an empty pane; a click copies the folder's path), the mode and short messages in the middle, the next meeting from 30 minutes before it (`Team sync in 12 min`, then `Team sync now · Join` while it runs; Join opens its link), and the agents of every workspace (`● 2 working · ● 1 needs you`, or `No agents`; a click goes to the next task that needs you, as ⌘⇧N). In a narrow window the folder shortens first (its name alone, then cut), then the meeting (`12 min`), then the agents (`● 2 ● 1`). The folder's branch and changes are read when the focus, the folder or the program in front of its shell changes (`git status`, off the main thread, taking no lock). A socket client's click copies nothing and joins nothing; the meeting's title is drawn, never in the state.
 
 ## Settings
 

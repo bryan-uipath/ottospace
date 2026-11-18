@@ -45,15 +45,7 @@ pub fn found_in(root: &Path) -> Vec<Repo> {
 /// same directory found by itself have the same path, and the core can tell they are one.
 fn read(dir: &Path) -> Option<Repo> {
     let dir = dir.canonicalize().ok()?;
-    let dot_git = dir.join(".git");
-    let git_dir = if dot_git.is_dir() {
-        dot_git
-    } else {
-        // e.g. `gitdir: /code/app/.git/worktrees/app-2`, or relative to `dir`.
-        let pointer = text(&dot_git)?;
-        dir.join(pointer.trim().strip_prefix("gitdir: ")?).canonicalize().ok()?
-    };
-    let branch = |git_dir: &Path| text(&git_dir.join("HEAD")).and_then(|head| branch_of(&head));
+    let git_dir = git_dir(&dir)?;
     let linked = fs::read_dir(git_dir.join("worktrees")).into_iter().flatten().flatten().filter_map(|entry| {
         // The worktree's `.git` file: absolute, or relative to this entry. Gone if the worktree
         // was deleted and git has not pruned it yet.
@@ -63,6 +55,28 @@ fn read(dir: &Path) -> Option<Repo> {
     });
     let path = dir.to_string_lossy().into_owned();
     Some(Repo { name: name_of(&path), branch: branch(&git_dir), worktrees: linked.collect(), path })
+}
+
+/// The checkout `dir` is in: the nearest folder up with a `.git`, and its branch. `None`: in none.
+pub fn checkout_of(dir: &Path) -> Option<(PathBuf, Option<String>)> {
+    let top = dir.ancestors().find(|at| at.join(".git").exists())?;
+    Some((top.to_path_buf(), branch(&git_dir(top)?)))
+}
+
+/// A checkout's git folder: its `.git`, or where its `.git` file points (a linked worktree's).
+fn git_dir(dir: &Path) -> Option<PathBuf> {
+    let dot_git = dir.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git);
+    }
+    // e.g. `gitdir: /code/app/.git/worktrees/app-2`, or relative to `dir`.
+    let pointer = text(&dot_git)?;
+    dir.join(pointer.trim().strip_prefix("gitdir: ")?).canonicalize().ok()
+}
+
+/// The branch checked out, or a short commit id, as `HEAD` in `git_dir` says.
+fn branch(git_dir: &Path) -> Option<String> {
+    text(&git_dir.join("HEAD")).and_then(|head| branch_of(&head))
 }
 
 /// A small regular file's text. Not a pipe or device (reading one would hang), and not a huge file.
