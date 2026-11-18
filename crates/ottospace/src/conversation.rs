@@ -85,6 +85,11 @@ pub struct Look {
 /// A question's context past this many lines folds behind "Show all".
 const FOLD_LINES: usize = 6;
 
+/// About how many rows `text` takes as drawn in a card: a long line wraps.
+fn rows_drawn(text: &str) -> usize {
+    text.lines().map(|line| line.chars().count() / 60 + 1).sum()
+}
+
 /// A local image's thumbnail: being read, read, or not to be drawn.
 pub enum Thumb {
     Reading(Receiver<Option<Arc<gpui::Image>>>),
@@ -479,6 +484,10 @@ impl Workspace {
     pub(crate) fn chat_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let Some(chat) = self.model.shown_draft_chat() else { return };
         let (key, mods) = (&event.keystroke.key, crate::mods(event.keystroke.modifiers));
+        // ↵ held on a question card: one answer, not the next tab's and Send's too.
+        if event.is_held && key == "enter" && chat.form().is_some() {
+            return cx.stop_propagation();
+        }
         match chat.key(key, mods) {
             Key::Pass => return,
             Key::Act(action) => drop(self.dispatch(action, self.input, window, cx)),
@@ -893,6 +902,9 @@ impl Workspace {
                     NoteKind::Ended { status: Status::Stopped } => "Subtask stopped:".into(),
                     NoteKind::Ended { status: Status::Other } => "Subtask ended:".into(),
                     NoteKind::Notification => "Claude Code:".into(),
+                    NoteKind::Answered { answered, of } if words.is_empty() => {
+                        format!("You answered {answered} of {of}.")
+                    }
                     NoteKind::Answered { answered, of } => format!("You answered {answered} of {of} ·"),
                 };
                 div()
@@ -1309,7 +1321,7 @@ impl Workspace {
         });
         // A few lines as they are; more scroll in a box of fixed height (a scroll box grows to its cap).
         // Rows as drawn, about: a long line wraps.
-        let rows: usize = payload.lines().map(|line| line.chars().count() / 60 + 1).sum();
+        let rows = rows_drawn(&payload);
         let most = if card.expanded { 16 } else { 8 };
         let body = div()
             .id("chat-card-payload")
@@ -1405,7 +1417,10 @@ impl Workspace {
                 buttons.push(self.ask_tab(form, at, ticket, cx));
             }
             let review = buttons.pop();
+            // Many tabs scroll sideways: Review stays reachable.
             div()
+                .id(ElementId::Name(format!("chat-ask-tabs:{ticket}").into()))
+                .overflow_x_scroll()
                 .flex_none()
                 .flex()
                 .gap_0p5()
@@ -1509,7 +1524,6 @@ impl Workspace {
             .bg(rgb(theme::RAISED))
             .flex()
             .flex_col()
-            .child(self.controls.mark("talk:chat-ask-card"))
             .children(tabs)
             .children(bar)
             .children(question)
@@ -1522,11 +1536,7 @@ impl Workspace {
     fn ask_tab(&self, form: &Form, at: usize, ticket: u64, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
         let n = form.questions.len();
         let answered = form.answered(at);
-        let label = match form.questions.get(at) {
-            None => "Review".to_string(),
-            Some(q) if q.header.is_empty() => format!("Question {}", at + 1),
-            Some(q) => clean(q.header.text()),
-        };
+        let label = if at < n { clean(&form.name(at)) } else { "Review".to_string() };
         let shown = form.cursor.0 == at;
         let color = match () {
             _ if shown => theme::TEXT,
@@ -1552,27 +1562,20 @@ impl Workspace {
 
     /// A question as markdown: its last paragraph the question, in bold; what comes before it
     /// context, folded behind "Show all · N lines" past `FOLD_LINES`. With no tabs, its header too.
-    fn ask_question(
-        &self,
-        subject: &Subject,
-        form: &Form,
-        q: usize,
-        ticket: u64,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<Div> {
+    fn ask_question(&self, subject: &Subject, form: &Form, q: usize, ticket: u64, cx: &mut Context<Self>) -> Div {
         let question = &form.questions[q];
-        let text = question.question.text().trim();
-        let (context, asked) = match text.rsplit_once("\n\n") {
-            Some((context, asked)) => (Some(context.trim_end()), asked),
-            None => (None, text),
-        };
         let of = Links::Chat(subject.clone());
         let at = format!("ask:{ticket}:{q}");
-        let draw = |text: &str, at: &str, cx: &mut Context<Self>| {
-            let blocks = markdown::parse(text, None);
-            let blocks: Vec<AnyElement> =
-                blocks.iter().enumerate().map(|(i, b)| self.block(&of, at, i, b, cx)).collect();
-            div().flex().flex_col().gap_1p5().children(blocks)
+        // Parsed whole: its last block is the question, the blocks before it context. A line
+        // past what markdown draws of one goes as plain text, so no word is cut.
+        let text = question.question.text();
+        let whole = text.lines().all(|line| line.chars().count() <= markdown::MAX_LINE);
+        let mut blocks = if whole { markdown::parse(text, None) } else { Vec::new() };
+        let asked = blocks.pop();
+        let draw = |blocks: &[Block], from: usize, cx: &mut Context<Self>| {
+            let drawn: Vec<AnyElement> =
+                blocks.iter().enumerate().map(|(i, b)| self.block(&of, &at, from + i, b, cx)).collect();
+            div().flex().flex_col().gap_1p5().children(drawn)
         };
         let header = (form.tabs() == 0 && !question.header.is_empty()).then(|| {
             div()
@@ -1584,18 +1587,17 @@ impl Workspace {
                 .child(clean(question.header.text()))
         });
         let open = self.drawer.looks.get(subject).is_some_and(|look| look.ask_open.contains(&(ticket, q)));
-        let context = context.map(|context| {
-            // Lines as drawn, about: a long line wraps.
-            let lines: usize = context.lines().map(|line| line.chars().count() / 60 + 1).sum();
+        let context = (!blocks.is_empty()).then(|| {
+            let lines = rows_drawn(&markdown::plain(&blocks));
             let folds = lines > FOLD_LINES && !open;
-            let body = draw(context, &format!("{at}:context"), cx)
+            let body = draw(&blocks, 0, cx)
                 .text_sm()
                 .text_color(rgb(theme::MUTED))
                 .when(folds, |d| d.max_h(px(18. * FOLD_LINES as f32)).overflow_hidden());
             // Shown in full it scrolls in a box of its own: the question under it stays in view.
             let body = div()
                 .id(ElementId::Name(format!("chat-ask-context:{ticket}:{q}").into()))
-                .when(open, |d| d.max_h(px(18. * 3. * FOLD_LINES as f32)).overflow_y_scroll())
+                .when(open, |d| d.max_h(px(18. * 2. * FOLD_LINES as f32)).overflow_y_scroll())
                 .child(body);
             let who = subject.clone();
             let show = (lines > FOLD_LINES).then(|| {
@@ -1612,9 +1614,19 @@ impl Workspace {
             });
             div().flex().flex_col().gap_1().child(body).children(show)
         });
-        let asked = draw(asked, &format!("{at}:asked"), cx).text_sm().font_weight(FontWeight::SEMIBOLD);
+        let asked = match asked {
+            Some(asked) => draw(std::slice::from_ref(&asked), blocks.len(), cx),
+            None => div().child(clean(text)),
+        };
+        let asked = asked.text_sm().font_weight(FontWeight::SEMIBOLD);
+        // The question in view whatever the context: a long one scrolls in a box of its own,
+        // so the options and the foot stay in the card.
+        let asked = div()
+            .id(ElementId::Name(format!("chat-ask-asked:{ticket}:{q}").into()))
+            .max_h(px(18. * (FOLD_LINES as f32 + 2.)))
+            .overflow_y_scroll()
+            .child(asked);
         div()
-            .id(ElementId::Name(format!("chat-ask-question:{ticket}:{q}").into()))
             .flex_none()
             .flex()
             .flex_col()
@@ -1631,16 +1643,9 @@ impl Workspace {
     /// Review's row for a question: its header and its answer, or "Not answered" in amber. A
     /// click goes back to it.
     fn review_row(&self, form: &Form, q: usize, ticket: u64, cx: &mut Context<Self>) -> AnyElement {
-        let question = &form.questions[q];
-        let name =
-            if question.header.is_empty() { format!("Question {}", q + 1) } else { clean(question.header.text()) };
+        let name = clean(&form.name(q));
         let here = form.cursor.1 == q;
-        let picked = (0..question.options.len()).filter(|o| form.picked(q, *o));
-        let mut parts: Vec<String> = picked.map(|o| clean(question.options[o].label.text())).collect();
-        let words = form.other(q).map(|field| field.text()).unwrap_or_default();
-        if form.picked(q, question.options.len()) && !words.trim().is_empty() {
-            parts.push(clean(words));
-        }
+        let parts: Vec<String> = form.parts(q).iter().map(|part| clean(part)).collect();
         let answered = form.answered(q);
         let answer = match answered {
             true => div().flex_1().min_w_0().text_sm().child(parts.join(", ")),
@@ -1675,10 +1680,17 @@ impl Workspace {
 
     /// "Show all" on a question's context, or less again. The drawer's look, not the card's state.
     pub(crate) fn toggle_ask_context(&mut self, subject: &Subject, ticket: u64, q: usize, cx: &mut Context<Self>) {
-        let open = &mut self.drawer.looks.entry(subject.clone()).or_default().ask_open;
-        if !open.remove(&(ticket, q)) {
-            open.insert((ticket, q));
+        // The user's card: a client's click changes nothing of it.
+        if self.input != Origin::User {
+            self.error = Some(chat::USERS_ALONE.into());
+            return cx.notify();
         }
+        let look = self.drawer.looks.entry(subject.clone()).or_default();
+        if !look.ask_open.remove(&(ticket, q)) {
+            look.ask_open.insert((ticket, q));
+        }
+        // The options' room changed: the cursor's row is brought into view again.
+        look.ask_seen.set(None);
         cx.notify();
     }
 

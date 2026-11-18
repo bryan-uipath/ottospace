@@ -255,16 +255,27 @@ impl Form {
     /// The answers in a line, as the chat folds the card: `Scope: Untracked files only · Base:
     /// develop`. The words are the agent's and the user's: drawn, never in the state.
     pub fn summary(&self) -> String {
-        let answer = |q: usize| {
-            let chosen = self.chosen(q);
-            let labels = chosen.options.iter().map(|o| self.questions[q].options[*o].label.text().to_string());
-            let parts: Vec<String> = labels.chain(chosen.other).collect();
-            let question = &self.questions[q];
-            let name = if question.header.is_empty() { &question.question } else { &question.header };
-            format!("{}: {}", name.text(), parts.join(", "))
-        };
+        let answer = |q: usize| format!("{}: {}", self.name(q), self.parts(q).join(", "));
         let answered = (0..self.questions.len()).filter(|q| self.answered(*q));
         answered.map(answer).collect::<Vec<String>>().join(" · ")
+    }
+
+    /// What a tab or a Review row calls a question: its header, else `Question 2`.
+    pub fn name(&self, question: usize) -> String {
+        match self.questions.get(question) {
+            Some(q) if !q.header.is_empty() => q.header.text().to_string(),
+            _ => format!("Question {}", question + 1),
+        }
+    }
+
+    /// A question's answer as Send sends it: the labels picked, then the user's words.
+    pub fn parts(&self, question: usize) -> Vec<String> {
+        if question >= self.questions.len() {
+            return Vec::new();
+        }
+        let chosen = self.chosen(question);
+        let labels = chosen.options.iter().map(|o| self.questions[question].options[*o].label.text().to_string());
+        labels.chain(chosen.other).collect()
     }
 
     /// What the state says of it: counts and indexes, never a word.
