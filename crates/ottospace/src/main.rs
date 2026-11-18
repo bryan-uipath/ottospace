@@ -48,7 +48,7 @@ use ottospace_core::rules::{self, Facts};
 use ottospace_core::scrollbar::{Extent, key_step};
 use ottospace_core::settings::Installed;
 use ottospace_core::sneak::{SneakKey, sneak_key};
-use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, State, Task, TaskId, TaskRow};
+use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, PENDING_LINES, Pending, State, Task, TaskId, TaskRow};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, clears_selection, edge_scroll, press, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Origin, Pane, PaneId, PickItem, Picker, Rect, Section, Zone,
@@ -5575,12 +5575,83 @@ impl Workspace {
                             .children(row.worktree.clone().map(|name| muted().flex_none().child(name)))
                             .children(row.fact.clone().map(|fact| muted().flex_none().child(fact))),
                     )
-                    .children(row.live.clone().map(|live| muted().h(px(18.)).truncate().child(live))),
+                    .children(row.live.clone().map(|live| muted().h(px(18.)).truncate().child(live)))
+                    .children(self.task_pending(id, row, cx)),
             )
             .child(actions)
             .child(self.controls.mark(format!("task:{id}")))
             .when_some(progress::card_tip(self, id), |row, tip| row.tooltip(tip))
             .on_click(open_task(id, cx))
+            .into_any_element()
+    }
+
+    /// A task's waiting cards, a line each under its row (`TaskRow::pending`): a question on
+    /// show and how far in, or what a permission would run; then `+N more`. The words are the
+    /// agent's: drawn here, never in the state. A click opens its conversation on the card with
+    /// the keyboard in it (`TaskTalk`, the user's alone); nothing is answered from the list.
+    fn task_pending(&self, id: TaskId, row: &TaskRow, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let cards = self.model.chat(&ottospace_core::talk::Subject::Task(id)).map(|chat| &chat.transcript.cards);
+        let mut lines = Vec::new();
+        for (at, (pending, card)) in row.pending.iter().zip(cards.into_iter().flatten()).enumerate() {
+            let (glyph, words, count) = match (pending, card.ask.as_ref()) {
+                (Pending::Question { shown, of }, Some(form)) => {
+                    // The question itself: its markdown's last block, as the card shows it in bold.
+                    let text =
+                        form.questions.get(shown.saturating_sub(1)).map(|q| q.question.text()).unwrap_or_default();
+                    let blocks = markdown::parse(text, None);
+                    let question = markdown::plain(blocks.last().map(std::slice::from_ref).unwrap_or_default());
+                    let count = (*of > 1).then(|| format!("{shown} of {of}"));
+                    ("?", ottospace_core::transcript::clean(&question), count)
+                }
+                _ => {
+                    // The first field of what it asks (`command: git push`), else its label.
+                    let first = card.detail.text().lines().next().unwrap_or_default();
+                    let summary = first.split_once(": ").map_or(first, |(_, value)| value);
+                    let summary = if summary.is_empty() { card.label.as_str() } else { summary };
+                    ("⚠", format!("Wants to run: {}", ottospace_core::transcript::clean(summary)), None)
+                }
+            };
+            let words = words.split_whitespace().collect::<Vec<_>>().join(" ");
+            lines.push(self.pending_line(id, at, glyph, words, count, cx));
+        }
+        if row.more > 0 {
+            lines.push(self.pending_line(id, PENDING_LINES, "", format!("+{} more", row.more), None, cx));
+        }
+        lines
+    }
+
+    fn pending_line(
+        &self,
+        id: TaskId,
+        at: usize,
+        glyph: &'static str,
+        words: String,
+        count: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let muted = || div().text_xs().text_color(rgb(theme::MUTED));
+        div()
+            .id(ElementId::Name(format!("task-pending:{id}:{at}").into()))
+            .relative()
+            .h(px(18.))
+            .flex()
+            .items_center()
+            .gap_1()
+            .min_w_0()
+            .rounded_sm()
+            .cursor_pointer()
+            .text_xs()
+            .hover(|s| s.bg(rgb(theme::SELECTED)))
+            .children((!glyph.is_empty()).then(|| div().flex_none().text_color(rgb(theme::SNEAK)).child(glyph)))
+            .child(div().flex_1().min_w_0().truncate().text_color(rgb(theme::TEXT)).child(words))
+            .children(count.map(|count| muted().flex_none().child(count)))
+            .child(self.controls.mark(format!("task-pending:{id}:{at}")))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                // The card, with the keyboard: the user's alone (the core refuses a client's).
+                this.dispatch(Action::TaskTalk { id }, this.input, window, cx);
+                cx.stop_propagation();
+                cx.notify();
+            }))
             .into_any_element()
     }
 

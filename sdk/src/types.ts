@@ -635,6 +635,10 @@ export interface TaskRow {
   live: string | null;
   /** The worktree it works in (`app-2`), while its workspace's tasks work in more than one; else null. */
   worktree: string | null;
+  /** The cards its conversation waits on, a line each under it (the first two): a question (`shown` of `of`) or a permission. Kinds and counts only. */
+  pending: ({ kind: "question"; shown: number; of: number } | { kind: "permission" })[];
+  /** The waiting cards past those lines (`+N more`). */
+  more: number;
 }
 
 /** A project's tasks by state: its bar's segments, in this order. */

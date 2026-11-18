@@ -7368,7 +7368,18 @@ impl Model {
         let current = self.tab_task() == Some(task.id);
         let live = self.task_session(task).and_then(Found::doing);
         let (fact, worktree) = (tasks::fact(task, group, now), self.worktree_label(task.id));
-        TaskRow { live, id: task.id, group, current, fact, worktree }
+        let cards = self.chat(&Subject::Task(task.id)).map(|chat| &chat.transcript.cards);
+        let pending = cards.into_iter().flatten().map(|card| match &card.ask {
+            Some(form) => {
+                let of = form.questions.len();
+                tasks::Pending::Question { shown: (form.cursor.0 + 1).min(of), of }
+            }
+            None => tasks::Pending::Permission,
+        });
+        let pending: Vec<tasks::Pending> = pending.collect();
+        let more = pending.len().saturating_sub(tasks::PENDING_LINES);
+        let pending = pending.into_iter().take(tasks::PENDING_LINES).collect();
+        TaskRow { live, id: task.id, group, current, fact, worktree, pending, more }
     }
 
     /// The Tasks section's State view as drawn: Needs you, Running, Later (captured and on hold),

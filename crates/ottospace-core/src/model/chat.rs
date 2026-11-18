@@ -1257,6 +1257,34 @@ mod tests {
         assert_eq!(m.update(act(Act::Submit)), []);
     }
 
+    /// A task waiting on cards lists them under its row: a question and how far in, or a
+    /// permission; past two, how many more. Kinds and counts only.
+    #[test]
+    fn a_tasks_row_lists_its_waiting_cards() {
+        use crate::ask::Act;
+        use crate::tasks::Pending;
+        let mut m = two_live();
+        let one = first(&m);
+        typed(&mut m, "go");
+        m.update(Action::TalkSend);
+        events(&mut m, &one, vec![Event::TurnStarted, ask(1), card(2, false), card(3, false), card(4, false)]);
+        let row = |m: &Model| {
+            let sections = m.task_sections(10);
+            let rows = sections.iter().flat_map(|s| s.rows.clone());
+            rows.into_iter().find(|row| Some(row.id) == one.task()).map(|row| (row.pending, row.more))
+        };
+        let question = |shown| Pending::Question { shown, of: 2 };
+        assert_eq!(row(&m), Some((vec![question(1), Pending::Permission], 2)));
+        m.update(Action::TalkAsk { ticket: 1, act: Act::Tab { forward: true } });
+        assert_eq!(row(&m), Some((vec![question(2), Pending::Permission], 2)));
+        m.update(Action::TalkAsk { ticket: 1, act: Act::Tab { forward: true } });
+        assert_eq!(row(&m).map(|(p, _)| p[0]), Some(question(2)), "on Review, the last");
+        m.update(Action::TalkAsk { ticket: 1, act: Act::Decline });
+        assert_eq!(row(&m), Some((vec![Pending::Permission, Pending::Permission], 1)));
+        let said = serde_json::to_string(&m.task_sections(10)).unwrap();
+        assert!(said.contains(r#""pending":[{"kind":"permission"},{"kind":"permission"}],"more":1"#), "{said}");
+    }
+
     /// Esc declines: a Deny with fixed words, so the agent goes on.
     #[test]
     fn a_declined_question_card_tells_the_agent() {
