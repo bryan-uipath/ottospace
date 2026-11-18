@@ -1510,7 +1510,7 @@ pub enum Action {
     TaskStop {
         id: Subject,
     },
-    /// Close the chat, or open it again on the same conversation.
+    /// ⌘⇧R: collapse the drawer into its rail, or open it again (the conversation, else the transcript).
     TalkToggle,
     /// Put a task of the selected workspace in front (its row, or the drawer's rail). The user's alone.
     TalkFront {
@@ -3877,6 +3877,9 @@ impl Model {
         let over_other = ((modal || self.palette.is_some()) && picker) || (boxed && opens);
         // A conversation the user opens takes the drawer from the new task being written.
         let talks = matches!(action, Action::TaskTalk { .. } | Action::SessionOpen { .. }) && self.picker.is_none();
+        // So does ⌘⇧R, collapsing it, its line put aside (a client's is refused), but while the editor has the line.
+        let aside = modal && self.picker.is_none() && self.palette.is_none() && !self.edits_compose();
+        let talks = talks || (matches!(action, Action::TalkToggle) && aside);
         if (boxed && for_panes && !named_close && !talks) || over_other {
             return Some(match (self.picker.is_some(), self.palette.is_some()) {
                 (true, _) => "the picker is open",

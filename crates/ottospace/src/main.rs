@@ -7174,6 +7174,14 @@ impl Render for Workspace {
             ottospace_core::model::editor::COLUMNS as f32 * f32::from(self.cell.width) + 10. + drawer_rail::WIDTH;
         let drawer = if self.model.editor_shown() { drawer.max(columns.min(half.max(MIN_DRAWER))) } else { drawer };
         self.drawer.width = drawer;
+        // A header gone gets no hover's end: its cap must not come back with it (`slide`).
+        let talk = self.model.talk.as_ref().is_some_and(|talk| talk.open);
+        let place = self.model.inspector.is_none() && self.model.capture.is_none();
+        let drawer_head = place && (self.model.listen.shown || (talk && self.model.compose.is_none()));
+        let drawn = [(slide::BAR_HEAD, self.model.sidebar.is_some()), (slide::DRAWER_HEAD, drawer_head)];
+        if drawn.iter().any(|(head, drawn)| self.slide_hover == Some(*head) && !drawn) {
+            self.slide_hover = None;
+        }
         // The drawer's place and its rail, always: the rail alone while it is collapsed.
         let (right, right_width) = self.render_right(drawer, cx);
         // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,

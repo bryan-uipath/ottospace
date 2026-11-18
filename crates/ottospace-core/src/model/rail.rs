@@ -301,13 +301,18 @@ mod tests {
         assert_eq!((m.compose.is_none(), m.rail_selected()), (true, Some(RailItem::Transcript)));
         assert!(m.compose_kept.as_ref().is_some_and(|kept| kept.line.text() == "later"));
         // Review: ⌘⇧R collapses the drawer whatever is in its place (the box, typed in, keeps it), and lifts nothing.
+        m.tasks.list.iter_mut().for_each(|task| task.materials = vec!["shot.png".into()]);
         for open in [Action::InspectorOpen { pane: 1, app: "Notes".into() }, Action::BriefShow { id: 1 }] {
             m.update(Action::RailSelect { item: task(1) });
+            m.update(Action::TalkToggle);
             m.update(open.clone());
-            assert!(!m.drawer_collapsed(), "{open:?}");
+            assert!(!m.drawer_collapsed() && m.talk.as_ref().is_some_and(|talk| !talk.open), "{open:?}");
             m.update(Action::TalkToggle);
             assert!(m.drawer_collapsed() && m.rail_shown().is_none(), "{open:?}");
         }
+        m.update(Action::OpenCompose { text: "typed".into() });
+        m.update(Action::TalkToggle);
+        assert!(m.drawer_collapsed() && m.compose_kept.as_ref().is_some_and(|kept| kept.line.text() == "typed"));
         // Beside the box, the front task is selected but not shown.
         m.update(Action::RailSelect { item: task(1) });
         assert_eq!(m.rail_shown(), Some(task(1)));
