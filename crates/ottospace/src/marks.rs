@@ -578,7 +578,7 @@ impl Workspace {
         });
         let list = div().id("marks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         let list = list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows);
-        self.bars.tracked("marks", list.children(hint), &self.list_scroll)
+        self.bars.tracked("marks", list.children(hint), &self.list_scroll, theme::RAISED)
     }
 }
 

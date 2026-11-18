@@ -294,7 +294,7 @@ impl Workspace {
             .when(counts.sparse, |d| d.child(small(sparse_note(counts.nodes)).px_3().text_color(rgb(theme::SNEAK))))
             .child(div().px_3().flex().flex_wrap().gap_1().children(roles))
             .child(filter)
-            .child(self.bars.area("inspector", list))
+            .child(self.bars.area("inspector", list, theme::RAISED))
             .children(detail);
         Some(panel.into_any_element())
     }

@@ -956,7 +956,7 @@ impl Workspace {
             .child(pick)
             .child(div().text_xs().text_color(rgb(theme::MUTED)).child(about))
             .children(today);
-        self.listen_panel(width, header, body)
+        self.listen_panel(width, header, self.bars.area("listen-idle", body, theme::RAISED))
     }
 
     /// The past transcript open, read-only: its lines as the file has them, plain; ‹ goes back.
@@ -1016,7 +1016,7 @@ impl Workspace {
             .flex_col()
             .gap_1()
             .children(rows);
-        Some(self.listen_panel(width, header, body))
+        Some(self.listen_panel(width, header, self.bars.area("listen-past", body, theme::RAISED)))
     }
 
     /// "Transcribe a window…": the apps that can play sound, read off the main thread (in a test
