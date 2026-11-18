@@ -86,13 +86,27 @@ struct Shared {
     status: OnceLock<Option<i32>>,
 }
 
+impl Shared {
+    /// New output, or a scroll: the main loop takes it at its next run.
+    fn set_dirty(&self) {
+        self.dirty.store(true, Relaxed);
+        ottospace_mac::wake::post();
+    }
+
+    fn set_exited(&self) {
+        // Release: whoever sees `exited` sees the status.
+        self.exited.store(true, Release);
+        ottospace_mac::wake::post();
+    }
+}
+
 #[derive(Clone)]
 struct Listener(Arc<Shared>);
 
 impl EventListener for Listener {
     fn send_event(&self, event: Event) {
         match event {
-            Event::Wakeup => self.0.dirty.store(true, Relaxed),
+            Event::Wakeup => self.0.set_dirty(),
             // Answers the terminal owes the program, e.g. a cursor position report.
             Event::PtyWrite(text) => {
                 if let Some(input) = self.0.input.get() {
@@ -101,10 +115,9 @@ impl EventListener for Listener {
             }
             Event::ChildExit(status) => {
                 let _ = self.0.status.set(status.code());
-                // Release: whoever sees `exited` sees the status.
-                self.0.exited.store(true, Release)
+                self.0.set_exited()
             }
-            Event::Exit => self.0.exited.store(true, Release),
+            Event::Exit => self.0.set_exited(),
             _ => {}
         }
     }
@@ -364,7 +377,7 @@ impl Terminal {
             Scroll::Bottom => GridScroll::Bottom,
         };
         term.scroll_display(scroll);
-        self.shared.dirty.store(true, Relaxed);
+        self.shared.set_dirty();
         self.shared.scrolls.fetch_add(1, Relaxed);
     }
 
@@ -379,7 +392,7 @@ impl Terminal {
             let mut term = term.lock();
             let delta = back as i64 - term.grid().display_offset() as i64;
             term.scroll_display(GridScroll::Delta(delta as i32));
-            shared.dirty.store(true, Relaxed);
+            shared.set_dirty();
         }
     }
 
@@ -459,7 +472,7 @@ impl Terminal {
     /// Notes the selection's text: output written over it later clears it (`selection_holds`).
     fn selection_changed(&self) {
         *self.kept.borrow_mut() = self.selected();
-        self.shared.dirty.store(true, Relaxed);
+        self.shared.set_dirty();
     }
 
     /// After new output: a selection whose text changed under it goes. One that scrolled with

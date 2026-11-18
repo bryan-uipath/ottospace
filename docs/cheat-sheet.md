@@ -19,7 +19,7 @@ ottospace            # opens on the Repos list
 | I want to | Press |
 |---|---|
 | Split with a new terminal | ⌘D right · ⌘⇧D down |
-| Choose what goes in a new pane (terminal or app) | ⌘E (right) or ⌘⇧E (below), type to filter, ↵. Typing also offers installed apps that are not running |
+| Choose what goes in a new pane (terminal, file or app) | ⌘E (right) or ⌘⇧E (below), type to filter, ↵. Typing also offers installed apps that are not running |
 | Edit the picker's filter or the new-task line | As any Mac text field: ⌥←/→ words, ⌘←/→ line, ⇧ selects, ⌘A, ⌘C/⌘X/⌘V, ⌘Z/⇧⌘Z, ⌥⌫ a word, ⌘⌫ the line; click, drag, double click |
 | Move between panes | ⌘⌃ arrows or ⌘⌃ H J K L · ⌘] ⌘[ cycle |
 | Move to the rails and back | The keys of the row above, on past the panes: left to the section list, then the rail; right to the conversation. On the rail ↑↓ move, ↵ opens, Esc goes back |
@@ -27,6 +27,7 @@ ottospace            # opens on the Repos list
 | Give an app the room its window needs | ⌘⌃0, or `fit` in the pane header: shown when the app refused the pane's size and a split can move |
 | Swap the pane with its neighbour | ⌘⇧⌥ arrows or ⌘⇧⌥ H J K L |
 | Move the pane to another tab | ⌘⇧⌥1 … ⌘⇧⌥9. US keyboard layout only (US, ABC): on others the keys do nothing |
+| Read a file | ⌘E, File…; ⌘-click a path in a terminal or a file link in the chat; `open_file`. `j`/`k`, `10j`, `gg`/`G`, `3G`, ⌃D/⌃U · ⌃G or Edit: your editor beside it. It reloads when the file changes |
 | Read a pane's header | A terminal's directory, and its program while one runs (`app-api · cargo test`); an app's icon and window title |
 | Rearrange with the mouse | Drag a pane by its header: onto another pane's edge to split there, its centre to swap, a tab to move there. Esc cancels. Dragging an app you are in parks it: click it to go back in |
 | Close the pane | ⌘W |
@@ -40,14 +41,14 @@ ottospace            # opens on the Repos list
 | Switch tab (of the task on show) | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
 | Switch task or workspace (top row) | ⌘⌃1 … ⌘⌃9 · ⌘⌃] ⌘⌃[ |
 | Go to Home (the house, first on the top row) | ⌘⌃1, or Go to Home in the palette |
-| Switch what the drawer shows (several tasks, or a task and a running transcript) | The rail at the drawer's right edge (the transcript first, then the tasks by urgency; + adds a task) · ⌘⌥] ⌘⌥[ |
+| Switch what the drawer shows | The rail at the drawer's right edge: the workspace's tasks by urgency and + on top, the transcript at the foot · ⌘⌥] ⌘⌥[ |
 | New workspace | + on the top row, or in the Workspaces section's header |
 | Hide the task or workspace on show | ⌘⌃W, or its × on the top row. Its row in Tasks or Workspaces opens it again |
 | Close the tab and its panes | ⌘⇧W |
 | Save the tab into its workspace, else as a new one | ⌘⇧S |
 | Fill the whole display, over the menu bar and Dock | ⌃⌘F, the green button, or the expand button at the top right (again to restore) |
 
-## The bar on the left (Tasks, Calendar, Workspaces, Repos; Apps and Marks behind flags)
+## The bar on the left (Repos, Tasks, Calendar, Workspaces; Apps and Marks behind flags)
 
 | I want to | Do |
 |---|---|
@@ -81,12 +82,12 @@ Without it, ⌘E puts an app in a pane.
 | Give the window back to macOS | Come back to ottospace first, then ⌘W on its pane: the window returns to where it was |
 | Find a window lost off screen | `ottospace rescue` in a terminal, or Developer ▸ Bring All Windows Back |
 
-The badge on an app is how many windows it has open. A new window of a hosted app gets its own pane.
+The badge on an app is how many windows it has open. A new window of a hosted app gets its own pane, unless it is a pop-up (a dialog, a panel, a small window): that floats over the app's pane at its own size.
 
 ## Workspaces
 
 A workspace is a named set of tabs, for a context that comes back. A new one is temporary (its
-name muted) until it gets a task, a repository, a name or Keep; kept, it is kept between runs and
+name muted and italic) until it gets a task, a repository, a name or Keep; kept, it is kept between runs and
 listed in the Workspaces section whether it is open or not. The first item of the top row is
 Home, a house: it holds no pane. What you open there (a pane, ⌘T, a Repos row) gets a new
 workspace; tabs of nothing (a dismissed task's, a client's) go to the workspace selected last.
@@ -95,7 +96,7 @@ workspace; tabs of nothing (a dismissed task's, a client's) go to the workspace 
 |---|---|
 | Make a new, empty one | + on the top row, or in the Workspaces section's header: "Workspace 2", one empty tab, selected. It never takes the tab on show |
 | Take it off the top row | Its ×, or ⌘⌃W. Nothing in it stops; it stays listed, and its row opens it again |
-| Close a temporary one for good | Its ×, ⌘⌃W, or close its last tab: off the list; Undo on the notice bar for six seconds. A terminal in it runs a program: asked first |
+| Close a temporary one for good | Its ×, ⌘⌃W, or close its last tab: off the list; Undo on the notice bar, and on its row in the Workspaces section, for six seconds. A terminal in it runs a program: asked first |
 | Keep a temporary one | Its row's … ▸ Keep, the … on its item on the top row, File ▸ Keep Workspace, or rename it. A task or a Repos click keeps it too |
 | Save the tab on show | ⌘⇧S. In a workspace: into that one. Elsewhere: as a new one; type its name, ↵ |
 | Add the tab on show to one | ⌘⌃E, then `a` on its row. Or File ▸ Add Tab to Workspace… |
@@ -148,7 +149,7 @@ Key Counts forgets it.
 | Switch between running agents | Click its task on the top row, or ⌘⌃1 … ⌘⌃9 |
 | See a task's tabs | Click its row, or ⌘⇧N for the next that needs you: its space |
 | Let a task see an app pane (the `agent_mode` flag) | The robot in the pane's header, or ⌘⌃V: Off, See, See and act (presses come later). Only that workspace's task may read it, and every read is a row in its chat |
-| Transcribe an app pane's audio (the `transcripts` flag; macOS 26) | ⌘⌃T starts on the focused app pane, and stops it from anywhere. While on: a red dot and the time in the pane's header and on the top row (click either for the drawer's lines). The drawer's header shows the level and says Hearing speech, Listening or No sound for 30 s, with Stop, and ⋯ for Pause or Resume (also the palette and the menu bar's dot). Kept as Markdown in `transcripts_dir` |
+| Transcribe an app pane's audio (the `transcripts` flag; macOS 26) | ⌘⌃T starts on the focused app pane, and stops it from anywhere. Any app, in a pane or not: the transcript on the drawer's rail, Transcribe a window… (the app playing sound first). Today's finished ones are listed there, each a click from read-only. While on: a red dot in the pane's header, on its tab or workspace while off show, and on the drawer's rail (click any for the drawer's lines and the time). The drawer's header shows the level and says Hearing speech, Listening or No sound for 30 s, with Stop, and ⋯ for Pause or Resume (also the palette and the menu bar's dot). Kept as Markdown in `transcripts_dir` |
 | Point at something for a task ("this message", "this error") | ⌃⌥⌘Space, from any app: the pane in use freezes as a picture and a draft opens on the right. Drag to circle, ⇧-drag a box, ⌥-drag a line, click to type a note. ↵, type what you want, ↵ starts it (⇧↵ for later). Esc leaves the picture; Esc in the title cancels the draft. The task keeps the pictures and the text under what you circled as its brief: [Capture](reference.md#capture) |
 | Capture a second pane into the same draft | While drawing, click the other pane. Or press ⌃⌥⌘Space again |
 | Give an agent a task's brief | In a terminal of the task: `ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"` |
@@ -243,11 +244,11 @@ setting takes its default.
 
 `capture_key`: the key that captures the pane in use (`"off"` for none). `capture`: `keep_images` `false` writes no picture; `ax` `false` reads no accessibility tree for a capture.
 
-The Calendar section (second on the rail, only while `calendar_ics` is set) lists a day's meetings, one line each; `‹ ›` in its header (← → in list mode) go a day back and on, 7 each way, `Today` (`t`) comes back; ↵ or `Join` opens a meeting's link. Its rail cell has an amber dot near a meeting, a filled badge while its notice stands.
+The Calendar section (third on the rail, under Tasks, only while `calendar_ics` is set) lists a day's meetings, one line each; `‹ ›` in its header (← → in list mode) go a day back and on, 7 each way, `Today` (`t`) comes back; ↵ or `Join` opens a meeting's link. Its rail cell has an amber dot near a meeting, a filled badge while its notice stands.
 
 `calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a band of the workday (`calendar_workday`, `"09:00-17:00"`) above the status bar, hover a block for its details (now's tick: the next meeting and when the feed was read), a pulse from 10 minutes before, and at the start, if you are in no call (or still in an earlier one), a meeting notice on the notice bar (Join, × to dismiss) and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link; `calendar_email` (your address in the feed) leaves out meetings you declined; `calendar_hide_free: true` leaves out free entries (a feed without attendees); `calendar_colors` colours by title (`[{"match": "1:1", "color": "teal"}]`). On the band calls sit in lanes over faint blocks of time held; a block that starts with `Focus` or `Deep Work` and has no call link is green.
 
-`windows` rules name windows ottospace leaves alone, by `app`, `title`, `identifier` and `subrole`: [reference](reference.md#settings).
+`windows` rules name windows ottospace leaves alone (`ignore`), or say where a new window of a hosted app goes (`split`, `float`), by `app`, `title`, `identifier` and `subrole`: [reference](reference.md#settings).
 
 `repos`: the repositories Repos lists, in its order, none until you add one. Older settings named folders to look in: a folder of repositories there shows as one folded group (remove it, add the ones you use); `~/code` and `~/notes` are no longer looked in by default.
 

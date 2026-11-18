@@ -1,7 +1,8 @@
 //! The model's side of a transcript (`crate::listen`): which pane may be heard, and what a start,
 //! pause, stop, or the shell's news of the streams does. Who may send each is `Model::refusal`.
 
-use super::{Action, Effect, Kind, Model, PaneId};
+use super::{Action, Effect, Field, Kind, MAX_FILTER, Model, PaneId, PickItem, Picker};
+use crate::layout::Axis;
 use crate::listen::{self, Record, Source, Status};
 
 impl Model {
@@ -36,6 +37,25 @@ impl Model {
         }
     }
 
+    /// Whether the rail holds the transcript, idle or on: the flag is on and something could be
+    /// heard (the recogniser is here, or a test run's fixture), or one is on.
+    pub fn listen_item(&self) -> bool {
+        let here = self.listen.available || self.listen.fixture || self.listen.on.is_some();
+        self.features.on(crate::features::Feature::Transcripts) && here
+    }
+
+    /// The red dot of the pane being heard, off show: none while its tab is on show (its header
+    /// has the dot), none for a source in no pane, and none in a hidden space (off the row).
+    pub fn listen_dot(&self) -> Option<listen::Dot> {
+        let pane = self.listen.pane()?;
+        let at = self.tab_panes().iter().position(|panes| panes.contains(&pane))?;
+        let tab = self.tabs.get(at).filter(|_| at != self.active)?;
+        if self.spaces().iter().any(|space| space.of == tab.space && space.hidden) {
+            return None;
+        }
+        Some(if tab.space == *self.space() { listen::Dot::Tab(tab.id) } else { listen::Dot::Space(tab.space.clone()) })
+    }
+
     /// The drawer shows the transcript only while nothing that takes keys is in it: the new-task
     /// box, the conversation with the keyboard and the editor take it back, so no key goes unseen.
     pub(crate) fn listen_hidden(&self) -> bool {
@@ -43,9 +63,50 @@ impl Model {
     }
 
     pub(super) fn settle_listen(&mut self) {
-        if self.listen_hidden() {
+        if self.listen_hidden() || !self.listen_item() {
             self.listen.shown = false;
         }
+        // A past one is open only on the idle view, and only while Today lists it.
+        let idle = self.listen.shown && self.listen.on.is_none();
+        let listed = |name: &String| self.transcripts.today.iter().any(|past| past.name == *name);
+        if !idle || !self.transcripts.open.as_ref().is_some_and(listed) {
+            self.transcripts.open = None;
+        }
+        if !self.features.on(crate::features::Feature::Transcripts) {
+            self.transcripts.today.clear();
+        }
+    }
+
+    /// Why `source` cannot be heard now, if it cannot: a pane as `listen_refusal` says; an app
+    /// only where something can be heard, and only one the picker listed.
+    fn listen_source_refusal(&self, source: Source) -> Option<&'static str> {
+        match source {
+            Source::Pane(pane) => self.listen_refusal(Some(pane)),
+            Source::App { .. } if !self.listen.fixture && !self.listen.available => Some(listen::NO_SOURCE),
+            Source::App { pid } if !self.listen.apps.iter().any(|app| app.pid == pid) => Some(listen::NOT_LISTED),
+            Source::App { .. } => None,
+        }
+    }
+
+    /// The user's "Transcribe a window…": the picker on the apps that can play sound, the one
+    /// playing now first (`listen::sound_rows`). None while one is on.
+    fn listen_picker(&mut self, apps: Vec<listen::SoundApp>, id: String, at: u64, effects: &mut Vec<Effect>) {
+        if self.listen.on.is_some() {
+            return effects.push(Effect::Notice { text: listen::ONE_AT_A_TIME.into() });
+        }
+        if !self.listen_item() {
+            return;
+        }
+        self.leave(effects);
+        let items = listen::sound_rows(&apps)
+            .into_iter()
+            .map(|(pid, name, window, playing)| PickItem::Sound { pid, name, window, playing })
+            .collect();
+        self.listen.apps = apps;
+        let query = Field::new("", MAX_FILTER);
+        let start = Some((id, at));
+        let (axis, new_tab, installed) = (Axis::Right, false, Vec::new());
+        self.picker = Some(Picker { axis, new_tab, items, query, selected: 0, installed, transcribe: true, start });
     }
 
     /// Whether the close would take the pane being transcribed.
@@ -94,16 +155,20 @@ impl Model {
                     self.listen.lost = None;
                 }
             }
-            // The top row's mark: the drawer on the transcript, in its pane's tab.
+            // The drawer on the transcript, idle or on (the pane's dot, the menu bar's Show): in
+            // its pane's tab while one is on.
             Action::ListenShow { on: true } => {
                 if let Some(pane) = self.listen.pane() {
                     self.show_tab_of(pane, effects);
-                    self.listen.shown = true;
                 }
+                self.listen.shown = self.listen_item();
             }
             Action::ListenShow { on: false } => self.listen.shown = false,
+            Action::ListenPicker { apps, id, at } => self.listen_picker(apps, id, at, effects),
+            Action::ListenOpenPast { name } => self.transcripts.open = name,
             // The shell's alone: a key or click of the user's reports nothing.
             _ if self.by_user => {}
+            Action::ListenPast { files, today } => self.transcripts.today = listen::file::today(&files, &today),
             Action::ListenFixture => self.listen.fixture = true,
             Action::ListenAvailable { on } => self.listen.available = on,
             Action::ListenBegan { id, at } => self.listen.began(&id, at),
@@ -132,10 +197,10 @@ impl Model {
         }
     }
 
-    fn listen_start(&mut self, source: Source, mic: bool, id: String, at: u64, effects: &mut Vec<Effect>) {
+    pub(super) fn listen_start(&mut self, source: Source, mic: bool, id: String, at: u64, effects: &mut Vec<Effect>) {
         let refused = match self.listen.on {
             Some(_) => Some(listen::ONE_AT_A_TIME),
-            None => self.listen_refusal(source.pane()),
+            None => self.listen_source_refusal(source),
         };
         if let Some(why) = refused {
             return effects.push(Effect::Notice { text: why.into() });
@@ -151,8 +216,13 @@ impl Model {
     /// it, never a window title. A test run's terminal pane is `Terminal`.
     fn listen_head(&self, source: Source, mic: bool, started: u64) -> listen::file::Head {
         let kind = source.pane().and_then(|pane| self.pane(pane)).map(|pane| &pane.kind);
-        let (app, bundle) = match kind {
-            Some(Kind::App { name, bundle, .. }) => (name.clone(), bundle.clone()),
+        let picked = match source {
+            Source::App { pid } => self.listen.apps.iter().find(|app| app.pid == pid),
+            Source::Pane(_) => None,
+        };
+        let (app, bundle) = match (kind, picked) {
+            (_, Some(app)) => (app.name.clone(), app.bundle.clone()),
+            (Some(Kind::App { name, bundle, .. }), _) => (name.clone(), bundle.clone()),
             _ => ("Terminal".into(), None),
         };
         listen::file::Head { app, bundle, mic, started }
@@ -177,8 +247,9 @@ impl Model {
 
 #[cfg(test)]
 mod tests {
+    use crate::features::{Feature, Features};
     use crate::listen::{self, Ended, Heard, Record, Source, Speaker, Status};
-    use crate::model::{Action, Effect, Kind, Model, Origin};
+    use crate::model::{Action, Effect, Kind, Model, Origin, PickItem};
     use crate::{Axis, Envelope};
 
     /// A terminal pane (1) and an app pane (2), with the test fixture as the sound.
@@ -334,6 +405,160 @@ mod tests {
         assert_eq!(m.update(toggle(3)), [Effect::Notice { text: listen::FOCUS_APP.into() }]);
     }
 
+    fn app(pid: i32, name: &str, windows: &[&str], playing: bool) -> listen::SoundApp {
+        let windows = windows.iter().map(|w| w.to_string()).collect();
+        listen::SoundApp { pid, name: name.into(), bundle: Some(format!("b.{name}")), windows, playing }
+    }
+
+    fn picker(apps: Vec<listen::SoundApp>) -> Action {
+        Action::ListenPicker { apps, id: "p1".into(), at: 5_000 }
+    }
+
+    fn rows(m: &Model) -> Vec<(String, Option<String>, bool)> {
+        let items = m.picker.as_ref().map(|picker| picker.items.clone()).unwrap_or_default();
+        let row = |item: PickItem| match item {
+            PickItem::Sound { name, window, playing, .. } => Some((name, window, playing)),
+            _ => None,
+        };
+        items.into_iter().filter_map(row).collect()
+    }
+
+    /// The owner: "the app playing sound now sorts first (mark it)". Each window a row, an app
+    /// with none one row; only the user opens it, moves in it or picks; a pick hears that app,
+    /// in a pane or not.
+    #[test]
+    fn the_picker_lists_the_app_playing_first_and_only_the_users_pick_starts_one() {
+        let mut m = model();
+        let apps = vec![
+            app(30, "Slack", &[], false),
+            app(20, "Chrome", &["meet.example.com", "Docs"], false),
+            app(10, "Zoom", &["Zoom Meeting"], true),
+        ];
+        for origin in [Origin::Socket, Origin::System] {
+            assert_eq!(m.refusal(&picker(apps.clone()), origin), Some(listen::USERS_ALONE));
+            m.update(picker(apps.clone()).sent_by(origin));
+            assert!(m.picker.is_none());
+        }
+        m.update(picker(apps.clone()));
+        let row = |name: &str, window: Option<&str>, playing| (name.to_string(), window.map(String::from), playing);
+        assert_eq!(
+            rows(&m),
+            [
+                row("Zoom", Some("Zoom Meeting"), true),
+                row("Chrome", Some("meet.example.com"), false),
+                row("Chrome", Some("Docs"), false),
+                row("Slack", None, false),
+            ]
+        );
+        // Window titles are drawn, never in the state.
+        let state = serde_json::to_string(&m.picker).unwrap();
+        assert!(!state.contains("meet.example.com") && state.contains("\"playing\":true"), "{state}");
+        // An installed-app list read meanwhile adds no row.
+        let installed = crate::settings::Installed { name: "Bear".into(), path: "/Applications/Bear.app".into() };
+        m.update(Action::SetInstalled { apps: vec![installed], running: Vec::new() }.sent_by(Origin::System));
+        assert!(m.picker.as_ref().is_some_and(|picker| picker.installed.is_empty()));
+        // A client moves nothing, picks nothing, types nothing in its filter, closes or replaces nothing.
+        let theirs = [
+            Action::PickerMove { delta: 1 },
+            Action::PickerChoose { index: Some(1) },
+            Action::FieldEdit { edit: crate::edit::Edit::Insert("slack".into()) },
+            Action::ClosePicker,
+            Action::OpenPicker { axis: crate::Axis::Right, new_tab: false, items: vec![PickItem::Terminal] },
+        ];
+        for action in theirs {
+            assert_eq!(m.refusal(&action, Origin::Socket), Some(listen::PICK_USERS), "{action:?}");
+            m.update(action.sent_by(Origin::Socket));
+        }
+        assert!(m.picker.as_ref().is_some_and(|picker| picker.selected == 0 && picker.transcribe));
+        assert_eq!((rows(&m).len(), m.listen.on.is_none()), (4, true));
+        // The user's filter finds a window by its title too.
+        m.update(Action::PickerQuery { query: "docs".into() });
+        let found: Vec<String> =
+            m.picker.as_ref().unwrap().matches().iter().map(|item| item.label().to_string()).collect();
+        assert_eq!(found, ["Chrome"]);
+        m.update(Action::PickerQuery { query: String::new() });
+        // The user's pick of Chrome's second window: Chrome's sound, its name in the file.
+        let effects = m.update(Action::PickerChoose { index: Some(2) });
+        let head =
+            listen::file::Head { app: "Chrome".into(), bundle: Some("b.Chrome".into()), mic: false, started: 5_000 };
+        let source = Source::App { pid: 20 };
+        assert_eq!(
+            effects,
+            [
+                Effect::ListenWrite { id: "p1".into(), records: vec![Record::Begin(head)] },
+                Effect::ListenOpen { id: "p1".into(), source, mic: false },
+            ]
+        );
+        assert_eq!((m.listen.on.as_ref().map(|on| on.source), m.picker.is_none()), (Some(source), true));
+        // In no pane: no dot anywhere but the rail; while it is on, no second picker.
+        assert_eq!(m.listen_dot(), None);
+        assert_eq!(m.update(picker(apps)), [Effect::Notice { text: listen::ONE_AT_A_TIME.into() }]);
+        // An app the picker did not list is refused.
+        m.update(Action::ListenStop { at: 6_000 });
+        let unlisted = Action::ListenStart { source: Source::App { pid: 99 }, mic: false, id: "u".into(), at: 7_000 };
+        assert_eq!(m.update(unlisted), [Effect::Notice { text: listen::NOT_LISTED.into() }]);
+        // The flag off takes the picker with it: no pick could start one.
+        m.update(picker(vec![app(10, "Zoom", &[], true)]));
+        m.update(Action::SetFeatures { features: Features::all().with(Feature::Transcripts, false) });
+        assert!(m.picker.is_none() && m.listen.apps.is_empty());
+    }
+
+    /// Opened idle: today's finished transcripts (the shell's reading of the folder), and one
+    /// open read-only on the user's click alone; it closes when one starts.
+    #[test]
+    fn today_lists_the_finished_ones_and_the_users_click_opens_one() {
+        let mut m = model();
+        let head = |app: &str, started| listen::file::Head { app: app.into(), bundle: None, mic: false, started };
+        let done = |at: u64| listen::file::header(&head("Zoom", at), Some(at + 120_000), &|_| 0);
+        let files = vec![
+            ("2026-11-16-0900-zoom.md".to_string(), done(1_794_819_600_000)),
+            ("2026-11-16-1000-zoom.md".to_string(), done(1_794_823_200_000)),
+        ];
+        let past = Action::ListenPast { files, today: "2026-11-16".into() };
+        assert_eq!(m.refusal(&past, Origin::Socket), Some(listen::SHELLS_ALONE));
+        m.update(past.sent_by(Origin::System));
+        let names: Vec<&str> = m.transcripts.today.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["2026-11-16-1000-zoom.md", "2026-11-16-0900-zoom.md"]);
+        assert_eq!(m.transcripts.today[0].length_ms, 120_000);
+        let open = Action::ListenOpenPast { name: Some("2026-11-16-0900-zoom.md".into()) };
+        // Only on the idle view, and only the user's.
+        m.update(open.clone());
+        assert_eq!(m.transcripts.open, None, "the drawer is not on the transcript");
+        m.update(Action::ListenShow { on: true });
+        m.update(open.clone().sent_by(Origin::Socket));
+        assert_eq!(m.transcripts.open, None);
+        m.update(open);
+        assert_eq!(m.transcripts.open.as_deref(), Some("2026-11-16-0900-zoom.md"));
+        // A name Today does not list opens nothing.
+        m.update(Action::ListenOpenPast { name: Some("../x.md".into()) });
+        assert_eq!(m.transcripts.open, None);
+        m.update(Action::ListenOpenPast { name: Some("2026-11-16-1000-zoom.md".into()) });
+        m.update(start(2));
+        assert_eq!(m.transcripts.open, None, "a start shows the one on");
+    }
+
+    /// The owner: "we show the record + time in 3 spots". The pane's own dot while its tab is on
+    /// show; off show, a dot on its tab (its space selected) or on its space in the top row.
+    #[test]
+    fn the_dot_marks_the_tab_or_space_of_the_pane_heard_only_while_it_is_off_show() {
+        let mut m = model();
+        m.update(start(2));
+        assert_eq!(m.listen_dot(), None, "on show: the pane's header has it");
+        let (tab, space) = (m.tabs[m.active].id, m.space().clone());
+        m.update(Action::NewTab);
+        assert_eq!(m.listen_dot(), Some(listen::Dot::Tab(tab)));
+        m.update(Action::WorkbookNew { uid: "00000000000000a1".into() });
+        assert_ne!(*m.space(), space);
+        assert_eq!(m.listen_dot(), Some(listen::Dot::Space(space)));
+        // Its pane's dot shows it: on show again, no dot elsewhere.
+        m.update(Action::ListenShow { on: true });
+        assert_eq!(m.listen_dot(), None);
+        // None on, none anywhere.
+        m.update(Action::NewTab);
+        m.update(Action::ListenStop { at: 5_000 });
+        assert_eq!(m.listen_dot(), None);
+    }
+
     #[test]
     fn closing_the_pane_ends_it_and_a_client_cannot() {
         let mut m = model();
@@ -350,7 +575,8 @@ mod tests {
         // The shell's close (its window is gone) and the user's end it.
         let effects = m.update(Action::Close { pane: Some(2) }.sent_by(Origin::System));
         assert!(effects.contains(&Effect::ListenClose { id: "t2".into() }), "{effects:?}");
-        assert!(m.listen.on.is_none() && !m.listen.shown);
+        // The drawer stays on the transcript, idle.
+        assert!(m.listen.on.is_none() && m.listen.shown);
     }
 
     #[test]

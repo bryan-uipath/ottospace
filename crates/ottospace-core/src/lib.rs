@@ -7,6 +7,7 @@ pub mod agents;
 pub mod app_wheel;
 pub mod apps;
 pub mod ax;
+pub mod cadence;
 pub mod calendar;
 pub mod capture;
 pub mod capture_model;
@@ -20,6 +21,7 @@ pub mod features;
 pub mod fill;
 #[cfg(test)]
 mod fuzz;
+pub mod gist;
 pub mod home;
 pub mod hosted;
 pub mod ics;
@@ -57,6 +59,8 @@ pub mod terminal;
 pub mod theme;
 pub mod titlebar;
 pub mod transcript;
+pub mod viewer;
+pub mod vim;
 pub mod workbook;
 
 pub use layout::{Axis, Dir, Node, Rect, Zone};

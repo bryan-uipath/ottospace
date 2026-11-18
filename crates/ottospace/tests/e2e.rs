@@ -3200,7 +3200,8 @@ fn the_picker_filter_is_a_field_and_offers_apps_that_are_not_running() {
     };
     // Nothing typed: what the picker showed before. The folders are read on another thread.
     let reply = otto.call(json!({"cmd": "picker"}));
-    assert_eq!((rows(&reply), reply["field"]["of"].as_str()), (vec!["terminal ".to_string()], Some("picker")));
+    let none_typed = vec!["terminal ".to_string(), "file ".to_string()];
+    assert_eq!((rows(&reply), reply["field"]["of"].as_str()), (none_typed, Some("picker")));
     otto.wait_for("the scan of the apps folder", |o| {
         let reply = o.call(json!({"cmd": "picker_query", "query": "sk"}));
         (rows(&reply) == ["closed Sketchpad", "closed Skylark", "closed Lumen Desk"]).then_some(())
@@ -4299,7 +4300,7 @@ fn a_feature_that_is_off_is_absent_and_features_turns_it_on_live() {
         assert_eq!(otto.raw(&request.to_string())["error"], why, "{request}");
     }
     assert_eq!(otto.call(json!({"cmd": "section", "section": "repos"}))["state"]["sidebar"], "repos");
-    // No rail cell: Tasks, Workbook, Repos.
+    // No rail cell: Repos, Tasks, Workbook.
     let (_, labels) = sneak(&otto);
     let rails: Vec<&String> = labels.keys().filter(|id| id.starts_with("rail:")).collect();
     assert_eq!(rails, ["rail:repos", "rail:tasks", "rail:workbook"], "{labels:?}");
@@ -4778,6 +4779,88 @@ fn a_long_list_has_a_scrollbar_that_drags_and_pages() {
     otto.faded("tasks");
 }
 
+/// Which edges of the scroll area `id` fade, as the state gives them: `{top, bottom}` or `{left, right}`.
+fn fades(reply: &Value, id: &str) -> Value {
+    reply["overflow"][id].clone()
+}
+
+/// The owner: every overflowing list fades at an edge with more beyond it, and only there.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_long_list_fades_where_more_lies_beyond_and_a_short_one_nowhere() {
+    let otto = Otto::launch("overflow");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.call(json!({"cmd": "task_add", "title": "task 0"}));
+    otto.bounds(&[1]);
+    // A list that fits: laid out, no fade.
+    assert_eq!(fades(&otto.drawn(), "tasks"), json!({"top": false, "bottom": false}));
+
+    for i in 1..60 {
+        otto.call(json!({"cmd": "task_add", "title": format!("task {i}")}));
+    }
+    let (track, ..) = otto.wait_for("the bar", |o| scrollbar(&o.drawn(), "tasks"));
+    // At the top: only the foot fades. Down a little: both. At the end: only the top.
+    assert_eq!(fades(&otto.drawn(), "tasks"), json!({"top": false, "bottom": true}));
+    let over = [track[0] - 100.0, track[1] + 200.0];
+    assert_eq!(fades(&otto.wheel(over, -60.0, true), "tasks"), json!({"top": true, "bottom": true}));
+    assert_eq!(fades(&otto.wheel(over, -50_000.0, true), "tasks"), json!({"top": true, "bottom": false}));
+    // Once the bar has faded out, a list at rest with its fades draws no more frames.
+    let frame = |reply: &Value| reply["frame"]["number"].as_u64().expect("a frame number");
+    // Twice at most: a minute's tick (the rows' ages) may draw one.
+    let still = || {
+        let rest = frame(&otto.faded("tasks"));
+        std::thread::sleep(Duration::from_millis(1500));
+        frame(&otto.call(json!({"cmd": "state"}))) == rest
+    };
+    assert!(still() || still(), "frames drawn at rest");
+
+    // The palette: every command overflows it; one that matches fits.
+    let reply = otto.user_key("cmd-p");
+    assert_eq!(fades(&reply, "palette"), json!({"top": false, "bottom": true}), "{}", reply["overflow"]);
+    let reply = otto.user_key("c o p y space s t a t e");
+    assert_eq!(fades(&reply, "palette"), json!({"top": false, "bottom": false}));
+    otto.user_key("escape");
+
+    // The tab row: two tabs fit; many scroll across, the newest (on show) brought into view.
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.call(json!({"cmd": "new_tab"}));
+    assert_eq!(fades(&otto.drawn(), "tabs"), json!({"left": false, "right": false}));
+    for _ in 0..30 {
+        otto.call(json!({"cmd": "new_tab"}));
+    }
+    let scrolled = otto.drawn();
+    assert_eq!(fades(&scrolled, "tabs"), json!({"left": true, "right": false}));
+    // Scrolled by code (the tab on show brought into view): no bar.
+    assert_eq!(scrollbar(&scrolled, "tabs").map(|(.., opacity)| opacity), Some(0.0), "{}", scrolled["scrollbars"]);
+    // The row's bar only shows: a click on a tab's foot, where the bar lies, selects that tab.
+    let tabs = otto.call(json!({"cmd": "state"}))["state"]["tabs"].as_array().cloned().unwrap();
+    let before = tabs.len() - 2;
+    let tab = otto.control(&format!("tab:{}", tabs[before]["id"]));
+    otto.mouse("move", at(tab, 0.5, 0.5));
+    assert_eq!(otto.user_click(at(tab, 0.5, 0.92))["state"]["active"].as_u64(), Some(before as u64));
+    // The workspace's first tab on show again: scrolled back to the row's start.
+    let tabs = tab_titles(&otto.call(json!({"cmd": "state"})));
+    let first = tabs.iter().position(|(_, space)| Some(space) == tabs.last().map(|(_, space)| space)).unwrap();
+    otto.call(json!({"cmd": "select_tab", "index": first}));
+    assert_eq!(fades(&otto.drawn(), "tabs"), json!({"left": false, "right": true}));
+    // The last tab on show, the row wheeled back to its start, Home and back: in view again.
+    otto.call(json!({"cmd": "select_tab", "index": tabs.len() - 1}));
+    let end = otto.drawn();
+    assert_eq!(fades(&end, "tabs"), json!({"left": true, "right": false}));
+    let (track, ..) = scrollbar(&end, "tabs").expect("the row's bar");
+    let wheeled = otto.wheel(at(track, 0.5, 0.5), 50_000.0, true);
+    assert_eq!(fades(&wheeled, "tabs"), json!({"left": false, "right": true}));
+    // The user's wheel shows it.
+    assert!(scrollbar(&wheeled, "tabs").is_some_and(|(.., opacity)| opacity > 0.0), "{}", wheeled["scrollbars"]);
+    let row: Vec<Value> =
+        end["spaces"].as_array().into_iter().flatten().filter(|s| s["hidden"] == false).cloned().collect();
+    let back = row.iter().position(|s| s["selected"] == true).expect("a workspace selected");
+    otto.call(json!({"cmd": "select_space", "index": 0}));
+    otto.call(json!({"cmd": "select_space", "index": back}));
+    assert_eq!(fades(&otto.drawn(), "tabs"), json!({"left": true, "right": false}));
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_terminal_scrollbar_shows_the_scrollback_and_drags_it() {
@@ -5034,6 +5117,7 @@ fn the_key_reference_fits_the_window_and_the_wheel_closes_nothing() {
     // What is not known yet fits a window of this size whole: no bar. (A smaller window scrolls
     // it with the shared scroll area, as the other lists.)
     assert!(scrollbar(&reply, "keys").is_none(), "{}", reply["scrollbars"]);
+    assert_eq!(fades(&reply, "keys"), json!({"top": false, "bottom": false}));
     let reply = otto.wheel([700.0, 450.0], -60.0, true);
     assert_eq!(reply["state"]["keys"], json!(true));
     assert_eq!(otto.call(json!({"cmd": "key", "keys": "escape"}))["state"]["keys"], json!(false));
@@ -5938,6 +6022,49 @@ fn closing_a_temporary_workspace_whose_terminal_runs_asks_first() {
     assert_eq!(pane_ids(&closed), vec![pane.as_u64().unwrap_or(0)], "it runs until the Undo runs out");
 }
 
+/// ⌘⇧W on the last tab of a temporary workspace whose terminal runs asks the same question as its
+/// ×. Each closed workspace keeps its own Undo on its row in the section, while the bar offers the
+/// latest; a client's selection of its tab is refused; the user's Undo on its row brings it back.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_last_tab_closed_asks_and_each_closing_workspace_keeps_its_undo() {
+    let otto = Otto::launch("workspace-closing-rows");
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    let pane = otto.user_key("cmd-d")["state"]["focused"].clone();
+    otto.call(json!({"cmd": "type", "pane": pane, "text": "sh -c 'echo go; exec sleep 30'\r"}));
+    otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^go$", "timeout_ms": 30000}));
+    let asked = otto.user_key("cmd-shift-w");
+    assert_eq!((&asked["mode"], &asked["state"]["confirm"]["close"]), (&json!("confirm"), &json!(1)), "{asked}");
+    let closed = otto.user_key("enter");
+    assert_eq!((&closed["workbook_offer"], pane_ids(&closed)), (&json!("closed"), vec![pane.as_u64().unwrap_or(0)]));
+    // A second one closed takes the bar; the first keeps its own Undo.
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.user_key("cmd-ctrl-w");
+    let both = otto.call(json!({"cmd": "section", "section": "workbook"}));
+    let closing: Vec<&str> =
+        both["workbooks_closing"].as_array().into_iter().flatten().filter_map(|row| row["name"].as_str()).collect();
+    assert_eq!((closing, &both["workbook_offer"]), (vec!["Workspace 2", "Workspace 3"], &json!("closed")), "{both}");
+    // A client selecting the first one's tab is refused: it stays closing.
+    let tabs = both["state"]["tabs"].as_array().cloned().unwrap_or_default();
+    let first = tabs.iter().position(|tab| tab["space"]["id"] == json!(1)).unwrap_or(0);
+    let theirs = otto.raw(&json!({"cmd": "select_tab", "index": first}).to_string());
+    assert_eq!(theirs["error"], "that workspace is closing: only the user's Undo brings it back", "{theirs}");
+    let still = otto.call(json!({"cmd": "state"}));
+    assert_eq!(still["workbooks_closing"].as_array().map(Vec::len), Some(2), "{still}");
+    // The user's Undo on its row: back, selected; the bar still offers the second one's.
+    let undo = rect(&otto.drawn()["workbooks_closing"][0]["undo"]);
+    let back = otto.user_click(at(undo, 0.5, 0.5));
+    assert_eq!(back["workbooks_closing"].as_array().map(Vec::len), Some(1), "{back}");
+    assert_eq!((&back["workbook_offer"], pane_ids(&back)), (&json!("closed"), vec![pane.as_u64().unwrap_or(0)]));
+    assert_eq!(back["workbooks"][0]["name"], "Workspace 2", "{}", back["workbooks"]);
+    // The second one's Undo by its label: back too, and the bar's offer of it goes.
+    let id = back["workbooks_closing"][0]["id"].as_u64().unwrap_or(0);
+    let (_, labels) = sneak(&otto);
+    let label = otto.user_key(&letters(&labels[&format!("workbook-reopen:{id}")]));
+    let rows = label["workbooks_closing"].as_array().map(Vec::len);
+    assert_eq!((rows, &label["workbook_offer"]), (Some(0), &Value::Null), "{label}");
+}
+
 /// The owner's report: the section's + took the tab on show (another session's), and a second +
 /// said "Updated". + makes a new, empty workspace each time, on the top row and in the section.
 /// Temporary: closing it discards it (Undo aside); open at quit, it comes back.
@@ -6330,8 +6457,8 @@ fn several_tasks_share_a_workspace_and_the_drawers_rail_switches_between_them() 
         otto.user_key("o n e");
         let first = otto.user_key("enter");
         let one = first["state"]["talk"]["task"].as_u64().expect("the drawer is on the first task");
-        assert_eq!((rail_tasks(&first), &space(&first)["front"]), (vec![], &json!(one)));
-        assert_eq!(otto.control_opt(&format!("drawer-rail:{one}")), None, "one task: no rail");
+        assert_eq!((rail_tasks(&first), &space(&first)["front"]), (vec![one], &json!(one)));
+        otto.control(&format!("drawer-rail:{one}"));
         // A second task, started here: in the same space, in front; nothing moved.
         otto.user_key("cmd-n");
         let typed = otto.user_key("t w o");
@@ -6391,7 +6518,7 @@ fn several_tasks_share_a_workspace_and_the_drawers_rail_switches_between_them() 
     assert_eq!((rail_tasks(&again), &space(&again)["front"]), (vec![one, two], &json!(two)));
     let tabs = space(&again)["tabs"].clone();
     let left = otto.call(json!({"cmd": "task_dismiss", "id": two}));
-    assert_eq!((rail_tasks(&left), &space(&left)["front"], &space(&left)["tabs"]), (vec![], &json!(one), &tabs));
+    assert_eq!((rail_tasks(&left), &space(&left)["front"], &space(&left)["tabs"]), (vec![one], &json!(one), &tabs));
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -6732,12 +6859,12 @@ fn the_rail_of_five_tasks_is_one_column_at_the_drawers_right_edge() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
-/// The drawer's rail with a transcript: it comes at two items (a task and the transcript, the
-/// transcript first) and goes at one; a click, ⌘⌥] / ⌘⌥[ and list mode switch it, a client's
-/// click does not; the transcript leaves it when it stops.
+/// The drawer's rail always shows: one task on top, +, and below a divider the transcript, idle
+/// (grey) or recording; a click, ⌘⌥] / ⌘⌥[ and list mode switch it, a client's click does not;
+/// stopped, the transcript stays, idle, and so does the drawer on it.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn the_rail_holds_the_running_transcript_and_the_tasks_and_only_the_user_switches_it() {
+fn the_rail_holds_the_tasks_then_the_transcript_always_and_only_the_user_switches_it() {
     let root = support::temp(&format!("ottospace-e2e-rail-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let (bin, sessions) = (root.join("bin"), root.join("sessions"));
@@ -6768,12 +6895,26 @@ fn the_rail_holds_the_running_transcript_and_the_tasks_and_only_the_user_switche
     otto.user_key("cmd-n");
     otto.user_key("o n e");
     let one = otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the first task");
-    // One item: no rail.
-    assert_eq!(kinds(&otto.drawn()), Vec::<String>::new());
-    // A transcript: two items, the transcript first.
+    // One task: the rail, the task on top, + under it, the transcript idle at the foot.
+    let idle = otto.drawn();
+    assert_eq!(kinds(&idle), ["task", "transcript"], "{}", idle["drawer"]["rail"]);
+    let sections: Vec<&Value> = idle["drawer"]["rail"].as_array().unwrap().iter().map(|i| &i["section"]).collect();
+    assert_eq!(sections, [&json!("workspace"), &json!("everywhere")]);
+    assert_eq!(idle["state"]["listen"], Value::Null);
+    let (task, new, transcript) = (
+        otto.control(&format!("drawer-rail:{one}")),
+        otto.control("drawer-rail:new"),
+        otto.control("drawer-rail:transcript"),
+    );
+    assert!(task[1] < new[1] && new[1] + new[3] < transcript[1], "{task:?} {new:?} {transcript:?}");
+    // Idle, a click shows the transcript's idle view.
+    otto.user_click(at(transcript, 0.5, 0.5));
+    otto.listen_rect("listen-idle");
+    otto.user_click(at(otto.control(&format!("drawer-rail:{one}")), 0.5, 0.5));
+    // A transcript: still the task, then the transcript.
     otto.user_click(at(otto.listen_rect("listen-start:1"), 0.5, 0.5));
     let two_items = otto.drawn();
-    assert_eq!(kinds(&two_items), ["transcript", "task"], "{}", two_items["drawer"]["rail"]);
+    assert_eq!(kinds(&two_items), ["task", "transcript"], "{}", two_items["drawer"]["rail"]);
     assert_eq!(rail_tasks(&two_items), [one]);
     // The user's click on the transcript shows it here; a client's on the task does nothing.
     let shown = otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
@@ -6791,17 +6932,20 @@ fn the_rail_holds_the_running_transcript_and_the_tasks_and_only_the_user_switche
     let keyed = otto.user_key("cmd-ctrl-right");
     assert_eq!(keyed["focus"], json!({"drawer_rail": {"kind": "transcript"}}), "{}", keyed["focus"]);
     otto.user_key("escape");
-    // The transcript, stopped, leaves the rail: one item left, the rail goes.
+    // Stopped, the transcript stays on the rail, idle, and the drawer on its idle view.
     otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
     otto.user_click(at(otto.listen_rect("listen-stop:view"), 0.5, 0.5));
-    let alone = otto.drawn();
-    assert!(kinds(&alone).is_empty() && otto.control_opt("drawer-rail").is_none(), "{}", alone["drawer"]["rail"]);
-    // A second task brings it back, of tasks alone.
+    let stopped = otto.drawn();
+    assert_eq!(kinds(&stopped), ["task", "transcript"], "{}", stopped["drawer"]["rail"]);
+    assert_eq!((&stopped["state"]["listen"], picked(&stopped).as_deref()), (&Value::Null, Some("transcript")));
+    otto.listen_rect("listen-idle");
+    // A second task joins the top, the transcript still last.
     otto.user_key("cmd-n");
     otto.user_key("t w o");
     let two = otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the second task");
     let both = otto.drawn();
-    assert_eq!((kinds(&both), rail_tasks(&both)), (vec!["task".into(), "task".into()], vec![one, two]));
+    assert_eq!(kinds(&both), ["task", "task", "transcript"], "{}", both["drawer"]["rail"]);
+    assert_eq!(rail_tasks(&both), [one, two]);
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -7539,7 +7683,7 @@ fn nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_open_or
         // Sneak mode, which says where controls are, does not start over the new-task box.
         let rails: &[&str] = match state["mode"] == "compose" {
             true => &[],
-            false => &["rail:tasks", "rail:apps", "rail:workbook", "rail:repos", "rail:marks"],
+            false => &["rail:repos", "rail:tasks", "rail:apps", "rail:workbook", "rail:marks"],
         };
         for rail in rails {
             let cell = otto.control(rail);
@@ -7548,7 +7692,7 @@ fn nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_open_or
                 "{what}: {rail} at {cell:?}, not {header:?} tall below the strip"
             );
         }
-        // Tasks, the first cell, joins the strip: no gap, no line of its own.
+        // Repos, the first cell, joins the strip: no gap, no line of its own.
         if let Some(first) = rails.first() {
             assert_eq!(otto.control(first)[1], strip[1] + strip[3], "{what}: {first} under the strip {strip:?}");
         }
@@ -7846,8 +7990,9 @@ fn focus_moves_across_the_zones_to_the_rails_and_back() {
     assert_eq!(focus(&otto.call(json!({"cmd": "key", "keys": FOCUS_LEFT}))), json!({"pane": 1}));
     // The user's goes on: the left rail (no section open), its cells by ↓, a section's list by →.
     let rail = otto.user_key(FOCUS_LEFT);
-    assert_eq!((focus(&rail), &rail["mode"]), (json!({"rail": "tasks"}), &json!("list")));
-    // With the flags off the rail is Tasks, Workbook, Repos: no Apps cell between.
+    assert_eq!((focus(&rail), &rail["mode"]), (json!({"rail": "repos"}), &json!("list")));
+    // With the flags off the rail is Repos, Tasks, Workbook: no Apps cell between.
+    assert_eq!(focus(&otto.user_key("down")), json!({"rail": "tasks"}));
     assert_eq!(focus(&otto.user_key("down")), json!({"rail": "workbook"}));
     let list = otto.user_key("right");
     assert_eq!((list["focus"].get("list").is_some(), &list["state"]["sidebar"]), (true, &json!("workbook")), "{list}");
@@ -9223,6 +9368,179 @@ fn native_setup(
 fn launch_env(name: &str, env: &[(String, String)]) -> Otto {
     let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     Otto::launch_with(name, &env)
+}
+
+/// Made-up stream-json for the rows: a call of each tool kind (its result after it), a
+/// sub-agent with its start, a call of its own and its end, a permission check, a denial by a
+/// settings rule, a notification and a model fallback; last a command with a description.
+fn row_fixtures(repo: &Path) -> Vec<(&'static str, String)> {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let call = |id: &str, name: &str, input: Value, parent: Option<&str>| {
+        let block = json!({"type": "tool_use", "id": format!("toolu_{id}"), "name": name, "input": input});
+        let parent = parent.map_or("null".to_string(), |p| format!(r#""toolu_{p}""#));
+        format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":{parent},"message":{{"content":[{block}]}}}}"#)
+    };
+    let result = |id: &str, out: &str| {
+        let block =
+            json!({"type": "tool_result", "tool_use_id": format!("toolu_{id}"), "content": out, "is_error": false});
+        format!(r#"{{"type":"user",{S},"parent_tool_use_id":null,"message":{{"content":[{block}]}}}}"#)
+    };
+    let system = |rest: Value| {
+        let mut record = json!({"type": "system", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003"});
+        record.as_object_mut().unwrap().extend(rest.as_object().unwrap().clone());
+        record.to_string()
+    };
+    let file = |name: &str| repo.join(name).to_string_lossy().into_owned();
+    let init = system(json!({"subtype": "init", "model": "claude-opus-5-5", "permissionMode": "default"}));
+    let done = r#"{"type":"result","subtype":"success","is_error":false}"#.to_string();
+    let mut turn = vec![init];
+    let calls = [
+        ("r", "Read", json!({"file_path": file("src/auth.rs")})),
+        ("e", "Edit", json!({"file_path": file("src/auth.rs"), "old_string": "a", "new_string": "b"})),
+        ("w", "Write", json!({"file_path": "/elsewhere/notes.md", "content": "x"})),
+        ("g", "Grep", json!({"pattern": "redirect", "path": file("src")})),
+        ("l", "Glob", json!({"pattern": "**/*.rs"})),
+        ("f", "WebFetch", json!({"url": "https://docs.example.com/a?k=v", "prompt": "x"})),
+        ("s", "WebSearch", json!({"query": "gpui text"})),
+        ("m", "mcp__made__lookup", json!({"name": "made-up", "count": 3})),
+    ];
+    for (id, name, input) in calls {
+        turn.push(call(id, name, input, None));
+        turn.push(result(id, "ok"));
+    }
+    turn.extend([
+        call("a", "Agent", json!({"description": "Find the redirect", "prompt": "x", "subagent_type": "Explore"}), None),
+        system(json!({"subtype": "task_started", "task_id": "t1", "tool_use_id": "toolu_a", "description": "Find the redirect", "task_type": "local_agent"})),
+        call("ag", "Grep", json!({"pattern": "login"}), Some("a")),
+        result("ag", "ok"),
+        system(json!({"subtype": "task_progress", "task_id": "t1", "tool_use_id": "toolu_a", "description": "Find the redirect"})),
+        system(json!({"subtype": "task_notification", "task_id": "t1", "tool_use_id": "toolu_a", "status": "completed", "summary": "Found it in auth.rs"})),
+        result("a", "done"),
+        system(json!({"subtype": "task_started", "task_id": "t2", "description": "Watch the build", "task_type": "local_bash"})),
+        system(json!({"subtype": "permission_check_status", "tool_use_id": "toolu_x", "status": "checking"})),
+        system(json!({"subtype": "permission_check_status", "tool_use_id": "toolu_x", "status": "done"})),
+        system(json!({"subtype": "permission_denied", "tool_name": "Bash", "tool_use_id": "toolu_x", "decision_reason_type": "rule"})),
+        system(json!({"subtype": "notification", "key": "made-up", "text": "Fast mode is off for now", "priority": "low"})),
+        system(json!({"subtype": "model_fallback", "originalModel": "claude-opus-5-5", "fallbackModel": "claude-sonnet-5"})),
+        call("b", "Bash", json!({"command": "git status --short\ngit diff --stat", "description": "Show changes"}), None),
+        result("b", " M src/auth.rs"),
+        done,
+    ]);
+    vec![("turn1.jsonl", turn.join("\n"))]
+}
+
+/// Each call's row shows what ran (a command, a path, a pattern, a host, a query, a subtask),
+/// and what the CLI said besides is a row; the state has their shapes, never their words. The
+/// user's click opens a command's row, and again closes it; its sneak label opens it too.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn tool_rows_show_what_ran_and_the_clis_other_words_are_rows() {
+    let root = support::temp(&format!("ottospace-e2e-rows-{}", std::process::id()));
+    let repo = root.join("repos/app");
+    let (root, _record, env) = native_setup("rows", &row_fixtures(&repo), &[]);
+    let otto = launch_env("rows", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    otto.start_task(1);
+    let ended = otto.wait_for("the turn's end", |o| {
+        let chat = chat(o);
+        let entries = chat["transcript"]["entries"].as_array()?.clone();
+        (chat["transcript"]["turn"].is_null() && entries.iter().any(|e| e["tool"] == "Bash" && e["kind"] == "tool"))
+            .then_some(chat)
+    });
+    let entries = ended["transcript"]["entries"].as_array().unwrap();
+    let tools: Vec<(String, Value, bool)> = entries
+        .iter()
+        .filter(|e| e["kind"] == "tool")
+        .map(|e| (e["tool"].as_str().unwrap_or("").to_string(), e["summary"]["kind"].clone(), e["sub"] == true))
+        .collect();
+    let kinds: Vec<(&str, &str, bool)> =
+        tools.iter().map(|(tool, kind, sub)| (tool.as_str(), kind.as_str().unwrap_or("none"), *sub)).collect();
+    assert_eq!(
+        kinds,
+        [
+            ("Read", "path", false),
+            ("Edit", "path", false),
+            ("Write", "path", false),
+            ("Grep", "pattern", false),
+            ("Glob", "pattern", false),
+            ("WebFetch", "host", false),
+            ("WebSearch", "query", false),
+            ("made/lookup", "argument", false),
+            ("Agent", "subtask", false),
+            ("Grep", "pattern", true),
+            ("Bash", "command", false),
+        ],
+        "{ended}"
+    );
+    let bash = entries.iter().find(|e| e["tool"] == "Bash" && e["kind"] == "tool").unwrap();
+    assert_eq!(bash["summary"], json!({"kind": "command", "lines": 2, "note": true}), "{bash}");
+    assert_eq!(bash["expanded"], false);
+    // The CLI's other words: the subtask's end, a background task's start (no call of its
+    // own), the denial by settings and the model it fell back to. The check says nothing.
+    let notes: Vec<Value> = entries
+        .iter()
+        .filter(|e| e["kind"] == "note" || e["kind"] == "notice")
+        .map(|e| json!([e["kind"], e["note"].as_str().or(e["notice"].as_str())]))
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            json!(["note", "ended"]),
+            json!(["note", "subtask"]),
+            json!(["notice", "denied_by"]),
+            json!(["note", "notification"]),
+            json!(["notice", "model_fallback"]),
+        ],
+        "{ended}"
+    );
+    assert_eq!(
+        (&ended["transcript"]["not_understood"], &ended["transcript"]["model"]),
+        (&json!(0), &json!("claude-sonnet-5"))
+    );
+    // Beyond the labels (`git status`, `src/auth.rs`, a host): no word of a command, its output, a
+    // pattern, a query, a description or a summary.
+    let said = ended.to_string();
+    for word in
+        ["git diff", "M src", "redirect", "gpui text", "Find the", "Found it", "Fast mode", "Show changes", "made-up"]
+    {
+        assert!(!said.contains(word), "{word}: {said}");
+    }
+    // The user's click opens the command's row; another closes it.
+    let rows = otto.controls();
+    let row = |rows: &[(String, [f64; 4])]| {
+        let mut ids: Vec<&(String, [f64; 4])> = rows.iter().filter(|(id, _)| id.contains("chat-row:1:")).collect();
+        ids.sort_by_key(|(id, _)| id.rsplit(':').next().and_then(|n| n.parse::<u64>().ok()));
+        ids.last().map(|(_, frame)| *frame).expect("the last call's row is drawn")
+    };
+    let last = row(&rows);
+    otto.user_click(at(last, 0.5, 0.3));
+    let bash = |o: &Otto| {
+        let chat = chat(o);
+        chat["transcript"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["tool"] == "Bash" && e["kind"] == "tool")
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(bash(&otto)["expanded"], true);
+    let open = row(&otto.controls());
+    assert!(open[3] > last[3], "open, it is taller: {open:?} after {last:?}");
+    otto.user_click(at(open, 0.5, 0.1));
+    assert_eq!(bash(&otto)["expanded"], false);
+    // Its sneak label does what the click does.
+    let id = |rows: Vec<(String, [f64; 4])>| {
+        let ids = rows.into_iter().map(|(id, _)| id).filter(|id| id.starts_with("chat-row:1:"));
+        ids.max_by_key(|id| id.rsplit(':').next().and_then(|n| n.parse::<u64>().ok())).expect("a row")
+    };
+    sneak_to(&otto, &id(otto.controls()));
+    assert_eq!(bash(&otto)["expanded"], true);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// Made-up stream-json for the dial: a turn of calls of each kind, one failing, a hook and the
@@ -10935,7 +11253,7 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     let key = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-t"}));
     assert_eq!(key["state"]["listen"], Value::Null, "{key}");
 
-    // The user's click does: the indicator in the header and on the top row, the lines in the drawer.
+    // The user's click does: the dot in the header (no time, no top row mark), the lines in the drawer.
     let on = otto.user_click(at(start, 0.5, 0.5));
     assert_eq!(on["state"]["listen"]["source"], json!({"pane": 1}), "{on}");
     let lines = otto.listen_finals(2);
@@ -10944,8 +11262,9 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     assert_eq!(texts, [("them", "made-up words one"), ("me", "made-up words two")]);
     let indicator = otto.listen_rect("listen-header");
     assert!(indicator[1] >= header[1] && indicator[1] < header[1] + header[3], "{indicator:?} in {header:?}");
-    let top = otto.listen_rect("listen-top:");
-    assert!(top[1] < header[1], "the top row's mark {top:?} is above the panes");
+    assert!(indicator[2] <= 24.0, "the header's mark is the dot alone: {indicator:?}");
+    let drawn = otto.drawn();
+    assert!(drawn["listen_rects"].get("listen-top:").is_none(), "{}", drawn["listen_rects"]);
     otto.listen_rect("listen-view");
     // What was heard is in no client's state: only this test run's `listen_lines` has it.
     let mut state = otto.call(json!({"cmd": "state"}));
@@ -10955,7 +11274,7 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     // The pane's header is the source's mark alone: the controls are the drawer's, one Stop and ⋯.
     let drawn = otto.drawn()["listen_rects"].clone();
     let ids: Vec<&str> = drawn.as_object().unwrap().keys().map(String::as_str).collect();
-    let button = |id: &&&str| id.contains(':') && !id.starts_with("listen-top") && !id.starts_with("listen-hearing");
+    let button = |id: &&&str| id.contains(':') && !id.starts_with("listen-hearing");
     let controls: Vec<&&str> = ids.iter().filter(button).collect();
     assert_eq!((controls, ids.contains(&"listen-menu")), (vec![&"listen-stop:view"], true), "{drawn}");
 
@@ -10990,18 +11309,151 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     assert_eq!((&stopped["state"]["listen"], &stopped["listen_lines"]), (&Value::Null, &json!([])), "{stopped}");
     otto.call(json!({"cmd": "focus", "pane": 1}));
     assert_eq!(otto.user_key("cmd-ctrl-t")["state"]["listen"]["source"], json!({"pane": 1}));
-    // In a narrower pane the indicator gives way, or goes: × stays in its header, and the top
-    // row still shows it.
+    // In a narrower pane the dot stays left of × while there is room (150 points), else gives
+    // way: × always stays in its header.
     otto.call(json!({"cmd": "split"}));
     let drawn = otto.drawn();
     let (header, close) = (rect(&drawn["headers"]["1"]), rect(&drawn["closes"]["1"]));
     assert!(close[0] + close[2] <= header[0] + header[2] + 1.0, "{drawn}");
-    if let Some(indicator) = drawn["listen_rects"].get("listen-header") {
-        assert!(rect(indicator)[0] + rect(indicator)[2] <= close[0], "{drawn}");
+    let indicator = drawn["listen_rects"].get("listen-header").map(rect);
+    assert_eq!(indicator.is_some(), header[2] >= 150.0, "{drawn}");
+    if let Some(indicator) = indicator {
+        assert!(indicator[0] + indicator[2] <= close[0] && indicator[0] >= header[0], "{drawn}");
     }
-    assert!(drawn["listen_rects"].get("listen-top:").is_some(), "{drawn}");
     let closed = otto.user_click(at(close, 0.5, 0.5));
     assert_eq!((&closed["state"]["listen"], pane_ids(&closed)), (&Value::Null, vec![2, 3]), "{closed}");
+}
+
+/// The owner: with no conversation, ⌘⇧L opens the transcript in this drawer, as a click on the
+/// rail does; it does not jump to the tab of the pane being heard, in another workspace.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_users_toggle_opens_the_transcript_here_from_another_workspace() {
+    let otto = listen_otto("toggle-here");
+    otto.call(json!({"cmd": "split"}));
+    let on = otto.user_click(at(otto.listen_rect("listen-start:1"), 0.5, 0.5));
+    assert_eq!(on["state"]["listen"]["source"], json!({"pane": 1}), "{on}");
+    otto.user_key("cmd-shift-l");
+    let away = otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    let selected = |reply: &Value| -> Value {
+        let spaces = reply["spaces"].as_array().cloned().unwrap_or_default();
+        spaces.iter().find(|s| s["selected"] == true).map(|s| s["of"].clone()).unwrap_or_default()
+    };
+    let (tab, space) = (away["state"]["active"].clone(), selected(&away));
+    assert_eq!(space["kind"], "workbook", "{}", away["spaces"]);
+    let shown = otto.user_key("cmd-shift-l");
+    assert_eq!((&shown["state"]["active"], selected(&shown)), (&tab, space), "no jump to the pane's tab");
+    otto.listen_rect("listen-view");
+}
+
+/// The owner: many tasks scroll the rail's top; the transcript stays pinned at its foot, in the
+/// window, and the selected task, by ⌘⌥] / ⌘⌥[ or a new one, is scrolled into view.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_rail_of_twenty_tasks_scrolls_and_keeps_the_transcript_in_the_window() {
+    let root = support::temp(&format!("ottospace-e2e-rail20-{}", std::process::id()));
+    let (bin, sessions) = (root.join("bin"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    let fixture = root.join("fixture.jsonl");
+    std::fs::write(&fixture, LISTEN_FIXTURE).unwrap();
+    let settings =
+        json!({"repos": [], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("rail20", &settings.to_string());
+    let env = [
+        ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "transcripts"),
+        ("OTTOSPACE_LISTEN_FIXTURE", fixture.to_str().unwrap()),
+    ];
+    let otto = Otto::launch_with("rail20", &env);
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.user_key("cmd-d");
+    let mut ids: Vec<u64> = Vec::new();
+    for n in 0..20 {
+        otto.user_key("cmd-n");
+        otto.user_key(&format!("t {n}"));
+        ids.push(otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the drawer is on the new task"));
+    }
+    // A task's rect, null when scrolled out; the window and the transcript's.
+    let task = |reply: &Value, id: u64| -> Option<[f64; 4]> {
+        let rail = reply["drawer"]["rail"].as_array().cloned().unwrap_or_default();
+        rail.iter()
+            .find(|item| item["id"] == json!(id))
+            .and_then(|item| item["rect"].as_array().map(|_| rect(&item["rect"])))
+    };
+    let check = |reply: &Value, selected: u64| {
+        assert_eq!(rail_selected(reply), Some(selected));
+        let (window, rail) = (rect(&reply["window"]), otto.control("drawer-rail"));
+        let transcript = otto.control("drawer-rail:transcript");
+        assert!(transcript[1] + transcript[3] <= window[1] + window[3] + 0.5, "{transcript:?} {window:?}");
+        assert!(transcript[1] + transcript[3] <= rail[1] + rail[3] + 0.5, "{transcript:?} {rail:?}");
+        let shown =
+            task(reply, selected).unwrap_or_else(|| panic!("{selected} not drawn: {}", reply["drawer"]["rail"]));
+        // Square when wholly shown: 36, or 34 inside the ring while keyed; a clipped one is shorter.
+        assert!(shown[3] >= shown[2] - 0.5 && shown[2] >= 33., "{selected} wholly in view: {shown:?}");
+        assert!(shown[1] + shown[3] <= transcript[1], "{shown:?} above {transcript:?}");
+        let hidden = ids.iter().filter(|id| task(reply, **id).is_none()).count();
+        assert!(hidden > 0, "twenty tasks overflow the rail: {}", reply["drawer"]["rail"]);
+    };
+    // The newest is in front; the rail's order is by urgency, read from the reply.
+    let drawn = otto.drawn();
+    check(&drawn, ids[19]);
+    let order = rail_tasks(&drawn);
+    let from = order.iter().position(|id| *id == ids[19]).expect("the newest on the rail");
+    // ⌘⌥] past the rail's last task: the transcript, then the first, scrolled up into view.
+    for _ in from..order.len() {
+        otto.user_key("cmd-alt-]");
+    }
+    otto.user_key("cmd-alt-]");
+    let drawn = otto.drawn();
+    check(&drawn, rail_tasks(&drawn)[0]);
+    // Back again: the transcript, then the last, scrolled down.
+    otto.user_key("cmd-alt-[");
+    otto.user_key("cmd-alt-[");
+    let drawn = otto.drawn();
+    let last = *rail_tasks(&drawn).last().expect("tasks");
+    check(&drawn, last);
+    // Closed and opened again (the rail drawn anew, its first frame's bounds stale): still in view.
+    otto.user_key("cmd-shift-l");
+    otto.user_key("cmd-shift-l");
+    check(&otto.drawn(), last);
+    // Wheeled to the top, then the keys onto the rail (on the selected task): scrolled to it again.
+    let first = *rail_tasks(&otto.drawn()).first().expect("tasks");
+    let rail = otto.control("drawer-rail");
+    let wheel =
+        json!({"cmd": "mouse", "action": "wheel", "x": rail[0] + 24., "y": rail[1] + 40., "dy": 40, "as": "user"});
+    otto.call(wheel);
+    let top = otto.drawn();
+    assert!(task(&top, first).is_some() && task(&top, last).is_none(), "{}", top["drawer"]["rail"]);
+    // The tasks fade at the foot only, where more lie beyond.
+    assert_eq!(fades(&top, "drawer-rail"), json!({"top": false, "bottom": true}));
+    otto.call(json!({"cmd": "focus", "pane": 1}));
+    let mut keyed = otto.user_key(FOCUS_RIGHT);
+    for _ in 0..2 {
+        if keyed["focus"]["drawer_rail"].is_null() {
+            keyed = otto.user_key(FOCUS_RIGHT);
+        }
+    }
+    assert_eq!(keyed["focus"]["drawer_rail"]["id"], json!(last), "{}", keyed["focus"]);
+    let drawn = otto.drawn();
+    check(&drawn, last);
+    assert_eq!(fades(&drawn, "drawer-rail")["top"], json!(true), "{}", drawn["overflow"]);
+    otto.user_key("escape");
+    // A sneak label only on what shows: no label for a task scrolled out.
+    let drawn = otto.drawn();
+    let sneak = otto.call(json!({"cmd": "sneak"}));
+    let labelled: Vec<String> = sneak["sneak"]["targets"]
+        .as_array()
+        .expect("targets")
+        .iter()
+        .filter_map(|t| t["source"]["id"].as_str().map(String::from))
+        .collect();
+    for id in ids.iter().filter(|id| task(&drawn, **id).is_none()) {
+        assert!(!labelled.contains(&format!("drawer-rail:{id}")), "{id} scrolled out, labelled: {labelled:?}");
+    }
+    assert!(labelled.contains(&format!("drawer-rail:{last}")), "{labelled:?}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -11036,6 +11488,153 @@ fn transcripts_are_absent_with_the_flag_off_and_silent_with_no_source() {
     assert_eq!(split["listen_rects"], json!({}), "{split}");
     let key = on.user_key("cmd-ctrl-t");
     assert_eq!((&key["state"]["listen"], &key["notice"]), (&Value::Null, &json!("focus an app pane to transcribe it")));
+}
+
+/// The owner: "we show the record + time in 3 spots". No top row mark; the pane's header has the
+/// dot while its tab is on show; off show, a dot on its tab, or on its space in the top row; the
+/// user's click on that dot (not a client's) brings the pane back.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_dot_of_the_pane_heard_is_on_its_tab_or_space_only_while_off_show() {
+    let otto = listen_otto("dot");
+    otto.call(json!({"cmd": "split"}));
+    otto.user_key("cmd-ctrl-t");
+    let dots = |otto: &Otto| -> Vec<String> {
+        let drawn = otto.drawn()["listen_rects"].clone();
+        let ids = drawn.as_object().map(|ids| ids.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
+        ids.into_iter().filter(|id| id.starts_with("listen-dot") || id.starts_with("listen-top")).collect()
+    };
+    // On show: the header's dot alone.
+    otto.listen_rect("listen-header");
+    assert_eq!(dots(&otto), Vec::<String>::new());
+    // Another tab on show: the first tab has the dot, inside it.
+    let first = otto.call(json!({"cmd": "state"}))["state"]["tabs"][0]["id"].as_u64().unwrap();
+    otto.user_key("cmd-t");
+    let id = format!("listen-dot:tab:{first}");
+    assert_eq!(dots(&otto), [id.clone()]);
+    let (dot, tab) = (otto.listen_rect(&id), otto.control(&format!("tab:{first}")));
+    assert!(dot[0] >= tab[0] && dot[0] + dot[2] <= tab[0] + tab[2] + 0.5 && dot[1] >= tab[1], "{dot:?} in {tab:?}");
+    // Another workspace: the dot on the first one's item in the top row.
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    let on = dots(&otto);
+    assert!(on.len() == 1 && on[0].starts_with("listen-dot:space:"), "{on:?}");
+    // A client's click on it does nothing; the user's shows the pane, and the dot goes.
+    let dot = otto.listen_rect(&on[0]);
+    let theirs = otto.click(at(dot, 0.5, 0.5), 1);
+    assert_eq!(dots(&otto), on, "{} {} {}", theirs["notice"], theirs["spaces"], theirs["state"]["active"]);
+    otto.user_click(at(dot, 0.5, 0.5));
+    assert_eq!(dots(&otto), Vec::<String>::new());
+    otto.listen_rect("listen-header");
+}
+
+/// The owner: opened idle, "Transcribe a window…" and today's finished transcripts, each read-only
+/// in the drawer; the picker lists apps that can play sound, the one playing first; only the
+/// user's pick starts one, of an app in no pane. Made-up apps (`OTTOSPACE_LISTEN_APPS`), the
+/// fixture's lines, a made-up file in the test's own folder.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_idle_transcript_lists_today_and_only_the_users_pick_starts_one_of_an_app() {
+    let home = user_folder("listen-idle", r#"{"repos": [], "restore_layout": false}"#);
+    let today = std::process::Command::new("/bin/date").arg("+%Y-%m-%d").output().unwrap();
+    let today = String::from_utf8(today.stdout).unwrap().trim().to_string();
+    let name = format!("{today}-0900-zoom.md");
+    std::fs::create_dir_all(home.join("transcripts")).unwrap();
+    let file = format!(
+        "# Transcript: Zoom, {today} 09:00\n\n- Started: {today} 09:00 (+00:00)\n- Ended: 09:42, 42 minutes\n\
+         - App: Zoom (us.zoom.xos)\n- Microphone: off\n- Started by: you\n\n> Heard on this Mac.\n\n\
+         - 09:00:12 **them**: made-up words in the file\n"
+    );
+    std::fs::write(home.join("transcripts").join(&name), &file).unwrap();
+    std::fs::write(home.join("transcripts").join(format!("{today}-1000-x.md")), "still being written").unwrap();
+    // A link to a finished one outside the folder, and a FIFO: neither listed, neither blocks.
+    std::fs::write(home.join("outside.md"), &file).unwrap();
+    std::os::unix::fs::symlink(home.join("outside.md"), home.join("transcripts").join(format!("{today}-0800-link.md")))
+        .unwrap();
+    let fifo = home.join("transcripts").join(format!("{today}-0700-fifo.md"));
+    assert!(std::process::Command::new("/usr/bin/mkfifo").arg(&fifo).status().unwrap().success());
+    let (fixture, apps) = (home.join("fixture.jsonl"), home.join("apps.json"));
+    std::fs::write(&fixture, LISTEN_FIXTURE).unwrap();
+    let made_up = json!([
+        {"pid": 101, "name": "Chrome", "windows": ["made-up tab one", "made-up tab two"]},
+        {"pid": 102, "name": "Zoom", "windows": ["made-up meeting"], "playing": true},
+    ]);
+    std::fs::write(&apps, made_up.to_string()).unwrap();
+    let env = [
+        ("OTTOSPACE_FEATURES", "transcripts"),
+        ("OTTOSPACE_LISTEN_FIXTURE", fixture.to_str().unwrap()),
+        ("OTTOSPACE_LISTEN_APPS", apps.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+    ];
+    let otto = Otto::launch_with("listen-idle", &env);
+    otto.call(json!({"cmd": "split"}));
+    // No conversation: ⌘⇧L opens the transcript, idle; Today lists the finished file alone.
+    otto.user_key("cmd-shift-l");
+    otto.listen_rect("listen-idle");
+    let listed = otto.wait_for("today's transcripts", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        let today = state["state"]["transcripts"]["today"].as_array().cloned().unwrap_or_default();
+        (!today.is_empty()).then_some(today)
+    });
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    // One row fits: no fade.
+    assert_eq!(fades(&otto.drawn(), "listen-idle"), json!({"top": false, "bottom": false}));
+    assert_eq!((&listed[0]["name"], &listed[0]["length_ms"]), (&json!(name), &json!(42 * 60_000)));
+    // Opened read-only by the user's click, not a client's; its words never in a client's state.
+    let row = otto.listen_rect("listen-past:0");
+    let theirs = otto.click(at(row, 0.5, 0.5), 1);
+    assert_eq!(theirs["state"]["transcripts"]["open"], Value::Null);
+    let open = otto.user_click(at(row, 0.5, 0.5));
+    assert_eq!(open["state"]["transcripts"]["open"], json!(name));
+    otto.listen_rect("listen-past-view");
+    let lines = otto.wait_for("the file's lines", |o| {
+        let lines = o.call(json!({"cmd": "state"}))["listen_lines"].clone();
+        (lines.as_array().is_some_and(|l| !l.is_empty())).then_some(lines)
+    });
+    assert_eq!(lines[0]["text"], "made-up words in the file", "{lines}");
+    let mut state = otto.call(json!({"cmd": "state"}));
+    state["listen_lines"] = Value::Null;
+    assert!(!state.to_string().contains("made-up words"), "the file's text reached the state");
+    otto.user_click(at(otto.listen_rect("listen-back"), 0.5, 0.5));
+    // Put away, the file gone meanwhile, opened again: Today is read anew, not what it last listed.
+    otto.user_key("cmd-shift-l");
+    assert!(otto.drawn()["listen_rects"].get("listen-idle").is_none(), "{}", otto.drawn()["listen_rects"]);
+    std::fs::remove_file(home.join("transcripts").join(&name)).unwrap();
+    std::thread::sleep(Duration::from_millis(1_500));
+    otto.user_key("cmd-shift-l");
+    otto.listen_rect("listen-idle");
+    otto.wait_for("Today without the file", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        state["state"]["transcripts"]["today"].as_array().is_some_and(Vec::is_empty).then_some(())
+    });
+    // The picker: a client's click opens none; the user's lists Zoom (playing) first, each window a
+    // row, no title in the state.
+    let pick = otto.listen_rect("listen-pick");
+    assert!(otto.click(at(pick, 0.5, 0.5), 1)["state"]["picker"].is_null());
+    let picker = otto.user_click(at(pick, 0.5, 0.5))["state"]["picker"].clone();
+    let rows: Vec<(String, bool)> = picker["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| (item["name"].as_str().unwrap().to_string(), item["playing"] == true))
+        .collect();
+    let want = [("Zoom", true), ("Chrome", false), ("Chrome", false)].map(|(n, p)| (n.to_string(), p));
+    assert_eq!((rows, &picker["transcribe"]), (want.to_vec(), &json!(true)));
+    assert!(!picker.to_string().contains("made-up"), "{picker}");
+    // A client's typing, ↓ and ↵ filter and pick nothing; the user's ↵ hears Zoom, in no pane.
+    let typed = otto.call(json!({"cmd": "key", "keys": "c h r"}));
+    assert_eq!(typed["state"]["picker"]["query"], "", "{}", typed["state"]["picker"]);
+    otto.call(json!({"cmd": "key", "keys": "down"}));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["picker"]["selected"], 0);
+    let theirs = otto.call(json!({"cmd": "key", "keys": "enter"}));
+    assert!(theirs["state"]["listen"].is_null() && theirs["state"]["picker"].is_object(), "{theirs}");
+    let on = otto.user_key("enter");
+    assert_eq!((&on["state"]["listen"]["source"], &on["state"]["picker"]), (&json!({"app": true}), &Value::Null));
+    otto.listen_finals(1);
+    otto.user_key("cmd-t");
+    let ids = otto.drawn()["listen_rects"].clone();
+    assert!(ids.as_object().unwrap().keys().all(|id| !id.starts_with("listen-dot")), "{ids}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// The files in `dir`, by name.
@@ -11229,6 +11828,33 @@ fn the_window_draws_on_after_the_displays_change() {
     assert_eq!(redraws(&otto), kicked);
 }
 
+/// At rest the tick sleeps: each frame only for a moment after something happened, then about
+/// once a second for the slow looks. It wakes for what happens with no request: a terminal's
+/// output, seconds later, is drawn.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn at_rest_the_tick_sleeps_and_wakes_for_output() {
+    let otto = Otto::launch("idle-tick");
+    otto.call(json!({"cmd": "split"}));
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    let ticks = |s: &Value| s["counts"]["ticks"].as_u64().expect("ticks");
+    std::thread::sleep(Duration::from_secs(2));
+    let before = ticks(&state(&otto));
+    std::thread::sleep(Duration::from_secs(4));
+    let after = ticks(&state(&otto));
+    // A second of frames after the request, then a few slow looks; each frame would be ~240.
+    assert!(after - before < 120, "{} ticks in 4 s at rest", after - before);
+
+    otto.call(json!({"cmd": "type", "text": "sleep 3; echo late-$((6*7))\r"}));
+    std::thread::sleep(Duration::from_millis(1500));
+    let asleep = state(&otto)["frame"]["number"].as_u64().expect("frame");
+    std::thread::sleep(Duration::from_secs(4));
+    let woken = state(&otto);
+    assert!(woken["frame"]["number"].as_u64().expect("frame") > asleep, "the output was not drawn");
+    let lines = woken["terminals"]["1"]["lines"].as_array().cloned().unwrap_or_default();
+    assert!(lines.iter().any(|l| l.as_str().is_some_and(|l| l.contains("late-42"))), "{lines:?}");
+}
+
 /// `<home>/log`: the start, the display the window is on, a change of the displays and the quit,
 /// private, in the folder the test named. Counts and sizes only.
 #[test]
@@ -11265,4 +11891,189 @@ fn the_log_says_the_start_the_displays_and_the_quit() {
     assert!(events.iter().all(|e| e["at"].as_str().is_some_and(|at| at.len() == 25)), "{events:?}");
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+}
+
+/// The markdown fixture and its picture, copied into a folder of the test's own: a test may
+/// change or remove them. The path as the app resolves it (the temp folder is behind a link).
+fn fixture_copy(name: &str) -> PathBuf {
+    let dir = support::temp(&format!("ottospace-e2e-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/markdown");
+    for file in ["fixture.md", "checker.png"] {
+        std::fs::copy(from.join(file), dir.join(file)).unwrap();
+    }
+    std::fs::canonicalize(&dir).unwrap()
+}
+
+/// Viewer `pane`'s view in a reply: `state.viewers`.
+fn view(reply: &Value, pane: u64) -> Value {
+    reply["state"]["viewers"][pane.to_string()].clone()
+}
+
+/// The state once viewer `pane` has read its file and been laid out: `lines` read, `most` known.
+fn viewer_read(otto: &Otto, pane: u64, lines: u64) -> Value {
+    otto.wait_for("the file read and laid out", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        let v = view(&state, pane);
+        (v["read"] == json!({"status": "shown", "lines": lines}) && v["most"].is_u64()).then_some(state)
+    })
+}
+
+fn line_count(path: &Path) -> u64 {
+    std::fs::read_to_string(path).unwrap().lines().count() as u64
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_file_opens_in_a_viewer_moves_by_counts_reloads_and_edits_beside() {
+    let dir = fixture_copy("viewer");
+    let file = dir.join("fixture.md");
+    let path = file.to_str().unwrap();
+    // The stand-in editor: says what it was given, then waits until it is killed.
+    let editor = dir.join("edit");
+    let script = format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {}/args\nwhile :; do sleep 0.1; done\n", dir.display());
+    std::fs::write(&editor, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let env = [("VISUAL", editor.to_str().unwrap()), ("EDITOR", "/usr/bin/false")];
+    let otto = Otto::launch_with("viewer", &env);
+    otto.call(json!({"cmd": "split"}));
+
+    // A client opens it beside the terminal: the pane says its path, the state its kind and lines.
+    let reply = otto.call(json!({"cmd": "open_file", "path": path}));
+    assert_eq!(reply["state"]["panes"][1]["kind"], json!({"type": "file", "path": path}));
+    assert_eq!((reply["state"]["focused"].as_u64(), view(&reply, 2)["shows"].as_str()), (Some(2), Some("markdown")));
+    let lines = line_count(&file);
+    let state = viewer_read(&otto, 2, lines);
+    assert_eq!(state["viewers"]["2"]["body"], "markdown");
+    assert_eq!(state["viewers"]["2"]["shape"]["blocks"]["table"], 2);
+    assert_eq!(state["titles"]["2"], "fixture.md");
+    // Never the file's text.
+    assert!(!state.to_string().contains("pneumonoultramicroscopic"), "the file's text is in the state");
+
+    // A count before a move: the status bar shows it typed; Esc takes it back.
+    let reply = otto.call(json!({"cmd": "key", "keys": "1 0"}));
+    assert_eq!(view(&reply, 2)["pending"], "10");
+    assert_eq!(view(&otto.call(json!({"cmd": "key", "keys": "escape"})), 2)["pending"], Value::Null);
+    assert_eq!(view(&otto.call(json!({"cmd": "key", "keys": "1 0 j"})), 2)["top"], 10);
+    let most = view(&otto.call(json!({"cmd": "key", "keys": "shift-g"})), 2)["most"].as_u64().unwrap();
+    assert!(most > 10, "the fixture is longer than the pane: {most}");
+    assert_eq!(view(&otto.call(json!({"cmd": "state"})), 2)["top"], most);
+    assert_eq!(view(&otto.call(json!({"cmd": "key", "keys": "g g 5 j"})), 2)["top"], 5);
+    // The shell drew it there: its next report says the same line.
+    otto.wait_for("the view at line 5", |o| (view(&o.call(json!({"cmd": "state"})), 2)["top"] == 5).then_some(()));
+    // Five lines down a long file: both edges fade.
+    assert_eq!(fades(&otto.drawn(), "viewer:2"), json!({"top": true, "bottom": true}));
+
+    // Changed on disk: read again, at the same line.
+    let mut text = std::fs::read_to_string(&file).unwrap();
+    text.push_str("\nOne more line.\n\nAnd another.\n");
+    std::fs::write(&file, &text).unwrap();
+    let state = viewer_read(&otto, 2, line_count(&file));
+    assert_eq!(view(&state, 2)["top"], 5);
+
+    // ⌃G: the user's editor on the file, in a terminal beside the viewer.
+    let reply = otto.call(json!({"cmd": "key", "keys": "ctrl-g"}));
+    assert_eq!((pane_ids(&reply), reply["state"]["focused"].as_u64()), (vec![1, 2, 3], Some(3)));
+    assert_eq!(reply["state"]["panes"][2]["kind"]["type"], "terminal");
+    let args = dir.join("args");
+    otto.wait_for("the editor", |_| std::fs::read_to_string(&args).ok().filter(|a| *a == format!("{path}\n")));
+
+    // Gone from disk: "File not found", and back when it is.
+    std::fs::remove_file(&file).unwrap();
+    otto.wait_for("the file missing", |o| {
+        (view(&o.call(json!({"cmd": "state"})), 2)["read"]["status"] == "missing").then_some(())
+    });
+    std::fs::write(&file, "# Back\n").unwrap();
+    viewer_read(&otto, 2, 1);
+
+    // A picture; and what is refused: a relative path, a folder, no file.
+    let picture = dir.join("checker.png");
+    let reply = otto.call(json!({"cmd": "open_file", "path": picture, "beside": 1}));
+    let id = pane_ids(&reply).into_iter().max().unwrap();
+    assert_eq!(view(&reply, id)["shows"], "image");
+    otto.wait_for("the picture", |o| {
+        (o.call(json!({"cmd": "state"}))["viewers"][id.to_string()]["body"] == "image").then_some(())
+    });
+    for bad in [json!("fixture.md"), json!(dir), json!(dir.join("gone.md"))] {
+        let reply = otto.raw(&json!({"cmd": "open_file", "path": bad}).to_string());
+        assert_eq!(reply["ok"], false, "{bad}: {reply}");
+    }
+    let reply = otto.raw(&json!({"cmd": "open_file", "path": picture, "beside": 99}).to_string());
+    assert_eq!(reply["error"], "no pane 99");
+
+    // The picker's "File…" asks for a file: a test run shows no panel and counts the ask.
+    otto.call(json!({"cmd": "picker"}));
+    otto.call(json!({"cmd": "picker_query", "query": "file"}));
+    let reply = otto.call(json!({"cmd": "picker_choose"}));
+    assert_eq!((reply["mode"].as_str(), reply["counts"]["file_prompts"].as_u64()), (Some("normal"), Some(1)));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_viewer_comes_back_after_a_restart_at_its_line() {
+    let dir = fixture_copy("viewer-restart");
+    let home = support::temp(&format!("ottospace-e2e-home-viewer-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let file = dir.join("fixture.md");
+    let path = file.to_str().unwrap();
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let mut otto = Otto::launch_with("viewer-restart-1", &env);
+    otto.call(json!({"cmd": "open_file", "path": path}));
+    viewer_read(&otto, 1, line_count(&file));
+    otto.call(json!({"cmd": "key", "keys": "2 0 j"}));
+    otto.wait_for("the view at line 20", |o| (view(&o.call(json!({"cmd": "state"})), 1)["top"] == 20).then_some(()));
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+    let text = std::fs::read_to_string(home.join("layout.json")).unwrap();
+    assert!(text.contains("\"type\": \"file\"") && text.contains("\"top\": 20"), "{text}");
+    assert!(!text.contains("pneumonoultramicroscopic"), "the file's text is not kept");
+
+    let otto = Otto::launch_with("viewer-restart-2", &env);
+    let state = viewer_read(&otto, 1, line_count(&file));
+    assert_eq!(state["state"]["panes"][0]["kind"], json!({"type": "file", "path": path}));
+    otto.wait_for("the view back at line 20", |o| {
+        (view(&o.call(json!({"cmd": "state"})), 1)["top"] == 20).then_some(())
+    });
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_cmd_click_on_a_path_in_a_terminal_opens_the_viewer_beside_and_reuses_it() {
+    let dir = fixture_copy("viewer-click");
+    std::fs::write(dir.join("notes.txt"), "one\ntwo\n").unwrap();
+    let otto = Otto::launch("viewer-click");
+    otto.call(json!({"cmd": "split"}));
+    let typed = format!("cd '{}' && printf 'fixture.md\\nnotes.txt:2\\n'\r", dir.display());
+    otto.call(json!({"cmd": "type", "pane": 1, "text": typed}));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^notes.txt:2$"}));
+    let state = otto.drawn();
+    let lines: Vec<String> =
+        state["terminals"]["1"]["lines"].as_array().unwrap().iter().map(|l| l.as_str().unwrap().to_string()).collect();
+    let bounds = rect(&state["bounds"]["1"]);
+    let cell = (state["cell"][0].as_f64().unwrap(), state["cell"][1].as_f64().unwrap());
+    let on = |text: &str| {
+        let row =
+            lines.iter().position(|line| line == text).unwrap_or_else(|| panic!("{text} not on screen: {lines:?}"));
+        [bounds[0] + cell.0 * 2.5, bounds[1] + cell.1 * (row as f64 + 0.5)]
+    };
+    let cmd_click = |p: [f64; 2]| {
+        otto.call(json!({"cmd": "mouse", "action": "down", "x": p[0], "y": p[1], "modifiers": ["cmd"]}));
+        otto.call(json!({"cmd": "mouse", "action": "up", "x": p[0], "y": p[1], "modifiers": ["cmd"]}))
+    };
+    let fixture = dir.join("fixture.md");
+    cmd_click(on("fixture.md"));
+    let reply = otto.wait_for("the viewer", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        (pane_ids(&state) == [1, 2]).then_some(state)
+    });
+    assert_eq!(reply["state"]["panes"][1]["kind"], json!({"type": "file", "path": fixture}));
+    assert_eq!((reply["state"]["focused"].as_u64(), view(&reply, 2)["opener"].as_u64()), (Some(1), Some(1)));
+    // The next one goes to the same viewer; the line number is no part of the path.
+    cmd_click(on("notes.txt:2"));
+    let reply = otto.wait_for("the viewer reused", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        (state["state"]["panes"][1]["kind"]["path"] == json!(dir.join("notes.txt"))).then_some(state)
+    });
+    assert_eq!((pane_ids(&reply), view(&reply, 2)["shows"].as_str()), (vec![1, 2], Some("text")));
 }

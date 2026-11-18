@@ -15,6 +15,16 @@ pub const MAX_BLOCKS: usize = 300;
 pub const MAX_LINE: usize = 2000;
 /// The most lines of a code block drawn; Copy takes all of it.
 pub const MAX_CODE_LINES: usize = 400;
+/// How much of a text is drawn: a reply's (`CHAT`) or a viewed file's (`FILE`), which is longer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Caps {
+    pub blocks: usize,
+    pub code_lines: usize,
+}
+
+pub const CHAT: Caps = Caps { blocks: MAX_BLOCKS, code_lines: MAX_CODE_LINES };
+/// A file the viewer reads is at most 5 MB: this draws all of most, and stops before a stall.
+pub const FILE: Caps = Caps { blocks: 20_000, code_lines: 20_000 };
 /// Containers nested deeper than this are drawn flat.
 const MAX_DEPTH: usize = 12;
 /// The image files a thumbnail is drawn for.
@@ -109,6 +119,7 @@ struct Open {
 
 struct Builder<'a> {
     repo: Option<&'a str>,
+    caps: Caps,
     frames: Vec<Frame>,
     style: Style,
     links: Vec<Open>,
@@ -124,9 +135,15 @@ struct Builder<'a> {
 
 /// `text`, a reply's markdown, as blocks. `repo`: the task's repository, whose files may be links.
 pub fn parse(text: &str, repo: Option<&str>) -> Vec<Block> {
+    parse_with(text, repo, CHAT)
+}
+
+/// `parse`, drawing as much as `caps` says: a viewed file's folder is its `repo`.
+pub fn parse_with(text: &str, repo: Option<&str>, caps: Caps) -> Vec<Block> {
     let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let mut b = Builder {
         repo,
+        caps,
         frames: vec![Frame::Root(Vec::new())],
         style: Style::default(),
         links: Vec::new(),
@@ -296,8 +313,9 @@ impl Builder<'_> {
             Frame::Code { label, text } => {
                 let copy = text.strip_suffix('\n').unwrap_or(&text).to_string();
                 let lines: Vec<&str> = copy.split('\n').collect();
-                let shown: Vec<String> = lines.iter().take(MAX_CODE_LINES).map(|line| cap(line, MAX_LINE)).collect();
-                let more = lines.len().saturating_sub(MAX_CODE_LINES);
+                let most = self.caps.code_lines;
+                let shown: Vec<String> = lines.iter().take(most).map(|line| cap(line, MAX_LINE)).collect();
+                let more = lines.len().saturating_sub(most);
                 self.block(Block::Code { label, shown: shown.join("\n"), copy, more });
             }
             Frame::Table { mut rows, row, cell } => {
@@ -341,7 +359,7 @@ impl Builder<'_> {
 
     /// True if one more block may be drawn; else it is counted as cut.
     fn room(&mut self) -> bool {
-        let room = self.blocks < MAX_BLOCKS;
+        let room = self.blocks < self.caps.blocks;
         if room {
             self.blocks += 1
         } else {
@@ -559,6 +577,50 @@ mod tests {
         assert!(count(&parse(&"![x](a.png)\n\n".repeat(MAX_BLOCKS * 2), REPO)) <= MAX_BLOCKS * 2 + 2);
         let deep = format!("{}x", "> ".repeat(500));
         assert!(!parse(&deep, None).is_empty());
+    }
+
+    /// The fixture the viewer's pictures are taken of (`tests/fixtures/markdown`): every kind of
+    /// block it holds is drawn, each fence's language named, its picture beside it local.
+    #[test]
+    fn the_fixture_gives_every_kind_of_block() {
+        let text = include_str!("../tests/fixtures/markdown/fixture.md");
+        let blocks = parse_with(text, Some("/fixture"), FILE);
+        let mut labels = Vec::new();
+        fn walk<'a>(blocks: &'a [Block], labels: &mut Vec<&'a str>, kinds: &mut Vec<&'static str>) {
+            for block in blocks {
+                let kind = match block {
+                    Block::Para(_) => "para",
+                    Block::Heading(_) => "heading",
+                    Block::Code { label, .. } => {
+                        labels.extend(label.as_deref());
+                        "code"
+                    }
+                    Block::Quote(inner) => {
+                        walk(inner, labels, kinds);
+                        "quote"
+                    }
+                    Block::List { items, .. } => {
+                        items.iter().for_each(|item| walk(item, labels, kinds));
+                        "list"
+                    }
+                    Block::Table(_) => "table",
+                    Block::Image { .. } => "image",
+                    Block::Rule => "rule",
+                    Block::Cut { .. } => "cut",
+                };
+                kinds.push(kind);
+            }
+        }
+        let mut kinds = Vec::new();
+        walk(&blocks, &mut labels, &mut kinds);
+        let count = |kind: &str| kinds.iter().filter(|k| **k == kind).count();
+        let langs = ["rust", "ts", "js", "python", "sh", "json", "yaml", "toml", "go", "swift", "sql", "diff"];
+        assert_eq!(labels, langs);
+        assert_eq!((count("table"), count("rule"), count("cut")), (2, 2, 0));
+        assert!(count("heading") >= 10 && count("quote") >= 4 && count("list") >= 6, "{kinds:?}");
+        assert!(blocks.contains(&Block::Image { path: "/fixture/checker.png".into() }));
+        let web = links_of(&blocks).iter().filter(|link| matches!(link.target, Target::Web(_))).count();
+        assert!(web >= 5, "{web} web links");
     }
 
     /// Whatever the model writes: no panic, every link one `links::target` gives for its own

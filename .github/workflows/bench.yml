@@ -1,0 +1,84 @@
+name: Bench
+
+# Startup, memory and CPU of the app (`scripts/bench`, docs/development.md "Benchmarks"). On a
+# pull request that changes a crate: the base branch's tip against the pull request merged into it
+# (main's own changes since the branch point are on both sides), on one runner, alternating. Red
+# past the thresholds in scripts/bench, never a required check: whoever merges a red run says in
+# the pull request whether the regression is real and accepted.
+# Nightly and by hand on main: this tree alone, its JSON kept for trends.
+on:
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'Cargo.lock'
+      - 'scripts/bench'
+      - 'scripts/shot'
+      # The sessions it copies into its fixture.
+      - 'scripts/shots/restart/sessions/**'
+      - 'scripts/shots/tasks/codex/**'
+      - '.github/workflows/bench.yml'
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+
+# pull_request, never pull_request_target: a fork's run gets a read-only token and no secrets.
+permissions: {}
+
+concurrency:
+  group: bench-${{ github.event.pull_request.number || github.ref }}
+  # A run by hand on main does not cancel the nightly one.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bench:
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge commit's parents: the base branch's tip is built too.
+          fetch-depth: 2
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      # The dev build, as ci.yml's e2e job builds it: reads the cache it saves on main, saves none.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: e2e
+          save-if: false
+      - name: Build
+        run: |
+          cargo build -p ottospace --bin ottospace --locked
+          cp target/debug/ottospace "$RUNNER_TEMP/ottospace-after"
+      # HEAD is the merge commit: its parents are the base branch's tip and the pull request.
+      - name: Bench
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            base="$(git rev-parse HEAD^1)"
+            echo "base: $base"
+            set -- --compare "$base" --bin-after "$RUNNER_TEMP/ottospace-after"
+          else
+            set -- --bin "$RUNNER_TEMP/ottospace-after"
+          fi
+          status=0
+          # A hosted runner's launches vary 3x (345 to 1090 ms): more of them than the default 10 and 5.
+          scripts/bench "$@" --runs 20 --cold-runs 10 --out "$RUNNER_TEMP/bench" || status=$?
+          { echo "## Bench"; echo; cat "$RUNNER_TEMP/bench/bench.md" 2>/dev/null || echo "No results: see the log."; } \
+            >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: bench-${{ github.sha }}
+          path: ${{ runner.temp }}/bench
+          if-no-files-found: warn
+          retention-days: 90

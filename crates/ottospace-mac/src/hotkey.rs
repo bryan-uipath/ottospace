@@ -64,6 +64,7 @@ extern "C" fn on_hot_key(_: *mut c_void, event: *mut c_void, _: *mut c_void) -> 
     let flag = (status == 0).then(|| PRESSED.get(id.id.wrapping_sub(1) as usize)).flatten();
     if let Some(flag) = flag {
         flag.store(true, Relaxed);
+        crate::wake::post();
     }
     0
 }

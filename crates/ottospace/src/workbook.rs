@@ -248,6 +248,25 @@ impl Workspace {
         self.model.workbook_rows().into_iter().map(row).collect()
     }
 
+    /// The closing temporary workspaces as the state lists them: each one's id, name and where its
+    /// Undo is drawn.
+    pub(crate) fn closing_json(&self) -> Vec<serde_json::Value> {
+        let drawn = |id: String| self.controls.bounds(&id).map(rect);
+        let row = |row: ottospace_core::workbook::ClosingRow| {
+            let mut value = serde_json::json!(row);
+            value["undo"] = serde_json::json!(drawn(format!("workbook-reopen:{}", row.id)));
+            value
+        };
+        self.model.workbooks.closing_rows().into_iter().map(row).collect()
+    }
+
+    /// Undo on closing workspace `id`'s row, by click or label. The clock first, as the bar's Undo:
+    /// one whose time is up stays gone.
+    pub(crate) fn reopen_workbook(&mut self, id: WorkbookId, window: &Window, cx: &mut Context<Self>) {
+        self.tick_now();
+        self.dispatch(Action::WorkbookReopen { workbook: id }, self.input, window, cx);
+    }
+
     /// The name of the workbook open tab `tab` stands for: the tab bar marks it.
     pub(crate) fn workbook_of(&self, tab: u32) -> Option<String> {
         let (id, _) = self.model.workbooks.entry_of(tab)?;
@@ -288,7 +307,7 @@ impl Workspace {
     /// unfolded one under it. A click opens; hover (or list mode's selection) shows its ….
     pub(crate) fn render_workbooks(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.model.workbook_rows();
-        let empty = rows.is_empty().then(|| {
+        let empty = (rows.is_empty() && self.model.workbooks.closing_rows().is_empty()).then(|| {
             let new = div()
                 .id("workbook-new")
                 .relative()
@@ -346,10 +365,10 @@ impl Workspace {
                         this.click_workbook("workbook-fold", id, None, window, cx);
                     }))
             });
-            // A temporary one's name is muted, and its tip says so.
+            // A temporary one's name is muted and italic, and its tip says so.
             let temporary = !self.model.workbooks.is_kept(id);
             let name = self.workbook_name(renaming, row.name.clone(), cx);
-            let name = if temporary && !renaming { name.text_color(rgb(theme::MUTED)) } else { name };
+            let name = if temporary && !renaming { name.text_color(rgb(theme::MUTED)).italic() } else { name };
             let summary = if temporary { format!("{} · {TEMPORARY_TIP}", row.summary) } else { row.summary.clone() };
             // Bound to a task: the task's badge, where the dot is.
             let lead = match row.task.and_then(|task| self.task_badge(task, 16.)) {
@@ -402,9 +421,35 @@ impl Workspace {
             }
             children.extend(crate::well(tabs, 4.));
         }
+        // Each closing temporary workspace under the others, with its own Undo until its time is up,
+        // whatever the notice bar offers since. Not a list row: Undo is its one act.
+        for row in self.model.workbooks.closing_rows() {
+            let id = row.id;
+            let control = format!("workbook-reopen:{id}");
+            let undo = div()
+                .id(ElementId::Name(control.clone().into()))
+                .relative()
+                .flex_none()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(rgb(theme::PRIMARY))
+                .hover(|s| s.underline())
+                .child("Undo")
+                .child(self.controls.mark(control))
+                .on_click(cx.listener(move |this, _, window, cx| this.reopen_workbook(id, window, cx)));
+            let name = crate::cut_text(row.name).flex_1().min_w_0().italic().text_color(rgb(theme::MUTED));
+            let closing = div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child("Closing");
+            let line = crate::sidebar_row(ElementId::Name(format!("workbook-closing:{id}").into()), false)
+                .opacity(0.8)
+                .child(dot(false))
+                .child(name)
+                .child(closing)
+                .child(undo);
+            children.push(line.into_any_element());
+        }
         // A delete or an update is offered back on the notice bar: nothing here moves.
         let list = div().id("workbooks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         let list = list.track_scroll(&self.list_scroll).children(empty).children(children);
-        self.bars.tracked("workbooks", list, &self.list_scroll)
+        self.bars.tracked("workbooks", list, &self.list_scroll, theme::RAISED)
     }
 }

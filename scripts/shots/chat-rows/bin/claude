@@ -1,0 +1,3 @@
+#!/bin/sh
+# The agents crate's stand-in.
+exec "{REPO}/crates/ottospace-agents/tests/fakes/claude" "$@"

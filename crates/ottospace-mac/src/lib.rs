@@ -19,5 +19,6 @@ pub mod recovery;
 pub mod speech;
 pub mod status_item;
 pub mod time;
+pub mod wake;
 pub mod wheel;
 pub mod window;

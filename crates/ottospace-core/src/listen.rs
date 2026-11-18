@@ -30,19 +30,69 @@ pub const RING: usize = 2_000;
 /// The most characters of one line.
 pub const MAX_LINE: usize = 2_000;
 
-/// Where the sound comes from: the app of a pane's window.
+/// Where the sound comes from: the app of a pane's window, or an app the user picked
+/// ("Transcribe a window…"), by its pid, in a pane or not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
     Pane(PaneId),
+    App { pid: i32 },
 }
 
 impl Source {
     pub fn pane(self) -> Option<PaneId> {
         match self {
             Source::Pane(pane) => Some(pane),
+            Source::App { .. } => None,
         }
     }
+}
+
+/// Why a client's move or pick in the transcript's picker is refused.
+pub const PICK_USERS: &str = "only the user picks what is transcribed";
+/// A pick of an app that is not in the picker's list.
+pub const NOT_LISTED: &str = "that app is not in the list";
+
+/// An app that can play sound, as the shell lists it for the picker: its windows' titles (drawn
+/// for the user, never in the state) and whether it plays sound now.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct SoundApp {
+    pub pid: i32,
+    pub name: String,
+    #[serde(default)]
+    pub bundle: Option<String>,
+    #[serde(default)]
+    pub windows: Vec<String>,
+    #[serde(default)]
+    pub playing: bool,
+}
+
+/// The picker's rows, in order: the apps playing sound now first, then by name; each window of
+/// an app a row of its own, an app with none one row. Each app once.
+pub fn sound_rows(all: &[SoundApp]) -> Vec<(i32, String, Option<String>, bool)> {
+    let mut apps: Vec<&SoundApp> = Vec::new();
+    for app in all {
+        if !apps.iter().any(|seen| seen.pid == app.pid) {
+            apps.push(app);
+        }
+    }
+    apps.sort_by_key(|app| (!app.playing, app.name.to_lowercase(), app.pid));
+    let rows = apps.into_iter().flat_map(|app| {
+        let windows: Vec<Option<String>> = match app.windows.is_empty() {
+            true => vec![None],
+            false => app.windows.iter().map(|title| Some(crate::capture::plain(title, 200))).collect(),
+        };
+        windows.into_iter().map(|window| (app.pid, app.name.clone(), window, app.playing))
+    });
+    rows.collect()
+}
+
+/// Where the red dot of the pane being heard goes while its tab is not on show: on its tab in
+/// the second row (its space selected; a tab's id), else on its space in the top row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Dot {
+    Space(crate::model::Owner),
+    Tab(u32),
 }
 
 /// Whose voice a line is: the app's (`them`), or the microphone's (`me`).
@@ -184,6 +234,24 @@ pub struct Listening {
     /// The pane whose transcript stopped because its sound stopped coming: its header shows a grey
     /// dot until the user's Stop (its ×), a new start or the pane's close. Not in the state.
     pub lost: Option<PaneId>,
+    /// The apps the picker last listed (`ListenPicker`): a pick names one by its pid. Not in the state.
+    pub apps: Vec<SoundApp>,
+}
+
+/// `transcripts` in the state: today's finished ones (`file::today`), by file name, start and
+/// length, never their text; and the one open read-only in the drawer, by name.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Today {
+    pub today: Vec<file::Past>,
+    pub open: Option<String>,
+}
+
+/// A transcript's source in the state: the pane, or `{"app": true}` (which app is not said).
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SourceShown {
+    Pane(PaneId),
+    App(bool),
 }
 
 /// `listen` in the state: status, source, mic and times. Never the text, a line count or when
@@ -191,9 +259,9 @@ pub struct Listening {
 impl Serialize for Listening {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         #[derive(Serialize)]
-        struct Shown<'a> {
+        struct Shown {
             status: Status,
-            source: &'a Source,
+            source: SourceShown,
             mic: bool,
             auto: bool,
             started_ms: u64,
@@ -202,7 +270,10 @@ impl Serialize for Listening {
         }
         let shown = self.on.as_ref().map(|on| Shown {
             status: on.status,
-            source: &on.source,
+            source: match on.source {
+                Source::Pane(pane) => SourceShown::Pane(pane),
+                Source::App { .. } => SourceShown::App(true),
+            },
             mic: on.mic,
             auto: false,
             started_ms: on.started,
@@ -292,12 +363,10 @@ impl Listening {
     }
 
     /// Ends the one on (of `id`, if given): the one that ended, for the shell to close its
-    /// streams and its file.
+    /// streams and its file. A drawer on it stays, on the transcript idle.
     pub fn end(&mut self, id: Option<&str>) -> Option<Listen> {
         let ends = self.on.as_ref().is_some_and(|on| id.is_none_or(|id| on.id == id));
-        let on = self.on.take_if(|_| ends)?;
-        self.shown = false;
-        Some(on)
+        self.on.take_if(|_| ends)
     }
 
     /// The pane being heard, if one is.
@@ -343,7 +412,7 @@ mod tests {
         assert_eq!(l.pane(), Some(1));
         assert_eq!(l.end(Some("t2")), None, "another's end ends nothing");
         assert_eq!(l.end(None).map(|on| on.id).as_deref(), Some("t1"));
-        assert!(l.on.is_none() && !l.shown);
+        assert!(l.on.is_none() && l.shown, "the drawer stays, on the transcript idle");
     }
 
     #[test]

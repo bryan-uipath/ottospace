@@ -9,7 +9,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering::SeqCst};
 use std::time::Duration;
 
 use ottospace_core::ax::Frame;
@@ -115,7 +115,7 @@ fn give_back(entries: &[Entry], only: Option<i32>, screens: &Screens, skip: &[(i
         if !process::alive(e.pid) {
             continue;
         }
-        // Only a standard window of that pid with that id: the file's numbers are untrusted.
+        // Only a standard window or dialog of that pid with that id: the file's numbers are untrusted.
         let back = match ax::Window::find(e.pid, e.window) {
             Some(window) => {
                 let now = window.frame().map(recovery::to_frame);
@@ -291,7 +291,11 @@ extern "C" fn on_signal(signal: c_int) {
     if SIGNALS.fetch_add(1, SeqCst) > 0 {
         unsafe { _exit(128 + signal) };
     }
+    crate::signal_pipe::ring(&PIPE);
 }
+
+/// The pipe a quit signal rings: its thread wakes the main loop, which quits.
+static PIPE: AtomicI32 = AtomicI32::new(-1);
 
 const SIGHUP: c_int = 1;
 
@@ -300,6 +304,9 @@ const SIGHUP: c_int = 1;
 pub fn on_signals() {
     unsafe extern "C" {
         fn signal(signal: c_int, handler: extern "C" fn(c_int)) -> usize;
+    }
+    if let Some(fd) = crate::signal_pipe::start("signals", ottospace_mac::wake::post) {
+        PIPE.store(fd, SeqCst);
     }
     for sig in [SIGHUP, 2, 15] {
         unsafe { signal(sig, on_signal) };

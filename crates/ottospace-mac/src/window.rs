@@ -253,6 +253,7 @@ static ZOOM_ASKED: AtomicBool = AtomicBool::new(false);
 /// `zoom:`: no zoom; the shell fills the display instead.
 extern "C-unwind" fn zoom_instead(_: &AnyObject, _: Sel, _: *mut AnyObject) {
     ZOOM_ASKED.store(true, Ordering::SeqCst);
+    crate::wake::post();
 }
 
 /// Makes a zoom of the window ask the shell (`take_zoom`) instead of resizing it: `zoom:` is
@@ -345,6 +346,19 @@ pub unsafe fn add_button(ns_view: *mut c_void, title: &str, at: [f64; 4]) {
     };
     button.setFrame(frame_in(view, at));
     view.addSubview(&button);
+}
+
+/// Gives the view's window the accessibility subrole `subrole` (`AXDialog`): what another app
+/// reads of it. For the canary, whose GPUI windows are all standard.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread.
+pub unsafe fn set_subrole(ns_view: *mut c_void, subrole: &str) {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    if let Some(window) = view.window() {
+        let subrole = objc2_foundation::NSString::from_str(subrole);
+        let _: () = unsafe { msg_send![&*window, setAccessibilitySubrole: &*subrole] };
+    }
 }
 
 /// Moves the view's window so its top left is at `x`, `y`, in Accessibility's coordinates

@@ -378,7 +378,7 @@ impl Workspace {
             .into_iter()
             .filter(|(pid, ..)| only(*pid))
             .find_map(|(pid, bundle, name)| marks::same_app(app, (bundle.as_deref(), &name)).then_some(pid));
-        let shown = |pid: i32| ax::Window::standard_of(pid).iter().any(hostable);
+        let shown = |pid: i32| ax::Window::all_of(pid).iter().any(hostable);
         if let Some(pid) = pid.filter(|pid| shown(*pid)) {
             return self.host_window_of(pid, &wanted, window, cx);
         }
@@ -409,7 +409,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let main = ax::Window::main_id(pid);
-        let windows: Vec<ax::Window> = ax::Window::standard_of(pid).into_iter().filter(hostable).collect();
+        let windows: Vec<ax::Window> = ax::Window::all_of(pid).into_iter().filter(hostable).collect();
         let held = |id: u32| self.hosted.iter().find(|(_, hosted)| hosted.window_id == id).map(|(pane, _)| *pane);
         let fact = |window: &ax::Window| {
             let id = window.id()?;
@@ -578,11 +578,12 @@ impl Workspace {
         });
         let list = div().id("marks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         let list = list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows);
-        self.bars.tracked("marks", list.children(hint), &self.list_scroll)
+        self.bars.tracked("marks", list.children(hint), &self.list_scroll, theme::RAISED)
     }
 }
 
-/// A window that may go in a pane: one the rules let in, not minimised (its stream would draw nothing).
+/// A window that may go in a pane: one the rules let in, not minimised (its stream would draw
+/// nothing), not a sheet or child window (macOS keeps it on its parent).
 fn hostable(window: &ax::Window) -> bool {
-    !window.minimized() && window_managed(window)
+    !window.minimized() && window_managed(window) && !window.quick(ax::Window::sheet)
 }

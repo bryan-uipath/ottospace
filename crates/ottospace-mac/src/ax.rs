@@ -42,6 +42,11 @@ pub fn is_frontmost(pid: i32) -> bool {
     copy_attr(&app, "AXFrontmost").and_then(|v| v.downcast::<CFBoolean>().ok()).is_some_and(|front| front.as_bool())
 }
 
+/// As `is_frontmost`, asked of AppKit, not of the app: a hung app costs no wait.
+pub fn is_active(pid: i32) -> bool {
+    NSRunningApplication::runningApplicationWithProcessIdentifier(pid).is_some_and(|app| app.isActive())
+}
+
 /// Whether this process (or its parent terminal) has Accessibility access; optionally prompts.
 pub fn is_trusted(prompt: bool) -> bool {
     let key = CFString::from_static_str("AXTrustedCheckOptionPrompt");
@@ -55,15 +60,23 @@ pub struct Window {
     pid: i32,
 }
 
+/// `Window::quick`'s wait for each Accessibility call, in seconds.
+const QUICK: f32 = 0.25;
+
 impl Window {
     /// The app's standard windows (skips the desktop, panels, popovers).
     pub fn standard_of(pid: i32) -> Vec<Self> {
+        Self::all_of(pid).into_iter().filter(Self::is_standard).collect()
+    }
+
+    /// Every window the app lists: dialogs and panels too.
+    pub fn all_of(pid: i32) -> Vec<Self> {
         let app = unsafe { AXUIElement::new_application(pid) };
         let Some(all) = copy_attr(&app, "AXWindows").and_then(|a| a.downcast::<CFArray>().ok()) else {
             return Vec::new();
         };
         let all = unsafe { CFRetained::cast_unchecked::<CFArray<AXUIElement>>(all) };
-        all.iter().map(|element| Self { element, pid }).filter(Self::is_standard).collect()
+        all.iter().map(|element| Self { element, pid }).collect()
     }
 
     /// The app's main window if it's a standard window, else its first standard window.
@@ -90,16 +103,22 @@ impl Window {
             .or_else(|| Self::standard_of(pid).into_iter().find(|window| keep(window)))
     }
 
-    /// The standard window with this window-server id, if `pid` still has it.
+    /// The standard window or dialog (`rules::judged`: one a `split` rule may put in a pane) with
+    /// this window-server id, if `pid` still has it. Never a toast or popover.
     pub fn find(pid: i32, id: u32) -> Option<Self> {
-        Self::standard_of(pid).into_iter().find(|w| w.id() == Some(id))
+        Self::all_of(pid).into_iter().find(|w| w.id() == Some(id) && w.judged())
+    }
+
+    /// A kind of window `rules::place` decides on: standard, dialog or panel.
+    pub fn judged(&self) -> bool {
+        ottospace_core::rules::judged(&self.subrole().unwrap_or_default())
     }
 
     /// Runs `ask` with a short wait for the app (a quarter of a second a call, not AX's 6), then
     /// puts the default back: for a question whose answer has a fallback, asked on the main
     /// thread. An app that hangs then costs the user a blink, not seconds.
     pub fn quick<R>(&self, ask: impl FnOnce(&Self) -> R) -> R {
-        unsafe { self.element.set_messaging_timeout(0.25) };
+        unsafe { self.element.set_messaging_timeout(QUICK) };
         let answer = ask(self);
         // 0: the default again.
         unsafe { self.element.set_messaging_timeout(0.0) };
@@ -149,6 +168,29 @@ impl Window {
 
     pub fn subrole(&self) -> Option<String> {
         Some(copy_attr(&self.element, "AXSubrole")?.downcast::<CFString>().ok()?.to_string())
+    }
+
+    /// `AXModal`: the window blocks its app until answered.
+    pub fn modal(&self) -> bool {
+        let value = copy_attr(&self.element, "AXModal").and_then(|v| v.downcast::<CFBoolean>().ok());
+        value.is_some_and(|modal| modal.as_bool())
+    }
+
+    /// A sheet (`AXSheet`), or a window whose `AXParent` is a window: macOS keeps it on that one.
+    pub fn sheet(&self) -> bool {
+        let role = |element: &AXUIElement| Some(copy_attr(element, "AXRole")?.downcast::<CFString>().ok()?.to_string());
+        let parent = copy_attr(&self.element, "AXParent").and_then(|p| p.downcast::<AXUIElement>().ok());
+        // `quick`'s short wait for the parent too: a reference of its own, the wait goes with it.
+        if let Some(parent) = &parent {
+            unsafe { parent.set_messaging_timeout(QUICK) };
+        }
+        role(&self.element).as_deref() == Some("AXSheet")
+            || parent.is_some_and(|parent| matches!(role(&parent).as_deref(), Some("AXWindow" | "AXSheet")))
+    }
+
+    /// Asks for this window in front, without activating its app: the keyboard stays where it is.
+    pub fn raise_only(&self) {
+        unsafe { self.element.perform_action(&CFString::from_static_str("AXRaise")) };
     }
 
     /// The app's own name for this window (`AXIdentifier`): Zoom's `zm.meeting.window.main`.

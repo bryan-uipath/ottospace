@@ -979,7 +979,7 @@ fn the_calendar_section_is_there_only_with_a_feed() {
         Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() }
             .sent_by(Origin::System),
     );
-    assert_eq!(m.sections()[..2], [Section::Tasks, Section::Calendar]);
+    assert_eq!(m.sections()[..3], [Section::Repos, Section::Tasks, Section::Calendar]);
     m.update(Action::ToggleSection { section: Section::Calendar });
     assert_eq!(m.sidebar, Some(Section::Calendar));
     // Not written to the layout: a build without the section could not read the file.

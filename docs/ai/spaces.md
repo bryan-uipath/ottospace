@@ -58,17 +58,32 @@ need to persist by default. maybe we need a way to differentiate persisted vs no
   at once, its space hidden with its tabs, and the notice bar offers `Workspace closed` with Undo
   for `NOTICE_MS` (#208's offer, `Change::Closed`). The user's Undo brings it back on the row,
   selected, as it was. The user's × or ⌘⌃W on one whose terminal runs a program asks first
-  (`SpaceHideAsked`, `Confirm::close`), as ⌘Q does: closed, the program ends with the Undo. Its time up (a `Tick`; × on the bar sets it up now, and the shell ticks then): its tabs close, their
+  (`SpaceHideAsked`, `Confirm::close`), as ⌘Q does: closed, the program ends with the Undo. So
+  does the user's close of its last tab (⌘⇧W, the tab's × or label: `CloseTabAsked`, turned into
+  `SpaceHideAsked` or `CloseTab` before any step by `close_tab_asked`): yes closes the workspace,
+  its tab kept for the Undo. Its time up (a `Tick`; × on the bar sets it up now, and the shell ticks then): its tabs close, their
   terminals and windows with them, and it is gone. Only time passing ends one, so no other step
   ends a pane by it. A tab of it selected meanwhile (a mark, a client's `select_tab`) puts it back
-  on the row, temporary still, and the offer goes. A second close while one is offered takes the
-  bar; the first still goes at its own time.
+  on the row, temporary still, and the offer goes, only by the user's step: a client's
+  `select_tab`, focus or mark into it, a pane moved into or out of it, or its tab or pane closed, is
+  refused (`CLOSING`, `touches_closing`), and any other
+  step not the user's that puts it on the row is undone in `settle_closing` (its space hidden
+  again, the tab on show before back: `keep_closing`). A window the shell adopts beside a pane of
+  it joins the tab on show instead (`Model::in_closing`). No step but the user's opens a pane
+  in it, or another file in its viewer: `Open` or `OpenFile` beside a pane of it, ⌃G's editor
+  on its viewer, a pane dropped on one of it or moved to its tab, a client's `Fill` of its
+  empty pane are refused (`CLOSING_OPENS`,
+  `opens_in_closing`). A second close while one is offered takes
+  the bar; the first still goes at its own time, and keeps its own Undo: each closing workspace
+  shows under the others in the section (`Workbooks::closing_rows`, state `workbooks_closing`),
+  italic, `Closing` and Undo (`WorkbookReopen`, the user's alone; by click or label, the clock
+  moved first as for the bar's), whatever the bar says since.
 - **Who.** Only the user's step closes one or keeps one: a client's `hide_space` or `close_tab`
   leaves it listed (hidden, it comes back after a restart as an open one does; with no tab left
   it goes at quit, having no file), and its `WorkbookKeep` is refused (`USERS_ALONE`).
 - **Numbering.** + names a new one with the lowest free number among the listed workspaces and
   one whose Undo is offered (`free_name`): once closed ones go, "Workspace 2" comes again.
-- **Look.** Its name is muted on the top row and in the section, its tip "Temporary: closes
+- **Look.** Its name is muted and italic on the top row (selected or not) and in the section, its tip "Temporary: closes
   without saving · ⋯ Keep". The state says `spaces[].kept` (false only for a temporary
   workspace) and `workbook_offer` `closed`.
 - **Migration.** Every file read is kept: a workspace saved before this rule was one the user
@@ -76,7 +91,9 @@ need to persist by default. maybe we need a way to differentiate persisted vs no
   of an older layout's first space ("Workspace") is kept too.
 - Property rules: no step but the user's keeps or closes a temporary workspace or takes one off
   the list (the files read again aside); no temporary workspace is written; a closing one is not
-  listed, not on the row, not kept and not in `layout.json`, nor are its tabs.
+  listed, not on the row, not kept and not in `layout.json`, nor are its tabs; no step but the
+  user's brings a closing one back, whatever the action; no client's changes its panes (time
+  aside), and no shell's step adds one.
 
 ## Home (built)
 
@@ -373,28 +390,42 @@ right now"; "i'd expect < 5 so the ui should be suitable for that".
 The owner's design (2026-11-16, the canvas "Right rail"): one way to switch what the drawer
 shows, a column at its right edge, replacing the strip.
 
-- **Items** (`Model::rail`, `model/rail.rs`): the transcript while one is on (running or paused;
-  none that ended), then the selected space's tasks by urgency (needs you, running, later, on
-  hold; done ones left out but the one in front). Fewer than two: no rail, as before.
-- **Drawn** (`drawer_rail.rs`): 48 points wide, inside the drawer's width. The transcript's
-  waveform (in the accent while selected) with a red dot while it records, a divider, each
-  task's badge with its state's dot, then +, a new task here. The selected item is lifted with
-  an accent edge; the one list mode's keys are on is ringed. Shown with the transcript or a
-  conversation, not over the new-task box, a brief beside the tabs or the inspector.
+- **v2** (the owner, 2026-11-17, canvas "Rail v2"): "the rail always shows" (whenever the
+  drawer shows a conversation or the transcript, and has an item); two parts with a
+  divider: on top this workspace's tasks, below what is the same in every workspace, for now
+  only the transcript. No "need you elsewhere" item, no capture draft, no pinned chat.
+- **Items** (`Model::rail`, `model/rail.rs`), each of a section (`RailSection`): `workspace`,
+  the selected space's tasks by urgency (needs you, running, later, on hold; done ones left out
+  but the one in front); then `everywhere`, the transcript, idle or on, while the flag is on and
+  something could be heard (`Model::listen_item`: the recogniser, a test run's fixture, or one
+  on). No minimum: one item is a rail.
+- **Drawn** (`drawer_rail.rs`): 48 points wide, inside the drawer's width. Each task's badge
+  with its state's dot, then +, a new task here; at the foot, a divider and the transcript's
+  waveform: grey while idle, in the accent while one is on, a red dot while it records. The
+  selected item is lifted with an accent edge; the one list mode's keys are on is ringed. Shown
+  with the transcript or a conversation, not over the new-task box, a brief beside the tabs or
+  the inspector (they take the drawer, and its keys). The tasks and + scroll (the owner,
+  2026-11-17: thirteen or more pushed the transcript below the window); the divider and the
+  transcript stay at the foot, always in view. The item a selection or list mode's keys move to
+  is scrolled into view once; a wheel may move it out. Sneak labels only on what shows. With no
+  conversation, the user's ⌘⇧L opens this drawer on the transcript, as a click on it does (no
+  jump to its pane's tab, the owner 2026-11-17). Idle, it shows "Transcribe a window…" and Today
+  (`transcripts.md`, "The idle view").
 - **Selected** (`Model::rail_selected`): the transcript while it is shown, else the task in
   front. `RailSelect`: the transcript is shown in this space's drawer (its pane's tab is not
-  brought up, unlike the top row's mark); a task is put in front, its conversation open.
-- **Keys**: ⌘⌥] / ⌘⌥[ (`TalkCycle`) step through the rail and wrap. ⌘⇧] / ⌘⇧[ were asked for,
+  brought up, unlike the pane's dots); a task is put in front, its conversation open.
+- **Keys**: ⌘⌥] / ⌘⌥[ (`TalkCycle`) step through the rail, top to bottom, and wrap. ⌘⇧] / ⌘⇧[ were asked for,
   but are Next / Previous Tab. List mode: → past the drawer (or past the panes, onto the
   transcript or a stopped agent's conversation, which take no keys) is the rail (`RailFocus::Right`, focus `drawer_rail`), ↑ ↓
   move, ↵ shows, ← or Esc back to the pane. Sneak labels: `drawer-rail:transcript`,
   `drawer-rail:<id>`, `drawer-rail:new`.
-- **Who**: the user alone. `RailSelect`, `TalkCycle` and `ListenShow` (the top row's mark,
-  the pane header's dot) are refused from a client (`RAIL_USERS`); a client's ⌘⇧L leaves the
+- **Who**: the user alone. `RailSelect`, `TalkCycle` and `ListenShow` (the pane header's dot,
+  the dot on its tab or space) are refused from a client (`RAIL_USERS`); a client's ⌘⇧L leaves the
   transcript shown.
-- **State**: `drawer.rail`, each `kind`, `id`, `selected`, `rect`. Never a transcript's text.
-- Property rules: two items or none; the transcript first while one is on, the tasks by
-  urgency, each once; the transcript selected while shown; the keys on the rail only on an
+- **State**: `drawer.rail`, each `kind`, `id`, `section`, `selected`, `rect`. Never a
+  transcript's text.
+- Property rules: the tasks by urgency, each once, then the transcript, there exactly while it
+  can be had; sections in order; the transcript selected while shown; the keys on the rail only on an
   item of it; after another's step in the same space an item still on the rail stays selected,
   unless what takes keys took the drawer from the transcript.
 

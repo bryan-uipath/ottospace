@@ -2,12 +2,17 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use objc2_core_foundation::{CGPoint, CGRect};
+use ottospace_core::ax::Frame;
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGMainDisplayID() -> u32;
     fn CGDisplayBounds(display: u32) -> CGRect;
     fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGDisplayCopyDisplayMode(display: u32) -> *mut c_void;
+    fn CGDisplayModeGetWidth(mode: *mut c_void) -> usize;
+    fn CGDisplayModeGetPixelWidth(mode: *mut c_void) -> usize;
+    fn CGDisplayModeRelease(mode: *mut c_void);
     fn CGDisplayRegisterReconfigurationCallback(
         callback: extern "C" fn(u32, u32, *mut c_void),
         user_info: *mut c_void,
@@ -23,6 +28,7 @@ const BEGIN: u32 = 1;
 extern "C" fn on_reconfigure(_display: u32, flags: u32, _: *mut c_void) {
     if flags & BEGIN == 0 {
         CHANGED.store(true, Ordering::SeqCst);
+        crate::wake::post();
     }
 }
 
@@ -34,6 +40,7 @@ pub fn watch() {
 /// Notes a change as `watch` does: for a test, which cannot unplug a display.
 pub fn note_change() {
     CHANGED.store(true, Ordering::SeqCst);
+    crate::wake::post();
 }
 
 /// True once after each change of the displays.
@@ -47,27 +54,55 @@ pub fn bounds(display: u32) -> CGRect {
 }
 
 pub fn all() -> Vec<CGRect> {
+    ids().into_iter().map(bounds).collect()
+}
+
+fn ids() -> Vec<u32> {
     let mut ids = [0u32; 16];
     let mut count = 0;
     unsafe { CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut count) };
-    ids[..count as usize].iter().map(|&id| bounds(id)).collect()
+    ids[..count as usize].to_vec()
 }
 
-/// Where to park a window so only its top-left pixel is on-screen (AeroSpace-style).
-/// Picks a display's bottom-right corner with no other display to its right or below,
-/// e.g. the right-hand monitor's corner in a side-by-side setup.
-pub fn parking_spot() -> CGPoint {
-    let displays = all();
-    let far = 100_000.0;
-    let overlaps = |x: f64, y: f64| {
-        displays.iter().any(|d| {
-            d.origin.x + d.size.width > x && d.origin.y + d.size.height > y && d.origin.x < x + far && d.origin.y < y + far
-        })
+/// Pixels a point on `display`: 2 on a Retina display, 1 on most external ones.
+pub fn scale(display: u32) -> f64 {
+    let mode = unsafe { CGDisplayCopyDisplayMode(display) };
+    if mode.is_null() {
+        return 1.0;
+    }
+    let (points, pixels) = unsafe { (CGDisplayModeGetWidth(mode), CGDisplayModeGetPixelWidth(mode)) };
+    unsafe { CGDisplayModeRelease(mode) };
+    if points == 0 { 1.0 } else { pixels as f64 / points as f64 }
+}
+
+/// The scale of the display a window parked for a pane of `want` is on (`parking_spot`).
+pub fn parking_scale(want: f64) -> f64 {
+    let spot = parking_spot(want);
+    let on = |id: &u32| {
+        let b = bounds(*id);
+        (b.origin.x..b.origin.x + b.size.width).contains(&spot.x)
+            && (b.origin.y..b.origin.y + b.size.height).contains(&spot.y)
     };
-    let corner = |d: &CGRect| CGPoint::new(d.origin.x + d.size.width - 1.0, d.origin.y + d.size.height - 1.0);
-    displays
-        .iter()
-        .map(corner)
-        .find(|p| !overlaps(p.x + 1.0, p.y) && !overlaps(p.x, p.y + 1.0))
-        .unwrap_or_else(|| corner(&bounds(unsafe { CGMainDisplayID() })))
+    ids().iter().find(|id| on(id)).map_or(1.0, |id| scale(*id))
+}
+
+/// Where to park a window so only its top-left pixel is on-screen (AeroSpace-style): a display's
+/// bottom-right corner with no other display to its right or below, e.g. the right-hand monitor's
+/// in a side-by-side setup; of those, one with `want` pixels a point, the scale its pane is drawn
+/// at (`ottospace_core::hosted::parking_corner`). `f64::INFINITY`: the sharpest.
+pub fn parking_spot(want: f64) -> CGPoint {
+    let displays: Vec<(Frame, f64)> = ids()
+        .into_iter()
+        .map(|id| {
+            let b = bounds(id);
+            (Frame::new(b.origin.x, b.origin.y, b.size.width, b.size.height), scale(id))
+        })
+        .collect();
+    match ottospace_core::hosted::parking_corner(&displays, want) {
+        Some((x, y)) => CGPoint::new(x, y),
+        None => {
+            let main = bounds(unsafe { CGMainDisplayID() });
+            CGPoint::new(main.origin.x + main.size.width - 1.0, main.origin.y + main.size.height - 1.0)
+        }
+    }
 }

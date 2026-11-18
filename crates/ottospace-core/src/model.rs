@@ -66,6 +66,8 @@ pub enum Kind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bundle: Option<String>,
     },
+    /// A file, read only (`viewer`): its view is the model's `viewers`, by pane.
+    File { path: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -316,6 +318,8 @@ pub const MAX_FILTER: usize = 200;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PickItem {
     Terminal,
+    /// "File…": the open panel, then the file in a viewer.
+    File,
     /// A running app, by name. The shell hosts its main window.
     App {
         name: String,
@@ -325,13 +329,32 @@ pub enum PickItem {
         name: String,
         path: String,
     },
+    /// In the transcript's picker: an app that can play sound, and one of its windows (its
+    /// title drawn, never in the state). Choosing it starts a transcript of the app.
+    Sound {
+        #[serde(skip)]
+        pid: i32,
+        name: String,
+        #[serde(skip)]
+        window: Option<String>,
+        playing: bool,
+    },
 }
 
 impl PickItem {
+    /// What the filter matches: the label, and a sound app's window as its row shows it.
+    fn filter_text(&self) -> String {
+        match self {
+            PickItem::Sound { name, window: Some(window), .. } => format!("{name} · {window}"),
+            _ => self.label().to_string(),
+        }
+    }
+
     pub fn label(&self) -> &str {
         match self {
             PickItem::Terminal => "Terminal",
-            PickItem::App { name } | PickItem::Closed { name, .. } => name,
+            PickItem::File => "File…",
+            PickItem::App { name } | PickItem::Closed { name, .. } | PickItem::Sound { name, .. } => name,
         }
     }
 }
@@ -351,6 +374,11 @@ pub struct Picker {
     /// Every other installed app that is not running, by name. Offered once something is typed.
     #[serde(skip)]
     pub installed: Vec<PickItem>,
+    /// The transcript's picker ("Transcribe a window…"): its rows are apps that can play sound.
+    pub transcribe: bool,
+    /// Its pick's transcript id and the time it was opened.
+    #[serde(skip)]
+    pub start: Option<(String, u64)>,
 }
 
 impl Picker {
@@ -374,7 +402,7 @@ impl Picker {
             let hit = |starts: bool| {
                 let query = &query;
                 group.iter().copied().filter(move |item| {
-                    let label = item.label().to_lowercase();
+                    let label = item.filter_text().to_lowercase();
                     label.contains(query) && label.starts_with(query) == starts
                 })
             };
@@ -560,6 +588,13 @@ pub enum Action {
     /// an empty one.
     CloseTab {
         index: Option<usize>,
+    },
+    /// The user's ⌘⇧W, a tab's × or its label: `CloseTab`, but the last tab of a temporary workspace
+    /// whose terminals run something (`running`, as for `QuitAsked`) asks first, as its × does.
+    /// Anyone else's: `CloseTab`. Never acted on: `close_tab_asked` turns it into one of those.
+    CloseTabAsked {
+        index: Option<usize>,
+        running: Vec<Running>,
     },
     /// The apps found installed, and the bundles of those running now. The shell sends it when
     /// the picker opens and when a scan ends.
@@ -1248,6 +1283,38 @@ pub enum Action {
     /// Open Settings: a tab titled "Settings" whose terminal runs the user's editor on
     /// `settings.json`, or the one opened so that is still there. Only the user's.
     EditSettings,
+    /// The file at `path` (absolute) in a viewer: in `beside` (default: the focused pane) if it
+    /// is empty, else split from it along `axis`. `reuse`: the viewer `beside` opened before, in
+    /// its tab, shows it instead, and the keyboard stays on `beside` (`docs/ai/file-viewer.md`).
+    OpenFile {
+        path: String,
+        axis: Axis,
+        beside: Option<PaneId>,
+        reuse: bool,
+    },
+    /// A key while the focused viewer has the keyboard, named as `vim::Keys::press` takes it.
+    ViewerKey {
+        key: String,
+    },
+    /// The view as the shell drew it: the first line on show, the last place it may be, the
+    /// lines on show. After a layout and the user's wheel. The shell's alone.
+    ViewerScrolled {
+        pane: PaneId,
+        top: u32,
+        most: u32,
+        page: u32,
+    },
+    /// What the shell read of the file a viewer shows, never its text. The shell's alone.
+    ViewerRead {
+        pane: PaneId,
+        path: String,
+        read: crate::viewer::Read,
+    },
+    /// ⌃G or Edit: the user's editor on the viewer's file (default: the focused pane's), in a
+    /// terminal beside it.
+    ViewerEdit {
+        pane: Option<PaneId>,
+    },
     /// `settings.json` as the shell read it: at start, then each time it changed. The shell's
     /// alone: what is right applies, what is wrong is said in the status bar.
     /// `written`: just after the app wrote it itself.
@@ -1315,6 +1382,11 @@ pub enum Action {
     },
     /// Take the last delete or update of a workbook back, or a temporary one's close.
     WorkbookUndo,
+    /// The user's Undo on a closing temporary workspace's row: back on the row, selected, as it was.
+    /// Each closing one keeps its own until its time is up, whatever the notice bar offers since.
+    WorkbookReopen {
+        workbook: WorkbookId,
+    },
     /// … on a row of the bar: its menu (`row_menu`). On the row whose menu is open: close it.
     /// `dots`: where the … is drawn. `keys`: a key or a label opened it, so the keys are on its
     /// first item; a click's are on none.
@@ -1552,7 +1624,7 @@ pub enum Action {
     ListenStop {
         at: u64,
     },
-    /// The drawer on the transcript (the top row's mark selects its pane's tab), or off it.
+    /// The drawer on the transcript, idle or on (one on: its pane's tab selected), or off it.
     ListenShow {
         on: bool,
     },
@@ -1583,6 +1655,23 @@ pub enum Action {
         id: String,
         why: listen::Ended,
         at: u64,
+    },
+    /// The user's "Transcribe a window…": the picker lists `apps` (the shell's reading of the
+    /// apps that can play sound), and a pick starts transcript `id` at `at`, or later.
+    ListenPicker {
+        apps: Vec<listen::SoundApp>,
+        id: String,
+        at: u64,
+    },
+    /// The shell's: the files of `transcripts_dir` (each its name and the start of its text),
+    /// and today's local date (`2026-11-17`), for the idle view's Today list.
+    ListenPast {
+        files: Vec<(String, String)>,
+        today: String,
+    },
+    /// The user's click on a row of Today: that transcript read-only in the drawer; none: back.
+    ListenOpenPast {
+        name: Option<String>,
     },
     /// The user's level for an app pane (default: the focused one): what the task of its
     /// workspace may do there (`agent_mode`). Only the user's: a client's is refused.
@@ -1723,6 +1812,19 @@ impl Action {
         matches!(kind, Some(Kind::Slot { .. }))
     }
 
+    /// Whether it would put a file in a pane by a path the viewer does not open (`viewer::sound`).
+    fn makes_unsound_file(&self) -> bool {
+        let kind = match self {
+            Action::Split { kind, .. }
+            | Action::Open { kind, .. }
+            | Action::Adopt { kind, .. }
+            | Action::Fill { kind, .. } => Some(kind),
+            Action::SlotHosted { kind, .. } => kind.as_ref(),
+            _ => None,
+        };
+        matches!(kind, Some(Kind::File { path }) if !crate::viewer::sound(path))
+    }
+
     /// Whether the action acts on panes, tabs or the bar: it waits while the picker, the new-task
     /// box, the key reference or visual mode has the keyboard.
     pub fn for_panes(&self) -> bool {
@@ -1753,6 +1855,8 @@ impl Action {
                 | Action::NewTab
                 | Action::NewEmptyTab
                 | Action::EditSettings
+                | Action::OpenFile { .. }
+                | Action::ViewerEdit { .. }
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
                 | Action::SpaceSelect { .. }
@@ -1848,6 +1952,7 @@ impl Action {
             | Action::SelectTab { .. }
             | Action::CycleTab { .. }
             | Action::CloseTab { .. }
+            | Action::CloseTabAsked { .. }
             | Action::PickerQuery { .. }
             | Action::SetInstalled { .. }
             | Action::PickerMove { .. }
@@ -2014,7 +2119,8 @@ impl Action {
             | Action::RowMenuMove { .. }
             | Action::RowMenuChoose { .. }
             | Action::RowMenuClose
-            | Action::WorkbookUndo => false,
+            | Action::WorkbookUndo
+            | Action::WorkbookReopen { .. } => false,
             | Action::SetAgents { .. }
             | Action::ComposeEnter
             | Action::AgentStarted { .. }
@@ -2063,6 +2169,9 @@ impl Action {
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
             | Action::ListenEnded { .. }
+            | Action::ListenPicker { .. }
+            | Action::ListenPast { .. }
+            | Action::ListenOpenPast { .. }
             | Action::AgentLevel { .. }
             | Action::AgentMenu { .. }
             | Action::AgentMenuMove { .. }
@@ -2080,7 +2189,12 @@ impl Action {
             | Action::SlotWindows { .. }
             | Action::SlotHosted { .. }
             | Action::SlotTick { .. }
-            | Action::WindowGone { .. } => false,
+            | Action::WindowGone { .. }
+            | Action::OpenFile { .. }
+            | Action::ViewerKey { .. }
+            | Action::ViewerScrolled { .. }
+            | Action::ViewerRead { .. }
+            | Action::ViewerEdit { .. } => false,
         }
     }
 
@@ -2116,7 +2230,10 @@ impl Action {
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
-            | Action::ListenEnded { .. } => Some(Feature::Transcripts),
+            | Action::ListenEnded { .. }
+            | Action::ListenPicker { .. }
+            | Action::ListenPast { .. }
+            | Action::ListenOpenPast { .. } => Some(Feature::Transcripts),
             Action::AgentLevel { .. }
             | Action::AgentMenu { .. }
             | Action::AgentMenuMove { .. }
@@ -2190,6 +2307,7 @@ impl Action {
             | Action::SelectTab { .. }
             | Action::CycleTab { .. }
             | Action::CloseTab { .. }
+            | Action::CloseTabAsked { .. }
             | Action::SetInstalled { .. }
             | Action::PickerQuery { .. }
             | Action::PickerMove { .. }
@@ -2334,6 +2452,7 @@ impl Action {
             | Action::RowMenuChoose { .. }
             | Action::RowMenuClose
             | Action::WorkbookUndo
+            | Action::WorkbookReopen { .. }
             | Action::SetAgents { .. }
             | Action::AgentEvents { .. }
             | Action::TalkSend
@@ -2375,6 +2494,11 @@ impl Action {
             | Action::EditorOpen
             | Action::EditorKeys { .. }
             | Action::EditorDone { .. }
+            | Action::OpenFile { .. }
+            | Action::ViewerKey { .. }
+            | Action::ViewerScrolled { .. }
+            | Action::ViewerRead { .. }
+            | Action::ViewerEdit { .. }
             | Action::SetFeatures { .. } => None,
         }
     }
@@ -2521,6 +2645,28 @@ pub enum Effect {
     /// terminal runs that, not a shell. Carried out with the pane's `Opened`.
     EditSettings {
         pane: PaneId,
+    },
+    /// Pane `pane` was just opened for the user's editor on `path`, a viewer's file. Carried out
+    /// with the pane's `Opened`, as `EditSettings`.
+    EditFile {
+        pane: PaneId,
+        path: String,
+    },
+    /// The user chose "File…" in the picker: ask which file (the open panel), then send
+    /// `OpenFile` as theirs, in a new tab first with `new_tab`.
+    ChooseFile {
+        axis: Axis,
+        new_tab: bool,
+    },
+    /// Read the file viewer `pane` shows (its `Kind::File`), and watch it: `ViewerRead` with what
+    /// was found, again when it changes. Its last file is no longer watched.
+    ViewFile {
+        pane: PaneId,
+    },
+    /// Scroll viewer `pane` so line `top` is the first on show.
+    ViewerScroll {
+        pane: PaneId,
+        top: u32,
     },
     /// `settings.json` is right again: what the shell reads as it goes (`windows`, `capture`,
     /// `wheel_to_apps`, `workbook_scrollback_lines`) reads these from now on.
@@ -2761,6 +2907,7 @@ pub mod chat;
 pub mod editor;
 pub mod slots;
 mod transcribe;
+mod viewer;
 pub mod worktrees;
 pub(crate) use worktrees::subagent_path;
 #[cfg(test)]
@@ -3056,6 +3203,8 @@ pub struct Model {
     /// The pane Open Settings opened (or a restore opened again), while it may still be there.
     #[serde(skip)]
     pub(crate) settings_pane: Option<PaneId>,
+    /// Each file viewer's view, by pane: one for each `Kind::File` pane (`settle_viewers`).
+    pub viewers: std::collections::BTreeMap<PaneId, crate::viewer::Viewer>,
     /// What the status bar says of `settings.json` (`settings_line`).
     #[serde(skip)]
     settings_file: crate::settings::Watch,
@@ -3067,6 +3216,8 @@ pub struct Model {
     editor_note: Option<(String, u64)>,
     /// The transcript on, if one is. In the state: its status and times, never its text.
     pub listen: Listening,
+    /// Today's finished transcripts, and the one open read-only (`listen::Today`).
+    pub transcripts: listen::Today,
     /// Each app pane's agent mode level and the task it is given to, the default, the menu.
     #[serde(rename = "agent_mode")]
     pub agent: crate::agent_mode::AgentMode,
@@ -3199,10 +3350,12 @@ impl Default for Model {
             // In this crate's tests every feature is on: a test of one that is off turns it off.
             features: if cfg!(test) { Features::all() } else { Features::default() },
             settings_pane: None,
+            viewers: Default::default(),
             settings_file: crate::settings::Watch::default(),
             editing: None,
             editor_note: None,
             listen: Listening::default(),
+            transcripts: listen::Today::default(),
             agent: crate::agent_mode::AgentMode::default(),
             slots: Default::default(),
             slot_looks: Vec::new(),
@@ -3304,9 +3457,16 @@ impl Model {
     /// key reference.
     /// `None`: the origin does not stop it. The shell answers a socket request with the reason.
     pub fn refusal(&self, action: &Action, origin: Origin) -> Option<&'static str> {
+        // Asked as what it turns into (`close_tab_asked`).
+        if let Action::CloseTabAsked { .. } = action {
+            return self.refusal(&self.close_tab_asked(action.clone().sent_by(origin)).action, origin);
+        }
         let boxed = self.picker.is_some() || self.compose_keys();
         match action {
             _ if origin == Origin::User => None,
+            // Only the user's Undo brings a closing workspace back: no client selects its tab or moves its panes.
+            _ if origin == Origin::Socket && self.touches_closing(action) => Some(workbook::CLOSING),
+            _ if self.opens_in_closing(action, origin) => Some(workbook::CLOSING_OPENS),
             // Only ottospace records what a task did in an app: no client forges or hides a row.
             // The user's is ignored (`app_used`): the shell sends it as its own.
             Action::AppUsed { .. } if origin == Origin::Socket => Some(crate::agent_mode::SHELLS_ALONE),
@@ -3317,6 +3477,10 @@ impl Model {
             Action::NoticeDismiss { .. } => Some(crate::notice::USERS_ALONE),
             // So does a scroll in another app.
             Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
+            // What was read and drawn of a file is the shell's to say.
+            Action::ViewerRead { .. } | Action::ViewerScrolled { .. } if origin == Origin::Socket => {
+                Some(viewer::SHELLS_ALONE)
+            }
             // Nor puts the transcript the user has in the drawer away, or the keys over it.
             Action::TalkToggle | Action::TalkKeys { on: true } if self.listen.shown => Some(rail::RAIL_USERS),
             // Only the user starts, pauses, resumes or stops a transcript; only the shell reports
@@ -3325,16 +3489,30 @@ impl Model {
             | Action::ListenToggle { .. }
             | Action::ListenPause { .. }
             | Action::ListenResume { .. }
-            | Action::ListenStop { .. } => Some(listen::USERS_ALONE),
+            | Action::ListenStop { .. }
+            | Action::ListenPicker { .. } => Some(listen::USERS_ALONE),
             Action::ListenFixture
             | Action::ListenAvailable { .. }
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
             | Action::ListenEnded { .. }
+            | Action::ListenPast { .. }
                 if origin == Origin::Socket =>
             {
                 Some(listen::SHELLS_ALONE)
+            }
+            // The transcript's picker: only the user moves, filters or picks in it; a client
+            // neither types in its filter nor closes or replaces it.
+            Action::PickerMove { .. } | Action::PickerQuery { .. } | Action::PickerChoose { .. }
+                if self.picker.as_ref().is_some_and(|picker| picker.transcribe) =>
+            {
+                Some(listen::PICK_USERS)
+            }
+            Action::FieldEdit { .. } | Action::OpenPicker { .. } | Action::ClosePicker
+                if origin == Origin::Socket && self.picker.as_ref().is_some_and(|picker| picker.transcribe) =>
+            {
+                Some(listen::PICK_USERS)
             }
             // Only the user lets a task see an app, or opens the menu that does: a client's key,
             // click or label is the client's, and a timer grants nothing.
@@ -3432,7 +3610,8 @@ impl Model {
             | Action::RowMenuMove { .. }
             | Action::RowMenuChoose { .. }
             | Action::RowMenuClose
-            | Action::WorkbookUndo => Some(workbook::USERS_ALONE),
+            | Action::WorkbookUndo
+            | Action::WorkbookReopen { .. } => Some(workbook::USERS_ALONE),
             // Only the shell says where the menu's … is drawn.
             Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
             Action::ListChoose { .. } | Action::ListDismiss | Action::ListUndo | Action::ListMarkEdit { .. }
@@ -3514,7 +3693,9 @@ impl Model {
             // So is which of a workspace's conversations is in front.
             Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
             // What the drawer shows is the user's choice: its rail, the transcript's mark.
-            Action::RailSelect { .. } | Action::ListenShow { .. } => Some(rail::RAIL_USERS),
+            Action::RailSelect { .. } | Action::ListenShow { .. } | Action::ListenOpenPast { .. } => {
+                Some(rail::RAIL_USERS)
+            }
             // A client changes no space under the user's keys in the chat, nor takes them.
             action if self.space_refusal(action, origin).is_some() => self.space_refusal(action, origin),
             action
@@ -3566,6 +3747,12 @@ impl Model {
             // Its brief says the ask, the notes and the drawings are the user's: so they are.
             action if self.capture.is_some() && self.drafts(action) => Some(capture::DRAFT_USERS),
             action if self.confirm.is_some() && action.takes_keyboard() => Some(CONFIRM_UP),
+            // Nor takes the workspace "Close this workspace?" is about off the row: the user answers.
+            Action::SpaceHide { .. } | Action::CloseTab { .. }
+                if self.confirm.as_ref().is_some_and(|c| c.close.is_some()) =>
+            {
+                Some(CONFIRM_UP)
+            }
             // A key a client presses is input to the wait, as a label's letter is to sneak mode.
             Action::MarkPrefix | Action::MarkEdit { .. } | Action::ListMarkEdit { .. } => None,
             action if self.mark_input.is_some() && action.takes_keyboard() => Some(marks::INPUT_ON),
@@ -3645,7 +3832,7 @@ impl Model {
     /// act behind. `None`: nothing is in its way. The shell answers a socket request with it.
     pub fn waits(&self, action: &Action) -> Option<&'static str> {
         let for_panes = action.for_panes();
-        let picker = matches!(action, Action::OpenPicker { .. });
+        let picker = matches!(action, Action::OpenPicker { .. } | Action::ListenPicker { .. });
         // A close of a named pane still runs: the shell sends it when a window or shell is
         // gone, and must not leave a dead pane.
         let named_close = matches!(action, Action::Close { pane: Some(_) });
@@ -3753,10 +3940,10 @@ impl Model {
     }
 
     pub fn update(&mut self, sent: impl Into<Envelope>) -> Vec<Effect> {
-        let sent = self.space_click(sent.into());
+        let sent = self.close_tab_asked(self.space_click(sent.into()));
         // A feature that is off is absent: its actions change nothing and ask for nothing.
         // Nor does a pane become a slot but by `SlotMake`.
-        if self.disabled(&sent.action).is_some() || sent.action.makes_slot_kind() {
+        if self.disabled(&sent.action).is_some() || sent.action.makes_slot_kind() || sent.action.makes_unsound_file() {
             return Vec::new();
         }
         let (origin, line) = (sent.origin, self.compose_line().cloned());
@@ -3824,6 +4011,7 @@ impl Model {
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
         self.settle_row_menu();
+        self.settle_viewers(&mut effects);
         self.settle_listen();
         self.settle_agent(origin);
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
@@ -4083,9 +4271,10 @@ impl Model {
             action => action,
         };
         let (temporary, tick) = (self.temporary_shown(), matches!(action, Action::Tick { .. }));
+        let on_show = self.tabs.get(self.active).map(|tab| tab.id);
         self.act(action, &mut effects);
         // A temporary workspace the user took off the row closes; one whose Undo ran out goes.
-        self.settle_closing(user, tick, &temporary, &mut effects);
+        self.settle_closing(user, tick, (&temporary, on_show), &mut effects);
         if let Some((id, talk)) = shown {
             self.keep_shown(id, &mut effects);
             // A pane opened, focused or closed beside the user, a row selected, takes no keys from
@@ -4338,6 +4527,9 @@ impl Model {
                 {
                     return;
                 }
+                // A window opened beside a pane of a closing workspace joins the tab on show: what
+                // that workspace's Undo brings back stays as it was.
+                let beside = beside.filter(|pane| !self.in_closing(*pane));
                 self.next_id += 1;
                 let id = self.next_id;
                 self.panes.push(Pane { id, kind, cwd: None, fit: None });
@@ -4394,6 +4586,8 @@ impl Model {
                 let to = tabs[(at + delta as i64).rem_euclid(tabs.len() as i64) as usize];
                 self.select_tab(to, effects);
             }
+            // Turned into `CloseTab` or `SpaceHideAsked` before any step (`close_tab_asked`).
+            Action::CloseTabAsked { .. } => {}
             Action::CloseTab { index } => {
                 let index = index.unwrap_or(self.active);
                 // Home's own tab stays.
@@ -4900,13 +5094,14 @@ impl Model {
             Action::OpenPicker { axis, new_tab, items } => {
                 self.leave(effects);
                 let installed = offered(&self.installed.0, &self.installed.1, &items);
-                self.picker =
-                    Some(Picker { axis, new_tab, items, query: Field::new("", MAX_FILTER), selected: 0, installed });
+                let (query, transcribe, start) = (Field::new("", MAX_FILTER), false, None);
+                self.picker = Some(Picker { axis, new_tab, items, query, selected: 0, installed, transcribe, start });
             }
             Action::SetInstalled { apps, running } => {
                 self.app_lists.resolve(&apps);
                 self.installed = (apps, running);
-                if let Some(picker) = &mut self.picker {
+                // The transcript's picker lists sound apps alone: no installed app joins it.
+                if let Some(picker) = self.picker.as_mut().filter(|picker| !picker.transcribe) {
                     // The rows change under the selection: it stays on its item, so ↵ opens
                     // what was highlighted. If the item is gone, on a row.
                     let chosen = picker.matches().get(picker.selected).copied().cloned();
@@ -4933,6 +5128,17 @@ impl Model {
             }
             Action::PickerChoose { index } => {
                 let Some(picker) = self.picker.take() else { return };
+                if let Some((id, at)) = picker.start.clone() {
+                    let choice = picker.matches().get(index.unwrap_or(picker.selected)).copied().cloned();
+                    match choice {
+                        Some(PickItem::Sound { pid, .. }) => {
+                            let at = at.max(self.now);
+                            self.listen_start(listen::Source::App { pid }, false, id, at, effects);
+                        }
+                        _ => self.picker = Some(picker),
+                    }
+                    return;
+                }
                 let choice = picker.matches().get(index.unwrap_or(picker.selected)).copied().cloned();
                 match choice {
                     // Same rule as an app: fill the focused pane if it is empty, else split it.
@@ -4950,9 +5156,15 @@ impl Model {
                     Some(PickItem::App { name }) => {
                         effects.push(Effect::HostApp { name, axis: picker.axis, new_tab: picker.new_tab })
                     }
+                    // The shell asks which file (the open panel), then sends `OpenFile` as the user's.
+                    Some(PickItem::File) => {
+                        effects.push(Effect::ChooseFile { axis: picker.axis, new_tab: picker.new_tab })
+                    }
                     Some(PickItem::Closed { name, path }) => {
                         effects.push(Effect::LaunchApp { name, path, axis: picker.axis, new_tab: picker.new_tab })
                     }
+                    // Only the transcript's picker lists these; it is handled above.
+                    Some(PickItem::Sound { .. }) => {}
                     // Nothing matches: keep the picker open so the user can fix the query.
                     None => self.picker = Some(picker),
                 }
@@ -5332,6 +5544,11 @@ impl Model {
                 effects.push(Effect::ForgetLayout);
             }
             Action::EditSettings => self.edit_settings(effects),
+            Action::OpenFile { path, axis, beside, reuse } => self.open_file(path, axis, beside, reuse, effects),
+            Action::ViewerKey { key } => self.viewer_key(&key, effects),
+            Action::ViewerScrolled { pane, top, most, page } => self.viewer_scrolled(pane, top, most, page),
+            Action::ViewerRead { pane, path, read } => self.viewer_read(pane, &path, read),
+            Action::ViewerEdit { pane } => self.viewer_edit(pane, effects),
             Action::SettingsRead { text, written } => self.settings_read(&text, written, effects),
             Action::UnfilledOpen { pane } => self.unfilled_open(pane, effects),
             Action::WorkbookSave { uid, cwds, histories } => self.workbook_save(uid, (&cwds, &histories), effects),
@@ -5353,6 +5570,7 @@ impl Model {
             Action::RowMenuChoose { index } => self.row_menu_choose(index, effects),
             Action::RowMenuClose => self.row_menu = None,
             Action::WorkbookUndo => self.workbook_undo(effects),
+            Action::WorkbookReopen { workbook } => self.workbook_reopen(workbook, effects),
             Action::ListReorder { delta } => match self.selected_mark() {
                 // The selection goes with the mark.
                 Some(id) => {
@@ -5634,6 +5852,10 @@ impl Model {
                     talk.open = false;
                 }
             }
+            // No conversation here: ⌘⇧L opens this drawer on the transcript, as a rail click (no jump to its pane).
+            Action::TalkToggle if self.talk.is_none() && self.by_user => {
+                self.rail_select(rail::RailItem::Transcript, effects)
+            }
             Action::TalkToggle => {
                 if let Some(open) = self.talk.as_ref().map(|talk| !talk.open) {
                     self.talk_keys(open, effects);
@@ -5714,7 +5936,10 @@ impl Model {
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
-            | Action::ListenEnded { .. }) => self.listen_act(action, effects),
+            | Action::ListenEnded { .. }
+            | Action::ListenPicker { .. }
+            | Action::ListenPast { .. }
+            | Action::ListenOpenPast { .. }) => self.listen_act(action, effects),
             action @ (Action::AgentLevel { .. }
             | Action::AgentMenu { .. }
             | Action::AgentMenuMove { .. }
@@ -5743,6 +5968,9 @@ impl Model {
         if !self.features.on(Feature::Transcripts) {
             self.listen_end(None, None, effects);
             self.listen.lost = None;
+            // Its picker goes too: a pick would start one with the flag off.
+            self.picker = self.picker.take().filter(|picker| !picker.transcribe);
+            self.listen.apps.clear();
         }
         let sections = self.sections();
         if self.sidebar.is_some_and(|section| !sections.contains(&section)) {
@@ -6279,7 +6507,7 @@ impl Model {
         for pane in &self.panes {
             let id = Some(pane.id as u32);
             match &pane.kind {
-                Kind::Empty | Kind::Slot { .. } => {}
+                Kind::Empty | Kind::Slot { .. } | Kind::File { .. } => {}
                 Kind::Terminal => {
                     let info = self.terminals.iter().find(|info| info.pane == pane.id);
                     let cwd = info.and_then(|info| info.cwd.clone()).or(pane.cwd.clone());
@@ -6757,6 +6985,14 @@ impl Model {
             || self.clip.as_ref().is_some_and(|clip| !clip.shows(now))
             || self.workbooks.due(now)
             || self.calendar.due(now)
+    }
+
+    /// When `due` turns true next, but for the calendar's alerts: the shell looks at those on its
+    /// slow step while the calendar is on. Its loop sleeps until then.
+    pub fn next_due(&self) -> Option<u64> {
+        let offer = self.undo_offer.as_ref().map(|offer| offer.until);
+        let clip = self.clip.as_ref().map(|clip| clip.at.saturating_add(crate::clip::NOTICE_MS));
+        [self.tasks.next_due(), offer, clip, self.workbooks.next_due()].into_iter().flatten().min()
     }
 
     /// Everything the marks and the workbooks need, each once: what the shell looks for on
@@ -7699,6 +7935,7 @@ impl Model {
         let kind = match pane.kind {
             Kind::App { .. } => None,
             Kind::Terminal => Some("a terminal"),
+            Kind::File { .. } => Some("a file"),
             Kind::Empty | Kind::Slot { .. } => Some("empty"),
         };
         if let Some(kind) = kind {
@@ -8522,6 +8759,7 @@ mod tests {
         Action::SelectTab { .. },
         Action::CycleTab { .. },
         Action::CloseTab { .. },
+        Action::CloseTabAsked { .. },
         Action::PickerQuery { .. },
         Action::SetInstalled { .. },
         Action::PickerMove { .. },
@@ -8693,6 +8931,11 @@ mod tests {
         Action::RestoreLayout { .. },
         Action::StartFresh,
         Action::EditSettings,
+        Action::OpenFile { .. },
+        Action::ViewerKey { .. },
+        Action::ViewerScrolled { .. },
+        Action::ViewerRead { .. },
+        Action::ViewerEdit { .. },
         Action::SettingsRead { .. },
         Action::UnfilledOpen { .. },
         Action::WorkbookSave { .. },
@@ -8703,6 +8946,7 @@ mod tests {
         Action::WorkbookEdit { .. },
         Action::WorkbookRemove { .. },
         Action::WorkbookUndo,
+        Action::WorkbookReopen { .. },
         Action::SetAgents { .. },
         Action::TaskTalk { .. },
         Action::ComposeEnter,
@@ -8760,6 +9004,9 @@ mod tests {
         Action::ListenFailed { .. },
         Action::ListenHeard { .. },
         Action::ListenEnded { .. },
+        Action::ListenPicker { .. },
+        Action::ListenPast { .. },
+        Action::ListenOpenPast { .. },
         Action::AgentLevel { .. },
         Action::AgentMenu { .. },
         Action::AgentMenuMove { .. },
@@ -8808,6 +9055,7 @@ mod tests {
             Action::SelectTab { index: 0 },
             Action::CycleTab { delta: 1 },
             Action::CloseTab { index: None },
+            Action::CloseTabAsked { index: None, running: Vec::new() },
             Action::PickerQuery { query: text() },
             Action::SetInstalled { apps: Vec::new(), running: Vec::new() },
             Action::PickerMove { delta: 1 },
@@ -8983,6 +9231,11 @@ mod tests {
             },
             Action::StartFresh,
             Action::EditSettings,
+            Action::OpenFile { path: "/w/a.md".into(), axis: Axis::Right, beside: None, reuse: false },
+            Action::ViewerKey { key: "j".into() },
+            Action::ViewerScrolled { pane: 1, top: 0, most: 0, page: 0 },
+            Action::ViewerRead { pane: 1, path: "/w/a.md".into(), read: crate::viewer::Read::Missing },
+            Action::ViewerEdit { pane: None },
             Action::SettingsRead { text: "{}".into(), written: false },
             Action::UnfilledOpen { pane: 1 },
             Action::WorkbookSave { uid: text(), cwds: Vec::new(), histories: Vec::new() },
@@ -9000,6 +9253,7 @@ mod tests {
             Action::RowMenuChoose { index: None },
             Action::RowMenuClose,
             Action::WorkbookUndo,
+            Action::WorkbookReopen { workbook: 1 },
             Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: None, shows: View::Native },
             Action::TaskTalk { id: 1 },
             Action::ComposeEnter,
@@ -9056,6 +9310,9 @@ mod tests {
             Action::ListenFailed { id: text(), why: text() },
             Action::ListenHeard { id: text(), lines: Vec::new() },
             Action::ListenEnded { id: text(), why: listen::Ended::AppQuit, at: 0 },
+            Action::ListenPicker { apps: Vec::new(), id: text(), at: 0 },
+            Action::ListenPast { files: Vec::new(), today: text() },
+            Action::ListenOpenPast { name: None },
             Action::AgentLevel { pane: Some(1), level: crate::agent_mode::Level::See },
             Action::AgentMenu { pane: None, keys: true },
             Action::AgentMenuMove { delta: 1 },
@@ -9102,13 +9359,15 @@ mod tests {
             | Action::ListenToggle { .. }
             | Action::ListenPause { .. }
             | Action::ListenResume { .. }
-            | Action::ListenStop { .. } => Some(listen::USERS_ALONE),
+            | Action::ListenStop { .. }
+            | Action::ListenPicker { .. } => Some(listen::USERS_ALONE),
             Action::ListenFixture
             | Action::ListenAvailable { .. }
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
             | Action::ListenEnded { .. }
+            | Action::ListenPast { .. }
                 if origin == Origin::Socket =>
             {
                 Some(listen::SHELLS_ALONE)
@@ -9178,6 +9437,7 @@ mod tests {
                 | Action::WorkbookRemove { .. }
                 | Action::WorkbookKeep { .. }
                 | Action::WorkbookUndo
+                | Action::WorkbookReopen { .. }
                 | Action::RowMenu { .. }
                 | Action::RowMenuMove { .. }
                 | Action::RowMenuChoose { .. }
@@ -9329,7 +9589,9 @@ mod tests {
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
-                    Action::RailSelect { .. } | Action::ListenShow { .. } => Some(rail::RAIL_USERS),
+                    Action::RailSelect { .. } | Action::ListenShow { .. } | Action::ListenOpenPast { .. } => {
+                        Some(rail::RAIL_USERS)
+                    }
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     Action::CalendarRetry => Some(calendar::USERS_RETRY),
                     _ if talks(action) => Some(chat::USERS_ALONE),
@@ -9357,6 +9619,9 @@ mod tests {
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
                     Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
+                    Action::ViewerRead { .. } | Action::ViewerScrolled { .. } if origin == Origin::Socket => {
+                        Some(viewer::SHELLS_ALONE)
+                    }
                     Action::WorktreeEdit { .. } | Action::ComposeWorktree { .. } => Some(crate::repos::USERS_ALONE),
                     Action::WorktreeAdded { .. } | Action::WorktreeFailed { .. } if origin == Origin::Socket => {
                         Some(crate::repos::USERS_ALONE)
@@ -10500,8 +10765,8 @@ mod tests {
             (m.members(&of), m.front(&of), m.task_space(4), m.task_space(5)),
             (vec![1, 2, 3], Some(3), task_space(4), task_space(5))
         );
-        // A workspace of one task has no rail.
-        assert_eq!(rail_tasks(&workspace_of_one_task()), Vec::<TaskId>::new());
+        // A workspace of one task: the rail still shows it.
+        assert_eq!(rail_tasks(&workspace_of_one_task()), [1]);
     }
 
     #[test]
@@ -10561,7 +10826,7 @@ mod tests {
         m.update(Action::TalkFront { task: 2 });
         assert_eq!(rail_tasks(&m), [1, 2]);
         m.update(Action::TaskSetState { id: 2, state: State::Done });
-        assert_eq!((m.front(&of), rail_tasks(&m)), (Some(1), vec![]));
+        assert_eq!((m.front(&of), rail_tasks(&m)), (Some(1), vec![1]));
         m.update(state(2, State::Running));
         // The front one dismissed, by anyone: the most urgent remaining.
         m.update(Action::TalkFront { task: 2 });
@@ -11693,9 +11958,9 @@ mod tests {
         m.update(Action::SetApps { names: vec!["Notes".into(), "Safari".into()] });
         m.update(Action::ToggleSection { section: Section::Repos });
         m.update(Action::FocusList);
-        m.update(Action::ListSection { delta: 1 }); // after Repos comes Marks, with no rows yet
+        m.update(Action::ListSection { delta: -1 }); // Repos is first: before it, Marks, with no rows yet
         assert_eq!((m.sidebar, m.list_rows()), (Some(Section::Marks), vec![]));
-        m.update(Action::ListSection { delta: 2 }); // then Tasks again, and Apps
+        m.update(Action::ListSection { delta: 3 }); // then Repos again, Tasks, and Apps
         m.update(Action::ListMove { delta: 1 });
         assert_eq!((m.sidebar, m.list), (Some(Section::Apps), Some(1)));
         // The shell hosts the app; until it opens a pane, the list keeps the keyboard.
@@ -13132,6 +13397,22 @@ mod tests {
         Effect::StartAgent { task: subject, start, cwd: Some(cwd.into()), brief: None }
     }
 
+    /// A session's space: no task, so nothing in front; ⌘⌥] / ⌘⌥[ still reach the transcript.
+    #[test]
+    fn in_a_sessions_space_the_rail_keys_start_from_the_top_or_the_foot() {
+        use crate::model::rail::RailItem;
+        let mut m = conversations();
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::ListenFixture.sent_by(Origin::System));
+        m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() });
+        assert_eq!((m.rail(), m.rail_selected(), m.rail_drawn()), (vec![RailItem::Transcript], None, true));
+        m.update(Action::TalkCycle { delta: 1 });
+        assert_eq!(m.rail_selected(), Some(RailItem::Transcript));
+        m.listen.shown = false;
+        m.update(Action::TalkCycle { delta: -1 });
+        assert_eq!(m.rail_selected(), Some(RailItem::Transcript));
+    }
+
     /// A session another terminal holds is watched, read-only: what it did, no card, no turn;
     /// once idle it may be taken over, by the user's click.
     #[test]
@@ -13150,6 +13431,7 @@ mod tests {
             label: "git".into(),
             detail: Text::default(),
             diff: None,
+            gist: None,
         };
         let card = Event::Permission {
             ticket: 1,
@@ -13177,6 +13459,7 @@ mod tests {
                 label: "git".into(),
                 detail: Text::default(),
                 diff: None,
+                gist: None,
             },
         ];
         m.update(Action::AgentEvents { task: held.clone(), events: again, at: 2 }.sent_by(Origin::System));
@@ -13526,7 +13809,8 @@ mod tests {
         assert_eq!(m.watch_target(), Some(target));
         let (id, tool, label) = ("a".to_string(), "Bash".to_string(), "git".to_string());
         let station = crate::activity::Station::Shell;
-        let call = Event::ToolStart { id, sub: false, tool, station, label, detail: Text::default(), diff: None };
+        let call =
+            Event::ToolStart { id, sub: false, tool, station, label, detail: Text::default(), diff: None, gist: None };
         let events = vec![Event::WatchFromStart, Event::MessageElsewhere, call];
         m.update(Action::AgentEvents { task: task.clone(), events, at: NOW }.sent_by(Origin::System));
         let t = &m.chat(&task).expect("its past").transcript;
@@ -15420,7 +15704,9 @@ mod tests {
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
-                    Action::RailSelect { .. } | Action::ListenShow { .. } => Some(rail::RAIL_USERS),
+                    Action::RailSelect { .. } | Action::ListenShow { .. } | Action::ListenOpenPast { .. } => {
+                        Some(rail::RAIL_USERS)
+                    }
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     Action::CalendarRetry => Some(calendar::USERS_RETRY),
                     _ if talks(action) => Some(chat::USERS_ALONE),
@@ -15448,6 +15734,9 @@ mod tests {
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
                     Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
+                    Action::ViewerRead { .. } | Action::ViewerScrolled { .. } if origin == Origin::Socket => {
+                        Some(viewer::SHELLS_ALONE)
+                    }
                     Action::WorktreeEdit { .. } | Action::ComposeWorktree { .. } => Some(crate::repos::USERS_ALONE),
                     Action::WorktreeAdded { .. } | Action::WorktreeFailed { .. } if origin == Origin::Socket => {
                         Some(crate::repos::USERS_ALONE)

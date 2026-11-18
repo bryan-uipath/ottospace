@@ -52,7 +52,7 @@ use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, State, Task, Task
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, clears_selection, edge_scroll, press, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Origin, Pane, PaneId, PickItem, Picker, Rect, Section, Zone,
-    theme,
+    cadence, theme,
     titlebar::{self, TitleBar},
 };
 use ottospace_mac::window::{Mouse, MouseKind};
@@ -106,6 +106,7 @@ mod running;
 mod scratch;
 mod scrollbar;
 mod sessions;
+mod signal_pipe;
 mod sneak;
 mod sneak_apps;
 mod stall;
@@ -113,6 +114,7 @@ mod tags;
 mod talk;
 mod terminal;
 mod trace;
+mod viewer;
 mod words;
 mod workbook;
 mod worktree;
@@ -134,6 +136,11 @@ struct Latest {
     /// When the stream last said anything, a frame or "nothing changed" (milliseconds since
     /// 1970). It says nothing while its window is not drawn: minimised, or on another Space.
     seen: AtomicU64,
+    /// What the stream has sent, frames and "nothing changed": a test run shows that a live
+    /// window's stream sends none and starts again as it parks.
+    samples: AtomicU64,
+    /// The frame held is from before the stream last started: a capture waits for a new one.
+    old: AtomicBool,
 }
 
 impl Latest {
@@ -147,6 +154,7 @@ struct Output(Arc<Latest>);
 impl SCStreamOutputTrait for Output {
     fn did_output_sample_buffer(&self, sample: CMSampleBuffer, _: SCStreamOutputType) {
         self.0.seen.store(now_ms(), Relaxed);
+        self.0.samples.fetch_add(1, Relaxed);
         let ptr = sample.image_buffer_ptr_borrowed();
         if ptr.is_null() {
             return; // idle frames carry no image
@@ -158,6 +166,7 @@ impl SCStreamOutputTrait for Output {
         }
         if let Ok(mut slot) = self.0.frame.lock() {
             *slot = Some(Frame(buffer));
+            self.0.old.store(false, Relaxed);
             self.0.dirty.store(true, Relaxed);
         }
     }
@@ -165,12 +174,14 @@ impl SCStreamOutputTrait for Output {
 
 /// Stream config showing `size` points of the window at `scale` (Retina = 2), from its top left
 /// below its top `crop` points (the title bar), never scaled: a window that refused the pane's
-/// size (Outlook's minimum) looks as it does when it is live.
+/// size (Outlook's minimum) looks as it does when it is live. `scale` is the pane's display's:
+/// the picture has the pixels the pane is drawn with (`hosted::capture_pixels`).
 fn stream_config(size: CGSize, crop: f64, scale: f64) -> SCStreamConfiguration {
+    let (width, height) = hosting::capture_pixels((size.width, size.height), scale);
     // 420f is the only format gpui's surface renderer accepts.
     SCStreamConfiguration::new()
-        .with_width((size.width * scale).max(1.0) as u32)
-        .with_height((size.height * scale).max(1.0) as u32)
+        .with_width(width)
+        .with_height(height)
         .with_scales_to_fit(true)
         .with_pixel_format(PixelFormat::YCbCr_420f)
         .with_fps(60)
@@ -194,6 +205,9 @@ struct Hosted {
     off_screen: bool,
     latest: Arc<Latest>,
     stream: SCStream,
+    /// The stream is stopped while the window is live: a captured window loses quick clicks
+    /// (Finder misses double-clicks). Holds what the stream was configured to show then.
+    paused: Option<(CGSize, f64)>,
     pid: i32,
     /// Window corner radius in points, for masking the stream's black corners.
     radius: f64,
@@ -209,16 +223,22 @@ struct Hosted {
     shown: CGSize,
     /// The title-bar crop the stream shows it with.
     shown_crop: f64,
+    /// The pixels a point the stream captures at: ottospace's display's when it was configured.
+    shown_scale: f64,
     /// The window's content size when `shown` was last worked out, for the corner mask.
     content: CGSize,
     /// How often `window_frame` read the window's frame.
     frame_reads: u64,
-    /// The last size and crop the stream refused, so the same one is not asked for every check.
-    refused: Option<(CGSize, f64)>,
+    /// The last size, crop and scale the stream refused, so the same one is not asked for every check.
+    refused: Option<(CGSize, f64, f64)>,
     /// Where the preview was last drawn, in window-content coordinates.
     preview: Rc<Cell<Bounds<Pixels>>>,
     /// Last pane content rect the live window was placed over, to re-place only on change.
     placed: CGRect,
+    /// Where it was last parked: it parks again when the spot moves (`display::parking_spot`).
+    parked_at: CGPoint,
+    /// The width the window kept when its pane asked for less: no split may leave it narrower.
+    min_width: Option<f64>,
 }
 
 impl Hosted {
@@ -267,6 +287,7 @@ impl Hosted {
             window,
             original,
             latest,
+            paused: None,
             stream,
             pid,
             radius,
@@ -276,11 +297,14 @@ impl Hosted {
             parked_size: CGSize::ZERO,
             shown: original.size,
             shown_crop: 0.0,
+            shown_scale: 2.0,
             content: original.size,
             frame_reads: 0,
             refused: None,
             preview: Rc::default(),
             placed: CGRect::default(),
+            parked_at: CGPoint::ZERO,
+            min_width: None,
         })
     }
 
@@ -312,17 +336,22 @@ impl Hosted {
     /// Sizes the window to the pane (so the stream matches) and parks it on the off-screen sliver.
     /// With a `crop`, the window is that much taller and the stream shows only the part below it.
     fn park(&mut self, size: CGSize, scale: f64, crop: f64) {
+        // On a display of the pane's scale, so the app draws the window at it.
+        let spot = display::parking_spot(scale);
         // Only resize/reconfigure when the pane changed; redoing it on every park flickers.
         if size != self.parked_size || crop != self.crop {
             // Move first. Resized where it stood, macOS clamps the window to what fits above the
             // Dock there (a pane 818pt tall parked at 805pt), and the stream no longer matches.
-            let _ = self.window.set_position(display::parking_spot());
+            let _ = self.window.set_position(spot);
             let _ = self.window.set_size(CGSize::new(size.width, size.height + crop));
         }
         self.parked_size = size;
         self.crop = crop;
         self.show(scale);
-        let _ = self.window.set_position(display::parking_spot());
+        // A refused move (a busy app) is tried again at the next check.
+        if self.window.set_position(spot).is_ok() {
+            self.parked_at = spot;
+        }
         self.placed = CGRect::default();
     }
 
@@ -336,23 +365,32 @@ impl Hosted {
         let content = CGSize::new(frame.size.width, frame.size.height - self.crop);
         let shown = CGSize::new(pane.width.min(content.width), pane.height.min(content.height));
         let asked = (shown, self.crop);
-        if asked == (self.shown, self.shown_crop) {
-            self.content = content;
+        // Live: the click rule and the mask follow the window; `resume` configures the stream.
+        if self.paused.is_some() {
+            (self.shown, self.shown_crop, self.content) = (shown, self.crop, content);
             return Some(content);
         }
-        if self.refused == Some(asked) {
+        // Also on a new scale: ottospace moved to a display of another, and the old picture
+        // would be drawn up (blurred) or down.
+        if asked == (self.shown, self.shown_crop) && scale == self.shown_scale {
+            self.content = content;
+            // Back to what it shows: a refusal of another is asked again when it comes back.
+            self.refused = None;
+            return Some(content);
+        }
+        if self.refused == Some((shown, self.crop, scale)) {
             return Some(content);
         }
         let config = stream_config(shown, self.crop, scale);
         // Frames of another size are dropped, so expect the new one only once it is set.
         if self.stream.update_configuration(&config).is_ok() {
             self.latest.expect(&config);
-            (self.shown, self.shown_crop) = asked;
+            (self.shown, self.shown_crop, self.shown_scale) = (shown, self.crop, scale);
             self.content = content;
             self.refused = None;
         } else {
             // `shown` keeps describing what the stream still shows.
-            self.refused = Some(asked);
+            self.refused = Some((shown, self.crop, scale));
             eprintln!("window {}: the stream refused {}×{}", self.window_id, shown.width, shown.height);
         }
         Some(content)
@@ -386,6 +424,33 @@ impl Hosted {
         self.place(pane_rect(rect, keep, true, crop), crop);
         self.window.raise();
         self.show(window.scale_factor() as f64);
+    }
+
+    /// Stops the stream while the window is live: the real window is on screen, and a captured
+    /// one loses quick clicks.
+    fn pause(&mut self) {
+        if self.paused.is_some() {
+            return;
+        }
+        match self.stream.stop_capture() {
+            Ok(()) => self.paused = Some((self.shown, self.shown_crop)),
+            Err(_) => event_log::event("stream_stop_failed", serde_json::json!({ "window": self.window_id })),
+        }
+    }
+
+    /// Starts the stream again once the window is parked, configured for what the pane shows.
+    /// A failed start stays paused, and the next park tries again.
+    fn resume(&mut self, scale: f64) {
+        let Some(streamed) = self.paused else { return };
+        // Here, not in `pause`: a frame sent as the stream stopped may land after the stop.
+        self.latest.old.store(true, Relaxed);
+        if self.stream.start_capture().is_err() {
+            return event_log::event("stream_start_failed", serde_json::json!({ "window": self.window_id }));
+        }
+        self.paused = None;
+        // What the stream shows; `show` configures it for the pane now.
+        (self.shown, self.shown_crop) = streamed;
+        self.show(scale);
     }
 
     /// The crop for this window with its pane content at `rect`; see `titlebar::crop`.
@@ -506,11 +571,11 @@ pub(crate) fn rail_id(label: &str) -> String {
 
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 6] = [
+    (Section::Repos, "icons/repos.svg", "Repos"),
     (Section::Tasks, "icons/tasks.svg", "Tasks"),
     (Section::Calendar, "icons/calendar.svg", "Calendar"),
     (Section::Apps, "icons/apps.svg", "Apps"),
     (Section::Workbook, "icons/workbook.svg", "Workspaces"),
-    (Section::Repos, "icons/repos.svg", "Repos"),
     (Section::Marks, "icons/marks.svg", "Marks"),
 ];
 
@@ -608,6 +673,18 @@ fn mark(marks: &Marks, key: Mark) -> impl IntoElement + use<> {
     let marks = marks.clone();
     let note = move |bounds, _: &mut Window, _: &mut App| {
         marks.borrow_mut().insert(key, bounds);
+    };
+    canvas(note, |_, _, _, _| {}).absolute().top_0().left_0().size_full()
+}
+
+/// As `mark`, only the part that shows: a tab scrolled out of its row is not noted.
+fn shown_mark(marks: &Marks, key: Mark) -> impl IntoElement + use<> {
+    let marks = marks.clone();
+    let note = move |bounds: Bounds<Pixels>, window: &mut Window, _: &mut App| {
+        let shown = bounds.intersect(&window.content_mask().bounds);
+        if shown.size.width > px(1.) && shown.size.height > px(1.) {
+            marks.borrow_mut().insert(key, shown);
+        }
     };
     canvas(note, |_, _, _, _| {}).absolute().top_0().left_0().size_full()
 }
@@ -781,6 +858,10 @@ struct Workspace {
     hosted: HashMap<PaneId, Hosted>,
     /// Shell half of each terminal pane.
     terminals: HashMap<PaneId, Terminal>,
+    /// Each file viewer's file as read and drawn (`viewer`), by pane.
+    viewers: HashMap<PaneId, viewer::FileView>,
+    /// "File…" choices that would have shown the open panel: a test run shows none.
+    file_prompts: u32,
     /// Each terminal's header, read from its processes a few times a second: `app-api · cargo test`.
     titles: HashMap<PaneId, String>,
     /// The right drawer: each task's agent, and where its conversation was drawn.
@@ -914,6 +995,8 @@ struct Workspace {
     /// What a tick with no window brought (`tick_now`), carried out at the next dispatch: a
     /// closed temporary workspace's panes, its Undo run out.
     held_effects: Vec<Effect>,
+    /// Runs of the tick so far, for a test run's state.
+    ticks: u64,
     kept_layout: layout_file::Kept,
     /// `keys.json` as last read and written.
     kept_keys: key_use::Kept,
@@ -925,6 +1008,14 @@ struct Workspace {
     /// it was last drawn in and the day it showed (`calendar::render_calendar`).
     calendar_scroll: ScrollHandle,
     calendar_shown: std::cell::Cell<(u64, i32)>,
+    /// The drawer rail's tasks; the frame and what it last drew (a new one scrolls to it
+    /// once); the item still to bring into view, and the tries left (`drawer_rail`).
+    rail_scroll: ScrollHandle,
+    rail_scrolled: RefCell<(u64, Option<drawer_rail::Drawn>)>,
+    rail_pending: Rc<Cell<Option<(usize, u8)>>>,
+    /// The second row's tabs, and the tab last brought into view there.
+    tabs_scroll: ScrollHandle,
+    tabs_shown: Cell<Option<u32>>,
     /// Every scroll area's bar.
     bars: scrollbar::Bars,
     /// The minute of the last look at the clock: the Tasks section's ages are drawn again when it changes.
@@ -1007,6 +1098,8 @@ struct Workspace {
     listen_meter: Option<listen_meter::Meter>,
     /// The transcript whose speech model the system is downloading, for its label.
     listen_downloading: Option<String>,
+    /// Today's files of `transcripts_dir` as last handed to the core, and the one open read-only.
+    listen_past: listen::Past,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -1144,8 +1237,6 @@ impl Workspace {
             }),
         ];
 
-        // ~60Hz tick: answer control calls, redraw on new frames, keep windows matched to panes.
-        // Every ~500ms, also look for new and closed windows of hosted apps.
         // Whether this Mac has the recogniser, asked once: then an app pane may be transcribed.
         cx.spawn_in(window, async move |this, cx| {
             let on = cx.background_executor().spawn(async { listen_live::available() }).await;
@@ -1156,22 +1247,41 @@ impl Workspace {
             }
         })
         .detach();
+        // The tick: answer control calls, redraw on new output, keep windows matched to panes;
+        // every ~500ms, also look for new and closed windows of hosted apps. Each frame while
+        // something moves or waits, or just happened; else asleep until woken, or the next slow
+        // look or thing due (`cadence`).
         cx.spawn_in(window, async move |this, cx| {
-            for tick in 0u64.. {
-                cx.background_executor().timer(Duration::from_millis(16)).await;
-                let alive = this.update_in(cx, |this, window, cx| {
+            let mut clock = cadence::Clock::default();
+            let mut wait = cadence::Wait::For(cadence::FRAME_MS);
+            loop {
+                match wait {
+                    // One frame: a wakeup does not cut it short, so the loop runs at most each frame.
+                    cadence::Wait::For(ms) if ms <= cadence::FRAME_MS => {
+                        cx.background_executor().timer(Duration::from_millis(ms)).await
+                    }
+                    cadence::Wait::For(ms) => woken_or(cx.background_executor().timer(Duration::from_millis(ms))).await,
+                    cadence::Wait::Woken => ottospace_mac::wake::woken().await,
+                }
+                let ticks = clock.step(loop_ms(), ottospace_mac::wake::take());
+                let load = this.update_in(cx, |this, window, cx| {
+                    this.ticks += 1;
                     if give_back::signalled() {
                         cx.quit();
                     }
                     this.serve_control(window, cx);
+                    this.sync_viewers(window, cx);
                     this.take_tags(window, cx);
                     this.store_layout(false);
                     this.store_key_use(false);
-                    if tick % 15 == 0 {
+                    if ticks.every(15, 0) {
                         this.poll_sessions(window, cx);
                         this.read_titles(cx);
                     }
                     this.listen_menu_bar(window, cx);
+                    if ticks.every(60, 0) {
+                        this.listen_read_past(window, cx);
+                    }
                     // The green button, Window ▸ Zoom or a title bar double-click: only the user's hand.
                     if ottospace_mac::window::take_zoom() {
                         this.dispatch(Action::FillDisplay, Origin::User, window, cx);
@@ -1188,7 +1298,7 @@ impl Workspace {
                         cx.notify();
                     }
                     this.with_origin(Origin::System, |this| {
-                        if tick % 30 == 0 {
+                        if ticks.every(30, 0) {
                             this.adopt_new_windows(window, cx);
                             this.drop_closed(window, cx);
                             this.follow_front_app(window, cx);
@@ -1219,17 +1329,17 @@ impl Workspace {
                         // the sizes are those of the layout before it.
                         let drawn = this.renders > this.dispatched_at;
                         // A display that changed moves no window: looked at, not told.
-                        if tick % 30 == 15 {
+                        if ticks.every(30, 15) {
                             this.fill_holds(window, cx);
                         }
-                        for (pane, content, outer, kept) in this.sync_layout(window, cx, tick % 30 == 15) {
+                        for (pane, content, outer, kept) in this.sync_layout(window, cx, ticks.every(30, 15)) {
                             if drawn && this.model.wants_changed(pane, content, outer, kept) {
                                 let wants = Action::PaneWants { pane, content, outer, window: kept };
                                 this.dispatch(wants, Origin::System, window, cx);
                             }
                         }
                         this.sync_terminals(window, cx);
-                        if tick % 3 == 0 {
+                        if ticks.every(3, 0) {
                             this.drag_scroll(cx);
                         }
                         // A pulse after a copy or paste is drawn frame by frame, and once more as it ends.
@@ -1239,29 +1349,29 @@ impl Workspace {
                         }
                         this.sync_agents(window, cx);
                         // A notice whose time is up, or one that came with no frame asked for.
-                        if tick % 6 == 0 && this.notice_changed() {
+                        if ticks.every(6, 0) && this.notice_changed() {
                             cx.notify();
                         }
                         // The header's time goes on while an agent runs.
                         let runs = this.model.talk.as_ref().is_some_and(|t| t.open && this.model.agent_runs(&t.task));
-                        if runs && tick % 30 == 0 {
+                        if runs && ticks.every(30, 0) {
                             cx.notify();
                         }
                         // A dial lit is drawn again each second; at rest only on a change.
-                        if tick % 60 == 0 && this.dial_moves() {
+                        if ticks.every(60, 0) && this.dial_moves() {
                             cx.notify();
                         }
-                        if tick % 60 == 0 {
+                        if ticks.every(60, 0) {
                             this.seek_sessions(window, cx);
                         }
-                        if tick % 15 == 7 {
+                        if ticks.every(15, 7) {
                             this.watch_settings(window, cx);
                         }
                         this.sync_sneak(window, cx);
                         this.sync_row_menu(window, cx);
                         this.sync_agent_looks();
                         this.read_sneak_app(window, cx);
-                        if tick % 4 == 0 {
+                        if ticks.every(4, 0) {
                             this.check_peek(window, cx);
                         }
                         this.tick_timeline(window, cx);
@@ -1274,10 +1384,10 @@ impl Workspace {
                         cx.notify();
                     }
                     this.watch_frames(window, cx);
+                    this.load(cx)
                 });
-                if alive.is_err() {
-                    break;
-                }
+                let Ok(load) = load else { break };
+                wait = clock.wait(loop_ms(), load);
             }
         })
         .detach();
@@ -1340,6 +1450,8 @@ impl Workspace {
             model,
             hosted: HashMap::new(),
             terminals: HashMap::new(),
+            viewers: HashMap::new(),
+            file_prompts: 0,
             titles: HashMap::new(),
             drawer: talk::Drawer::default(),
             cell: terminal::cell_size(window),
@@ -1402,6 +1514,11 @@ impl Workspace {
             list_scroll: ScrollHandle::new(),
             calendar_scroll: ScrollHandle::new(),
             calendar_shown: std::cell::Cell::new((0, 0)),
+            rail_scroll: ScrollHandle::new(),
+            rail_scrolled: RefCell::new((0, None)),
+            rail_pending: Rc::new(Cell::new(None)),
+            tabs_scroll: ScrollHandle::new(),
+            tabs_shown: Cell::new(None),
             bars: scrollbar::Bars::default(),
             minute: 0,
             tags: tags::Reader::start(),
@@ -1441,6 +1558,7 @@ impl Workspace {
             row_hovered: None,
             row_menu_spent: false,
             held_effects: Vec::new(),
+            ticks: 0,
             kept_layout: layout_file::Kept::default(),
             kept_keys: key_use::Kept::default(),
             caps_drawn: Cell::default(),
@@ -1457,6 +1575,7 @@ impl Workspace {
             listen_ending: Vec::new(),
             listen_meter: None,
             listen_downloading: None,
+            listen_past: listen::Past::default(),
             focus,
             _subscriptions: subscriptions,
         };
@@ -1529,6 +1648,11 @@ impl Workspace {
     /// The one path that changes state: updates the model, then carries out its effects.
     /// `origin`: who sent the action. The person's own keys and clicks pass `self.input`.
     fn dispatch(&mut self, action: Action, origin: Origin, window: &Window, cx: &mut Context<Self>) -> Vec<Effect> {
+        // What follows an action is the tick's: it runs each frame for a while. Not the system's:
+        // the tick's own, or a thread's that woke it (a redraw it asks for wakes it as a frame).
+        if origin != Origin::System {
+            ottospace_mac::wake::post();
+        }
         // The time it happens at: a task done now is done now, not at the last read.
         let now = now_ms();
         if now.saturating_sub(self.model.now()) >= 1_000 && !matches!(action, Action::Tick { .. }) {
@@ -1670,10 +1794,16 @@ impl Workspace {
                             _ => None,
                         });
                         let spawned = Instant::now();
-                        // Open Settings: the editor on the file, not a shell.
+                        // Open Settings, or ⌃G in a viewer: the editor on the file, not a shell.
+                        let edits = effects.iter().find_map(|effect| match effect {
+                            Effect::EditFile { pane, path } if pane == id => Some(path),
+                            _ => None,
+                        });
                         let started = if effects.contains(&Effect::EditSettings { pane: *id }) {
                             let file = config::settings_file().map_err(std::io::Error::other);
                             file.and_then(|file| Terminal::edit(&file.to_string_lossy(), &vars))
+                        } else if let Some(path) = edits {
+                            Terminal::edit(path, &vars)
                         } else {
                             Terminal::spawn(&vars, cwd, history)
                         };
@@ -1692,6 +1822,7 @@ impl Workspace {
                         .borrow_mut()
                         .retain(|mark, _| ![Mark::Header(pane.id), Mark::Close(pane.id)].contains(mark));
                     self.terminals.remove(&pane.id); // drop ends its shell
+                    self.viewers.remove(&pane.id);
                     if let Some(hosted) = self.hosted.remove(&pane.id) {
                         hosted.release();
                     }
@@ -1704,7 +1835,9 @@ impl Workspace {
                         let limit = top_limit(window, cx);
                         let rect = on_screen(hosted.bounds.get(), window, cx);
                         let crop = hosted.crop_at(rect, limit);
-                        hosted.park(pane_rect(rect, keep, false, crop).size, window.scale_factor() as f64, crop);
+                        let scale = window.scale_factor() as f64;
+                        hosted.park(pane_rect(rect, keep, false, crop).size, scale, crop);
+                        hosted.resume(scale);
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
                         // bar shows no mode. If the user moved to a third app, leave them there.
@@ -1786,7 +1919,11 @@ impl Workspace {
                     }
                 }
                 // Carried out with its pane's `Opened`, before the shell starts.
-                Effect::History { .. } | Effect::EditSettings { .. } => {}
+                Effect::History { .. } | Effect::EditSettings { .. } | Effect::EditFile { .. } => {}
+                // Read again from the start: the next tick does (`sync_viewers`).
+                Effect::ViewFile { pane } => drop(self.viewers.remove(pane)),
+                Effect::ViewerScroll { pane, top } => self.viewer_scroll(*pane, *top, cx),
+                Effect::ChooseFile { axis, new_tab } => self.choose_file(*axis, *new_tab, window, cx),
                 Effect::OpenEditor { text } => {
                     if let Err(why) = self.open_editor(text) {
                         self.error = Some(why);
@@ -1824,13 +1961,15 @@ impl Workspace {
                     .detach();
                 }
                 Effect::Live(id) => {
-                    self.live_since = Some(Instant::now());
                     self.went_live += 1;
                     let keep = self.bars_leave();
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("unpark", serde_json::json!({ "pane": id, "window": hosted.window_id }));
+                        hosted.pause();
                         hosted.bring_up(keep, window, cx);
                     }
+                    // After the blocking stop and AX calls: the activation they delay is still ignored.
+                    self.live_since = Some(Instant::now());
                 }
             }
         }
@@ -2022,6 +2161,61 @@ impl Workspace {
         self.settle(false, window, cx);
         // What a request reaches through a shared method (`open_app`, a click) is the client's too.
         self.with_origin(Origin::Socket, |this| this.serve_calls(window, cx));
+    }
+
+    /// After a tick: what the next must look at (`cadence`). Busy: something moves, or waits for
+    /// what no event announces. Slow: a look with no event of its own. Due: the next write or read.
+    fn load(&self, cx: &App) -> cadence::Load {
+        let model = &self.model;
+        let now = now_ms();
+        let clip = model.clip.as_ref().filter(|clip| clip.pane.is_some());
+        let talk = model.talk.as_ref().filter(|talk| talk.open);
+        let busy = !self.hosted.is_empty()
+            || !self.launching.is_empty()
+            || !self.settling.is_empty()
+            || !self.filing.is_empty()
+            || !self.pending.is_empty()
+            || !self.held_effects.is_empty()
+            || self.dragging.is_some()
+            || cx.has_active_drag()
+            || model.sneak.is_some()
+            || model.row_menu().is_some()
+            || model.agent.menu.is_some()
+            || model.peek.is_some()
+            || clip.is_some_and(|clip| now.saturating_sub(clip.at) < clip::PULSE_MS + 100)
+            || self.bar.moves()
+            || self.notice_changed()
+            || talk.is_some_and(|talk| model.agent_runs(&talk.task))
+            || self.stall.watching()
+            || !self.drawer.native.is_empty()
+            || !self.drawer.stopping.is_empty()
+            || model.calendar.on && self.timeline.pulse;
+        // An app hosted once: its new windows are adopted, its panes all gone or not.
+        let slow = !self.terminals.is_empty()
+            || !self.known.is_empty()
+            || config::get().home.is_some()
+            || model.calendar.on
+            || model.inspector.is_some()
+            || matches!(model.sidebar, Some(Section::Marks | Section::Workbook | Section::Repos | Section::Tasks))
+            || talk.is_some()
+            || !model.seeking().is_empty()
+            || model.listen.shown
+            || model.fill_display
+            || self.drawer.editor.is_some()
+            || self.notice_shown().is_some();
+        // In the loop's ms: a time of the wall clock, or an instant.
+        let (ms, instant) = (loop_ms(), Instant::now());
+        let wall = |at: u64| ms + at.saturating_sub(now);
+        let soon = |at: Instant| ms + at.saturating_duration_since(instant).as_millis() as u64;
+        // A save only while one is written; the told line only until it goes.
+        let layout = self.kept_layout.due.filter(|_| self.kept_layout.writing);
+        let keys = self.kept_keys.due.filter(|_| self.kept_keys.writing);
+        let told = self.told.as_ref().map(|(_, at)| *at + TOLD_FOR).filter(|end| *end > instant);
+        let instants = [layout, keys, told];
+        let walls = [model.next_due(), self.sessions.as_ref().and_then(sessions::Poller::next_ask)];
+        let due = instants.into_iter().chain([self.viewers_due()]).flatten().map(soon);
+        let due = due.chain(walls.into_iter().flatten().map(wall)).min();
+        cadence::Load { busy, slow, due }
     }
 
     /// Each tick: after a change of the displays, or while the shown window has something to draw
@@ -2319,7 +2513,7 @@ impl Workspace {
                             if self.model.visual.is_some() {
                                 self.dispatch(Action::LeaveVisual, Origin::Socket, window, cx);
                             }
-                            self.terminal_mouse_down(id, &event, cx);
+                            self.terminal_mouse_down(id, &event, window, cx);
                             self.click_pane(id, &event, window, cx);
                         }
                         Err(err) => failure = Some(err),
@@ -2464,6 +2658,19 @@ impl Workspace {
                     None
                 }
                 Request::OpenRepo { path, axis } => Some(Action::OpenRepo { path, axis }),
+                // Judged before the core: one line, absolute, and on disk a regular file (the
+                // viewer reads it again itself, and shows what it finds).
+                Request::OpenFile { beside: Some(pane), .. } if self.model.pane(pane).is_none() => {
+                    failure = Some(format!("no pane {pane}"));
+                    None
+                }
+                Request::OpenFile { path, beside } => match viewer::open_refusal(&path) {
+                    Some(why) => {
+                        failure = Some(why);
+                        None
+                    }
+                    None => Some(Action::OpenFile { path, axis: Axis::Right, beside, reuse: false }),
+                },
                 // A test run only (refused above otherwise): the folder the user's picker would give.
                 Request::RepoAdd { path } => {
                     // All of it the user's, what it says too.
@@ -3117,7 +3324,7 @@ impl Workspace {
     }
 
     fn state(&self, window: &Window, cx: &App) -> serde_json::Value {
-        let parking = display::parking_spot();
+        let parking = display::parking_spot(window.scale_factor() as f64);
         let hosted: BTreeMap<PaneId, [f64; 4]> = self
             .hosted
             .iter()
@@ -3261,6 +3468,9 @@ impl Workspace {
             // Each hosted pane's title-bar crop in points (0: none).
             "crop": crop,
             "terminals": terminals,
+            // Each file viewer as drawn: `body` (`markdown` with its blocks' `shape`, `lines`, `image`,
+            // or null), never the file's text. Its path, kind, line and count are `state.viewers`.
+            "viewers": self.viewers_snapshot(),
             // A test run's stand-in clipboard: the last text copied. Null outside a test run.
             "copied": self.clipboard.test_text(),
             // The picker's rows as drawn, or null: `state.picker.items` narrowed by its filter,
@@ -3351,11 +3561,15 @@ impl Workspace {
                 "live": self.went_live,
                 // Pull requests the user's click opened (a test run opens none).
                 "pr_opens": self.pr_opens,
+                // "File…" choices: the open panel a test run does not show.
+                "file_prompts": self.file_prompts,
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
                 // How often GPUI's own handlers were kicked to draw again (`stall`): after a change
                 // of the displays, or frames that stopped.
                 "redraws": self.redraws,
+                // Runs of the tick (`cadence`): each frame just after a change, else few at rest.
+                "ticks": self.ticks,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
                 // Scrolls over an app pane's picture, peeks they started, and the one on now (its pane; 0:
                 // none).
@@ -3393,6 +3607,7 @@ impl Workspace {
             // (each `title`, `panes`, `summary`, `open`, `tab`), `unfolded`. No directory.
             // `row` and `buttons`: where the Workbook section drew it, or null; so for each tab.
             "workbooks": self.workbooks_json(),
+            "workbooks_closing": self.closing_json(),
             // What the Workbook section offers to take back (`deleted`, `updated`), or null.
             "workbook_offer": self.model.workbooks.offered(),
             // A row's open menu (its …), or null: `workbook` and `tab` (whose row), `selected`
@@ -3402,6 +3617,9 @@ impl Workspace {
             // `marks`, `picker`, `keys`, `terminal:<pane>`): its bar's `track` and `thumb` in
             // window points, and the bar's `opacity` (0 once it has faded).
             "scrollbars": self.bars.snapshot(),
+            // Test runs only: each scroll area laid out (not a terminal), also one that fits, and which of its edges
+            // fade (`top`, `bottom`; the tab row's `left`, `right`). Null outside a test run.
+            "overflow": std::env::var_os("OTTOSPACE_E2E").map(|_| self.bars.overflow()),
             // The capture key, and what was drawn of the draft or the brief in the right bar.
             "capture": self.capture_snapshot(),
             // The right drawer: where its conversation is drawn (`body`), each task's agent
@@ -3424,6 +3642,20 @@ impl Workspace {
         });
         // Restored or rebuilt panes still empty: `pane`, `why`, and where its "Open <App>" is drawn, or null.
         state["unfilled"] = unfilled.into();
+        // Test runs only: what each app pane's stream has sent, `stream_samples_<pane>` (`counts`
+        // holds numbers only); the pixel size of the frame it holds and the scale it captures at;
+        // the scale of ottospace's display and of the parked windows' display.
+        if let Some(counts) = state["counts"].as_object_mut() {
+            for (id, hosted) in &self.hosted {
+                counts.insert(format!("stream_samples_{id}"), hosted.latest.samples.load(Relaxed).into());
+                let held = hosted.frame().map_or((0, 0), |f| (f.get_width(), f.get_height()));
+                counts.insert(format!("stream_width_{id}"), held.0.into());
+                counts.insert(format!("stream_height_{id}"), held.1.into());
+                counts.insert(format!("stream_scale_{id}"), hosted.shown_scale.into());
+            }
+            counts.insert("scale".into(), (window.scale_factor() as f64).into());
+            counts.insert("parking_scale".into(), display::parking_scale(window.scale_factor() as f64).into());
+        }
         // Where the box offers a choice of where the task works: `new` (a new worktree, the user's
         // choice), the repository's name and the `branch` it would make; else null.
         state["compose_worktree"] = serde_json::json!(self.model.compose_worktree());
@@ -3470,7 +3702,8 @@ impl Workspace {
     fn attach(&mut self, hosted: Hosted, action: Action, window: &Window, cx: &mut Context<Self>) -> Option<PaneId> {
         let pid = hosted.pid;
         if !self.known.iter().any(|(p, _)| *p == pid) {
-            let ids = ax::Window::standard_of(pid).iter().filter_map(ax::Window::id).collect();
+            // Its dialogs open now too: only those that open later are judged (`adopt_new_windows`).
+            let ids = ax::Window::all_of(pid).iter().filter(|w| w.judged()).filter_map(ax::Window::id).collect();
             self.known.push((pid, ids));
         }
         let effects = self.dispatch(action, self.input, window, cx);
@@ -3481,7 +3714,7 @@ impl Workspace {
             // window. Move it off screen now; it is sized when its tab is first shown.
             let drawn = self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(id));
             if !drawn {
-                let _ = hosted.window.set_position(display::parking_spot());
+                let _ = hosted.window.set_position(display::parking_spot(window.scale_factor() as f64));
             }
             if hosted.off_screen {
                 self.broke(format!("{}'s window was off screen: it goes back to the middle of the screen", hosted.app));
@@ -3719,26 +3952,64 @@ impl Workspace {
         }
     }
 
-    /// Hosts windows that appeared since we started watching their app (e.g. undocked DevTools),
-    /// each to the right of its app's newest pane.
+    /// Hosts windows that appeared since we started watching their app (e.g. a second browser
+    /// window), each to the right of its app's newest pane. A pop-up stays a free window over that
+    /// pane (`rules::place`). Each window is judged once, when first seen as standard or a dialog.
     fn adopt_new_windows(&mut self, window: &Window, cx: &mut Context<Self>) {
         let mut fresh = Vec::new();
         for (pid, seen) in &mut self.known {
-            for window in ax::Window::standard_of(*pid) {
-                // A window the rules leave alone is seen once and never becomes a pane.
+            for window in ax::Window::all_of(*pid) {
+                // A toast or popover is looked at again next time: it may become a window.
                 if let Some(id) = window.id()
-                    && seen.insert(id)
-                    && window_managed(&window)
+                    && !seen.contains(&id)
+                    && window.quick(ax::Window::judged)
                 {
+                    seen.insert(id);
                     fresh.push(window);
                 }
             }
         }
+        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
         for ax_window in fresh {
-            if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
-                let beside = self.hosted.iter().filter(|(_, h)| h.pid == hosted.pid).map(|(id, _)| *id).max();
-                let action = Action::Adopt { kind: hosted.kind(), beside, seen: None };
-                self.attach(hosted, action, window, cx);
+            let pid = ax_window.pid();
+            let beside = self.hosted.iter().filter(|(_, h)| h.pid == pid).map(|(id, _)| *id).max();
+            // The pane it would split, if drawn: a background tab's bounds are stale.
+            let pane = beside.filter(|id| drawn.contains(id)).and_then(|id| self.hosted.get(&id));
+            let pane = pane.map(|h| (h.bounds.get(), h.min_width)).filter(|(b, _)| f32::from(b.size.width) >= 1.0);
+            // A short wait for each read: a hung app costs a blink, not seconds.
+            let (frame, modal, sheet) = ax_window.quick(|w| (w.frame(), w.modal(), w.sheet()));
+            let shape = rules::Shape {
+                modal,
+                sheet,
+                size: frame.map(|f| [f.size.width, f.size.height]),
+                pane: pane.map(|(b, _)| to_cg(b.size)).map(|s| [s.width, s.height]),
+                min_width: pane.and_then(|(_, min)| min),
+            };
+            match ax_window.quick(|w| window_place(w, &shape)) {
+                rules::Place::Split => {
+                    if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
+                        let action = Action::Adopt { kind: hosted.kind(), beside, seen: None };
+                        self.attach(hosted, action, window, cx);
+                    }
+                }
+                // Only while its app has a pane: an app given back is left alone.
+                rules::Place::Float if beside.is_some() => {
+                    let pane = pane.map(|(b, _)| recovery::to_frame(on_screen(b, window, cx)));
+                    let screens = recovery::screens();
+                    // Parked: no pane of its app is up and the app is not in front, so ottospace is.
+                    let peek = self.model.peek.as_ref().map(|peek| peek.pane);
+                    let up = |id: &PaneId| self.model.live == Some(*id) || peek == Some(*id);
+                    let parked = !self.hosted.iter().any(|(id, h)| h.pid == pid && up(id)) && !ax::is_active(pid);
+                    let ottospace = Some(recovery::to_frame(own_frame(window, cx)));
+                    let spots = &screens.spots;
+                    let sight =
+                        rules::Sight { screens: &screens.visible, main: screens.main, ottospace, parked, spots };
+                    let to = frame.and_then(|f| rules::float_to(recovery::to_frame(f), pane, &sight));
+                    let moved = to.is_some_and(|(x, y)| ax_window.set_position(CGPoint::new(x, y)).is_ok());
+                    ax_window.raise_only();
+                    trace::record("float", serde_json::json!({ "window": ax_window.id(), "moved": moved }));
+                }
+                rules::Place::Float | rules::Place::Leave => {}
             }
         }
     }
@@ -3752,6 +4023,8 @@ impl Workspace {
         // Only panes of the active tab are drawn; a background pane's bounds are stale.
         let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
         let scale = window.scale_factor() as f64;
+        // Only on a check, with windows hosted: it asks each display's mode, and this runs every frame.
+        let spot = (check && !self.hosted.is_empty()).then(|| display::parking_spot(scale));
         // A peeked window is kept over its pane as the live one is.
         let live = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
         // Under the notice bar as it is in this frame: the windows follow it as it opens and closes.
@@ -3769,7 +4042,11 @@ impl Workspace {
                 if hosted.placed != rect || drifted {
                     hosted.place(rect, crop);
                 }
-            } else if hosted.parked_size != rect.size || hosted.crop != crop {
+            // Also when the spot moved: displays changed, or ottospace is on one of another scale.
+            } else if hosted.parked_size != rect.size
+                || hosted.crop != crop
+                || spot.is_some_and(|spot| hosted.parked_at != spot)
+            {
                 hosted.park(rect.size, scale, crop);
             }
             // Only on a check: reading a window's size is a synchronous accessibility call.
@@ -3780,6 +4057,7 @@ impl Workspace {
                 && let Some(frame) = self.frames.get(id)
                 && drawn.contains(id)
             {
+                hosted.min_width = rules::refused_width(hosted.min_width, kept.width, rect.size.width);
                 let content = [rect.size.width as f32, rect.size.height as f32];
                 // The pane's size with its 1pt border.
                 let outer = frame.get().size;
@@ -3944,6 +4222,10 @@ impl Workspace {
         if self.model.mode() == Mode::Talk {
             return self.talk_key(event, window, cx);
         }
+        if self.model.keyboard_viewer().is_some() && self.viewer_key(event, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
         let Some(terminal) = self.model.focused.and_then(|id| self.terminals.get(&id)) else {
             // Esc that nothing else takes (no mode, no terminal to type it in) dismisses the notice.
             if key.key == "escape" && !key.modifiers.modified() && self.dismiss_notice(window, cx) {
@@ -3975,12 +4257,16 @@ impl Workspace {
     /// A press on a terminal starts a selection there: a drag, or a word or line by click count;
     /// with ⇧ it moves the far end of the one there (`press`).
     /// It also focuses the pane (`click_pane`), so the first click on an unfocused pane selects too.
-    fn terminal_mouse_down(&mut self, id: PaneId, event: &MouseDownEvent, cx: &mut Context<Self>) {
+    fn terminal_mouse_down(&mut self, id: PaneId, event: &MouseDownEvent, window: &Window, cx: &mut Context<Self>) {
         // While a picture is annotated a click on another pane captures it: it selects nothing.
         if self.model.annotated().is_some() {
             return;
         }
         let Some(at) = self.cell_under(id, event.position) else { return };
+        // ⌘-click on a text file's path: the viewer beside, reused for the next one.
+        if event.modifiers.platform && self.terminal_path_click(id, at, window, cx) {
+            return;
+        }
         if let Some(terminal) = self.terminals.get(&id) {
             terminal.select_start(at, press(event.click_count, event.modifiers.shift));
             (self.dragging, self.drag_at) = (Some(id), None);
@@ -4285,7 +4571,7 @@ impl Workspace {
         // What `refresh_apps` just listed: running apps, then the pinned ones that are not.
         let apps = self.apps.iter().map(|app| PickItem::App { name: app.name.clone() });
         let closed = self.pinned_closed().map(|app| PickItem::Closed { name: app.name, path: app.path });
-        let items = std::iter::once(PickItem::Terminal).chain(apps).chain(closed).collect();
+        let items = [PickItem::Terminal, PickItem::File].into_iter().chain(apps).chain(closed).collect();
         self.offer_installed(cx);
         self.dispatch(Action::OpenPicker { axis, new_tab, items }, self.input, window, cx);
     }
@@ -4374,7 +4660,14 @@ impl Workspace {
         let panel = dialog::panel(theme::BORDER_STRONG).min_h_0().max_w_full().flex().flex_col().overflow_hidden();
         // The columns keep their height inside the list: a flex row would stretch them to its own.
         let list = div().id("keys-rows").flex_1().overflow_y_scroll().child(body);
-        let panel = panel.child(self.bars.area("keys", list));
+        let panel = panel.child(self.bars.rounded(
+            "keys",
+            list,
+            scrollbar::Fade {
+                radius: (dialog::RADIUS - 1., dialog::RADIUS - 1.),
+                ..scrollbar::Fade::to(theme::RAISED)
+            },
+        ));
         dialog::backdrop("keys-backdrop", 0.5, Action::CloseKeys, cx)
             .p_6()
             .flex()
@@ -4393,13 +4686,18 @@ impl Workspace {
     }
 
     /// The picker dropdown, under the split buttons. A click outside it closes it.
-    fn render_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> AnyElement {
+        if picker.transcribe {
+            return self.render_sound_picker(picker, cx);
+        }
         let selected = picker.selected;
         let rows = picker.matches().into_iter().enumerate().map(|(i, item)| {
             let (tag, color) = match item {
                 PickItem::Terminal => ("TERM", theme::PRIMARY),
+                PickItem::File => ("FILE", theme::PRIMARY),
                 PickItem::App { .. } => ("APP", theme::APP),
                 PickItem::Closed { .. } => ("APP", theme::MUTED),
+                PickItem::Sound { .. } => ("APP", theme::APP),
             };
             dialog::filter_row(("pick", i), i == selected)
                 .child(match item {
@@ -4436,7 +4734,60 @@ impl Workspace {
             .child(div().text_color(rgb(theme::PICK)).child(title))
             .child(self.render_field("type to filter", cx));
         let panel = self.list_panel(panel, header, "picker", rows, "No match");
-        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel)
+        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel).into_any_element()
+    }
+
+    /// The transcript's picker ("Transcribe a window…"), in ⌘E's style: each app that can play
+    /// sound and its windows, the one playing now first and marked. A pick hears that app.
+    fn render_sound_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> AnyElement {
+        let selected = picker.selected;
+        let rows = picker.matches().into_iter().enumerate().filter_map(|(i, item)| {
+            let PickItem::Sound { name, window, playing, .. } = item else { return None };
+            let icon = match self.icons.contains_key(name) {
+                true => div().w(px(28.)).flex_none().child(self.app_icon(name)),
+                false => div().w(px(28.)).flex_none(),
+            };
+            let label = match window {
+                Some(window) => format!("{name} · {window}"),
+                None => name.clone(),
+            };
+            let now = playing.then(|| {
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(rgb(theme::RECORDING))
+                    .child(div().size(px(6.)).rounded_full().bg(rgb(theme::RECORDING)))
+                    .child("sound now")
+            });
+            let row = dialog::filter_row(("pick", i), i == selected)
+                .child(icon)
+                .child(div().flex_1().min_w_0().truncate().child(label))
+                .children(now)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.dispatch(Action::PickerChoose { index: Some(i) }, this.input, window, cx);
+                }));
+            Some(row.into_any_element())
+        });
+        let rows: Vec<AnyElement> = rows.collect();
+        let panel = dialog::floating(360.).absolute().top(px(TOP_BAR + 6.)).right(px(8.)).max_h(px(420.));
+        let header = div()
+            .h(px(34.))
+            .text_xs()
+            .child(div().text_color(rgb(theme::PICK)).child("Listen to…"))
+            .child(self.render_field("type to filter", cx));
+        let foot = div()
+            .px_3()
+            .py_2()
+            .border_t_1()
+            .border_color(rgb(theme::BORDER))
+            .text_xs()
+            .text_color(rgb(theme::MUTED))
+            .child("↵ listen · Esc cancel · needn't be in a pane");
+        let panel = self.list_panel(panel, header, "picker", rows, "No app to listen to").child(foot);
+        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel).into_any_element()
     }
 
     /// Carries out `Effect::FillDisplay`. A run with hosting off changes no window: its own
@@ -4892,6 +5243,7 @@ impl Workspace {
             // A window with no title says whose it is.
             Kind::App { title, name, .. } if title.is_empty() => name.clone(),
             Kind::App { title, .. } => title.clone(),
+            Kind::File { path } => viewer::name_and_dir(path).0,
         }
     }
 
@@ -5150,7 +5502,7 @@ impl Workspace {
         let sessions = self.render_sessions(listed, cx);
         let list = div().id("tasks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         let list = list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows);
-        let list = self.bars.tracked("tasks", list.children(sessions), &self.list_scroll);
+        let list = self.bars.tracked("tasks", list.children(sessions), &self.list_scroll, theme::RAISED);
         // The footer stays under the list as it scrolls.
         let footer = (!self.model.tasks.list.is_empty()).then(|| self.render_today());
         div().flex_1().min_h_0().flex().flex_col().child(list).children(footer)
@@ -5346,6 +5698,7 @@ impl Workspace {
                 div().px_2().pt_2().text_xs().text_color(rgb(theme::MUTED)).child(format!("Pull requests: {note}"))
             })),
             &self.list_scroll,
+            theme::RAISED,
         )
     }
 
@@ -5517,6 +5870,22 @@ impl Workspace {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.fit_pane(id, window, cx)))
         });
+        // A viewer's Edit: the user's editor on its file, beside it (⌃G).
+        let edit = matches!(pane.kind, Kind::File { .. }).then(|| {
+            div()
+                .id(("edit", id))
+                .flex_none()
+                .relative()
+                .cursor_pointer()
+                .text_color(rgb(theme::MUTED))
+                .hover(|s| s.text_color(rgb(theme::TEXT)))
+                .child("Edit")
+                .child(self.controls.mark(format!("viewer-edit:{id}")))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    drop(this.dispatch(Action::ViewerEdit { pane: Some(id) }, this.input, window, cx))
+                }))
+        });
         // After a copy from it or a paste into it: "Copied 3 lines" in the header, and one pulse.
         let now = now_ms();
         let clip = self.model.clip.as_ref().filter(|clip| clip.pane == Some(id) && clip.shows(now));
@@ -5532,6 +5901,7 @@ impl Workspace {
             Kind::Terminal => "Terminal".into(),
             Kind::Empty => "Empty pane".into(),
             Kind::Slot { name, .. } => format!("Slot · {name}").into(),
+            Kind::File { .. } => "File".into(),
         };
         // A marked pane says so, with its letter: ⌘B gives no other sign while the Marks list is shut.
         let marked = self.model.mark_of(MarkOf::Pane(Some(id))).filter(|_| self.on(Feature::Marks));
@@ -5610,6 +5980,7 @@ impl Workspace {
                     .children(clip)
                     .children(hint)
                     .children(word)
+                    .children(edit)
                     .children(strip)
                     .child(
                         div()
@@ -5672,6 +6043,8 @@ impl Workspace {
                 }
                 None => div().child("waiting for frames…").into_any_element(),
             }
+        } else if let Kind::File { path } = &pane.kind {
+            self.viewer_body(id, path, cx)
         } else if let Some(terminal) = self.terminals.get(&id) {
             let screen = terminal.screen();
             let cell = self.cell;
@@ -5694,11 +6067,14 @@ impl Workspace {
             // Shown by the user's own scrolls, not by output arriving. A press beside the thumb
             // is the terminal's: a selection, or the program's own mouse.
             let (scroll_to, scrolls) = (terminal.scroller(), terminal.scrolls() as f32);
+            // No edge fade: a terminal's lines run to its edges.
             let scrollbar = self.bars.overlay(
                 &format!("terminal:{id}"),
+                scrollbar::Axis::Down,
                 false,
+                None,
                 move || (extent, scrolls),
-                move |offset| scroll_to(history.saturating_sub((offset / line).round() as usize)),
+                move |offset, _| scroll_to(history.saturating_sub((offset / line).round() as usize)),
             );
             div()
                 .absolute()
@@ -5706,7 +6082,9 @@ impl Workspace {
                 .on_scroll_wheel(cx.listener(move |this, e: &ScrollWheelEvent, _, cx| this.wheel(id, e.delta, cx)))
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this, e: &MouseDownEvent, _, cx| this.terminal_mouse_down(id, e, cx)),
+                    cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                        this.terminal_mouse_down(id, e, window, cx)
+                    }),
                 )
                 .child(grid)
                 .child(scrollbar)
@@ -5874,11 +6252,18 @@ impl Workspace {
             })
             .collect();
         let more = others - badges;
+        let dot = self.model.listen_dot();
+        // The heard pane's space left off for room: the count carries its dot.
+        let dot_in_more = matches!(&dot, Some(ottospace_core::listen::Dot::Space(of))
+            if !shown.iter().any(|(_, space)| space.of == *of));
         let spaces = shown.into_iter().map(|(place, space)| {
             let of = space.of.clone();
+            // The pane being heard is in this space, off show: a red dot at its corner.
+            let heard = (dot == Some(ottospace_core::listen::Dot::Space(of.clone())))
+                .then(|| self.off_show_dot(format!("listen-dot:space:{place}"), cx).top(px(5.)).left(px(3.)));
             let on = of == selected;
             let small = of == Owner::Home || (compact && !on);
-            // A temporary workspace's name is muted; its tip says it closes without saving.
+            // A temporary workspace's name is muted and italic (selected or not); its tip says it closes without saving.
             let temporary = !self.model.space_kept(&of);
             let title = self.model.space_title(&of);
             let tip: SharedString =
@@ -6006,10 +6391,11 @@ impl Workspace {
                 })
                 .hover(|s| s.text_color(rgb(theme::TEXT)))
                 .child(mark(&self.marks, Mark::Space(place)))
+                .children(heard)
                 .children(lead)
                 .children((!small).then(|| {
                     let name = cut_text(title).flex_1();
-                    if temporary { name.text_color(rgb(theme::MUTED)) } else { name }
+                    if temporary { name.text_color(rgb(theme::MUTED)).italic() } else { name }
                 }))
                 .children(
                     (count > 1 && !small)
@@ -6032,6 +6418,10 @@ impl Workspace {
         let more = (more > 0).then(|| {
             div()
                 .id("more-spaces")
+                .relative()
+                .when(dot_in_more, |d| {
+                    d.child(self.off_show_dot("listen-dot:more".into(), cx).top(px(5.)).left(px(2.)))
+                })
                 .flex_none()
                 .px_2()
                 .h_full()
@@ -6106,8 +6496,6 @@ impl Workspace {
     /// New tab and split buttons: a new empty tab, or the picker for that split. Then Fill the
     /// Whole Display, its arrows out while off and in while on.
     fn render_top_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // A transcript's mark first, at the row's right end.
-        let listen = self.render_listen_mark(cx);
         // Each the same: an icon, its sneak label, its tip.
         let button = |id: ElementId, icon: &'static str, name: String, tip: &'static str| {
             div()
@@ -6136,7 +6524,7 @@ impl Workspace {
                 this.dispatch(Action::FillDisplay, this.input, window, cx);
             }),
         );
-        div().flex_none().ml_auto().mr_2().flex().items_center().gap_1().children(listen).children(splits).child(fill)
+        div().flex_none().ml_auto().mr_2().flex().items_center().gap_1().children(splits).child(fill)
     }
 
     /// The second row: the selected space's tabs, only while it has more than one. The one on
@@ -6145,10 +6533,26 @@ impl Workspace {
         let of = self.model.space().clone();
         let places = self.model.space_tabs(&of);
         if places.len() < 2 {
+            // Back on this row (e.g. from Home), its tab on show scrolls into view again.
+            self.tabs_shown.set(None);
             return None;
         }
         let colour = self.space_colour(&of);
         let chip = self.agent_chip(SPACE_TABS, cx);
+        let dot = self.model.listen_dot();
+        // The tab on show scrolls into view once, when it changes: a scroll may move it out again.
+        // Asked after the row's layout: `scroll_to_item` reads the row's bounds of the frame before.
+        let at = places.iter().position(|place| *place == self.model.active);
+        let on_show = at.and_then(|_| self.model.tabs.get(self.model.active)).map(|tab| tab.id);
+        let changed = self.tabs_shown.replace(on_show) != on_show;
+        let follow = at.filter(|_| changed).map(|at| {
+            let handle = self.tabs_scroll.clone();
+            let ask = move |_, window: &mut Window, _: &mut App| {
+                handle.scroll_to_item(at);
+                window.request_animation_frame();
+            };
+            canvas(ask, |_, _, _, _| {}).absolute().size_0()
+        });
         let tabs =
             places.into_iter().filter_map(|place| Some((place, self.model.tabs.get(place)?))).map(|(place, tab)| {
                 let (active, id) = (place == self.model.active, tab.id);
@@ -6191,7 +6595,12 @@ impl Workspace {
                     // A tab not on show sits below the one that is.
                     .when(!active, |d| d.child(inner_shade(false, 6.)))
                     .hover(|s| s.text_color(rgb(theme::TEXT)))
-                    .child(mark(&self.marks, Mark::Tab(place)))
+                    .child(shown_mark(&self.marks, Mark::Tab(place)))
+                    // The pane being heard is in this tab, off show.
+                    .children(
+                        (dot == Some(ottospace_core::listen::Dot::Tab(id)))
+                            .then(|| self.off_show_dot(format!("listen-dot:tab:{id}"), cx).top(px(6.)).left(px(3.))),
+                    )
                     .children(
                         self.model
                             .mark_of(MarkOf::Tab(Some(id)))
@@ -6224,6 +6633,16 @@ impl Workspace {
                     )
                     .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
             });
+        // Tabs past the row's width scroll across, under the overflow motif.
+        let row = div()
+            .id("tabs")
+            .flex_shrink()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .overflow_x_scroll()
+            .track_scroll(&self.tabs_scroll)
+            .children(tabs);
         Some(
             div()
                 .h(px(SPACE_TABS))
@@ -6234,10 +6653,13 @@ impl Workspace {
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .overflow_hidden()
-                .children(tabs)
-                // The agent chip, in the room the tabs leave: its badge over the row's end.
+                .child(self.bars.tracked_row("tabs", row, &self.tabs_scroll, theme::BACKGROUND))
+                .children(follow)
+                // The agent chip, in the room the tabs leave, at least its badge's: over the row's end.
                 .relative()
-                .children(chip.into_iter().flat_map(|(badge, whole)| [badge, whole])),
+                .children(chip.map(|(badge, whole)| {
+                    div().relative().flex_1().min_w(px(self.chip_badge())).h_full().flex().child(badge).child(whole)
+                })),
         )
     }
 
@@ -6305,6 +6727,10 @@ impl Workspace {
                 d.child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
             })
             .child(cut_text(hint))
+            // A count or `g` typed in the viewer, waiting for its move (`10j`).
+            .children(
+                self.model.viewer_pending().map(|typed| div().flex_none().text_color(rgb(theme::TEXT)).child(typed)),
+            )
             // Pushes what follows to the right (an auto margin there closed the gaps on the left).
             // Its hover names the build.
             .child(div().id("status-space").flex_1().h_full().tooltip(|_, cx| {
@@ -6550,6 +6976,26 @@ fn now_ms() -> u64 {
     since.map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
+/// The main loop's clock (`cadence`): ms since it was first read. Monotonic, unlike `now_ms`.
+fn loop_ms() -> u64 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// Ready when `timer` is, or sooner when something posts a wakeup.
+async fn woken_or(mut timer: gpui::Task<()>) {
+    let mut woken = ottospace_mac::wake::woken();
+    std::future::poll_fn(|cx| {
+        let woke = std::pin::Pin::new(&mut woken).poll(cx).is_ready();
+        if woke || std::pin::Pin::new(&mut timer).poll(cx).is_ready() {
+            std::task::Poll::Ready(())
+        } else {
+            std::task::Poll::Pending
+        }
+    })
+    .await
+}
+
 /// A key's modifiers as the core names them.
 fn mods(m: gpui::Modifiers) -> Mods {
     Mods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform }
@@ -6601,6 +7047,16 @@ fn list_button(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
 
 /// True if the window rules (the user's, then the built-in ones) let this window be put in a pane.
 fn window_managed(window: &ax::Window) -> bool {
+    with_facts(window, |facts| rules::manages(&config::live().windows, facts))
+}
+
+/// Where a new window of a hosted app goes, by the window rules and its `shape`.
+fn window_place(window: &ax::Window, shape: &rules::Shape) -> rules::Place {
+    with_facts(window, |facts| rules::place(&config::live().windows, facts, shape))
+}
+
+/// `judge` given what the window rules select by, read from the window.
+fn with_facts<R>(window: &ax::Window, judge: impl FnOnce(&Facts) -> R) -> R {
     let (bundle, name) = ax::app_identity(window.pid());
     let (title, subrole) = (window.title().unwrap_or_default(), window.subrole().unwrap_or_default());
     let identifier = window.identifier();
@@ -6611,7 +7067,7 @@ fn window_managed(window: &ax::Window) -> bool {
         subrole: &subrole,
         identifier: identifier.as_deref(),
     };
-    rules::manages(&config::live().windows, &facts)
+    judge(&facts)
 }
 
 /// Apps that can be hosted right now. In a test run limited to one app, only that app.
@@ -6693,9 +7149,17 @@ fn on_screen(body: Bounds<Pixels>, window: &Window, cx: &App) -> CGRect {
     CGRect { origin: CGPoint::new(x, y), size: to_cg(body.size) }
 }
 
+/// ottospace's own window, title bar too, in global top-left screen coordinates.
+fn own_frame(window: &Window, cx: &App) -> CGRect {
+    let size = window.bounds().size;
+    on_screen(Bounds { origin: point(px(0.), window.viewport_size().height - size.height), size }, window, cx)
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        // A frame: the tick runs each frame for a while, to take what follows it.
+        ottospace_mac::wake::post();
         // Every task's letters, worked out once a frame for each badge drawn (`task_badge`).
         *self.badges.borrow_mut() = self.model.badges();
         // This frame draws every action so far: the replies held for it can go (`settle`).
@@ -6747,7 +7211,7 @@ impl Render for Workspace {
         // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
         // the buttons and the agent chip's badge.
         let centre = f32::from(window.viewport_size().width) - left;
-        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve() - self.listen_reserve();
+        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve();
         div()
             .size_full()
             .flex()
@@ -6971,7 +7435,7 @@ impl Render for Workspace {
                 this.dispatch(Action::CycleTab { delta: -1 }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
-                this.dispatch(Action::CloseTab { index: None }, this.input, window, cx);
+                this.ask_close_tab(None, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
                 this.dispatch(Action::Close { pane: None }, this.input, window, cx);
@@ -7301,7 +7765,7 @@ fn main() {
         if quiet {
             ottospace_mac::window::stay_in_background();
             if std::env::var_os("OTTOSPACE_E2E_SHOW").is_none() {
-                let corner = display::parking_spot();
+                let corner = display::parking_spot(f64::INFINITY);
                 bounds.origin = point(px(corner.x as f32 - E2E_SLIVER), px(corner.y as f32 - E2E_SLIVER));
             }
         }
