@@ -11,8 +11,11 @@ use serde_json::Value;
 
 use crate::cache::Cache;
 use crate::station;
-use crate::{Batch, Cursor, Event, SessionReader, SessionRef, Usage, What, jsonl, opaque, recorded_cwd, track};
+use crate::{Batch, Cursor, Event, SessionReader, SessionRef, Usage, What, id_of, jsonl, recorded_cwd, track};
 use ottospace_core::activity::Station;
+
+/// The most bytes a process or sub-agent record (`*.json`) is read with.
+const RECORD_MOST: u64 = 65_536;
 
 /// The values of an API-error record's `error` field. Seen in transcripts: the first five.
 /// The rest are the API's other error types. Anything else is shown as `api_error`.
@@ -239,7 +242,7 @@ fn live(config: &Path) -> HashMap<String, Vec<(crate::Holder, Option<bool>)>> {
     let records = files.flatten().filter(|f| f.path().extension().is_some_and(|e| e == "json"));
     let mut live: HashMap<String, Vec<_>> = HashMap::new();
     for file in records {
-        let record = jsonl::small(&file.path()).and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        let record = jsonl::small(&file.path(), RECORD_MOST).and_then(|text| serde_json::from_str::<Value>(&text).ok());
         let Some(record) = record else { continue };
         let pid = record["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok());
         let (Some(pid), Some(id)) = (pid, record["sessionId"].as_str()) else { continue };
@@ -305,11 +308,6 @@ fn record_events(record: &Value, sub: bool, cursor: &mut Cursor, events: &mut Ve
         }
         _ => {}
     }
-}
-
-/// A call or message id, made opaque. `None` if it is missing or empty.
-fn id_of(value: &Value) -> Option<String> {
-    value.as_str().and_then(opaque)
 }
 
 fn user(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
@@ -429,7 +427,8 @@ fn finished_subagents(transcript: &Path, cursor: &mut Cursor, events: &mut Vec<E
     }
     let Ok(files) = fs::read_dir(transcript.with_extension("").join("subagents")) else { return };
     for file in files.flatten().filter(|f| f.file_name().to_string_lossy().ends_with(".meta.json")) {
-        let Some(record) = jsonl::small(&file.path()).and_then(|t| serde_json::from_str::<Value>(&t).ok()) else {
+        let Some(record) = jsonl::small(&file.path(), RECORD_MOST).and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        else {
             continue;
         };
         let done = record["finished"] == true || record["stoppedByUser"] == true;

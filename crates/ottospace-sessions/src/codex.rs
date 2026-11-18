@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::cache::Cache;
 use crate::station;
 use crate::{
-    Batch, Cursor, Event, MAX_OPEN, Refined, SessionReader, SessionRef, Usage, What, jsonl, opaque, recorded_cwd, track,
+    Batch, Cursor, Event, MAX_OPEN, Refined, SessionReader, SessionRef, Usage, What, id_of, jsonl, recorded_cwd, track,
 };
 use ottospace_core::activity::Station;
 
@@ -201,11 +201,6 @@ fn newest_first(dir: &Path, depth: usize, max: usize, out: &mut Vec<PathBuf>) {
 /// A session id or a model, as written, if it is a name (`station::is_name`).
 fn name_of(value: &Value) -> Option<String> {
     value.as_str().filter(|text| station::is_name(text)).map(str::to_string)
-}
-
-/// A call or thread id, made opaque. `None` if it is missing or empty.
-fn id_of(value: &Value) -> Option<String> {
-    value.as_str().and_then(opaque)
 }
 
 /// What a rollout says about its session. None if its id is not a name or its cwd not a plain path.
@@ -473,7 +468,8 @@ mod tests {
     fn ends(records: &[Value]) -> Vec<(String, bool, Option<String>)> {
         let (cursor, events) = fold(records);
         assert!(cursor.open.is_empty() && cursor.refined.is_empty(), "nothing is kept once every call ended");
-        let call = |id: &str| ["a", "b"].into_iter().find(|c| opaque(c).as_deref() == Some(id)).unwrap().to_string();
+        let call =
+            |id: &str| ["a", "b"].into_iter().find(|c| crate::opaque(c).as_deref() == Some(id)).unwrap().to_string();
         let ends = events.into_iter().filter_map(|e| match e.what {
             What::ToolEnd { id, failed, summary, .. } => Some((call(&id), failed, summary)),
             _ => None,

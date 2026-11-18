@@ -135,10 +135,10 @@ pub(crate) fn tail(path: &Path, max_bytes: u64) -> io::Result<Vec<String>> {
     Ok(lines.into_iter().map(str::to_string).collect())
 }
 
-/// A small regular file's text, e.g. a pid file. Not a pipe or device, and not a huge file.
-pub(crate) fn small(path: &Path) -> Option<String> {
+/// A regular file's text under `most` bytes, e.g. a pid file. Not a pipe or device (reading one would hang).
+pub(crate) fn small(path: &Path, most: u64) -> Option<String> {
     let meta = fs::metadata(path).ok()?;
-    (meta.is_file() && meta.len() < 65_536).then(|| fs::read_to_string(path).ok()).flatten()
+    (meta.is_file() && meta.len() < most).then(|| fs::read_to_string(path).ok()).flatten()
 }
 
 /// An RFC 3339 UTC time in Unix milliseconds, e.g. `2026-11-12T10:44:00.123Z` → 1794480240123.
@@ -274,7 +274,7 @@ mod tests {
         let made = std::process::Command::new("mkfifo").arg(&*path).status().is_ok_and(|s| s.success());
         assert!(made, "mkfifo");
         assert_eq!(open(&path).unwrap_err().kind(), io::ErrorKind::InvalidInput);
-        assert!(head(&path, 1, 100).is_err() && tail(&path, 100).is_err() && small(&path).is_none());
+        assert!(head(&path, 1, 100).is_err() && tail(&path, 100).is_err() && small(&path, 65_536).is_none());
         assert_eq!(open(&std::env::temp_dir()).unwrap_err().kind(), io::ErrorKind::InvalidInput, "a directory");
         std::fs::remove_file(&path).unwrap();
     }

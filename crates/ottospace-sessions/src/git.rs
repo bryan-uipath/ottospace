@@ -50,6 +50,5 @@ fn common_dir(root: &Path) -> Option<PathBuf> {
 
 /// A small regular file's text. Not a pipe or device (reading one would hang), and not a huge file.
 fn text(file: &Path) -> Option<String> {
-    let meta = fs::metadata(file).ok()?;
-    (meta.is_file() && meta.len() < 4096).then(|| fs::read_to_string(file).ok()).flatten()
+    crate::jsonl::small(file, 4096)
 }
