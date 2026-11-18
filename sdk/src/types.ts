@@ -65,7 +65,8 @@ export interface NativeChat {
 export interface ChatSelection {
   extent: { rows: number; chars: number } | null;
   keys: boolean;
-  texts: [string, Rect][];
+  /** Test runs only; null outside one. */
+  texts: [string, Rect][] | null;
 }
 
 /** Where an agent's work goes: `other` is any other tool ("Tools"). */

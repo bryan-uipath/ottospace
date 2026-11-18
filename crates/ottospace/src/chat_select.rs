@@ -135,12 +135,20 @@ impl Workspace {
         canvas(|_, _, _| {}, listen).absolute().size_0().into_any_element()
     }
 
-    /// The texts drawn now go into `subject`'s selection; then `at` in window points as a text and
-    /// a byte of it. `None`: nothing drawn.
-    fn transcript_at(&mut self, subject: &Subject, at: Point<Pixels>) -> Option<(usize, usize)> {
+    /// The texts drawn now go into `subject`'s selection. A press whose text changed under it
+    /// (a reply streaming) ends its drag. `None`: nothing of it drawn.
+    fn transcript_sync(&mut self, subject: &Subject) -> Option<()> {
         let texts = self.drawer.texts.of(subject)?;
         let look = self.drawer.looks.entry(subject.clone()).or_default();
-        look.select.selection.set(texts.iter().map(|(key, text)| (key.as_str(), text.as_ref())));
+        if !look.select.selection.set(texts.iter().map(|(key, text)| (key.as_str(), text.as_ref()))) {
+            look.select.held = false;
+        }
+        Some(())
+    }
+
+    /// `at` in window points as a text of `subject`'s and a byte of it, the texts synced first.
+    fn transcript_at(&mut self, subject: &Subject, at: Point<Pixels>) -> Option<(usize, usize)> {
+        self.transcript_sync(subject)?;
         let drawn = self.drawer.texts.0.borrow();
         let rects: Vec<[f32; 4]> = drawn.laid.iter().map(|laid| crate::rect(laid.layout.bounds())).collect();
         let hit = selection::hit(&rects, (at.x.into(), at.y.into()))?;
@@ -151,7 +159,7 @@ impl Workspace {
             let x = at.x.clamp(bounds.left(), bounds.right());
             layout.index_for_position(gpui::point(x, at.y)).unwrap_or_else(|nearest| nearest)
         };
-        Some(look.select.selection.at(hit, offset))
+        Some(hit.at(offset))
     }
 
     /// The mouse went down in `subject`'s transcript: a press of the core's `Selection`.
@@ -168,10 +176,15 @@ impl Workspace {
             return;
         }
         let Some((n, offset)) = self.transcript_at(subject, at) else { return };
-        if let Some(look) = self.drawer.looks.get_mut(subject) {
+        if let Some(look) = self.drawer.looks.get_mut(subject).filter(|look| look.select.held) {
             look.select.selection.drag(n, offset);
         }
         cx.notify();
+    }
+
+    /// `subject`'s transcript has text selected: a release on a link ends a drag, not a click.
+    pub(crate) fn transcript_has_selection(&self, subject: &Subject) -> bool {
+        self.drawer.looks.get(subject).is_some_and(|look| look.select.selection.extent().is_some())
     }
 
     /// A press in the drawer outside the transcript: the keys are no longer its. Its selection stays.
@@ -182,11 +195,14 @@ impl Workspace {
     }
 
     /// The transcript drawn last, if it has the keys: the open drawer's, and the drawer has the
-    /// keyboard (`Mode::Talk`), not a terminal or a box over it.
+    /// keyboard (`Mode::Talk`), not a box over it; a conversation the keyboard cannot go into
+    /// (watched, ended) needs only no box over it.
     fn transcript_keyed(&self) -> Option<Subject> {
+        use ottospace_core::model::Mode;
         let subject = self.drawer.texts.0.borrow().subject.clone()?;
         let talk = self.model.talk.as_ref().filter(|talk| talk.open && talk.task == subject);
-        let drawer = talk.is_some() && self.model.mode() == ottospace_core::model::Mode::Talk;
+        let writable = self.model.shown_draft_chat().is_some();
+        let drawer = talk.is_some() && matches!((self.model.mode(), writable), (Mode::Talk, _) | (Mode::Normal, false));
         let keys = self.drawer.looks.get(&subject).is_some_and(|look| look.select.keys);
         (drawer && keys).then_some(subject)
     }
@@ -197,29 +213,24 @@ impl Workspace {
         subject.and_then(|s| self.drawer.looks.get(&s)).is_some_and(|look| look.select.selection.extent().is_some())
     }
 
-    /// ⌘C while the transcript has the keys and a selection: its text, the user's only. False:
+    /// ⌘C while the transcript has the keys: its selection, the user's only; with none (or one
+    /// gone with its streaming text), nothing, and the clipboard keeps what it had. False:
     /// another has the keys.
     pub(crate) fn transcript_copy(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.transcript_selected() {
-            return false;
-        }
         let Some(subject) = self.transcript_keyed() else { return false };
-        if let Some(texts) = self.drawer.texts.of(&subject)
-            && let Some(look) = self.drawer.looks.get_mut(&subject)
-        {
-            look.select.selection.set(texts.iter().map(|(key, text)| (key.as_str(), text.as_ref())));
-        }
+        self.transcript_sync(&subject);
         let text = self.drawer.looks.get(&subject).map(|look| look.select.selection.selected().to_string());
-        self.copy_untrusted(text.unwrap_or_default(), cx);
+        if let Some(text) = text.filter(|text| !text.is_empty()) {
+            self.copy_untrusted(text, cx);
+        }
         true
     }
 
     /// ⌘A while the transcript has the keys: all of it. False: another has the keys.
     pub(crate) fn transcript_select_all(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(subject) = self.transcript_keyed() else { return false };
-        let texts = self.drawer.texts.of(&subject).unwrap_or_default();
+        self.transcript_sync(&subject);
         if let Some(look) = self.drawer.looks.get_mut(&subject) {
-            look.select.selection.set(texts.iter().map(|(key, text)| (key.as_str(), text.as_ref())));
             look.select.selection.select_all();
         }
         cx.notify();
@@ -250,10 +261,14 @@ impl Workspace {
     }
 
     /// The selection for the state: its extent (texts and characters, never its text), whether
-    /// the transcript has the keys, and each selectable text's key and rect as last drawn.
+    /// the transcript has the keys, and in a test run each selectable text's key and rect as
+    /// last drawn (null outside one).
     pub(crate) fn selection_snapshot(&self, subject: &Subject) -> serde_json::Value {
         let look = self.drawer.looks.get(subject);
         let extent = look.and_then(|look| look.select.selection.extent());
+        if std::env::var_os("OTTOSPACE_E2E").is_none() {
+            return serde_json::json!({ "extent": extent, "keys": look.is_some_and(|look| look.select.keys), "texts": null });
+        }
         let drawn = self.drawer.texts.0.borrow();
         let texts: Vec<serde_json::Value> = (drawn.subject.as_ref() == Some(subject))
             .then(|| drawn.laid.iter().map(|laid| serde_json::json!([laid.key, crate::rect(laid.layout.bounds())])))

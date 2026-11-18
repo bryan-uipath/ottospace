@@ -10309,6 +10309,8 @@ fn the_user_selects_and_copies_transcript_text_and_a_client_cannot() {
     assert_eq!(all["extent"]["rows"].as_u64(), Some(all["texts"].as_array().map_or(0, Vec::len) as u64), "{all}");
     otto.user_key("escape");
     assert_eq!(chat(&otto)["selection"]["extent"], Value::Null);
+    // ⌘C with nothing selected leaves the clipboard as it was (not a composer's selection either).
+    assert_eq!(otto.user_key("cmd-c")["copied"], "Fix the login redirect.\nIt runs twice on a cold start.");
 
     // The call's row opens on the user's click: its input pretty-printed, wrapped to the drawer.
     let rows = otto.controls();

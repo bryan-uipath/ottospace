@@ -947,7 +947,7 @@ function chatSelection(value: unknown, at: string): ChatSelection {
     if (!Array.isArray(v) || v.length !== 2) throw wrong(a, "[key, rect]", v);
     return [str(v[0], a), rect(v[1], a)];
   };
-  return { extent, keys: bool(o.keys, `${at}.keys`), texts: list(text)(o.texts, `${at}.texts`) };
+  return { extent, keys: bool(o.keys, `${at}.keys`), texts: orNull(list(text))(o.texts, `${at}.texts`) };
 }
 
 function station(value: unknown, at: string): Station {

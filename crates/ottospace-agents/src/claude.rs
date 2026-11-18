@@ -417,7 +417,7 @@ fn detail(tool: &str, input: &Value) -> Untrusted {
     };
     match shown {
         Some(text) => Untrusted::new(text, MAX_DETAIL),
-        None => Untrusted::new(&serde_json::to_string_pretty(input).unwrap_or_default(), MAX_DETAIL),
+        None => Untrusted::json(input, MAX_DETAIL),
     }
 }
 
@@ -852,6 +852,10 @@ mod tests {
         let out = Claude::new().read(&line.to_string());
         let Some(Event::ToolStart { detail, .. }) = out.events.get(1) else { panic!("{out:?}") };
         assert_eq!(detail.text(), "{\n  \"questions\": [\n    {\n      \"q\": \"a\"\n    }\n  ]\n}");
+        // Too long pretty, it stays compact: the indentation cuts nothing that would have fit.
+        let input = json!({"todos": vec!["x".repeat(30); (MAX_DETAIL - 200) / 33]});
+        assert!(serde_json::to_string_pretty(&input).unwrap().len() > MAX_DETAIL);
+        assert_eq!(Untrusted::json(&input, MAX_DETAIL).text(), input.to_string());
     }
 
     #[test]

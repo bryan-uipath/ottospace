@@ -38,6 +38,13 @@ impl Untrusted {
         Self(text[..end].to_string())
     }
 
+    /// `value` as JSON, pretty-printed (an expanded row wraps it) if that fits in `max` bytes,
+    /// else compact: the indentation never cuts what would have fit.
+    pub(crate) fn json(value: &Value, max: usize) -> Self {
+        let pretty = serde_json::to_string_pretty(value).unwrap_or_default();
+        Self::new(&if pretty.len() <= max { pretty } else { value.to_string() }, max)
+    }
+
     pub fn text(&self) -> &str {
         &self.0
     }

@@ -20,7 +20,8 @@
 {"cmd":"mouse","action":"wheel","x":1130,"y":700,"dy":4,"as":"user"}
 {"settle":500}
 {"shot":"input-open"}
+# Over the input, then over its Copy at its top right (by the row's frame: a build without it runs this too).
 {"hover":"chat-row:1:2","at":[0.5,0.5]}
-{"hover":"chat-io-copy:1:2:in"}
+{"hover":"chat-row:1:2","at":[0.96,0.065]}
 {"settle":1500}
 {"shot":"copy-input"}

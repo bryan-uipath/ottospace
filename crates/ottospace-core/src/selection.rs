@@ -16,6 +16,9 @@ pub struct Selection {
     /// Each text's key and its range in `field`'s text.
     texts: Vec<(String, Range<usize>)>,
     field: Field,
+    /// The last press that was no ⇧-click: its text's key, offset and click count. A drag after
+    /// text changed goes on from it, by its unit (a word after a double click).
+    pressed: Option<(String, usize, usize)>,
 }
 
 /// Where a point is, by the texts' rectangles.
@@ -48,6 +51,17 @@ pub fn hit(rects: &[[f32; 4]], (x, y): (f32, f32)) -> Option<Hit> {
     match rects.iter().position(|r| y < r[1]) {
         Some(n) => Some(Hit::Start(n)),
         None => rects.len().checked_sub(1).map(Hit::End),
+    }
+}
+
+impl Hit {
+    /// The text it is on and an offset there, `offset` saying where in text `In(n)`.
+    pub fn at(self, offset: impl FnOnce(usize) -> usize) -> (usize, usize) {
+        match self {
+            Hit::In(n) => (n, offset(n)),
+            Hit::Start(n) => (n, 0),
+            Hit::End(n) => (n, usize::MAX),
+        }
     }
 }
 
@@ -85,9 +99,9 @@ pub fn overlay<T: Clone>(
 }
 
 impl Selection {
-    /// The texts drawn now, in order, as (key, text). A selection stays while the texts at both
-    /// its ends are still there and unchanged; else it goes.
-    pub fn set<'a>(&mut self, texts: impl IntoIterator<Item = (&'a str, &'a str)>) {
+    /// The texts drawn now, in order, as (key, text). A selection, or a press, stays while the
+    /// texts at its ends are still there and unchanged. False: one went with its text.
+    pub fn set<'a>(&mut self, texts: impl IntoIterator<Item = (&'a str, &'a str)>) -> bool {
         let mut joined = String::new();
         let mut kept = Vec::new();
         for (key, text) in texts {
@@ -98,26 +112,39 @@ impl Selection {
             joined.push_str(text);
         }
         if joined == self.field.text() && kept == self.texts {
-            return;
+            return true;
         }
-        let ends = [self.field.selection().start, self.field.cursor(), self.field.selection().end];
-        let ends = ends.map(|at| self.place(at).map(|(key, offset)| (key.to_string(), offset)));
-        let old = std::mem::replace(self, Self { texts: kept, field: Field::of_lines(&joined) });
+        let (selection, head) = (self.field.selection(), self.field.cursor());
+        let anchor = if head == selection.end { selection.start } else { selection.end };
+        let place = |at: usize| self.place(at).map(|(key, offset)| (key.to_string(), offset));
+        let (anchor, head) = (place(anchor), place(head));
+        let old = std::mem::replace(self, Self { texts: kept, field: Field::of_lines(&joined), pressed: None });
+        // Byte `offset` of text `key` now, if that text is as it was.
         let at = |(key, offset): (String, usize)| {
             let (_, range) = self.texts.iter().find(|(k, _)| *k == key)?;
             let (_, before) = old.texts.iter().find(|(k, _)| *k == key)?;
             let same = self.field.text().get(range.clone()) == old.field.text().get(before.clone());
             same.then_some(range.start + offset)
         };
-        let [Some(start), Some(head), Some(end)] = ends.map(|end| end.and_then(at)) else {
-            return;
-        };
-        if start == end {
-            return;
+        let (Some(anchor), Some(head)) = (anchor.and_then(at), head.and_then(at)) else { return false };
+        let pressed =
+            old.pressed.and_then(|(key, offset, count)| Some((at((key.clone(), offset))?, key, offset, count)));
+        match pressed {
+            Some((press, key, offset, count)) => {
+                self.field.apply(Edit::Click { at: press, count, shift: false });
+                // A drag had gone past the pressed unit: on to where it was.
+                let unit = self.field.selection();
+                if head < unit.start || head > unit.end {
+                    self.field.apply(Edit::Drag { to: head });
+                }
+                self.pressed = Some((key, offset, count));
+            }
+            None => {
+                self.field.apply(Edit::Click { at: anchor, count: 1, shift: false });
+                self.field.apply(Edit::Click { at: head, count: 1, shift: true });
+            }
         }
-        let anchor = if head == end { start } else { end };
-        self.field.apply(Edit::Click { at: anchor, count: 1, shift: false });
-        self.field.apply(Edit::Click { at: head, count: 1, shift: true });
+        true
     }
 
     /// Byte `at` of the joined text as the key of its text and an offset in it.
@@ -134,7 +161,9 @@ impl Selection {
     /// A press on text `n` at byte `offset`: `clicks` 2 a word, 3 its line; `shift` extends.
     pub fn press(&mut self, n: usize, offset: usize, clicks: usize, shift: bool) {
         let at = self.joined(n, offset);
-        self.field.apply(Edit::Click { at, count: clicks.max(1), shift });
+        let count = clicks.max(1);
+        self.field.apply(Edit::Click { at, count, shift });
+        self.pressed = self.place(at).filter(|_| !shift).map(|(key, offset)| (key.to_string(), offset, count));
     }
 
     /// The pressed mouse is over text `n` at byte `offset`.
@@ -143,23 +172,16 @@ impl Selection {
         self.field.apply(Edit::Drag { to });
     }
 
-    /// The text at `hit` and its offset there, `offset` saying where in text `In(n)`.
-    pub fn at(&self, hit: Hit, offset: impl FnOnce(usize) -> usize) -> (usize, usize) {
-        match hit {
-            Hit::In(n) => (n, offset(n)),
-            Hit::Start(n) => (n, 0),
-            Hit::End(n) => (n, usize::MAX),
-        }
-    }
-
     /// ⌘A: every text.
     pub fn select_all(&mut self) {
         self.field.apply(Edit::SelectAll);
+        self.pressed = None;
     }
 
     pub fn clear(&mut self) {
         let at = self.field.cursor();
         self.field.apply(Edit::Click { at, count: 1, shift: false });
+        self.pressed = None;
     }
 
     /// What ⌘C copies: the texts selected, a line break between two. Empty: none.
@@ -266,6 +288,27 @@ mod tests {
     }
 
     #[test]
+    fn a_press_holds_its_place_and_unit_while_text_is_added() {
+        // A press, then a row is added before the mouse moves: the drag goes on from the press.
+        let mut s = of(&[("a", "first reply"), ("b", "second")]);
+        s.press(0, 6, 1, false);
+        assert!(s.set([("a", "first reply"), ("b", "second"), ("c", "new")]));
+        s.drag(0, 9);
+        assert_eq!(s.selected(), "rep");
+        // A double click's word stays whole when a drag turns back after text changed.
+        s.press(1, 2, 2, false);
+        s.drag(2, 1);
+        assert!(s.set([("z", "top"), ("a", "first reply"), ("b", "second"), ("c", "new")]));
+        assert_eq!(s.selected(), "second\nnew");
+        s.drag(1, 7);
+        assert_eq!(s.selected(), "reply\nsecond");
+        // The pressed text changed (streaming): the press goes, and the shell ends the drag.
+        s.press(3, 1, 1, false);
+        assert!(!s.set([("a", "first reply"), ("b", "second"), ("c", "newest")]));
+        assert_eq!(s.selected(), "");
+    }
+
+    #[test]
     fn a_point_finds_its_text_or_the_nearest_end() {
         let rects = [[0., 0., 100., 20.], [0., 30., 40., 20.], [50., 30., 40., 20.]];
         assert_eq!(hit(&rects, (10., 5.)), Some(Hit::In(0)));
@@ -276,8 +319,7 @@ mod tests {
         assert_eq!(hit(&rects, (10., -5.)), Some(Hit::Start(0)));
         assert_eq!(hit(&rects, (10., 99.)), Some(Hit::End(2)));
         assert_eq!(hit(&[], (0., 0.)), None);
-        let s = of(&[("a", "ab"), ("b", "cd")]);
-        assert_eq!((s.at(Hit::End(1), |_| 0), s.at(Hit::In(0), |_| 1)), ((1, usize::MAX), (0, 1)));
+        assert_eq!((Hit::End(1).at(|_| 0), Hit::In(0).at(|_| 1)), ((1, usize::MAX), (0, 1)));
     }
 
     #[test]

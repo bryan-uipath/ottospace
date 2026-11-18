@@ -1087,16 +1087,18 @@ impl Workspace {
             Part::Input => ("in", "Copy the call's input (or select part of it and ⌘C)"),
             Part::Output => ("out", "Copy what it printed (or select part of it and ⌘C)"),
         };
-        let shown = self
-            .picked_text(Some(subject), &format!("{name}:{id}"), text)
-            .font_family(crate::terminal::font_family())
-            .text_xs();
+        let shown = self.picked_text(Some(subject), &format!("{name}:{id}"), text);
         let shown = match part {
-            Part::Input => shown.min_w_0().text_color(rgb(theme::TEXT)).into_any_element(),
+            Part::Input => shown
+                .font_family(crate::terminal::font_family())
+                .text_xs()
+                .min_w_0()
+                .text_color(rgb(theme::TEXT))
+                .into_any_element(),
             Part::Output => div()
                 .id(ElementId::Name(format!("chat-out:{key}:{id}").into()))
                 .overflow_x_scroll()
-                .child(shown.whitespace_nowrap())
+                .child(code_style(shown))
                 .into_any_element(),
         };
         let copy = clean(text);
@@ -1232,7 +1234,10 @@ impl Workspace {
                 let copy = copy.clone();
                 let button = self.word(
                     format!("chat-code-copy:{at}"),
-                    ("Copy", "Copy the code (or select part of it and ⌘C)"),
+                    match of.subject() {
+                        Some(_) => ("Copy", "Copy the code (or select part of it and ⌘C)"),
+                        None => ("Copy", "Copy the code"),
+                    },
                     move |this, _, cx| this.copy_untrusted(copy.clone(), cx),
                     cx,
                 );
@@ -1248,8 +1253,7 @@ impl Workspace {
                     .text_color(rgb(theme::MUTED))
                     .child(label.clone().unwrap_or_else(|| "code".into()))
                     .child(button);
-                let code = self.picked_text(of.subject(), &format!("code:{at}"), shown);
-                let code = code.font_family(crate::terminal::font_family()).text_xs().whitespace_nowrap();
+                let code = code_style(self.picked_text(of.subject(), &format!("code:{at}"), shown));
                 let body = div()
                     .id(ElementId::Name(format!("chat-code:{at}").into()))
                     .overflow_x_scroll()
@@ -1368,7 +1372,12 @@ impl Workspace {
             .on_click(ranges, move |n, window, cx| {
                 let Some((_, link)) = clicked.get(n) else { return };
                 let (target, cmd) = (link.target.clone(), window.modifiers().platform);
-                let _ = workspace.update(cx, |this, cx| this.open_link(&of, &target, cmd, window, cx));
+                let _ = workspace.update(cx, |this, cx| {
+                    // A drag that selected the link's words opens nothing.
+                    if !of.subject().is_some_and(|subject| this.transcript_has_selection(subject)) {
+                        this.open_link(&of, &target, cmd, window, cx)
+                    }
+                });
             })
             .tooltip(move |index, _, cx| {
                 let n = tips.iter().position(|range| range.contains(&index))?;
@@ -2234,5 +2243,10 @@ fn muted(text: String) -> Div {
 
 /// Plain text in the terminal's font, lines kept, not wrapped.
 fn code_text(text: &str) -> Div {
-    div().font_family(crate::terminal::font_family()).text_xs().whitespace_nowrap().child(text.to_string())
+    code_style(div()).child(text.to_string())
+}
+
+/// `code_text`'s look on a div of its own (a selectable text's).
+fn code_style(d: Div) -> Div {
+    d.font_family(crate::terminal::font_family()).text_xs().whitespace_nowrap()
 }
