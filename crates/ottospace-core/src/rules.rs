@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ax::Frame;
+
 /// What is known of a window when it is first seen.
 #[derive(Clone, Copy, Debug)]
 pub struct Facts<'a> {
@@ -84,21 +86,125 @@ impl From<RuleFields> for Rule {
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
-    /// Never put it in a pane: not when its app is hosted, and not when it opens later.
+    /// Never put it in a pane, nor move it: not when its app is hosted, and not when it opens later.
     Ignore,
     /// Treat it as any other window. A user's rule can say this to undo a built-in `ignore`.
     Manage,
+    /// A new window of a hosted app goes in a split, even a dialog or a small one.
+    Split,
+    /// A new window of a hosted app stays a free window over its app's pane, as a pop-up does.
+    /// Never put in a pane, as `ignore`.
+    Float,
 }
 
 /// True if ottospace may put this window in a pane. The first rule that selects the window
 /// decides, the user's rules before the built-in ones. With no rule: only a standard window,
 /// which leaves out panels, pop-ups and an app's floating controls.
 pub fn manages(user: &[Rule], window: &Facts) -> bool {
-    let built_in = built_in();
-    match user.iter().chain(&built_in).find(|rule| rule.select.selects(window)) {
-        Some(rule) => rule.action == Action::Manage && window.subrole == "AXStandardWindow",
-        None => window.subrole == "AXStandardWindow",
+    match first(user, window) {
+        Some(Action::Manage) | None => window.subrole == STANDARD,
+        // A dialog a `split` rule put in a pane is one, for the capture key and marks too.
+        Some(Action::Split) => judged(window.subrole),
+        Some(Action::Ignore | Action::Float) => false,
     }
+}
+
+const STANDARD: &str = "AXStandardWindow";
+
+/// True for the kinds of window `place` decides on: standard windows, dialogs and panels. Any
+/// other (a toast, a popover) is left alone, and looked at again in case it becomes one.
+pub fn judged(subrole: &str) -> bool {
+    subrole == STANDARD || POP_UP.contains(&subrole)
+}
+
+/// What the first rule that selects the window says, the user's rules before the built-in ones.
+fn first(user: &[Rule], window: &Facts) -> Option<Action> {
+    user.iter().chain(&built_in()).find(|rule| rule.select.selects(window)).map(|rule| rule.action)
+}
+
+/// What the shell read of a new window of a hosted app, and of the pane it would split. Points.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Shape {
+    /// `AXModal`: it blocks its app until answered.
+    pub modal: bool,
+    /// A sheet, or a window whose `AXParent` is another window: macOS keeps it on that window.
+    pub sheet: bool,
+    pub size: Option<[f64; 2]>,
+    /// The content size of the app pane it would split (`Adopt`'s `beside`), if drawn.
+    pub pane: Option<[f64; 2]>,
+    /// The least width that pane's window kept when asked for less: it refuses narrower.
+    pub min_width: Option<f64>,
+}
+
+/// Where a new window of a hosted app goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    /// A pane of its own, beside its app's (`Action::Adopt`).
+    Split,
+    /// A free window at its own size, over its app's pane (`float_to`).
+    Float,
+    /// Left as it is: ignored, a sheet, or not a kind of window ottospace hosts.
+    Leave,
+}
+
+/// Subroles of dialogs and panels: never split, unless a rule says so.
+const POP_UP: [&str; 4] = ["AXDialog", "AXSystemDialog", "AXFloatingWindow", "AXSystemFloatingWindow"];
+
+/// A standard window under this, both ways, is a pop-up: a join or login dialog is about 400×300.
+const SMALL: [f64; 2] = [600.0, 400.0];
+
+/// Under this, both ways, a window is an app's helper, not a pop-up: left where the app keeps it.
+/// A GPUI app has a 66×20 one off screen.
+const TINY: [f64; 2] = [100.0, 100.0];
+
+/// Where a new window of a hosted app goes. A sheet stays on its window. Then the first rule that
+/// selects it decides, both ways; else a window under 100×100 is left alone (an app's helper), a
+/// dialog, a panel or a modal window floats, and so does a
+/// standard window under 600×400, under half its app's pane both ways, or whose split would
+/// leave its app's pane narrower than that pane's window kept. Other standard windows split.
+pub fn place(user: &[Rule], window: &Facts, shape: &Shape) -> Place {
+    if shape.sheet || !judged(window.subrole) {
+        return Place::Leave;
+    }
+    match first(user, window) {
+        Some(Action::Ignore) => return Place::Leave,
+        Some(Action::Split) => return Place::Split,
+        Some(Action::Float) => return Place::Float,
+        Some(Action::Manage) | None => {}
+    }
+    let under = |size: [f64; 2], limit: [f64; 2]| size[0] < limit[0] && size[1] < limit[1];
+    if shape.size.is_some_and(|size| under(size, TINY)) {
+        return Place::Leave;
+    }
+    if window.subrole != STANDARD || shape.modal {
+        return Place::Float;
+    }
+    let half = shape.pane.map(|pane| [pane[0] / 2.0, pane[1] / 2.0]);
+    let small = shape.size.is_some_and(|size| under(size, SMALL) || half.is_some_and(|half| under(size, half)));
+    // A split to the right halves the pane's width; its height stays.
+    let squeezed = shape.pane.zip(shape.min_width).is_some_and(|(pane, min)| min > pane[0] / 2.0);
+    if small || squeezed { Place::Float } else { Place::Split }
+}
+
+/// Where a floating pop-up's top left goes (global frames), or `None` to leave it: centred over
+/// its app's `pane` unless its middle already is over it, never above or left of the pane. With
+/// no pane drawn, it moves only if the user could not reach it. Wherever it goes, out of reach
+/// (a pane partly off screen) becomes the middle of `main`.
+pub fn float_to(window: Frame, pane: Option<Frame>, screens: &[Frame], main: Frame) -> Option<(f64, f64)> {
+    let over = pane.filter(|pane| {
+        let (x, y) = (window.x + window.w / 2.0, window.y + window.h / 2.0);
+        !((pane.x..=pane.x + pane.w).contains(&x) && (pane.y..=pane.y + pane.h).contains(&y))
+    });
+    // At its own size: `centred` shrinks it to the pane, so its top left is never above or left of it.
+    let to = over.map_or(window, |pane| Frame { w: window.w, h: window.h, ..crate::restore::centred(window, pane) });
+    let to = crate::restore::destination(to, screens, main);
+    (to != window).then_some((to.x, to.y))
+}
+
+/// The width a hosted window refuses to go below, after a check that asked it for `asked` and
+/// found it `kept`: wider than asked, that; as wide, any refusal wider than `asked` is past.
+pub fn refused_width(was: Option<f64>, kept: f64, asked: f64) -> Option<f64> {
+    if kept > asked + 1.0 { Some(kept) } else { was.filter(|width| *width <= asked) }
 }
 
 /// Rules that ship with ottospace, for windows known to break when moved. Measured: see
@@ -225,6 +331,112 @@ mod tests {
         // Written back without the fields not given.
         let written = serde_json::to_string(&by_id).unwrap();
         assert_eq!(written, r#"{"app":"us.zoom.xos","identifier":"zm.meeting.window.main"}"#);
+    }
+
+    /// A big pane beside it, its window with no known minimum.
+    fn beside(size: [f64; 2]) -> Shape {
+        Shape { size: Some(size), pane: Some([1600.0, 1000.0]), ..Shape::default() }
+    }
+
+    #[test]
+    fn a_dialog_a_panel_a_modal_window_and_a_sheet_never_split() {
+        let big = beside([1200.0, 900.0]);
+        for subrole in ["AXDialog", "AXSystemDialog", "AXFloatingWindow", "AXSystemFloatingWindow"] {
+            assert_eq!(place(&[], &zoom("Settings", subrole), &big), Place::Float, "{subrole}");
+        }
+        let standard = zoom("Zoom Workplace", "AXStandardWindow");
+        assert_eq!(place(&[], &standard, &big), Place::Split);
+        assert_eq!(place(&[], &standard, &Shape { modal: true, ..big }), Place::Float);
+        // A sheet stays on its window, whatever a rule says.
+        let split = serde_json::from_str::<Rule>(r#"{"app": "zoom.us", "do": "split"}"#).unwrap();
+        assert_eq!(place(&[split], &standard, &Shape { sheet: true, ..big }), Place::Leave);
+        // Other kinds are left alone, as before: Zoom's reactions, a built-in ignore.
+        assert_eq!(place(&[], &zoom("Toast", "AXUnknown"), &big), Place::Leave);
+        assert_eq!(place(&[], &zoom("zoom share toolbar window", "AXStandardWindow"), &big), Place::Leave);
+    }
+
+    #[test]
+    fn a_standard_window_much_smaller_than_its_apps_pane_floats() {
+        let standard = zoom("Zoom", "AXStandardWindow");
+        // Under 600×400 both ways, with or without a pane.
+        assert_eq!(place(&[], &standard, &Shape { size: Some([420.0, 300.0]), ..Shape::default() }), Place::Float);
+        assert_eq!(place(&[], &standard, &beside([599.0, 399.0])), Place::Float);
+        // Under half the pane (800×500) both ways.
+        assert_eq!(place(&[], &standard, &beside([790.0, 490.0])), Place::Float);
+        // One side as big as that is enough to split: a tall chat window, a wide bar.
+        assert_eq!(place(&[], &standard, &beside([500.0, 800.0])), Place::Split);
+        assert_eq!(place(&[], &standard, &beside([900.0, 300.0])), Place::Split);
+        // Unknown size: as before.
+        assert_eq!(place(&[], &standard, &Shape::default()), Place::Split);
+        // A helper under 100×100 is left alone, a dialog too; a rule still decides.
+        assert_eq!(place(&[], &standard, &beside([66.0, 20.0])), Place::Leave);
+        assert_eq!(place(&[], &zoom("x", "AXFloatingWindow"), &beside([66.0, 20.0])), Place::Leave);
+        let float = serde_json::from_str::<Rule>(r#"{"app": "zoom.us", "do": "float"}"#).unwrap();
+        assert_eq!(place(&[float], &standard, &beside([66.0, 20.0])), Place::Float);
+    }
+
+    #[test]
+    fn a_split_never_squeezes_the_apps_window_below_what_it_kept() {
+        let standard = zoom("Zoom", "AXStandardWindow");
+        let shape = |min_width| Shape { min_width, ..beside([1000.0, 800.0]) };
+        // The pane is 1600 wide: a split leaves 800.
+        assert_eq!(place(&[], &standard, &shape(Some(900.0))), Place::Float);
+        assert_eq!(place(&[], &standard, &shape(Some(700.0))), Place::Split);
+        assert_eq!(place(&[], &standard, &shape(None)), Place::Split);
+    }
+
+    #[test]
+    fn a_rule_wins_both_ways() {
+        let rule = |text: &str| serde_json::from_str::<Rule>(text).unwrap();
+        let split = rule(r#"{"app": "us.zoom.xos", "title": "Settings", "do": "split"}"#);
+        let float = rule(r#"{"app": "us.zoom.xos", "title": "Zoom Workplace", "do": "float"}"#);
+        let rules = [split, float];
+        let tiny = beside([300.0, 200.0]);
+        // A dialog, or a small window, forced into a split.
+        assert_eq!(place(&rules, &zoom("Settings", "AXDialog"), &tiny), Place::Split);
+        assert_eq!(place(&rules, &zoom("Settings", "AXStandardWindow"), &tiny), Place::Split);
+        // Hosted, it counts as managed (the capture key, marks). A toast is never split.
+        assert!(manages(&rules, &zoom("Settings", "AXDialog")));
+        assert_eq!(place(&rules, &zoom("Settings", "AXUnknown"), &tiny), Place::Leave);
+        assert!(!manages(&rules, &zoom("Settings", "AXUnknown")));
+        // A big standard window kept free, and never hosted with its app either.
+        let workplace = zoom("Zoom Workplace", "AXStandardWindow");
+        assert_eq!(place(&rules, &workplace, &beside([1400.0, 900.0])), Place::Float);
+        assert!(!manages(&rules, &workplace) && manages(&rules, &zoom("Settings", "AXStandardWindow")));
+        // `ignore` leaves it alone; `manage` is the rules above.
+        let ignore = rule(r#"{"app": "zoom.us", "do": "ignore"}"#);
+        assert_eq!(place(&[ignore], &zoom("Settings", "AXDialog"), &tiny), Place::Leave);
+        let manage = rule(r#"{"app": "zoom.us", "do": "manage"}"#);
+        assert_eq!(place(std::slice::from_ref(&manage), &zoom("Settings", "AXDialog"), &tiny), Place::Float);
+        assert_eq!(place(&[manage], &zoom("Meeting chat", "AXStandardWindow"), &beside([900.0, 700.0])), Place::Split);
+    }
+
+    #[test]
+    fn a_floating_pop_up_is_centred_over_its_pane_unless_it_is_over_it() {
+        let main = Frame::new(0.0, 0.0, 1920.0, 1080.0);
+        let pane = Frame::new(100.0, 100.0, 1000.0, 800.0);
+        // Put by macOS over its parked window, off screen: centred over the pane.
+        let off = Frame::new(5000.0, 3000.0, 400.0, 200.0);
+        assert_eq!(float_to(off, Some(pane), &[main], main), Some((400.0, 400.0)));
+        // Already over the pane: left there.
+        assert_eq!(float_to(Frame::new(150.0, 120.0, 400.0, 200.0), Some(pane), &[main], main), None);
+        // Bigger than the pane: at its top left, not above or left of it.
+        assert_eq!(float_to(Frame::new(1500.0, 0.0, 1200.0, 900.0), Some(pane), &[main], main), Some((100.0, 100.0)));
+        // No pane drawn: moved only if out of reach.
+        assert_eq!(float_to(Frame::new(10.0, 40.0, 400.0, 200.0), None, &[main], main), None);
+        assert_eq!(float_to(off, None, &[main], main), Some((760.0, 440.0)));
+        // A pane mostly off screen: the middle of the main screen instead.
+        let away = Frame::new(1800.0, 1000.0, 1000.0, 800.0);
+        assert_eq!(float_to(off, Some(away), &[main], main), Some((760.0, 440.0)));
+    }
+
+    #[test]
+    fn the_width_a_window_refuses_is_what_it_kept_when_asked_for_less() {
+        assert_eq!(refused_width(None, 900.0, 600.0), Some(900.0));
+        // As wide as asked: it went to 700, so a refusal of 900 is past; one of 650 still holds.
+        assert_eq!(refused_width(Some(900.0), 700.0, 700.0), None);
+        assert_eq!(refused_width(Some(650.0), 700.0, 700.0), Some(650.0));
+        assert_eq!(refused_width(None, 700.5, 700.0), None, "a point of rounding is no refusal");
     }
 
     #[test]
