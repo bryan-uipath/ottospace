@@ -12,7 +12,7 @@ use crate::model::PaneId;
 /// The left rail's sections, top to bottom, as the shell draws them. Calendar only while a feed is
 /// set: `Model::sections`.
 pub const SECTIONS: [Section; 6] =
-    [Section::Tasks, Section::Calendar, Section::Apps, Section::Workbook, Section::Repos, Section::Marks];
+    [Section::Repos, Section::Tasks, Section::Calendar, Section::Apps, Section::Workbook, Section::Marks];
 
 /// A rail when it has the keyboard, in list mode as the section list does: a section's cell, or
 /// an item of the drawer's rail.
@@ -255,8 +255,8 @@ mod tests {
         m.update(Action::FocusDir { dir: Dir::Left }.sent_by(Origin::Socket));
         assert_eq!(m.focus_target(), Target::Pane(1));
         // No section open: the rail, on its first cell. ↓ moves; → opens that section's list.
-        assert_eq!((user(&mut m, Dir::Left), m.mode()), (Target::Rail(Section::Tasks), Mode::List));
-        m.update(Action::ListMove { delta: 1 }.sent_by(Origin::User));
+        assert_eq!((user(&mut m, Dir::Left), m.mode()), (Target::Rail(Section::Repos), Mode::List));
+        m.update(Action::ListMove { delta: 2 }.sent_by(Origin::User));
         assert_eq!(m.focus_target(), Target::Rail(Section::Apps));
         assert!(matches!(user(&mut m, Dir::Right), Target::List(_)));
         assert_eq!(m.sidebar, Some(Section::Apps));
@@ -309,7 +309,7 @@ mod tests {
         m.update(Action::LeaveList.sent_by(Origin::User));
         m.update(Action::CloseSidebar.sent_by(Origin::User));
         // Esc on the rail goes back to the pane focused.
-        assert_eq!(user(&mut m, Dir::Left), Target::Rail(Section::Tasks));
+        assert_eq!(user(&mut m, Dir::Left), Target::Rail(Section::Repos));
         m.update(Action::LeaveList.sent_by(Origin::User));
         assert_eq!(m.focus_target(), Target::Pane(1));
     }
