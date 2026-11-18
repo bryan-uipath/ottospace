@@ -149,6 +149,47 @@ Name controls and read the state; never pixel positions, which move with every l
 Requests a client is refused (keys and clicks that are the user's) take `"as":"user"`, which
 answers in a test run only. Made-up content only.
 
+## Benchmarks
+
+`scripts/bench` measures startup, memory and CPU on private test instances (`scripts/shot`'s:
+`OTTOSPACE_E2E`, home and socket in a fresh temp folder, `/bin/sh` terminals, made-up content):
+
+```sh
+scripts/bench                        # this tree: .bench/bench.json and bench.md
+scripts/bench --compare origin/main  # the base and this tree, alternating; prints the deltas
+scripts/bench --release --runs 20    # release builds, more launches
+```
+
+It builds the dev profile by default, as CI does: CI's Rust cache holds the dev build's
+dependencies (`shared-key: e2e`), so a pull request rebuilds only the workspace's crates, twice.
+A release build of GPUI from nothing takes too long for every pull request. Dev numbers are slower
+than a user's; compare them with each other, not with a release build.
+
+| Number | What it is |
+|---|---|
+| startup, warm | process start until the socket answers and a frame is drawn (`frame.number` > 0). Median and p90 of `--runs` (10) launches, after one unmeasured |
+| startup, cold | the same, the first launch of a fresh `cp -c` copy of the binary at a new path: none of its pages cached, no launch closure for it. The system's own libraries stay cached (dropping those needs root `purge`), so this is "first launch after a build", not after a reboot. `--cold-runs` (5) |
+| startup, 50 sessions | the same, with a home of 50 made-up Claude Code and Codex sessions in 5 repositories, 12 tasks and a saved layout of 3 tabs and 6 terminals |
+| then the sessions listed | with that home, until the Tasks section, opened on Elsewhere, lists them |
+| RSS, footprint, idle | resident size and `phys_footprint` (what Activity Monitor shows as Memory), 5 s after start |
+| RSS, footprint, 8 terminals | after 8 terminals each printed 5000 lines of scrollback |
+| CPU, idle | the app's CPU over 30 s with nothing moving, 100 = one core; with its wakeups a second, frames drawn and `counts.dial_frames` (both 0 at rest) |
+| CPU, streaming | over 10 s while one terminal prints about 2500 lines a second: a fixed load |
+
+Memory and CPU come from `proc_pid_rusage` of the app's own pid, never its terminals' shells.
+
+Thresholds (`THRESHOLDS` in the script), past which `--compare` exits 1 and CI's job is red: a
+startup median +20% and +50 ms, RSS +25% and +10 MB, idle CPU above 2% of a core and a point more
+than the base. A startup past its threshold runs a second round of launches and fails only if it
+is past it in each round. Exit 2: the bench itself failed (a build, a timeout), not a regression.
+
+Noise. Both sides run on one machine, alternating, so drift falls on both. On an M-series Mac, two
+runs of `main` against itself differed by at most 4% on startup medians, 7% (13 MB) on RSS with 8
+terminals and 0.2 points of idle CPU. A hosted runner is far noisier: one launch takes 345 to 1090
+ms, and a run of identical code once came out +20% on warm startup. So CI launches 20 (cold: 10)
+times a round. A red bench is not a required check: whoever merges says in the pull request
+whether the regression is real and accepted.
+
 ## Crates
 
 | Path | Role |
@@ -180,10 +221,14 @@ answers in a test run only. Made-up content only.
 - `.github/workflows/scripts.yml`, on pull requests that change `install.sh`, `scripts/osi`,
   `scripts/test-osi.sh` or `scripts/package.sh`: tests the installer.
 - The Rust build cache: the `e2e` job of `ci.yml` saves one, on `main` only; `app-windows.yml`,
-  `shots.yml` and `reliability.yml` read it (`shared-key: e2e`) and save none. `check` and
+  `shots.yml`, `bench.yml` and `reliability.yml` read it (`shared-key: e2e`) and save none. `check` and
   `build` keep their own.
 - `.github/workflows/shots.yml`, on pull requests that change the app's, core's or mac crate's sources or the
   scenarios: before and after pictures, an artifact (see "Screenshots and recordings").
+- `.github/workflows/bench.yml`, on pull requests that change a crate, `Cargo.lock`,
+  `scripts/bench`, `scripts/shot` or the shots fixtures it copies: `scripts/bench --compare` against the base branch's tip (the pull request merged into it after), the table
+  in the job summary, the JSON as an artifact (see "Benchmarks"). Nightly and by hand on `main`:
+  this tree alone, the JSON kept 90 days for trends.
 - `.github/workflows/release.yml`, on a `v*` tag: the GitHub Release.
 - `.github/workflows/pages.yml`, on pushes to `main` that change `site/`: deploys `site/` to
   GitHub Pages. Pages must be on for the repository, with GitHub Actions as its source.

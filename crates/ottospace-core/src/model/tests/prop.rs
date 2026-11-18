@@ -47,6 +47,8 @@ const HEARD: &str = "HEARDWORDS";
 /// In every title and identifier a slot's look found: never in the state.
 const SLOT_SEEN: &str = "SLOTSEEN";
 const LISTEN_IDS: &[&str] = &["t1", "t2", ""];
+/// Keys in a viewer: counts, moves, ⌃G, and others.
+const VIEWER_KEYS: &[&str] = &["j", "k", "g", "G", "0", "1", "9", "escape", "ctrl-d", "ctrl-u", "space", "ctrl-g", "x"];
 const CONTROLS: &[&str] = &["rail:apps", "pane:1", "close:1", "tab:1", "tab-close:1", "mark-remove:1", "c0", "c1"];
 
 /// Arguments for an action: from the model as it is half the time, else anything.
@@ -375,7 +377,29 @@ impl Gen<'_> {
         self.rng.pick(&[Captured, Triaged, Running, NeedsYou, Review, Stale, Parked, Done, Cleaned])
     }
 
+    /// A file a viewer may be asked for, or a path it refuses.
+    fn file_path(&mut self) -> String {
+        self.name(&[
+            "/w/app/README.md",
+            "/w/app/src/main.rs",
+            "/w/app/shot.png",
+            "/w/notes.txt",
+            "README.md",
+            "/w/a\nb",
+        ])
+    }
+
+    /// A viewer pane, else any.
+    fn file_pane(&mut self) -> PaneId {
+        let real: Vec<PaneId> = self.m.viewers.keys().copied().collect();
+        self.one_of(&real, |g| g.pane())
+    }
+
     fn kind(&mut self) -> Kind {
+        // A sound path only: an unsound one is no step at all (`makes_unsound_file`), as a slot's kind.
+        if self.rng.one_in(8) {
+            return Kind::File { path: self.rng.pick(&["/w/app/README.md", "/w/app/src/main.rs", "/w/x.png"]).into() };
+        }
         match self.rng.below(4) {
             0 => Kind::Empty,
             1 | 2 => Kind::Terminal,
@@ -599,7 +623,8 @@ impl Gen<'_> {
     }
 
     fn record(&mut self, id: u32) -> PaneRecord {
-        let kind = match self.rng.below(4) {
+        let kind = match self.rng.below(5) {
+            4 => RecordKind::File { path: self.file_path(), top: self.rng.pick(&[0, 12, u32::MAX]) },
             0 => RecordKind::Empty,
             1 | 2 => RecordKind::Terminal,
             _ => RecordKind::App {
@@ -837,6 +862,7 @@ const MAKERS: &[Make] = &[
     |_| Action::CloseSidebar,
     |g| {
         let item = |g: &mut Gen| match g.rng.coin() {
+            true if g.rng.one_in(4) => PickItem::File,
             true => PickItem::Terminal,
             false if g.rng.one_in(4) => PickItem::Closed { name: g.name(APPS), path: g.name(DIRS) },
             false => PickItem::App { name: g.name(APPS) },
@@ -1277,6 +1303,35 @@ const MAKERS: &[Make] = &[
     },
     |_| Action::StartFresh,
     |_| Action::EditSettings,
+    |g| Action::OpenFile {
+        path: g.file_path(),
+        axis: g.axis(),
+        beside: g.rng.coin().then(|| g.pane()),
+        reuse: g.rng.coin(),
+    },
+    |g| Action::ViewerKey { key: g.name(VIEWER_KEYS) },
+    |g| {
+        let (top, most, page) = (g.rng.below(300) as u32, g.rng.below(300) as u32, g.rng.below(60) as u32);
+        let odd = g.rng.one_in(8).then_some(u32::MAX);
+        Action::ViewerScrolled { pane: g.file_pane(), top: odd.unwrap_or(top), most, page }
+    },
+    |g| {
+        use crate::viewer::Read;
+        let read = match g.rng.below(6) {
+            0 => Read::Missing,
+            1 => Read::TooLarge { bytes: 6_000_000 },
+            2 => Read::NotFile,
+            3 => Read::Binary,
+            _ => Read::Shown { lines: g.rng.below(400) as u32 },
+        };
+        let path = g.file_path();
+        let path = match g.m.pane(g.file_pane()).map(|p| p.kind.clone()) {
+            Some(Kind::File { path: open }) if g.rng.coin() => open,
+            _ => path,
+        };
+        Action::ViewerRead { pane: g.file_pane(), path, read }
+    },
+    |g| Action::ViewerEdit { pane: g.rng.coin().then(|| g.file_pane()) },
     |g| Action::SettingsRead {
         text: g
             .rng
@@ -1407,7 +1462,10 @@ const MAKERS: &[Make] = &[
     },
     |_| Action::CalendarRetry,
     |g| Action::ListenStart {
-        source: crate::listen::Source::Pane(g.pane()),
+        source: match g.rng.coin() {
+            true => crate::listen::Source::Pane(g.pane()),
+            false => crate::listen::Source::App { pid: g.rng.pick(&[10, 11, 12]) },
+        },
         mic: g.rng.coin(),
         id: g.name(LISTEN_IDS),
         at: g.time(),
@@ -1436,6 +1494,36 @@ const MAKERS: &[Make] = &[
         id: g.listen_id(),
         why: g.rng.pick(&[crate::listen::Ended::AppQuit, crate::listen::Ended::StreamFailed]),
         at: g.time(),
+    },
+    // Window titles carry the heard marker: a title must never reach the state either.
+    |g| {
+        let apps = (0..g.rng.pick(&[0, 1, 3]))
+            .map(|_| crate::listen::SoundApp {
+                pid: g.rng.pick(&[10, 11, 12]),
+                name: g.rng.pick(&["Zoom", "Chrome", "zoom"]).into(),
+                bundle: None,
+                windows: (0..g.rng.pick(&[0, 2])).map(|_| format!("{HEARD} window")).collect(),
+                playing: g.rng.coin(),
+            })
+            .collect();
+        Action::ListenPicker { apps, id: g.name(LISTEN_IDS), at: g.time() }
+    },
+    |g| {
+        let head =
+            |app: &str, started| crate::listen::file::Head { app: app.into(), bundle: None, mic: false, started };
+        let ended = |app: &str, at: u64| crate::listen::file::header(&head(app, at), Some(at + 60_000), &|_| 0);
+        // 2026-11-16 09:00 and 10:00 UTC, and one still on.
+        let files = vec![
+            ("2026-11-16-0900-zoom.md".to_string(), ended("Zoom", 1_794_819_600_000)),
+            ("2026-11-16-1000-chrome.md".to_string(), ended("Chrome", 1_794_823_200_000)),
+            ("2026-11-16-1100-zoom.md".to_string(), crate::listen::file::header(&head("Zoom", 0), None, &|_| 0)),
+        ];
+        let today = g.rng.pick(&["2026-11-16", "2026-11-17"]).to_string();
+        Action::ListenPast { files: files.into_iter().filter(|_| g.rng.coin()).collect(), today }
+    },
+    |g| {
+        let names = ["2026-11-16-0900-zoom.md", "2026-11-16-1000-chrome.md", "x.md"];
+        Action::ListenOpenPast { name: g.rng.coin().then(|| g.rng.pick(&names).to_string()) }
     },
     |g| Action::AgentLevel { pane: g.rng.coin().then(|| g.app_pane()), level: g.rng.pick(&Level::ALL) },
     |g| Action::AgentMenu { pane: g.rng.coin().then(|| g.app_pane()), keys: g.rng.coin() },
@@ -1557,6 +1645,9 @@ fn selects_tab(action: &Action) -> bool {
             | Action::RepoClick { .. }
             | Action::WorktreeAdded { .. }
             | Action::EditSettings
+            | Action::OpenFile { .. }
+            | Action::ViewerEdit { .. }
+            | Action::ViewerKey { .. }
             | Action::TaskGo { .. }
             | Action::DropPane { .. }
             | Action::MovePane { .. }
@@ -1594,6 +1685,7 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 
 fn check(m: &Model) -> Result<(), String> {
     check_slots(m)?;
+    check_viewers(m)?;
     // The Repos list: each entry once, pinned ones first; the repositories in its order.
     let dirs = &m.repo_dirs.dirs;
     let once = dirs.iter().enumerate().all(|(i, d)| dirs[..i].iter().all(|e| e.path != d.path));
@@ -1706,12 +1798,42 @@ fn check(m: &Model) -> Result<(), String> {
     // paused with the time it paused. The drawer shows one only while it is on.
     if let Some(on) = &m.listen.on {
         ensure!(m.features.on(Feature::Transcripts), "a transcript on with the flag off");
-        ensure!(on.source.pane().is_some_and(|pane| m.pane(pane).is_some()), "a transcript of no pane: {on:?}");
+        let source = match on.source {
+            crate::listen::Source::Pane(pane) => m.pane(pane).is_some(),
+            crate::listen::Source::App { pid } => m.listen.apps.iter().any(|app| app.pid == pid),
+        };
+        ensure!(source, "a transcript of no pane and no app picked: {on:?}");
         ensure!(on.rows().count() <= crate::listen::RING, "{} rows kept", on.rows().count());
         let paused = on.status == crate::listen::Status::Paused;
         ensure!(paused == on.paused_at.is_some(), "{:?} with a pause at {:?}", on.status, on.paused_at);
     }
-    ensure!(!m.listen.shown || m.listen.on.is_some(), "the drawer on no transcript");
+    ensure!(!m.listen.shown || m.listen_item(), "the drawer on a transcript the rail does not hold");
+    // Today: newest first; the one open is listed, and only on the idle view.
+    let today = &m.transcripts.today;
+    ensure!(today.windows(2).all(|two| two[0].started_ms >= two[1].started_ms), "Today out of order");
+    if let Some(open) = &m.transcripts.open {
+        let idle = m.listen.shown && m.listen.on.is_none();
+        ensure!(idle && today.iter().any(|past| past.name == *open), "{open} open, idle: {idle}");
+    }
+    // The transcript's picker: the apps playing sound first.
+    if let Some(picker) = m.picker.as_ref().filter(|picker| picker.transcribe) {
+        let playing: Vec<bool> =
+            picker.items.iter().map(|item| matches!(item, PickItem::Sound { playing: true, .. })).collect();
+        ensure!(playing.windows(2).all(|two| two[0] >= two[1]), "a quiet app above one playing: {playing:?}");
+        ensure!(picker.items.iter().all(|item| matches!(item, PickItem::Sound { .. })), "{:?}", picker.items);
+    }
+    // The off-show dot: exactly while the pane heard is in a tab not on show, of a space on the
+    // row; on that tab if its space is selected, else on its space.
+    let holder = m.listen.pane().and_then(|pane| m.tab_panes().iter().position(|panes| panes.contains(&pane)));
+    let want = holder.filter(|at| *at != m.active).map(|at| &m.tabs[at]).and_then(|tab| {
+        let hidden = m.spaces().iter().any(|space| space.of == tab.space && space.hidden);
+        match (hidden, tab.space == *m.space()) {
+            (true, _) => None,
+            (false, true) => Some(crate::listen::Dot::Tab(tab.id)),
+            (false, false) => Some(crate::listen::Dot::Space(tab.space.clone())),
+        }
+    });
+    ensure!(m.listen_dot() == want, "the dot {:?}, not {want:?}", m.listen_dot());
     // A grey mark of a lost stream is of a pane that is there, with none on, the flag on.
     if let Some(lost) = m.listen.lost {
         ensure!(m.pane(lost).is_some() && m.listen.on.is_none(), "a lost mark on {lost} with {:?}", m.listen.on);
@@ -2210,6 +2332,10 @@ fn check(m: &Model) -> Result<(), String> {
         let stands_for = |pane: &Pane| match (&mark.target, &pane.kind) {
             (marks::Target::Pane(PaneRecord { kind: RecordKind::Terminal, .. }), Kind::Terminal) => true,
             (
+                marks::Target::Pane(PaneRecord { kind: RecordKind::File { path, .. }, .. }),
+                Kind::File { path: open },
+            ) => path == open,
+            (
                 marks::Target::Pane(PaneRecord { kind: RecordKind::App { bundle, name, .. }, .. }),
                 Kind::App { bundle: b, name: n, .. } | Kind::Slot { bundle: b, name: n },
             ) => marks::same_app((bundle.as_deref(), name), (b.as_deref(), n)),
@@ -2330,6 +2456,26 @@ fn check(m: &Model) -> Result<(), String> {
     Ok(())
 }
 
+/// One view for each viewer pane and none for another; its file by a path it opens; its line no
+/// further than the shell says it goes; a count typed only where the keys go now.
+fn check_viewers(m: &Model) -> Result<(), String> {
+    for pane in &m.panes {
+        if let Kind::File { path } = &pane.kind {
+            ensure!(crate::viewer::sound(path), "pane {} shows a file by {path:?}", pane.id);
+            ensure!(m.viewers.contains_key(&pane.id), "viewer {} has no view", pane.id);
+        }
+    }
+    for (id, view) in &m.viewers {
+        let file = m.pane(*id).is_some_and(|p| matches!(p.kind, Kind::File { .. }));
+        ensure!(file, "a view for pane {id}, no viewer");
+        ensure!(view.most.is_none_or(|most| view.top <= most), "viewer {id} at {} past {:?}", view.top, view.most);
+        ensure!(view.opener.is_none_or(|o| o != *id && m.pane(o).is_some()), "viewer {id} opened by {:?}", view.opener);
+        let typing = m.keyboard_viewer() == Some(*id);
+        ensure!(typing || view.pending.pending().is_none(), "viewer {id} keeps a count it has no keys for");
+    }
+    Ok(())
+}
+
 /// Each tab that holds a pane, by id, with its panes: where every pane is.
 fn tab_panes_by_id(m: &Model) -> Vec<(u32, Vec<PaneId>)> {
     let held = m.tabs.iter().zip(m.tab_panes()).filter(|(_, panes)| !panes.is_empty());
@@ -2420,24 +2566,22 @@ fn check_zones(m: &Model) -> Result<(), String> {
     if let Some(crate::model::zones::RailFocus::Right(item)) = m.rail_focus {
         ensure!(m.rail().contains(&item) && m.rail_drawn(), "the keyboard on {item:?}, not on a drawn rail");
     }
-    // The drawer's rail: two items or none; the transcript first while one is on, then the tasks
-    // by urgency, each once; the transcript selected while it is shown.
+    // The drawer's rail: this workspace's tasks by urgency, each once, then (below the divider)
+    // the transcript, there whenever it can be had; the transcript selected while it is shown.
     let rail = m.rail();
-    ensure!(rail.len() != 1, "a rail of one item");
     let task = |item: &RailItem| match item {
         RailItem::Task { id } => Some(*id),
         RailItem::Transcript => None,
     };
     let tasks: Vec<TaskId> = rail.iter().filter_map(task).collect();
     let transcript = rail.iter().position(|item| *item == RailItem::Transcript);
-    let placed = transcript.is_none_or(|at| at == 0);
-    ensure!(
-        placed && transcript.is_some() == (m.listen.on.is_some() && !rail.is_empty()),
-        "the transcript on {rail:?}"
-    );
+    let placed = transcript.is_none_or(|at| at + 1 == rail.len());
+    ensure!(placed && transcript.is_some() == m.listen_item(), "the transcript on {rail:?}");
+    let sections = rail.windows(2).all(|two| two[0].section() <= two[1].section());
+    ensure!(sections, "the rail's sections out of order: {rail:?}");
     let ordered = tasks.windows(2).all(|two| m.urgency(two[0]) <= m.urgency(two[1]));
     ensure!(unique(&tasks) && ordered, "the rail's tasks out of order: {tasks:?}");
-    if m.listen.shown && !rail.is_empty() {
+    if m.listen.shown {
         ensure!(m.rail_selected() == Some(RailItem::Transcript), "the transcript shown, the rail on {rail:?}");
     }
     Ok(())
@@ -2842,6 +2986,7 @@ impl Run {
             .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty() && !m.compose_theirs)));
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
+        let transcribe_picker = m.picker.as_ref().is_some_and(|picker| picker.transcribe);
         let filled_before = m.fill_display;
         let grants_before = m.agent.panes.clone();
         let (default, last_before) = (m.agent.default, m.agent.last.clone());
@@ -2926,9 +3071,10 @@ impl Run {
             let twice = held_before.iter().any(|(pane, held)| pane != id && Some(*held) == window);
             ensure!(!filled || !twice, "slot {id} filled with {window:?}, which another pane holds");
         }
-        // Only the user starts a transcript: their click, or their key.
+        // Only the user starts a transcript: their click, their key, or their pick in its picker.
         let listen_now = m.listen.on.as_ref().map(|on| on.id.clone());
-        let starts = matches!(action, Action::ListenStart { .. } | Action::ListenToggle { .. });
+        let picks = transcribe_picker && matches!(action, Action::PickerChoose { .. });
+        let starts = matches!(action, Action::ListenStart { .. } | Action::ListenToggle { .. }) || picks;
         ensure!(
             listen_now.is_none() || listen_now == listen_before || (origin == Origin::User && starts),
             "{origin:?}'s {action:?} started a transcript"
@@ -3767,6 +3913,26 @@ impl Run {
                         "{origin:?} ran the editor in pane {pane}: {action:?}"
                     );
                 }
+                // The user's editor on a viewer's file: in a terminal just opened beside it, by ⌃G or Edit.
+                Effect::EditFile { pane, path } => {
+                    let opened = effects.contains(&Effect::Opened(*pane));
+                    let terminal = m.pane(*pane).is_some_and(|p| p.kind == Kind::Terminal);
+                    let asked = matches!(&action, Action::ViewerEdit { .. })
+                        || matches!(&action, Action::ViewerKey { key } if key == "ctrl-g");
+                    let viewed = kinds_before.iter().any(|(_, kind)| *kind == Kind::File { path: path.clone() });
+                    ensure!(opened && terminal && asked && viewed, "{origin:?}'s {action:?} edited {path:?} in {pane}");
+                }
+                Effect::ChooseFile { .. } => {
+                    ensure!(matches!(action, Action::PickerChoose { .. }), "{action:?} asked for a file");
+                }
+                Effect::ViewFile { pane } => {
+                    let file = m.pane(*pane).is_some_and(|p| matches!(p.kind, Kind::File { .. }));
+                    ensure!(file && m.viewer(*pane).is_some(), "{action:?} reads a file into pane {pane}, no viewer");
+                }
+                Effect::ViewerScroll { pane, top } => {
+                    let at = m.viewer(*pane).map(|view| view.top);
+                    ensure!(at == Some(*top), "{action:?} scrolled viewer {pane} to {top}, the model says {at:?}");
+                }
                 // The editor opens only on the user's ⌃G, on the draft it then edits, one at a time.
                 Effect::OpenEditor { text } => {
                     let given = m.editing.as_ref().map(|editing| editing.given.as_str());
@@ -4497,6 +4663,7 @@ fn code(sent: &Envelope) -> String {
         ("failure", "Failure"),
         ("from", "crate::listen::Speaker"),
         ("why", "crate::listen::Ended"),
+        ("read", "crate::viewer::Read"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {
@@ -4544,6 +4711,23 @@ fn code(sent: &Envelope) -> String {
         return format!(
             "Action::ListenStart {{ source: crate::listen::Source::Pane({pane}), mic: {mic}, id: {id:?}.into(), \
              at: {at} }}.sent_by(Origin::{:?})",
+            sent.origin
+        );
+    }
+    if let Action::ListenPicker { apps, id, at } = &sent.action {
+        let app = |app: &crate::listen::SoundApp| {
+            let crate::listen::SoundApp { pid, name, bundle, windows, playing } = app;
+            let windows: Vec<String> = windows.iter().map(|w| format!("{w:?}.into()")).collect();
+            format!(
+                "crate::listen::SoundApp {{ pid: {pid}, name: {name:?}.into(), bundle: {bundle:?}.map(|b: &str| b.to_string()), \
+                 windows: vec![{}], playing: {playing} }}",
+                windows.join(", ")
+            )
+        };
+        let apps: Vec<String> = apps.iter().map(app).collect();
+        return format!(
+            "Action::ListenPicker {{ apps: vec![{}], id: {id:?}.into(), at: {at} }}.sent_by(Origin::{:?})",
+            apps.join(", "),
             sent.origin
         );
     }
@@ -6187,6 +6371,32 @@ fn yes_to_closing_a_workspace_moves_the_tab_on_show() {
         split(Axis::Right, Kind::Terminal),
         Action::SpaceHideAsked { index: None, running }.into(),
         Action::QuitConfirm.into(),
+    ])
+    .unwrap();
+}
+
+#[test]
+fn seed_983_a_clients_hide_leaves_the_close_question_to_the_user() {
+    let running = |pane| Running { pane, program: None, background: false };
+    replay(&[
+        by(Origin::User, Action::Open { kind: slack(3), axis: Axis::Right, beside: None }),
+        by(Origin::User, Action::SpaceHideAsked { index: Some(1), running: (1..5).map(running).collect() }),
+        by(Origin::Socket, Action::SpaceHide { index: None }),
+    ])
+    .unwrap();
+}
+
+/// The user's pick in the transcript's picker starts one: the check allowed only ListenStart and
+/// ListenToggle (seed 316).
+#[test]
+fn seed_316_the_users_pick_in_the_transcripts_picker_starts_one() {
+    let zoom =
+        |pid, playing| crate::listen::SoundApp { pid, name: "Zoom".into(), bundle: None, windows: vec![], playing };
+    replay(&[
+        by(Origin::System, Action::ListenFixture),
+        Action::ListenPicker { apps: vec![zoom(10, false), zoom(11, false), zoom(10, true)], id: "".into(), at: 1 }
+            .into(),
+        Action::PickerChoose { index: Some(0) }.into(),
     ])
     .unwrap();
 }

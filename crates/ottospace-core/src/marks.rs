@@ -47,6 +47,12 @@ pub enum RecordKind {
         #[serde(flatten)]
         extra: Extra,
     },
+    /// A file in a viewer, and the line on show (`Viewer::top`).
+    File {
+        path: String,
+        #[serde(default)]
+        top: u32,
+    },
 }
 
 impl RecordKind {
@@ -55,6 +61,7 @@ impl RecordKind {
     pub(crate) fn is(&self, kind: &Kind) -> bool {
         match (self, kind) {
             (RecordKind::Terminal, Kind::Terminal) => true,
+            (RecordKind::File { path, .. }, Kind::File { path: open }) => path == open,
             (
                 RecordKind::App { bundle, name, .. },
                 Kind::App { bundle: b, name: n, .. } | Kind::Slot { bundle: b, name: n },
@@ -371,7 +378,8 @@ impl PaneRecord {
         match &self.kind {
             RecordKind::Terminal => self.cwd.clone().map(Need::Dir),
             RecordKind::App { bundle, name, .. } => Some(Need::App { bundle: bundle.clone(), name: name.clone() }),
-            RecordKind::Empty => None,
+            // A file that is gone says so in its viewer.
+            RecordKind::Empty | RecordKind::File { .. } => None,
         }
     }
 
@@ -379,6 +387,7 @@ impl PaneRecord {
     fn default_name(&self) -> String {
         match &self.kind {
             RecordKind::App { name, .. } => name.clone(),
+            RecordKind::File { path, .. } => directory_name(path).unwrap_or("file").to_string(),
             _ => self.cwd.as_deref().and_then(directory_name).unwrap_or("shell").to_string(),
         }
     }
@@ -396,6 +405,7 @@ impl PaneRecord {
                 let fine = plain(name, 256) && plain(title, 512) && bundle.as_deref().is_none_or(|b| plain(b, 256));
                 (!fine).then_some("its app or title is too long or not one line")
             }
+            RecordKind::File { path, .. } if !crate::viewer::sound(path) => Some("its file is not an absolute path"),
             _ => None,
         }
     }
@@ -459,6 +469,7 @@ impl Mark {
         match &self.target {
             Target::Tab(_) => "tab",
             Target::Pane(PaneRecord { kind: RecordKind::App { .. }, .. }) => "app",
+            Target::Pane(PaneRecord { kind: RecordKind::File { .. }, .. }) => "file",
             Target::Pane(_) => "terminal",
         }
     }
@@ -846,6 +857,9 @@ impl Model {
             Kind::Slot { name, bundle } => {
                 RecordKind::App { bundle: bundle.clone(), name: name.clone(), title: String::new(), extra }
             }
+            Kind::File { path } => {
+                RecordKind::File { path: path.clone(), top: self.viewer(pane.id).map_or(0, |v| v.top) }
+            }
         };
         // Where the shell is now, as the shell crate read it; else where it started.
         let now = cwds.iter().find(|(id, _)| *id == pane.id).map(|(_, cwd)| cwd.clone());
@@ -1125,6 +1139,7 @@ impl Model {
                         launch: true,
                     });
                 }
+                (RecordKind::File { path, top }, None) => self.restore_viewer(pane, path, *top, effects),
                 (RecordKind::Empty, None) => {}
             }
         }

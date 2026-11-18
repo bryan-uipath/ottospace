@@ -14,6 +14,9 @@ import type {
   Listen,
   ListenLine,
   Slot,
+  Viewer,
+  ViewerDrawn,
+  ViewerRead,
   CalendarReply,
   Meeting,
   TimeSpan,
@@ -256,9 +259,14 @@ function railRow(value: unknown, at: string): Snapshot["drawer"]["rail"][number]
   const o = fields(value, at);
   const kind = o.kind;
   if (kind !== "transcript" && kind !== "task") throw wrong(`${at}.kind`, "transcript or task", kind);
+  const section = o.section;
+  if (section !== "workspace" && section !== "everywhere") {
+    throw wrong(`${at}.section`, "workspace or everywhere", section);
+  }
   return {
     kind,
     id: orNull(num)(o.id, `${at}.id`),
+    section,
     selected: bool(o.selected, `${at}.selected`),
     rect: orNull(rect)(o.rect, `${at}.rect`),
   };
@@ -416,7 +424,47 @@ function paneKind(value: unknown, at: string): PaneKind {
     if (o.bundle !== undefined) slot.bundle = str(o.bundle, `${at}.bundle`);
     return slot;
   }
+  if (o.type === "file") return { type: "file", path: str(o.path, `${at}.path`) };
   throw wrong(`${at}.type`, "a pane kind", o.type);
+}
+
+function viewerRead(value: unknown, at: string): ViewerRead {
+  const o = fields(value, at);
+  if (o.status === "shown") return { status: "shown", lines: num(o.lines, `${at}.lines`) };
+  if (o.status === "too_large") return { status: "too_large", bytes: num(o.bytes, `${at}.bytes`) };
+  const bare = ["reading", "missing", "not_file", "binary", "unreadable"] as const;
+  return { status: oneOf(bare, "what the viewer read")(o.status, `${at}.status`) };
+}
+
+function viewer(value: unknown, at: string): Viewer {
+  const o = fields(value, at);
+  const view: Viewer = {
+    shows: oneOf(["markdown", "code", "text", "image"] as const, "what a file shows as")(o.shows, `${at}.shows`),
+    read: viewerRead(o.read, `${at}.read`),
+    top: num(o.top, `${at}.top`),
+    most: orNull(num)(o.most, `${at}.most`),
+    page: num(o.page, `${at}.page`),
+    pending: orNull(str)(o.pending, `${at}.pending`),
+  };
+  if (o.opener !== undefined) view.opener = num(o.opener, `${at}.opener`);
+  return view;
+}
+
+function viewerDrawn(value: unknown, at: string): ViewerDrawn {
+  const o = fields(value, at);
+  const drawn: ViewerDrawn = {
+    body: orNull(oneOf(["markdown", "lines", "image"] as const, "a viewer's body"))(o.body, `${at}.body`),
+  };
+  if (o.shape !== undefined) {
+    const shape = fields(o.shape, `${at}.shape`);
+    const links = fields(shape.links, `${at}.shape.links`);
+    drawn.shape = {
+      blocks: map(num)(shape.blocks, `${at}.shape.blocks`),
+      links: { web: num(links.web, `${at}.shape.links.web`), file: num(links.file, `${at}.shape.links.file`) },
+    };
+  }
+  if (o.lines !== undefined) drawn.lines = num(o.lines, `${at}.lines`);
+  return drawn;
 }
 
 function pane(value: unknown, at: string): Pane {
@@ -1069,9 +1117,13 @@ function repoDirs(value: unknown, at: string): RepoDirs {
 function pickItem(value: unknown, at: string): PickItem {
   const o = fields(value, at);
   if (o.type === "terminal") return { type: "terminal" };
+  if (o.type === "file") return { type: "file" };
   if (o.type === "app") return { type: "app", name: str(o.name, `${at}.name`) };
   if (o.type === "closed") {
     return { type: "closed", name: str(o.name, `${at}.name`), path: str(o.path, `${at}.path`) };
+  }
+  if (o.type === "sound") {
+    return { type: "sound", name: str(o.name, `${at}.name`), playing: bool(o.playing, `${at}.playing`) };
   }
   throw wrong(`${at}.type`, "a picker item", o.type);
 }
@@ -1102,6 +1154,7 @@ function picker(value: unknown, at: string): Picker {
     items: list(pickItem)(o.items, `${at}.items`),
     query: str(o.query, `${at}.query`),
     selected: num(o.selected, `${at}.selected`),
+    transcribe: bool(o.transcribe, `${at}.transcribe`),
   };
 }
 
@@ -1256,8 +1309,8 @@ function markInput(value: unknown, at: string): MarkInput {
   throw wrong(`${at}.type`, "what a mark waits for", o.type);
 }
 
-function markKind(value: unknown, at: string): "terminal" | "app" | "tab" {
-  if (value === "terminal" || value === "app" || value === "tab") return value;
+function markKind(value: unknown, at: string): "terminal" | "app" | "tab" | "file" {
+  if (value === "terminal" || value === "app" || value === "tab" || value === "file") return value;
   throw wrong(at, "a mark's kind", value);
 }
 
@@ -1293,7 +1346,9 @@ function workbook(value: unknown, at: string): Workbook {
   const pane = (value: unknown, at: string): WorkbookPane => {
     const p = fields(value, at);
     const kind = p.kind;
-    if (kind !== "terminal" && kind !== "app" && kind !== "empty") throw wrong(`${at}.kind`, "a pane's kind", kind);
+    if (kind !== "terminal" && kind !== "app" && kind !== "empty" && kind !== "file") {
+      throw wrong(`${at}.kind`, "a pane's kind", kind);
+    }
     const read: WorkbookPane = p.app === undefined ? { kind } : { kind, app: str(p.app, `${at}.app`) };
     if (p.lines !== undefined) read.lines = num(p.lines, `${at}.lines`);
     if (p.has_command !== undefined) read.has_command = bool(p.has_command, `${at}.has_command`);
@@ -1395,8 +1450,10 @@ function model(value: unknown, at: string): Model {
     agents: list(subject)(o.agents, `${at}.agents`),
     features: list(feature)(o.features, `${at}.features`),
     listen: orNull(listen)(o.listen, `${at}.listen`),
+    transcripts: transcripts(o.transcripts, `${at}.transcripts`),
     agent_mode: agentMode(o.agent_mode, `${at}.agent_mode`),
     slots: map(slot)(o.slots, `${at}.slots`),
+    viewers: map(viewer)(o.viewers, `${at}.viewers`),
   };
 }
 
@@ -1425,12 +1482,26 @@ function agentMode(value: unknown, at: string): AgentMode {
   return { panes, default: agentLevel(o.default, `${at}.default`), menu: orNull(menu)(o.menu, `${at}.menu`) };
 }
 
+function transcripts(value: unknown, at: string): Snapshot["state"]["transcripts"] {
+  const o = fields(value, at);
+  const past = (value: unknown, at: string) => {
+    const p = fields(value, at);
+    return {
+      name: str(p.name, `${at}.name`),
+      started_ms: num(p.started_ms, `${at}.started_ms`),
+      length_ms: num(p.length_ms, `${at}.length_ms`),
+    };
+  };
+  return { today: list(past)(o.today, `${at}.today`), open: orNull(str)(o.open, `${at}.open`) };
+}
+
 function listen(value: unknown, at: string): Listen {
   const o = fields(value, at);
   const source = fields(o.source, `${at}.source`);
+  const from = source.app === true ? { app: true as const } : { pane: num(source.pane, `${at}.source.pane`) };
   return {
     status: oneOf(["starting", "on", "paused"] as const, "a transcript's status")(o.status, `${at}.status`),
-    source: { pane: num(source.pane, `${at}.source.pane`) },
+    source: from,
     mic: bool(o.mic, `${at}.mic`),
     auto: bool(o.auto, `${at}.auto`),
     started_ms: num(o.started_ms, `${at}.started_ms`),
@@ -1664,6 +1735,7 @@ export function snapshot(value: unknown): Snapshot {
     hosted: map(rect)(o.hosted, "hosted"),
     crop: map(num)(o.crop, "crop"),
     terminals: map(terminal)(o.terminals, "terminals"),
+    viewers: map(viewerDrawn)(o.viewers, "viewers"),
     copied: orNull(str)(o.copied, "copied"),
     picker_rows: orNull(list(pickItem))(o.picker_rows, "picker_rows"),
     palette_rows: orNull(list(paletteRow))(o.palette_rows, "palette_rows"),
