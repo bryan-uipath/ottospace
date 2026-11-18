@@ -185,13 +185,12 @@ impl Model {
         };
     }
 
-    /// The keyboard onto the drawer's rail, on the item shown, while the drawer and its rail show.
+    /// The keyboard onto the drawer's rail, on the item shown, while it has an item.
     fn enter_drawer_rail(&mut self, effects: &mut Vec<Effect>) {
-        let Some(item) = self.rail_selected().or(self.rail().first().copied()).filter(|_| self.rail_drawn()) else {
+        let Some(item) = self.rail_selected().or(self.rail().first().copied()) else {
             return;
         };
-        self.talk_keys(false, effects);
-        self.compose_aside();
+        self.leave_right_zone(effects);
         self.rail_focus = Some(RailFocus::Right(item));
     }
 
@@ -226,8 +225,8 @@ impl Model {
             || self.live.is_some()
             || self.talk.as_ref().is_some_and(|talk| talk.keys)
             || self.mark_input.is_some();
-        // An item gone from the drawer's rail (or the rail with it) takes the keyboard off it.
-        let gone = matches!(self.rail_focus, Some(RailFocus::Right(item)) if !self.rail_drawn() || !self.rail().contains(&item));
+        // An item gone from the drawer's rail takes the keyboard off it.
+        let gone = matches!(self.rail_focus, Some(RailFocus::Right(item)) if !self.rail().contains(&item));
         if taken || gone {
             self.rail_focus = None;
         }

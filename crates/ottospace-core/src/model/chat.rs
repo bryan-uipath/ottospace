@@ -811,7 +811,7 @@ mod tests {
     }
 
     /// The transcript in the drawer's place: no chip, so the user's click on the selected space
-    /// only selects it, and leaves the transcript shown (⌘⇧L would close it).
+    /// only selects it, and leaves the transcript shown (⌘⇧R would collapse it).
     #[test]
     fn no_agent_chip_while_the_transcript_is_in_the_drawer() {
         let mut m = two_live();
@@ -830,7 +830,7 @@ mod tests {
     }
 
     /// The user's click on the selected space (or the chip) opens its closed conversation, as
-    /// ⌘⇧L does. A client's click only selects, and so does a click on another space.
+    /// ⌘⇧R does. A client's click only selects, and so does a click on another space.
     #[test]
     fn a_click_on_the_selected_space_opens_its_closed_conversation() {
         let mut m = two_live();

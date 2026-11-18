@@ -978,6 +978,7 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
     body: orNull(rect)(o.body, `${at}.body`),
     rail: list(railRow)(o.rail, `${at}.rail`),
     width: num(o.width, `${at}.width`),
+    collapsed: bool(o.collapsed, `${at}.collapsed`),
     agents: map(agent)(o.agents, `${at}.agents`),
     native: native(o.native, `${at}.native`),
     line: orNull(agentLine)(o.line, `${at}.line`),

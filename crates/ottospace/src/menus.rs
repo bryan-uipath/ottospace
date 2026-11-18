@@ -78,6 +78,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
         Menu {
             name: "View".into(),
             items: [
+                item("Open or Collapse the Sidebar", SidebarToggle),
                 item("Drive the Bar with the Keyboard", ListMode),
                 item("Label the Controls", SneakMode),
                 item("Fill the Whole Display", FillDisplay),
@@ -146,7 +147,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 // The conversation in the drawer.
                 item("Type in the Conversation", TalkFocus),
                 item("Edit Message in Editor", EditMessage),
-                item("Open or Close the Conversation", TalkToggle),
+                item("Open or Collapse the Drawer", TalkToggle),
                 item("Stop the Agent", StopAgent),
                 item("Toggle Agent Dial", DialToggle),
             ],

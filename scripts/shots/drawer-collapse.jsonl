@@ -1,0 +1,38 @@
+# The arrows that collapse the sidebar and the drawer into their rails, each with its key's cap:
+# open; the transcript, then collapsed by ⌘⇧R (it records on); opened again on a task by its
+# rail item; each header's arrow hovered, its key's cap beside it; collapsed by the conversation's →;
+# the sidebar collapsed by its ←, both rails left.
+# Made-up task; the fixture's lines stand in for the sound.
+{"env":{"OTTOSPACE_FEATURES":"transcripts","OTTOSPACE_LISTEN_FIXTURE":"{ROOT}/fixture.jsonl"}}
+{"click":"top:new_workspace"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"f i x space t h e space l o g i n space l o o p","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"task_set_state","id":1,"state":"needs_you"}
+{"settle":700}
+{"shot":"open"}
+{"click":"listen-start:1"}
+{"until":"listen_lines","len":6}
+{"click":"drawer-rail:transcript"}
+{"cmd":"section","section":"tasks"}
+{"settle":300}
+{"shot":"transcript"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
+{"settle":300}
+{"shot":"transcript-collapsed"}
+{"click":"drawer-rail:1"}
+{"settle":300}
+{"shot":"reopened"}
+{"hover":"talk:talk-close"}
+{"settle":300}
+{"shot":"hover-drawer"}
+{"hover":"bar:close"}
+{"settle":300}
+{"shot":"hover-sidebar"}
+{"click":"talk:talk-close"}
+{"settle":300}
+{"shot":"collapsed"}
+{"click":"bar:close"}
+{"settle":300}
+{"shot":"both-collapsed"}

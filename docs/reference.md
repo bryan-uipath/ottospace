@@ -126,12 +126,13 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘N | New task, in the drawer. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task and starts its agent; ⇧↵ adds it for later; Esc closes. [Its keys](#keys) |
 | ⌘L | The keyboard into the drawer's conversation, or back to the workspace |
 | ⌃G | In the composer or the new-task box: its text in your editor (`$VISUAL`, else `$EDITOR`, else `vi`, as Open Settings runs it), in the drawer: the editor takes the conversation's place (the drawer widens to 60 columns if it is narrower). Save and quit: the text is back in the composer (one trailing newline dropped; the new-task line takes it as one line), nothing sent; quit with an error, or save nothing new: as it was. ⌃G again while it runs goes back to it. A permission card that arrives meanwhile shows under the editor, which keeps the keyboard: click the card to answer it (`a`, `d`), ⌃G to go back. The text goes back to the conversation it came from, wherever you went; its task dismissed, it is put on the clipboard and the status bar says so. Also Edit Message in Editor (Tasks, the palette). Only yours: a socket client's ⌃G opens nothing, and its keys reach neither the editor nor a card. See [Compose in your editor](#compose-in-your-editor) |
-| ⌘⇧L | Close the chat, or open it again (on a transcript: close the drawer; with no chat: the transcript). The agent goes on. Closed, the [agent chip](#the-agent-chip) at the row's end opens it too |
+| ⌘⇧R | Collapse the drawer into its rail, or open it again (with no chat: the transcript). The agent and the transcript go on, and the rail always shows. Also the → at the right end of the drawer's header and the ← on the collapsed rail, each with its key's cap. Collapsed, a click on a rail item, ⌘⌥] / ⌘⌥[ or the [agent chip](#the-agent-chip) opens it too. Only yours: a socket client's is refused |
+| ⌘⇧L | Collapse the sidebar into the left rail, or open it again on the section open last. Also the ← at the right end of the sidebar's header and the → at the left rail's foot, each with its key's cap |
 | ⌘⇧A | Collapse the conversation's [dial](#the-agent-dial) to its marker beside the badge, or open it again (a click on either does the same). Kept per task |
 | ⌘⇧N | Next task: the space and chat of the first task that needs you |
 | ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
 | ⌘⌃V | With the `agent_mode` [flag](#features) on: the robot's menu on the focused app pane (Off, See, See and act): what the task of its workspace may do there. ↓ ↑ move, ↵ takes, any other key closes. Also Agent Mode… and Agent Mode: Off / See / See and Act (the palette). Only yours: a client's key, click or label sets nothing |
-| ⌘⌃T | With the `transcripts` [flag](#features) on: stop the transcript that is on, from any pane; else start one of the focused app pane. With focus on no such pane, the status bar says "focus an app pane to transcribe it". Also Start or Stop Transcribing (View, the palette). The app's audio is heard by ScreenCaptureKit (Screen Recording covers it) and transcribed by Apple's on-device recogniser: nothing leaves the Mac. The first start may ask the system for its speech model ("Downloading speech model…"). Below macOS 26 it says "transcripts need macOS 26". While one is on: the source pane's header shows a red dot (a click shows the transcript in the drawer); while its tab is not on show, a red dot on that tab, or on its workspace in the top row (a click brings the pane back); the drawer's rail has the transcript's red dot; the drawer's transcript header has the level, the time, Stop, and ⋯ with Pause or Resume (paused: "Paused" and Resume where the level was); ⌘⇧L closes the drawer on it. Pause or Resume Transcribing is also in the palette and the View menu, and the menu bar's red dot has Stop, Pause or Resume, and Show. Only yours: a socket client's ⌘⌃T, click or label starts and stops nothing |
+| ⌘⌃T | With the `transcripts` [flag](#features) on: stop the transcript that is on, from any pane; else start one of the focused app pane. With focus on no such pane, the status bar says "focus an app pane to transcribe it". Also Start or Stop Transcribing (View, the palette). The app's audio is heard by ScreenCaptureKit (Screen Recording covers it) and transcribed by Apple's on-device recogniser: nothing leaves the Mac. The first start may ask the system for its speech model ("Downloading speech model…"). Below macOS 26 it says "transcripts need macOS 26". While one is on: the source pane's header shows a red dot (a click shows the transcript in the drawer); while its tab is not on show, a red dot on that tab, or on its workspace in the top row (a click brings the pane back); the drawer's rail has the transcript's red dot; the drawer's transcript header has the level, the time, Stop, and ⋯ with Pause or Resume (paused: "Paused" and Resume where the level was); → or ⌘⇧R collapses the drawer into its rail, and it records on. Pause or Resume Transcribing is also in the palette and the View menu, and the menu bar's red dot has Stop, Pause or Resume, and Show. Only yours: a socket client's ⌘⌃T, click or label starts and stops nothing |
 | ⌘B / ⌘⇧B | With the `marks` [flag](#features) on (so for the next two rows): mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
 | ⌘⌥1 … ⌘⌥9 | Go to one of the first nine marks, in the order of the Marks section |
@@ -170,7 +171,7 @@ would. At their right, what ↵ does when it is not "add": `[↵] completes` whi
 row, else `[⇧] [↵] later`. The dropdown teaches the rest.
 
 The box is beside the rest of the window, not over it, and your pointer works there as without
-it. A click that only changes the bar (a rail icon, the bar's ×, a fold, a row's button) leaves
+it. A click that only changes the bar (a rail icon, the bar's ←, a fold, a row's button) leaves
 the box its line, its cursor and the keyboard. A click that takes the keyboard elsewhere (a
 tab, a pane, a repository's terminal, a mark, a workbook, a task's conversation, a name or a
 filter typed in the bar) puts the line aside: it is back when the box next opens empty. So do
@@ -281,7 +282,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 4. **The drawer.** Its header: the task's badge and title (hover it for the model, the
    permission mode, how long the agent has run and its folder), the folder itself only when it
    is not the task's repository; Brief (when it has captures); Stop ends the agent (in the terminal view; drawn natively, "Stop the Agent" in the palette or the menu);
-   × (⌘⇧L) closes the chat and the agent goes on. ⌘L moves the keyboard in
+   → (⌘⇧R) collapses the drawer into its rail and the agent goes on. ⌘L moves the keyboard in
    and out. At its foot, muted, the model in short, a permission mode that lets the agent
    act without asking (`auto`, `accept edits`; `bypass` in the warning colour), and, at the
    right, the folder its process runs in: `haiku-5.5 · auto` and `~/code/app`. The folder is
@@ -301,14 +302,14 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    started with ↵ is in the workspace you are in: one you made, or a task's. No space is made
    and nothing moves (the box says "↵ starts it in this workspace" when there is something in
    it). A workspace may hold several tasks: a later one works in the same folder unless its
-   line names another. One conversation is in front, the drawer's. The drawer on a conversation or a transcript has a rail
-   at its right edge, in two parts. On top, this workspace's tasks, the most urgent first (each
+   line names another. One conversation is in front, the drawer's. The rail at the window's right edge always shows (the drawer open beside it, or collapsed into it by its → or ⌘⇧R; its ← opens it again). It has
+   two parts. On top, this workspace's tasks, the most urgent first (each
    its badge, the dot at its corner in its state's colour), and + for another task here. At the
    foot, below a divider, what is the same in every workspace: the transcript (the `transcripts`
    flag), its waveform grey while idle, in colour with a red dot while it records. The selected
    item is lifted with an accent edge. A click on an item, ⌘⌥] / ⌘⌥[ (top to bottom), list mode
    (→ past the drawer, ↑ ↓, ↵), a task's row or ⌘⇧N switches it; nothing but you does. With no
-   task, ⌘⇧L opens this drawer on the transcript, as a click on it does. Many tasks scroll; the
+   task, ⌘⇧R opens this drawer on the transcript, as a click on it does. Many tasks scroll; the
    transcript stays at the rail's foot. Stopped, the transcript stays, idle. Idle, it
    offers **Transcribe a window…** (a picker in ⌘E's style of the apps that can play sound and
    their windows, the one playing now first and marked "sound now"; your pick hears that app,
@@ -432,7 +433,7 @@ its score, when it was last used and whether it is known; no key text and nothin
 the socket. A test run keeps none unless it names `OTTOSPACE_HOME`.
 
 The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Edit Message in
-Editor (⌃G), Open or Close the Conversation (⌘⇧L), Stop the Agent (the drawer's Stop) and Toggle
+Editor (⌃G), Open or Collapse the Drawer (⌘⇧R), Stop the Agent (the drawer's Stop) and Toggle
 Agent Dial (⌘⇧A), each for
 the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
 it: the agent gets no key while it is open, and when it closes the keyboard goes back to it.
@@ -449,7 +450,7 @@ a space with one tab has no tab row, so it sits on the top row, left of the spli
   your word next), `Idle`, `Ended`, `Failed`.
 - While it needs you it is drawn in the needs-you colour: a permission request shows with the
   chat closed.
-- A click opens the conversation, as ⌘⇧L does. So does a click on the selected space on the top
+- A click opens the conversation, as ⌘⇧R does. So does a click on the selected space on the top
   row; a click on another space only selects it. Its hover names the key.
 - It takes the room the row has left and moves nothing: short of room for the line it is the
   badge alone, and on a full tab row the badge lies over the row's end. It is not there while the drawer's place shows something else (a new task, a

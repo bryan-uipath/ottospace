@@ -1546,7 +1546,7 @@ fn the_new_task_box_files_a_line() {
         "{}",
         reply["state"]["talk"]
     );
-    otto.user_key("cmd-shift-l");
+    otto.user_key("cmd-shift-r");
 
     // What a line's tags may name is read off the window's thread: the box says when it is in.
     let compose = |text: &str| {
@@ -6950,6 +6950,92 @@ fn the_rail_holds_the_tasks_then_the_transcript_always_and_only_the_user_switche
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The owner: "how do i close the 'transcript' pane?". The → in the drawer's header, the
+/// transcript's or a task's, collapses the drawer into its rail, which stays at the window's
+/// edge: the transcript records on, the panes widen by the drawer less the rail. A rail click,
+/// ⌘⇧R or ← opens it again; a client's click or key is refused and says why.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_drawer_collapses_into_the_rail_from_the_transcript_or_a_task_and_only_the_user_opens_it() {
+    let root = support::temp(&format!("ottospace-e2e-collapse-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, sessions) = (root.join("bin"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    let fixture = root.join("fixture.jsonl");
+    std::fs::write(&fixture, LISTEN_FIXTURE).unwrap();
+    let settings =
+        json!({"repos": [], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("collapse", &settings.to_string());
+    let env = [
+        ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "transcripts"),
+        ("OTTOSPACE_LISTEN_FIXTURE", fixture.to_str().unwrap()),
+    ];
+    let otto = Otto::launch_with("collapse", &env);
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.user_key("cmd-d");
+    otto.user_key("cmd-n");
+    otto.user_key("o n e");
+    let one = otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the task");
+    otto.user_click(at(otto.listen_rect("listen-start:1"), 0.5, 0.5));
+    otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
+    let open = otto.drawn();
+    assert_eq!(open["drawer"]["collapsed"], false);
+    let (pane, drawer) = (rect(&open["headers"]["1"])[2], open["drawer"]["width"].as_f64().unwrap());
+    // The transcript's →: the rail alone at the window's edge, the transcript on, the pane wider.
+    let collapsed = otto.user_click(at(otto.control("listen-collapse"), 0.5, 0.5));
+    assert_eq!(
+        (&collapsed["drawer"]["collapsed"], &collapsed["state"]["listen"]["status"]),
+        (&json!(true), &json!("on"))
+    );
+    let (rail, window) = (otto.control("drawer-rail"), rect(&collapsed["window"]));
+    assert!(rail[0] + rail[2] >= window[2] - 1. && rail[2] <= 49., "{rail:?} {window:?}");
+    let wider = rect(&otto.drawn()["headers"]["1"])[2];
+    assert!((wider - pane - (drawer - rail[2])).abs() <= 2., "{pane} → {wider}, drawer {drawer}, rail {rail:?}");
+    assert!(otto.control_opt("listen-collapse").is_none() && otto.control_opt("drawer-rail:transcript").is_some());
+    // A client's click on ← and its ⌘⇧R: refused, said, still collapsed.
+    let theirs = otto.click(at(otto.control("drawer-rail:open"), 0.5, 0.5), 1);
+    assert_eq!(theirs["drawer"]["collapsed"], true);
+    assert!(
+        theirs["notice"].to_string().contains("only the user collapses or opens the drawer"),
+        "{}",
+        theirs["notice"]
+    );
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-shift-r"}))["drawer"]["collapsed"], true);
+    // The user's click on the task: open on its conversation. Its → collapses it again.
+    let opened = otto.user_click(at(otto.control(&format!("drawer-rail:{one}")), 0.5, 0.5));
+    assert_eq!((&opened["drawer"]["collapsed"], &opened["state"]["talk"]["task"]), (&json!(false), &json!(one)));
+    let folded = otto.user_click(at(otto.control("talk:talk-close"), 0.5, 0.5));
+    assert_eq!((&folded["drawer"]["collapsed"], &folded["state"]["talk"]["task"]), (&json!(true), &json!(one)));
+    assert_eq!(rail_tasks(&folded), [one]);
+    // ⌘⇧R opens it and collapses it; ← opens it.
+    assert_eq!(otto.user_key("cmd-shift-r")["drawer"]["collapsed"], false);
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-shift-r"}))["drawer"]["collapsed"], false);
+    assert_eq!(otto.user_key("cmd-shift-r")["drawer"]["collapsed"], true);
+    assert_eq!(otto.user_click(at(otto.control("drawer-rail:open"), 0.5, 0.5))["drawer"]["collapsed"], false);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// The owner: "for both the left pane and right pane we should have a <- and -> slide in arrow".
+/// The sidebar's ← collapses it into the left rail; the rail's →, or ⌘⇧L, opens it on the
+/// section open last. Each arrow's key is on screen beside it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_sidebar_collapses_into_the_left_rail_and_opens_on_the_section_open_last() {
+    let otto = Otto::launch("sidebar-slide");
+    otto.user_click(at(otto.control("rail:tasks"), 0.5, 0.5));
+    assert_eq!(otto.drawn()["state"]["sidebar"], "tasks");
+    assert!(otto.control_opt("rail:open").is_none());
+    assert!(otto.user_click(at(otto.control("bar:close"), 0.5, 0.5))["state"]["sidebar"].is_null());
+    let (open, rail) = (otto.control("rail:open"), otto.control("rail:tasks"));
+    assert!(open[0] >= rail[0] - 1. && open[0] + open[2] <= rail[0] + rail[2] + 9., "{open:?} {rail:?}");
+    assert_eq!(otto.user_click(at(open, 0.5, 0.5))["state"]["sidebar"], "tasks");
+    assert!(otto.user_key("cmd-shift-l")["state"]["sidebar"].is_null());
+    assert_eq!(otto.user_key("cmd-shift-l")["state"]["sidebar"], "tasks");
+}
+
 /// A workspace keeps what is open in it: made with +, a terminal in a folder, closed with × and
 /// opened from the list; and closed, then after a restart, opened from the list again.
 #[test]
@@ -7265,11 +7351,11 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
         let state = o.call(json!({"cmd": "state"}));
         state["drawer"]["agents"]["1"]["lines"].as_array()?.iter().any(|l| l == "hi").then_some(())
     });
-    // ⌘L gives the keyboard back; ⌘⇧L closes the drawer and opens it again.
+    // ⌘L gives the keyboard back; ⌘⇧R closes the drawer and opens it again.
     assert_eq!(otto.user_key("cmd-l")["mode"], "normal");
-    let closed = otto.user_key("cmd-shift-l");
+    let closed = otto.user_key("cmd-shift-r");
     assert_eq!((&closed["state"]["talk"]["open"], &closed["drawer"]["body"]), (&json!(false), &json!(null)));
-    assert_eq!(otto.user_key("cmd-shift-l")["state"]["talk"]["open"], true);
+    assert_eq!(otto.user_key("cmd-shift-r")["state"]["talk"]["open"], true);
     // ⌘⌃1 selects Home, ⌘⌃2 the workspace: no chat. ⌘⌃3 the task again, its chat as the drawer was.
     assert_eq!(otto.user_key("cmd-ctrl-1")["state"]["talk"], Value::Null);
     assert_eq!(otto.user_key("cmd-ctrl-2")["state"]["talk"], Value::Null);
@@ -7344,7 +7430,7 @@ fn the_agent_chip_brings_a_closed_conversation_back() {
 
     // Closed by the user: the chip, with what the agent does. One tab, so no second row: it
     // is on the top row, right of the spaces (Home, the workspace, the task's).
-    let closed = otto.user_key("cmd-shift-l");
+    let closed = otto.user_key("cmd-shift-r");
     let chip = closed["agent_chip"].clone();
     let said = json!([chip["task"], chip["space"], chip["state"], chip["line"], chip["short"]]);
     assert_eq!(said, json!([1, 2, "running", "Working", false]), "{chip}");
@@ -7357,13 +7443,13 @@ fn the_agent_chip_brings_a_closed_conversation_back() {
         let theirs = otto.click(point, 1);
         assert_eq!((&theirs["state"]["talk"]["open"], &theirs["mode"]), (&json!(false), &json!("normal")), "{theirs}");
     }
-    // The user's click on the chip: the conversation, with the keyboard, as ⌘⇧L. The chip goes.
+    // The user's click on the chip: the conversation, with the keyboard, as ⌘⇧R. The chip goes.
     let opened = otto.user_click(centre(&chip["rect"]));
     let shown = (&opened["state"]["talk"]["open"], &opened["mode"], &opened["agent_chip"]);
     assert_eq!(shown, (&json!(true), &json!("talk"), &Value::Null), "{opened}");
     assert!(opened["drawer"]["body"].is_array());
     // Closed again: the user's click on the selected space opens it too.
-    assert_eq!(otto.user_key("cmd-shift-l")["agent_chip"]["line"], "Working");
+    assert_eq!(otto.user_key("cmd-shift-r")["agent_chip"]["line"], "Working");
     let opened = otto.user_click(at(space, 0.5, 0.5));
     assert_eq!((&opened["state"]["talk"]["open"], &opened["mode"]), (&json!(true), &json!("talk")), "{opened}");
 
@@ -7371,7 +7457,7 @@ fn the_agent_chip_brings_a_closed_conversation_back() {
     // with the conversation open.
     let two = otto.user_key("cmd-t");
     assert_eq!((&two["spaces"][2]["tabs"], &two["agent_chip"]), (&json!([1, 2]), &Value::Null), "{two}");
-    let closed = otto.user_key("cmd-shift-l");
+    let closed = otto.user_key("cmd-shift-r");
     let (drawn, tab) = (rect(&closed["agent_chip"]["rect"]), rect(&closed["tabs"][2]));
     assert_eq!(closed["agent_chip"]["short"], false);
     assert!(drawn[1] >= tab[1] && drawn[1] + drawn[3] <= tab[1] + tab[3], "{drawn:?} on the tab row {tab:?}");
@@ -7398,7 +7484,7 @@ fn the_agent_chip_brings_a_closed_conversation_back() {
     assert_eq!(opened["state"]["talk"]["open"], true, "{opened}");
 
     // Workspace: no conversation, no chip, whatever the drawer was.
-    otto.user_key("cmd-shift-l");
+    otto.user_key("cmd-shift-r");
     assert_eq!(otto.user_key("cmd-ctrl-1")["agent_chip"], Value::Null);
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
@@ -7482,7 +7568,7 @@ fn a_new_task_from_home_opens_its_space_and_takes_no_tab_of_a_workspace() {
     let shown = otto.user_key("cmd-ctrl-3");
     assert_eq!((&shown["state"]["talk"]["task"], &shown["state"]["talk"]["open"]), (&json!(1), &json!(true)));
     // Closed, it stays closed.
-    otto.user_key("cmd-shift-l");
+    otto.user_key("cmd-shift-r");
     let closed = otto.user_key("cmd-ctrl-5");
     assert_eq!((&closed["state"]["talk"]["open"], &closed["state"]["talk"]["task"]), (&json!(false), &json!(2)));
     // A click on a task's row: its space, and the drawer on it.
@@ -7491,7 +7577,7 @@ fn a_new_task_from_home_opens_its_space_and_takes_no_tab_of_a_workspace() {
     assert_eq!((&clicked["state"]["active"], &clicked["state"]["talk"]["task"]), (&json!(1), &json!(1)));
 
     // The user's drag of a second-row tab onto a task on the top row moves it there.
-    otto.user_key("cmd-shift-l");
+    otto.user_key("cmd-shift-r");
     otto.user_key("cmd-ctrl-2");
     otto.user_key("cmd-t");
     let from = rect(&otto.drawn()["tabs"][0]);
@@ -7650,8 +7736,8 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     });
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.wait_for("nothing listed", |o| (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == 0).then_some(()));
-    otto.user_key("cmd-shift-l");
-    otto.user_key("cmd-shift-l");
+    otto.user_key("cmd-shift-r");
+    otto.user_key("cmd-shift-r");
     let reading = otto.user_start();
     assert_eq!((&reading["mode"], &reading["state"]["talk"]["task"]), (&json!("talk"), &json!(1)), "{reading}");
     let argv = otto.wait_for("claude --resume, read first", |_| agent_argv(&bin, "claude"));
@@ -10123,7 +10209,7 @@ fn agent_mode_brings_a_kept_level_back_only_as_an_offer_the_user_takes() {
     let pass = pass_of(&again);
     // Room for the panes' headers: the Tasks section and the chat closed.
     again.call(json!({"cmd": "section", "section": "tasks"}));
-    again.user_key("cmd-shift-l");
+    again.user_key("cmd-shift-r");
     let offer = |o: &Otto, pane: u64| o.control_opt(&format!("agent-offer:{pane}"));
     // A client's fill of Notes, the same app: Off, and no offer.
     again.call(json!({"cmd": "focus", "pane": notes}));
@@ -11296,8 +11382,8 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     assert_eq!(resumed["state"]["listen"]["status"], "on", "{resumed}");
     assert!(resumed["listen_lines"].as_array().unwrap().iter().any(|l| l["paused_ms"].is_u64()), "{resumed}");
 
-    // No × of its own: ⌘⇧L closes the drawer on it; the dot in the pane's header shows it again.
-    otto.user_key("cmd-shift-l");
+    // No × of its own: ⌘⇧R closes the drawer on it; the dot in the pane's header shows it again.
+    otto.user_key("cmd-shift-r");
     let closed = otto.drawn();
     assert!(closed["listen_rects"].get("listen-view").is_none(), "{}", closed["listen_rects"]);
     otto.user_click(at(otto.listen_rect("listen-header"), 0.5, 0.5));
@@ -11324,7 +11410,7 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     assert_eq!((&closed["state"]["listen"], pane_ids(&closed)), (&Value::Null, vec![2, 3]), "{closed}");
 }
 
-/// The owner: with no conversation, ⌘⇧L opens the transcript in this drawer, as a click on the
+/// The owner: with no conversation, ⌘⇧R opens the transcript in this drawer, as a click on the
 /// rail does; it does not jump to the tab of the pane being heard, in another workspace.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
@@ -11333,7 +11419,7 @@ fn the_users_toggle_opens_the_transcript_here_from_another_workspace() {
     otto.call(json!({"cmd": "split"}));
     let on = otto.user_click(at(otto.listen_rect("listen-start:1"), 0.5, 0.5));
     assert_eq!(on["state"]["listen"]["source"], json!({"pane": 1}), "{on}");
-    otto.user_key("cmd-shift-l");
+    otto.user_key("cmd-shift-r");
     let away = otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
     let selected = |reply: &Value| -> Value {
         let spaces = reply["spaces"].as_array().cloned().unwrap_or_default();
@@ -11341,7 +11427,7 @@ fn the_users_toggle_opens_the_transcript_here_from_another_workspace() {
     };
     let (tab, space) = (away["state"]["active"].clone(), selected(&away));
     assert_eq!(space["kind"], "workbook", "{}", away["spaces"]);
-    let shown = otto.user_key("cmd-shift-l");
+    let shown = otto.user_key("cmd-shift-r");
     assert_eq!((&shown["state"]["active"], selected(&shown)), (&tab, space), "no jump to the pane's tab");
     otto.listen_rect("listen-view");
 }
@@ -11414,8 +11500,8 @@ fn a_rail_of_twenty_tasks_scrolls_and_keeps_the_transcript_in_the_window() {
     let last = *rail_tasks(&drawn).last().expect("tasks");
     check(&drawn, last);
     // Closed and opened again (the rail drawn anew, its first frame's bounds stale): still in view.
-    otto.user_key("cmd-shift-l");
-    otto.user_key("cmd-shift-l");
+    otto.user_key("cmd-shift-r");
+    otto.user_key("cmd-shift-r");
     check(&otto.drawn(), last);
     // Wheeled to the top, then the keys onto the rail (on the selected task): scrolled to it again.
     let first = *rail_tasks(&otto.drawn()).first().expect("tasks");
@@ -11567,8 +11653,8 @@ fn the_idle_transcript_lists_today_and_only_the_users_pick_starts_one_of_an_app(
     ];
     let otto = Otto::launch_with("listen-idle", &env);
     otto.call(json!({"cmd": "split"}));
-    // No conversation: ⌘⇧L opens the transcript, idle; Today lists the finished file alone.
-    otto.user_key("cmd-shift-l");
+    // No conversation: ⌘⇧R opens the transcript, idle; Today lists the finished file alone.
+    otto.user_key("cmd-shift-r");
     otto.listen_rect("listen-idle");
     let listed = otto.wait_for("today's transcripts", |o| {
         let state = o.call(json!({"cmd": "state"}));
@@ -11596,11 +11682,11 @@ fn the_idle_transcript_lists_today_and_only_the_users_pick_starts_one_of_an_app(
     assert!(!state.to_string().contains("made-up words"), "the file's text reached the state");
     otto.user_click(at(otto.listen_rect("listen-back"), 0.5, 0.5));
     // Put away, the file gone meanwhile, opened again: Today is read anew, not what it last listed.
-    otto.user_key("cmd-shift-l");
+    otto.user_key("cmd-shift-r");
     assert!(otto.drawn()["listen_rects"].get("listen-idle").is_none(), "{}", otto.drawn()["listen_rects"]);
     std::fs::remove_file(home.join("transcripts").join(&name)).unwrap();
     std::thread::sleep(Duration::from_millis(1_500));
-    otto.user_key("cmd-shift-l");
+    otto.user_key("cmd-shift-r");
     otto.listen_rect("listen-idle");
     otto.wait_for("Today without the file", |o| {
         let state = o.call(json!({"cmd": "state"}));

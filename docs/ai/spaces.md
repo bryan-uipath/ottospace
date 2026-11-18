@@ -173,11 +173,12 @@ tab never saved with ⌘⇧S is gone), and a tab closed with ⌘⇧W.
   Workspaces). Home keeps its one empty tab.
 - **One selection.** The selected space is the tab on show's. Selecting a space shows the tab it
   showed last. The drawer is only ever on the selected space's conversation: a task's (the one in front, with several) or a
-  session's agent; none for a workspace. ⌘⇧L opens and closes the drawer; switching spaces keeps
-  it open or closed. Closed on a conversation, with nothing else in the drawer's place, the
+  session's agent; none for a workspace. ⌘⇧R collapses the drawer into its rail and opens it
+  again (below, "Collapse"); switching spaces keeps it open or collapsed. Collapsed on a
+  conversation, with nothing else in the drawer's place, the
   **agent chip** (`Model::agent_chip`) is at the end of the tab row (the top row, for a space of
   one tab): the badge, the dial's marker and what the agent does. The user's click on it, or on
-  the selected space (`SpaceClick`), opens the conversation as ⌘⇧L does; a client's click only
+  the selected space (`SpaceClick`), opens the conversation as ⌘⇧R does; a client's click only
   selects. Selecting starts nothing: only `TalkStart` (and the user's ↵ on a new task) starts or
   resumes an agent.
 - **Hide** (`SpaceHide`, × on the space) takes a space off the row. Nothing ends: agent, tabs,
@@ -402,13 +403,17 @@ shows, a column at its right edge, replacing the strip.
 - **Drawn** (`drawer_rail.rs`): 48 points wide, inside the drawer's width. Each task's badge
   with its state's dot, then +, a new task here; at the foot, a divider and the transcript's
   waveform: grey while idle, in the accent while one is on, a red dot while it records. The
-  selected item is lifted with an accent edge; the one list mode's keys are on is ringed. Shown
-  with the transcript or a conversation, not over the new-task box, a brief beside the tabs or
-  the inspector (they take the drawer, and its keys). The tasks and + scroll (the owner,
+  selected item is lifted with an accent edge (none while collapsed); the one list mode's keys
+  are on is ringed. Always shown (the owner, 2026-11-17: "we should always have the right rail
+  visible now"): beside the transcript, a conversation, the new-task box, a brief, a capture's
+  draft or the inspector, and alone while the drawer is collapsed; on Home and in an empty
+  workspace too, with only +. A click on an item beside the inspector closes it, beside the
+  new-task box puts its line aside (`compose_kept`); beside a capture's draft the draft stays
+  until kept or discarded (it is the user's work in progress). The tasks and + scroll (the owner,
   2026-11-17: thirteen or more pushed the transcript below the window); the divider and the
   transcript stay at the foot, always in view. The item a selection or list mode's keys move to
   is scrolled into view once; a wheel may move it out. Sneak labels only on what shows. With no
-  conversation, the user's ⌘⇧L opens this drawer on the transcript, as a click on it does (no
+  conversation, the user's ⌘⇧R opens this drawer on the transcript, as a click on it does (no
   jump to its pane's tab, the owner 2026-11-17). Idle, it shows "Transcribe a window…" and Today
   (`transcripts.md`, "The idle view").
 - **Selected** (`Model::rail_selected`): the transcript while it is shown, else the task in
@@ -420,10 +425,41 @@ shows, a column at its right edge, replacing the strip.
   move, ↵ shows, ← or Esc back to the pane. Sneak labels: `drawer-rail:transcript`,
   `drawer-rail:<id>`, `drawer-rail:new`.
 - **Who**: the user alone. `RailSelect`, `TalkCycle` and `ListenShow` (the pane header's dot,
-  the dot on its tab or space) are refused from a client (`RAIL_USERS`); a client's ⌘⇧L leaves the
+  the dot on its tab or space) are refused from a client (`RAIL_USERS`); a client's ⌘⇧R leaves the
   transcript shown.
-- **State**: `drawer.rail`, each `kind`, `id`, `section`, `selected`, `rect`. Never a
-  transcript's text.
+- **State**: `drawer.rail`, each `kind`, `id`, `section`, `selected`, `rect`; `drawer.collapsed`.
+  Never a transcript's text.
+
+## Collapse (built)
+
+The owner (2026-11-17): "how do i close the 'transcript' pane? there isn't a slide-in/collapse
+icon"; "for both the left pane and right pane we should have a <- and -> slide in arrow"; "we
+should have shortcut keys visible there"; "we should always have the right rail visible now".
+
+- **Collapsed is closed.** The drawer is collapsed (`Model::drawer_collapsed`) when nothing is in
+  its place: no transcript shown, no open conversation, no new-task box, brief, capture's draft
+  or inspector. There is no other closed state: the rail stays. The transcript records on, the
+  agents work on, each rail item keeps its dot. Panes widen by the drawer's width less the rail's.
+- **The arrows**, one button for both sides (`slide.rs`), each with its key's cap: in a header
+  beside it while the header is hovered (shown always, it cut the transcript's clock and crowded the Tasks header), on a rail under it, always: the drawer's → at the right end of
+  the transcript's header and of a conversation's (the conversation's × was this), tooltip
+  "Collapse into the rail · ⌘⇧R"; the collapsed rail's ← at its foot, "Open the drawer · ⌘⇧R",
+  only while ⌘⇧R would open something (`drawer_opens`: a conversation, or the transcript); the
+  sidebar's ← at the right end of its header (its × was this), "Collapse into the rail · ⌘⇧L";
+  the left rail's → at its foot while the bar is collapsed, "Open the sidebar · ⌘⇧L".
+- **Keys** (the owner): ⌘⇧R is the drawer's (all that ⌘⇧L did: collapse or open the
+  conversation; on the transcript, collapse; with no conversation, the transcript). ⌘⇧L is the
+  sidebar's: `ToggleSection` of `Model::sidebar_toggled`, the open section (it closes the bar),
+  else the one open last, else Repos. The key reference lists both; `keys.json`'s `talk_toggle`
+  (⌘⇧L's count) is not read: the key changed, so it is learned anew as `drawer_toggle`.
+- **Opened again** by the user's rail click, ⌘⇧R, ←, ⌘⌥] / ⌘⌥[ or the agent chip.
+- **Who.** The drawer: the user alone. A client's `TalkToggle` (its ⌘⇧R, a click on → or ←) is
+  refused, and so is its ⌘L while collapsed (`DRAWER_USERS`); the reply's `notice` says so. The
+  sidebar stays a client's to open and close (`section`), as before.
+- **Kept**: `layout.json` keeps the conversation's `open` (the drawer collapsed on it or not) and
+  the section; the sidebar's last section is not kept.
+- **Sneak and controls**: `talk:talk-close`, `listen-collapse`, `drawer-rail:open`, `bar:close`,
+  `rail:open`.
 - Property rules: the tasks by urgency, each once, then the transcript, there exactly while it
   can be had; sections in order; the transcript selected while shown; the keys on the rail only on an
   item of it; after another's step in the same space an item still on the rail stays selected,

@@ -1,8 +1,8 @@
 //! The drawer's right rail (`docs/ai/spaces.md`, "The drawer's rail"): a narrow column at the
 //! drawer's right edge, one item for each thing the drawer can show here, in two sections. On
 //! top this workspace's tasks, the most urgent first; below a divider what is the same in every
-//! workspace: the transcript, idle or recording. Always shown with the drawer. The selected item
-//! is what the drawer shows; only the user changes it.
+//! workspace: the transcript, idle or recording. Always shown: with the drawer open, or the
+//! drawer collapsed into it. The selected item is what the drawer shows; only the user changes it.
 
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +11,8 @@ use crate::tasks::{State, TaskId};
 
 /// Why a client's choice on the rail is refused.
 pub const RAIL_USERS: &str = "only the user switches what the drawer shows";
+/// Why a client's ⌘⇧R, or its click on the drawer's → or ←, is refused.
+pub const DRAWER_USERS: &str = "only the user collapses or opens the drawer";
 
 /// What an item of the rail stands for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,21 +66,43 @@ impl Model {
         shown.filter(|item| rail.contains(item))
     }
 
-    /// Whether the rail is drawn: it has items, and the drawer shows the transcript (idle or on)
-    /// or a conversation, not the new-task box, a capture's draft or the inspector in its place.
-    pub fn rail_drawn(&self) -> bool {
+    /// The drawer is collapsed into its rail: nothing is in its place, neither the transcript, a
+    /// conversation, the new-task box, a brief, a capture's draft nor the inspector.
+    pub fn drawer_collapsed(&self) -> bool {
         let talk = self.talk.as_ref().is_some_and(|talk| talk.open);
         let boxed = self.compose.is_some() || self.welcome();
-        let elsewhere = self.inspector.is_some() || self.capture.is_some();
-        !elsewhere && !self.rail().is_empty() && (self.listen.shown || (talk && !boxed))
+        let elsewhere = self.inspector.is_some() || self.capture.is_some() || self.brief.is_some();
+        !(self.listen.shown || talk || boxed || elsewhere)
+    }
+
+    /// The selected item while the drawer's place shows it: not while collapsed, nor while the
+    /// inspector, a capture's draft or the new-task box is there. What the rail lifts.
+    pub fn rail_shown(&self) -> Option<RailItem> {
+        let taken = self.inspector.is_some() || self.capture.is_some();
+        let boxed = self.compose.is_some() || self.welcome();
+        let talk = self.talk.as_ref().is_some_and(|talk| talk.open);
+        self.rail_selected().filter(|item| match item {
+            RailItem::Transcript => self.listen.shown && !taken,
+            RailItem::Task { .. } => !self.listen.shown && !taken && !boxed && talk,
+        })
+    }
+
+    /// Collapsed, with something the user's ⌘⇧R would open: the conversation, else the transcript.
+    pub fn drawer_opens(&self) -> bool {
+        self.drawer_collapsed() && (self.talk.is_some() || self.listen_item())
     }
 
     /// The user's choice of an item: the drawer shows it, open. The transcript is shown here,
     /// in this space's drawer (its source pane's tab is not brought up); a task is put in front.
-    /// An item not on the rail: nothing.
+    /// The inspector closes and the new-task box's line is kept: they were in its place. A
+    /// capture's draft stays until kept or discarded. An item not on the rail: nothing.
     pub(super) fn rail_select(&mut self, item: RailItem, effects: &mut Vec<Effect>) {
         if !self.rail().contains(&item) {
             return;
+        }
+        self.inspector = None;
+        if self.compose_host() == Some(super::Host::Drawer) {
+            self.put_compose_aside();
         }
         match item {
             RailItem::Transcript => {
@@ -97,13 +121,13 @@ impl Model {
     }
 
     /// The next (positive) or previous item of the rail, from the one selected. It wraps. None
-    /// selected on a drawn rail (a session's space: no task in front): from the top, or the foot.
+    /// selected (a session's space: no task in front): from the top, or the foot.
     pub(super) fn rail_cycle(&mut self, delta: i32, effects: &mut Vec<Effect>) {
         let rail = self.rail();
         let from = match self.rail_selected().and_then(|item| rail.iter().position(|it| *it == item)) {
             Some(at) => at as i64,
             // Just above the top, or on it: a step lands on the first, or wraps to the last.
-            None if self.rail_drawn() => {
+            None if !rail.is_empty() => {
                 if delta > 0 {
                     -1
                 } else {
@@ -122,8 +146,8 @@ mod tests {
     use super::*;
     use crate::Axis;
     use crate::features::{Feature, Features};
-    use crate::listen::Source;
-    use crate::model::{Action, Kind, Origin};
+    use crate::listen::{Source, Status};
+    use crate::model::{Action, Kind, Origin, Section};
     use crate::tasks::State;
 
     /// A workspace of three tasks, the last in front, and a terminal pane (1) the fixture may hear.
@@ -163,7 +187,7 @@ mod tests {
         m.update(Action::OpenCompose { text: "one".into() });
         m.update(Action::ComposeSubmit { open: true });
         assert_eq!(m.rail(), [task(1)]);
-        assert!(m.rail_drawn(), "one item shows the rail");
+        assert!(!m.drawer_collapsed(), "the drawer on it");
         // Something can be heard: the transcript below, idle, in the other section.
         m.update(Action::ListenFixture.sent_by(Origin::System));
         assert_eq!(m.rail(), [task(1), RailItem::Transcript]);
@@ -187,7 +211,7 @@ mod tests {
         assert_eq!(m.rail(), [task(3), task(1), RailItem::Transcript]);
     }
 
-    /// The owner: "the transcript is still one click away". With no task, the user's ⌘⇧L opens
+    /// The owner: "the transcript is still one click away". With no task, the user's ⌘⇧R opens
     /// the drawer on the transcript idle, the rail beside it; a client's does not.
     #[test]
     fn with_no_task_the_users_toggle_opens_the_idle_transcript() {
@@ -198,12 +222,12 @@ mod tests {
         assert!(!m.listen.shown);
         m.update(Action::TalkToggle);
         assert_eq!(
-            (m.rail(), m.rail_selected(), m.rail_drawn()),
-            (vec![RailItem::Transcript], Some(RailItem::Transcript), true)
+            (m.rail(), m.rail_selected(), m.drawer_collapsed()),
+            (vec![RailItem::Transcript], Some(RailItem::Transcript), false)
         );
         assert!(m.listen.on.is_none());
         m.update(Action::TalkToggle);
-        assert!(!m.listen.shown && !m.rail_drawn());
+        assert!(!m.listen.shown && m.drawer_collapsed());
         // Nothing could be heard: nothing opens.
         let mut m = Model::default();
         m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
@@ -211,7 +235,7 @@ mod tests {
         assert!(!m.listen.shown);
     }
 
-    /// The owner: with no conversation, ⌘⇧L opens the transcript in this drawer, as a click on
+    /// The owner: with no conversation, ⌘⇧R opens the transcript in this drawer, as a click on
     /// the rail does; it does not jump to the tab of the pane being heard, in another workspace.
     #[test]
     fn the_toggle_opens_the_transcript_here_not_in_its_panes_tab() {
@@ -227,6 +251,93 @@ mod tests {
         assert!(m.talk.is_none());
         m.update(Action::TalkToggle);
         assert_eq!((m.rail_selected(), m.active, m.space().clone()), (Some(RailItem::Transcript), tab, space));
+    }
+
+    /// The owner: "how do i close the 'transcript' pane?". → (⌘⇧R) folds the drawer into its
+    /// rail: the transcript records on, the agents work on, the items stay. A rail click, ⌘⇧R or
+    /// ⌘⌥] opens it again. Only the user's.
+    #[test]
+    fn the_drawer_collapses_into_the_rail_and_only_the_user_opens_it() {
+        let mut m = three();
+        listen(&mut m);
+        let items = m.rail();
+        m.update(Action::TalkToggle);
+        assert!(m.drawer_collapsed() && m.drawer_opens());
+        assert_eq!((m.rail(), m.listen.on.as_ref().map(|on| on.status)), (items.clone(), Some(Status::On)));
+        // A client's ⌘⇧R, its keys into the conversation or its click on an item: refused.
+        for theirs in [Action::TalkToggle, Action::TalkKeys { on: true }, Action::RailSelect { item: task(1) }] {
+            assert!(m.refusal(&theirs, Origin::Socket).is_some(), "{theirs:?}");
+            m.update(theirs.clone().sent_by(Origin::Socket));
+            assert!(m.drawer_collapsed(), "{theirs:?}");
+        }
+        assert_eq!(m.refusal(&Action::TalkToggle, Origin::Socket), Some(DRAWER_USERS));
+        // The user's click on a task: open on its conversation. → again: collapsed, the agent on.
+        m.update(Action::RailSelect { item: task(1) });
+        assert!(!m.drawer_collapsed() && m.talk.as_ref().is_some_and(|talk| talk.open && talk.task.task() == Some(1)));
+        m.update(Action::TalkToggle);
+        assert!(m.drawer_collapsed() && m.talk.as_ref().is_some_and(|talk| talk.task.task() == Some(1)));
+        // ⌘⇧R opens it on the same; ⌘⌥] on the next item.
+        m.update(Action::TalkToggle);
+        assert_eq!((m.drawer_collapsed(), m.rail_selected()), (false, Some(task(1))));
+        m.update(Action::TalkToggle);
+        m.update(Action::TalkCycle { delta: 1 });
+        assert!(!m.drawer_collapsed());
+        // A client's ⌘⇧R does not collapse it either.
+        m.update(Action::TalkToggle.sent_by(Origin::Socket));
+        assert!(!m.drawer_collapsed());
+    }
+
+    /// The rail shows beside whatever is in the drawer's place: a click on an item there closes
+    /// the inspector, and puts the new-task box's line aside.
+    #[test]
+    fn a_rail_click_beside_the_inspector_or_the_box_shows_the_item() {
+        let mut m = three();
+        listen(&mut m);
+        m.update(Action::InspectorOpen { pane: 1, app: "Notes".into() });
+        m.update(Action::RailSelect { item: task(2) });
+        assert_eq!((m.inspector.is_none(), m.rail_selected()), (true, Some(task(2))));
+        m.update(Action::OpenCompose { text: "later".into() });
+        m.update(Action::RailSelect { item: RailItem::Transcript });
+        assert_eq!((m.compose.is_none(), m.rail_selected()), (true, Some(RailItem::Transcript)));
+        assert!(m.compose_kept.as_ref().is_some_and(|kept| kept.line.text() == "later"));
+        // Review: ⌘⇧R collapses the drawer whatever is in its place (the box, typed in, keeps it), and lifts nothing.
+        m.tasks.list.iter_mut().for_each(|task| task.materials = vec!["shot.png".into()]);
+        for open in [Action::InspectorOpen { pane: 1, app: "Notes".into() }, Action::BriefShow { id: 1 }] {
+            m.update(Action::RailSelect { item: task(1) });
+            m.update(Action::TalkToggle);
+            m.update(open.clone());
+            assert!(!m.drawer_collapsed() && m.talk.as_ref().is_some_and(|talk| !talk.open), "{open:?}");
+            m.update(Action::TalkToggle);
+            assert!(m.drawer_collapsed() && m.rail_shown().is_none(), "{open:?}");
+        }
+        m.update(Action::OpenCompose { text: "typed".into() });
+        m.update(Action::TalkToggle);
+        assert!(m.drawer_collapsed() && m.compose_kept.as_ref().is_some_and(|kept| kept.line.text() == "typed"));
+        // Beside the box, the front task is selected but not shown.
+        m.update(Action::RailSelect { item: task(1) });
+        assert_eq!(m.rail_shown(), Some(task(1)));
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!((m.rail_selected(), m.rail_shown()), (Some(task(1)), None));
+    }
+
+    /// ⌘⇧L and the left rail's → open the sidebar on the section open last; ← and ⌘⇧L close it.
+    #[test]
+    fn the_sidebar_toggle_opens_the_section_open_last() {
+        let mut m = Model::default();
+        assert_eq!((m.sidebar, m.sidebar_toggled()), (None, Section::Repos));
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        assert_eq!(m.sidebar_toggled(), Section::Tasks);
+        m.update(Action::ToggleSection { section: m.sidebar_toggled() });
+        assert_eq!((m.sidebar, m.sidebar_toggled()), (None, Section::Tasks));
+        m.update(Action::ToggleSection { section: m.sidebar_toggled() });
+        assert_eq!(m.sidebar, Some(Section::Tasks));
+        m.update(Action::CloseSidebar);
+        assert_eq!(m.sidebar_toggled(), Section::Tasks);
+        // A section no longer on the rail: its first.
+        m.update(Action::ToggleSection { section: Section::Marks });
+        m.update(Action::CloseSidebar);
+        m.update(Action::SetFeatures { features: Features::all().with(Feature::Marks, false) });
+        assert_eq!(m.sidebar_toggled(), Section::Repos);
     }
 
     #[test]
@@ -259,7 +370,7 @@ mod tests {
                 assert_eq!(m.rail_selected(), before, "{action:?} {origin:?}");
             }
         }
-        // Nor does a client's ⌘⇧L or its keys into the conversation put the transcript away, the
+        // Nor does a client's ⌘⇧R or its keys into the conversation put the transcript away, the
         // conversation open behind it or closed (review: closed, the toggle gave it the keys).
         m.update(Action::RailSelect { item: RailItem::Transcript });
         for closed in [false, true] {
@@ -296,12 +407,12 @@ mod tests {
         assert!(m.refusal(&Action::ListMove { delta: 1 }, Origin::Socket).is_some());
         m.update(Action::FocusDir { dir: Dir::Left });
         assert_eq!(m.focus_target(), Target::Pane(1));
-        // Review: → from the inspector put the keys on a rail it hides. Not drawn, not reached.
+        // The owner: the rail always shows, beside the inspector too: → past its rows reaches it.
         m.update(Action::InspectorOpen { pane: 1, app: "Notes".into() });
-        assert!(!m.rail_drawn());
         m.update(Action::FocusDir { dir: Dir::Right });
+        assert_eq!(m.focus_target(), Target::Inspector);
         m.update(Action::FocusDir { dir: Dir::Right });
-        assert!(!matches!(m.focus_target(), Target::DrawerRail(_)), "{:?}", m.focus_target());
+        assert!(matches!(m.focus_target(), Target::DrawerRail(_)), "{:?}", m.focus_target());
         m.update(Action::InspectorClose);
         m.update(Action::Focus { pane: 1 });
         // Its item gone (the flag off, the transcript with it): the keys leave it.
@@ -322,7 +433,7 @@ mod tests {
             m.update(Action::AgentExited { task: crate::talk::Subject::Task(id) }.sent_by(Origin::System));
         }
         let front = m.rail_selected();
-        assert!(m.rail_drawn() && front.is_some() && m.talk.as_ref().is_some_and(|talk| !talk.keys));
+        assert!(!m.drawer_collapsed() && front.is_some() && m.talk.as_ref().is_some_and(|talk| !talk.keys));
         m.update(Action::Focus { pane: 1 });
         m.update(Action::FocusDir { dir: Dir::Right });
         assert_eq!(Some(m.focus_target()), front.map(Target::DrawerRail));

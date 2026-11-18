@@ -160,7 +160,7 @@ step.
   change which tab a display shows: fold it back in, pick another, ⌘⇧O.
 - **⌘D, ⌘E, ⌘W** act on the focused pane, wherever it is. Closing a secondary window's last pane
   leaves its tab empty there, as in the main window.
-- **⌘L, ⌘N, ⌘⇧L, ⌘⌥] [** go to the drawer of the window you are typing in, for its workspace.
+- **⌘L, ⌘N, ⌘⇧R, ⌘⌥] [** go to the drawer of the window you are typing in, for its workspace.
   While that drawer is not drawn (main shows the same space), they go to the main window's
   drawer, and the keyboard with them.
 - **⌘⇧W** in a secondary window closes the tab, and the window with it; the keyboard goes to the
@@ -566,7 +566,7 @@ Each a stacked PR, shippable alone, behind `multi_monitor` from slice 3 on. They
    the cheat sheet and `docs/reference.md`. Focus moves between windows only by a click here.
 4. **Each window's drawer.** The secondary window draws its drawer and the drawer's rail for its
    workspace: tasks, the running transcript, a task's conversation (native or terminal), the
-   new-task box, the agent chip in the strip. ⌘L, ⌘N, ⌘⇧L, ⌘⌥] [ go to the window typed in.
+   new-task box, the agent chip in the strip. ⌘L, ⌘N, ⌘⇧R, ⌘⌥] [ go to the window typed in.
    `windows[].drawer` in the state and the SDK. A conversation moves between drawers when the
    main window selects (or leaves) the same workspace.
 5. **The rest of §5; `layout.json`.** The table's other rows (a replug sends nothing out, ⌘⇧O

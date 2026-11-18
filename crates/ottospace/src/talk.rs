@@ -527,7 +527,7 @@ impl Workspace {
     }
 
     /// The conversation's header: state, title, Chat | Terminal, then what can be done.
-    fn talk_header(&self, subject: &Subject, cx: &mut Context<Self>) -> Option<Div> {
+    fn talk_header(&self, subject: &Subject, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let shown = match subject {
             Subject::Task(id) => Some(self.model.tasks.get(*id)?),
             Subject::Session { .. } => None,
@@ -579,56 +579,54 @@ impl Workspace {
                     this.dispatch(Action::TaskStop { id: id.clone() }, this.input, window, cx);
                 }))
         });
-        let close = self.talk_button("talk-close", "×", "Close the chat (⌘⇧L); the agent goes on").on_click(
-            cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkToggle, this.input, window, cx))),
-        );
-        Some(
-            // As high as the top row above it.
-            div()
-                .h(px(crate::TOP_BAR))
-                .flex_none()
-                .pl_3()
-                .pr_1()
-                .flex()
-                .items_center()
-                .gap_2()
-                .border_b_1()
-                .border_color(rgb(theme::BORDER))
-                .child(match shown.and_then(|task| self.task_badge(task.id, 18.)) {
-                    Some(badge) => badge,
-                    None => home::dot(color),
-                })
-                .children(self.dial_marker(subject, cx))
-                // Model, mode, time and folder are on its hover; the model is at the drawer's foot too.
-                .child(
-                    div()
-                        .id("talk-title")
-                        .flex_1()
-                        .min_w(px(72.))
-                        .truncate()
-                        .text_sm()
-                        .child(title)
-                        .when(!facts.is_empty(), |d| {
-                            d.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(facts.clone()))))
-                        }),
-                )
-                // Where it runs, only when that is not its task's own folder: what it can see.
-                .children(line.folder.map(|folder| {
-                    let tip: gpui::SharedString = format!("The agent runs in {folder}").into();
-                    muted(folder)
-                        .id("talk-folder")
-                        .flex_shrink()
-                        .min_w_0()
-                        .truncate()
-                        .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
-                }))
-                .children(self.watch_chip(subject))
-                .children(self.view_switch(subject, cx))
-                .children(brief)
-                .children(adopt)
-                .children(stop)
-                .child(close),
-        )
+        // The agent goes on, its rail item with it.
+        let close = self.drawer_collapse("talk:talk-close", cx);
+        // As high as the top row above it.
+        let header = div()
+            .h(px(crate::TOP_BAR))
+            .flex_none()
+            .pl_3()
+            .pr_1()
+            .flex()
+            .items_center()
+            .gap_2()
+            .border_b_1()
+            .border_color(rgb(theme::BORDER))
+            .child(match shown.and_then(|task| self.task_badge(task.id, 18.)) {
+                Some(badge) => badge,
+                None => home::dot(color),
+            })
+            .children(self.dial_marker(subject, cx))
+            // Model, mode, time and folder are on its hover; the model is at the drawer's foot too.
+            .child(
+                div()
+                    .id("talk-title")
+                    .flex_1()
+                    .min_w(px(72.))
+                    .truncate()
+                    .text_sm()
+                    .child(title)
+                    .when(!facts.is_empty(), |d| {
+                        d.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(facts.clone()))))
+                    }),
+            )
+            // Where it runs, only when that is not its task's own folder: what it can see.
+            .children(line.folder.map(|folder| {
+                let tip: gpui::SharedString = format!("The agent runs in {folder}").into();
+                muted(folder)
+                    .id("talk-folder")
+                    .flex_shrink()
+                    .min_w_0()
+                    .truncate()
+                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
+            }))
+            .children(self.watch_chip(subject))
+            .children(self.view_switch(subject, cx))
+            .children(brief)
+            .children(adopt)
+            .children(stop)
+            .child(close);
+        Some(self.slide_head(header, crate::slide::DRAWER_HEAD, cx))
     }
 
     /// The conversation: the agent's terminal as it is drawn in a pane. Stage 1 of the one seam
@@ -860,6 +858,8 @@ impl Workspace {
         serde_json::json!({
             "body": shown.then(|| crate::rect(self.drawer.body.get())),
             "width": self.drawer.width,
+            // Folded into its rail: nothing in its place (`Model::drawer_collapsed`).
+            "collapsed": self.model.drawer_collapsed(),
             "agents": agents,
             "native": self.chats_snapshot(),
             // The shown conversation's foot, header folder and title hover (`talk::agent_line`).

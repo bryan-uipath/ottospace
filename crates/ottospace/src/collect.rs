@@ -966,14 +966,14 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// The right bar's frame: the drawer, as high as the window and as wide as it is.
+    /// The right bar's frame: the drawer, as high as the window and as wide as it is, less its rail.
     fn right_bar(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let at = self.bar_at.clone();
         div()
             .id("right-bar")
             .relative()
             .flex_none()
-            .w(px(self.drawer.width))
+            .w(px((self.drawer.width - crate::drawer_rail::WIDTH).max(0.)))
             .h_full()
             .flex()
             .flex_col()

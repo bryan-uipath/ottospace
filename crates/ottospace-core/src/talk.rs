@@ -36,7 +36,7 @@ impl Subject {
 pub struct Talk {
     /// Whose it is.
     pub task: Subject,
-    /// False: closed. The agent goes on; ⌘⇧L opens it again.
+    /// False: collapsed into the rail. The agent goes on; ⌘⇧R or its rail item opens it again.
     pub open: bool,
     /// The keyboard is in it: keys go to the agent, as in an app pane they go to the app.
     pub keys: bool,

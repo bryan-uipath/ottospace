@@ -14,15 +14,15 @@
 {"drag":{"rect":"drawer.body"},"at":[0,0.5],"by":[200,0]}
 {"shot":"narrow"}
 {"drag":{"rect":"drawer.body"},"at":[0,0.5],"by":[-160,0]}
-{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
 {"settle":300}
 {"shot":"closed-needs-you"}
-{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
 {"click":"task:2","at":[0.3,0.3]}
 {"click":"talk:talk-start"}
 {"until":"drawer.native.chats.2.transcript.live","is":false}
 {"shot":"ended"}
-{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
 {"cmd":"key","keys":"cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t","as":"user"}
 {"settle":300}
 {"shot":"closed-badge"}

@@ -1678,7 +1678,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::CaptureBack
             | Action::RestoreLayout { .. }
             | Action::ListenShow { on: true }
-            // The user's ⌘⇧L with no conversation is `ListenShow`.
+            // The user's ⌘⇧R with no conversation is `ListenShow`.
             | Action::TalkToggle
     )
 }
@@ -2591,7 +2591,7 @@ fn check_zones(m: &Model) -> Result<(), String> {
         ensure!(m.list.is_none() && m.mode() == Mode::List, "a rail and {:?} have the keyboard", m.mode());
     }
     if let Some(crate::model::zones::RailFocus::Right(item)) = m.rail_focus {
-        ensure!(m.rail().contains(&item) && m.rail_drawn(), "the keyboard on {item:?}, not on a drawn rail");
+        ensure!(m.rail().contains(&item), "the keyboard on {item:?}, not on the rail");
     }
     // The drawer's rail: this workspace's tasks by urgency, each once, then (below the divider)
     // the transcript, there whenever it can be had; the transcript selected while it is shown.
@@ -6502,7 +6502,7 @@ fn seed_835_nothing_opens_in_a_closing_workspace() {
     .unwrap();
 }
 
-/// The user's ⌘⇧L with no conversation shows the transcript in its pane's tab, as `ListenShow`
+/// The user's ⌘⇧R with no conversation shows the transcript in its pane's tab, as `ListenShow`
 /// does: the check let only `ListenShow` change the tab on show (seed 1254).
 #[test]
 fn seed_1254_the_users_talk_toggle_shows_the_transcripts_tab() {

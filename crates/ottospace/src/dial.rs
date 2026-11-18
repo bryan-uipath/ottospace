@@ -246,7 +246,7 @@ impl Workspace {
         let chip = self.model.agent_chip()?;
         let needs = chip.state == Pulse::NeedsYou;
         let colour = if needs || chip.state == Pulse::Error { theme::pulse(chip.state) } else { theme::MUTED };
-        let tip: gpui::SharedString = format!("{}\nOpen the conversation (⌘⇧L)", chip.line).into();
+        let tip: gpui::SharedString = format!("{}\nOpen the conversation (⌘⇧R)", chip.line).into();
         let pill = |name: &'static str| {
             let marker = self.dial_of(&chip.task).map(|dial| self.marker_face(&chip.task, &dial));
             // A task's badge; a session's, or one drawn in a terminal, its state's dot.
