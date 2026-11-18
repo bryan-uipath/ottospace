@@ -245,22 +245,25 @@ fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_still_spl
     };
 
     // A dialog the app opens over its parked window, off screen, as macOS places one by its
-    // parent: no pane, the app's pane as it was, the dialog over it at its own size.
+    // parent: no pane, the app's pane as it was, the dialog over it at its own size. 700×450 is
+    // no small window: only its subrole makes it a pop-up.
     canary.call(json!({"cmd": "dialog", "at": spot}));
     let dialog = wait_for("the dialog over the pane", || frame(1).filter(|f| over_pane(*f)));
-    assert!(close(dialog[2], 360.0) && close(dialog[3], 200.0), "its own size: {dialog:?}");
+    assert!(close(dialog[2], 700.0) && close(dialog[3], 450.0), "its own size: {dialog:?}");
     // A small standard window: the same.
     canary.call(json!({"cmd": "open_window", "fixed": [420.0, 300.0]}));
-    let small = wait_for("the small window", || frame(2));
+    wait_for("the small window", || frame(2));
     std::thread::sleep(Duration::from_millis(1200));
     assert_eq!(state()["tab_panes"], json!([[1]]), "no pane for either");
     assert_eq!(hosted(), 1);
     assert_eq!(pane(1), Some(body), "the app's pane kept its rect");
     assert_eq!(frame(1), Some(dialog), "the dialog stays where it was put");
-    assert!(close(frame(2).expect("small")[2], small[2]) && reachable(small), "the small one stays: {small:?}");
+    let small = frame(2).expect("the small window");
+    assert!(close(small[2], 420.0) && reachable(small), "the small one, at its size, on screen: {small:?}");
 
-    // A big standard window still gets a pane of its own, to the right.
-    canary.call(json!({"cmd": "open_window", "min": [body[2] * 0.6, body[3] * 0.6]}));
+    // A big standard window still gets a pane of its own, to the right. Wider than half the
+    // pane and taller than 400: not small on any screen.
+    canary.call(json!({"cmd": "open_window", "min": [body[2] * 0.6, 420.0]}));
     wait_for("the big window's pane", || (state()["tab_panes"] == json!([[1, 2]])).then_some(()));
     assert_eq!(hosted(), 2);
     assert_eq!(state()["state"]["panes"][1]["kind"]["title"], "Canary 4");

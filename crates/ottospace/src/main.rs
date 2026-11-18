@@ -3478,7 +3478,8 @@ impl Workspace {
         let pid = hosted.pid;
         if !self.known.iter().any(|(p, _)| *p == pid) {
             // Its dialogs open now too: only those that open later are judged (`adopt_new_windows`).
-            let ids = ax::Window::all_of(pid).iter().filter_map(ax::Window::id).collect();
+            let judged = |w: &ax::Window| rules::judged(&w.subrole().unwrap_or_default());
+            let ids = ax::Window::all_of(pid).iter().filter(|w| judged(w)).filter_map(ax::Window::id).collect();
             self.known.push((pid, ids));
         }
         let effects = self.dispatch(action, self.input, window, cx);
@@ -3727,16 +3728,20 @@ impl Workspace {
         }
     }
 
-    /// Hosts windows that appeared since we started watching their app (e.g. undocked DevTools),
-    /// each to the right of its app's newest pane. A pop-up stays a free window over that pane
-    /// (`rules::place`). Each window is judged once, when first seen.
+    /// Hosts windows that appeared since we started watching their app (e.g. a second browser
+    /// window), each to the right of its app's newest pane. A pop-up stays a free window over that
+    /// pane (`rules::place`). Each window is judged once, when first seen as standard or a dialog.
     fn adopt_new_windows(&mut self, window: &Window, cx: &mut Context<Self>) {
         let mut fresh = Vec::new();
         for (pid, seen) in &mut self.known {
             for window in ax::Window::all_of(*pid) {
+                // A toast or popover is looked at again next time: it may become a window.
+                let judged = || window.quick(|w| rules::judged(&w.subrole().unwrap_or_default()));
                 if let Some(id) = window.id()
-                    && seen.insert(id)
+                    && !seen.contains(&id)
+                    && judged()
                 {
+                    seen.insert(id);
                     fresh.push(window);
                 }
             }
@@ -3748,22 +3753,24 @@ impl Workspace {
             // The pane it would split, if drawn: a background tab's bounds are stale.
             let pane = beside.filter(|id| drawn.contains(id)).and_then(|id| self.hosted.get(&id));
             let pane = pane.map(|h| (h.bounds.get(), h.min_width)).filter(|(b, _)| f32::from(b.size.width) >= 1.0);
-            let frame = ax_window.frame();
+            // A short wait for each read: a hung app costs a blink, not seconds.
+            let (frame, modal, sheet) = ax_window.quick(|w| (w.frame(), w.modal(), w.sheet()));
             let shape = rules::Shape {
-                modal: ax_window.modal(),
-                sheet: ax_window.sheet(),
+                modal,
+                sheet,
                 size: frame.map(|f| [f.size.width, f.size.height]),
                 pane: pane.map(|(b, _)| [f32::from(b.size.width) as f64, f32::from(b.size.height) as f64]),
                 min_width: pane.and_then(|(_, min)| min),
             };
-            match window_place(&ax_window, &shape) {
+            match ax_window.quick(|w| window_place(w, &shape)) {
                 rules::Place::Split => {
                     if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
                         let action = Action::Adopt { kind: hosted.kind(), beside, seen: None };
                         self.attach(hosted, action, window, cx);
                     }
                 }
-                rules::Place::Float => {
+                // Only while its app has a pane: an app given back is left alone.
+                rules::Place::Float if beside.is_some() => {
                     let pane = pane.map(|(b, _)| recovery::to_frame(on_screen(b, window, cx)));
                     let screens = recovery::screens();
                     let to = frame
@@ -3774,7 +3781,7 @@ impl Workspace {
                     ax_window.raise_only();
                     trace::record("float", serde_json::json!({ "window": ax_window.id(), "moved": to.is_some() }));
                 }
-                rules::Place::Leave => {}
+                rules::Place::Float | rules::Place::Leave => {}
             }
         }
     }
@@ -3816,10 +3823,7 @@ impl Workspace {
                 && let Some(frame) = self.frames.get(id)
                 && drawn.contains(id)
             {
-                // Wider than asked: it refuses narrower. As wide: any width it refused is past.
-                let asked = rect.size.width;
-                hosted.min_width =
-                    if kept.width > asked + 1.0 { Some(kept.width) } else { hosted.min_width.filter(|m| *m <= asked) };
+                hosted.min_width = rules::refused_width(hosted.min_width, kept.width, rect.size.width);
                 let content = [rect.size.width as f32, rect.size.height as f32];
                 // The pane's size with its 1pt border.
                 let outer = frame.get().size;

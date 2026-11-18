@@ -102,12 +102,20 @@ pub enum Action {
 /// which leaves out panels, pop-ups and an app's floating controls.
 pub fn manages(user: &[Rule], window: &Facts) -> bool {
     match first(user, window) {
-        Some(Action::Manage | Action::Split) | None => window.subrole == STANDARD,
+        Some(Action::Manage) | None => window.subrole == STANDARD,
+        // A dialog a `split` rule put in a pane is one, for the capture key and marks too.
+        Some(Action::Split) => judged(window.subrole),
         Some(Action::Ignore | Action::Float) => false,
     }
 }
 
 const STANDARD: &str = "AXStandardWindow";
+
+/// True for the kinds of window `place` decides on: standard windows, dialogs and panels. Any
+/// other (a toast, a popover) is left alone, and looked at again in case it becomes one.
+pub fn judged(subrole: &str) -> bool {
+    subrole == STANDARD || POP_UP.contains(&subrole)
+}
 
 /// What the first rule that selects the window says, the user's rules before the built-in ones.
 fn first(user: &[Rule], window: &Facts) -> Option<Action> {
@@ -148,9 +156,9 @@ const SMALL: [f64; 2] = [600.0, 400.0];
 /// Where a new window of a hosted app goes. A sheet stays on its window. Then the first rule that
 /// selects it decides, both ways; else a dialog, a panel or a modal window floats, and so does a
 /// standard window under 600×400, under half its app's pane both ways, or whose split would
-/// leave its app's pane narrower or shorter than that pane's window kept. Other standard windows split.
+/// leave its app's pane narrower than that pane's window kept. Other standard windows split.
 pub fn place(user: &[Rule], window: &Facts, shape: &Shape) -> Place {
-    if shape.sheet {
+    if shape.sheet || !judged(window.subrole) {
         return Place::Leave;
     }
     match first(user, window) {
@@ -159,11 +167,8 @@ pub fn place(user: &[Rule], window: &Facts, shape: &Shape) -> Place {
         Some(Action::Float) => return Place::Float,
         Some(Action::Manage) | None => {}
     }
-    if POP_UP.contains(&window.subrole) || shape.modal {
+    if window.subrole != STANDARD || shape.modal {
         return Place::Float;
-    }
-    if window.subrole != STANDARD {
-        return Place::Leave;
     }
     let under = |size: [f64; 2], limit: [f64; 2]| size[0] < limit[0] && size[1] < limit[1];
     let half = shape.pane.map(|pane| [pane[0] / 2.0, pane[1] / 2.0]);
@@ -175,17 +180,25 @@ pub fn place(user: &[Rule], window: &Facts, shape: &Shape) -> Place {
 
 /// Where a floating pop-up's top left goes (global frames), or `None` to leave it: centred over
 /// its app's `pane` unless its middle already is over it, never above or left of the pane. With
-/// no pane drawn, it moves only if the user could not reach it: to the middle of `main`.
+/// no pane drawn, it moves only if the user could not reach it. Wherever it goes, out of reach
+/// (a pane partly off screen) becomes the middle of `main`.
 pub fn float_to(window: Frame, pane: Option<Frame>, screens: &[Frame], main: Frame) -> Option<(f64, f64)> {
-    let Some(pane) = pane else {
-        let back = crate::restore::destination(window, screens, main);
-        return (back != window).then_some((back.x, back.y));
-    };
-    let (x, y) = (window.x + window.w / 2.0, window.y + window.h / 2.0);
-    if (pane.x..=pane.x + pane.w).contains(&x) && (pane.y..=pane.y + pane.h).contains(&y) {
-        return None;
-    }
-    Some((pane.x + ((pane.w - window.w) / 2.0).max(0.0), pane.y + ((pane.h - window.h) / 2.0).max(0.0)))
+    let over = pane.filter(|pane| {
+        let (x, y) = (window.x + window.w / 2.0, window.y + window.h / 2.0);
+        !((pane.x..=pane.x + pane.w).contains(&x) && (pane.y..=pane.y + pane.h).contains(&y))
+    });
+    let to = over.map_or(window, |pane| {
+        let (x, y) = (pane.x + ((pane.w - window.w) / 2.0).max(0.0), pane.y + ((pane.h - window.h) / 2.0).max(0.0));
+        Frame { x, y, ..window }
+    });
+    let to = crate::restore::destination(to, screens, main);
+    (to != window).then_some((to.x, to.y))
+}
+
+/// The width a hosted window refuses to go below, after a check that asked it for `asked` and
+/// found it `kept`: wider than asked, that; as wide, any refusal wider than `asked` is past.
+pub fn refused_width(was: Option<f64>, kept: f64, asked: f64) -> Option<f64> {
+    if kept > asked + 1.0 { Some(kept) } else { was.filter(|width| *width <= asked) }
 }
 
 /// Rules that ship with ottospace, for windows known to break when moved. Measured: see
@@ -371,6 +384,10 @@ mod tests {
         // A dialog, or a small window, forced into a split.
         assert_eq!(place(&rules, &zoom("Settings", "AXDialog"), &tiny), Place::Split);
         assert_eq!(place(&rules, &zoom("Settings", "AXStandardWindow"), &tiny), Place::Split);
+        // Hosted, it counts as managed (the capture key, marks). A toast is never split.
+        assert!(manages(&rules, &zoom("Settings", "AXDialog")));
+        assert_eq!(place(&rules, &zoom("Settings", "AXUnknown"), &tiny), Place::Leave);
+        assert!(!manages(&rules, &zoom("Settings", "AXUnknown")));
         // A big standard window kept free, and never hosted with its app either.
         let workplace = zoom("Zoom Workplace", "AXStandardWindow");
         assert_eq!(place(&rules, &workplace, &beside([1400.0, 900.0])), Place::Float);
@@ -397,6 +414,18 @@ mod tests {
         // No pane drawn: moved only if out of reach.
         assert_eq!(float_to(Frame::new(10.0, 40.0, 400.0, 200.0), None, &[main], main), None);
         assert_eq!(float_to(off, None, &[main], main), Some((760.0, 440.0)));
+        // A pane mostly off screen: the middle of the main screen instead.
+        let away = Frame::new(1800.0, 1000.0, 1000.0, 800.0);
+        assert_eq!(float_to(off, Some(away), &[main], main), Some((760.0, 440.0)));
+    }
+
+    #[test]
+    fn the_width_a_window_refuses_is_what_it_kept_when_asked_for_less() {
+        assert_eq!(refused_width(None, 900.0, 600.0), Some(900.0));
+        // As wide as asked: it went to 700, so a refusal of 900 is past; one of 650 still holds.
+        assert_eq!(refused_width(Some(900.0), 700.0, 700.0), None);
+        assert_eq!(refused_width(Some(650.0), 700.0, 700.0), Some(650.0));
+        assert_eq!(refused_width(None, 700.5, 700.0), None, "a point of rounding is no refusal");
     }
 
     #[test]

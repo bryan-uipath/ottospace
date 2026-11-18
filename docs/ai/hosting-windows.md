@@ -74,8 +74,12 @@ its size, the app pane's size, the width that pane's window has refused to go be
   to go, or a `"do": "float"` rule. No pane, no stream: the window is moved, at its own size, to
   the middle of its app's pane (`rules::float_to`) unless its middle is already over it, and
   `AXRaise`d once without activating the app.
-- **Leave**: a sheet or a child window (macOS keeps it on its parent), an `ignore` rule, any other
-  subrole.
+- **Leave**: a sheet or a child window (macOS keeps it on its parent), an `ignore` rule. Any other
+  subrole (a toast, a popover) is not judged at all, a `split` rule or not, and is looked at again
+  each tick in case it becomes a window.
+
+Each window is judged once, at first sight: one that opens small and grows stays floating.
+A pop-up of an app with no pane left is not touched.
 
 AX has no minimum size. The width a window kept when its pane asked for less (read on the
 half-second check) stands for one; a window never squeezed has none, and splits.

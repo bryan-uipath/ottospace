@@ -95,9 +95,11 @@ impl Window {
             .or_else(|| Self::standard_of(pid).into_iter().find(|window| keep(window)))
     }
 
-    /// The window with this window-server id, if `pid` still has it: a dialog a rule put in a pane too.
+    /// The standard window or dialog (`rules::judged`: one a `split` rule may put in a pane) with
+    /// this window-server id, if `pid` still has it. Never a toast or popover.
     pub fn find(pid: i32, id: u32) -> Option<Self> {
-        Self::all_of(pid).into_iter().find(|w| w.id() == Some(id))
+        let judged = |w: &Self| ottospace_core::rules::judged(&w.subrole().unwrap_or_default());
+        Self::all_of(pid).into_iter().find(|w| w.id() == Some(id) && judged(w))
     }
 
     /// Runs `ask` with a short wait for the app (a quarter of a second a call, not AX's 6), then
