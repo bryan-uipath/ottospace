@@ -13,6 +13,10 @@ pub const MIN_THUMB: f32 = 24.;
 /// An overlay bar stays this long after the last scroll or hover, then fades for `FADE_MS`.
 pub const IDLE_MS: u64 = 1000;
 pub const FADE_MS: u64 = 200;
+/// How deep an edge fade reaches into the area, at most a quarter of it.
+pub const EDGE_FADE: f32 = 20.;
+/// Within this of its end a chat is on its latest: it follows, shows no Jump and no fade there.
+pub const LATEST: f32 = 4.;
 
 /// A scroll area along one axis.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -97,6 +101,16 @@ impl Extent {
         (self.at() + pages * self.viewport).clamp(0., self.max_offset())
     }
 
+    /// Which edges fade, `(start, end)`: those with more than `within` beyond them. Half a point
+    /// at least: that much is rounding.
+    pub fn beyond(&self, within: f32) -> (bool, bool) {
+        let (max, within) = (self.max_offset(), within.max(0.5));
+        if max < within || self.viewport.is_nan() || self.viewport <= 0. {
+            return (false, false);
+        }
+        (self.at() >= within, max - self.at() >= within)
+    }
+
     /// The offset after a step from the keyboard. `line`: how far one line goes.
     pub fn stepped(&self, step: Step, line: f32) -> f32 {
         let to = match step {
@@ -156,6 +170,32 @@ mod tests {
         for ((viewport, content, offset, track), thumb) in cases {
             assert_eq!(extent(viewport, content, offset).thumb(track), thumb, "{viewport} {content} {offset} {track}");
         }
+    }
+
+    #[test]
+    fn an_edge_fades_only_where_more_lies_beyond_it() {
+        // (viewport, content, offset) -> (start, end)
+        let cases = [
+            ((100., 400., 0.), (false, true)),
+            ((100., 400., 150.), (true, true)),
+            ((100., 400., 300.), (true, false)),
+            ((100., 400., 299.8), (true, false)),
+            ((100., 400., 900.), (true, false)),
+            ((100., 400., -20.), (false, true)),
+            // Content that fits, or nothing to measure: no fade.
+            ((100., 100.4, 0.), (false, false)),
+            ((100., 40., 0.), (false, false)),
+            ((0., 400., 0.), (false, false)),
+            ((f32::NAN, 400., 0.), (false, false)),
+            ((100., 400., f32::NAN), (false, true)),
+        ];
+        for ((viewport, content, offset), edges) in cases {
+            assert_eq!(extent(viewport, content, offset).beyond(0.), edges, "{viewport} {content} {offset}");
+        }
+        // A chat within `LATEST` of its end is on its latest: no fade at its foot.
+        assert_eq!(extent(100., 400., 297.).beyond(LATEST), (true, false));
+        assert_eq!(extent(100., 400., 295.).beyond(LATEST), (true, true));
+        assert_eq!(extent(100., 102., 0.).beyond(LATEST), (false, false));
     }
 
     #[test]

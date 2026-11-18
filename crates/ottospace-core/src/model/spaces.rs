@@ -657,7 +657,8 @@ impl Model {
             return;
         }
         let open = self.drawer_open || self.compose_host() == Some(Host::Drawer);
-        if open && self.compose_host() == Some(Host::Drawer) {
+        // Only the user's change takes the box they write in (seed 158804).
+        if open && self.compose_host() == Some(Host::Drawer) && origin == Origin::User {
             self.put_compose_aside();
         }
         // Not under an app, the list, visual mode or a picture being drawn on.

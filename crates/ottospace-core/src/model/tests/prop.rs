@@ -6701,6 +6701,50 @@ fn seed_23315_a_closed_workspace_ending_ends_its_panes_transcript() {
     .unwrap();
 }
 
+/// A client dismissed the task on show while the user wrote a new one: the drawer followed the
+/// space to its next conversation and put the box aside (seed 158804). Only the user's change
+/// takes the box.
+#[test]
+fn seed_158804_a_clients_dismissal_leaves_the_new_task_box() {
+    let none = || Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] };
+    let known = Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] };
+    replay(&[
+        Action::TaskAdd { title: "a".into(), priority: 2, state: State::Running, tab: None, assign: none() }.into(),
+        Action::TaskAdd { title: "b".into(), priority: 1, state: State::NeedsYou, tab: None, assign: none() }.into(),
+        Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known, open: false }.into(),
+        Action::SpaceOpen { space: Owner::Task { id: 3 } }.into(),
+        Action::TaskGo { id: Some(2) }.into(),
+        Action::Adopt { kind: Kind::Terminal, beside: Some(u32::MAX), seen: None }.into(),
+        Action::OpenCompose { text: "fix".into() }.into(),
+        by(Origin::Socket, Action::RowDismiss { id: 2 }),
+    ])
+    .unwrap();
+}
+
+/// The user's level for an app pane was written into its tab's mark while marks were off: they
+/// stay as stored (seed 7205).
+#[test]
+fn seed_7205_a_level_leaves_the_marks_while_they_are_off() {
+    let none = || Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] };
+    let known = Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] };
+    let slides =
+        Kind::App { window: 0, title: "deck".into(), bundle: Some("com.safari".into()), name: "Slides".into() };
+    replay(&[
+        Action::TaskAdd { title: "a".into(), priority: 2, state: State::Running, tab: None, assign: none() }.into(),
+        Action::TaskAdd { title: "b".into(), priority: 1, state: State::NeedsYou, tab: None, assign: none() }.into(),
+        Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known, open: false }.into(),
+        Action::SpaceOpen { space: Owner::Task { id: 3 } }.into(),
+        split(Axis::Down, Kind::Terminal),
+        split(Axis::Right, Kind::Terminal),
+        by(Origin::Socket, Action::Split { axis: Axis::Down, kind: Kind::Terminal }),
+        Action::Adopt { kind: slides, beside: None, seen: None }.into(),
+        Action::MarkToggle { of: MarkOf::Tab(None), uid: "u4".into(), cwds: vec![(4, "/tmp".into())] }.into(),
+        set_features(&["apps_section", "transcripts", "slots", "agent_mode"]).into(),
+        Action::AgentLevel { pane: Some(4), level: Level::Act }.into(),
+    ])
+    .unwrap();
+}
+
 /// A failed worktree's answer carries the repositories read again, as `SetRepos` does: a task
 /// follows its agent to where its session said. The check let only `SetRepos` and `WorktreeAdded`
 /// move one (seeds 53188 and 146342).
@@ -6738,3 +6782,4 @@ fn seed_53188_a_failed_worktrees_list_moves_a_task_with_its_agent() {
     ])
     .unwrap();
 }
+
