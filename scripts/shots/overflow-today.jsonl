@@ -33,7 +33,7 @@
 {"write": "home/transcripts/{DATE}-2230-google-chrome.md", "text": "# Transcript: Google Chrome, {DATE} 22:30\n\n- Started: {DATE} 22:30 (+00:00)\n- Ended: 22:50, 20 minutes\n- App: Google Chrome\n- Microphone: off\n- Started by: you\n\n> Heard on this Mac.\n\n- 22:30:05 **them**: Made-up line 30.\n"}
 {"click": "top:new_workspace"}
 {"cmd": "key", "keys": "cmd-d", "as": "user"}
-{"cmd": "key", "keys": "cmd-shift-l", "as": "user"}
+{"cmd": "key", "keys": "cmd-shift-r", "as": "user"}
 {"until": "state.transcripts.today", "len": 30}
 {"settle": 300}
 {"shot": "today"}
