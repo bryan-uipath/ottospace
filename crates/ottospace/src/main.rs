@@ -558,11 +558,10 @@ const PANE_HEADER: f32 = 28.;
 const HEADER_TITLE_MIN: f32 = 72.;
 
 /// Top-bar buttons: the name in the control's id (`top:split_right`), icon, tooltip, split
-/// direction, and whether it makes a new tab (no picker) instead. No + for a tab: ⌘T (the owner:
-/// two +s, workspace and tab, confused).
-const SPLITS: [(&str, &str, &str, Axis, bool); 2] = [
-    ("split_right", "icons/split-right.svg", "Split right…  ⌘E", Axis::Right, false),
-    ("split_down", "icons/split-down.svg", "Split down…  ⌘⇧E", Axis::Down, false),
+/// direction. No + for a tab, only ⌘T: two +s (workspace, tab) confused the owner.
+const SPLITS: [(&str, &str, &str, Axis); 2] = [
+    ("split_right", "icons/split-right.svg", "Split right…  ⌘E", Axis::Right),
+    ("split_down", "icons/split-down.svg", "Split down…  ⌘⇧E", Axis::Down),
 ];
 
 /// A rail cell's control id: `rail:tasks`. The Workspaces cell keeps `rail:workbook`, as the
@@ -1675,7 +1674,7 @@ impl Workspace {
             self.refresh_apps();
             self.offer_installed(cx);
         }
-        // A client's key, click or label at the user's draft, or at the drawer's ⌘⇧R, → or ←: its
+        // A client's key, click or label at the user's draft, or at the drawer's ⌘⇧R or →: its
         // reply's `notice` says why it did nothing.
         let said = [ottospace_core::capture::DRAFT_USERS, ottospace_core::model::rail::DRAWER_USERS];
         if let Some(why) =
@@ -4563,13 +4562,9 @@ impl Workspace {
         }
     }
 
-    /// A top-bar button: + makes a new tab with an empty pane; a split opens the picker.
-    pub(crate) fn top_button(&mut self, axis: Axis, new_tab: bool, window: &Window, cx: &mut Context<Self>) {
-        if new_tab {
-            self.dispatch(Action::NewEmptyTab, self.input, window, cx);
-        } else {
-            self.open_picker(axis, false, window, cx);
-        }
+    /// A top-bar split button: the picker.
+    pub(crate) fn top_button(&mut self, axis: Axis, window: &Window, cx: &mut Context<Self>) {
+        self.open_picker(axis, false, window, cx);
     }
 
     /// Opens the pane picker: a terminal, then each running app.
@@ -5067,7 +5062,7 @@ impl Workspace {
                     }),
                 ),
             );
-        self.slide_head(header, slide::BAR_HEAD)
+        header.id("bar-head")
     }
 
     /// The header's +: a new task in Tasks, a repository to list in Repos, a new workspace in Workspaces.
@@ -6535,10 +6530,10 @@ impl Workspace {
                 .child(self.controls.mark(format!("top:{name}")))
                 .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
         };
-        let splits = SPLITS.iter().enumerate().map(|(i, (name, icon, tip, axis, new_tab))| {
-            let (axis, new_tab) = (*axis, *new_tab);
+        let splits = SPLITS.iter().enumerate().map(|(i, (name, icon, tip, axis))| {
+            let axis = *axis;
             button(("split", i).into(), icon, name.to_string(), tip)
-                .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, new_tab, window, cx)))
+                .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, window, cx)))
         });
         let on = self.model.fill_display;
         let tip = if on { "Back from the whole display  ⌃⌘F" } else { "Fill the whole display  ⌃⌘F" };
@@ -7429,7 +7424,9 @@ impl Render for Workspace {
                     cx.notify();
                 }
             }))
-            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.top_button(Axis::Right, true, window, cx)))
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| {
+                this.dispatch(Action::NewEmptyTab, this.input, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &MoveTabToTask, window, cx| {
                 this.dispatch(Action::PaletteTasks, this.input, window, cx);
             }))

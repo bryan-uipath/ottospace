@@ -451,8 +451,8 @@ should have shortcut keys visible there"; "we should always have the right rail 
   sidebar's: `ToggleSection` of `Model::sidebar_toggled`, the open section (it closes the bar),
   else the one open last, else Repos. The key reference lists both; `keys.json`'s `talk_toggle`
   (⌘⇧L's count) is not read: the key changed, so it is learned anew as `drawer_toggle`.
-- **Opened again** by the user's rail click, ⌘⇧R, ←, ⌘⌥] / ⌘⌥[ or the agent chip.
-- **Who.** The drawer: the user alone. A client's `TalkToggle` (its ⌘⇧R, a click on → or ←) is
+- **Opened again** by the user's rail click, ⌘⇧R, ⌘⌥] / ⌘⌥[ or the agent chip.
+- **Who.** The drawer: the user alone. A client's `TalkToggle` (its ⌘⇧R, a click on →) is
   refused, and so is its ⌘L while collapsed (`DRAWER_USERS`); the reply's `notice` says so. The
   sidebar stays a client's to open and close (`section`), as before.
 - **Kept**: `layout.json` keeps the conversation's `open` (the drawer collapsed on it or not) and

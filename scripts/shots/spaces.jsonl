@@ -8,8 +8,8 @@
 {"cmd":"open_space","space":{"kind":"task","id":1}}
 {"shot":"one-tab-task"}
 {"cmd":"open_space","space":{"kind":"task","id":2}}
-{"cmd":"new_tab"}
-{"cmd":"new_tab"}
+{"cmd":"key","keys":"cmd-t","as":"user"}
+{"cmd":"key","keys":"cmd-t","as":"user"}
 {"cmd":"split"}
 {"shot":"multi-tab-task"}
 {"click":"space:0"}

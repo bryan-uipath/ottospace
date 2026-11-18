@@ -12,9 +12,6 @@ pub(crate) const RIGHT: &str = "icons/slide-right.svg";
 /// The sidebar's key and the drawer's, as their tooltips say.
 pub(crate) const SIDEBAR_KEY: &str = "⌘⇧L";
 pub(crate) const DRAWER_KEY: &str = "⌘⇧R";
-/// The headers that end in an arrow (`slide_head`): the drawer's and the sidebar's.
-pub(crate) const DRAWER_HEAD: &str = "drawer-head";
-pub(crate) const BAR_HEAD: &str = "bar-head";
 
 impl Workspace {
     /// A slide button: its arrow, its key in the tooltip. `control` is its control id; `tip` says
@@ -44,18 +41,13 @@ impl Workspace {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
     }
 
-    /// A header that ends in a slide button of `head`.
-    pub(crate) fn slide_head(&self, header: Div, head: &'static str) -> Stateful<Div> {
-        header.id(head)
-    }
-
-    /// The drawer's →, at the end of a header of `DRAWER_HEAD` (`slide_head`): collapsed into its rail, as ⌘⇧R does.
+    /// The drawer's →, at the end of its header: collapsed into its rail, as ⌘⇧R does.
     pub(crate) fn drawer_collapse(&self, control: &'static str, cx: &mut Context<Self>) -> Stateful<Div> {
         self.slide_button(control, (RIGHT, DRAWER_KEY), "Collapse into the rail")
             .on_click(cx.listener(|this, _, window, cx| this.drawer_toggle(window, cx)))
     }
 
-    /// ⌘⇧R, the drawer's → or the rail's ←, as whoever acts: a client's is refused.
+    /// ⌘⇧R or the drawer's →, as whoever acts: a client's is refused.
     pub(crate) fn drawer_toggle(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.dispatch(Action::TalkToggle, self.input, window, cx);
         cx.notify();

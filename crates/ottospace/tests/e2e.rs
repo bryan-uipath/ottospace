@@ -3861,6 +3861,7 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     for id in ["space:0", "top:new_workspace", "top:split_right", "top:split_down"] {
         assert!(ids.contains(&id), "no label for {id}: {ids:?}");
     }
+    assert!(!ids.contains(&"top:new_tab"), "no + for a tab: {ids:?}");
     for id in ["home:open_app", "home:terminal", "home-row:1", "home-node:1", "top:new_workspace"] {
         assert!(ids.contains(&id), "no label for {id}: {ids:?}");
     }
@@ -6952,8 +6953,8 @@ fn the_rail_holds_the_tasks_then_the_transcript_always_and_only_the_user_switche
 
 /// The owner: "how do i close the 'transcript' pane?". The → in the drawer's header, the
 /// transcript's or a task's, collapses the drawer into its rail, which stays at the window's
-/// edge: the transcript records on, the panes widen by the drawer less the rail. A rail click,
-/// ⌘⇧R or ← opens it again; a client's click or key is refused and says why.
+/// edge: the transcript records on, the panes widen by the drawer less the rail. A rail click
+/// or ⌘⇧R opens it again; a client's click or key is refused and says why.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_drawer_collapses_into_the_rail_from_the_transcript_or_a_task_and_only_the_user_opens_it() {

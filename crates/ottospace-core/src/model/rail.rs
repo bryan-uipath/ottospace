@@ -11,7 +11,7 @@ use crate::tasks::{State, TaskId};
 
 /// Why a client's choice on the rail is refused.
 pub const RAIL_USERS: &str = "only the user switches what the drawer shows";
-/// Why a client's ⌘⇧R, or its click on the drawer's → or ←, is refused.
+/// Why a client's ⌘⇧R, or its click on the drawer's →, is refused.
 pub const DRAWER_USERS: &str = "only the user collapses or opens the drawer";
 
 /// What an item of the rail stands for.
@@ -85,11 +85,6 @@ impl Model {
             RailItem::Transcript => self.listen.shown && !taken,
             RailItem::Task { .. } => !self.listen.shown && !taken && !boxed && talk,
         })
-    }
-
-    /// Collapsed, with something the user's ⌘⇧R would open: the conversation, else the transcript.
-    pub fn drawer_opens(&self) -> bool {
-        self.drawer_collapsed() && (self.talk.is_some() || self.listen_item())
     }
 
     /// The user's choice of an item: the drawer shows it, open. The transcript is shown here,
@@ -262,7 +257,7 @@ mod tests {
         listen(&mut m);
         let items = m.rail();
         m.update(Action::TalkToggle);
-        assert!(m.drawer_collapsed() && m.drawer_opens());
+        assert!(m.drawer_collapsed());
         assert_eq!((m.rail(), m.listen.on.as_ref().map(|on| on.status)), (items.clone(), Some(Status::On)));
         // A client's ⌘⇧R, its keys into the conversation or its click on an item: refused.
         for theirs in [Action::TalkToggle, Action::TalkKeys { on: true }, Action::RailSelect { item: task(1) }] {
