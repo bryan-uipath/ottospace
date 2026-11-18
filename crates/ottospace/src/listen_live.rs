@@ -53,6 +53,13 @@ struct Counts {
     lines: AtomicUsize,
 }
 
+impl Drop for Live {
+    /// The stream stops here, though a refresh still holds it.
+    fn drop(&mut self) {
+        self.audio.stop();
+    }
+}
+
 /// The log's line for a stream that started: the app's bundle id and how many pids it hears.
 fn log_start(audio: &AppAudio) {
     let fields = serde_json::json!({
@@ -157,8 +164,9 @@ impl Live {
     pub(crate) fn tick(&mut self, now: Instant) -> Option<Arc<AppAudio>> {
         if now.saturating_duration_since(self.counted.0) >= COUNTS {
             let take = |count: &AtomicUsize| count.swap(0, Ordering::Relaxed);
-            let (buffers, loud, lines) =
-                (take(&self.counts.buffers), take(&self.counts.loud), take(&self.counts.lines));
+            // `loud` before `buffers`, the samples' order backwards: never more loud than buffers.
+            let (loud, buffers, lines) =
+                (take(&self.counts.loud), take(&self.counts.buffers), take(&self.counts.lines));
             let bundle = &self.audio.bundle;
             let fields = serde_json::json!({ "bundle": bundle, "buffers": buffers, "loud": loud, "lines": lines });
             event_log::event("listen_counts", fields);

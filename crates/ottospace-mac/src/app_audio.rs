@@ -4,6 +4,7 @@
 //! dropped unread. Audio is filtered per app (its pid), not per window. Screen Recording covers
 //! it ("Screen & System Audio Recording").
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use screencapturekit::cm::CMTime;
@@ -32,10 +33,13 @@ fn lineage(pid: i32, parent: impl Fn(i32) -> Option<i32>) -> impl Iterator<Item 
     std::iter::successors(Some(pid), move |p| parent(*p).filter(|q| *q > 1 && q != p)).take(DEPTH)
 }
 
-/// The pids a stream of `chosen` hears: it, then each `offered` pid it started, directly or not.
-/// Zoom (89087) with `aomhost` (its child) offered: `[89087, aomhost's pid]`.
-pub fn included(offered: &[i32], parent: impl Fn(i32) -> Option<i32> + Copy, chosen: i32) -> Vec<i32> {
-    let helpers = offered.iter().copied().filter(|&pid| pid != chosen && lineage(pid, parent).any(|p| p == chosen));
+/// The pids a stream of `chosen` hears: it, then each `offered` pid it started, directly or not,
+/// in order. Zoom (89087) with `aomhost` (its child) offered: `[89087, aomhost's pid]`.
+pub(crate) fn included(offered: &[i32], parent: impl Fn(i32) -> Option<i32> + Copy, chosen: i32) -> Vec<i32> {
+    let mut helpers: Vec<i32> =
+        offered.iter().copied().filter(|&pid| pid != chosen && lineage(pid, parent).any(|p| p == chosen)).collect();
+    // SCK's list has no order: the same helpers are the same filter.
+    helpers.sort_unstable();
     std::iter::once(chosen).chain(helpers).collect()
 }
 
@@ -43,8 +47,11 @@ pub fn included(offered: &[i32], parent: impl Fn(i32) -> Option<i32> + Copy, cho
 pub struct AppAudio {
     stream: SCStream,
     pid: i32,
-    /// The pids its filter names now, `pid` first.
+    /// The pids its filter names now, `pid` first. Held through a refresh: one at a time.
     pids: Mutex<Vec<i32>>,
+    /// How many: read with no wait on a refresh.
+    count: AtomicUsize,
+    stopped: AtomicBool,
     /// The app's bundle id, empty if it has none.
     pub bundle: String,
     /// It or a process it started played sound when the stream started.
@@ -120,33 +127,44 @@ impl AppAudio {
         // The frames: taken and dropped, or SCK logs each one it has nowhere to put.
         stream.add_output_handler(|_: CMSampleBuffer, _: SCStreamOutputType| {}, SCStreamOutputType::Screen).map_err(|e| format!("{e}"))?;
         stream.start_capture().map_err(|e| format!("{e}"))?;
-        Ok(AppAudio { stream, pid, pids: Mutex::new(pids), bundle, playing: !played.is_empty(), unoffered })
+        let (count, stopped) = (AtomicUsize::new(pids.len()), AtomicBool::new(false));
+        let playing = !played.is_empty();
+        Ok(AppAudio { stream, pid, pids: Mutex::new(pids), count, stopped, bundle, playing, unoffered })
     }
 
     /// How many pids its filter names.
     pub fn heard(&self) -> usize {
-        self.pids.lock().map_or(0, |pids| pids.len())
+        self.count.load(Ordering::Relaxed)
+    }
+
+    /// Stops it now, though a refresh still holds it.
+    pub fn stop(&self) {
+        if !self.stopped.swap(true, Ordering::Relaxed) {
+            let _ = self.stream.stop_capture();
+        }
     }
 
     /// Names the app's helpers again (Zoom starts `aomhost` when a meeting starts): `Some(count)`
     /// when they changed and the filter now names `count` pids. Waits on the system: off the main thread.
     pub fn refresh(&self) -> Result<Option<usize>, String> {
-        let (display, apps) = offered()?;
         let mut pids = self.pids.lock().map_err(|_| "poisoned")?;
+        let (display, apps) = offered()?;
         let now = included_of(&apps, self.pid);
-        // The app itself gone: its stream stops by itself.
-        if !apps.iter().any(|app| app.process_id() == self.pid) || now == *pids {
+        // The app itself gone: its stream stops by itself. Stopped meanwhile: left stopped.
+        let gone = !apps.iter().any(|app| app.process_id() == self.pid);
+        if gone || now == *pids || self.stopped.load(Ordering::Relaxed) {
             return Ok(None);
         }
         self.stream.update_content_filter(&filter_of(&display, &apps, &now)?).map_err(|e| format!("{e}"))?;
         *pids = now;
+        self.count.store(pids.len(), Ordering::Relaxed);
         Ok(Some(pids.len()))
     }
 }
 
 impl Drop for AppAudio {
     fn drop(&mut self) {
-        let _ = self.stream.stop_capture();
+        self.stop();
     }
 }
 
@@ -237,13 +255,13 @@ mod tests {
         // zoom.us 89087; aomhost ×2, caphost and a Cef helper its children; another app beside it.
         let map = parents(&[(89087, 1), (96341, 89087), (97986, 89087), (90952, 89087), (28884, 89087), (500, 1)]);
         let offered = [500, 89087, 96341, 97986, 90952];
-        assert_eq!(included(&offered, |p| map.get(&p).copied(), 89087), [89087, 96341, 97986, 90952]);
+        assert_eq!(included(&offered, |p| map.get(&p).copied(), 89087), [89087, 90952, 96341, 97986]);
     }
 
     #[test]
     fn grandchildren_are_named() {
         let map = parents(&[(10, 1), (11, 10), (12, 11), (13, 12)]);
-        assert_eq!(included(&[10, 13, 12], |p| map.get(&p).copied(), 10), [10, 13, 12]);
+        assert_eq!(included(&[10, 13, 12], |p| map.get(&p).copied(), 10), [10, 12, 13]);
     }
 
     #[test]
@@ -259,6 +277,13 @@ mod tests {
         // Two `zoom.us`: 30 and 40, each launched by launchd; 41 is 40's child.
         let map = parents(&[(30, 1), (40, 1), (41, 40)]);
         assert_eq!(included(&[30, 40, 41], |p| map.get(&p).copied(), 30), [30]);
+    }
+
+    #[test]
+    fn helpers_in_another_order_are_the_same() {
+        let map = parents(&[(10, 1), (11, 10), (12, 10)]);
+        let of = |offered: &[i32]| included(offered, |p| map.get(&p).copied(), 10);
+        assert_eq!(of(&[12, 10, 11]), of(&[11, 12, 10]));
     }
 
     #[test]

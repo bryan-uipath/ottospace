@@ -2062,7 +2062,7 @@ fn a_tone_the_canarys_app_child_plays_is_heard() {
     std::fs::create_dir_all(&home).expect("make the folder");
     std::fs::write(home.join("settings.json"), json!({"restore_layout": false}).to_string()).expect("settings");
     let tone = home.join("tone.wav");
-    wav(&tone, &[(8., true)]);
+    wav(&tone, &[(20., true)]);
 
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-child", "CANARY_SOCKET", &[]);
     wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
@@ -2077,22 +2077,31 @@ fn a_tone_the_canarys_app_child_plays_is_heard() {
         ],
     );
     canary.call(json!({"cmd": "play", "path": tone, "app": true}));
-    // The child's window reaches the window server, and SCK's list.
-    std::thread::sleep(Duration::from_secs(2));
-    otto.call(json!({"cmd": "audio_probe_start"}));
-    std::thread::sleep(Duration::from_secs(4));
-    let reply = otto.call(json!({"cmd": "audio_probe_stop"}));
-    let log = std::fs::read_to_string(home.join("log")).unwrap_or_default();
+    // The pids each start heard, from the log.
+    let starts = || -> Vec<Value> {
+        let log = std::fs::read_to_string(home.join("log")).unwrap_or_default();
+        let lines = log.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok());
+        lines.filter(|line| line["ev"] == "listen_audio").map(|line| line["pids"].clone()).collect()
+    };
+    // Started again until SCK offers the child (its window reaches the window server).
+    let begun = Instant::now();
+    let reply = loop {
+        otto.call(json!({"cmd": "audio_probe_start"}));
+        if starts().last() == Some(&json!(2)) {
+            std::thread::sleep(Duration::from_secs(4));
+            break Some(otto.call(json!({"cmd": "audio_probe_stop"})));
+        }
+        otto.call(json!({"cmd": "audio_probe_stop"}));
+        if begun.elapsed() > Duration::from_secs(12) {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    let started = starts();
+    eprintln!("the log's starts, pids: {started:?}");
     let _ = std::fs::remove_dir_all(&home);
+    let reply = reply.unwrap_or_else(|| panic!("no start heard the canary's child: {started:?}"));
 
-    let started: Vec<Value> = log
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|line| line["ev"] == "listen_audio")
-        .collect();
-    eprintln!("the log's starts: {started:?}");
-    assert_eq!(started.len(), 1, "{log}");
-    assert_eq!(started[0]["pids"], 2, "the canary and its child: {log}");
     let buffers = reply["buffers"].as_array().expect("buffers");
     let loud = buffers.iter().filter(|b| b["rms"].as_f64().is_some_and(|rms| rms >= 0.01)).count();
     assert!(loud > 0, "no sound in {} buffers; the stream said {}", buffers.len(), reply["failed"]);
