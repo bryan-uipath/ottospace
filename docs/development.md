@@ -173,7 +173,7 @@ than a user's; compare them with each other, not with a release build.
 | then the sessions listed | with that home, until the Tasks section, opened on Elsewhere, lists them |
 | RSS, footprint, idle | resident size and `phys_footprint` (what Activity Monitor shows as Memory), 5 s after start |
 | RSS, footprint, 8 terminals | after 8 terminals each printed 5000 lines of scrollback |
-| CPU, idle | the app's CPU over 30 s with nothing moving, 100 = one core; with its wakeups a second, frames drawn and `counts.dial_frames` (both 0 at rest) |
+| CPU, idle | the app's CPU over 30 s with nothing moving, 100 = one core; with its wakeups a second, frames drawn and `counts.dial_frames` (both 0 at rest), and the tick's runs (`counts.ticks`: each frame for a second after the first request, then about one a second) |
 | CPU, streaming | over 10 s while one terminal prints about 2500 lines a second: a fixed load |
 
 Memory and CPU come from `proc_pid_rusage` of the app's own pid, never its terminals' shells.

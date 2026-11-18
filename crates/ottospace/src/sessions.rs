@@ -158,6 +158,7 @@ impl Poller {
                 if !worked.is_empty() && send.send(Read::Work(worked)).is_err() {
                     break;
                 }
+                ottospace_mac::wake::nudge();
             }
         });
         spawned.ok().map(|_| Self {
@@ -194,6 +195,12 @@ impl Poller {
                 Err(_) => self.stopped = true,
             }
         }
+    }
+
+    /// When `ask` sends the next round (ms): none while one is on its way, or the reader stopped.
+    pub fn next_ask(&self) -> Option<u64> {
+        let every = if self.open { EVERY_MS } else { SLOW_MS };
+        (!self.waiting && !self.stopped).then(|| self.asked.map_or(0, |at| at.saturating_add(every)))
     }
 
     /// What the rounds since read, oldest first.

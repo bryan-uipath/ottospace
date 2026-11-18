@@ -1696,6 +1696,12 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 fn check(m: &Model) -> Result<(), String> {
     check_slots(m)?;
     check_viewers(m)?;
+    // The shell's loop sleeps until `next_due`: nothing but the calendar comes due sooner.
+    if let Some(at) = m.next_due() {
+        ensure!(m.due(at), "next due at {at}, not due then");
+        let sooner = at.checked_sub(1).is_some_and(|before| m.due(before) && !m.calendar.due(before));
+        ensure!(!sooner, "due before next due {at}");
+    }
     // The Repos list: each entry once, pinned ones first; the repositories in its order.
     let dirs = &m.repo_dirs.dirs;
     let once = dirs.iter().enumerate().all(|(i, d)| dirs[..i].iter().all(|e| e.path != d.path));

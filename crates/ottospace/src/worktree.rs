@@ -33,6 +33,7 @@ pub fn start(repo: String, branch: String, path: String, root: String, fresh: bo
         let made = add(Path::new(&repo), &branch, Path::new(&path), Path::new(&root), fresh);
         let result = made.map(|target| target.to_string_lossy().into_owned());
         let _ = done.send(Made { repo, asked: path, fresh, result });
+        ottospace_mac::wake::post();
     });
 }
 

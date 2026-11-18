@@ -87,6 +87,8 @@ pub struct Timeline {
     motion_read: u64,
     slid: u64,
     call_looked: u64,
+    /// The band pulses: drawn 10 times a second.
+    pub(crate) pulse: bool,
     /// Links a test run's Join would have opened.
     joins: u32,
 }
@@ -130,6 +132,7 @@ impl Timeline {
                         if said.is_none_or(|said| said == 0 && bytes > 0) || told.elapsed() >= PROGRESS {
                             (told, said) = (Instant::now(), Some(bytes));
                             let _ = tx.send(Heard::Fetching { since: now, bytes });
+                            ottospace_mac::wake::post();
                         }
                     };
                     let got = fetch(&source, &mut progress);
@@ -171,7 +174,9 @@ impl Timeline {
                     // Retries asked for while this one ran: it was the fetch they asked for.
                     while wake.try_recv().is_ok() {}
                 }
-                if due || now >= days[calendar::BACK + 1] {
+                // A read to take (a fetch's, or a new day's); a look that found neither wakes nothing.
+                let heard = due || now >= days[calendar::BACK + 1];
+                if heard {
                     let (events, today, held_from) = evaluate(&feed, now);
                     days = today;
                     if let Some((bytes, ms, parse_ms)) = fetched {
@@ -188,6 +193,9 @@ impl Timeline {
                 }
                 if let Some(outcome) = outcome {
                     let _ = tx.send(outcome);
+                }
+                if heard {
+                    ottospace_mac::wake::post();
                 }
                 // Asleep until the next fetch, a new day's look (`WAKE`), or the user's Retry.
                 match wake.recv_timeout(WAKE.min(next.saturating_duration_since(Instant::now()))) {
@@ -383,6 +391,7 @@ impl Workspace {
         let pulses =
             calendar.near(now).any(|e| matches!(calendar::stage(e, now), Stage::Approaching | Stage::Imminent));
         let pulse = pulses && !self.timeline.reduce_motion;
+        self.timeline.pulse = pulse;
         // A fetch's seconds go on in the section while it runs.
         let loading = matches!(calendar.fetch, fetch::Fetch::Loading { .. });
         let every = if loading { 1_000 } else { 20_000 };
