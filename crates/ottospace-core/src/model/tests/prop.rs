@@ -1674,7 +1674,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::CaptureBack
             | Action::RestoreLayout { .. }
             | Action::ListenShow { on: true }
-            // The user's ⌘⇧L with no conversation is `ListenShow`.
+            // The user's ⌘⇧R with no conversation is `ListenShow`.
             | Action::TalkToggle
     )
 }
@@ -6473,7 +6473,7 @@ fn seed_835_nothing_opens_in_a_closing_workspace() {
     .unwrap();
 }
 
-/// The user's ⌘⇧L with no conversation shows the transcript in its pane's tab, as `ListenShow`
+/// The user's ⌘⇧R with no conversation shows the transcript in its pane's tab, as `ListenShow`
 /// does: the check let only `ListenShow` change the tab on show (seed 1254).
 #[test]
 fn seed_1254_the_users_talk_toggle_shows_the_transcripts_tab() {
