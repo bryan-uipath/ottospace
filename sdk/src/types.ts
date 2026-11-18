@@ -204,7 +204,43 @@ export type PaneKind =
   /** `window`: the window-server id of the hosted window. `bundle`, `name`: whose it is. */
   | { type: "app"; window: number; title: string; bundle?: string; name: string }
   /** A slot that waits for a window of this app (the `slots` flag). Where it is: `slots`. */
-  | { type: "slot"; name: string; bundle?: string };
+  | { type: "slot"; name: string; bundle?: string }
+  /** A file, read only (`open_file`). Its view: `state.viewers`. */
+  | { type: "file"; path: string };
+
+/** What the viewer read of its file: never its text. */
+export type ViewerRead =
+  | { status: "reading" }
+  | { status: "shown"; lines: number }
+  | { status: "missing" }
+  | { status: "too_large"; bytes: number }
+  | { status: "not_file" }
+  | { status: "binary" }
+  | { status: "unreadable" };
+
+/** A file viewer's view, by pane id. */
+export interface Viewer {
+  shows: "markdown" | "code" | "text" | "image";
+  read: ViewerRead;
+  /** The first line on show, from 0 (a markdown file's: a row of text's height). */
+  top: number;
+  /** The last place `top` may be, once laid out. */
+  most: number | null;
+  /** Lines on show. */
+  page: number;
+  /** A count or `g` typed, waiting for its move. */
+  pending: string | null;
+  /** The pane that opened it to be reused: its next file goes here. */
+  opener?: PaneId;
+}
+
+/** A file viewer as drawn, by pane id: never its text. */
+export interface ViewerDrawn {
+  body: "markdown" | "lines" | "image" | null;
+  /** A markdown file's blocks by kind, and its links that open. */
+  shape?: { blocks: Record<string, number>; links: { web: number; file: number } };
+  lines?: number;
+}
 
 export interface Pane {
   id: PaneId;
@@ -684,6 +720,8 @@ export interface RepoDirs {
 
 export type PickItem =
   | { type: "terminal" }
+  /** "File…": the open panel, then the file in a viewer. */
+  | { type: "file" }
   | { type: "app"; name: string }
   /** An installed app that is not running, by its bundle's path. Choosing it starts it. */
   | { type: "closed"; name: string; path: string }
@@ -875,7 +913,7 @@ export type MarkInput =
 /** A pane of a workspace's saved tab. `app`: an app pane's app, by name. A terminal's `lines` and
  * `has_command` count the history it kept; the text is never in the state. */
 export interface WorkbookPane {
-  kind: "terminal" | "app" | "empty";
+  kind: "terminal" | "app" | "empty" | "file";
   app?: string;
   lines?: number;
   has_command?: boolean;
@@ -939,7 +977,7 @@ export interface Mark {
   name: string;
   /** The letter that jumps to it, or null. */
   key: string | null;
-  kind: "terminal" | "app" | "tab";
+  kind: "terminal" | "app" | "tab" | "file";
   /** Its pane or tab is open now: `pane` or `tab` (a tab's `id`) says which. */
   open: boolean;
   pane: PaneId | null;
@@ -1031,6 +1069,8 @@ export interface Model {
    * is the user's: a client cannot make, fill, clear, close, move or swap one.
    */
   slots: Record<string, Slot>;
+  /** Each file viewer's view, by pane id. */
+  viewers: Record<string, Viewer>;
 }
 
 /** A slot: a pane that keeps its place and waits for a window the user named. */
@@ -1289,6 +1329,8 @@ export interface Snapshot {
   crop: Record<string, number>;
   /** By pane id. */
   terminals: Record<string, Terminal>;
+  /** Each file viewer as drawn, by pane id. */
+  viewers: Record<string, ViewerDrawn>;
   /** A test run's stand-in clipboard: the last text copied. Null outside a test run. */
   copied: string | null;
   /** The picker's rows as drawn, or null: its items narrowed by the filter, then, once something is typed, the installed apps that are not running. */

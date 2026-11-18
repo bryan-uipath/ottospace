@@ -660,6 +660,7 @@ fn row_pane(pane: &PaneRecord) -> RowPane {
         RecordKind::Terminal => RowPane { kind: "terminal", app: None, lines, has_command },
         RecordKind::App { name, .. } => RowPane { kind: "app", app: Some(name.clone()), lines: 0, has_command: false },
         RecordKind::Empty => RowPane { kind: "empty", app: None, lines: 0, has_command: false },
+        RecordKind::File { .. } => RowPane { kind: "file", app: None, lines: 0, has_command: false },
     }
 }
 

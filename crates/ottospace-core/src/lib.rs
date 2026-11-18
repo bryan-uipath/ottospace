@@ -57,6 +57,8 @@ pub mod terminal;
 pub mod theme;
 pub mod titlebar;
 pub mod transcript;
+pub mod viewer;
+pub mod vim;
 pub mod workbook;
 
 pub use layout::{Axis, Dir, Node, Rect, Zone};

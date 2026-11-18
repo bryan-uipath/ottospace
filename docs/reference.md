@@ -20,6 +20,7 @@ running, and the rest of the design is not built: see the
 | Capability | State |
 |---|---|
 | Split panes mixing terminals and real app windows | Works today |
+| [File viewer](#file-viewer): a file read only in a pane (markdown drawn, code and text with line numbers, pictures), reloaded when it changes, vim moves with counts, ⌃G edits it beside | Works today |
 | Key bindings and a status bar showing the mode (`APP`, `PICK`…; none when normal) | Works today |
 | [Notice bar](#notice-bar): one app-level message, full width at the window's foot, red, amber or blue by level (error, warning, information) | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
@@ -90,7 +91,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 |---|---|
 | ⌘D | Split right, new terminal |
 | ⌘⇧D | Split down, new terminal |
-| ⌘E / ⌘⇧E | Pick what goes in a new pane, right of / below the focused one: a terminal or a running app. Type to filter: then every installed app that matches is offered too, under "Not running" (those of the `apps` setting first); choosing one starts it in the background. ↑/↓ or ⌃N/⌃P move, ↵ opens, Esc closes |
+| ⌘E / ⌘⇧E | Pick what goes in a new pane, right of / below the focused one: a terminal, a file (File…: the open panel, then a [file viewer](#file-viewer)) or a running app. Type to filter: then every installed app that matches is offered too, under "Not running" (those of the `apps` setting first); choosing one starts it in the background. ↑/↓ or ⌃N/⌃P move, ↵ opens, Esc closes |
 | ⌘W | Close the focused pane |
 | ⌘⌃←/→/↑/↓ or ⌘⌃H/L/K/J | Focus the pane in that direction. Past the leftmost pane, ← goes to the open section's list (on the row it was left on), then to the left rail; with no section open, straight to the rail. Past the rightmost pane, → goes into the drawer's conversation (as ⌘L), or the accessibility inspector's rows while it has the drawer's place. On the rail ↑/↓ move (its cell gets a pink ring), → and ↵ open it; ←, or Esc, goes back to the pane you came from. Only your own keys cross: a client's move stops at the panes |
 | ⌘] / ⌘[ | Focus the next / previous pane |
@@ -952,6 +953,31 @@ Its header names its directory, and the program in front of the shell while one 
 `app-api · cargo test`. An app pane's header shows the app's icon and the window's title; an
 empty pane's, nothing.
 
+## File viewer
+
+A file, read only, in a pane: markdown drawn by the conversation's renderer (code blocks with
+Copy, tables, quotes, pictures beside the file), code and other text as lines with their numbers,
+a PNG, JPEG, GIF or WebP as a picture. Open one with ⌘E's **File…** (the open panel), a ⌘-click
+on a path in a terminal (from the shell's folder, `~` too; `src/main.rs:12` opens `src/main.rs`)
+or on a file link in the conversation, or `ottospace ctl '{"cmd":"open_file","path":"/abs/a.md"}'`.
+A ⌘-click opens only markdown, code and text files there; any other file does what a click did
+before. A terminal's ⌘-clicks reuse the one viewer they opened beside it, and the keyboard stays
+in the terminal.
+
+- It reads only a regular file (no folder, device or pipe), at most 5 MB ("Too large"); "File not
+  found" with the path when it is gone, and the file again when it is back.
+- It reloads when the file changes on disk (looked at twice a second, read once the change has
+  held for 0.2 s), at the same line.
+- Keys: `j`/`k` or ↓/↑ a line, ⌃D/⌃U half a page, Space or ⌃F/⌃B a page, `gg`/`G` the top and
+  the end. A count before a move repeats it (`10j`) or names a line (`3G`, `3gg`); the status bar
+  shows it while typed, Esc takes it back, another key drops it.
+- ⌃G or **Edit** in its header: your editor (`$VISUAL`, else `$EDITOR`, else `vi`) on the file in a
+  terminal beside it.
+- Links in it open only on your click: a web page in the browser; a file in the file's folder is
+  revealed in Finder, or with ⌘ opened in the viewer beside. A web picture is never fetched.
+- Restored after a restart with its file and line. The state has its path, kind, line and line
+  count, never its text.
+
 ## App panes
 
 To put an app window in a pane, open Apps on the left rail and click the app. It fills the focused pane if that is
@@ -1222,7 +1248,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   no task works; See in the app's blue with the task's tip, See and act in amber; the pane's
   header line in the level's colour. Only the task the pane is granted to (its agent's pass) may `app_read` its tree or
   `app_look` at its picture (a PNG at most 1600 px, 0600, in `materials/agent-<pid>-<task>-<word>/`,
-  the last 10 kept, gone when the level goes below See and at the next start), at See or more, one read and one look a second; `ax_tree` is
+  the last 10 kept, gone when the level goes below See and at the next start; none while the pane is live), at See or more, one read and one look a second; `ax_tree` is
   `app_read`'s older name. Every use and refusal is a row in that task's conversation and a spoke
   of the dial's Apps station. A pane that moves to another task's workspace, or whose task ends,
   is Off; grants are not kept over a restart. See and act presses nothing yet (stage (c)).
@@ -1354,6 +1380,7 @@ first brainstorm:
 - [zoom-meeting.md](ai/1-initial-brainstorm/zoom-meeting.md): Zoom meeting layout and participants.
 - [zoom-ax.md](ai/1-initial-brainstorm/zoom-ax.md): what a Zoom meeting exposes through accessibility, measured.
 - [accessibility.md](ai/1-initial-brainstorm/accessibility.md): reading app accessibility trees, toward sneak mode and agent actions.
+- [file-viewer.md](ai/file-viewer.md): the read-only file viewer pane, and what comes after it (the markdown pass, the explorer, comments).
 - [fill-display.md](ai/fill-display.md): the window over the menu bar and the Dock (⌃⌘F, the green button): what macOS does, measured, and what is left to check by hand.
 - [sneak-apps.md](ai/sneak-apps.md): sneak labels that press controls inside the focused app pane, and why agents still cannot.
 - [multi-monitor.md](ai/1-initial-brainstorm/multi-monitor.md): options for more than one display, and a staged recommendation. Nothing measured yet.
