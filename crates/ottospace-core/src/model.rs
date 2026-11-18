@@ -6030,17 +6030,12 @@ impl Model {
             }
             Action::CalendarJoin { id } => effects.extend(self.calendar.join(id).map(|url| Effect::OpenLink { url })),
             Action::CalendarFetching { since, bytes } => self.calendar.fetch = calendar::fetch::Fetch::Loading { since, bytes },
-            Action::CalendarFetched { at, events, failure } => {
-                self.calendar.fetch = match failure {
-                    None => calendar::fetch::Fetch::Read { at, events },
-                    Some(why) => calendar::fetch::Fetch::Failed { at, why },
+            Action::CalendarFetched { at, events, failure } => self.calendar.fetched(at, events, failure),
+            Action::CalendarRetry => {
+                if self.calendar.retry() {
+                    effects.push(Effect::CalendarRetry)
                 }
             }
-            // Not while one runs: a second would only wait behind it.
-            Action::CalendarRetry if self.calendar.on && !matches!(self.calendar.fetch, calendar::fetch::Fetch::Loading { .. }) => {
-                effects.push(Effect::CalendarRetry)
-            }
-            Action::CalendarRetry => {}
             Action::SetFeatures { features } => self.set_features(features, effects),
             action @ (Action::ListenStart { .. }
             | Action::ListenToggle { .. }

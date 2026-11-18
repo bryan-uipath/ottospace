@@ -165,6 +165,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       fetch: { state: "failed", at: 1794470400000, error: "http", code: 403 },
       fetch_line: "The calendar answered 403 · last read 09:40", empty_note: "No meetings today",
       fetch_rect: [70, 200, 236, 20], retry: [270, 200, 36, 18], retries: 1,
+      band_state: "ready", band_line: null, band_rect: [6, 828, 1428, 11], band_retry: null,
     },
     drawer: {
       body: [880, 40, 470, 820],

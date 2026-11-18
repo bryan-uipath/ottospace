@@ -862,7 +862,11 @@ address in iCal format", or a file's path) and ottospace shows your day's meetin
 the way.
 
 - **The band**: 12 points high, directly above the status bar, the window's width, with a
-  hairline along its top as the status bar has; panes give up that height. It is the workday
+  hairline along its top as the status bar has; panes give up that height from the first frame,
+  so nothing moves when the meetings come. Until the first read lands a short highlight slides
+  along it (`Loading…` with Reduce motion); a first read that fails says `Couldn't read the
+  calendar · Retry` there, through the retries that follow by themselves (your Retry slides it
+  again; your click only; hover for why). It is the workday
   (`calendar_workday`, 09:00 to 17:00), fixed through the day: a small mark at its start and one
   at its end, and a bright tick for now that moves along it (pinned to an end before or after
   hours). A **call** (an entry with a Zoom, Meet or Teams link) is a solid block at its clock

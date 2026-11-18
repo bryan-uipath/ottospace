@@ -9017,6 +9017,112 @@ fn the_calendar_says_it_loads_what_failed_and_tries_again() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// Bryan, 2026-11-18: "it is a little jarring when it pops in. Can we reserve the space, if a
+/// calendar is configured, and show a simple loading sequence there". The band is there from the
+/// first frame: a bar slides while the feed loads, a line and a Retry after it failed, then the
+/// meetings, all in one rect. The bar's frames stop when the read lands.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_calendar_band_keeps_its_room_while_it_loads_fails_and_reads() {
+    use std::os::unix::fs::PermissionsExt;
+    let link = "https://calendar.example.com/private-s3cret/basic.ics";
+    let text = feed(&[("a", "Offsite prep", 3 * 3_600, 3 * 3_600 + 1_800, "")]);
+    // A stand-in for curl: the first call holds until `go`, the second (the retry 15 s on) until
+    // `go2`, each then answering 403; the next gives the feed.
+    let curl_in = |home: &std::path::Path| {
+        let dir = home.to_str().unwrap();
+        let script = format!(
+            "#!/bin/sh\n/bin/cat > /dev/null\nn=$(( $(/bin/cat '{dir}/n' 2>/dev/null || echo 0) + 1 ))\necho $n > '{dir}/n'\n\
+             hold() {{ i=0; while [ ! -e \"{dir}/$1\" ] && [ -d '{dir}' ] && [ $i -lt 600 ]; do i=$((i+1)); /bin/sleep 0.1; done; printf Forbidden; printf 403 >&2; exit 22; }}\n\
+             [ $n = 1 ] && hold go\n[ $n = 2 ] && hold go2\n\
+             /bin/cat '{dir}/today.ics'; printf 200 >&2\n"
+        );
+        std::fs::write(home.join("curl"), script).unwrap();
+        std::fs::set_permissions(home.join("curl"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        home.join("curl").to_string_lossy().into_owned()
+    };
+    let home = calendar_folder("calendar-band-load", &text, Some(link));
+    let (dir, curl) = (home.to_str().unwrap(), curl_in(&home));
+    let otto = Otto::launch_with("calendar-band-load", &[("OTTOSPACE_HOME", dir), ("OTTOSPACE_CURL", &curl)]);
+    // A pane, measured in every state: it must not move.
+    otto.call(json!({"cmd": "split"}));
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    let frames = |s: &Value| s["counts"]["band_frames"].as_u64().expect("band_frames");
+    let shows = |o: &Otto, what: &str| {
+        o.wait_for(&format!("the band {what}"), |o| Some(state(o)).filter(|s| s["calendar"]["band_state"] == what))
+    };
+    // Loading: the band's room, a bar that slides (frames go on), no meetings yet.
+    let loading = shows(&otto, "loading");
+    let room = rect(&loading["calendar"]["band_rect"]);
+    let pane = otto.wait_for("the pane", |o| {
+        Some(state(o)["bounds"].clone()).filter(|b| b.as_object().is_some_and(|b| !b.is_empty()))
+    });
+    assert_eq!(state(&otto)["calendar"]["band_state"], "loading");
+    assert!((room[3] - 11.).abs() < 0.5, "the band's height under its top line: {room:?}");
+    assert_eq!((&loading["calendar"]["band"], &loading["calendar"]["band_line"]), (&Value::Null, &Value::Null));
+    let first = frames(&loading);
+    std::thread::sleep(Duration::from_millis(500));
+    let sliding = state(&otto);
+    assert!(frames(&sliding) > first + 5, "the bar slides: {} then {}", first, frames(&sliding));
+    // Failed: one quiet line and a Retry, in the same room; the bar stops.
+    std::fs::write(home.join("go"), "").unwrap();
+    let failed = shows(&otto, "failed");
+    let c = &failed["calendar"];
+    assert_eq!((rect(&c["band_rect"]), &failed["bounds"]), (room, &pane), "{c}");
+    assert_eq!((&c["band_line"], c["band_retry"].is_array()), (&json!("Couldn't read the calendar"), true), "{c}");
+    let stopped = frames(&state(&otto));
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(frames(&state(&otto)), stopped, "no bar after the failure");
+    // Tried again by itself: quiet, the line and its Retry stay, nothing slides.
+    let quiet = otto.wait_for("the retry", |o| Some(state(o)).filter(|s| s["calendar"]["fetch"]["state"] == "loading"));
+    let c = &quiet["calendar"];
+    assert_eq!((&c["band_state"], rect(&c["band_rect"])), (&json!("failed"), room), "{c}");
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(frames(&state(&otto)), stopped, "no bar for a retry of its own");
+    // A client's click or label on Retry slides nothing; the user's, while that one runs, slides for it.
+    otto.click(centre(&c["band_retry"]), 1);
+    sneak_to(&otto, "calendar-band-retry");
+    assert_eq!(state(&otto)["calendar"]["band_state"], "failed");
+    otto.user_click(centre(&c["band_retry"]));
+    shows(&otto, "loading");
+    std::fs::write(home.join("go2"), "").unwrap();
+    let failed = shows(&otto, "failed");
+    let c = &failed["calendar"];
+    // A client's Retry fetches nothing; the user's does: the meetings, in the same room.
+    otto.click(centre(&c["band_retry"]), 1);
+    assert_eq!(state(&otto)["calendar"]["retries"], 0);
+    otto.user_click(centre(&c["band_retry"]));
+    let ready = shows(&otto, "ready");
+    let c = &ready["calendar"];
+    assert_eq!((rect(&c["band_rect"]), rect(&c["band"]["rect"]), &ready["bounds"]), (room, room, &pane), "{c}");
+    assert_eq!((&c["band_line"], &c["band_retry"], &c["retries"]), (&Value::Null, &Value::Null, &json!(1)), "{c}");
+    // At rest: no frames for the bar, and the tick sleeps (each frame would be ~180 in 3 s).
+    let (at_rest, ticks) = (frames(&ready), ready["counts"]["ticks"].as_u64().expect("ticks"));
+    std::thread::sleep(Duration::from_secs(3));
+    let later = state(&otto);
+    assert_eq!(frames(&later), at_rest, "no frames for the bar at rest");
+    let ticked = later["counts"]["ticks"].as_u64().expect("ticks") - ticks;
+    assert!(ticked < 90, "{ticked} ticks in 3 s at rest");
+    assert!(!later.to_string().contains("s3cret") && !later.to_string().contains("Offsite"), "{later}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+
+    // Reduce motion: a still word in place of the bar, and no frames for it.
+    let home = calendar_folder("calendar-band-still", &text, Some(link));
+    let (dir, curl) = (home.to_str().unwrap(), curl_in(&home));
+    let env = [("OTTOSPACE_HOME", dir), ("OTTOSPACE_CURL", curl.as_str()), ("OTTOSPACE_REDUCE_MOTION", "1")];
+    let otto = Otto::launch_with("calendar-band-still", &env);
+    let still =
+        otto.wait_for("the still word", |o| Some(state(o)).filter(|s| s["calendar"]["band_line"] == "Loading…"));
+    assert_eq!(rect(&still["calendar"]["band_rect"]), room);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(frames(&state(&otto)), 0, "nothing slides");
+    std::fs::write(home.join("go"), "").unwrap();
+    shows(&otto, "failed");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_calendar_request_gives_titles_and_busy_time_but_no_link_or_address() {

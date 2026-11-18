@@ -2201,7 +2201,7 @@ impl Workspace {
             || self.stall.watching()
             || !self.drawer.native.is_empty()
             || !self.drawer.stopping.is_empty()
-            || model.calendar.on && self.timeline.pulse;
+            || model.calendar.on && (self.timeline.pulse || self.timeline.sliding);
         // An app hosted once: its new windows are adopted, its panes all gone or not.
         let slow = !self.terminals.is_empty()
             || !self.known.is_empty()
@@ -3595,6 +3595,8 @@ impl Workspace {
                 "file_prompts": self.file_prompts,
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
+                // Frames drawn while the calendar band's loading bar slides: none once a read lands.
+                "band_frames": self.timeline.band_frames.get(),
                 // How often GPUI's own handlers were kicked to draw again (`stall`): after a change
                 // of the displays, or frames that stopped.
                 "redraws": self.redraws,
@@ -7689,7 +7691,7 @@ impl Render for Workspace {
             // The notice bar, at the foot: nothing above it moves when it opens, but the content's foot.
             .children(self.render_notice_bar(cx))
             // The meeting timeline, directly above the status bar.
-            .children(self.render_timeline())
+            .children(self.render_timeline(cx))
             .child(self.render_status(cx))
             // Only over a parked, drawn pane: a live window sits above ottospace and would cover it.
             .children(

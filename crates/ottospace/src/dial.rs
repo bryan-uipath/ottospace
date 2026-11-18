@@ -118,7 +118,7 @@ impl DialMotion {
 }
 
 /// No motion: the system's Reduce Motion. A test run's is `OTTOSPACE_REDUCE_MOTION`, never the machine's.
-fn calm() -> bool {
+pub(crate) fn calm() -> bool {
     match std::env::var_os("OTTOSPACE_E2E") {
         Some(_) => std::env::var_os("OTTOSPACE_REDUCE_MOTION").is_some(),
         None => ottospace_mac::meeting::reduce_motion(),
