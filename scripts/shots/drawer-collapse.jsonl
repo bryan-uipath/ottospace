@@ -1,6 +1,6 @@
 # The arrows that collapse the sidebar and the drawer into their rails (keys in tooltips only):
 # open; the transcript, then collapsed by ⌘⇧R (it records on); opened again on a task by its
-# rail item; each header's arrow hovered; collapsed by the conversation's →;
+# rail item; collapsed by a click on that item, opened again; each header's arrow hovered; collapsed by the conversation's →;
 # the sidebar collapsed by its ←, both rails left.
 # Made-up task; the fixture's lines stand in for the sound.
 {"env":{"OTTOSPACE_FEATURES":"transcripts","OTTOSPACE_LISTEN_FIXTURE":"{ROOT}/fixture.jsonl"}}
@@ -24,6 +24,10 @@
 {"click":"drawer-rail:1"}
 {"settle":300}
 {"shot":"reopened"}
+{"click":"drawer-rail:1"}
+{"settle":300}
+{"shot":"rail-click-collapsed"}
+{"click":"drawer-rail:1"}
 {"hover":"talk:talk-close"}
 {"settle":300}
 {"shot":"hover-drawer"}

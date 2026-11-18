@@ -5947,6 +5947,8 @@ impl Model {
                 }
             }
             Action::TalkCycle { delta } => self.rail_cycle(delta, effects),
+            // The user's click on the item shown collapses the drawer into the rail, as ⌘⇧R; as the left rail's open cell.
+            Action::RailSelect { item } if self.rail_shown() == Some(item) => self.act(Action::TalkToggle, effects),
             Action::RailSelect { item } => self.rail_select(item, effects),
             // ⌘⇧R or a →: the drawer collapses into its rail, whatever it shows (a brief, the
             // inspector, the box's line put aside), but a capture's draft: the user's work in progress.
@@ -7098,7 +7100,7 @@ impl Model {
         zones::SECTIONS.into_iter().filter(|s| (*s != Section::Calendar || self.calendar.on) && flagged(s)).collect()
     }
 
-    /// The section ⌘⇧L and the left rail's → toggle (`ToggleSection`): the open one, which closes
+    /// The section ⌘⇧L toggles (`ToggleSection`): the open one, which closes
     /// the bar; else the one open last, else the rail's first.
     pub fn sidebar_toggled(&self) -> Section {
         let sections = self.sections();

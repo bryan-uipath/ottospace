@@ -470,8 +470,13 @@ should have shortcut keys visible there"; "we should always have the right rail 
   small buttons show their shortcut in the tooltip): the drawer's → at the right end of the
   transcript's header and of a conversation's (the conversation's × was this), "Collapse into the
   rail · ⌘⇧R"; the sidebar's ← at the right end of its header (its × was this), "Collapse into the
-  rail · ⌘⇧L"; the left rail's → at its foot while the bar is collapsed, "Open the sidebar · ⌘⇧L".
-  The right rail has no expand button (the owner): a click on any of its items opens the drawer on it.
+  rail · ⌘⇧L". Both read as buttons: outlined, filled, brighter under the pointer. Neither rail
+  has an expand button (the owner): a click on any item or cell opens its side on it.
+- **A click on what is shown collapses it** (the owner: "how come clicking the transcript button
+  doesn't toggle the right rail?"): the left rail's open section's cell closes the bar
+  (`ToggleSection`); the drawer's rail item it shows (`rail_shown`) collapses the drawer, as ⌘⇧R
+  (`RailSelect` in the core). The user's alone, as every rail click. ↵ in list mode only opens,
+  on both rails.
 - **Keys** (the owner): ⌘⇧R is the drawer's (all that ⌘⇧L did: collapse or open the
   conversation; on the transcript, collapse; with no conversation, the transcript). ⌘⇧L is the
   sidebar's: `ToggleSection` of `Model::sidebar_toggled`, the open section (it closes the bar),
@@ -488,8 +493,7 @@ should have shortcut keys visible there"; "we should always have the right rail 
   sidebar stays a client's to open and close (`section`), as before.
 - **Kept**: `layout.json` keeps the conversation's `open` (the drawer collapsed on it or not) and
   the section; the sidebar's last section is not kept.
-- **Sneak and controls**: `talk:talk-close`, `listen-collapse`, `bar:close`,
-  `rail:open`.
+- **Sneak and controls**: `talk:talk-close`, `listen-collapse`, `bar:close`.
 - Property rules: the tasks by urgency, each once, then the transcript, there exactly while it
   can be had; sections in order; the transcript selected while shown; the keys on the rail only on an
   item of it; after another's step in the same space an item still on the rail stays selected,

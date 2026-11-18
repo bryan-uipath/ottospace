@@ -3092,8 +3092,15 @@ impl Run {
                 _ => None,
             })
             .collect();
+        // Not while something over the workspace waits for the click (the palette, a question).
+        let rail_shown = m.rail_shown().filter(|_| m.waits_for(&action, origin).is_none() && m.confirm.is_none());
         let effects = m.update(sent);
         check(m)?;
+        // The user's click on the item the drawer shows collapses it, as ⌘⇧R.
+        if let (Action::RailSelect { item }, None) = (&action, &refused) {
+            let collapses = rail_shown == Some(*item);
+            ensure!(!collapses || m.drawer_collapsed(), "the user's click on the shown {item:?} left the drawer open");
+        }
         // A level rises only by the user's own choice. A pane kept by its task keeps its level but
         // for the user's; a pane new to it starts at the default, or Off.
         let users_level = origin == Origin::User

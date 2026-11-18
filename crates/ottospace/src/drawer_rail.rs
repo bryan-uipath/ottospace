@@ -159,7 +159,7 @@ impl Workspace {
                 let status = self.model.listen.on.as_ref().map(|on| on.status);
                 let recording = status == Some(Status::On);
                 let colour = if status.is_some() { theme::PRIMARY } else { theme::MUTED };
-                let wave = svg().path("icons/waveform.svg").size(px(18.)).text_color(rgb(colour));
+                let wave = svg().path("icons/waveform.svg").size(px(20.)).text_color(rgb(colour));
                 let dot = div()
                     .absolute()
                     .top(px(3.))

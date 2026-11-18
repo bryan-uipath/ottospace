@@ -5046,19 +5046,6 @@ impl Workspace {
                 },
             ))
             .child(div().flex_1().border_r_1().border_color(rgb(theme::BORDER)))
-            // The bar collapsed: → opens it again, on the section open last.
-            .children(open.is_none().then(|| {
-                let open = self.slide_button("rail:open", (slide::RIGHT, slide::SIDEBAR_KEY), "Open the sidebar");
-                let open = open.on_click(cx.listener(|this, _, window, cx| this.sidebar_toggle(window, cx)));
-                div()
-                    .flex_none()
-                    .pb_2()
-                    .flex()
-                    .justify_center()
-                    .border_r_1()
-                    .border_color(rgb(theme::BORDER))
-                    .child(open)
-            }))
     }
 
     /// The strip over the rail and the section list: the traffic lights, and room to drag the

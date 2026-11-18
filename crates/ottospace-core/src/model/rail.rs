@@ -304,6 +304,35 @@ mod tests {
         assert!(!m.drawer_collapsed());
     }
 
+    /// The owner: "how come clicking the transcript button doesn't toggle the right rail?". The
+    /// user's click on the item shown collapses the drawer, as ⌘⇧R; again, it opens on it. As the
+    /// left rail's open cell. The transcript records on. A client's click: refused.
+    #[test]
+    fn a_click_on_the_item_shown_collapses_the_drawer_and_again_opens_it() {
+        let mut m = three();
+        listen(&mut m);
+        m.update(Action::RailSelect { item: task(2) });
+        for item in [RailItem::Transcript, task(1)] {
+            m.update(Action::RailSelect { item });
+            assert_eq!(m.rail_shown(), Some(item));
+            assert!(m.refusal(&Action::RailSelect { item }, Origin::Socket).is_some());
+            m.update(Action::RailSelect { item }.sent_by(Origin::Socket));
+            assert_eq!(m.rail_shown(), Some(item), "{item:?}");
+            m.update(Action::RailSelect { item });
+            assert!(m.drawer_collapsed(), "{item:?}");
+            assert_eq!(m.listen.on.as_ref().map(|on| on.status), Some(Status::On));
+            m.update(Action::RailSelect { item });
+            assert_eq!((m.drawer_collapsed(), m.rail_shown()), (false, Some(item)), "{item:?}");
+        }
+        // Beside the inspector the item is selected, not shown: a click shows it.
+        m.update(Action::InspectorOpen { pane: 1, app: "Notes".into() });
+        m.update(Action::RailSelect { item: task(1) });
+        assert_eq!((m.inspector.is_none(), m.rail_shown()), (true, Some(task(1))));
+        // ↵ on the rail shows, never collapses: as ↵ on the left rail opens.
+        m.update(Action::ListChoose { axis: Axis::Right });
+        assert!(!m.drawer_collapsed());
+    }
+
     /// The owner: reopening shows what was collapsed. The transcript collapsed beside a
     /// conversation: ⌘⇧R brings the transcript back, not the conversation.
     #[test]
@@ -400,7 +429,7 @@ mod tests {
         assert_eq!((m.rail_selected(), m.rail_shown()), (Some(task(1)), None));
     }
 
-    /// ⌘⇧L and the left rail's → open the sidebar on the section open last; ← and ⌘⇧L close it.
+    /// ⌘⇧L opens the sidebar on the section open last; ← and ⌘⇧L close it.
     #[test]
     fn the_sidebar_toggle_opens_the_section_open_last() {
         let mut m = Model::default();
