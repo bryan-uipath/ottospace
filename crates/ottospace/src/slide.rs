@@ -32,6 +32,10 @@ impl Workspace {
             .flex()
             .items_center()
             .rounded_md()
+            // Reads as a button: outlined, filled, brighter under the pointer.
+            .border_1()
+            .border_color(rgb(theme::BORDER_STRONG))
+            .bg(rgb(theme::RAISED))
             .cursor_pointer()
             .hover(|s| s.bg(rgb(theme::SELECTED)))
             .child(arrow)
@@ -53,7 +57,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ⌘⇧L, the sidebar's ← or the left rail's →: the bar closes, or opens on the section open last.
+    /// ⌘⇧L: the bar closes, or opens on the section open last.
     pub(crate) fn sidebar_toggle(&mut self, window: &Window, cx: &mut Context<Self>) {
         let section = self.model.sidebar_toggled();
         self.dispatch(Action::ToggleSection { section }, self.input, window, cx);

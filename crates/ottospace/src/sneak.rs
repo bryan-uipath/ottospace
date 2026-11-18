@@ -310,7 +310,6 @@ impl Workspace {
             return;
         }
         let action = match (kind, name) {
-            ("rail", "open") => Some(Action::ToggleSection { section: self.model.sidebar_toggled() }),
             ("rail", _) => {
                 let section = SECTIONS.iter().find(|(_, _, label)| crate::rail_id(label) == format!("rail:{name}"));
                 section.map(|(section, ..)| Action::ToggleSection { section: *section })

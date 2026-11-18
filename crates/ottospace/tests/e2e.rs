@@ -6966,9 +6966,8 @@ fn the_rail_holds_the_tasks_then_the_transcript_always_and_only_the_user_switche
     let two_items = otto.drawn();
     assert_eq!(kinds(&two_items), ["task", "transcript"], "{}", two_items["drawer"]["rail"]);
     assert_eq!(rail_tasks(&two_items), [one]);
-    // The user's click on the transcript shows it here; a client's on the task does nothing.
-    let shown = otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
-    assert_eq!(picked(&shown).as_deref(), Some("transcript"));
+    // Started, the transcript shows here; a client's click on the task does nothing.
+    assert_eq!(picked(&two_items).as_deref(), Some("transcript"));
     otto.listen_rect("listen-view");
     let theirs = otto.click(at(otto.control(&format!("drawer-rail:{one}")), 0.5, 0.5), 1);
     assert_eq!(picked(&theirs).as_deref(), Some("transcript"), "{}", theirs["notice"]);
@@ -6983,7 +6982,6 @@ fn the_rail_holds_the_tasks_then_the_transcript_always_and_only_the_user_switche
     assert_eq!(keyed["focus"], json!({"drawer_rail": {"kind": "transcript"}}), "{}", keyed["focus"]);
     otto.user_key("escape");
     // Stopped, the transcript stays on the rail, idle, and the drawer on its idle view.
-    otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
     otto.user_click(at(otto.listen_rect("listen-stop:view"), 0.5, 0.5));
     let stopped = otto.drawn();
     assert_eq!(kinds(&stopped), ["task", "transcript"], "{}", stopped["drawer"]["rail"]);
@@ -7066,6 +7064,58 @@ fn the_drawer_collapses_into_the_rail_from_the_transcript_or_a_task_and_only_the
     assert!(otto.control_opt("drawer-rail:open").is_none());
     let reopened = otto.user_click(at(otto.control(&format!("drawer-rail:{one}")), 0.5, 0.5));
     assert_eq!(reopened["drawer"]["collapsed"], false);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// The owner: "how come clicking the transcript button doesn't toggle the right rail?". The
+/// user's click on the item the drawer shows collapses it, as the left rail's open cell; again,
+/// it opens on it. The transcript records on. A client's click is refused.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_click_on_the_rails_item_shown_collapses_the_drawer_and_again_opens_it() {
+    let root = support::temp(&format!("ottospace-e2e-rail-toggle-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, sessions) = (root.join("bin"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    let fixture = root.join("fixture.jsonl");
+    std::fs::write(&fixture, LISTEN_FIXTURE).unwrap();
+    let settings =
+        json!({"repos": [], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("rail-toggle", &settings.to_string());
+    let env = [
+        ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "transcripts"),
+        ("OTTOSPACE_LISTEN_FIXTURE", fixture.to_str().unwrap()),
+    ];
+    let otto = Otto::launch_with("rail-toggle", &env);
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.user_key("cmd-d");
+    otto.user_key("cmd-n");
+    otto.user_key("o n e");
+    let one = otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the task");
+    otto.user_click(at(otto.listen_rect("listen-start:1"), 0.5, 0.5));
+    for (item, kind) in [(format!("drawer-rail:{one}"), "task"), ("drawer-rail:transcript".into(), "transcript")] {
+        let click = |otto: &Otto| at(otto.control(&item), 0.5, 0.5);
+        // Shown: selected, the drawer open. Not yet: a click shows it.
+        let drawn = otto.drawn();
+        let rail = drawn["drawer"]["rail"].as_array().cloned().unwrap_or_default();
+        let selected = rail.iter().any(|it| it["selected"] == true && it["kind"] == kind);
+        if !selected || drawn["drawer"]["collapsed"] == true {
+            otto.user_click(click(&otto));
+        }
+        assert_eq!(otto.drawn()["drawer"]["collapsed"], false, "{item}");
+        // A client's click on it: refused, still open.
+        assert_eq!(otto.click(click(&otto), 1)["drawer"]["collapsed"], false, "{item}");
+        let folded = otto.user_click(click(&otto));
+        assert_eq!(
+            (&folded["drawer"]["collapsed"], &folded["state"]["listen"]["status"]),
+            (&json!(true), &json!("on")),
+            "{item}"
+        );
+        assert_eq!(otto.user_click(click(&otto))["drawer"]["collapsed"], false, "{item}");
+    }
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -7213,21 +7263,20 @@ fn the_new_task_box_starts_its_task_where_it_was_opened_or_where_switch_brings_i
 }
 
 /// The owner: "for both the left pane and right pane we should have a <- and -> slide in arrow".
-/// The sidebar's ← collapses it into the left rail; the rail's →, or ⌘⇧L, opens it on the
-/// section open last. Each arrow's key is in its tooltip only.
+/// The sidebar's ← collapses it into the left rail; ⌘⇧L opens it on the section open last. No
+/// expand button (the owner): a click on a section's cell opens it, on the open one closes it.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_sidebar_collapses_into_the_left_rail_and_opens_on_the_section_open_last() {
     let otto = Otto::launch("sidebar-slide");
     otto.user_click(at(otto.control("rail:tasks"), 0.5, 0.5));
     assert_eq!(otto.drawn()["state"]["sidebar"], "tasks");
-    assert!(otto.control_opt("rail:open").is_none());
     assert!(otto.user_click(at(otto.control("bar:close"), 0.5, 0.5))["state"]["sidebar"].is_null());
-    let (open, rail) = (otto.control("rail:open"), otto.control("rail:tasks"));
-    assert!(open[0] >= rail[0] - 1. && open[0] + open[2] <= rail[0] + rail[2] + 9., "{open:?} {rail:?}");
-    assert_eq!(otto.user_click(at(open, 0.5, 0.5))["state"]["sidebar"], "tasks");
-    assert!(otto.user_key("cmd-shift-l")["state"]["sidebar"].is_null());
+    assert_eq!(otto.user_click(at(otto.control("rail:tasks"), 0.5, 0.5))["state"]["sidebar"], "tasks");
+    assert!(otto.user_click(at(otto.control("rail:tasks"), 0.5, 0.5))["state"]["sidebar"].is_null());
     assert_eq!(otto.user_key("cmd-shift-l")["state"]["sidebar"], "tasks");
+    assert!(otto.user_key("cmd-shift-l")["state"]["sidebar"].is_null());
+    assert_eq!(otto.user_click(at(otto.control("rail:repos"), 0.5, 0.5))["state"]["sidebar"], "repos");
 }
 
 /// A workspace keeps what is open in it: made with +, a terminal in a folder, closed with × and
