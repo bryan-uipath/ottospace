@@ -26,6 +26,7 @@ use ottospace_core::diff::{self, Change, Diff, Sign};
 use ottospace_core::gist;
 use ottospace_core::links::Target;
 use ottospace_core::model::chat::{self, Key, Primary};
+use ottospace_core::scrollbar::LATEST;
 use ottospace_core::talk::Subject;
 use ottospace_core::transcript::{
     By, Call, Entry, Event, Item, MAX_CARDS, NoteKind, Notice, Status, Text, View, clean,
@@ -33,6 +34,7 @@ use ottospace_core::transcript::{
 use ottospace_core::{Action, Origin, theme};
 
 use crate::markdown::{self, Block, Span};
+use crate::scrollbar::{Axis, Fade, extent};
 use crate::{Tooltip, Workspace};
 
 /// Whose markdown is drawn, for its links and pictures: a conversation's (inside its task's
@@ -543,8 +545,7 @@ impl Workspace {
     /// The wheel over the transcript: scrolled up, it stays; back at the bottom, it follows again.
     fn chat_wheel(&mut self, subject: &Subject, cx: &mut Context<Self>) {
         if let Some(look) = self.drawer.looks.get_mut(subject) {
-            let (offset, max) = (look.scroll.offset().y, look.scroll.max_offset().height);
-            look.away = -offset < max - px(4.);
+            look.away = extent(&look.scroll, Axis::Down).beyond(LATEST).1;
         }
         cx.notify();
     }
@@ -603,9 +604,10 @@ impl Workspace {
         let moved = move |cx: &mut gpui::App| drop(this.update(cx, |this, cx| this.chat_wheel(&who, cx)));
         let bar = self.bars.follow(
             &format!("chat:{key}"),
-            crate::scrollbar::Axis::Down,
+            Axis::Down,
             &scroll,
-            (theme::BACKGROUND, (0., 0.)),
+            // On its latest within `LATEST`, as `chat_wheel` says: no fade at its foot then.
+            Fade { within: LATEST, ..Fade::to(theme::BACKGROUND) },
             !away,
             moved,
         );

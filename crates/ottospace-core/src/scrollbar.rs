@@ -15,6 +15,8 @@ pub const IDLE_MS: u64 = 1000;
 pub const FADE_MS: u64 = 200;
 /// How deep an edge fade reaches into the area, at most a quarter of it.
 pub const EDGE_FADE: f32 = 20.;
+/// Within this of its end a chat is on its latest: it follows, shows no Jump and no fade there.
+pub const LATEST: f32 = 4.;
 
 /// A scroll area along one axis.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -99,13 +101,14 @@ impl Extent {
         (self.at() + pages * self.viewport).clamp(0., self.max_offset())
     }
 
-    /// Which edges fade, `(start, end)`: those with more content beyond them. Half a point is rounding.
-    pub fn beyond(&self) -> (bool, bool) {
-        let max = self.max_offset();
-        if max < 0.5 || self.viewport.is_nan() || self.viewport <= 0. {
+    /// Which edges fade, `(start, end)`: those with more than `within` beyond them. Half a point
+    /// at least: that much is rounding.
+    pub fn beyond(&self, within: f32) -> (bool, bool) {
+        let (max, within) = (self.max_offset(), within.max(0.5));
+        if max < within || self.viewport.is_nan() || self.viewport <= 0. {
             return (false, false);
         }
-        (self.at() >= 0.5, max - self.at() >= 0.5)
+        (self.at() >= within, max - self.at() >= within)
     }
 
     /// The offset after a step from the keyboard. `line`: how far one line goes.
@@ -187,8 +190,12 @@ mod tests {
             ((100., 400., f32::NAN), (false, true)),
         ];
         for ((viewport, content, offset), edges) in cases {
-            assert_eq!(extent(viewport, content, offset).beyond(), edges, "{viewport} {content} {offset}");
+            assert_eq!(extent(viewport, content, offset).beyond(0.), edges, "{viewport} {content} {offset}");
         }
+        // A chat within `LATEST` of its end is on its latest: no fade at its foot.
+        assert_eq!(extent(100., 400., 297.).beyond(LATEST), (true, false));
+        assert_eq!(extent(100., 400., 295.).beyond(LATEST), (true, true));
+        assert_eq!(extent(100., 102., 0.).beyond(LATEST), (false, false));
     }
 
     #[test]

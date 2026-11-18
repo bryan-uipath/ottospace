@@ -4658,8 +4658,14 @@ impl Workspace {
         let panel = dialog::panel(theme::BORDER_STRONG).min_h_0().max_w_full().flex().flex_col().overflow_hidden();
         // The columns keep their height inside the list: a flex row would stretch them to its own.
         let list = div().id("keys-rows").flex_1().overflow_y_scroll().child(body);
-        let panel =
-            panel.child(self.bars.rounded("keys", list, theme::RAISED, (dialog::RADIUS - 1., dialog::RADIUS - 1.)));
+        let panel = panel.child(self.bars.rounded(
+            "keys",
+            list,
+            scrollbar::Fade {
+                radius: (dialog::RADIUS - 1., dialog::RADIUS - 1.),
+                ..scrollbar::Fade::to(theme::RAISED)
+            },
+        ));
         dialog::backdrop("keys-backdrop", 0.5, Action::CloseKeys, cx)
             .p_6()
             .flex()

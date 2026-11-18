@@ -3,16 +3,16 @@
 //! at each edge with more beyond it. Where the thumb is, what a drag or a click scrolls to and
 //! which edges fade are the core's rules (`ottospace_core::scrollbar`).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, App, Bounds, Corners, DispatchPhase, Div, HitboxBehavior, Hsla, IntoElement, MouseButton,
-    MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, ScrollHandle, Stateful,
-    StatefulInteractiveElement, Styled, Window, canvas, div, fill, linear_color_stop, linear_gradient, point, px, rgb,
-    size,
+    AnyElement, App, Bounds, Corners, DispatchPhase, Div, HitboxBehavior, Hsla, InteractiveElement, IntoElement,
+    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
+    ScrollHandle, ScrollWheelEvent, Stateful, StatefulInteractiveElement, Styled, Window, canvas, div, fill,
+    linear_color_stop, linear_gradient, point, px, rgb, size,
 };
 use ottospace_core::scrollbar::{self as rules, EDGE_FADE, Extent, Step};
 use ottospace_core::theme;
@@ -56,6 +56,8 @@ struct Bar {
     drawn: Option<(Bounds<Pixels>, Bounds<Pixels>, f32)>,
     /// Its axis and which edges fade, `(start, end)`, as last laid out; also for a list that fits.
     faded: Option<(Axis, bool, bool)>,
+    /// The user's wheel events over a row that only they show (`tracked_row`).
+    wheels: Rc<Cell<f32>>,
 }
 
 /// Every scroll area's bar, by the area's id.
@@ -63,7 +65,7 @@ struct Bar {
 pub struct Bars(Rc<RefCell<BTreeMap<String, Bar>>>);
 
 /// A list's extent along `axis` as last laid out.
-fn extent(handle: &ScrollHandle, axis: Axis) -> Extent {
+pub(crate) fn extent(handle: &ScrollHandle, axis: Axis) -> Extent {
     let (bounds, offset, max) = (handle.bounds().size, handle.offset(), handle.max_offset());
     let (viewport, offset, max) = match axis {
         Axis::Down => (bounds.height, offset.y, max.height),
@@ -91,36 +93,46 @@ impl Bars {
     /// `list` (an `overflow_y_scroll` element that fills its parent) with its bar over it, its
     /// edges fading into `bg`, the colour behind it.
     pub fn area(&self, id: &str, list: Stateful<Div>, bg: u32) -> Div {
-        self.rounded(id, list, bg, (0., 0.))
+        self.rounded(id, list, Fade::to(bg))
     }
 
-    /// As `area`, against a panel's corners rounded by `radius` at its start and its end (top,
-    /// bottom): the fades round with them.
-    pub fn rounded(&self, id: &str, list: Stateful<Div>, bg: u32, radius: (f32, f32)) -> Div {
+    /// As `area`, its edges fading as `fade` says (a panel's rounded corners).
+    pub fn rounded(&self, id: &str, list: Stateful<Div>, fade: Fade) -> Div {
         let handle = self.0.borrow_mut().entry(id.into()).or_default().handle.clone();
-        self.down(id, list.track_scroll(&handle), &handle, (bg, radius))
+        self.down(id, list.track_scroll(&handle), &handle, fade, true)
     }
 
     /// As `area`, for a list that already scrolls under `handle`.
     pub fn tracked(&self, id: &str, list: impl IntoElement, handle: &ScrollHandle, bg: u32) -> Div {
-        self.down(id, list, handle, (bg, (0., 0.)))
+        self.down(id, list, handle, Fade::to(bg), true)
     }
 
-    fn down(&self, id: &str, list: impl IntoElement, handle: &ScrollHandle, fade: Fade) -> Div {
-        let bar = self.follow(id, Axis::Down, handle, fade, false, |_| {});
+    /// As `tracked`, its track paging nothing: a press beside the thumb is the item's under it (the rail's).
+    pub fn tracked_under(&self, id: &str, list: impl IntoElement, handle: &ScrollHandle, bg: u32) -> Div {
+        self.down(id, list, handle, Fade::to(bg), false)
+    }
+
+    fn down(&self, id: &str, list: impl IntoElement, handle: &ScrollHandle, fade: Fade, pages: bool) -> Div {
+        let bar = self.bar_of(id, Axis::Down, handle, fade, pages, |extent| extent.offset, |_| {});
         div().relative().flex_1().min_h_0().flex().flex_col().child(list).child(bar)
     }
 
     /// As `tracked`, for a row that scrolls across (`overflow_x_scroll`), its bar along the
     /// bottom: as wide as the row's content, narrower when its parent has less room. The bar only
-    /// shows: a press on it is the row's (a tab's), and the wheel scrolls it.
+    /// shows: a press on it is the row's (a tab's), and the wheel scrolls it. Only the user's
+    /// wheel shows it, not a scroll from code (the tab on show brought into view).
     pub fn tracked_row(&self, id: &str, row: impl IntoElement, handle: &ScrollHandle, bg: u32) -> Div {
-        let bar = self.follow(id, Axis::Across, handle, (bg, (0., 0.)), false, |_| {});
-        div().relative().flex_shrink().min_w_0().h_full().flex().child(row).child(bar)
+        let wheels = self.0.borrow_mut().entry(id.into()).or_default().wheels.clone();
+        let counted = wheels.clone();
+        let bar = self.bar_of(id, Axis::Across, handle, Fade::to(bg), false, move |_| counted.get(), |_| {});
+        let wheeled = move |_: &ScrollWheelEvent, window: &mut Window, _: &mut App| {
+            wheels.set(wheels.get() + 1.);
+            window.refresh();
+        };
+        div().relative().flex_shrink().min_w_0().h_full().flex().child(row).child(bar).on_scroll_wheel(wheeled)
     }
 
-    /// The bar and fades of a list under `handle`, alone, over its parent. `fade`: the colour
-    /// behind it and the radius of its container's corners at its start and end. `pinned`: the list
+    /// The bar and fades of a list under `handle`, alone, over its parent. `pinned`: the list
     /// keeps to its end (a chat on its latest), so growing there is no scroll that shows the bar.
     /// `moved`: after the bar scrolled it (a drag, a page).
     pub fn follow(
@@ -132,16 +144,32 @@ impl Bars {
         pinned: bool,
         moved: impl Fn(&mut App) + 'static,
     ) -> AnyElement {
+        let by = move |extent: Extent| if pinned { extent.offset - extent.max_offset() } else { extent.offset };
+        self.bar_of(id, axis, handle, fade, true, by, moved)
+    }
+
+    /// The bar of a list under `handle`: `by`, the number whose change shows it.
+    #[allow(clippy::too_many_arguments)] // Each is one area's own; a struct would only rename them.
+    fn bar_of(
+        &self,
+        id: &str,
+        axis: Axis,
+        handle: &ScrollHandle,
+        fade: Fade,
+        pages: bool,
+        by: impl Fn(Extent) -> f32 + 'static,
+        moved: impl Fn(&mut App) + 'static,
+    ) -> AnyElement {
         let (read, write) = (handle.clone(), handle.clone());
         let read = move || {
             let extent = extent(&read, axis);
-            (extent, if pinned { extent.offset - extent.max_offset() } else { extent.offset })
+            (extent, by(extent))
         };
         let scroll = move |offset, cx: &mut App| {
             scroll_to(&write, axis, offset);
             moved(cx);
         };
-        self.overlay(id, axis, true, Some(fade), read, scroll)
+        self.overlay(id, axis, pages, Some(fade), read, scroll)
     }
 
     /// Scrolls an `area`'s list so its child `ix` is in view.
@@ -178,7 +206,7 @@ impl Bars {
         canvas(
             move |area, window, _| {
                 let (extent, moved_by) = read();
-                let edges = extent.beyond();
+                let edges = extent.beyond(fade.map_or(0., |fade| fade.within));
                 // Only an area that fades is listed: a terminal's lines run to its edges.
                 if let Some(bar) = laid.0.borrow_mut().get_mut(&laid_id).filter(|_| fade.is_some()) {
                     bar.faded = Some((axis, edges.0, edges.1));
@@ -375,13 +403,32 @@ impl Bars {
     }
 }
 
-/// The colour behind an area, and the radius of its container's corners at its start and end.
-pub type Fade = (u32, (f32, f32));
+/// How an area's edges fade: into `bg`, the colour behind it, its outer corners rounded by
+/// `radius` (start, end) as its container's, where more than `within` lies beyond (`Extent::beyond`).
+#[derive(Clone, Copy, Default)]
+pub struct Fade {
+    pub bg: u32,
+    pub radius: (f32, f32),
+    pub within: f32,
+}
+
+impl Fade {
+    /// Into `bg`, square, wherever anything lies beyond.
+    pub fn to(bg: u32) -> Fade {
+        Fade { bg, ..Fade::default() }
+    }
+}
 
 /// The fades at an area's edges with more beyond them (`edges`: start, end): `bg`, the colour
 /// behind the area, clearing into the area over `EDGE_FADE` (at most a quarter of it), its outer
 /// corners rounded by `radius` (start, end) as its panel's. Drawn only: a press or hover goes through to the row under it.
-fn paint_fades(area: Bounds<Pixels>, axis: Axis, edges: (bool, bool), (bg, radius): Fade, window: &mut Window) {
+fn paint_fades(
+    area: Bounds<Pixels>,
+    axis: Axis,
+    edges: (bool, bool),
+    Fade { bg, radius, .. }: Fade,
+    window: &mut Window,
+) {
     let (solid, clear) = (Hsla::from(rgb(bg)), Hsla::from(rgb(bg)).opacity(0.));
     let (w, h) = (area.size.width, area.size.height);
     let depth = px(EDGE_FADE).min(if axis == Axis::Down { h } else { w } / 4.);

@@ -9,6 +9,7 @@ use ottospace_core::keys::{self, FilterKey};
 use ottospace_core::{Action, theme};
 
 use crate::Workspace;
+use crate::scrollbar::Fade;
 
 /// Corner radius of a panel, and of what sits inside one.
 pub const RADIUS: f32 = 13.;
@@ -93,7 +94,7 @@ impl Workspace {
             .child(header.px_3().flex().items_center().gap_2().border_b_1().border_color(rgb(theme::BORDER)))
             .when(none, |d| d.child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child(empty)))
             // Long lists scroll inside the panel, their foot in its rounded corners.
-            .child(self.bars.rounded(name, list, theme::RAISED, (0., RADIUS - 1.)))
+            .child(self.bars.rounded(name, list, Fade { radius: (0., RADIUS - 1.), ..Fade::to(theme::RAISED) }))
     }
 
     /// A key while a filtered list is open: `action` is what a list key does (`keys::filter_key`),

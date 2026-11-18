@@ -4829,7 +4829,10 @@ fn a_long_list_fades_where_more_lies_beyond_and_a_short_one_nowhere() {
     for _ in 0..30 {
         otto.call(json!({"cmd": "new_tab"}));
     }
-    assert_eq!(fades(&otto.drawn(), "tabs"), json!({"left": true, "right": false}));
+    let scrolled = otto.drawn();
+    assert_eq!(fades(&scrolled, "tabs"), json!({"left": true, "right": false}));
+    // Scrolled by code (the tab on show brought into view): no bar.
+    assert_eq!(scrollbar(&scrolled, "tabs").map(|(.., opacity)| opacity), Some(0.0), "{}", scrolled["scrollbars"]);
     // The row's bar only shows: a click on a tab's foot, where the bar lies, selects that tab.
     let tabs = otto.call(json!({"cmd": "state"}))["state"]["tabs"].as_array().cloned().unwrap();
     let before = tabs.len() - 2;
@@ -4846,7 +4849,10 @@ fn a_long_list_fades_where_more_lies_beyond_and_a_short_one_nowhere() {
     let end = otto.drawn();
     assert_eq!(fades(&end, "tabs"), json!({"left": true, "right": false}));
     let (track, ..) = scrollbar(&end, "tabs").expect("the row's bar");
-    assert_eq!(fades(&otto.wheel(at(track, 0.5, 0.5), 50_000.0, true), "tabs"), json!({"left": false, "right": true}));
+    let wheeled = otto.wheel(at(track, 0.5, 0.5), 50_000.0, true);
+    assert_eq!(fades(&wheeled, "tabs"), json!({"left": false, "right": true}));
+    // The user's wheel shows it.
+    assert!(scrollbar(&wheeled, "tabs").is_some_and(|(.., opacity)| opacity > 0.0), "{}", wheeled["scrollbars"]);
     let row: Vec<Value> =
         end["spaces"].as_array().into_iter().flatten().filter(|s| s["hidden"] == false).cloned().collect();
     let back = row.iter().position(|s| s["selected"] == true).expect("a workspace selected");
