@@ -236,6 +236,8 @@ struct Hosted {
     placed: CGRect,
     /// Where it was last parked: it parks again when the spot moves (`display::parking_spot`).
     parked_at: CGPoint,
+    /// The width the window kept when its pane asked for less: no split may leave it narrower.
+    min_width: Option<f64>,
 }
 
 impl Hosted {
@@ -301,6 +303,7 @@ impl Hosted {
             preview: Rc::default(),
             placed: CGRect::default(),
             parked_at: CGPoint::ZERO,
+            min_width: None,
         })
     }
 
@@ -563,11 +566,11 @@ pub(crate) fn rail_id(label: &str) -> String {
 
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 6] = [
+    (Section::Repos, "icons/repos.svg", "Repos"),
     (Section::Tasks, "icons/tasks.svg", "Tasks"),
     (Section::Calendar, "icons/calendar.svg", "Calendar"),
     (Section::Apps, "icons/apps.svg", "Apps"),
     (Section::Workbook, "icons/workbook.svg", "Workspaces"),
-    (Section::Repos, "icons/repos.svg", "Repos"),
     (Section::Marks, "icons/marks.svg", "Marks"),
 ];
 
@@ -3585,7 +3588,8 @@ impl Workspace {
     fn attach(&mut self, hosted: Hosted, action: Action, window: &Window, cx: &mut Context<Self>) -> Option<PaneId> {
         let pid = hosted.pid;
         if !self.known.iter().any(|(p, _)| *p == pid) {
-            let ids = ax::Window::standard_of(pid).iter().filter_map(ax::Window::id).collect();
+            // Its dialogs open now too: only those that open later are judged (`adopt_new_windows`).
+            let ids = ax::Window::all_of(pid).iter().filter(|w| w.judged()).filter_map(ax::Window::id).collect();
             self.known.push((pid, ids));
         }
         let effects = self.dispatch(action, self.input, window, cx);
@@ -3834,26 +3838,57 @@ impl Workspace {
         }
     }
 
-    /// Hosts windows that appeared since we started watching their app (e.g. undocked DevTools),
-    /// each to the right of its app's newest pane.
+    /// Hosts windows that appeared since we started watching their app (e.g. a second browser
+    /// window), each to the right of its app's newest pane. A pop-up stays a free window over that
+    /// pane (`rules::place`). Each window is judged once, when first seen as standard or a dialog.
     fn adopt_new_windows(&mut self, window: &Window, cx: &mut Context<Self>) {
         let mut fresh = Vec::new();
         for (pid, seen) in &mut self.known {
-            for window in ax::Window::standard_of(*pid) {
-                // A window the rules leave alone is seen once and never becomes a pane.
+            for window in ax::Window::all_of(*pid) {
+                // A toast or popover is looked at again next time: it may become a window.
                 if let Some(id) = window.id()
-                    && seen.insert(id)
-                    && window_managed(&window)
+                    && !seen.contains(&id)
+                    && window.quick(ax::Window::judged)
                 {
+                    seen.insert(id);
                     fresh.push(window);
                 }
             }
         }
+        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
         for ax_window in fresh {
-            if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
-                let beside = self.hosted.iter().filter(|(_, h)| h.pid == hosted.pid).map(|(id, _)| *id).max();
-                let action = Action::Adopt { kind: hosted.kind(), beside, seen: None };
-                self.attach(hosted, action, window, cx);
+            let pid = ax_window.pid();
+            let beside = self.hosted.iter().filter(|(_, h)| h.pid == pid).map(|(id, _)| *id).max();
+            // The pane it would split, if drawn: a background tab's bounds are stale.
+            let pane = beside.filter(|id| drawn.contains(id)).and_then(|id| self.hosted.get(&id));
+            let pane = pane.map(|h| (h.bounds.get(), h.min_width)).filter(|(b, _)| f32::from(b.size.width) >= 1.0);
+            // A short wait for each read: a hung app costs a blink, not seconds.
+            let (frame, modal, sheet) = ax_window.quick(|w| (w.frame(), w.modal(), w.sheet()));
+            let shape = rules::Shape {
+                modal,
+                sheet,
+                size: frame.map(|f| [f.size.width, f.size.height]),
+                pane: pane.map(|(b, _)| to_cg(b.size)).map(|s| [s.width, s.height]),
+                min_width: pane.and_then(|(_, min)| min),
+            };
+            match ax_window.quick(|w| window_place(w, &shape)) {
+                rules::Place::Split => {
+                    if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
+                        let action = Action::Adopt { kind: hosted.kind(), beside, seen: None };
+                        self.attach(hosted, action, window, cx);
+                    }
+                }
+                // Only while its app has a pane: an app given back is left alone.
+                rules::Place::Float if beside.is_some() => {
+                    let pane = pane.map(|(b, _)| recovery::to_frame(on_screen(b, window, cx)));
+                    let screens = recovery::screens();
+                    let to = frame
+                        .and_then(|f| rules::float_to(recovery::to_frame(f), pane, &screens.visible, screens.main));
+                    let moved = to.is_some_and(|(x, y)| ax_window.set_position(CGPoint::new(x, y)).is_ok());
+                    ax_window.raise_only();
+                    trace::record("float", serde_json::json!({ "window": ax_window.id(), "moved": moved }));
+                }
+                rules::Place::Float | rules::Place::Leave => {}
             }
         }
     }
@@ -3898,6 +3933,7 @@ impl Workspace {
                 && let Some(frame) = self.frames.get(id)
                 && drawn.contains(id)
             {
+                hosted.min_width = rules::refused_width(hosted.min_width, kept.width, rect.size.width);
                 let content = [rect.size.width as f32, rect.size.height as f32];
                 // The pane's size with its 1pt border.
                 let outer = frame.get().size;
@@ -6828,6 +6864,16 @@ fn list_button(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
 
 /// True if the window rules (the user's, then the built-in ones) let this window be put in a pane.
 fn window_managed(window: &ax::Window) -> bool {
+    with_facts(window, |facts| rules::manages(&config::live().windows, facts))
+}
+
+/// Where a new window of a hosted app goes, by the window rules and its `shape`.
+fn window_place(window: &ax::Window, shape: &rules::Shape) -> rules::Place {
+    with_facts(window, |facts| rules::place(&config::live().windows, facts, shape))
+}
+
+/// `judge` given what the window rules select by, read from the window.
+fn with_facts<R>(window: &ax::Window, judge: impl FnOnce(&Facts) -> R) -> R {
     let (bundle, name) = ax::app_identity(window.pid());
     let (title, subrole) = (window.title().unwrap_or_default(), window.subrole().unwrap_or_default());
     let identifier = window.identifier();
@@ -6838,7 +6884,7 @@ fn window_managed(window: &ax::Window) -> bool {
         subrole: &subrole,
         identifier: identifier.as_deref(),
     };
-    rules::manages(&config::live().windows, &facts)
+    judge(&facts)
 }
 
 /// Apps that can be hosted right now. In a test run limited to one app, only that app.

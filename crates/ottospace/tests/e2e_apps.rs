@@ -224,6 +224,59 @@ fn a_window_the_rules_ignore_never_becomes_a_pane() {
 
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_still_splits() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-popup", "CANARY_SOCKET", &[]);
+    let frame = |index: usize| rect(&canary.call(json!({"cmd": "state"}))["windows"][index]["bounds"]);
+    wait_for("the canary window", || frame(0));
+    let otto = otto_for(&canary, "otto-popup", &[]);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let pane = |id: u64| rect(&state()["bounds"][id.to_string()]).filter(|b| b[2] > 1.0);
+    let hosted = || state()["hosted"].as_object().map_or(0, |hosted| hosted.len());
+    let spot = host_and_park(&otto);
+    let body = wait_for("the pane layout", || pane(1));
+    // The pane's content on the canary's screen.
+    let window = rect(&state()["window"]).expect("ottospace window frame");
+    let over_pane = |f: [f64; 4]| {
+        let [x, y] = middle(f);
+        x > window[0] + body[0]
+            && x < window[0] + body[0] + body[2]
+            && y > window[1] + body[1]
+            && y < window[1] + body[1] + body[3]
+    };
+
+    // A dialog the app opens over its parked window, off screen, as macOS places one by its
+    // parent: no pane, the app's pane as it was, the dialog over it at its own size. 700×450 is
+    // no small window: only its subrole makes it a pop-up.
+    canary.call(json!({"cmd": "dialog", "at": spot}));
+    // Settled: where it is now is where it was a moment ago (the canary and ottospace both move it).
+    let dialog = wait_for("the dialog to settle over the pane", || {
+        let before = frame(1).filter(|f| over_pane(*f))?;
+        std::thread::sleep(Duration::from_millis(800));
+        (frame(1) == Some(before)).then_some(before)
+    });
+    // GPUI's bounds hold the title bar too.
+    assert!(close(dialog[2], 700.0) && (450.0..520.0).contains(&dialog[3]), "its own size: {dialog:?}");
+    // A small standard window: the same.
+    canary.call(json!({"cmd": "open_window", "fixed": [420.0, 300.0]}));
+    wait_for("the small window", || frame(2));
+    std::thread::sleep(Duration::from_millis(1200));
+    assert_eq!(state()["tab_panes"], json!([[1]]), "no pane for either");
+    assert_eq!(hosted(), 1);
+    assert_eq!(pane(1), Some(body), "the app's pane kept its rect");
+    assert_eq!(frame(1), Some(dialog), "the dialog stays where it was put");
+    let small = frame(2).expect("the small window");
+    assert!(close(small[2], 420.0) && reachable(small), "the small one, at its size, on screen: {small:?}");
+
+    // A big standard window still gets a pane of its own, to the right. Wider than half the
+    // pane and taller than 400: not small on any screen.
+    canary.call(json!({"cmd": "open_window", "min": [body[2] * 0.6, 420.0]}));
+    wait_for("the big window's pane", || (state()["tab_panes"] == json!([[1, 2]])).then_some(()));
+    assert_eq!(hosted(), 2);
+    assert_eq!(state()["state"]["panes"][1]["kind"]["title"], "Canary 4");
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
 fn a_canary_window_is_hosted_entered_left_and_restored() {
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary", "CANARY_SOCKET", &[]);
     let frame = |index: usize| rect(&canary.call(json!({"cmd": "state"}))["windows"][index]["bounds"]);
@@ -616,6 +669,7 @@ fn a_window_that_refuses_the_pane_size_is_shown_unscaled_at_the_pane_top_left() 
     let windows = || canary.call(json!({"cmd": "state"}))["windows"].clone();
     let frame = |index: usize| rect(&windows()[index]["bounds"]);
     wait_for("the canary window", || frame(0));
+    let home = splitting_home("size");
     let otto = Proc::launch(
         env!("CARGO_BIN_EXE_ottospace"),
         "otto-size",
@@ -624,6 +678,7 @@ fn a_window_that_refuses_the_pane_size_is_shown_unscaled_at_the_pane_top_left() 
             ("OTTOSPACE_E2E", "1"),
             ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
             ("OTTOSPACE_RETURN_KEY", "f19"),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
         ],
     );
     let state = || otto.call(json!({"cmd": "state"}));
@@ -783,6 +838,7 @@ fn a_window_that_refuses_the_pane_size_is_shown_unscaled_at_the_pane_top_left() 
 fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-fit", "CANARY_SOCKET", &[]);
     wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let home = splitting_home("fit");
     let otto = Proc::launch(
         env!("CARGO_BIN_EXE_ottospace"),
         "otto-fit",
@@ -791,6 +847,7 @@ fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
             ("OTTOSPACE_E2E", "1"),
             ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
             ("OTTOSPACE_RETURN_KEY", "f19"),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
         ],
     );
     let state = || otto.call(json!({"cmd": "state"}));
@@ -1352,6 +1409,16 @@ fn otto_for(canary: &Proc, name: &str, env: &[(&str, &str)]) -> Proc {
     let mut all = vec![("OTTOSPACE_E2E", "1"), ("OTTOSPACE_HOST_ONLY", pid.as_str()), ("OTTOSPACE_RETURN_KEY", "f19")];
     all.extend_from_slice(env);
     Proc::launch(env!("CARGO_BIN_EXE_ottospace"), name, "OTTOSPACE_SOCKET", &all)
+}
+
+/// A home of the test's own whose one rule splits every new canary window, however small.
+fn splitting_home(name: &str) -> PathBuf {
+    let home = support::temp(&format!("otto-apps-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("make the folder");
+    // Standard windows only: GPUI's own small panels would get panes too.
+    let settings = json!({"windows": [{"app": CANARY, "subrole": "AXStandardWindow", "do": "split"}]});
+    std::fs::write(home.join("settings.json"), settings.to_string()).expect("write settings");
+    home
 }
 
 /// Hosts the canary's first window and waits for it to park. Returns the parking spot.

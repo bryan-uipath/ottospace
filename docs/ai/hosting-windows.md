@@ -87,6 +87,35 @@ the on-screen rate while parked.
 - 2026-11-10 Slack (Electron) + animated GIF, unfocused, 10s/phase: ~51 on-screen, ~50 parked. Live.
 - 2026-11-10 Chrome + YouTube muted (site + player), 30s/phase: 39 on-screen, 51 parked, 56 restored. Live.
 
+## Pop-ups: a new window that does not split
+
+A new window of a hosted app (`adopt_new_windows`, every tick) used to split its app's pane if it
+was standard: a Zoom dialog halved Zoom's pane and cut its main window off. Now `rules::place`
+judges it once, on facts the shell reads (`AXSubrole`, `AXModal`, `AXRole`/`AXParent` for a sheet,
+its size, the app pane's size, the width that pane's window has refused to go below):
+
+- **Split**: a standard window that is not small, or any window a `"do": "split"` rule selects.
+- **Float**: a dialog or panel subrole, a modal window, a standard window under 600×400 or under
+  half the pane both ways, one whose split would leave the pane narrower than its window refused
+  to go, or a `"do": "float"` rule. No pane, no stream: the window is moved, at its own size, to
+  the middle of its app's pane (`rules::float_to`) unless its middle is already over it, and
+  `AXRaise`d once without activating the app.
+- **Leave**: a sheet or a child window (macOS keeps it on its parent), an `ignore` rule, a window
+  under 100×100 with no rule (the canary, a GPUI app, has a 66×20 one off screen). Any other
+  subrole (a toast, a popover) is not judged at all, a `split` rule or not, and is looked at again
+  each tick in case it becomes a window.
+
+Each window is judged once, at first sight: one that opens small and grows stays floating.
+A pop-up of an app with no pane left is not touched.
+
+AX has no minimum size. The width a window kept when its pane asked for less (read on the
+half-second check) stands for one; a window never squeezed has none, and splits.
+
+A floating pop-up is placed once, then left to its app. Live, the app is in front and its pop-up
+with it. Parked, ottospace is in front of it, as of every window of the app; entering the pane
+brings the app, and its key window, forward again. A child window or sheet moves with its parent,
+by macOS. ottospace does not follow, park, give back or close a pop-up.
+
 ## Risks
 
 - Capture costs input: while ScreenCaptureKit streams a Finder window, macOS loses a release of
