@@ -589,6 +589,13 @@ pub enum Action {
     CloseTab {
         index: Option<usize>,
     },
+    /// The user's ⌘⇧W, a tab's × or its label: `CloseTab`, but the last tab of a temporary workspace
+    /// whose terminals run something (`running`, as for `QuitAsked`) asks first, as its × does.
+    /// Anyone else's: `CloseTab`. Never acted on: `close_tab_asked` turns it into one of those.
+    CloseTabAsked {
+        index: Option<usize>,
+        running: Vec<Running>,
+    },
     /// The apps found installed, and the bundles of those running now. The shell sends it when
     /// the picker opens and when a scan ends.
     SetInstalled {
@@ -1375,6 +1382,11 @@ pub enum Action {
     },
     /// Take the last delete or update of a workbook back, or a temporary one's close.
     WorkbookUndo,
+    /// The user's Undo on a closing temporary workspace's row: back on the row, selected, as it was.
+    /// Each closing one keeps its own until its time is up, whatever the notice bar offers since.
+    WorkbookReopen {
+        workbook: WorkbookId,
+    },
     /// … on a row of the bar: its menu (`row_menu`). On the row whose menu is open: close it.
     /// `dots`: where the … is drawn. `keys`: a key or a label opened it, so the keys are on its
     /// first item; a click's are on none.
@@ -1940,6 +1952,7 @@ impl Action {
             | Action::SelectTab { .. }
             | Action::CycleTab { .. }
             | Action::CloseTab { .. }
+            | Action::CloseTabAsked { .. }
             | Action::PickerQuery { .. }
             | Action::SetInstalled { .. }
             | Action::PickerMove { .. }
@@ -2106,7 +2119,8 @@ impl Action {
             | Action::RowMenuMove { .. }
             | Action::RowMenuChoose { .. }
             | Action::RowMenuClose
-            | Action::WorkbookUndo => false,
+            | Action::WorkbookUndo
+            | Action::WorkbookReopen { .. } => false,
             | Action::SetAgents { .. }
             | Action::ComposeEnter
             | Action::AgentStarted { .. }
@@ -2293,6 +2307,7 @@ impl Action {
             | Action::SelectTab { .. }
             | Action::CycleTab { .. }
             | Action::CloseTab { .. }
+            | Action::CloseTabAsked { .. }
             | Action::SetInstalled { .. }
             | Action::PickerQuery { .. }
             | Action::PickerMove { .. }
@@ -2437,6 +2452,7 @@ impl Action {
             | Action::RowMenuChoose { .. }
             | Action::RowMenuClose
             | Action::WorkbookUndo
+            | Action::WorkbookReopen { .. }
             | Action::SetAgents { .. }
             | Action::AgentEvents { .. }
             | Action::TalkSend
@@ -3441,9 +3457,16 @@ impl Model {
     /// key reference.
     /// `None`: the origin does not stop it. The shell answers a socket request with the reason.
     pub fn refusal(&self, action: &Action, origin: Origin) -> Option<&'static str> {
+        // Asked as what it turns into (`close_tab_asked`).
+        if let Action::CloseTabAsked { .. } = action {
+            return self.refusal(&self.close_tab_asked(action.clone().sent_by(origin)).action, origin);
+        }
         let boxed = self.picker.is_some() || self.compose_keys();
         match action {
             _ if origin == Origin::User => None,
+            // Only the user's Undo brings a closing workspace back: no client selects its tab or moves its panes.
+            _ if origin == Origin::Socket && self.touches_closing(action) => Some(workbook::CLOSING),
+            _ if self.opens_in_closing(action, origin) => Some(workbook::CLOSING_OPENS),
             // Only ottospace records what a task did in an app: no client forges or hides a row.
             // The user's is ignored (`app_used`): the shell sends it as its own.
             Action::AppUsed { .. } if origin == Origin::Socket => Some(crate::agent_mode::SHELLS_ALONE),
@@ -3587,7 +3610,8 @@ impl Model {
             | Action::RowMenuMove { .. }
             | Action::RowMenuChoose { .. }
             | Action::RowMenuClose
-            | Action::WorkbookUndo => Some(workbook::USERS_ALONE),
+            | Action::WorkbookUndo
+            | Action::WorkbookReopen { .. } => Some(workbook::USERS_ALONE),
             // Only the shell says where the menu's … is drawn.
             Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
             Action::ListChoose { .. } | Action::ListDismiss | Action::ListUndo | Action::ListMarkEdit { .. }
@@ -3916,7 +3940,7 @@ impl Model {
     }
 
     pub fn update(&mut self, sent: impl Into<Envelope>) -> Vec<Effect> {
-        let sent = self.space_click(sent.into());
+        let sent = self.close_tab_asked(self.space_click(sent.into()));
         // A feature that is off is absent: its actions change nothing and ask for nothing.
         // Nor does a pane become a slot but by `SlotMake`.
         if self.disabled(&sent.action).is_some() || sent.action.makes_slot_kind() || sent.action.makes_unsound_file() {
@@ -4247,9 +4271,10 @@ impl Model {
             action => action,
         };
         let (temporary, tick) = (self.temporary_shown(), matches!(action, Action::Tick { .. }));
+        let on_show = self.tabs.get(self.active).map(|tab| tab.id);
         self.act(action, &mut effects);
         // A temporary workspace the user took off the row closes; one whose Undo ran out goes.
-        self.settle_closing(user, tick, &temporary, &mut effects);
+        self.settle_closing(user, tick, (&temporary, on_show), &mut effects);
         if let Some((id, talk)) = shown {
             self.keep_shown(id, &mut effects);
             // A pane opened, focused or closed beside the user, a row selected, takes no keys from
@@ -4502,6 +4527,9 @@ impl Model {
                 {
                     return;
                 }
+                // A window opened beside a pane of a closing workspace joins the tab on show: what
+                // that workspace's Undo brings back stays as it was.
+                let beside = beside.filter(|pane| !self.in_closing(*pane));
                 self.next_id += 1;
                 let id = self.next_id;
                 self.panes.push(Pane { id, kind, cwd: None, fit: None });
@@ -4558,6 +4586,8 @@ impl Model {
                 let to = tabs[(at + delta as i64).rem_euclid(tabs.len() as i64) as usize];
                 self.select_tab(to, effects);
             }
+            // Turned into `CloseTab` or `SpaceHideAsked` before any step (`close_tab_asked`).
+            Action::CloseTabAsked { .. } => {}
             Action::CloseTab { index } => {
                 let index = index.unwrap_or(self.active);
                 // Home's own tab stays.
@@ -5540,6 +5570,7 @@ impl Model {
             Action::RowMenuChoose { index } => self.row_menu_choose(index, effects),
             Action::RowMenuClose => self.row_menu = None,
             Action::WorkbookUndo => self.workbook_undo(effects),
+            Action::WorkbookReopen { workbook } => self.workbook_reopen(workbook, effects),
             Action::ListReorder { delta } => match self.selected_mark() {
                 // The selection goes with the mark.
                 Some(id) => {
@@ -8720,6 +8751,7 @@ mod tests {
         Action::SelectTab { .. },
         Action::CycleTab { .. },
         Action::CloseTab { .. },
+        Action::CloseTabAsked { .. },
         Action::PickerQuery { .. },
         Action::SetInstalled { .. },
         Action::PickerMove { .. },
@@ -8906,6 +8938,7 @@ mod tests {
         Action::WorkbookEdit { .. },
         Action::WorkbookRemove { .. },
         Action::WorkbookUndo,
+        Action::WorkbookReopen { .. },
         Action::SetAgents { .. },
         Action::TaskTalk { .. },
         Action::ComposeEnter,
@@ -9014,6 +9047,7 @@ mod tests {
             Action::SelectTab { index: 0 },
             Action::CycleTab { delta: 1 },
             Action::CloseTab { index: None },
+            Action::CloseTabAsked { index: None, running: Vec::new() },
             Action::PickerQuery { query: text() },
             Action::SetInstalled { apps: Vec::new(), running: Vec::new() },
             Action::PickerMove { delta: 1 },
@@ -9211,6 +9245,7 @@ mod tests {
             Action::RowMenuChoose { index: None },
             Action::RowMenuClose,
             Action::WorkbookUndo,
+            Action::WorkbookReopen { workbook: 1 },
             Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: None, shows: View::Native },
             Action::TaskTalk { id: 1 },
             Action::ComposeEnter,
@@ -9394,6 +9429,7 @@ mod tests {
                 | Action::WorkbookRemove { .. }
                 | Action::WorkbookKeep { .. }
                 | Action::WorkbookUndo
+                | Action::WorkbookReopen { .. }
                 | Action::RowMenu { .. }
                 | Action::RowMenuMove { .. }
                 | Action::RowMenuChoose { .. }
