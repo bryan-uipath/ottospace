@@ -17,5 +17,5 @@
 {"shot":"empty-focused"}
 {"cmd":"focus_dir","dir":"left"}
 {"shot":"terminal-focused"}
-{"cmd":"key","keys":"cmd-ctrl-h","as":"user"}
+{"cmd":"key","keys":"cmd-alt-h","as":"user"}
 {"shot":"list-mode"}

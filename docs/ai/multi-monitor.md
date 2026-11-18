@@ -262,7 +262,7 @@ only for the user's moves.
 
 ### Moving panes across
 
-- **Swap** (⌘⇧⌥ arrows): at the edge it swaps with the pane across, by the same rule.
+- **Swap** (⌘⌃ arrows): at the edge it swaps with the pane across, by the same rule.
   `swap_panes` already swaps leaves in every tab's tree. The focus stays on the pane, now on the
   other display.
 - **Move to a tab** (⌘⇧⌥1–9): unchanged; moving into the tab that is out moves the pane to that
@@ -497,8 +497,8 @@ Requests:
   a sliver (offset so both show and draw); the core's geometry is the made-up frames', so the
   span-overlap rule and the different-heights fallback are both tested. Its pane bounds are read
   from the state as for the first. Tests: ⌘⇧O opens the second window with the tab and the main row marks
-  it; ⌘⌃→ from the rightmost pane focuses display 2's nearest pane and `key` is the second window;
-  ⌘⌃← comes back; → past the main drawer's rail reaches display 2's panes in screen order; the
+  it; ⌘⌥→ from the rightmost pane focuses display 2's nearest pane and `key` is the second window;
+  ⌘⌥← comes back; → past the main drawer's rail reaches display 2's panes in screen order; the
   second window's "From" strip names its workspace and tab, and its Fold back in closes it; ⌘L
   there opens its own drawer on its workspace's task; leaving the second display out of
   `displays_set` folds it in and closes the window; putting it back leaves it folded in, and
@@ -516,7 +516,7 @@ Requests:
 
 ### By hand (the owner, two displays, before the flag leaves Experimental)
 
-1. ⌘⇧O a tab with a terminal and an app pane. ⌘⌃→ ⌘⌃← across; type in each; enter the app pane on
+1. ⌘⇧O a tab with a terminal and an app pane. ⌘⌥→ ⌘⌥← across; type in each; enter the app pane on
    display 2 and use the return key: the right window is key.
 2. ⌃⌘F on each window, separately and both. With separate Spaces on: does `autoHideMenuBar` hide
    the second display's bar, and does clicking an app on one display bring the bars back on both?

@@ -252,8 +252,8 @@ fn panes_resize_swap_and_change_tab_from_the_keyboard() {
     let [one, two] = otto.bounds(&[1, 2])[..] else { panic!("two panes") };
     let total = one[2] + two[2];
 
-    // ⌘⌥← moves the split left: 1 gives 5% of the row to 2. The socket request does the same.
-    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-alt-left"}));
+    // ⌘⌥⇧← moves the split left: 1 gives 5% of the row to 2. The socket request does the same.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-alt-left"}));
     assert_eq!(reply["state"]["layout"]["split"]["ratio"], 0.45, "{reply}");
     otto.call(json!({"cmd": "resize", "dir": "left"}));
     // The frame of both moves, not the first: 45% is narrower too.
@@ -285,10 +285,10 @@ fn panes_resize_swap_and_change_tab_from_the_keyboard() {
         assert!(close[2].as_f64() > Some(1.0) && right(close) <= right(frame), "× {close} in pane {frame}");
     }
 
-    // ⌘⌃H and ⌘⌃→ move focus. ⌘⇧⌥H swaps 2 with its left neighbour; 2 keeps focus.
-    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-h"}))["state"]["focused"], 1);
-    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-right"}))["state"]["focused"], 2);
-    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-alt-h"}));
+    // ⌘⌥H and ⌘⌥→ move focus. ⌘⌃H swaps 2 with its left neighbour; 2 keeps focus.
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-alt-h"}))["state"]["focused"], 1);
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-alt-right"}))["state"]["focused"], 2);
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-h"}));
     assert_eq!(reply["state"]["focused"], 2);
     assert_eq!(reply["tab_panes"], json!([[2, 1]]));
     otto.wait_for("2 on the left", |o| Some(o.bounds(&[1, 2])).filter(|b| b[1][0] < b[0][0]));
@@ -306,6 +306,50 @@ fn panes_resize_swap_and_change_tab_from_the_keyboard() {
     // A frame of the other tab, where 1 is alone: the last one drawn may be of 1 beside 2.
     otto.wait_for("1 to fill the other tab", |o| Some(o.bounds(&[1])[0]).filter(|b| b[2] >= total));
     assert_eq!(otto.raw(r#"{"cmd":"move_pane","tab":5}"#)["ok"], false);
+}
+
+/// The user's pane keys, as iTerm2 and Ghostty have them: ⌘⌥ focuses, ⌘⌥⇧ resizes, ⌘⌃ swaps.
+/// Each arrow and its H J K L.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_users_pane_keys_focus_resize_and_swap() {
+    let otto = Otto::launch("pane-keys");
+    // 1 | 2 over 3; 3 has focus.
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "axis": "down", "kind": "empty"}));
+    let focused = |keys: &str| otto.user_key(keys)["state"]["focused"].clone();
+    for [up, down, left, right] in [["up", "down", "left", "right"], ["k", "j", "h", "l"]] {
+        assert_eq!(focused(&format!("cmd-alt-{up}")), 2, "⌘⌥{up}");
+        assert_eq!(focused(&format!("cmd-alt-{left}")), 1, "⌘⌥{left}");
+        assert_eq!(focused(&format!("cmd-alt-{right}")), 2, "⌘⌥{right}");
+        assert_eq!(focused(&format!("cmd-alt-{down}")), 3, "⌘⌥{down}");
+    }
+
+    // 3 trades places with its neighbour, and keeps focus.
+    let swapped = |keys: &str| {
+        let reply = otto.user_key(keys);
+        assert_eq!(reply["state"]["focused"], 3, "{keys}");
+        reply["tab_panes"].clone()
+    };
+    for [up, down, left, right] in [["up", "down", "left", "right"], ["k", "j", "h", "l"]] {
+        assert_eq!(swapped(&format!("cmd-ctrl-{up}")), json!([[1, 3, 2]]), "⌘⌃{up}");
+        assert_eq!(swapped(&format!("cmd-ctrl-{left}")), json!([[3, 1, 2]]), "⌘⌃{left}");
+        assert_eq!(swapped(&format!("cmd-ctrl-{right}")), json!([[1, 3, 2]]), "⌘⌃{right}");
+        assert_eq!(swapped(&format!("cmd-ctrl-{down}")), json!([[1, 2, 3]]), "⌘⌃{down}");
+    }
+
+    // 3's borders move: its top up and down (the column's split), its left (the row's).
+    let ratios = |keys: &str| {
+        let layout = &otto.user_key(keys)["state"]["layout"]["split"];
+        (layout["ratio"].as_f64(), layout["b"]["split"]["ratio"].as_f64())
+    };
+    for [up, down, left, right] in [["up", "down", "left", "right"], ["k", "j", "h", "l"]] {
+        assert_eq!(ratios(&format!("cmd-shift-alt-{up}")), (Some(0.5), Some(0.45)), "⌘⌥⇧{up}");
+        assert_eq!(ratios(&format!("cmd-shift-alt-{down}")), (Some(0.5), Some(0.5)), "⌘⌥⇧{down}");
+        assert_eq!(ratios(&format!("cmd-shift-alt-{left}")), (Some(0.45), Some(0.5)), "⌘⌥⇧{left}");
+        assert_eq!(ratios(&format!("cmd-shift-alt-{right}")), (Some(0.5), Some(0.5)), "⌘⌥⇧{right}");
+    }
 }
 
 #[test]
@@ -6935,7 +6979,7 @@ fn the_rail_holds_the_tasks_then_the_transcript_always_and_only_the_user_switche
     assert_eq!(picked(&otto.user_key("cmd-alt-[")).as_deref(), Some("transcript"));
     // List mode: right of the panes, past the transcript (it takes no keys), the rail.
     otto.call(json!({"cmd": "focus", "pane": 1}));
-    let keyed = otto.user_key("cmd-ctrl-right");
+    let keyed = otto.user_key(FOCUS_RIGHT);
     assert_eq!(keyed["focus"], json!({"drawer_rail": {"kind": "transcript"}}), "{}", keyed["focus"]);
     otto.user_key("escape");
     // Stopped, the transcript stays on the rail, idle, and the drawer on its idle view.
@@ -8111,8 +8155,8 @@ fn a_workbooks_terminal_comes_back_with_its_lines_and_its_command_typed_not_run(
 }
 
 /// The keys that move focus between panes, and on past them into the zones.
-const FOCUS_LEFT: &str = "cmd-ctrl-left";
-const FOCUS_RIGHT: &str = "cmd-ctrl-right";
+const FOCUS_LEFT: &str = "cmd-alt-left";
+const FOCUS_RIGHT: &str = "cmd-alt-right";
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]

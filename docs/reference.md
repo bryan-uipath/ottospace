@@ -93,12 +93,12 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧D | Split down, new terminal |
 | ⌘E / ⌘⇧E | Pick what goes in a new pane, right of / below the focused one: a terminal, a file (File…: the open panel, then a [file viewer](#file-viewer)) or a running app. Type to filter: then every installed app that matches is offered too, under "Not running" (those of the `apps` setting first); choosing one starts it in the background. ↑/↓ or ⌃N/⌃P move, ↵ opens, Esc closes |
 | ⌘W | Close the focused pane |
-| ⌘⌃←/→/↑/↓ or ⌘⌃H/L/K/J | Focus the pane in that direction. Past the leftmost pane, ← goes to the open section's list (on the row it was left on), then to the left rail; with no section open, straight to the rail. Past the rightmost pane, → goes into the drawer's conversation (as ⌘L), or the accessibility inspector's rows while it has the drawer's place. On the rail ↑/↓ move (its cell gets a pink ring), → and ↵ open it; ←, or Esc, goes back to the pane you came from. Only your own keys cross: a client's move stops at the panes |
+| ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Focus the pane in that direction. Past the leftmost pane, ← goes to the open section's list (on the row it was left on), then to the left rail; with no section open, straight to the rail. Past the rightmost pane, → goes into the drawer's conversation (as ⌘L), or the accessibility inspector's rows while it has the drawer's place. On the rail ↑/↓ move (its cell gets a pink ring), → and ↵ open it; ←, or Esc, goes back to the pane you came from. Only your own keys cross: a client's move stops at the panes |
 | ⌘] / ⌘[ | Focus the next / previous pane |
-| ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Resize: move the focused pane's split that way |
+| ⌘⌥⇧←/→/↑/↓ or ⌘⌥⇧H/L/K/J | Resize: move the focused pane's split that way |
 | ⌘⌃= | Even out the splits of the tab |
 | ⌘⌃0 | Fit the focused pane to its app's window, when the app refused the pane's size |
-| ⌘⇧⌥←/→/↑/↓ or ⌘⇧⌥H/L/K/J | Swap the focused pane with its neighbour on that side |
+| ⌘⌃←/→/↑/↓ or ⌘⌃H/L/K/J | Swap the focused pane with its neighbour on that side |
 | ⌘⇧⌥1 … ⌘⇧⌥9 | Move the focused pane to that tab on the bar. US keyboard layout only |
 | Drag a pane's header | Onto another pane's edge: split there. Onto its centre: swap. Onto a tab: move there. Esc cancels. An app you are in is parked: click it to go back in |
 | ⌃⌘F | Fill the whole display, over the menu bar and the Dock; again to restore. The window's green button (Window ▸ Zoom, a title bar double-click when the system's setting is Zoom) and the expand button at the top row's right do the same: there is no zoom to the visible frame, and no native full screen, which would put ottospace on a Space of its own where apps' windows cannot follow. While ottospace is in front the bars stay away until the pointer reaches their edge. In an app pane the app's menu bar and the Dock come back, over ottospace's top row and bottom edge: nothing moves, and the app's window stops at the Dock's top. Dragging the window ends it. On at quit, on at the next start (`layout.json`); only your own key, click, menu or palette turns it on. [Measured](ai/fill-display.md) |
@@ -441,7 +441,7 @@ key of ottospace's, so it does nothing while a hosted app has the keyboard (`APP
 in a terminal it clears the screen, and is kept for that.
 
 Reset Key Counts (View, also Help ▸ Reset Key Counts) forgets which keys you use. ottospace
-counts each key you press that runs a binding (⌘D, ⌘⌃ arrows, ⌘1–9 …), never the palette, a menu
+counts each key you press that runs a binding (⌘D, ⌘⌥ arrows, ⌘1–9 …), never the palette, a menu
 item or a socket client's key, and a press within a second of the last (a held key) is the same
 use. Each key has a score that halves in a week without use. A key is known from a
 score of 4.5 (five uses within a day or two), and again unknown once it decays below 2 (about eight

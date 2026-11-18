@@ -22,11 +22,14 @@ pub enum Binding {
     PickPane,
     ClosePane,
     FocusNext,
-    FocusDir,
-    Resize,
+    /// ⌘⌥ arrows. `focus_dir` was ⌘⌃'s: its count is of the old key, so it is not read.
+    FocusWay,
+    /// ⌘⌥⇧ arrows. `resize` was ⌘⌥'s: not read.
+    ResizeWay,
     Equalize,
     FitPane,
-    Swap,
+    /// ⌘⌃ arrows. `swap` was ⌘⇧⌥'s: not read.
+    SwapWay,
     MoveToTab,
     NewTab,
     TabNumber,
@@ -73,11 +76,11 @@ pub const ALL: &[Binding] = &[
     Binding::PickPane,
     Binding::ClosePane,
     Binding::FocusNext,
-    Binding::FocusDir,
-    Binding::Resize,
+    Binding::FocusWay,
+    Binding::ResizeWay,
     Binding::Equalize,
     Binding::FitPane,
-    Binding::Swap,
+    Binding::SwapWay,
     Binding::MoveToTab,
     Binding::NewTab,
     Binding::TabNumber,
@@ -124,11 +127,11 @@ impl Binding {
             Binding::PickPane => &[C::PickPane, C::PickPaneDown],
             Binding::ClosePane => &[C::ClosePane],
             Binding::FocusNext => &[C::FocusNext, C::FocusPrev],
-            Binding::FocusDir => &[C::FocusLeft, C::FocusRight, C::FocusUp, C::FocusDown],
-            Binding::Resize => &[C::ResizeLeft, C::ResizeRight, C::ResizeUp, C::ResizeDown],
+            Binding::FocusWay => &[C::FocusLeft, C::FocusRight, C::FocusUp, C::FocusDown],
+            Binding::ResizeWay => &[C::ResizeLeft, C::ResizeRight, C::ResizeUp, C::ResizeDown],
             Binding::Equalize => &[C::Equalize],
             Binding::FitPane => &[C::FitPane],
-            Binding::Swap => &[C::SwapLeft, C::SwapRight, C::SwapUp, C::SwapDown],
+            Binding::SwapWay => &[C::SwapLeft, C::SwapRight, C::SwapUp, C::SwapDown],
             Binding::NewTab => &[C::NewTab],
             Binding::NextTab => &[C::NextTab, C::PrevTab],
             Binding::CloseTab => &[C::CloseTab],
@@ -181,11 +184,11 @@ impl Binding {
             | B::PickPane
             | B::ClosePane
             | B::FocusNext
-            | B::FocusDir
-            | B::Resize
+            | B::FocusWay
+            | B::ResizeWay
             | B::Equalize
             | B::FitPane
-            | B::Swap
+            | B::SwapWay
             | B::MoveToTab
             | B::SidebarToggle => Group::Panes,
             B::SpaceNumber
@@ -225,11 +228,11 @@ impl Binding {
             B::PickPane => "New pane, right / below",
             B::ClosePane => "Close pane",
             B::FocusNext => "Next / previous pane",
-            B::FocusDir => "Focus that way",
-            B::Resize => "Resize that way",
+            B::FocusWay => "Focus that way",
+            B::ResizeWay => "Resize that way",
             B::Equalize => "Even out splits",
             B::FitPane => "Fit pane to its app",
-            B::Swap => "Swap that way",
+            B::SwapWay => "Swap that way",
             B::MoveToTab => "Move pane to tab",
             B::NewTab => "New tab",
             B::TabNumber => "Go to tab",
@@ -600,10 +603,10 @@ mod tests {
     #[test]
     fn the_file_holds_ids_scores_and_times_and_reads_back() {
         let mut uses = KeyUse::default();
-        uses.press(Binding::FocusDir, T0);
+        uses.press(Binding::FocusWay, T0);
         (0..5).for_each(|_| uses.press(Binding::Copy, T0 + HOUR));
         let text = uses.write();
-        assert!(text.contains("\"focus_dir\"") && text.contains("\"copy\"") && text.contains("\"version\": 1"));
+        assert!(text.contains("\"focus_way\"") && text.contains("\"copy\"") && text.contains("\"version\": 1"));
         assert_eq!(KeyUse::parse(&text), Ok(uses));
     }
 
@@ -636,6 +639,14 @@ mod tests {
         let uses = KeyUse::parse(r#"{"version":1,"keys":{"zoom":{"score":3,"at":5,"known":true}}}"#).expect("reads");
         assert_eq!(uses.0.get(&Binding::FillDisplay), Some(&Use { score: 3., at: 5, known: true }));
         assert!(uses.write().contains("\"fill_display\""), "{}", uses.write());
+    }
+
+    /// Focus, resize and swap took new keys: an older file's counts of the old ones are not read.
+    #[test]
+    fn an_older_files_pane_moves_are_learned_anew() {
+        let old = r#"{"version":1,"keys":{"focus_dir":{"score":3,"at":5,"known":true},
+            "resize":{"score":3,"at":5,"known":true},"swap":{"score":3,"at":5,"known":true}}}"#;
+        assert!(KeyUse::parse(old).expect("reads").is_empty());
     }
 
     /// The user's own keys count, and a count ends no mode; nobody else counts or resets.
@@ -696,11 +707,11 @@ mod tests {
             [
                 "pick_pane",
                 "focus_next",
-                "focus_dir",
-                "resize",
+                "focus_way",
+                "resize_way",
                 "equalize",
                 "fit_pane",
-                "swap",
+                "swap_way",
                 "move_to_tab",
                 "sidebar_toggle",
                 "split_down 0.2",
@@ -821,8 +832,8 @@ mod tests {
         for (i, binding) in ALL.iter().enumerate() {
             assert!(!ALL[..i].contains(binding), "{binding:?} twice");
         }
-        assert_eq!(Binding::of(Command::FocusUp), Some(Binding::FocusDir));
+        assert_eq!(Binding::of(Command::FocusUp), Some(Binding::FocusWay));
         assert_eq!(Binding::of(Command::AxOverlay), None);
-        assert_eq!(Binding::Resize.id(), "resize");
+        assert_eq!(Binding::ResizeWay.id(), "resize_way");
     }
 }
