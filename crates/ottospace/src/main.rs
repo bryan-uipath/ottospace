@@ -347,8 +347,10 @@ impl Hosted {
         self.parked_size = size;
         self.crop = crop;
         self.show(scale);
-        let _ = self.window.set_position(spot);
-        self.parked_at = spot;
+        // A refused move (a busy app) is tried again at the next check.
+        if self.window.set_position(spot).is_ok() {
+            self.parked_at = spot;
+        }
         self.placed = CGRect::default();
     }
 
@@ -371,6 +373,8 @@ impl Hosted {
         // would be drawn up (blurred) or down.
         if asked == (self.shown, self.shown_crop) && scale == self.shown_scale {
             self.content = content;
+            // Back to what it shows: a refusal of another is asked again when it comes back.
+            self.refused = None;
             return Some(content);
         }
         if self.refused == Some((shown, self.crop, scale)) {
@@ -3902,8 +3906,8 @@ impl Workspace {
         // Only panes of the active tab are drawn; a background pane's bounds are stale.
         let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
         let scale = window.scale_factor() as f64;
-        // Once a sync, not a pane: it asks each display's mode.
-        let spot = display::parking_spot(scale);
+        // Only on a check, with windows hosted: it asks each display's mode, and this runs every frame.
+        let spot = (check && !self.hosted.is_empty()).then(|| display::parking_spot(scale));
         // A peeked window is kept over its pane as the live one is.
         let live = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
         // Under the notice bar as it is in this frame: the windows follow it as it opens and closes.
@@ -3922,7 +3926,10 @@ impl Workspace {
                     hosted.place(rect, crop);
                 }
             // Also when the spot moved: displays changed, or ottospace is on one of another scale.
-            } else if hosted.parked_size != rect.size || hosted.crop != crop || hosted.parked_at != spot {
+            } else if hosted.parked_size != rect.size
+                || hosted.crop != crop
+                || spot.is_some_and(|spot| hosted.parked_at != spot)
+            {
                 hosted.park(rect.size, scale, crop);
             }
             // Only on a check: reading a window's size is a synchronous accessibility call.

@@ -87,9 +87,11 @@ pub fn put_back(window: &ax::Window, original: Frame, screens: &Screens) -> Opti
 }
 
 /// True when the user cannot get at the window: it sits in ottospace's parking spot, or wholly
-/// off every display.
+/// off every display. At a spot but reachable is the user's: e.g. on the left edge of a display
+/// beside another's free corner.
 pub fn stranded(frame: Frame, screens: &Screens) -> bool {
-    screens.spots.iter().any(|spot| restore::parked(frame, *spot)) || restore::off_every(frame, &screens.displays)
+    let parked = screens.spots.iter().any(|spot| restore::parked(frame, *spot));
+    (parked && !restore::reachable(frame, &screens.visible)) || restore::off_every(frame, &screens.displays)
 }
 
 /// The app's standard windows that are stranded, with their frames.
@@ -158,5 +160,20 @@ mod tests {
     #[test]
     fn a_window_id_nobody_has_does_not_exist() {
         assert!(!super::window_exists(u32::MAX));
+    }
+
+    #[test]
+    fn a_window_beside_a_free_corner_is_not_stranded() {
+        use ottospace_core::ax::Frame;
+        // A laptop, and to its left an external that reaches lower: its corner (-1, 1139) is free.
+        let laptop = Frame::new(0.0, 0.0, 1728.0, 1117.0);
+        let external = Frame::new(-2560.0, -300.0, 2560.0, 1440.0);
+        let displays = vec![laptop, external];
+        let spots = ottospace_core::hosted::parking_corners(&displays);
+        let screens = super::Screens { visible: displays.clone(), displays, main: laptop, spots };
+        // On the laptop's left edge, level with that corner: the user's.
+        assert!(!super::stranded(Frame::new(0.0, 900.0, 232.0, 200.0), &screens));
+        // Parked there, one point showing.
+        assert!(super::stranded(Frame::new(-1.0, 1139.0, 232.0, 200.0), &screens));
     }
 }

@@ -2651,6 +2651,12 @@ fn a_parked_panes_picture_is_its_window_pixel_for_pixel() {
         shown[3]
     ));
     assert_eq!(count(&s, "stream_scale_1"), scale, "the stream captures at ottospace's scale");
+    // No free corner of ottospace's scale (a 2× laptop, a 1× external to its right, lower): the
+    // window draws at 1× parked, and no picture of it matches the live one.
+    if count(&s, "parking_scale") < scale {
+        report("sharp: parked on a display of a lower scale, the pixels are not compared");
+        return;
+    }
 
     // What ottospace draws: its own window, the preview's rect in pixels. This reply waits for a
     // frame drawn after the one held came.

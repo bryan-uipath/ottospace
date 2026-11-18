@@ -61,8 +61,11 @@ pub const MOST_PIXELS: f64 = 5120.0 * 2880.0;
 /// point: the pixels the pane is drawn with, so the picture is drawn 1:1. Under `MOST_PIXELS`.
 pub fn capture_pixels(shown: (f64, f64), scale: f64) -> (u32, u32) {
     let (w, h) = (shown.0.max(1.0), shown.1.max(1.0));
-    let scale = scale.min((MOST_PIXELS / (w * h)).sqrt());
-    ((w * scale).round().max(1.0) as u32, (h * scale).round().max(1.0) as u32)
+    let most = (MOST_PIXELS / (w * h)).sqrt();
+    // Capped: rounded down, or rounding up could pass `MOST_PIXELS`.
+    let whole = if scale > most { f64::floor } else { f64::round };
+    let scale = scale.min(most);
+    (whole(w * scale).max(1.0) as u32, whole(h * scale).max(1.0) as u32)
 }
 
 /// Where windows are parked: a display's bottom-right corner with no display to its right or
@@ -208,7 +211,10 @@ mod tests {
         assert_eq!(capture_pixels((641.0, 400.0), 1.0), (641, 400));
         // A 6K display's pane at 2× is captured at a 5K display's pixels: about 22 MB a frame.
         let (w, h) = capture_pixels((3008.0, 1692.0), 2.0);
-        assert!((w as f64) * (h as f64) <= MOST_PIXELS + 6000.0 && w > 5000, "{w}×{h}");
+        assert!((w as f64) * (h as f64) <= MOST_PIXELS && w > 5000, "{w}×{h}");
+        // Rounded up, this one would pass it by 1508.
+        let (w, h) = capture_pixels((2501.0, 2160.0), 2.0);
+        assert!((w as f64) * (h as f64) <= MOST_PIXELS, "{w}×{h}");
         assert_eq!(capture_pixels((0.0, 0.0), 2.0), (2, 2));
     }
 
