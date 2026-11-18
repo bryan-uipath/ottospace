@@ -4,7 +4,7 @@
 {"cmd":"task_new","line":"Fix the login loop #auth p1"}
 {"cmd":"open_space","space":{"kind":"task","id":1}}
 {"shot":"task-tab"}
-{"hover":"top:new_tab","at":[0.5,8],"modifiers":["cmd"]}
+{"hover":"top:split_right","at":[0.5,8],"modifiers":["cmd"]}
 {"shot":"cmd-held"}
 {"cmd":"key","keys":"cmd-e","as":"user"}
 {"shot":"picker"}

@@ -468,8 +468,8 @@ impl Workspace {
             }
             ("top", "fill") => Some(Action::FillDisplay),
             ("top", _) => {
-                if let Some((.., axis, new_tab)) = SPLITS.iter().find(|(top, ..)| *top == name) {
-                    self.top_button(*axis, *new_tab, window, cx);
+                if let Some((.., axis)) = SPLITS.iter().find(|(top, ..)| *top == name) {
+                    self.top_button(*axis, window, cx);
                 }
                 None
             }

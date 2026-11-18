@@ -626,7 +626,7 @@ impl Workspace {
             .children(adopt)
             .children(stop)
             .child(close);
-        Some(self.slide_head(header, crate::slide::DRAWER_HEAD, cx))
+        Some(header.id("drawer-head"))
     }
 
     /// The conversation: the agent's terminal as it is drawn in a pane. Stage 1 of the one seam

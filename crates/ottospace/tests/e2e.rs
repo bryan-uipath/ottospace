@@ -3858,9 +3858,10 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     for id in ["rail:apps", "rail:workbook", "rail:tasks", "rail:repos", "bar:add", "bar:close", row.as_str()] {
         assert!(ids.contains(&id), "no label for {id}: {ids:?}");
     }
-    for id in ["space:0", "top:new_workspace", "top:new_tab", "top:split_right", "top:split_down"] {
+    for id in ["space:0", "top:new_workspace", "top:split_right", "top:split_down"] {
         assert!(ids.contains(&id), "no label for {id}: {ids:?}");
     }
+    assert!(!ids.contains(&"top:new_tab"), "no + for a tab: {ids:?}");
     for id in ["home:open_app", "home:terminal", "home-row:1", "home-node:1", "top:new_workspace"] {
         assert!(ids.contains(&id), "no label for {id}: {ids:?}");
     }
@@ -3889,7 +3890,7 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     // A small control's label sits beside it, not on it: the top row's buttons, and the rail's
     // icons, which have no room beside them and keep a corner off the icon in their middle.
     let of = |id: &str| targets.iter().find(|t| t["source"]["id"] == id).unwrap_or_else(|| panic!("no {id}"));
-    for id in ["top:new_tab", "top:split_right", "top:split_down", "top:new_workspace", "bar:add", "bar:close"] {
+    for id in ["top:split_right", "top:split_down", "top:new_workspace", "bar:add", "bar:close"] {
         assert!(!meet(rect(&of(id)["frame"]), rect(&of(id)["pill"])), "{}", of(id));
     }
     for id in ["rail:apps", "rail:workbook", "rail:tasks", "rail:repos"] {
@@ -3981,7 +3982,7 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     assert!((body["frame"]["w"].as_f64().unwrap() - drawn[1][2]).abs() < 1.0, "{body} {drawn:?}");
     // A pane's ×, its header and the top row's buttons: each label beside its control.
     let targets = reply["sneak"]["targets"].as_array().unwrap();
-    for id in ["close:1", "close:3", "header:1", "header:3", "top:new_tab", "top:split_right", "top:split_down"] {
+    for id in ["close:1", "close:3", "header:1", "header:3", "top:split_right", "top:split_down"] {
         let t = targets.iter().find(|t| t["source"]["id"] == id).unwrap_or_else(|| panic!("no {id}"));
         assert!(!meet(rect(&t["frame"]), rect(&t["pill"])), "{t}");
     }
@@ -6952,8 +6953,8 @@ fn the_rail_holds_the_tasks_then_the_transcript_always_and_only_the_user_switche
 
 /// The owner: "how do i close the 'transcript' pane?". The → in the drawer's header, the
 /// transcript's or a task's, collapses the drawer into its rail, which stays at the window's
-/// edge: the transcript records on, the panes widen by the drawer less the rail. A rail click,
-/// ⌘⇧R or ← opens it again; a client's click or key is refused and says why.
+/// edge: the transcript records on, the panes widen by the drawer less the rail. A rail click
+/// or ⌘⇧R opens it again; a client's click or key is refused and says why.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_drawer_collapses_into_the_rail_from_the_transcript_or_a_task_and_only_the_user_opens_it() {
@@ -6994,11 +6995,11 @@ fn the_drawer_collapses_into_the_rail_from_the_transcript_or_a_task_and_only_the
     let wider = rect(&otto.drawn()["headers"]["1"])[2];
     assert!((wider - pane - (drawer - rail[2])).abs() <= 2., "{pane} → {wider}, drawer {drawer}, rail {rail:?}");
     assert!(otto.control_opt("listen-collapse").is_none() && otto.control_opt("drawer-rail:transcript").is_some());
-    // A client's click on ← and its ⌘⇧R: refused, said, still collapsed.
-    let theirs = otto.click(at(otto.control("drawer-rail:open"), 0.5, 0.5), 1);
+    // A client's click on a rail item and its ⌘⇧R: refused, said, still collapsed.
+    let theirs = otto.click(at(otto.control(&format!("drawer-rail:{one}")), 0.5, 0.5), 1);
     assert_eq!(theirs["drawer"]["collapsed"], true);
     assert!(
-        theirs["notice"].to_string().contains("only the user collapses or opens the drawer"),
+        theirs["notice"].to_string().contains("only the user switches what the drawer shows"),
         "{}",
         theirs["notice"]
     );
@@ -7009,18 +7010,20 @@ fn the_drawer_collapses_into_the_rail_from_the_transcript_or_a_task_and_only_the
     let folded = otto.user_click(at(otto.control("talk:talk-close"), 0.5, 0.5));
     assert_eq!((&folded["drawer"]["collapsed"], &folded["state"]["talk"]["task"]), (&json!(true), &json!(one)));
     assert_eq!(rail_tasks(&folded), [one]);
-    // ⌘⇧R opens it and collapses it; ← opens it.
+    // ⌘⇧R opens it and collapses it. No expand button: a click on an item opens it.
     assert_eq!(otto.user_key("cmd-shift-r")["drawer"]["collapsed"], false);
     assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-shift-r"}))["drawer"]["collapsed"], false);
     assert_eq!(otto.user_key("cmd-shift-r")["drawer"]["collapsed"], true);
-    assert_eq!(otto.user_click(at(otto.control("drawer-rail:open"), 0.5, 0.5))["drawer"]["collapsed"], false);
+    assert!(otto.control_opt("drawer-rail:open").is_none());
+    let reopened = otto.user_click(at(otto.control(&format!("drawer-rail:{one}")), 0.5, 0.5));
+    assert_eq!(reopened["drawer"]["collapsed"], false);
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
 
 /// The owner: "for both the left pane and right pane we should have a <- and -> slide in arrow".
 /// The sidebar's ← collapses it into the left rail; the rail's →, or ⌘⇧L, opens it on the
-/// section open last. Each arrow's key is on screen beside it.
+/// section open last. Each arrow's key is in its tooltip only.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_sidebar_collapses_into_the_left_rail_and_opens_on_the_section_open_last() {
@@ -8276,7 +8279,7 @@ fn the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view() {
         let window = rect(&otto.call(json!({"cmd": "state"}))["window"]);
         let frames = otto.controls();
         let mut first = f64::MAX;
-        for id in ["top:new_tab", "top:split_right", "top:split_down"] {
+        for id in ["top:split_right", "top:split_down"] {
             let b = frames.iter().find(|(i, _)| i == id).unwrap_or_else(|| panic!("{what}: no {id}")).1;
             assert!(b[0] + b[2] <= window[2], "{what}: {id} {b:?} runs past the window's end {}", window[2]);
             first = first.min(b[0]);

@@ -10,7 +10,7 @@ use ottospace_core::model::rail::{RailItem, RailSection};
 use ottospace_core::model::zones::RailFocus;
 use ottospace_core::{Action, theme};
 
-use crate::{Tooltip, Workspace, rect, slide};
+use crate::{Tooltip, Workspace, rect};
 
 /// The rail's width, and an item's side, in points.
 pub(crate) const WIDTH: f32 = 48.;
@@ -121,15 +121,8 @@ impl Workspace {
         let foot = (!foot.is_empty())
             .then(|| div().flex_none().flex().flex_col().items_center().child(divider).children(foot));
         let tasks = self.bars.tracked_under("drawer-rail", tasks, &self.rail_scroll, theme::BACKGROUND).w_full();
-        // Collapsed: ← opens the drawer again, as ⌘⇧R (the conversation, else the transcript).
-        let open = self.model.drawer_opens().then(|| {
-            let open = self.slide_button("drawer-rail:open", (slide::LEFT, slide::DRAWER_KEY), "Open the drawer", None);
-            div()
-                .flex_none()
-                .pt_2()
-                .child(open.on_click(cx.listener(|this, _, window, cx| this.drawer_toggle(window, cx))))
-        });
-        let column = column.child(tasks).child(self.rail_follow()).children(foot).children(open);
+        // Collapsed, a click on any item opens the drawer on it (the owner: no expand button).
+        let column = column.child(tasks).child(self.rail_follow()).children(foot);
         column.pb_2().child(self.controls.mark("drawer-rail"))
     }
 
@@ -237,8 +230,7 @@ impl Workspace {
         self.dispatch(Action::RailSelect { item }, self.input, window, cx);
     }
 
-    /// A sneak label on the rail: `drawer-rail:transcript`, `drawer-rail:3`, `drawer-rail:new`,
-    /// `drawer-rail:open` (the collapsed drawer's ←).
+    /// A sneak label on the rail: `drawer-rail:transcript`, `drawer-rail:3`, `drawer-rail:new`.
     /// False: not the rail's.
     pub(crate) fn click_drawer_rail(
         &mut self,
@@ -252,7 +244,6 @@ impl Workspace {
         }
         match name {
             "new" => self.new_task(window, cx),
-            "open" => self.drawer_toggle(window, cx),
             "transcript" => self.rail_click(RailItem::Transcript, window, cx),
             id => {
                 if let Ok(id) = id.parse() {
