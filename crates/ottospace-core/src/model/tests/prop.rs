@@ -3431,7 +3431,7 @@ impl Run {
         // (Anyone's list read again may find the folder the session said: the agent chose it, not they.)
         let follows = match action {
             Action::SessionWork { .. } => origin != Origin::Socket,
-            Action::SetRepos { .. } | Action::WorktreeAdded { .. } => true,
+            Action::SetRepos { .. } | Action::WorktreeAdded { .. } | Action::WorktreeFailed { .. } => true,
             _ => false,
         };
         if defaults(m).iter().any(moved) {
@@ -3475,7 +3475,7 @@ impl Run {
             let read = matches!(action, Action::RestoreTasks { .. });
             let follows = match action {
                 Action::SessionWork { .. } => origin != Origin::Socket,
-                Action::SetRepos { .. } | Action::WorktreeAdded { .. } => true,
+                Action::SetRepos { .. } | Action::WorktreeAdded { .. } | Action::WorktreeFailed { .. } => true,
                 _ => false,
             };
             ensure!(read || follows, "{origin:?}'s {action:?} moved task {id} to {worktree:?}");
@@ -6706,6 +6706,114 @@ fn seed_23315_a_closed_workspace_ending_ends_its_panes_transcript() {
     .unwrap();
 }
 
+/// A client dismissed the task on show while the user wrote a new one: the drawer followed the
+/// space to its next conversation and put the box aside (seed 158804). Only the user's change
+/// takes the box.
+#[test]
+fn seed_158804_a_clients_dismissal_leaves_the_new_task_box() {
+    let none = || Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] };
+    let known = Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] };
+    replay(&[
+        Action::TaskAdd { title: "a".into(), priority: 2, state: State::Running, tab: None, assign: none() }.into(),
+        Action::TaskAdd { title: "b".into(), priority: 1, state: State::NeedsYou, tab: None, assign: none() }.into(),
+        Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known, open: false }.into(),
+        Action::SpaceOpen { space: Owner::Task { id: 3 } }.into(),
+        Action::TaskGo { id: Some(2) }.into(),
+        Action::Adopt { kind: Kind::Terminal, beside: Some(u32::MAX), seen: None }.into(),
+        Action::OpenCompose { text: "fix".into() }.into(),
+        by(Origin::Socket, Action::RowDismiss { id: 2 }),
+    ])
+    .unwrap();
+}
+
+/// The user's level for an app pane was written into its tab's mark while marks were off: they
+/// stay as stored (seed 7205).
+#[test]
+fn seed_7205_a_level_leaves_the_marks_while_they_are_off() {
+    let none = || Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] };
+    let known = Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] };
+    let slides =
+        Kind::App { window: 0, title: "deck".into(), bundle: Some("com.safari".into()), name: "Slides".into() };
+    replay(&[
+        Action::TaskAdd { title: "a".into(), priority: 2, state: State::Running, tab: None, assign: none() }.into(),
+        Action::TaskAdd { title: "b".into(), priority: 1, state: State::NeedsYou, tab: None, assign: none() }.into(),
+        Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known, open: false }.into(),
+        Action::SpaceOpen { space: Owner::Task { id: 3 } }.into(),
+        split(Axis::Down, Kind::Terminal),
+        split(Axis::Right, Kind::Terminal),
+        by(Origin::Socket, Action::Split { axis: Axis::Down, kind: Kind::Terminal }),
+        Action::Adopt { kind: slides, beside: None, seen: None }.into(),
+        Action::MarkToggle { of: MarkOf::Tab(None), uid: "u4".into(), cwds: vec![(4, "/tmp".into())] }.into(),
+        set_features(&["apps_section", "transcripts", "slots", "agent_mode"]).into(),
+        Action::AgentLevel { pane: Some(4), level: Level::Act }.into(),
+    ])
+    .unwrap();
+}
+
+/// A failed worktree's answer carries the repositories read again, as `SetRepos` does: a task
+/// follows its agent to where its session said. The check let only `SetRepos` and `WorktreeAdded`
+/// move one (seeds 53188 and 146342).
+#[test]
+fn seed_53188_a_failed_worktrees_list_moves_a_task_with_its_agent() {
+    let found = |id: &str, last_activity, active| Found {
+        runner: "claude".into(),
+        id: id.into(),
+        cwd: "/code/app".into(),
+        repo: "/code/app".into(),
+        started: Some(1),
+        last_activity,
+        active,
+        station: None,
+        label: None,
+        title: None,
+        model: None,
+        held: false,
+    };
+    let work = r#"{"runner":"claude","session":"s2","clock":{"ms":0,"last":1,"day":6001,"day_ms":0},"tokens":[],"context":null,"window":null}"#;
+    let worktree =
+        |name: &str, path: &str| Worktree { name: name.into(), path: path.into(), branch: Some("main".into()) };
+    let repo = Repo {
+        name: "".into(),
+        path: "/tmp".into(),
+        branch: Some("fix/zoom".into()),
+        worktrees: vec![worktree("a", ""), worktree("app", "/code/app")],
+    };
+    replay(&[
+        Action::SetSessions { found: vec![found("s1", Some(999000), true), found("s2", Some(5), false)], day: 0 }
+            .into(),
+        by(Origin::System, Action::SessionAdopt { runner: "claude".into(), id: "s2".into() }),
+        session_work(work, Some("\r\n \0")).into(),
+        Action::WorktreeFailed { asked: "/code/app".into(), fresh: true, repos: vec![repo] }.into(),
+    ])
+    .unwrap();
+}
+
+/// A stray tab goes to the workspace selected last; a file read had bound that one to a task
+/// since, so its tabs are the task's. Settling Home put the tab in the workspace's own space
+/// (seeds 28003 and 190214).
+#[test]
+fn seed_28003_a_stray_tab_goes_to_a_bound_workspaces_task() {
+    let task = r#"[{"id":7,"title":"fix","state":"parked","priority":0,"snoozed_until":null,"dismissed":false,"project":null,"repo":null,"agent":null,"paths":[],"resolved":[],"skills":[],"created":null,"session":null,"title_generated":false,"materials":[],"refs":[]}]"#;
+    let worktree = Worktree { name: "canvas".into(), path: "/code/canvas".into(), branch: Some("main".into()) };
+    let repo =
+        Repo { name: "app".into(), path: "/code/app-2".into(), branch: Some("main".into()), worktrees: vec![worktree] };
+    replay(&[
+        split(Axis::Down, Kind::Empty),
+        Action::WorkbookNew { uid: "00000000000000a2".into() }.into(),
+        Action::WorkbookKeep { workbook: 2 }.into(),
+        by(Origin::System, Action::SetRepos { repos: vec![repo] }),
+        Action::SpaceSelect { index: 1 }.into(),
+        by(Origin::System, Action::SpaceHideAsked { index: None, running: vec![] }),
+        Action::PaletteTasks.into(),
+        Action::PaletteChoose { index: None }.into(),
+        by(Origin::Socket, restore_tasks(task, 8)),
+        by(Origin::System, Action::OpenRepo { path: "/code/app-2".into(), axis: Axis::Down }),
+        Action::WorkbookSave { uid: "../../x".into(), cwds: vec![], histories: vec![] }.into(),
+        restore_workbooks(r#"[{"version":2,"id":"00000000000000a2","name":"x","tabs":[],"task":7}]"#).into(),
+    ])
+    .unwrap();
+}
+
 /// A user's `^reference` to an app pane copies its title, the shell's: the maker gave an adopted
 /// pane the look's title, so the check took the copy for the look leaking (seeds 9000, 26837,
 /// 63117, 129547, 150260, 150464, 155817).
@@ -6727,3 +6835,4 @@ fn seed_150464_a_reference_copies_a_panes_title_not_the_look() {
     ])
     .unwrap();
 }
+

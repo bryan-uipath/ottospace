@@ -320,6 +320,13 @@ impl Workspace {
                 self.dismiss_notice(window, cx);
                 None
             }
+            ("notice", "undo") => {
+                let shown = self.notice_shown().and_then(|shown| self.undo_beside(&shown));
+                if let Some(undo) = shown {
+                    self.take_undo_beside(&undo.text, window, cx);
+                }
+                None
+            }
             ("notice", "offer") => {
                 if let Some((drawn, _)) = self.notice_shown().and_then(|shown| self.notice_offer(&shown)) {
                     self.take_notice_offer(drawn, window, cx);

@@ -175,6 +175,13 @@ pub fn shown(live: &[Notice], hidden: &[Notice]) -> Option<Notice> {
     live.rev().max_by_key(|notice| notice.level()).cloned()
 }
 
+/// A workspace's Undo (`undo`, from `Workbooks::notice`) still offered while another notice
+/// (`shown`: an error, a meeting) has the bar: drawn beside it, so it cannot run out unseen. None
+/// while the bar says it itself, or the user dismissed it.
+pub fn undo_beside(shown: &Notice, undo: Option<Notice>, hidden: &[Notice]) -> Option<Notice> {
+    undo.filter(|undo| shown.kind != Kind::Undo && !hidden.contains(undo))
+}
+
 /// Whether a failure of `by`'s step may take the place of the one `shown_by` caused: a
 /// client's never covers the user's.
 pub fn replaces(by: Origin, shown_by: Option<Origin>) -> bool {
@@ -237,6 +244,18 @@ pub fn height(from: f32, open: bool, elapsed: f32, reduced: bool) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_workspaces_undo_shows_beside_a_higher_notice_unless_it_is_the_notice_or_dismissed() {
+        let said = |kind: Kind, text: &str| Notice { kind, text: text.into() };
+        let (undo, error) = (said(Kind::Undo, "Workspace closed"), said(Kind::Failed, "not saved"));
+        assert_eq!(undo_beside(&error, Some(undo.clone()), &[]), Some(undo.clone()));
+        assert_eq!(undo_beside(&said(Kind::Meeting, "standup"), Some(undo.clone()), &[]), Some(undo.clone()));
+        // The bar says it itself; none offered; dismissed.
+        assert_eq!(undo_beside(&undo, Some(undo.clone()), &[]), None);
+        assert_eq!(undo_beside(&error, None, &[]), None);
+        assert_eq!(undo_beside(&error, Some(undo.clone()), &[undo]), None);
+    }
+
     use super::*;
 
     #[test]

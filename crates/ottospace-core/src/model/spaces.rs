@@ -596,6 +596,8 @@ impl Model {
                     to
                 }
             };
+            // A workspace bound to a task since it was selected: its tabs are the task's (seed 28003).
+            let to = self.workbooks.space_of(&to);
             // A dismissal taken back finds its task's tabs where they went.
             for (_, tabs, home) in &mut self.unlinked {
                 if tabs.iter().any(|id| ids.contains(id)) {
@@ -657,7 +659,8 @@ impl Model {
             return;
         }
         let open = self.drawer_open || self.compose_host() == Some(Host::Drawer);
-        if open && self.compose_host() == Some(Host::Drawer) {
+        // Only the user's change takes the box they write in (seed 158804).
+        if open && self.compose_host() == Some(Host::Drawer) && origin == Origin::User {
             self.put_compose_aside();
         }
         // Not under an app, the list, visual mode or a picture being drawn on.
