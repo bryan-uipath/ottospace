@@ -229,7 +229,14 @@ impl Gen<'_> {
         let text = Text::new(&self.name(WORDS));
         let id = self.rng.pick(&["a", "b"]).to_string();
         let (tool, label) = ("Bash".to_string(), self.name(WORDS));
-        match self.rng.below(15) {
+        match self.rng.below(16) {
+            15 => match self.rng.below(5) {
+                0 => Said::Subtask { id: self.rng.coin().then_some(id), description: text },
+                1 => Said::SubtaskEnded { status: crate::transcript::Status::Completed, summary: text },
+                2 => Said::Note { text },
+                3 => Said::DeniedBy { tool, by: crate::transcript::By::Settings },
+                _ => Said::ModelFallback { from: None, to: "m-2".into() },
+            },
             14 => Said::Hook,
             12 => Said::MessageElsewhere,
             13 => Said::WatchFromStart,
@@ -240,9 +247,11 @@ impl Gen<'_> {
                 let input = serde_json::json!({"file_path": "/w/a", "old_string": "x", "new_string": text.text()});
                 let diff = self.rng.coin().then(|| crate::diff::claude("Edit", &input)).flatten();
                 let station = self.rng.pick(&crate::activity::Station::DIAL);
-                Said::ToolStart { id, sub: self.rng.coin(), tool, station, label, detail: text, diff }
+                let command = serde_json::json!({"command": text.text()});
+                let gist = self.rng.coin().then(|| crate::gist::claude("Bash", &command)).flatten();
+                Said::ToolStart { id, sub: self.rng.coin(), tool, station, label, detail: text, diff, gist }
             }
-            5 => Said::ToolEnd { id, failed: self.rng.coin() },
+            5 => Said::ToolEnd { id, failed: self.rng.coin(), output: self.rng.coin().then_some(text) },
             6 | 7 => {
                 let (ticket, cut) = (self.rng.below(3) as u64, self.rng.coin());
                 Said::Permission { ticket, tool, label, detail: text, len: 9, cut, claim: Text::default() }
@@ -4814,18 +4823,41 @@ fn event_code(event: &Said) -> String {
         Said::TurnStarted => "Said::TurnStarted".into(),
         Said::TextDelta { text: t } => format!("Said::TextDelta {{ text: {} }}", text(t)),
         Said::Text { text: t } => format!("Said::Text {{ text: {} }}", text(t)),
-        Said::ToolStart { id, sub, tool, station, label, detail, diff } => format!(
+        Said::ToolStart { id, sub, tool, station, label, detail, diff, gist } => format!(
             "Said::ToolStart {{ id: {id:?}.into(), sub: {sub}, tool: {tool:?}.into(), \
-             station: crate::activity::Station::{station:?}, label: {label:?}.into(), detail: {}, diff: {} }}",
+             station: crate::activity::Station::{station:?}, label: {label:?}.into(), detail: {}, diff: {}, gist: {} }}",
             text(detail),
             match diff {
                 Some(_) =>
                     "crate::diff::claude(\"Edit\", &serde_json::json!({\"file_path\": \"/w/a\", \
                             \"old_string\": \"x\", \"new_string\": \"y\"}))",
                 None => "None",
+            },
+            match gist {
+                Some(_) => "crate::gist::claude(\"Bash\", &serde_json::json!({\"command\": \"x\"}))",
+                None => "None",
             }
         ),
-        Said::ToolEnd { id, failed } => format!("Said::ToolEnd {{ id: {id:?}.into(), failed: {failed} }}"),
+        Said::ToolEnd { id, failed, output } => format!(
+            "Said::ToolEnd {{ id: {id:?}.into(), failed: {failed}, output: {} }}",
+            output.as_ref().map_or("None".into(), |t| format!("Some({})", text(t)))
+        ),
+        Said::Subtask { id, description } => format!(
+            "Said::Subtask {{ id: {:?}.map(str::to_string), description: {} }}",
+            id.as_deref(),
+            text(description)
+        ),
+        Said::SubtaskEnded { status, summary } => format!(
+            "Said::SubtaskEnded {{ status: crate::transcript::Status::{status:?}, summary: {} }}",
+            text(summary)
+        ),
+        Said::Note { text: t } => format!("Said::Note {{ text: {} }}", text(t)),
+        Said::DeniedBy { tool, by } => {
+            format!("Said::DeniedBy {{ tool: {tool:?}.into(), by: crate::transcript::By::{by:?} }}")
+        }
+        Said::ModelFallback { from, to } => {
+            format!("Said::ModelFallback {{ from: {:?}.map(str::to_string), to: {to:?}.into() }}", from.as_deref())
+        }
         Said::Permission { ticket, tool, label, detail, len, cut, claim } => format!(
             "Said::Permission {{ ticket: {ticket}, tool: {tool:?}.into(), label: {label:?}.into(), detail: {}, \
              len: {len}, cut: {cut}, claim: {} }}",
