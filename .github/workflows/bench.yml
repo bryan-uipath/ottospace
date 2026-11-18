@@ -1,9 +1,10 @@
 name: Bench
 
 # Startup, memory and CPU of the app (`scripts/bench`, docs/development.md "Benchmarks"). On a
-# pull request that changes a crate: the merge base against the pull request, on one runner, both
-# sides alternating. Red past the thresholds in scripts/bench, never a required check: whoever
-# merges a red run says in the pull request whether the regression is real and accepted.
+# pull request that changes a crate: the base branch's tip against the pull request merged into it
+# (main's own changes since the branch point are on both sides), on one runner, alternating. Red
+# past the thresholds in scripts/bench, never a required check: whoever merges a red run says in
+# the pull request whether the regression is real and accepted.
 # Nightly and by hand on main: this tree alone, its JSON kept for trends.
 on:
   pull_request:
@@ -25,7 +26,8 @@ permissions: {}
 
 concurrency:
   group: bench-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # A run by hand on main does not cancel the nightly one.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -40,8 +42,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # The merge base is in the history.
-          fetch-depth: 0
+          # The merge commit's parents: the base branch's tip is built too.
+          fetch-depth: 2
       - name: Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal
@@ -55,14 +57,14 @@ jobs:
         run: |
           cargo build -p ottospace --bin ottospace --locked
           cp target/debug/ottospace "$RUNNER_TEMP/ottospace-after"
-      # HEAD is the merge commit: its parents are the base branch and the pull request.
+      # HEAD is the merge commit: its parents are the base branch's tip and the pull request.
       - name: Bench
         env:
           EVENT: ${{ github.event_name }}
         run: |
           if [ "$EVENT" = pull_request ]; then
-            base="$(git merge-base HEAD^1 HEAD^2)"
-            echo "merge base: $base"
+            base="$(git rev-parse HEAD^1)"
+            echo "base: $base"
             set -- --compare "$base" --bin-after "$RUNNER_TEMP/ottospace-after"
           else
             set -- --bin "$RUNNER_TEMP/ottospace-after"

@@ -181,7 +181,7 @@ Memory and CPU come from `proc_pid_rusage` of the app's own pid, never its termi
 Thresholds (`THRESHOLDS` in the script), past which `--compare` exits 1 and CI's job is red: a
 startup median +20% and +50 ms, RSS +25% and +10 MB, idle CPU above 2% of a core and a point more
 than the base. A startup past its threshold runs a second round of launches and fails only if it
-is still past it over both. Exit 2: the bench itself failed (a build, a timeout), not a regression.
+is past it in each round. Exit 2: the bench itself failed (a build, a timeout), not a regression.
 
 Noise. Both sides run on one machine, alternating, so drift falls on both. On an M-series Mac, two
 runs of `main` against itself differed by at most 4% on startup medians, 7% (13 MB) on RSS with 8
@@ -226,7 +226,7 @@ whether the regression is real and accepted.
 - `.github/workflows/shots.yml`, on pull requests that change the app's, core's or mac crate's sources or the
   scenarios: before and after pictures, an artifact (see "Screenshots and recordings").
 - `.github/workflows/bench.yml`, on pull requests that change a crate, `Cargo.lock`,
-  `scripts/bench`, `scripts/shot` or the shots fixtures it copies: `scripts/bench --compare` against the merge base, the table
+  `scripts/bench`, `scripts/shot` or the shots fixtures it copies: `scripts/bench --compare` against the base branch's tip (the pull request merged into it after), the table
   in the job summary, the JSON as an artifact (see "Benchmarks"). Nightly and by hand on `main`:
   this tree alone, the JSON kept 90 days for trends.
 - `.github/workflows/release.yml`, on a `v*` tag: the GitHub Release.

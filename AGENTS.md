@@ -188,7 +188,7 @@ Rules:
   the pictures are the artifact `shots`. Read-only token, no comment on the pull request. Not a
   required check. (`test-shot.sh` needs a screen that draws, so it runs here, not in scripts.yml.)
 - `.github/workflows/bench.yml`, on pull requests that change `crates/**`, `Cargo.lock`, `scripts/bench`,
-  `scripts/shot`, the fixtures it copies or `bench.yml`: `scripts/bench --compare` against the merge base (dev build, both sides on one
+  `scripts/shot`, the fixtures it copies or `bench.yml`: `scripts/bench --compare` against the base branch's tip, the pull request merged into it after (dev build, both sides on one
   runner), the table in the job summary, the JSON as an artifact. Red past the thresholds in
   `scripts/bench`; not a required check: whoever merges a red run says in the pull request whether
   the regression is real and accepted. Nightly and by hand on `main`: the JSON alone, for trends.

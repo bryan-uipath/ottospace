@@ -41,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -167,7 +168,7 @@ def make_fixture(root):
     with open(os.path.join(root, "codex", "session_index.jsonl"), "w") as f:
         f.writelines(json.dumps(line) + "\n" for line in index)
     for t in range(1, 13):
-        task = {"id": t, "title": f"made-up task {t}", "state": ["needs_you", "running", "later", "done"][t % 4],
+        task = {"id": t, "title": f"made-up task {t}", "state": ["needs_you", "running", "parked", "done"][t % 4],
                 "priority": 1 + t % 3, "repo": repos[t % 5], "created": 1794800000000 + t * 1000, "colour": t % 6}
         if t <= 5:
             # Its repository's first Claude session.
@@ -248,7 +249,7 @@ def long_run(binary):
         if len(panes) != TERMS:  # a start has no pane: each split opens one terminal
             raise Failed(f"{len(panes)} terminals opened, not {TERMS}")
         for pane in panes:
-            inst.ok({"cmd": "type", "pane": pane, "text": f"seq 1 {SCROLLBACK}; echo bench-done\r"})
+            inst.ok({"cmd": "type", "pane": pane, "text": f"seq 1 {SCROLLBACK} && echo bench-done\r"})
         for pane in panes:
             inst.ok({"cmd": "wait", "pane": pane, "pattern": "^bench-done$", "timeout_ms": 60000})
         inst.settle()
@@ -319,7 +320,8 @@ def startup_stats(r):
 def bench(sides, args, scratch):
     """`sides`: {name: binary}. Returns each side's numbers."""
     names = list(sides)
-    raw = {name: {"warm": [], "cold": [], "sessions": [], "sessions_read": []} for name in names}
+    fresh = lambda: {name: {"warm": [], "cold": [], "sessions": [], "sessions_read": []} for name in names}
+    raw = fresh()
     # A fixture a side, its layout saved by that side's own build.
     templates = {}
     for name in names:
@@ -327,15 +329,21 @@ def bench(sides, args, scratch):
         prime(sides[name], templates[name])
     startups(sides, args, scratch, raw, templates)
     # A hosted runner's launches vary 3x: a startup past a threshold runs a second round, and
-    # fails only if it is still past it over both rounds' launches.
-    if len(names) == 2 and regressions(*(startup_stats(raw[n]) for n in names), startup_only=True):
+    # fails only if it is past it in each round (`held`); the table pools both rounds.
+    held = set(past(*(startup_stats(raw[n]) for n in names))) if len(names) == 2 else set()
+    if held:
         say("a startup is past a threshold: a second round, to confirm ...")
-        startups(sides, args, scratch, raw, templates)
+        again = fresh()
+        startups(sides, args, scratch, again, templates)
+        held &= set(past(*(startup_stats(again[n]) for n in names)))
+        for name in names:
+            for key, runs in again[name].items():
+                raw[name][key] += runs
     result = {}
     for name in names:
         say(f"memory and CPU, {name} ({IDLE_S + STREAM_S + 20} s) ...")
         result[name] = {**startup_stats(raw[name]), **{k: round(v, 2) for k, v in long_run(sides[name]).items()}}
-    return result
+    return result, sorted(held)
 
 
 # ---------------------------------------------------------------------------------- report
@@ -369,15 +377,22 @@ def cell(side, key):
     return f"{v:.1f}" if isinstance(v, float) else str(v)
 
 
-def regressions(before, after, startup_only=False):
+def past(before, after):
+    """The metrics of `after` past their threshold over `before` (those both have)."""
     found = []
     for key, rel, rise, floor in THRESHOLDS:
-        if startup_only and not key.startswith("startup_"):
+        if key not in before or key not in after:
             continue
         b, a = value(before, key), value(after, key)
         if a > floor and a - b > rise and (rel is None or b <= 0 or (a - b) / b > rel):
-            found.append(f"{key}: {b:.1f} → {a:.1f}")
+            found.append(key)
     return found
+
+
+def regressions(before, after, held):
+    """What fails: a startup past its threshold in every round (`held`), any other metric past its own."""
+    keys = [k for k, *_ in THRESHOLDS if k in held or (not k.startswith("startup_") and k in past(before, after))]
+    return [f"{k}: {value(before, k):.1f} → {value(after, k):.1f}" for k in keys]
 
 
 def table(result, meta):
@@ -395,7 +410,7 @@ def table(result, meta):
         vb, va = value(b, key), value(a, key)
         delta = f"{(va - vb) / vb * 100:+.0f}%" if vb else f"{va - vb:+.1f}"
         lines.append(f"| {label} | {cell(b, key)} | {cell(a, key)} | {delta} |")
-    found = regressions(b, a)
+    found = regressions(b, a, meta["startup_held"])
     lines += ["", "**Past a threshold:** " + "; ".join(found) if found else "No metric past a threshold."]
     lines += ["", "Thresholds: " + LIMITS]
     return "\n".join(lines) + "\n"
@@ -426,26 +441,30 @@ def main():
             sides = {"before": before, "after": after}
         else:
             sides = {"this": args.bin or shot.build(REPO, os.path.join(scratch, "ottospace"), None, cargo)}
-        result = bench(sides, args, scratch)
+        result, held = bench(sides, args, scratch)
+        commit = subprocess.run(["git", "-C", REPO, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        meta = {"profile": "release" if args.release else "dev", "runs": args.runs, "cold_runs": args.cold_runs,
+                "commit": commit, "base": args.compare, "machine": os.uname().machine,
+                "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "startup_held": held}
+        md = table(result, meta)
+        os.makedirs(args.out, exist_ok=True)
+        with open(os.path.join(args.out, "bench.json"), "w") as f:
+            json.dump({"meta": meta, "result": result}, f, indent=2)
+        with open(os.path.join(args.out, "bench.md"), "w") as f:
+            f.write(md)
     except Failed as err:
         say(f"bench: {err}")
         return 2
+    # Any other error (a missing binary, a socket timeout, an --out that is a file) is the bench's
+    # too: 2, never 1.
+    except Exception:
+        traceback.print_exc()
+        return 2
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-    commit = subprocess.run(["git", "-C", REPO, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-    meta = {"profile": "release" if args.release else "dev", "runs": args.runs, "cold_runs": args.cold_runs,
-            "commit": commit, "base": args.compare, "machine": os.uname().machine,
-            "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-    md = table(result, meta)
-    os.makedirs(args.out, exist_ok=True)
-    with open(os.path.join(args.out, "bench.json"), "w") as f:
-        json.dump({"meta": meta, "result": result}, f, indent=2)
-    with open(os.path.join(args.out, "bench.md"), "w") as f:
-        f.write(md)
     print(md)
     say(f"wrote {args.out}/bench.json and bench.md")
-    return 1 if len(result) == 2 and regressions(result["before"], result["after"]) else 0
-
+    return 1 if len(result) == 2 and regressions(result["before"], result["after"], held) else 0
 
 if __name__ == "__main__":
     sys.exit(main())

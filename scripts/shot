@@ -175,7 +175,9 @@ class Instance:
         self.steps = read_steps(scenario, self.root) if scenario else []
         # A first line `{"env":{..}}`: what the scenario adds to the instance's environment.
         extra = self.steps.pop(0)["env"] if self.steps and "env" in self.steps[0] else {}
-        clean = {k: v for k, v in os.environ.items() if not k.startswith(("OTTOSPACE_", "FAKE_", "CLAUDE", "CODEX"))}
+        # `ENV`: a script of the user's that an interactive /bin/sh would read.
+        clean = {k: v for k, v in os.environ.items()
+                 if k != "ENV" and not k.startswith(("OTTOSPACE_", "FAKE_", "CLAUDE", "CODEX"))}
         clean.update(
             {
                 "OTTOSPACE_E2E": "1",
