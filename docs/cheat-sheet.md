@@ -48,7 +48,7 @@ ottospace            # opens on the Repos list
 | Save the tab into its workspace, else as a new one | ⌘⇧S |
 | Fill the whole display, over the menu bar and Dock | ⌃⌘F, the green button, or the expand button at the top right (again to restore) |
 
-## The bar on the left (Tasks, Calendar, Workspaces, Repos; Apps and Marks behind flags)
+## The bar on the left (Repos, Tasks, Calendar, Workspaces; Apps and Marks behind flags)
 
 | I want to | Do |
 |---|---|
