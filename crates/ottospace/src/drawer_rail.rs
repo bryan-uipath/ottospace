@@ -3,8 +3,9 @@
 //! the transcript, idle or recording. Which items, their order and which is selected are the
 //! core's (`ottospace_core::model::rail`).
 
-use gpui::{AnyElement, AnyView, Context, Div, ElementId, Stateful, Window, div, prelude::*, px, rgb, svg};
+use gpui::{AnyElement, AnyView, Context, Div, ElementId, Stateful, Window, canvas, div, prelude::*, px, rgb, svg};
 use ottospace_core::listen::Status;
+use ottospace_core::model::Owner;
 use ottospace_core::model::rail::{RailItem, RailSection};
 use ottospace_core::model::zones::RailFocus;
 use ottospace_core::{Action, theme};
@@ -14,6 +15,10 @@ use crate::{Tooltip, Workspace, rect};
 /// The rail's width, and an item's side, in points.
 pub(crate) const WIDTH: f32 = 48.;
 const ITEM: f32 = 36.;
+/// Frames a pending scroll is asked for again before it gives up.
+const TRIES: u8 = 4;
+/// What the rail last drew: its space, the item keyed and the one selected.
+pub(crate) type Drawn = (Owner, Option<RailItem>, Option<RailItem>);
 
 /// The control id of an item: `drawer-rail:transcript`, `drawer-rail:3`.
 fn control(item: RailItem) -> String {
@@ -35,7 +40,7 @@ impl Workspace {
         Some(div().flex_none().h_full().flex().child(body).child(self.drawer_rail(cx)).into_any_element())
     }
 
-    /// The column: the tasks, +; at the foot a divider, then the transcript.
+    /// The column: the tasks and + scroll; at the foot a divider, then the transcript, always in view.
     fn drawer_rail(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let selected = self.model.rail_selected();
         let keyed = match self.model.rail_focus {
@@ -43,31 +48,44 @@ impl Workspace {
             _ => None,
         };
         let items = self.model.rail();
-        let mut column = div()
+        let column = div()
             .id("drawer-rail")
             .w(px(WIDTH))
             .flex_none()
             .h_full()
-            .pt_2()
             .flex()
             .flex_col()
             .items_center()
-            .gap(px(6.))
             .bg(rgb(theme::BACKGROUND))
             .border_l_1()
             .border_color(rgb(theme::BORDER));
         let item = |item: RailItem| {
             let face = self.rail_face(item)?;
-            Some(self.rail_item(item, face, selected == Some(item), keyed == Some(item), cx))
+            Some((item, self.rail_item(item, face, selected == Some(item), keyed == Some(item), cx)))
         };
         let (top, foot): (Vec<RailItem>, Vec<RailItem>) =
             items.iter().partition(|it| it.section() == RailSection::Workspace);
-        for it in top {
-            column = column.children(item(it));
+        let (shown, top): (Vec<RailItem>, Vec<Stateful<Div>>) = top.into_iter().filter_map(item).unzip();
+        // The item the keys or the selection moved to, scrolled into view once: a wheel may move it out again.
+        // A space's own: drawn anew, or another space's, it starts at the top.
+        // Keyed and selected apart: the keys entering the rail on the selected item scroll to it too.
+        let key = (self.model.space().clone(), keyed, selected);
+        let (frame, last) = self.rail_scrolled.replace((self.renders, Some(key.clone())));
+        let anew = frame + 1 != self.renders;
+        if anew || last.as_ref().map(|(space, ..)| space) != Some(&key.0) {
+            self.rail_scroll.set_offset(gpui::point(px(0.), px(0.)));
+        }
+        let at = shown.iter().position(|it| Some(*it) == keyed.or(selected));
+        if anew || last.as_ref() != Some(&key) {
+            self.rail_pending.set(at.map(|at| (at, TRIES)));
+        } else if let Some((_, tries)) = self.rail_pending.get() {
+            // Still pending, the tasks reordered (one now needs you): its place now.
+            self.rail_pending.set(at.map(|at| (at, tries)));
         }
         let new = div()
             .id("drawer-rail-new")
             .relative()
+            .flex_none()
             .w(px(ITEM))
             .h(px(28.))
             .flex()
@@ -81,15 +99,49 @@ impl Workspace {
             .child(self.controls.mark("drawer-rail:new"))
             .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New task in this workspace (⌘N)".into()))))
             .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)));
-        column = column.child(new);
-        if !foot.is_empty() {
-            let divider = div().w(px(20.)).h(px(1.)).my(px(2.)).bg(rgb(theme::BORDER));
-            column = column.child(div().flex_1()).child(divider);
-            for it in foot {
-                column = column.children(item(it));
+        let tasks = div()
+            .id("drawer-rail-tasks")
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .pt_2()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(6.))
+            .overflow_y_scroll()
+            .track_scroll(&self.rail_scroll)
+            .children(top)
+            .child(new);
+        let foot = foot.into_iter().filter_map(item).map(|(_, it)| it).collect::<Vec<_>>();
+        let divider = div().flex_none().w(px(20.)).h(px(1.)).my(px(8.)).bg(rgb(theme::BORDER));
+        let foot = (!foot.is_empty())
+            .then(|| div().flex_none().flex().flex_col().items_center().child(divider).children(foot));
+        column.child(tasks).child(self.rail_follow()).children(foot).pb_2().child(self.controls.mark("drawer-rail"))
+    }
+
+    /// After the tasks are laid out: the pending item wholly in view, else scrolled to and checked
+    /// next frame (the first frame's bounds are the last one's). A few tries: one taller than the rail never fits.
+    fn rail_follow(&self) -> AnyElement {
+        let (pending, handle) = (self.rail_pending.clone(), self.rail_scroll.clone());
+        let follow = move |_, window: &mut Window, _: &mut gpui::App| {
+            let Some((at, tries)) = pending.get() else { return };
+            let (area, offset) = (handle.bounds(), handle.offset().y);
+            let shown = handle.bounds_for_item(at).is_some_and(|item| {
+                item.top() + offset >= area.top() - px(0.5) && item.bottom() + offset <= area.bottom() + px(0.5)
+            });
+            if (at == 0 && offset == px(0.)) || (at > 0 && shown) || tries == 0 {
+                return pending.set(None);
             }
-        }
-        column.pb_2().child(self.controls.mark("drawer-rail"))
+            // The first to the very top, its padding with it.
+            match at {
+                0 => handle.set_offset(gpui::point(px(0.), px(0.))),
+                _ => handle.scroll_to_item(at),
+            }
+            pending.set(Some((at, tries - 1)));
+            window.request_animation_frame();
+        };
+        canvas(follow, |_, _, _, _| {}).absolute().size_0().into_any_element()
     }
 
     /// What an item shows, and its hover: the transcript's waveform, grey while idle, in the

@@ -11168,6 +11168,134 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     assert_eq!((&closed["state"]["listen"], pane_ids(&closed)), (&Value::Null, vec![2, 3]), "{closed}");
 }
 
+/// The owner: with no conversation, ⌘⇧L opens the transcript in this drawer, as a click on the
+/// rail does; it does not jump to the tab of the pane being heard, in another workspace.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_users_toggle_opens_the_transcript_here_from_another_workspace() {
+    let otto = listen_otto("toggle-here");
+    otto.call(json!({"cmd": "split"}));
+    let on = otto.user_click(at(otto.listen_rect("listen-start:1"), 0.5, 0.5));
+    assert_eq!(on["state"]["listen"]["source"], json!({"pane": 1}), "{on}");
+    otto.user_key("cmd-shift-l");
+    let away = otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    let selected = |reply: &Value| -> Value {
+        let spaces = reply["spaces"].as_array().cloned().unwrap_or_default();
+        spaces.iter().find(|s| s["selected"] == true).map(|s| s["of"].clone()).unwrap_or_default()
+    };
+    let (tab, space) = (away["state"]["active"].clone(), selected(&away));
+    assert_eq!(space["kind"], "workbook", "{}", away["spaces"]);
+    let shown = otto.user_key("cmd-shift-l");
+    assert_eq!((&shown["state"]["active"], selected(&shown)), (&tab, space), "no jump to the pane's tab");
+    otto.listen_rect("listen-view");
+}
+
+/// The owner: many tasks scroll the rail's top; the transcript stays pinned at its foot, in the
+/// window, and the selected task, by ⌘⌥] / ⌘⌥[ or a new one, is scrolled into view.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_rail_of_twenty_tasks_scrolls_and_keeps_the_transcript_in_the_window() {
+    let root = support::temp(&format!("ottospace-e2e-rail20-{}", std::process::id()));
+    let (bin, sessions) = (root.join("bin"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    let fixture = root.join("fixture.jsonl");
+    std::fs::write(&fixture, LISTEN_FIXTURE).unwrap();
+    let settings =
+        json!({"repos": [], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("rail20", &settings.to_string());
+    let env = [
+        ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "transcripts"),
+        ("OTTOSPACE_LISTEN_FIXTURE", fixture.to_str().unwrap()),
+    ];
+    let otto = Otto::launch_with("rail20", &env);
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.user_key("cmd-d");
+    let mut ids: Vec<u64> = Vec::new();
+    for n in 0..20 {
+        otto.user_key("cmd-n");
+        otto.user_key(&format!("t {n}"));
+        ids.push(otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the drawer is on the new task"));
+    }
+    // A task's rect, null when scrolled out; the window and the transcript's.
+    let task = |reply: &Value, id: u64| -> Option<[f64; 4]> {
+        let rail = reply["drawer"]["rail"].as_array().cloned().unwrap_or_default();
+        rail.iter()
+            .find(|item| item["id"] == json!(id))
+            .and_then(|item| item["rect"].as_array().map(|_| rect(&item["rect"])))
+    };
+    let check = |reply: &Value, selected: u64| {
+        assert_eq!(rail_selected(reply), Some(selected));
+        let (window, rail) = (rect(&reply["window"]), otto.control("drawer-rail"));
+        let transcript = otto.control("drawer-rail:transcript");
+        assert!(transcript[1] + transcript[3] <= window[1] + window[3] + 0.5, "{transcript:?} {window:?}");
+        assert!(transcript[1] + transcript[3] <= rail[1] + rail[3] + 0.5, "{transcript:?} {rail:?}");
+        let shown =
+            task(reply, selected).unwrap_or_else(|| panic!("{selected} not drawn: {}", reply["drawer"]["rail"]));
+        // Square when wholly shown: 36, or 34 inside the ring while keyed; a clipped one is shorter.
+        assert!(shown[3] >= shown[2] - 0.5 && shown[2] >= 33., "{selected} wholly in view: {shown:?}");
+        assert!(shown[1] + shown[3] <= transcript[1], "{shown:?} above {transcript:?}");
+        let hidden = ids.iter().filter(|id| task(reply, **id).is_none()).count();
+        assert!(hidden > 0, "twenty tasks overflow the rail: {}", reply["drawer"]["rail"]);
+    };
+    // The newest is in front; the rail's order is by urgency, read from the reply.
+    let drawn = otto.drawn();
+    check(&drawn, ids[19]);
+    let order = rail_tasks(&drawn);
+    let from = order.iter().position(|id| *id == ids[19]).expect("the newest on the rail");
+    // ⌘⌥] past the rail's last task: the transcript, then the first, scrolled up into view.
+    for _ in from..order.len() {
+        otto.user_key("cmd-alt-]");
+    }
+    otto.user_key("cmd-alt-]");
+    let drawn = otto.drawn();
+    check(&drawn, rail_tasks(&drawn)[0]);
+    // Back again: the transcript, then the last, scrolled down.
+    otto.user_key("cmd-alt-[");
+    otto.user_key("cmd-alt-[");
+    let drawn = otto.drawn();
+    let last = *rail_tasks(&drawn).last().expect("tasks");
+    check(&drawn, last);
+    // Closed and opened again (the rail drawn anew, its first frame's bounds stale): still in view.
+    otto.user_key("cmd-shift-l");
+    otto.user_key("cmd-shift-l");
+    check(&otto.drawn(), last);
+    // Wheeled to the top, then the keys onto the rail (on the selected task): scrolled to it again.
+    let first = *rail_tasks(&otto.drawn()).first().expect("tasks");
+    let rail = otto.control("drawer-rail");
+    let wheel =
+        json!({"cmd": "mouse", "action": "wheel", "x": rail[0] + 24., "y": rail[1] + 40., "dy": 40, "as": "user"});
+    otto.call(wheel);
+    let top = otto.drawn();
+    assert!(task(&top, first).is_some() && task(&top, last).is_none(), "{}", top["drawer"]["rail"]);
+    otto.call(json!({"cmd": "focus", "pane": 1}));
+    let mut keyed = otto.user_key(FOCUS_RIGHT);
+    for _ in 0..2 {
+        if keyed["focus"]["drawer_rail"].is_null() {
+            keyed = otto.user_key(FOCUS_RIGHT);
+        }
+    }
+    assert_eq!(keyed["focus"]["drawer_rail"]["id"], json!(last), "{}", keyed["focus"]);
+    check(&otto.drawn(), last);
+    otto.user_key("escape");
+    // A sneak label only on what shows: no label for a task scrolled out.
+    let drawn = otto.drawn();
+    let sneak = otto.call(json!({"cmd": "sneak"}));
+    let labelled: Vec<String> = sneak["sneak"]["targets"]
+        .as_array()
+        .expect("targets")
+        .iter()
+        .filter_map(|t| t["source"]["id"].as_str().map(String::from))
+        .collect();
+    for id in ids.iter().filter(|id| task(&drawn, **id).is_none()) {
+        assert!(!labelled.contains(&format!("drawer-rail:{id}")), "{id} scrolled out, labelled: {labelled:?}");
+    }
+    assert!(labelled.contains(&format!("drawer-rail:{last}")), "{labelled:?}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_transcript_ends_when_its_app_quits_and_the_bar_says_so() {

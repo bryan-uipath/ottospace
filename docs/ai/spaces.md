@@ -387,8 +387,12 @@ shows, a column at its right edge, replacing the strip.
   waveform: grey while idle, in the accent while one is on, a red dot while it records. The
   selected item is lifted with an accent edge; the one list mode's keys are on is ringed. Shown
   with the transcript or a conversation, not over the new-task box, a brief beside the tabs or
-  the inspector (they take the drawer, and its keys). With no conversation, the user's ⌘⇧L opens
-  the drawer on the transcript. Idle, it shows "Transcribe a window…" and Today
+  the inspector (they take the drawer, and its keys). The tasks and + scroll (the owner,
+  2026-11-17: thirteen or more pushed the transcript below the window); the divider and the
+  transcript stay at the foot, always in view. The item a selection or list mode's keys move to
+  is scrolled into view once; a wheel may move it out. Sneak labels only on what shows. With no
+  conversation, the user's ⌘⇧L opens this drawer on the transcript, as a click on it does (no
+  jump to its pane's tab, the owner 2026-11-17). Idle, it shows "Transcribe a window…" and Today
   (`transcripts.md`, "The idle view").
 - **Selected** (`Model::rail_selected`): the transcript while it is shown, else the task in
   front. `RailSelect`: the transcript is shown in this space's drawer (its pane's tab is not

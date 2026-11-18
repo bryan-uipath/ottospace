@@ -991,6 +991,11 @@ struct Workspace {
     /// it was last drawn in and the day it showed (`calendar::render_calendar`).
     calendar_scroll: ScrollHandle,
     calendar_shown: std::cell::Cell<(u64, i32)>,
+    /// The drawer rail's tasks; the frame and what it last drew (a new one scrolls to it
+    /// once); the item still to bring into view, and the tries left (`drawer_rail`).
+    rail_scroll: ScrollHandle,
+    rail_scrolled: RefCell<(u64, Option<drawer_rail::Drawn>)>,
+    rail_pending: Rc<Cell<Option<(usize, u8)>>>,
     /// Every scroll area's bar.
     bars: scrollbar::Bars,
     /// The minute of the last look at the clock: the Tasks section's ages are drawn again when it changes.
@@ -1476,6 +1481,9 @@ impl Workspace {
             list_scroll: ScrollHandle::new(),
             calendar_scroll: ScrollHandle::new(),
             calendar_shown: std::cell::Cell::new((0, 0)),
+            rail_scroll: ScrollHandle::new(),
+            rail_scrolled: RefCell::new((0, None)),
+            rail_pending: Rc::new(Cell::new(None)),
             bars: scrollbar::Bars::default(),
             minute: 0,
             tags: tags::Reader::start(),

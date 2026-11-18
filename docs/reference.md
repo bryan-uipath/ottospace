@@ -308,7 +308,8 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    flag), its waveform grey while idle, in colour with a red dot while it records. The selected
    item is lifted with an accent edge. A click on an item, ⌘⌥] / ⌘⌥[ (top to bottom), list mode
    (→ past the drawer, ↑ ↓, ↵), a task's row or ⌘⇧N switches it; nothing but you does. With no
-   task, ⌘⇧L opens the drawer on the transcript. Stopped, the transcript stays, idle. Idle, it
+   task, ⌘⇧L opens this drawer on the transcript, as a click on it does. Many tasks scroll; the
+   transcript stays at the rail's foot. Stopped, the transcript stays, idle. Idle, it
    offers **Transcribe a window…** (a picker in ⌘E's style of the apps that can play sound and
    their windows, the one playing now first and marked "sound now"; your pick hears that app,
    in a pane or not) and **Today**, the day's finished transcripts in `transcripts_dir` (app, start,
