@@ -44,8 +44,8 @@ impl Workspace {
     /// The column: the tasks and + scroll; at the foot a divider, then the transcript, always in view.
     fn drawer_rail(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let selected = self.model.rail_selected();
-        // Collapsed, no item is lifted: the drawer shows none.
-        let lifted = selected.filter(|_| !self.model.drawer_collapsed());
+        // Lifted only while the drawer shows it: not collapsed, nor beside the inspector or the box.
+        let lifted = self.model.rail_shown();
         let keyed = match self.model.rail_focus {
             Some(RailFocus::Right(item)) => Some(item),
             _ => None,
@@ -263,10 +263,10 @@ impl Workspace {
     }
 
     /// The rail as the state shows it: each item's `kind`, `id` (a task's, else null),
-    /// `section` (`workspace` on top, `everywhere` below the divider), `selected` and where it
+    /// `section` (`workspace` on top, `everywhere` below the divider), `selected` (what the drawer shows: none while collapsed or beside the box) and where it
     /// was drawn (null: not drawn). Empty: no rail. Never a transcript's text.
     pub(crate) fn rail_json(&self) -> serde_json::Value {
-        let selected = self.model.rail_selected();
+        let selected = self.model.rail_shown();
         let row = |item: RailItem| {
             let (kind, id) = match item {
                 RailItem::Transcript => ("transcript", None),

@@ -7046,7 +7046,8 @@ impl Render for Workspace {
         let half = f32::from(window.viewport_size().width) / 2.;
         let drawer = if self.model.talk_wide { half } else { self.model.talk_width.min(half.max(MIN_DRAWER)) };
         // The editor gets its columns: a narrower drawer widens while it shows, up to half the window.
-        let columns = ottospace_core::model::editor::COLUMNS as f32 * f32::from(self.cell.width) + 10.;
+        let columns =
+            ottospace_core::model::editor::COLUMNS as f32 * f32::from(self.cell.width) + 10. + drawer_rail::WIDTH;
         let drawer = if self.model.editor_shown() { drawer.max(columns.min(half.max(MIN_DRAWER))) } else { drawer };
         self.drawer.width = drawer;
         // The drawer's place and its rail, always: the rail alone while it is collapsed.

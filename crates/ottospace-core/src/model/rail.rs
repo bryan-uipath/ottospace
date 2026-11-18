@@ -75,6 +75,18 @@ impl Model {
         !(self.listen.shown || talk || boxed || elsewhere)
     }
 
+    /// The selected item while the drawer's place shows it: not while collapsed, nor while the
+    /// inspector, a capture's draft or the new-task box is there. What the rail lifts.
+    pub fn rail_shown(&self) -> Option<RailItem> {
+        let taken = self.inspector.is_some() || self.capture.is_some();
+        let boxed = self.compose.is_some() || self.welcome();
+        let talk = self.talk.as_ref().is_some_and(|talk| talk.open);
+        self.rail_selected().filter(|item| match item {
+            RailItem::Transcript => self.listen.shown && !taken,
+            RailItem::Task { .. } => !self.listen.shown && !taken && !boxed && talk,
+        })
+    }
+
     /// Collapsed, with something the user's ⌘⇧R would open: the conversation, else the transcript.
     pub fn drawer_opens(&self) -> bool {
         self.drawer_collapsed() && (self.talk.is_some() || self.listen_item())
@@ -288,6 +300,19 @@ mod tests {
         m.update(Action::RailSelect { item: RailItem::Transcript });
         assert_eq!((m.compose.is_none(), m.rail_selected()), (true, Some(RailItem::Transcript)));
         assert!(m.compose_kept.as_ref().is_some_and(|kept| kept.line.text() == "later"));
+        // Review: ⌘⇧R collapses the drawer whatever is in its place (the box, typed in, keeps it), and lifts nothing.
+        for open in [Action::InspectorOpen { pane: 1, app: "Notes".into() }, Action::BriefShow { id: 1 }] {
+            m.update(Action::RailSelect { item: task(1) });
+            m.update(open.clone());
+            assert!(!m.drawer_collapsed(), "{open:?}");
+            m.update(Action::TalkToggle);
+            assert!(m.drawer_collapsed() && m.rail_shown().is_none(), "{open:?}");
+        }
+        // Beside the box, the front task is selected but not shown.
+        m.update(Action::RailSelect { item: task(1) });
+        assert_eq!(m.rail_shown(), Some(task(1)));
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!((m.rail_selected(), m.rail_shown()), (Some(task(1)), None));
     }
 
     /// ⌘⇧L and the left rail's → open the sidebar on the section open last; ← and ⌘⇧L close it.
