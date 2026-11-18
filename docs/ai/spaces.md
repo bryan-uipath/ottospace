@@ -69,7 +69,10 @@ need to persist by default. maybe we need a way to differentiate persisted vs no
   refused (`CLOSING`, `touches_closing`), and any other
   step not the user's that puts it on the row is undone in `settle_closing` (its space hidden
   again, the tab on show before back: `keep_closing`). A window the shell adopts beside a pane of
-  it joins the tab on show instead (`Model::in_closing`). A second close while one is offered takes
+  it joins the tab on show instead (`Model::in_closing`). No step but the user's opens a pane
+  in it, or another file in its viewer: `Open` or `OpenFile` beside a pane of it, ⌃G's editor
+  on its viewer, a client's `Fill` of its empty pane are refused (`CLOSING_OPENS`,
+  `opens_in_closing`). A second close while one is offered takes
   the bar; the first still goes at its own time, and keeps its own Undo: each closing workspace
   shows under the others in the section (`Workbooks::closing_rows`, state `workbooks_closing`),
   italic, `Closing` and Undo (`WorkbookReopen`, the user's alone; by click or label, the clock

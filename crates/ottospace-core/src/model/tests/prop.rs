@@ -1674,6 +1674,8 @@ fn selects_tab(action: &Action) -> bool {
             | Action::CaptureBack
             | Action::RestoreLayout { .. }
             | Action::ListenShow { on: true }
+            // The user's ⌘⇧L with no conversation is `ListenShow`.
+            | Action::TalkToggle
     )
 }
 
@@ -6442,6 +6444,59 @@ fn seed_316_the_users_pick_in_the_transcripts_picker_starts_one() {
         Action::ListenPicker { apps: vec![zoom(10, false), zoom(11, false), zoom(10, true)], id: "".into(), at: 1 }
             .into(),
         Action::PickerChoose { index: Some(0) }.into(),
+    ])
+    .unwrap();
+}
+
+/// The system's `OpenFile` beside a pane of a closing workspace split it there, and the Undo would
+/// have brought back a pane the user never had (seed 835, once #234's viewer joined the makers).
+/// Nobody but the user opens a pane in one.
+#[test]
+fn seed_835_nothing_opens_in_a_closing_workspace() {
+    let assign = || Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] };
+    let known = Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] };
+    replay(&[
+        Action::TaskAdd { title: "a".into(), priority: 2, state: State::Running, tab: None, assign: assign() }.into(),
+        Action::TaskAdd { title: "b".into(), priority: 1, state: State::NeedsYou, tab: None, assign: assign() }.into(),
+        Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known, open: false }.into(),
+        Action::SpaceOpen { space: Owner::Task { id: 3 } }.into(),
+        split(Axis::Down, Kind::Terminal),
+        Action::SelectTab { index: 1 }.into(),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        restore_tasks("[]", 4294967295).sent_by(Origin::System),
+        Action::SpaceHideAsked { index: Some(1), running: vec![] }.into(),
+        by(
+            Origin::System,
+            Action::OpenFile { path: "/w/app/src/main.rs".into(), axis: Axis::Right, beside: Some(2), reuse: true },
+        ),
+    ])
+    .unwrap();
+}
+
+/// The user's ⌘⇧L with no conversation shows the transcript in its pane's tab, as `ListenShow`
+/// does: the check let only `ListenShow` change the tab on show (seed 1254).
+#[test]
+fn seed_1254_the_users_talk_toggle_shows_the_transcripts_tab() {
+    let app = Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() };
+    replay(&[
+        split(Axis::Right, Kind::Terminal),
+        split(Axis::Down, Kind::Terminal),
+        Action::Open { kind: app, axis: Axis::Right, beside: Some(1) }.into(),
+        Action::NewTab.into(),
+        split(Axis::Right, Kind::Terminal),
+        split(Axis::Down, Kind::Empty),
+        Action::CaptureStart {
+            pane: None,
+            draft: "d1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![],
+            images: true,
+        }
+        .into(),
+        Action::Fill { pane: 5, kind: Kind::File { path: "/w/app/README.md".into() } }.into(),
+        Action::ListenToggle { id: "\"@".into(), at: 200000000 }.into(),
+        by(Origin::System, Action::Focus { pane: 2 }),
+        Action::TalkToggle.into(),
     ])
     .unwrap();
 }

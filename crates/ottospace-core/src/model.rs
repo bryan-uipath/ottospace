@@ -3466,6 +3466,7 @@ impl Model {
             _ if origin == Origin::User => None,
             // Only the user's Undo brings a closing workspace back: no client selects its tab or moves its panes.
             _ if origin == Origin::Socket && self.touches_closing(action) => Some(workbook::CLOSING),
+            _ if self.opens_in_closing(action, origin) => Some(workbook::CLOSING_OPENS),
             // Only ottospace records what a task did in an app: no client forges or hides a row.
             // The user's is ignored (`app_used`): the shell sends it as its own.
             Action::AppUsed { .. } if origin == Origin::Socket => Some(crate::agent_mode::SHELLS_ALONE),

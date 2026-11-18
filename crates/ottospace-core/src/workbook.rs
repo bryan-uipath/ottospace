@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::edit::{Edit, Field};
 use crate::layout::Node;
 use crate::marks::{self, Extra, MAX_NAME, MarkInput, Need, PaneRecord, RecordKind, TabRecord};
-use crate::model::{Action, Effect, Kind, Model, Owner, PaneId, Section, Space, Tab};
+use crate::model::{Action, Effect, Kind, Model, Origin, Owner, PaneId, Section, Space, Tab};
 use crate::notice::{self, Notice};
 use crate::tasks::{NOTICE_MS, TaskId};
 
@@ -30,6 +30,8 @@ const EMPTY: &str = "a tab with nothing in it has nothing to save";
 pub const USERS_ALONE: &str = "only the user makes, saves, opens, renames or deletes a workspace";
 /// Why a client's step that would put a closing workspace back on the row is refused.
 pub const CLOSING: &str = "that workspace is closing: only the user's Undo brings it back";
+/// Why a step not the user's that would open a pane in a closing workspace is refused.
+pub const CLOSING_OPENS: &str = "that workspace is closing: nothing opens in it";
 /// Why a client's list of workspaces is refused: ottospace reads them from the folder, at start.
 pub const READ_ALONE: &str = "only ottospace reads the workspaces folder";
 
@@ -1312,6 +1314,20 @@ impl Model {
         }
     }
 
+    /// Whether `action` from `origin` would open a pane in a closing workspace, or show another
+    /// file in one: split from, or fill, a pane of it (`Open`, `OpenFile`, ⌃G's editor; a client's
+    /// `Fill`: the shell's gives a waiting pane its window). Refused (`CLOSING_OPENS`):
+    /// `keep_closing` puts its tab away again, not a new pane.
+    pub(crate) fn opens_in_closing(&self, action: &Action, origin: Origin) -> bool {
+        let pane = match action {
+            Action::Open { beside, .. } | Action::OpenFile { beside, .. } => beside.or(self.focused),
+            Action::ViewerEdit { pane } => pane.or(self.focused),
+            Action::Fill { pane, .. } if origin == Origin::Socket => Some(*pane),
+            _ => None,
+        };
+        pane.is_some_and(|pane| self.in_closing(pane))
+    }
+
     /// Whether pane `pane` is in a tab of a closing workspace.
     pub(crate) fn in_closing(&self, pane: PaneId) -> bool {
         let tab = self.tab_of(pane).and_then(|tab| self.tabs.iter().find(|t| t.id == tab));
@@ -2425,6 +2441,22 @@ mod tests {
         let adopt = Action::Adopt { kind: Kind::Terminal, beside: Some(1), seen: None };
         m.update(adopt.sent_by(Origin::System));
         assert_eq!(tab_of(&m, m.next_id), Some(Owner::Workbook { id: 2 }));
+        // Nor does anyone but the user open a pane in it, or another file in its viewer.
+        let file = |beside, reuse| Action::OpenFile { path: "/w/a.md".into(), axis: Right, beside, reuse };
+        let opens = [
+            Action::Open { kind: Kind::Terminal, axis: Right, beside: Some(1) },
+            file(Some(1), false),
+            file(Some(1), true),
+            Action::ViewerEdit { pane: Some(1) },
+        ];
+        for origin in [Origin::Socket, Origin::System] {
+            for action in &opens {
+                assert_eq!(m.refusal(action, origin), Some(CLOSING_OPENS), "{origin:?} {action:?}");
+            }
+        }
+        let fill = Action::Fill { pane: 1, kind: Kind::Terminal };
+        assert_eq!((m.refusal(&fill, Origin::Socket), m.refusal(&fill, Origin::System)), (Some(CLOSING_OPENS), None));
+        assert_eq!(m.refusal(&file(Some(1), false), Origin::User), None);
     }
 
     /// The user's close of the last tab of a temporary workspace whose terminal runs asks, as its
