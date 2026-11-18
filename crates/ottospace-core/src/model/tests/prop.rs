@@ -6586,3 +6586,42 @@ fn seed_3520_a_closed_workspace_ending_takes_its_slots() {
     ])
     .unwrap();
 }
+
+/// The system's drop of a pane of a closing workspace on a pane elsewhere swapped them, and the
+/// Undo would have brought back a pane the user never had there (seed 4049): the mirror of seed
+/// 977. Nobody but the user moves a pane out of one.
+#[test]
+fn seed_4049_no_pane_is_dropped_out_of_a_closing_workspace() {
+    let app = |window, title: &str| Kind::App { window, title: title.into(), bundle: None, name: "app".into() };
+    let repo = |name: &str, path: &str, worktrees| Repo {
+        name: name.into(),
+        path: path.into(),
+        branch: Some("main".into()),
+        worktrees,
+    };
+    let wt = Worktree { name: "canvas".into(), path: "@z".into(), branch: Some("fix/zoom".into()) };
+    let repos = vec![repo("Ottospace", "/code/canvas", vec![]), repo("Ottospace", "İ>y", vec![wt])];
+    replay(&[
+        Action::Open { kind: app(1, "w1"), axis: Axis::Right, beside: None }.into(),
+        split(Axis::Right, Kind::Terminal),
+        Action::Open { kind: slack(2), axis: Axis::Down, beside: Some(1) }.into(),
+        Action::Open { kind: app(3, "w3"), axis: Axis::Right, beside: None }.into(),
+        Action::WorktreeAdded {
+            repo: "/code/app".into(),
+            path: "/code/app-2".into(),
+            asked: "/code/app-2".into(),
+            fresh: true,
+            repos,
+        }
+        .into(),
+        by(Origin::Socket, Action::Split { axis: Axis::Right, kind: Kind::Empty }),
+        Action::SpaceHide { index: None }.into(),
+        Action::OpenRepo { path: "İ>y".into(), axis: Axis::Right }.into(),
+        Action::WorkbookReopen { workbook: 1 }.into(),
+        Action::SpaceOpen { space: Owner::Workbook { id: 2 } }.into(),
+        by(Origin::System, Action::RepoClick { path: "/code/canvas".into(), axis: Axis::Right }),
+        Action::SpaceHide { index: None }.into(),
+        by(Origin::System, Action::DropPane { source: 7, target: 3, zone: Zone::Center }),
+    ])
+    .unwrap();
+}
