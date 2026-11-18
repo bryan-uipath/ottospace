@@ -11232,7 +11232,8 @@ fn a_rail_of_twenty_tasks_scrolls_and_keeps_the_transcript_in_the_window() {
         assert!(transcript[1] + transcript[3] <= rail[1] + rail[3] + 0.5, "{transcript:?} {rail:?}");
         let shown =
             task(reply, selected).unwrap_or_else(|| panic!("{selected} not drawn: {}", reply["drawer"]["rail"]));
-        assert!(shown[3] >= 35., "{selected} wholly in view: {shown:?}");
+        // Square when wholly shown: 36, or 34 inside the ring while keyed; a clipped one is shorter.
+        assert!(shown[3] >= shown[2] - 0.5 && shown[2] >= 33., "{selected} wholly in view: {shown:?}");
         assert!(shown[1] + shown[3] <= transcript[1], "{shown:?} above {transcript:?}");
         let hidden = ids.iter().filter(|id| task(reply, **id).is_none()).count();
         assert!(hidden > 0, "twenty tasks overflow the rail: {}", reply["drawer"]["rail"]);
