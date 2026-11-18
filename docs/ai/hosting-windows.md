@@ -50,6 +50,32 @@ a short pane. A pane whose raised window would reach above ottospace's top bar g
 so a raised window cannot go under it either. Not hidden: while live, the app's real title bar shows,
 including the purple pill macOS draws in it while the window is captured.
 
+## A sharp picture
+
+A parked pane's picture is drawn 1:1: the stream captures the pane's points × the scale of
+ottospace's display (`hosted::capture_pixels`), and GPUI draws it into the same pixels (its
+sampler is linear; at 1:1 on whole pixels that changes nothing). Three things made it blurry:
+
+- The scale was read at each re-park but the stream was reconfigured only for a new size or
+  crop: ottospace moved from a 1× display to a 2× one kept its 1× picture, drawn up 2×.
+  The check (every ~500ms) now also compares the scale.
+- Windows were parked at the first free corner, whatever its display: with a 2× laptop and a
+  1× external, often the external's. A window is drawn at its display's scale, so the app drew
+  1× and no capture setting could add pixels. Parking now takes a free corner of a display with
+  ottospace's scale (`hosted::parking_corner`): not more, or each park and enter would move the
+  window between scales and the app would draw itself again. A window re-parks when the spot
+  moves (displays changed, ottospace moved). Recovery counts every free corner as a parking spot
+  (`hosted::parking_corners`). With no free corner on a 2× display (an external to the right
+  that reaches lower than the laptop), the picture stays 1×.
+- Memory: a picture is at most a 5K display's pixels (`hosted::MOST_PIXELS`, 14.7 M, 22 MB a
+  4:2:0 frame); a larger pane is captured at a lower scale.
+
+Measured 2026-11-17: a mostly off-screen window on a 1× display, captured at 1:1, equals
+`screencapture -l` of it exactly in BGRA, and in 420f 92.7% of pixels within 2 levels (chroma at
+half resolution). `e2e_apps.rs` (`a_parked_panes_picture_is_its_window_pixel_for_pixel`) compares
+the canary's one-pixel stripes as ottospace draws them with the live window. CI's runner has one
+1024×768 display at 1× and no HiDPI modes, so the 2× cases are checked by hand.
+
 ## Probe results
 
 Measured with `probe`, a CLI since removed (`d483a37:crates/probe` in git history).

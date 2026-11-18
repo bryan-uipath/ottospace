@@ -5,6 +5,8 @@
 
 use serde::Serialize;
 
+use crate::ax::Frame;
+
 /// Where to replay a click that makes a parked pane live: the same point in the window, or
 /// `None` in the gap beside a smaller window. A replay there would land on ottospace, which
 /// takes the keyboard back. `click` is from the pane's top left; `shown` is the preview's size.
@@ -49,6 +51,52 @@ pub fn click(live: bool, click: (f64, f64), shown: (f64, f64)) -> Click {
 /// a gap click that arrives second would find the pane parked and enter it again.
 pub fn was_live(live: bool, left_on_activation: bool, first_mouse: bool) -> bool {
     live || (left_on_activation && first_mouse)
+}
+
+/// The most pixels a pane's picture is captured at: a 5K display's, 5120×2880 (22 MB a frame in
+/// the stream's 4:2:0 format). A larger pane is captured at a lower scale, and drawn up.
+pub const MOST_PIXELS: f64 = 5120.0 * 2880.0;
+
+/// The pixel size to capture `shown` points of a window at, for a pane drawn at `scale` pixels a
+/// point: the pixels the pane is drawn with, so the picture is drawn 1:1. Under `MOST_PIXELS`.
+pub fn capture_pixels(shown: (f64, f64), scale: f64) -> (u32, u32) {
+    let (w, h) = (shown.0.max(1.0), shown.1.max(1.0));
+    let most = (MOST_PIXELS / (w * h)).sqrt();
+    // Capped: rounded down, or rounding up could pass `MOST_PIXELS`.
+    let whole = if scale > most { f64::floor } else { f64::round };
+    let scale = scale.min(most);
+    (whole(w * scale).max(1.0) as u32, whole(h * scale).max(1.0) as u32)
+}
+
+/// Where windows are parked: a display's bottom-right corner with no display to its right or
+/// below, so one pixel of the window shows. A window is drawn at its display's scale: one parked
+/// on a 1× display gives a 1× picture however its pane is drawn. So of the free corners, the
+/// display with the fewest pixels a point that still has `want` (the pane's display's), else the
+/// most; the first on a tie. Not more than `want`: each park and enter would move the window
+/// between scales, and the app draw itself again. `displays`: bounds and scale.
+pub fn parking_corner(displays: &[(Frame, f64)], want: f64) -> Option<(f64, f64)> {
+    let bounds: Vec<Frame> = displays.iter().map(|(d, _)| *d).collect();
+    let free = displays.iter().filter(|(d, _)| free_corner(&bounds, d).is_some());
+    // Lower is better: enough pixels first, the fewest of those; else the most.
+    let rank = |scale: f64| if scale >= want { (0, scale) } else { (1, -scale) };
+    let best = free.fold(None, |best: Option<&(Frame, f64)>, d| match best {
+        Some(b) if rank(b.1) <= rank(d.1) => Some(b),
+        _ => Some(d),
+    });
+    best.and_then(|(d, _)| free_corner(&bounds, d))
+}
+
+/// Every corner `parking_corner` may pick, whatever the pane's scale: where a parked window may be.
+pub fn parking_corners(displays: &[Frame]) -> Vec<(f64, f64)> {
+    displays.iter().filter_map(|d| free_corner(displays, d)).collect()
+}
+
+/// `display`'s bottom-right corner, if no display of `all` is to its right or below.
+fn free_corner(all: &[Frame], display: &Frame) -> Option<(f64, f64)> {
+    let far = 100_000.0;
+    let taken = |x: f64, y: f64| all.iter().any(|d| d.intersects(&Frame::new(x, y, far, far)));
+    let (x, y) = (display.x + display.w - 1.0, display.y + display.h - 1.0);
+    (!taken(x + 1.0, y) && !taken(x, y + 1.0)).then_some((x, y))
 }
 
 /// A window may differ from its pane by this much, in points, and still count as fitting.
@@ -156,6 +204,39 @@ mod tests {
     use super::*;
 
     const CALCULATOR: (f64, f64) = (232., 320.);
+
+    #[test]
+    fn a_picture_is_captured_at_the_pixels_its_pane_is_drawn_with() {
+        assert_eq!(capture_pixels((641.5, 400.0), 2.0), (1283, 800));
+        assert_eq!(capture_pixels((641.0, 400.0), 1.0), (641, 400));
+        // A 6K display's pane at 2× is captured at a 5K display's pixels: about 22 MB a frame.
+        let (w, h) = capture_pixels((3008.0, 1692.0), 2.0);
+        assert!((w as f64) * (h as f64) <= MOST_PIXELS && w > 5000, "{w}×{h}");
+        // Rounded up, this one would pass it by 1508.
+        let (w, h) = capture_pixels((2501.0, 2160.0), 2.0);
+        assert!((w as f64) * (h as f64) <= MOST_PIXELS, "{w}×{h}");
+        assert_eq!(capture_pixels((0.0, 0.0), 2.0), (2, 2));
+    }
+
+    #[test]
+    fn windows_park_on_a_free_corner_with_the_panes_scale() {
+        let laptop = Frame::new(0.0, 0.0, 1728.0, 1117.0);
+        // An external display above the laptop: both corners are free.
+        let above = Frame::new(-400.0, -1440.0, 2560.0, 1440.0);
+        let both = [(above, 1.0), (laptop, 2.0)];
+        // ottospace on the laptop: the laptop's corner, or the picture is 1×.
+        assert_eq!(parking_corner(&both, 2.0), Some((1727.0, 1116.0)));
+        // On the external: its own, so the window keeps one scale parked and live.
+        assert_eq!(parking_corner(&both, 1.0), Some((2159.0, -1.0)));
+        // One to the right that reaches lower: only its corner is free, 1× or not.
+        let right = Frame::new(1728.0, -300.0, 2560.0, 1440.0);
+        assert_eq!(parking_corner(&[(laptop, 2.0), (right, 1.0)], 2.0), Some((4287.0, 1139.0)));
+        // Equal scales: the first, as before.
+        assert_eq!(parking_corner(&[(above, 1.0), (laptop, 1.0)], 1.0), Some((2159.0, -1.0)));
+        assert_eq!(parking_corner(&[], 2.0), None);
+        // A window parked for either is recognised as parked.
+        assert_eq!(parking_corners(&[above, laptop]), vec![(2159.0, -1.0), (1727.0, 1116.0)]);
+    }
     const ON: (f64, f64) = (100., 60.);
     const GAP: (f64, f64) = (100., 500.);
 
