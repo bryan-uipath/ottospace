@@ -6700,3 +6700,27 @@ fn seed_23315_a_closed_workspace_ending_ends_its_panes_transcript() {
     ])
     .unwrap();
 }
+
+/// The user's level for an app pane was written into its tab's mark while marks were off: they
+/// stay as stored (seed 7205).
+#[test]
+fn seed_7205_a_level_leaves_the_marks_while_they_are_off() {
+    let none = || Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] };
+    let known = Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] };
+    let slides =
+        Kind::App { window: 0, title: "deck".into(), bundle: Some("com.safari".into()), name: "Slides".into() };
+    replay(&[
+        Action::TaskAdd { title: "a".into(), priority: 2, state: State::Running, tab: None, assign: none() }.into(),
+        Action::TaskAdd { title: "b".into(), priority: 1, state: State::NeedsYou, tab: None, assign: none() }.into(),
+        Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known, open: false }.into(),
+        Action::SpaceOpen { space: Owner::Task { id: 3 } }.into(),
+        split(Axis::Down, Kind::Terminal),
+        split(Axis::Right, Kind::Terminal),
+        by(Origin::Socket, Action::Split { axis: Axis::Down, kind: Kind::Terminal }),
+        Action::Adopt { kind: slides, beside: None, seen: None }.into(),
+        Action::MarkToggle { of: MarkOf::Tab(None), uid: "u4".into(), cwds: vec![(4, "/tmp".into())] }.into(),
+        set_features(&["apps_section", "transcripts", "slots", "agent_mode"]).into(),
+        Action::AgentLevel { pane: Some(4), level: Level::Act }.into(),
+    ])
+    .unwrap();
+}
