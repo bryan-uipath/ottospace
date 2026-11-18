@@ -873,6 +873,81 @@ fn the_section_says_loading_or_what_failed_and_no_meetings_only_after_a_good_rea
     assert_eq!(line(&m, NINE + H), after);
 }
 
+/// Bryan, 2026-11-18: "it is a little jarring when it pops in". The band was drawn only once a read
+/// landed; now it is there while a feed is set, loading, failed, then the meetings.
+#[test]
+fn the_band_is_there_from_the_start_loading_or_failed_until_a_read_lands() {
+    use crate::Action;
+    use crate::Origin;
+    use crate::model::Model;
+    use fetch::Failure;
+    let mut m = Model::default();
+    assert_eq!(m.calendar.band_shows(), BandShows::Absent, "no feed, no band");
+    m.update(Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() });
+    assert_eq!(m.calendar.band_shows(), BandShows::Loading, "before the thread's first word");
+    m.update(Action::CalendarFetching { since: NINE, bytes: 0 });
+    let shows = m.calendar.band_shows();
+    assert_eq!((shows, shows.slides(false), shows.line(false)), (BandShows::Loading, true, None));
+    // Reduce motion: still, a word in place of the bar.
+    assert_eq!((shows.slides(true), shows.line(true)), (false, Some("Loading…")));
+    // A first read that fails: a line, nothing moves. A read with no events (the failed one's) is no read.
+    m.update(Action::CalendarRead { events: None, days: days_of(NINE), at: NINE, held_from: 0 });
+    m.update(Action::CalendarFetched { at: NINE + 1_000, events: 0, failure: Some(Failure::Http(403)) });
+    let shows = m.calendar.band_shows();
+    assert_eq!(
+        (shows, shows.slides(false), shows.line(false)),
+        (BandShows::Failed, false, Some("Couldn't read the calendar"))
+    );
+    // Tried again by itself (15 s, 30 s..): quiet, the line stays and nothing slides.
+    m.update(Action::CalendarFetching { since: NINE + 15_000, bytes: 0 });
+    assert_eq!(m.calendar.band_shows(), BandShows::Failed);
+    let tip = "The calendar answered 403 · trying again";
+    assert_eq!(m.calendar.band_tip(NINE + 18_000, 0), tip, "why, not the retry's seconds");
+    // The user's Retry while that one runs wakes nothing, but the band slides for it.
+    assert!(m.update(Action::CalendarRetry.sent_by(Origin::User)).is_empty());
+    assert_eq!(m.calendar.band_shows(), BandShows::Loading);
+    m.update(Action::CalendarFetched { at: NINE + 20_000, events: 0, failure: Some(Failure::Http(403)) });
+    assert_eq!(m.calendar.band_shows(), BandShows::Failed);
+    // A client's Retry is refused, so it slides nothing; the user's fetches and slides.
+    m.update(Action::CalendarRetry.sent_by(Origin::Socket));
+    m.update(Action::CalendarFetching { since: NINE + 30_000, bytes: 0 });
+    assert_eq!(m.calendar.band_shows(), BandShows::Failed, "a client's Retry");
+    m.update(Action::CalendarFetched { at: NINE + 31_000, events: 0, failure: Some(Failure::Http(403)) });
+    assert_eq!(m.update(Action::CalendarRetry.sent_by(Origin::User)), [crate::Effect::CalendarRetry]);
+    assert_eq!(m.calendar.band_shows(), BandShows::Loading, "at once, before the thread's word");
+    m.update(Action::CalendarFetching { since: NINE + 32_000, bytes: 0 });
+    assert_eq!(m.calendar.band_shows(), BandShows::Loading);
+    assert_eq!(m.calendar.band_tip(NINE + 32_000, 0), "Loading the calendar…");
+    // Read, even empty: the band, still once later fetches run or fail.
+    m.update(Action::CalendarRead { events: Some(Vec::new()), days: days_of(NINE), at: NINE + 3_000, held_from: 0 });
+    for failure in [None, Some(Failure::Unreachable)] {
+        m.update(Action::CalendarFetching { since: NINE + H, bytes: 0 });
+        assert_eq!(m.calendar.band_shows(), BandShows::Ready);
+        m.update(Action::CalendarFetched { at: NINE + H, events: 0, failure });
+        let shows = m.calendar.band_shows();
+        assert_eq!((shows, shows.slides(false), shows.line(true)), (BandShows::Ready, false, None));
+    }
+    m.update(Action::SetCalendar { on: false, notify: true, links_only: false, hide_free: false, colors: Vec::new() });
+    assert_eq!(m.calendar.band_shows(), BandShows::Absent);
+}
+
+#[test]
+fn the_loading_bar_crosses_the_band_and_comes_round_again() {
+    // Enters at the left, eased: slow at the ends, fast through the middle.
+    assert_eq!(slide(0), (0., 0.));
+    let (from, to) = slide(SLIDE_MS / 2);
+    assert!((from - 0.4).abs() < 1e-6 && (to - 0.6).abs() < 1e-6, "{from} {to}");
+    assert!(slide(SLIDE_MS / 10).1 < 0.1, "slow at first");
+    let (from, to) = slide(SLIDE_MS - 1);
+    assert!(from > 0.99 && to == 1., "leaving at the right: {from} {to}");
+    assert_eq!(slide(SLIDE_MS + SLIDE_MS / 2), slide(SLIDE_MS / 2), "round again");
+    // Always within the band, never wider than the highlight.
+    for ms in (0..SLIDE_MS).step_by(7) {
+        let (from, to) = slide(ms);
+        assert!((0. ..=1.).contains(&from) && from <= to && to <= 1. && to - from <= SLIDE_WIDTH + 1e-6, "{ms}");
+    }
+}
+
 #[test]
 fn spans_round_up_to_the_minute() {
     assert_eq!(span(1), "1m");

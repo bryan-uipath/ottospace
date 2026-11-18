@@ -744,6 +744,10 @@ pub struct Calendar {
     pub stale: bool,
     /// The feed's fetch as it goes: loading, read or failed.
     pub fetch: fetch::Fetch,
+    /// The last fetch that failed: the band says so through the retries that follow.
+    last_failure: Option<fetch::Failure>,
+    /// The user's Retry asked for the fetch that runs or comes next: the band slides for it.
+    retried: bool,
     /// Whether the user is in a call (a microphone is in use), as last seen. `None`: not known.
     pub in_call: Option<bool>,
     /// When the call that is on was first seen (ms).
@@ -769,7 +773,96 @@ pub enum RailMark {
     Alert,
 }
 
+/// What the band above the status bar shows. Its room is kept from the first frame while a feed
+/// is set: nothing moves when the meetings come.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BandShows {
+    /// No feed: no band.
+    Absent,
+    /// No good read yet, and none failed last: a bar slides along it.
+    Loading,
+    /// No good read yet, the last fetch failed: one quiet line and the user's Retry.
+    Failed,
+    /// A read landed: the workday and its meetings.
+    Ready,
+}
+
+/// One crossing of the loading bar's highlight (ms), and its width (of the band's).
+const SLIDE_MS: u64 = 1_600;
+const SLIDE_WIDTH: f32 = 0.2;
+
+impl BandShows {
+    pub fn name(self) -> &'static str {
+        match self {
+            BandShows::Absent => "absent",
+            BandShows::Loading => "loading",
+            BandShows::Failed => "failed",
+            BandShows::Ready => "ready",
+        }
+    }
+
+    /// Its quiet line, if any: a failure; loading with Reduce motion, in place of the bar.
+    pub fn line(self, reduced: bool) -> Option<&'static str> {
+        match self {
+            BandShows::Loading if reduced => Some("Loading…"),
+            BandShows::Failed => Some("Couldn't read the calendar"),
+            _ => None,
+        }
+    }
+
+    /// The bar slides: a frame each tick while it does, none once the read lands or fails.
+    pub fn slides(self, reduced: bool) -> bool {
+        self == BandShows::Loading && !reduced
+    }
+}
+
+/// The loading bar's highlight at `ms`, from and to across the band (0 to 1): a short highlight
+/// enters at the left and leaves at the right every `SLIDE_MS`, eased in and out.
+pub fn slide(ms: u64) -> (f32, f32) {
+    let p = (ms % SLIDE_MS) as f32 / SLIDE_MS as f32;
+    let start = -SLIDE_WIDTH + (1. + SLIDE_WIDTH) * p * p * (3. - 2. * p);
+    (start.max(0.), (start + SLIDE_WIDTH).min(1.))
+}
+
 impl Calendar {
+    /// What the band shows: absent without a feed; until a read lands, loading, or failed once a
+    /// fetch failed: the retries after it stay quiet, but for the user's own.
+    pub fn band_shows(&self) -> BandShows {
+        match (self.on, self.updated, self.fetch) {
+            (false, ..) => BandShows::Absent,
+            (true, Some(_), _) => BandShows::Ready,
+            (true, None, _) if self.retried => BandShows::Loading,
+            (true, None, fetch::Fetch::Failed { .. }) => BandShows::Failed,
+            (true, None, _) if self.last_failure.is_some() => BandShows::Failed,
+            (true, None, _) => BandShows::Loading,
+        }
+    }
+
+    /// The band's line's hover: the section's line, or while a retry of its own runs, what failed.
+    pub fn band_tip(&self, now: u64, offset: i64) -> String {
+        match (self.fetch, self.last_failure) {
+            (fetch::Fetch::Loading { .. }, Some(why)) if !self.retried => format!("{} · trying again", why.words()),
+            _ => self.fetch_line(now, offset),
+        }
+    }
+
+    /// A fetch ended: failed or read.
+    pub fn fetched(&mut self, at: u64, events: u32, failure: Option<fetch::Failure>) {
+        self.fetch = match failure {
+            None => fetch::Fetch::Read { at, events },
+            Some(why) => fetch::Fetch::Failed { at, why },
+        };
+        self.last_failure = failure.or(self.last_failure);
+        self.retried = false;
+    }
+
+    /// The user's Retry: whether to wake the feed thread. Not while a fetch runs (a second would
+    /// only wait behind it), though the band slides for that one.
+    pub fn retry(&mut self) -> bool {
+        self.retried = self.on;
+        self.on && !matches!(self.fetch, fetch::Fetch::Loading { .. })
+    }
+
     /// A read of the feed: its events, or `None` when it failed (the last ones stay).
     pub fn read(&mut self, events: Option<Vec<Event>>, days: [u64; DAYS], at: u64) {
         if days[BACK] != self.days[BACK] {

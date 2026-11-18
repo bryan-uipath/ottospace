@@ -494,6 +494,8 @@ impl Workspace {
                 };
                 Some(Action::CalendarDay { step })
             }
+            // The core takes a Retry from the user alone.
+            ("calendar-retry" | "calendar-band-retry", _) => Some(Action::CalendarRetry),
             ("meeting-row-join", _) => name.parse().ok().map(|id| Action::CalendarJoin { id }),
             _ => {
                 match (kind, number) {

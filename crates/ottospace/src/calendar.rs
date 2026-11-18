@@ -89,6 +89,10 @@ pub struct Timeline {
     call_looked: u64,
     /// The band pulses: drawn 10 times a second.
     pub(crate) pulse: bool,
+    /// The loading bar slides: drawn each frame until the first read lands or fails.
+    pub(crate) sliding: bool,
+    /// Frames drawn with the bar sliding (the state's `counts.band_frames`, test runs).
+    pub(crate) band_frames: std::cell::Cell<u64>,
     /// Links a test run's Join would have opened.
     joins: u32,
 }
@@ -99,6 +103,8 @@ impl Timeline {
         let settings = &config::get().settings;
         let workday = settings.workday();
         let Some(feed) = settings.calendar_ics.as_deref() else { return Self { workday, ..Self::default() } };
+        // Known before the first frame: a still band never slides once.
+        let reduce_motion = crate::dial::calm();
         let source = if feed.starts_with("https://") {
             Source::Link(feed.to_string())
         } else {
@@ -205,7 +211,7 @@ impl Timeline {
                 }
             }
         });
-        Self { heard: Some(rx), retry: Some(retry), workday, ..Self::default() }
+        Self { heard: Some(rx), retry: Some(retry), workday, reduce_motion, ..Self::default() }
     }
 }
 
@@ -386,16 +392,17 @@ impl Workspace {
         let calendar = &self.model.calendar;
         if now.saturating_sub(self.timeline.motion_read) >= 10_000 {
             self.timeline.motion_read = now;
-            self.timeline.reduce_motion = meeting::reduce_motion();
+            self.timeline.reduce_motion = crate::dial::calm();
         }
         let pulses =
             calendar.near(now).any(|e| matches!(calendar::stage(e, now), Stage::Approaching | Stage::Imminent));
         let pulse = pulses && !self.timeline.reduce_motion;
         self.timeline.pulse = pulse;
+        self.timeline.sliding = calendar.band_shows().slides(self.timeline.reduce_motion);
         // A fetch's seconds go on in the section while it runs.
         let loading = matches!(calendar.fetch, fetch::Fetch::Loading { .. });
         let every = if loading { 1_000 } else { 20_000 };
-        if pulse || now.saturating_sub(self.timeline.slid) >= every {
+        if pulse || self.timeline.sliding || now.saturating_sub(self.timeline.slid) >= every {
             self.timeline.slid = now;
             cx.notify();
         }
@@ -431,7 +438,7 @@ impl Workspace {
     /// its right, a mark at its start and end, blocks of time held under the calls, calls in lanes,
     /// a tick for now, a dot for all-day events and for blocks outside the band. Hover only: a
     /// card for each, no click.
-    pub(crate) fn render_timeline(&self) -> Option<AnyElement> {
+    pub(crate) fn render_timeline(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let gone = |m: &Mark| {
             matches!(
                 m,
@@ -444,9 +451,18 @@ impl Workspace {
         };
         self.marks.borrow_mut().retain(|m, _| !gone(m));
         let calendar = &self.model.calendar;
-        // Not before the first read: there is no day yet.
-        if !calendar.on || calendar.span(0).1 == 0 {
-            return None;
+        // A hairline along the top, as the status bar's and the panes' edges: the band reads as
+        // part of the chrome, not empty space. Its room is kept while loading, so nothing jumps.
+        let frame = div().flex_none().relative().h(px(BAND)).w_full().bg(rgb(theme::BACKGROUND));
+        let frame = frame.border_t_1().border_color(rgb(theme::BORDER));
+        // Inset, so a mark or block at either end is drawn whole.
+        let mut out = div().absolute().top_0().bottom_0().left(px(INSET)).right(px(INSET));
+        out = out.child(mark(&self.marks, Mark::Band));
+        let shows = calendar.band_shows();
+        match shows {
+            calendar::BandShows::Absent => return None,
+            calendar::BandShows::Ready => {}
+            _ => return Some(frame.child(self.band_waiting(shows, out, cx)).into_any_element()),
         }
         let now = now_ms();
         let offset = zone_offset(now);
@@ -464,9 +480,6 @@ impl Workspace {
         // A meeting's: the card the Calendar section's rows show.
         let hover_card = |id: gpui::ElementId, tip: progress::MeetingTip| area(id).tooltip(tip);
         let at = |from: f32, to: f32| div().absolute().top_0().bottom_0().left(relative(from)).w(relative(to - from));
-        // Inset, so a mark or block at either end is drawn whole.
-        let mut out = div().absolute().top_0().bottom_0().left(px(INSET)).right(px(INSET));
-        out = out.child(mark(&self.marks, Mark::Band));
         for (n, (t, what)) in
             [(band.workday.0, "Workday starts"), (band.workday.1, "Workday ends")].into_iter().enumerate()
         {
@@ -555,11 +568,41 @@ impl Workspace {
                 .child(tick.child(mark(&self.marks, Mark::BandNow)))
                 .child(hover("timeline-now".into(), calendar.now_card(now, offset))),
         );
-        // A hairline along the top, as the status bar's and the panes' edges: the band reads as
-        // part of the chrome, not empty space.
-        let band = div().flex_none().relative().h(px(BAND)).w_full().bg(rgb(theme::BACKGROUND));
-        let band = band.border_t_1().border_color(rgb(theme::BORDER));
-        Some(band.child(out).into_any_element())
+        Some(frame.child(out).into_any_element())
+    }
+
+    /// The band before a read landed: a highlight sliding along a faint track; with Reduce motion
+    /// `Loading…`; after a failed fetch its line and the user's Retry.
+    fn band_waiting(&self, shows: calendar::BandShows, out: Div, cx: &Context<Self>) -> Div {
+        let reduced = self.timeline.reduce_motion;
+        let Some(line) = shows.line(reduced) else {
+            let (from, to) = calendar::slide(now_ms());
+            if shows.slides(reduced) {
+                self.timeline.band_frames.set(self.timeline.band_frames.get() + 1);
+            }
+            let bar = |from: f32, to: f32| {
+                let at = div().absolute().left(relative(from)).w(relative(to - from)).h(px(2.)).rounded_full();
+                at.top(px(LANES_TOP + (INNER - LANES_TOP - LANES_BOTTOM) / 2. - 1.)).bg(rgb(theme::MUTED))
+            };
+            return out.child(bar(0., 1.).opacity(0.12)).child(bar(from, to).opacity(0.6));
+        };
+        let failed = shows == calendar::BandShows::Failed;
+        // The section's words for why, on hover.
+        let why = self.model.calendar.band_tip(now_ms(), zone_offset(now_ms()));
+        let text = div()
+            .id("band-line")
+            .child(line)
+            .tooltip(move |_: &mut Window, cx: &mut gpui::App| AnyView::from(cx.new(|_| Tooltip(why.clone().into()))));
+        let retry = failed.then(|| {
+            let click = |this: &mut Self, window: &Window, cx: &mut Context<Self>| {
+                drop(this.dispatch(Action::CalendarRetry, this.input, window, cx))
+            };
+            let word = self.word("calendar-band-retry".into(), ("Retry", "Read the calendar again"), click, cx);
+            word.text_size(px(9.)).line_height(px(INNER)).text_color(rgb(theme::MUTED))
+        });
+        let line = div().absolute().inset_0().flex().items_center().gap_1().text_size(px(9.)).line_height(px(INNER));
+        let line = line.text_color(rgb(theme::MUTED)).child(text).children(failed.then_some("·")).children(retry);
+        out.child(line)
     }
 
     /// What the state says of the timeline: counts, times and stages, never a title or a place,
@@ -607,7 +650,7 @@ impl Workspace {
             // the workday's (ms), the workday's marks, now's tick, each block's times and rect, kind,
             // status, colour name, whether a focus block, and lane (blocks under the calls have none), and the markers of
             // blocks wholly before and after it (`outside`: counts and rects).
-            "band": (calendar.on && calendar.span(0).1 > 0).then(|| serde_json::json!({
+            "band": (calendar.band_shows() == calendar::BandShows::Ready).then(|| serde_json::json!({
                 "rect": drawn(Mark::Band),
                 "span": [band.from, band.to],
                 "workday": [band.workday.0, band.workday.1],
@@ -620,6 +663,12 @@ impl Workspace {
                 ],
                 "status_bar": drawn(Mark::Status),
             })),
+            // What the band shows (`absent`, `loading`, `failed`, `ready`), in every state but
+            // absent where (its rect is the same in each), its quiet line and its Retry's rect.
+            "band_state": calendar.band_shows().name(),
+            "band_line": calendar.band_shows().line(self.timeline.reduce_motion),
+            "band_rect": drawn(Mark::Band),
+            "band_retry": at("calendar-band-retry".into()),
             // The meeting on the notice bar: where its Join and × are (null: not drawn).
             "banner": banner.map(|_| serde_json::json!({ "join": controls.0, "dismiss": controls.1 })),
             "alerts": calendar.given,

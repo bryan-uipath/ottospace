@@ -1541,6 +1541,15 @@ export interface Snapshot {
       outside: { count: number; rect: Rect | null }[];
       status_bar: Rect | null;
     } | null;
+    /**
+     * What the band shows: `absent` (no feed), `loading` (a bar slides, or `Loading…` with Reduce
+     * motion), `failed` (no good read yet: a line and a Retry), `ready`. `band_rect` is the same in
+     * each but absent; `band_line` the line drawn, `band_retry` its Retry (the user's alone).
+     */
+    band_state: "absent" | "loading" | "failed" | "ready";
+    band_line: string | null;
+    band_rect: Rect | null;
+    band_retry: Rect | null;
     banner: { join: Rect | null; dismiss: Rect | null } | null;
     alerts: number;
     joins: number | null;

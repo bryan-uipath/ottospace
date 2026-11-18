@@ -199,7 +199,31 @@ just showing no events)".
 - **The section**: under the rows, `Fetch::line` (`Loading the calendar… 412 KB`, `… 3 s` before
   a byte, `Updated 2 min ago · 1858 events`, or the failure's words and `· last read 09:40`) and,
   after a failure, `Retry`. "No meetings today" only once a read succeeded
-  (`Calendar::empty_note`). The band has no empty state: it is not drawn before the first read.
+  (`Calendar::empty_note`). The band: below.
+
+## The band while it loads
+
+Bryan, 2026-11-18: "it is a little jarring when it pops in. Can we reserve the space, if a
+calendar is configured, and show a simple loading sequence there (like a sliding bar)". The band
+was drawn only once a read landed (and, after a failed first read, as an empty workday).
+
+- **What it shows** (`Calendar::band_shows`, pure): `Absent` without a feed; `Ready` once a read
+  landed (a later fetch, running or failed, changes nothing); before that `Failed` once a fetch
+  failed, through the retries that follow by themselves (15 s, 30 s, ..: a feed that keeps
+  failing does not animate each time), `Loading` for the user's Retry (also one pressed while a
+  retry runs) and before any failure. Its room (12 points) is the same in each but absent, from the first frame:
+  `calendar_ics` is read at start (restart to apply), so the band never appears later.
+- **Loading**: a faint track and a highlight a fifth of the band wide crossing it every 1.6 s,
+  eased (`calendar::slide`), in `theme::MUTED`. Reduce motion (`OTTOSPACE_REDUCE_MOTION` in a
+  test run, read before the first frame): `Loading…`, still. The meetings then appear in place;
+  no fade, so no frames for one.
+- **Failed**: `Couldn't read the calendar · Retry`, the section's line (`Fetch::line`) on hover.
+  Retry is `CalendarRetry`, the user's alone.
+- **Frames**: the bar asks for one each tick only while it slides (`Timeline::sliding`, busy in
+  `cadence`); none after the read or the failure. The state's `counts.band_frames` (test runs)
+  counts them.
+- **State**: `calendar.band_state`, `band_line`, `band_rect` (every state but absent) and
+  `band_retry`. `band` (the workday's layout) stays null until ready.
 - **Retry soon**: after a failure 15 s, 30 s, doubling to the refresh interval
   (`fetch::retry_after`). The user's Retry (`CalendarRetry`, refused for any other origin: no
   client makes the app reach the network) wakes the thread at once; not while a fetch runs.
