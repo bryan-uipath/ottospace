@@ -5,6 +5,7 @@
 
 use gpui::{AnyElement, AnyView, Context, Div, ElementId, Stateful, Window, canvas, div, prelude::*, px, rgb, svg};
 use ottospace_core::listen::Status;
+use ottospace_core::model::Owner;
 use ottospace_core::model::rail::{RailItem, RailSection};
 use ottospace_core::model::zones::RailFocus;
 use ottospace_core::{Action, theme};
@@ -16,6 +17,8 @@ pub(crate) const WIDTH: f32 = 48.;
 const ITEM: f32 = 36.;
 /// Frames a pending scroll is asked for again before it gives up.
 const TRIES: u8 = 4;
+/// What the rail last drew: its space, the item keyed and the one selected.
+pub(crate) type Drawn = (Owner, Option<RailItem>, Option<RailItem>);
 
 /// The control id of an item: `drawer-rail:transcript`, `drawer-rail:3`.
 fn control(item: RailItem) -> String {
@@ -65,14 +68,19 @@ impl Workspace {
         let (shown, top): (Vec<RailItem>, Vec<Stateful<Div>>) = top.into_iter().filter_map(item).unzip();
         // The item the keys or the selection moved to, scrolled into view once: a wheel may move it out again.
         // A space's own: drawn anew, or another space's, it starts at the top.
-        let key = (self.model.space().clone(), keyed.or(selected));
+        // Keyed and selected apart: the keys entering the rail on the selected item scroll to it too.
+        let key = (self.model.space().clone(), keyed, selected);
         let (frame, last) = self.rail_scrolled.replace((self.renders, Some(key.clone())));
         let anew = frame + 1 != self.renders;
-        if anew || last.as_ref().map(|(space, _)| space) != Some(&key.0) {
+        if anew || last.as_ref().map(|(space, ..)| space) != Some(&key.0) {
             self.rail_scroll.set_offset(gpui::point(px(0.), px(0.)));
         }
+        let at = shown.iter().position(|it| Some(*it) == keyed.or(selected));
         if anew || last.as_ref() != Some(&key) {
-            self.rail_pending.set(shown.iter().position(|it| Some(*it) == key.1).map(|at| (at, TRIES)));
+            self.rail_pending.set(at.map(|at| (at, TRIES)));
+        } else if let Some((_, tries)) = self.rail_pending.get() {
+            // Still pending, the tasks reordered (one now needs you): its place now.
+            self.rail_pending.set(at.map(|at| (at, tries)));
         }
         let new = div()
             .id("drawer-rail-new")

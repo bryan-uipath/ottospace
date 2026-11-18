@@ -971,11 +971,10 @@ struct Workspace {
     /// it was last drawn in and the day it showed (`calendar::render_calendar`).
     calendar_scroll: ScrollHandle,
     calendar_shown: std::cell::Cell<(u64, i32)>,
-    /// The drawer rail's tasks; the frame, space and item it last drew (a new one scrolls to it
+    /// The drawer rail's tasks; the frame and what it last drew (a new one scrolls to it
     /// once); the item still to bring into view, and the tries left (`drawer_rail`).
     rail_scroll: ScrollHandle,
-    rail_scrolled:
-        RefCell<(u64, Option<(ottospace_core::model::Owner, Option<ottospace_core::model::rail::RailItem>)>)>,
+    rail_scrolled: RefCell<(u64, Option<drawer_rail::Drawn>)>,
     rail_pending: Rc<Cell<Option<(usize, u8)>>>,
     /// Every scroll area's bar.
     bars: scrollbar::Bars,

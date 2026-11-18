@@ -11259,6 +11259,24 @@ fn a_rail_of_twenty_tasks_scrolls_and_keeps_the_transcript_in_the_window() {
     otto.user_key("cmd-shift-l");
     otto.user_key("cmd-shift-l");
     check(&otto.drawn(), last);
+    // Wheeled to the top, then the keys onto the rail (on the selected task): scrolled to it again.
+    let first = *rail_tasks(&otto.drawn()).first().expect("tasks");
+    let rail = otto.control("drawer-rail");
+    let wheel =
+        json!({"cmd": "mouse", "action": "wheel", "x": rail[0] + 24., "y": rail[1] + 40., "dy": 40, "as": "user"});
+    otto.call(wheel);
+    let top = otto.drawn();
+    assert!(task(&top, first).is_some() && task(&top, last).is_none(), "{}", top["drawer"]["rail"]);
+    otto.call(json!({"cmd": "focus", "pane": 1}));
+    let mut keyed = otto.user_key(FOCUS_RIGHT);
+    for _ in 0..2 {
+        if keyed["focus"]["drawer_rail"].is_null() {
+            keyed = otto.user_key(FOCUS_RIGHT);
+        }
+    }
+    assert_eq!(keyed["focus"]["drawer_rail"]["id"], json!(last), "{}", keyed["focus"]);
+    check(&otto.drawn(), last);
+    otto.user_key("escape");
     // A sneak label only on what shows: no label for a task scrolled out.
     let drawn = otto.drawn();
     let sneak = otto.call(json!({"cmd": "sneak"}));
