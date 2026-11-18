@@ -5713,9 +5713,9 @@ impl Model {
                     talk.open = false;
                 }
             }
-            // No conversation here: ⌘⇧L opens the drawer on the transcript, the rail beside it.
+            // No conversation here: ⌘⇧L opens this drawer on the transcript, as a rail click (no jump to its pane).
             Action::TalkToggle if self.talk.is_none() && self.by_user => {
-                self.listen_act(Action::ListenShow { on: true }, effects)
+                self.rail_select(rail::RailItem::Transcript, effects)
             }
             Action::TalkToggle => {
                 if let Some(open) = self.talk.as_ref().map(|talk| !talk.open) {
