@@ -58,17 +58,32 @@ need to persist by default. maybe we need a way to differentiate persisted vs no
   at once, its space hidden with its tabs, and the notice bar offers `Workspace closed` with Undo
   for `NOTICE_MS` (#208's offer, `Change::Closed`). The user's Undo brings it back on the row,
   selected, as it was. The user's × or ⌘⌃W on one whose terminal runs a program asks first
-  (`SpaceHideAsked`, `Confirm::close`), as ⌘Q does: closed, the program ends with the Undo. Its time up (a `Tick`; × on the bar sets it up now, and the shell ticks then): its tabs close, their
+  (`SpaceHideAsked`, `Confirm::close`), as ⌘Q does: closed, the program ends with the Undo. So
+  does the user's close of its last tab (⌘⇧W, the tab's × or label: `CloseTabAsked`, turned into
+  `SpaceHideAsked` or `CloseTab` before any step by `close_tab_asked`): yes closes the workspace,
+  its tab kept for the Undo. Its time up (a `Tick`; × on the bar sets it up now, and the shell ticks then): its tabs close, their
   terminals and windows with them, and it is gone. Only time passing ends one, so no other step
   ends a pane by it. A tab of it selected meanwhile (a mark, a client's `select_tab`) puts it back
-  on the row, temporary still, and the offer goes. A second close while one is offered takes the
-  bar; the first still goes at its own time.
+  on the row, temporary still, and the offer goes, only by the user's step: a client's
+  `select_tab`, focus or mark into it, a pane moved into or out of it, or its tab or pane closed, is
+  refused (`CLOSING`, `touches_closing`), and any other
+  step not the user's that puts it on the row is undone in `settle_closing` (its space hidden
+  again, the tab on show before back: `keep_closing`). A window the shell adopts beside a pane of
+  it joins the tab on show instead (`Model::in_closing`). No step but the user's opens a pane
+  in it, or another file in its viewer: `Open` or `OpenFile` beside a pane of it, ⌃G's editor
+  on its viewer, a pane dropped on one of it or moved to its tab, a client's `Fill` of its
+  empty pane are refused (`CLOSING_OPENS`,
+  `opens_in_closing`). A second close while one is offered takes
+  the bar; the first still goes at its own time, and keeps its own Undo: each closing workspace
+  shows under the others in the section (`Workbooks::closing_rows`, state `workbooks_closing`),
+  italic, `Closing` and Undo (`WorkbookReopen`, the user's alone; by click or label, the clock
+  moved first as for the bar's), whatever the bar says since.
 - **Who.** Only the user's step closes one or keeps one: a client's `hide_space` or `close_tab`
   leaves it listed (hidden, it comes back after a restart as an open one does; with no tab left
   it goes at quit, having no file), and its `WorkbookKeep` is refused (`USERS_ALONE`).
 - **Numbering.** + names a new one with the lowest free number among the listed workspaces and
   one whose Undo is offered (`free_name`): once closed ones go, "Workspace 2" comes again.
-- **Look.** Its name is muted on the top row and in the section, its tip "Temporary: closes
+- **Look.** Its name is muted and italic on the top row (selected or not) and in the section, its tip "Temporary: closes
   without saving · ⋯ Keep". The state says `spaces[].kept` (false only for a temporary
   workspace) and `workbook_offer` `closed`.
 - **Migration.** Every file read is kept: a workspace saved before this rule was one the user
@@ -76,7 +91,9 @@ need to persist by default. maybe we need a way to differentiate persisted vs no
   of an older layout's first space ("Workspace") is kept too.
 - Property rules: no step but the user's keeps or closes a temporary workspace or takes one off
   the list (the files read again aside); no temporary workspace is written; a closing one is not
-  listed, not on the row, not kept and not in `layout.json`, nor are its tabs.
+  listed, not on the row, not kept and not in `layout.json`, nor are its tabs; no step but the
+  user's brings a closing one back, whatever the action; no client's changes its panes (time
+  aside), and no shell's step adds one.
 
 ## Home (built)
 

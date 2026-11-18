@@ -88,7 +88,7 @@ The badge on an app is how many windows it has open. A new window of a hosted ap
 ## Workspaces
 
 A workspace is a named set of tabs, for a context that comes back. A new one is temporary (its
-name muted) until it gets a task, a repository, a name or Keep; kept, it is kept between runs and
+name muted and italic) until it gets a task, a repository, a name or Keep; kept, it is kept between runs and
 listed in the Workspaces section whether it is open or not. The first item of the top row is
 Home, a house: it holds no pane. What you open there (a pane, ⌘T, a Repos row) gets a new
 workspace; tabs of nothing (a dismissed task's, a client's) go to the workspace selected last.
@@ -97,7 +97,7 @@ workspace; tabs of nothing (a dismissed task's, a client's) go to the workspace 
 |---|---|
 | Make a new, empty one | + on the top row, or in the Workspaces section's header: "Workspace 2", one empty tab, selected. It never takes the tab on show |
 | Take it off the top row | Its ×, or ⌘⌃W. Nothing in it stops; it stays listed, and its row opens it again |
-| Close a temporary one for good | Its ×, ⌘⌃W, or close its last tab: off the list; Undo on the notice bar for six seconds. A terminal in it runs a program: asked first |
+| Close a temporary one for good | Its ×, ⌘⌃W, or close its last tab: off the list; Undo on the notice bar, and on its row in the Workspaces section, for six seconds. A terminal in it runs a program: asked first |
 | Keep a temporary one | Its row's … ▸ Keep, the … on its item on the top row, File ▸ Keep Workspace, or rename it. A task or a Repos click keeps it too |
 | Save the tab on show | ⌘⇧S. In a workspace: into that one. Elsewhere: as a new one; type its name, ↵ |
 | Add the tab on show to one | ⌘⌃E, then `a` on its row. Or File ▸ Add Tab to Workspace… |

@@ -875,6 +875,11 @@ const MAKERS: &[Make] = &[
     |g| Action::SelectTab { index: g.index(g.m.tabs.len()) },
     |g| Action::CycleTab { delta: g.delta() },
     |g| Action::CloseTab { index: g.rng.coin().then(|| g.index(g.m.tabs.len())) },
+    |g| {
+        let running = g.m.panes.iter().filter(|_| g.rng.coin()).map(|p| p.id).collect::<Vec<_>>();
+        let running = running.into_iter().map(|pane| Running { pane, program: None, background: false }).collect();
+        Action::CloseTabAsked { index: g.rng.coin().then(|| g.index(g.m.tabs.len())), running }
+    },
     |g| Action::PickerQuery { query: g.name(&["s", "S", "sl", "term", "Slack"]) },
     |g| Action::PickerMove { delta: g.delta() },
     |g| {
@@ -1359,6 +1364,7 @@ const MAKERS: &[Make] = &[
     |g| Action::RowMenuChoose { index: g.rng.coin().then(|| g.rng.below(3)) },
     |_| Action::RowMenuClose,
     |_| Action::WorkbookUndo,
+    |g| Action::WorkbookReopen { workbook: g.workbook() },
     |g| Action::SetAgents {
         claude: g.names(AGENTS, 2),
         codex: Vec::new(),
@@ -1624,6 +1630,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::SelectVisibleTab { .. }
             | Action::CycleTab { .. }
             | Action::CloseTab { .. }
+            | Action::CloseTabAsked { .. }
             | Action::NewTab
             | Action::NewEmptyTab
             | Action::SpaceSelect { .. }
@@ -1659,6 +1666,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::WorkbookOpen { .. }
             // A closed temporary workspace's Undo: it is back, selected.
             | Action::WorkbookUndo
+            | Action::WorkbookReopen { .. }
             | Action::ListUndo
             | Action::ListChoose { .. }
             | Action::MarkType { .. }
@@ -1666,6 +1674,8 @@ fn selects_tab(action: &Action) -> bool {
             | Action::CaptureBack
             | Action::RestoreLayout { .. }
             | Action::ListenShow { on: true }
+            // The user's ⌘⇧L with no conversation is `ListenShow`.
+            | Action::TalkToggle
     )
 }
 
@@ -2943,6 +2953,19 @@ impl Run {
         let listed =
             |m: &Model| -> Vec<(String, bool)> { m.workbooks.listed().map(|b| (b.uid.clone(), b.kept)).collect() };
         let listed_before = listed(m);
+        let closing_before: Vec<workbook::WorkbookId> =
+            m.workbooks.list.iter().filter(|book| book.closing.is_some()).map(|book| book.id).collect();
+        // Each closing workspace's tabs, each with its panes and whether they are empty: what its Undo brings back.
+        let closing_held = |m: &Model| -> Vec<(u32, Vec<(PaneId, bool)>)> {
+            let panes = m.tab_panes();
+            let shown = |pane: &PaneId| m.pane(*pane).map(|p| (*pane, p.kind == Kind::Empty));
+            let held = |(at, tab): (usize, &Tab)| {
+                let of = matches!(tab.space, Owner::Workbook { id } if closing_before.contains(&id));
+                of.then(|| (tab.id, panes.get(at).into_iter().flatten().filter_map(shown).collect()))
+            };
+            m.tabs.iter().enumerate().filter_map(held).collect()
+        };
+        let closing_was = closing_held(m);
         let bindings = |m: &Model| -> Vec<(String, Option<TaskId>)> {
             m.workbooks.list.iter().map(|book| (book.uid.clone(), book.task)).collect()
         };
@@ -3224,6 +3247,24 @@ impl Run {
         let tabs_kept = m.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>() == tabs_before;
         let row_kept = m.spaces.iter().map(|space| space.of.clone()).collect::<Vec<_>>() == spaces_before;
         ensure!(!hides || (tabs_kept && row_kept), "{action:?} changed the tabs or the spaces");
+        // Only the user's step brings a closing workspace back, whatever the action.
+        for id in closing_before.iter().filter(|_| origin != Origin::User) {
+            let still = m.workbooks.get(*id).is_none() || m.workbooks.closing(*id);
+            ensure!(still, "{origin:?}'s {action:?} brought closing workspace {id} back");
+        }
+        // Nor does a client change what a closing one holds (no pane moved in or out, opened, closed); time
+        // ends it. The shell's step may end a pane there (a window quit), or give a waiting one its window
+        // (`Fill`), never add one.
+        let held = closing_held(m);
+        let was: Vec<&(PaneId, bool)> = closing_was.iter().flat_map(|(_, panes)| panes).collect();
+        let changed = match origin {
+            Origin::Socket => !matches!(action, Action::Tick { .. }) && held != closing_was,
+            Origin::System => {
+                held.iter().flat_map(|(_, panes)| panes).any(|(pane, _)| !was.iter().any(|(p, _)| p == pane))
+            }
+            Origin::User => false,
+        };
+        ensure!(!changed, "{origin:?}'s {action:?} changed a closing workspace: {closing_was:?} to {held:?}");
         // Nobody but the user moves what the user types to: not the chat (its agent may end), not
         // the new-task box.
         if let Some(was) = &typing_to {
@@ -3255,7 +3296,10 @@ impl Run {
             // Its space gone (a task, a workspace), a tab is the workspace's the task was bound
             // to, else the workspace selected last's. Never Home's (`check`).
             let gone = matches!(now, Owner::Task { .. } | Owner::Workbook { .. }) && !m.owner_valid(was);
-            let undone = matches!(action, Action::TaskUndo | Action::ListUndo | Action::WorkbookUndo);
+            let undone = matches!(
+                action,
+                Action::TaskUndo | Action::ListUndo | Action::WorkbookUndo | Action::WorkbookReopen { .. }
+            );
             let adopted =
                 matches!((was, now, &action), (Owner::Session { .. }, Owner::Task { .. }, Action::SessionAdopt { .. }));
             ensure!(
@@ -3337,7 +3381,10 @@ impl Run {
                 action,
                 Action::ComposeSubmit { open: true } | Action::ComposeEnter | Action::TaskFromLine { open: true, .. }
             );
-            let undone = matches!(action, Action::TaskUndo | Action::ListUndo | Action::WorkbookUndo);
+            let undone = matches!(
+                action,
+                Action::TaskUndo | Action::ListUndo | Action::WorkbookUndo | Action::WorkbookReopen { .. }
+            );
             ensure!(
                 read || (origin == Origin::User && (starts || undone)),
                 "{origin:?}'s {action:?} bound a workspace"
@@ -6397,6 +6444,112 @@ fn seed_316_the_users_pick_in_the_transcripts_picker_starts_one() {
         Action::ListenPicker { apps: vec![zoom(10, false), zoom(11, false), zoom(10, true)], id: "".into(), at: 1 }
             .into(),
         Action::PickerChoose { index: Some(0) }.into(),
+    ])
+    .unwrap();
+}
+
+/// The system's `OpenFile` beside a pane of a closing workspace split it there, and the Undo would
+/// have brought back a pane the user never had (seed 835, once #234's viewer joined the makers).
+/// Nobody but the user opens a pane in one.
+#[test]
+fn seed_835_nothing_opens_in_a_closing_workspace() {
+    let assign = || Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] };
+    let known = Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] };
+    replay(&[
+        Action::TaskAdd { title: "a".into(), priority: 2, state: State::Running, tab: None, assign: assign() }.into(),
+        Action::TaskAdd { title: "b".into(), priority: 1, state: State::NeedsYou, tab: None, assign: assign() }.into(),
+        Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known, open: false }.into(),
+        Action::SpaceOpen { space: Owner::Task { id: 3 } }.into(),
+        split(Axis::Down, Kind::Terminal),
+        Action::SelectTab { index: 1 }.into(),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        restore_tasks("[]", 4294967295).sent_by(Origin::System),
+        Action::SpaceHideAsked { index: Some(1), running: vec![] }.into(),
+        by(
+            Origin::System,
+            Action::OpenFile { path: "/w/app/src/main.rs".into(), axis: Axis::Right, beside: Some(2), reuse: true },
+        ),
+    ])
+    .unwrap();
+}
+
+/// The user's ⌘⇧L with no conversation shows the transcript in its pane's tab, as `ListenShow`
+/// does: the check let only `ListenShow` change the tab on show (seed 1254).
+#[test]
+fn seed_1254_the_users_talk_toggle_shows_the_transcripts_tab() {
+    let app = Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() };
+    replay(&[
+        split(Axis::Right, Kind::Terminal),
+        split(Axis::Down, Kind::Terminal),
+        Action::Open { kind: app, axis: Axis::Right, beside: Some(1) }.into(),
+        Action::NewTab.into(),
+        split(Axis::Right, Kind::Terminal),
+        split(Axis::Down, Kind::Empty),
+        Action::CaptureStart {
+            pane: None,
+            draft: "d1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![],
+            images: true,
+        }
+        .into(),
+        Action::Fill { pane: 5, kind: Kind::File { path: "/w/app/README.md".into() } }.into(),
+        Action::ListenToggle { id: "\"@".into(), at: 200000000 }.into(),
+        by(Origin::System, Action::Focus { pane: 2 }),
+        Action::TalkToggle.into(),
+    ])
+    .unwrap();
+}
+
+/// The system's drop of a pane on the empty pane of a closing workspace put it there, and the
+/// Undo would have brought back a pane the user never had (seed 977 of the long run).
+#[test]
+fn seed_977_no_pane_is_dropped_into_a_closing_workspace() {
+    let wt = |name: &str, path: &str, branch: Option<&str>| Worktree {
+        name: name.into(),
+        path: path.into(),
+        branch: branch.map(Into::into),
+    };
+    let repos = vec![
+        Repo {
+            name: "canvas".into(),
+            path: "/code/app-2".into(),
+            branch: Some("main".into()),
+            worktrees: vec![wt("../..,>#123", "/tmp", Some("fix/zoom")), wt("canvas", "İ\\", Some("main"))],
+        },
+        Repo {
+            name: "app".into(),
+            path: "/code/canvas".into(),
+            branch: Some("fix/zoom".into()),
+            worktrees: vec![wt("Ottospace", "\\$", None), wt("Ottospace", "/code/app-2", None)],
+        },
+    ];
+    let missing = vec![Need::Dir("/code/app".into()), Need::App { bundle: None, name: "Safari".into() }];
+    let readme = Kind::File { path: "/w/app/README.md".into() };
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        Action::Open { kind: slack(7), axis: Axis::Right, beside: None }.into(),
+        Action::MarkAdd {
+            of: MarkOf::Tab(None),
+            name: None,
+            key: Some('c'),
+            uid: "u3".into(),
+            cwds: vec![(1, "/code/app".into())],
+        }
+        .into(),
+        Action::NewTab.into(),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        Action::CloseTab { index: Some(0) }.into(),
+        Action::MarkGo { mark: MarkRef::Key('c'), axis: Axis::Right }.into(),
+        Action::CloseTab { index: None }.into(),
+        Action::MarksChecked { missing }.into(),
+        by(Origin::System, Action::MarkGo { mark: MarkRef::Key('c'), axis: Axis::Down }),
+        Action::Adopt { kind: Kind::Terminal, beside: Some(6), seen: None }.into(),
+        Action::SpaceHide { index: None }.into(),
+        by(Origin::System, Action::SetRepos { repos }),
+        by(Origin::System, Action::Open { kind: readme, axis: Axis::Down, beside: None }),
+        Action::OpenRepo { path: "/code/canvas".into(), axis: Axis::Down }.into(),
+        by(Origin::System, Action::DropPane { source: 10, target: 6, zone: Zone::Center }),
     ])
     .unwrap();
 }

@@ -1341,6 +1341,11 @@ function mark(value: unknown, at: string): Mark {
   };
 }
 
+function closingWorkbook(value: unknown, at: string): { id: number; name: string; undo: Rect | null } {
+  const o = fields(value, at);
+  return { id: num(o.id, `${at}.id`), name: str(o.name, `${at}.name`), undo: orNull(rect)(o.undo, `${at}.undo`) };
+}
+
 function workbook(value: unknown, at: string): Workbook {
   const o = fields(value, at);
   const buttons = fields(o.buttons, `${at}.buttons`);
@@ -1783,6 +1788,7 @@ export function snapshot(value: unknown): Snapshot {
       return { pane: num(empty.pane, `${at}.pane`), why: str(empty.why, `${at}.why`), open };
     })(o.unfilled, "unfilled"),
     workbooks: list(workbook)(o.workbooks, "workbooks"),
+    workbooks_closing: list(closingWorkbook)(o.workbooks_closing, "workbooks_closing"),
     workbook_offer: orNull(workbookOffer)(o.workbook_offer, "workbook_offer"),
     row_menu: orNull(rowMenu)(o.row_menu, "row_menu"),
     scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),

@@ -5909,6 +5909,49 @@ fn closing_a_temporary_workspace_whose_terminal_runs_asks_first() {
     assert_eq!(pane_ids(&closed), vec![pane.as_u64().unwrap_or(0)], "it runs until the Undo runs out");
 }
 
+/// ⌘⇧W on the last tab of a temporary workspace whose terminal runs asks the same question as its
+/// ×. Each closed workspace keeps its own Undo on its row in the section, while the bar offers the
+/// latest; a client's selection of its tab is refused; the user's Undo on its row brings it back.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_last_tab_closed_asks_and_each_closing_workspace_keeps_its_undo() {
+    let otto = Otto::launch("workspace-closing-rows");
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    let pane = otto.user_key("cmd-d")["state"]["focused"].clone();
+    otto.call(json!({"cmd": "type", "pane": pane, "text": "sh -c 'echo go; exec sleep 30'\r"}));
+    otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^go$", "timeout_ms": 30000}));
+    let asked = otto.user_key("cmd-shift-w");
+    assert_eq!((&asked["mode"], &asked["state"]["confirm"]["close"]), (&json!("confirm"), &json!(1)), "{asked}");
+    let closed = otto.user_key("enter");
+    assert_eq!((&closed["workbook_offer"], pane_ids(&closed)), (&json!("closed"), vec![pane.as_u64().unwrap_or(0)]));
+    // A second one closed takes the bar; the first keeps its own Undo.
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.user_key("cmd-ctrl-w");
+    let both = otto.call(json!({"cmd": "section", "section": "workbook"}));
+    let closing: Vec<&str> =
+        both["workbooks_closing"].as_array().into_iter().flatten().filter_map(|row| row["name"].as_str()).collect();
+    assert_eq!((closing, &both["workbook_offer"]), (vec!["Workspace 2", "Workspace 3"], &json!("closed")), "{both}");
+    // A client selecting the first one's tab is refused: it stays closing.
+    let tabs = both["state"]["tabs"].as_array().cloned().unwrap_or_default();
+    let first = tabs.iter().position(|tab| tab["space"]["id"] == json!(1)).unwrap_or(0);
+    let theirs = otto.raw(&json!({"cmd": "select_tab", "index": first}).to_string());
+    assert_eq!(theirs["error"], "that workspace is closing: only the user's Undo brings it back", "{theirs}");
+    let still = otto.call(json!({"cmd": "state"}));
+    assert_eq!(still["workbooks_closing"].as_array().map(Vec::len), Some(2), "{still}");
+    // The user's Undo on its row: back, selected; the bar still offers the second one's.
+    let undo = rect(&otto.drawn()["workbooks_closing"][0]["undo"]);
+    let back = otto.user_click(at(undo, 0.5, 0.5));
+    assert_eq!(back["workbooks_closing"].as_array().map(Vec::len), Some(1), "{back}");
+    assert_eq!((&back["workbook_offer"], pane_ids(&back)), (&json!("closed"), vec![pane.as_u64().unwrap_or(0)]));
+    assert_eq!(back["workbooks"][0]["name"], "Workspace 2", "{}", back["workbooks"]);
+    // The second one's Undo by its label: back too, and the bar's offer of it goes.
+    let id = back["workbooks_closing"][0]["id"].as_u64().unwrap_or(0);
+    let (_, labels) = sneak(&otto);
+    let label = otto.user_key(&letters(&labels[&format!("workbook-reopen:{id}")]));
+    let rows = label["workbooks_closing"].as_array().map(Vec::len);
+    assert_eq!((rows, &label["workbook_offer"]), (Some(0), &Value::Null), "{label}");
+}
+
 /// The owner's report: the section's + took the tab on show (another session's), and a second +
 /// said "Updated". + makes a new, empty workspace each time, on the top row and in the section.
 /// Temporary: closing it discards it (Undo aside); open at quit, it comes back.

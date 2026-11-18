@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::edit::{Edit, Field};
 use crate::layout::Node;
 use crate::marks::{self, Extra, MAX_NAME, MarkInput, Need, PaneRecord, RecordKind, TabRecord};
-use crate::model::{Effect, Kind, Model, Owner, PaneId, Section, Space, Tab};
+use crate::model::{Action, Effect, Kind, Model, Origin, Owner, PaneId, Section, Space, Tab};
 use crate::notice::{self, Notice};
 use crate::tasks::{NOTICE_MS, TaskId};
 
@@ -28,6 +28,10 @@ const EMPTY: &str = "a tab with nothing in it has nothing to save";
 
 /// Why a client's workbook action does nothing: they are the user's files and apps.
 pub const USERS_ALONE: &str = "only the user makes, saves, opens, renames or deletes a workspace";
+/// Why a client's step that would put a closing workspace back on the row is refused.
+pub const CLOSING: &str = "that workspace is closing: only the user's Undo brings it back";
+/// Why a step not the user's that would open a pane in a closing workspace is refused.
+pub const CLOSING_OPENS: &str = "that workspace is closing: nothing opens in it";
 /// Why a client's list of workspaces is refused: ottospace reads them from the folder, at start.
 pub const READ_ALONE: &str = "only ottospace reads the workspaces folder";
 
@@ -450,6 +454,13 @@ pub struct WorkbookRow {
     pub task: Option<TaskId>,
 }
 
+/// A closing temporary workspace, as the section lists it with its Undo.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ClosingRow {
+    pub id: WorkbookId,
+    pub name: String,
+}
+
 /// The workbooks, by name: a folder of files has no order of its own.
 #[derive(Debug, Default)]
 pub struct Workbooks {
@@ -538,6 +549,13 @@ impl Workbooks {
     /// The workbooks the section lists: all but those closing.
     pub fn listed(&self) -> impl Iterator<Item = &Workbook> {
         self.list.iter().filter(|book| book.closing.is_none())
+    }
+
+    /// The temporary workspaces the user closed whose Undo still stands, in the list's order: the section
+    /// lists each under the others with its own Undo (`WorkbookReopen`), until its time is up.
+    pub fn closing_rows(&self) -> Vec<ClosingRow> {
+        let closing = self.list.iter().filter(|book| book.closing.is_some());
+        closing.map(|book| ClosingRow { id: book.id, name: book.name.clone() }).collect()
     }
 
     /// The workbooks whose files the shell writes: the kept ones. A temporary one has none.
@@ -1201,11 +1219,7 @@ impl Model {
         let Some(Offer { change, mut before, tabs, made, .. }) = self.workbooks.offer.take() else { return };
         // A temporary workspace closed: back on the row, selected, as it was.
         if change == Change::Closed {
-            if let Some(book) = self.workbooks.get_mut(before.id) {
-                book.closing = None;
-                self.open_space(Owner::Workbook { id: before.id }, effects);
-            }
-            return;
+            return self.workbook_reopen(before.id, effects);
         }
         let id = before.id;
         let claimed = |tab: u32| self.workbooks.list.iter().any(|book| book.id != id && book.place_of(tab).is_some());
@@ -1242,6 +1256,16 @@ impl Model {
         }
     }
 
+    /// A closing temporary workspace back on the row, selected, as it was; the bar's offer of it goes.
+    pub(crate) fn workbook_reopen(&mut self, id: WorkbookId, effects: &mut Vec<Effect>) {
+        let Some(book) = self.workbooks.get_mut(id).filter(|book| book.closing.is_some()) else { return };
+        book.closing = None;
+        if self.workbooks.offer.as_ref().is_some_and(|o| o.change == Change::Closed && o.before.id == id) {
+            self.workbooks.offer = None;
+        }
+        self.open_space(Owner::Workbook { id }, effects);
+    }
+
     /// The user's Keep: a temporary workspace is kept from now on, its file written.
     pub(crate) fn workbook_keep(&mut self, id: WorkbookId) {
         if let Some(book) = self.workbooks.get_mut(id).filter(|book| book.closing.is_none()) {
@@ -1264,6 +1288,56 @@ impl Model {
             self.mark_input = None;
         }
         self.workbooks.unfolded.retain(|book| *book != id);
+    }
+
+    /// Whether `action` would bring a closing workspace back or change what it keeps for its Undo:
+    /// a tab of it selected or closed; a pane of it focused, entered, closed or moved,
+    /// or one moved into it; a mark in it gone to. Refused from a client (`CLOSING`); any other
+    /// step not the user's that puts it on the row is undone (`keep_closing`).
+    pub(crate) fn touches_closing(&self, action: &Action) -> bool {
+        let closing_space = |of: &Owner| matches!(of, Owner::Workbook { id } if self.workbooks.closing(*id));
+        let closing =
+            |index: Option<usize>| index.and_then(|at| self.tabs.get(at)).is_some_and(|t| closing_space(&t.space));
+        let of_pane = |pane: PaneId| self.tab_of(pane).and_then(|tab| self.tabs.iter().position(|t| t.id == tab));
+        match action {
+            Action::SelectTab { index } => closing(Some(*index)),
+            Action::CloseTab { index } => closing(Some(index.unwrap_or(self.active))),
+            Action::Focus { pane } | Action::Enter { pane } => closing(of_pane(*pane)),
+            Action::Close { pane } => closing(pane.or(self.focused).and_then(of_pane)),
+            Action::MovePane { pane, tab } => closing(Some(*tab)) || closing(pane.or(self.focused).and_then(of_pane)),
+            Action::DropPane { source, target, .. } => closing(of_pane(*source)) || closing(of_pane(*target)),
+            Action::MarkGo { mark, .. } => {
+                let Some(mark) = self.marks.find(mark).and_then(|id| self.marks.get(id)) else { return false };
+                closing(self.mark_pane(mark).and_then(of_pane).or_else(|| self.mark_tab(mark)))
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `action` from `origin` would open or put a pane in a closing workspace, or show
+    /// another file in one: split from, fill or drop on a pane of it, or move one to its tab
+    /// (`Open`, `OpenFile`, ⌃G's editor, `DropPane`, `MovePane`; a client's `Fill`: the shell's
+    /// gives a waiting pane its window). Refused (`CLOSING_OPENS`): `keep_closing` puts its tab
+    /// away again, not a new pane.
+    pub(crate) fn opens_in_closing(&self, action: &Action, origin: Origin) -> bool {
+        let pane = match action {
+            Action::Open { beside, .. } | Action::OpenFile { beside, .. } => beside.or(self.focused),
+            Action::ViewerEdit { pane } => pane.or(self.focused),
+            Action::DropPane { target, .. } => Some(*target),
+            Action::Fill { pane, .. } if origin == Origin::Socket => Some(*pane),
+            Action::MovePane { tab, .. } => {
+                let space = self.tabs.get(*tab).map(|tab| &tab.space);
+                return space.is_some_and(|of| matches!(of, Owner::Workbook { id } if self.workbooks.closing(*id)));
+            }
+            _ => None,
+        };
+        pane.is_some_and(|pane| self.in_closing(pane))
+    }
+
+    /// Whether pane `pane` is in a tab of a closing workspace.
+    pub(crate) fn in_closing(&self, pane: PaneId) -> bool {
+        let tab = self.tab_of(pane).and_then(|tab| self.tabs.iter().find(|t| t.id == tab));
+        tab.is_some_and(|t| matches!(t.space, Owner::Workbook { id } if self.workbooks.closing(id)))
     }
 
     /// Whether workbook `id`'s space is on the row with a tab, or its tab is on show.
@@ -1297,7 +1371,13 @@ impl Model {
     /// After every step: a temporary workspace of `before` the user's step took off the row
     /// closes. One closing that is on the row again (a tab of it selected) is back; one whose
     /// time is up at a `tick` goes, and its tabs close: only time passing ends one.
-    pub(crate) fn settle_closing(&mut self, user: bool, tick: bool, before: &[WorkbookId], effects: &mut Vec<Effect>) {
+    pub(crate) fn settle_closing(
+        &mut self,
+        user: bool,
+        tick: bool,
+        (before, on_show): (&[WorkbookId], Option<u32>),
+        effects: &mut Vec<Effect>,
+    ) {
         for id in before.iter().copied().filter(|_| user) {
             if !self.workbooks.is_kept(id) && !self.on_row(id) {
                 self.workbook_close(id);
@@ -1306,6 +1386,11 @@ impl Model {
         let closing: Vec<(WorkbookId, u64)> =
             self.workbooks.list.iter().filter_map(|book| Some((book.id, book.closing?))).collect();
         for (id, until) in closing {
+            // Only the user's step brings one back: a client's or the system's (a pane moved
+            // into it, a tab cycled to) leaves it closing, off the row, the tab before on show.
+            if self.on_row(id) && !user {
+                self.keep_closing(id, on_show, effects);
+            }
             if self.on_row(id) {
                 if let Some(book) = self.workbooks.get_mut(id) {
                     book.closing = None;
@@ -1324,6 +1409,23 @@ impl Model {
                 self.close_background_tab(at, effects);
             }
             self.workbooks.list.retain(|book| book.id != id);
+        }
+    }
+
+    /// Closing workspace `id` off the row again: its space hidden and, on show, the tab that was
+    /// (`on_show`), else the one beside it.
+    fn keep_closing(&mut self, id: WorkbookId, on_show: Option<u32>, effects: &mut Vec<Effect>) {
+        let of = Owner::Workbook { id };
+        if *self.space() == of {
+            let before = self.tabs.iter().position(|tab| Some(tab.id) == on_show && tab.space != of);
+            // Else Home's own tab, always there and on the row.
+            let other = || self.tabs.iter().position(|tab| tab.id == crate::model::spaces::HOME_TAB);
+            if let Some(at) = before.or_else(|| self.space_after(&of)).or_else(other) {
+                self.select_tab(at, effects);
+            }
+        }
+        if let Some(space) = self.spaces.iter_mut().find(|space| space.of == of) {
+            space.hidden = true;
         }
     }
 
@@ -2285,15 +2387,171 @@ mod tests {
         assert_eq!((m.due(NOTICE_MS - 1), m.due(NOTICE_MS)), (false, true));
     }
 
-    /// A tab of a temporary workspace being closed selected again (a mark, a client's
-    /// selection): it is back on the row, and its Undo is no longer offered.
+    /// Whatever a client's or the system's step does (a pane moved or dropped into it, a tab
+    /// cycled or closed beside it, its tab selected), a closing workspace stays closing, off the
+    /// row, and the tab on show before stays.
+    #[test]
+    fn only_the_users_step_brings_a_closing_workspace_back() {
+        let setup = || {
+            let mut m = Model::default();
+            m.update(Action::WorkbookNew { uid: UID.into() });
+            m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+            m.update(Action::SpaceHide { index: None });
+            m.update(Action::WorkbookNew { uid: UID_2.into() });
+            m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+            m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+            m
+        };
+        let of = Owner::Workbook { id: 1 };
+        let tab_of_a = |m: &Model| m.tabs.iter().position(|tab| tab.space == of).unwrap_or_default();
+        let steps: [fn(&Model, usize) -> Action; 6] = [
+            |_, a| Action::MovePane { pane: Some(2), tab: a },
+            |_, _| Action::DropPane { source: 1, target: 2, zone: crate::layout::Zone::Right },
+            |_, _| Action::DropPane { source: 2, target: 1, zone: crate::layout::Zone::Center },
+            |_, _| Action::CycleTab { delta: 1 },
+            |_, _| Action::CloseTab { index: None },
+            |_, a| Action::SelectTab { index: a },
+        ];
+        for origin in [Origin::Socket, Origin::System] {
+            for step in steps {
+                let mut m = setup();
+                let on_show = m.tabs[m.active].id;
+                let action = step(&m, tab_of_a(&m));
+                m.update(action.clone().sent_by(origin));
+                assert!(m.workbooks.closing(1), "{origin:?} {action:?}");
+                assert!(*m.space() != of && m.shown_spaces().iter().all(|s| s.of != of), "{origin:?} {action:?}");
+                let kept = !matches!(action, Action::CloseTab { .. }) && m.tabs.iter().any(|tab| tab.id == on_show);
+                assert!(!kept || m.tabs[m.active].id == on_show, "{origin:?} {action:?}");
+            }
+        }
+        // A client's move of a pane into or out of it, or its close of its tab or pane, is refused:
+        // the user's pane stays where it was, and what the Undo would bring back is all there.
+        let mut m = setup();
+        let a = tab_of_a(&m);
+        let theirs = [
+            Action::MovePane { pane: Some(2), tab: a },
+            Action::MovePane { pane: Some(1), tab: m.active },
+            Action::DropPane { source: 2, target: 1, zone: crate::layout::Zone::Right },
+            Action::CloseTab { index: Some(a) },
+            Action::Close { pane: Some(1) },
+        ];
+        for action in theirs {
+            assert_eq!(m.refusal(&action, Origin::Socket), Some(CLOSING), "{action:?}");
+            m.update(action.sent_by(Origin::Socket));
+        }
+        let tab_of = |m: &Model, pane| {
+            m.tab_of(pane).and_then(|id| m.tabs.iter().find(|tab| tab.id == id)).map(|t| t.space.clone())
+        };
+        assert_eq!((tab_of(&m, 1), tab_of(&m, 2)), (Some(of.clone()), Some(Owner::Workbook { id: 2 })));
+        // A window the shell adopts beside a pane of it joins the tab on show instead.
+        let adopt = Action::Adopt { kind: Kind::Terminal, beside: Some(1), seen: None };
+        m.update(adopt.sent_by(Origin::System));
+        assert_eq!(tab_of(&m, m.next_id), Some(Owner::Workbook { id: 2 }));
+        // Nor does anyone but the user open a pane in it, or another file in its viewer.
+        let file = |beside, reuse| Action::OpenFile { path: "/w/a.md".into(), axis: Right, beside, reuse };
+        let opens = [
+            Action::Open { kind: Kind::Terminal, axis: Right, beside: Some(1) },
+            file(Some(1), false),
+            file(Some(1), true),
+            Action::ViewerEdit { pane: Some(1) },
+        ];
+        for origin in [Origin::Socket, Origin::System] {
+            for action in &opens {
+                assert_eq!(m.refusal(action, origin), Some(CLOSING_OPENS), "{origin:?} {action:?}");
+            }
+        }
+        let into = [
+            Action::DropPane { source: 2, target: 1, zone: crate::layout::Zone::Center },
+            Action::MovePane { pane: Some(2), tab: a },
+        ];
+        assert!(into.iter().all(|action| m.refusal(action, Origin::System) == Some(CLOSING_OPENS)));
+        let fill = Action::Fill { pane: 1, kind: Kind::Terminal };
+        assert_eq!((m.refusal(&fill, Origin::Socket), m.refusal(&fill, Origin::System)), (Some(CLOSING_OPENS), None));
+        assert_eq!(m.refusal(&file(Some(1), false), Origin::User), None);
+    }
+
+    /// The user's close of the last tab of a temporary workspace whose terminal runs asks, as its
+    /// × does; yes closes the workspace with its Undo. Nothing running, a client's or another
+    /// tab: the tab closes at once.
+    #[test]
+    fn closing_the_last_tab_of_a_temporary_workspace_whose_terminal_runs_asks_first() {
+        let running = vec![Running { pane: 1, program: Some("cargo".into()), background: false }];
+        let ask = |running: &Vec<Running>| Action::CloseTabAsked { index: None, running: running.clone() };
+        let setup = || {
+            let mut m = Model::default();
+            m.update(Action::WorkbookNew { uid: UID.into() });
+            m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+            m
+        };
+        let mut m = setup();
+        m.update(ask(&running));
+        assert_eq!((m.mode(), m.confirm.as_ref().and_then(|c| c.close), m.panes.len()), (Mode::Confirm, Some(1), 1));
+        m.update(Action::QuitConfirm);
+        assert_eq!((names(&m), m.workbooks.offered(), m.panes.len()), (Vec::<&str>::new(), Some(Change::Closed), 1));
+        // Undo: back with its tab and its terminal.
+        m.update(Action::WorkbookUndo);
+        assert_eq!((names(&m), m.space(), m.panes.len()), (vec!["Workspace 2"], &Owner::Workbook { id: 1 }, 1));
+        // Nothing running there, or a client's: the tab closes, and its terminal with it.
+        for (running, origin) in [(Vec::new(), Origin::User), (running.clone(), Origin::Socket)] {
+            let mut m = setup();
+            m.update(ask(&running).sent_by(origin));
+            assert_eq!((m.confirm.is_none(), m.panes.len()), (true, 0), "{origin:?}");
+        }
+        // Not its last tab: closes at once.
+        let mut m = setup();
+        m.update(Action::NewTab);
+        m.update(ask(&running));
+        assert_eq!((m.confirm.is_none(), m.space_tabs(&Owner::Workbook { id: 1 }).len()), (true, 1));
+    }
+
+    /// Each closing workspace keeps its own Undo: a later close takes the bar, and A is still
+    /// listed as closing with its Undo, the user's alone, until its own time is up.
+    #[test]
+    fn each_closing_workspace_keeps_its_own_undo() {
+        let mut m = Model::default();
+        for uid in [UID, UID_2] {
+            m.update(Action::WorkbookNew { uid: uid.into() });
+            m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+            m.update(Action::SpaceHide { index: None });
+        }
+        let rows = |m: &Model| m.workbooks.closing_rows().into_iter().map(|row| row.name).collect::<Vec<_>>();
+        assert_eq!(
+            (rows(&m), m.workbooks.notice().map(|n| n.text)),
+            (vec!["Workspace 2".to_string(), "Workspace 3".into()], Some("Workspace closed".into()))
+        );
+        let reopen = Action::WorkbookReopen { workbook: 1 };
+        assert_eq!(m.refusal(&reopen, Origin::Socket), Some(USERS_ALONE));
+        m.update(reopen.clone().sent_by(Origin::Socket));
+        assert!(m.workbooks.closing(1));
+        // The user's Undo on A's row: A is back, selected; B's offer stays on the bar.
+        m.update(reopen);
+        assert_eq!(
+            (names(&m), m.space(), rows(&m)),
+            (vec!["Workspace 2"], &Owner::Workbook { id: 1 }, vec!["Workspace 3".to_string()])
+        );
+        assert_eq!(m.workbooks.offered(), Some(Change::Closed));
+        // Reopening B takes its offer off the bar too; one not closing is nothing.
+        m.update(Action::WorkbookReopen { workbook: 2 });
+        assert_eq!((rows(&m), m.workbooks.offered()), (Vec::<String>::new(), None));
+        assert_eq!(m.update(Action::WorkbookReopen { workbook: 2 }), vec![]);
+    }
+
+    /// A tab of a temporary workspace being closed selected again by the user: it is back on the
+    /// row, and its Undo is no longer offered. A client's selection, focus or mark is refused.
     #[test]
     fn a_closing_workspace_whose_tab_is_selected_is_back() {
         let mut m = Model::default();
         m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        let pane = m.focused.unwrap_or_default();
         m.update(Action::SpaceHide { index: None });
         let at = m.space_tabs(&Owner::Workbook { id: 1 })[0];
-        m.update(Action::SelectTab { index: at }.sent_by(Origin::Socket));
+        for action in [Action::SelectTab { index: at }, Action::Focus { pane }, Action::Enter { pane }] {
+            assert_eq!(m.refusal(&action, Origin::Socket), Some(CLOSING), "{action:?}");
+            m.update(action.sent_by(Origin::Socket));
+            assert_eq!((names(&m), m.workbooks.offered()), (Vec::<&str>::new(), Some(Change::Closed)));
+        }
+        m.update(Action::SelectTab { index: at });
         assert_eq!(
             (names(&m), m.workbooks.offered(), m.space()),
             (vec!["Workspace 2"], None, &Owner::Workbook { id: 1 })
