@@ -347,7 +347,7 @@ def bench(sides, args, scratch):
     result = {}
     for name in names:
         say(f"memory and CPU, {name} ({IDLE_S + STREAM_S + 20} s) ...")
-        result[name] = {**startup_stats(raw[name]), **{k: round(v, 2) for k, v in long_run(sides[name]).items()}}
+        result[name] = {**startup_stats(raw[name]), **{k: v if v is None else round(v, 2) for k, v in long_run(sides[name]).items()}}
     return result, sorted(held)
 
 
