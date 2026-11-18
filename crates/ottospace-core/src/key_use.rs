@@ -186,7 +186,8 @@ impl Binding {
             | B::Equalize
             | B::FitPane
             | B::Swap
-            | B::MoveToTab => Group::Panes,
+            | B::MoveToTab
+            | B::SidebarToggle => Group::Panes,
             B::SpaceNumber
             | B::NextSpace
             | B::NextChat
@@ -208,7 +209,7 @@ impl Binding {
             | B::Transcribe
             | B::AgentMenu => Group::Tasks,
             B::Copy | B::Paste => Group::Text,
-            B::VisualMode | B::ListMode | B::SneakMode | B::SidebarToggle => Group::Modes,
+            B::VisualMode | B::ListMode | B::SneakMode => Group::Modes,
             B::Palette | B::ShowKeys | B::EditSettings | B::FillDisplay | B::ReturnKey | B::Hide | B::Quit => {
                 Group::App
             }
@@ -701,6 +702,7 @@ mod tests {
                 "fit_pane",
                 "swap",
                 "move_to_tab",
+                "sidebar_toggle",
                 "split_down 0.2",
                 "close_pane 0.4",
                 "Drag a header",
