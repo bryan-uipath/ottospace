@@ -2516,6 +2516,13 @@ impl Serialize for StateWithoutApps<'_> {
     }
 }
 
+/// Whether pane `pane` went with a workspace the user closed: its Undo ran out at this `Tick`,
+/// whoever sent it. Time ends one, and with it what its panes held (a slot, a transcript).
+fn closed_with(m: &Model, action: &Action, closing_was: &[(u32, Vec<(PaneId, bool)>)], pane: PaneId) -> bool {
+    let held = closing_was.iter().any(|(_, panes)| panes.iter().any(|(p, _)| *p == pane));
+    matches!(action, Action::Tick { .. }) && m.pane(pane).is_none() && held
+}
+
 /// Slots: each is a pane; one that waits is a slot pane, one filled holds a window of its app;
 /// a window is offered by one slot at most, never one in a pane or passed over; a slot on a
 /// hidden tab offers nothing.
@@ -2961,6 +2968,10 @@ impl Run {
         let listed_before = listed(m);
         let closing_before: Vec<workbook::WorkbookId> =
             m.workbooks.list.iter().filter(|book| book.closing.is_some()).map(|book| book.id).collect();
+        let until = |m: &Model| -> Vec<(workbook::WorkbookId, Option<u64>)> {
+            m.workbooks.list.iter().map(|book| (book.id, book.closing)).collect()
+        };
+        let until_before = until(m);
         // Each closing workspace's tabs, each with its panes and whether they are empty: what its Undo brings back.
         let closing_held = |m: &Model| -> Vec<(u32, Vec<(PaneId, bool)>)> {
             let panes = m.tab_panes();
@@ -3015,6 +3026,7 @@ impl Run {
             .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty() && !m.compose_theirs)));
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
+        let listen_pane = m.listen.on.as_ref().and_then(|on| on.source.pane());
         let transcribe_picker = m.picker.as_ref().is_some_and(|picker| picker.transcribe);
         let filled_before = m.fill_display;
         let grants_before = m.agent.panes.clone();
@@ -3079,10 +3091,7 @@ impl Run {
             let now = m.slots.get(id);
             // Cleared, or gone with its pane: never by a client. A workspace the user closed goes
             // with its panes when its Undo runs out, at any `Tick`.
-            let ended = matches!(action, Action::Tick { .. })
-                && m.pane(*id).is_none()
-                && closing_was.iter().any(|(_, panes)| panes.iter().any(|(pane, _)| pane == id));
-            let gone = now.is_none() && m.features.on(Feature::Slots) && !ended;
+            let gone = now.is_none() && m.features.on(Feature::Slots) && !closed_with(m, &action, &closing_was, *id);
             ensure!(!gone || origin != Origin::Socket, "{origin:?}'s {action:?} cleared slot {id}");
             ensure!(!gone || m.pane(*id).is_none() || users, "{origin:?}'s {action:?} cleared slot {id}");
             let Some(now) = now else { continue };
@@ -3257,10 +3266,13 @@ impl Run {
         let tabs_kept = m.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>() == tabs_before;
         let row_kept = m.spaces.iter().map(|space| space.of.clone()).collect::<Vec<_>>() == spaces_before;
         ensure!(!hides || (tabs_kept && row_kept), "{action:?} changed the tabs or the spaces");
-        // Only the user's step brings a closing workspace back, whatever the action.
+        // Only the user's step brings a closing workspace back, or moves when it goes (× on its offer).
         for id in closing_before.iter().filter(|_| origin != Origin::User) {
             let still = m.workbooks.get(*id).is_none() || m.workbooks.closing(*id);
             ensure!(still, "{origin:?}'s {action:?} brought closing workspace {id} back");
+            let was = until_before.iter().find(|(book, _)| book == id);
+            let moved = until(m).iter().find(|(book, _)| book == id).is_some_and(|now| Some(now) != was);
+            ensure!(!moved, "{origin:?}'s {action:?} moved when closing workspace {id} goes");
         }
         // Nor does a client change what a closing one holds (no pane moved in or out, opened, closed); time
         // ends it. The shell's step may end a pane there (a window quit), or give a waiting one its window
@@ -3874,7 +3886,9 @@ impl Run {
                 // Ended by the user, the shell or a flag: never by a client.
                 Effect::ListenClose { id } => {
                     ensure!(listen_before.as_ref() == Some(id), "{action:?} closed {id:?}, not on");
-                    ensure!(origin != Origin::Socket, "a client's {action:?} ended {id:?}")
+                    // Or with its pane, in a workspace the user closed (`closed_with`).
+                    let closed = listen_pane.is_some_and(|pane| closed_with(m, &action, &closing_was, pane));
+                    ensure!(origin != Origin::Socket || closed, "a client's {action:?} ended {id:?}")
                 }
                 // The file of the transcript that was on, or of the one just started: made with its
                 // streams, closed with them, and between, final lines and pauses only.
@@ -6622,6 +6636,67 @@ fn seed_4049_no_pane_is_dropped_out_of_a_closing_workspace() {
         by(Origin::System, Action::RepoClick { path: "/code/canvas".into(), axis: Axis::Right }),
         Action::SpaceHide { index: None }.into(),
         by(Origin::System, Action::DropPane { source: 7, target: 3, zone: Zone::Center }),
+    ])
+    .unwrap();
+}
+
+/// The system's read of the workspaces folder found a file of a closing temporary workspace's
+/// name, and the file took its place, kept and back on the list (seed 4460). Only the user's Undo
+/// brings a closing one back: the read passes over its name.
+#[test]
+fn seed_4460_a_read_of_the_folder_brings_no_closing_workspace_back() {
+    let running = |pane| Running { pane, program: None, background: false };
+    replay(&[
+        split(Axis::Down, Kind::Empty),
+        split(Axis::Right, Kind::Terminal),
+        Action::Open {
+            kind: Kind::App { window: 9, title: "w9".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: None,
+        }
+        .into(),
+        Action::WorkbookNew { uid: "00000000000000a3".into() }.into(),
+        Action::Enter { pane: 3 }.into(),
+        by(Origin::System, Action::SpaceHideAsked { index: None, running: vec![running(8), running(9)] }),
+        Action::SpaceHide { index: None }.into(),
+        by(
+            Origin::System,
+            restore_workbooks(
+                r#"[{"version":2,"id":"00000000000000a3","name":"@","tabs":[],"task":0,"worktree":"/src/export,"}]"#,
+            ),
+        ),
+    ])
+    .unwrap();
+}
+
+/// The user's transcript of a pane in a workspace they closed ended with its pane when the Undo
+/// ran out, at a client's `Tick`: the check took that for a client ending it (seeds 54461 and
+/// 23315). Time ends one, as a slot's (seed 3520).
+#[test]
+fn seed_54461_a_closed_workspace_ending_ends_its_panes_transcript() {
+    let readme = Kind::File { path: "/w/app/README.md".into() };
+    replay(&[
+        by(Origin::System, Action::Open { kind: readme, axis: Axis::Right, beside: Some(7) }),
+        Action::ListenToggle { id: "t1".into(), at: 6000 }.into(),
+        Action::SpaceHide { index: None }.into(),
+        by(Origin::Socket, Action::Tick { now: u64::MAX }),
+    ])
+    .unwrap();
+}
+
+#[test]
+fn seed_23315_a_closed_workspace_ending_ends_its_panes_transcript() {
+    let app = Kind::App { window: 0, title: "general".into(), bundle: None, name: "\t".into() };
+    replay(&[
+        by(Origin::System, Action::Adopt { kind: app, beside: None, seen: None }),
+        Action::EditSettings.into(),
+        Action::Adopt { kind: Kind::Terminal, beside: Some(4), seen: None }.into(),
+        Action::ToggleKeys.into(),
+        by(Origin::System, Action::ListenFixture),
+        Action::ListenStart { source: crate::listen::Source::Pane(3), mic: false, id: "t2".into(), at: 0 }.into(),
+        by(Origin::System, Action::ToggleKeys),
+        Action::SpaceHide { index: Some(1) }.into(),
+        by(Origin::Socket, Action::Tick { now: 60000 }),
     ])
     .unwrap();
 }
