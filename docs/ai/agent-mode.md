@@ -296,7 +296,8 @@ anything.
   (its path and role, from this read) for act to name.
 - **`app_look {pane}`.** The pane's last stream frame (the title bar is already cropped), PNG,
   at most 1600 px on the long side, written 0600 under `~/.ottospace/materials/agent-<task>-<word>/`
-  and removed when the task ends or the level goes Off; the reply gives the path. A test run with
+  and removed when the task ends or the level goes Off; the reply gives the path. Refused while the
+  pane is live or peeked: its stream is stopped then (hosting-windows.md, Risks). A test run with
   no `OTTOSPACE_HOME` writes under its temp folder.
 - **Why pictures too.** The owner's own case: Spotify (CEF) exposes 17 nodes, 3 interactive
   (accessibility.md, "Measured cost"); Electron and Chrome pages the same. Tree only, See answers
