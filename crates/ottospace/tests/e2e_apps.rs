@@ -279,13 +279,14 @@ fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_still_spl
     assert!(left.max(right) >= 140.0, "no room beside ottospace's window: {window:?} {main:?}");
     let x = if right >= left { window[0] + window[2] + 10.0 } else { window[0] - 710.0 };
     let at = [x, window[1] + 100.0];
+    // Judged: a `float` newer than the trace's last line now. By time, not count: the ring drops old lines.
+    let trace = || otto.call(json!({"cmd": "trace"}))["trace"].as_str().unwrap_or_default().to_string();
+    let ms = |line: &str| serde_json::from_str::<Value>(line).ok().and_then(|line| line["ms"].as_u64());
+    let since = trace().lines().last().and_then(ms);
     canary.call(json!({"cmd": "dialog", "at": at}));
-    // Judged: the third pop-up ottospace floated (the first dialog, the small window, this one).
-    let floats = || {
-        let trace = otto.call(json!({"cmd": "trace"}))["trace"].as_str().unwrap_or_default().to_string();
-        trace.lines().filter(|l| l.contains(r#""ev":"float""#)).map(str::to_string).collect::<Vec<_>>()
-    };
-    let judged = wait_for("the dialog beside to be judged", || floats().get(2).cloned());
+    let judged = wait_for("the dialog beside to be judged", || {
+        trace().lines().find(|l| l.contains(r#""ev":"float""#) && ms(l) > since).map(str::to_string)
+    });
     assert!(judged.contains(r#""moved":false"#), "{judged}");
     let beside = frame(3).expect("the dialog beside");
     assert!(close(beside[0], at[0]) && close(beside[1], at[1]), "left where the app put it: {beside:?} {at:?}");

@@ -582,7 +582,8 @@ impl Workspace {
     }
 }
 
-/// A window that may go in a pane: one the rules let in, not minimised (its stream would draw nothing).
+/// A window that may go in a pane: one the rules let in, not minimised (its stream would draw
+/// nothing), not a sheet or child window (macOS keeps it on its parent).
 fn hostable(window: &ax::Window) -> bool {
-    !window.minimized() && window_managed(window)
+    !window.minimized() && window_managed(window) && !window.quick(ax::Window::sheet)
 }
