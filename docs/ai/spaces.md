@@ -347,7 +347,8 @@ could add a note 'This task will be dispatched in Workspace A. Switch To B?'"
   show, by one of its tabs (so a rename, a workspace bound to its task, keeps it). ↵ starts the
   task there (`joins`, and with it the folder and the new-worktree offer), whatever the view shows
   later; the view then goes to it, as for any task started. Its space gone (closed or hidden),
-  the box goes where the user is, and says nothing.
+  the box goes where the user is, and says nothing (the new-worktree choice checked again there).
+  A capture's draft (its title in the bar) is not pinned: its task goes where the user is.
 - **The user's switch of space keeps the box open** (`beside_box`: a space picked on the row, ⌘⌃1–9,
   ⌘⌃] / ⌘⌃[, `SpaceOpen`, a workspace of the list, a repository with a workspace). A click on a tab
   or a pane puts the line aside as before; a client's switch waits behind the box, as before.
@@ -355,7 +356,7 @@ could add a note 'This task will be dispatched in Workspace A. Switch To B?'"
   (`ComposeHere`, the user's alone: `PIN_USERS`) brings it to the space on show, and checks the
   new-worktree choice again there: cleared if it has no repository to make one of. The user's
   own ⌘N while the box is pinned elsewhere does the same, keeping the line.
-- **State**: `compose_target` (`space`, `name`, `elsewhere`, `switch`: Switch's rect), null while
+- **State**: `compose_target` (`space`, `name`: null where ↵ makes a new workspace, `elsewhere`, `switch`: Switch's rect), null while
   the box is closed.
 - Property rules: the open box is pinned to a space on the row, shown; no step but the user's moves
   its target while its tab's space is shown.

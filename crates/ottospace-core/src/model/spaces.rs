@@ -668,8 +668,12 @@ impl Model {
         // The box stays over it, pinned where it was opened (`compose_space`): a change of space takes no line.
         // Not under an app, the list, visual mode or a picture being drawn on.
         let free = self.live.is_none() && self.list.is_none() && self.visual.is_none() && self.annotated().is_none();
-        let keys =
-            open && drawer_keys && free && origin == Origin::User && self.talk_live(&subject) && self.compose.is_none();
+        let keys = open
+            && drawer_keys
+            && free
+            && origin == Origin::User
+            && self.talk_live(&subject)
+            && self.compose_host() != Some(Host::Drawer);
         self.talk = Some(Talk { task: subject.clone(), open, keys });
         self.drawer_open = open;
         self.opened.retain(|seen| *seen != subject);
@@ -682,7 +686,8 @@ impl Model {
     /// The space the box's ↵ starts its task in: the one it was opened in (or switched to),
     /// followed by a tab of it through renames. None while nothing pins it.
     pub fn compose_space(&self) -> Option<Owner> {
-        let (tab, of) = self.compose_to.as_ref()?;
+        // A capture's draft is no box of the drawer: its task goes where the user is.
+        let (tab, of) = self.compose_to.as_ref().filter(|_| self.capture.is_none())?;
         let by_tab = self.tabs.iter().find(|t| t.id == *tab).map(|t| t.space.clone());
         let of = by_tab.unwrap_or_else(|| of.clone());
         // Closed or hidden: it pins nothing.
@@ -715,8 +720,8 @@ impl Model {
             if let Some((_, was)) = &mut self.compose_to {
                 *was = of;
             }
-        } else {
-            self.compose_to = Some((self.tabs[self.active].id, self.space().clone()));
+        } else if self.capture.is_none() {
+            self.compose_here();
         }
     }
 }

@@ -3521,7 +3521,8 @@ impl Workspace {
             // space on show (`elsewhere`); null while it is closed.
             "compose_target": self.model.compose.as_ref().and_then(|_| self.model.compose_space()).map(|of| serde_json::json!({
                 "space": of,
-                "name": self.model.space_title(&of),
+                // Null where ↵ makes a new workspace (Home, a session's space).
+                "name": self.model.joins().map(|_| self.model.space_title(&of)),
                 "elsewhere": self.model.compose_elsewhere(),
                 // Where its Switch is drawn, while it is.
                 "switch": marks.get(&Mark::ComposeSwitch).copied().map(rect).filter(|_| self.model.compose_elsewhere()),

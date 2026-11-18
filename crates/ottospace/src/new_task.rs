@@ -531,7 +531,10 @@ impl Workspace {
                 .on_click(
                     cx.listener(|this, _, window, cx| drop(this.dispatch(Action::ComposeHere, this.input, window, cx))),
                 );
-            let goes = format!("This task goes to {} · ", self.model.space_title(&of));
+            // From Home or a session's space ↵ makes a workspace: no name to give it yet.
+            let name =
+                if self.model.joins().is_some() { self.model.space_title(&of) } else { "a new workspace".into() };
+            let goes = format!("This task goes to {name} · ");
             div().flex().flex_wrap().text_xs().text_color(rgb(theme::COMPOSE)).child(goes).child(switch)
         });
         let idle = (!open).then(|| {

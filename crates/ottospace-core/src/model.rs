@@ -3997,7 +3997,9 @@ impl Model {
     /// `waits`, for who sent it: the user's own click beside the new task does not (`beside_box`).
     pub fn waits_for(&self, action: &Action, origin: Origin) -> Option<&'static str> {
         // Nor their ⌘N while the box is pinned elsewhere: it brings the box here.
-        let here = origin == Origin::User && matches!(action, Action::OpenCompose { .. }) && self.compose_elsewhere();
+        let free = !self.keys && self.picker.is_none() && self.palette.is_none();
+        let here =
+            origin == Origin::User && matches!(action, Action::OpenCompose { .. }) && free && self.compose_elsewhere();
         self.waits(action).filter(|_| !here && (origin != Origin::User || self.beside_box(action).is_none()))
     }
 

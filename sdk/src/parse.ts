@@ -783,7 +783,7 @@ function composeTarget(value: unknown, at: string): Snapshot["compose_target"] &
   const o = fields(value, at);
   return {
     space: owner(o.space, `${at}.space`),
-    name: str(o.name, `${at}.name`),
+    name: orNull(str)(o.name, `${at}.name`),
     elsewhere: bool(o.elsewhere, `${at}.elsewhere`),
     switch: orNull(rect)(o.switch, `${at}.switch`),
   };

@@ -1859,7 +1859,7 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(!m.listen.shown || m.listen_item(), "the drawer on a transcript the rail does not hold");
     // The open box is pinned to a space on the row, shown: its ↵ has somewhere to go.
     ensure!(
-        m.compose.is_none() || m.compose_space().is_some(),
+        m.compose.is_none() || m.capture.is_some() || m.compose_space().is_some(),
         "the new-task box is pinned to no space: {:?}",
         m.compose_to
     );
@@ -3055,7 +3055,8 @@ impl Run {
         let composing_before = m.composing() && written && !m.compose_theirs && origin != Origin::User;
         // The drawer the user collapsed: no client opens the new-task box in it.
         let folded_before = m.folded.is_some() && m.compose.is_none() && origin != Origin::User;
-        let pin_before = m.compose_to.clone().filter(|_| m.compose.is_some() && origin != Origin::User);
+        let pin_before =
+            m.compose_to.clone().filter(|_| m.compose.is_some() && m.capture.is_none() && origin != Origin::User);
         let agents_before = (m.agents.clone(), m.starting.clone());
         let spaces_before: Vec<Owner> = m.spaces.iter().map(|space| space.of.clone()).collect();
 
@@ -3359,7 +3360,7 @@ impl Run {
             let of = m.tabs.iter().find(|t| t.id == *tab).map(|t| &t.space);
             of.is_some_and(|of| m.spaces.iter().any(|s| s.of == *of && !s.hidden))
         };
-        if let Some((tab, _)) = pin_before.filter(|(tab, _)| m.compose.is_some() && shown(tab)) {
+        if let Some((tab, _)) = pin_before.filter(|(tab, _)| m.compose.is_some() && m.capture.is_none() && shown(tab)) {
             let now = m.compose_to.as_ref().map(|(at, _)| *at);
             ensure!(now == Some(tab), "{origin:?}'s {action:?} moved the new-task box from tab {tab} to {now:?}");
         }
