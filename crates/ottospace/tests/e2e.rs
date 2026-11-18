@@ -10231,6 +10231,111 @@ fn tool_rows_show_what_ran_and_the_clis_other_words_are_rows() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Made-up stream-json for selecting: a reply of two paragraphs, then an `AskUserQuestion` call
+/// whose input is long JSON.
+fn select_fixtures() -> Vec<(&'static str, String)> {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003","parent_tool_use_id":null"#;
+    let init = r#"{"type":"system","subtype":"init","model":"claude-opus-5-5","permissionMode":"default","session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003"}"#;
+    let text = json!({"type": "text", "text": "Fix the login redirect.\n\nIt runs twice on a cold start."});
+    let question = "Should the fix cover the cold start only, or every path that reaches the login page, including the one through the expired session handler and the refresh token retry?";
+    let input = json!({"questions": [{"question": question, "header": "Scope", "multiSelect": false,
+        "options": [{"label": "Cold start", "description": "Only the first load"}, {"label": "Every path", "description": "All of them"}]}]});
+    let ask = json!({"type": "tool_use", "id": "toolu_q", "name": "AskUserQuestion", "input": input});
+    let result = json!({"type": "tool_result", "tool_use_id": "toolu_q", "content": "Every path", "is_error": false});
+    let turn = [
+        init.to_string(),
+        format!(r#"{{"type":"assistant",{S},"message":{{"content":[{text}]}}}}"#),
+        format!(r#"{{"type":"assistant",{S},"message":{{"content":[{ask}]}}}}"#),
+        format!(r#"{{"type":"user",{S},"message":{{"content":[{result}]}}}}"#),
+        r#"{"type":"result","subtype":"success","is_error":false}"#.to_string(),
+    ];
+    vec![("turn1.jsonl", turn.join("\n"))]
+}
+
+/// The user drags across a reply's two paragraphs and ⌘C copies them, a line break between; ⌘A
+/// takes all of it. A call's input opens pretty-printed and wrapped, and its Copy copies it. A
+/// client's ⌘C or Copy puts nothing on the clipboard. The state has the extent, never the text.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_user_selects_and_copies_transcript_text_and_a_client_cannot() {
+    let (root, _record, env) = native_setup("chat-select", &select_fixtures(), &[]);
+    let otto = launch_env("chat-select", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.drawn()["drawer"]["native"]["chats"]["1"].clone();
+    otto.start_task(1);
+    otto.wait_for("the turn's end", |o| {
+        let chat = chat(o);
+        let entries = chat["transcript"]["entries"].as_array()?.clone();
+        (chat["transcript"]["turn"].is_null() && entries.iter().any(|e| e["tool"] == "AskUserQuestion")).then_some(())
+    });
+    let texts = |o: &Otto| -> Vec<(String, [f64; 4])> {
+        let chat = chat(o);
+        let texts = chat["selection"]["texts"].as_array().cloned().unwrap_or_default();
+        texts.iter().map(|t| (t[0].as_str().unwrap_or("").to_string(), rect(&t[1]))).collect()
+    };
+    // The reply's paragraphs: keys of its blocks, `1:<entry>.<block>`.
+    let paragraphs: Vec<[f64; 4]> =
+        texts(&otto).into_iter().filter(|(key, _)| key.starts_with("1:")).map(|(_, r)| r).collect();
+    assert_eq!(paragraphs.len(), 2, "{:?}", texts(&otto));
+    let (first, second) = (paragraphs[0], paragraphs[1]);
+
+    // A drag from the first paragraph's start past the second's end, as the user's.
+    otto.user_drag(
+        [first[0] + 0.5, first[1] + first[3] / 2.],
+        [second[0] + second[2] + 20., second[1] + second[3] / 2.],
+    );
+    let selection = chat(&otto)["selection"].clone();
+    assert_eq!(selection["extent"], json!({"rows": 2, "chars": 54}), "{selection}");
+    assert_eq!(selection["keys"], true);
+    assert!(!chat(&otto).to_string().contains("cold start"), "the state has no word of it");
+    // A client's ⌘C copies nothing and says why.
+    let refused = otto.call(json!({"cmd": "key", "keys": "cmd-c"}));
+    assert_eq!(
+        (&refused["copied"], &refused["notice"]),
+        (&Value::Null, &json!("only the user copies from a conversation"))
+    );
+    // The user's copies both, a line break between.
+    let copied = otto.user_key("cmd-c");
+    assert_eq!(copied["copied"], "Fix the login redirect.\nIt runs twice on a cold start.");
+    // A double click takes a word; ⌘A the whole transcript; Esc clears it.
+    let p = [first[0] + 5., first[1] + first[3] / 2.];
+    otto.call(json!({"cmd": "mouse", "action": "down", "x": p[0], "y": p[1], "clicks": 2, "as": "user"}));
+    otto.call(json!({"cmd": "mouse", "action": "up", "x": p[0], "y": p[1], "clicks": 2, "as": "user"}));
+    assert_eq!(chat(&otto)["selection"]["extent"], json!({"rows": 1, "chars": 3}));
+    otto.user_key("cmd-a");
+    let all = chat(&otto)["selection"].clone();
+    assert_eq!(all["extent"]["rows"].as_u64(), Some(all["texts"].as_array().map_or(0, Vec::len) as u64), "{all}");
+    otto.user_key("escape");
+    assert_eq!(chat(&otto)["selection"]["extent"], Value::Null);
+
+    // The call's row opens on the user's click: its input pretty-printed, wrapped to the drawer.
+    let rows = otto.controls();
+    let (row_id, closed) = rows.iter().find(|(id, _)| id.starts_with("chat-row:1:")).cloned().expect("the call's row");
+    otto.user_click(at(closed, 0.5, 0.5));
+    let input = texts(&otto).into_iter().find(|(key, _)| key.starts_with("in:")).map(|(_, r)| r).expect("its input");
+    // 21 lines of JSON; the question's line wraps, so it is taller still.
+    assert!(input[3] > 22. * closed[3] * 0.8, "wrapped: {input:?}, a line {closed:?}");
+    let open = otto.control(&row_id);
+    assert!(input[0] + input[2] <= open[0] + open[2] + 1., "inside the drawer: {input:?} in {open:?}");
+    // Copy over it: a client's puts nothing there, the user's the whole input.
+    let id = row_id.rsplit(':').next().unwrap().to_string();
+    let copy_id = format!("chat-io-copy:1:{id}:in");
+    otto.call(json!({"cmd": "mouse", "action": "move", "x": input[0] + 10., "y": input[1] + 10., "as": "user"}));
+    let copy = otto.control(&copy_id);
+    let refused = otto.click(at(copy, 0.5, 0.5), 1);
+    assert_eq!(refused["notice"], "only the user copies from a conversation", "{refused}");
+    assert_eq!(refused["copied"], "Fix the login redirect.\nIt runs twice on a cold start.");
+    otto.call(json!({"cmd": "mouse", "action": "move", "x": input[0] + 10., "y": input[1] + 10., "as": "user"}));
+    let copied = otto.user_click(at(otto.control(&copy_id), 0.5, 0.5));
+    let json: Value = serde_json::from_str(copied["copied"].as_str().expect("copied")).expect("JSON");
+    assert_eq!(json["questions"][0]["header"], "Scope");
+    assert!(copied["copied"].as_str().unwrap().starts_with("{\n  \"questions\": ["), "{copied}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Made-up stream-json for the dial: a turn of calls of each kind, one failing, a hook and the
 /// context at 75%; the next with an edit, `cargo test` still running and the context at 92%.
 fn dial_fixtures() -> Vec<(&'static str, String)> {

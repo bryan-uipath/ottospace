@@ -57,6 +57,15 @@ export interface NativeChat {
   /** The kinds of the lines not understood are shown. */
   unread_open: boolean;
   dial: AgentDial;
+  /** The user's selection in the transcript, never its text. */
+  selection: ChatSelection;
+}
+
+/** How much of a transcript is selected, whether it has ⌘A and ⌘C, and each selectable text's key and rect. */
+export interface ChatSelection {
+  extent: { rows: number; chars: number } | null;
+  keys: boolean;
+  texts: [string, Rect][];
 }
 
 /** Where an agent's work goes: `other` is any other tool ("Tools"). */

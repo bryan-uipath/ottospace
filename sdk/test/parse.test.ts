@@ -220,6 +220,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
             details: false,
             details_open: false,
             unread_open: false,
+            selection: { extent: { rows: 2, chars: 54 }, keys: true, texts: [["1:1.0", [933, 320, 407, 45]]] },
             dial: {
               pulse: "needs_you",
               stations: [

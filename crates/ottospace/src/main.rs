@@ -65,6 +65,7 @@ mod app_wheel;
 mod apps;
 mod ax_debug;
 mod calendar;
+mod chat_select;
 mod child;
 mod clipboard;
 mod collect;
@@ -4521,7 +4522,7 @@ impl Workspace {
     /// ⌘C: copies the open text field's selection, else the focused terminal's, in visual mode too. With nothing selected it
     /// does nothing.
     fn copy(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.field_copy(false, window, cx) {
+        if self.transcript_copy(cx) || self.field_copy(false, window, cx) {
             return;
         }
         let Some(id) = self.copy_pane() else { return };
@@ -7397,13 +7398,15 @@ impl Render for Workspace {
                 }
             }))
             // Copy, in the menu too, only with something selected: in a field, else in the terminal.
-            .when(self.field_selected() || self.copy_pane().is_some(), |d| {
+            .when(self.transcript_selected() || self.field_selected() || self.copy_pane().is_some(), |d| {
                 d.on_action(cx.listener(|this, _: &CopySelection, window, cx| this.copy(window, cx)))
             })
             .on_action(cx.listener(|this, _: &PasteText, window, cx| this.paste(window, cx)))
             .on_action(cx.listener(|this, _: &Cut, window, cx| this.field_menu(edit::Key::Cut, window, cx)))
             .on_action(cx.listener(|this, _: &SelectAll, window, cx| {
-                this.field_menu(edit::Key::Edit(Edit::SelectAll), window, cx)
+                if !this.transcript_select_all(cx) {
+                    this.field_menu(edit::Key::Edit(Edit::SelectAll), window, cx)
+                }
             }))
             // ⌘Z and ⇧⌘Z: the field's, else in annotate mode what was drawn.
             .on_action(cx.listener(|this, _: &Undo, window, cx| {

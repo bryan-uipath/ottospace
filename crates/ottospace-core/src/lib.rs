@@ -48,6 +48,7 @@ pub mod rules;
 pub mod runner;
 pub mod scrollbar;
 pub mod secrets;
+pub mod selection;
 pub mod sessions;
 pub mod settings;
 pub mod slot;

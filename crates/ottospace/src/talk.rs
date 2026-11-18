@@ -65,6 +65,8 @@ pub struct Drawer {
     pub details: HashMap<Subject, String>,
     /// The user's editor on a draft (⌃G), while it runs (`editor`).
     pub editor: Option<crate::editor::Editor>,
+    /// The texts of the transcript drawn last, for selecting in it (`chat_select`).
+    pub texts: crate::chat_select::Texts,
 }
 
 /// A new session's id: a random (version 4) UUID. `None`: no random bytes could be read.

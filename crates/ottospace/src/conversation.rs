@@ -15,8 +15,8 @@ use std::time::Instant;
 
 use gpui::{
     AnyElement, AnyView, Context, Div, ElementId, FontStyle, FontWeight, HighlightStyle, ImageSource, InteractiveText,
-    KeyDownEvent, ScrollHandle, ScrollWheelEvent, SharedString, StrikethroughStyle, StyledText, UnderlineStyle, Window,
-    div, img, prelude::*, px, rgb,
+    KeyDownEvent, MouseButton, MouseDownEvent, ScrollHandle, ScrollWheelEvent, StrikethroughStyle, UnderlineStyle,
+    Window, div, img, prelude::*, px, rgb,
 };
 use ottospace_agents::driver::Driver;
 use ottospace_agents::{Answer, Event as Said, Input, Process, Ticket};
@@ -44,6 +44,23 @@ use crate::{Tooltip, Workspace};
 pub(crate) enum Links {
     Chat(Subject),
     File { pane: ottospace_core::PaneId, dir: String },
+}
+
+impl Links {
+    /// The conversation whose text this is: selectable there (`chat_select`). None for a file's.
+    pub(crate) fn subject(&self) -> Option<&Subject> {
+        match self {
+            Links::Chat(subject) => Some(subject),
+            Links::File { .. } => None,
+        }
+    }
+}
+
+/// A call's part shown open: what it was given, or what it gave back.
+#[derive(Clone, Copy)]
+enum Part {
+    Input,
+    Output,
 }
 
 /// A native agent: its process, the requests it waits on by our number, and when it started.
@@ -80,6 +97,8 @@ pub struct Look {
     ask_scroll: ScrollHandle,
     ask_seen: std::cell::Cell<Option<(u64, usize, usize)>>,
     ask_open: HashSet<(u64, usize)>,
+    /// Text selected in it (`chat_select`).
+    pub(crate) select: crate::chat_select::Selecting,
 }
 
 /// A question's context past this many lines folds behind "Show all".
@@ -493,12 +512,25 @@ impl Workspace {
     /// reaches nothing here, as in the terminal.
     pub(crate) fn chat_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let Some(chat) = self.model.shown_draft_chat() else { return };
+        let subject = chat.subject.clone();
         let (key, mods) = (&event.keystroke.key, crate::mods(event.keystroke.modifiers));
         // ↵ held on a question card: one answer, not the next tab's and Send's too.
         if event.is_held && key == "enter" && chat.form().is_some() {
             return cx.stop_propagation();
         }
-        match chat.key(key, mods) {
+        let what = chat.key(key, mods);
+        if self.transcript_escape(key, mods) {
+            cx.notify();
+            return cx.stop_propagation();
+        }
+        let key = what;
+        // Typing goes to the composer: the keys are no longer the transcript's.
+        if matches!(key, Key::Field | Key::Newline)
+            && let Some(look) = self.drawer.looks.get_mut(&subject)
+        {
+            look.select.keys = false;
+        }
+        match key {
             Key::Pass => return,
             Key::Act(action) => drop(self.dispatch(action, self.input, window, cx)),
             Key::Newline => {
@@ -566,12 +598,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Copies what a model or a tool wrote, as every copy goes (`copy_text`). The state reply's
-    /// `copied` shows only a test run's stand-in clipboard: a client never reads it there.
-    fn copy_untrusted(&mut self, text: String, cx: &mut Context<Self>) {
-        self.copy_text(text, None, ottospace_core::clip::Verb::Copied, cx);
-    }
-
     /// The wheel over the transcript: scrolled up, it stays; back at the bottom, it follows again.
     fn chat_wheel(&mut self, subject: &Subject, cx: &mut Context<Self>) {
         if let Some(look) = self.drawer.looks.get_mut(subject) {
@@ -601,6 +627,7 @@ impl Workspace {
         let Some(chat) = self.model.chat(subject) else { return div().flex_1().into_any_element() };
         let t = &chat.transcript;
         let key = crate::talk::key(subject);
+        self.drawer.texts.begin(subject);
         let look = self.drawer.looks.get(subject);
         let scroll = look.map(|look| look.scroll.clone()).unwrap_or_default();
         let away = look.is_some_and(|look| look.away);
@@ -628,7 +655,20 @@ impl Workspace {
             .on_scroll_wheel(cx.listener({
                 let subject = subject.clone();
                 move |this, _: &ScrollWheelEvent, _, cx| this.chat_wheel(&subject, cx)
-            }));
+            }))
+            // A press selects text, as in a text field; one elsewhere takes the keys from it.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener({
+                    let subject = subject.clone();
+                    move |this, event: &MouseDownEvent, _, cx| this.transcript_press(&subject, event, cx)
+                }),
+            )
+            .on_mouse_down_out(cx.listener({
+                let subject = subject.clone();
+                move |this, _: &MouseDownEvent, _, _| this.transcript_leave(&subject)
+            }))
+            .child(self.transcript_listener(subject, cx));
         // A drag or a page of the bar leaves the latest, as a wheel does.
         let (this, who) = (cx.entity().downgrade(), subject.clone());
         let moved = move |cx: &mut gpui::App| drop(this.update(cx, |this, cx| this.chat_wheel(&who, cx)));
@@ -808,7 +848,6 @@ impl Workspace {
         let id = item.id;
         match &item.entry {
             Entry::User { text } => {
-                let shown = clean(text.text());
                 let copy = text.text().to_string();
                 let body = div()
                     .rounded_md()
@@ -817,7 +856,7 @@ impl Workspace {
                     .py_1()
                     .text_sm()
                     .child(div().text_xs().text_color(rgb(theme::MUTED)).child("You"))
-                    .child(shown);
+                    .child(self.picked_text(Some(subject), &format!("msg:{id}"), text.text()));
                 self.with_copy(key, id, body, copy.clone(), copy, cx)
             }
             Entry::Assistant { text, streaming } => {
@@ -877,19 +916,20 @@ impl Workspace {
                                     .flex()
                                     .flex_col()
                                     .gap_1()
-                                    .overflow_x_scroll()
-                                    .child(code_text(&command).text_color(rgb(theme::TEXT)))
-                                    .children(printed.map(|printed| code_text(&printed)))
+                                    .child(self.tool_part(subject, key, id, Part::Input, &command, cx))
+                                    .children(
+                                        printed.map(|out| self.tool_part(subject, key, id, Part::Output, &out, cx)),
+                                    )
                             }
                             None => div()
                                 .id(ElementId::Name(format!("chat-row-body:{key}:{id}").into()))
-                                .child(code_text(&clean(detail.text()))),
+                                .child(self.tool_part(subject, key, id, Part::Input, detail.text(), cx)),
                         });
                         self.gist_row(subject, key, id, (glyph, color), head, body, cx)
                     }
                     None => {
                         let line = format!("{tool} · {label}");
-                        self.row(subject, key, id, (glyph, color), line, detail, cx)
+                        self.row(subject, key, id, (glyph, color), line, detail.text(), cx)
                     }
                 };
                 // A sub-agent's calls sit under the row that started it.
@@ -925,12 +965,12 @@ impl Workspace {
                     .text_xs()
                     .text_color(rgb(theme::MUTED))
                     .child(div().flex_none().child(lead))
-                    .child(div().truncate().min_w_0().child(words))
+                    .child(self.picked_text(Some(subject), &format!("note:{id}"), &words).truncate().min_w_0())
                     .into_any_element()
             }
             Entry::AutoDenied { tool, label, reason, detail } => {
                 let line = format!("Denied without asking ({reason}): {tool} · {label}");
-                self.row(subject, key, id, ("✕", theme::ERROR), line, detail, cx)
+                self.row(subject, key, id, ("✕", theme::ERROR), line, detail.text(), cx)
             }
             Entry::Notice(notice) => match divider(notice) {
                 Some((word, tip)) => {
@@ -945,7 +985,11 @@ impl Workspace {
                         None => line.into_any_element(),
                     }
                 }
-                None => muted(notice_text(notice)).into_any_element(),
+                None => self
+                    .picked_text(Some(subject), &format!("notice:{id}"), &notice_text(notice))
+                    .text_xs()
+                    .text_color(rgb(theme::MUTED))
+                    .into_any_element(),
             },
         }
     }
@@ -983,7 +1027,11 @@ impl Workspace {
                     .text_color(rgb(theme::MUTED))
                     .child(div().flex_none().text_color(rgb(color)).child(glyph.to_string()))
                     .child(head.flex_1())
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_row(&subject, id, cx))),
+                    .on_click(cx.listener(move |this, e: &gpui::ClickEvent, _, cx| {
+                        if !crate::chat_select::dragged(e) {
+                            this.toggle_row(&subject, id, cx)
+                        }
+                    })),
             )
             .children(body.map(|body| body.ml_4().mt_0p5()))
             .into_any_element()
@@ -998,31 +1046,68 @@ impl Workspace {
         id: u64,
         (glyph, color): (&str, u32),
         line: String,
-        detail: &Text,
+        detail: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let open = self.drawer.looks.get(subject).is_some_and(|look| look.open.contains(&id));
-        let subject = subject.clone();
+        let body = open.then(|| self.tool_part(subject, key, id, Part::Input, detail, cx).ml_4().mt_0p5());
+        let who = subject.clone();
         let control = format!("chat-row:{key}:{id}");
         div()
             .id(ElementId::Name(control.clone().into()))
             .relative()
             .flex()
             .flex_col()
-            .cursor_pointer()
-            .child(self.controls.mark(control))
+            .child(self.controls.mark(control.clone()))
+            // Its head opens and closes it: a click or a drag in its input leaves it open.
             .child(
                 div()
+                    .id(ElementId::Name(format!("{control}:head").into()))
                     .flex()
                     .gap_1p5()
+                    .cursor_pointer()
                     .text_xs()
                     .text_color(rgb(theme::MUTED))
                     .child(div().text_color(rgb(color)).child(glyph.to_string()))
-                    .child(div().truncate().child(clean(&line))),
+                    .child(div().truncate().child(clean(&line)))
+                    .on_click(cx.listener(move |this, e: &gpui::ClickEvent, _, cx| {
+                        if !crate::chat_select::dragged(e) {
+                            this.toggle_row(&who, id, cx)
+                        }
+                    })),
             )
-            .children(open.then(|| code_text(&clean(detail.text())).ml_4().mt_0p5()))
-            .on_click(cx.listener(move |this, _, _, cx| this.toggle_row(&subject, id, cx)))
+            .children(body)
             .into_any_element()
+    }
+
+    /// An open call's input (wrapped: JSON comes pretty-printed) or output (scrolls sideways, as
+    /// code does), selectable, with Copy on hover.
+    fn tool_part(&self, subject: &Subject, key: &str, id: u64, part: Part, text: &str, cx: &mut Context<Self>) -> Div {
+        let (name, tip) = match part {
+            Part::Input => ("in", "Copy the call's input (or select part of it and ⌘C)"),
+            Part::Output => ("out", "Copy what it printed (or select part of it and ⌘C)"),
+        };
+        let shown = self
+            .picked_text(Some(subject), &format!("{name}:{id}"), text)
+            .font_family(crate::terminal::font_family())
+            .text_xs();
+        let shown = match part {
+            Part::Input => shown.min_w_0().text_color(rgb(theme::TEXT)).into_any_element(),
+            Part::Output => div()
+                .id(ElementId::Name(format!("chat-out:{key}:{id}").into()))
+                .overflow_x_scroll()
+                .child(shown.whitespace_nowrap())
+                .into_any_element(),
+        };
+        let copy = clean(text);
+        let word = self.word(
+            format!("chat-io-copy:{key}:{id}:{name}"),
+            ("Copy", tip),
+            move |this, _, cx| this.copy_untrusted(copy.clone(), cx),
+            cx,
+        );
+        let words = crate::words::words("chat-io", false).top(px(-2.)).child(word);
+        div().group("chat-io").relative().min_w_0().child(shown).child(words)
     }
 
     /// An edit's change under its call: each file's path (a click reveals it, if `File::target`
@@ -1121,7 +1206,7 @@ impl Workspace {
     ) -> AnyElement {
         let copy = self.word(
             format!("chat-copy:{key}:{id}"),
-            ("Copy", "Copy as plain text"),
+            ("Copy", "Copy as plain text (or select part of it and ⌘C)"),
             move |this, _, cx| this.copy_untrusted(plain.clone(), cx),
             cx,
         );
@@ -1147,7 +1232,7 @@ impl Workspace {
                 let copy = copy.clone();
                 let button = self.word(
                     format!("chat-code-copy:{at}"),
-                    ("Copy", "Copy the code"),
+                    ("Copy", "Copy the code (or select part of it and ⌘C)"),
                     move |this, _, cx| this.copy_untrusted(copy.clone(), cx),
                     cx,
                 );
@@ -1163,10 +1248,12 @@ impl Workspace {
                     .text_color(rgb(theme::MUTED))
                     .child(label.clone().unwrap_or_else(|| "code".into()))
                     .child(button);
+                let code = self.picked_text(of.subject(), &format!("code:{at}"), shown);
+                let code = code.font_family(crate::terminal::font_family()).text_xs().whitespace_nowrap();
                 let body = div()
                     .id(ElementId::Name(format!("chat-code:{at}").into()))
                     .overflow_x_scroll()
-                    .child(code_text(shown).px_2().py_1());
+                    .child(code.px_2().py_1());
                 let more = (*more > 0).then(|| muted(format!("… {more} more lines; Copy takes them all")).px_2());
                 div()
                     .rounded_md()
@@ -1244,8 +1331,10 @@ impl Workspace {
         let mut text = String::new();
         let (mut styles, mut links) = (Vec::new(), Vec::new());
         for span in spans {
-            let range = text.len()..text.len() + span.text.len();
-            text.push_str(&span.text);
+            // Cleaned as a selectable text is drawn (`picked_text`), each span on its own.
+            let shown = clean(&span.text);
+            let range = text.len()..text.len() + shown.len();
+            text.push_str(&shown);
             let link = span.link.is_some();
             let style = HighlightStyle {
                 color: link.then(|| rgb(theme::PRIMARY).into()),
@@ -1266,15 +1355,16 @@ impl Workspace {
                 links.push((range, link.clone()));
             }
         }
-        let styled = StyledText::new(SharedString::from(text)).with_highlights(styles);
+        let (styled, note) = self.picked(of.subject(), at, text, styles);
+        let host = div().relative().when(note.is_some(), |d| d.cursor_text());
         if links.is_empty() {
-            return div().child(styled).into_any_element();
+            return host.child(styled).children(note).into_any_element();
         }
         let ranges: Vec<_> = links.iter().map(|(range, _)| range.clone()).collect();
         let (targets, tips) = (Rc::new(links), ranges.clone());
         let (workspace, of) = (cx.entity().downgrade(), of.clone());
         let clicked = targets.clone();
-        InteractiveText::new(ElementId::Name(format!("chat-text:{at}").into()), styled)
+        let text = InteractiveText::new(ElementId::Name(format!("chat-text:{at}").into()), styled)
             .on_click(ranges, move |n, window, cx| {
                 let Some((_, link)) = clicked.get(n) else { return };
                 let (target, cmd) = (link.target.clone(), window.modifiers().platform);
@@ -1284,8 +1374,8 @@ impl Workspace {
                 let n = tips.iter().position(|range| range.contains(&index))?;
                 let tip = targets.get(n).map(|(_, link)| link.raw.clone())?;
                 Some(AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-            })
-            .into_any_element()
+            });
+        host.child(text).children(note).into_any_element()
     }
 
     /// While a turn runs: what it waits on and for how long. Steady; Stop is at the composer.
@@ -1900,6 +1990,8 @@ impl Workspace {
                     "details_open": look.is_some_and(|look| look.details),
                     "unread_open": look.is_some_and(|look| look.unread),
                     "dial": self.dial_snapshot(&subject),
+                    // How much of the transcript is selected, never its text; whether it has the keys.
+                    "selection": self.selection_snapshot(&subject),
                 }),
             );
         }
