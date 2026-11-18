@@ -122,8 +122,12 @@ impl Model {
 
     /// A tab mark of `pane`'s tab keeps the level the user has for it now: one picked since is
     /// offered back, one reset to Off is not. Its pane by place, while the tab has as many as the mark
-    /// and the pane there records the same app (a swap since leaves the mark as it was).
+    /// and the pane there records the same app (a swap since leaves the mark as it was). Marks off:
+    /// they stay as stored (seed 7205).
     fn mark_level(&mut self, pane: PaneId) {
+        if !self.features.on(Feature::Marks) {
+            return;
+        }
         let Some(at) = self.tabs.iter().position(|tab| Some(tab.id) == self.tab_of(pane)) else { return };
         let (tab, leaves) = (self.tabs[at].id, self.tab_panes().swap_remove(at));
         let Some(place) = leaves.iter().position(|id| *id == pane) else { return };

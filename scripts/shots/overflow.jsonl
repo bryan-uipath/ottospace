@@ -1,0 +1,51 @@
+# Long lists fade at an edge with more beyond: 40 made-up tasks scrolled partway (both edges),
+# then a workspace of 20 tabs on its newest (the left edge).
+{"cmd": "split", "kind": "empty"}
+{"cmd": "section", "section": "tasks"}
+{"cmd": "task_add", "title": "Fix the login loop 1"}
+{"cmd": "task_add", "title": "Review the export PR 2"}
+{"cmd": "task_add", "title": "Bump the SDK types 3"}
+{"cmd": "task_add", "title": "Trace the slow start 4"}
+{"cmd": "task_add", "title": "Tidy the settings page 5"}
+{"cmd": "task_add", "title": "Split the big test 6"}
+{"cmd": "task_add", "title": "Name the dial states 7"}
+{"cmd": "task_add", "title": "Check the icon sizes 8"}
+{"cmd": "task_add", "title": "Fix the login loop 9"}
+{"cmd": "task_add", "title": "Review the export PR 10"}
+{"cmd": "task_add", "title": "Bump the SDK types 11"}
+{"cmd": "task_add", "title": "Trace the slow start 12"}
+{"cmd": "task_add", "title": "Tidy the settings page 13"}
+{"cmd": "task_add", "title": "Split the big test 14"}
+{"cmd": "task_add", "title": "Name the dial states 15"}
+{"cmd": "task_add", "title": "Check the icon sizes 16"}
+{"cmd": "task_add", "title": "Fix the login loop 17"}
+{"cmd": "task_add", "title": "Review the export PR 18"}
+{"cmd": "task_add", "title": "Bump the SDK types 19"}
+{"cmd": "task_add", "title": "Trace the slow start 20"}
+{"cmd": "task_add", "title": "Tidy the settings page 21"}
+{"cmd": "task_add", "title": "Split the big test 22"}
+{"cmd": "task_add", "title": "Name the dial states 23"}
+{"cmd": "task_add", "title": "Check the icon sizes 24"}
+{"cmd": "task_add", "title": "Fix the login loop 25"}
+{"cmd": "task_add", "title": "Review the export PR 26"}
+{"cmd": "task_add", "title": "Bump the SDK types 27"}
+{"cmd": "task_add", "title": "Trace the slow start 28"}
+{"cmd": "task_add", "title": "Tidy the settings page 29"}
+{"cmd": "task_add", "title": "Split the big test 30"}
+{"cmd": "task_add", "title": "Name the dial states 31"}
+{"cmd": "task_add", "title": "Check the icon sizes 32"}
+{"cmd": "task_add", "title": "Fix the login loop 33"}
+{"cmd": "task_add", "title": "Review the export PR 34"}
+{"cmd": "task_add", "title": "Bump the SDK types 35"}
+{"cmd": "task_add", "title": "Trace the slow start 36"}
+{"cmd": "task_add", "title": "Tidy the settings page 37"}
+{"cmd": "task_add", "title": "Split the big test 38"}
+{"cmd": "task_add", "title": "Name the dial states 39"}
+{"cmd": "task_add", "title": "Check the icon sizes 40"}
+{"settle": 300}
+{"cmd": "mouse", "action": "wheel", "x": 150, "y": 400, "dy": -240, "precise": true}
+{"shot": "tasks"}
+{"click": "top:new_workspace"}
+{"cmd": "key", "keys": "cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t cmd-t", "as": "user"}
+{"settle": 300}
+{"shot": "tabs"}
