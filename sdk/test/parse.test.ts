@@ -196,7 +196,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
                   cut: false,
                   expanded: false,
                   len: 0,
-                  ask: { questions: [{ options: 2, multi: true, picked: [0, 2] }], cursor: [0, 2] },
+                  ask: { questions: [{ options: 2, multi: true, picked: [0, 2], answered: true }], cursor: [0, 2], tabs: 0 },
                 },
               ],
               turn: "git",

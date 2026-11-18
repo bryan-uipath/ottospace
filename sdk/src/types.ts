@@ -9,18 +9,22 @@ export interface NativeChat {
   /** Its structured process runs now. */
   native: boolean;
   transcript: {
-    /** Each entry by kind: `user`, `assistant` (bytes, streaming), `tool` (tool, label, state, sub, `diff`: an edit's card by counts, `{changes, more_files, added, removed, lines, more}`, else null, `summary`: what its row shows, `{kind: command|path|pattern|host|query|subtask|argument, lines, note}`, else null, and `expanded`: the user opened it), `note` (`note`: `subtask`, `ended` with `status`, or `notification`; `bytes`), `auto_denied`, `notice` (incl. `denied_by` with `tool` and `by`, `model_fallback` with `from` and `to`). */
+    /** Each entry by kind: `user`, `assistant` (bytes, streaming), `tool` (tool, label, state, sub, `diff`: an edit's card by counts, `{changes, more_files, added, removed, lines, more}`, else null, `summary`: what its row shows, `{kind: command|path|pattern|host|query|subtask|argument, lines, note}`, else null, and `expanded`: the user opened it), `note` (`note`: `subtask`, `ended` with `status`, `notification`, or `answered` with `answered` and `of`: a question card sent; `bytes`), `auto_denied`, `notice` (incl. `denied_by` with `tool` and `by`, `model_fallback` with `from` and `to`). */
     entries: ({ kind: string } & Record<string, unknown>)[];
     /** Entries no longer kept here; the session's file has them. */
     dropped: number;
-    /** Permission requests waiting, the first shown. `ask`: a question card's shape (the agent asks the user: each question's option count, `multi`, the rows `picked` by index, `options` being "Other…"; the `cursor` as [question, row]), else null. Never a word of it. */
+    /** Permission requests waiting, the first shown. `ask`: a question card's shape (the agent asks the user: each question's option count, `multi`, the rows `picked` by index, `options` being "Other…", and `answered`; the `cursor` as [tab, row], the tab `questions.length` being Review; `tabs`: each question and Review, 0 with one question), else null. Never a word of it. */
     cards: {
       tool: string;
       label: string;
       cut: boolean;
       expanded: boolean;
       len: number;
-      ask: { questions: { options: number; multi: boolean; picked: number[] }[]; cursor: [number, number] } | null;
+      ask: {
+        questions: { options: number; multi: boolean; picked: number[]; answered: boolean }[];
+        cursor: [number, number];
+        tabs: number;
+      } | null;
     }[];
     /** A turn runs: the label of the call it waits on, else empty. */
     turn: string | null;

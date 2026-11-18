@@ -1392,12 +1392,14 @@ const MAKERS: &[Make] = &[
     |g| Action::TalkExpand { ticket: g.card() },
     |g| {
         use crate::ask::Act;
-        let act = match g.rng.below(6) {
+        let act = match g.rng.below(9) {
             0 => Act::Move { down: g.rng.coin() },
             1 => Act::Toggle,
             2 => Act::Number { n: g.rng.below(6) },
-            3 => Act::Row { question: g.rng.below(3), row: g.rng.below(5) },
-            4 => Act::Submit,
+            3 => Act::Row { question: g.rng.below(4), row: g.rng.below(5) },
+            4 => Act::Tab { forward: g.rng.coin() },
+            5 => Act::Show { tab: g.rng.below(4) },
+            6 | 7 => Act::Submit,
             _ => Act::Decline,
         };
         Action::TalkAsk { ticket: g.card(), act }
@@ -1822,6 +1824,7 @@ fn check(m: &Model) -> Result<(), String> {
             let form = card.ask.as_ref().ok_or("no form")?;
             let (q, r) = form.cursor;
             ensure!(r < form.rows(q), "{subject:?} has a question card's cursor off its rows");
+            ensure!(q < form.tabs().max(1), "{subject:?} shows a question card's tab it has not");
             ensure!(!card.allowable(), "{subject:?} may allow a question card unanswered");
         }
         // A watched transcript is read-only: no turn to stop.

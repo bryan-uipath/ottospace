@@ -9461,7 +9461,7 @@ fn a_question_card_sends_the_users_pick() {
         let chat = chat(o);
         chat["transcript"]["cards"][0]["ask"].is_object().then_some(chat)
     });
-    let shape = json!({"questions": [{"options": 2, "multi": false, "picked": []}], "cursor": [0, 0]});
+    let shape = json!({"questions": [{"options": 2, "multi": false, "picked": [], "answered": false}], "cursor": [0, 0], "tabs": 0});
     assert_eq!(card["transcript"]["cards"][0]["ask"], shape, "{card}");
     let said = card.to_string();
     assert!(["Colour", "Which colour", "Blue", "warm"].iter().all(|w| !said.contains(w)), "{said}");
@@ -9481,7 +9481,7 @@ fn a_question_card_sends_the_users_pick() {
     assert_eq!(reply, json!({"behavior": "allow", "updatedInput": input}));
     let done = otto.wait_for("the turn to end", |o| Some(chat(o)).filter(|c| c["transcript"]["turn"].is_null()));
     let entries = done["transcript"]["entries"].as_array().unwrap();
-    assert!(entries.iter().any(|e| e["notice"] == "answered"), "{done}");
+    assert!(entries.iter().any(|e| e["note"] == "answered"), "{done}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -9515,12 +9515,137 @@ fn a_multi_select_question_sends_picks_and_the_users_words() {
     assert!(!state.to_string().contains("xl 2"), "the user's words are not in the state: {state}");
     otto.user_click(at(otto.control("talk:chat-ask:0:1"), 0.5, 0.5));
     let picked = ask(&otto);
-    assert_eq!(picked, json!({"questions": [{"options": 2, "multi": true, "picked": [0, 1, 2]}], "cursor": [0, 1]}));
+    let shape = json!({"options": 2, "multi": true, "picked": [0, 1, 2], "answered": true});
+    assert_eq!(picked, json!({"questions": [shape], "cursor": [0, 1], "tabs": 0}));
     otto.user_key("enter");
     let reply = otto.wait_for("the answer", |_| ask_reply(&record));
     let mut input = json!({ "questions": questions });
     input["answers"] = json!({"Which sizes?": "Small, \"Large, wide\", xl 2"});
     assert_eq!(reply, json!({"behavior": "allow", "updatedInput": input}));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Several questions: one at a time, each header a tab. ↵ answers and goes on, ⇥ skips, Review
+/// lists each answer and a row goes back. A client's ⇥ and clicks move nothing. Send leaves the
+/// skipped question out of `answers`, and the card folds to a line: answered 2 of 3.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn several_questions_go_tab_by_tab_to_review_and_send() {
+    let option = |label: &str| json!({"label": label, "description": "made-up"});
+    let questions = json!([
+        {"question": "Which scope?", "header": "Scope", "multiSelect": false, "options": [option("All"), option("Untracked")]},
+        {"question": "Which base?", "header": "Base", "multiSelect": false, "options": [option("develop"), option("main")]},
+        {"question": "Which output?", "header": "Output", "multiSelect": true, "options": [option("Table"), option("JSON")]},
+    ]);
+    let (root, record, env) = native_setup("ask-tabs", &ask_fixtures(questions.clone()), &[]);
+    let otto = launch_env("ask-tabs", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "compare branches >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let ask = |o: &Otto| chat(o)["transcript"]["cards"][0]["ask"].clone();
+    let cursor = |o: &Otto| ask(o)["cursor"].clone();
+    otto.start_task(1);
+    let first = otto.wait_for("a question card", |o| Some(ask(o)).filter(Value::is_object));
+    assert_eq!((&first["tabs"], &first["cursor"]), (&json!(4), &json!([0, 0])), "{first}");
+    // A client's ⇥ and tab click move nothing.
+    otto.call(json!({"cmd": "key", "keys": "tab"}));
+    otto.click(at(otto.control("talk:chat-ask-tab:2"), 0.5, 0.5), 1);
+    assert_eq!(cursor(&otto), json!([0, 0]));
+    // Scope: 2 ↵ → Base; ⇥ skips it → Output; space ↵ → Review.
+    otto.user_key("2 enter");
+    assert_eq!(cursor(&otto), json!([1, 0]));
+    otto.user_key("tab space");
+    // ↵ held down answers nothing more: a repeat is no press.
+    otto.call(json!({"cmd": "key", "keys": "enter", "repeat": true, "as": "user"}));
+    assert_eq!((cursor(&otto), ask_reply(&record)), (json!([2, 0]), None));
+    otto.user_key("enter");
+    let review = ask(&otto);
+    assert_eq!(review["cursor"], json!([3, 0]), "{review}");
+    let answered: Vec<&Value> = review["questions"].as_array().unwrap().iter().map(|q| &q["answered"]).collect();
+    assert_eq!(answered, [&json!(true), &json!(false), &json!(true)]);
+    // A Review row goes back to its question; ⇧⇥ and a tab click go between.
+    otto.user_click(at(otto.control("talk:chat-ask:3:1"), 0.5, 0.5));
+    assert_eq!(cursor(&otto), json!([1, 0]));
+    otto.user_key("shift-tab");
+    assert_eq!(cursor(&otto), json!([0, 1]), "on its pick");
+    otto.user_click(at(otto.control("talk:chat-ask-tab:3"), 0.5, 0.5));
+    assert_eq!(cursor(&otto), json!([3, 0]));
+    assert_eq!(ask_reply(&record), None, "nothing goes before Send");
+    otto.user_key("enter");
+    let reply = otto.wait_for("the answers", |_| ask_reply(&record));
+    let mut input = json!({ "questions": questions });
+    input["answers"] = json!({"Which scope?": "Untracked", "Which output?": "Table"});
+    assert_eq!(reply, json!({"behavior": "allow", "updatedInput": input}));
+    let done = otto.wait_for("the turn to end", |o| Some(chat(o)).filter(|c| c["transcript"]["turn"].is_null()));
+    let entries = done["transcript"]["entries"].as_array().unwrap();
+    let folded = entries.iter().find(|e| e["note"] == "answered").expect("the folded line");
+    assert_eq!((&folded["answered"], &folded["of"]), (&json!(2), &json!(3)), "{folded}");
+    assert!(!done.to_string().contains("Untracked"), "the answers are drawn, not in the state");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A long question: its context folds behind Show all, and its many options scroll in the card,
+/// which keeps its foot: the cursor's row stays in view between the question and Send.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_long_question_folds_its_context_and_keeps_the_cursor_in_view() {
+    let words = "The export job writes the nightly file; two readers depend on its column order. ".repeat(3);
+    let context: Vec<String> = (0..12).map(|i| format!("- reader {i}: {words}")).collect();
+    let question = format!("{}\n\nHow should I roll out the schema change?", context.join("\n"));
+    let option = |i: usize| json!({"label": format!("Plan {i}"), "description": words.clone()});
+    let questions = json!([{"question": question, "header": "Migration", "multiSelect": false,
+        "options": (0..8).map(option).collect::<Vec<_>>()}]);
+    let (root, _record, env) = native_setup("ask-long", &ask_fixtures(questions), &[]);
+    let otto = launch_env("ask-long", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "migrate >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let ask = |o: &Otto| {
+        o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"]["transcript"]["cards"][0]["ask"].clone()
+    };
+    otto.start_task(1);
+    otto.wait_for("a question card", |o| Some(ask(o)).filter(Value::is_object));
+    assert!(otto.control_opt("talk:chat-ask-show-all").is_some(), "the context folds");
+    otto.user_key("down down down down down down down down");
+    assert_eq!(ask(&otto)["cursor"], json!([0, 8]));
+    let (fold, other, send) =
+        (otto.control("talk:chat-ask-show-all"), otto.control("talk:chat-ask:0:8"), otto.control("talk:chat-ask-send"));
+    // In view: under the question, above the foot; the first option scrolled out of view.
+    assert!(other[1] >= fold[1] + fold[3] && other[1] + other[3] <= send[1], "{other:?} under {fold:?} above {send:?}");
+    assert!(otto.control_opt("talk:chat-ask:0:0").is_none(), "the options scrolled");
+    // A client's Show all opens nothing; the user's does, and the cursor's row stays in view.
+    otto.click(at(fold, 0.5, 0.5), 1);
+    assert!(otto.control_opt("talk:chat-ask:0:8").is_some_and(|row| row[1] + row[3] <= send[1]));
+    otto.user_click(at(fold, 0.5, 0.5));
+    let (other, send) = (otto.control("talk:chat-ask:0:8"), otto.control("talk:chat-ask-send"));
+    assert!(other[1] + other[3] <= send[1] + 0.5, "{other:?} above {send:?} once shown");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A question of one long paragraph, no blank line in it: it scrolls in the card, and the
+/// options and the foot stay in view.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_question_of_one_long_paragraph_keeps_its_options_and_foot() {
+    let lines: Vec<String> = (0..60).map(|i| format!("line {i} of what the agent found")).collect();
+    let questions = json!([{"question": format!("{}\nWhich one?", lines.join("\n")), "header": "Long",
+        "multiSelect": false, "options": [{"label": "A", "description": "a"}, {"label": "B", "description": "b"}]}]);
+    let (root, _record, env) = native_setup("ask-paragraph", &ask_fixtures(questions), &[]);
+    let otto = launch_env("ask-paragraph", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "read it >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    otto.start_task(1);
+    otto.wait_for("a question card", |o| {
+        Some(chat(o)["transcript"]["cards"][0]["ask"].clone()).filter(Value::is_object)
+    });
+    let (first, send) = (otto.control("talk:chat-ask:0:0"), otto.control("talk:chat-ask-send"));
+    assert!(first[1] + first[3] <= send[1] + 0.5, "{first:?} above {send:?}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }

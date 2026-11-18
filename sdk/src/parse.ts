@@ -854,9 +854,14 @@ function nativeChat(value: unknown, at: string): NativeChat {
         options: num(q.options, `${at}.options`),
         multi: bool(q.multi, `${at}.multi`),
         picked: list(num)(q.picked, `${at}.picked`),
+        answered: bool(q.answered, `${at}.answered`),
       };
     };
-    return { questions: list(question)(f.questions, `${at}.questions`), cursor: pair(f.cursor, `${at}.cursor`) };
+    return {
+      questions: list(question)(f.questions, `${at}.questions`),
+      cursor: pair(f.cursor, `${at}.cursor`),
+      tabs: num(f.tabs, `${at}.tabs`),
+    };
   };
   const card = (value: unknown, at: string) => {
     const c = fields(value, at);

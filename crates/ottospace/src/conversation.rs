@@ -75,6 +75,19 @@ pub struct Look {
     /// The user opened the ended agent's stderr (`Drawer::details`), or the lines not understood.
     details: bool,
     unread: bool,
+    /// A question card's options, scrolled; the cursor last brought into view (ticket, tab, row);
+    /// the contexts opened in full (ticket, question).
+    ask_scroll: ScrollHandle,
+    ask_seen: std::cell::Cell<Option<(u64, usize, usize)>>,
+    ask_open: HashSet<(u64, usize)>,
+}
+
+/// A question's context past this many lines folds behind "Show all".
+const FOLD_LINES: usize = 6;
+
+/// About how many rows `text` takes as drawn in a card: a long line wraps.
+fn rows_drawn(text: &str) -> usize {
+    text.lines().map(|line| line.chars().count() / 60 + 1).sum()
 }
 
 /// A local image's thumbnail: being read, read, or not to be drawn.
@@ -471,6 +484,10 @@ impl Workspace {
     pub(crate) fn chat_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let Some(chat) = self.model.shown_draft_chat() else { return };
         let (key, mods) = (&event.keystroke.key, crate::mods(event.keystroke.modifiers));
+        // ↵ held on a question card: one answer, not the next tab's and Send's too.
+        if event.is_held && key == "enter" && chat.form().is_some() {
+            return cx.stop_propagation();
+        }
         match chat.key(key, mods) {
             Key::Pass => return,
             Key::Act(action) => drop(self.dispatch(action, self.input, window, cx)),
@@ -879,12 +896,16 @@ impl Workspace {
                 // Untrusted words on one line, after fixed ones.
                 let words = clean(text.text()).split_whitespace().collect::<Vec<_>>().join(" ");
                 let lead = match note {
-                    NoteKind::Subtask => "Started a subtask:",
-                    NoteKind::Ended { status: Status::Completed } => "Subtask done:",
-                    NoteKind::Ended { status: Status::Failed } => "Subtask failed:",
-                    NoteKind::Ended { status: Status::Stopped } => "Subtask stopped:",
-                    NoteKind::Ended { status: Status::Other } => "Subtask ended:",
-                    NoteKind::Notification => "Claude Code:",
+                    NoteKind::Subtask => "Started a subtask:".into(),
+                    NoteKind::Ended { status: Status::Completed } => "Subtask done:".into(),
+                    NoteKind::Ended { status: Status::Failed } => "Subtask failed:".into(),
+                    NoteKind::Ended { status: Status::Stopped } => "Subtask stopped:".into(),
+                    NoteKind::Ended { status: Status::Other } => "Subtask ended:".into(),
+                    NoteKind::Notification => "Claude Code:".into(),
+                    NoteKind::Answered { answered, of } if words.is_empty() => {
+                        format!("You answered {answered} of {of}.")
+                    }
+                    NoteKind::Answered { answered, of } => format!("You answered {answered} of {of} ·"),
                 };
                 div()
                     .id(ElementId::Name(format!("chat-note:{key}:{id}").into()))
@@ -1286,7 +1307,7 @@ impl Workspace {
     pub(crate) fn chat_card(&self, subject: &Subject, chat: &chat::Chat, cx: &mut Context<Self>) -> Option<Div> {
         let card = chat.transcript.cards.front()?;
         if let Some(form) = chat.form() {
-            return Some(self.ask_card(chat, form, card.ticket, cx));
+            return Some(self.ask_card(subject, chat, form, card.ticket, cx));
         }
         let full = card.expanded.then(|| self.drawer.native.get(subject).and_then(|n| n.full(card.ticket))).flatten();
         let payload = full.unwrap_or_else(|| card.detail.text().to_string());
@@ -1300,7 +1321,7 @@ impl Workspace {
         });
         // A few lines as they are; more scroll in a box of fixed height (a scroll box grows to its cap).
         // Rows as drawn, about: a long line wraps.
-        let rows: usize = payload.lines().map(|line| line.chars().count() / 60 + 1).sum();
+        let rows = rows_drawn(&payload);
         let most = if card.expanded { 16 } else { 8 };
         let body = div()
             .id("chat-card-payload")
@@ -1381,90 +1402,296 @@ impl Workspace {
         )
     }
 
-    /// A question card: each question's header and text, its options as rows with their
-    /// descriptions (one picked, or several in a multi-select question) and "Other…", which takes
-    /// the user's words while the cursor is on it. ↵ sends the answers, Esc declines.
-    fn ask_card(&self, chat: &chat::Chat, form: &Form, ticket: u64, cx: &mut Context<Self>) -> Div {
-        let questions = form.questions.iter().enumerate().map(|(q, question)| {
-            let header = (!question.header.is_empty()).then(|| {
-                div()
-                    .flex_none()
-                    .px_1()
-                    .rounded_sm()
-                    .bg(rgb(theme::SELECTED))
-                    .text_xs()
-                    .text_color(rgb(theme::MUTED))
-                    .child(clean(question.header.text()))
-            });
-            let head = div()
+    /// A question card. Several questions show one at a time, each header a tab (✓ once
+    /// answered), a thin bar a segment per question, and Review last: every answer, a row back to
+    /// its question, Send. A question is markdown: its last paragraph the question, what comes
+    /// before it context, folded past `FOLD_LINES`. The options scroll with the cursor's row in
+    /// view; the foot stays. The card grows to the drawer's height.
+    fn ask_card(&self, subject: &Subject, chat: &chat::Chat, form: &Form, ticket: u64, cx: &mut Context<Self>) -> Div {
+        let look = self.drawer.looks.get(subject);
+        let (tab, row) = form.cursor;
+        let n = form.questions.len();
+        let tabs = (form.tabs() > 0).then(|| {
+            let mut buttons: Vec<gpui::Stateful<Div>> = Vec::new();
+            for at in 0..=n {
+                buttons.push(self.ask_tab(form, at, ticket, cx));
+            }
+            let review = buttons.pop();
+            // Many tabs scroll sideways: Review stays reachable.
+            div()
+                .id(ElementId::Name(format!("chat-ask-tabs:{ticket}").into()))
+                .overflow_x_scroll()
+                .flex_none()
                 .flex()
-                .items_center()
-                .gap_1p5()
-                .children(header)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(clean(question.question.text())),
-                )
-                .children(question.multi.then(|| muted("pick any".into())));
-            let rows: Vec<AnyElement> = (0..form.rows(q)).map(|row| self.ask_row(form, q, row, ticket, cx)).collect();
-            div().flex().flex_col().gap_0p5().child(head).children(rows)
+                .gap_0p5()
+                .px_1p5()
+                .pt_1p5()
+                .border_b_1()
+                .border_color(rgb(theme::BORDER))
+                .children(buttons)
+                .child(div().flex_1())
+                .children(review)
         });
-        let questions: Vec<Div> = questions.collect();
-        let send = self
-            .talk_button("chat-ask-send", "Send (↵)", "Send these answers to the agent")
-            .text_color(rgb(theme::PICK))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                drop(this.dispatch(Action::TalkAsk { ticket, act: Act::Submit }, this.input, window, cx))
-            }));
+        // A segment per question: green answered, the accent on show, amber on Review if left, grey to come.
+        let bar = (form.tabs() > 0).then(|| {
+            let segment = |q: usize| {
+                let (color, faint) = match () {
+                    _ if form.answered(q) => (theme::PICK, false),
+                    _ if q == tab => (theme::PRIMARY, true),
+                    _ if form.review() => (theme::SNEAK, false),
+                    _ => (theme::BORDER_STRONG, false),
+                };
+                div().flex_1().h(px(3.)).rounded_sm().bg(rgb(color)).when(faint, |d| d.opacity(0.55))
+            };
+            div().flex_none().flex().gap(px(3.)).px_3().pt_2().children((0..n).map(segment))
+        });
+        let scroll = look.map(|look| look.ask_scroll.clone()).unwrap_or_default();
+        // The cursor's row in view, once each time it moves.
+        if let Some(look) = look
+            && look.ask_seen.replace(Some((ticket, tab, row))) != Some((ticket, tab, row))
+        {
+            scroll.scroll_to_item(row);
+        }
+        let rows: Vec<AnyElement> = match form.review() {
+            true => (0..n).map(|q| self.review_row(form, q, ticket, cx)).collect(),
+            false => (0..form.rows(tab)).map(|r| self.ask_row(form, tab, r, ticket, cx)).collect(),
+        };
+        let rows = div()
+            .id(ElementId::Name(format!("chat-ask-rows:{ticket}:{tab}").into()))
+            .flex_shrink()
+            .min_h(px(40.))
+            .overflow_y_scroll()
+            .track_scroll(&scroll)
+            .flex()
+            .flex_col()
+            .pb_1()
+            .children(rows);
+        let question = (!form.review()).then(|| self.ask_question(subject, form, tab, ticket, cx));
+        let primary = |label: &'static str, tip: &'static str, act: Act| {
+            self.talk_button("chat-ask-send", label, tip)
+                .bg(rgb(theme::PRIMARY))
+                .text_color(rgb(theme::BACKGROUND))
+                .font_weight(FontWeight::SEMIBOLD)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    drop(this.dispatch(Action::TalkAsk { ticket, act }, this.input, window, cx))
+                }))
+        };
+        let (hint, send) = match () {
+            _ if form.tabs() == 0 => {
+                ("↵ send · Esc decline".to_string(), primary("Send", "Send the answer to the agent", Act::Submit))
+            }
+            _ if form.review() => (
+                "a row goes back to it · ↵ send · Esc decline".into(),
+                primary("Send", "Send these answers; one left goes as no answer", Act::Submit),
+            ),
+            _ => (
+                format!("{} of {n} · ↵ next · ⇥ / ⇧⇥ between · Esc decline", tab + 1),
+                primary("Next", "Answer this one and go on", Act::Submit),
+            ),
+        };
         let decline = self
-            .talk_button("chat-ask-decline", "Decline (esc)", "Answer nothing; the agent goes on")
+            .talk_button(
+                "chat-ask-decline",
+                if form.tabs() > 0 { "Decline all" } else { "Decline" },
+                "Answer nothing; the agent goes on",
+            )
             .on_click(cx.listener(move |this, _, window, cx| {
                 drop(this.dispatch(Action::TalkAsk { ticket, act: Act::Decline }, this.input, window, cx))
             }));
         let queued = chat.transcript.cards.len() - 1;
+        let foot = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .border_t_1()
+            .border_color(rgb(theme::BORDER))
+            .child(muted(hint).flex_1().min_w_0())
+            .children((queued > 0).then(|| muted(format!("{queued} more waiting"))))
+            .child(decline)
+            .child(send);
         div()
             .mx_3()
             .mb_2()
-            .p_2()
+            .flex_shrink()
+            .min_h_0()
+            .overflow_hidden()
             .rounded_md()
             .border_1()
-            .border_color(rgb(theme::SNEAK))
+            .border_color(rgb(theme::PRIMARY))
             .bg(rgb(theme::RAISED))
             .flex()
             .flex_col()
+            .children(tabs)
+            .children(bar)
+            .children(question)
+            .child(rows)
+            .child(foot)
+    }
+
+    /// A question's tab, or Review's (`at` = the questions' count): ✓ once answered, amber on
+    /// Review if left, underlined while on show. A click shows it.
+    fn ask_tab(&self, form: &Form, at: usize, ticket: u64, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+        let n = form.questions.len();
+        let answered = form.answered(at);
+        let label = if at < n { clean(&form.name(at)) } else { "Review".to_string() };
+        let shown = form.cursor.0 == at;
+        let color = match () {
+            _ if shown => theme::TEXT,
+            _ if answered => theme::PICK,
+            _ if form.review() && at < n => theme::SNEAK,
+            _ => theme::MUTED,
+        };
+        div()
+            .id(ElementId::Name(format!("chat-ask-tab:{at}").into()))
+            .relative()
+            .px_2p5()
+            .py_1p5()
+            .text_xs()
+            .cursor_pointer()
+            .text_color(rgb(color))
+            .when(shown, |d| d.border_b_2().border_color(rgb(theme::PRIMARY)))
+            .child(if answered { format!("✓ {label}") } else { label })
+            .child(self.controls.mark(format!("talk:chat-ask-tab:{at}")))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                drop(this.dispatch(Action::TalkAsk { ticket, act: Act::Show { tab: at } }, this.input, window, cx))
+            }))
+    }
+
+    /// A question as markdown: its last paragraph the question, in bold; what comes before it
+    /// context, folded behind "Show all · N lines" past `FOLD_LINES`. With no tabs, its header too.
+    fn ask_question(&self, subject: &Subject, form: &Form, q: usize, ticket: u64, cx: &mut Context<Self>) -> Div {
+        let question = &form.questions[q];
+        let of = Links::Chat(subject.clone());
+        let at = format!("ask:{ticket}:{q}");
+        // Parsed whole: its last block is the question, the blocks before it context. A line
+        // past what markdown draws of one goes as plain text, so no word is cut.
+        let text = question.question.text();
+        let whole = text.lines().all(|line| line.chars().count() <= markdown::MAX_LINE);
+        let mut blocks = if whole { markdown::parse(text, None) } else { Vec::new() };
+        let asked = blocks.pop();
+        let draw = |blocks: &[Block], from: usize, cx: &mut Context<Self>| {
+            let drawn: Vec<AnyElement> =
+                blocks.iter().enumerate().map(|(i, b)| self.block(&of, &at, from + i, b, cx)).collect();
+            div().flex().flex_col().gap_1p5().children(drawn)
+        };
+        let header = (form.tabs() == 0 && !question.header.is_empty()).then(|| {
+            div()
+                .px_1p5()
+                .rounded_sm()
+                .bg(rgb(theme::SELECTED))
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child(clean(question.header.text()))
+        });
+        let open = self.drawer.looks.get(subject).is_some_and(|look| look.ask_open.contains(&(ticket, q)));
+        let context = (!blocks.is_empty()).then(|| {
+            let lines = rows_drawn(&markdown::plain(&blocks));
+            let folds = lines > FOLD_LINES && !open;
+            let body = draw(&blocks, 0, cx)
+                .text_sm()
+                .text_color(rgb(theme::MUTED))
+                .when(folds, |d| d.max_h(px(18. * FOLD_LINES as f32)).overflow_hidden());
+            // Shown in full it scrolls in a box of its own: the question under it stays in view.
+            let body = div()
+                .id(ElementId::Name(format!("chat-ask-context:{ticket}:{q}").into()))
+                .when(open, |d| d.max_h(px(18. * 2. * FOLD_LINES as f32)).overflow_y_scroll())
+                .child(body);
+            let who = subject.clone();
+            let show = (lines > FOLD_LINES).then(|| {
+                let label = if open { "Show less".to_string() } else { format!("Show all · {lines} lines") };
+                div()
+                    .id("chat-ask-show-all")
+                    .relative()
+                    .text_xs()
+                    .cursor_pointer()
+                    .text_color(rgb(theme::PRIMARY))
+                    .child(label)
+                    .child(self.controls.mark("talk:chat-ask-show-all"))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_ask_context(&who, ticket, q, cx)))
+            });
+            div().flex().flex_col().gap_1().child(body).children(show)
+        });
+        let asked = match asked {
+            Some(asked) => draw(std::slice::from_ref(&asked), blocks.len(), cx),
+            None => div().child(clean(text)),
+        };
+        let asked = asked.text_sm().font_weight(FontWeight::SEMIBOLD);
+        // The question in view whatever the context: a long one scrolls in a box of its own,
+        // so the options and the foot stay in the card.
+        let asked = div()
+            .id(ElementId::Name(format!("chat-ask-asked:{ticket}:{q}").into()))
+            .max_h(px(18. * (FOLD_LINES as f32 + 2.)))
+            .overflow_y_scroll()
+            .child(asked);
+        div()
+            .flex_none()
+            .flex()
+            .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .text_sm()
-                    .child(div().flex_1().font_weight(FontWeight::SEMIBOLD).child("The agent asks"))
-                    .children((queued > 0).then(|| muted(format!("{queued} more waiting")))),
-            )
-            // Many questions scroll in a box of their own: Send stays in view.
-            .child(
-                div()
-                    .id("chat-ask-questions")
-                    .max_h(px(360.))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .children(questions),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(send)
-                    .child(decline)
-                    .child(muted("↑↓ move · space picks · 1–9".into()).flex_1().text_right()),
-            )
+            .px_3()
+            .pt_2()
+            .pb_1p5()
+            .children(header.map(|chip| div().flex().child(chip)))
+            .children(context)
+            .child(asked)
+            .children(question.multi.then(|| muted("pick any".into())))
+    }
+
+    /// Review's row for a question: its header and its answer, or "Not answered" in amber. A
+    /// click goes back to it.
+    fn review_row(&self, form: &Form, q: usize, ticket: u64, cx: &mut Context<Self>) -> AnyElement {
+        let name = clean(&form.name(q));
+        let here = form.cursor.1 == q;
+        let parts: Vec<String> = form.parts(q).iter().map(|part| clean(part)).collect();
+        let answered = form.answered(q);
+        let answer = match answered {
+            true => div().flex_1().min_w_0().text_sm().child(parts.join(", ")),
+            false => div()
+                .flex_1()
+                .min_w_0()
+                .text_sm()
+                .text_color(rgb(theme::SNEAK))
+                .child("Not answered · goes as “no answer”"),
+        };
+        let n = form.questions.len();
+        let id = format!("chat-ask:{n}:{q}");
+        div()
+            .id(ElementId::Name(id.clone().into()))
+            .relative()
+            .flex()
+            .gap_2p5()
+            .px_3()
+            .py_1p5()
+            .cursor_pointer()
+            .when(here, |d| d.bg(rgb(theme::SELECTED)))
+            .hover(|s| s.bg(rgb(theme::SELECTED)))
+            .child(div().flex_none().w(px(80.)).truncate().text_sm().text_color(rgb(theme::MUTED)).child(name))
+            .child(answer)
+            .child(self.controls.mark(format!("talk:{id}")))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                let act = Act::Row { question: n, row: q };
+                drop(this.dispatch(Action::TalkAsk { ticket, act }, this.input, window, cx))
+            }))
+            .into_any_element()
+    }
+
+    /// "Show all" on a question's context, or less again. The drawer's look, not the card's state.
+    pub(crate) fn toggle_ask_context(&mut self, subject: &Subject, ticket: u64, q: usize, cx: &mut Context<Self>) {
+        // The user's card: a client's click changes nothing of it.
+        if self.input != Origin::User {
+            self.error = Some(chat::USERS_ALONE.into());
+            return cx.notify();
+        }
+        let look = self.drawer.looks.entry(subject.clone()).or_default();
+        if !look.ask_open.remove(&(ticket, q)) {
+            look.ask_open.insert((ticket, q));
+        }
+        // The options' room changed: the cursor's row is brought into view again.
+        look.ask_seen.set(None);
+        cx.notify();
     }
 
     /// One row of a question: its mark, its number key, its label and description; "Other…"
@@ -1500,13 +1727,15 @@ impl Workspace {
             .id(ElementId::Name(id.clone().into()))
             .relative()
             .flex()
+            .flex_none()
             .items_start()
-            .gap_1p5()
-            .px_1p5()
-            .py_0p5()
-            .rounded_sm()
+            .gap_2()
+            .px_3()
+            .py_1p5()
+            .border_l_2()
+            .border_color(rgb(theme::RAISED))
             .cursor_pointer()
-            .when(here, |d| d.bg(rgb(theme::SELECTED)))
+            .when(here, |d| d.bg(rgb(theme::SELECTED)).border_color(rgb(theme::PRIMARY)))
             .hover(|s| s.bg(rgb(theme::SELECTED)))
             .child(
                 div()
@@ -1862,7 +2091,6 @@ fn notice_text(notice: &Notice) -> String {
         Notice::Compacted => "The context was compacted.".into(),
         Notice::Allowed { tool, label } => format!("You allowed {tool} · {label}."),
         Notice::Denied { tool, label } => format!("You denied {tool} · {label}."),
-        Notice::Answered => "You answered the agent's questions.".into(),
         Notice::Declined => "You declined to answer.".into(),
         Notice::DeniedBy { tool, by } => {
             let by = match by {

@@ -245,7 +245,9 @@ What is verified, and how:
   `updatedInput` = that input plus `answers` (question text → the label; several labels joined
   by `", "`, one that holds `", "` or `"` quoted as JSON; or the user's own words), the tool
   result reads "Your questions have been answered: …". Allowed unchanged it reads "The user did
-  not answer the questions." Codex's `item/tool/requestUserInput` is not read yet.
+  not answer the questions." A question left out of `answers` is no answer: the CLI lists only
+  the others (its tool result skips a question with no entry), and with none says the user did
+  not answer. Codex's `item/tool/requestUserInput` is not read yet.
 
 Where the UI asks the spec today: a new session's id (`chooses_session`: the task is linked at
 once, or its session is sought), the sessions sought and read (`reader`), the held check

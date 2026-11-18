@@ -1,0 +1,18 @@
+# Native chat: AskUserQuestion with three questions. One at a time, each header a tab; ↵ answers
+# and goes on, ⇥ skips; Review lists the answers (a skipped one in amber); sent, the card folds.
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"compare branches >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.transcript.cards","len":1}
+{"cmd":"key","keys":"2 enter","as":"user"}
+{"settle":300}
+{"shot":"second"}
+{"cmd":"key","keys":"down enter tab","as":"user"}
+{"settle":300}
+{"shot":"review"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"until":"drawer.native.chats.1.transcript.turn","is":null}
+{"settle":300}
+{"shot":"sent"}
