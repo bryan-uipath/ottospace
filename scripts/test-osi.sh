@@ -19,6 +19,8 @@ export OSI_SELF_URL="file://$osi"
 export OSI_GH="$work/fake-gh"
 # main's tip, as GitHub would say it; no file: the lookup fails.
 export OSI_MAIN_URL="file://$work/main-tip"
+# GitHub's compare of two commits: compare/<old>...<new>; no file: the lookup fails.
+export OSI_COMPARE_URL="file://$work/compare"
 export FAKE_GH_DIR="$work/gh"
 mkdir -p "$HOME" "$FAKE_GH_DIR"
 
@@ -174,6 +176,7 @@ check "state records the channel" state_has "channel=main"
 check "state records the commit" state_has "commit=$(commit a)"
 check "says it uses the terminal's permissions" says "terminal's Accessibility and Screen Recording"
 check "names the build in one line" says "Installed ottospace 0.1.0 (aaaaaaa) from main"
+check "a first install has no commits to list" says "first install of main"
 not_says() { ! says "$1"; }
 check "no download URL" not_says "file://"
 check "no command path when the bin directory is on PATH" eval "! PATH='$bin:$PATH' '$bin/osi' install main --force 2>&1 | grep -q '$bin'"
@@ -196,6 +199,7 @@ run "$osi" update
 check "update installs the newer build" installed_is B
 check "an update does not repeat the permissions note" not_says "Accessibility"
 check "nor compare commits, as --check does" not_says "installed is"
+check "the new commits cannot be read: one line" says "could not list new commits"
 check "main's tip unknown: nothing about main" not_says "main has newer commits"
 commit b | tr -d '\n' >"$work/main-tip"
 run "$osi" update
@@ -214,6 +218,74 @@ run "$osi" rollback
 check "a second rollback undoes the first" installed_is B
 run "$osi" current
 check "current shows the previous build" says "previous:  main  0.1.0  commit aaaaaaaaaaaa"
+
+echo "# new commits"
+mkdir -p "$work/compare"
+# make_compare <old> <new> <status> <total> <subject>...: GitHub's answer, one commit per subject
+# (commit 1, 2, ...), a body under each.
+make_compare() {
+  local f="$work/compare/$1...$2" status="$3" total="$4" i=0 sep=""
+  shift 4
+  {
+    printf '{"status":"%s","ahead_by":%s,"behind_by":2,"total_commits":%s,"files":[],"commits":[' "$status" "$total" "$total"
+    for subject in "$@"; do
+      i=$((i + 1))
+      printf '%s{"sha":"%040d","author":null,"commit":{"message":"%s\\n\\nbody %s"}}' "$sep" "$i" "$subject" "$i"
+      sep=","
+    done
+    printf ']}'
+  } >"$f"
+}
+make_build "$main_dir" C "$(commit c)"
+make_compare "$(commit b)" "$(commit c)" ahead 2 "First change" "Second change"
+run "$osi" install main
+check "lists each new commit, oldest first" eval "printf '%s' \"\$out\" | grep -A1 -xF '  00000000 First change' | grep -qxF '  00000000 Second change'"
+check "and not the bodies" not_says "body"
+check "and no more line when all are listed" not_says "more:"
+run "$osi" install main
+check "the same commit: one line" says "no new commits"
+make_build "$main_dir" D "$(commit d)"
+subjects=()
+for n in $(seq 1 30); do subjects+=("Change $n"); done
+make_compare "$(commit c)" "$(commit d)" ahead 45 "${subjects[@]}"
+run "$osi" install main
+check "more than 30: lists 30" [ "$(printf '%s\n' "$out" | grep -c '^  00000000 Change ')" = 30 ]
+check "and says how many more, with the compare page" says "  … and 15 more: https://github.com/bryan-uipath/ottospace/compare/cccccccccccc...dddddddddddd"
+make_build "$main_dir" E "$(commit e)"
+long="$(printf 'x%.0s' $(seq 1 150))"
+make_compare "$(commit d)" "$(commit e)" ahead 2 \
+  'Bad \u001b[31mred\u001b[0m \u001b]8;;https://evil.example\u0007link\u001b]8;;\u0007 \u009b2J\u202ex\r\u0007end \u009d0;t\u0007\u001b]0;t\u009cC1' "$long"
+run "$osi" install main
+check "a subject's escape sequences are stripped" says "  00000000 Bad red link xend C1"
+subject_plain() { ! printf '%s' "$out" | LC_ALL=C grep -q $'[\x01-\x08\x0b-\x1f\x7f]\|\xc2[\x80-\x9f]\|\xe2\x80\xae'; }
+check "no control, C1 or bidi byte reaches the terminal" subject_plain
+check "a long subject is cut to 100 characters" says "  00000000 $(printf 'x%.0s' $(seq 1 99))…"
+make_build "$main_dir" F "$(commit f)"
+make_compare "$(commit e)" "$(commit f)" diverged 3
+run "$osi" install main
+check "diverged: one line with the compare page" says "main diverged from the build installed before (3 new, 2 not on main): https://github.com/bryan-uipath/ottospace/compare/eeeeeeeeeeee...ffffffffffff"
+printf 'not json' >"$work/compare/$(commit f)...$(commit b)"
+make_build "$main_dir" B "$(commit b)"
+run "$osi" install main
+check "an answer that is not JSON: one line" says "could not list new commits"
+check "and the install succeeds" [ "$status" = 0 ]
+check "and installs" installed_is B
+make_build "$main_dir" C "$(commit c)"
+make_compare "$(commit b)" "$(commit c)" ahead '"08"' "One"
+run "$osi" install main
+check "a count that is not a number: one line" eval "says 'could not list new commits' && ! says 'One'"
+check "and the install succeeds" [ "$status" = 0 ]
+make_build "$main_dir" B "$(commit b)"
+printf '{"status":"ahead","total_commits":2,"commits":[{"sha":"%040d","commit":{"message":"One"}},{"sha":"%040d","commit":{}}]}' 1 2 \
+  >"$work/compare/$(commit c)...$(commit b)"
+run "$osi" install main
+check "a commit without a message: one line, no partial list" eval "says 'could not list new commits' && ! says 'One'"
+check "and the install succeeds" [ "$status" = 0 ]
+make_build "$work/releases/latest/download" S "$(commit 5)"
+run "$osi" install stable
+check "another channel lists nothing" not_says "commits"
+run "$osi" install main
+check "back from another channel: as a first install" says "first install of main"
 
 echo "# a build carries osi"
 osi_is() { tail -n 1 "$bin/osi" | grep -qxF "# fixture osi $1"; }
@@ -583,6 +655,11 @@ printf '40\t%s\tfalse\ttrue\tBad \033[31m\302\233title \342\200\256x\n' "$(commi
 out="$("$osi" list 2>&1)" || true
 only_plain() { ! printf '%s' "$out" | LC_ALL=C grep -q '[^[:print:][:space:]]'; }
 check "a title cannot send escape, C1 or bidi bytes to the terminal" only_plain
+# No "[31m" left over; the C1 CSI takes "t" as its final byte, as a terminal would.
+check "a title's escape sequences leave nothing behind" says "Bad itle x"
+printf '42\t%s\tfalse\ttrue\tKeys \342\214\230\342\207\247R\n' "$(commit 6)" >"$FAKE_GH_DIR/prs"
+run "$osi" list
+check "a title keeps its UTF-8" says "Keys ⌘⇧R"
 make_pr 35 "$(commit 7)" bryan-uipath/ottospace false bryan-uipath
 printf '77\tin_progress\tnone\n' >"$FAKE_GH_DIR/run-$(commit 7)"
 run "$osi" update --no-wait

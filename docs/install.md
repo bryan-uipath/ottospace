@@ -46,6 +46,11 @@ osi self-update       # replace osi with the one on main
   what runs in them close) and start it again. osi says so when the app is running: the app
   records its pid and program in `~/.ottospace/running`. `ottospace ctl` and other subcommands
   do not count.
+- After installing `main`, osi lists the commits that are new since the `main` build installed
+  before, oldest first: the short commit and the subject, at most 30, then
+  `… and N more: <compare page>`. A first install of `main` (or after another channel) says
+  `first install of main`, the same build `no new commits`, a failed lookup
+  `could not list new commits`; the install succeeds either way.
 - After installing `main`, osi says when `main` has a newer commit than the build: its build is
   not published yet, or it changed only docs (which publish none).
 - Undo an install: `osi rollback`. It puts the previous ottospace back, not the previous osi.
