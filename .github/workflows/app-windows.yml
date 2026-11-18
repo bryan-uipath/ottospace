@@ -72,6 +72,7 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.repeat == '0' }}
         env:
           OTTOSPACE_E2E_FINDER: '1'
+          OTTOSPACE_SHARP_OUT: ${{ runner.temp }}/sharp
         run: cargo e2e-apps --skip canarys
       # The canary's transcript, shown: what the recogniser heard, or why it skipped.
       - name: Transcript tests
@@ -84,6 +85,7 @@ jobs:
           REPEAT: ${{ inputs.repeat }}
           TEST: ${{ inputs.test }}
           OTTOSPACE_E2E_FINDER: '1'
+          OTTOSPACE_SHARP_OUT: ${{ runner.temp }}/sharp
         run: |
           failed=0
           for i in $(seq 1 "$REPEAT"); do
@@ -92,3 +94,10 @@ jobs:
           done
           echo "== $failed of $REPEAT failed"
           test "$failed" -eq 0
+      # The sharpness test's crops: a parked pane's picture, and its live window cropped alike.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: sharp
+          path: ${{ runner.temp }}/sharp
+          if-no-files-found: ignore

@@ -173,12 +173,14 @@ impl SCStreamOutputTrait for Output {
 
 /// Stream config showing `size` points of the window at `scale` (Retina = 2), from its top left
 /// below its top `crop` points (the title bar), never scaled: a window that refused the pane's
-/// size (Outlook's minimum) looks as it does when it is live.
+/// size (Outlook's minimum) looks as it does when it is live. `scale` is the pane's display's:
+/// the picture has the pixels the pane is drawn with (`hosted::capture_pixels`).
 fn stream_config(size: CGSize, crop: f64, scale: f64) -> SCStreamConfiguration {
+    let (width, height) = hosting::capture_pixels((size.width, size.height), scale);
     // 420f is the only format gpui's surface renderer accepts.
     SCStreamConfiguration::new()
-        .with_width((size.width * scale).max(1.0) as u32)
-        .with_height((size.height * scale).max(1.0) as u32)
+        .with_width(width)
+        .with_height(height)
         .with_scales_to_fit(true)
         .with_pixel_format(PixelFormat::YCbCr_420f)
         .with_fps(60)
@@ -220,16 +222,20 @@ struct Hosted {
     shown: CGSize,
     /// The title-bar crop the stream shows it with.
     shown_crop: f64,
+    /// The pixels a point the stream captures at: ottospace's display's when it was configured.
+    shown_scale: f64,
     /// The window's content size when `shown` was last worked out, for the corner mask.
     content: CGSize,
     /// How often `window_frame` read the window's frame.
     frame_reads: u64,
-    /// The last size and crop the stream refused, so the same one is not asked for every check.
-    refused: Option<(CGSize, f64)>,
+    /// The last size, crop and scale the stream refused, so the same one is not asked for every check.
+    refused: Option<(CGSize, f64, f64)>,
     /// Where the preview was last drawn, in window-content coordinates.
     preview: Rc<Cell<Bounds<Pixels>>>,
     /// Last pane content rect the live window was placed over, to re-place only on change.
     placed: CGRect,
+    /// Where it was last parked: it parks again when the spot moves (`display::parking_spot`).
+    parked_at: CGPoint,
     /// The width the window kept when its pane asked for less: no split may leave it narrower.
     min_width: Option<f64>,
 }
@@ -290,11 +296,13 @@ impl Hosted {
             parked_size: CGSize::ZERO,
             shown: original.size,
             shown_crop: 0.0,
+            shown_scale: 2.0,
             content: original.size,
             frame_reads: 0,
             refused: None,
             preview: Rc::default(),
             placed: CGRect::default(),
+            parked_at: CGPoint::ZERO,
             min_width: None,
         })
     }
@@ -327,17 +335,22 @@ impl Hosted {
     /// Sizes the window to the pane (so the stream matches) and parks it on the off-screen sliver.
     /// With a `crop`, the window is that much taller and the stream shows only the part below it.
     fn park(&mut self, size: CGSize, scale: f64, crop: f64) {
+        // On a display of the pane's scale, so the app draws the window at it.
+        let spot = display::parking_spot(scale);
         // Only resize/reconfigure when the pane changed; redoing it on every park flickers.
         if size != self.parked_size || crop != self.crop {
             // Move first. Resized where it stood, macOS clamps the window to what fits above the
             // Dock there (a pane 818pt tall parked at 805pt), and the stream no longer matches.
-            let _ = self.window.set_position(display::parking_spot());
+            let _ = self.window.set_position(spot);
             let _ = self.window.set_size(CGSize::new(size.width, size.height + crop));
         }
         self.parked_size = size;
         self.crop = crop;
         self.show(scale);
-        let _ = self.window.set_position(display::parking_spot());
+        // A refused move (a busy app) is tried again at the next check.
+        if self.window.set_position(spot).is_ok() {
+            self.parked_at = spot;
+        }
         self.placed = CGRect::default();
     }
 
@@ -356,23 +369,27 @@ impl Hosted {
             (self.shown, self.shown_crop, self.content) = (shown, self.crop, content);
             return Some(content);
         }
-        if asked == (self.shown, self.shown_crop) {
+        // Also on a new scale: ottospace moved to a display of another, and the old picture
+        // would be drawn up (blurred) or down.
+        if asked == (self.shown, self.shown_crop) && scale == self.shown_scale {
             self.content = content;
+            // Back to what it shows: a refusal of another is asked again when it comes back.
+            self.refused = None;
             return Some(content);
         }
-        if self.refused == Some(asked) {
+        if self.refused == Some((shown, self.crop, scale)) {
             return Some(content);
         }
         let config = stream_config(shown, self.crop, scale);
         // Frames of another size are dropped, so expect the new one only once it is set.
         if self.stream.update_configuration(&config).is_ok() {
             self.latest.expect(&config);
-            (self.shown, self.shown_crop) = asked;
+            (self.shown, self.shown_crop, self.shown_scale) = (shown, self.crop, scale);
             self.content = content;
             self.refused = None;
         } else {
             // `shown` keeps describing what the stream still shows.
-            self.refused = Some(asked);
+            self.refused = Some((shown, self.crop, scale));
             eprintln!("window {}: the stream refused {}×{}", self.window_id, shown.width, shown.height);
         }
         Some(content)
@@ -3203,7 +3220,7 @@ impl Workspace {
     }
 
     fn state(&self, window: &Window, cx: &App) -> serde_json::Value {
-        let parking = display::parking_spot();
+        let parking = display::parking_spot(window.scale_factor() as f64);
         let hosted: BTreeMap<PaneId, [f64; 4]> = self
             .hosted
             .iter()
@@ -3516,11 +3533,18 @@ impl Workspace {
         // Restored or rebuilt panes still empty: `pane`, `why`, and where its "Open <App>" is drawn, or null.
         state["unfilled"] = unfilled.into();
         // Test runs only: what each app pane's stream has sent, `stream_samples_<pane>` (`counts`
-        // holds numbers only).
+        // holds numbers only); the pixel size of the frame it holds and the scale it captures at;
+        // the scale of ottospace's display and of the parked windows' display.
         if let Some(counts) = state["counts"].as_object_mut() {
             for (id, hosted) in &self.hosted {
                 counts.insert(format!("stream_samples_{id}"), hosted.latest.samples.load(Relaxed).into());
+                let held = hosted.frame().map_or((0, 0), |f| (f.get_width(), f.get_height()));
+                counts.insert(format!("stream_width_{id}"), held.0.into());
+                counts.insert(format!("stream_height_{id}"), held.1.into());
+                counts.insert(format!("stream_scale_{id}"), hosted.shown_scale.into());
             }
+            counts.insert("scale".into(), (window.scale_factor() as f64).into());
+            counts.insert("parking_scale".into(), display::parking_scale(window.scale_factor() as f64).into());
         }
         // Where the box offers a choice of where the task works: `new` (a new worktree, the user's
         // choice), the repository's name and the `branch` it would make; else null.
@@ -3580,7 +3604,7 @@ impl Workspace {
             // window. Move it off screen now; it is sized when its tab is first shown.
             let drawn = self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(id));
             if !drawn {
-                let _ = hosted.window.set_position(display::parking_spot());
+                let _ = hosted.window.set_position(display::parking_spot(window.scale_factor() as f64));
             }
             if hosted.off_screen {
                 self.broke(format!("{}'s window was off screen: it goes back to the middle of the screen", hosted.app));
@@ -3882,6 +3906,8 @@ impl Workspace {
         // Only panes of the active tab are drawn; a background pane's bounds are stale.
         let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
         let scale = window.scale_factor() as f64;
+        // Only on a check, with windows hosted: it asks each display's mode, and this runs every frame.
+        let spot = (check && !self.hosted.is_empty()).then(|| display::parking_spot(scale));
         // A peeked window is kept over its pane as the live one is.
         let live = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
         // Under the notice bar as it is in this frame: the windows follow it as it opens and closes.
@@ -3899,7 +3925,11 @@ impl Workspace {
                 if hosted.placed != rect || drifted {
                     hosted.place(rect, crop);
                 }
-            } else if hosted.parked_size != rect.size || hosted.crop != crop {
+            // Also when the spot moved: displays changed, or ottospace is on one of another scale.
+            } else if hosted.parked_size != rect.size
+                || hosted.crop != crop
+                || spot.is_some_and(|spot| hosted.parked_at != spot)
+            {
                 hosted.park(rect.size, scale, crop);
             }
             // Only on a check: reading a window's size is a synchronous accessibility call.
@@ -7551,7 +7581,7 @@ fn main() {
         if quiet {
             ottospace_mac::window::stay_in_background();
             if std::env::var_os("OTTOSPACE_E2E_SHOW").is_none() {
-                let corner = display::parking_spot();
+                let corner = display::parking_spot(f64::INFINITY);
                 bounds.origin = point(px(corner.x as f32 - E2E_SLIVER), px(corner.y as f32 - E2E_SLIVER));
             }
         }
