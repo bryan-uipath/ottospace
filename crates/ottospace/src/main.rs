@@ -1252,11 +1252,8 @@ impl Workspace {
                     this.take_tags(window, cx);
                     this.store_layout(false);
                     this.store_key_use(false);
-                    // A round on its way: taken at the run its result nudges.
-                    if ticks.every(15, 0) || this.sessions.as_ref().is_some_and(sessions::Poller::waiting) {
-                        this.poll_sessions(window, cx);
-                    }
                     if ticks.every(15, 0) {
+                        this.poll_sessions(window, cx);
                         this.read_titles(cx);
                     }
                     this.listen_menu_bar(window, cx);
@@ -1279,12 +1276,6 @@ impl Workspace {
                         cx.notify();
                     }
                     this.with_origin(Origin::System, |this| {
-                        // The time `next_due` woke the loop for: at once, not at the next half second.
-                        let now = now_ms();
-                        if !ticks.every(30, 0) && this.model.next_due().is_some_and(|at| at <= now) {
-                            this.dispatch(Action::Tick { now }, Origin::System, window, cx);
-                            cx.notify();
-                        }
                         if ticks.every(30, 0) {
                             this.adopt_new_windows(window, cx);
                             this.drop_closed(window, cx);
