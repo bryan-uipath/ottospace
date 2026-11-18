@@ -984,8 +984,8 @@ To put an app window in a pane, open Apps on the left rail and click the app. It
 empty, otherwise it splits right. Shift-click splits down. New windows of a hosted app get their
 own pane, to the right of the app's, unless they are pop-ups. A pop-up stays a free window at its
 own size: ottospace asks for it in front once, and then leaves it to the app, which closes it. One
-you can reach stays where the app put it: over its app's pane, or with its title bar on screen
-and, while the app's pane is parked, not under ottospace's window. Any other (off screen, by its
+you can reach stays where the app put it: its title bar on screen and, while the app's pane is
+parked, not under ottospace's window unless it is over that pane. Any other (off screen, by its
 parked window, under ottospace) is first moved to the middle of its app's pane, wholly onto that
 pane's screen (a pop-up bigger than the screen at its top left). A pop-up is a dialog or panel
 (subrole `AXDialog`, `AXSystemDialog`, `AXFloatingWindow`, `AXSystemFloatingWindow`), a modal

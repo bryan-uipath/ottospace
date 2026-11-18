@@ -3862,10 +3862,10 @@ impl Workspace {
                 rules::Place::Float if beside.is_some() => {
                     let pane = pane.map(|(b, _)| recovery::to_frame(on_screen(b, window, cx)));
                     let screens = recovery::screens();
-                    // Parked: no pane of its app is live or peeked, so ottospace is in front of it.
+                    // Parked: no pane of its app is up and the app is not in front, so ottospace is.
                     let peek = self.model.peek.as_ref().map(|peek| peek.pane);
                     let up = |id: &PaneId| self.model.live == Some(*id) || peek == Some(*id);
-                    let parked = !self.hosted.iter().any(|(id, h)| h.pid == pid && up(id));
+                    let parked = !self.hosted.iter().any(|(id, h)| h.pid == pid && up(id)) && !ax::is_active(pid);
                     let ottospace = Some(recovery::to_frame(own_frame(window, cx)));
                     let sight = rules::Sight { screens: &screens.visible, main: screens.main, ottospace, parked };
                     let to = frame.and_then(|f| rules::float_to(recovery::to_frame(f), pane, &sight));

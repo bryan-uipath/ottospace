@@ -27,8 +27,9 @@ pub fn reachable(frame: Frame, screens: &[Frame]) -> bool {
 /// As `reachable`, with `cover` (a window in front) hiding what of the top it lies over.
 pub fn reachable_beside(frame: Frame, screens: &[Frame], cover: Option<Frame>) -> bool {
     let (wide, tall) = (GRIP.0.min(frame.w), GRIP.1.min(frame.h));
-    // Only a cover over every row of the top hides columns of it.
-    let cover = cover.filter(|c| c.y <= frame.y + 1.0 && c.y + c.h >= frame.y + tall - 1.0);
+    // A cover over the title bar's middle row (a bar is about 28 tall) hides the columns it spans.
+    let bar = frame.y + 14.0_f64.min(frame.h / 2.0);
+    let cover = cover.filter(|c| c.y <= bar && c.y + c.h >= bar);
     screens.iter().any(|s| {
         let (left, right) = (frame.x.max(s.x), (frame.x + frame.w).min(s.x + s.w));
         // The longest run of the top left in sight, either side of the cover.

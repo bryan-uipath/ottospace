@@ -280,8 +280,13 @@ fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_still_spl
     let x = if right >= left { window[0] + window[2] + 10.0 } else { window[0] - 710.0 };
     let at = [x, window[1] + 100.0];
     canary.call(json!({"cmd": "dialog", "at": at}));
-    wait_for("the dialog beside", || frame(3));
-    std::thread::sleep(Duration::from_millis(1200));
+    // Judged: the third pop-up ottospace floated (the first dialog, the small window, this one).
+    let floats = || {
+        let trace = otto.call(json!({"cmd": "trace"}))["trace"].as_str().unwrap_or_default().to_string();
+        trace.lines().filter(|l| l.contains(r#""ev":"float""#)).map(str::to_string).collect::<Vec<_>>()
+    };
+    let judged = wait_for("the dialog beside to be judged", || floats().get(2).cloned());
+    assert!(judged.contains(r#""moved":false"#), "{judged}");
     let beside = frame(3).expect("the dialog beside");
     assert!(close(beside[0], at[0]) && close(beside[1], at[1]), "left where the app put it: {beside:?} {at:?}");
     assert!(!over_pane(beside) && reachable(beside), "{beside:?}");

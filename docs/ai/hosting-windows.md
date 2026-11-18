@@ -73,9 +73,9 @@ its size, the app pane's size, the width that pane's window has refused to go be
   half the pane both ways, one whose split would leave the pane narrower than its window refused
   to go, or a `"do": "float"` rule. No pane, no stream: the window is `AXRaise`d once without
   activating the app. It is moved first only if the user cannot reach it (`rules::reachable`):
-  its middle is not over its app's pane, and its top has no 120×60 on a screen's visible frame,
-  or (while no pane of the app is live, so ottospace is in front) none of it beside ottospace's
-  window. Then `rules::float_to` puts it, at its own size, in the middle of the pane, wholly on
+  its top has no 120×60 on a screen's visible frame, or, while no pane of the app is up and the
+  app is not active (ottospace is in front), no 120 of it beside ottospace's window and its middle
+  not over its app's pane. A cover counts where it lies over the title bar's middle row. Then `rules::float_to` puts it, at its own size, in the middle of the pane, wholly on
   the visible frame of the pane's screen (a pane whose middle is on no screen: the main one's).
 - **Leave**: a sheet or a child window (macOS keeps it on its parent), an `ignore` rule (a built-in
   `ignore` beats a user's `split` or `float`; only `manage` undoes it), a window

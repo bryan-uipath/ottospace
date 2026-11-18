@@ -204,9 +204,9 @@ pub struct Sight<'a> {
     pub parked: bool,
 }
 
-/// True when the user can get at the pop-up where it is: over its app's `pane` (entering the
-/// pane brings it up), or with `restore::GRIP` of its top on one screen and, while its app is
-/// parked, not under ottospace's window.
+/// True when the user can get at the pop-up where it is: `restore::GRIP` of its top on one screen
+/// and, while its app is parked, beside ottospace's window, unless it is over its app's `pane`
+/// (entering the pane brings it up).
 pub fn reachable(window: Frame, pane: Option<Frame>, sight: &Sight) -> bool {
     let (x, y) = (window.x + window.w / 2.0, window.y + window.h / 2.0);
     let over = pane.is_some_and(|p| (p.x..=p.x + p.w).contains(&x) && (p.y..=p.y + p.h).contains(&y));
@@ -466,7 +466,7 @@ mod tests {
         // Other windows of the app still follow the user's rule.
         assert_eq!(place(&[split], &zoom("Settings", "AXDialog"), &big), Place::Split);
         assert_eq!(place(&[float], &zoom("Zoom Workplace", "AXStandardWindow"), &big), Place::Float);
-        // Only `manage`, naming the window, undoes the built-in rule.
+        // Only a `manage` rule undoes the built-in one.
         let manage = rule(r#"{"app": "zoom.us", "title": "Meeting chat", "do": "manage"}"#);
         assert_eq!(place(&[manage], &zoom("Meeting chat", "AXStandardWindow"), &big), Place::Split);
     }
@@ -509,6 +509,9 @@ mod tests {
         let hidden = Frame::new(1250.0, 300.0, 140.0, 100.0);
         assert!(!reachable(hidden, Some(PANE), &parked) && reachable(hidden, Some(PANE), &sight(&screens, false)));
         assert_eq!(float_to(hidden, Some(PANE), &parked), Some((530.0, 450.0)));
+        // Its title bar's middle under ottospace's bottom edge: hidden; below it: in sight.
+        assert!(!reachable(Frame { y: 1010.0, ..hidden }, Some(PANE), &parked));
+        assert!(reachable(Frame { y: 1020.0, ..hidden }, Some(PANE), &parked));
         // Its title bar above the screen's top: out of reach though most of it shows.
         let high = Frame::new(1450.0, -100.0, 400.0, 600.0);
         assert_eq!(float_to(high, Some(PANE), &parked), Some((400.0, 200.0)));

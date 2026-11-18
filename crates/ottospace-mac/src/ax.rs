@@ -42,6 +42,11 @@ pub fn is_frontmost(pid: i32) -> bool {
     copy_attr(&app, "AXFrontmost").and_then(|v| v.downcast::<CFBoolean>().ok()).is_some_and(|front| front.as_bool())
 }
 
+/// As `is_frontmost`, asked of AppKit, not of the app: a hung app costs no wait.
+pub fn is_active(pid: i32) -> bool {
+    NSRunningApplication::runningApplicationWithProcessIdentifier(pid).is_some_and(|app| app.isActive())
+}
+
 /// Whether this process (or its parent terminal) has Accessibility access; optionally prompts.
 pub fn is_trusted(prompt: bool) -> bool {
     let key = CFString::from_static_str("AXTrustedCheckOptionPrompt");
