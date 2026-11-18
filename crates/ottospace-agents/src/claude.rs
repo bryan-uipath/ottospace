@@ -407,7 +407,7 @@ fn code(value: &Value, fallback: &'static str) -> String {
 }
 
 /// What the user reads to judge a call: the command, the path or the address; else the input
-/// as JSON. Untrusted, and cut.
+/// as JSON, pretty-printed (an expanded row wraps it). Untrusted, and cut.
 fn detail(tool: &str, input: &Value) -> Untrusted {
     let text = |key: &str| input[key].as_str();
     let shown = match tool {
@@ -417,7 +417,7 @@ fn detail(tool: &str, input: &Value) -> Untrusted {
     };
     match shown {
         Some(text) => Untrusted::new(text, MAX_DETAIL),
-        None => Untrusted::new(&input.to_string(), MAX_DETAIL),
+        None => Untrusted::json(input, MAX_DETAIL),
     }
 }
 
@@ -842,6 +842,20 @@ mod tests {
         );
         let Some(Event::ToolStart { station, label, .. }) = out.events.get(1) else { panic!("{out:?}") };
         assert_eq!((*station, label.as_str()), (ottospace_core::activity::Station::Files, "b/c.rs"));
+    }
+
+    #[test]
+    fn a_calls_json_input_is_pretty_printed() {
+        let block =
+            json!({"type": "tool_use", "id": "t", "name": "AskUserQuestion", "input": {"questions": [{"q": "a"}]}});
+        let line = json!({"type": "assistant", "parent_tool_use_id": null, "message": {"content": [block]}});
+        let out = Claude::new().read(&line.to_string());
+        let Some(Event::ToolStart { detail, .. }) = out.events.get(1) else { panic!("{out:?}") };
+        assert_eq!(detail.text(), "{\n  \"questions\": [\n    {\n      \"q\": \"a\"\n    }\n  ]\n}");
+        // Too long pretty, it stays compact: the indentation cuts nothing that would have fit.
+        let input = json!({"todos": vec!["x".repeat(30); (MAX_DETAIL - 200) / 33]});
+        assert!(serde_json::to_string_pretty(&input).unwrap().len() > MAX_DETAIL);
+        assert_eq!(Untrusted::json(&input, MAX_DETAIL).text(), input.to_string());
     }
 
     #[test]

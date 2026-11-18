@@ -129,3 +129,14 @@ To settle first: the setting is per app, not per window; whether Electron drops 
 when it is turned off is not verified; while it is on, the app's text (messages, names) is
 readable by `ax_tree`, which a socket client may call, and by captures; the app pays CPU and
 memory for it.
+
+## 13. Output of every call in the native transcript, with Copy
+
+An opened call shows what it printed only for a command (`gist::Kind::Command`): the transcript
+keeps `output` for commands alone. Keep a bounded, cleaned result for the other calls too (an
+`AskUserQuestion`'s answer, a `Read`'s text, an MCP tool's reply), drawn under the input as a
+command's is: selectable, Copy on hover (`chat_select`, `Part::Output`).
+
+To settle first: how much to keep per call (`gist::MAX_OUTPUT`, and the transcript's byte budget),
+credential-shaped text hidden as a command's output is (`transcript::details`), and results that
+are not text (images, structured content).

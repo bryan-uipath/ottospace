@@ -5,6 +5,7 @@
 import type {
   AgentChip,
   AgentDial,
+  ChatSelection,
   AgentLine,
   CalendarFetch,
   NoticeBar,
@@ -932,7 +933,21 @@ function nativeChat(value: unknown, at: string): NativeChat {
     details_open: bool(o.details_open, `${at}.details_open`),
     unread_open: bool(o.unread_open, `${at}.unread_open`),
     dial: agentDial(o.dial, `${at}.dial`),
+    selection: chatSelection(o.selection, `${at}.selection`),
   };
+}
+
+function chatSelection(value: unknown, at: string): ChatSelection {
+  const o = fields(value, at);
+  const extent = orNull((v, a) => {
+    const e = fields(v, a);
+    return { rows: num(e.rows, `${a}.rows`), chars: num(e.chars, `${a}.chars`) };
+  })(o.extent, `${at}.extent`);
+  const text = (v: unknown, a: string): [string, Rect] => {
+    if (!Array.isArray(v) || v.length !== 2) throw wrong(a, "[key, rect]", v);
+    return [str(v[0], a), rect(v[1], a)];
+  };
+  return { extent, keys: bool(o.keys, `${at}.keys`), texts: orNull(list(text))(o.texts, `${at}.texts`) };
 }
 
 function station(value: unknown, at: string): Station {

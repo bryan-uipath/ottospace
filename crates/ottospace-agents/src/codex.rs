@@ -437,11 +437,11 @@ fn describe(item: &Value) -> Option<(String, Station, String, Untrusted)> {
         "mcpToolCall" => {
             let tool = format!("mcp__{}__{}", text("server"), text("tool"));
             let label = station::tool_label(&tool);
-            (label.clone(), station::classify(&tool, None), label, detail(&item["arguments"].to_string()))
+            (label.clone(), station::classify(&tool, None), label, Untrusted::json(&item["arguments"], MAX_DETAIL))
         }
         "dynamicToolCall" => {
             let label = station::tool_label(text("tool"));
-            (label.clone(), Station::Other, label, detail(&item["arguments"].to_string()))
+            (label.clone(), Station::Other, label, Untrusted::json(&item["arguments"], MAX_DETAIL))
         }
         "webSearch" => ("web_search".into(), Station::Network, "web_search".into(), detail(text("query"))),
         "imageView" => ("view_image".into(), Station::Files, station::path_label(text("path")), detail(text("path"))),

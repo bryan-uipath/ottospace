@@ -1,0 +1,27 @@
+# Selecting in a native chat: a reply, an AskUserQuestion call and a code block. The call's row
+# opened by the user's click: its input pretty-printed and wrapped (before: one line of JSON, cut
+# at the drawer's edge). Before it, a drag across the reply's two paragraphs; after, Copy over
+# the input on hover. The stand-in `claude` replays chat-select/fixtures.
+{"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"fix the login loop >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.transcript.turn","is":null}
+{"settle":1500}
+{"shot":"transcript"}
+# From the reply's first word (left of its Copy, which a build without selection has too) into its second paragraph.
+{"drag":"chat-copy:1:1","at":[-6.4,0.6],"by":[300,70]}
+{"settle":500}
+{"shot":"selected"}
+{"click":"chat-row:1:2"}
+{"until":"drawer.native.chats.1.transcript.entries.2.expanded","is":true}
+{"cmd":"mouse","action":"wheel","x":1130,"y":700,"dy":4,"as":"user"}
+{"settle":500}
+{"shot":"input-open"}
+# Over the input, then over its Copy at its top right (by the row's frame: a build without it runs this too).
+{"hover":"chat-row:1:2","at":[0.5,0.5]}
+{"hover":"chat-row:1:2","at":[0.96,0.065]}
+{"settle":1500}
+{"shot":"copy-input"}

@@ -179,6 +179,14 @@ impl Field {
         Self { limit, lines: true, ..Self::default() }
     }
 
+    /// A field of several lines holding `text`, the cursor at its end. e.g. a transcript to select in.
+    pub fn of_lines(text: &str) -> Self {
+        let mut field = Self::lines(0);
+        field.text = field.cleaned(text, false);
+        (field.anchor, field.head) = (field.text.len(), field.text.len());
+        field
+    }
+
     /// `text` as this field takes it: control characters out, line breaks kept if it holds lines.
     fn cleaned(&self, text: &str, paste: bool) -> String {
         if !self.lines {
@@ -450,6 +458,11 @@ impl Field {
         match count {
             0 | 1 => at..at,
             2 => self.word_at(at),
+            // Of several lines, the line: "a\nb|c\nd" → "b c".
+            _ if self.lines => {
+                let start = self.text[..at].rfind('\n').map_or(0, |i| i + 1);
+                start..self.text[at..].find('\n').map_or(self.text.len(), |i| at + i)
+            }
             _ => 0..self.text.len(),
         }
     }
@@ -752,6 +765,18 @@ pub(crate) mod tests {
         for (start, edits, want) in cases {
             assert_eq!(after(start, edits.clone()), want, "{start} {edits:?}");
         }
+    }
+
+    #[test]
+    fn a_triple_click_in_lines_selects_the_line() {
+        let mut f = Field::of_lines("one\ntwo three\nfour");
+        f.apply(Edit::Click { at: 6, count: 3, shift: false });
+        assert_eq!(f.selected(), "two three");
+        // A drag after it takes whole lines.
+        f.apply(Edit::Drag { to: 16 });
+        assert_eq!(f.selected(), "two three\nfour");
+        f.apply(Edit::Click { at: 99, count: 3, shift: false });
+        assert_eq!(f.selected(), "four");
     }
 
     #[test]
