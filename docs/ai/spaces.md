@@ -453,8 +453,8 @@ should have shortcut keys visible there"; "we should always have the right rail 
   (⌘⇧L's count) is not read: the key changed, so it is learned anew as `drawer_toggle`.
 - **Opened again** by the user's rail click, ⌘⇧R, ⌘⌥] / ⌘⌥[ or the agent chip. ⌘⇧R opens
   what was collapsed (`Model::folded`, the user's collapse until something shows there again):
-  the transcript if it was shown, the fresh start's box (`welcome_shown`) if it was; else the
-  conversation, else the transcript.
+  the transcript if it was shown, the new-task box (its line back, or a fresh start's:
+  `welcome_shown`) if it was; else the conversation, else the transcript.
 - **Who.** The drawer: the user alone. A client's `TalkToggle` (its ⌘⇧R, a click on →) is
   refused, and so is its ⌘L while collapsed (`DRAWER_USERS`); the reply's `notice` says so.
   While the user collapsed it, a client's `OpenCompose` (its ⌘N, the bar's or the rail's +, a

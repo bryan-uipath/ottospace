@@ -4059,8 +4059,8 @@ impl Model {
         self.settle_row_menu();
         self.settle_viewers(&mut effects);
         self.settle_listen();
-        // Something shows in the drawer's place: nothing is collapsed to reopen.
-        if !self.drawer_collapsed() {
+        // Something shows in the drawer's place, or nothing is left to reopen: nothing to keep from a client.
+        if !self.drawer_collapsed() || !self.drawer_opens() {
             self.folded = None;
         }
         self.settle_agent(origin);
@@ -5906,7 +5906,7 @@ impl Model {
             Action::TalkToggle if self.by_user && !self.drawer_collapsed() && self.capture.is_none() => {
                 self.folded = Some(match () {
                     _ if self.listen.shown => rail::Folded::Transcript,
-                    _ if self.welcome() => rail::Folded::Welcome,
+                    _ if self.welcome() || self.compose_host() == Some(Host::Drawer) => rail::Folded::Box,
                     _ => rail::Folded::Rest,
                 });
                 self.listen.shown = false;
@@ -5919,13 +5919,15 @@ impl Model {
                     self.put_compose_aside();
                 }
             }
-            // Reopened as it was collapsed: the transcript, or the box of a fresh start.
+            // Reopened as it was collapsed: the transcript, or the box (its line back).
             Action::TalkToggle if self.by_user && self.folded == Some(rail::Folded::Transcript) && self.listen_item() => {
                 self.rail_select(rail::RailItem::Transcript, effects)
             }
-            Action::TalkToggle if self.by_user && self.folded == Some(rail::Folded::Welcome) && self.welcome() => {
+            Action::TalkToggle if self.by_user && self.folded == Some(rail::Folded::Box) => {
                 self.folded = None;
-                self.act(Action::OpenCompose { text: String::new() }, effects);
+                if self.waits(&Action::OpenCompose { text: String::new() }).is_none() {
+                    self.act(Action::OpenCompose { text: String::new() }, effects);
+                }
             }
             // No conversation here: ⌘⇧R opens this drawer on the transcript, as a rail click (no jump to its pane).
             Action::TalkToggle if self.talk.is_none() && self.by_user => {
