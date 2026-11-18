@@ -113,6 +113,9 @@ pub enum Answer {
     Deny {
         message: Option<String>,
     },
+    /// A question request's answers, one per question in order (`Event::Permission`'s
+    /// `questions`): allowed with them.
+    Questions(Vec<ottospace_core::ask::Chosen>),
 }
 
 /// An image file's type, read from its first bytes.
@@ -266,6 +269,8 @@ pub enum Event {
     /// from the request's payload: whole, or when `cut`, its first `MAX_DETAIL` bytes and
     /// `… [N more bytes]` (`len`: the whole payload's bytes; `ticket.full()` has all of it).
     /// `claim` is the model's own description of why: secondary, never what is approved.
+    /// `questions`: the agent asks the user (`RunnerSpec::structured.asks`), answered by
+    /// `Answer::Questions`; else empty.
     Permission {
         ticket: Ticket,
         tool: String,
@@ -275,6 +280,7 @@ pub enum Event {
         len: usize,
         cut: bool,
         claim: Untrusted,
+        questions: Vec<ottospace_core::ask::Question>,
     },
     /// A request denied without asking (`reason`, fixed words): too long to show, nothing to
     /// show, or Allow would grant more than this one action. `detail` as in `Permission`.
@@ -461,7 +467,7 @@ impl Ask<'_> {
         ticket.full = Untrusted(full.to_string());
         let claim = Untrusted::new(&payload::escaped(self.claim), MAX_DETAIL);
         let (tool, label, station) = (self.tool, self.label, self.station);
-        Event::Permission { ticket, tool, station, label, detail, len, cut, claim }
+        Event::Permission { ticket, tool, station, label, detail, len, cut, claim, questions: Vec::new() }
     }
 
     /// The request, denied without asking for `reason`; what it asked is still shown.

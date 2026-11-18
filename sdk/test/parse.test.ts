@@ -188,7 +188,17 @@ function replyWith(overlay: unknown): Record<string, unknown> {
                 { kind: "notice", notice: "interrupted" },
               ],
               dropped: 0,
-              cards: [{ tool: "Bash", label: "git", cut: false, expanded: false, len: 22 }],
+              cards: [
+                { tool: "Bash", label: "git", cut: false, expanded: false, len: 22, ask: null },
+                {
+                  tool: "AskUserQuestion",
+                  label: "AskUserQuestion",
+                  cut: false,
+                  expanded: false,
+                  len: 0,
+                  ask: { questions: [{ options: 2, multi: true, picked: [0, 2] }], cursor: [0, 2] },
+                },
+              ],
               turn: "git",
               model: "claude-opus-5-5",
               mode: "default",

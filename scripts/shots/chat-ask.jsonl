@@ -1,0 +1,14 @@
+# Native chat: the agent asks with AskUserQuestion. A question card: a single-select question
+# and a multi-select one, each with "Other…"; then picks, the cursor on "Other…" with words
+# typed. (Before this card, the same request was an Allow/Deny permission card.)
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"add a cache >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.transcript.cards","len":1}
+{"shot":"asked"}
+{"cmd":"key","keys":"down enter space down down down","as":"user"}
+{"cmd":"key","keys":"a n d space b e n c h","as":"user"}
+{"settle":300}
+{"shot":"picked"}

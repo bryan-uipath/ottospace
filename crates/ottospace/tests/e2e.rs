@@ -9416,6 +9416,109 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// A made-up `AskUserQuestion` request, as Claude Code 2.1.327 sends it (`real-2.1.327-ask.jsonl`):
+/// the call, then its `can_use_tool`. `questions`: its input's.
+fn ask_fixtures(questions: Value) -> Vec<(&'static str, String)> {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let input = json!({ "questions": questions });
+    let call = json!({"type": "tool_use", "id": "toolu_ask", "name": "AskUserQuestion", "input": input});
+    let call = format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{call}]}}}}"#);
+    let request = json!({"subtype": "can_use_tool", "tool_name": "AskUserQuestion", "display_name": "AskUserQuestion",
+        "input": input, "tool_use_id": "toolu_ask", "requires_user_interaction": true});
+    let request = json!({"type": "control_request", "request_id": "ask-1", "request": request}).to_string();
+    let done = r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01}"#.to_string();
+    vec![
+        ("turn1.jsonl", [call, request].join("\n")),
+        ("turn1-allowed.jsonl", done.clone()),
+        ("turn1-denied.jsonl", done),
+    ]
+}
+
+/// The `control_response` the stand-in `claude` was sent for the question, if one was.
+fn ask_reply(record: &Path) -> Option<Value> {
+    let stdin = std::fs::read_to_string(record.join("stdin")).unwrap_or_default();
+    let line = stdin.lines().find(|line| line.contains(r#""control_response""#))?;
+    Some(serde_json::from_str::<Value>(line).unwrap()["response"]["response"].clone())
+}
+
+/// The agent asks with `AskUserQuestion`: a question card, not Allow/Deny. A client's keys and
+/// clicks pick and send nothing; the user's ↓ and ↵ pick an option and send it, as
+/// `updatedInput.answers` keyed by the question. The state has the card's shape alone.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_question_card_sends_the_users_pick() {
+    let questions = json!([{"question": "Which colour?", "header": "Colour", "multiSelect": false,
+        "options": [{"label": "Red", "description": "warm"}, {"label": "Blue", "description": "cool"}]}]);
+    let (root, record, env) = native_setup("ask-one", &ask_fixtures(questions.clone()), &[]);
+    let otto = launch_env("ask-one", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "pick a colour >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let ask = |o: &Otto| chat(o)["transcript"]["cards"][0]["ask"].clone();
+    otto.start_task(1);
+    let card = otto.wait_for("a question card", |o| {
+        let chat = chat(o);
+        chat["transcript"]["cards"][0]["ask"].is_object().then_some(chat)
+    });
+    let shape = json!({"questions": [{"options": 2, "multi": false, "picked": []}], "cursor": [0, 0]});
+    assert_eq!(card["transcript"]["cards"][0]["ask"], shape, "{card}");
+    let said = card.to_string();
+    assert!(["Colour", "Which colour", "Blue", "warm"].iter().all(|w| !said.contains(w)), "{said}");
+    assert!(otto.control_opt("talk:chat-allow").is_none(), "no Allow on a question");
+
+    // A client's ↵, number key and click pick and send nothing.
+    otto.call(json!({"cmd": "key", "keys": "2 enter"}));
+    otto.click(at(otto.control("talk:chat-ask:0:1"), 0.5, 0.5), 1);
+    otto.click(at(otto.control("talk:chat-ask-send"), 0.5, 0.5), 1);
+    assert_eq!((ask(&otto), ask_reply(&record)), (shape, None));
+
+    // The user's ↓ ↵: Blue.
+    otto.user_key("down enter");
+    let reply = otto.wait_for("the answer", |_| ask_reply(&record));
+    let mut input = json!({ "questions": questions });
+    input["answers"] = json!({"Which colour?": "Blue"});
+    assert_eq!(reply, json!({"behavior": "allow", "updatedInput": input}));
+    let done = otto.wait_for("the turn to end", |o| Some(chat(o)).filter(|c| c["transcript"]["turn"].is_null()));
+    let entries = done["transcript"]["entries"].as_array().unwrap();
+    assert!(entries.iter().any(|e| e["notice"] == "answered"), "{done}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A multi-select question: space and a click pick options, "Other…" takes the user's words,
+/// and ↵ sends them all, joined as Claude Code reads them (a label that holds `", "` quoted).
+/// The words never reach the state.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_multi_select_question_sends_picks_and_the_users_words() {
+    let questions = json!([{"question": "Which sizes?", "header": "Sizes", "multiSelect": true,
+        "options": [{"label": "Small", "description": "s"}, {"label": "Large, wide", "description": "l"}]}]);
+    let (root, record, env) = native_setup("ask-multi", &ask_fixtures(questions.clone()), &[]);
+    let otto = launch_env("ask-multi", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "pick sizes >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let ask = |o: &Otto| chat(o)["transcript"]["cards"][0]["ask"].clone();
+    otto.start_task(1);
+    otto.wait_for("a question card", |o| Some(ask(o)).filter(Value::is_object));
+    otto.user_key("space");
+    otto.user_click(at(otto.control("talk:chat-ask:0:1"), 0.5, 0.5));
+    // ↓ to "Other…": letters, digits and space are its words.
+    otto.user_key("down x l space 2");
+    let picked = ask(&otto);
+    assert_eq!(picked, json!({"questions": [{"options": 2, "multi": true, "picked": [0, 1, 2]}], "cursor": [0, 2]}));
+    assert!(!chat(&otto).to_string().contains("xl 2"), "the user's words are not in the state");
+    otto.user_key("enter");
+    let reply = otto.wait_for("the answer", |_| ask_reply(&record));
+    let mut input = json!({ "questions": questions });
+    input["answers"] = json!({"Which sizes?": "Small, \"Large, wide\", xl 2"});
+    assert_eq!(reply, json!({"behavior": "allow", "updatedInput": input}));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The stand-in `claude` in a folder of its own, replaying `fixtures` (name, lines), with a
 /// repository `app` listed and the native view set. Returns the root (to remove when the test
 /// ends), the record folder, and the environment to launch with, `extra` added.

@@ -350,6 +350,7 @@ mod tests {
             len: 12,
             cut: false,
             claim: Text::default(),
+            questions: Vec::new(),
         };
         events(&mut m, &one, vec![Event::TurnStarted, card]);
         assert!(m.editor_shown() && m.editor_keys(), "the editor keeps the keyboard");
@@ -415,6 +416,7 @@ mod tests {
             len: 11,
             cut: false,
             claim: Text::default(),
+            questions: Vec::new(),
         };
         events(&mut m, &one, vec![Event::TurnStarted, card]);
         assert_eq!(m.update(Action::EditorOpen), []);

@@ -15,13 +15,14 @@ use std::time::Instant;
 
 use gpui::{
     AnyElement, AnyView, Context, Div, ElementId, FontStyle, FontWeight, HighlightStyle, ImageSource, InteractiveText,
-    KeyDownEvent, ScrollHandle, ScrollWheelEvent, SharedString, StrikethroughStyle, StyledText, UnderlineStyle, Window,
-    div, img, prelude::*, px, rgb,
+    KeyDownEvent, MouseButton, ScrollHandle, ScrollWheelEvent, SharedString, StrikethroughStyle, StyledText,
+    UnderlineStyle, Window, div, img, prelude::*, px, rgb,
 };
 use ottospace_agents::driver::Driver;
 use ottospace_agents::{Answer, Event as Said, Input, Process, Ticket};
 use ottospace_core::activity::Station;
 use ottospace_core::agents::{self, Start};
+use ottospace_core::ask::{Act, Form};
 use ottospace_core::diff::{self, Change, Diff, Sign};
 use ottospace_core::gist;
 use ottospace_core::links::Target;
@@ -317,11 +318,14 @@ impl Workspace {
         let input = match input {
             NativeInput::Send(text) => Input::Send { text, images: Vec::new() },
             NativeInput::Interrupt => Input::Interrupt,
-            NativeInput::Answer { ticket, allow, message } => {
-                let Some(at) = native.tickets.iter().position(|(n, _)| *n == ticket) else { return };
-                let (_, ticket) = native.tickets.remove(at);
+            NativeInput::Answer { ticket: n, allow, message } => {
                 let answer = if allow { Answer::Allow } else { Answer::Deny { message } };
+                let Some(ticket) = native.take(n) else { return };
                 Input::Answer { ticket, answer }
+            }
+            NativeInput::Answers { ticket: n, answers } => {
+                let Some(ticket) = native.take(n) else { return };
+                Input::Answer { ticket, answer: Answer::Questions(answers) }
             }
         };
         if let Err(err) = native.driver.send(input) {
@@ -466,9 +470,8 @@ impl Workspace {
     /// reaches nothing here, as in the terminal.
     pub(crate) fn chat_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let Some(chat) = self.model.shown_draft_chat() else { return };
-        let card = chat.transcript.cards.front().map(|card| card.ticket).filter(|_| !chat.deny);
         let (key, mods) = (&event.keystroke.key, crate::mods(event.keystroke.modifiers));
-        match chat::key(key, mods, card) {
+        match chat.key(key, mods) {
             Key::Pass => return,
             Key::Act(action) => drop(self.dispatch(action, self.input, window, cx)),
             Key::Newline => {
@@ -1282,6 +1285,9 @@ impl Workspace {
     /// cut request. ↵ does nothing here.
     pub(crate) fn chat_card(&self, subject: &Subject, chat: &chat::Chat, cx: &mut Context<Self>) -> Option<Div> {
         let card = chat.transcript.cards.front()?;
+        if let Some(form) = card.ask.as_ref().filter(|_| !chat.deny) {
+            return Some(self.ask_card(chat, form, card.ticket, cx));
+        }
         let full = card.expanded.then(|| self.drawer.native.get(subject).and_then(|n| n.full(card.ticket))).flatten();
         let payload = full.unwrap_or_else(|| card.detail.text().to_string());
         let lines = payload.lines().map(|line| {
@@ -1373,6 +1379,145 @@ impl Workspace {
                 .children(claim)
                 .child(div().flex().gap_1().child(allow).child(deny).child(note)),
         )
+    }
+
+    /// A question card: each question's header and text, its options as rows with their
+    /// descriptions (one picked, or several in a multi-select question) and "Other…", which takes
+    /// the user's words while the cursor is on it. ↵ sends the answers, Esc declines.
+    fn ask_card(&self, chat: &chat::Chat, form: &Form, ticket: u64, cx: &mut Context<Self>) -> Div {
+        let questions = form.questions.iter().enumerate().map(|(q, question)| {
+            let header = (!question.header.is_empty()).then(|| {
+                div()
+                    .flex_none()
+                    .px_1()
+                    .rounded_sm()
+                    .bg(rgb(theme::SELECTED))
+                    .text_xs()
+                    .text_color(rgb(theme::MUTED))
+                    .child(clean(question.header.text()))
+            });
+            let head = div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .children(header)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(clean(question.question.text())),
+                )
+                .children(question.multi.then(|| muted("pick any".into())));
+            let rows: Vec<AnyElement> = (0..form.rows(q)).map(|row| self.ask_row(form, q, row, ticket, cx)).collect();
+            div().flex().flex_col().gap_0p5().child(head).children(rows)
+        });
+        let questions: Vec<Div> = questions.collect();
+        let send = self
+            .talk_button("chat-ask-send", "Send (↵)", "Send these answers to the agent")
+            .text_color(rgb(theme::PICK))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                drop(this.dispatch(Action::TalkAsk { ticket, act: Act::Submit }, this.input, window, cx))
+            }));
+        let decline = self
+            .talk_button("chat-ask-decline", "Decline (esc)", "Answer nothing; the agent goes on")
+            .on_click(cx.listener(move |this, _, window, cx| {
+                drop(this.dispatch(Action::TalkAsk { ticket, act: Act::Decline }, this.input, window, cx))
+            }));
+        let queued = chat.transcript.cards.len() - 1;
+        div()
+            .mx_3()
+            .mb_2()
+            .p_2()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(theme::SNEAK))
+            .bg(rgb(theme::RAISED))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .text_sm()
+                    .child(div().flex_1().font_weight(FontWeight::SEMIBOLD).child("The agent asks"))
+                    .children((queued > 0).then(|| muted(format!("{queued} more waiting")))),
+            )
+            .children(questions)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(send)
+                    .child(decline)
+                    .child(muted("↑↓ move · space picks · 1–9".into()).flex_1().text_right()),
+            )
+    }
+
+    /// One row of a question: its mark, its number key, its label and description; "Other…"
+    /// last, its words in a field while the cursor is on it. A click picks it.
+    fn ask_row(&self, form: &Form, q: usize, row: usize, ticket: u64, cx: &mut Context<Self>) -> AnyElement {
+        let question = &form.questions[q];
+        let (here, picked) = (form.cursor == (q, row), form.picked(q, row));
+        let mark = match (question.multi, picked) {
+            (true, true) => "☑",
+            (true, false) => "☐",
+            (false, true) => "●",
+            (false, false) => "○",
+        };
+        let other = row == question.options.len();
+        let words = form.other(q).map(|field| field.text()).unwrap_or_default();
+        let body = match question.options.get(row) {
+            Some(choice) => div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(div().text_sm().child(clean(choice.label.text())))
+                .children((!choice.description.is_empty()).then(|| muted(clean(choice.description.text())))),
+            None if here => {
+                div().flex_1().min_w_0().text_sm().child(self.render_field_of("talk", "Other: type your answer", cx))
+            }
+            None if words.is_empty() => div().flex_1().text_sm().text_color(rgb(theme::MUTED)).child("Other…"),
+            None => div().flex_1().min_w_0().text_sm().child(clean(words)),
+        };
+        let number = (row < 9).then(|| (row + 1).to_string()).unwrap_or_default();
+        let id = format!("chat-ask:{q}:{row}");
+        div()
+            .id(ElementId::Name(id.clone().into()))
+            .relative()
+            .flex()
+            .items_start()
+            .gap_1p5()
+            .px_1p5()
+            .py_0p5()
+            .rounded_sm()
+            .cursor_pointer()
+            .when(here, |d| d.bg(rgb(theme::SELECTED)))
+            .hover(|s| s.bg(rgb(theme::SELECTED)))
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(12.))
+                    .text_sm()
+                    .text_color(rgb(if picked { theme::PICK } else { theme::MUTED }))
+                    .child(mark),
+            )
+            .child(div().flex_none().w(px(10.)).text_xs().text_color(rgb(theme::MUTED)).child(number))
+            .child(body)
+            .child(self.controls.mark(format!("talk:{id}")))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            // The field takes clicks in its own row: a click there places the cursor.
+            .when(!(other && here), |d| {
+                d.on_click(cx.listener(move |this, _, window, cx| {
+                    let act = Act::Row { question: q, row };
+                    drop(this.dispatch(Action::TalkAsk { ticket, act }, this.input, window, cx))
+                }))
+            })
+            .into_any_element()
     }
 
     /// The composer: the draft, what ↵ does now, and at its right the one button the core
@@ -1521,6 +1666,7 @@ impl Workspace {
 pub enum NativeInput {
     Send(String),
     Answer { ticket: u64, allow: bool, message: Option<String> },
+    Answers { ticket: u64, answers: Vec<ottospace_core::ask::Chosen> },
     Interrupt,
 }
 
@@ -1528,6 +1674,12 @@ impl Native {
     /// Its process has exited.
     pub(crate) fn reaped(&self) -> bool {
         self.driver.reaped()
+    }
+
+    /// The request numbered `n`, to answer once.
+    fn take(&mut self, n: u64) -> Option<Ticket> {
+        let at = self.tickets.iter().position(|(of, _)| *of == n)?;
+        Some(self.tickets.remove(at).1)
     }
 
     /// A request's whole payload, for "Show all".
@@ -1567,10 +1719,11 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
             let reason = "too many requests at once".to_string();
             Event::AutoDenied { tool, label, reason, detail: text(&detail) }
         }
-        Said::Permission { ticket, tool, label, detail, len, cut, claim, .. } => {
+        Said::Permission { ticket, tool, label, detail, len, cut, claim, questions, .. } => {
             native.next += 1;
             native.tickets.push((native.next, ticket));
-            Event::Permission { ticket: native.next, tool, label, detail: text(&detail), len, cut, claim: text(&claim) }
+            let (detail, claim) = (text(&detail), text(&claim));
+            Event::Permission { ticket: native.next, tool, label, detail, len, cut, claim, questions }
         }
         Said::PermissionClosed { ticket } => {
             let at = native.tickets.iter().position(|(_, t)| *t == ticket)?;
@@ -1699,6 +1852,8 @@ fn notice_text(notice: &Notice) -> String {
         Notice::Compacted => "The context was compacted.".into(),
         Notice::Allowed { tool, label } => format!("You allowed {tool} · {label}."),
         Notice::Denied { tool, label } => format!("You denied {tool} · {label}."),
+        Notice::Answered => "You answered the agent's questions.".into(),
+        Notice::Declined => "You declined to answer.".into(),
         Notice::DeniedBy { tool, by } => {
             let by = match by {
                 By::Settings => " by your settings",

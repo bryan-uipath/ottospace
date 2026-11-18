@@ -846,6 +846,18 @@ function nativeChat(value: unknown, at: string): NativeChat {
     const e = fields(value, at);
     return { ...e, kind: str(e.kind, `${at}.kind`) };
   };
+  const form = (value: unknown, at: string) => {
+    const f = fields(value, at);
+    const question = (value: unknown, at: string) => {
+      const q = fields(value, at);
+      return {
+        options: num(q.options, `${at}.options`),
+        multi: bool(q.multi, `${at}.multi`),
+        picked: list(num)(q.picked, `${at}.picked`),
+      };
+    };
+    return { questions: list(question)(f.questions, `${at}.questions`), cursor: pair(f.cursor, `${at}.cursor`) };
+  };
   const card = (value: unknown, at: string) => {
     const c = fields(value, at);
     return {
@@ -854,6 +866,7 @@ function nativeChat(value: unknown, at: string): NativeChat {
       cut: bool(c.cut, `${at}.cut`),
       expanded: bool(c.expanded, `${at}.expanded`),
       len: num(c.len, `${at}.len`),
+      ask: orNull(form)(c.ask, `${at}.ask`),
     };
   };
   const reply = (value: unknown, at: string) => {

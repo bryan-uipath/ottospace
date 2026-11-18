@@ -13,8 +13,15 @@ export interface NativeChat {
     entries: ({ kind: string } & Record<string, unknown>)[];
     /** Entries no longer kept here; the session's file has them. */
     dropped: number;
-    /** Permission requests waiting, the first shown. */
-    cards: { tool: string; label: string; cut: boolean; expanded: boolean; len: number }[];
+    /** Permission requests waiting, the first shown. `ask`: a question card's shape (the agent asks the user: each question's option count, `multi`, the rows `picked` by index, `options` being "Other…"; the `cursor` as [question, row]), else null. Never a word of it. */
+    cards: {
+      tool: string;
+      label: string;
+      cut: boolean;
+      expanded: boolean;
+      len: number;
+      ask: { questions: { options: number; multi: boolean; picked: number[] }[]; cursor: [number, number] } | null;
+    }[];
     /** A turn runs: the label of the call it waits on, else empty. */
     turn: string | null;
     model: string | null;

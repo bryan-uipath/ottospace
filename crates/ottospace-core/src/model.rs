@@ -1439,6 +1439,12 @@ pub enum Action {
     TalkExpand {
         ticket: u64,
     },
+    /// A key or click on the shown question card (`ask::Act`), `ticket` as in `TalkAnswer`: a
+    /// move, a pick, ↵ (the answers go) or Esc (declined). Only the user's.
+    TalkAsk {
+        ticket: u64,
+        act: crate::ask::Act,
+    },
     /// The composer takes the user's words for a Deny of the shown card. Only the user's.
     TalkDenyNote,
     /// Esc in a native conversation: ends a Deny's message; while a turn runs, the first says
@@ -2149,6 +2155,7 @@ impl Action {
             | Action::TalkSend
             | Action::TalkAnswer { .. }
             | Action::TalkExpand { .. }
+            | Action::TalkAsk { .. }
             | Action::TalkDenyNote
             | Action::TalkEscape
             | Action::TalkInterrupt
@@ -2458,6 +2465,7 @@ impl Action {
             | Action::TalkSend
             | Action::TalkAnswer { .. }
             | Action::TalkExpand { .. }
+            | Action::TalkAsk { .. }
             | Action::TalkDenyNote
             | Action::TalkEscape
             | Action::TalkInterrupt
@@ -2827,6 +2835,12 @@ pub enum Effect {
         ticket: u64,
         allow: bool,
         message: Option<String>,
+    },
+    /// The user's answers to the question card the shell numbered `ticket`, one per question.
+    AgentAnswers {
+        task: Subject,
+        ticket: u64,
+        answers: Vec<crate::ask::Chosen>,
     },
     /// End a native agent's turn; its session goes on.
     AgentInterrupt {
@@ -3727,6 +3741,7 @@ impl Model {
             Action::TalkSend
             | Action::TalkAnswer { .. }
             | Action::TalkExpand { .. }
+            | Action::TalkAsk { .. }
             | Action::TalkDenyNote
             | Action::TalkEscape
             | Action::TalkInterrupt
@@ -4767,7 +4782,7 @@ impl Model {
                     }
                 }
                 Some("apps") => drop(self.app_lists.filter.apply(edit)),
-                Some("talk") => drop(self.talk_draft_mut().map(|draft| draft.apply(edit))),
+                Some("talk") => self.talk_edit(edit),
                 Some(_) => {
                     if let Some(exact) = self.spelled_out(&edit) {
                         // A space after a name that is one of the rows takes that row.
@@ -5684,6 +5699,7 @@ impl Model {
             | Action::TalkSend
             | Action::TalkAnswer { .. }
             | Action::TalkExpand { .. }
+            | Action::TalkAsk { .. }
             | Action::TalkDenyNote
             | Action::TalkEscape
             | Action::TalkInterrupt
@@ -9002,6 +9018,7 @@ mod tests {
         Action::TalkSend,
         Action::TalkAnswer { .. },
         Action::TalkExpand { .. },
+        Action::TalkAsk { .. },
         Action::TalkDenyNote,
         Action::TalkEscape,
         Action::TalkInterrupt,
@@ -9312,6 +9329,7 @@ mod tests {
             Action::TalkSend,
             Action::TalkAnswer { allow: false, ticket: 1 },
             Action::TalkExpand { ticket: 1 },
+            Action::TalkAsk { ticket: 1, act: crate::ask::Act::Submit },
             Action::TalkDenyNote,
             Action::TalkEscape,
             Action::TalkInterrupt,
@@ -9370,6 +9388,7 @@ mod tests {
             Action::TalkSend
                 | Action::TalkAnswer { .. }
                 | Action::TalkExpand { .. }
+                | Action::TalkAsk { .. }
                 | Action::TalkDenyNote
                 | Action::TalkEscape
                 | Action::TalkInterrupt
@@ -13470,6 +13489,7 @@ mod tests {
             len: 0,
             cut: false,
             claim: Text::default(),
+            questions: Vec::new(),
         };
         let events = Action::AgentEvents { task: held.clone(), events: vec![Event::TurnStarted, tool, card], at: 1 };
         assert!(m.update(events.clone().sent_by(Origin::Socket)).is_empty() && m.chat(&held).is_none());
