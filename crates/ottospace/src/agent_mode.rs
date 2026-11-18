@@ -8,6 +8,7 @@ use std::sync::mpsc::Sender;
 
 use gpui::{AnyElement, AnyView, Context, MouseDownEvent, Window, actions, div, prelude::*, px, rgb, svg};
 use ottospace_core::agent_mode::{self, AppUse, Level, menu_key};
+use ottospace_core::ax::{Frame, Tree};
 use ottospace_core::features::Feature;
 use ottospace_core::tasks::{Caller, TaskId};
 use ottospace_core::{Action, Origin, PaneId, theme};
@@ -78,6 +79,16 @@ fn tip(level: Level, task: Option<TaskId>) -> String {
         (Some(task), Level::See) => format!("Task {task} can see this window"),
         (Some(task), Level::Act) => format!("Task {task} can see this window. {}", agent_mode::ACT_LATER),
     }
+}
+
+/// `app_read`'s reply: the window, the read's time and its tree, quoted as untrusted. No `task`: a test's canary.
+fn read_answer(pane: PaneId, task: Option<TaskId>, (window, millis, tree): (Frame, f64, Tree)) -> String {
+    let captured = serde_json::json!({
+        "untrusted": true, "warning": ottospace_core::capture::WARNING,
+        "count": tree.count, "truncated": tree.truncated, "tree": agent_mode::seen(tree.root),
+    });
+    serde_json::json!({ "ok": true, "pane": pane, "task": task, "window": window, "millis": millis, "captured": captured })
+        .to_string()
 }
 
 fn colour(level: Level) -> u32 {
@@ -306,14 +317,7 @@ impl Workspace {
             .spawn(async move {
                 let answer = match read.await {
                     Err(why) => control::error(&why),
-                    Ok((window, millis, tree)) => {
-                        let captured = serde_json::json!({
-                            "untrusted": true, "warning": ottospace_core::capture::WARNING,
-                            "count": tree.count, "truncated": tree.truncated, "tree": agent_mode::seen(tree.root),
-                        });
-                        serde_json::json!({ "ok": true, "pane": pane, "task": null, "window": window, "millis": millis, "captured": captured })
-                            .to_string()
-                    }
+                    Ok(read) => read_answer(pane, None, read),
                 };
                 let _ = reply.send(answer);
             })
@@ -349,15 +353,7 @@ impl Workspace {
             let answer = match read {
                 _ if !seeing => control::error("agent mode went off on this pane while it was read"),
                 Err(why) => control::error(&why),
-                Ok((window, millis, tree)) => {
-                    let root = agent_mode::seen(tree.root);
-                    let captured = serde_json::json!({
-                        "untrusted": true, "warning": ottospace_core::capture::WARNING,
-                        "count": tree.count, "truncated": tree.truncated, "tree": root,
-                    });
-                    serde_json::json!({ "ok": true, "pane": pane, "task": task, "window": window, "millis": millis, "captured": captured })
-                        .to_string()
-                }
+                Ok(read) => read_answer(pane, Some(task), read),
             };
             let _ = reply.send(answer);
         })
