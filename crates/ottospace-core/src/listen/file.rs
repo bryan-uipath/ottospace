@@ -236,12 +236,19 @@ pub fn read_head(name: &str, text: &str) -> Option<Past> {
     Some(Past { name: name.into(), app: unescape(app), started_ms, length_ms })
 }
 
+/// Whether a finished transcript is worth a row: a minute or more, with a line heard. `text` is the
+/// file's start (its header and, if any, its first lines).
+fn worth_listing(past: &Past, text: &str) -> bool {
+    past.length_ms >= 60_000 && !read_lines(text).is_empty()
+}
+
 /// Today's finished transcripts in `files` (each a name and its text), newest first: those whose
-/// name starts with `today` (`2026-11-17`, the local date) and whose header reads back.
+/// name starts with `today` (`2026-11-17`, the local date), whose header reads back and that are
+/// worth a row (`worth_listing`).
 pub fn today(files: &[(String, String)], today: &str) -> Vec<Past> {
     let ours = |name: &str| name.ends_with(".md") && name.strip_prefix(today).is_some_and(|rest| rest.starts_with('-'));
-    let mut past: Vec<Past> =
-        files.iter().filter(|(name, _)| ours(name)).filter_map(|(name, text)| read_head(name, text)).collect();
+    let head = |(name, text): &(String, String)| read_head(name, text).filter(|past| worth_listing(past, text));
+    let mut past: Vec<Past> = files.iter().filter(|(name, _)| ours(name)).filter_map(head).collect();
     // One minute's second file (`-2.md`, a longer name) is the newer.
     past.sort_by(|a, b| {
         b.started_ms.cmp(&a.started_ms).then_with(|| (b.name.len(), &b.name).cmp(&(a.name.len(), &a.name)))
@@ -421,7 +428,8 @@ mod tests {
 
     #[test]
     fn todays_list_is_its_files_newest_first() {
-        let file = |at: u64| header(&head(), Some(at + 60_000), &paris);
+        let said = Record::Line { from: Speaker::Them, at: START + 1_000, text: "made-up".into() };
+        let file = |at: u64| header(&head(), Some(at + 60_000), &paris) + &line(&said, &paris).unwrap();
         let files = vec![
             ("2026-11-16-1000-zoom.md".to_string(), file(START)),
             ("2026-11-16-1100-zoom.md".to_string(), file(START + 3_600_000)),
@@ -432,6 +440,24 @@ mod tests {
         ];
         let names: Vec<String> = today(&files, "2026-11-16").into_iter().map(|p| p.name).collect();
         assert_eq!(names, ["2026-11-16-1100-zoom-2.md", "2026-11-16-1100-zoom.md", "2026-11-16-1000-zoom.md"]);
+    }
+
+    /// The owner mistook an empty one for the one on: under a minute, or no line heard, no row.
+    #[test]
+    fn todays_list_leaves_out_the_empty_ones() {
+        let said = Record::Line { from: Speaker::Them, at: START + 1_000, text: "made-up".into() };
+        let file = |long: u64, lines: bool| {
+            let text = header(&head(), Some(START + long), &paris);
+            if lines { text + &line(&said, &paris).unwrap() } else { text }
+        };
+        let files = vec![
+            ("2026-11-16-1000-a.md".to_string(), file(12 * 60_000, true)),
+            ("2026-11-16-1000-b.md".to_string(), file(59_000, true)),
+            ("2026-11-16-1000-c.md".to_string(), file(12 * 60_000, false)),
+            ("2026-11-16-1000-d.md".to_string(), file(60_000, true)),
+        ];
+        let names: Vec<String> = today(&files, "2026-11-16").into_iter().map(|p| p.name).collect();
+        assert_eq!(names, ["2026-11-16-1000-d.md", "2026-11-16-1000-a.md"]);
     }
 
     #[test]

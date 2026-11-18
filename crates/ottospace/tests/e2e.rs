@@ -12687,6 +12687,12 @@ fn the_idle_transcript_lists_today_and_only_the_users_pick_starts_one_of_an_app(
     );
     std::fs::write(home.join("transcripts").join(&name), &file).unwrap();
     std::fs::write(home.join("transcripts").join(format!("{today}-1000-x.md")), "still being written").unwrap();
+    // Under a minute, nothing heard: not listed, so not taken for the one on.
+    let empty = file
+        .replace("09:42, 42 minutes", "09:00, less than a minute")
+        .replace("- 09:00:12 **them**: made-up words in the file\n", "");
+    assert!(empty.contains("less than a minute") && !empty.contains("**them**"), "{empty}");
+    std::fs::write(home.join("transcripts").join(format!("{today}-0628-zoom.md")), &empty).unwrap();
     // A link to a finished one outside the folder, and a FIFO: neither listed, neither blocks.
     std::fs::write(home.join("outside.md"), &file).unwrap();
     std::os::unix::fs::symlink(home.join("outside.md"), home.join("transcripts").join(format!("{today}-0800-link.md")))
@@ -12749,7 +12755,10 @@ fn the_idle_transcript_lists_today_and_only_the_users_pick_starts_one_of_an_app(
     });
     // The picker: a client's click opens none; the user's lists Zoom (playing) first, each window a
     // row, no title in the state.
+    // The button the owner missed: the drawer's width, less its gutters.
     let pick = otto.listen_rect("listen-pick");
+    let view = otto.listen_rect("listen-view");
+    assert!(pick[2] > view[2] - 40., "{pick:?} in {view:?}");
     assert!(otto.click(at(pick, 0.5, 0.5), 1)["state"]["picker"].is_null());
     let picker = otto.user_click(at(pick, 0.5, 0.5))["state"]["picker"].clone();
     let rows: Vec<(String, bool)> = picker["items"]

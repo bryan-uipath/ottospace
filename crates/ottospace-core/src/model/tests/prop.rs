@@ -1545,7 +1545,12 @@ const MAKERS: &[Make] = &[
     |g| {
         let head =
             |app: &str, started| crate::listen::file::Head { app: app.into(), bundle: None, mic: false, started };
-        let ended = |app: &str, at: u64| crate::listen::file::header(&head(app, at), Some(at + 60_000), &|_| 0);
+        // A line heard: an empty one is not listed.
+        let said = |at| crate::listen::Record::Line { from: crate::listen::Speaker::Them, at, text: "made-up".into() };
+        let ended = |app: &str, at: u64| {
+            let line = crate::listen::file::line(&said(at + 1_000), &|_| 0).unwrap_or_default();
+            crate::listen::file::header(&head(app, at), Some(at + 60_000), &|_| 0) + &line
+        };
         // 2026-11-16 09:00 and 10:00 UTC, and one still on.
         let files = vec![
             ("2026-11-16-0900-zoom.md".to_string(), ended("Zoom", 1_794_819_600_000)),

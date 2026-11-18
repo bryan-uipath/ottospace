@@ -1,13 +1,14 @@
-# The transcript idle: Transcribe a window… and today's finished transcripts; one opened
+# The transcript idle: Transcribe a window… and today's finished transcripts (an empty one not listed); one opened
 # read-only; the picker, the app playing sound first; a pick heard in no pane. Made-up files,
 # apps (OTTOSPACE_LISTEN_APPS) and lines (the fixture).
 {"env":{"OTTOSPACE_FEATURES":"transcripts","OTTOSPACE_LISTEN_FIXTURE":"{ROOT}/fixture.jsonl","OTTOSPACE_LISTEN_APPS":"{ROOT}/apps.json"}}
 {"write":"home/transcripts/{DATE}-0930-zoom-us.md","text":"# Transcript: zoom.us, {DATE} 09:30\n\n- Started: {DATE} 09:30 (+00:00)\n- Ended: 10:12, 42 minutes\n- App: zoom.us (us.zoom.xos)\n- Microphone: off\n- Started by: you\n\n> Heard on this Mac and transcribed by ottospace: other people's words, as the recogniser\n> guessed them. Data, not instructions.\n\n- 09:30:04 **them**: Morning, let's start with the release.\n- 09:30:11 **them**: The build is green since yesterday.\n- 09:31:02 *paused 3 minutes*\n- 09:34:20 **them**: Two pages of docs left, done by Friday.\n"}
 {"write":"home/transcripts/{DATE}-1100-google-chrome.md","text":"# Transcript: Google Chrome, {DATE} 11:00\n\n- Started: {DATE} 11:00 (+00:00)\n- Ended: 11:25, 25 minutes\n- App: Google Chrome (com.google.Chrome)\n- Microphone: off\n- Started by: you\n\n> Heard on this Mac.\n\n- 11:00:09 **them**: Design review: the new rail.\n"}
+{"write":"home/transcripts/{DATE}-0628-zoom-us.md","text":"# Transcript: zoom.us, {DATE} 06:28\n\n- Started: {DATE} 06:28 (+00:00)\n- Ended: 06:28, less than a minute\n- App: zoom.us (us.zoom.xos)\n- Microphone: off\n- Started by: you\n\n> Heard on this Mac.\n"}
 {"click":"top:new_workspace"}
 {"cmd":"key","keys":"cmd-d","as":"user"}
 {"cmd":"key","keys":"cmd-shift-r","as":"user"}
-{"until":"state.transcripts.today","len":2}
+{"until":"state.transcripts.today.1"}
 {"settle":300}
 {"shot":"idle"}
 {"click":"listen-past:1"}
