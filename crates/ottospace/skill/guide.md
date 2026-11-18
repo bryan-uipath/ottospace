@@ -739,7 +739,7 @@ per keystroke: the control acts as if clicked and the mode ends. A first letter 
 label only narrows; `backspace` takes it back; `escape` leaves with nothing done. So does a letter
 that goes on with no label, and the keys after it in the same `key` request are dropped, as are
 those after a spelled label. Ids: `rail:apps`
-(`workbook`, `tasks`, `repos`, `marks`), `bar:add` (Tasks: the new-task box; Repos: the folder picker, for the user alone; Workspaces: a new, empty workspace, for the user alone), `bar:close` (its ←: the bar collapses into the rail), `talk:talk-close`, `listen-collapse` (the drawer's ← and →: the user's alone), `listen-file` (the path of the file the transcript on is written to: opens it read-only in a viewer), `repo-remove:<path>` (under the pointer; the user's alone), `app:<name>`, `repo:<path>`,
+(`workbook`, `tasks`, `repos`, `marks`), `bar:add` (Tasks: the new-task box; Repos: the folder picker, for the user alone; Workspaces: a new, empty workspace, for the user alone), `bar:close` (its ←: the bar collapses into the rail), `talk:talk-close`, `listen-collapse` (the drawer's ← and →: the user's alone), `listen-file` (the path of the file the transcript on is written to: opens it read-only in a viewer; the user's alone), `repo-remove:<path>` (under the pointer; the user's alone), `app:<name>`, `repo:<path>`,
 `task:<id>`, `mark:<id>` (go to it), `mark-key:<id>`, `mark-rename:<id>`, `mark-remove:<id>`,
 `mark-undo`, `tab:<tab id>`, `tab-close:<tab id>`, `top:split_right`,
 `top:split_down`, `top:new_workspace` (the top row's +: a new, empty workspace, for the user alone), `space:<n>` (the nth space of `spaces`: selects it),

@@ -7057,6 +7057,9 @@ fn the_drawer_collapses_into_the_rail_from_the_transcript_or_a_task_and_only_the
     );
     let (rail, window) = (otto.control("drawer-rail"), rect(&collapsed["window"]));
     assert!(rail[0] + rail[2] >= window[2] - 1. && rail[2] <= 49., "{rail:?} {window:?}");
+    // Collapsed, no item is raised, as the left rail with its bar collapsed.
+    let items = collapsed["drawer"]["rail"].as_array().unwrap();
+    assert!(items.iter().all(|item| item["selected"] == false), "{}", collapsed["drawer"]["rail"]);
     let wider = rect(&otto.drawn()["headers"]["1"])[2];
     assert!((wider - pane - (drawer - rail[2])).abs() <= 2., "{pane} → {wider}, drawer {drawer}, rail {rail:?}");
     assert!(otto.control_opt("listen-collapse").is_none() && otto.control_opt("drawer-rail:transcript").is_some());
@@ -12810,6 +12813,9 @@ fn a_transcript_is_kept_in_a_private_markdown_file_written_as_lines_come() {
     // The drawer on it shows the file's path; the user's click opens it read-only in a viewer.
     otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
     let path = otto.listen_rect("listen-file");
+    // A client's click opens none: the path is never on the socket.
+    let theirs = otto.click(at(path, 0.5, 0.5), 1);
+    assert!(theirs["state"]["panes"].as_array().unwrap().iter().all(|p| p["kind"]["type"] != "file"), "{theirs}");
     let opened = otto.user_click(at(path, 0.5, 0.5));
     let viewer = opened["state"]["panes"].as_array().unwrap().iter().find(|p| p["kind"]["type"] == "file").cloned();
     let viewer = viewer.unwrap_or_else(|| panic!("no viewer: {}", opened["state"]["panes"]));

@@ -555,7 +555,7 @@ const RAIL: f32 = 56.;
 const SECTION: f32 = 260.;
 /// Height of every rail cell (left and right) and of the section panel's header: the open cell
 /// and the header end on one line.
-pub(crate) const RAIL_CELL: f32 = 40.;
+const RAIL_CELL: f32 = 40.;
 /// The drawer is never narrower than this, unless the window is.
 const MIN_DRAWER: f32 = ottospace_core::talk::MIN_WIDTH;
 /// Height of a pane's header (label and close button).

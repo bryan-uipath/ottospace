@@ -856,7 +856,7 @@ impl Workspace {
             div().text_xs().text_color(rgb(theme::MUTED)).child(waiting)
         });
         // The file it is written to, a click from read-only in a viewer: the path says it all.
-        // A long folder is cut in its middle (`short_dir`): the name stays whole.
+        // A long folder is cut in its middle (`short_dir`), then clipped in a narrow drawer: the name stays whole.
         let file = self.listen_path().map(|path| {
             let home = config::user_home();
             let folder =
@@ -865,16 +865,19 @@ impl Workspace {
             div()
                 .id("listen-file")
                 .flex_none()
+                .flex()
+                .overflow_hidden()
+                .whitespace_nowrap()
                 .px_3()
                 .py_1()
                 .border_b_1()
                 .border_color(rgb(theme::BORDER))
-                .truncate()
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .cursor_pointer()
                 .hover(|s| s.text_color(rgb(theme::TEXT)))
-                .child(format!("{}/{name}", folder.unwrap_or_default()))
+                .child(div().min_w_0().overflow_hidden().child(format!("{}/", folder.unwrap_or_default())))
+                .child(div().flex_none().child(name.into_owned()))
                 .child(self.controls.mark("listen-file"))
                 .on_click(cx.listener(|this, _, window, cx| this.listen_open_file(window, cx)))
         });
@@ -903,9 +906,16 @@ impl Workspace {
         file.writer.as_ref().ok().map(|writer| writer.path.as_path())
     }
 
-    /// The user's click on the file's path: it opens read-only in a viewer, as ⌘-click on a path does.
+    /// The user's click on the file's path: it opens read-only in a viewer. Only the user's: the
+    /// viewer's pane would put the path on the socket, which never has it (`docs/ai/transcripts.md`).
     fn listen_open_file(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let Some(path) = self.listen_path().map(|path| path.to_string_lossy().into_owned()) else { return };
+        if self.input != Origin::User {
+            self.error = Some("only the user opens the transcript's file".into());
+            return cx.notify();
+        }
+        // Absolute: a relative OTTOSPACE_HOME writes to a relative path, and a viewer takes none.
+        let path = self.listen_path().and_then(|path| std::path::absolute(path).ok());
+        let Some(path) = path.map(|path| path.to_string_lossy().into_owned()) else { return };
         if let Some(why) = crate::viewer::open_refusal(&path) {
             self.error = Some(why.into());
             return cx.notify();
