@@ -456,7 +456,7 @@ plain() {
   c1="$(printf '\302')"
   line="$(head -n 1 | LC_ALL=C sed -E \
     -e "s#($e\[|$c1$(printf '\233'))[0-?]*[ -/]*[@-~]##g" \
-    -e "s#${e}[]P_^X][^$b$e]*($b|$e\\\\)?##g" \
+    -e "s#(${e}[]P_^X]|${c1}[$(printf '\220\230\235\236\237')])[^$b$e$c1]*($b|$e\\\\|$c1$(printf '\234'))?##g" \
     -e "s#${e}[ -/]*[0-~]##g" \
     -e "s/${c1}[$(printf '\200')-$(printf '\237')]//g" \
     -e "s/$(printf '\342\200')[$(printf '\216\217\250-\256')]//g" \
@@ -490,7 +490,8 @@ note_new_commits() {
     *) compare_url="" ;;
   esac
   # Read with plutil, the system's JSON reader: no jq or python on every Mac.
-  field() { plutil -extract "$1" raw -o - "$2" 2>/dev/null; }
+  # field <keypath> <type> <file>: a count is a decimal integer (no "08"), an array its length.
+  field() { plutil -extract "$1" raw -expect "$2" -o - "$3" 2>/dev/null; }
   if [ -z "$compare_url" ] ||
     ! curl -fsS --proto "$proto" --tlsv1.2 --max-time 5 -H 'Accept: application/vnd.github+json' \
       -o "$tmp/compare.json" "$compare_url" 2>/dev/null ||
@@ -498,9 +499,9 @@ note_new_commits() {
     say "could not list new commits"
     return 0
   fi
-  c_status="$(field status "$tmp/compare.json")" || c_status=""
-  c_total="$(field total_commits "$tmp/compare.json")" || c_total=""
-  c_listed="$(field commits "$tmp/compare.json")" || c_listed=""
+  c_status="$(field status string "$tmp/compare.json")" || c_status=""
+  c_total="$(field total_commits integer "$tmp/compare.json")" || c_total=""
+  c_listed="$(field commits array "$tmp/compare.json")" || c_listed=""
   if ! is_number "$c_total" || ! is_number "$c_listed"; then c_status=""; fi
   case "$c_status" in
     identical)
@@ -509,8 +510,8 @@ note_new_commits() {
       ;;
     ahead) ;;
     behind | diverged)
-      c_ahead="$(field ahead_by "$tmp/compare.json")" || c_ahead=""
-      c_behind="$(field behind_by "$tmp/compare.json")" || c_behind=""
+      c_ahead="$(field ahead_by integer "$tmp/compare.json")" || c_ahead=""
+      c_behind="$(field behind_by integer "$tmp/compare.json")" || c_behind=""
       if ! is_number "$c_ahead" || ! is_number "$c_behind"; then
         say "could not list new commits"
       elif [ "$c_status" = behind ]; then
@@ -526,19 +527,25 @@ note_new_commits() {
       ;;
   esac
   # Every line is read before any is said: a bad entry says only that the list failed.
-  : >"$tmp/new-commits"
+  # In memory: a full disk must not fail an install that is done.
+  c_lines=""
   i=0
   while [ "$i" -lt "$c_listed" ] && [ "$i" -lt 30 ]; do
-    c_sha="$(field "$i.sha" "$tmp/commits.json")" || c_sha=""
+    c_sha="$(field "$i.sha" string "$tmp/commits.json")" || c_sha=""
     if ! is_sha "$c_sha" 40; then
       say "could not list new commits"
       return 0
     fi
-    c_subject="$(field "$i.commit.message" "$tmp/commits.json" | plain)" || c_subject=""
-    printf '  %.8s %s\n' "$c_sha" "$c_subject" >>"$tmp/new-commits"
+    if ! c_message="$(field "$i.commit.message" string "$tmp/commits.json")"; then
+      say "could not list new commits"
+      return 0
+    fi
+    c_subject="$(printf '%s\n' "$c_message" | plain)" || c_subject=""
+    c_lines="$c_lines$(printf '  %.8s %s' "$c_sha" "$c_subject")
+"
     i=$((i + 1))
   done
-  cat "$tmp/new-commits"
+  printf '%s' "$c_lines"
   if [ "$c_total" -gt "$i" ]; then say "  … and $((c_total - i)) more: $web"; fi
 }
 
@@ -660,7 +667,7 @@ install_build() {
   if [ ! -f "$state_dir/current" ]; then first=1; fi
   # The commit installed before, to list what is new: only from the same channel.
   was_commit=""
-  if [ "$(get channel "$state_dir/current")" = "$channel" ]; then was_commit="$(get commit "$state_dir/current")"; fi
+  if [ "$channel" = main ] && [ "$(get channel "$state_dir/current")" = main ]; then was_commit="$(get commit "$state_dir/current")"; fi
   is_sha "$was_commit" 40 || was_commit=""
   write_state "$state_dir/current" "channel=$channel" "ref=$ref" "version=$b_version" "commit=$b_commit" \
     "date=$b_date" "binary_sha256=$(sha256_of "$cmd")" "installed=$(now)"

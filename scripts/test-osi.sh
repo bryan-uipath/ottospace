@@ -254,9 +254,9 @@ check "and says how many more, with the compare page" says "  … and 15 more: h
 make_build "$main_dir" E "$(commit e)"
 long="$(printf 'x%.0s' $(seq 1 150))"
 make_compare "$(commit d)" "$(commit e)" ahead 2 \
-  'Bad \u001b[31mred\u001b[0m \u001b]8;;https://evil.example\u0007link\u001b]8;;\u0007 \u009b2J\u202ex\r\u0007end' "$long"
+  'Bad \u001b[31mred\u001b[0m \u001b]8;;https://evil.example\u0007link\u001b]8;;\u0007 \u009b2J\u202ex\r\u0007end \u009d0;t\u0007\u001b]0;t\u009cC1' "$long"
 run "$osi" install main
-check "a subject's escape sequences are stripped" says "  00000000 Bad red link xend"
+check "a subject's escape sequences are stripped" says "  00000000 Bad red link xend C1"
 subject_plain() { ! printf '%s' "$out" | LC_ALL=C grep -q $'[\x01-\x08\x0b-\x1f\x7f]\|\xc2[\x80-\x9f]\|\xe2\x80\xae'; }
 check "no control, C1 or bidi byte reaches the terminal" subject_plain
 check "a long subject is cut to 100 characters" says "  00000000 $(printf 'x%.0s' $(seq 1 99))…"
@@ -268,7 +268,19 @@ printf 'not json' >"$work/compare/$(commit f)...$(commit b)"
 make_build "$main_dir" B "$(commit b)"
 run "$osi" install main
 check "an answer that is not JSON: one line" says "could not list new commits"
-check "and the install succeeds" installed_is B
+check "and the install succeeds" [ "$status" = 0 ]
+check "and installs" installed_is B
+make_build "$main_dir" C "$(commit c)"
+make_compare "$(commit b)" "$(commit c)" ahead '"08"' "One"
+run "$osi" install main
+check "a count that is not a number: one line" eval "says 'could not list new commits' && ! says 'One'"
+check "and the install succeeds" [ "$status" = 0 ]
+make_build "$main_dir" B "$(commit b)"
+printf '{"status":"ahead","total_commits":2,"commits":[{"sha":"%040d","commit":{"message":"One"}},{"sha":"%040d","commit":{}}]}' 1 2 \
+  >"$work/compare/$(commit c)...$(commit b)"
+run "$osi" install main
+check "a commit without a message: one line, no partial list" eval "says 'could not list new commits' && ! says 'One'"
+check "and the install succeeds" [ "$status" = 0 ]
 make_build "$work/releases/latest/download" S "$(commit 5)"
 run "$osi" install stable
 check "another channel lists nothing" not_says "commits"
