@@ -21,9 +21,19 @@ pub const GRIP: (f64, f64) = (120.0, 60.0);
 /// True when at least `GRIP` of the window's top (all of it, for a smaller window) lies inside one
 /// screen's visible frame: below the menu bar, above the Dock.
 pub fn reachable(frame: Frame, screens: &[Frame]) -> bool {
+    reachable_beside(frame, screens, None)
+}
+
+/// As `reachable`, with `cover` (a window in front) hiding what of the top it lies over.
+pub fn reachable_beside(frame: Frame, screens: &[Frame], cover: Option<Frame>) -> bool {
     let (wide, tall) = (GRIP.0.min(frame.w), GRIP.1.min(frame.h));
+    // A cover over the title bar's middle row (a bar is about 28 tall) hides the columns it spans.
+    let bar = frame.y + 14.0_f64.min(frame.h / 2.0);
+    let cover = cover.filter(|c| c.y <= bar && c.y + c.h >= bar);
     screens.iter().any(|s| {
-        let shared = (frame.x + frame.w).min(s.x + s.w) - frame.x.max(s.x);
+        let (left, right) = (frame.x.max(s.x), (frame.x + frame.w).min(s.x + s.w));
+        // The longest run of the top left in sight, either side of the cover.
+        let shared = cover.map_or(right - left, |c| (c.x.min(right) - left).max(right - (c.x + c.w).max(left)));
         // A point of slack: AppKit puts a window's top at the menu bar's bottom, give or take.
         shared >= wide && frame.y >= s.y - 1.0 && frame.y + tall <= s.y + s.h + 1.0
     })
