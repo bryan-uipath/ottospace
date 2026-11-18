@@ -5588,42 +5588,50 @@ impl Workspace {
     /// A task's waiting cards, a line each under its row (`TaskRow::pending`): a question on
     /// show and how far in, or what a permission would run; then `+N more`. The words are the
     /// agent's: drawn here, never in the state. A click opens its conversation on the card with
-    /// the keyboard in it (`TaskTalk`, the user's alone); nothing is answered from the list.
+    /// the keyboard in it (`TaskCard`, the user's alone); nothing is answered from the list.
     fn task_pending(&self, id: TaskId, row: &TaskRow, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let cards = self.model.chat(&ottospace_core::talk::Subject::Task(id)).map(|chat| &chat.transcript.cards);
         let mut lines = Vec::new();
         for (at, (pending, card)) in row.pending.iter().zip(cards.into_iter().flatten()).enumerate() {
             let (glyph, words, count) = match (pending, card.ask.as_ref()) {
                 (Pending::Question { shown, of }, Some(form)) => {
-                    // The question itself: its markdown's last block, as the card shows it in bold.
+                    // The question itself, as the card shows it in bold.
                     let text =
                         form.questions.get(shown.saturating_sub(1)).map(|q| q.question.text()).unwrap_or_default();
-                    let blocks = markdown::parse(text, None);
-                    let question = markdown::plain(blocks.last().map(std::slice::from_ref).unwrap_or_default());
+                    let question = match conversation::question_blocks(text).1 {
+                        Some(asked) => markdown::plain(std::slice::from_ref(&asked)),
+                        None => text.to_string(),
+                    };
                     let count = (*of > 1).then(|| format!("{shown} of {of}"));
                     ("?", ottospace_core::transcript::clean(&question), count)
                 }
                 _ => {
-                    // The first field of what it asks (`command: git push`), else its label.
+                    // A command as it would run (`command: git push`); any other request, its tool
+                    // and label (`Edit · auth.rs`), whose payload is JSON or a change's kind.
                     let first = card.detail.text().lines().next().unwrap_or_default();
-                    let summary = first.split_once(": ").map_or(first, |(_, value)| value);
-                    let summary = if summary.is_empty() { card.label.as_str() } else { summary };
-                    ("⚠", format!("Wants to run: {}", ottospace_core::transcript::clean(summary)), None)
+                    let words = match first.strip_prefix("command: ") {
+                        Some(command) => format!("Wants to run: {}", ottospace_core::transcript::clean(command)),
+                        None => format!("Wants to use {} · {}", card.tool, card.label),
+                    };
+                    ("⚠", words, None)
                 }
             };
-            let words = words.split_whitespace().collect::<Vec<_>>().join(" ");
-            lines.push(self.pending_line(id, at, glyph, words, count, cx));
+            // One line; spaces inside kept as they are: `rm 'a  b'` names that file.
+            let words = words.replace(['\n', '\r', '\t'], " ");
+            lines.push(self.pending_line(id, at, Some(card.ticket), glyph, words, count, cx));
         }
         if row.more > 0 {
-            lines.push(self.pending_line(id, PENDING_LINES, "", format!("+{} more", row.more), None, cx));
+            lines.push(self.pending_line(id, PENDING_LINES, None, "", format!("+{} more", row.more), None, cx));
         }
         lines
     }
 
+    #[allow(clippy::too_many_arguments)] // a line's place, its card and its three parts.
     fn pending_line(
         &self,
         id: TaskId,
         at: usize,
+        ticket: Option<u64>,
         glyph: &'static str,
         words: String,
         count: Option<String>,
@@ -5647,8 +5655,8 @@ impl Workspace {
             .children(count.map(|count| muted().flex_none().child(count)))
             .child(self.controls.mark(format!("task-pending:{id}:{at}")))
             .on_click(cx.listener(move |this, _, window, cx| {
-                // The card, with the keyboard: the user's alone (the core refuses a client's).
-                this.dispatch(Action::TaskTalk { id }, this.input, window, cx);
+                // The card, first and with the keyboard: the user's alone (the core refuses a client's).
+                this.dispatch(Action::TaskCard { id, ticket }, this.input, window, cx);
                 cx.stop_propagation();
                 cx.notify();
             }))

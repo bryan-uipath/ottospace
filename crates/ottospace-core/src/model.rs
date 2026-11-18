@@ -1476,6 +1476,13 @@ pub enum Action {
     TaskTalk {
         id: TaskId,
     },
+    /// A click on a waiting card's line under a task (`TaskRow::pending`): that card first in
+    /// its conversation's queue (`ticket`; `None`, `+N more`, keeps the order), then as
+    /// `TaskTalk`. Nothing is answered. Only the user's.
+    TaskCard {
+        id: TaskId,
+        ticket: Option<u64>,
+    },
     /// ↵ in the new-task box: takes the highlighted row of the dropdown, else adds the task
     /// and starts it (`ComposeSubmit { open: true }`).
     ComposeEnter,
@@ -1891,6 +1898,7 @@ impl Action {
                 | Action::WorkbookOpen { .. }
                 | Action::WorkbookEdit { .. }
                 | Action::TaskTalk { .. }
+                | Action::TaskCard { .. }
                 | Action::SessionOpen { .. }
                 | Action::TalkStart
                 | Action::TalkToggle
@@ -1933,6 +1941,7 @@ impl Action {
             // So is a new worktree's branch.
             | Action::WorktreeEdit { .. } => true,
             | Action::TaskTalk { .. }
+            | Action::TaskCard { .. }
             | Action::SessionOpen { .. }
             | Action::TalkStart
             | Action::TalkKeys { on: true } => true,
@@ -2471,6 +2480,7 @@ impl Action {
             | Action::TalkInterrupt
             | Action::TalkView { .. }
             | Action::TaskTalk { .. }
+            | Action::TaskCard { .. }
             | Action::ComposeEnter
             | Action::AgentStarted { .. }
             | Action::AgentSessions { .. }
@@ -3676,9 +3686,11 @@ impl Model {
             }
             // An agent runs with the user's rights: no client's request, key or label starts
             // or stops one. A client's ↵ in the box files the task and starts none (`start`).
-            Action::TaskTalk { .. } | Action::SessionOpen { .. } | Action::TalkStart | Action::TaskStop { .. } => {
-                Some(agents::USERS_ALONE)
-            }
+            Action::TaskTalk { .. }
+            | Action::TaskCard { .. }
+            | Action::SessionOpen { .. }
+            | Action::TalkStart
+            | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
             // A paste is of the user's clipboard: only their ⌘V and their answer to "Paste 4 lines?".
             Action::Paste { .. } => Some(clip::USERS_ALONE),
             Action::QuitConfirm | Action::QuitCancel
@@ -3891,7 +3903,8 @@ impl Model {
         let opens = matches!(action, Action::OpenCompose { .. } | Action::CaptureTitle | Action::CaptureEdit { .. });
         let over_other = ((modal || self.palette.is_some()) && picker) || (boxed && opens);
         // A conversation the user opens takes the drawer from the new task being written.
-        let talks = matches!(action, Action::TaskTalk { .. } | Action::SessionOpen { .. }) && self.picker.is_none();
+        let talks = matches!(action, Action::TaskTalk { .. } | Action::TaskCard { .. } | Action::SessionOpen { .. })
+            && self.picker.is_none();
         // So does ⌘⇧R, collapsing it, its line put aside (a client's is refused), but while the editor has the line.
         let aside = modal && self.picker.is_none() && self.palette.is_none() && !self.edits_compose();
         let talks = talks || (matches!(action, Action::TalkToggle) && aside);
@@ -4242,6 +4255,7 @@ impl Model {
                 | Action::CaptureTitle
                 | Action::CaptureBack
                 | Action::TaskTalk { .. }
+                | Action::TaskCard { .. }
                 | Action::SessionOpen { .. }
                 | Action::TalkStart
                 | Action::TalkKeys { on: true }
@@ -5710,6 +5724,10 @@ impl Model {
             Action::EditorDone { .. } if self.by_user => {}
             Action::EditorDone { saved, more } => self.editor_done(saved, more, effects),
             Action::TaskTalk { id } => self.talk_to(Subject::Task(id), false, effects),
+            Action::TaskCard { id, ticket } => {
+                self.card_first(&Subject::Task(id), ticket);
+                self.talk_to(Subject::Task(id), false, effects)
+            }
             Action::TalkStart => {
                 if let Some(subject) = self.talk.as_ref().filter(|talk| talk.open).map(|talk| talk.task.clone()) {
                     self.talk_to(subject, true, effects);
@@ -7369,16 +7387,15 @@ impl Model {
         let live = self.task_session(task).and_then(Found::doing);
         let (fact, worktree) = (tasks::fact(task, group, now), self.worktree_label(task.id));
         let cards = self.chat(&Subject::Task(task.id)).map(|chat| &chat.transcript.cards);
-        let pending = cards.into_iter().flatten().map(|card| match &card.ask {
+        let more = cards.map_or(0, |cards| cards.len().saturating_sub(tasks::PENDING_LINES));
+        let pending = cards.into_iter().flatten().take(tasks::PENDING_LINES).map(|card| match &card.ask {
             Some(form) => {
                 let of = form.questions.len();
                 tasks::Pending::Question { shown: (form.cursor.0 + 1).min(of), of }
             }
             None => tasks::Pending::Permission,
         });
-        let pending: Vec<tasks::Pending> = pending.collect();
-        let more = pending.len().saturating_sub(tasks::PENDING_LINES);
-        let pending = pending.into_iter().take(tasks::PENDING_LINES).collect();
+        let pending = pending.collect();
         TaskRow { live, id: task.id, group, current, fact, worktree, pending, more }
     }
 
@@ -9001,6 +9018,7 @@ mod tests {
         Action::WorkbookReopen { .. },
         Action::SetAgents { .. },
         Action::TaskTalk { .. },
+        Action::TaskCard { .. },
         Action::ComposeEnter,
         Action::AgentStarted { .. },
         Action::AgentSessions { .. },
@@ -9309,6 +9327,7 @@ mod tests {
             Action::WorkbookReopen { workbook: 1 },
             Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: None, shows: View::Native },
             Action::TaskTalk { id: 1 },
+            Action::TaskCard { id: 1, ticket: Some(1) },
             Action::ComposeEnter,
             Action::AgentStarted { task: Subject::Task(1), session: None, at: 0 },
             Action::AgentSessions { found: Vec::new(), home: None, now: 0 },
@@ -9639,6 +9658,7 @@ mod tests {
                     _ if agent_refused(action, origin).is_some() => agent_refused(action, origin),
                     _ if slot_refused(action, origin).is_some() => slot_refused(action, origin),
                     Action::TaskTalk { .. }
+                    | Action::TaskCard { .. }
                     | Action::SessionOpen { .. }
                     | Action::TalkStart
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
@@ -15759,6 +15779,7 @@ mod tests {
                     _ if agent_refused(action, origin).is_some() => agent_refused(action, origin),
                     _ if slot_refused(action, origin).is_some() => slot_refused(action, origin),
                     Action::TaskTalk { .. }
+                    | Action::TaskCard { .. }
                     | Action::SessionOpen { .. }
                     | Action::TalkStart
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),

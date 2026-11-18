@@ -1422,6 +1422,7 @@ const MAKERS: &[Make] = &[
         Action::EditorDone { saved, more: g.rng.one_in(5) }
     },
     |g| Action::TaskTalk { id: g.task() },
+    |g| Action::TaskCard { id: g.task(), ticket: g.rng.coin().then(|| g.rng.below(3) as u64) },
     |_| Action::TalkStart,
     |g| {
         let (runner, id) = g.session();
@@ -1665,6 +1666,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::SpaceOpen { .. }
             | Action::WorkbookNew { .. }
             | Action::TaskTalk { .. }
+            | Action::TaskCard { .. }
             | Action::SessionOpen { .. }
             | Action::SessionAdopt { .. }
             | Action::ComposeSubmit { .. }
@@ -2965,14 +2967,20 @@ impl Run {
         let tabs_before: Vec<u32> = m.tabs.iter().map(|tab| tab.id).collect();
         // Yes to "Close this workspace?" hides it, as its × would.
         let closes = matches!(action, Action::QuitConfirm) && m.confirm.as_ref().is_some_and(|c| c.close.is_some());
-        let talks =
-            matches!(action, Action::TaskTalk { .. } | Action::SessionOpen { .. } | Action::SessionAdopt { .. });
+        let talks = matches!(
+            action,
+            Action::TaskTalk { .. }
+                | Action::TaskCard { .. }
+                | Action::SessionOpen { .. }
+                | Action::SessionAdopt { .. }
+        );
 
         // Selecting a conversation, a tab, a space or a row, hiding or opening a space, only
         // shows: never an agent, never a transcript.
         let selects = matches!(
             action,
             Action::TaskTalk { .. }
+                | Action::TaskCard { .. }
                 | Action::SessionOpen { .. }
                 | Action::TaskGo { .. }
                 | Action::ListChoose { .. }

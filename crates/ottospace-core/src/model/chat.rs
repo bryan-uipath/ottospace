@@ -199,6 +199,18 @@ impl Model {
         self.talk_live(subject) || (shown && self.shown_draft_chat().is_some())
     }
 
+    /// The card `ticket` first in its conversation's queue: the one shown. A Deny's message is
+    /// for the card it was written under, so it ends.
+    pub(super) fn card_first(&mut self, subject: &Subject, ticket: Option<u64>) {
+        let Some(chat) = self.chat_mut(subject) else { return };
+        let cards = &mut chat.transcript.cards;
+        let at = ticket.and_then(|ticket| cards.iter().position(|card| card.ticket == ticket));
+        if let Some(card) = at.filter(|at| *at > 0).and_then(|at| cards.remove(at)) {
+            cards.push_front(card);
+            chat.deny = false;
+        }
+    }
+
     /// The composer takes keys: the shown native conversation has the keyboard, no card waits
     /// (or the user writes a Deny's message), and the user's editor does not have its draft.
     /// Or a question card's "Other…" does: the editor has the draft, not it.
@@ -1281,6 +1293,16 @@ mod tests {
         assert_eq!(row(&m).map(|(p, _)| p[0]), Some(question(2)), "on Review, the last");
         m.update(Action::TalkAsk { ticket: 1, act: Act::Decline });
         assert_eq!(row(&m), Some((vec![Pending::Permission, Pending::Permission], 1)));
+        // A line's click: that card first, nothing answered; a client's moves nothing.
+        assert_eq!(m.update(Action::TaskCard { id: 1, ticket: Some(3) }.sent_by(Origin::Socket)), []);
+        let order =
+            |m: &Model| m.chat(&one).map(|chat| chat.transcript.cards.iter().map(|c| c.ticket).collect::<Vec<_>>());
+        assert_eq!(order(&m), Some(vec![2, 3, 4]));
+        let effects = m.update(Action::TaskCard { id: one.task().unwrap_or_default(), ticket: Some(3) });
+        assert!(!effects.iter().any(|e| matches!(e, Effect::AgentAnswer { .. } | Effect::AgentAnswers { .. })));
+        assert_eq!(order(&m), Some(vec![3, 2, 4]));
+        m.update(Action::TaskCard { id: one.task().unwrap_or_default(), ticket: None });
+        assert_eq!(order(&m), Some(vec![3, 2, 4]));
         let said = serde_json::to_string(&m.task_sections(10)).unwrap();
         assert!(said.contains(r#""pending":[{"kind":"permission"},{"kind":"permission"}],"more":1"#), "{said}");
     }

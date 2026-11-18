@@ -9708,8 +9708,12 @@ fn a_waiting_tasks_cards_are_lines_under_its_row() {
         (&json!(1), &json!(true), &json!(true)),
         "{opened}"
     );
+    // The drawer shows that card: the permission, first now; the question waits behind it.
+    let cards = state(&otto)["drawer"]["native"]["chats"]["1"]["transcript"]["cards"].clone();
+    assert!(cards[0]["ask"].is_null() && cards[1]["ask"].is_object(), "{cards}");
+    assert!(otto.control_opt("talk:chat-allow").is_some(), "the permission's card is drawn");
     // Nothing was answered from the list.
-    assert_eq!(row(&otto)["more"], 2);
+    assert_eq!((cards.as_array().map(Vec::len), &row(&otto)["more"]), (Some(4), &json!(2)));
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }
