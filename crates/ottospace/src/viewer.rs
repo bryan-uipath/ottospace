@@ -490,15 +490,12 @@ impl Workspace {
                                 let line = &lines[at];
                                 let line: String = line.chars().take(MAX_DRAWN).collect();
                                 // Runs past what is drawn of a long line are cut with it.
-                                let styles: Vec<_> = marks
-                                    .get(at)
+                                let runs = marks.get(at).map_or(Vec::new(), |marks| highlight::within(marks, &line));
+                                let styles: Vec<_> = runs
                                     .into_iter()
-                                    .flatten()
-                                    .take_while(|(range, _)| range.start < line.len())
                                     .map(|(range, token)| {
-                                        let colour = rgb(highlight::colour(*token)).into();
-                                        let style = HighlightStyle { color: Some(colour), ..Default::default() };
-                                        (range.start..range.end.min(line.len()), style)
+                                        let colour = rgb(highlight::colour(token)).into();
+                                        (range, HighlightStyle { color: Some(colour), ..Default::default() })
                                     })
                                     .collect();
                                 let text = StyledText::new(SharedString::from(line)).with_highlights(styles);

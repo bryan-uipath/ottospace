@@ -55,6 +55,26 @@ pub fn by_line(text: &str, marks: &[Mark]) -> Vec<Vec<Mark>> {
     out
 }
 
+/// `marks` (of a line, in order) cut to `shown`, what is drawn of it: each end snapped down to a
+/// character of `shown`, a run left empty dropped. Never a range that would split a character.
+pub fn within(marks: &[Mark], shown: &str) -> Vec<Mark> {
+    let snap = |mut at: usize| {
+        at = at.min(shown.len());
+        while !shown.is_char_boundary(at) {
+            at -= 1;
+        }
+        at
+    };
+    marks
+        .iter()
+        .take_while(|(range, _)| range.start < shown.len())
+        .filter_map(|(range, token)| {
+            let (start, end) = (snap(range.start), snap(range.end));
+            (start < end).then_some((start..end, *token))
+        })
+        .collect()
+}
+
 /// A token's colour, from the theme's hues.
 pub fn colour(token: Token) -> u32 {
     match token {
@@ -579,6 +599,25 @@ mod tests {
         assert_eq!(texts[1], [("two */", Token::Comment), ("\"s\"", Token::String)]);
         assert_eq!((texts[2].len(), &texts[3][..]), (0, &[("fn", Token::Keyword)][..]));
         assert_eq!(by_line("a\nb", &[]), Vec::<Vec<Mark>>::new());
+    }
+
+    /// A run over the drawn end of a line of wide characters is cut at a character, never inside one.
+    #[test]
+    fn runs_cut_to_what_is_drawn_never_split_a_character() {
+        let line = "// é日本😀 and more";
+        let marks = marks("rust", line);
+        for most in 0..=line.chars().count() {
+            let shown: String = line.chars().take(most).collect();
+            for (range, _) in within(&marks, &shown) {
+                assert!(shown.get(range.clone()).is_some_and(|run| !run.is_empty()), "{shown:?} {range:?}");
+            }
+            assert_eq!(within(&marks, &shown).last().map(|(r, _)| r.end), (!shown.is_empty()).then_some(shown.len()));
+        }
+        // Ranges from another string, inside its characters: snapped down, or dropped when empty.
+        let shown = "日本";
+        assert_eq!(within(&[(1..5, Token::String)], shown), [(0..3, Token::String)]);
+        assert!(within(&[(1..2, Token::String)], shown).is_empty());
+        assert_eq!(within(&[(0..99, Token::Comment)], "😀é"), [(0..6, Token::Comment)]);
     }
 
     #[test]
