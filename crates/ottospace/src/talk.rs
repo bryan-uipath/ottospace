@@ -583,6 +583,7 @@ impl Workspace {
         Some(
             // As high as the top row above it.
             div()
+                .group(crate::slide::DRAWER_HEAD)
                 .h(px(crate::TOP_BAR))
                 .flex_none()
                 .pl_3()

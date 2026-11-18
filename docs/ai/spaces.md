@@ -440,8 +440,8 @@ should have shortcut keys visible there"; "we should always have the right rail 
   its place: no transcript shown, no open conversation, no new-task box, brief, capture's draft
   or inspector. There is no other closed state: the rail stays. The transcript records on, the
   agents work on, each rail item keeps its dot. Panes widen by the drawer's width less the rail's.
-- **The arrows**, one button for both sides (`slide.rs`), each with its key's cap beside it,
-  always (it fits; on a rail the cap sits under the arrow): the drawer's → at the right end of
+- **The arrows**, one button for both sides (`slide.rs`), each with its key's cap: in a header
+  beside it while the header is hovered (shown always, it cut the transcript's clock and crowded the Tasks header), on a rail under it, always: the drawer's → at the right end of
   the transcript's header and of a conversation's (the conversation's × was this), tooltip
   "Collapse into the rail · ⌘⇧R"; the collapsed rail's ← at its foot, "Open the drawer · ⌘⇧R",
   only while ⌘⇧R would open something (`drawer_opens`: a conversation, or the transcript); the

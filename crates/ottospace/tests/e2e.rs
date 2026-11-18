@@ -2698,7 +2698,7 @@ fn the_text_field_moves_selects_and_undoes() {
     let reply = key("o m");
     assert_eq!((field(&reply), reply["state"]["compose"].as_str()), (at("fix zoom", 8, 8, 8), Some("fix zoom")));
     assert_eq!(field(&key("alt-shift-left")), at("fix zoom", 4, 4, 8));
-    assert_eq!(field(&key("cmd-shift-reft")), at("fix zoom", 0, 0, 8));
+    assert_eq!(field(&key("cmd-shift-left")), at("fix zoom", 0, 0, 8));
     // An arrow leaves a selection at that side. ⌘A then a key replaces everything.
     assert_eq!(field(&key("right")), at("fix zoom", 8, 8, 8));
     assert_eq!(field(&key("cmd-a")), at("fix zoom", 8, 0, 8));

@@ -4862,7 +4862,7 @@ impl Workspace {
             .child(div().flex_1().border_r_1().border_color(rgb(theme::BORDER)))
             // The bar collapsed: → opens it again, on the section open last.
             .children(open.is_none().then(|| {
-                let open = self.slide_button("rail:open", (slide::RIGHT, slide::SIDEBAR_KEY), "Open the sidebar", true);
+                let open = self.slide_button("rail:open", (slide::RIGHT, slide::SIDEBAR_KEY), "Open the sidebar", None);
                 let open = open.on_click(cx.listener(|this, _, window, cx| this.sidebar_toggle(window, cx)));
                 div()
                     .flex_none()
@@ -4917,6 +4917,7 @@ impl Workspace {
             _ => None,
         };
         div()
+            .group(slide::BAR_HEAD)
             .relative()
             .flex_none()
             .h(px(RAIL_CELL))
@@ -4946,10 +4947,15 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, window, cx| this.bar_add(section, window, cx)))
             }))
             .child(
-                self.slide_button("bar:close", (slide::LEFT, slide::SIDEBAR_KEY), "Collapse into the rail", false)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.dispatch(Action::CloseSidebar, this.input, window, cx);
-                    })),
+                self.slide_button(
+                    "bar:close",
+                    (slide::LEFT, slide::SIDEBAR_KEY),
+                    "Collapse into the rail",
+                    Some(slide::BAR_HEAD),
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.dispatch(Action::CloseSidebar, this.input, window, cx);
+                })),
             )
     }
 

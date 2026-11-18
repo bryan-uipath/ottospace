@@ -871,7 +871,8 @@ impl Workspace {
     /// The drawer's transcript view, `width` wide: its header over its body.
     fn listen_panel(&self, width: f32, header: Div, body: impl IntoElement, cx: &mut Context<Self>) -> AnyElement {
         // At the header's right end: collapsed into the rail, the transcript goes on.
-        let header = header.child(self.drawer_collapse("listen-collapse", cx).ml_auto());
+        let header =
+            header.group(crate::slide::DRAWER_HEAD).child(self.drawer_collapse("listen-collapse", cx).ml_auto());
         div()
             .id("listen")
             .w(px(width))

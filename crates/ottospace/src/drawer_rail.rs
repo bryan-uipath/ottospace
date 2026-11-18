@@ -122,7 +122,7 @@ impl Workspace {
             .then(|| div().flex_none().flex().flex_col().items_center().child(divider).children(foot));
         // Collapsed: ← opens the drawer again on what it showed.
         let open = self.model.drawer_opens().then(|| {
-            let open = self.slide_button("drawer-rail:open", (slide::LEFT, slide::DRAWER_KEY), "Open the drawer", true);
+            let open = self.slide_button("drawer-rail:open", (slide::LEFT, slide::DRAWER_KEY), "Open the drawer", None);
             div()
                 .flex_none()
                 .pt_2()
