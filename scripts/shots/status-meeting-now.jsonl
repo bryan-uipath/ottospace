@@ -1,0 +1,6 @@
+# The status bar while a meeting runs, an app pane focused and no agents: the app's name, the
+# meeting's Join, `No agents`.
+{"cmd":"app_fixture","name":"Zoom Workplace","user":true}
+{"until":"calendar.updated"}
+{"sleep_ms":800}
+{"shot":"meeting-now"}

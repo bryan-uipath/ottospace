@@ -8882,6 +8882,126 @@ fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in_a_narrow_window() {
+    let link = "LOCATION:https://example.zoom.us/j/123\r\n";
+    let home = calendar_folder("status-bar", &feed(&[("a", "Team sync", -60, 1_800, link)]), None);
+    // Checkouts on `develop` with a file not committed, whose own config names an fsmonitor that
+    // leaves a marker if git runs it: one listed in Repos, one cloned elsewhere.
+    let marker = home.join("fsmonitor-ran");
+    let hostile = |repo: &Path| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(repo).unwrap();
+        let git = |args: &[&str]| {
+            let mut git = Command::new("git");
+            git.arg("-C").arg(repo).args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1");
+            assert!(git.status().unwrap().success(), "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "develop"]);
+        let script = repo.join("monitor.sh");
+        std::fs::write(&script, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        git(&["config", "core.fsmonitor", script.to_str().unwrap()]);
+        std::fs::write(repo.join("notes.txt"), "draft").unwrap();
+    };
+    let (repo, cloned) = (home.join("flow-workbench"), home.join("cloned"));
+    hostile(&repo);
+    hostile(&cloned);
+    // Inside the listed one: a clone of another, and a link to the one cloned elsewhere.
+    let nested = repo.join("vendor/evil");
+    hostile(&nested);
+    std::os::unix::fs::symlink(&cloned, repo.join("link")).unwrap();
+    let settings = json!({ "calendar_ics": home.join("today.ics"), "repos": [repo] });
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let otto = Otto::launch_with("status-bar", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let bar = |o: &Otto| o.drawn()["status_bar"].clone();
+    // The place says `dir` and then `rest`: whole, or by the folder's name if the window is narrow
+    // for a long path (a runner's is smaller).
+    let says = |b: &Value, dir: &str, rest: &str| {
+        let name = Path::new(dir).file_name().unwrap().to_string_lossy().into_owned();
+        [format!("{dir}{rest}"), format!("{name}{rest}")].iter().any(|t| b["place"]["text"] == t.as_str())
+    };
+    // Home: nowhere, no meeting yet read, no agents.
+    assert_eq!((&bar(&otto)["place"], &bar(&otto)["agents"]["text"]), (&Value::Null, &json!("No agents")));
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "wait", "pattern": "\\$"}));
+    // Outside Repos: the folder and its branch, no dot, and no git run there.
+    otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", cloned.display())}));
+    let elsewhere = cloned.canonicalize().unwrap().to_string_lossy().into_owned();
+    otto.wait_for("the branch alone", |o| says(&bar(o), &elsewhere, " · develop").then_some(()));
+    // A repository nested in a listed one is not listed, nor is a link out of it.
+    otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", nested.display())}));
+    let inner = nested.canonicalize().unwrap().to_string_lossy().into_owned();
+    otto.wait_for("the nested one's branch alone", |o| says(&bar(o), &inner, " · develop").then_some(()));
+    otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", repo.join("link").display())}));
+    otto.wait_for("the linked one's branch alone", |o| says(&bar(o), &elsewhere, " · develop").then_some(()));
+    assert!(!marker.exists(), "git ran in a repository not listed");
+    // A listed checkout: its changes too, read without running the repository's fsmonitor.
+    otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", repo.display())}));
+    let plain = repo.canonicalize().unwrap().to_string_lossy().into_owned();
+    otto.wait_for("the folder, its branch and its changes", |o| {
+        let b = bar(o);
+        (says(&b, &plain, " · develop ●") && b["meeting"].is_object()).then_some(())
+    });
+    assert!(!marker.exists(), "a repository's fsmonitor ran");
+    for (task, state) in [("a", "running"), ("b", "running"), ("c", "needs_you")] {
+        otto.call(json!({"cmd": "task_add", "title": task, "state": state}));
+    }
+    let shown = otto.wait_for("the agents", |o| {
+        let b = bar(o);
+        (b["agents"]["text"] == "● 2 working · ● 1 needs you").then_some(b)
+    });
+    // Left to right in the bar: the place, the meeting with its Join, the agents.
+    let status = rect(&otto.drawn()["calendar"]["band"]["status_bar"]);
+    let (place, meeting, join, agents) = (
+        rect(&shown["place"]["rect"]),
+        rect(&shown["meeting"]["rect"]),
+        rect(&shown["meeting"]["join"]),
+        rect(&shown["agents"]["rect"]),
+    );
+    assert!(place[0] + place[2] <= meeting[0] && meeting[0] + meeting[2] <= agents[0], "{shown}");
+    assert!(join[0] >= meeting[0] && join[0] + join[2] <= meeting[0] + meeting[2] + 0.5, "{shown}");
+    for r in [place, meeting, agents] {
+        assert!(r[1] >= status[1] && r[1] + r[3] <= status[1] + status[3] + 0.5, "in the bar {status:?}: {r:?}");
+    }
+    // Wide enough for all whole, or (a runner's smaller window, a long temp path) the folder alone shortened.
+    assert!(shown["shrink"].as_u64() <= Some(1), "{shown}");
+    // The meeting's title is drawn, never in the state.
+    assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Team sync"));
+    // A client's click copies nothing and joins nothing; the user's copies the path and joins.
+    otto.click(centre(&shown["place"]["rect"]), 1);
+    otto.click(centre(&shown["meeting"]["join"]), 1);
+    let theirs = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&theirs["copied"], &theirs["calendar"]["joins"]), (&Value::Null, &json!(0)), "{}", theirs["notice"]);
+    otto.user_click(centre(&shown["place"]["rect"]));
+    otto.user_click(centre(&shown["meeting"]["join"]));
+    let mine = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&mine["copied"], &mine["calendar"]["joins"]), (&json!(plain), &json!(1)));
+    // Narrow: the folder shortens first, then the meeting, then the agents.
+    otto.call(json!({"cmd": "window_width", "width": 340}));
+    let narrow = otto.wait_for("the narrow bar", |o| {
+        let b = bar(o);
+        (b["shrink"] == 3).then_some(b)
+    });
+    assert_eq!(
+        (&narrow["place"]["text"], &narrow["agents"]["text"]),
+        (&json!("flow-workbench · develop ●"), &json!("● 2 ● 1"))
+    );
+    let right = rect(&narrow["agents"]["rect"]);
+    assert!(right[0] + right[2] <= 340.5, "{narrow}");
+    // An app pane says its app; an empty pane nothing.
+    otto.call(json!({"cmd": "app_fixture", "name": "Zoom Workplace", "user": true}));
+    otto.wait_for("the app's name", |o| (bar(o)["place"]["text"] == "Zoom Workplace").then_some(()));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.wait_for("nowhere", |o| bar(o)["place"].is_null().then_some(()));
+    // The agents go to the next that needs you, as ⌘⇧N does.
+    let went = otto.user_click(centre(&bar(&otto)["agents"]["rect"]));
+    assert_eq!(went["state"]["talk"]["task"], 3, "{}", went["state"]["talk"]);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_feed_link_goes_to_curl_on_its_standard_input_not_its_arguments() {
     use std::os::unix::fs::PermissionsExt;
     let link = "https://calendar.example.com/private-s3cret/basic.ics";

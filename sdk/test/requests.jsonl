@@ -78,6 +78,7 @@
 {"cmd":"app_fixture","name":"Mail","user":true}
 {"cmd":"audio_probe_start"}
 {"cmd":"audio_probe_stop"}
+{"cmd":"window_width","width":340}
 {"cmd":"zoom_press"}
 {"cmd":"display_change"}
 {"cmd":"calendar","day":"tomorrow","days":2}

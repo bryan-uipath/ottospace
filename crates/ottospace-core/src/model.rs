@@ -1614,6 +1614,10 @@ pub enum Action {
     /// The Calendar section's Retry: fetch the feed now. Only the user's: no client makes the app
     /// reach the network.
     CalendarRetry,
+    /// The status bar's folder was clicked: `path` goes to the clipboard. Only the user's.
+    CopyPath {
+        path: String,
+    },
     /// The features that are on, as the settings say (`features`). What a feature turned off
     /// shows goes from view; what it keeps (marks, pins) stays as it is.
     SetFeatures {
@@ -2164,6 +2168,7 @@ impl Action {
             | Action::CalendarFetching { .. }
             | Action::CalendarFetched { .. }
             | Action::CalendarRetry
+            | Action::CopyPath { .. }
             | Action::AgentEvents { .. }
             | Action::TalkSend
             | Action::TalkAnswer { .. }
@@ -2510,6 +2515,7 @@ impl Action {
             | Action::CalendarFetching { .. }
             | Action::CalendarFetched { .. }
             | Action::CalendarRetry
+            | Action::CopyPath { .. }
             | Action::EditSettings
             | Action::SettingsRead { .. }
             | Action::Copied { .. }
@@ -3633,6 +3639,7 @@ impl Model {
             // silence an alert meant for the user.
             Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
             Action::CalendarRetry => Some(calendar::USERS_RETRY),
+            Action::CopyPath { .. } => Some(crate::status_bar::USERS_COPY),
             Action::ListDismiss | Action::ListUndo if self.sidebar == Some(Section::Apps) => Some(apps::USERS_ALONE),
             // The layout file is read by the shell at start, and its app panes start the user's apps.
             Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
@@ -6036,6 +6043,7 @@ impl Model {
                     effects.push(Effect::CalendarRetry)
                 }
             }
+            Action::CopyPath { path } => effects.push(Effect::Clip { text: path }),
             Action::SetFeatures { features } => self.set_features(features, effects),
             action @ (Action::ListenStart { .. }
             | Action::ListenToggle { .. }
@@ -9105,6 +9113,7 @@ mod tests {
         Action::CalendarFetching { .. },
         Action::CalendarFetched { .. },
         Action::CalendarRetry,
+        Action::CopyPath { .. },
         Action::AgentEvents { .. },
         Action::TalkSend,
         Action::TalkAnswer { .. },
@@ -9418,6 +9427,7 @@ mod tests {
             Action::CalendarFetching { since: 0, bytes: 0 },
             Action::CalendarFetched { at: 0, events: 0, failure: None },
             Action::CalendarRetry,
+            Action::CopyPath { path: "/code/app".into() },
             Action::AgentEvents { task: Subject::Task(1), events: Vec::new(), at: 0 },
             Action::TalkSend,
             Action::TalkAnswer { allow: false, ticket: 1 },
@@ -9733,6 +9743,7 @@ mod tests {
                     }
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     Action::CalendarRetry => Some(calendar::USERS_RETRY),
+                    Action::CopyPath { .. } => Some(crate::status_bar::USERS_COPY),
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::DialToggle => Some(chat::DIAL_USERS),
                     Action::FillDisplay => Some(crate::fill::USERS_ALONE),
@@ -15964,6 +15975,7 @@ mod tests {
                     }
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     Action::CalendarRetry => Some(calendar::USERS_RETRY),
+                    Action::CopyPath { .. } => Some(crate::status_bar::USERS_COPY),
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::DialToggle => Some(chat::DIAL_USERS),
                     Action::FillDisplay => Some(crate::fill::USERS_ALONE),

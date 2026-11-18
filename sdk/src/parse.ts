@@ -815,6 +815,20 @@ function noticeBar(value: unknown, at: string): NoticeBar {
   };
 }
 
+function statusBar(value: unknown, at: string): Snapshot["status_bar"] {
+  const o = fields(value, at);
+  const meeting = (v: unknown, p: string) => {
+    const m = fields(v, p);
+    return { rect: orNull(rect)(m.rect, `${p}.rect`), join: orNull(rect)(m.join, `${p}.join`) };
+  };
+  return {
+    place: orNull(noticeUndo)(o.place, `${at}.place`),
+    meeting: orNull(meeting)(o.meeting, `${at}.meeting`),
+    agents: noticeUndo(o.agents, `${at}.agents`),
+    shrink: num(o.shrink, `${at}.shrink`),
+  };
+}
+
 function agentLine(value: unknown, at: string): AgentLine {
   const o = fields(value, at);
   const pair = (v: unknown, p: string): [string, string] => {
@@ -1857,6 +1871,7 @@ export function snapshot(value: unknown): Snapshot {
     badges: map(str)(o.badges, "badges"),
     drawer: drawerDrawn(o.drawer, "drawer"),
     calendar: calendar(o.calendar, "calendar"),
+    status_bar: statusBar(o.status_bar, "status_bar"),
     frame: frameNumbers(o.frame, "frame"),
     ...(o.stale === undefined ? {} : { stale: staleMark(o.stale, "stale") }),
   };

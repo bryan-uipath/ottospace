@@ -554,6 +554,13 @@ export class Client {
     return audioProbeReply(await this.send({ cmd: "audio_probe_stop" }));
   }
   /**
+   * For tests (`OTTOSPACE_E2E`): the window `width` points wide, its top left where it is: a
+   * narrow window's status bar. Rejects outside a test run: only the user sizes their window.
+   */
+  windowWidth(args: { width: number }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "window_width", ...args });
+  }
+  /**
    * For tests (`OTTOSPACE_E2E`): the window's green button, pressed as the user would. It fills
    * the display instead of zooming. Rejects outside a test run: only the user's hand fills it.
    */

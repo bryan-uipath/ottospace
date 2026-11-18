@@ -1506,6 +1506,17 @@ export interface Snapshot {
     note: string | null;
   };
   /**
+   * The status bar's segments: the focused pane's folder and branch, or its app (`place`, null on
+   * Home or an empty pane); whether a meeting shows (where it and its Join are drawn, never its
+   * title); the agents of every workspace; how many steps a narrow window shortened them (0 to 3).
+   */
+  status_bar: {
+    place: { text: string; rect: Rect | null } | null;
+    meeting: { rect: Rect | null; join: Rect | null } | null;
+    agents: { text: string; rect: Rect | null };
+    shrink: number;
+  };
+  /**
    * The meeting timeline, if `calendar_ics` is set: counts, times (ms) and stages only. No title or
    * place: every reply carries the state, and those are only in `calendar`'s own reply. `banner`: while a meeting runs and no call is on,
    * where its Join and Dismiss are on the notice bar (null while an error covers it). `joins`: in a test run, links a Join opened.

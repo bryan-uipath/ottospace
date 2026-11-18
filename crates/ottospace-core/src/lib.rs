@@ -55,6 +55,7 @@ pub mod slot;
 pub mod sneak;
 pub mod sneak_apps;
 pub mod sneak_place;
+pub mod status_bar;
 pub mod talk;
 pub mod tasks;
 pub mod terminal;

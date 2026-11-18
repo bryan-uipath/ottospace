@@ -146,6 +146,12 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       { of: { kind: "task", id: 1 }, hidden: true, selected: false, tabs: [1], tasks: [1], front: 1, worktree: null, glyph: { kind: "tasks" }, kept: true },
     ],
     badges: { "1": "FL" },
+    status_bar: {
+      place: { text: "~/code/app · main ●", rect: [8, 879, 180, 19] },
+      meeting: { rect: [900, 879, 150, 19], join: null },
+      agents: { text: "● 2 working · ● 1 needs you", rect: [1200, 879, 180, 19] },
+      shrink: 0,
+    },
     calendar: {
       on: true, events_today: 3, all_day_today: 1, events_tomorrow: 2, next_start: 1794560400000, stage: "approaching",
       updated: 1794556800000, stale: false, in_call: false, bars: 3,

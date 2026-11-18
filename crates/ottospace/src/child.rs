@@ -59,3 +59,25 @@ pub fn git(dir: &std::path::Path) -> Command {
     }
     command
 }
+
+/// `git` for a read in the background: no program the repository's own config or hooks name
+/// (fsmonitor, an external diff, hooks), no system config or attributes, no pager, no optional lock.
+pub fn git_read(dir: &std::path::Path) -> Command {
+    let mut command = git(dir);
+    let settings = [
+        "core.fsmonitor=false",
+        "core.untrackedCache=false",
+        "core.hooksPath=/dev/null",
+        "core.attributesFile=/dev/null",
+        "diff.external=",
+    ];
+    for setting in settings {
+        command.args(["-c", setting]);
+    }
+    command
+        .args(["--no-pager", "--no-optional-locks"])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_ATTR_NOSYSTEM", "1")
+        .env("GIT_PAGER", "cat");
+    command
+}
