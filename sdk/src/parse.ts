@@ -775,6 +775,11 @@ function noticeLevel(value: unknown, at: string): NoticeLevel {
   throw new Error(`${at}: not a level: ${JSON.stringify(value)}`);
 }
 
+function noticeUndo(value: unknown, at: string): { text: string; rect: Rect | null } {
+  const o = fields(value, at);
+  return { text: str(o.text, `${at}.text`), rect: orNull(rect)(o.rect, `${at}.rect`) };
+}
+
 function noticeBar(value: unknown, at: string): NoticeBar {
   const o = fields(value, at);
   return {
@@ -784,6 +789,7 @@ function noticeBar(value: unknown, at: string): NoticeBar {
     offer: orNull(str)(o.offer, `${at}.offer`),
     offer_rect: orNull(rect)(o.offer_rect, `${at}.offer_rect`),
     close: orNull(rect)(o.close, `${at}.close`),
+    undo: orNull(noticeUndo)(o.undo, `${at}.undo`),
     rect: orNull(rect)(o.rect, `${at}.rect`),
     height: num(o.height, `${at}.height`),
   };

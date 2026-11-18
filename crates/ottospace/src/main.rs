@@ -660,6 +660,8 @@ enum Mark {
     Notice,
     NoticeClose,
     NoticeOffer,
+    /// A workspace's Undo beside a higher notice.
+    NoticeUndo,
     /// The key reference's `Known · n`.
     KeysKnown,
 }

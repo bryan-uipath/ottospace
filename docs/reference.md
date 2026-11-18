@@ -1099,7 +1099,9 @@ once under the system's Reduce Motion. A live app window in a bottom pane stops 
   (`meeting`: over a warning, under an error). A glyph says the level too: `!` in a circle, `▲`,
   `ⓘ`, `◷`. The state says a meeting's notice as `Meeting started`, never its title.
 - **One at a time**: the most pressing, and of those the newest. An error is not replaced by
-  information; when it goes, what it covered shows.
+  information; when it goes, what it covered shows. One exception: a workspace's **Undo** never
+  runs out unseen. While an error or a meeting covers it, its text and its own Undo stay at the
+  bar's right, beside what covers it (`Workspace closed · Undo`).
 - **One line**: text too long is cut with an ellipsis, and the hover shows all of it. A settings
   problem offers **Open settings**; a meeting with a link, **Join**; a workspace deleted or updated,
   **Undo** (only your click takes it back).
