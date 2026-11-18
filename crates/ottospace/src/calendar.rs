@@ -174,7 +174,9 @@ impl Timeline {
                     // Retries asked for while this one ran: it was the fetch they asked for.
                     while wake.try_recv().is_ok() {}
                 }
-                if due || now >= days[calendar::BACK + 1] {
+                // A read to take (a fetch's, or a new day's); a look that found neither wakes nothing.
+                let heard = due || now >= days[calendar::BACK + 1];
+                if heard {
                     let (events, today, held_from) = evaluate(&feed, now);
                     days = today;
                     if let Some((bytes, ms, parse_ms)) = fetched {
@@ -192,7 +194,9 @@ impl Timeline {
                 if let Some(outcome) = outcome {
                     let _ = tx.send(outcome);
                 }
-                ottospace_mac::wake::post();
+                if heard {
+                    ottospace_mac::wake::post();
+                }
                 // Asleep until the next fetch, a new day's look (`WAKE`), or the user's Retry.
                 match wake.recv_timeout(WAKE.min(next.saturating_duration_since(Instant::now()))) {
                     Ok(()) => next = Instant::now(),

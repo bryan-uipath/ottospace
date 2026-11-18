@@ -226,6 +226,11 @@ impl Poller {
         self.slow_reads.load(Ordering::Relaxed)
     }
 
+    /// A round is on its way.
+    pub fn waiting(&self) -> bool {
+        self.waiting
+    }
+
     /// The reading thread is gone. Sessions cannot be listed until the app starts again.
     pub fn stopped(&self) -> bool {
         self.stopped

@@ -11,6 +11,9 @@ pub const LINGER_MS: u64 = 1_000;
 /// The slow checks' step: what changes with no event to say so (a terminal's title, the settings
 /// file, the calendar).
 pub const SLOW_MS: u64 = 1_000;
+/// The longest wait for something due: a far time (a snooze of `u64::MAX` seconds) is no timer
+/// the system can set.
+pub const MOST_MS: u64 = 3_600_000;
 
 /// What the loop has to look at, as the shell sees it after a run.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -84,7 +87,7 @@ impl Clock {
         }
         let slow = load.slow.then_some(SLOW_MS);
         // Not sooner than a frame: something due now runs at the next.
-        let due = load.due.map(|at| at.saturating_sub(now).max(FRAME_MS));
+        let due = load.due.map(|at| at.saturating_sub(now).clamp(FRAME_MS, MOST_MS));
         match slow.into_iter().chain(due).min() {
             Some(ms) => Wait::For(ms),
             None => Wait::Woken,
@@ -160,5 +163,6 @@ mod tests {
         assert_eq!(clock.wait(now, Load { due: Some(now + 5_000), ..Load::default() }), Wait::For(5_000));
         assert_eq!(clock.wait(now, Load { due: Some(now - 50), ..Load::default() }), Wait::For(FRAME_MS));
         assert_eq!(clock.wait(now, Load::default()), Wait::Woken);
+        assert_eq!(clock.wait(now, Load { due: Some(u64::MAX), ..Load::default() }), Wait::For(MOST_MS));
     }
 }

@@ -78,8 +78,10 @@ impl Stall {
             return verdict;
         }
         if !shown {
-            // A hidden window is not drawn, by design.
+            // A hidden window is not drawn, by design. A kick planned for now is spent: kept, it
+            // would hold the tick at each frame (`watching`) until the window shows.
             (self.waiting, self.ticks, self.kicks, self.next) = (None, 0, 0, None);
+            self.planned.retain(|at| *at > now);
             return Verdict::Nothing;
         }
         let planned = self.planned.first().is_some_and(|at| *at <= now);
@@ -180,5 +182,17 @@ mod tests {
             .collect();
         // One tick each at 0, 300 ms, 1 s and 3 s (ticks fall on 16 ms).
         assert_eq!(kicks, [0, 304, 1008, 3008]);
+    }
+
+    /// Hidden past the last planned kick: none is left to watch for.
+    #[test]
+    fn a_hidden_window_spends_the_kicks_planned() {
+        let (mut stall, start) = (Stall::new(), Instant::now());
+        stall.displays_changed(start);
+        assert!(stall.watching());
+        assert_eq!(stall.check(start + ms(2000), 0, false, false), Verdict::Nothing);
+        assert!(stall.watching(), "the kick at 3 s is still to come");
+        assert_eq!(stall.check(start + ms(3000), 0, false, false), Verdict::Nothing);
+        assert!(!stall.watching());
     }
 }
