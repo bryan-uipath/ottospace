@@ -94,7 +94,12 @@ impl Meeting {
 /// The meeting at `now`: the one the band's now card names (`Calendar::next`), if it runs or
 /// starts within `MEETING_FROM`.
 pub fn meeting(calendar: &Calendar, now: u64) -> Option<Meeting> {
-    let (event, stage) = calendar.next(now).filter(|_| calendar.on)?;
+    // `next` looks past midnight only `APPROACHING` ahead: a meeting at 00:15 counts from 23:45.
+    let after = || {
+        let soon = |e: &&crate::calendar::Event| !e.all_day && e.start > now && e.start - now <= MEETING_FROM;
+        calendar.events.iter().find(soon).map(|e| (e, crate::calendar::stage(e, now)))
+    };
+    let (event, stage) = calendar.next(now).or_else(after).filter(|_| calendar.on)?;
     let in_min = match stage {
         Stage::Running => None,
         _ if event.start.saturating_sub(now) <= MEETING_FROM => Some(event.start.saturating_sub(now).div_ceil(60_000)),
@@ -327,6 +332,11 @@ mod tests {
         let c = calendar(vec![event(1, NINE, 60, None), event(2, NINE + 30 * M, 30, None)]);
         assert_eq!(meeting(&c, NINE + 10 * M).map(|m| (m.id, m.in_min)), Some((1, None)), "20 min off: the one on");
         assert_eq!(meeting(&c, NINE + 22 * M).map(|m| (m.id, m.in_min)), Some((2, Some(8))));
+        // Past midnight, from 30 minutes before: the day's list ends at midnight.
+        let midnight = NINE + 15 * 60 * M;
+        let late = calendar(vec![event(4, midnight + 15 * M, 30, None)]);
+        assert_eq!(meeting(&late, midnight - 5 * M).map(|m| m.in_min), Some(Some(20)));
+        assert_eq!(meeting(&late, midnight - 16 * M), None);
         let all_day = Event { all_day: true, ..event(3, NINE, 60, None) };
         assert_eq!(meeting(&calendar(vec![all_day]), NINE + M), None, "an all-day entry is no meeting");
     }

@@ -11,7 +11,7 @@ use ottospace_core::status_bar::{self, Agents, Fit, Meeting, Place, Widths};
 use ottospace_core::tasks::Group;
 use ottospace_core::{Action, Kind, theme};
 
-use crate::{Tooltip, Workspace, cut_text, now_ms};
+use crate::{Mark, Tooltip, Workspace, cut_text, mark, now_ms};
 
 /// How long `git status` may take.
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -31,7 +31,7 @@ pub struct Checkout {
 pub struct Reader {
     jobs: Sender<(String, Vec<String>)>,
     reads: Receiver<(String, Option<Checkout>)>,
-    asked: Option<(String, Vec<String>, Option<String>)>,
+    asked: Option<(String, Vec<String>, Option<String>, u32)>,
     held: Option<(String, Option<Checkout>)>,
 }
 
@@ -40,7 +40,9 @@ impl Reader {
         let (jobs, inbox) = channel::<(String, Vec<String>)>();
         let (done, reads) = channel();
         std::thread::spawn(move || {
-            for (dir, roots) in inbox {
+            while let Ok(job) = inbox.recv() {
+                // Only the newest: a focus that moved on while git ran needs no read of the old one.
+                let (dir, roots) = inbox.try_iter().last().unwrap_or(job);
                 let read = read(Path::new(&dir), &roots);
                 if done.send((dir, read)).is_err() {
                     return;
@@ -51,12 +53,12 @@ impl Reader {
         Self { jobs, reads, asked: None, held: None }
     }
 
-    /// Asks for `dir`'s checkout if it, `roots` (`status_bar::reads_changes`) or `program`
-    /// changed since the last ask.
-    pub fn ask(&mut self, dir: Option<&str>, roots: Vec<String>, program: Option<String>) {
-        let key = dir.map(|dir| (dir.to_string(), roots, program));
+    /// Asks for `dir`'s checkout if it, `roots` (`status_bar::reads_changes`), `program` or the
+    /// focused `pane` changed since the last ask.
+    pub fn ask(&mut self, dir: Option<&str>, roots: Vec<String>, program: Option<String>, pane: u32) {
+        let key = dir.map(|dir| (dir.to_string(), roots, program, pane));
         if key != self.asked {
-            if let Some((dir, roots, _)) = &key {
+            if let Some((dir, roots, ..)) = &key {
                 let _ = self.jobs.send((dir.clone(), roots.clone()));
             }
             self.asked = key;
@@ -92,7 +94,7 @@ fn read(dir: &Path, roots: &[String]) -> Option<Checkout> {
         return Some(Checkout { branch, dirty: false });
     };
     let mut status = crate::child::git_read(Path::new(&top));
-    status.args(["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules"]);
+    status.args(["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=dirty"]);
     // One line is enough to know: what follows is not read.
     let said = crate::child::run(status, TIMEOUT, 256).ok();
     Some(Checkout { branch, dirty: said.is_some_and(|said| !said.out.trim().is_empty()) })
@@ -138,8 +140,9 @@ impl Workspace {
             Some(Place::Folder(dir)) => Some(dir),
             _ => None,
         };
-        let program = self.model.status_pane().and_then(|p| self.terminals.get(&p.id)?.foreground_command());
-        self.status_git.ask(folder.as_deref(), self.model.checkout_roots(), program);
+        let pane = self.model.status_pane().map_or(0, |p| p.id);
+        let program = self.terminals.get(&pane).and_then(|t| t.foreground_command());
+        self.status_git.ask(folder.as_deref(), self.model.checkout_roots(), program, pane);
         if self.status_git.take() {
             cx.notify();
         }
@@ -212,7 +215,8 @@ impl Workspace {
 
     fn place_segment(&self, place: &Place, name_only: bool, cx: &mut Context<Self>) -> Stateful<Div> {
         let segment = div().id("status-place").relative().flex().items_center().gap(px(6.)).min_w_0();
-        let segment = match place {
+        let segment = segment.child(mark(&self.marks, Mark::StatusPlace));
+        match place {
             Place::App(name) => segment.child(cut_text(name.clone())),
             Place::Folder(dir) => {
                 let (text, branch, dirty) = self.folder_parts(dir, name_only);
@@ -223,18 +227,23 @@ impl Workspace {
                     .cursor_pointer()
                     .child(icon("icons/folder.svg"))
                     .child(cut_text(text))
+                    // A long branch is cut too: the segment shrinks whole (`status_bar::fit`).
                     .children(branch.map(|branch| {
-                        let part = div().flex_none().flex().items_center().gap(px(6.));
-                        part.child(div().text_color(rgb(theme::BORDER_STRONG)).child("·"))
+                        let part = div().min_w_0().flex().items_center().gap(px(6.));
+                        part.child(div().flex_none().text_color(rgb(theme::BORDER_STRONG)).child("·"))
                             .child(icon("icons/repos.svg"))
-                            .child(branch)
+                            .child(cut_text(branch))
                     }))
                     .when(dirty, |d| d.child(div().flex_none().text_color(rgb(theme::SNEAK)).child("●")))
                     .tooltip(tip)
-                    .on_click(cx.listener(|this, _, window, cx| this.click_status("place", window, cx)))
+                    .child(self.controls.mark("status:place"))
+                    // The path drawn: a folder changed since is not the one clicked.
+                    .on_click(cx.listener({
+                        let path = dir.clone();
+                        move |this, _, window, cx| this.copy_status_path(path.clone(), window, cx)
+                    }))
             }
-        };
-        segment.child(self.controls.mark("status:place"))
+        }
     }
 
     fn meeting_segment(&self, meeting: &Meeting, short: bool, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -248,7 +257,14 @@ impl Workspace {
                 .font_weight(FontWeight::MEDIUM)
                 .child("Join")
                 .child(self.controls.mark("status:join"))
-                .on_click(cx.listener(|this, _, window, cx| this.click_status("join", window, cx)))
+                .on_click({
+                    // The meeting drawn: another that runs by the click is not joined.
+                    let id = meeting.id;
+                    cx.listener(move |this, _, window, cx| {
+                        this.dispatch(Action::CalendarJoin { id }, this.input, window, cx);
+                        cx.notify();
+                    })
+                })
         });
         div()
             .id("status-meeting")
@@ -262,7 +278,7 @@ impl Workspace {
             .child(meeting.text(short))
             .when(join.is_some(), |d| d.child(div().text_color(rgb(theme::BORDER_STRONG)).child("·")))
             .children(join)
-            .child(self.controls.mark("status:meeting"))
+            .child(mark(&self.marks, Mark::StatusMeeting))
     }
 
     fn agents_segment(&self, agents: Agents, short: bool, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -274,6 +290,11 @@ impl Workspace {
             };
             div().flex_none().text_color(rgb(color)).child(text)
         });
+        // `● 2 working · ● 1 needs you`: a dot between the two, as `Agents::text`.
+        let parts = parts.enumerate().flat_map(|(n, part)| {
+            let dot = (n > 0 && !short).then(|| div().flex_none().text_color(rgb(theme::BORDER_STRONG)).child("·"));
+            dot.into_iter().chain([part])
+        });
         let tip = format!("{} · ⌘⇧N goes to the next that needs you", agents.text(false));
         let segment = div()
             .id("status-agents")
@@ -281,12 +302,13 @@ impl Workspace {
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(if short { 6. } else { 10. }))
+            .gap(px(6.))
             .children(parts)
-            .child(self.controls.mark("status:agents"));
+            .child(mark(&self.marks, Mark::StatusAgents));
         match agents == Agents::default() {
             true => segment,
             false => segment
+                .child(self.controls.mark("status:agents"))
                 .cursor_pointer()
                 .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
                 .on_click(cx.listener(|this, _, window, cx| this.click_status("agents", window, cx))),
@@ -299,7 +321,7 @@ impl Workspace {
         match name {
             "place" => {
                 if let Some(Place::Folder(path)) = self.status_place() {
-                    self.dispatch(Action::CopyPath { path }, self.input, window, cx);
+                    self.copy_status_path(path, window, cx);
                 }
             }
             "join" => {
@@ -313,16 +335,23 @@ impl Workspace {
         cx.notify();
     }
 
+    fn copy_status_path(&mut self, path: String, window: &Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::CopyPath { path }, self.input, window, cx);
+        cx.notify();
+    }
+
     /// The bar's segments in the state: where each is drawn; the place's and the agents' text.
     /// The meeting's title is never here: only whether it shows, and where.
     pub(crate) fn status_snapshot(&self) -> serde_json::Value {
-        let at = |id: &str| self.controls.bounds(id).map(crate::rect);
+        let marks = self.marks.borrow();
+        let drawn = |m: Mark| marks.get(&m).copied().map(crate::rect);
         let place = self.status_place();
         let fit = self.status_fit.get();
+        let join = self.controls.bounds("status:join").map(crate::rect);
         serde_json::json!({
-            "place": place.map(|p| serde_json::json!({ "text": self.place_line(&p, fit.folder_name), "rect": at("status:place") })),
-            "meeting": self.status_meeting().map(|_| serde_json::json!({ "rect": at("status:meeting"), "join": at("status:join") })),
-            "agents": { "text": self.model.agents().text(fit.agents_short), "rect": at("status:agents") },
+            "place": place.map(|p| serde_json::json!({ "text": self.place_line(&p, fit.folder_name), "rect": drawn(Mark::StatusPlace) })),
+            "meeting": self.status_meeting().map(|_| serde_json::json!({ "rect": drawn(Mark::StatusMeeting), "join": join })),
+            "agents": { "text": self.model.agents().text(fit.agents_short), "rect": drawn(Mark::StatusAgents) },
             "shrink": fit.steps(),
         })
     }

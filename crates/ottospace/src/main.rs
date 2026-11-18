@@ -661,8 +661,11 @@ enum Mark {
     CalendarAllDay,
     CalendarFirstRow,
     CalendarFetch,
-    /// The status bar.
+    /// The status bar, and its place, meeting and agents segments.
     Status,
+    StatusPlace,
+    StatusMeeting,
+    StatusAgents,
     /// The notice bar, its × and what it offers.
     Notice,
     NoticeClose,
@@ -6892,7 +6895,7 @@ impl Workspace {
         // What the middle keeps whole (the hint is cut): the room left is the segments'.
         let kept = [back.as_deref(), clip.as_deref(), pending.as_deref()];
         let middle = kept.iter().flatten().map(|text| status_bar::width(window, text) + 12.).sum::<f32>()
-            + if mode.is_empty() { 0. } else { status_bar::width(window, mode) + 16. };
+            + if mode.is_empty() { 0. } else { status_bar::width(window, mode) + 16. + 12. };
         let segments = self.status_segments(middle, window, cx);
         self.status_fit.set(segments.fit);
         div()
@@ -7371,6 +7374,9 @@ impl Render for Workspace {
                     | Mark::Space(_)
                     | Mark::KeysKnown
                     | Mark::ComposeSwitch
+                    | Mark::StatusPlace
+                    | Mark::StatusMeeting
+                    | Mark::StatusAgents
             )
         };
         self.marks.borrow_mut().retain(|mark, _| !drawn_anew(mark));
