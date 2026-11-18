@@ -249,7 +249,8 @@ fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_still_spl
     // no small window: only its subrole makes it a pop-up.
     canary.call(json!({"cmd": "dialog", "at": spot}));
     let dialog = wait_for("the dialog over the pane", || frame(1).filter(|f| over_pane(*f)));
-    assert!(close(dialog[2], 700.0) && close(dialog[3], 450.0), "its own size: {dialog:?}");
+    // GPUI's bounds hold the title bar too.
+    assert!(close(dialog[2], 700.0) && (450.0..520.0).contains(&dialog[3]), "its own size: {dialog:?}");
     // A small standard window: the same.
     canary.call(json!({"cmd": "open_window", "fixed": [420.0, 300.0]}));
     wait_for("the small window", || frame(2));
