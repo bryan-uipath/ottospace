@@ -1309,7 +1309,7 @@ Only you can read it (0600). At 1 MB it becomes `log.1` and the one before goes:
 | `give_back_failed` | A hosted window could not be put back on a screen: its number |
 | `gpui` | An error or warning of GPUI's macOS layer: `level`, `src` (`gpui-0.2.2/src/platform/mac/window.rs:489`), `said` only when fixed words and a code (`could not create display link, code: -6661`), and `n`: one from the same place is written its 1st, 2nd, 4th, 8th.. time |
 | `panic` | `src` (`crate/src/file.rs:line`) and `thread`; never the message |
-| `listen_audio` | A transcript's sound started: the app's `bundle`, `pids` the stream hears (the app and the helpers it started that ScreenCaptureKit offers), whether it or a helper was `playing`, and `unoffered`: helpers playing that SCK does not offer, whose sound is not heard |
+| `listen_audio` | A transcript's sound started: the app's `bundle`, `pids` the stream hears (the app and the helpers it started that ScreenCaptureKit offers, of its own bundle id or one under it), whether it or a helper was `playing`, and `unoffered`: helpers playing that SCK does not offer, whose sound is not heard |
 | `listen_audio_filter` | The app's helpers changed while transcribing (looked at every 5 s): `bundle`, `pids` heard now |
 | `listen_counts` | Every 10 s while transcribing: `bundle`, `buffers` of sound the stream gave, `loud` (of those, with sound), `lines` the recogniser finished |
 | `listen_quiet` | No sound 10 s after a start, from an app that was playing: `bundle`, `pids`, `buffers` (none: SCK sent nothing) |

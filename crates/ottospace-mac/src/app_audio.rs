@@ -1,5 +1,5 @@
 //! One app's audio output, by ScreenCaptureKit: a display filter with only that app and the
-//! helpers it started that SCK offers as apps, audio on, ottospace's own sound left out, 16 kHz
+//! helpers it started, of its bundle id, that SCK offers as apps, audio on, ottospace's own sound left out, 16 kHz
 //! mono Float32. SCK needs a display stream, so the video is 2×2 at one frame a second and
 //! dropped unread. Audio is filtered per app (its pid), not per window. Screen Recording covers
 //! it ("Screen & System Audio Recording").
@@ -33,11 +33,22 @@ fn lineage(pid: i32, parent: impl Fn(i32) -> Option<i32>) -> impl Iterator<Item 
     std::iter::successors(Some(pid), move |p| parent(*p).filter(|q| *q > 1 && q != p)).take(DEPTH)
 }
 
-/// The pids a stream of `chosen` hears: it, then each `offered` pid it started, directly or not,
-/// in order. Zoom (89087) with `aomhost` (its child) offered: `[89087, aomhost's pid]`.
-pub(crate) fn included(offered: &[i32], parent: impl Fn(i32) -> Option<i32> + Copy, chosen: i32) -> Vec<i32> {
-    let mut helpers: Vec<i32> =
-        offered.iter().copied().filter(|&pid| pid != chosen && lineage(pid, parent).any(|p| p == chosen)).collect();
+/// Whether `helper`'s bundle id is `app`'s own or under it (`us.zoom.xos.aomhost` of
+/// `us.zoom.xos`). Neither empty: a browser a terminal's shell started is not the terminal's.
+fn same_maker(helper: &str, app: &str) -> bool {
+    !app.is_empty() && helper.strip_prefix(app).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+}
+
+/// The pids a stream of `chosen` hears: it, then each `offered` (pid, bundle id) it started,
+/// directly or not, of its own bundle id or one under it, in order. Zoom (89087) with
+/// `us.zoom.xos.aomhost` (its child) offered: `[89087, aomhost's pid]`.
+pub(crate) fn included(offered: &[(i32, &str)], parent: impl Fn(i32) -> Option<i32> + Copy, chosen: i32) -> Vec<i32> {
+    let bundle = offered.iter().find(|(pid, _)| *pid == chosen).map_or("", |(_, bundle)| bundle);
+    let mut helpers: Vec<i32> = offered
+        .iter()
+        .filter(|(pid, helper)| *pid != chosen && same_maker(helper, bundle) && lineage(*pid, parent).any(|p| p == chosen))
+        .map(|(pid, _)| *pid)
+        .collect();
     // SCK's list has no order: the same helpers are the same filter.
     helpers.sort_unstable();
     std::iter::once(chosen).chain(helpers).collect()
@@ -69,7 +80,8 @@ fn offered() -> Result<(SCDisplay, Vec<SCRunningApplication>), String> {
 
 /// The pids a stream of `pid` hears among `apps`.
 fn included_of(apps: &[SCRunningApplication], pid: i32) -> Vec<i32> {
-    let all: Vec<i32> = apps.iter().map(|app| app.process_id()).collect();
+    let bundles: Vec<(i32, String)> = apps.iter().map(|app| (app.process_id(), app.bundle_identifier())).collect();
+    let all: Vec<(i32, &str)> = bundles.iter().map(|(pid, bundle)| (*pid, bundle.as_str())).collect();
     included(&all, crate::process::parent, pid)
 }
 
@@ -250,24 +262,28 @@ mod tests {
         pairs.iter().copied().collect()
     }
 
+    const ZOOM: &str = "us.zoom.xos";
+
     #[test]
     fn a_zoom_like_tree_names_its_offered_children() {
         // zoom.us 89087; aomhost ×2, caphost and a Cef helper its children; another app beside it.
         let map = parents(&[(89087, 1), (96341, 89087), (97986, 89087), (90952, 89087), (28884, 89087), (500, 1)]);
-        let offered = [500, 89087, 96341, 97986, 90952];
+        let aom = "us.zoom.xos.aomhost";
+        let offered = [(500, "com.other"), (89087, ZOOM), (96341, aom), (97986, aom), (90952, "us.zoom.xos.caphost")];
         assert_eq!(included(&offered, |p| map.get(&p).copied(), 89087), [89087, 90952, 96341, 97986]);
     }
 
     #[test]
     fn grandchildren_are_named() {
         let map = parents(&[(10, 1), (11, 10), (12, 11), (13, 12)]);
-        assert_eq!(included(&[10, 13, 12], |p| map.get(&p).copied(), 10), [10, 12, 13]);
+        let offered = [(10, ZOOM), (13, "us.zoom.xos.b"), (12, "us.zoom.xos.a")];
+        assert_eq!(included(&offered, |p| map.get(&p).copied(), 10), [10, 12, 13]);
     }
 
     #[test]
     fn an_app_with_no_children_is_named_alone() {
         let map = parents(&[(10, 1), (20, 1)]);
-        assert_eq!(included(&[10, 20], |p| map.get(&p).copied(), 10), [10]);
+        assert_eq!(included(&[(10, ZOOM), (20, "us.zoom.xos.x")], |p| map.get(&p).copied(), 10), [10]);
         // Not offered at all: still named, the caller finds it.
         assert_eq!(included(&[], |p| map.get(&p).copied(), 10), [10]);
     }
@@ -276,20 +292,34 @@ mod tests {
     fn an_unrelated_app_of_the_same_name_is_not_named() {
         // Two `zoom.us`: 30 and 40, each launched by launchd; 41 is 40's child.
         let map = parents(&[(30, 1), (40, 1), (41, 40)]);
-        assert_eq!(included(&[30, 40, 41], |p| map.get(&p).copied(), 30), [30]);
+        let offered = [(30, ZOOM), (40, ZOOM), (41, "us.zoom.xos.aomhost")];
+        assert_eq!(included(&offered, |p| map.get(&p).copied(), 30), [30]);
+    }
+
+    #[test]
+    fn a_child_of_another_maker_or_of_none_is_not_named() {
+        // iTerm 10; Chrome its shell's child; a helper of no bundle id; a look-alike prefix; a
+        // second iTerm it started.
+        let map = parents(&[(10, 1), (11, 10), (12, 11), (13, 10), (14, 10), (15, 10)]);
+        let iterm = "com.googlecode.iterm2";
+        let offered = [(10, iterm), (12, "com.google.Chrome"), (13, ""), (14, "com.googlecode.iterm2x"), (15, iterm)];
+        assert_eq!(included(&offered, |p| map.get(&p).copied(), 10), [10, 15]);
+        // An app of no bundle id names no helper.
+        assert_eq!(included(&[(10, ""), (13, "")], |p| map.get(&p).copied(), 10), [10]);
     }
 
     #[test]
     fn helpers_in_another_order_are_the_same() {
         let map = parents(&[(10, 1), (11, 10), (12, 10)]);
-        let of = |offered: &[i32]| included(offered, |p| map.get(&p).copied(), 10);
-        assert_eq!(of(&[12, 10, 11]), of(&[11, 12, 10]));
+        let of = |offered: &[(i32, &str)]| included(offered, |p| map.get(&p).copied(), 10);
+        let (a, b) = ((11, "us.zoom.xos.a"), (12, "us.zoom.xos.b"));
+        assert_eq!(of(&[b, (10, ZOOM), a]), of(&[a, b, (10, ZOOM)]));
     }
 
     #[test]
     fn a_parent_loop_ends() {
         // A pid reused while read: 50 and 51 each other's parent.
         let map = parents(&[(50, 51), (51, 50), (60, 1)]);
-        assert_eq!(included(&[50, 51], |p| map.get(&p).copied(), 60), [60]);
+        assert_eq!(included(&[(50, ZOOM), (51, ZOOM)], |p| map.get(&p).copied(), 60), [60]);
     }
 }

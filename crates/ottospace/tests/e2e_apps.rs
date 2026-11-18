@@ -2052,9 +2052,10 @@ fn wav(file: &std::path::Path, parts: &[(f64, bool)]) {
     std::fs::write(file, out).expect("write the sound");
 }
 
-/// Zoom plays a meeting from `aomhost`, its child: the stream of an app names each child that
-/// ScreenCaptureKit offers as an app (one with a window), and hears it. The canary's child is
-/// such an app, with a window never shown; the log says how many pids the stream heard.
+/// An app's helpers (Teams's `com.microsoft.teams2.helper`): the stream of an app names each
+/// child of its own bundle id, or one under it, that ScreenCaptureKit offers as an app (one with
+/// a window), and hears it. The canary runs from a bundle the test makes, so it and its child
+/// have a bundle id; the child has a window never shown. The log says how many pids were heard.
 #[test]
 #[ignore = "hears the canary's child's tone; run with `cargo e2e-apps`"]
 fn a_tone_the_canarys_app_child_plays_is_heard() {
@@ -2063,8 +2064,17 @@ fn a_tone_the_canarys_app_child_plays_is_heard() {
     std::fs::write(home.join("settings.json"), json!({"restore_layout": false}).to_string()).expect("settings");
     let tone = home.join("tone.wav");
     wav(&tone, &[(20., true)]);
+    let contents = home.join("Canary.app/Contents");
+    std::fs::create_dir_all(contents.join("MacOS")).expect("make the bundle");
+    let exe = contents.join("MacOS/ottospace-canary");
+    std::fs::copy(env!("CARGO_BIN_EXE_ottospace-canary"), &exe).expect("copy the canary");
+    let plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>\
+        <key>CFBundleIdentifier</key><string>com.ottospace.canary.test</string>\
+        <key>CFBundleExecutable</key><string>ottospace-canary</string>\
+        <key>CFBundlePackageType</key><string>APPL</string></dict></plist>";
+    std::fs::write(contents.join("Info.plist"), plist).expect("write the bundle's plist");
 
-    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-child", "CANARY_SOCKET", &[]);
+    let canary = Proc::launch(exe.to_str().expect("a plain path"), "canary-child", "CANARY_SOCKET", &[]);
     wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
     let otto = Proc::launch(
         env!("CARGO_BIN_EXE_ottospace"),
