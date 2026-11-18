@@ -3378,7 +3378,8 @@ impl Default for Model {
             ending: Vec::new(),
             by_user: false,
             next_id: 0,
-            spaces: vec![Space::new(Owner::Home)],
+            // Born settled: Home's tab is its last, as `settle_spaces` leaves it after any step.
+            spaces: vec![Space { last: Some(HOME_TAB), ..Space::new(Owner::Home) }],
             drawer_open: false,
             folded: None,
             unlinked: Vec::new(),
@@ -10914,6 +10915,29 @@ mod tests {
         );
         // A workspace of one task: the rail still shows it.
         assert_eq!(rail_tasks(&workspace_of_one_task()), [1]);
+    }
+
+    /// git's answer to the user's + opens the checkout's workspace, as a click on its row would;
+    /// only the user's own click also puts the task there in front (seed 81412).
+    #[test]
+    fn a_worktree_answer_opens_its_workspace_and_leaves_the_front() {
+        let mut m = workspace_of_one_task();
+        join(&mut m, "third >app-2");
+        m.update(Action::TalkFront { task: 1 });
+        let of = m.task_space(2);
+        m.update(Action::SpaceSelect { index: 0 });
+        let answer = Action::WorktreeAdded {
+            repo: "/code/app".into(),
+            path: "/code/app-2".into(),
+            asked: "/code/app-2".into(),
+            fresh: false,
+            repos: listed(),
+        };
+        m.update(answer.sent_by(Origin::System));
+        assert_eq!((m.space(), m.front(&of)), (&of, Some(1)));
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::RepoClick { path: "/code/app-2".into(), axis: Right });
+        assert_eq!((m.space(), m.front(&of)), (&of, Some(2)));
     }
 
     #[test]
