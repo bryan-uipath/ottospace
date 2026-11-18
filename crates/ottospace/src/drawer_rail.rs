@@ -117,6 +117,7 @@ impl Workspace {
         let divider = div().flex_none().w(px(20.)).h(px(1.)).my(px(8.)).bg(rgb(theme::BORDER));
         let foot = (!foot.is_empty())
             .then(|| div().flex_none().flex().flex_col().items_center().child(divider).children(foot));
+        let tasks = self.bars.tracked_under("drawer-rail", tasks, &self.rail_scroll, theme::BACKGROUND).w_full();
         column.child(tasks).child(self.rail_follow()).children(foot).pb_2().child(self.controls.mark("drawer-rail"))
     }
 

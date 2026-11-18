@@ -499,6 +499,8 @@ impl Workspace {
                     .into_any_element(),
                 _ => return said("Reading…".into()),
             };
+        let handle = view.map(FileView::handle).unwrap_or_default();
+        let body = self.bars.tracked(&format!("viewer:{id}"), body, &handle, theme::BACKGROUND).size_full();
         div().absolute().size_full().bg(rgb(theme::BACKGROUND)).child(body).into_any_element()
     }
 
