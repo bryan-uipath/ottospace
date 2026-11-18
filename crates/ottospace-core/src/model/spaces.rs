@@ -597,7 +597,11 @@ impl Model {
                 }
             };
             // A workspace bound to a task since it was selected: its tabs are the task's (seed 28003).
-            let to = self.workbooks.space_of(&to);
+            // A task that joined another's space: there, as `place_tab` sends one.
+            let to = match self.workbooks.space_of(&to) {
+                Owner::Task { id } => self.task_space(id),
+                of => of,
+            };
             // A dismissal taken back finds its task's tabs where they went.
             for (_, tabs, home) in &mut self.unlinked {
                 if tabs.iter().any(|id| ids.contains(id)) {
