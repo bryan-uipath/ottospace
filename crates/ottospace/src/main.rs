@@ -134,6 +134,11 @@ struct Latest {
     /// When the stream last said anything, a frame or "nothing changed" (milliseconds since
     /// 1970). It says nothing while its window is not drawn: minimised, or on another Space.
     seen: AtomicU64,
+    /// What the stream has sent, frames and "nothing changed": a test run shows that a live
+    /// window's stream sends none and starts again as it parks.
+    samples: AtomicU64,
+    /// The frame held is from before the stream last started: a capture waits for a new one.
+    old: AtomicBool,
 }
 
 impl Latest {
@@ -147,6 +152,7 @@ struct Output(Arc<Latest>);
 impl SCStreamOutputTrait for Output {
     fn did_output_sample_buffer(&self, sample: CMSampleBuffer, _: SCStreamOutputType) {
         self.0.seen.store(now_ms(), Relaxed);
+        self.0.samples.fetch_add(1, Relaxed);
         let ptr = sample.image_buffer_ptr_borrowed();
         if ptr.is_null() {
             return; // idle frames carry no image
@@ -158,6 +164,7 @@ impl SCStreamOutputTrait for Output {
         }
         if let Ok(mut slot) = self.0.frame.lock() {
             *slot = Some(Frame(buffer));
+            self.0.old.store(false, Relaxed);
             self.0.dirty.store(true, Relaxed);
         }
     }
@@ -194,6 +201,9 @@ struct Hosted {
     off_screen: bool,
     latest: Arc<Latest>,
     stream: SCStream,
+    /// The stream is stopped while the window is live: a captured window loses quick clicks
+    /// (Finder misses double-clicks). Holds what the stream was configured to show then.
+    paused: Option<(CGSize, f64)>,
     pid: i32,
     /// Window corner radius in points, for masking the stream's black corners.
     radius: f64,
@@ -267,6 +277,7 @@ impl Hosted {
             window,
             original,
             latest,
+            paused: None,
             stream,
             pid,
             radius,
@@ -336,6 +347,11 @@ impl Hosted {
         let content = CGSize::new(frame.size.width, frame.size.height - self.crop);
         let shown = CGSize::new(pane.width.min(content.width), pane.height.min(content.height));
         let asked = (shown, self.crop);
+        // Live: the click rule and the mask follow the window; `resume` configures the stream.
+        if self.paused.is_some() {
+            (self.shown, self.shown_crop, self.content) = (shown, self.crop, content);
+            return Some(content);
+        }
         if asked == (self.shown, self.shown_crop) {
             self.content = content;
             return Some(content);
@@ -386,6 +402,33 @@ impl Hosted {
         self.place(pane_rect(rect, keep, true, crop), crop);
         self.window.raise();
         self.show(window.scale_factor() as f64);
+    }
+
+    /// Stops the stream while the window is live: the real window is on screen, and a captured
+    /// one loses quick clicks.
+    fn pause(&mut self) {
+        if self.paused.is_some() {
+            return;
+        }
+        match self.stream.stop_capture() {
+            Ok(()) => self.paused = Some((self.shown, self.shown_crop)),
+            Err(_) => event_log::event("stream_stop_failed", serde_json::json!({ "window": self.window_id })),
+        }
+    }
+
+    /// Starts the stream again once the window is parked, configured for what the pane shows.
+    /// A failed start stays paused, and the next park tries again.
+    fn resume(&mut self, scale: f64) {
+        let Some(streamed) = self.paused else { return };
+        // Here, not in `pause`: a frame sent as the stream stopped may land after the stop.
+        self.latest.old.store(true, Relaxed);
+        if self.stream.start_capture().is_err() {
+            return event_log::event("stream_start_failed", serde_json::json!({ "window": self.window_id }));
+        }
+        self.paused = None;
+        // What the stream shows; `show` configures it for the pane now.
+        (self.shown, self.shown_crop) = streamed;
+        self.show(scale);
     }
 
     /// The crop for this window with its pane content at `rect`; see `titlebar::crop`.
@@ -1708,7 +1751,9 @@ impl Workspace {
                         let limit = top_limit(window, cx);
                         let rect = on_screen(hosted.bounds.get(), window, cx);
                         let crop = hosted.crop_at(rect, limit);
-                        hosted.park(pane_rect(rect, keep, false, crop).size, window.scale_factor() as f64, crop);
+                        let scale = window.scale_factor() as f64;
+                        hosted.park(pane_rect(rect, keep, false, crop).size, scale, crop);
+                        hosted.resume(scale);
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
                         // bar shows no mode. If the user moved to a third app, leave them there.
@@ -1828,13 +1873,15 @@ impl Workspace {
                     .detach();
                 }
                 Effect::Live(id) => {
-                    self.live_since = Some(Instant::now());
                     self.went_live += 1;
                     let keep = self.bars_leave();
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("unpark", serde_json::json!({ "pane": id, "window": hosted.window_id }));
+                        hosted.pause();
                         hosted.bring_up(keep, window, cx);
                     }
+                    // After the blocking stop and AX calls: the activation they delay is still ignored.
+                    self.live_since = Some(Instant::now());
                 }
             }
         }
@@ -3428,6 +3475,13 @@ impl Workspace {
         });
         // Restored or rebuilt panes still empty: `pane`, `why`, and where its "Open <App>" is drawn, or null.
         state["unfilled"] = unfilled.into();
+        // Test runs only: what each app pane's stream has sent, `stream_samples_<pane>` (`counts`
+        // holds numbers only).
+        if let Some(counts) = state["counts"].as_object_mut() {
+            for (id, hosted) in &self.hosted {
+                counts.insert(format!("stream_samples_{id}"), hosted.latest.samples.load(Relaxed).into());
+            }
+        }
         // Where the box offers a choice of where the task works: `new` (a new worktree, the user's
         // choice), the repository's name and the `branch` it would make; else null.
         state["compose_worktree"] = serde_json::json!(self.model.compose_worktree());

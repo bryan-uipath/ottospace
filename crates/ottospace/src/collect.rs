@@ -354,7 +354,9 @@ impl Workspace {
                 let pane = crate::to_cg(hosted.bounds.get().size);
                 let expected = hosted.latest.expected.load(Relaxed);
                 let frame = hosted.frame().map(|frame| (frame.get_width() as u64) << 32 | frame.get_height() as u64);
-                hosted.parked_size == pane && frame == Some(expected)
+                // Not the frame from before the pane went live.
+                let fresh = hosted.paused.is_none() && !hosted.latest.old.load(Relaxed);
+                hosted.parked_size == pane && frame == Some(expected) && fresh
             });
             (drawn && framed) || waited >= SETTLE_MOST
         };
@@ -415,7 +417,9 @@ impl Workspace {
         let shown = size(px(hosted.shown.width as f32), px(hosted.shown.height as f32));
         let (pid, window_id) = (hosted.pid, hosted.window_id);
         // The stream says nothing while its window is not drawn: the frame held may be old.
-        let stale = now_ms().saturating_sub(hosted.latest.seen.load(Relaxed)) > STALE_MS;
+        let stale = now_ms().saturating_sub(hosted.latest.seen.load(Relaxed)) > STALE_MS
+            || hosted.paused.is_some()
+            || hosted.latest.old.load(Relaxed);
         let frozen = match hosted.frame() {
             Some(buffer) => Frozen::App { buffer, shown },
             None => Frozen::Blank,
