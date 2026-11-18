@@ -2562,6 +2562,13 @@ impl Workspace {
                     failure = Some(ottospace_core::capture_model::DRAFT_OPEN.into());
                     None
                 }
+                // The drawer the user collapsed: only they open it.
+                Request::Compose { .. }
+                    if self.model.refusal(&Action::OpenCompose { text: String::new() }, Origin::Socket).is_some() =>
+                {
+                    failure = Some(ottospace_core::model::rail::DRAWER_USERS.into());
+                    None
+                }
                 Request::Compose { text } => {
                     self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
                     self.tell_compose_context(cx);

@@ -2963,6 +2963,9 @@ pub struct Model {
     /// The drawer was open when last on a conversation: a space with one opens it so.
     #[serde(skip)]
     pub(crate) drawer_open: bool,
+    /// What the user's ⌘⇧R or → collapsed, until the drawer shows something again: ⌘⇧R opens it.
+    #[serde(skip)]
+    pub(crate) folded: Option<rail::Folded>,
     /// The tabs a dismissed task had, linked again if the dismissal is taken back.
     #[serde(skip)]
     unlinked: Vec<(TaskId, Vec<u32>, Owner)>,
@@ -3363,6 +3366,7 @@ impl Default for Model {
             next_id: 0,
             spaces: vec![Space::new(Owner::Home)],
             drawer_open: false,
+            folded: None,
             unlinked: Vec::new(),
             departed: Vec::new(),
             joined_before: Vec::new(),
@@ -3512,6 +3516,8 @@ impl Model {
             // Nor puts the transcript the user has in the drawer away, or the keys over it.
             // Nor collapses the drawer into its rail, or opens a conversation there is from there.
             Action::TalkToggle => Some(rail::DRAWER_USERS),
+            // Nor opens the new-task box in a drawer the user collapsed: its ⌘N, the bar's or the rail's +.
+            Action::OpenCompose { .. } if self.folded.is_some() => Some(rail::DRAWER_USERS),
             Action::TalkKeys { on: true } if self.listen.shown => Some(rail::RAIL_USERS),
             Action::TalkKeys { on: true } if self.talk.as_ref().is_some_and(|talk| !talk.open) => {
                 Some(rail::DRAWER_USERS)
@@ -4053,6 +4059,10 @@ impl Model {
         self.settle_row_menu();
         self.settle_viewers(&mut effects);
         self.settle_listen();
+        // Something shows in the drawer's place: nothing is collapsed to reopen.
+        if !self.drawer_collapsed() {
+            self.folded = None;
+        }
         self.settle_agent(origin);
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
         if self.list.is_none() && listed.is_some() {
@@ -5894,6 +5904,11 @@ impl Model {
             // ⌘⇧R or a →: the drawer collapses into its rail, whatever it shows (a brief, the
             // inspector, the box's line put aside), but a capture's draft: the user's work in progress.
             Action::TalkToggle if self.by_user && !self.drawer_collapsed() && self.capture.is_none() => {
+                self.folded = Some(match () {
+                    _ if self.listen.shown => rail::Folded::Transcript,
+                    _ if self.welcome() => rail::Folded::Welcome,
+                    _ => rail::Folded::Rest,
+                });
                 self.listen.shown = false;
                 self.talk_keys(false, effects);
                 if let Some(talk) = &mut self.talk {
@@ -5903,6 +5918,14 @@ impl Model {
                 if self.compose_host() == Some(Host::Drawer) {
                     self.put_compose_aside();
                 }
+            }
+            // Reopened as it was collapsed: the transcript, or the box of a fresh start.
+            Action::TalkToggle if self.by_user && self.folded == Some(rail::Folded::Transcript) && self.listen_item() => {
+                self.rail_select(rail::RailItem::Transcript, effects)
+            }
+            Action::TalkToggle if self.by_user && self.folded == Some(rail::Folded::Welcome) && self.welcome() => {
+                self.folded = None;
+                self.act(Action::OpenCompose { text: String::new() }, effects);
             }
             // No conversation here: ⌘⇧R opens this drawer on the transcript, as a rail click (no jump to its pane).
             Action::TalkToggle if self.talk.is_none() && self.by_user => {
