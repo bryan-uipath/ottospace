@@ -872,7 +872,7 @@ impl Workspace {
     fn listen_panel(&self, width: f32, header: Div, body: impl IntoElement, cx: &mut Context<Self>) -> AnyElement {
         // At the header's right end: collapsed into the rail, the transcript goes on.
         let header = header.child(self.drawer_collapse("listen-collapse", cx).ml_auto());
-        let header = self.slide_head(header, crate::slide::DRAWER_HEAD, cx);
+        let header = self.slide_head(header, crate::slide::DRAWER_HEAD);
         div()
             .id("listen")
             .w(px(width))
@@ -905,7 +905,6 @@ impl Workspace {
             .border_color(rgb(theme::BORDER))
             .text_sm()
             .child("Transcript")
-            .child(div().text_xs().text_color(rgb(theme::MUTED)).child("not listening"))
             .child(self.controls.mark("listen-idle"));
         let pick = div()
             .id("listen-pick")
@@ -920,8 +919,6 @@ impl Workspace {
             .child("Transcribe a window…")
             .child(self.controls.mark("listen-pick"))
             .on_click(cx.listener(|this, _, window, cx| this.listen_pick(window, cx)));
-        let about =
-            "Listens to one app's sound: a call in Zoom, Teams or a browser tab. Lines land in a file on this Mac.";
         let rows = self.model.transcripts.today.iter().enumerate().map(|(at, past)| {
             let name = past.name.clone();
             let start = ottospace_core::calendar::clock(past.started_ms, crate::calendar::zone_offset(past.started_ms));
@@ -959,7 +956,6 @@ impl Workspace {
             .flex_col()
             .gap_2()
             .child(pick)
-            .child(div().text_xs().text_color(rgb(theme::MUTED)).child(about))
             .children(today);
         self.listen_panel(width, header, self.bars.area("listen-idle", body, theme::RAISED), cx)
     }

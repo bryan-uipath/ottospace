@@ -557,10 +557,10 @@ const PANE_HEADER: f32 = 28.;
 /// The least width a pane header keeps for its tag and title, e.g. `APP Calc…`.
 const HEADER_TITLE_MIN: f32 = 72.;
 
-/// Top-bar buttons: the name in the control's id (`top:new_tab`), icon, tooltip, split direction,
-/// and whether it makes a new tab (no picker) instead.
-const SPLITS: [(&str, &str, &str, Axis, bool); 3] = [
-    ("new_tab", "icons/plus.svg", "New tab  ⌘T", Axis::Right, true),
+/// Top-bar buttons: the name in the control's id (`top:split_right`), icon, tooltip, split
+/// direction, and whether it makes a new tab (no picker) instead. No + for a tab: ⌘T (the owner:
+/// two +s, workspace and tab, confused).
+const SPLITS: [(&str, &str, &str, Axis, bool); 2] = [
     ("split_right", "icons/split-right.svg", "Split right…  ⌘E", Axis::Right, false),
     ("split_down", "icons/split-down.svg", "Split down…  ⌘⇧E", Axis::Down, false),
 ];
@@ -1017,8 +1017,6 @@ struct Workspace {
     rail_scroll: ScrollHandle,
     rail_scrolled: RefCell<(u64, Option<drawer_rail::Drawn>)>,
     rail_pending: Rc<Cell<Option<(usize, u8)>>>,
-    /// The header the pointer is over whose arrow shows its key's cap (`slide`).
-    slide_hover: Option<&'static str>,
     /// The second row's tabs, and the tab last brought into view there.
     tabs_scroll: ScrollHandle,
     tabs_shown: Cell<Option<u32>>,
@@ -1523,7 +1521,6 @@ impl Workspace {
             rail_scroll: ScrollHandle::new(),
             rail_scrolled: RefCell::new((0, None)),
             rail_pending: Rc::new(Cell::new(None)),
-            slide_hover: None,
             tabs_scroll: ScrollHandle::new(),
             tabs_shown: Cell::new(None),
             bars: scrollbar::Bars::default(),
@@ -4980,7 +4977,7 @@ impl Workspace {
             .child(div().flex_1().border_r_1().border_color(rgb(theme::BORDER)))
             // The bar collapsed: → opens it again, on the section open last.
             .children(open.is_none().then(|| {
-                let open = self.slide_button("rail:open", (slide::RIGHT, slide::SIDEBAR_KEY), "Open the sidebar", None);
+                let open = self.slide_button("rail:open", (slide::RIGHT, slide::SIDEBAR_KEY), "Open the sidebar");
                 let open = open.on_click(cx.listener(|this, _, window, cx| this.sidebar_toggle(window, cx)));
                 div()
                     .flex_none()
@@ -5064,17 +5061,13 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _, window, cx| this.bar_add(section, window, cx)))
             }))
             .child(
-                self.slide_button(
-                    "bar:close",
-                    (slide::LEFT, slide::SIDEBAR_KEY),
-                    "Collapse into the rail",
-                    Some(slide::BAR_HEAD),
-                )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.dispatch(Action::CloseSidebar, this.input, window, cx);
-                })),
+                self.slide_button("bar:close", (slide::LEFT, slide::SIDEBAR_KEY), "Collapse into the rail").on_click(
+                    cx.listener(|this, _, window, cx| {
+                        this.dispatch(Action::CloseSidebar, this.input, window, cx);
+                    }),
+                ),
             );
-        self.slide_head(header, slide::BAR_HEAD, cx)
+        self.slide_head(header, slide::BAR_HEAD)
     }
 
     /// The header's +: a new task in Tasks, a repository to list in Repos, a new workspace in Workspaces.
@@ -7235,14 +7228,6 @@ impl Render for Workspace {
             ottospace_core::model::editor::COLUMNS as f32 * f32::from(self.cell.width) + 10. + drawer_rail::WIDTH;
         let drawer = if self.model.editor_shown() { drawer.max(columns.min(half.max(MIN_DRAWER))) } else { drawer };
         self.drawer.width = drawer;
-        // A header gone gets no hover's end: its cap must not come back with it (`slide`).
-        let talk = self.model.talk.as_ref().is_some_and(|talk| talk.open);
-        let place = self.model.inspector.is_none() && self.model.capture.is_none();
-        let drawer_head = place && (self.model.listen.shown || (talk && self.model.compose.is_none()));
-        let drawn = [(slide::BAR_HEAD, self.model.sidebar.is_some()), (slide::DRAWER_HEAD, drawer_head)];
-        if drawn.iter().any(|(head, drawn)| self.slide_hover == Some(*head) && !drawn) {
-            self.slide_hover = None;
-        }
         // The drawer's place and its rail, always: the rail alone while it is collapsed.
         let (right, right_width) = self.render_right(drawer, cx);
         // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,

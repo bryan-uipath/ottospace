@@ -302,7 +302,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    started with ↵ is in the workspace you are in: one you made, or a task's. No space is made
    and nothing moves (the box says "↵ starts it in this workspace" when there is something in
    it). A workspace may hold several tasks: a later one works in the same folder unless its
-   line names another. One conversation is in front, the drawer's. The rail at the window's right edge always shows (the drawer open beside it, or collapsed into it by its → or ⌘⇧R; its ← opens it again). It has
+   line names another. One conversation is in front, the drawer's. The rail at the window's right edge always shows (the drawer open beside it, or collapsed into it by its → or ⌘⇧R; a click on any rail item, or ⌘⇧R, opens it again). It has
    two parts. On top, this workspace's tasks, the most urgent first (each
    its badge, the dot at its corner in its state's colour), and + for another task here. At the
    foot, below a divider, what is the same in every workspace: the transcript (the `transcripts`
