@@ -46,6 +46,8 @@ const SAVED: &str = "SAVEDHISTORY";
 const HEARD: &str = "HEARDWORDS";
 /// In every title and identifier a slot's look found: never in the state.
 const SLOT_SEEN: &str = "SLOTSEEN";
+/// In the title of every window the shell hosts in a pane: may reach the state, never a slot.
+const HOSTED: &str = "HOSTEDTITLE";
 const LISTEN_IDS: &[&str] = &["t1", "t2", ""];
 /// Keys in a viewer: counts, moves, ⌃G, and others.
 const VIEWER_KEYS: &[&str] = &["j", "k", "g", "G", "0", "1", "9", "escape", "ctrl-d", "ctrl-u", "space", "ctrl-g", "x"];
@@ -130,7 +132,9 @@ impl Gen<'_> {
             self.m.slots.values().map(|run| (run.bundle.clone(), run.name.clone())).collect();
         let (bundle, name) = self.one_of(&apps, |g| (None, g.name(APPS)));
         let seen = self.seen();
-        let kind = Kind::App { window: seen.window, title: seen.title.clone(), bundle, name };
+        // The pane's title is the shell's, not the look's: a user's `^reference` may copy it (seed 9000).
+        let title = seen.title.replacen(SLOT_SEEN, HOSTED, 1);
+        let kind = Kind::App { window: seen.window, title, bundle, name };
         Action::Adopt { kind, beside: self.rng.coin().then(|| self.pane()), seen: Some(seen) }
     }
 
@@ -140,7 +144,7 @@ impl Gen<'_> {
         let (pane, window) = self.one_of(&asked, |g| (g.pane(), g.rng.below(5) as u32));
         let run = self.m.slots.get(&pane);
         let (bundle, name) = run.map(|run| (run.bundle.clone(), run.name.clone())).unwrap_or_default();
-        let kind = Kind::App { window, title: format!("{SLOT_SEEN} w1"), bundle, name };
+        let kind = Kind::App { window, title: format!("{HOSTED} w1"), bundle, name };
         Action::SlotHosted { pane, kind: (!self.rng.one_in(5)).then_some(kind) }
     }
 
@@ -2694,7 +2698,8 @@ fn check_layout(m: &Model) -> Result<(), String> {
     // Only a slot keeps a title: the user's own pattern, under `slot`, never a window's.
     let titled = |pane: &PaneRecord| match &pane.kind {
         RecordKind::App { title, extra, .. } => {
-            let slot = extra.get("slot").is_some_and(|slot| !slot.to_string().contains(SLOT_SEEN));
+            let slot =
+                extra.get("slot").is_some_and(|slot| ![SLOT_SEEN, HOSTED].iter().any(|m| slot.to_string().contains(m)));
             !title.is_empty() || extra.keys().any(|key| key != "slot") || (extra.contains_key("slot") && !slot)
         }
         _ => false,
@@ -6805,6 +6810,28 @@ fn seed_28003_a_stray_tab_goes_to_a_bound_workspaces_task() {
         by(Origin::System, Action::OpenRepo { path: "/code/app-2".into(), axis: Axis::Down }),
         Action::WorkbookSave { uid: "../../x".into(), cwds: vec![], histories: vec![] }.into(),
         restore_workbooks(r#"[{"version":2,"id":"00000000000000a2","name":"x","tabs":[],"task":7}]"#).into(),
+    ])
+    .unwrap();
+}
+
+/// A user's `^reference` to an app pane copies its title, the shell's: the maker gave an adopted
+/// pane the look's title, so the check took the copy for the look leaking (seeds 9000, 26837,
+/// 63117, 129547, 150260, 150464, 155817).
+#[test]
+fn seed_150464_a_reference_copies_a_panes_title_not_the_look() {
+    let seen = r#"{"pid":0,"window":2,"title":"SLOTSEEN w1","identifier":"slotseen.other","subrole":"AXStandardWindow","frame":{"x":0.0,"y":0.0,"w":800.0,"h":600.0}}"#;
+    replay(&[
+        split(Axis::Right, Kind::Terminal),
+        Action::Open {
+            kind: Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: None,
+        }
+        .into(),
+        adopt(r#"{"type":"app","window":2,"title":"w1","name":"app"}"#, None, seen).into(),
+        by(Origin::Socket, Action::OpenCompose { text: "flicker".into() }),
+        by(Origin::System, Action::ComposeRef { target: Pointed::Pane(3) }),
+        Action::ComposeSubmit { open: true }.into(),
     ])
     .unwrap();
 }
