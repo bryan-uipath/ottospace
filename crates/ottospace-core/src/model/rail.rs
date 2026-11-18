@@ -211,6 +211,24 @@ mod tests {
         assert!(!m.listen.shown);
     }
 
+    /// The owner: with no conversation, ⌘⇧L opens the transcript in this drawer, as a click on
+    /// the rail does; it does not jump to the tab of the pane being heard, in another workspace.
+    #[test]
+    fn the_toggle_opens_the_transcript_here_not_in_its_panes_tab() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::ListenFixture.sent_by(Origin::System));
+        listen(&mut m);
+        m.update(Action::TalkToggle);
+        assert!(!m.listen.shown && m.listen.on.is_some());
+        // Another workspace, no task in it: the drawer opens on the transcript, the tab stays.
+        m.update(Action::NewTab);
+        let (tab, space) = (m.active, m.space().clone());
+        assert!(m.talk.is_none());
+        m.update(Action::TalkToggle);
+        assert_eq!((m.rail_selected(), m.active, m.space().clone()), (Some(RailItem::Transcript), tab, space));
+    }
+
     #[test]
     fn a_click_or_the_keys_select_an_item_and_only_the_users() {
         let mut m = three();

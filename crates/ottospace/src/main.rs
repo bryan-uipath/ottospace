@@ -994,6 +994,11 @@ struct Workspace {
     /// it was last drawn in and the day it showed (`calendar::render_calendar`).
     calendar_scroll: ScrollHandle,
     calendar_shown: std::cell::Cell<(u64, i32)>,
+    /// The drawer rail's tasks; the frame and what it last drew (a new one scrolls to it
+    /// once); the item still to bring into view, and the tries left (`drawer_rail`).
+    rail_scroll: ScrollHandle,
+    rail_scrolled: RefCell<(u64, Option<drawer_rail::Drawn>)>,
+    rail_pending: Rc<Cell<Option<(usize, u8)>>>,
     /// Every scroll area's bar.
     bars: scrollbar::Bars,
     /// The minute of the last look at the clock: the Tasks section's ages are drawn again when it changes.
@@ -1492,6 +1497,9 @@ impl Workspace {
             list_scroll: ScrollHandle::new(),
             calendar_scroll: ScrollHandle::new(),
             calendar_shown: std::cell::Cell::new((0, 0)),
+            rail_scroll: ScrollHandle::new(),
+            rail_scrolled: RefCell::new((0, None)),
+            rail_pending: Rc::new(Cell::new(None)),
             bars: scrollbar::Bars::default(),
             minute: 0,
             tags: tags::Reader::start(),
@@ -3580,6 +3588,7 @@ impl Workspace {
             // (each `title`, `panes`, `summary`, `open`, `tab`), `unfolded`. No directory.
             // `row` and `buttons`: where the Workbook section drew it, or null; so for each tab.
             "workbooks": self.workbooks_json(),
+            "workbooks_closing": self.closing_json(),
             // What the Workbook section offers to take back (`deleted`, `updated`), or null.
             "workbook_offer": self.model.workbooks.offered(),
             // A row's open menu (its …), or null: `workbook` and `tab` (whose row), `selected`
@@ -6214,7 +6223,7 @@ impl Workspace {
                 .then(|| self.off_show_dot(format!("listen-dot:space:{place}"), cx).top(px(5.)).left(px(3.)));
             let on = of == selected;
             let small = of == Owner::Home || (compact && !on);
-            // A temporary workspace's name is muted; its tip says it closes without saving.
+            // A temporary workspace's name is muted and italic (selected or not); its tip says it closes without saving.
             let temporary = !self.model.space_kept(&of);
             let title = self.model.space_title(&of);
             let tip: SharedString =
@@ -6346,7 +6355,7 @@ impl Workspace {
                 .children(lead)
                 .children((!small).then(|| {
                     let name = cut_text(title).flex_1();
-                    if temporary { name.text_color(rgb(theme::MUTED)) } else { name }
+                    if temporary { name.text_color(rgb(theme::MUTED)).italic() } else { name }
                 }))
                 .children(
                     (count > 1 && !small)
@@ -7352,7 +7361,7 @@ impl Render for Workspace {
                 this.dispatch(Action::CycleTab { delta: -1 }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
-                this.dispatch(Action::CloseTab { index: None }, this.input, window, cx);
+                this.ask_close_tab(None, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
                 this.dispatch(Action::Close { pane: None }, this.input, window, cx);

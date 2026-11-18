@@ -1,0 +1,77 @@
+# The drawer's rail with twenty-two tasks: the top scrolls, the transcript stays at the foot; the
+# last task selected (scrolled down to it), then the first (cmd-alt-] twice: scrolled up). Made-up tasks.
+{"env":{"OTTOSPACE_FEATURES":"transcripts","OTTOSPACE_LISTEN_FIXTURE":"{ROOT}/fixture.jsonl"}}
+{"click":"top:new_workspace"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"f i x space t h e space l o g i n space l o o p","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"r e v i e w space t h e space e x p o r t space p r","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"b u m p space t h e space s d k space t y p e s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"t r a c e space t h e space s l o w space s t a r t","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"t i d y space t h e space s e t t i n g s space p a g e","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"s p l i t space t h e space b i g space t e s t","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"f l a k y space r e s i z e space t e s t","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"n a m e space t h e space d i a l space s t a t e s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"c h e c k space t h e space i c o n space s i z e s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"d r a f t space t h e space r e l e a s e space n o t e s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"a u d i t space t h e space s o c k e t space r e f u s a l s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"s o r t space t h e space c a l e n d a r space r o w s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"p o r t space t h e space m a r k space m e n u","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"c l e a n space t h e space t e m p space f o l d e r s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"p r o f i l e space t h e space d r a w e r","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"m e a s u r e space t h e space e 2 e space r u n","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"l i s t space t h e space o p e n space p r s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"r e n a m e space t h e space h o m e space t a b","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"m o v e space t h e space n o t i c e space b a r","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"t r i m space t h e space g u i d e","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"p i n space t h e space a c t i o n s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"t i m e space t h e space d i a l space f r a m e s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"settle":700}
+{"shot":"last"}
+{"cmd":"key","keys":"cmd-alt-]","as":"user"}
+{"cmd":"key","keys":"cmd-alt-]","as":"user"}
+{"settle":500}
+{"shot":"first"}
