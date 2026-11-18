@@ -112,6 +112,13 @@ pub struct Agents {
 }
 
 impl Model {
+    /// Whether the bar may run `git status` in `dir`: only in a checkout the user listed in Repos
+    /// (its worktrees too). A repository's own config can run programs (`core.fsmonitor`,
+    /// filters): elsewhere only the branch, read from its `HEAD`.
+    pub fn reads_changes(&self, dir: &str) -> bool {
+        self.repo_names().any(|(_, path)| crate::sessions::below(dir, path))
+    }
+
     pub fn agents(&self) -> Agents {
         let Segments { needs_you, running, .. } = Segments::of(&self.tasks.inbox());
         Agents { working: running, needs_you }
@@ -238,6 +245,19 @@ mod tests {
         for origin in [Origin::Socket, Origin::System] {
             assert_eq!(m.refusal(&copy(), origin), Some(USERS_COPY));
             assert_eq!(m.update(copy().sent_by(origin)), []);
+        }
+    }
+
+    #[test]
+    fn changes_are_read_only_in_a_checkout_listed_in_repos() {
+        use crate::repos::{Repo, Worktree};
+        let mut m = Model::default();
+        let worktree = Worktree { name: "app-2".into(), path: "/code/app-2".into(), branch: None };
+        let repo = Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![worktree] };
+        m.update(Action::SetRepos { repos: vec![repo] });
+        assert!(m.reads_changes("/code/app") && m.reads_changes("/code/app/src") && m.reads_changes("/code/app-2"));
+        for elsewhere in ["/code/application", "/code", "/tmp/cloned", "/code/app/../evil"] {
+            assert!(!m.reads_changes(elsewhere), "{elsewhere}");
         }
     }
 

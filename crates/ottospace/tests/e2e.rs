@@ -8885,24 +8885,47 @@ fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
 fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in_a_narrow_window() {
     let link = "LOCATION:https://example.zoom.us/j/123\r\n";
     let home = calendar_folder("status-bar", &feed(&[("a", "Team sync", -60, 1_800, link)]), None);
-    // A checkout on `develop` with a file not committed.
-    let repo = home.join("flow-workbench");
-    std::fs::create_dir_all(&repo).unwrap();
-    let git = Command::new("git").args(["init", "-q", "-b", "develop"]).current_dir(&repo).status().unwrap();
-    assert!(git.success());
-    std::fs::write(repo.join("notes.txt"), "draft").unwrap();
+    // Checkouts on `develop` with a file not committed, whose own config names an fsmonitor that
+    // leaves a marker if git runs it: one listed in Repos, one cloned elsewhere.
+    let marker = home.join("fsmonitor-ran");
+    let hostile = |repo: &Path| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(repo).unwrap();
+        let git = |args: &[&str]| {
+            let mut git = Command::new("git");
+            git.arg("-C").arg(repo).args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1");
+            assert!(git.status().unwrap().success(), "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "develop"]);
+        let script = repo.join("monitor.sh");
+        std::fs::write(&script, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        git(&["config", "core.fsmonitor", script.to_str().unwrap()]);
+        std::fs::write(repo.join("notes.txt"), "draft").unwrap();
+    };
+    let (repo, cloned) = (home.join("flow-workbench"), home.join("cloned"));
+    hostile(&repo);
+    hostile(&cloned);
+    let settings = json!({ "calendar_ics": home.join("today.ics"), "repos": [repo] });
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
     let otto = Otto::launch_with("status-bar", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     let bar = |o: &Otto| o.drawn()["status_bar"].clone();
     // Home: nowhere, no meeting yet read, no agents.
     assert_eq!((&bar(&otto)["place"], &bar(&otto)["agents"]["text"]), (&Value::Null, &json!("No agents")));
     otto.call(json!({"cmd": "split"}));
     otto.call(json!({"cmd": "wait", "pattern": "\\$"}));
+    // Outside Repos: the folder and its branch, no dot, and no git run there.
+    otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", cloned.display())}));
+    let elsewhere = cloned.canonicalize().unwrap().to_string_lossy().into_owned();
+    otto.wait_for("the branch alone", |o| (bar(o)["place"]["text"] == format!("{elsewhere} · develop")).then_some(()));
+    // A listed checkout: its changes too, read without running the repository's fsmonitor.
     otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", repo.display())}));
     let plain = repo.canonicalize().unwrap().to_string_lossy().into_owned();
     otto.wait_for("the folder, its branch and its changes", |o| {
         let b = bar(o);
         (b["place"]["text"] == format!("{plain} · develop ●") && b["meeting"].is_object()).then_some(())
     });
+    assert!(!marker.exists(), "a repository's fsmonitor ran");
     for (task, state) in [("a", "running"), ("b", "running"), ("c", "needs_you")] {
         otto.call(json!({"cmd": "task_add", "title": task, "state": state}));
     }

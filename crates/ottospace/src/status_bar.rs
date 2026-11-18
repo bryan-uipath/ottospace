@@ -29,19 +29,19 @@ pub struct Checkout {
 /// Reads the focused folder's checkout on a thread of its own: when the folder changes, or the
 /// program in front of its shell does (a `git commit` that ended). No timer of its own.
 pub struct Reader {
-    jobs: Sender<String>,
+    jobs: Sender<(String, bool)>,
     reads: Receiver<(String, Option<Checkout>)>,
-    asked: Option<(String, Option<String>)>,
+    asked: Option<(String, bool, Option<String>)>,
     held: Option<(String, Option<Checkout>)>,
 }
 
 impl Reader {
     pub fn new() -> Self {
-        let (jobs, inbox) = channel::<String>();
+        let (jobs, inbox) = channel::<(String, bool)>();
         let (done, reads) = channel();
         std::thread::spawn(move || {
-            for dir in inbox {
-                let read = read(Path::new(&dir));
+            for (dir, changes) in inbox {
+                let read = read(Path::new(&dir), changes);
                 if done.send((dir, read)).is_err() {
                     return;
                 }
@@ -51,12 +51,13 @@ impl Reader {
         Self { jobs, reads, asked: None, held: None }
     }
 
-    /// Asks for `dir`'s checkout if it, or `program`, changed since the last ask.
-    pub fn ask(&mut self, dir: Option<&str>, program: Option<String>) {
-        let key = dir.map(|dir| (dir.to_string(), program));
+    /// Asks for `dir`'s checkout if it, or `program`, changed since the last ask. `changes`: run
+    /// `git status` there (`Model::reads_changes`); else the branch alone.
+    pub fn ask(&mut self, dir: Option<&str>, changes: bool, program: Option<String>) {
+        let key = dir.map(|dir| (dir.to_string(), changes, program));
         if key != self.asked {
-            if let Some((dir, _)) = &key {
-                let _ = self.jobs.send(dir.clone());
+            if let Some((dir, changes, _)) = &key {
+                let _ = self.jobs.send((dir.clone(), *changes));
             }
             self.asked = key;
         }
@@ -80,13 +81,15 @@ impl Reader {
     }
 }
 
-/// `dir`'s checkout: the branch from git's own files (as the Repos section reads it), and
-/// `git status`. `None`: in no checkout.
-fn read(dir: &Path) -> Option<Checkout> {
+/// `dir`'s checkout: the branch from git's own files (as the Repos section reads it), and with
+/// `changes`, `git status` (hardened: `child::git_read`). `None`: in no checkout.
+fn read(dir: &Path, changes: bool) -> Option<Checkout> {
     let (top, branch) = crate::repos::checkout_of(dir)?;
-    // No optional locks: a status in the background must not hold up the user's own git.
-    let mut status = crate::child::git(&top);
-    status.args(["--no-optional-locks", "status", "--porcelain", "--untracked-files=normal"]);
+    if !changes {
+        return Some(Checkout { branch, dirty: false });
+    }
+    let mut status = crate::child::git_read(&top);
+    status.args(["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules"]);
     // One line is enough to know: what follows is not read.
     let said = crate::child::run(status, TIMEOUT, 256).ok();
     Some(Checkout { branch, dirty: said.is_some_and(|said| !said.out.trim().is_empty()) })
@@ -133,7 +136,8 @@ impl Workspace {
             _ => None,
         };
         let program = self.model.status_pane().and_then(|p| self.terminals.get(&p.id)?.foreground_command());
-        self.status_git.ask(folder.as_deref(), program);
+        let changes = folder.as_deref().is_some_and(|dir| self.model.reads_changes(dir));
+        self.status_git.ask(folder.as_deref(), changes, program);
         if self.status_git.take() {
             cx.notify();
         }
@@ -324,4 +328,44 @@ impl Workspace {
 
 fn icon(path: &'static str) -> gpui::Svg {
     svg().path(path).size(px(12.)).flex_none().text_color(rgb(theme::MUTED))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scratch::Scratch;
+    use std::process::{Command, Stdio};
+
+    /// A repository with a file not committed, whose own config names an fsmonitor that leaves
+    /// `marker` when it runs.
+    fn hostile(at: &Path, marker: &Path) {
+        std::fs::create_dir_all(at).unwrap();
+        let git = |args: &[&str]| {
+            let mut git = Command::new("git");
+            git.arg("-C").arg(at).args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1");
+            assert!(git.stdin(Stdio::null()).status().unwrap().success(), "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "develop"]);
+        let script = at.join("monitor.sh");
+        std::fs::write(&script, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        git(&["config", "core.fsmonitor", script.to_str().unwrap()]);
+    }
+
+    #[test]
+    fn a_status_runs_none_of_the_repositorys_programs_and_none_runs_outside_repos() {
+        let scratch = Scratch::dir(&format!("ottospace-status-git-{}", std::process::id()));
+        let (repo, marker) = (scratch.as_ref().join("repo"), scratch.as_ref().join("ran"));
+        hostile(&repo, &marker);
+        // A plain status runs it: what the test guards against is there.
+        let plain = Command::new("git").arg("-C").arg(&repo).arg("status").stdout(Stdio::null()).status().unwrap();
+        assert!(plain.success() && marker.exists(), "git ran no fsmonitor: the test proves nothing");
+        std::fs::remove_file(&marker).unwrap();
+        // Outside Repos: the branch, from HEAD, and no git at all.
+        assert_eq!(read(&repo, false), Some(Checkout { branch: Some("develop".into()), dirty: false }));
+        // Inside: the status, hardened. It sees the changes and runs nothing of the repository's.
+        assert_eq!(read(&repo, true), Some(Checkout { branch: Some("develop".into()), dirty: true }));
+        assert!(!marker.exists(), "the repository's fsmonitor ran");
+    }
 }

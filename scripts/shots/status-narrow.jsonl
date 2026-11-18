@@ -6,6 +6,10 @@
 {"cmd":"task_add","title":"Approve the retry plan","state":"needs_you"}
 {"cmd":"wait","pattern":"^\\$"}
 {"cmd":"type","text":"mkdir -p code/flow-workbench && cd code/flow-workbench && git init -q -b develop && echo draft > notes.txt && clear\r"}
+{"sleep_ms":1500}
+# Read the Repos list again, now that its checkout is there: a listed one shows its changes.
+{"cmd":"section","section":"repos"}
+{"cmd":"section","section":"repos"}
 {"until":"calendar.updated"}
 {"cmd":"window_width","width":340}
 {"until":"status_bar.shrink","is":3}

@@ -116,7 +116,7 @@ fn command(gh: &Path) -> Command {
 /// requests (gh, in the repository's folder).
 fn read(gh: &Path, job: &Job) -> Result<(Vec<Pr>, Vec<Branch>), &'static str> {
     let git = |dir: &str, args: &[&str]| {
-        let mut command = crate::child::git(Path::new(dir));
+        let mut command = crate::child::git_read(Path::new(dir));
         command.args(args);
         crate::child::run(command, TIMEOUT, 256 * 1024).ok().filter(|said| said.ok).map(|said| said.out)
     };
