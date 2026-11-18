@@ -2465,3 +2465,159 @@ fn a_task_reads_and_looks_at_the_canary_only_while_the_user_lets_it() {
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A window's picture by `screencapture -l`, no shadow: width, height and RGBA, top row first.
+fn window_pixels(window: u64, path: &std::path::Path) -> (usize, usize, Vec<u8>) {
+    let status = Command::new("/usr/sbin/screencapture")
+        .args(["-x", "-o", "-t", "bmp", "-l", &window.to_string()])
+        .arg(path)
+        .status()
+        .expect("screencapture");
+    assert!(status.success(), "screencapture -l {window}");
+    let bmp = std::fs::read(path).expect("the picture");
+    let le = |at: usize| u32::from_le_bytes(bmp[at..at + 4].try_into().expect("4 bytes"));
+    let (start, width, height) = (le(10) as usize, le(18) as usize, le(22) as i32);
+    assert_eq!(u16::from_le_bytes([bmp[28], bmp[29]]), 32, "32 bits a pixel");
+    let rows = height.unsigned_abs() as usize;
+    let mut rgba = Vec::with_capacity(width * rows * 4);
+    for row in 0..rows {
+        // Negative: top row first.
+        let from = if height < 0 { row } else { rows - 1 - row };
+        for bgra in bmp[start + from * width * 4..][..width * 4].chunks_exact(4) {
+            rgba.extend([bgra[2], bgra[1], bgra[0], 255]);
+        }
+    }
+    (width, rows, rgba)
+}
+
+/// `w`×`h` pixels of a picture from `(x, y)`, as grey levels.
+fn grey(picture: &(usize, usize, Vec<u8>), x: usize, y: usize, w: usize, h: usize) -> Vec<f64> {
+    let (width, height, rgba) = picture;
+    assert!(x + w <= *width && y + h <= *height, "{w}×{h} at {x},{y} in {width}×{height}");
+    let mut out = Vec::with_capacity(w * h);
+    for row in y..y + h {
+        for p in rgba[(row * width + x) * 4..][..w * 4].chunks_exact(4) {
+            out.push(0.299 * p[0] as f64 + 0.587 * p[1] as f64 + 0.114 * p[2] as f64);
+        }
+    }
+    out
+}
+
+/// Mean difference of neighbouring pixels, across and down: high for a sharp picture of stripes
+/// or text, lower once it is resampled.
+fn sharpness(g: &[f64], w: usize) -> f64 {
+    let h = g.len() / w;
+    let (mut sum, mut n) = (0.0, 0.0);
+    for y in 0..h - 1 {
+        for x in 0..w - 1 {
+            sum += (g[y * w + x] - g[y * w + x + 1]).abs() + (g[y * w + x] - g[(y + 1) * w + x]).abs();
+            n += 2.0;
+        }
+    }
+    sum / n
+}
+
+/// The box of the canary's stripes in `g`: rows where 32 neighbouring pairs differ white to black.
+fn stripes_box(g: &[f64], w: usize) -> Option<[usize; 4]> {
+    let h = g.len() / w;
+    let alternates = |x: usize, y: usize| (g[y * w + x] - g[y * w + x + 1]).abs() > 160.0;
+    let rows: Vec<(usize, usize, usize)> = (0..h)
+        .filter_map(|y| {
+            let xs: Vec<usize> = (0..w - 1).filter(|&x| alternates(x, y)).collect();
+            (xs.len() >= 32).then(|| (y, xs[0], xs[xs.len() - 1] + 1))
+        })
+        .collect();
+    let (top, bottom) = (rows.first()?.0, rows.last()?.0 + 1);
+    let (left, right) = (rows.iter().map(|r| r.1).min()?, rows.iter().map(|r| r.2).max()?);
+    Some([left, top, right - left, bottom - top])
+}
+
+/// `OTTOSPACE_SHARP_OUT`: where CI keeps the crops it compared, as PNGs.
+fn keep_crop(name: &str, picture: &(usize, usize, Vec<u8>), at: [usize; 4]) {
+    let Some(dir) = std::env::var_os("OTTOSPACE_SHARP_OUT").map(PathBuf::from) else { return };
+    let (width, height, rgba) = picture;
+    let [x, y] = [at[0].min(width - 1), at[1].min(height - 1)];
+    let [w, h] = [at[2].min(width - x), at[3].min(height - y)];
+    let crop: Vec<u8> = (y..y + h).flat_map(|row| rgba[(row * width + x) * 4..][..w * 4].to_vec()).collect();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Some(png) = ottospace_mac::image::png_from_rgba(w, h, &crop) {
+        let _ = std::fs::write(dir.join(format!("{name}.png")), png);
+    }
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_parked_panes_picture_is_its_window_pixel_for_pixel() {
+    let canary = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace-canary"),
+        "canary-sharp",
+        "CANARY_SOCKET",
+        &[("CANARY_PATTERN", "1")],
+    );
+    wait_for("the canary window", || global_frame(&canary, 0));
+    let otto = otto_for(&canary, "otto-sharp", &[]);
+    host_and_park(&otto);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let count = |s: &Value, key: &str| s["counts"][key].as_f64().unwrap_or(0.0);
+    // The held frame has the pixels the pane is drawn with: points × the display's scale.
+    let s = wait_or(
+        "a frame of the pane's size in pixels",
+        || state()["counts"].to_string(),
+        || {
+            let s = state();
+            let shown = rect(&s["shown"]["1"]).filter(|r| r[2] > 100.0)?;
+            let scale = count(&s, "scale");
+            let size = [count(&s, "stream_width_1"), count(&s, "stream_height_1")];
+            (size == [(shown[2] * scale).round(), (shown[3] * scale).round()]).then_some(s)
+        },
+    );
+    let (scale, shown) = (count(&s, "scale"), rect(&s["shown"]["1"]).expect("shown"));
+    let canary_scale = canary.call(json!({"cmd": "state"}))["windows"][0]["scale"].as_f64().unwrap_or(0.0);
+    report(&format!(
+        "sharp: ottospace scale {scale}, parked display {}, canary window {canary_scale}, stream {}×{} px for {}×{} pt",
+        count(&s, "parking_scale"),
+        count(&s, "stream_width_1"),
+        count(&s, "stream_height_1"),
+        shown[2],
+        shown[3]
+    ));
+    assert_eq!(count(&s, "stream_scale_1"), scale, "the stream captures at ottospace's scale");
+
+    // What ottospace draws: its own window, the preview's rect in pixels.
+    let otto_window = s["frame"]["window"].as_u64().expect("ottospace's window number");
+    let drawn = window_pixels(otto_window, &support::temp(&format!("otto-sharp-{}.bmp", std::process::id())));
+    let px = |v: f64| (v * scale).round() as usize;
+    let (w, h) = (px(shown[2]), px(shown[3]));
+    let picture = grey(&drawn, px(shown[0]), px(shown[1]), w, h);
+
+    // The real window, live over its pane: its stream is stopped, so the window server gives all of it.
+    let crop = s["crop"]["1"].as_f64().unwrap_or(0.0);
+    let canary_window = s["state"]["panes"][0]["kind"]["window"].as_u64().expect("the canary's window number");
+    assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
+    wait_for("the window to go live", || (count(&state(), "live") >= 1.0).then_some(()));
+    std::thread::sleep(Duration::from_millis(500));
+    let live = window_pixels(canary_window, &support::temp(&format!("canary-sharp-{}.bmp", std::process::id())));
+    let real = grey(&live, 0, px(crop), w, h);
+    assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
+
+    let [x, y, sw, sh] = stripes_box(&real, w).expect("the canary's stripes in its window");
+    // The rows below the columns too.
+    let sh = (2 * sh).min(h - y);
+    let part = |g: &[f64]| -> Vec<f64> { (y..y + sh).flat_map(|row| g[row * w + x..][..sw].to_vec()).collect() };
+    let (sharp_picture, sharp_real) = (sharpness(&part(&picture), sw), sharpness(&part(&real), sw));
+    let same = picture.iter().zip(&real).filter(|(a, b)| (*a - *b).abs() <= 8.0).count() as f64 / real.len() as f64;
+    report(&format!(
+        "sharp: stripes {sw}×{sh} px at {x},{y}; sharpness picture {sharp_picture:.1}, window {sharp_real:.1}; \
+         {:.1}% of the preview's pixels within 8 levels of the window's",
+        same * 100.0
+    ));
+    // The stripes and the text above them, from each.
+    let (left, top) = (x.saturating_sub(40), y.saturating_sub(120));
+    keep_crop("picture", &drawn, [px(shown[0]) + left, px(shown[1]) + top, sw + 80, sh + 140]);
+    keep_crop("window", &live, [left, px(crop) + top, sw + 80, sh + 140]);
+    assert!(
+        sharp_picture >= 0.95 * sharp_real,
+        "the picture is as sharp as the window: {sharp_picture} vs {sharp_real}"
+    );
+    assert!(same >= 0.98, "the picture is the window's pixels: {:.1}% within 8 levels", same * 100.0);
+}

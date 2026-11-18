@@ -18,6 +18,9 @@
 //! its content: a control its accessibility tree names. Below it, a checkbox "Canary press"
 //! (`pressed` in the state: whether it is on) and a disabled one, "Canary disabled".
 //! The state's `visible` and `bars_hidden`: the menu bar and the Dock, as another app sees them.
+//! With `CANARY_PATTERN` set, the first window draws stripes one pixel wide, of its display's
+//! pixels: columns above, rows below, white on black. A picture of it that is not 1:1 greys them.
+//! The state's `scale`: each window's pixels a point.
 
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
@@ -104,6 +107,26 @@ struct Canary {
     /// The scroll wheel's vertical deltas received, in points, added up.
     wheel: f32,
     focus: FocusHandle,
+    /// Draws `CANARY_PATTERN`'s stripes.
+    pattern: bool,
+}
+
+/// `CANARY_PATTERN`'s stripes, in `bounds`: columns in its top half, rows in the bottom, one
+/// device pixel each, so neighbouring pixels are white and black.
+fn stripes(bounds: Bounds<gpui::Pixels>, window: &mut Window) {
+    let scale = window.scale_factor();
+    let pixel = px(1.0 / scale);
+    let (w, h) = (bounds.size.width, bounds.size.height / 2.0);
+    window.paint_quad(gpui::fill(bounds, gpui::black()));
+    let white = gpui::white();
+    for i in (0..(f32::from(w) * scale) as usize).step_by(2) {
+        let at = gpui::point(bounds.origin.x + pixel * i as f32, bounds.origin.y);
+        window.paint_quad(gpui::fill(Bounds::new(at, size(pixel, h)), white));
+    }
+    for i in (0..(f32::from(h) * scale) as usize).step_by(2) {
+        let at = gpui::point(bounds.origin.x, bounds.origin.y + h + pixel * i as f32);
+        window.paint_quad(gpui::fill(Bounds::new(at, size(w, pixel)), white));
+    }
 }
 
 impl Render for Canary {
@@ -135,6 +158,9 @@ impl Render for Canary {
             .child(div().text_xl().child(self.title.clone()))
             .child(format!("keys: {}", self.keys.join(" ")))
             .child(format!("clicks: {}", self.clicks.len()))
+            .children(
+                self.pattern.then(|| gpui::canvas(|_, _, _| {}, |b, _, w, _| stripes(b, w)).w(px(160.)).h(px(96.))),
+            )
     }
 }
 
@@ -168,7 +194,8 @@ fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, at: O
         cx.new(|cx| {
             let focus = cx.focus_handle();
             window.focus(&focus);
-            Canary { title, keys: Vec::new(), clicks: Vec::new(), wheel: 0.0, focus }
+            let pattern = number == 1 && std::env::var_os("CANARY_PATTERN").is_some();
+            Canary { title, keys: Vec::new(), clicks: Vec::new(), wheel: 0.0, focus, pattern }
         })
     });
     if let Ok(handle) = handle {
@@ -213,13 +240,14 @@ fn state(windows: &Windows, cx: &mut App) -> String {
     let mut open_windows = Vec::new();
     windows.borrow_mut().retain(|handle| {
         let entry = handle.update(cx, |canary, window, _| {
+            let scale = window.scale_factor();
             let b = window.bounds();
             let frame: [f32; 4] = [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()];
             // `active`: this window has the keyboard. A test waits for it before typing.
             let active = window.is_window_active();
             // `frame`: as Accessibility has it, global, so a test can tell whether it is on a screen.
             let global = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::frame(view) });
-            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "wheel": canary.wheel, "bounds": frame, "frame": global, "active": active })
+            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "wheel": canary.wheel, "bounds": frame, "frame": global, "active": active, "scale": scale })
         });
         entry.map(|entry| open_windows.push(entry)).is_ok()
     });

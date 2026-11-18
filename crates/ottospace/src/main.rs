@@ -173,12 +173,14 @@ impl SCStreamOutputTrait for Output {
 
 /// Stream config showing `size` points of the window at `scale` (Retina = 2), from its top left
 /// below its top `crop` points (the title bar), never scaled: a window that refused the pane's
-/// size (Outlook's minimum) looks as it does when it is live.
+/// size (Outlook's minimum) looks as it does when it is live. `scale` is the pane's display's:
+/// the picture has the pixels the pane is drawn with (`hosted::capture_pixels`).
 fn stream_config(size: CGSize, crop: f64, scale: f64) -> SCStreamConfiguration {
+    let (width, height) = hosting::capture_pixels((size.width, size.height), scale);
     // 420f is the only format gpui's surface renderer accepts.
     SCStreamConfiguration::new()
-        .with_width((size.width * scale).max(1.0) as u32)
-        .with_height((size.height * scale).max(1.0) as u32)
+        .with_width(width)
+        .with_height(height)
         .with_scales_to_fit(true)
         .with_pixel_format(PixelFormat::YCbCr_420f)
         .with_fps(60)
@@ -220,12 +222,14 @@ struct Hosted {
     shown: CGSize,
     /// The title-bar crop the stream shows it with.
     shown_crop: f64,
+    /// The pixels a point the stream captures at: ottospace's display's when it was configured.
+    shown_scale: f64,
     /// The window's content size when `shown` was last worked out, for the corner mask.
     content: CGSize,
     /// How often `window_frame` read the window's frame.
     frame_reads: u64,
-    /// The last size and crop the stream refused, so the same one is not asked for every check.
-    refused: Option<(CGSize, f64)>,
+    /// The last size, crop and scale the stream refused, so the same one is not asked for every check.
+    refused: Option<(CGSize, f64, f64)>,
     /// Where the preview was last drawn, in window-content coordinates.
     preview: Rc<Cell<Bounds<Pixels>>>,
     /// Last pane content rect the live window was placed over, to re-place only on change.
@@ -288,6 +292,7 @@ impl Hosted {
             parked_size: CGSize::ZERO,
             shown: original.size,
             shown_crop: 0.0,
+            shown_scale: 2.0,
             content: original.size,
             frame_reads: 0,
             refused: None,
@@ -353,23 +358,25 @@ impl Hosted {
             (self.shown, self.shown_crop, self.content) = (shown, self.crop, content);
             return Some(content);
         }
-        if asked == (self.shown, self.shown_crop) {
+        // Also on a new scale: ottospace moved to a display of another, and the old picture
+        // would be drawn up (blurred) or down.
+        if asked == (self.shown, self.shown_crop) && scale == self.shown_scale {
             self.content = content;
             return Some(content);
         }
-        if self.refused == Some(asked) {
+        if self.refused == Some((shown, self.crop, scale)) {
             return Some(content);
         }
         let config = stream_config(shown, self.crop, scale);
         // Frames of another size are dropped, so expect the new one only once it is set.
         if self.stream.update_configuration(&config).is_ok() {
             self.latest.expect(&config);
-            (self.shown, self.shown_crop) = asked;
+            (self.shown, self.shown_crop, self.shown_scale) = (shown, self.crop, scale);
             self.content = content;
             self.refused = None;
         } else {
             // `shown` keeps describing what the stream still shows.
-            self.refused = Some(asked);
+            self.refused = Some((shown, self.crop, scale));
             eprintln!("window {}: the stream refused {}×{}", self.window_id, shown.width, shown.height);
         }
         Some(content)
@@ -3513,11 +3520,18 @@ impl Workspace {
         // Restored or rebuilt panes still empty: `pane`, `why`, and where its "Open <App>" is drawn, or null.
         state["unfilled"] = unfilled.into();
         // Test runs only: what each app pane's stream has sent, `stream_samples_<pane>` (`counts`
-        // holds numbers only).
+        // holds numbers only); the pixel size of the frame it holds and the scale it captures at;
+        // the scale of ottospace's display and of the parked windows' display.
         if let Some(counts) = state["counts"].as_object_mut() {
             for (id, hosted) in &self.hosted {
                 counts.insert(format!("stream_samples_{id}"), hosted.latest.samples.load(Relaxed).into());
+                let held = hosted.frame().map_or((0, 0), |f| (f.get_width(), f.get_height()));
+                counts.insert(format!("stream_width_{id}"), held.0.into());
+                counts.insert(format!("stream_height_{id}"), held.1.into());
+                counts.insert(format!("stream_scale_{id}"), hosted.shown_scale.into());
             }
+            counts.insert("scale".into(), (window.scale_factor() as f64).into());
+            counts.insert("parking_scale".into(), display::parking_scale().into());
         }
         // Where the box offers a choice of where the task works: `new` (a new worktree, the user's
         // choice), the repository's name and the `branch` it would make; else null.
