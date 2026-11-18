@@ -21,6 +21,7 @@ pub mod features;
 pub mod fill;
 #[cfg(test)]
 mod fuzz;
+pub mod gist;
 pub mod home;
 pub mod hosted;
 pub mod ics;

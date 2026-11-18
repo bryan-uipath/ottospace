@@ -9213,6 +9213,179 @@ fn launch_env(name: &str, env: &[(String, String)]) -> Otto {
     Otto::launch_with(name, &env)
 }
 
+/// Made-up stream-json for the rows: a call of each tool kind (its result after it), a
+/// sub-agent with its start, a call of its own and its end, a permission check, a denial by a
+/// settings rule, a notification and a model fallback; last a command with a description.
+fn row_fixtures(repo: &Path) -> Vec<(&'static str, String)> {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let call = |id: &str, name: &str, input: Value, parent: Option<&str>| {
+        let block = json!({"type": "tool_use", "id": format!("toolu_{id}"), "name": name, "input": input});
+        let parent = parent.map_or("null".to_string(), |p| format!(r#""toolu_{p}""#));
+        format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":{parent},"message":{{"content":[{block}]}}}}"#)
+    };
+    let result = |id: &str, out: &str| {
+        let block =
+            json!({"type": "tool_result", "tool_use_id": format!("toolu_{id}"), "content": out, "is_error": false});
+        format!(r#"{{"type":"user",{S},"parent_tool_use_id":null,"message":{{"content":[{block}]}}}}"#)
+    };
+    let system = |rest: Value| {
+        let mut record = json!({"type": "system", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003"});
+        record.as_object_mut().unwrap().extend(rest.as_object().unwrap().clone());
+        record.to_string()
+    };
+    let file = |name: &str| repo.join(name).to_string_lossy().into_owned();
+    let init = system(json!({"subtype": "init", "model": "claude-opus-5-5", "permissionMode": "default"}));
+    let done = r#"{"type":"result","subtype":"success","is_error":false}"#.to_string();
+    let mut turn = vec![init];
+    let calls = [
+        ("r", "Read", json!({"file_path": file("src/auth.rs")})),
+        ("e", "Edit", json!({"file_path": file("src/auth.rs"), "old_string": "a", "new_string": "b"})),
+        ("w", "Write", json!({"file_path": "/elsewhere/notes.md", "content": "x"})),
+        ("g", "Grep", json!({"pattern": "redirect", "path": file("src")})),
+        ("l", "Glob", json!({"pattern": "**/*.rs"})),
+        ("f", "WebFetch", json!({"url": "https://docs.example.com/a?k=v", "prompt": "x"})),
+        ("s", "WebSearch", json!({"query": "gpui text"})),
+        ("m", "mcp__made__lookup", json!({"name": "made-up", "count": 3})),
+    ];
+    for (id, name, input) in calls {
+        turn.push(call(id, name, input, None));
+        turn.push(result(id, "ok"));
+    }
+    turn.extend([
+        call("a", "Agent", json!({"description": "Find the redirect", "prompt": "x", "subagent_type": "Explore"}), None),
+        system(json!({"subtype": "task_started", "task_id": "t1", "tool_use_id": "toolu_a", "description": "Find the redirect", "task_type": "local_agent"})),
+        call("ag", "Grep", json!({"pattern": "login"}), Some("a")),
+        result("ag", "ok"),
+        system(json!({"subtype": "task_progress", "task_id": "t1", "tool_use_id": "toolu_a", "description": "Find the redirect"})),
+        system(json!({"subtype": "task_notification", "task_id": "t1", "tool_use_id": "toolu_a", "status": "completed", "summary": "Found it in auth.rs"})),
+        result("a", "done"),
+        system(json!({"subtype": "task_started", "task_id": "t2", "description": "Watch the build", "task_type": "local_bash"})),
+        system(json!({"subtype": "permission_check_status", "tool_use_id": "toolu_x", "status": "checking"})),
+        system(json!({"subtype": "permission_check_status", "tool_use_id": "toolu_x", "status": "done"})),
+        system(json!({"subtype": "permission_denied", "tool_name": "Bash", "tool_use_id": "toolu_x", "decision_reason_type": "rule"})),
+        system(json!({"subtype": "notification", "key": "made-up", "text": "Fast mode is off for now", "priority": "low"})),
+        system(json!({"subtype": "model_fallback", "originalModel": "claude-opus-5-5", "fallbackModel": "claude-sonnet-5"})),
+        call("b", "Bash", json!({"command": "git status --short\ngit diff --stat", "description": "Show changes"}), None),
+        result("b", " M src/auth.rs"),
+        done,
+    ]);
+    vec![("turn1.jsonl", turn.join("\n"))]
+}
+
+/// Each call's row shows what ran (a command, a path, a pattern, a host, a query, a subtask),
+/// and what the CLI said besides is a row; the state has their shapes, never their words. The
+/// user's click opens a command's row, and again closes it; its sneak label opens it too.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn tool_rows_show_what_ran_and_the_clis_other_words_are_rows() {
+    let root = support::temp(&format!("ottospace-e2e-rows-{}", std::process::id()));
+    let repo = root.join("repos/app");
+    let (root, _record, env) = native_setup("rows", &row_fixtures(&repo), &[]);
+    let otto = launch_env("rows", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    otto.start_task(1);
+    let ended = otto.wait_for("the turn's end", |o| {
+        let chat = chat(o);
+        let entries = chat["transcript"]["entries"].as_array()?.clone();
+        (chat["transcript"]["turn"].is_null() && entries.iter().any(|e| e["tool"] == "Bash" && e["kind"] == "tool"))
+            .then_some(chat)
+    });
+    let entries = ended["transcript"]["entries"].as_array().unwrap();
+    let tools: Vec<(String, Value, bool)> = entries
+        .iter()
+        .filter(|e| e["kind"] == "tool")
+        .map(|e| (e["tool"].as_str().unwrap_or("").to_string(), e["summary"]["kind"].clone(), e["sub"] == true))
+        .collect();
+    let kinds: Vec<(&str, &str, bool)> =
+        tools.iter().map(|(tool, kind, sub)| (tool.as_str(), kind.as_str().unwrap_or("none"), *sub)).collect();
+    assert_eq!(
+        kinds,
+        [
+            ("Read", "path", false),
+            ("Edit", "path", false),
+            ("Write", "path", false),
+            ("Grep", "pattern", false),
+            ("Glob", "pattern", false),
+            ("WebFetch", "host", false),
+            ("WebSearch", "query", false),
+            ("made/lookup", "argument", false),
+            ("Agent", "subtask", false),
+            ("Grep", "pattern", true),
+            ("Bash", "command", false),
+        ],
+        "{ended}"
+    );
+    let bash = entries.iter().find(|e| e["tool"] == "Bash" && e["kind"] == "tool").unwrap();
+    assert_eq!(bash["summary"], json!({"kind": "command", "lines": 2, "note": true}), "{bash}");
+    assert_eq!(bash["expanded"], false);
+    // The CLI's other words: the subtask's end, a background task's start (no call of its
+    // own), the denial by settings and the model it fell back to. The check says nothing.
+    let notes: Vec<Value> = entries
+        .iter()
+        .filter(|e| e["kind"] == "note" || e["kind"] == "notice")
+        .map(|e| json!([e["kind"], e["note"].as_str().or(e["notice"].as_str())]))
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            json!(["note", "ended"]),
+            json!(["note", "subtask"]),
+            json!(["notice", "denied_by"]),
+            json!(["note", "notification"]),
+            json!(["notice", "model_fallback"]),
+        ],
+        "{ended}"
+    );
+    assert_eq!(
+        (&ended["transcript"]["not_understood"], &ended["transcript"]["model"]),
+        (&json!(0), &json!("claude-sonnet-5"))
+    );
+    // Beyond the labels (`git status`, `src/auth.rs`, a host): no word of a command, its output, a
+    // pattern, a query, a description or a summary.
+    let said = ended.to_string();
+    for word in
+        ["git diff", "M src", "redirect", "gpui text", "Find the", "Found it", "Fast mode", "Show changes", "made-up"]
+    {
+        assert!(!said.contains(word), "{word}: {said}");
+    }
+    // The user's click opens the command's row; another closes it.
+    let rows = otto.controls();
+    let row = |rows: &[(String, [f64; 4])]| {
+        let mut ids: Vec<&(String, [f64; 4])> = rows.iter().filter(|(id, _)| id.contains("chat-row:1:")).collect();
+        ids.sort_by_key(|(id, _)| id.rsplit(':').next().and_then(|n| n.parse::<u64>().ok()));
+        ids.last().map(|(_, frame)| *frame).expect("the last call's row is drawn")
+    };
+    let last = row(&rows);
+    otto.user_click(at(last, 0.5, 0.3));
+    let bash = |o: &Otto| {
+        let chat = chat(o);
+        chat["transcript"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["tool"] == "Bash" && e["kind"] == "tool")
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(bash(&otto)["expanded"], true);
+    let open = row(&otto.controls());
+    assert!(open[3] > last[3], "open, it is taller: {open:?} after {last:?}");
+    otto.user_click(at(open, 0.5, 0.1));
+    assert_eq!(bash(&otto)["expanded"], false);
+    // Its sneak label does what the click does.
+    let id = |rows: Vec<(String, [f64; 4])>| {
+        let ids = rows.into_iter().map(|(id, _)| id).filter(|id| id.starts_with("chat-row:1:"));
+        ids.max_by_key(|id| id.rsplit(':').next().and_then(|n| n.parse::<u64>().ok())).expect("a row")
+    };
+    sneak_to(&otto, &id(otto.controls()));
+    assert_eq!(bash(&otto)["expanded"], true);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Made-up stream-json for the dial: a turn of calls of each kind, one failing, a hook and the
 /// context at 75%; the next with an edit, `cargo test` still running and the context at 92%.
 fn dial_fixtures() -> Vec<(&'static str, String)> {

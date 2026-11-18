@@ -1,0 +1,18 @@
+# Tool rows over a native chat: each call shows what ran (a path, a pattern, a sub-agent's
+# description with its own call under it, a host, a command with its description), and what the
+# CLI said besides is a row (a subtask's end, a denial by settings, a notification). Then the
+# command's row opened by the user's click: the whole command and what it printed. The stand-in
+# `claude` replays chat-rows/fixtures.
+{"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"fix the login loop >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.transcript.turn","is":null}
+{"settle":1500}
+{"shot":"rows"}
+{"click":"chat-row:1:10"}
+{"until":"drawer.native.chats.1.transcript.entries.10.expanded","is":true}
+{"settle":500}
+{"shot":"expanded"}
