@@ -248,7 +248,12 @@ fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_still_spl
     // parent: no pane, the app's pane as it was, the dialog over it at its own size. 700×450 is
     // no small window: only its subrole makes it a pop-up.
     canary.call(json!({"cmd": "dialog", "at": spot}));
-    let dialog = wait_for("the dialog over the pane", || frame(1).filter(|f| over_pane(*f)));
+    // Settled: where it is now is where it was a moment ago (the canary and ottospace both move it).
+    let dialog = wait_for("the dialog to settle over the pane", || {
+        let before = frame(1).filter(|f| over_pane(*f))?;
+        std::thread::sleep(Duration::from_millis(800));
+        (frame(1) == Some(before)).then_some(before)
+    });
     // GPUI's bounds hold the title bar too.
     assert!(close(dialog[2], 700.0) && (450.0..520.0).contains(&dialog[3]), "its own size: {dialog:?}");
     // A small standard window: the same.
@@ -1410,7 +1415,8 @@ fn otto_for(canary: &Proc, name: &str, env: &[(&str, &str)]) -> Proc {
 fn splitting_home(name: &str) -> PathBuf {
     let home = support::temp(&format!("otto-apps-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&home).expect("make the folder");
-    let settings = json!({"windows": [{"app": CANARY, "do": "split"}]});
+    // Standard windows only: GPUI's own small panels would get panes too.
+    let settings = json!({"windows": [{"app": CANARY, "subrole": "AXStandardWindow", "do": "split"}]});
     std::fs::write(home.join("settings.json"), settings.to_string()).expect("write settings");
     home
 }

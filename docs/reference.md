@@ -962,7 +962,7 @@ front once, and then leaves it to the app, which closes it. A pop-up is a dialog
 (subrole `AXDialog`, `AXSystemDialog`, `AXFloatingWindow`, `AXSystemFloatingWindow`), a modal
 window, a standard window under 600×400 or under half its app's pane both ways, or one whose split
 would leave the app's pane narrower than the app's window has refused to go. A sheet stays on its
-window. `windows` rules decide first: `"do": "split"` and `"do": "float"`.
+window, and a window under 100×100 (an app's helper) where the app keeps it. `windows` rules decide first: `"do": "split"` and `"do": "float"`.
 
 Below the running apps the section lists apps that are not running. A click starts one in the
 background and puts its window in a pane (ottospace waits up to 30 seconds for the window):

@@ -153,8 +153,13 @@ const POP_UP: [&str; 4] = ["AXDialog", "AXSystemDialog", "AXFloatingWindow", "AX
 /// A standard window under this, both ways, is a pop-up: a join or login dialog is about 400×300.
 const SMALL: [f64; 2] = [600.0, 400.0];
 
+/// Under this, both ways, a window is an app's helper, not a pop-up: left where the app keeps it.
+/// A GPUI app has a 66×20 one off screen.
+const TINY: [f64; 2] = [100.0, 100.0];
+
 /// Where a new window of a hosted app goes. A sheet stays on its window. Then the first rule that
-/// selects it decides, both ways; else a dialog, a panel or a modal window floats, and so does a
+/// selects it decides, both ways; else a window under 100×100 is left alone (an app's helper), a
+/// dialog, a panel or a modal window floats, and so does a
 /// standard window under 600×400, under half its app's pane both ways, or whose split would
 /// leave its app's pane narrower than that pane's window kept. Other standard windows split.
 pub fn place(user: &[Rule], window: &Facts, shape: &Shape) -> Place {
@@ -167,10 +172,13 @@ pub fn place(user: &[Rule], window: &Facts, shape: &Shape) -> Place {
         Some(Action::Float) => return Place::Float,
         Some(Action::Manage) | None => {}
     }
+    let under = |size: [f64; 2], limit: [f64; 2]| size[0] < limit[0] && size[1] < limit[1];
+    if shape.size.is_some_and(|size| under(size, TINY)) {
+        return Place::Leave;
+    }
     if window.subrole != STANDARD || shape.modal {
         return Place::Float;
     }
-    let under = |size: [f64; 2], limit: [f64; 2]| size[0] < limit[0] && size[1] < limit[1];
     let half = shape.pane.map(|pane| [pane[0] / 2.0, pane[1] / 2.0]);
     let small = shape.size.is_some_and(|size| under(size, SMALL) || half.is_some_and(|half| under(size, half)));
     // A split to the right halves the pane's width; its height stays.
@@ -362,6 +370,11 @@ mod tests {
         assert_eq!(place(&[], &standard, &beside([900.0, 300.0])), Place::Split);
         // Unknown size: as before.
         assert_eq!(place(&[], &standard, &Shape::default()), Place::Split);
+        // A helper under 100×100 is left alone, a dialog too; a rule still decides.
+        assert_eq!(place(&[], &standard, &beside([66.0, 20.0])), Place::Leave);
+        assert_eq!(place(&[], &zoom("x", "AXFloatingWindow"), &beside([66.0, 20.0])), Place::Leave);
+        let float = serde_json::from_str::<Rule>(r#"{"app": "zoom.us", "do": "float"}"#).unwrap();
+        assert_eq!(place(&[float], &standard, &beside([66.0, 20.0])), Place::Float);
     }
 
     #[test]
