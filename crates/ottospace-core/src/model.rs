@@ -4496,7 +4496,7 @@ impl Model {
                         self.worktree_made(making.task, path, effects);
                     }
                     // The user's + made it: it opens as their click on its row would.
-                    None => self.repo_open(path, Axis::Right, true, self.by_user, effects),
+                    None => self.repo_click(path, Axis::Right, true, effects),
                 }
             }
             Action::WorktreeFailed { asked, fresh, repos } => {
