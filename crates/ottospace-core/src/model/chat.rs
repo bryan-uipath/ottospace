@@ -134,8 +134,8 @@ pub fn key(key: &str, mods: crate::keys::Mods, card: Option<u64>) -> Key {
 }
 
 /// A key on a question card (`typing`: the cursor is on an "Other…" row, whose words take the
-/// letters, digits and space). ↑/↓ or j/k move, space picks, 1 to 9 pick that row, ↵ sends the
-/// answers, Esc declines.
+/// letters, digits and space). ↑/↓ or j/k move, space picks, 1 to 9 pick that row, ⇥ / ⇧⇥ go
+/// between questions, ↵ answers (and goes on, or sends), Esc declines.
 pub fn ask_key(key: &str, mods: crate::keys::Mods, ticket: u64, typing: bool) -> Key {
     if mods.cmd {
         return Key::Pass;
@@ -148,6 +148,7 @@ pub fn ask_key(key: &str, mods: crate::keys::Mods, ticket: u64, typing: bool) ->
         "enter" if bare => act(Act::Submit),
         "up" => act(Act::Move { down: false }),
         "down" => act(Act::Move { down: true }),
+        "tab" if !mods.ctrl && !mods.alt => act(Act::Tab { forward: !mods.shift }),
         _ if typing => Key::Field,
         "k" if bare => act(Act::Move { down: false }),
         "j" if bare => act(Act::Move { down: true }),
@@ -1179,6 +1180,8 @@ mod tests {
             ]
         );
         assert_eq!(ask_key("enter", shift, 4, false), Key::Swallow);
+        assert_eq!(ask_key("tab", none, 4, true), act(Act::Tab { forward: true }));
+        assert_eq!(ask_key("tab", shift, 4, false), act(Act::Tab { forward: false }));
         assert_eq!(ask_key("q", Mods { cmd: true, ..none }, 4, false), Key::Pass);
     }
 
@@ -1213,8 +1216,8 @@ mod tests {
         let ask_of = |m: &Model| shape(m).map(|cards| cards[0]["ask"].clone());
         assert_eq!(
             ask_of(&m),
-            Some(serde_json::json!({"questions": [{"options": 2, "multi": false, "picked": []},
-                {"options": 2, "multi": true, "picked": []}], "cursor": [0, 0]}))
+            Some(serde_json::json!({"questions": [{"options": 2, "multi": false, "picked": [], "answered": false},
+                {"options": 2, "multi": true, "picked": [], "answered": false}], "cursor": [0, 0], "tabs": 3}))
         );
         let act = |act| Action::TalkAsk { ticket: 1, act };
         assert_eq!(m.refusal(&act(Act::Submit), Origin::Socket), Some(super::USERS_ALONE));
@@ -1225,7 +1228,7 @@ mod tests {
         let none = crate::keys::Mods::default();
         assert_eq!(m.chat(&one).map(|chat| chat.key("enter", none)), Some(Key::Act(act(Act::Submit))));
         m.update(act(Act::Number { n: 2 }));
-        // ↵ with the second question open: nothing goes, the cursor goes there.
+        // ↵ on the first of two: answered, nothing goes, the second shows.
         assert_eq!(m.update(act(Act::Submit)), []);
         assert_eq!(ask_of(&m).map(|a| a["cursor"].clone()), Some(serde_json::json!([1, 0])));
         m.update(act(Act::Toggle));
@@ -1241,11 +1244,15 @@ mod tests {
         assert!(said.contains(r#""picked":[0,2]"#) && !said.contains("big"), "{said}");
         let answers =
             vec![Chosen { options: vec![1], other: None }, Chosen { options: vec![0], other: Some("big one".into()) }];
+        // ↵ on the last question: Review; ↵ there sends.
+        assert_eq!(m.update(act(Act::Submit)), []);
+        assert_eq!(ask_of(&m).map(|a| a["cursor"].clone()), Some(serde_json::json!([2, 0])));
         assert_eq!(m.update(act(Act::Submit)), [Effect::AgentAnswers { task: one.clone(), ticket: 1, answers }]);
         let t = m.chat(&one).map(|chat| chat.transcript.summary());
         assert!(t.as_ref().is_some_and(|t| t.cards.is_empty()), "answered once");
         let last = t.and_then(|t| t.entries.last().cloned());
-        assert_eq!(last, Some(crate::transcript::Shape::Notice(crate::transcript::Notice::Answered)));
+        let note = crate::transcript::NoteKind::Answered { answered: 2, of: 2 };
+        assert_eq!(last, Some(crate::transcript::Shape::Note { note, bytes: "H: o1 · H: o0, big one".len() }));
         assert_eq!(m.tasks.get(one.task().unwrap_or_default()).map(|t| t.state), Some(State::Running));
         assert_eq!(m.update(act(Act::Submit)), []);
     }

@@ -39,25 +39,38 @@ pub struct Choice {
 /// The user's act on the card shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Act {
-    /// ↑/↓, j/k: a row up or down, through every question's rows.
+    /// ↑/↓, j/k: a row up or down in the tab on show.
     Move { down: bool },
-    /// Space: the cursor's row picked; in a multi-select question, toggled.
+    /// ⇥ / ⇧⇥: the next or the previous tab, Review last.
+    Tab { forward: bool },
+    /// A click on a tab: that question, or Review (`questions.len()`).
+    Show { tab: usize },
+    /// Space: the cursor's row picked; in a multi-select question, toggled. On Review: its question.
     Toggle,
-    /// A number key, 1 to 9: that row of the cursor's question, as space.
+    /// A number key, 1 to 9: that row of the tab on show, as space.
     Number { n: usize },
-    /// A click on a row: the cursor there, as space.
+    /// A click on a row: the cursor there, as space. `question` is the tab: Review's rows are its
+    /// questions.
     Row { question: usize, row: usize },
-    /// ↵: the answers go, once each question has one.
+    /// ↵: on a question of several, it is answered and the next tab shows; on Review, or on a
+    /// card of one question, the answers go.
     Submit,
     /// Esc: the card is declined; the agent goes on.
     Decline,
 }
 
-/// One question's answer: the options picked, by index, and the user's own words.
+/// One question's answer: the options picked, by index, and the user's own words. Neither:
+/// no answer (left out of what goes back).
 #[derive(Clone, PartialEq, Eq)]
 pub struct Chosen {
     pub options: Vec<usize>,
     pub other: Option<String>,
+}
+
+impl Chosen {
+    pub fn is_empty(&self) -> bool {
+        self.options.is_empty() && self.other.is_none()
+    }
 }
 
 impl fmt::Debug for Chosen {
@@ -67,11 +80,12 @@ impl fmt::Debug for Chosen {
     }
 }
 
-/// The card's state: its questions, the cursor and what is picked.
+/// The card's state: its questions, the tab on show, the cursor and what is picked.
 #[derive(Clone, PartialEq)]
 pub struct Form {
     pub questions: Vec<Question>,
-    /// (question, row). A question's last row, `options.len()`, is "Other…".
+    /// (tab, row). A tab is a question, its last row, `options.len()`, "Other…"; with several
+    /// questions the tab `questions.len()` is Review, a row per question.
     pub cursor: (usize, usize),
     /// Each question's rows picked, "Other…" last.
     picked: Vec<Vec<bool>>,
@@ -95,12 +109,40 @@ impl Form {
         Some(Self { questions, cursor: (0, 0), picked, other })
     }
 
-    pub fn rows(&self, question: usize) -> usize {
-        self.questions.get(question).map_or(0, |q| q.options.len() + 1)
+    /// Its tabs: each question, then Review; none with one question.
+    pub fn tabs(&self) -> usize {
+        match self.questions.len() {
+            1 => 0,
+            n => n + 1,
+        }
+    }
+
+    /// Review is on show.
+    pub fn review(&self) -> bool {
+        self.cursor.0 == self.questions.len()
+    }
+
+    /// The rows of a tab: a question's options and "Other…", or Review's questions.
+    pub fn rows(&self, tab: usize) -> usize {
+        match self.questions.get(tab) {
+            Some(q) => q.options.len() + 1,
+            None if tab == self.questions.len() && self.tabs() > 0 => self.questions.len(),
+            None => 0,
+        }
     }
 
     pub fn picked(&self, question: usize, row: usize) -> bool {
         self.picked.get(question).and_then(|rows| rows.get(row)).copied().unwrap_or(false)
+    }
+
+    /// A question has an answer: an option, or words under "Other…".
+    pub fn answered(&self, question: usize) -> bool {
+        question < self.questions.len() && !self.chosen(question).is_empty()
+    }
+
+    /// How many questions have an answer.
+    pub fn answers(&self) -> usize {
+        (0..self.questions.len()).filter(|q| self.answered(*q)).count()
     }
 
     /// A question's "Other…" words.
@@ -111,7 +153,7 @@ impl Form {
     /// The cursor is on an "Other…" row: typing goes there.
     pub fn on_other(&self) -> bool {
         let (q, r) = self.cursor;
-        r + 1 == self.rows(q)
+        !self.review() && r + 1 == self.rows(q)
     }
 
     /// The "Other…" words under the cursor, to type in.
@@ -131,20 +173,34 @@ impl Form {
         }
     }
 
+    /// A tab on show, its cursor on the first row picked, else the first.
+    fn show(&mut self, tab: usize) {
+        let row = (0..self.rows(tab)).find(|r| tab < self.questions.len() && self.picked(tab, *r));
+        self.cursor = (tab, row.unwrap_or(0));
+    }
+
     /// Moves or picks; `Submit` and `Decline` are the card's (`submit`), and do nothing here.
     pub fn act(&mut self, act: Act) {
         let (q, r) = self.cursor;
+        let review = self.review();
         match act {
             Act::Move { down: true } if r + 1 < self.rows(q) => self.cursor = (q, r + 1),
-            Act::Move { down: true } if q + 1 < self.questions.len() => self.cursor = (q + 1, 0),
             Act::Move { down: false } if r > 0 => self.cursor = (q, r - 1),
-            Act::Move { down: false } if q > 0 => self.cursor = (q - 1, self.rows(q - 1) - 1),
+            Act::Tab { forward: true } if q + 1 < self.tabs() => self.show(q + 1),
+            Act::Tab { forward: false } if q > 0 && self.tabs() > 0 => self.show(q - 1),
+            Act::Show { tab } if tab < self.tabs() => self.show(tab),
+            // On Review a row is its question: picking it goes back there.
+            Act::Toggle if review => self.show(r),
             Act::Toggle => self.pick(q, r),
+            Act::Number { n } if review && (1..=self.rows(q)).contains(&n) => self.show(n - 1),
             Act::Number { n } if (1..=self.rows(q)).contains(&n) => {
                 self.cursor = (q, n - 1);
                 self.pick(q, n - 1);
             }
-            Act::Row { question, row } if row < self.rows(question) => {
+            Act::Row { question, row } if question == self.questions.len() && row < self.rows(question) => {
+                self.show(row)
+            }
+            Act::Row { question, row } if question < self.questions.len() && row < self.rows(question) => {
                 self.cursor = (question, row);
                 self.pick(question, row);
             }
@@ -175,23 +231,40 @@ impl Form {
         Chosen { options, other }
     }
 
-    /// ↵: each question's answer, or `None` with the cursor on the first one unanswered. On a
-    /// single-select question with nothing picked, the cursor's row is picked first: ↓ ↵ answers.
+    /// ↵. On a single-select question with nothing picked, the cursor's row is picked first:
+    /// ↓ ↵ answers. One question: its answer, or `None` until it has one. Several: on a
+    /// question, the next tab shows and `None`; on Review, every answer, an unanswered one
+    /// empty (no answer).
     pub fn submit(&mut self) -> Option<Vec<Chosen>> {
         let (q, r) = self.cursor;
-        let unpicked = !self.picked[q].contains(&true);
-        if !self.questions[q].multi && unpicked && !self.on_other() {
+        if !self.review() && !self.questions[q].multi && !self.picked[q].contains(&true) && !self.on_other() {
             self.pick(q, r);
         }
         let all: Vec<Chosen> = (0..self.questions.len()).map(|q| self.chosen(q)).collect();
-        match all.iter().position(|c| c.options.is_empty() && c.other.is_none()) {
-            Some(open) => {
-                let other = self.rows(open) - 1;
-                self.cursor = (open, if self.picked(open, other) { other } else { 0 });
+        match self.tabs() {
+            0 if all[0].is_empty() => None,
+            0 => Some(all),
+            _ if self.review() => Some(all),
+            _ => {
+                self.show(q + 1);
                 None
             }
-            None => Some(all),
         }
+    }
+
+    /// The answers in a line, as the chat folds the card: `Scope: Untracked files only · Base:
+    /// develop`. The words are the agent's and the user's: drawn, never in the state.
+    pub fn summary(&self) -> String {
+        let answer = |q: usize| {
+            let chosen = self.chosen(q);
+            let labels = chosen.options.iter().map(|o| self.questions[q].options[*o].label.text().to_string());
+            let parts: Vec<String> = labels.chain(chosen.other).collect();
+            let question = &self.questions[q];
+            let name = if question.header.is_empty() { &question.question } else { &question.header };
+            format!("{}: {}", name.text(), parts.join(", "))
+        };
+        let answered = (0..self.questions.len()).filter(|q| self.answered(*q));
+        answered.map(answer).collect::<Vec<String>>().join(" · ")
     }
 
     /// What the state says of it: counts and indexes, never a word.
@@ -200,8 +273,9 @@ impl Form {
             options: question.options.len(),
             multi: question.multi,
             picked: (0..self.rows(q)).filter(|r| self.picked(q, *r)).collect(),
+            answered: self.answered(q),
         });
-        FormShape { questions: questions.collect(), cursor: [self.cursor.0, self.cursor.1] }
+        FormShape { questions: questions.collect(), cursor: [self.cursor.0, self.cursor.1], tabs: self.tabs() }
     }
 }
 
@@ -209,8 +283,10 @@ impl Form {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FormShape {
     pub questions: Vec<QuestionShape>,
-    /// [question, row]; a question's row `options` is "Other…".
+    /// [tab, row]: a question's row `options` is "Other…"; the tab `questions.len()` is Review.
     pub cursor: [usize; 2],
+    /// Each question and Review; 0 with one question.
+    pub tabs: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -219,6 +295,8 @@ pub struct QuestionShape {
     pub multi: bool,
     /// The rows picked, by index; `options` is "Other…".
     pub picked: Vec<usize>,
+    /// It has an answer: an option, or words under "Other…".
+    pub answered: bool,
 }
 
 #[cfg(test)]
@@ -249,25 +327,36 @@ pub(crate) mod tests {
         assert_eq!(Form::new(Vec::new()), None);
     }
 
-    /// ↓ goes through every question's rows, "Other…" last in each; it stops at either end.
+    /// ↑/↓ stay in the tab on show, "Other…" last; ⇥ and ⇧⇥ go between tabs, Review last; one
+    /// question has no tabs.
     #[test]
-    fn the_cursor_runs_through_every_row() {
+    fn the_cursor_stays_in_its_tab_and_tabs_go_on_to_review() {
         let mut f = form(&[(2, false), (1, true)]);
+        assert_eq!((f.tabs(), f.rows(2)), (3, 2));
         let mut seen = vec![f.cursor];
-        for _ in 0..6 {
+        for _ in 0..3 {
             f.act(Act::Move { down: true });
             seen.push(f.cursor);
         }
-        assert_eq!(seen, [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 1), (1, 1)]);
+        assert_eq!(seen, [(0, 0), (0, 1), (0, 2), (0, 2)]);
         assert!(f.on_other());
-        for _ in 0..3 {
-            f.act(Act::Move { down: false });
+        for (act, at) in [(true, 1), (true, 2), (true, 2), (false, 1), (false, 0), (false, 0)] {
+            f.act(Act::Tab { forward: act });
+            assert_eq!(f.cursor.0, at);
         }
-        assert_eq!(f.cursor, (0, 1));
+        f.act(Act::Show { tab: 2 });
+        assert!(f.review() && !f.on_other());
+        f.act(Act::Show { tab: 3 });
+        assert_eq!(f.cursor, (2, 0), "no such tab");
+        let mut one = form(&[(2, false)]);
+        one.act(Act::Tab { forward: true });
+        one.act(Act::Show { tab: 1 });
+        assert_eq!((one.tabs(), one.cursor), (0, (0, 0)));
     }
 
     /// One pick in a single-select question, toggles in a multi-select one; a number key picks
-    /// in the cursor's question, a click anywhere; a number past the rows does nothing.
+    /// in the tab on show, a click anywhere; a number past the rows does nothing. A tab shows
+    /// with its cursor on its first pick.
     #[test]
     fn picks_are_single_or_toggled() {
         let mut f = form(&[(3, false), (3, true)]);
@@ -283,21 +372,48 @@ pub(crate) mod tests {
         assert_eq!(f.shape().questions[1].picked, [0, 1]);
         f.act(Act::Row { question: 5, row: 0 });
         assert_eq!(f.cursor, (1, 1), "no such row");
+        f.act(Act::Tab { forward: false });
+        assert_eq!(f.cursor, (0, 2));
     }
 
-    /// ↵ on a single-select question with nothing picked picks the cursor's row; with a question
-    /// still unanswered it sends nothing and goes there.
+    /// One question: ↵ sends once it has an answer; on a single-select question with nothing
+    /// picked it picks the cursor's row first.
     #[test]
-    fn submit_waits_for_every_answer() {
-        let mut f = form(&[(2, false), (2, true)]);
-        f.act(Act::Move { down: true });
-        assert_eq!(f.submit(), None);
-        assert_eq!((f.cursor, f.shape().questions[0].picked.clone()), ((1, 0), vec![1]));
+    fn one_question_sends_on_enter() {
+        let mut f = form(&[(2, true)]);
         assert_eq!(f.submit(), None, "↵ toggles nothing in a multi-select question");
         f.act(Act::Toggle);
+        assert_eq!(f.submit(), Some(vec![chosen(&[0], None)]));
+        let mut f = form(&[(2, false)]);
         f.act(Act::Move { down: true });
+        assert_eq!(f.submit(), Some(vec![chosen(&[1], None)]));
+    }
+
+    /// Several: ↵ answers and the next tab shows, Review after the last; on Review ↵ sends every
+    /// answer, one left unanswered empty. A Review row goes back to its question.
+    #[test]
+    fn several_questions_go_on_to_review_then_send() {
+        let mut f = form(&[(2, false), (2, true), (2, false)]);
+        f.act(Act::Move { down: true });
+        assert_eq!(f.submit(), None);
+        assert_eq!((f.cursor, f.answered(0)), ((1, 0), true));
+        // Nothing picked in the multi-select one: ↵ goes on, it stays unanswered.
+        assert_eq!(f.submit(), None);
+        assert_eq!(f.submit(), None);
+        assert!(f.review() && !f.answered(1) && f.answered(2));
+        assert_eq!(f.answers(), 2);
+        f.act(Act::Row { question: 3, row: 1 });
+        assert_eq!(f.cursor, (1, 0));
         f.act(Act::Toggle);
-        assert_eq!(f.submit(), Some(vec![chosen(&[1], None), chosen(&[0, 1], None)]));
+        f.act(Act::Show { tab: 3 });
+        f.act(Act::Number { n: 3 });
+        assert_eq!(f.cursor, (2, 0), "a number on Review goes to that question");
+        f.act(Act::Show { tab: 3 });
+        let all = vec![chosen(&[1], None), chosen(&[0], None), chosen(&[0], None)];
+        assert_eq!(f.submit(), Some(all));
+        let mut skipped = form(&[(2, false), (2, true)]);
+        skipped.act(Act::Show { tab: 2 });
+        assert_eq!(skipped.submit(), Some(vec![chosen(&[], None), chosen(&[], None)]), "no answer is sent as none");
     }
 
     /// Words typed on "Other…" pick it (alone, in a single-select question); picked with no
@@ -316,12 +432,14 @@ pub(crate) mod tests {
         f.typed();
         assert_eq!(f.shape().questions[0].picked, [2]);
         f.act(Act::Row { question: 1, row: 2 });
-        assert_eq!(f.submit(), None, "Other picked, no words");
-        assert_eq!(f.cursor, (1, 2));
+        assert!(!f.answered(1), "Other picked, no words");
         f.typing().unwrap().apply(Edit::Insert("huge".into()));
         f.typed();
         f.act(Act::Row { question: 1, row: 1 });
-        assert_eq!(f.submit(), Some(vec![chosen(&[], Some("  green ")), chosen(&[1], Some("huge"))]), "as typed");
+        f.act(Act::Show { tab: 2 });
+        let all = vec![chosen(&[], Some("  green ")), chosen(&[1], Some("huge"))];
+        assert_eq!(f.submit(), Some(all), "as typed");
+        assert_eq!(f.summary(), "H:   green  · H: o1, huge");
     }
 
     /// The state's shape: counts, picks and the cursor, never a word of the card's or the user's.
@@ -332,7 +450,10 @@ pub(crate) mod tests {
         f.typing().unwrap().apply(Edit::Insert("secret words".into()));
         f.typed();
         let shape = serde_json::to_string(&f.shape()).unwrap();
-        assert_eq!(shape, r#"{"questions":[{"options":2,"multi":true,"picked":[2]}],"cursor":[0,2]}"#);
+        assert_eq!(
+            shape,
+            r#"{"questions":[{"options":2,"multi":true,"picked":[2],"answered":true}],"cursor":[0,2],"tabs":0}"#
+        );
         assert!(!format!("{f:?}").contains("secret"));
         assert_eq!(format!("{:?}", chosen(&[1], Some("secret"))), "Chosen([1], other: Some(6) bytes)");
     }

@@ -275,8 +275,7 @@ pub enum Notice {
         tool: String,
         label: String,
     },
-    /// A question card answered, or declined, by the user.
-    Answered,
+    /// A question card declined by the user.
     Declined,
     /// A call the CLI denied without asking the user, `by` what (its settings, its mode, …).
     DeniedBy {
@@ -393,6 +392,8 @@ pub enum NoteKind {
     Ended { status: Status },
     /// The CLI's notification.
     Notification,
+    /// "You answered 2 of 3 · <the answers>": a question card, sent.
+    Answered { answered: usize, of: usize },
 }
 
 /// How an agent ended, kept on the divider of the resume that followed: for its hover.
@@ -672,7 +673,10 @@ impl Transcript {
     pub fn reply(&mut self) -> Option<(u64, Vec<Chosen>)> {
         let chosen = self.form_mut()?.submit()?;
         let card = self.cards.pop_front()?;
-        self.push(Entry::Notice(Notice::Answered));
+        let form = card.ask.as_ref()?;
+        // The card folds to a line: how many were answered, and the answers (drawn only).
+        let note = NoteKind::Answered { answered: form.answers(), of: form.questions.len() };
+        self.push(Entry::Note { note, text: Text::new(&form.summary()) });
         Some((card.ticket, chosen))
     }
 

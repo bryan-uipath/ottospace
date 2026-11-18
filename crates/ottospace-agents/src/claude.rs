@@ -291,7 +291,8 @@ fn questions(input: &Value) -> Option<Vec<Question>> {
 /// `updatedInput` for an answered question request: its input as it came, and `answers`: each
 /// question's text → the label picked, or the user's words; in a multi-select question each
 /// joined by `", "`, one holding `", "` or `"` quoted as JSON, as the CLI joins and splits them.
-/// Seen in a probe of 2.1.327 (`docs/ai/agent-runners.md`).
+/// A question with no answer is left out: the CLI then reports only the others, and "The
+/// user did not answer the questions." with none (read in 2.1.327's code, seen in a probe).
 fn answered(input: &Value, chosen: &[Chosen]) -> Result<Value, Refused> {
     let all = input["questions"].as_array().filter(|all| all.len() == chosen.len());
     let all = all.ok_or(Refused("not one answer per question"))?;
@@ -306,7 +307,7 @@ fn answered(input: &Value, chosen: &[Chosen]) -> Result<Value, Refused> {
             false => part.clone(),
         };
         let value = match (q["multiSelect"] == true, &parts[..]) {
-            (_, []) => return Err(Refused("a question with no answer")),
+            (_, []) => continue,
             (false, [one]) => one.clone(),
             (false, _) => return Err(Refused("one answer to a single-select question")),
             (true, _) => parts.iter().map(quoted).collect::<Vec<String>>().join(", "),
@@ -617,9 +618,12 @@ mod tests {
         let both = answers(vec![chosen(&[0], None), chosen(&[0], Some(r#"a "b""#))]).unwrap();
         let said = &both["response"]["response"]["updatedInput"]["answers"]["Which sizes?"];
         assert_eq!(said, &json!(r#"Small, "a \"b\"""#));
+        // A question left unanswered is left out.
+        let skipped = answers(vec![chosen(&[0], None), chosen(&[], None)]).unwrap();
+        let said = &skipped["response"]["response"]["updatedInput"]["answers"];
+        assert_eq!(said, &json!({"Which colour?": "Red"}));
         let wrong = [
             vec![chosen(&[0], None)],
-            vec![chosen(&[0], None), chosen(&[], None)],
             vec![chosen(&[5], None), chosen(&[0], None)],
             vec![chosen(&[0, 1], None), chosen(&[0], None)],
         ];

@@ -362,15 +362,25 @@ impl Workspace {
             ("talk", "chat-deny-note", _) => Action::TalkDenyNote,
             // A question card's rows and buttons: `chat-ask:<question>:<row>`.
             ("talk", _, _) if name.starts_with("chat-ask") => {
+                let shown_subject = shown.clone();
                 let shown = self.model.shown_chat().and_then(|chat| chat.transcript.cards.front());
                 let Some(ticket) = shown.map(|card| card.ticket) else { return true };
                 let row = name.strip_prefix("chat-ask:").and_then(|at| at.split_once(':'));
                 let row = row.and_then(|(q, r)| {
                     Some(ottospace_core::ask::Act::Row { question: q.parse().ok()?, row: r.parse().ok()? })
                 });
+                let tab = name.strip_prefix("chat-ask-tab:").and_then(|tab| tab.parse().ok());
                 let act = match name {
                     "chat-ask-send" => ottospace_core::ask::Act::Submit,
                     "chat-ask-decline" => ottospace_core::ask::Act::Decline,
+                    "chat-ask-show-all" => {
+                        let tab = shown.and_then(|card| card.ask.as_ref()).map(|form| form.cursor.0);
+                        if let (Some(subject), Some(q)) = (&shown_subject, tab) {
+                            self.toggle_ask_context(subject, ticket, q, cx);
+                        }
+                        return true;
+                    }
+                    _ if let Some(tab) = tab => ottospace_core::ask::Act::Show { tab },
                     _ => match row {
                         Some(act) => act,
                         None => return true,

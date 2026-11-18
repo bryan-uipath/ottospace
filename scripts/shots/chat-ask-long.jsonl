@@ -1,0 +1,12 @@
+# Native chat: a long AskUserQuestion. The question is markdown; its context folds behind
+# Show all; the options scroll with the cursor in view and the foot pinned.
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"change the export >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.transcript.cards","len":1}
+{"shot":"folded"}
+{"click":"talk:chat-ask-show-all"}
+{"settle":300}
+{"shot":"shown"}
