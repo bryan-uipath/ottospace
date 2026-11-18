@@ -7,9 +7,9 @@
 {"cmd":"key","keys":"escape","as":"user"}
 {"cmd":"key","keys":"cmd-] cmd-t cmd-d","as":"user"}
 {"sleep_ms":1100}
-{"cmd":"key","keys":"cmd-] cmd-t cmd-d cmd-ctrl-left","as":"user"}
+{"cmd":"key","keys":"cmd-] cmd-t cmd-d cmd-alt-left","as":"user"}
 {"sleep_ms":1100}
-{"cmd":"key","keys":"cmd-] cmd-t cmd-d cmd-ctrl-left","as":"user"}
+{"cmd":"key","keys":"cmd-] cmd-t cmd-d cmd-alt-left","as":"user"}
 {"sleep_ms":1100}
 {"cmd":"key","keys":"cmd-] cmd-t cmd-d","as":"user"}
 {"sleep_ms":1100}

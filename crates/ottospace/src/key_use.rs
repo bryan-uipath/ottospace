@@ -51,7 +51,7 @@ pub fn first_stroke(keymap: &Keymap, action: &dyn gpui::Action) -> Option<Keystr
     binding.keystrokes().first().map(|stroke| stroke.inner().clone())
 }
 
-/// A binding's keys as the key reference shows them, from the keymap: `⌘⌃←→↑↓`, `⌘] ⌘[`.
+/// A binding's keys as the key reference shows them, from the keymap: `⌘⌥←→↑↓`, `⌘] ⌘[`.
 /// `None`: it has no key in this run (an unset return key).
 pub fn keys_text(keymap: &Keymap, binding: Binding) -> Option<String> {
     if let Some(keys) = binding.keys() {
@@ -69,7 +69,7 @@ pub fn keys_text(keymap: &Keymap, binding: Binding) -> Option<String> {
     };
     let strokes: Vec<(String, String)> = actions.filter_map(first).collect();
     let (mods, _) = strokes.first()?;
-    // Arrows with one set of modifiers: the modifiers once, e.g. ⌘⌃←→↑↓.
+    // Arrows with one set of modifiers: the modifiers once, e.g. ⌘⌥←→↑↓.
     let arrows = strokes.iter().all(|(m, key)| m == mods && ["←", "→", "↑", "↓"].contains(&key.as_str()));
     Some(match arrows {
         true => mods.clone() + &strokes.iter().map(|(_, key)| key.as_str()).collect::<String>(),
@@ -220,7 +220,9 @@ mod tests {
     fn a_bindings_keys_come_from_the_keymap() {
         let keymap = gpui::Keymap::new(crate::keymap());
         let keys = |binding| keys_text(&keymap, binding);
-        assert_eq!(keys(Binding::FocusDir).as_deref(), Some("⌘⌃←→↑↓"));
+        assert_eq!(keys(Binding::FocusWay).as_deref(), Some("⌘⌥←→↑↓"));
+        assert_eq!(keys(Binding::ResizeWay).as_deref(), Some("⌘⌥⇧←→↑↓"));
+        assert_eq!(keys(Binding::SwapWay).as_deref(), Some("⌘⌃←→↑↓"));
         assert_eq!(keys(Binding::FocusNext).as_deref(), Some("⌘] ⌘["));
         assert_eq!(keys(Binding::PickPane).as_deref(), Some("⌘E ⌘⇧E"));
         assert_eq!(keys(Binding::Copy).as_deref(), Some("⌘C"));
@@ -247,7 +249,7 @@ mod tests {
 
     #[test]
     fn a_keys_action_names_its_binding() {
-        assert_eq!(binding_of(&crate::FocusUp), Some(Binding::FocusDir));
+        assert_eq!(binding_of(&crate::FocusUp), Some(Binding::FocusWay));
         assert_eq!(binding_of(&crate::SplitRight), Some(Binding::SplitRight));
         assert_eq!(binding_of(&CopySelection), Some(Binding::Copy));
         assert_eq!(binding_of(&commands::CommandPalette), Some(Binding::Palette));

@@ -4093,7 +4093,7 @@ impl Model {
         }
         self.settle_compose_to();
         self.settle_agent(origin);
-        // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
+        // However the list was left (Esc, a click on a pane), ⌘⌥← comes back to its row.
         if self.list.is_none() && listed.is_some() {
             self.list_kept = zones::KeptRow(listed);
         }

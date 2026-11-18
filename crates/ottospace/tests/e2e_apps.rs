@@ -983,7 +983,7 @@ fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
     let hinted = || fit(3)["hint"].as_str().is_some_and(|h| h.starts_with("needs "));
     let mut cut = before;
     for _ in 0..6 {
-        otto.call(json!({"cmd": "key", "keys": "cmd-alt-l"}));
+        otto.call(json!({"cmd": "key", "keys": "cmd-shift-alt-l"}));
         let was = cut[2];
         cut = wait("pane 3 to be narrower", &|| pane(3).filter(|b| b[2] < was - 1.0));
         std::thread::sleep(Duration::from_millis(1200));

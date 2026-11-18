@@ -41,7 +41,7 @@ pub enum Target {
     Nothing,
 }
 
-/// The row a section's list was left on, however it was left: where ⌘⌃← comes back to. Not
+/// The row a section's list was left on, however it was left: where ⌘⌥← comes back to. Not
 /// part of what the model shows, so its `Debug` says nothing of it.
 #[derive(Clone, Copy, Default)]
 pub struct KeptRow(pub Option<(Section, usize)>);
