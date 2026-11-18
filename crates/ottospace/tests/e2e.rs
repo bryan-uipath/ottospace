@@ -4300,7 +4300,7 @@ fn a_feature_that_is_off_is_absent_and_features_turns_it_on_live() {
         assert_eq!(otto.raw(&request.to_string())["error"], why, "{request}");
     }
     assert_eq!(otto.call(json!({"cmd": "section", "section": "repos"}))["state"]["sidebar"], "repos");
-    // No rail cell: Tasks, Workbook, Repos.
+    // No rail cell: Repos, Tasks, Workbook.
     let (_, labels) = sneak(&otto);
     let rails: Vec<&String> = labels.keys().filter(|id| id.starts_with("rail:")).collect();
     assert_eq!(rails, ["rail:repos", "rail:tasks", "rail:workbook"], "{labels:?}");
