@@ -101,7 +101,7 @@ its size, the app pane's size, the width that pane's window has refused to go be
   activating the app. It is moved first only if the user cannot reach it (`rules::reachable`):
   its top has no 120×60 on a screen's visible frame, or, while no pane of the app is up and the
   app is not active (ottospace is in front), no 120 of it beside ottospace's window and its middle
-  not over its app's pane. A cover counts where it lies over the title bar's middle row. Then `rules::float_to` puts it, at its own size, in the middle of the pane, wholly on
+  not over its app's pane, or it lies over a parking spot (put by its parked parent). A cover counts where it lies over the title bar's middle row. Then `rules::float_to` puts it, at its own size, in the middle of the pane, wholly on
   the visible frame of the pane's screen (a pane whose middle is on no screen: the main one's).
 - **Leave**: a sheet or a child window (macOS keeps it on its parent), an `ignore` rule (a built-in
   `ignore` beats a user's `split` or `float`; only `manage` undoes it), a window

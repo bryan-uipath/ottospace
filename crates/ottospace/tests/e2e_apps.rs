@@ -274,30 +274,35 @@ fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_still_spl
 
     // A dialog the app opens on screen beside ottospace's window, its title bar in sight: the
     // user can reach it, so it is raised where it is, not moved over the pane.
+    // It needs 140 beside ottospace's window: none on a laptop's screen, where it is skipped.
     let main = screens[0];
     let (left, right) = (window[0] - main.x, main.x + main.w - (window[0] + window[2]));
-    assert!(left.max(right) >= 140.0, "no room beside ottospace's window: {window:?} {main:?}");
-    let x = if right >= left { window[0] + window[2] + 10.0 } else { window[0] - 710.0 };
-    let at = [x, window[1] + 100.0];
-    // Judged: a `float` newer than the trace's last line now. By time, not count: the ring drops old lines.
-    let trace = || otto.call(json!({"cmd": "trace"}))["trace"].as_str().unwrap_or_default().to_string();
-    let ms = |line: &str| serde_json::from_str::<Value>(line).ok().and_then(|line| line["ms"].as_u64());
-    let since = trace().lines().last().and_then(ms);
-    canary.call(json!({"cmd": "dialog", "at": at}));
-    let judged = wait_for("the dialog beside to be judged", || {
-        trace().lines().find(|l| l.contains(r#""ev":"float""#) && ms(l) > since).map(str::to_string)
-    });
-    assert!(judged.contains(r#""moved":false"#), "{judged}");
-    let beside = frame(3).expect("the dialog beside");
-    assert!(close(beside[0], at[0]) && close(beside[1], at[1]), "left where the app put it: {beside:?} {at:?}");
-    assert!(!over_pane(beside) && reachable(beside), "{beside:?}");
+    let room = left.max(right) >= 140.0;
+    if !room {
+        eprintln!("skipped the dialog beside ottospace: no room beside {window:?} on {main:?}");
+    } else {
+        let x = if right >= left { window[0] + window[2] + 10.0 } else { window[0] - 710.0 };
+        let at = [x, window[1] + 100.0];
+        // Judged: a `float` newer than the trace's last line now. By time, not count: the ring drops old lines.
+        let trace = || otto.call(json!({"cmd": "trace"}))["trace"].as_str().unwrap_or_default().to_string();
+        let ms = |line: &str| serde_json::from_str::<Value>(line).ok().and_then(|line| line["ms"].as_u64());
+        let since = trace().lines().last().and_then(ms);
+        canary.call(json!({"cmd": "dialog", "at": at}));
+        let judged = wait_for("the dialog beside to be judged", || {
+            trace().lines().find(|l| l.contains(r#""ev":"float""#) && ms(l) > since).map(str::to_string)
+        });
+        assert!(judged.contains(r#""moved":false"#), "{judged}");
+        let beside = frame(3).expect("the dialog beside");
+        assert!(close(beside[0], at[0]) && close(beside[1], at[1]), "left where the app put it: {beside:?} {at:?}");
+        assert!(!over_pane(beside) && reachable(beside), "{beside:?}");
+    }
 
     // A big standard window still gets a pane of its own, to the right. Wider than half the
     // pane and taller than 400: not small on any screen.
     canary.call(json!({"cmd": "open_window", "min": [body[2] * 0.6, 420.0]}));
     wait_for("the big window's pane", || (state()["tab_panes"] == json!([[1, 2]])).then_some(()));
     assert_eq!(hosted(), 2);
-    assert_eq!(state()["state"]["panes"][1]["kind"]["title"], "Canary 5");
+    assert_eq!(state()["state"]["panes"][1]["kind"]["title"], if room { "Canary 5" } else { "Canary 4" });
 }
 
 #[test]

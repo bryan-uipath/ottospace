@@ -202,12 +202,21 @@ pub struct Sight<'a> {
     pub ottospace: Option<Frame>,
     /// None of the app's panes is live: ottospace is in front of every window of the app.
     pub parked: bool,
+    /// Where parked windows sit (`hosted::parking_corners`), each a top left.
+    pub spots: &'a [(f64, f64)],
 }
 
 /// True when the user can get at the pop-up where it is: `restore::GRIP` of its top on one screen
 /// and, while its app is parked, beside ottospace's window, unless it is over its app's `pane`
-/// (entering the pane brings it up).
+/// (entering the pane brings it up). One over a parking spot is not: macOS put it by its parked
+/// parent, mostly off the screen's corner.
 pub fn reachable(window: Frame, pane: Option<Frame>, sight: &Sight) -> bool {
+    let at = |&(x, y): &(f64, f64)| {
+        (window.x..window.x + window.w).contains(&x) && (window.y..window.y + window.h).contains(&y)
+    };
+    if sight.spots.iter().any(at) {
+        return false;
+    }
     let (x, y) = (window.x + window.w / 2.0, window.y + window.h / 2.0);
     let over = pane.is_some_and(|p| (p.x..=p.x + p.w).contains(&x) && (p.y..=p.y + p.h).contains(&y));
     let cover = sight.ottospace.filter(|_| sight.parked && !over);
@@ -477,7 +486,7 @@ mod tests {
     const PANE: Frame = Frame { x: 100.0, y: 100.0, w: 1000.0, h: 800.0 };
 
     fn sight(screens: &[Frame], parked: bool) -> Sight<'_> {
-        Sight { screens, main: screens[0], ottospace: Some(OTTO), parked }
+        Sight { screens, main: screens[0], ottospace: Some(OTTO), parked, spots: &[] }
     }
 
     #[test]
@@ -521,6 +530,13 @@ mod tests {
         assert_eq!(float_to(Frame::new(5000.0, 0.0, 2500.0, 1200.0), Some(PANE), &parked), Some((0.0, 25.0)));
         // No pane drawn: the middle of the main screen.
         assert_eq!(float_to(off, None, &parked), Some((760.0, 452.5)));
+        // Centred on its parent at a parking spot, 150×200 of it in the screen's corner: over the pane.
+        let spot = (1919.0, 1079.0);
+        let corner = Frame::new(spot.0 - 150.0, spot.1 - 200.0, 700.0, 600.0);
+        let spots = [spot];
+        let sight = Sight { ottospace: None, spots: &spots, ..parked };
+        assert!(reachable(corner, Some(PANE), &Sight { spots: &[], ..sight }));
+        assert_eq!(float_to(corner, Some(PANE), &sight), Some((250.0, 200.0)));
     }
 
     #[test]

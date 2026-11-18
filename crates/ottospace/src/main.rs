@@ -3891,7 +3891,9 @@ impl Workspace {
                     let up = |id: &PaneId| self.model.live == Some(*id) || peek == Some(*id);
                     let parked = !self.hosted.iter().any(|(id, h)| h.pid == pid && up(id)) && !ax::is_active(pid);
                     let ottospace = Some(recovery::to_frame(own_frame(window, cx)));
-                    let sight = rules::Sight { screens: &screens.visible, main: screens.main, ottospace, parked };
+                    let spots = &screens.spots;
+                    let sight =
+                        rules::Sight { screens: &screens.visible, main: screens.main, ottospace, parked, spots };
                     let to = frame.and_then(|f| rules::float_to(recovery::to_frame(f), pane, &sight));
                     let moved = to.is_some_and(|(x, y)| ax_window.set_position(CGPoint::new(x, y)).is_ok());
                     ax_window.raise_only();
