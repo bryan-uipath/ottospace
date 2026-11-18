@@ -220,6 +220,12 @@ whether the regression is real and accepted.
   prerelease. `osi install pr <n>` adds the label.
 - `.github/workflows/scripts.yml`, on pull requests that change `install.sh`, `scripts/osi`,
   `scripts/test-osi.sh` or `scripts/package.sh`: tests the installer.
+- `.github/workflows/duped.yml`, on pull requests (not docs-only ones), on Linux:
+  `duped check --base origin/<base>` fails when the change adds a helper identical to one
+  already there, or an identical file of 10 lines or more. A deliberate copy is acknowledged in
+  `duped.toml`. The
+  release binary is pinned by version and checksum. Run it locally with
+  `duped check --base origin/main`.
 - The Rust build cache: the `e2e` job of `ci.yml` saves one, on `main` only; `app-windows.yml`,
   `shots.yml`, `bench.yml` and `reliability.yml` read it (`shared-key: e2e`) and save none. `check` and
   `build` keep their own.

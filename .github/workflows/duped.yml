@@ -1,0 +1,41 @@
+name: duped
+
+# Fails a pull request that adds a certain copy: a helper identical to one already there, or an
+# identical file. Linux, no build: it reads source only, so it needs no macOS runner.
+on:
+  pull_request:
+    paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: duped-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  duped:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # The release binary, pinned by version and checksum.
+      DUPED_VERSION: v0.3.0
+      DUPED_SHA256: 175e51b659379500bcf08e99bf893abe49336b06f1ce43be88c7e4181c7fc409
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # `--base` needs the merge base
+          persist-credentials: false
+      # Outside the checkout: a file the PR commits under this name can't be overwritten.
+      - name: Install duped
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL --proto '=https' --tlsv1.2 -o duped.tar.gz \
+            "https://github.com/bryan-uipath/duped/releases/download/$DUPED_VERSION/duped-x86_64-unknown-linux-musl.tar.gz"
+          echo "$DUPED_SHA256  duped.tar.gz" | sha256sum -c -
+          tar xzf duped.tar.gz -C "$RUNNER_TEMP" duped
+          rm duped.tar.gz
+      - name: Check for added copies
+        run: '"$RUNNER_TEMP/duped" check --base "origin/$BASE" --color never'
+        env:
+          BASE: ${{ github.base_ref }}
