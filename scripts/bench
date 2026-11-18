@@ -20,6 +20,8 @@ temp folder, `/bin/sh` terminals, no apps, no repositories or sessions of the us
   cpu_idle_pct         the process's CPU over 30 s with nothing moving (100 = one core).
   frames_idle, dial_frames_idle     frames drawn and dial frames over those 30 s: 0 at rest.
   wakeups_idle_per_s   the process's wakeups a second over those 30 s.
+  ticks_idle           runs of the app's tick over those 30 s (`counts.ticks`): a second of each
+                       frame after the first request, then about one a second.
   cpu_stream_pct       its CPU over 10 s while one terminal prints about 2500 lines a second.
 
 Startups: median and p90 of --runs launches (cold: --cold-runs). With --compare, both sides
@@ -122,6 +124,8 @@ def cpu_over(inst, seconds):
         "wakeups_per_s": (u1["wakeups"] - u0["wakeups"]) / wall,
         "frames": s1["frame"]["number"] - s0["frame"]["number"],
         "dial_frames": s1["counts"]["dial_frames"] - s0["counts"]["dial_frames"],
+        # Runs of the app's tick: none counted by a build before `counts.ticks`.
+        "ticks": s1["counts"]["ticks"] - s0["counts"]["ticks"] if "ticks" in s0["counts"] else None,
     }
 
 
@@ -241,6 +245,7 @@ def long_run(binary):
         idle = cpu_over(inst, IDLE_S)
         out["cpu_idle_pct"], out["wakeups_idle_per_s"] = idle["cpu_pct"], idle["wakeups_per_s"]
         out["frames_idle"], out["dial_frames_idle"] = idle["frames"], idle["dial_frames"]
+        out["ticks_idle"] = idle["ticks"]
         panes = []
         for _ in range(TERMS):
             before = {p["id"] for p in inst.state()["state"]["panes"]}
@@ -361,17 +366,20 @@ ROWS = [
     ("wakeups_idle_per_s", "  wakeups a second, idle"),
     ("frames_idle", f"  frames drawn, idle {IDLE_S} s"),
     ("dial_frames_idle", f"  dial frames, idle {IDLE_S} s"),
+    ("ticks_idle", f"  tick runs, idle {IDLE_S} s"),
     ("cpu_stream_pct", f"CPU, a terminal streaming {STREAM_S} s (%)"),
 ]
 
 
 def value(side, key):
-    v = side[key]
+    v = side.get(key)
     return v["median"] if isinstance(v, dict) else v
 
 
 def cell(side, key):
-    v = side[key]
+    v = side.get(key)
+    if v is None:
+        return "—"
     if isinstance(v, dict):
         return f"{v['median']:.0f} / {v['p90']:.0f}"
     return f"{v:.1f}" if isinstance(v, float) else str(v)
@@ -408,7 +416,10 @@ def table(result, meta):
     lines += [f"| | {names[0]} | {names[1]} | Δ |", "|---|---|---|---|"]
     for key, label in ROWS:
         vb, va = value(b, key), value(a, key)
-        delta = f"{(va - vb) / vb * 100:+.0f}%" if vb else f"{va - vb:+.1f}"
+        if vb is None or va is None:
+            delta = ""
+        else:
+            delta = f"{(va - vb) / vb * 100:+.0f}%" if vb else f"{va - vb:+.1f}"
         lines.append(f"| {label} | {cell(b, key)} | {cell(a, key)} | {delta} |")
     found = regressions(b, a, meta["startup_held"])
     lines += ["", "**Past a threshold:** " + "; ".join(found) if found else "No metric past a threshold."]
