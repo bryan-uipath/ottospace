@@ -361,7 +361,7 @@ impl Workspace {
             }
             ("talk", "chat-deny-note", _) => Action::TalkDenyNote,
             // A question card's rows and buttons: `chat-ask:<question>:<row>`.
-            ("talk", "chat-ask-send" | "chat-ask-decline", _) | ("talk", _, _) if name.starts_with("chat-ask") => {
+            ("talk", _, _) if name.starts_with("chat-ask") => {
                 let shown = self.model.shown_chat().and_then(|chat| chat.transcript.cards.front());
                 let Some(ticket) = shown.map(|card| card.ticket) else { return true };
                 let row = name.strip_prefix("chat-ask:").and_then(|at| at.split_once(':'));

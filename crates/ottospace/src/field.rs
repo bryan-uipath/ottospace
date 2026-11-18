@@ -215,6 +215,12 @@ impl Workspace {
     /// window points.
     pub fn field_snapshot(&self) -> serde_json::Value {
         let Some((of, field)) = self.model.field() else { return serde_json::Value::Null };
+        // The user's words to a question card: only where its cursor is, never the words.
+        let hidden = of == "talk" && self.model.talk_answers();
+        let (text, selected) = match hidden {
+            true => ("", ""),
+            false => (field.text(), field.selected()),
+        };
         let drawn = self.drawn();
         let drawn = drawn.borrow();
         let (b, selection) = (drawn.bounds, field.selection());
@@ -224,10 +230,10 @@ impl Workspace {
         };
         serde_json::json!({
             "of": of,
-            "text": field.text(),
+            "text": text,
             "cursor": field.utf16(field.cursor()),
             "selection": [field.utf16(selection.start), field.utf16(selection.end)],
-            "selected": field.selected(),
+            "selected": selected,
             "marked": field.marked().map(|m| [field.utf16(m.start), field.utf16(m.end)]),
             "bounds": [f32::from(b.origin.x), f32::from(b.origin.y), f32::from(b.size.width), f32::from(b.size.height)],
             "cursor_x": f32::from(b.origin.x + x - drawn.scroll),

@@ -47,12 +47,22 @@ impl Chat {
         self.transcript.cards.front().is_some_and(|card| card.ticket == ticket)
     }
 
+    /// The question card shown, unless a Deny's message is written under it.
+    pub fn form(&self) -> Option<&Form> {
+        self.transcript.cards.front().and_then(|card| card.ask.as_ref()).filter(|_| !self.deny)
+    }
+
+    /// The cursor of the question card shown is on "Other…": typing goes there.
+    pub fn answers_other(&self) -> bool {
+        self.form().is_some_and(Form::on_other)
+    }
+
     /// What `key` does in it: a question card's keys while one is shown, else `key`'s.
     pub fn key(&self, key: &str, mods: crate::keys::Mods) -> Key {
-        let front = self.transcript.cards.front().filter(|_| !self.deny);
-        match front.map(|card| (card.ticket, card.ask.as_ref())) {
-            Some((ticket, Some(form))) => ask_key(key, mods, ticket, form.on_other()),
-            card => self::key(key, mods, card.map(|(ticket, _)| ticket)),
+        let ticket = self.transcript.cards.front().map(|card| card.ticket).filter(|_| !self.deny);
+        match (ticket, self.form()) {
+            (Some(ticket), Some(form)) => ask_key(key, mods, ticket, form.on_other()),
+            (ticket, _) => self::key(key, mods, ticket),
         }
     }
 
@@ -190,20 +200,24 @@ impl Model {
 
     /// The composer takes keys: the shown native conversation has the keyboard, no card waits
     /// (or the user writes a Deny's message), and the user's editor does not have its draft.
+    /// Or a question card's "Other…" does: the editor has the draft, not it.
     pub fn talk_typing(&self) -> bool {
         let keys = self.talk.as_ref().is_some_and(|talk| talk.keys);
-        let other =
-            |chat: &Chat| chat.transcript.cards.front().and_then(|card| card.ask.as_ref()).is_some_and(Form::on_other);
-        let free =
-            |chat: &Chat| (chat.transcript.cards.is_empty() || chat.deny || other(chat)) && !self.edits(&chat.subject);
+        let free = |chat: &Chat| {
+            chat.answers_other() || ((chat.transcript.cards.is_empty() || chat.deny) && !self.edits(&chat.subject))
+        };
         keys && self.shown_draft_chat().is_some_and(free)
+    }
+
+    /// The field "talk" holds the user's words to a question card: never in the state.
+    pub fn talk_answers(&self) -> bool {
+        self.shown_draft_chat().is_some_and(Chat::answers_other)
     }
 
     /// The composer's draft; while a question card's cursor is on "Other…", its words.
     pub(super) fn talk_draft(&self) -> Option<&Field> {
         let chat = self.shown_draft_chat()?;
-        let form = chat.transcript.cards.front().and_then(|card| card.ask.as_ref()).filter(|_| !chat.deny);
-        match form.filter(|form| form.on_other()) {
+        match chat.form().filter(|form| form.on_other()) {
             Some(form) => form.other(form.cursor.0),
             None => Some(&chat.draft),
         }
@@ -212,8 +226,8 @@ impl Model {
     /// An edit of `talk_draft`. Words typed on "Other…" pick it.
     pub(super) fn talk_edit(&mut self, edit: crate::edit::Edit) {
         let Some(chat) = self.shown_draft_chat_mut() else { return };
-        let deny = chat.deny;
-        match chat.transcript.form_mut().filter(|form| !deny && form.on_other()) {
+        let other = chat.answers_other();
+        match chat.transcript.form_mut().filter(|_| other) {
             Some(form) => {
                 if let Some(field) = form.typing() {
                     field.apply(edit);

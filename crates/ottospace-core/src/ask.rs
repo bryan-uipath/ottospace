@@ -169,8 +169,9 @@ impl Form {
     fn chosen(&self, q: usize) -> Chosen {
         let n = self.questions[q].options.len();
         let options = (0..n).filter(|r| self.picked(q, *r)).collect();
-        let words = self.other[q].text().trim();
-        let other = (self.picked(q, n) && !words.is_empty()).then(|| words.to_string());
+        // Blank words answer nothing; others go as typed: ` | ` may be the answer.
+        let words = self.other[q].text();
+        let other = (self.picked(q, n) && !words.trim().is_empty()).then(|| words.to_string());
         Chosen { options, other }
     }
 
@@ -320,7 +321,7 @@ pub(crate) mod tests {
         f.typing().unwrap().apply(Edit::Insert("huge".into()));
         f.typed();
         f.act(Act::Row { question: 1, row: 1 });
-        assert_eq!(f.submit(), Some(vec![chosen(&[], Some("green")), chosen(&[1], Some("huge"))]));
+        assert_eq!(f.submit(), Some(vec![chosen(&[], Some("  green ")), chosen(&[1], Some("huge"))]), "as typed");
     }
 
     /// The state's shape: counts, picks and the cursor, never a word of the card's or the user's.

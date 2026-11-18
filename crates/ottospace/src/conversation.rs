@@ -15,8 +15,8 @@ use std::time::Instant;
 
 use gpui::{
     AnyElement, AnyView, Context, Div, ElementId, FontStyle, FontWeight, HighlightStyle, ImageSource, InteractiveText,
-    KeyDownEvent, MouseButton, ScrollHandle, ScrollWheelEvent, SharedString, StrikethroughStyle, StyledText,
-    UnderlineStyle, Window, div, img, prelude::*, px, rgb,
+    KeyDownEvent, ScrollHandle, ScrollWheelEvent, SharedString, StrikethroughStyle, StyledText, UnderlineStyle, Window,
+    div, img, prelude::*, px, rgb,
 };
 use ottospace_agents::driver::Driver;
 use ottospace_agents::{Answer, Event as Said, Input, Process, Ticket};
@@ -1285,7 +1285,7 @@ impl Workspace {
     /// cut request. ↵ does nothing here.
     pub(crate) fn chat_card(&self, subject: &Subject, chat: &chat::Chat, cx: &mut Context<Self>) -> Option<Div> {
         let card = chat.transcript.cards.front()?;
-        if let Some(form) = card.ask.as_ref().filter(|_| !chat.deny) {
+        if let Some(form) = chat.form() {
             return Some(self.ask_card(chat, form, card.ticket, cx));
         }
         let full = card.expanded.then(|| self.drawer.native.get(subject).and_then(|n| n.full(card.ticket))).flatten();
@@ -1445,7 +1445,17 @@ impl Workspace {
                     .child(div().flex_1().font_weight(FontWeight::SEMIBOLD).child("The agent asks"))
                     .children((queued > 0).then(|| muted(format!("{queued} more waiting")))),
             )
-            .children(questions)
+            // Many questions scroll in a box of their own: Send stays in view.
+            .child(
+                div()
+                    .id("chat-ask-questions")
+                    .max_h(px(360.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(questions),
+            )
             .child(
                 div()
                     .flex()
@@ -1508,8 +1518,8 @@ impl Workspace {
             )
             .child(div().flex_none().w(px(10.)).text_xs().text_color(rgb(theme::MUTED)).child(number))
             .child(body)
+            // The press goes on to the drawer, which takes the keyboard: "Other…" is typed in next.
             .child(self.controls.mark(format!("talk:{id}")))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             // The field takes clicks in its own row: a click there places the cursor.
             .when(!(other && here), |d| {
                 d.on_click(cx.listener(move |this, _, window, cx| {

@@ -9504,12 +9504,18 @@ fn a_multi_select_question_sends_picks_and_the_users_words() {
     otto.start_task(1);
     otto.wait_for("a question card", |o| Some(ask(o)).filter(Value::is_object));
     otto.user_key("space");
+    // The keyboard elsewhere: a click on "Other…" takes it, and its words are typed there.
+    let keys = |o: &Otto| o.call(json!({"cmd": "state"}))["state"]["talk"]["keys"].clone();
+    otto.user_key("cmd-l");
+    assert_eq!(keys(&otto), json!(false));
+    otto.user_click(at(otto.control("talk:chat-ask:0:2"), 0.5, 0.5));
+    assert_eq!(keys(&otto), json!(true));
+    otto.user_key("x l space 2");
+    let state = otto.call(json!({"cmd": "state"}));
+    assert!(!state.to_string().contains("xl 2"), "the user's words are not in the state: {state}");
     otto.user_click(at(otto.control("talk:chat-ask:0:1"), 0.5, 0.5));
-    // ↓ to "Other…": letters, digits and space are its words.
-    otto.user_key("down x l space 2");
     let picked = ask(&otto);
-    assert_eq!(picked, json!({"questions": [{"options": 2, "multi": true, "picked": [0, 1, 2]}], "cursor": [0, 2]}));
-    assert!(!chat(&otto).to_string().contains("xl 2"), "the user's words are not in the state");
+    assert_eq!(picked, json!({"questions": [{"options": 2, "multi": true, "picked": [0, 1, 2]}], "cursor": [0, 1]}));
     otto.user_key("enter");
     let reply = otto.wait_for("the answer", |_| ask_reply(&record));
     let mut input = json!({ "questions": questions });

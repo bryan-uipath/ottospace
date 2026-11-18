@@ -261,11 +261,13 @@ const UNREADABLE: &str = "a field of it cannot be read";
 
 /// An `AskUserQuestion` input's questions (`question`, `header`, `options` of `label` and
 /// `description`, `multiSelect`), as a card shows them. `None`: not one a card can show: no
-/// question or too many, too many options, a question or label that is not text, or two
-/// questions alike (its answers are keyed by the question's text).
+/// question or too many, too many options, a question or label that is not text or too long
+/// to show whole, or two questions alike (its answers are keyed by the question's text). Core
+/// `Text` from here, as `Untrusted` is: drawn, never in the state.
 fn questions(input: &Value) -> Option<Vec<Question>> {
     let all = input["questions"].as_array().filter(|all| (1..=ask::MAX_QUESTIONS).contains(&all.len()))?;
-    let text = |value: &Value| value.as_str().map(|text| Text::new(Untrusted::new(text, MAX_DETAIL).text()));
+    // Shown whole or not at all: two labels cut alike could not be told apart.
+    let text = |value: &Value| value.as_str().filter(|text| text.len() <= MAX_DETAIL).map(Text::new);
     let read = |q: &Value| {
         let options = q["options"].as_array().map_or(&[][..], Vec::as_slice);
         let choice = |o: &Value| {
@@ -306,7 +308,8 @@ fn answered(input: &Value, chosen: &[Chosen]) -> Result<Value, Refused> {
         let value = match (q["multiSelect"] == true, &parts[..]) {
             (_, []) => return Err(Refused("a question with no answer")),
             (false, [one]) => one.clone(),
-            _ => parts.iter().map(quoted).collect::<Vec<String>>().join(", "),
+            (false, _) => return Err(Refused("one answer to a single-select question")),
+            (true, _) => parts.iter().map(quoted).collect::<Vec<String>>().join(", "),
         };
         let question = q["question"].as_str().ok_or(Refused("a question that is not text"))?;
         answers.insert(question.to_string(), Value::from(value));
@@ -618,6 +621,7 @@ mod tests {
             vec![chosen(&[0], None)],
             vec![chosen(&[0], None), chosen(&[], None)],
             vec![chosen(&[5], None), chosen(&[0], None)],
+            vec![chosen(&[0, 1], None), chosen(&[0], None)],
         ];
         for wrong in wrong {
             assert!(answers(wrong).is_err());
@@ -637,7 +641,9 @@ mod tests {
         let mut alike = asked();
         alike["questions"][1]["question"] = json!("Which colour?");
         let many = json!({"questions": vec![asked()["questions"][0].clone(); ask::MAX_QUESTIONS + 1]});
-        for input in [bad, alike, many, json!({"questions": []}), json!({"questions": "pick"})] {
+        let mut long = asked();
+        long["questions"][0]["options"][0]["label"] = json!("a".repeat(MAX_DETAIL + 1));
+        for input in [bad, alike, many, long, json!({"questions": []}), json!({"questions": "pick"})] {
             assert_eq!(questions("AskUserQuestion", input.clone()), 0, "{input}");
         }
         assert_eq!(questions("Write", asked()), 0);
