@@ -996,6 +996,9 @@ struct Workspace {
     rail_scroll: ScrollHandle,
     rail_scrolled: RefCell<(u64, Option<drawer_rail::Drawn>)>,
     rail_pending: Rc<Cell<Option<(usize, u8)>>>,
+    /// The second row's tabs, and the tab last brought into view there.
+    tabs_scroll: ScrollHandle,
+    tabs_shown: Cell<Option<u32>>,
     /// Every scroll area's bar.
     bars: scrollbar::Bars,
     /// The minute of the last look at the clock: the Tasks section's ages are drawn again when it changes.
@@ -1484,6 +1487,8 @@ impl Workspace {
             rail_scroll: ScrollHandle::new(),
             rail_scrolled: RefCell::new((0, None)),
             rail_pending: Rc::new(Cell::new(None)),
+            tabs_scroll: ScrollHandle::new(),
+            tabs_shown: Cell::new(None),
             bars: scrollbar::Bars::default(),
             minute: 0,
             tags: tags::Reader::start(),
@@ -3518,6 +3523,9 @@ impl Workspace {
             // `marks`, `picker`, `keys`, `terminal:<pane>`): its bar's `track` and `thumb` in
             // window points, and the bar's `opacity` (0 once it has faded).
             "scrollbars": self.bars.snapshot(),
+            // Test runs only: each scroll area laid out, also one that fits, and which of its edges
+            // fade (`top`, `bottom`; the tab row's `left`, `right`). Null outside a test run.
+            "overflow": std::env::var_os("OTTOSPACE_E2E").map(|_| self.bars.overflow()),
             // The capture key, and what was drawn of the draft or the brief in the right bar.
             "capture": self.capture_snapshot(),
             // The right drawer: where its conversation is drawn (`body`), each task's agent
@@ -4551,7 +4559,7 @@ impl Workspace {
         let panel = dialog::panel(theme::BORDER_STRONG).min_h_0().max_w_full().flex().flex_col().overflow_hidden();
         // The columns keep their height inside the list: a flex row would stretch them to its own.
         let list = div().id("keys-rows").flex_1().overflow_y_scroll().child(body);
-        let panel = panel.child(self.bars.area("keys", list));
+        let panel = panel.child(self.bars.area("keys", list, theme::RAISED));
         dialog::backdrop("keys-backdrop", 0.5, Action::CloseKeys, cx)
             .p_6()
             .flex()
@@ -5386,7 +5394,7 @@ impl Workspace {
         let sessions = self.render_sessions(listed, cx);
         let list = div().id("tasks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         let list = list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows);
-        let list = self.bars.tracked("tasks", list.children(sessions), &self.list_scroll);
+        let list = self.bars.tracked("tasks", list.children(sessions), &self.list_scroll, theme::RAISED);
         // The footer stays under the list as it scrolls.
         let footer = (!self.model.tasks.list.is_empty()).then(|| self.render_today());
         div().flex_1().min_h_0().flex().flex_col().child(list).children(footer)
@@ -5582,6 +5590,7 @@ impl Workspace {
                 div().px_2().pt_2().text_xs().text_color(rgb(theme::MUTED)).child(format!("Pull requests: {note}"))
             })),
             &self.list_scroll,
+            theme::RAISED,
         )
     }
 
@@ -5950,11 +5959,14 @@ impl Workspace {
             // Shown by the user's own scrolls, not by output arriving. A press beside the thumb
             // is the terminal's: a selection, or the program's own mouse.
             let (scroll_to, scrolls) = (terminal.scroller(), terminal.scrolls() as f32);
+            // No edge fade: a terminal's lines run to its edges.
             let scrollbar = self.bars.overlay(
                 &format!("terminal:{id}"),
+                scrollbar::Axis::Down,
                 false,
+                None,
                 move || (extent, scrolls),
-                move |offset| scroll_to(history.saturating_sub((offset / line).round() as usize)),
+                move |offset, _| scroll_to(history.saturating_sub((offset / line).round() as usize)),
             );
             div()
                 .absolute()
@@ -6418,6 +6430,15 @@ impl Workspace {
         let colour = self.space_colour(&of);
         let chip = self.agent_chip(SPACE_TABS, cx);
         let dot = self.model.listen_dot();
+        // The tab on show scrolls into view once, when it changes: a scroll may move it out again.
+        let drawn = || places.iter().filter_map(|place| Some((*place, self.model.tabs.get(*place)?.id)));
+        let shown = drawn().position(|(place, _)| place == self.model.active);
+        let on_show = drawn().find(|(place, _)| *place == self.model.active).map(|(_, id)| id);
+        if self.tabs_shown.replace(on_show) != on_show
+            && let Some(at) = shown
+        {
+            self.tabs_scroll.scroll_to_item(at);
+        }
         let tabs =
             places.into_iter().filter_map(|place| Some((place, self.model.tabs.get(place)?))).map(|(place, tab)| {
                 let (active, id) = (place == self.model.active, tab.id);
@@ -6498,6 +6519,16 @@ impl Workspace {
                     )
                     .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
             });
+        // Tabs past the row's width scroll across, under the overflow motif.
+        let row = div()
+            .id("tabs")
+            .flex_shrink()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .overflow_x_scroll()
+            .track_scroll(&self.tabs_scroll)
+            .children(tabs);
         Some(
             div()
                 .h(px(SPACE_TABS))
@@ -6508,7 +6539,9 @@ impl Workspace {
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .overflow_hidden()
-                .children(tabs)
+                .child(
+                    self.bars.tracked_row("tabs", row, &self.tabs_scroll, theme::BACKGROUND).mr(px(self.chip_badge())),
+                )
                 // The agent chip, in the room the tabs leave: its badge over the row's end.
                 .relative()
                 .children(chip.into_iter().flat_map(|(badge, whole)| [badge, whole])),

@@ -732,7 +732,12 @@ impl Workspace {
         self.calendar_shown.set((self.renders, calendar.day));
         let list = div().id("calendar").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         let list = list.track_scroll(&self.calendar_scroll).children(children);
-        div().flex_1().min_h_0().flex().flex_col().child(self.bars.tracked("calendar", list, &self.calendar_scroll))
+        div().flex_1().min_h_0().flex().flex_col().child(self.bars.tracked(
+            "calendar",
+            list,
+            &self.calendar_scroll,
+            theme::RAISED,
+        ))
     }
 
     /// The fetch's muted line under the rows: loading with its progress, what failed with a Retry

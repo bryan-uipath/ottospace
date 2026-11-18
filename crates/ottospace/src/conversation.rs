@@ -594,6 +594,18 @@ impl Workspace {
                 let subject = subject.clone();
                 move |this, _: &ScrollWheelEvent, _, cx| this.chat_wheel(&subject, cx)
             }));
+        // A drag or a page of the bar leaves the latest, as a wheel does.
+        let (this, who) = (cx.entity().downgrade(), subject.clone());
+        let moved = move |cx: &mut gpui::App| drop(this.update(cx, |this, cx| this.chat_wheel(&who, cx)));
+        let bar = self.bars.follow(
+            &format!("chat:{key}"),
+            crate::scrollbar::Axis::Down,
+            &scroll,
+            theme::BACKGROUND,
+            !away,
+            moved,
+        );
+        let list = div().relative().flex_1().min_h_0().min_w_0().flex().flex_col().child(list).child(bar);
         let latest = away.then(|| {
             let subject = subject.clone();
             self.talk_button("chat-latest", "↓ Jump to latest", "Back to the newest message")

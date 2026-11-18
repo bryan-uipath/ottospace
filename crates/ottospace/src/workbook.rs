@@ -405,6 +405,6 @@ impl Workspace {
         // A delete or an update is offered back on the notice bar: nothing here moves.
         let list = div().id("workbooks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         let list = list.track_scroll(&self.list_scroll).children(empty).children(children);
-        self.bars.tracked("workbooks", list, &self.list_scroll)
+        self.bars.tracked("workbooks", list, &self.list_scroll, theme::RAISED)
     }
 }

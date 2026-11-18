@@ -1785,6 +1785,7 @@ export function snapshot(value: unknown): Snapshot {
     workbook_offer: orNull(workbookOffer)(o.workbook_offer, "workbook_offer"),
     row_menu: orNull(rowMenu)(o.row_menu, "row_menu"),
     scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),
+    overflow: orNull(map(map(bool)))(o.overflow, "overflow"),
     capture: captureDrawn(o.capture, "capture"),
     spaces: list(spaceRow)(o.spaces, "spaces"),
     badges: map(str)(o.badges, "badges"),

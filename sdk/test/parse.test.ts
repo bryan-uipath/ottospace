@@ -136,6 +136,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     workbook_offer: null,
     row_menu: null,
     scrollbars: {},
+    overflow: null,
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
     spaces: [
       { of: { kind: "home" }, hidden: false, selected: false, tabs: [], tasks: [], front: null, worktree: null, glyph: { kind: "home" }, kept: true },

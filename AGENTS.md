@@ -104,6 +104,8 @@ Rules:
   - `sneak_app_tree`: a fixture tree as if read from the focused pane's window while sneak mode
     is on (a test run hosts no window), so its elements get labels. The state's `app_presses`
     (null outside a test run) lists each press a label asked for.
+  - State field `overflow`: each scroll area laid out, also one that fits, and which of its edges
+    fade (`top`/`bottom`, the tab row's `left`/`right`). Null outside a test run.
   - State fields `keys_known` (the ids of the key bindings the user knows) and `key_reference`
     (while ⌘/ shows: its groups' row ids, the known ids, whether Known is open, its header's
     rect). Null outside a test run: what the user's keys are used for is never on the socket.

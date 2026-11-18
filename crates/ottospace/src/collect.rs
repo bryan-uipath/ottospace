@@ -1052,6 +1052,7 @@ impl Workspace {
                     .area(
                         "materials",
                         div().id("materials").flex().flex_col().min_h_0().overflow_y_scroll().children(rows),
+                        theme::RAISED,
                     )
                     .flex_initial(),
             )
@@ -1141,6 +1142,7 @@ impl Workspace {
                         .child(
                             div().pt_2().text_xs().font_family("Menlo").text_color(rgb(theme::MUTED)).children(lines),
                         ),
+                    theme::RAISED,
                 ),
             );
         Some(bar.into_any_element())

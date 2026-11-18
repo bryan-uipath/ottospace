@@ -1,6 +1,7 @@
-//! The scrollbar: GPUI scrolls overflow but draws no bar. An overlay thumb at the right edge of
-//! a scroll area, in apollo-ui's future-dark style. Where the thumb is and what a drag or a
-//! click scrolls to are the core's rules (`ottospace_core::scrollbar`).
+//! Every overflowing list's motif: GPUI scrolls overflow but draws no bar. An overlay thumb at
+//! the right (or bottom) edge of a scroll area, in apollo-ui's future-dark style, and a soft fade
+//! at each edge with more beyond it. Where the thumb is, what a drag or a click scrolls to and
+//! which edges fade are the core's rules (`ottospace_core::scrollbar`).
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -8,15 +9,30 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, Bounds, DispatchPhase, Div, HitboxBehavior, Hsla, IntoElement, MouseButton, MouseDownEvent,
-    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, ScrollHandle, Stateful,
-    StatefulInteractiveElement, Styled, canvas, div, fill, point, px, rgb, size,
+    AnyElement, App, Bounds, DispatchPhase, Div, HitboxBehavior, Hsla, IntoElement, MouseButton, MouseDownEvent,
+    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, ScrollHandle, Stateful,
+    StatefulInteractiveElement, Styled, Window, canvas, div, fill, linear_color_stop, linear_gradient, point, px, rgb,
+    size,
 };
-use ottospace_core::scrollbar::{self as rules, Extent, Step};
+use ottospace_core::scrollbar::{self as rules, EDGE_FADE, Extent, Step};
 use ottospace_core::theme;
 
 /// How far a line step from the keyboard scrolls a list.
 const LINE: f32 = 40.;
+
+/// Which way an area scrolls: a list down, the tab row across.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Axis {
+    Down,
+    Across,
+}
+
+impl Axis {
+    /// How far `at` lies along the axis.
+    fn along(self, at: Point<Pixels>) -> f32 {
+        f32::from(if self == Axis::Down { at.y } else { at.x })
+    }
+}
 
 /// One scroll area's bar, kept between frames.
 #[derive(Default)]
@@ -32,50 +48,89 @@ struct Bar {
     over_track: bool,
     /// The pointer left the window: wherever it was last seen, it is over nothing.
     left: bool,
-    /// The thumb is held: how far below its start.
+    /// The thumb is held: how far along from its start.
     grab: Option<f32>,
     /// When the pending redraw is due.
     wake: Option<Instant>,
     /// The track, the thumb and the opacity as last painted. `None`: the content fits.
     drawn: Option<(Bounds<Pixels>, Bounds<Pixels>, f32)>,
+    /// Its axis and which edges fade, `(start, end)`, as last laid out; also for a list that fits.
+    faded: Option<(Axis, bool, bool)>,
 }
 
 /// Every scroll area's bar, by the area's id.
 #[derive(Clone, Default)]
 pub struct Bars(Rc<RefCell<BTreeMap<String, Bar>>>);
 
-/// A list's extent as last laid out.
-fn extent(handle: &ScrollHandle) -> Extent {
-    let (viewport, offset) = (f32::from(handle.bounds().size.height), -f32::from(handle.offset().y));
-    Extent { viewport, content: viewport + f32::from(handle.max_offset().height), offset }
+/// A list's extent along `axis` as last laid out.
+fn extent(handle: &ScrollHandle, axis: Axis) -> Extent {
+    let (bounds, offset, max) = (handle.bounds().size, handle.offset(), handle.max_offset());
+    let (viewport, offset, max) = match axis {
+        Axis::Down => (bounds.height, offset.y, max.height),
+        Axis::Across => (bounds.width, offset.x, max.width),
+    };
+    let viewport = f32::from(viewport);
+    Extent { viewport, content: viewport + f32::from(max), offset: -f32::from(offset) }
 }
 
-fn scroll_to(handle: &ScrollHandle, offset: f32) {
-    handle.set_offset(point(handle.offset().x, px(-offset)));
+fn scroll_to(handle: &ScrollHandle, axis: Axis, offset: f32) {
+    let now = handle.offset();
+    handle.set_offset(match axis {
+        Axis::Down => point(now.x, px(-offset)),
+        Axis::Across => point(px(-offset), now.y),
+    });
 }
 
 impl Bars {
     /// A frame starts: forgets the areas the last one did not render.
     pub fn begin(&self) {
         self.0.borrow_mut().retain(|_, bar| std::mem::take(&mut bar.seen));
-        self.0.borrow_mut().values_mut().for_each(|bar| bar.drawn = None);
+        self.0.borrow_mut().values_mut().for_each(|bar| (bar.drawn, bar.faded) = (None, None));
     }
 
-    /// `list` (an `overflow_y_scroll` element that fills its parent) with its bar over it.
-    pub fn area(&self, id: &str, list: Stateful<Div>) -> Div {
+    /// `list` (an `overflow_y_scroll` element that fills its parent) with its bar over it, its
+    /// edges fading into `bg`, the colour behind it.
+    pub fn area(&self, id: &str, list: Stateful<Div>, bg: u32) -> Div {
         let handle = self.0.borrow_mut().entry(id.into()).or_default().handle.clone();
-        self.tracked(id, list.track_scroll(&handle), &handle)
+        self.tracked(id, list.track_scroll(&handle), &handle, bg)
     }
 
     /// As `area`, for a list that already scrolls under `handle`.
-    pub fn tracked(&self, id: &str, list: impl IntoElement, handle: &ScrollHandle) -> Div {
+    pub fn tracked(&self, id: &str, list: impl IntoElement, handle: &ScrollHandle, bg: u32) -> Div {
+        let bar = self.follow(id, Axis::Down, handle, bg, false, |_| {});
+        div().relative().flex_1().min_h_0().flex().flex_col().child(list).child(bar)
+    }
+
+    /// As `tracked`, for a row that scrolls across (`overflow_x_scroll`), its bar along the
+    /// bottom: as wide as the row's content, narrower when its parent has less room. The bar only
+    /// shows: a press on it is the row's (a tab's), and the wheel scrolls it.
+    pub fn tracked_row(&self, id: &str, row: impl IntoElement, handle: &ScrollHandle, bg: u32) -> Div {
+        let bar = self.follow(id, Axis::Across, handle, bg, false, |_| {});
+        div().relative().flex_shrink().min_w_0().h_full().flex().child(row).child(bar)
+    }
+
+    /// The bar and fades of a list under `handle`, alone, over its parent. `pinned`: the list
+    /// keeps to its end (a chat on its latest), so growing there is no scroll that shows the bar.
+    /// `moved`: after the bar scrolled it (a drag, a page).
+    pub fn follow(
+        &self,
+        id: &str,
+        axis: Axis,
+        handle: &ScrollHandle,
+        bg: u32,
+        pinned: bool,
+        moved: impl Fn(&mut App) + 'static,
+    ) -> AnyElement {
         let (read, write) = (handle.clone(), handle.clone());
         let read = move || {
-            let extent = extent(&read);
-            (extent, extent.offset)
+            let extent = extent(&read, axis);
+            (extent, if pinned { extent.offset - extent.max_offset() } else { extent.offset })
         };
-        let bar = self.overlay(id, true, read, move |offset| scroll_to(&write, offset));
-        div().relative().flex_1().min_h_0().flex().flex_col().child(list).child(bar)
+        let scroll = move |offset, cx: &mut App| {
+            scroll_to(&write, axis, offset);
+            moved(cx);
+        };
+        self.overlay(id, axis, true, Some(bg), read, scroll)
     }
 
     /// Scrolls an `area`'s list so its child `ix` is in view.
@@ -88,42 +143,60 @@ impl Bars {
     /// A step from the keyboard through an `area`.
     pub fn step(&self, id: &str, step: Step) {
         if let Some(bar) = self.0.borrow().get(id) {
-            scroll_to(&bar.handle, extent(&bar.handle).stepped(step, LINE));
+            scroll_to(&bar.handle, Axis::Down, extent(&bar.handle, Axis::Down).stepped(step, LINE));
         }
     }
 
-    /// The bar alone, over its parent. `read`: the area as laid out this frame, and a number
-    /// that changes when the user scrolls (a change of it shows the bar). `scroll` moves the
-    /// area to an offset. `pages`: a press on the track beside the thumb pages; without it,
-    /// that press goes to what is under the track.
+    /// The bar alone, over its parent, along `axis`. `read`: the area as laid out this frame,
+    /// and a number that changes when the user scrolls (a change of it shows the bar). `scroll`
+    /// moves the area to an offset. `pages`: a press on the track beside the thumb pages;
+    /// without it, that press goes to what is under the track. `fade`: the colour behind the
+    /// area, which its edges fade into where more lies beyond; `None`, no fade.
     pub fn overlay(
         &self,
         id: &str,
+        axis: Axis,
         pages: bool,
+        fade: Option<u32>,
         read: impl Fn() -> (Extent, f32) + 'static,
-        scroll: impl Fn(f32) + 'static,
+        scroll: impl Fn(f32, &mut App) + 'static,
     ) -> AnyElement {
         self.0.borrow_mut().entry(id.into()).or_default().seen = true;
         let (bars, id) = (self.clone(), id.to_string());
+        let (laid, laid_id) = (bars.clone(), id.clone());
         canvas(
             move |area, window, _| {
                 let (extent, moved_by) = read();
+                let edges = extent.beyond();
+                if let Some(bar) = laid.0.borrow_mut().get_mut(&laid_id) {
+                    bar.faded = Some((axis, edges.0, edges.1));
+                }
                 let inset = px(rules::INSET);
-                let track = Bounds::new(
-                    point(area.right() - px(rules::TRACK), area.top() + inset),
-                    size(px(rules::TRACK), area.size.height - inset * 2.),
-                );
-                let thumb = extent.thumb(track.size.height.into())?;
+                let track = match axis {
+                    Axis::Down => Bounds::new(
+                        point(area.right() - px(rules::TRACK), area.top() + inset),
+                        size(px(rules::TRACK), area.size.height - inset * 2.),
+                    ),
+                    Axis::Across => Bounds::new(
+                        point(area.left() + inset, area.bottom() - px(rules::TRACK)),
+                        size(area.size.width - inset * 2., px(rules::TRACK)),
+                    ),
+                };
+                let thumb = extent.thumb(axis.along(point(track.size.width, track.size.height)))?;
                 // Neither blocks what is under it: the root, the pane and the list still see the
                 // pointer there. A press the bar takes is stopped in its own listener.
                 let over = window.insert_hitbox(area, HitboxBehavior::Normal);
                 let bar = window.insert_hitbox(track, HitboxBehavior::Normal);
-                Some((extent, moved_by, thumb, over, bar))
+                Some((extent, moved_by, thumb, over, bar, edges))
             },
-            move |_, laid_out, window, cx| {
-                let Some((extent, moved_by, (start, length), over, hitbox)) = laid_out else { return };
+            move |area, laid_out, window, cx| {
+                let Some((extent, moved_by, (start, length), over, hitbox, edges)) = laid_out else { return };
+                if let Some(bg) = fade {
+                    paint_fades(area, axis, edges, bg, window);
+                }
                 let track = hitbox.bounds;
-                let track_length = f32::from(track.size.height);
+                let (track_start, track_length) =
+                    (axis.along(track.origin), axis.along(point(track.size.width, track.size.height)));
                 let now = Instant::now();
                 // E2E runs always fade, whatever this Mac is set to.
                 let always = !cx.should_auto_hide_scrollbars() && std::env::var_os("OTTOSPACE_E2E").is_none();
@@ -158,10 +231,16 @@ impl Bars {
                     (None, true) => (rules::TRACK, theme::SCROLL_THUMB_HOVER),
                     (None, false) => (rules::THUMB, theme::SCROLL_THUMB),
                 };
-                let thumb = Bounds::new(
-                    point(track.left() + px((rules::TRACK - width) / 2.), track.top() + px(start)),
-                    size(px(width), px(length)),
-                );
+                // Centred across the track, `start` along it.
+                let side = px((rules::TRACK - width) / 2.);
+                let thumb = match axis {
+                    Axis::Down => {
+                        Bounds::new(point(track.left() + side, track.top() + px(start)), size(px(width), px(length)))
+                    }
+                    Axis::Across => {
+                        Bounds::new(point(track.left() + px(start), track.top() + side), size(px(length), px(width)))
+                    }
+                };
                 bar.drawn = Some((track, thumb, opacity));
                 drop(all);
                 if opacity > 0. {
@@ -176,19 +255,20 @@ impl Bars {
                 window.on_mouse_event({
                     let (bars, id, scroll, hitbox) = (bars.clone(), id.clone(), scroll.clone(), hitbox.clone());
                     move |event: &MouseDownEvent, phase, window, cx| {
-                        if phase != DispatchPhase::Bubble || event.button != MouseButton::Left || opacity <= 0. {
+                        let off = opacity <= 0. || axis == Axis::Across;
+                        if phase != DispatchPhase::Bubble || event.button != MouseButton::Left || off {
                             return;
                         }
                         if !hitbox.is_hovered(window) {
                             return;
                         }
-                        let at = f32::from(event.position.y - track.top());
+                        let at = axis.along(event.position) - track_start;
                         if (start..start + length).contains(&at) {
                             if let Some(bar) = bars.0.borrow_mut().get_mut(&id) {
                                 bar.grab = Some(at - start);
                             }
                         } else if pages {
-                            scroll(extent.paged(track_length, at));
+                            scroll(extent.paged(track_length, at), cx);
                         } else {
                             return;
                         }
@@ -208,9 +288,9 @@ impl Bars {
                         match bar.grab {
                             // The thumb follows the pointer, also past the area's edge.
                             Some(grab) if event.pressed_button == Some(MouseButton::Left) => {
-                                let at = f32::from(event.position.y - track.top());
+                                let at = axis.along(event.position) - track_start;
                                 drop(all);
-                                scroll(extent.dragged(track_length, at - grab));
+                                scroll(extent.dragged(track_length, at - grab), cx);
                                 cx.stop_propagation();
                             }
                             // Released where no release was seen, e.g. outside the window.
@@ -265,5 +345,46 @@ impl Bars {
             Some((id.clone(), bar))
         });
         serde_json::Value::Object(drawn.collect())
+    }
+
+    /// For a test run's state: each area laid out this frame, also one that fits, with the edges
+    /// that fade: `{"top", "bottom"}` down a list, `{"left", "right"}` across a row.
+    pub fn overflow(&self) -> serde_json::Value {
+        let bars = self.0.borrow();
+        let laid = bars.iter().filter_map(|(id, bar)| {
+            let (axis, start, end) = bar.faded?;
+            let edges = match axis {
+                Axis::Down => serde_json::json!({"top": start, "bottom": end}),
+                Axis::Across => serde_json::json!({"left": start, "right": end}),
+            };
+            Some((id.clone(), edges))
+        });
+        serde_json::Value::Object(laid.collect())
+    }
+}
+
+/// The fades at an area's edges with more beyond them (`edges`: start, end): `bg`, the colour
+/// behind the area, clearing into the area over `EDGE_FADE` (at most a quarter of it). Drawn
+/// only: a press or hover goes through to the row under it.
+fn paint_fades(area: Bounds<Pixels>, axis: Axis, edges: (bool, bool), bg: u32, window: &mut Window) {
+    let (solid, clear) = (Hsla::from(rgb(bg)), Hsla::from(rgb(bg)).opacity(0.));
+    let (w, h) = (area.size.width, area.size.height);
+    let depth = px(EDGE_FADE).min(if axis == Axis::Down { h } else { w } / 4.);
+    // Each edge's band and its gradient's angle, solid at the edge (180°: top to bottom).
+    let (start, end) = match axis {
+        Axis::Down => (
+            (Bounds::new(area.origin, size(w, depth)), 180.),
+            (Bounds::new(point(area.left(), area.bottom() - depth), size(w, depth)), 0.),
+        ),
+        Axis::Across => (
+            (Bounds::new(area.origin, size(depth, h)), 90.),
+            (Bounds::new(point(area.right() - depth, area.top()), size(depth, h)), 270.),
+        ),
+    };
+    for (on, (band, angle)) in [(edges.0, start), (edges.1, end)] {
+        if on {
+            let shade = linear_gradient(angle, linear_color_stop(solid, 0.), linear_color_stop(clear, 1.));
+            window.paint_quad(fill(band, shade));
+        }
     }
 }
