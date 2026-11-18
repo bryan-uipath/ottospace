@@ -100,6 +100,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     compose_hint: null,
     compose_picks: { wheres: ["app"], whos: ["claude", "codex"] },
     compose_worktree: null,
+    compose_target: null,
     welcome: false,
     compose_menu: null,
     compose_menu_bounds: null,

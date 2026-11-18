@@ -7090,6 +7090,84 @@ fn the_drawer_reopens_what_it_collapsed_and_a_client_opens_no_box_in_it() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The owner: the new-task box is pinned to where it was opened. Opened in A, the user's click on
+/// B keeps it open (a client's switch waits): the box says so, and ↵ starts the task in A. Its
+/// Switch (the user's) brings it to B.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_new_task_box_starts_its_task_where_it_was_opened_or_where_switch_brings_it() {
+    let root = support::temp(&format!("ottospace-e2e-pinned-{}", std::process::id()));
+    let (bin, sessions) = (root.join("bin"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    let settings =
+        json!({"repos": [], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
+    let home = user_folder("pinned", &settings.to_string());
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("pinned", &env);
+    // Two workspaces with a terminal each: A (index 1) and B (index 2), B on show.
+    for _ in 0..2 {
+        otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+        otto.user_key("cmd-d");
+    }
+    let of = |reply: &Value, index: usize| reply["spaces"][index]["of"].clone();
+    let shown = otto.call(json!({"cmd": "select_space", "index": 1}));
+    let (a, b) = (of(&shown, 1), of(&shown, 2));
+    otto.user_key("cmd-n");
+    let typed = otto.user_key("o n e");
+    assert_eq!((&typed["compose_target"]["space"], &typed["compose_target"]["elsewhere"]), (&a, &json!(false)));
+    // A client's switch waits behind the box; the user's click on B keeps it, still A's, and it says so.
+    otto.call(json!({"cmd": "select_space", "index": 2}));
+    assert_eq!(otto.drawn()["compose_target"]["elsewhere"], false, "a client's switch waits");
+    let space_b = at(rect(&otto.drawn()["space_rects"][2]), 0.5, 0.5);
+    let theirs = otto.user_click(space_b);
+    let target = &theirs["compose_target"];
+    assert_eq!((&target["space"], &target["elsewhere"], &theirs["compose_host"]), (&a, &json!(true), &json!("drawer")));
+    assert_eq!(theirs["state"]["compose"], "one", "the line kept");
+    let name = target["name"].as_str().unwrap_or_default().to_string();
+    assert!(target["switch"].is_array(), "the line with Switch: {target}");
+    // ↵: the task is in A, and A is on show.
+    let started = otto.user_key("enter");
+    let task = started["state"]["talk"]["task"].as_u64().expect("the task");
+    assert_eq!(of(&started, 1), json!({"kind": "task", "id": task}), "{}", started["spaces"]);
+    assert_eq!((of(&started, 2), &started["compose_target"]), (b.clone(), &Value::Null));
+    assert!(name.starts_with("Workspace"), "{name}");
+    // Again, the user goes to B; their Switch brings the box there: ↵ starts it in B.
+    otto.user_key("cmd-n");
+    otto.user_key("t w o");
+    let pinned = otto.user_click(space_b);
+    let switch = at(rect(&pinned["compose_target"]["switch"]), 0.5, 0.5);
+    let refused = otto.click(switch, 1);
+    assert_eq!(
+        refused["compose_target"]["space"],
+        json!({"kind": "task", "id": task}),
+        "a client's click moves nothing"
+    );
+    let switched = otto.user_click(switch);
+    assert_eq!((&switched["compose_target"]["space"], &switched["compose_target"]["elsewhere"]), (&b, &json!(false)));
+    assert!(switched["compose_target"]["switch"].is_null(), "no line");
+    let second = otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the second task");
+    assert_eq!(of(&otto.drawn(), 2), json!({"kind": "task", "id": second}));
+    // Opened from B's conversation, the user goes to A, then Esc: A's conversation has the keys,
+    // and what they type reaches its agent.
+    let talk = otto.drawn()["state"]["talk"].clone();
+    if talk["keys"] != true {
+        otto.user_key("cmd-l");
+    }
+    otto.user_key("cmd-n");
+    otto.user_key("x");
+    otto.user_click(at(rect(&otto.drawn()["space_rects"][1]), 0.5, 0.5));
+    let back = otto.user_key("escape");
+    let talk = &back["state"]["talk"];
+    assert_eq!((&back["state"]["compose"], &talk["task"], &talk["keys"]), (&Value::Null, &json!(task), &json!(true)));
+    otto.user_key("h i enter");
+    otto.wait_for("A's agent to echo", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        state["drawer"]["agents"][task.to_string()]["lines"].as_array()?.iter().any(|l| l == "hi").then_some(())
+    });
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The owner: "for both the left pane and right pane we should have a <- and -> slide in arrow".
 /// The sidebar's ← collapses it into the left rail; the rail's →, or ⌘⇧L, opens it on the
 /// section open last. Each arrow's key is in its tooltip only.
@@ -11046,13 +11124,13 @@ fn a_click_on_a_tab_switches_with_the_drawer_open() {
     assert_eq!(active(&otto.user_click(at(space(2), 0.5, 0.5))), 2);
 
     // The new-task box open in the drawer, half written: a click on a space goes there and the
-    // line is kept for the box's next opening.
+    // box stays open, pinned to the space it was opened in.
     otto.user_key("cmd-n");
     otto.user_key("h a l f");
     assert!(otto.call(json!({"cmd": "state"}))["state"]["compose"].is_string());
     let clicked = otto.user_click(at(space(1), 0.5, 0.5));
-    assert_eq!((active(&clicked), &clicked["state"]["compose"]), (json!(0), &Value::Null), "{}", clicked["state"]);
-    assert_eq!(otto.user_key("cmd-n")["state"]["compose"], "half");
+    assert_eq!((active(&clicked), &clicked["state"]["compose"]), (json!(0), &json!("half")), "{}", clicked["state"]);
+    assert_eq!(clicked["compose_target"]["elsewhere"], true);
     otto.user_key("escape");
 
     // A press that moves 3 points before it is let go: still that tab.

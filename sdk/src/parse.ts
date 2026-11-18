@@ -779,6 +779,16 @@ function composeWorktree(value: unknown, at: string): Snapshot["compose_worktree
   return { new: bool(o.new, `${at}.new`), repo: str(o.repo, `${at}.repo`), branch: str(o.branch, `${at}.branch`) };
 }
 
+function composeTarget(value: unknown, at: string): Snapshot["compose_target"] & object {
+  const o = fields(value, at);
+  return {
+    space: owner(o.space, `${at}.space`),
+    name: orNull(str)(o.name, `${at}.name`),
+    elsewhere: bool(o.elsewhere, `${at}.elsewhere`),
+    switch: orNull(rect)(o.switch, `${at}.switch`),
+  };
+}
+
 function noticeLevel(value: unknown, at: string): NoticeLevel {
   if (value === "info" || value === "warning" || value === "meeting" || value === "error") return value;
   throw new Error(`${at}: not a level: ${JSON.stringify(value)}`);
@@ -1789,6 +1799,7 @@ export function snapshot(value: unknown): Snapshot {
     compose_hint: orNull(str)(o.compose_hint, "compose_hint"),
     compose_picks: composePicks(o.compose_picks, "compose_picks"),
     compose_worktree: orNull(composeWorktree)(o.compose_worktree, "compose_worktree"),
+    compose_target: orNull(composeTarget)(o.compose_target, "compose_target"),
     welcome: bool(o.welcome, "welcome"),
     compose_menu: orNull(composeMenu)(o.compose_menu, "compose_menu"),
     compose_menu_bounds: orNull(rect)(o.compose_menu_bounds, "compose_menu_bounds"),

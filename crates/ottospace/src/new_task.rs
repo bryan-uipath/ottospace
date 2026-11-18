@@ -516,6 +516,27 @@ impl Workspace {
         });
         let plan =
             self.model.compose_plan_line().map(|text| div().text_xs().text_color(rgb(theme::COMPOSE)).child(text));
+        // The view moved on while the box was open: it still goes where it was opened; Switch brings it here.
+        let pinned = self.model.compose_space().filter(|_| self.model.compose_elsewhere()).map(|of| {
+            let switch = div()
+                .id("compose-switch")
+                .relative()
+                .cursor_pointer()
+                .text_color(rgb(theme::TEXT))
+                .hover(|s| s.underline())
+                .child(format!("Switch to {}", self.model.space_title(self.model.space())))
+                .child(self.controls.mark("compose-switch"))
+                .child(crate::mark(&self.marks, crate::Mark::ComposeSwitch))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(
+                    cx.listener(|this, _, window, cx| drop(this.dispatch(Action::ComposeHere, this.input, window, cx))),
+                );
+            // From Home or a session's space ↵ makes a workspace: no name to give it yet.
+            let name =
+                if self.model.joins().is_some() { self.model.space_title(&of) } else { "a new workspace".into() };
+            let goes = format!("This task goes to {name} · ");
+            div().flex().flex_wrap().text_xs().text_color(rgb(theme::COMPOSE)).child(goes).child(switch)
+        });
         let idle = (!open).then(|| {
             dialog::panel(theme::BORDER_STRONG)
                 .id("drawer-new-task")
@@ -552,6 +573,7 @@ impl Workspace {
             .child(div().flex().flex_wrap().gap_1().children(whos))
             .children(choice)
             .child(div().flex_1())
+            .children(pinned)
             .children(plan)
             .children(open.then(|| self.new_task_content(cx)))
             .children(idle);
