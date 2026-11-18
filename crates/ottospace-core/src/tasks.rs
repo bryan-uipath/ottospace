@@ -111,6 +111,23 @@ pub struct TaskRow {
     pub fact: Option<String>,
     /// The worktree it works in, while its workspace's tasks work in more than one (`app-2`).
     pub worktree: Option<String>,
+    /// The cards its conversation waits on, a line each under it: the first `PENDING_LINES`;
+    /// `more` the rest. Kinds and counts: their words are the agent's, drawn only.
+    pub pending: Vec<Pending>,
+    pub more: usize,
+}
+
+/// The most lines a task's waiting cards take under it; the rest are `+N more`.
+pub const PENDING_LINES: usize = 2;
+
+/// A card a task's conversation waits on, as its line under the task says it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum Pending {
+    /// `? <the question on show>` and `2 of 3` (`shown` of `of`; on Review, the last).
+    Question { shown: usize, of: usize },
+    /// `⚠ Wants to run: <its summary>`.
+    Permission,
 }
 
 /// The one fact a row shows at its right, by its group: how long it has run (since its agent

@@ -359,7 +359,10 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    its model, tags and counts, Filed, Started, Agent time, Workspace (tabs · panes), the tokens and how full its context is. The
    Tasks section groups by state (Needs you, Running, Later, Done) or by project (State |
    Project in its header), and says under the list what was done today, what runs, and how
-   long agents worked today. A key of a task's file this build does not know is kept as it is.
+   long agents worked today. A task waiting on cards has a line for each under its row: a
+   question (`? <the question on show>` and `2 of 3`), a permission (`⚠ Wants to run: <its
+   command>`), past two `+N more`. A click opens the drawer on the card with the keyboard in
+   it; nothing is answered from the list. A key of a task's file this build does not know is kept as it is.
 11. **The native conversation.** The reply is drawn as it streams: markdown, code blocks (a
    Copy on each), tool calls as rows (a click shows what the call does, as plain text), a
    working row with the call it waits on and the time. A call that edits a file (Claude `Edit`,

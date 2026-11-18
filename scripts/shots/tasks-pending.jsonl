@@ -1,0 +1,11 @@
+# Tasks section: a task waiting on cards lists them under its row: the question on show and how
+# far in, a permission's command, then +N more. A second task runs, with nothing waiting.
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"compare branches >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.transcript.cards","len":4}
+{"cmd":"key","keys":"2 enter","as":"user"}
+{"settle":300}
+{"shot":"pending"}

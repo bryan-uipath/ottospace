@@ -9650,6 +9650,74 @@ fn a_question_of_one_long_paragraph_keeps_its_options_and_foot() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A task waiting on cards lists them under its row in the Tasks section: the question on show
+/// and how far in, then a permission, then `+N more`. The state has kinds and counts, no word.
+/// A client's click on a line opens nothing; the user's opens the card with the keyboard in it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_waiting_tasks_cards_are_lines_under_its_row() {
+    let option = |label: &str| json!({"label": label, "description": "made-up"});
+    let questions = json!([
+        {"question": "Which scope?", "header": "Scope", "multiSelect": false, "options": [option("All"), option("Untracked")]},
+        {"question": "Which base?", "header": "Base", "multiSelect": false, "options": [option("develop"), option("main")]},
+        {"question": "Which output?", "header": "Output", "multiSelect": false, "options": [option("Table"), option("JSON")]},
+    ]);
+    let mut fixtures = ask_fixtures(questions);
+    let ask = |id: &str, command: &str| {
+        let request = json!({"subtype": "can_use_tool", "tool_name": "Bash",
+            "input": {"command": command, "description": "made-up"}, "tool_use_id": format!("toolu_{id}")});
+        json!({"type": "control_request", "request_id": id, "request": request}).to_string()
+    };
+    let more = [ask("p1", "git push origin fix/login"), ask("p2", "cargo publish"), ask("p3", "rm -rf target")];
+    fixtures[0].1 = format!("{}\n{}", fixtures[0].1, more.join("\n"));
+    let (root, _record, env) = native_setup("ask-pending", &fixtures, &[]);
+    let otto = launch_env("ask-pending", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "compare branches >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    let row = |o: &Otto| {
+        let sections = state(o)["tasks_bar"]["sections"].clone();
+        let rows =
+            sections.as_array().into_iter().flatten().flat_map(|s| s["rows"].as_array().cloned().unwrap_or_default());
+        rows.into_iter().find(|row| row["id"] == 1).unwrap_or_default()
+    };
+    otto.start_task(1);
+    let waiting = otto.wait_for("four cards", |o| Some(row(o)).filter(|row| row["more"] == 2));
+    let pending = json!([{"kind": "question", "shown": 1, "of": 3}, {"kind": "permission"}]);
+    assert_eq!(waiting["pending"], pending, "{waiting}");
+    let said = state(&otto)["tasks_bar"].to_string();
+    assert!(["Which scope", "git push", "Wants to run"].iter().all(|w| !said.contains(w)), "{said}");
+    // A line each, and `+2 more`.
+    for at in 0..3 {
+        assert!(otto.control_opt(&format!("task-pending:1:{at}")).is_some(), "line {at}");
+    }
+    // ⇥ on the card: the line follows the question on show.
+    otto.user_key("tab");
+    otto.wait_for("2 of 3", |o| (row(o)["pending"][0]["shown"] == 2).then_some(()));
+    // The keyboard elsewhere: a client's click on a line opens nothing, the user's opens the card.
+    let talk = |o: &Otto| state(o)["state"]["talk"].clone();
+    otto.user_key("cmd-l");
+    assert_eq!(talk(&otto)["keys"], json!(false));
+    otto.click(at(otto.control("task-pending:1:1"), 0.5, 0.5), 1);
+    assert_eq!(talk(&otto)["keys"], json!(false), "a client's click opens nothing");
+    otto.user_click(at(otto.control("task-pending:1:1"), 0.5, 0.5));
+    let opened = talk(&otto);
+    assert_eq!(
+        (&opened["task"], &opened["open"], &opened["keys"]),
+        (&json!(1), &json!(true), &json!(true)),
+        "{opened}"
+    );
+    // The drawer shows that card: the permission, first now; the question waits behind it.
+    let cards = state(&otto)["drawer"]["native"]["chats"]["1"]["transcript"]["cards"].clone();
+    assert!(cards[0]["ask"].is_null() && cards[1]["ask"].is_object(), "{cards}");
+    assert!(otto.control_opt("talk:chat-allow").is_some(), "the permission's card is drawn");
+    // Nothing was answered from the list.
+    assert_eq!((cards.as_array().map(Vec::len), &row(&otto)["more"]), (Some(4), &json!(2)));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The stand-in `claude` in a folder of its own, replaying `fixtures` (name, lines), with a
 /// repository `app` listed and the native view set. Returns the root (to remove when the test
 /// ends), the record folder, and the environment to launch with, `extra` added.

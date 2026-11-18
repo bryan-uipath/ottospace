@@ -382,7 +382,16 @@ function taskRow(value: unknown, at: string): TaskRow {
     fact: orNull(str)(o.fact, `${at}.fact`),
     live: orNull(str)(o.live, `${at}.live`),
     worktree: orNull(str)(o.worktree, `${at}.worktree`),
+    pending: list(pending)(o.pending, `${at}.pending`),
+    more: num(o.more, `${at}.more`),
   };
+}
+
+function pending(value: unknown, at: string): TaskRow["pending"][number] {
+  const o = fields(value, at);
+  if (o.kind === "permission") return { kind: "permission" };
+  if (o.kind === "question") return { kind: "question", shown: num(o.shown, `${at}.shown`), of: num(o.of, `${at}.of`) };
+  throw wrong(`${at}.kind`, "question or permission", o.kind);
 }
 
 function taskSection(value: unknown, at: string): TaskSection {

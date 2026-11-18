@@ -316,6 +316,17 @@ impl Workspace {
                 section.map(|(section, ..)| Action::ToggleSection { section: *section })
             }
             ("bar", "close") => Some(Action::CloseSidebar),
+            // A waiting card's line under a task, `<task>:<line>`: as its click.
+            ("task-pending", _) => {
+                let place =
+                    name.split_once(':').and_then(|(id, at)| Some((id.parse().ok()?, at.parse::<usize>().ok()?)));
+                place.map(|(id, at)| {
+                    let subject = ottospace_core::talk::Subject::Task(id);
+                    let cards = self.model.chat(&subject).map(|chat| &chat.transcript.cards);
+                    let ticket = cards.and_then(|cards| cards.get(at)).map(|card| card.ticket);
+                    Action::TaskCard { id, ticket: ticket.filter(|_| at < ottospace_core::tasks::PENDING_LINES) }
+                })
+            }
             // The notice bar's × and its offer: the core takes both from the user alone.
             ("notice", "close") => {
                 self.dismiss_notice(window, cx);

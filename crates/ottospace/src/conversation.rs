@@ -85,6 +85,16 @@ pub struct Look {
 /// A question's context past this many lines folds behind "Show all".
 const FOLD_LINES: usize = 6;
 
+/// A question's markdown, parsed whole: the blocks before the question (context), and the
+/// question itself, its last block. `None`: drawn as plain text, as it came (a line past what
+/// markdown draws of one, so no word is cut; or no block at all).
+pub(crate) fn question_blocks(text: &str) -> (Vec<Block>, Option<Block>) {
+    let whole = text.lines().all(|line| line.chars().count() <= markdown::MAX_LINE);
+    let mut blocks = if whole { markdown::parse(text, None) } else { Vec::new() };
+    let asked = blocks.pop();
+    (blocks, asked)
+}
+
 /// About how many rows `text` takes as drawn in a card: a long line wraps.
 fn rows_drawn(text: &str) -> usize {
     text.lines().map(|line| line.chars().count() / 60 + 1).sum()
@@ -1566,12 +1576,8 @@ impl Workspace {
         let question = &form.questions[q];
         let of = Links::Chat(subject.clone());
         let at = format!("ask:{ticket}:{q}");
-        // Parsed whole: its last block is the question, the blocks before it context. A line
-        // past what markdown draws of one goes as plain text, so no word is cut.
         let text = question.question.text();
-        let whole = text.lines().all(|line| line.chars().count() <= markdown::MAX_LINE);
-        let mut blocks = if whole { markdown::parse(text, None) } else { Vec::new() };
-        let asked = blocks.pop();
+        let (blocks, asked) = question_blocks(text);
         let draw = |blocks: &[Block], from: usize, cx: &mut Context<Self>| {
             let drawn: Vec<AnyElement> =
                 blocks.iter().enumerate().map(|(i, b)| self.block(&of, &at, from + i, b, cx)).collect();
