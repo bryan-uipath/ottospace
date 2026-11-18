@@ -154,6 +154,9 @@ A fence with no language, and a line long enough to need a horizontal scroll in 
 > [!WARNING]
 > A warning callout, with `code` and **strong** text.
 
+> [!TIP]
+> A tip callout.
+
 ## Footnotes
 
 A sentence with a footnote.[^one] And another.[^long]
@@ -169,7 +172,8 @@ https://example.com/bare. A long link:
 [the full address shown](https://example.com/a/very/long/path/that/goes/on/and/on/for/quite/a/while/index.html?query=one&other=two#fragment).
 
 A Slack archive link: https://example.slack.com/archives/C0123ABCD/p1700000000000100 and a
-mention <@U0123> as Slack writes it.
+mention <@U0123> as Slack writes it,
+a named one <@U0456|ana> in <#C0123ABCD|general>, and <!here>.
 
 ## Images
 

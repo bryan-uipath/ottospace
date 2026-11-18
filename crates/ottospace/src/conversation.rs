@@ -34,7 +34,8 @@ use ottospace_core::transcript::{
 };
 use ottospace_core::{Action, Origin, theme};
 
-use crate::markdown::{self, Block, Span};
+use crate::highlight;
+use crate::markdown::{self, Align, Block, Callout, Span};
 use crate::scrollbar::{Axis, Fade, extent};
 use crate::{Tooltip, Workspace};
 
@@ -1225,12 +1226,25 @@ impl Workspace {
     /// One block of a reply, or of a viewed markdown file.
     pub(crate) fn block(&self, of: &Links, at: &str, n: usize, block: &Block, cx: &mut Context<Self>) -> AnyElement {
         let at = format!("{at}.{n}");
+        let blocks = |blocks: &[Block], at: &str, cx: &mut Context<Self>| {
+            let drawn: Vec<AnyElement> =
+                blocks.iter().enumerate().map(|(i, block)| self.block(of, at, i, block, cx)).collect();
+            div().flex_1().min_w_0().flex().flex_col().gap_1().children(drawn)
+        };
         match block {
             Block::Para(spans) => self.spans(of, &at, spans, cx),
-            Block::Heading(spans) => {
-                div().font_weight(FontWeight::SEMIBOLD).child(self.spans(of, &at, spans, cx)).into_any_element()
+            Block::Heading { level, spans, .. } => {
+                // h1 and h2 ruled under, as GitHub draws them; h6 quieter than text.
+                let size = [22., 19., 16.5, 15., 14., 13.][usize::from(level.clamp(&1, &6) - 1)];
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_size(px(size))
+                    .when(*level <= 2, |d| d.pb_1().border_b_1().border_color(rgb(theme::BORDER)))
+                    .when(*level == 6, |d| d.text_color(rgb(theme::MUTED)))
+                    .child(self.spans(of, &at, spans, cx))
+                    .into_any_element()
             }
-            Block::Code { label, shown, copy, more } => {
+            Block::Code { label, shown, copy, more, marks } => {
                 let copy = copy.clone();
                 let button = self.word(
                     format!("chat-code-copy:{at}"),
@@ -1251,13 +1265,29 @@ impl Workspace {
                     .border_color(rgb(theme::BORDER))
                     .text_xs()
                     .text_color(rgb(theme::MUTED))
-                    .child(label.clone().unwrap_or_else(|| "code".into()))
+                    .child(label.clone().unwrap_or_default())
                     .child(button);
-                let code = code_style(self.picked_text(of.subject(), &format!("code:{at}"), shown));
+                let id = format!("chat-code:{at}");
+                // Selectable as `picked_text` draws it, coloured where cleaning left the text as marked.
+                let cleaned = clean(shown);
+                let styles = if cleaned == *shown {
+                    let style = |token| HighlightStyle {
+                        color: Some(rgb(highlight::colour(token)).into()),
+                        ..Default::default()
+                    };
+                    marks.iter().map(|(range, token)| (range.clone(), style(*token))).collect()
+                } else {
+                    Vec::new()
+                };
+                let (styled, note) = self.picked(of.subject(), &format!("code:{at}"), cleaned, styles);
+                let code = code_style(div().relative().cursor_text().child(styled).children(note));
                 let body = div()
-                    .id(ElementId::Name(format!("chat-code:{at}").into()))
+                    .id(ElementId::Name(id.clone().into()))
                     .overflow_x_scroll()
-                    .child(code.px_2().py_1());
+                    .flex()
+                    .child(code.flex_none().px_2().py_1());
+                // A line past the edge fades there: the cue that it scrolls across.
+                let body = self.bars.across(&id, body, theme::RAISED);
                 let more = (*more > 0).then(|| muted(format!("… {more} more lines; Copy takes them all")).px_2());
                 div()
                     .rounded_md()
@@ -1269,61 +1299,113 @@ impl Workspace {
                     .children(more)
                     .into_any_element()
             }
-            Block::Quote(inner) => div()
+            Block::Quote { callout: None, blocks: inner } => div()
                 .border_l_2()
                 .border_color(rgb(theme::BORDER_STRONG))
                 .pl_2()
                 .text_color(rgb(theme::MUTED))
-                .flex()
-                .flex_col()
-                .gap_1()
-                .children(inner.iter().enumerate().map(|(i, block)| self.block(of, &at, i, block, cx)))
+                .child(blocks(inner, &at, cx))
                 .into_any_element(),
+            Block::Quote { callout: Some(callout), blocks: inner } => {
+                let (word, colour) = match callout {
+                    Callout::Note => ("Note", theme::MARK),
+                    Callout::Tip => ("Tip", theme::PICK),
+                    Callout::Important => ("Important", theme::VISUAL),
+                    Callout::Warning => ("Warning", theme::SNEAK),
+                    Callout::Caution => ("Caution", theme::ERROR),
+                };
+                div()
+                    .border_l_2()
+                    .border_color(rgb(colour))
+                    .pl_2()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().font_weight(FontWeight::SEMIBOLD).text_color(rgb(colour)).child(word))
+                    .child(blocks(inner, &at, cx))
+                    .into_any_element()
+            }
             Block::List { start, items } => div()
                 .flex()
                 .flex_col()
                 .gap_0p5()
                 .children(items.iter().enumerate().map(|(i, item)| {
-                    let mark = start.map_or("•".to_string(), |n| format!("{}.", n + i as u64));
+                    let mark = match (item.task, start) {
+                        (Some(done), _) => task_box(done),
+                        (None, Some(n)) => div().child(format!("{}.", n + i as u64)),
+                        (None, None) => div().child("•"),
+                    };
                     let at = format!("{at}.{i}");
-                    div().flex().gap_1p5().child(div().flex_none().text_color(rgb(theme::MUTED)).child(mark)).child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .children(item.iter().enumerate().map(|(j, b)| self.block(of, &at, j, b, cx))),
-                    )
-                }))
-                .into_any_element(),
-            Block::Table(rows) => div()
-                .flex()
-                .flex_col()
-                .border_1()
-                .border_color(rgb(theme::BORDER))
-                .rounded_md()
-                .text_xs()
-                .children(rows.iter().enumerate().map(|(r, row)| {
                     div()
                         .flex()
-                        .when(r == 0, |d| d.font_weight(FontWeight::SEMIBOLD).bg(rgb(theme::RAISED)))
-                        .when(r > 0, |d| d.border_t_1().border_color(rgb(theme::BORDER)))
-                        .children(row.iter().enumerate().map(|(c, cell)| {
-                            let at = format!("{at}.{r}.{c}");
-                            div().flex_1().min_w_0().px_1p5().py_0p5().child(self.spans(of, &at, cell, cx))
-                        }))
+                        .gap_1p5()
+                        .child(div().flex_none().text_color(rgb(theme::MUTED)).child(mark))
+                        .child(blocks(&item.blocks, &at, cx))
                 }))
                 .into_any_element(),
-            Block::Image { path } => match self.drawer.thumbs.get(path) {
-                Some(Thumb::Ready(image)) => img(ImageSource::Image(image.clone()))
-                    .max_w(px(320.))
-                    .max_h(px(200.))
+            Block::Table { align, widths, rows } => {
+                let table = div()
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .border_1()
+                    .border_color(rgb(theme::BORDER))
                     .rounded_md()
-                    .into_any_element(),
-                _ => muted("[image not shown]".into()).into_any_element(),
+                    .text_xs()
+                    .children(rows.iter().enumerate().map(|(r, row)| {
+                        div()
+                            .flex()
+                            .when(r == 0, |d| d.font_weight(FontWeight::SEMIBOLD).bg(rgb(theme::RAISED)))
+                            .when(r > 0, |d| d.border_t_1().border_color(rgb(theme::BORDER)))
+                            .children(row.iter().enumerate().map(|(c, cell)| {
+                                let at = format!("{at}.{r}.{c}");
+                                // Its widest cell's characters, at about a character's width each.
+                                let chars = widths.get(c).copied().unwrap_or(3) as f32;
+                                let cell = div()
+                                    .flex_none()
+                                    .w(px(chars * TABLE_CHAR + 12.))
+                                    .px_1p5()
+                                    .py_0p5()
+                                    .child(self.spans(of, &at, cell, cx));
+                                match align.get(c).copied().unwrap_or_default() {
+                                    Align::Left => cell,
+                                    Align::Center => cell.text_center(),
+                                    Align::Right => cell.text_right(),
+                                }
+                            }))
+                    }));
+                let id = format!("chat-table:{at}");
+                let row = div().id(ElementId::Name(id.clone().into())).overflow_x_scroll().flex().child(table);
+                self.bars.across(&id, row, theme::BACKGROUND).into_any_element()
+            }
+            Block::Image { path, alt } => match self.drawer.thumbs.get(path) {
+                Some(Thumb::Ready(image)) => {
+                    let (w, h) = crate::picture::size(&image.bytes)
+                        .map_or(crate::picture::MAX, |(w, h)| crate::picture::shown(w, h));
+                    img(ImageSource::Image(image.clone())).w(px(w)).h(px(h)).rounded_md().into_any_element()
+                }
+                _ => muted(format!("[image: {alt}]")).into_any_element(),
             },
             Block::Rule => div().h(px(1.)).bg(rgb(theme::BORDER)).into_any_element(),
+            Block::Footnotes(notes) => div()
+                .mt_2()
+                .pt_2()
+                .border_t_1()
+                .border_color(rgb(theme::BORDER))
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .children(notes.iter().map(|note| {
+                    let at = format!("{at}.{}", note.n);
+                    div().flex().gap_1p5().child(div().flex_none().child(format!("{}.", note.n))).child(blocks(
+                        &note.blocks,
+                        &at,
+                        cx,
+                    ))
+                }))
+                .into_any_element(),
             Block::Cut { blocks } => {
                 muted(format!("… {blocks} more blocks not shown; Copy takes them")).into_any_element()
             }
@@ -1331,20 +1413,23 @@ impl Workspace {
     }
 
     /// A run of spans as one text: styles by range, links clickable with their target on hover.
+    /// In a viewer, a `#heading` or footnote link scrolls to it.
     fn spans(&self, of: &Links, at: &str, spans: &[Span], cx: &mut Context<Self>) -> AnyElement {
         let mut text = String::new();
         let (mut styles, mut links) = (Vec::new(), Vec::new());
+        let viewer = matches!(of, Links::File { .. });
         for span in spans {
             // Cleaned as a selectable text is drawn (`picked_text`), each span on its own.
             let shown = clean(&span.text);
             let range = text.len()..text.len() + shown.len();
             text.push_str(&shown);
-            let link = span.link.is_some();
+            let anchor = span.anchor.clone().filter(|_| viewer);
+            let link = span.link.is_some() || anchor.is_some();
             let style = HighlightStyle {
-                color: link.then(|| rgb(theme::PRIMARY).into()),
-                font_weight: span.style.strong.then_some(FontWeight::BOLD),
+                color: (link || span.style.mention).then(|| rgb(theme::PRIMARY).into()),
+                font_weight: (span.style.strong || span.style.mention).then_some(FontWeight::BOLD),
                 font_style: span.style.emphasis.then_some(FontStyle::Italic),
-                background_color: span.style.code.then(|| rgb(theme::SELECTED).into()),
+                background_color: (span.style.code || span.style.mention).then(|| rgb(theme::SELECTED).into()),
                 underline: link.then(|| UnderlineStyle { thickness: px(1.), ..Default::default() }),
                 strikethrough: span
                     .style
@@ -1355,8 +1440,10 @@ impl Workspace {
             if style != HighlightStyle::default() {
                 styles.push((range.clone(), style));
             }
-            if let Some(link) = &span.link {
-                links.push((range, link.clone()));
+            match (&span.link, anchor) {
+                (Some(link), _) => links.push((range, Goes::Link(link.clone()))),
+                (None, Some(anchor)) => links.push((range, Goes::Anchor(anchor))),
+                (None, None) => {}
             }
         }
         let (styled, note) = self.picked(of.subject(), at, text, styles);
@@ -1370,18 +1457,22 @@ impl Workspace {
         let clicked = targets.clone();
         let text = InteractiveText::new(ElementId::Name(format!("chat-text:{at}").into()), styled)
             .on_click(ranges, move |n, window, cx| {
-                let Some((_, link)) = clicked.get(n) else { return };
-                let (target, cmd) = (link.target.clone(), window.modifiers().platform);
-                let _ = workspace.update(cx, |this, cx| {
+                let Some((_, goes)) = clicked.get(n) else { return };
+                let cmd = window.modifiers().platform;
+                let _ = workspace.update(cx, |this, cx| match (goes, &of) {
                     // A drag that selected the link's words opens nothing.
-                    if !of.subject().is_some_and(|subject| this.transcript_has_selection(subject)) {
-                        this.open_link(&of, &target, cmd, window, cx)
-                    }
+                    _ if of.subject().is_some_and(|subject| this.transcript_has_selection(subject)) => {}
+                    (Goes::Link(link), _) => this.open_link(&of, &link.target, cmd, window, cx),
+                    (Goes::Anchor(anchor), Links::File { pane, .. }) => this.viewer_anchor(*pane, anchor, cx),
+                    (Goes::Anchor(_), Links::Chat(_)) => {}
                 });
             })
             .tooltip(move |index, _, cx| {
                 let n = tips.iter().position(|range| range.contains(&index))?;
-                let tip = targets.get(n).map(|(_, link)| link.raw.clone())?;
+                let tip = match targets.get(n).map(|(_, goes)| goes)? {
+                    Goes::Link(link) => link.raw.clone(),
+                    Goes::Anchor(anchor) => format!("#{anchor}"),
+                };
                 Some(AnyView::from(cx.new(|_| Tooltip(tip.into()))))
             });
         host.child(text).children(note).into_any_element()
@@ -2122,38 +2213,27 @@ pub(crate) fn read_thumb(path: String, repo: Option<String>) -> Thumb {
 /// The local images among `blocks`.
 pub(crate) fn images(blocks: &[Block], each: &mut impl FnMut(&str)) {
     for block in blocks {
-        match block {
-            Block::Image { path } => each(path),
-            Block::Quote(inner) => images(inner, each),
-            Block::List { items, .. } => items.iter().for_each(|item| images(item, each)),
-            _ => {}
+        if let Block::Image { path, .. } = block {
+            each(path)
         }
+        markdown::inner(block).into_iter().for_each(|blocks| images(blocks, each));
     }
 }
 
-/// A reply's structure for the state: how many blocks of each kind, and links. No text.
+/// A reply's structure for the state: how many blocks of each kind (and list items with a task
+/// box, `task`), and links. No text.
 pub(crate) fn shape(blocks: &[Block]) -> serde_json::Value {
     let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
-    fn count<'a>(blocks: &'a [Block], counts: &mut std::collections::BTreeMap<&'a str, usize>) {
+    fn count(blocks: &[Block], counts: &mut std::collections::BTreeMap<&str, usize>) {
         for block in blocks {
-            let kind = match block {
-                Block::Para(_) => "para",
-                Block::Heading(_) => "heading",
-                Block::Code { .. } => "code",
-                Block::Quote(inner) => {
-                    count(inner, counts);
-                    "quote"
+            if let Block::List { items, .. } = block {
+                let tasks = items.iter().filter(|item| item.task.is_some()).count();
+                if tasks > 0 {
+                    *counts.entry("task").or_default() += tasks;
                 }
-                Block::List { items, .. } => {
-                    items.iter().for_each(|item| count(item, counts));
-                    "list"
-                }
-                Block::Table(_) => "table",
-                Block::Image { .. } => "image",
-                Block::Rule => "rule",
-                Block::Cut { .. } => "cut",
-            };
-            *counts.entry(kind).or_default() += 1;
+            }
+            markdown::inner(block).into_iter().for_each(|blocks| count(blocks, counts));
+            *counts.entry(markdown::kind(block)).or_default() += 1;
         }
     }
     count(blocks, &mut counts);
@@ -2250,3 +2330,28 @@ fn code_text(text: &str) -> Div {
 fn code_style(d: Div) -> Div {
     d.font_family(crate::terminal::font_family()).text_xs().whitespace_nowrap()
 }
+
+/// A task item's box, ticked when done.
+fn task_box(done: bool) -> Div {
+    let tick = div().text_size(px(9.)).text_color(rgb(theme::BACKGROUND)).child("✓");
+    div()
+        .mt(px(4.))
+        .size(px(12.))
+        .rounded_sm()
+        .border_1()
+        .border_color(rgb(if done { theme::PRIMARY } else { theme::BORDER_STRONG }))
+        .when(done, |d| d.bg(rgb(theme::PRIMARY)))
+        .flex()
+        .items_center()
+        .justify_center()
+        .children(done.then_some(tick))
+}
+
+/// What a link in a run of text does: opens, or (in a viewer) scrolls to a heading or footnote.
+enum Goes {
+    Link(markdown::Link),
+    Anchor(String),
+}
+
+/// About how wide a table's character is drawn, in points (`text_xs`).
+const TABLE_CHAR: f32 = 7.6;

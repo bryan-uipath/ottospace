@@ -20,7 +20,7 @@ running, and the rest of the design is not built: see the
 | Capability | State |
 |---|---|
 | Split panes mixing terminals and real app windows | Works today |
-| [File viewer](#file-viewer): a file read only in a pane (markdown drawn, code and text with line numbers, pictures), reloaded when it changes, vim moves with counts, ⌃G edits it beside | Works today |
+| [File viewer](#file-viewer): a file read only in a pane (markdown drawn, code coloured and text with line numbers, pictures), reloaded when it changes, vim moves with counts, ⌃G edits it beside | Works today |
 | Key bindings and a status bar showing the mode (`APP`, `PICK`…; none when normal) | Works today |
 | [Notice bar](#notice-bar): one app-level message, full width at the window's foot, red, amber or blue by level (error, warning, information) | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
@@ -986,9 +986,13 @@ empty pane's, nothing.
 
 ## File viewer
 
-A file, read only, in a pane: markdown drawn by the conversation's renderer (code blocks with
-Copy, tables, quotes, pictures beside the file), code and other text as lines with their numbers,
-a PNG, JPEG, GIF or WebP as a picture. Open one with ⌘E's **File…** (the open panel), a ⌘-click
+A file, read only, in a pane: markdown drawn by the conversation's renderer (headings by level,
+code blocks coloured by their language with Copy, task boxes, tables aligned as written and
+scrolled across when wide, quotes and `> [!NOTE]` callouts, footnotes at the foot, bare addresses
+as links, `#heading` links that scroll to it, pictures beside the file; raw HTML as the text it
+is, a web picture only a link), code as lines with their numbers coloured by the file's extension
+(Rust, TypeScript and JavaScript, Python, shell, JSON, YAML, TOML, Go, Swift, SQL, diffs), other
+text plain, a PNG, JPEG, GIF or WebP as a picture. Open one with ⌘E's **File…** (the open panel), a ⌘-click
 on a path in a terminal (from the shell's folder, `~` too; `src/main.rs:12` opens `src/main.rs`)
 or on a file link in the conversation, or `ottospace ctl '{"cmd":"open_file","path":"/abs/a.md"}'`.
 A ⌘-click opens only markdown, code and text files there; any other file does what a click did

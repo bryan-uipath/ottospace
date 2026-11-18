@@ -102,6 +102,14 @@ impl Bars {
         self.down(id, list.track_scroll(&handle), &handle, fade, true)
     }
 
+    /// `row` (an `overflow_x_scroll` element) under a handle of its own, its edges fading into
+    /// `bg` where more lies beyond: a code block's long line, a wide table. Its bar shows as it scrolls.
+    pub fn across(&self, id: &str, row: Stateful<Div>, bg: u32) -> Div {
+        let handle = self.0.borrow_mut().entry(id.into()).or_default().handle.clone();
+        let bar = self.bar_of(id, Axis::Across, &handle, Fade::to(bg), false, |extent| extent.offset, |_| {});
+        div().relative().child(row.track_scroll(&handle)).child(bar)
+    }
+
     /// As `area`, for a list that already scrolls under `handle`.
     pub fn tracked(&self, id: &str, list: impl IntoElement, handle: &ScrollHandle, bg: u32) -> Div {
         self.down(id, list, handle, Fade::to(bg), true)
