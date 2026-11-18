@@ -277,7 +277,7 @@ impl Workspace {
                 let path = path.clone();
                 std::thread::spawn(move || {
                     let _ = send.send(stamp(&path));
-                    ottospace_mac::wake::post();
+                    ottospace_mac::wake::nudge();
                 });
                 view.looking = Some(looking);
             }

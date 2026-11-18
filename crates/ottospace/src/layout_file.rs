@@ -17,7 +17,7 @@ const SETTLE: Duration = Duration::from_secs(1);
 #[derive(Default)]
 pub struct Kept {
     /// False: the file is not written this run (nothing is kept, a newer build's file, Start Fresh).
-    writing: bool,
+    pub(crate) writing: bool,
     /// When the next write is due.
     pub(crate) due: Option<Instant>,
     /// The text last read or written: the same text is not written again.

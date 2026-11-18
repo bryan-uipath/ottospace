@@ -158,7 +158,7 @@ impl Poller {
                 if !worked.is_empty() && send.send(Read::Work(worked)).is_err() {
                     break;
                 }
-                ottospace_mac::wake::post();
+                ottospace_mac::wake::nudge();
             }
         });
         spawned.ok().map(|_| Self {

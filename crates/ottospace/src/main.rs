@@ -1601,8 +1601,11 @@ impl Workspace {
     /// The one path that changes state: updates the model, then carries out its effects.
     /// `origin`: who sent the action. The person's own keys and clicks pass `self.input`.
     fn dispatch(&mut self, action: Action, origin: Origin, window: &Window, cx: &mut Context<Self>) -> Vec<Effect> {
-        // What follows an action is the tick's: it runs each frame for a while.
-        ottospace_mac::wake::post();
+        // What follows an action is the tick's: it runs each frame for a while. Not the system's:
+        // the tick's own, or a thread's that woke it (a redraw it asks for wakes it as a frame).
+        if origin != Origin::System {
+            ottospace_mac::wake::post();
+        }
         // The time it happens at: a task done now is done now, not at the last read.
         let now = now_ms();
         if now.saturating_sub(self.model.now()) >= 1_000 && !matches!(action, Action::Tick { .. }) {
@@ -2121,7 +2124,6 @@ impl Workspace {
         let clip = model.clip.as_ref().filter(|clip| clip.pane.is_some());
         let talk = model.talk.as_ref().filter(|talk| talk.open);
         let busy = !self.hosted.is_empty()
-            || !self.known.is_empty()
             || !self.launching.is_empty()
             || !self.settling.is_empty()
             || !self.filing.is_empty()
@@ -2141,7 +2143,9 @@ impl Workspace {
             || !self.drawer.native.is_empty()
             || !self.drawer.stopping.is_empty()
             || model.calendar.on && self.timeline.pulse;
+        // An app hosted once: its new windows are adopted, its panes all gone or not.
         let slow = !self.terminals.is_empty()
+            || !self.known.is_empty()
             || config::get().home.is_some()
             || model.calendar.on
             || model.inspector.is_some()
@@ -2156,7 +2160,11 @@ impl Workspace {
         let (ms, instant) = (loop_ms(), Instant::now());
         let wall = |at: u64| ms + at.saturating_sub(now);
         let soon = |at: Instant| ms + at.saturating_duration_since(instant).as_millis() as u64;
-        let instants = [self.kept_layout.due, self.kept_keys.due, self.told.as_ref().map(|(_, at)| *at + TOLD_FOR)];
+        // A save only while one is written; the told line only until it goes.
+        let layout = self.kept_layout.due.filter(|_| self.kept_layout.writing);
+        let keys = self.kept_keys.due.filter(|_| self.kept_keys.writing);
+        let told = self.told.as_ref().map(|(_, at)| *at + TOLD_FOR).filter(|end| *end > instant);
+        let instants = [layout, keys, told];
         let walls = [model.next_due(), self.sessions.as_ref().and_then(sessions::Poller::next_ask)];
         let due = instants.into_iter().chain([self.viewers_due()]).flatten().map(soon);
         let due = due.chain(walls.into_iter().flatten().map(wall)).min();
