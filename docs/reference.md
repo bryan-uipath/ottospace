@@ -335,7 +335,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    their windows, the one playing now first and marked "sound now"; your pick hears that app,
    in a pane or not) and **Earlier today**, the day's finished transcripts in `transcripts_dir` of a
    minute or more with a line heard (app, start, length), each a click from read-only in the drawer
-   (‹ Today goes back). The top
+   (‹ Earlier today goes back). The top
    row shows the workspace's badges stacked, the most urgent first. A task dismissed (or one you
    mark done) leaves the rail and the most urgent remaining is in front; the last one gone, a
    workspace you made is its own again, with its tabs. From Home, the task gets

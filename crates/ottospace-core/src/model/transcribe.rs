@@ -214,7 +214,7 @@ impl Model {
 
     /// What the file's header says of a transcript of `source`: its app's name as ottospace reads
     /// it, never a window title. A test run's terminal pane is `Terminal`.
-    fn listen_head(&self, source: Source, mic: bool, started: u64) -> listen::file::Head {
+    pub fn listen_head(&self, source: Source, mic: bool, started: u64) -> listen::file::Head {
         let kind = source.pane().and_then(|pane| self.pane(pane)).map(|pane| &pane.kind);
         let picked = match source {
             Source::App { pid } => self.listen.apps.iter().find(|app| app.pid == pid),

@@ -753,12 +753,8 @@ impl Workspace {
             return None;
         }
         let Some(on) = self.model.listen.on.as_ref() else { return Some(self.render_listen_idle(width, cx)) };
-        let source = match on.source {
-            listen::Source::Pane(pane) => self.model.pane(pane).map(|pane| self.pane_title(pane)),
-            listen::Source::App { pid } => {
-                self.model.listen.apps.iter().find(|app| app.pid == pid).map(|app| app.name.clone())
-            }
-        };
+        // The app's name, as the file's header has it: a window's title is content.
+        let source = Some(self.model.listen_head(on.source, false, 0).app);
         let paused = on.status == Status::Paused;
         // Paused: the word and Resume where the meter was.
         let paused_note = paused.then(|| {
@@ -1040,11 +1036,11 @@ impl Workspace {
     fn render_listen_past(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let name = self.model.transcripts.open.as_ref()?;
         let past = self.model.transcripts.today.iter().find(|past| past.name == *name)?;
-        let back = button("listen-back", "‹ Today").child(self.controls.mark("listen-back")).on_click(cx.listener(
-            |this, _, window, cx| {
+        let back = button("listen-back", "‹ Earlier today").child(self.controls.mark("listen-back")).on_click(
+            cx.listener(|this, _, window, cx| {
                 this.dispatch(Action::ListenOpenPast { name: None }, this.input, window, cx);
-            },
-        ));
+            }),
+        );
         let when = format!(
             "{} · {} min",
             ottospace_core::calendar::clock(past.started_ms, crate::calendar::zone_offset(past.started_ms)),
