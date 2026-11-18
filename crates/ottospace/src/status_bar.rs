@@ -29,19 +29,19 @@ pub struct Checkout {
 /// Reads the focused folder's checkout on a thread of its own: when the folder changes, or the
 /// program in front of its shell does (a `git commit` that ended). No timer of its own.
 pub struct Reader {
-    jobs: Sender<(String, bool)>,
+    jobs: Sender<(String, Vec<String>)>,
     reads: Receiver<(String, Option<Checkout>)>,
-    asked: Option<(String, bool, Option<String>)>,
+    asked: Option<(String, Vec<String>, Option<String>)>,
     held: Option<(String, Option<Checkout>)>,
 }
 
 impl Reader {
     pub fn new() -> Self {
-        let (jobs, inbox) = channel::<(String, bool)>();
+        let (jobs, inbox) = channel::<(String, Vec<String>)>();
         let (done, reads) = channel();
         std::thread::spawn(move || {
-            for (dir, changes) in inbox {
-                let read = read(Path::new(&dir), changes);
+            for (dir, roots) in inbox {
+                let read = read(Path::new(&dir), &roots);
                 if done.send((dir, read)).is_err() {
                     return;
                 }
@@ -51,13 +51,13 @@ impl Reader {
         Self { jobs, reads, asked: None, held: None }
     }
 
-    /// Asks for `dir`'s checkout if it, or `program`, changed since the last ask. `changes`: run
-    /// `git status` there (`Model::reads_changes`); else the branch alone.
-    pub fn ask(&mut self, dir: Option<&str>, changes: bool, program: Option<String>) {
-        let key = dir.map(|dir| (dir.to_string(), changes, program));
+    /// Asks for `dir`'s checkout if it, `roots` (`status_bar::reads_changes`) or `program`
+    /// changed since the last ask.
+    pub fn ask(&mut self, dir: Option<&str>, roots: Vec<String>, program: Option<String>) {
+        let key = dir.map(|dir| (dir.to_string(), roots, program));
         if key != self.asked {
-            if let Some((dir, changes, _)) = &key {
-                let _ = self.jobs.send((dir.clone(), *changes));
+            if let Some((dir, roots, _)) = &key {
+                let _ = self.jobs.send((dir.clone(), roots.clone()));
             }
             self.asked = key;
         }
@@ -81,14 +81,17 @@ impl Reader {
     }
 }
 
-/// `dir`'s checkout: the branch from git's own files (as the Repos section reads it), and with
-/// `changes`, `git status` (hardened: `child::git_read`). `None`: in no checkout.
-fn read(dir: &Path, changes: bool) -> Option<Checkout> {
+/// `dir`'s checkout: the branch from git's own files (as the Repos section reads it), and
+/// `git status` (hardened: `child::git_read`) only if its top folder, resolved, is one of `roots`
+/// (`status_bar::reads_changes`). `None`: in no checkout.
+fn read(dir: &Path, roots: &[String]) -> Option<Checkout> {
     let (top, branch) = crate::repos::checkout_of(dir)?;
-    if !changes {
+    // Resolved: a link into a listed folder that leads to another is that other one.
+    let top = top.canonicalize().ok().and_then(|top| top.to_str().map(str::to_string));
+    let Some(top) = top.filter(|top| status_bar::reads_changes(top, roots)) else {
         return Some(Checkout { branch, dirty: false });
-    }
-    let mut status = crate::child::git_read(&top);
+    };
+    let mut status = crate::child::git_read(Path::new(&top));
     status.args(["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules"]);
     // One line is enough to know: what follows is not read.
     let said = crate::child::run(status, TIMEOUT, 256).ok();
@@ -136,8 +139,7 @@ impl Workspace {
             _ => None,
         };
         let program = self.model.status_pane().and_then(|p| self.terminals.get(&p.id)?.foreground_command());
-        let changes = folder.as_deref().is_some_and(|dir| self.model.reads_changes(dir));
-        self.status_git.ask(folder.as_deref(), changes, program);
+        self.status_git.ask(folder.as_deref(), self.model.checkout_roots(), program);
         if self.status_git.take() {
             cx.notify();
         }
@@ -337,7 +339,7 @@ mod tests {
     use std::process::{Command, Stdio};
 
     /// A repository with a file not committed, whose own config names an fsmonitor that leaves
-    /// `marker` when it runs.
+    /// `marker` when it runs, and a clean filter that does too.
     fn hostile(at: &Path, marker: &Path) {
         std::fs::create_dir_all(at).unwrap();
         let git = |args: &[&str]| {
@@ -351,6 +353,9 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         git(&["config", "core.fsmonitor", script.to_str().unwrap()]);
+        git(&["config", "filter.evil.clean", script.to_str().unwrap()]);
+        std::fs::write(at.join(".gitattributes"), "* filter=evil\n").unwrap();
+        std::fs::create_dir_all(at.join("src")).unwrap();
     }
 
     #[test]
@@ -362,10 +367,28 @@ mod tests {
         let plain = Command::new("git").arg("-C").arg(&repo).arg("status").stdout(Stdio::null()).status().unwrap();
         assert!(plain.success() && marker.exists(), "git ran no fsmonitor: the test proves nothing");
         std::fs::remove_file(&marker).unwrap();
+        let develop = |dirty| Some(Checkout { branch: Some("develop".into()), dirty });
         // Outside Repos: the branch, from HEAD, and no git at all.
-        assert_eq!(read(&repo, false), Some(Checkout { branch: Some("develop".into()), dirty: false }));
+        assert_eq!(read(&repo, &[]), develop(false));
         // Inside: the status, hardened. It sees the changes and runs nothing of the repository's.
-        assert_eq!(read(&repo, true), Some(Checkout { branch: Some("develop".into()), dirty: true }));
+        let roots = [repo.canonicalize().unwrap().to_string_lossy().into_owned()];
+        assert_eq!((read(&repo, &roots), read(&repo.join("src"), &roots)), (develop(true), develop(true)));
         assert!(!marker.exists(), "the repository's fsmonitor ran");
+    }
+
+    #[test]
+    fn a_repository_nested_in_a_listed_one_or_a_link_out_of_it_runs_no_git() {
+        let scratch = Scratch::dir(&format!("ottospace-status-nested-{}", std::process::id()));
+        let (repo, marker) = (scratch.as_ref().join("repo"), scratch.as_ref().join("ran"));
+        hostile(&repo, &scratch.as_ref().join("listed-ran"));
+        // A clone inside the listed repository, and a link in it to one outside.
+        let (nested, outside) = (repo.join("vendor/evil"), scratch.as_ref().join("outside"));
+        hostile(&nested, &marker);
+        hostile(&outside, &marker);
+        std::os::unix::fs::symlink(&outside, repo.join("link")).unwrap();
+        let roots = [repo.canonicalize().unwrap().to_string_lossy().into_owned()];
+        let develop = Some(Checkout { branch: Some("develop".into()), dirty: false });
+        assert_eq!((read(&nested, &roots), read(&repo.join("link"), &roots)), (develop.clone(), develop));
+        assert!(!marker.exists(), "git ran in a repository not listed");
     }
 }

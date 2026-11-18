@@ -111,12 +111,18 @@ pub struct Agents {
     pub needs_you: usize,
 }
 
+/// Whether the bar may run `git status` in the checkout whose top folder is `top` (resolved):
+/// only if it is one the user listed in Repos, or a worktree of one (`roots`, resolved). Not a
+/// repository nested inside one, nor a link to another: a repository's own config and
+/// attributes can run programs (`core.fsmonitor`, filters). Elsewhere the branch alone, from `HEAD`.
+pub fn reads_changes(top: &str, roots: &[String]) -> bool {
+    roots.iter().any(|root| root == top)
+}
+
 impl Model {
-    /// Whether the bar may run `git status` in `dir`: only in a checkout the user listed in Repos
-    /// (its worktrees too). A repository's own config can run programs (`core.fsmonitor`,
-    /// filters): elsewhere only the branch, read from its `HEAD`.
-    pub fn reads_changes(&self, dir: &str) -> bool {
-        self.repo_names().any(|(_, path)| crate::sessions::below(dir, path))
+    /// The folders `reads_changes` allows: each listed repository's and worktree's.
+    pub fn checkout_roots(&self) -> Vec<String> {
+        self.repo_names().map(|(_, path)| path.to_string()).collect()
     }
 
     pub fn agents(&self) -> Agents {
@@ -255,9 +261,11 @@ mod tests {
         let worktree = Worktree { name: "app-2".into(), path: "/code/app-2".into(), branch: None };
         let repo = Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![worktree] };
         m.update(Action::SetRepos { repos: vec![repo] });
-        assert!(m.reads_changes("/code/app") && m.reads_changes("/code/app/src") && m.reads_changes("/code/app-2"));
-        for elsewhere in ["/code/application", "/code", "/tmp/cloned", "/code/app/../evil"] {
-            assert!(!m.reads_changes(elsewhere), "{elsewhere}");
+        let roots = m.checkout_roots();
+        assert!(reads_changes("/code/app", &roots) && reads_changes("/code/app-2", &roots));
+        // A repository nested in a listed one has a top of its own: not listed.
+        for elsewhere in ["/code/app/vendor/evil", "/code/application", "/code", "/tmp/cloned", "/code/app/../evil"] {
+            assert!(!reads_changes(elsewhere, &roots), "{elsewhere}");
         }
     }
 

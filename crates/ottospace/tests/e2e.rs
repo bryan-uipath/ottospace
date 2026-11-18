@@ -8906,6 +8906,10 @@ fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in
     let (repo, cloned) = (home.join("flow-workbench"), home.join("cloned"));
     hostile(&repo);
     hostile(&cloned);
+    // Inside the listed one: a clone of another, and a link to the one cloned elsewhere.
+    let nested = repo.join("vendor/evil");
+    hostile(&nested);
+    std::os::unix::fs::symlink(&cloned, repo.join("link")).unwrap();
     let settings = json!({ "calendar_ics": home.join("today.ics"), "repos": [repo] });
     std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
     let otto = Otto::launch_with("status-bar", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
@@ -8918,6 +8922,17 @@ fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in
     otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", cloned.display())}));
     let elsewhere = cloned.canonicalize().unwrap().to_string_lossy().into_owned();
     otto.wait_for("the branch alone", |o| (bar(o)["place"]["text"] == format!("{elsewhere} · develop")).then_some(()));
+    // A repository nested in a listed one is not listed, nor is a link out of it.
+    otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", nested.display())}));
+    let inner = nested.canonicalize().unwrap().to_string_lossy().into_owned();
+    otto.wait_for("the nested one's branch alone", |o| {
+        (bar(o)["place"]["text"] == format!("{inner} · develop")).then_some(())
+    });
+    otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", repo.join("link").display())}));
+    otto.wait_for("the linked one's branch alone", |o| {
+        (bar(o)["place"]["text"] == format!("{elsewhere} · develop")).then_some(())
+    });
+    assert!(!marker.exists(), "git ran in a repository not listed");
     // A listed checkout: its changes too, read without running the repository's fsmonitor.
     otto.call(json!({"cmd": "type", "text": format!("cd '{}'\r", repo.display())}));
     let plain = repo.canonicalize().unwrap().to_string_lossy().into_owned();
