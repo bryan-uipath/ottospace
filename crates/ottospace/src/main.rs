@@ -1003,6 +1003,8 @@ struct Workspace {
     rail_scroll: ScrollHandle,
     rail_scrolled: RefCell<(u64, Option<drawer_rail::Drawn>)>,
     rail_pending: Rc<Cell<Option<(usize, u8)>>>,
+    /// The header the pointer is over whose arrow shows its key's cap (`slide`).
+    slide_hover: Option<&'static str>,
     /// Every scroll area's bar.
     bars: scrollbar::Bars,
     /// The minute of the last look at the clock: the Tasks section's ages are drawn again when it changes.
@@ -1504,6 +1506,7 @@ impl Workspace {
             rail_scroll: ScrollHandle::new(),
             rail_scrolled: RefCell::new((0, None)),
             rail_pending: Rc::new(Cell::new(None)),
+            slide_hover: None,
             bars: scrollbar::Bars::default(),
             minute: 0,
             tags: tags::Reader::start(),
@@ -4979,7 +4982,7 @@ impl Workspace {
 
     /// The bar's header, the same for every section: its name, + where the section can add
     /// something, and ← to collapse the bar into the rail.
-    fn bar_header(&self, section: Section, cx: &mut Context<Self>) -> Div {
+    fn bar_header(&self, section: Section, cx: &mut Context<Self>) -> Stateful<Div> {
         let title = SECTIONS.iter().find(|(s, ..)| *s == section).map_or("", |(_, _, label)| label);
         let button = |id: &'static str, icon: &'static str, tip: &'static str| {
             div()
@@ -5002,8 +5005,7 @@ impl Workspace {
             Section::Workbook => Some(("New workspace", "bar:add")),
             _ => None,
         };
-        div()
-            .group(slide::BAR_HEAD)
+        let header = div()
             .relative()
             .flex_none()
             .h(px(RAIL_CELL))
@@ -5042,7 +5044,8 @@ impl Workspace {
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.dispatch(Action::CloseSidebar, this.input, window, cx);
                 })),
-            )
+            );
+        self.slide_head(header, slide::BAR_HEAD, cx)
     }
 
     /// The header's +: a new task in Tasks, a repository to list in Repos, a new workspace in Workspaces.
