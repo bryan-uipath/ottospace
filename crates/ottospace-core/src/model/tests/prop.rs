@@ -3071,8 +3071,12 @@ impl Run {
         );
         for (id, run) in &slots_before {
             let now = m.slots.get(id);
-            // Cleared, or gone with its pane: never by a client.
-            let gone = now.is_none() && m.features.on(Feature::Slots);
+            // Cleared, or gone with its pane: never by a client. A workspace the user closed goes
+            // with its panes when its Undo runs out, at any `Tick`.
+            let ended = matches!(action, Action::Tick { .. })
+                && m.pane(*id).is_none()
+                && closing_was.iter().any(|(_, panes)| panes.iter().any(|(pane, _)| pane == id));
+            let gone = now.is_none() && m.features.on(Feature::Slots) && !ended;
             ensure!(!gone || origin != Origin::Socket, "{origin:?}'s {action:?} cleared slot {id}");
             ensure!(!gone || m.pane(*id).is_none() || users, "{origin:?}'s {action:?} cleared slot {id}");
             let Some(now) = now else { continue };
@@ -6550,6 +6554,29 @@ fn seed_977_no_pane_is_dropped_into_a_closing_workspace() {
         by(Origin::System, Action::Open { kind: readme, axis: Axis::Down, beside: None }),
         Action::OpenRepo { path: "/code/canvas".into(), axis: Axis::Down }.into(),
         by(Origin::System, Action::DropPane { source: 10, target: 6, zone: Zone::Center }),
+    ])
+    .unwrap();
+}
+
+/// The user's slot in a workspace they closed went with its pane when the Undo ran out, at a
+/// client's `Tick`: the check took that for a client clearing it (seed 3520). Time ends one.
+#[test]
+fn seed_3520_a_closed_workspace_ending_takes_its_slots() {
+    replay(&[
+        adopt(
+            "{\"type\":\"app\",\"window\":12,\"title\":\"SLOTSEEN general\",\"name\":\"\u{7f}~/\u{feff}\"}",
+            Some(1),
+            "{\"pid\":2,\"window\":12,\"title\":\"SLOTSEEN general\",\"identifier\":\"slotseen.main\",\"subrole\":\"AXDialog\",\"frame\":{\"x\":0.0,\"y\":0.0,\"w\":800.0,\"h\":600.0}}",
+        )
+        .sent_by(Origin::User),
+        Action::SpaceHide { index: None }.sent_by(Origin::User),
+        slot_make(
+            1,
+            0,
+            "{\"select\":{\"title\":\"other\",\"identifier\":\"*\"},\"pick\":{\"display\":2},\"matching\":\"manual\",\"absent\":\"wait\",\"closed\":\"keep\"}",
+        )
+        .sent_by(Origin::User),
+        Action::Tick { now: 60000 }.sent_by(Origin::Socket),
     ])
     .unwrap();
 }
