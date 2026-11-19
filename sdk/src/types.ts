@@ -59,6 +59,7 @@ export interface NativeChat {
   dial: AgentDial;
   /** The user's selection in the transcript, never its text. */
   selection: ChatSelection;
+  btw: Btw;
 }
 
 /** How much of a transcript is selected, whether it has ⌘A and ⌘C, and each selectable text's key and rect. */
@@ -67,6 +68,23 @@ export interface ChatSelection {
   keys: boolean;
   /** Test runs only; null outside one. */
   texts: [string, Rect][] | null;
+}
+
+/** A conversation's btw: side questions to its running agent, beside the conversation. Counts only, never a question or an answer. Only the user opens, asks, uses or closes one. */
+export interface Btw {
+  /** Its runner takes side questions and its agent runs here (never Codex yet). */
+  offered: boolean;
+  /** Its column shows. */
+  open: boolean;
+  /** Its input has the drawer's keyboard. */
+  keys: boolean;
+  asked: number;
+  answered: number;
+  /** Answers the CLI wrote itself (an API error). */
+  synthetic: number;
+  failed: number;
+  /** A question waits for its answer: one at a time. */
+  waiting: boolean;
 }
 
 /** Where an agent's work goes: `other` is any other tool ("Tools"). */
@@ -765,7 +783,7 @@ export type PickItem =
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
   /** Whose it is: the new-task line, the picker's or the Apps section's filter, a mark's name, a note on a capture, or a native conversation's composer (`talk`). */
-  of: "compose" | "picker" | "palette" | "inspector" | "apps" | "mark" | "workbook" | "worktree" | "note" | "talk";
+  of: "compose" | "picker" | "palette" | "inspector" | "apps" | "mark" | "workbook" | "worktree" | "note" | "talk" | "btw";
   text: string;
   cursor: number;
   /** Start and end, in text order. Equal: only a cursor. */

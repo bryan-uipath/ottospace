@@ -409,8 +409,9 @@ impl Workspace {
                 let task = subject.clone();
                 match said {
                     Said::SideAnswer { id, text, synthetic } => {
+                        let plain = Text::new(&crate::markdown::plain_line(text.text()));
                         let text = Text::new(text.text());
-                        sides.push(Action::BtwAnswered { task, id, text, synthetic });
+                        sides.push(Action::BtwAnswered { task, id, text, plain, synthetic });
                         continue;
                     }
                     Said::SideFailed { id } => {
@@ -559,7 +560,7 @@ impl Workspace {
         }
         let key = what;
         // Typing goes to the composer: the keys are no longer the transcript's.
-        if matches!(key, Key::Field | Key::Newline)
+        if matches!(key, Key::Field | Key::Newline | Key::Act(Action::BtwOpen))
             && let Some(look) = self.drawer.looks.get_mut(&subject)
         {
             look.select.keys = false;
@@ -2033,10 +2034,16 @@ impl Workspace {
             ),
             Primary::Resume | Primary::Start => self.start_button(cx),
         });
+        let btw = self.btw_button(subject, cx);
         // A card waits and no turn to stop: nothing to write and nothing to say, so no empty strip.
-        if field.is_none() && editing.is_none() && hint.is_empty() && button.is_none() {
+        if field.is_none() && editing.is_none() && hint.is_empty() && button.is_none() && btw.is_none() {
             return div();
         }
+        // The foot: the hint, and "btw" at its end.
+        let foot = (!hint.is_empty() || btw.is_some()).then(|| {
+            let hint = div().flex_1().min_w_0().text_xs().text_color(rgb(theme::MUTED)).child(hint);
+            div().flex().items_center().gap_2().child(hint).children(btw)
+        });
         div()
             .flex_none()
             .px_3()
@@ -2054,7 +2061,7 @@ impl Workspace {
                     .child(div().flex_1().min_w_0().text_sm().children(field).children(editing))
                     .children(button.map(|button| button.flex_none())),
             )
-            .children((!hint.is_empty()).then(|| div().text_xs().text_color(rgb(theme::MUTED)).child(hint)))
+            .children(foot)
     }
 
     /// The header's Chat | Terminal switch, for a Claude Code
@@ -2133,6 +2140,7 @@ impl Workspace {
                     "dial": self.dial_snapshot(&subject),
                     // How much of the transcript is selected, never its text; whether it has the keys.
                     "selection": self.selection_snapshot(&subject),
+                    "btw": crate::btw::snapshot(&self.model, &subject),
                 }),
             );
         }

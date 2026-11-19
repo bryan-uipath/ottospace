@@ -1,0 +1,9 @@
+# btw: a question card mid-turn; the composer's foot offers "btw" (⌘⇧K, on its hover) for a
+# side question to the running agent. (Before: no btw.)
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"add a cache >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.transcript.cards","len":1}
+{"shot":"card"}

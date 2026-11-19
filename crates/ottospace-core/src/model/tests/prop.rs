@@ -1478,7 +1478,8 @@ const MAKERS: &[Make] = &[
     |g| {
         let (task, id) = g.btw();
         let text = crate::transcript::Text::new(&g.name(&["Redis", "**bold** `code`", ""]));
-        Action::BtwAnswered { task, id, text, synthetic: g.rng.one_in(4) }
+        let plain = crate::transcript::Text::new(&g.name(&["Redis", "bold code", ""]));
+        Action::BtwAnswered { task, id, text, plain, synthetic: g.rng.one_in(4) }
     },
     |g| {
         let (task, id) = g.btw();
@@ -5202,10 +5203,10 @@ fn code(sent: &Envelope) -> String {
         }
     };
     // A side answer's text, as an agent's: that many `x`.
-    if let Action::BtwAnswered { task, id, text, synthetic } = &sent.action {
-        let (task, n) = (subject_code(task), text.len());
+    if let Action::BtwAnswered { task, id, text, plain, synthetic } = &sent.action {
+        let (task, n, p) = (subject_code(task), text.len(), plain.len());
         return format!(
-            "Action::BtwAnswered {{ task: {task}, id: {id}, text: Text::new(&\"x\".repeat({n})), synthetic: {synthetic} }}.sent_by(Origin::{:?})",
+            "Action::BtwAnswered {{ task: {task}, id: {id}, text: Text::new(&\"x\".repeat({n})), plain: Text::new(&\"x\".repeat({p})), synthetic: {synthetic} }}.sent_by(Origin::{:?})",
             sent.origin
         );
     }

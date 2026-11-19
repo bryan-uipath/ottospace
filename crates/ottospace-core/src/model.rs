@@ -1557,12 +1557,14 @@ pub enum Action {
     /// ↵ in the btw's input: its question to the agent, beside the conversation, with the
     /// thread's answers as history. One at a time. Only the user's.
     BtwAsk,
-    /// What came back for side question `id` (`synthetic`: the CLI's own words). Only the shell's
-    /// runner sends it (`Origin::System`).
+    /// What came back for side question `id` (`synthetic`: the CLI's own words): its markdown, and
+    /// the same as one line of plain text, for a question card's "Other…". Only the shell's runner
+    /// sends it (`Origin::System`).
     BtwAnswered {
         task: Subject,
         id: u64,
         text: crate::transcript::Text,
+        plain: crate::transcript::Text,
         synthetic: bool,
     },
     /// Side question `id` got no answer: the CLI refused it, or it ended. The runner's alone.
@@ -9968,6 +9970,7 @@ mod tests {
                 task: Subject::Task(1),
                 id: 1,
                 text: crate::transcript::Text::new("x"),
+                plain: crate::transcript::Text::new("x"),
                 synthetic: false,
             },
             Action::BtwFailed { task: Subject::Task(1), id: 1 },

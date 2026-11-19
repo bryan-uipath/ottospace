@@ -10,6 +10,7 @@ import type {
   AgentDial,
   ChatSelection,
   AgentLine,
+  Btw,
   CalendarFetch,
   NoticeBar,
   NoticeLevel,
@@ -987,6 +988,21 @@ function nativeChat(value: unknown, at: string): NativeChat {
     unread_open: bool(o.unread_open, `${at}.unread_open`),
     dial: agentDial(o.dial, `${at}.dial`),
     selection: chatSelection(o.selection, `${at}.selection`),
+    btw: btw(o.btw, `${at}.btw`),
+  };
+}
+
+function btw(value: unknown, at: string): Btw {
+  const o = fields(value, at);
+  return {
+    offered: bool(o.offered, `${at}.offered`),
+    open: bool(o.open, `${at}.open`),
+    keys: bool(o.keys, `${at}.keys`),
+    asked: num(o.asked, `${at}.asked`),
+    answered: num(o.answered, `${at}.answered`),
+    synthetic: num(o.synthetic, `${at}.synthetic`),
+    failed: num(o.failed, `${at}.failed`),
+    waiting: bool(o.waiting, `${at}.waiting`),
   };
 }
 
@@ -1251,7 +1267,7 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  const owners = ["compose", "picker", "palette", "inspector", "apps", "mark", "workbook", "worktree", "note", "talk"];
+  const owners = ["compose", "picker", "palette", "inspector", "apps", "mark", "workbook", "worktree", "note", "talk", "btw"];
   if (typeof o.of !== "string" || !owners.includes(o.of)) {
     throw wrong(`${at}.of`, "compose, picker, apps, mark, workbook, note or talk", o.of);
   }

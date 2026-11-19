@@ -10,6 +10,8 @@
 # does under `projects/<cwd as a slug>/`, so it can be resumed; `--resume <id>` replays
 # `resume.jsonl` first, if there is one (what a resume prints before it reads stdin).
 # Its process id goes to `pid`: a test asks whether it outlived what started it.
+# A `side_question` request replays `side<k>.jsonl` (the k-th asked) or `side.jsonl`, `{ID}` in it
+# its `request_id`: the CLI's answer beside the turn, which goes on.
 printf '%s\n' "$@" >"$FAKE_DIR/argv"
 echo $$ >"$FAKE_DIR/pid"
 echo start >>"$FAKE_DIR/starts"
@@ -77,9 +79,16 @@ if [ -n "$FAKE_EXIT" ]; then
   exit "$FAKE_EXIT"
 fi
 turn=0
+sides=0
 while IFS= read -r line; do
   printf '%s\n' "$line" >>"$FAKE_DIR/stdin"
   case "$line" in
+    *'"subtype":"side_question"'*)
+      sides=$((sides + 1))
+      id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+      file="side$sides.jsonl"
+      [ -f "$FAKE_FIXTURES/$file" ] || file=side.jsonl
+      [ -f "$FAKE_FIXTURES/$file" ] && replay "$file" | sed "s/{ID}/$id/g" ;;
     *'"type":"user"'*) turn=$((turn + 1)); replay "turn$turn.jsonl" ;;
     *'"behavior":"allow"'*)
       if [ -f "$FAKE_FIXTURES/turn$turn-allowed.jsonl" ]; then replay "turn$turn-allowed.jsonl"; else replay turn1-allowed.jsonl; fi ;;

@@ -1,0 +1,17 @@
+# btw: ⌘⇧K opens the side column left of the conversation, the drawer widened for it. A side
+# question while the question card waits: its answer as markdown, with "Use as my answer";
+# then that fills the card's "Other…", unsent.
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"add a cache >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.transcript.cards","len":1}
+{"cmd":"key","keys":"cmd-shift-k","as":"user"}
+{"cmd":"key","keys":"w h i c h space c a c h e space f i t s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"until":"drawer.native.chats.1.btw.answered","is":1}
+{"shot":"answered"}
+{"click":"talk:btw-use:1"}
+{"settle":300}
+{"shot":"used"}

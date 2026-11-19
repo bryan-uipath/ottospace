@@ -623,9 +623,17 @@ in flight, its input. `BtwOpen`, `BtwKeys`, `BtwAsk`, `BtwUse` and `BtwClose` ar
 alone (`btw::USERS_ALONE`); `BtwAnswered` and `BtwFailed` the shell's runner's (`System`). Answer
 text is `Text`, never in the state. The thread ends with the agent's process (`AgentExited`, or a
 new start), with its conversation (the task closed), or on ×. Interrupting the main turn leaves
-it. "Use as my answer" fills the open question card's "Other…", else the composer: never sent.
+it. "Use as my answer" fills the open question card's "Other…" as plain text (the shell's
+`markdown::plain_line`, sent with the answer in `BtwAnswered`), else the composer as markdown:
+never sent.
 The property check holds that a btw step sends no message, answers no card, interrupts nothing
 and leaves the transcript as it was.
+
+**Shell** (`btw.rs`). "btw" at the composer's foot, or ⌘⇧K in the conversation (a key of the
+conversation's own, `btw::is_key`, not a binding), opens the column left of the conversation; the
+drawer widens by its width. Headed "btw · read-only", ×, the thread (answers as markdown, as a
+reply is drawn), its input. The state has `drawer.native.chats.<key>.btw`: `offered`, `open`,
+`keys` and counts, never a question or an answer.
 
 **Codex: none yet.** Its app server's `thread/fork`, read-only and ephemeral, is the possible
 later route: a fork answers, the main thread never sees it.

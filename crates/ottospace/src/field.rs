@@ -128,6 +128,8 @@ impl Workspace {
             "apps" => self.apps_field.clone(),
             "mark" | "workbook" | "worktree" => self.mark_field.clone(),
             "inspector" => self.inspector_field.clone(),
+            // Drawn beside the composer: each its own.
+            "btw" => self.btw_field.clone(),
             _ => self.field.clone(),
         }
     }
@@ -216,7 +218,9 @@ impl Workspace {
     pub fn field_snapshot(&self) -> serde_json::Value {
         let Some((of, field)) = self.model.field() else { return serde_json::Value::Null };
         // The user's words to a question card: only where its cursor is, never the words.
-        let hidden = of == "talk" && self.model.talk_answers();
+        // A side question, and a draft that took a btw answer (the model's words): neither.
+        let untrusted = self.model.shown_chat().is_some_and(|chat| chat.untrusted);
+        let hidden = of == "btw" || (of == "talk" && (self.model.talk_answers() || untrusted));
         let (text, selected) = match hidden {
             true => ("", ""),
             false => (field.text(), field.selected()),
@@ -290,7 +294,7 @@ impl Workspace {
                 marked: field.marked(),
                 placeholder: placeholder.into(),
                 accent: theme::accent(self.model.mode()),
-                rows: if of == "talk" { ROWS } else { 1 },
+                rows: if matches!(of, "talk" | "btw") { ROWS } else { 1 },
             })
     }
 }
