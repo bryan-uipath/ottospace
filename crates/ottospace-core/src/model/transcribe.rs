@@ -1016,7 +1016,7 @@ mod tests {
         // The recogniser's late final of words before the cut makes no file.
         assert_eq!(heard_at(&mut m, 68_000), [Effect::ListenWrite { id: "t2".into(), records: vec![] }]);
         assert_eq!(status(&m), Some(Status::On));
-        assert_eq!(m.listen.pane(), Some(2), "still on: its dot stays");
+        assert_eq!(m.listen_marked(), [2], "still on: its dot stays");
         // A new meeting at 2:00, in a window of its own; its first words, at 2:05, begin a file.
         m.update(look(&[50, 9], 7_200_000).sent_by(Origin::System));
         let begun = heard_at(&mut m, 7_300_000 - 1_000);
