@@ -1729,7 +1729,7 @@ impl Workspace {
             .flex_col()
             .children(tabs)
             .children(bar)
-            .children(question)
+            .children(question.into_iter().flatten())
             .child(rows)
             .child(foot)
     }
@@ -1765,7 +1765,9 @@ impl Workspace {
 
     /// A question as markdown: its last paragraph the question, in bold; what comes before it
     /// context, folded behind "Show all · N lines" past `FOLD_LINES`. With no tabs, its header too.
-    fn ask_question(&self, subject: &Subject, form: &Form, q: usize, ticket: u64, cx: &mut Context<Self>) -> Div {
+    /// Its parts are the card's own children: in a short drawer the shown context alone shrinks
+    /// (with the options), so the question, the options and the foot keep their room.
+    fn ask_question(&self, subject: &Subject, form: &Form, q: usize, ticket: u64, cx: &mut Context<Self>) -> Vec<Div> {
         let question = &form.questions[q];
         let of = Links::Chat(subject.clone());
         let at = format!("ask:{ticket}:{q}");
@@ -1811,7 +1813,7 @@ impl Workspace {
                     .child(self.controls.mark("talk:chat-ask-show-all"))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_ask_context(&who, ticket, q, cx)))
             });
-            div().flex().flex_col().gap_1().child(body).children(show)
+            (body, show)
         });
         let asked = match asked {
             Some(asked) => draw(std::slice::from_ref(&asked), blocks.len(), cx),
@@ -1825,18 +1827,23 @@ impl Workspace {
             .max_h(px(18. * (FOLD_LINES as f32 + 2.)))
             .overflow_y_scroll()
             .child(asked);
-        div()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .px_3()
-            .pt_2()
-            .pb_1p5()
-            .children(header.map(|chip| div().flex().child(chip)))
-            .children(context)
-            .child(asked)
-            .children(question.multi.then(|| muted("pick any".into())))
+        // Spaced as a column of `gap_2` (Show all `gap_1` under its context), padded `px_3 pt_2 pb_1p5`.
+        let part = |d: AnyElement| div().flex_none().px_3().pt_2().child(d);
+        let mut parts: Vec<Div> =
+            header.map(|chip| part(div().flex().child(chip).into_any_element())).into_iter().collect();
+        if let Some((body, show)) = context {
+            parts.push(match open {
+                true => div().flex_shrink().min_h_0().flex().flex_col().px_3().pt_2().child(body),
+                false => part(body.into_any_element()),
+            });
+            parts.extend(show.map(|show| div().flex_none().px_3().pt_1().child(show)));
+        }
+        parts.push(part(asked.into_any_element()));
+        parts.extend(question.multi.then(|| part(muted("pick any".into()).into_any_element())));
+        if let Some(last) = parts.pop() {
+            parts.push(last.pb_1p5());
+        }
+        parts
     }
 
     /// Review's row for a question: its header and its answer, or "Not answered" in amber. A
