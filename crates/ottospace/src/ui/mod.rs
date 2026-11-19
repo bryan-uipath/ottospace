@@ -4,7 +4,7 @@
 pub(crate) mod gallery;
 
 use gpui::{
-    BoxShadow, Div, ElementId, FontWeight, Refineable, SharedString, Stateful, StyleRefinement, black, div, point,
+    BoxShadow, Div, ElementId, FontWeight, Refineable, SharedString, Stateful, StyleRefinement, Svg, black, div, point,
     prelude::*, px, rgb, svg, transparent_black,
 };
 use ottospace_core::{notice, theme};
@@ -211,6 +211,12 @@ pub(crate) fn list_row(id: impl Into<ElementId>, row: Row, state: State) -> Stat
     }
 }
 
+/// A heading's fold mark, ▾ open or ▸ folded: drawn, not a glyph, so it sits on the words' middle
+/// (the font's ▾ sat a point below it). Coloured by the caller's `text_color`.
+pub(crate) fn fold_mark(open: bool) -> Svg {
+    svg().path(if open { "icons/fold-open.svg" } else { "icons/fold-closed.svg" }).flex_none().size(px(8.))
+}
+
 /// A group's heading in a list: a chevron (`open`: ▾), its name and how many it holds, then room
 /// for its actions. A dim row's hover and selection; a click anywhere folds it.
 pub(crate) fn section_heading(
@@ -228,7 +234,7 @@ pub(crate) fn section_heading(
         .flex()
         .items_center()
         .gap(px(theme::SPACE_1_5))
-        .child(muted(div()).w(px(10.)).child(if open { "▾" } else { "▸" }))
+        .child(div().flex_none().w(px(10.)).child(fold_mark(open).text_color(rgb(theme::MUTED))))
         .child(cut_text(name).flex_shrink().text_size(px(theme::TEXT_XS)))
         .child(muted(div()).child(format!("· {count}")))
         .child(div().flex_1())

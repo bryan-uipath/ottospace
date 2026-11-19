@@ -274,7 +274,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.text_color(rgb(theme::TEXT)))
                     .when(selected, |d| d.pb_0p5().rounded_md().bg(rgb(theme::SELECTED)))
-                    .child(div().w(px(8.)).child(if group.folded { "▸" } else { "▾" }))
+                    .child(crate::ui::fold_mark(!group.folded).text_color(rgb(theme::MUTED)))
                     .child(crate::cut_text(name).flex_1())
                     .child(
                         div()
@@ -316,7 +316,7 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.text_color(rgb(theme::TEXT)))
                         .when(selected, |d| d.rounded_md().bg(rgb(theme::SELECTED)))
-                        .child(div().w(px(8.)).child(if group.done_open { "▾" } else { "▸" }))
+                        .child(crate::ui::fold_mark(group.done_open).text_color(rgb(theme::MUTED)))
                         .child(format!("Done · {}", group.done))
                         .relative()
                         .child(self.controls.mark(format!("project-done:{key}")))

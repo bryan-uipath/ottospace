@@ -1962,6 +1962,7 @@ export function snapshot(value: unknown): Snapshot {
     key_reference: orNull(keyReference)(o.key_reference, "key_reference"),
     listen_lines: orNull(list(listenLine))(o.listen_lines, "listen_lines"),
     listen_rects: orNull(map(rect))(o.listen_rects, "listen_rects"),
+    heading_rects: orNull(map(rect))(o.heading_rects, "heading_rects"),
     marks: list(mark)(o.marks, "marks"),
     mark_removed: orNull(str)(o.mark_removed, "mark_removed"),
     unfilled: list((value, at) => {

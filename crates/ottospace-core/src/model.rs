@@ -4115,6 +4115,9 @@ impl Model {
             {
                 Some(agents::USERS_ALONE)
             }
+            // A done task's Clear (its word, or `x` on it) is the user's.
+            Action::RowDismiss { id } if self.done_row(*id) => Some(tasks::CLEAR_USERS),
+            Action::ListDismiss if self.selected_task().is_some_and(|id| self.done_row(id)) => Some(tasks::CLEAR_USERS),
             // Dismissing a task whose agent runs would stop the agent: the user is asked.
             Action::TaskDismiss { id } | Action::RowDismiss { id } if self.agent_runs(&Subject::Task(*id)) => {
                 Some(agents::USERS_ALONE)
@@ -4962,7 +4965,11 @@ impl Model {
             Action::TaskUndo => self.tasks.undo(),
             Action::RowSnooze { id, until } => self.row_move(id, Moved::Snoozed, |tasks| tasks.snooze(id, until)),
             Action::RowHold { id } => self.row_move(id, Moved::Held, |tasks| tasks.hold(id)),
-            Action::RowDismiss { id } => self.dismiss(id, Some(Moved::Dismissed), effects),
+            Action::RowDismiss { id } => {
+                // A done task's row says Clear, and so does its notice.
+                let moved = if self.done_row(id) { Moved::Cleared } else { Moved::Dismissed };
+                self.dismiss(id, Some(moved), effects)
+            }
             Action::Tick { now } => {
                 self.now = now;
                 self.left.1.get_or_insert(now);
@@ -5986,8 +5993,9 @@ impl Model {
             // Yes to "Stop its agent and dismiss?": the agent stops as Stop stops it, then the task goes.
             Action::QuitConfirm if let Some(id) = self.confirm.as_ref().and_then(|confirm| confirm.dismiss) => {
                 self.confirm = None;
+                let moved = if self.done_row(id) { Moved::Cleared } else { Moved::Dismissed };
                 self.act(Action::TaskStop { id: Subject::Task(id) }, effects);
-                self.row_move(id, Moved::Dismissed, |tasks| tasks.dismiss(id));
+                self.row_move(id, moved, |tasks| tasks.dismiss(id));
             }
             // Yes to "Stop it and put it away?".
             Action::QuitConfirm if let Some((id, _)) = self.confirm.as_ref().and_then(|confirm| confirm.later.clone()) => {
@@ -7622,6 +7630,11 @@ impl Model {
             effects.push(Effect::Paste { pane });
             self.clip = Some(Clip::new(Some(pane), clip::Verb::Pasted, amount, self.now));
         }
+    }
+
+    /// The task is listed under Done: its row offers Clear (`Group::row_actions`).
+    fn done_row(&self, id: TaskId) -> bool {
+        self.tasks.get(id).and_then(Task::group) == Some(tasks::Group::Done)
     }
 
     /// A move made with the mouse: if it changed the task, a notice offers to take it back.
@@ -12667,6 +12680,14 @@ mod tests {
         assert_eq!(m.update(Action::QuitConfirm), [Effect::StopAgent { task: Subject::Task(a) }]);
         m.update(Action::AgentExited { task: Subject::Task(a) }.sent_by(Origin::System));
         assert_eq!((m.tasks.get(a).map(|t| t.dismissed), m.spaces().len(), m.confirm.is_none()), (Some(true), 2, true));
+        // A done task's Clear, confirmed: its notice says Cleared.
+        m.update(Action::TaskUndo);
+        started(&mut m, Action::TaskTalk { id: a });
+        m.update(Action::TaskSetState { id: a, state: State::Done });
+        assert!(m.agent_runs(&Subject::Task(a)) && m.done_row(a));
+        m.update(Action::RowDismiss { id: a });
+        m.update(Action::QuitConfirm);
+        assert_eq!(m.undo_offer.map(|n| n.moved), Some(Moved::Cleared));
     }
 
     #[test]
@@ -14924,6 +14945,32 @@ mod tests {
         m.update(Action::RowDismiss { id: 1 });
         m.update(Action::TaskSetState { id: 1, state: State::Running });
         assert_eq!(m.undo_offer, None);
+    }
+
+    #[test]
+    fn a_done_rows_clear_is_the_users_and_can_be_taken_back() {
+        let mut m = Model::default();
+        for (title, state) in [("a", State::Running), ("b", State::Done)] {
+            m.update(Action::TaskAdd { title: title.into(), priority: 2, state, tab: None, assign: Assign::default() });
+        }
+        // A client's is refused; an open task's dismiss is not.
+        assert_eq!(m.refusal(&Action::RowDismiss { id: 2 }, Origin::Socket), Some(tasks::CLEAR_USERS));
+        assert_eq!(m.refusal(&Action::RowDismiss { id: 1 }, Origin::Socket), None);
+        let listed = |m: &Model| m.tasks.inbox().iter().map(|(_, task)| task.id).collect::<Vec<_>>();
+        m.update(Action::RowDismiss { id: 2 }.sent_by(Origin::Socket));
+        assert_eq!((listed(&m), m.undo_offer), (vec![1, 2], None));
+        // So is its `x` in list mode.
+        m.update(Action::ToggleGroup { heading: Heading::Done });
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        m.update(Action::FocusList);
+        m.update(Action::ListMove { delta: 2 });
+        assert_eq!(m.selected_task(), Some(2));
+        assert_eq!(m.refusal(&Action::ListDismiss, Origin::Socket), Some(tasks::CLEAR_USERS));
+        // The user's: off the list, and the notice says Cleared; Undo puts it back.
+        m.update(Action::RowDismiss { id: 2 });
+        assert_eq!((listed(&m), m.undo_offer.map(|n| n.moved)), (vec![1], Some(Moved::Cleared)));
+        m.update(Action::TaskUndo);
+        assert_eq!(listed(&m), [1, 2]);
     }
 
     #[test]

@@ -48,7 +48,9 @@ use ottospace_core::rules::{self, Facts};
 use ottospace_core::scrollbar::{Extent, key_step};
 use ottospace_core::settings::Installed;
 use ottospace_core::sneak::{SneakKey, sneak_key};
-use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, PENDING_LINES, Pending, State, Task, TaskId, TaskRow};
+use ottospace_core::tasks::{
+    Assign, Group, Heading, MAX_TITLE, PENDING_LINES, Pending, RowAction, State, Task, TaskId, TaskRow,
+};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, clears_selection, edge_scroll, press, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Origin, Pane, PaneId, PickItem, Picker, Rect, Section, Zone,
@@ -502,6 +504,8 @@ impl AssetSource for Assets {
             "icons/slide-left.svg" => Some(include_bytes!("../assets/icons/slide-left.svg")),
             "icons/slide-right.svg" => Some(include_bytes!("../assets/icons/slide-right.svg")),
             "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
+            "icons/fold-open.svg" => Some(include_bytes!("../assets/icons/fold-open.svg")),
+            "icons/fold-closed.svg" => Some(include_bytes!("../assets/icons/fold-closed.svg")),
             "icons/runner-claude.svg" => Some(include_bytes!("../assets/icons/runner-claude.svg")),
             "icons/runner-codex.svg" => Some(include_bytes!("../assets/icons/runner-codex.svg")),
             _ => None,
@@ -667,6 +671,8 @@ enum Mark {
     KeysKnown,
     /// The new-task box's Switch, while it is pinned to another space.
     ComposeSwitch,
+    /// A Tasks heading's fold mark (0), name (1) and count (2): a test run's `heading_rects`.
+    Heading(Heading, u8),
 }
 
 type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
@@ -1777,12 +1783,13 @@ impl Workspace {
             self.refresh_apps();
             self.offer_installed(cx);
         }
-        // A client's key, click or label at the user's draft, the drawer's ⌘⇧R or →, or Done and Later: its
-        // reply's `notice` says why it did nothing.
+        // A client's key, click or label at the user's draft, the drawer's ⌘⇧R or →, Done and Later, or a
+        // done task's Clear: its reply's `notice` says why it did nothing.
         let said = [
             ottospace_core::capture::DRAFT_USERS,
             ottospace_core::model::rail::DRAWER_USERS,
             ottospace_core::model::finish::USERS_ALONE,
+            ottospace_core::tasks::CLEAR_USERS,
         ];
         if let Some(why) =
             self.model.refusal(&action, origin).filter(|why| origin == Origin::Socket && said.contains(why))
@@ -3869,6 +3876,18 @@ impl Workspace {
             // what was heard never reaches a client.
             "listen_lines": self.listen_lines(),
             "listen_rects": self.listen_rects(),
+            // Test runs only: where each Tasks heading's fold mark, name and count were drawn
+            // (`done:fold`, `done:label`, `done:count`). Null outside a test run.
+            "heading_rects": std::env::var_os("OTTOSPACE_E2E").map(|_| {
+                let parts = ["fold", "label", "count"];
+                let named = |(mark, bounds): (&Mark, &Bounds<Pixels>)| match mark {
+                    Mark::Heading(heading, at) => {
+                        Some((format!("{}:{}", heading_name(*heading), parts[*at as usize]), rect(*bounds)))
+                    }
+                    _ => None,
+                };
+                marks.iter().filter_map(named).collect::<BTreeMap<_, _>>()
+            }),
             // While the key reference shows, in a test run: its groups' binding ids in order, the
             // known ones and whether they are open, and where `Known · n` is drawn. Else null.
             "key_reference": std::env::var_os("OTTOSPACE_E2E").filter(|_| self.model.keys).map(|_| {
@@ -5643,12 +5662,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A click on a button of a task's row, by the button's name: `task-snooze` or `task-dismiss`
-    /// (Done). Each offers to be undone.
+    /// A click on a button of a task's row, by the button's name: `task-snooze`, `task-dismiss`
+    /// (Done) or `task-clear` (a done task's, as Done). Each offers to be undone.
     pub(crate) fn click_row_button(&mut self, button: &str, id: TaskId, window: &Window, cx: &mut Context<Self>) {
         let action = match button {
             "task-snooze" => Action::RowSnooze { id, until: now_ms().saturating_add(SNOOZE_MS) },
-            "task-dismiss" => Action::RowDismiss { id },
+            "task-dismiss" | "task-clear" => Action::RowDismiss { id },
             _ => return,
         };
         self.dispatch(action, self.input, window, cx);
@@ -5719,6 +5738,9 @@ impl Workspace {
             Heading::NeedsYou => theme::task(Group::NeedsYou),
             _ => theme::MUTED,
         };
+        // Each part noted where it is drawn, for a test run (`heading_rects`).
+        let part = |at: u8| mark(&self.marks, Mark::Heading(heading, at));
+        let fold = ui::fold_mark(!collapsed).size_full().text_color(rgb(theme::MUTED));
         div()
             .id(("task-heading", heading as usize))
             .px_2()
@@ -5731,9 +5753,9 @@ impl Workspace {
             .cursor_pointer()
             .hover(|s| s.text_color(rgb(theme::TEXT)))
             .when(selected, |d| d.pb_0p5().rounded_md().bg(rgb(theme::SELECTED)))
-            .child(div().w(px(8.)).text_color(rgb(theme::MUTED)).child(if collapsed { "▸" } else { "▾" }))
-            .child(heading.title())
-            .child(div().text_color(rgb(theme::MUTED)).child(format!("· {count}")))
+            .child(div().flex_none().size(px(8.)).relative().child(fold).child(part(0)))
+            .child(div().relative().child(heading.title()).child(part(1)))
+            .child(div().relative().text_color(rgb(theme::MUTED)).child(format!("· {count}")).child(part(2)))
             .relative()
             .child(self.controls.mark(format!("task-heading:{}", heading_name(heading))))
             .on_click(cx.listener(move |this, _, window, cx| this.click_heading(heading, window, cx)))
@@ -5850,7 +5872,7 @@ impl Workspace {
 
     /// A task's row: its badge with the state dot, title (`P1` before it when urgent) and one fact
     /// at the right; while its agent works, a muted line of what it does. The rest is in its hover
-    /// card. Hover (or list mode's selection) shows Snooze and Done.
+    /// card. Hover (or list mode's selection) shows Snooze and Done; on a done task, Clear.
     fn task_row(&self, task: &Task, row: &TaskRow, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let id = task.id;
         // Words, as on a session's row: the icons said too little.
@@ -5862,10 +5884,14 @@ impl Workspace {
         };
         // Over the end of the title line, on the row's own colour: hidden, they take no room from it.
         // No Start or Show: a click on the row opens its conversation. Hold is `h` in list mode.
-        let actions = words::words("task-row", selected)
-            .top(px(3.5))
-            .child(button("task-snooze", "Snooze", "1 hour · S"))
-            .child(button("task-dismiss", "Done", "X"));
+        let actions =
+            words::words("task-row", selected).top(px(3.5)).children(row.group.row_actions().iter().map(|action| {
+                match action {
+                    RowAction::Snooze => button("task-snooze", "Snooze", "1 hour · S"),
+                    RowAction::Dismiss => button("task-dismiss", "Done", "Out of the inbox · X"),
+                    RowAction::Clear => button("task-clear", "Clear", "Off the list · X"),
+                }
+            }));
         // The task on show: a bar at the row's edge, and its title in bold.
         let bar = div().absolute().left(px(-1.)).top(px(5.)).bottom(px(5.)).w(px(3.)).rounded_full();
         let muted = || div().text_xs().text_color(rgb(theme::MUTED));
@@ -7849,6 +7875,7 @@ impl Render for Workspace {
                     | Mark::Space(_)
                     | Mark::KeysKnown
                     | Mark::ComposeSwitch
+                    | Mark::Heading(..)
                     | Mark::StatusPlace
                     | Mark::StatusMeeting
                     | Mark::StatusAgents

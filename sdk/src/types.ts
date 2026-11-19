@@ -717,7 +717,7 @@ export interface TaskSection {
 export interface TasksBar {
   /** Nothing is listed: the section shows how to add a task. */
   empty: boolean;
-  /** The move the line at its top offers to undo (`"Dismissed"`), for a few seconds after a click on a row's button. */
+  /** The move the line at its top offers to undo (`"Dismissed"`, `"Cleared"`), for a few seconds after a click on a row's button. */
   undo: string | null;
   sections: TaskSection[];
 }
@@ -1562,6 +1562,9 @@ export interface Snapshot {
    * `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-view`,
    * `listen-idle`, the off-show dot `listen-dot:space:<place>` or `listen-dot:tab:<id>`). Else null. */
   listen_rects: Record<string, Rect> | null;
+  /** Test runs only: where each Tasks heading's fold mark, name and count were drawn
+   * (`done:fold`, `done:label`, `done:count`). Else null. */
+  heading_rects: Record<string, Rect> | null;
   /** The marks, in the user's order. */
   marks: Mark[];
   /** The name of the mark just taken off, while the Marks section offers to put it back. */

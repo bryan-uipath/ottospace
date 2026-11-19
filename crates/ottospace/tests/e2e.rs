@@ -1442,6 +1442,52 @@ fn the_tasks_section_lists_what_needs_you_then_what_runs_then_what_waits() {
     assert_eq!((&state["state"]["active"], state["mode"].as_str()), (&json!(1), Some("compose")));
 }
 
+/// A done task's row offers Clear alone: the user's click takes it off the list and Undo puts it
+/// back; a client's is refused. Each heading's fold mark, name and count share one middle.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_done_row_offers_clear_and_headings_share_a_middle() {
+    let otto = Otto::launch("clear");
+    for (title, state) in [("open", "running"), ("finished", "done")] {
+        otto.call(json!({"cmd": "task_add", "title": title, "priority": 2, "state": state}));
+    }
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.call(json!({"cmd": "task_group", "heading": "done"}));
+    let listed = |reply: &Value| -> Vec<u64> {
+        reply["inbox"].as_array().unwrap().iter().map(|row| row["id"].as_u64().unwrap()).collect()
+    };
+    // The row's words, hovered: Clear on the done one; Snooze and Done on the open one.
+    otto.mouse("move", at(otto.control("task:2"), 0.5, 0.5));
+    let ids: Vec<String> = otto.controls().into_iter().map(|(id, _)| id).collect();
+    let words = |task: u64| -> Vec<&str> {
+        let end = format!(":{task}");
+        ids.iter().filter(|id| id.starts_with("task-") && id.ends_with(&end)).map(String::as_str).collect()
+    };
+    assert_eq!((words(2), words(1)), (vec!["task-clear:2"], vec!["task-snooze:1", "task-dismiss:1"]));
+    // A client's click on Clear is refused, and said.
+    let clear = at(otto.control("task-clear:2"), 0.5, 0.5);
+    let theirs = otto.click(clear, 1);
+    assert!(theirs.to_string().contains("only the user clears a done task"), "{theirs}");
+    assert_eq!(listed(&theirs), [1, 2]);
+    // The user's: the row goes, the notice says Cleared, and its Undo brings the row back.
+    let mine = otto.user_click(clear);
+    assert_eq!((listed(&mine), &mine["tasks_bar"]["undo"]), (vec![1], &json!("Cleared")));
+    let back = otto.user_click(at(otto.control("task-undo"), 0.5, 0.5));
+    assert_eq!(listed(&back), [1, 2]);
+    // Each heading's fold mark, name and count: one vertical middle, within a point.
+    let rects = otto.drawn()["heading_rects"].clone();
+    for heading in ["running", "done"] {
+        let middle = |part: &str| {
+            let r = rect(&rects[format!("{heading}:{part}")]);
+            r[1] + r[3] / 2.0
+        };
+        let fold = middle("fold");
+        for part in ["label", "count"] {
+            assert!((middle(part) - fold).abs() <= 1.0, "{heading}:{part} {rects}");
+        }
+    }
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn list_mode_drives_the_bar_with_the_keyboard() {

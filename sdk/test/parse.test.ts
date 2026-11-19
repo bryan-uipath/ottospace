@@ -138,6 +138,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     key_reference: null,
     listen_lines: null,
     listen_rects: null,
+    heading_rects: null,
     marks: [],
     mark_removed: null,
     unfilled: [],

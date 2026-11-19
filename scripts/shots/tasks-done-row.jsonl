@@ -1,0 +1,20 @@
+# The Tasks section with the pointer on a done task's row: its one word, Clear, and that word's
+# tooltip. The headings' fold marks, names and counts on one line, also in the Project view.
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"Review the zoom fix #canvas p1"}
+{"cmd":"task_new","line":"Minimap spike #canvas"}
+{"cmd":"task_new","line":"Ship the release notes #docs"}
+{"cmd":"task_new","line":"Socket guide for agents #docs"}
+{"cmd":"task_set_state","id":1,"state":"needs_you"}
+{"cmd":"task_set_state","id":2,"state":"running"}
+{"cmd":"task_set_state","id":3,"state":"done"}
+{"cmd":"task_set_state","id":4,"state":"done"}
+{"cmd":"section","section":"tasks"}
+{"cmd":"task_group","heading":"done"}
+{"hover":"task:3","at":[0.5,0.5]}
+{"shot":"done-row"}
+{"hover":"task:3","at":[0.92,0.5]}
+{"sleep_ms":1200}
+{"shot":"word-tip"}
+{"click":"tasks-view:project"}
+{"shot":"project"}
