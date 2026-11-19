@@ -369,7 +369,7 @@ impl Workspace {
         reply: Sender<String>,
         cx: &mut Context<Self>,
     ) {
-        // Live or peeked: the stream is stopped, and the frame held is from before.
+        // Live: the stream is stopped, and the frame held is from before.
         if self.hosted.get(&pane).is_some_and(|hosted| hosted.paused.is_some()) {
             return drop(reply.send(control::error("the pane is live: no picture until it is parked")));
         }

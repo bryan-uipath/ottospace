@@ -46,7 +46,7 @@ running, and the rest of the design is not built: see the
 | Repos: each repository's name over its checkouts, one line each (the branch; a dot for the repository's own folder; its open pull request's mark; a task's badge). The chevron folds a repository (a count while folded; kept in `layout.json`; shown while a task there runs or needs you). Open a terminal in one. Opt-in, in your order: + in the bar's header, a dropped folder or Add Folder to Repos adds a repository to the end of `repos`; a folder of repositories from older settings is one folded group. On a name under the pointer, + makes a worktree (`worktrees_dir`) and the trash stops listing it (asked first while a task works there; the status bar says nothing on disk changed) | Works today |
 | List mode (⌘⌃E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls, and on the buttons and text fields of the focused app pane; typing it clicks the control, presses the app's button, or focuses its text field | Works today |
-| The wheel over an app pane you are not in brings its window up for the scroll (a peek): `PEEK` in the status bar, parked again when the pointer leaves or the wheel is quiet | Partly verified: on CI the window comes up, the app is in front and the scrolls after the first reach it. The first scroll is lost. The window parking again by itself is unit-tested, not yet seen on CI |
+| Scrolling over an app pane you are not in enters it (`APP`), as a click does, and that first scroll reaches the app | Verified on CI (`e2e-apps`): the wheel enters, the window comes up under the pointer and the canary receives the first scroll |
 | [Command palette](#command-palette) (⌘P): every command of the menu bar by name, with its key; a Developer group | Works today |
 | [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today, behind the `marks` [flag](#features), off by default |
@@ -1093,15 +1093,13 @@ it is still among all apps. Each of these writes `~/.ottospace/settings.json` (`
 A running app has no Pin button yet. Original window frames are saved to disk and restored on
 every way out: see [Getting a window back](#getting-a-window-back).
 
-The wheel or trackpad over an app pane you are not in brings its real window up over the pane
-for the scroll (a peek, `wheel_to_apps`). The window is placed as on entering, and the app is
-activated, because macOS shows an inactive app's window under ottospace's. The notice bar says
-`PEEK <App>`, and keys go to the app. The scroll that started the peek reached ottospace and is
-lost; the ones after it go to the window. The window parks again, and ottospace takes the
-keyboard back, when the pointer leaves the pane or 1.5 s pass with no scroll. A click or a key in
-the app makes it a normal entry (`APP`), and the return key leaves as ever. Only your own wheel
-peeks: a socket client's scroll brings nothing up. No peek starts under sneak mode, the palette,
-a box, the quit question, the accessibility overlay or a drag, nor while another app is in front.
+Scrolling over an app pane you are not in enters it (`wheel_to_apps`), as a click on the pane
+does: the status bar says `APP`, the window comes up over the pane and the app has the keyboard.
+The scroll that entered reached ottospace, not the app: ottospace sends it on to the window once
+the window is up, so no scroll is lost. Leave as ever: the return key, or a click on ottospace
+itself. Only your own wheel enters: a socket client's scroll enters nothing. None enters under
+sneak mode, the palette, a box, the quit question, the accessibility overlay or a drag, nor while
+another app is in front.
 
 Click an app pane to give it the keyboard (`APP` mode). If you bring a hosted app forward from
 outside (its Dock icon, ⌘Tab) and the window it shows is one ottospace holds, ottospace comes
@@ -1285,7 +1283,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 | `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title`, `identifier` (the app's own name for the window, its `AXIdentifier`: Zoom's main meeting window is `zm.meeting.window.main`; a window without one has empty text: `""` or `*` matches it) and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later, and is never moved. `"do": "manage"` undoes a built-in rule. A new window of a hosted app: `"do": "split"` puts it in a pane of its own even if it is a pop-up (a dialog, a small window; a sheet stays on its window); `"do": "float"` keeps it a free window over its app's pane, as a pop-up, and it never becomes a pane. Without either, a new window floats and is offered in its app's pane ([App panes](#app-panes)): none splits by itself. Your rules come first, but a `split` or `float` rule never moves a window a built-in rule leaves alone (Zoom's share toolbar, Meeting chat): only `manage` does. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; a changed rule applies to windows seen after it | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
 | `apps` | The pinned apps: listed first under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. Each is the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`), looked for in `/Applications`, `~/Applications` and `/System/Applications` (and their `Utilities`), or the path of its bundle (`~/Tools/Lumen.app`). One that is not found is left out of the list and kept in the file. Pin and Unpin in the Apps section write this list: the name if it means that same bundle when read back (the first of that name in those folders, in that order), else its path. A name that is found only once ottospace runs (the app was installed since) is listed from the next scan. (Once you type in the picker it offers every installed app in those folders, these first) | none |
 | `apps_hidden` | Apps of the Dock not to suggest in Apps, written as `apps` is. Hide in the Apps section writes this list | none |
-| `wheel_to_apps` | The wheel or trackpad over an app pane you are not in brings its window up for the scroll (a peek). `false`: the wheel there does nothing | `true` |
+| `wheel_to_apps` | The wheel or trackpad over an app pane you are not in enters it, and the scroll reaches the app. `false`: the wheel there does nothing | `true` |
 | `calendar_ics` | The [meeting timeline](#meeting-timeline)'s calendar feed: an `https://` link (to a host on the internet, not an address or `localhost`) or a file's path (`/…` or `~/…`). Never shown: a private feed's link holds a secret | none: no timeline |
 | `calendar_workday` | The workday the timeline's band spans: `"HH:MM-HH:MM"`, local 24-hour time, the start at least an hour before the end (`"06:00-22:00"`; `24:00` ends the day). `calendar_window_hours`, from before, is retired: the status bar asks to remove it, and the rest applies | `"09:00-17:00"` |
 | `calendar_refresh_minutes` | How often the feed is read again, at least 1 | `5` |
@@ -1328,7 +1326,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   never written; the state's `marks` is `[]`.
 - `apps_section` off: no Apps cell or section, and `section` `apps` answers
   `feature off: apps_section`. ⌘⌃E drives the rail's first section. Hosting apps in panes, the
-  picker (⌘E, ⌘⇧E) and its installed apps, sneak labels in apps, peeks, restore and rescue all
+  picker (⌘E, ⌘⇧E) and its installed apps, sneak labels in apps, the wheel's entry, restore and rescue all
   still work. The state's `apps_bar` is empty.
 - `transcripts` off: no `Transcribe` in a pane's header, no transcript on the drawer's rail, ⌘⌃T does
   nothing, no Transcribe or Pause command or menu item, and the state's `listen` is null. Turning it off
@@ -1439,8 +1437,8 @@ The guide itself: [`crates/ottospace/skill/guide.md`](../crates/ottospace/skill/
 macOS cannot reparent another process's window, so ottospace fakes embedding with the Accessibility
 (AX) API and ScreenCaptureKit (SCK). An inactive app window is parked off-screen with one pixel on
 a display, and its pane shows an SCK stream of it. Clicking the pane moves the real window over it
-and replays the click, so input is native. The wheel over a parked pane places the window the
-same way for as long as the scroll lasts (a peek). A pane shows one title bar: the stream leaves out the
+and replays the click, so input is native. The wheel over a parked pane enters it the same way,
+and the scroll is sent on to the window. A pane shows one title bar: the stream leaves out the
 app's own, and the live window's covers the pane header. Measurements and risks: [docs/ai/hosting-windows.md](ai/hosting-windows.md).
 
 ### Getting a window back

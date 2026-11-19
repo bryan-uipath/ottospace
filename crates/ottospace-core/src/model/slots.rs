@@ -302,7 +302,7 @@ impl Model {
                     Some(Kind::App { window, .. }) if self.slots.contains_key(&pane) => *window,
                     _ => return,
                 };
-                if self.live == Some(pane) || self.peek.as_ref().is_some_and(|peek| peek.pane == pane) {
+                if self.live == Some(pane) {
                     self.leave(effects);
                 }
                 // Unhosting stops a transcript of it.
@@ -351,7 +351,7 @@ impl Model {
             return self.act(Action::Close { pane: Some(pane) }, effects);
         }
         // The keyboard comes back to ottospace, as the shell is told (`Effect::Parked`).
-        if self.live == Some(pane) || self.peek.as_ref().is_some_and(|peek| peek.pane == pane) {
+        if self.live == Some(pane) {
             self.leave(effects);
         }
         // Its window going stops a transcript of it, as the pane closing would (slice 5: a meeting's holds it).
