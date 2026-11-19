@@ -19,16 +19,19 @@ use crate::layout::Rect;
 const ASPECT: f32 = 1.6;
 /// Weights are cut in halves as whole numbers: this many times before a half rounds down.
 const HALVINGS: u32 = 24;
+/// The most a leaf weighs: a size class, not a count. Rectangles are `f32`: a leaf a millionth
+/// of its group still has a width.
+pub const MOST: u64 = 1 << 16;
 
 /// One thing, or a group of things, as a source gives it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Node {
-    /// Its own for good, and no other node's: what a place, a link or an activity names.
+    /// Its own for good, and no other node's: what a place or an activity names.
     pub id: String,
     pub label: String,
     /// What sizes a leaf on the plan, already coarse (a source's size classes). A change to it
     /// moves things, so it is a measure that changes slowly (a file's size, a channel's
-    /// members). A group's is not read: it weighs its children.
+    /// members). 1 to `MOST`. A group's is not read: it weighs its children.
     pub footprint: u64,
     /// A second measure, 0 to 1, that is only drawn and moves nothing, so it may change often
     /// (churn, a month's messages). Not drawn yet.
@@ -36,15 +39,6 @@ pub struct Node {
     /// In the order they are laid out: one that keeps old things before new ones keeps them
     /// in place.
     pub children: Vec<Node>,
-}
-
-/// Two nodes that go together (files changed together, an issue that blocks another), by id.
-/// A source gives them beside its tree; the layout does not read them. Not drawn yet.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Link {
-    pub from: String,
-    pub to: String,
-    pub weight: u32,
 }
 
 /// Where a node is, in fractions of the plan (0,0 top left; 1,1 bottom right).
@@ -80,7 +74,7 @@ fn step(sum: u64) -> u64 {
 /// exactly its children.
 fn weigh(node: &Node, round: bool) -> u64 {
     if node.children.is_empty() {
-        return node.footprint.max(1);
+        return node.footprint.clamp(1, MOST);
     }
     let sum = node.children.iter().map(|child| weigh(child, round)).fold(0, u64::saturating_add);
     if round { step(sum) } else { sum }
@@ -123,7 +117,7 @@ impl Layout {
     /// The cut is at the child's end nearest the middle (the earlier on a tie). While the
     /// children end before the middle the cut is the middle itself: ground is halved, not
     /// stretched, so a child added at the end moves the others only when it crosses a middle.
-    fn tile(&mut self, children: &[(&Node, u64)], (from, to): (u64, u64), area: Edges, depth: usize) {
+    fn tile(&mut self, children: &[(&Node, u128)], (from, to): (u128, u128), area: Edges, depth: usize) {
         let (Some((first, _)), Some((_, end))) = (children.first(), children.last()) else { return };
         if children.len() == 1 && *end >= to {
             let group = !first.children.is_empty();
@@ -138,22 +132,24 @@ impl Layout {
             let nearest = inner.min_by_key(|(_, (_, end))| end.abs_diff(middle));
             (at, cut) = nearest.map_or((at, *end), |(i, (_, end))| (i + 1, *end));
         } else if *end > middle {
-            // Too fine to halve again: the children take all of it.
-            (at, cut) = (children.len(), to);
+            // Too fine to halve again (no weight is this small): nothing more is placed.
+            return;
         }
-        let (head, rest) = area.cut((cut - from) as f32 / (to - from) as f32);
+        let (head, rest) = area.cut(((cut - from) as f64 / (to - from) as f64) as f32);
         self.tile(&children[..at], (from, cut), head, depth);
         self.tile(&children[at..], (cut, to), rest, depth);
     }
 
     fn group(&mut self, node: &Node, area: Edges, depth: usize) {
-        let mut end = 0u64;
+        // Wider than a weight, so a shift drops nothing: the cuts stay whole numbers.
+        let (mut end, mut sum) = (0u128, 0u64);
         let ends = node.children.iter().map(|child| {
-            end = end.saturating_add(weigh(child, self.round) << HALVINGS);
+            let weight = weigh(child, self.round);
+            (end, sum) = (end + (u128::from(weight) << HALVINGS), sum.saturating_add(weight));
             (child, end)
         });
-        let children: Vec<(&Node, u64)> = ends.collect();
-        let whole = if self.round { step(end >> HALVINGS) << HALVINGS } else { end };
+        let children: Vec<(&Node, u128)> = ends.collect();
+        let whole = if self.round { (u128::from(step(sum)) << HALVINGS).max(end) } else { end };
         self.tile(&children, (0, whole), area, depth);
     }
 }
@@ -306,6 +302,20 @@ mod tests {
         assert_eq!(rect_of(&was, "docs/1.md").x, rect_of(&more, "docs/1.md").x);
     }
 
+    /// Weights no source should give still end: none is lost in a shift, and the huge one is
+    /// a leaf of the most a leaf weighs.
+    #[test]
+    fn huge_weights_and_deep_trees_still_give_a_plan() {
+        let plan = atlas(&group("", vec![leaf("a", 1 << 40), leaf("b", u64::MAX), leaf("c", 1)]));
+        assert_eq!(plan.places.len(), 3);
+        assert!(rect_of(&plan, "a").w > 0.3 && rect_of(&plan, "c").w > 0. && rect_of(&plan, "c").h > 0.);
+        // 400 folders, one in the other, each with a file beside the next.
+        let nest = |inner: Node, i: u32| group(&format!("g{i}"), vec![inner, leaf(&format!("f{i}"), MOST)]);
+        let plan = atlas(&group("", vec![(0..400).fold(leaf("f", 8), nest)]));
+        assert_eq!(plan.places.len(), 801);
+        assert!(plan.places.iter().all(|place| place.rect.w >= 0. && place.rect.h >= 0. && place.rect.x.is_finite()));
+    }
+
     #[test]
     fn a_group_keeps_ground_at_its_end_and_a_new_last_child_lands_there() {
         // Nine issues weigh 9, a step up is 10: a tenth of the plan is free.
@@ -425,6 +435,18 @@ mod tests {
             shuffled.reverse();
             if plan != atlas(&repo(&shuffled)) || plan != atlas(&root) {
                 return Err("the same files gave another plan".into());
+            }
+            // Every node but the root has one place, a group's before its children's.
+            fn nodes<'a>(node: &'a Node, into: &mut Vec<(&'a str, bool)>) {
+                for child in &node.children {
+                    into.push((&child.id, !child.children.is_empty()));
+                    nodes(child, into);
+                }
+            }
+            let mut every = Vec::new();
+            nodes(&root, &mut every);
+            if every != plan.places.iter().map(|place| (place.id.as_str(), place.group)).collect::<Vec<_>>() {
+                return Err(format!("placed {:?} of {every:?}", plan.places));
             }
             let leaves: Vec<&Place> = plan.places.iter().filter(|place| !place.group).collect();
             let mut given: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();

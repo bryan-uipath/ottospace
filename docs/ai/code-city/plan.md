@@ -35,7 +35,7 @@ rectangle in fractions of the plan.
 | `footprint` | sizes a leaf on the plan | **slow measures only**: a change reflows. Already coarse (the source's size classes) |
 | `height` | a second measure, 0 to 1 | drawn only, moves nothing: **fast measures go here** (or on shade), never on footprint |
 | `children` | in layout order | a source that keeps old before new keeps old in place |
-| `Link` (beside the tree) | two ids and a weight | the layout does not read them; drawn for one node at a time |
+| links (beside the tree; proposed, not in the code) | two ids and a weight | the layout does not read them; drawn for one node at a time |
 
 Two more channels are the caller's, as sets of ids, not part of the tree:
 
