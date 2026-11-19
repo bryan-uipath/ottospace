@@ -14229,6 +14229,41 @@ fn a_file_opens_in_a_viewer_moves_by_counts_reloads_and_edits_beside() {
     assert_eq!((reply["mode"].as_str(), reply["counts"]["file_prompts"].as_u64()), (Some("normal"), Some(1)));
 }
 
+/// Evidence's open: a file at lines comes up scrolled to them, the first drawn marked inside the
+/// pane; asked again, the same viewer moves; Esc takes the mark off. Line 0 is refused.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_file_opened_at_lines_shows_them_marked_inside_the_pane() {
+    let dir = support::temp(&format!("ottospace-e2e-viewer-at-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = std::fs::canonicalize(&dir).unwrap().join("long.rs");
+    let text: String = (1..=300).map(|n| format!("fn made_up_{n}() {{}}\n")).collect();
+    std::fs::write(&file, text).unwrap();
+    let otto = Otto::launch("viewer-at");
+    let reply = otto.call(json!({"cmd": "open_file", "path": file, "line": 150, "last": 152}));
+    assert_eq!(view(&reply, 1)["marked"], json!({"first": 150, "last": 152}), "{reply}");
+    let marked_inside = |o: &Otto, first: f64| {
+        let state = o.drawn();
+        let row = state["viewers"]["1"]["marked_rect"].clone();
+        let pane = rect(&state["bounds"]["1"]);
+        let top = view(&state, 1)["top"].as_f64()?;
+        let row = row.is_array().then(|| rect(&row))?;
+        let inside = row[1] >= pane[1] && row[1] + row[3] <= pane[1] + pane[3];
+        // A few lines above it on show.
+        (inside && top == first - 4.).then_some(())
+    };
+    viewer_read(&otto, 1, 300);
+    otto.wait_for("line 150 marked in the pane", |o| marked_inside(o, 150.));
+    // Again at other lines: the same viewer moves there.
+    let reply = otto.call(json!({"cmd": "open_file", "path": file, "line": 40}));
+    assert_eq!((pane_ids(&reply), view(&reply, 1)["marked"].clone()), (vec![1], json!({"first": 40, "last": 40})));
+    otto.wait_for("line 40 marked in the pane", |o| marked_inside(o, 40.));
+    let reply = otto.raw(&json!({"cmd": "open_file", "path": file, "line": 0}).to_string());
+    assert_eq!(reply["error"], "open_file: lines count from 1");
+    let reply = otto.call(json!({"cmd": "key", "keys": "escape"}));
+    assert_eq!(view(&reply, 1)["marked"], Value::Null);
+}
+
 /// The fixture's structure as drawn: callouts, footnotes at the foot, task boxes; a code line
 /// and a table wider than the pane scroll across, their right edge fading as the cue.
 #[test]

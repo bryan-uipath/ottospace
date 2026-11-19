@@ -495,6 +495,10 @@ function viewer(value: unknown, at: string): Viewer {
     pending: orNull(str)(o.pending, `${at}.pending`),
   };
   if (o.opener !== undefined) view.opener = num(o.opener, `${at}.opener`);
+  if (o.marked !== undefined) {
+    const marked = fields(o.marked, `${at}.marked`);
+    view.marked = { first: num(marked.first, `${at}.marked.first`), last: num(marked.last, `${at}.marked.last`) };
+  }
   return view;
 }
 
@@ -512,6 +516,7 @@ function viewerDrawn(value: unknown, at: string): ViewerDrawn {
     };
   }
   if (o.lines !== undefined) drawn.lines = num(o.lines, `${at}.lines`);
+  if (o.marked_rect !== undefined) drawn.marked_rect = orNull(rect)(o.marked_rect, `${at}.marked_rect`);
   return drawn;
 }
 

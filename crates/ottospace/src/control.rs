@@ -234,10 +234,16 @@ pub enum Request {
     /// Opens a file read only in a viewer pane, beside `beside` (default: the focused pane):
     /// markdown drawn, code and text with line numbers, a picture shown. `path` is absolute and
     /// names a regular file; the viewer reloads it when it changes. Nothing is ever written.
+    /// `line` (from 1), to `last` if given: those lines marked and in view; a viewer of the file
+    /// in that tab goes there instead of a new one.
     OpenFile {
         path: String,
         #[serde(default)]
         beside: Option<PaneId>,
+        #[serde(default)]
+        line: Option<u32>,
+        #[serde(default)]
+        last: Option<u32>,
     },
     /// Opens a terminal in a listed repository or worktree, by its `path` from `state.repos`.
     OpenRepo {

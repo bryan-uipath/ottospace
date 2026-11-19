@@ -1386,11 +1386,13 @@ pub enum Action {
     /// The file at `path` (absolute) in a viewer: in `beside` (default: the focused pane) if it
     /// is empty, else split from it along `axis`. `reuse`: the viewer `beside` opened before, in
     /// its tab, shows it instead, and the keyboard stays on `beside` (`docs/ai/file-viewer.md`).
+    /// `at`: those lines marked and in view; a viewer of the file in that tab goes there instead.
     OpenFile {
         path: String,
         axis: Axis,
         beside: Option<PaneId>,
         reuse: bool,
+        at: Option<crate::viewer::Lines>,
     },
     /// A key while the focused viewer has the keyboard, named as `vim::Keys::press` takes it.
     ViewerKey {
@@ -6168,7 +6170,9 @@ impl Model {
                 effects.push(Effect::ForgetLayout);
             }
             Action::EditSettings => self.edit_settings(effects),
-            Action::OpenFile { path, axis, beside, reuse } => self.open_file(path, axis, beside, reuse, effects),
+            Action::OpenFile { path, axis, beside, reuse, at } => {
+                self.open_file(path, axis, beside, reuse, at, effects)
+            }
             Action::ViewerKey { key } => self.viewer_key(&key, effects),
             Action::ViewerScrolled { pane, top, most, page } => self.viewer_scrolled(pane, top, most, page),
             Action::ViewerRead { pane, path, read } => self.viewer_read(pane, &path, read),
@@ -9991,7 +9995,7 @@ mod tests {
             },
             Action::StartFresh,
             Action::EditSettings,
-            Action::OpenFile { path: "/w/a.md".into(), axis: Axis::Right, beside: None, reuse: false },
+            Action::OpenFile { path: "/w/a.md".into(), axis: Axis::Right, beside: None, reuse: false, at: None },
             Action::ViewerKey { key: "j".into() },
             Action::ViewerScrolled { pane: 1, top: 0, most: 0, page: 0 },
             Action::ViewerRead { pane: 1, path: "/w/a.md".into(), read: crate::viewer::Read::Missing },

@@ -4,7 +4,7 @@
 
 use super::{Effect, Kind, Mode, Model, PaneId};
 use crate::layout::Axis;
-use crate::viewer::{self, Read, Viewer};
+use crate::viewer::{self, Lines, Read, Shows, Viewer};
 use crate::vim::{self, Press};
 
 /// Why a client's report of what was read or drawn of a file is refused.
@@ -27,7 +27,9 @@ impl Model {
     /// True if `key` is the focused viewer's: a count, a move, or ⌃G. Else it is a shortcut's.
     pub fn viewer_takes(&self, key: &str) -> bool {
         let view = self.keyboard_viewer().and_then(|id| self.viewer(id));
-        view.is_some_and(|view| key == "ctrl-g" || view.pending.takes(key))
+        view.is_some_and(|view| {
+            key == "ctrl-g" || view.pending.takes(key) || (key == "escape" && view.marked.is_some())
+        })
     }
 
     /// What is typed of a move in the focused viewer (`10`, `g`), for the status bar.
@@ -44,15 +46,40 @@ impl Model {
         self.viewers.iter().find_map(mine)
     }
 
+    /// A viewer of `path` in `from`'s tab: `from` itself first.
+    fn viewer_of(&self, path: &str, from: PaneId) -> Option<PaneId> {
+        let tab = self.tab_of(from)?;
+        let shows = |id: &PaneId| {
+            self.pane(*id).is_some_and(|pane| matches!(&pane.kind, Kind::File { path: p } if p == path))
+                && self.tab_of(*id) == Some(tab)
+        };
+        Some(from).filter(shows).or_else(|| self.viewers.keys().copied().find(shows))
+    }
+
+    /// Viewer `id` of `path` marks `at` and goes to it. Drawn markdown shows its source instead,
+    /// read again.
+    fn mark_lines(&mut self, id: PaneId, path: &str, at: Lines, effects: &mut Vec<Effect>) {
+        let Some(view) = self.viewers.get_mut(&id) else { return };
+        if view.shows == Shows::Markdown {
+            *view = Viewer::at(path, Some(at), view.opener);
+            effects.push(Effect::ViewFile { pane: id });
+        } else {
+            view.mark(Some(at));
+            effects.push(Effect::ViewerScroll { pane: id, top: view.top });
+        }
+    }
+
     /// `OpenFile`: the file in the viewer `from` opened before (`reuse`), else in a new one beside
     /// `from` (an empty `from` shows it). A reused viewer, or one opened to be, leaves the
-    /// keyboard where it was: the next file `from` names goes there too.
+    /// keyboard where it was: the next file `from` names goes there too. At lines (`at`), a
+    /// viewer of the file in `from`'s tab moves to them and marks them, focused unless `reuse`.
     pub(super) fn open_file(
         &mut self,
         path: String,
         axis: Axis,
         beside: Option<PaneId>,
         reuse: bool,
+        at: Option<Lines>,
         effects: &mut Vec<Effect>,
     ) {
         // The user's is said on the bar; a client's request is answered by the shell (`control`).
@@ -70,6 +97,8 @@ impl Model {
         if let Some(from) = from {
             self.show_tab_of(from, effects);
         }
+        // Line 0 is none; a range written backwards, the same lines.
+        let at = at.and_then(|at| Lines::new(at.first, at.last));
         if let Some(id) = from.filter(|_| reuse).and_then(|from| self.reusable(from)) {
             let same = self.pane(id).is_some_and(|pane| pane.kind == Kind::File { path: path.clone() });
             if !same {
@@ -78,14 +107,23 @@ impl Model {
                 }
                 // A mark of the file it showed stands for it no more.
                 self.marks.forget_pane(id);
-                self.viewers.insert(id, Viewer::new(&path, 0, from));
+                self.viewers.insert(id, Viewer::at(&path, at, from));
                 effects.push(Effect::ViewFile { pane: id });
+            } else if let Some(at) = at {
+                self.mark_lines(id, &path, at, effects);
+            }
+            return;
+        }
+        if let Some((id, at)) = at.and_then(|at| Some((self.viewer_of(&path, from?)?, at))) {
+            self.mark_lines(id, &path, at, effects);
+            if !reuse {
+                self.focus(id, effects);
             }
             return;
         }
         let id = self.open(Kind::File { path: path.clone() }, axis, from, effects);
         let opener = from.filter(|from| reuse && *from != id);
-        self.viewers.insert(id, Viewer::new(&path, 0, opener));
+        self.viewers.insert(id, Viewer::at(&path, at, opener));
         effects.push(Effect::ViewFile { pane: id });
         if let Some(from) = opener {
             self.focus(from, effects);
@@ -109,6 +147,8 @@ impl Model {
                 }
             }
             Press::Unbound if key == "ctrl-g" => self.viewer_edit(Some(id), effects),
+            // Esc with nothing typed: the marked lines are marked no more.
+            Press::Unbound if key == "escape" => view.marked = None,
             Press::Pending | Press::Cleared | Press::Unbound => {}
         }
     }
@@ -124,6 +164,9 @@ impl Model {
     pub(super) fn viewer_read(&mut self, pane: PaneId, path: &str, read: Read) {
         let shows = self.pane(pane).is_some_and(|open| open.kind == Kind::File { path: path.to_string() });
         if let Some(view) = self.viewers.get_mut(&pane).filter(|_| shows) {
+            if let Read::Shown { lines } = read {
+                view.marked = view.marked.and_then(|at| at.within(lines));
+            }
             view.read = read;
         }
     }
@@ -185,7 +228,7 @@ mod tests {
     const DOC: &str = "/w/app/README.md";
 
     fn open(m: &mut Model, path: &str, beside: Option<PaneId>, reuse: bool) -> Vec<Effect> {
-        m.update(Action::OpenFile { path: path.into(), axis: Axis::Right, beside, reuse })
+        m.update(Action::OpenFile { path: path.into(), axis: Axis::Right, beside, reuse, at: None })
     }
 
     fn file(m: &Model, pane: PaneId) -> Option<String> {
@@ -279,6 +322,64 @@ mod tests {
         keys(&mut m, &["4"]);
         m.update(Action::Split { axis: Axis::Down, kind: Kind::Terminal });
         assert_eq!(m.viewer(id).and_then(|v| v.pending.pending()), None);
+    }
+
+    fn open_at(m: &mut Model, path: &str, beside: Option<PaneId>, reuse: bool, at: (u32, u32)) -> Vec<Effect> {
+        let at = Some(Lines { first: at.0, last: at.1 });
+        m.update(Action::OpenFile { path: path.into(), axis: Axis::Right, beside, reuse, at })
+    }
+
+    fn marked(m: &Model, pane: PaneId) -> Option<(u32, u32)> {
+        m.viewer(pane)?.marked.map(|at| (at.first, at.last))
+    }
+
+    /// Evidence's rule: a file opened at lines shows them marked, a few lines below the top. Asked
+    /// again, the viewer of the file moves and marks the new ones; past the end, the last line.
+    #[test]
+    fn a_file_opened_at_lines_marks_them_until_asked_for_others_or_esc() {
+        const CODE: &str = "/w/app/src/main.rs";
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None });
+        let terminal = m.focused.unwrap_or_default();
+        open_at(&mut m, CODE, None, false, (40, 42));
+        let id = m.focused.unwrap_or_default();
+        assert_eq!((marked(&m, id), m.viewer(id).map(|v| v.top)), (Some((40, 42)), Some(36)));
+        read(&mut m, id, CODE, 100);
+        m.update(Action::ViewerScrolled { pane: id, top: 36, most: 60, page: 40 }.sent_by(Origin::System));
+        // From the terminal again: the same viewer, no new pane, focused.
+        m.update(Action::Focus { pane: terminal });
+        let effects = open_at(&mut m, CODE, Some(terminal), false, (90, 80));
+        assert_eq!((m.panes.len(), m.focused, marked(&m, id)), (2, Some(id), Some((80, 90))));
+        assert!(effects.contains(&Effect::ViewerScroll { pane: id, top: 60 }), "no further than it goes: {effects:?}");
+        // Past the end: the last line. Line 0 is none: a new viewer, as with no lines.
+        open_at(&mut m, CODE, Some(id), false, (500, 600));
+        assert_eq!(marked(&m, id), Some((100, 100)));
+        assert_eq!(
+            open_at(&mut m, CODE, Some(id), false, (0, 0)),
+            vec![Effect::Opened(3), Effect::ViewFile { pane: 3 }]
+        );
+        assert_eq!(marked(&m, 3), None);
+        m.update(Action::Close { pane: Some(3) });
+        // The file shorter now: the mark is cut to it.
+        read(&mut m, id, CODE, 50);
+        assert_eq!(marked(&m, id), Some((50, 50)));
+        // Esc with nothing typed takes the mark off, and is the viewer's only while there is one.
+        m.update(Action::Focus { pane: id });
+        assert!(m.viewer_takes("escape"));
+        keys(&mut m, &["escape"]);
+        assert_eq!((marked(&m, id), m.viewer_takes("escape")), (None, false));
+        // Drawn markdown at a line: its source, read again.
+        open(&mut m, DOC, Some(terminal), true);
+        let doc = m.panes.last().map(|pane| pane.id).unwrap_or_default();
+        read(&mut m, doc, DOC, 30);
+        let effects = open_at(&mut m, DOC, Some(terminal), true, (12, 12));
+        assert_eq!(effects, vec![Effect::ViewFile { pane: doc }]);
+        let view = m.viewer(doc).map(|v| (v.shows, v.read.clone(), v.marked, v.opener));
+        assert_eq!(view, Some((Shows::Code, Read::Reading, Lines::new(12, 12), Some(terminal))));
+        assert_eq!(m.focused, Some(terminal), "a reused viewer leaves the keyboard where it was");
+        // Another file in the reused viewer: no mark of the last one.
+        open(&mut m, CODE, Some(terminal), true);
+        assert_eq!(marked(&m, doc), None);
     }
 
     #[test]

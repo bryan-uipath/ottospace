@@ -31,6 +31,16 @@ A pane that shows a file, read only. Owner-approved plan: A the viewer, B a mark
 - **Draws**: markdown by the conversation's renderer, shared (`conversation::Links` says whose
   links: a chat's, judged in its repository; a viewer's, in its file's folder), with larger caps
   (`markdown::FILE`); code and text as a virtual list of lines with numbers; a picture.
+- **At lines** (`OpenFile { at }`, `viewer::Lines`, for evidence): from 1, both ends in; line 0
+  is none, a range written backwards the same lines. `Viewer::mark` puts the first `CONTEXT` (3)
+  lines below the top and keeps `marked`; once read it is cut to the file (past the end: the last
+  line; an empty file or a picture: none). A viewer of the file in `from`'s tab moves and
+  re-marks instead of a new one (`viewer_of`); drawn markdown switches to its source (`shows:
+  code`) and is read again, since a rendered row is no file line. The mark goes with another
+  file, other lines, the pane, or Esc with nothing typed. Typed: `viewer::split_lines`
+  (`a.rs:12`, `:12:3`, `:12-14`), for a terminal's ⌘-click; a chat link drops it (left). The
+  shell tints the rows and draws a bar in `theme::MARK`; a test run's `marked_rect` says where
+  the first is drawn. Not kept in `layout.json`.
 - **Kept** in `layout.json` (and marks, workspaces) as `RecordKind::File { path, top }`.
 - **B, the fixture**: `crates/ottospace/tests/fixtures/markdown/fixture.md` and `checker.png`.
   Beside the tests, not in `docs/`: the renderer's unit test includes it, the e2e tests copy it,

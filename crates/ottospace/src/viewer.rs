@@ -60,6 +60,8 @@ enum Loaded {
 /// A viewer pane's file as the shell holds it.
 pub struct FileView {
     path: String,
+    /// What it was read as: a markdown file opened at a line is read again as its source.
+    shows: Shows,
     body: Body,
     reading: Option<Receiver<(Read, Option<Loaded>, Stamp)>>,
     /// What the file was when last read; a change seen since, and when it was first seen.
@@ -80,6 +82,7 @@ impl FileView {
     fn new(path: String, shows: Shows) -> Self {
         let mut view = FileView {
             path,
+            shows,
             body: Body::None,
             reading: None,
             stamp: None,
@@ -248,7 +251,8 @@ impl Workspace {
                 _ => None,
             })
             .collect();
-        self.viewers.retain(|id, view| files.get(id).is_some_and(|(path, _)| *path == view.path));
+        self.viewers
+            .retain(|id, view| files.get(id).is_some_and(|(path, shows)| (path, shows) == (&view.path, &view.shows)));
         let mut actions = Vec::new();
         for (id, (path, shows)) in &files {
             let view = self.viewers.entry(*id).or_insert_with(|| FileView::new(path.clone(), *shows));
@@ -355,7 +359,8 @@ impl Workspace {
                 if new_tab {
                     this.dispatch(Action::NewEmptyTab, Origin::User, window, cx);
                 }
-                this.dispatch(Action::OpenFile { path, axis, beside: None, reuse: false }, Origin::User, window, cx);
+                let open = Action::OpenFile { path, axis, beside: None, reuse: false, at: None };
+                this.dispatch(open, Origin::User, window, cx);
                 cx.notify();
             });
         })
@@ -363,8 +368,8 @@ impl Workspace {
     }
 
     /// ⌘-click in terminal `id` at `at`: a path there to a text or markdown file (from the shell's
-    /// folder, or `~`) opens in the viewer beside, reused for the next one. False: no such file,
-    /// and the click is the terminal's as before.
+    /// folder, or `~`) opens in the viewer beside, reused for the next one, at the line written
+    /// after it (`a.rs:12`, `a.rs:12-14`). False: no such file, and the click is the terminal's as before.
     pub(crate) fn terminal_path_click(
         &mut self,
         id: PaneId,
@@ -373,7 +378,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(terminal) = self.terminals.get(&id) else { return false };
-        let Some(typed) = terminal.lines().get(at.row).and_then(|line| viewer::path_at(line, at.col)) else {
+        let Some((typed, lines)) = terminal.lines().get(at.row).and_then(|line| viewer::path_at(line, at.col)) else {
             return false;
         };
         let cwd = terminal.cwd().or_else(|| self.model.pane(id).and_then(|pane| pane.cwd.clone()));
@@ -384,7 +389,7 @@ impl Workspace {
         if !viewer::opens_on_click(&real) {
             return false;
         }
-        let open = Action::OpenFile { path: real, axis: Axis::Right, beside: Some(id), reuse: true };
+        let open = Action::OpenFile { path: real, axis: Axis::Right, beside: Some(id), reuse: true, at: lines };
         self.dispatch(open, self.input, window, cx);
         cx.notify();
         true
@@ -481,6 +486,13 @@ impl Workspace {
             Some(Body::Lines(lines, marks)) => {
                 let (lines, marks) = (lines.clone(), marks.clone());
                 let digits = lines.len().max(1).to_string().len();
+                // The marked lines, by place in `lines`; a test run notes where the first is drawn.
+                let marked = self.model.viewer(id).and_then(|view| view.marked);
+                let marked = marked.map(|at| at.first.saturating_sub(1) as usize..at.last as usize);
+                let noted = std::env::var_os("OTTOSPACE_E2E").map(|_| self.marks.clone());
+                if let Some(noted) = &noted {
+                    noted.borrow_mut().remove(&crate::Mark::ViewerMarked(id));
+                }
                 let list = uniform_list(
                     ElementId::Name(format!("viewer-lines:{id}").into()),
                     lines.len(),
@@ -499,8 +511,20 @@ impl Workspace {
                                     })
                                     .collect();
                                 let text = StyledText::new(SharedString::from(line)).with_highlights(styles);
+                                let on = marked.as_ref().is_some_and(|marked| marked.contains(&at));
                                 div()
                                     .h(px(LINE))
+                                    .relative()
+                                    .when(on, |row| {
+                                        // A tint and a bar at its left edge, in mark mode's colour.
+                                        row.bg(gpui::Hsla::from(rgb(theme::MARK)).opacity(0.14)).child(
+                                            div().absolute().left_0().top_0().bottom_0().w(px(2.)).bg(rgb(theme::MARK)),
+                                        )
+                                    })
+                                    .when_some(
+                                        noted.as_ref().filter(|_| marked.as_ref().is_some_and(|m| m.start == at)),
+                                        |row, noted| row.child(crate::shown_mark(noted, crate::Mark::ViewerMarked(id))),
+                                    )
                                     .flex()
                                     .gap_3()
                                     .whitespace_nowrap()
@@ -542,16 +566,23 @@ impl Workspace {
     /// The viewers for the state: what is drawn of each, never its text. A picture's size, a
     /// markdown file's blocks by kind.
     pub(crate) fn viewers_snapshot(&self) -> serde_json::Value {
-        let drawn = |view: &FileView| match &view.body {
+        let marked = |id: PaneId| {
+            std::env::var_os("OTTOSPACE_E2E")?;
+            self.marks.borrow().get(&crate::Mark::ViewerMarked(id)).copied().map(crate::rect)
+        };
+        let drawn = |id: PaneId, view: &FileView| match &view.body {
             Body::None => serde_json::json!({ "body": null }),
             Body::Markdown(blocks) => {
                 serde_json::json!({ "body": "markdown", "shape": crate::conversation::shape(blocks) })
             }
-            Body::Lines(lines, _) => serde_json::json!({ "body": "lines", "lines": lines.len() }),
+            // A test run's: where the first marked line is drawn, if it shows.
+            Body::Lines(lines, _) => {
+                serde_json::json!({ "body": "lines", "lines": lines.len(), "marked_rect": marked(id) })
+            }
             Body::Image(_) => serde_json::json!({ "body": "image" }),
         };
         let all: serde_json::Map<String, serde_json::Value> =
-            self.viewers.iter().map(|(id, view)| (id.to_string(), drawn(view))).collect();
+            self.viewers.iter().map(|(id, view)| (id.to_string(), drawn(*id, view))).collect();
         serde_json::Value::Object(all)
     }
 }
