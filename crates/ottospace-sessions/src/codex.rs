@@ -327,10 +327,10 @@ fn refine(cursor: &mut Cursor, id: Option<String>, item: &Value) {
 /// A command's station and label: a string is a command line; an array is its words, used as they are.
 fn command(command: &Value) -> Option<(Station, String)> {
     if let Some(line) = command.as_str() {
-        return Some(station::describe_command(line));
+        return Some((Station::Shell, station::command_label(line)));
     }
     let words: Vec<&str> = command.as_array()?.iter().filter_map(Value::as_str).collect();
-    Some(station::describe_argv(&words))
+    Some((Station::Shell, station::argv_label(&words)))
 }
 
 fn subagent(activity: &Value, emit: &mut impl FnMut(What)) {
@@ -377,7 +377,7 @@ mod tests {
     fn commands_are_named_from_their_words() {
         let cases = [
             (json!("ls -la"), Station::Shell, "ls"),
-            (json!(["/bin/zsh", "-lc", "git -C client push"]), Station::Network, "git push"),
+            (json!(["/bin/zsh", "-lc", "git -C client push"]), Station::Shell, "git push"),
             (json!(["bash", "-c", "ls"]), Station::Shell, "ls"),
             (json!(["git", "status"]), Station::Shell, "git status"),
             (json!(["git", "private-thing"]), Station::Shell, "git"),
@@ -400,7 +400,7 @@ mod tests {
             ),
             (
                 json!({"name": "shell", "arguments": "{\"command\":[\"bash\",\"-lc\",\"curl example.com\"]}"}),
-                Station::Network,
+                Station::Shell,
                 "curl",
             ),
             (

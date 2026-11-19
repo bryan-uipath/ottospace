@@ -533,8 +533,10 @@ A native conversation has a dial under its header: where its agent's calls go, a
 - **Ring**: the context used (tokens in the context over the window); amber from 70%, red from 90%.
 - **Stations**, clockwise from the top: You, Model, Files, Shell, Network, Browser, Agents,
   Skills, Memory, Hooks, Tools (any other tool). Files is the agent's file tools only (Read,
-  Write, Edit, Grep, Glob, `apply_patch`, …); a terminal command is Shell, `ls` and `cat` too, or
-  Network if it reaches the network (`curl`, `git push`). A spoke is heavier for more use, the older uses
+  Write, Edit, Grep, Glob, `apply_patch`, …). Shell means the agent ran a command, any command
+  (`ls`, `curl`, `git push`): ottospace does not guess what a command did. Network is the agent's
+  web tools (WebFetch, WebSearch, Codex's web search) and MCP servers other than Browser and
+  Memory ones. A spoke is heavier for more use, the older uses
   counting less (half after ten minutes). A station is lit while a call there runs (Model while
   the model has the turn, You while a request waits), with two arcs for its time: the inner fills
   in a minute, the outer in ten. A red dot: a call there failed since your last message.

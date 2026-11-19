@@ -150,20 +150,13 @@ fn an_empty_or_relative_directory_is_an_error_not_every_session() {
 fn claude_snapshot() {
     let s = snapshot(&claude(), "/work/app", CLAUDE_MAIN);
     let running: Vec<_> = s.running.iter().map(|c| (c.tool.as_str(), c.station, c.summary.as_str())).collect();
-    assert_eq!(running, [("Bash", Station::Network, "git push")]);
-    assert_eq!(s.station(), Some(Station::Network));
+    assert_eq!(running, [("Bash", Station::Shell, "git push")]);
+    assert_eq!(s.station(), Some(Station::Shell));
     let recent: Vec<_> = s.recent.iter().map(|c| (c.summary.as_str(), c.failed)).collect();
     assert_eq!(recent, [("src/main.rs", false), ("Explore", false), ("cargo test", true), ("agent", false)]);
     assert_eq!(
         counts(&s),
-        [
-            (Station::You, 1),
-            (Station::Model, 3),
-            (Station::Files, 1),
-            (Station::Shell, 1),
-            (Station::Network, 1),
-            (Station::Agents, 2)
-        ],
+        [(Station::You, 1), (Station::Model, 3), (Station::Files, 1), (Station::Shell, 2), (Station::Agents, 2)],
         "one model step per message id; the summary, the reminder and the sidechain record count nowhere"
     );
     assert_eq!(s.errors, 2);
@@ -385,16 +378,13 @@ fn codex_snapshot() {
     assert_eq!(
         recent,
         [
-            (Station::Network, "curl", false),
+            (Station::Shell, "curl", false),
             (Station::Agents, "spawn_agent", false),
             (Station::Shell, "cargo test", true)
         ],
         "`exec` is named by the command it turned out to run"
     );
-    assert_eq!(
-        counts(&s),
-        [(Station::You, 1), (Station::Model, 1), (Station::Shell, 2), (Station::Network, 1), (Station::Agents, 1)]
-    );
+    assert_eq!(counts(&s), [(Station::You, 1), (Station::Model, 1), (Station::Shell, 3), (Station::Agents, 1)]);
     assert_eq!(s.errors, 1);
     assert_eq!(s.last_error.as_ref().map(|e| e.1.as_str()), Some("cargo test"));
     assert_eq!(s.subagents.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(), ["reviewer"]);
@@ -450,7 +440,7 @@ fn report_lists_each_session_once() {
     assert_eq!(main["kind"], "claude");
     assert_eq!(main["busy"], true);
     assert_eq!(main["model"], "claude-fable-5-2");
-    assert_eq!(main["snapshot"]["station"], "network");
+    assert_eq!(main["snapshot"]["station"], "shell");
     assert_eq!(main["snapshot"]["running"][0]["summary"], "git push");
     assert_eq!(main["snapshot"]["context_tokens"], 61_000);
     assert_eq!(main["snapshot"]["counts"]["agents"], 2);
@@ -556,23 +546,23 @@ fn nothing_private_comes_out() {
     }
 
     // The calls were read, not dropped: each is there, under a name from the tables or a fixed word.
-    assert_eq!(labels(claude.recent.iter()), ["Network Bash: git push", "Files Read: file"]);
+    assert_eq!(labels(claude.recent.iter()), ["Shell Bash: git push", "Files Read: file"]);
     assert_eq!(
         labels(claude.running.iter()),
         [
-            "Network Bash: curl",
-            "Network Bash: kubectl get",
-            "Network Bash: npm publish",
-            "Network Bash: gh",
+            "Shell Bash: curl",
+            "Shell Bash: kubectl get",
+            "Shell Bash: npm publish",
+            "Shell Bash: gh",
             "Shell Bash: shell",
             "Shell Bash: cat",
-            "Network Bash: curl",
+            "Shell Bash: curl",
             "Shell Bash: ls",
-            "Network Bash: ssh",
-            "Network Bash: curl",
+            "Shell Bash: ssh",
+            "Shell Bash: curl",
             "Shell Bash: shell",
-            "Network Bash: diff",
-            "Network Bash: curl",
+            "Shell Bash: diff",
+            "Shell Bash: curl",
             "Shell Bash: grep",
             "Shell Bash: sh",
             "Shell Bash: git",
@@ -616,16 +606,16 @@ fn nothing_private_comes_out() {
     assert_eq!(
         labels(codex.recent.iter()),
         [
-            "Network exec_command: curl",
+            "Shell exec_command: curl",
             "Shell shell: shell",
-            "Network shell: kubectl get",
+            "Shell shell: kubectl get",
             "Shell shell: git status",
-            "Network shell: curl",
+            "Shell shell: curl",
             "Shell shell: grep",
-            "Network shell: ssh",
-            "Network shell: shell",
+            "Shell shell: ssh",
+            "Shell shell: shell",
             "Shell shell: ls",
-            "Network exec: gh",
+            "Shell exec: gh",
             "Files apply_patch: ZZSHOWpdir/ZZSHOWpatch.rs",
             "Files apply_patch: file",
             "Other tool: tool",

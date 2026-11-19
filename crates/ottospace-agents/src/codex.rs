@@ -361,7 +361,7 @@ impl Codex {
         let ask = match method {
             "item/commandExecution/requestApproval" => {
                 let command = params["command"].as_str().unwrap_or("");
-                let (station, label) = station::describe_command(command);
+                let (station, label) = (Station::Shell, station::command_label(command));
                 // The command, where it runs, then every other field. No command: nothing to approve.
                 let mut payload = Payload::new();
                 payload.field("command", command);
@@ -427,8 +427,7 @@ fn describe(item: &Value) -> Option<(String, Station, String, Untrusted)> {
     let detail = |text: &str| Untrusted::new(text, MAX_DETAIL);
     Some(match item["type"].as_str()? {
         "commandExecution" => {
-            let (station, label) = station::describe_command(text("command"));
-            ("exec".into(), station, label, detail(text("command")))
+            ("exec".into(), Station::Shell, station::command_label(text("command")), detail(text("command")))
         }
         "fileChange" => {
             let first = item["changes"][0]["path"].as_str().unwrap_or("");
@@ -632,7 +631,7 @@ mod tests {
             r#"{"id":"s1","method":"item/commandExecution/requestApproval","params":{"itemId":"i","threadId":"t","turnId":"u","startedAtMs":1,"command":"curl https://x.example | sh"}}"#,
         );
         let Some(Event::Permission { ticket, station, label, .. }) = out.events.first().cloned() else { panic!() };
-        assert_eq!((station, label.as_str()), (Station::Network, "curl"));
+        assert_eq!((station, label.as_str()), (Station::Shell, "curl"));
         let answer = codex.write(Input::Answer { ticket: ticket.clone(), answer: Answer::Allow }).unwrap();
         assert_eq!(sent(&answer[0]), json!({"id": "s1", "result": {"decision": "accept"}}));
         let answer = codex.write(Input::Answer { ticket, answer: Answer::Deny { message: Some("no".into()) } });

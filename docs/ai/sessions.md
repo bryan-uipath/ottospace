@@ -69,12 +69,12 @@ fn reader(runner: RunnerId, dirs: &ConfigDirs) -> Option<Box<dyn SessionReader>>
   `ToolStart { id, tool, station, summary }`, `ToolEnd { id, failed, station, summary }`,
   `Error { kind }`, `SubAgentStart { id, label }`, `SubAgentEnd { id }`,
   `Compaction { tokens_after }`, `ModelChange { from, to }`.
-- `station::classify(tool, arg) -> Station` is pure and table-tested. For a shell tool `arg` is
-  the command line, and the station goes by the names of the commands in it: Network if any
-  reaches the network (`curl`, `gh`, `ssh`, `git push`, `npm install`, …), else Shell: never
-  Files, which only file tools light (`cat` and `grep` are Shell). Wrappers with their own
-  options (`sudo -u x`, `env`, `timeout -s KILL 30`, `xargs -I {}`), `bash -c '<line>'`, `$(…)`,
-  pipes, redirections, `find -exec`, comments, heredoc bodies and array values are handled.
+- `station::classify(tool, arg) -> Station` is pure and table-tested. A shell tool is Shell,
+  whatever its command line: Shell means "ran a command", and what the command did (`curl`,
+  `git push`) is never guessed from the line. Never Files either, which only file tools light.
+  `station::command_label(line)` names the line by its first command (`git push`). Wrappers with
+  their own options (`sudo -u x`, `env`, `timeout -s KILL 30`, `xargs -I {}`), `bash -c '<line>'`,
+  `$(…)`, pipes, redirections, `find -exec`, comments, heredoc bodies and array values are handled.
 - `Snapshot::fold(events)` is pure: running calls, the last 16 finished calls, uses per station,
   running sub-agents, errors since the last user message, the model, context tokens and window.
   `activity(now_ms, idle_after_ms)` takes the clock as an argument.

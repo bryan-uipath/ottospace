@@ -405,7 +405,7 @@ pub fn describe(tool: &str, input: &Value) -> (Station, String) {
     let summary = if tool.starts_with("mcp__") {
         station::tool_label(tool)
     } else if let Some(command) = text("command") {
-        station::describe_command(command).1
+        station::command_label(command)
     } else if let Some(path) = path.filter(|_| matches!(station, Station::Files | Station::Memory)) {
         station::path_label(path)
     } else {
@@ -459,7 +459,7 @@ mod tests {
             (
                 "Bash",
                 r#"{"command":"cd app && git push -f origin secret-branch","description":"Push"}"#,
-                Station::Network,
+                Station::Shell,
                 "git push",
             ),
             ("Bash", r#"{"command":"./run-secret.sh --token abc"}"#, Station::Shell, "shell"),

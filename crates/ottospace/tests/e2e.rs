@@ -2364,7 +2364,7 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     let bar = &reply["sessions_bar"];
     assert_eq!(
         (&bar["count"], &bar["total"], &bar["rows"][0]["doing"], &bar["rows"][1]["doing"]),
-        (&json!(2), &json!(3), &json!("network · git push"), &Value::Null)
+        (&json!(2), &json!(3), &json!("shell · git push"), &Value::Null)
     );
     assert_eq!((&bar["rows"][0]["age"], &bar["rows"][1]["age"]), (&json!("now"), &json!("2h")));
     // Each row's title, quoted (the last one its file has), and its model in short.
@@ -8408,7 +8408,7 @@ fn tasks_show_by_state_or_project_with_time_tokens_a_footer_and_a_card() {
     let running = &sections[1]["rows"][0];
     // Its one fact: how long it has run, as its card's Started. Its model is on the card.
     let card = &reply["tasks_progress"]["cards"]["1"];
-    assert_eq!((&running["live"], &running["fact"]), (&json!("network · git push"), &card["started"]), "{running}");
+    assert_eq!((&running["live"], &running["fact"]), (&json!("shell · git push"), &card["started"]), "{running}");
     assert_eq!((&card["model"], &card["priority"]), (&json!("fable-5.2"), &json!(3)), "{card}");
 
     // The task keeps what its session did: tokens by model, a sub-agent's apart, and time at work.
@@ -8426,7 +8426,7 @@ fn tasks_show_by_state_or_project_with_time_tokens_a_footer_and_a_card() {
     assert_eq!(tokens, want.map(|(m, s, n)| (m.to_string(), s, n)));
     assert_eq!(
         (&card["title"], &card["state"], &card["live"], &card["tags"]),
-        (&json!("app"), &json!("Running"), &json!("network · git push"), &json!([">app", "@claude"]))
+        (&json!("app"), &json!("Running"), &json!("shell · git push"), &json!([">app", "@claude"]))
     );
     assert!(card["started"].is_string() && card["agent_time"].is_string(), "{card}");
     assert_eq!((&card["workspace"], &card["context"]), (&json!("0 tabs · 0 panes"), &json!(61_000)));
