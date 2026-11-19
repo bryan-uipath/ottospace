@@ -98,7 +98,7 @@ at a time. Made for a block: "15 minutes of decisions".
   [Decision aids](https://claude.ai/artifact/VvJWQgWzXazQhijmCJ9dcv#artboard-DecisionAids).
 - **Defer with a default**, for low-stakes ones: "if I haven't answered by 3pm, take the
   recommendation". Shown on the card and the task until it fires.
-- **Where next** (⌘J): one card kind, the choice of what to focus on next (§6).
+- **Where next** (⌘J): one card kind, the choice of what to focus on next (§7).
 - **Agents hand over decision-ready questions** (question, options, recommendation, why); the
   guide says so. For a session that stopped without asking, a cheap model writes the recap and
   question: a model call ottospace does not make today.
@@ -168,7 +168,7 @@ a giant wall of slop and text that you are mentally unprepared to go through."
   (dispatches work inside rules: reversible, nothing outward-facing, a spend cap).
 - **Chores it would take**, each seen when coordinating many agents by hand: restart an agent
   that died or lost its helpers; notice a PR waiting on checks or conflicting; rebase; chase a
-  stale review; rank the where-next card; focus mode's break-through watch (§6).
+  stale review; rank the where-next card; focus mode's break-through watch (§7).
 - **Self-throttle**: it counts how many of its offers the person takes. A low rate, fewer offers.
 - **Trust**: its delegated authority is explicit and narrow. A relayed instruction is not the
   person's consent for an outward-facing or irreversible act (merge, send, delete): those go to
@@ -193,14 +193,44 @@ day. I want to spin up an agent to research, it needs some clarification/decisio
 those, and then have a draft reply ready to go."
 
 1. The person picks the message on screen (Pick, once built; Capture today), or a watcher
-   surfaces it (§6).
+   surfaces it (§7).
 2. "Handle this" starts a quick task with a deadline of today.
 3. The agent researches. Its questions land in the Decisions queue, ranked by that deadline.
 4. The result is a draft-reply card: Copy, or open the thread in Slack.
 
 ottospace never sends a message. The person sends it.
 
-### 6. Focus mode
+### 6. A quick note
+
+The owner: "I was in a meeting, wanted to take a note of something to follow up on. Ideally, I
+could press a shortcut (maybe command+shift+n), add the note, and it could also have a backpointer
+to transcript and context if available (along with current meeting title)." (Not "capture": that
+is the annotated screen capture, [capture.md](../capture.md).)
+
+- **One key, wherever ottospace has the keyboard.** A one-line box; type, ↵, gone. Nothing else
+  moves, no workspace switch. Inside a live app window (Zoom) ottospace's shortcuts do not fire:
+  the person first leaves the app by the existing way out (the return key, F18), then presses it.
+  Decided by the owner: "it's fine if this only works when not in a live app window".
+- **Not planned**: a system-wide hot key for it (as the return key and the capture key are,
+  `ottospace-mac/src/hotkey.rs`).
+- **Saved**: the words, the time, and back-pointers when there are any: the transcript being
+  written (its file in `transcripts_dir` and the time reached: each line there carries its local
+  time; the file is built, behind `transcripts`), the meeting on the calendar now, the workspace
+  and task in front.
+- **Filed as a task not started**, as the new-task box's ⇧↵ does today ("adds it for later:
+  nothing starts"; a saved agent's ↵ files the same way). It shows under Tasks and later in the
+  where-next list, where one key starts an agent on it, context attached, or clears it.
+- **Privacy**: meeting titles, transcript text and window titles are never in the state or the
+  logs (`AGENTS.md`, `event_log.rs`). The note's own file (in the person's notes, beside the
+  transcripts) may hold the meeting title and the pointer; the state holds only that a note
+  exists, its id and time. Transcript text reached through the pointer is untrusted data for an
+  agent.
+- **The key.** The owner suggests ⌘⇧N. On main ⌘⇧N is "next task that needs you". The decided
+  remap: ⌘N new task, ⌘⇧N quick task (its own temporary workspace), ⌘⌥N resume a session, ⌘J
+  next thing needing you. Options: (a) quick note and quick task are one box on ⌘⇧N: ↵ files a
+  note, ⌘↵ starts it as a task now; (b) a key of its own. Lean (a).
+
+### 7. Focus mode
 
 Knows focus time from the calendar (focus blocks are already recognised and coloured).
 
@@ -255,7 +285,7 @@ macOS version**.
 - **Set** one: the Shortcuts "Set Focus" action via `shortcuts run`, against a public API (the
   owner believes one exists). Private interfaces are not acceptable.
 
-### 7. Smaller ideas
+### 8. Smaller ideas
 
 - Hold agents' questions for the next Decisions block, unless one has blocked an agent too long.
 - A two-line "where we were" on returning to a task.
