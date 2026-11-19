@@ -13126,12 +13126,13 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     state["listen_lines"] = Value::Null;
     assert!(!state.to_string().contains("made-up words"), "the text reached the state");
 
-    // The pane's header is the source's mark alone: the controls are the drawer's, one Stop and ⋯.
+    // The controls: the drawer's Stop and ⋯, and the pane header's Stop beside its dot.
     let drawn = otto.drawn()["listen_rects"].clone();
     let ids: Vec<&str> = drawn.as_object().unwrap().keys().map(String::as_str).collect();
     let button = |id: &&&str| id.contains(':') && !id.starts_with("listen-hearing");
     let controls: Vec<&&str> = ids.iter().filter(button).collect();
-    assert_eq!((controls, ids.contains(&"listen-menu")), (vec![&"listen-stop:view"], true), "{drawn}");
+    let want = vec![&"listen-stop:header-1", &"listen-stop:view"];
+    assert_eq!((controls, ids.contains(&"listen-menu")), (want, true), "{drawn}");
 
     // A client can neither pause, stop, end nor close it.
     let close = otto.raw(r#"{"cmd":"close","pane":1}"#);
@@ -13381,6 +13382,70 @@ fn the_dot_of_the_pane_heard_is_on_its_tab_or_space_only_while_off_show() {
     otto.user_click(at(dot, 0.5, 0.5));
     assert_eq!(dots(&otto), Vec::<String>::new());
     otto.listen_rect("listen-header");
+}
+
+/// The owner: "a red dot in the zoom pane that is being recorded", the drawer collapsed. The pane
+/// heard keeps a red dot and Stop in its header while on, off at once when it ends for any reason;
+/// an app picked marks each pane of that app's windows.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_pane_heard_shows_a_red_dot_and_stop_until_it_ends() {
+    let home = user_folder("listen-marks", r#"{"repos": [], "restore_layout": false}"#);
+    let (fixture, apps) = (home.join("fixture.jsonl"), home.join("apps.json"));
+    std::fs::write(&fixture, LISTEN_FIXTURE).unwrap();
+    std::fs::write(&apps, json!([{"pid": 102, "name": "Zoom", "playing": true}]).to_string()).unwrap();
+    let env = [
+        ("OTTOSPACE_FEATURES", "transcripts"),
+        ("OTTOSPACE_LISTEN_FIXTURE", fixture.to_str().unwrap()),
+        ("OTTOSPACE_LISTEN_APPS", apps.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+    ];
+    let otto = Otto::launch_with("listen-marks", &env);
+    let marks = |otto: &Otto| -> Vec<String> {
+        let drawn = otto.drawn()["listen_rects"].clone();
+        let ids = drawn.as_object().map(|ids| ids.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
+        ids.into_iter().filter(|id| id == "listen-header" || id.starts_with("listen-stop:header")).collect()
+    };
+    // A terminal pane stands in for an app's (a test run hosts none). Started, the drawer collapsed.
+    otto.user_key("cmd-ctrl-t");
+    otto.listen_finals(1);
+    otto.user_key("cmd-shift-r");
+    assert!(otto.drawn()["listen_rects"].get("listen-view").is_none(), "collapsed");
+    assert_eq!(marks(&otto), ["listen-header", "listen-stop:header-1"]);
+    // The rail's transcript item says it is on, collapsed.
+    otto.control("drawer-rail:transcript");
+    // Moved to another tab and back: still marked.
+    otto.user_key("cmd-t");
+    assert_eq!(marks(&otto), Vec::<String>::new(), "not on show");
+    otto.call(json!({"cmd": "focus", "pane": 1}));
+    assert_eq!(marks(&otto), ["listen-header", "listen-stop:header-1"]);
+    // The header's Stop: a client's stops nothing; the user's does, off at once.
+    otto.click(at(otto.listen_rect("listen-stop:header-1"), 0.5, 0.5), 1);
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["listen"]["status"], "on");
+    let stopped = otto.user_click(at(otto.listen_rect("listen-stop:header-1"), 0.5, 0.5));
+    assert_eq!(stopped["state"]["listen"], Value::Null, "{stopped}");
+    assert_eq!(marks(&otto), Vec::<String>::new());
+    // Ended by the shell (its app quit): off at once too.
+    otto.call(json!({"cmd": "focus", "pane": 1}));
+    otto.user_key("cmd-ctrl-t");
+    otto.listen_finals(1);
+    assert_eq!(marks(&otto).len(), 2);
+    otto.call(json!({"cmd": "listen_end", "why": "app_quit"}));
+    assert_eq!(marks(&otto), Vec::<String>::new());
+    // An app picked: the pane of its window is marked, not the terminal's.
+    otto.call(json!({"cmd": "app_fixture", "name": "Zoom", "user": true}));
+    assert_eq!(marks(&otto), Vec::<String>::new());
+    let pane = pane_ids(&otto.call(json!({"cmd": "state"}))).into_iter().max().unwrap();
+    otto.user_key("cmd-shift-r");
+    otto.user_click(at(otto.listen_rect("listen-pick"), 0.5, 0.5));
+    let on = otto.user_key("enter");
+    assert_eq!(on["state"]["listen"]["source"], json!({"app": true}), "{on}");
+    otto.user_key("cmd-shift-r");
+    assert_eq!(marks(&otto), ["listen-header".to_string(), format!("listen-stop:header-{pane}")]);
+    otto.call(json!({"cmd": "listen_end", "why": "stream_failed"}));
+    assert!(marks(&otto).iter().all(|id| id != "listen-header"), "{:?}", marks(&otto));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// The owner: opened idle, "Transcribe a window…" and today's finished transcripts, each read-only
