@@ -50,7 +50,7 @@ repo="$work/repo"
 mkdir -p "$repo/crates/ottospace/tests" "$repo/crates/ottospace/src" "$repo/docs"
 cp "$root/crates/ottospace/tests/e2e.rs" "$repo/crates/ottospace/tests/e2e.rs"
 for f in calendar.rs terminal.rs; do echo "// $f" >"$repo/crates/ottospace/src/$f"; done
-echo "# docs" >"$repo/docs/a.md"
+echo "# docs" >"$repo/docs/zz-notes.md"
 git -C "$repo" init -q -b main
 git -C "$repo" -c user.name=t -c user.email=t@t add -A
 git -C "$repo" -c user.name=t -c user.email=t@t commit -qm base
@@ -64,7 +64,7 @@ run "$for_" --check
 check "and the fixture's" [ "$status" = 0 ]
 
 echo "# docs only: the smoke set"
-change docs sh -c "echo more >>'$repo/docs/a.md'"
+change docs sh -c "echo more >>'$repo/docs/zz-notes.md'"
 run "$for_" main
 check "exits 0" [ "$status" = 0 ]
 check "the smoke set" picks splits_are_drawn_where_the_layout_says
@@ -87,6 +87,21 @@ check "a test that uses it" picks a_transcript_with_no_meeting_on_has_no_calenda
 check "says so" says "uses transcript_header, changed in e2e.rs"
 
 check "not one that does not" sh -c "! printf '%s' \"\$1\" | grep -q '^  the_calendar_says'" _ "$out"
+
+echo "# a helper whose signature wraps"
+git -C "$repo" checkout -q main
+change wrapped edit "$e2e" '    let (bin, repos, record, dir) = (root.join("bin")' $'    let _ = 1;\n    let (bin, repos, record, dir) = (root.join("bin")'
+run "$for_" main
+check "a test that uses it" picks tool_rows_show_what_ran_and_the_clis_other_words_are_rows
+check "says so" says "uses native_setup, changed in e2e.rs"
+
+echo "# a file a test names: that test, whatever its row"
+git -C "$repo" checkout -q main
+mkdir -p "$repo/crates/ottospace/skill"
+change named sh -c "echo '# guide' >'$repo/crates/ottospace/skill/guide.md'"
+run "$for_" main
+check "picks it" picks no_feed_no_timeline
+check "says why" says "names guide.md"
 
 echo "# the harness, or a helper it uses, changed: the full suite"
 git -C "$repo" checkout -q main
@@ -129,11 +144,20 @@ check "an untracked file counts" picks capture_and_wait_read_one_pane
 check "against the working tree" says "to the working tree"
 rm "$repo/crates/ottospace-core/src/vim.rs"
 
+echo "# a path with a space"
+git -C "$repo" checkout -q main
+echo x >"$repo/docs/my notes.md"
+run "$for_" main
+check "is one path, docs: smoke only" [ "$(printf '%s\n' "$out" | grep -cE '^  [a-z_]+$')" = 5 ]
+rm "$repo/docs/my notes.md"
+
 echo "# --head"
 run "$for_" main --head case-area
 check "the diff to that revision" picks the_calendar_says_it_loads_what_failed_and_tries_again
 run "$for_" main --head case-area --run
 check "--run with --head is refused" [ "$status" = 2 ]
+run "$for_" --head
+check "--head with no revision is a usage error" [ "$status" = 2 ]
 
 echo "# a table that names a test there is not"
 mkdir -p "$work/bad"

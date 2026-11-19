@@ -1223,7 +1223,8 @@ const E2E_SLIVER: f32 = 12.;
 /// A test run's window size, `OTTOSPACE_E2E_WINDOW=1024x674` (CI's screen), read only under
 /// `OTTOSPACE_E2E`. macOS keeps it no larger than the screen. 8000 at most: 100000 ended the app at start.
 fn e2e_window() -> Option<(f32, f32)> {
-    let value = std::env::var("OTTOSPACE_E2E_WINDOW").ok().filter(|_| std::env::var_os("OTTOSPACE_E2E").is_some())?;
+    std::env::var_os("OTTOSPACE_E2E")?;
+    let value = std::env::var("OTTOSPACE_E2E_WINDOW").ok()?;
     let size = value.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
     let size = size.filter(|&(w, h): &(f32, f32)| (100. ..=8_000.).contains(&w) && (100. ..=8_000.).contains(&h));
     if size.is_none() {
