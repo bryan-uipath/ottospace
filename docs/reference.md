@@ -324,10 +324,13 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    its badge, the dot at its corner in its state's colour), and + for another task here. At the
    foot, below a divider, what is the same in every workspace: the transcript (the `transcripts`
    flag), its waveform grey while idle, in colour with a red dot while it records. The selected
-   item is lifted with an accent edge. A click on an item, ⌘⌥] / ⌘⌥[ (top to bottom), list mode
+   item is a cell as the left rail's open one: raised, an accent bar at the window's edge, no line
+   toward the drawer. Collapsed, none is. A click on an item, ⌘⌥] / ⌘⌥[ (top to bottom), list mode
    (→ past the drawer, ↑ ↓, ↵), a task's row or ⌘⇧N switches it; nothing but you does. With no
    task, ⌘⇧R opens this drawer on the transcript, as a click on it does. Many tasks scroll; the
-   transcript stays at the rail's foot. Stopped, the transcript stays, idle. Idle, it
+   transcript stays at the rail's foot. Recording, the drawer shows the file it writes
+   (`~/.ottospace/transcripts/2026-11-18-1032-zoom.md`) over its lines: a click opens it read-only in a
+   viewer. Stopped, the transcript stays, idle. Idle, it
    offers **Transcribe a window…** (a picker in ⌘E's style of the apps that can play sound and
    their windows, the one playing now first and marked "sound now"; your pick hears that app,
    in a pane or not) and **Today**, the day's finished transcripts in `transcripts_dir` (app, start,

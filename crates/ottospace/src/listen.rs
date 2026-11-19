@@ -248,6 +248,10 @@ impl Workspace {
                 Action::ListenOpenPast { name: past }
             }
             "listen-back" => Action::ListenOpenPast { name: None },
+            "listen-file" => {
+                self.listen_open_file(window, cx);
+                return true;
+            }
             // The header's →, as ⌘⇧R.
             "listen-collapse" => Action::TalkToggle,
             // Only a label comes here (a click opens it itself): the keys on its first item.
@@ -851,6 +855,32 @@ impl Workspace {
             };
             div().text_xs().text_color(rgb(theme::MUTED)).child(waiting)
         });
+        // The file it is written to, a click from read-only in a viewer: the path says it all.
+        // A long folder is cut in its middle (`short_dir`), then clipped in a narrow drawer: the name stays whole.
+        let file = self.listen_path().map(|path| {
+            let home = config::user_home();
+            let folder =
+                path.parent().map(|dir| ottospace_core::talk::short_dir(&dir.to_string_lossy(), Some(&home), None));
+            let name = path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
+            div()
+                .id("listen-file")
+                .flex_none()
+                .flex()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .px_3()
+                .py_1()
+                .border_b_1()
+                .border_color(rgb(theme::BORDER))
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .cursor_pointer()
+                .hover(|s| s.text_color(rgb(theme::TEXT)))
+                .child(div().min_w_0().overflow_hidden().child(format!("{}/", folder.unwrap_or_default())))
+                .child(div().flex_none().child(name.into_owned()))
+                .child(self.controls.mark("listen-file"))
+                .on_click(cx.listener(|this, _, window, cx| this.listen_open_file(window, cx)))
+        });
         // The last line at the foot: what does not fit goes off the top.
         let body = div()
             .flex_1()
@@ -865,7 +895,33 @@ impl Workspace {
             .children(empty)
             .children(rows)
             .children(volatile);
+        let body = div().flex_1().min_h_0().flex().flex_col().children(file).child(body);
         Some(self.listen_panel(width, header, body, cx))
+    }
+
+    /// The file the transcript on is written to; none if it could not be made.
+    fn listen_path(&self) -> Option<&std::path::Path> {
+        let on = self.model.listen.on.as_ref()?;
+        let file = self.listen_file.as_ref().filter(|file| file.id == on.id)?;
+        file.writer.as_ref().ok().map(|writer| writer.path.as_path())
+    }
+
+    /// The user's click on the file's path: it opens read-only in a viewer. Only the user's: the
+    /// viewer's pane would put the path on the socket, which never has it (`docs/ai/transcripts.md`).
+    fn listen_open_file(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.input != Origin::User {
+            self.error = Some("only the user opens the transcript's file".into());
+            return cx.notify();
+        }
+        // Absolute: a relative OTTOSPACE_HOME writes to a relative path, and a viewer takes none.
+        let path = self.listen_path().and_then(|path| std::path::absolute(path).ok());
+        let Some(path) = path.map(|path| path.to_string_lossy().into_owned()) else { return };
+        if let Some(why) = crate::viewer::open_refusal(&path) {
+            self.error = Some(why.into());
+            return cx.notify();
+        }
+        let open = Action::OpenFile { path, axis: ottospace_core::Axis::Right, beside: None, reuse: false };
+        self.dispatch(open, self.input, window, cx);
     }
 
     /// The drawer's transcript view, `width` wide: its header over its body.
@@ -1118,7 +1174,7 @@ impl Workspace {
     }
 
     /// Test runs only: where each of a transcript's controls was drawn, by id (`listen-start:3`,
-    /// `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-view`,
+    /// `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-file`, `listen-view`,
     /// `listen-idle`, the off-show dot `listen-dot:space:<place>` or `listen-dot:tab:<id>`).
     /// Null outside a test run.
     pub(crate) fn listen_rects(&self) -> Option<BTreeMap<String, [f32; 4]>> {

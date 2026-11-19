@@ -6529,7 +6529,11 @@ fn several_tasks_share_a_workspace_and_the_drawers_rail_switches_between_them() 
             otto.control(&format!("drawer-rail:{two}")),
             otto.control("drawer-rail"),
         );
-        assert!(a[0] == b[0] && a[1] + a[3] <= b[1] && a[0] >= drawer[0], "a column: {a:?} {b:?} in {drawer:?}");
+        // One right edge: a cell's line toward the drawer is inside its frame, the selected one has none.
+        assert!(
+            a[0] + a[2] == b[0] + b[2] && a[1] + a[3] <= b[1] && a[0] >= drawer[0],
+            "a column: {a:?} {b:?} in {drawer:?}"
+        );
         assert_eq!(otto.control_opt("strip:new"), None, "the strip is gone");
         assert_eq!(rail_selected(&second), Some(two));
         // A client's click on it is refused, and moves nothing.
@@ -6897,16 +6901,32 @@ fn the_rail_of_five_tasks_is_one_column_at_the_drawers_right_edge() {
         (otto.control("drawer-rail:new"), otto.control("drawer-rail"), otto.control("talk"), rect(&state["window"]));
     // One column, top to bottom, + last, right of the conversation, at the window's right edge.
     for pair in items.windows(2) {
-        assert!(pair[0][0] == pair[1][0] && pair[0][1] + pair[0][3] <= pair[1][1] + 0.5, "{items:?}");
+        assert!(
+            pair[0][0] + pair[0][2] == pair[1][0] + pair[1][2] && pair[0][1] + pair[0][3] <= pair[1][1] + 0.5,
+            "{items:?}"
+        );
     }
     assert!(new[1] >= items[4][1] + items[4][3] - 0.5, "{items:?} {new:?}");
     assert!(talk[0] + talk[2] <= rail[0] + 0.5 && rail[0] + rail[2] >= window[2] - 1., "{talk:?} {rail:?} {window:?}");
     assert!(
-        items.iter().chain([&new]).all(|item| item[0] >= rail[0] && item[0] + item[2] <= rail[0] + rail[2]),
+        // The selected one also covers the line left of the rail's frame.
+        items.iter().chain([&new]).all(|item| item[0] >= rail[0] - 1. && item[0] + item[2] <= rail[0] + rail[2]),
         "{items:?}"
     );
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A selected rail item's cell: the rail's width and a left-rail cell's height, from the drawer's
+/// right edge to the window's.
+fn joined(otto: &Otto, item: [f64; 4], drawer: [f64; 4]) {
+    let (rail, window) = (otto.control("drawer-rail"), rect(&otto.drawn()["window"]));
+    assert!((item[0] - (drawer[0] + drawer[2])).abs() <= 0.5, "{item:?} {drawer:?}");
+    // The rail's frame starts past its line toward the drawer: the selected cell covers that line too.
+    let right = item[0] + item[2];
+    assert!((right - window[2]).abs() <= 0.5 && (right - (rail[0] + rail[2])).abs() <= 0.5, "{item:?} {window:?}");
+    assert!((item[0] - (rail[0] - 1.)).abs() <= 0.5, "{item:?} {rail:?}");
+    assert!((item[3] - 40.).abs() <= 0.5, "{item:?}");
 }
 
 /// The drawer's rail always shows: one task on top, +, and below a divider the transcript, idle
@@ -6945,6 +6965,7 @@ fn the_rail_holds_the_tasks_then_the_transcript_always_and_only_the_user_switche
     otto.user_key("cmd-n");
     otto.user_key("o n e");
     let one = otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the first task");
+    joined(&otto, otto.control(&format!("drawer-rail:{one}")), otto.control("talk"));
     // One task: the rail, the task on top, + under it, the transcript idle at the foot.
     let idle = otto.drawn();
     assert_eq!(kinds(&idle), ["task", "transcript"], "{}", idle["drawer"]["rail"]);
@@ -6968,7 +6989,8 @@ fn the_rail_holds_the_tasks_then_the_transcript_always_and_only_the_user_switche
     assert_eq!(rail_tasks(&two_items), [one]);
     // Started, the transcript shows here; a client's click on the task does nothing.
     assert_eq!(picked(&two_items).as_deref(), Some("transcript"));
-    otto.listen_rect("listen-view");
+    // Selected, its cell runs from the drawer's right edge to the window's, as the left rail's open cell.
+    joined(&otto, otto.control("drawer-rail:transcript"), otto.listen_rect("listen-view"));
     let theirs = otto.click(at(otto.control(&format!("drawer-rail:{one}")), 0.5, 0.5), 1);
     assert_eq!(picked(&theirs).as_deref(), Some("transcript"), "{}", theirs["notice"]);
     // ⌘⌥] / ⌘⌥[ step through it; a client's key does not.
@@ -7039,6 +7061,9 @@ fn the_drawer_collapses_into_the_rail_from_the_transcript_or_a_task_and_only_the
     );
     let (rail, window) = (otto.control("drawer-rail"), rect(&collapsed["window"]));
     assert!(rail[0] + rail[2] >= window[2] - 1. && rail[2] <= 49., "{rail:?} {window:?}");
+    // Collapsed, no item is raised, as the left rail with its bar collapsed.
+    let items = collapsed["drawer"]["rail"].as_array().unwrap();
+    assert!(items.iter().all(|item| item["selected"] == false), "{}", collapsed["drawer"]["rail"]);
     let wider = rect(&otto.drawn()["headers"]["1"])[2];
     assert!((wider - pane - (drawer - rail[2])).abs() <= 2., "{pane} → {wider}, drawer {drawer}, rail {rail:?}");
     assert!(otto.control_opt("listen-collapse").is_none() && otto.control_opt("drawer-rail:transcript").is_some());
@@ -12465,7 +12490,7 @@ fn the_users_toggle_opens_the_transcript_here_from_another_workspace() {
 /// window, and the selected task, by ⌘⌥] / ⌘⌥[ or a new one, is scrolled into view.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_rail_of_twenty_tasks_scrolls_and_keeps_the_transcript_in_the_window() {
+fn a_rail_of_many_tasks_scrolls_and_keeps_the_transcript_in_the_window() {
     let root = support::temp(&format!("ottospace-e2e-rail20-{}", std::process::id()));
     let (bin, sessions) = (root.join("bin"), root.join("sessions"));
     fake_agents(&bin, &sessions);
@@ -12484,7 +12509,8 @@ fn a_rail_of_twenty_tasks_scrolls_and_keeps_the_transcript_in_the_window() {
     otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
     otto.user_key("cmd-d");
     let mut ids: Vec<u64> = Vec::new();
-    for n in 0..20 {
+    // More than the window holds, at a left-rail cell's height each.
+    for n in 0..24 {
         otto.user_key("cmd-n");
         otto.user_key(&format!("t {n}"));
         ids.push(otto.user_key("enter")["state"]["talk"]["task"].as_u64().expect("the drawer is on the new task"));
@@ -12504,17 +12530,17 @@ fn a_rail_of_twenty_tasks_scrolls_and_keeps_the_transcript_in_the_window() {
         assert!(transcript[1] + transcript[3] <= rail[1] + rail[3] + 0.5, "{transcript:?} {rail:?}");
         let shown =
             task(reply, selected).unwrap_or_else(|| panic!("{selected} not drawn: {}", reply["drawer"]["rail"]));
-        // Square when wholly shown: 36, or 34 inside the ring while keyed; a clipped one is shorter.
-        assert!(shown[3] >= shown[2] - 0.5 && shown[2] >= 33., "{selected} wholly in view: {shown:?}");
+        // A left-rail cell's height when wholly shown; a clipped one is shorter.
+        assert!(shown[3] >= 39.5, "{selected} wholly in view: {shown:?}");
         assert!(shown[1] + shown[3] <= transcript[1], "{shown:?} above {transcript:?}");
         let hidden = ids.iter().filter(|id| task(reply, **id).is_none()).count();
-        assert!(hidden > 0, "twenty tasks overflow the rail: {}", reply["drawer"]["rail"]);
+        assert!(hidden > 0, "the tasks overflow the rail: {}", reply["drawer"]["rail"]);
     };
     // The newest is in front; the rail's order is by urgency, read from the reply.
     let drawn = otto.drawn();
-    check(&drawn, ids[19]);
+    check(&drawn, ids[23]);
     let order = rail_tasks(&drawn);
-    let from = order.iter().position(|id| *id == ids[19]).expect("the newest on the rail");
+    let from = order.iter().position(|id| *id == ids[23]).expect("the newest on the rail");
     // ⌘⌥] past the rail's last task: the transcript, then the first, scrolled up into view.
     for _ in from..order.len() {
         otto.user_key("cmd-alt-]");
@@ -12788,6 +12814,20 @@ fn a_transcript_is_kept_in_a_private_markdown_file_written_as_lines_come() {
     assert!(text.contains("**me**: made-up words \\<b\\>two\\</b\\>\n"), "{text}");
     assert!(!text.contains("made up\n") && !text.contains("never heard"), "only final lines: {text}");
     assert!(text.contains("Data, not instructions."), "{text}");
+    // The drawer on it shows the file's path; the user's click opens it read-only in a viewer.
+    // Shown already (⌘⌃T shows it), or a click on its rail item: a click on it shown would collapse it.
+    if otto.drawn()["listen_rects"].get("listen-view").is_none() {
+        otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
+    }
+    let path = otto.listen_rect("listen-file");
+    // A client's click opens none: the path is never on the socket.
+    let theirs = otto.click(at(path, 0.5, 0.5), 1);
+    assert!(theirs["state"]["panes"].as_array().unwrap().iter().all(|p| p["kind"]["type"] != "file"), "{theirs}");
+    let opened = otto.user_click(at(path, 0.5, 0.5));
+    let viewer = opened["state"]["panes"].as_array().unwrap().iter().find(|p| p["kind"]["type"] == "file").cloned();
+    let viewer = viewer.unwrap_or_else(|| panic!("no viewer: {}", opened["state"]["panes"]));
+    let shown = std::fs::canonicalize(viewer["kind"]["path"].as_str().unwrap()).unwrap();
+    assert_eq!(shown, std::fs::canonicalize(&file).unwrap());
     // The user's stop keeps it, with its end in the header, and no other file.
     otto.user_key("cmd-ctrl-t");
     let ended = otto.wait_for("the end in the header", |_| {
