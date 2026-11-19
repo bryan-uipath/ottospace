@@ -40,9 +40,11 @@ pub struct Pair {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Reply {
     Waiting,
-    /// Untrusted: drawn, never in the state. `synthetic`: the CLI's own words (an API error).
+    /// Untrusted: drawn, never in the state. `plain`: one line, its markdown stripped.
+    /// `synthetic`: the CLI's own words (an API error).
     Answer {
         text: Text,
+        plain: Text,
         synthetic: bool,
     },
     Failed,
@@ -61,7 +63,7 @@ impl Btw {
     /// The answered pairs, the model's own, as the runner takes them back: question, answer.
     pub fn history(&self) -> Vec<(String, String)> {
         let answered = self.pairs.iter().filter_map(|pair| match &pair.reply {
-            Reply::Answer { text, synthetic: false } => Some((pair.question.clone(), text.text().to_string())),
+            Reply::Answer { text, synthetic: false, .. } => Some((pair.question.clone(), text.text().to_string())),
             _ => None,
         });
         answered.collect()
@@ -159,18 +161,19 @@ impl Model {
             }
             // The shell's runner alone reports: a key or click of the user's is none.
             Action::BtwAnswered { .. } | Action::BtwFailed { .. } if self.by_user => {}
-            Action::BtwAnswered { task, id, text, synthetic } => {
-                self.btw_reply(&task, id, Reply::Answer { text, synthetic });
+            Action::BtwAnswered { task, id, text, plain, synthetic } => {
+                self.btw_reply(&task, id, Reply::Answer { text, plain, synthetic });
             }
             Action::BtwFailed { task, id } => self.btw_reply(&task, id, Reply::Failed),
             Action::BtwUse { id } => {
                 let Some(chat) = self.shown_chat_mut() else { return };
                 let answer = chat.btw.as_ref().and_then(|btw| btw.pairs.iter().find(|pair| pair.id == id));
-                let Some(Reply::Answer { text, .. }) = answer.map(|pair| pair.reply.clone()) else { return };
-                // An open question card's "Other…", else the composer; never sent.
+                let Some(Reply::Answer { text, plain, .. }) = answer.map(|pair| pair.reply.clone()) else { return };
+                // An open question card's "Other…" as plain text, else the composer as markdown
+                // (it is markdown); never sent.
                 let card = !chat.deny;
                 match chat.transcript.form_mut().filter(|_| card) {
-                    Some(form) => form.fill_other(text.text()),
+                    Some(form) => form.fill_other(plain.text()),
                     None => {
                         chat.draft.apply(Edit::Paste(text.text().to_string()));
                         chat.untrusted = true;
@@ -227,7 +230,9 @@ mod tests {
     }
 
     fn answered(task: &Subject, id: u64, text: &str) -> Envelope {
-        Action::BtwAnswered { task: task.clone(), id, text: Text::new(text), synthetic: false }.sent_by(Origin::System)
+        let plain = Text::new(&text.replace("**", ""));
+        Action::BtwAnswered { task: task.clone(), id, text: Text::new(text), plain, synthetic: false }
+            .sent_by(Origin::System)
     }
 
     #[test]
@@ -256,8 +261,14 @@ mod tests {
         assert!(matches!(&effects[..], [Effect::AgentSideQuestion { id: 2, history: h, .. }] if *h == history));
         // A synthetic answer is shown, never taken back as history.
         m.update(
-            Action::BtwAnswered { task: one.clone(), id: 2, text: Text::new("(API error)"), synthetic: true }
-                .sent_by(Origin::System),
+            Action::BtwAnswered {
+                task: one.clone(),
+                id: 2,
+                text: Text::new("(API error)"),
+                plain: Text::new("(API error)"),
+                synthetic: true,
+            }
+            .sent_by(Origin::System),
         );
         assert_eq!(m.shown_btw().unwrap().history(), history);
         // The main conversation is as it was; the turn still runs.
@@ -295,7 +306,13 @@ mod tests {
         typed(&mut m, "why?");
         assert_eq!(m.refusal(&Action::FieldEdit { edit: Edit::Paste("x".into()) }, Origin::Socket), Some(USERS_ALONE));
         m.update(Action::BtwAsk);
-        let report = Action::BtwAnswered { task: one.clone(), id: 1, text: Text::new("x"), synthetic: false };
+        let report = Action::BtwAnswered {
+            task: one.clone(),
+            id: 1,
+            text: Text::new("x"),
+            plain: Text::new("x"),
+            synthetic: false,
+        };
         assert_eq!(m.refusal(&report, Origin::Socket), Some(RUNNERS_ALONE));
         m.update(report.clone());
         assert_eq!(m.shown_btw().unwrap().asking(), Some(1), "a user's report is none");
@@ -313,9 +330,9 @@ mod tests {
         m.update(Action::BtwOpen);
         typed(&mut m, "which one?");
         m.update(Action::BtwAsk);
-        m.update(answered(&one, 1, "Redis"));
+        m.update(answered(&one, 1, "**Redis**"));
         assert_eq!(m.update(Action::BtwUse { id: 1 }), []);
-        assert_eq!(m.chat(&one).unwrap().draft.text(), "Redis");
+        assert_eq!(m.chat(&one).unwrap().draft.text(), "**Redis**", "the composer is markdown");
         assert!(m.chat(&one).unwrap().untrusted, "the model's words: out of the state");
         assert!(!m.btw_typing() && m.talk_typing(), "the keyboard back to the composer");
         // A question card: its "Other…".
@@ -338,7 +355,11 @@ mod tests {
         m.update(Action::AgentEvents { task: one.clone(), events: vec![card], at: 4 }.sent_by(Origin::System));
         assert_eq!(m.update(Action::BtwUse { id: 1 }), []);
         let form = m.shown_chat().unwrap().form().unwrap();
-        assert_eq!((form.other(0).map(Field::text), form.on_other(), form.answered(0)), (Some("Redis"), true, true));
+        assert_eq!(
+            (form.other(0).map(Field::text), form.on_other(), form.answered(0)),
+            (Some("Redis"), true, true),
+            "plain text"
+        );
         assert_eq!(m.shown_chat().unwrap().transcript.cards.len(), 1, "never answered");
     }
 

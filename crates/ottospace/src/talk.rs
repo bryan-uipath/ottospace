@@ -398,6 +398,12 @@ impl Workspace {
             ("talk", "chat-stop", _) => Action::TalkInterrupt,
             ("talk", "talk-done" | "offer-done", Some(id)) => Action::TaskDone { id },
             ("talk", "talk-later" | "offer-later", Some(id)) => Action::TaskLater { id },
+            ("talk", "chat-btw", _) => Action::BtwOpen,
+            ("talk", "btw-close", _) => Action::BtwClose,
+            ("talk", "btw-input", _) => Action::BtwKeys { on: true },
+            ("talk", _, _) if let Some(id) = name.strip_prefix("btw-use:").and_then(|id| id.parse().ok()) => {
+                Action::BtwUse { id }
+            }
             ("talk", "view-chat", _) => Action::TalkView { shows: ottospace_core::transcript::View::Native },
             ("talk", "view-terminal", _) => Action::TalkView { shows: ottospace_core::transcript::View::Terminal },
             ("talk", "", _) => Action::TalkKeys { on: true },
@@ -734,6 +740,10 @@ impl Workspace {
         let brief = self.model.brief.is_some() && self.model.brief == talk.task.task();
         // The dial is the conversation's: not over the brief, nor over the editor.
         let editor = self.model.editor_shown();
+        // The btw column, left of the conversation: the drawer widened for it (`btw::WIDTH`).
+        let btw = self.btw_column(cx);
+        let whole = width;
+        let width = if btw.is_some() { (width - crate::btw::WIDTH).max(0.) } else { width };
         let dial = (!brief && !editor).then(|| self.dial_section(&talk.task, width, cx)).flatten();
         // The user's editor takes the conversation's place while it has its draft.
         let body = match brief {
@@ -758,6 +768,10 @@ impl Workspace {
                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
                     this.dispatch(Action::Leave, this.input, window, cx);
                     this.dispatch(Action::TalkKeys { on: true }, this.input, window, cx);
+                    // A press in the conversation takes the keyboard from the btw's input.
+                    if this.model.btw_typing() {
+                        this.dispatch(Action::BtwKeys { on: false }, this.input, window, cx);
+                    }
                 }),
             )
             .child(header)
@@ -769,7 +783,9 @@ impl Workspace {
             .children(dial)
             .child(body)
             .children(self.agent_foot(&talk.task, width));
-        Some(drawer.into_any_element())
+        let Some(btw) = btw else { return Some(drawer.into_any_element()) };
+        let row = div().flex_none().w(px(whole)).h_full().flex().bg(rgb(theme::BACKGROUND)).border_l_1();
+        Some(row.border_color(rgb(theme::BORDER)).child(btw).child(drawer).into_any_element())
     }
 
     /// The drawer, if it shows: the new task being written (or, with nothing open yet, the one
@@ -791,6 +807,8 @@ impl Workspace {
     /// The drawer's edge dragged to `x` in the window: its width is what lies right of it.
     pub(crate) fn drawer_edge_moved(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
         let width = f32::from(window.viewport_size().width) - x;
+        // The conversation's width: the btw column is added to it as drawn.
+        let width = if self.btw_drawn() { width - crate::btw::WIDTH } else { width };
         self.dispatch(Action::TalkResize { width }, self.input, window, cx);
     }
 

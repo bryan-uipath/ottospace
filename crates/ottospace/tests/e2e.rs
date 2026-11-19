@@ -10114,6 +10114,124 @@ fn a_question_card_sends_the_users_pick() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The stand-in `claude`'s side answer (`side.jsonl`): as 2.1.327 sends it, `{ID}` its request's id.
+fn side_fixture(answer: &str) -> String {
+    let progress = json!({"type": "system", "subtype": "control_request_progress", "request_id": "{ID}",
+        "status": "started", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003"});
+    let response = json!({"type": "control_response", "response": {"subtype": "success", "request_id": "{ID}",
+        "response": {"response": answer, "synthetic": false}}});
+    [progress.to_string(), response.to_string()].join("\n")
+}
+
+/// btw: a side question while a question card waits mid-turn. The user's ⌘⇧K opens its column,
+/// ↵ asks; the answer comes beside the conversation, whose transcript and card stay as they were.
+/// "Use as my answer" fills the card's "Other…" and sends nothing. A client opens, asks and uses
+/// nothing; the state has counts, never the question or the answer.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_side_question_mid_turn_is_answered_beside_it_and_fills_the_cards_other() {
+    let questions = json!([{"question": "Which cache?", "header": "Cache", "multiSelect": false,
+        "options": [{"label": "SQLite", "description": "a file"}, {"label": "None", "description": "measure first"}]}]);
+    let mut fixtures = ask_fixtures(questions);
+    fixtures.push(("side.jsonl", side_fixture("**Redis**, shared by every worker")));
+    let (root, record, env) = native_setup("btw", &fixtures, &[]);
+    let otto = launch_env("btw", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "add a cache >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let stdin = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default();
+    otto.start_task(1);
+    let before = otto.wait_for("a question card", |o| {
+        let chat = chat(o);
+        chat["transcript"]["cards"][0]["ask"].is_object().then_some(chat)
+    });
+    assert_eq!(before["btw"]["offered"], true, "{before}");
+    assert!(before["transcript"]["turn"].is_string(), "mid-turn");
+
+    // A client's key and click open nothing.
+    otto.call(json!({"cmd": "key", "keys": "cmd-shift-k"}));
+    otto.click(at(otto.control("talk:chat-btw"), 0.5, 0.5), 1);
+    assert_eq!(chat(&otto)["btw"]["open"], false);
+
+    // The user's ⌘⇧K: the column, its input with the keyboard; the drawer wider.
+    let width = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["width"].as_f64().unwrap();
+    let narrow = width(&otto);
+    otto.user_key("cmd-shift-k");
+    let open = chat(&otto);
+    assert_eq!((&open["btw"]["open"], &open["btw"]["keys"]), (&json!(true), &json!(true)), "{open}");
+    assert!(width(&otto) > narrow, "the drawer widens for it");
+    otto.control("talk:btw-close");
+    assert!(otto.control_opt("talk:chat-btw").is_none(), "no second btw while one is open");
+    // Two lines (⇧↵), typed in its own field: never in the state.
+    let typed = otto.user_key("w h y shift-enter r e d i s");
+    assert_eq!((&typed["field"]["of"], &typed["field"]["text"]), (&json!("btw"), &json!("")), "{}", typed["field"]);
+    assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("redis"));
+    otto.user_key("enter");
+    let answered = otto.wait_for("the side answer", |o| Some(chat(o)).filter(|c| c["btw"]["answered"] == 1));
+    assert!(stdin().contains(r#""subtype":"side_question""#) && stdin().contains(r"why\nredis"), "{}", stdin());
+    // The main conversation as it was: its entries, its card, its turn; nothing answered.
+    for at in ["entries", "cards", "turn"] {
+        assert_eq!(answered["transcript"][at], before["transcript"][at], "{at}");
+    }
+    assert_eq!((&answered["draft_chars"], &answered["btw"]["waiting"]), (&json!(0), &json!(false)));
+    let said = otto.call(json!({"cmd": "state"})).to_string();
+    assert!(!said.contains("redis") && !said.contains("shared by every worker"), "{said}");
+
+    // Use as my answer: a client's click does nothing; the user's fills "Other…", unsent.
+    let use_it = otto.control("talk:btw-use:1");
+    otto.click(at(use_it, 0.5, 0.5), 1);
+    assert_eq!(chat(&otto)["transcript"]["cards"][0]["ask"]["questions"][0]["answered"], false);
+    otto.user_click(at(use_it, 0.5, 0.5));
+    let filled = chat(&otto)["transcript"]["cards"][0]["ask"].clone();
+    assert_eq!((&filled["questions"][0]["picked"], &filled["cursor"]), (&json!([2]), &json!([0, 2])), "{filled}");
+    assert_eq!(filled["questions"][0]["answered"], true);
+    assert_eq!(ask_reply(&record), None, "nothing sent");
+
+    // ×: the column and its thread go.
+    otto.user_click(at(otto.control("talk:btw-close"), 0.5, 0.5));
+    assert_eq!(
+        chat(&otto)["btw"],
+        json!({"offered": true, "open": false, "keys": false, "asked": 0, "answered": 0,
+        "synthetic": 0, "failed": 0, "waiting": false})
+    );
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Codex takes no side questions (`RunnerSpec::structured.side_question`): its conversation
+/// offers no btw, and ⌘⇧K opens none.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_codex_conversation_offers_no_btw() {
+    let root = support::temp(&format!("ottospace-e2e-btw-codex-{}", std::process::id()));
+    let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    fake_repo(&repos.join("app"));
+    let settings = json!({ "repos": repos_in(&repos), "conversation_view": "native",
+        "session_dirs": {"claude": [sessions.join("claude")], "codex": sessions.join("codex")} });
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("btw-codex", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "try codex @codex-gpt-6-astra >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.wait_for("codex in the drawer", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        let lines = state["drawer"]["agents"]["1"]["lines"].clone();
+        lines.as_array()?.iter().any(|l| l == "fake codex ready").then_some(())
+    });
+    otto.user_key("cmd-shift-k");
+    assert!(otto.control_opt("talk:chat-btw").is_none() && otto.control_opt("talk:btw-close").is_none());
+    let chat = &otto.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"];
+    assert!(chat.is_null() || chat["btw"]["offered"] == false, "{chat}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A multi-select question: space and a click pick options, "Other…" takes the user's words,
 /// and ↵ sends them all, joined as Claude Code reads them (a label that holds `", "` quoted).
 /// The words never reach the state.

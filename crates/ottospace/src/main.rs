@@ -66,6 +66,7 @@ mod agent_mode;
 mod app_wheel;
 mod apps;
 mod ax_debug;
+mod btw;
 mod calendar;
 mod chat_select;
 mod child;
@@ -921,6 +922,7 @@ struct Workspace {
     apps_field: field::Shared,
     mark_field: field::Shared,
     inspector_field: field::Shared,
+    btw_field: field::Shared,
     /// What is held of each capture of the draft in the bar, by its number.
     shots: HashMap<u32, collect::Shot>,
     /// Where the picture being annotated and the right bar were last drawn.
@@ -1560,6 +1562,7 @@ impl Workspace {
             apps_field: field::Shared::default(),
             mark_field: field::Shared::default(),
             inspector_field: field::Shared::default(),
+            btw_field: field::Shared::default(),
             shots: HashMap::new(),
             annotate_at: Rc::default(),
             bar_at: Rc::default(),
@@ -7904,6 +7907,9 @@ impl Render for Workspace {
         let columns =
             ottospace_core::model::editor::COLUMNS as f32 * f32::from(self.cell.width) + 10. + drawer_rail::WIDTH;
         let drawer = if self.model.editor_shown() { drawer.max(columns.min(half.max(MIN_DRAWER))) } else { drawer };
+        // The btw column widens it, the conversation kept as wide, to three quarters of the window at most.
+        let most = f32::from(window.viewport_size().width) * 0.75;
+        let drawer = if self.btw_drawn() { (drawer + btw::WIDTH).min(most).max(drawer) } else { drawer };
         self.drawer.width = drawer;
         // The drawer's place and its rail, always: the rail alone while it is collapsed.
         let (right, right_width) = self.render_right(drawer, cx);

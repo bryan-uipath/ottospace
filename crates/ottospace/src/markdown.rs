@@ -654,6 +654,12 @@ impl Builder<'_> {
     }
 }
 
+/// A reply as one line of plain text: its markdown parsed and stripped, the whitespace between
+/// words one space. `**SQLite** fits` → `SQLite fits`. For a field that takes no markdown.
+pub fn plain_line(text: &str) -> String {
+    plain(&parse(text, None)).split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// The blocks as plain text, for Copy.
 pub fn plain(blocks: &[Block]) -> String {
     let spans = |spans: &[Span]| spans.iter().map(|span| span.text.as_str()).collect::<String>();
@@ -912,6 +918,15 @@ mod tests {
 
     fn texts(spans: &[Span]) -> String {
         spans.iter().map(|span| span.text.as_str()).collect()
+    }
+
+    /// A btw answer into a question card's "Other…": its words, no markdown, one line.
+    #[test]
+    fn plain_line_strips_the_markdown_to_one_line() {
+        assert_eq!(plain_line("**SQLite** fits"), "SQLite fits");
+        let answer = "**SQLite** fits: `one` writer, [docs](https://example.com).\n\n- Redis pays off\n- *None*";
+        assert_eq!(plain_line(answer), "SQLite fits: one writer, docs. - Redis pays off - None");
+        assert_eq!(plain_line("  "), "");
     }
 
     #[test]

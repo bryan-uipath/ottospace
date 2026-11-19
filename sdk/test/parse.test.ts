@@ -250,6 +250,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
               collapsed: false,
               animating: true,
             },
+            btw: { offered: true, open: true, keys: false, asked: 2, answered: 1, synthetic: 0, failed: 0, waiting: true },
           },
         },
         opened: ["web"],
@@ -291,7 +292,7 @@ test("the field of each owner parses: the Apps section's filter too", () => {
   });
   // `note`: a note being typed on a capture. Every reply has it while one is.
   // `talk`: a native conversation's composer.
-  for (const owner of ["compose", "picker", "palette", "inspector", "apps", "note", "talk"]) {
+  for (const owner of ["compose", "picker", "palette", "inspector", "apps", "note", "talk", "btw"]) {
     assert.equal(snapshot({ ...replyWith(null), field: field(owner) }).field?.of, owner);
   }
   assert.throws(() => snapshot({ ...replyWith(null), field: field("elsewhere") }), /field\.of should be/);
