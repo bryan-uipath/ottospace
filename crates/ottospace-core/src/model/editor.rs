@@ -36,6 +36,8 @@ pub struct Editing {
     pub given: String,
     /// The editor has the keyboard. False: the user clicked the card shown above it.
     pub keys: bool,
+    /// What it was given held a btw answer (`Chat::untrusted`): so does what it saves.
+    pub untrusted: bool,
 }
 
 /// The text a saved file holds, less the one trailing newline an editor adds.
@@ -117,7 +119,11 @@ impl Model {
             Target::Chat(subject) => self.chat(subject).map(|chat| chat.draft.text().to_string()).unwrap_or_default(),
         };
         let chat = matches!(target, Target::Chat(_));
-        self.editing = Some(Editing { target, given: given.clone(), keys: true });
+        let untrusted = match &target {
+            Target::Chat(subject) => self.chat(subject).is_some_and(|chat| chat.untrusted),
+            Target::Compose => false,
+        };
+        self.editing = Some(Editing { target, given: given.clone(), keys: true, untrusted });
         self.editor_note = None;
         if chat {
             self.talk_keys(true, effects);
@@ -143,7 +149,7 @@ impl Model {
     /// draft it was opened on, never sent; the same text, or none, leaves the draft as it was.
     /// A draft that is gone (its task dismissed): the text goes to the clipboard, and is said.
     pub(super) fn editor_done(&mut self, saved: Option<String>, more: bool, effects: &mut Vec<Effect>) {
-        let Some(Editing { target, given, .. }) = self.editing.take() else { return };
+        let Some(Editing { target, given, untrusted, .. }) = self.editing.take() else { return };
         let now = self.now;
         let said = |model: &mut Model, text: &str| model.editor_note = Some((text.to_string(), now));
         let Some(saved) = saved else {
@@ -170,6 +176,12 @@ impl Model {
                 effects.push(Effect::Clip { text: text.to_string() });
                 said(self, "The message's draft is gone: what your editor saved is on the clipboard");
             }
+        }
+        // Its chat may be a new one since (the old one dropped): still the model's words.
+        if let Target::Chat(subject) = &target
+            && let Some(chat) = self.chat_mut(subject).filter(|_| untrusted)
+        {
+            chat.untrusted = true;
         }
     }
 

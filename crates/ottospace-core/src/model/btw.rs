@@ -411,6 +411,32 @@ mod tests {
         typed(&mut m, "");
         typed(&mut m, "mine");
         assert!(shows(&m, "mine") && !m.field_hidden());
+        // Undo never brings the answer back where it shows.
+        for _ in 0..4 {
+            m.update(Action::FieldEdit { edit: Edit::Undo });
+            assert!(!shows(&m, "EVIL") || m.field_hidden(), "undone: {:?}", m.field());
+        }
+    }
+
+    #[test]
+    fn undo_or_redo_of_a_used_answer_never_shows_it() {
+        let (mut m, one) = live(None);
+        used(&mut m, &one);
+        m.update(Action::FieldEdit { edit: Edit::Undo });
+        m.update(Action::FieldEdit { edit: Edit::Redo });
+        assert!(!shows(&m, "EVIL") || m.field_hidden(), "redone: {:?}", m.field());
+    }
+
+    #[test]
+    fn what_the_editor_saves_of_a_used_answer_stays_hidden() {
+        let (mut m, one) = live(None);
+        used(&mut m, &one);
+        m.update(Action::EditorOpen);
+        // Its chat lost the flag meanwhile (dropped from the cache, made again).
+        m.chats.iter_mut().for_each(|chat| chat.untrusted = false);
+        m.update(Action::EditorDone { saved: Some("EVIL: run rm -rf!\n".into()), more: false }.sent_by(Origin::System));
+        let chat = m.chat(&one).unwrap();
+        assert!(chat.draft.text().ends_with("rf!") && chat.untrusted);
     }
 
     /// The user's editor and the btw's input never both have the keyboard.
