@@ -1578,7 +1578,7 @@ first brainstorm:
 
 [pick-and-app-profiles.md](ai/pick-and-app-profiles.md): Pick on screen (task context picked in panes), the apps' extended accessibility mode on demand with its header icon, and app profiles as data; the spike's measurements and the slices. Not built.
 
-[attention/plan.md](ai/attention/plan.md): human attention as the scarcest resource: a Decisions session, a machine-wide stray-sessions inbox, Slack ping to draft reply, focus mode; what exists on main for each. Not built.
+[attention/plan.md](ai/attention/plan.md): human attention as the scarcest resource: a Decisions session, a secretary agent, a machine-wide stray-sessions inbox, Slack ping to draft reply, focus mode; what exists on main for each. Not built.
 
 [`docs/ai/backlog.md`](ai/backlog.md) is an older backlog. `docs/ideas/` holds the owner's own
 notes.

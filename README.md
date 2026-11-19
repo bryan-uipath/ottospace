@@ -11,6 +11,10 @@ Human attention is the scarcest resource. ottospace interrupts only for what nee
 brings the context with the question, batches the rest, and never makes the person hunt for
 what's next.
 
+ottospace stays out of your way. Nothing moves, covers what you are working in, or takes the
+keyboard unless you asked for it; every mode has an obvious way out; and nothing decorative ever
+makes the fast path slower.
+
 ![The ottospace window: a Tasks inbox grouped Needs you, Running, Captured and On hold, beside three terminal panes. The status bar reads 2 tasks need you.](site/shots/tasks.png)
 
 Site: <https://bryan-uipath.github.io/ottospace/>

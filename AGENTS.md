@@ -27,13 +27,15 @@ Rules:
   a key or click it injects) or `System` (timers, a shell that exited, lists read again). A rule
   about what may interrupt the user asks the origin, not the action.
 
-## Principle: human attention
+## Principles
+
+Design rules for every feature. Each change answers to both.
+
+### Human attention
 
 > Human attention is the scarcest resource. ottospace interrupts only for what needs the person,
 > brings the context with the question, batches the rest, and never makes the person hunt for
 > what's next.
-
-For every feature:
 
 - A new interruption (notice, notification, badge, sound, focus change) says why it needs the
   person now. If it can wait, it does not interrupt.
@@ -42,6 +44,25 @@ For every feature:
 - What can wait is batched: one digest, one queue, never one ping each.
 - The person never searches for what needs them: one key and one place say what's next (⌘⇧N,
   the status bar's `needs you`). A new kind of waiting joins them, never a place of its own.
+
+### Out of the way (wording proposed)
+
+> ottospace stays out of your way. Nothing moves, covers what you are working in, or takes the
+> keyboard unless you asked for it; every mode has an obvious way out; and nothing decorative ever
+> makes the fast path slower.
+
+- Layout never shifts for a message: the notice bar moved every pane, so notices become a toast
+  over them (#299, open).
+- Nothing rearranges itself: a new app window never splits a pane by itself; its pane offers it
+  (#266).
+- Explicit over magical: the person says where a window goes (slots: only the user makes, fills
+  or clears one, `docs/ai/slots.md`).
+- Animation never delays input: the next thing is usable while it plays (Done's seal
+  plays over a model that has already moved on, #278); under Reduce Motion it is at once.
+- A test run or an agent never takes the person's keyboard or front window (see Tests).
+
+When the two conflict (wording proposed): ottospace offers and waits. It may show that something
+needs you; it never acts on your screen, focus or keyboard to make you look.
 
 Design note: `docs/ai/attention/plan.md`.
 
