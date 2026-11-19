@@ -83,7 +83,7 @@ Without it, ⌘E puts an app in a pane.
 | Give the window back to macOS | Come back to ottospace first, then ⌘W on its pane: the window returns to where it was |
 | Find a window lost off screen | `ottospace rescue` in a terminal, or Developer ▸ Bring All Windows Back |
 
-The badge on an app is how many windows it has open. A new window of a hosted app gets its own pane, unless it is a pop-up (a dialog, a panel, a small window): that floats over the app's pane at its own size.
+The badge on an app is how many windows it has open. A new window of a hosted app never splits a pane by itself: it floats over the app's pane at its own size, and the pane's header offers it (`no slot for this window · Put in a pane ×`). Put in a pane splits it in; × leaves it floating. A dialog or panel is offered too.
 
 ## Workspaces
 

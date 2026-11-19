@@ -473,6 +473,24 @@ pub enum Request {
         #[serde(default)]
         user: bool,
     },
+    /// For tests (`test_refusal`): a new window of app pane `pane`'s app, as if just seen (a test
+    /// run hosts none): judged by the window rules (`rules::decide`), logged, and offered by the
+    /// pane as a real one would be. Its id is in the reply's `offers`. Never for an agent: no
+    /// client makes up another app's windows.
+    WindowFixture {
+        pane: PaneId,
+        #[serde(default)]
+        title: String,
+        #[serde(default = "standard")]
+        subrole: String,
+        size: [f64; 2],
+        #[serde(default)]
+        modal: bool,
+    },
+    /// For tests (`test_refusal`): fixture window `window` closed, as the shell sees a window go.
+    WindowFixtureClose {
+        window: u32,
+    },
     /// For tests (`test_refusal`): hears the app `OTTOSPACE_HOST_ONLY` names by ScreenCaptureKit,
     /// with no recogniser, keeping each buffer's presentation time. The reply is `{"ok":true}`,
     /// not the state. Never for an agent: no client hears an app.
@@ -567,6 +585,10 @@ fn three() -> u8 {
     3
 }
 
+fn standard() -> String {
+    "AXStandardWindow".into()
+}
+
 fn captured() -> State {
     State::Captured
 }
@@ -607,7 +629,7 @@ pub enum Modifier {
 /// `sneak_app_tree`: it would choose what sneak mode labels in another app. `calendar_call`: it
 /// would raise or silence the user's meeting alert. `record_start`: it would film the window.
 /// `listen_end`: it would end the user's transcript. `app_fixture`: it would make an app pane.
-/// `audio_probe_start`: it would hear an app.
+/// `audio_probe_start`: it would hear an app. `window_fixture`: it would make up another app's windows.
 /// `zoom_press`: it would put the window over the menu bar and the Dock as the user.
 /// `display_change`: no client needs it, and it makes the window draw by GPUI's own paths.
 pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
@@ -641,6 +663,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
             Some("listen_end is for tests (OTTOSPACE_E2E): only the user, the app or its sound ends a transcript")
         }
         Request::AppFixture { .. } => Some("app_fixture is for tests (OTTOSPACE_E2E): app panes hold real windows"),
+        Request::WindowFixture { .. } | Request::WindowFixtureClose { .. } => {
+            Some("window_fixture is for tests (OTTOSPACE_E2E): ottospace sees an app's new windows itself")
+        }
         Request::AudioProbeStart | Request::AudioProbeStop => {
             Some("audio_probe_start and audio_probe_stop are for tests (OTTOSPACE_E2E): no client hears an app")
         }
@@ -954,6 +979,8 @@ mod tests {
                 .into_iter()
                 .chain(probe)
                 .chain([r#"{"cmd":"ui_gallery","on":true}"#])
+                .chain([r#"{"cmd":"window_fixture","pane":1,"size":[900,700]}"#])
+                .chain([r#"{"cmd":"window_fixture_close","window":800001}"#])
         {
             assert!(test_refusal(&parse(line), false).expect(line).contains("for tests"));
             assert_eq!(test_refusal(&parse(line), true), None);

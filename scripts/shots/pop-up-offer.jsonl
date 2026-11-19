@@ -1,0 +1,9 @@
+# A new window of a hosted app floats; its app pane's header offers it, and says why it is in no
+# pane. A test run hosts no window: `app_fixture` makes the app pane, `window_fixture` the window.
+# Before this, the window split the pane by itself: the base's run gives an "after only" picture.
+{"cmd":"split","axis":"right"}
+{"cmd":"app_fixture","name":"Meetings","user":true}
+{"cmd":"window_fixture","pane":2,"title":"Weekly sync","size":[1200,800]}
+{"shot":"offer"}
+{"click":"offer:800001"}
+{"shot":"put-in-a-pane"}

@@ -126,6 +126,8 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.recordStop(),
   (c) => c.listenEnd({ why: "app_quit" }),
   (c) => c.appFixture({ name: "Mail", user: true }),
+  (c) => c.windowFixture({ pane: 2, size: [900, 700], title: "Meeting" }),
+  (c) => c.windowFixtureClose({ window: 800001 }),
   (c) => c.audioProbeStart(),
   (c) => c.audioProbeStop(),
   (c) => c.windowWidth({ width: 340 }),

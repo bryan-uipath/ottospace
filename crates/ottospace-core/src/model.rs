@@ -1885,6 +1885,28 @@ pub enum Action {
         app_running: bool,
         at: u64,
     },
+    /// App pane `pane`'s app opened window `window` (of process `pid`) by itself, and it floats
+    /// (`rules::Place::Float { offer: true }`): the pane offers it. `title`, and `why` it is in
+    /// no pane (`rules::Decision::reason`), are drawn in the offer, never in the state. The shell's alone.
+    WindowOffered {
+        pane: PaneId,
+        pid: i32,
+        window: u32,
+        title: String,
+        why: String,
+    },
+    /// The user's Put in a pane on an offer: the window splits in beside its app's pane.
+    OfferAccept {
+        window: u32,
+    },
+    /// The user waved the offer away: the window stays floating.
+    OfferDismiss {
+        window: u32,
+    },
+    /// An offered window closed. The shell's alone.
+    OfferGone {
+        window: u32,
+    },
 }
 
 /// What the right drawer shows (see `Model::drawer_view`).
@@ -2329,6 +2351,10 @@ impl Action {
             | Action::SlotHosted { .. }
             | Action::SlotTick { .. }
             | Action::WindowGone { .. }
+            | Action::WindowOffered { .. }
+            | Action::OfferAccept { .. }
+            | Action::OfferDismiss { .. }
+            | Action::OfferGone { .. }
             | Action::OpenFile { .. }
             | Action::ViewerKey { .. }
             | Action::ViewerScrolled { .. }
@@ -2390,8 +2416,12 @@ impl Action {
             | Action::SlotWindows { .. }
             | Action::SlotHosted { .. }
             | Action::SlotTick { .. } => Some(Feature::Slots),
-            // Every pane's window going, a slot's or not: of no flag.
-            Action::WindowGone { .. } => None,
+            // Every pane's window going, a slot's or not: of no flag. Nor a new window's offer.
+            Action::WindowGone { .. }
+            | Action::WindowOffered { .. }
+            | Action::OfferAccept { .. }
+            | Action::OfferDismiss { .. }
+            | Action::OfferGone { .. } => None,
             // Shared with workbooks (a name typed, a row's letter), or data a restore reads.
             Action::MarkType { .. }
             | Action::MarkBackspace
@@ -2889,6 +2919,13 @@ pub enum Effect {
         pid: i32,
         window: u32,
     },
+    /// Host window `window` of process `pid` in a new pane beside `pane` (`Action::Adopt`): the
+    /// user took the offer.
+    HostOffer {
+        pane: PaneId,
+        pid: i32,
+        window: u32,
+    },
     /// Look at these apps' windows every 2 s and send `SlotWindows` when they change. Empty: none.
     WatchSlots {
         apps: Vec<(Option<String>, String)>,
@@ -3095,6 +3132,7 @@ mod agent;
 pub mod chat;
 pub mod editor;
 pub mod finish;
+pub mod offers;
 mod pick;
 pub mod slots;
 mod transcribe;
@@ -3444,6 +3482,12 @@ pub struct Model {
     /// its app: a pane of that app writes it back, so turning the flag on again loses none.
     #[serde(skip)]
     slot_dormant: std::collections::BTreeMap<PaneId, (Option<String>, String, serde_json::Value)>,
+    /// Windows apps opened by themselves, floating, each offered by its app's pane. In the state:
+    /// the pane and the window id, never the title.
+    pub offers: Vec<offers::Offer>,
+    /// Empty panes that wait for a window their app remade: each offers it (`offer_keeps`).
+    #[serde(skip)]
+    offer_panes: std::collections::BTreeSet<PaneId>,
     /// The user's `windows` rules, as the settings say: a slot is offered no window they ignore.
     #[serde(skip)]
     window_rules: Vec<crate::rules::Rule>,
@@ -3580,6 +3624,8 @@ impl Default for Model {
             slot_looks: Vec::new(),
             slot_watch: Vec::new(),
             slot_dormant: Default::default(),
+            offers: Vec::new(),
+            offer_panes: Default::default(),
             window_rules: Vec::new(),
         };
         // Home's own tab, on show.
@@ -3775,6 +3821,11 @@ impl Model {
                 if origin == Origin::Socket =>
             {
                 Some(crate::slot::SHELLS_ALONE)
+            }
+            // A window an app opened by itself goes in a pane only by the user's hand.
+            Action::OfferAccept { .. } | Action::OfferDismiss { .. } => Some(offers::USERS_ALONE),
+            Action::WindowOffered { .. } | Action::OfferGone { .. } if origin == Origin::Socket => {
+                Some(offers::SHELLS_ALONE)
             }
             // Nor takes one out of the user's layout, or moves it to a tab they do not see.
             Action::Close { .. }
@@ -4601,6 +4652,7 @@ impl Model {
         self.mark_stuck();
         self.prune_unfilled();
         self.settle_slots(&mut effects);
+        self.settle_offers();
         self.settle_app_filter();
         self.settle_talk();
         // The inspector goes with its pane, and gives up the keyboard to an app that takes it.
@@ -6333,6 +6385,10 @@ impl Model {
             | Action::SlotHosted { .. }
             | Action::SlotTick { .. }) => self.slot_act(action, effects),
             Action::WindowGone { pane, app_running, at } => self.window_gone(pane, app_running, at, effects),
+            action @ (Action::WindowOffered { .. }
+            | Action::OfferAccept { .. }
+            | Action::OfferDismiss { .. }
+            | Action::OfferGone { .. }) => self.offer_act(action, effects),
         }
     }
 
@@ -9452,7 +9508,11 @@ mod tests {
         Action::SlotWindows { .. },
         Action::SlotHosted { .. },
         Action::SlotTick { .. },
-        Action::WindowGone { .. }
+        Action::WindowGone { .. },
+        Action::WindowOffered { .. },
+        Action::OfferAccept { .. },
+        Action::OfferDismiss { .. },
+        Action::OfferGone { .. }
     );
 
     /// One of each action.
@@ -9770,6 +9830,10 @@ mod tests {
             Action::SlotHosted { pane: 1, kind: None },
             Action::SlotTick { at: 0 },
             Action::WindowGone { pane: 9, app_running: true, at: 0 },
+            Action::WindowOffered { pane: 1, pid: 1, window: 9, title: text(), why: text() },
+            Action::OfferAccept { window: 9 },
+            Action::OfferDismiss { window: 9 },
+            Action::OfferGone { window: 9 },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
         places.sort_unstable();
@@ -9830,6 +9894,17 @@ mod tests {
                 Some(crate::agent_mode::USERS_ALONE)
             }
             Action::AppUsed { .. } if origin == Origin::Socket => Some(crate::agent_mode::SHELLS_ALONE),
+            _ => None,
+        }
+    }
+
+    /// An offered window put in a pane or waved away: the user's alone. A new window: the shell's.
+    fn offer_refused(action: &Action, origin: Origin) -> Option<&'static str> {
+        match action {
+            Action::OfferAccept { .. } | Action::OfferDismiss { .. } => Some(offers::USERS_ALONE),
+            Action::WindowOffered { .. } | Action::OfferGone { .. } if origin == Origin::Socket => {
+                Some(offers::SHELLS_ALONE)
+            }
             _ => None,
         }
     }
@@ -10023,6 +10098,7 @@ mod tests {
                     _ if listen_refused(action, origin).is_some() => listen_refused(action, origin),
                     _ if agent_refused(action, origin).is_some() => agent_refused(action, origin),
                     _ if slot_refused(action, origin).is_some() => slot_refused(action, origin),
+                    _ if offer_refused(action, origin).is_some() => offer_refused(action, origin),
                     Action::TaskTalk { .. }
                     | Action::TaskCard { .. }
                     | Action::SessionOpen { .. }
@@ -16280,6 +16356,7 @@ mod tests {
                     _ if listen_refused(action, origin).is_some() => listen_refused(action, origin),
                     _ if agent_refused(action, origin).is_some() => agent_refused(action, origin),
                     _ if slot_refused(action, origin).is_some() => slot_refused(action, origin),
+                    _ if offer_refused(action, origin).is_some() => offer_refused(action, origin),
                     Action::TaskTalk { .. }
                     | Action::TaskCard { .. }
                     | Action::SessionOpen { .. }

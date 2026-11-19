@@ -1034,17 +1034,29 @@ in the terminal.
 ## App panes
 
 To put an app window in a pane, open Apps on the left rail and click the app. It fills the focused pane if that is
-empty, otherwise it splits right. Shift-click splits down. New windows of a hosted app get their
-own pane, to the right of the app's, unless they are pop-ups. A pop-up stays a free window at its
-own size: ottospace asks for it in front once, and then leaves it to the app, which closes it. One
+empty, otherwise it splits right. Shift-click splits down.
+
+A new window of a hosted app never splits a pane by itself. It stays a free window at its own size,
+over its app's pane, and it is offered in that pane's header:
+`Zoom opened “Zoom Meeting” · no slot for this window · Put in a pane ×`. Put in a pane (a click,
+or its sneak label) splits it in, to the right of the app's pane; × leaves it floating. The offer
+goes when you choose, when the window closes, or when it goes in a pane another way; its pane
+closing moves it to another pane of the app. When an app remakes its window (closes it, opens
+another), the pane stays empty and offers the new one: `Zoom replaced its window · Bring it here ↵ ×`. Only you take
+or wave away an offer: a client's click is refused, and the window's title is never in the state.
+While you are in the app's pane its window covers the header: the offer shows once you leave.
+Later: ottospace remembers where you put a window of each app, and slots (`slots` flag) take the
+windows you name. ottospace asks for a floating window in front once, and then leaves it to the app, which closes it. One
 you can reach stays where the app put it: its title bar on screen and, while the app's pane is
 parked, not under ottospace's window unless it is over that pane. Any other (off screen, by its
 parked window, under ottospace) is first moved to the middle of its app's pane, wholly onto that
-pane's screen (a pop-up bigger than the screen at its top left). A pop-up is a dialog or panel
-(subrole `AXDialog`, `AXSystemDialog`, `AXFloatingWindow`, `AXSystemFloatingWindow`), a modal
-window, a standard window under 600×400 or under half its app's pane both ways, or one whose split
-would leave the app's pane narrower than the app's window has refused to go. A sheet stays on its
-window, and a window under 100×100 (an app's helper) where the app keeps it. `windows` rules decide first: `"do": "split"` and `"do": "float"`.
+pane's screen (a pop-up bigger than the screen at its top left). A dialog or panel (subrole
+`AXDialog`, `AXSystemDialog`, `AXFloatingWindow`, `AXSystemFloatingWindow`) or a modal window
+is offered too, its chip saying why it floats (`a dialog or panel, so it floats`): Zoom's meeting
+window can be a panel. A sheet stays on its window, and a window under 100×100 (an app's helper)
+where the app keeps it. `windows` rules decide first: `"do": "split"` splits it in, `"do": "float"`
+floats it with no offer, `"do": "ignore"` leaves it alone. Each decision is a `place` line in [the
+log](#the-log), with the rule that made it.
 
 Below the running apps the section lists apps that are not running. A click starts one in the
 background and puts its window in a pane (ottospace waits up to 30 seconds for the window):
@@ -1249,7 +1261,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |
-| `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title`, `identifier` (the app's own name for the window, its `AXIdentifier`: Zoom's main meeting window is `zm.meeting.window.main`; a window without one has empty text: `""` or `*` matches it) and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later, and is never moved. `"do": "manage"` undoes a built-in rule. A new window of a hosted app: `"do": "split"` puts it in a pane of its own even if it is a pop-up (a dialog, a small window; a sheet stays on its window); `"do": "float"` keeps it a free window over its app's pane, as a pop-up, and it never becomes a pane. Without either, pop-ups float and other standard windows split ([App panes](#app-panes)). Your rules come first, but a `split` or `float` rule never moves a window a built-in rule leaves alone (Zoom's share toolbar, Meeting chat): only `manage` does. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; a changed rule applies to windows seen after it | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
+| `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title`, `identifier` (the app's own name for the window, its `AXIdentifier`: Zoom's main meeting window is `zm.meeting.window.main`; a window without one has empty text: `""` or `*` matches it) and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later, and is never moved. `"do": "manage"` undoes a built-in rule. A new window of a hosted app: `"do": "split"` puts it in a pane of its own even if it is a pop-up (a dialog, a small window; a sheet stays on its window); `"do": "float"` keeps it a free window over its app's pane, as a pop-up, and it never becomes a pane. Without either, a new window floats and is offered in its app's pane ([App panes](#app-panes)): none splits by itself. Your rules come first, but a `split` or `float` rule never moves a window a built-in rule leaves alone (Zoom's share toolbar, Meeting chat): only `manage` does. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; a changed rule applies to windows seen after it | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
 | `apps` | The pinned apps: listed first under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. Each is the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`), looked for in `/Applications`, `~/Applications` and `/System/Applications` (and their `Utilities`), or the path of its bundle (`~/Tools/Lumen.app`). One that is not found is left out of the list and kept in the file. Pin and Unpin in the Apps section write this list: the name if it means that same bundle when read back (the first of that name in those folders, in that order), else its path. A name that is found only once ottospace runs (the app was installed since) is listed from the next scan. (Once you type in the picker it offers every installed app in those folders, these first) | none |
 | `apps_hidden` | Apps of the Dock not to suggest in Apps, written as `apps` is. Hide in the Apps section writes this list | none |
 | `wheel_to_apps` | The wheel or trackpad over an app pane you are not in brings its window up for the scroll (a peek). `false`: the wheel there does nothing | `true` |
@@ -1358,6 +1370,7 @@ Only you can read it (0600). At 1 MB it becomes `log.1` and the one before goes:
 | `redrawn` | Frames came again after a written stall: `kicks`, `lasted_ms`, its `n` |
 | `host_failed` | A window could not be hosted: its number |
 | `give_back_failed` | A hosted window could not be put back on a screen: its number |
+| `place` | A new window of a hosted app was judged: `bundle`, `subrole`, `modal`, `sheet`, `size`, `pane` (its app pane's size), `min_width` (the least width that pane's window kept), `place` (`split`, `offer`, `float`, `leave`), `why` (`no_slot`, `dialog`, `modal`, `tiny`, `sheet`, `kind`, `rule`) and `rule` (`windows[2]: manage`, `built-in rule 3: ignore`, or null). Never the title |
 | `gpui` | An error or warning of GPUI's macOS layer: `level`, `src` (`gpui-0.2.2/src/platform/mac/window.rs:489`), `said` only when fixed words and a code (`could not create display link, code: -6661`), and `n`: one from the same place is written its 1st, 2nd, 4th, 8th.. time |
 | `panic` | `src` (`crate/src/file.rs:line`) and `thread`; never the message |
 | `listen_audio` | A transcript's sound started: the app's `bundle`, `pids` the stream hears (the app and the helpers it started that ScreenCaptureKit offers, of its own bundle id or one under it), whether it or a helper was `playing`, and `unoffered`: helpers playing that SCK does not offer, whose sound is not heard |

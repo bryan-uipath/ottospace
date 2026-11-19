@@ -543,6 +543,17 @@ export class Client {
     return this.snapshot({ cmd: "app_fixture", ...args });
   }
   /**
+   * For tests (`OTTOSPACE_E2E`): a new window of app pane `pane`'s app, as if just seen: judged,
+   * logged and offered as a real one. Rejects outside a test run.
+   */
+  windowFixture(args: { pane: number; size: [number, number]; title?: string; subrole?: string; modal?: boolean }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "window_fixture", ...args });
+  }
+  /** For tests (`OTTOSPACE_E2E`): fixture window `window` closed. */
+  windowFixtureClose(args: { window: number }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "window_fixture_close", ...args });
+  }
+  /**
    * For tests (`OTTOSPACE_E2E`): hears the app `OTTOSPACE_HOST_ONLY` names, no recogniser, each
    * buffer's presentation time kept. Rejects outside a test run: no client hears an app.
    */

@@ -210,9 +210,18 @@ fn a_window_the_rules_ignore_never_becomes_a_pane() {
     otto.call(json!({"cmd": "open_app", "name": CANARY}));
     assert_eq!(titles(), ["Canary 1"]);
 
-    // The app opens two more windows. The third gets a pane; the second, which the rule names, does not.
+    // The app opens two more windows. The third is offered, and the user's click puts it in a
+    // pane; the second, which the rule names, is not offered.
     canary.call(json!({"cmd": "open_window"}));
     canary.call(json!({"cmd": "open_window"}));
+    let offered = wait_offers(&otto, 1);
+    std::thread::sleep(Duration::from_millis(1200));
+    assert_eq!(
+        (wait_offers(&otto, 1), titles()),
+        (offered.clone(), vec!["Canary 1".to_string()]),
+        "no split by itself"
+    );
+    take_offer(&otto, offered[0]);
     wait_for("the third window's pane", || titles().contains(&"Canary 3".to_string()).then_some(()));
     assert_eq!(titles(), ["Canary 1", "Canary 3"]);
     // It was left where the app put it. A window in a pane is parked at the far corner of the
@@ -224,7 +233,7 @@ fn a_window_the_rules_ignore_never_becomes_a_pane() {
 
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
-fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_still_splits() {
+fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_is_offered_not_split() {
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-popup", "CANARY_SOCKET", &[]);
     let frame = |index: usize| rect(&canary.call(json!({"cmd": "state"}))["windows"][index]["bounds"]);
     wait_for("the canary window", || frame(0));
@@ -297,9 +306,14 @@ fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_still_spl
         assert!(!over_pane(beside) && reachable(beside), "{beside:?}");
     }
 
-    // A big standard window still gets a pane of its own, to the right. Wider than half the
-    // pane and taller than 400: not small on any screen.
+    // A big standard window floats too, offered (as the small one and the dialogs are): no size splits a pane.
+    // The user's click on the offer puts it in a pane of its own, to the right.
+    // The dialogs and the small window are offered too: one more for the big one.
+    let before = state()["state"]["offers"].as_array().map_or(0, Vec::len);
     canary.call(json!({"cmd": "open_window", "min": [body[2] * 0.6, 420.0]}));
+    let offered = wait_offers(&otto, before + 1);
+    assert_eq!((state()["tab_panes"].clone(), hosted()), (json!([[1]]), 1), "no split by itself");
+    take_offer(&otto, offered[before]);
     wait_for("the big window's pane", || (state()["tab_panes"] == json!([[1, 2]])).then_some(()));
     assert_eq!(hosted(), 2);
     assert_eq!(state()["state"]["panes"][1]["kind"]["title"], if room { "Canary 5" } else { "Canary 4" });
@@ -476,8 +490,10 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     wait_for("the return key to leave app mode", || (state()["mode"] == "normal").then_some(()));
     wait_for("the window to park after the return key", || hosted().filter(at_spot));
 
-    // A window the app opens itself gets its own pane, to the right, without taking focus.
+    // A window the app opens itself is offered; the user's click gives it its own pane, to the
+    // right, without taking focus.
     canary.call(json!({"cmd": "open_window"}));
+    take_offer(&otto, wait_offers(&otto, 1)[0]);
     wait_for("the new window's pane", || (state()["tab_panes"] == json!([[1, 2]])).then_some(()));
     assert_eq!(state()["state"]["focused"], 1);
     let (first, second) = (wait_for("pane 1", || pane(1)), wait_for("pane 2", || pane(2)));
@@ -1040,6 +1056,7 @@ fn a_mark_hosts_its_canary_window_again_and_of_two_windows_the_one_with_its_titl
         (&json!("app"), &json!(true), &json!(1))
     );
     canary.call(json!({"cmd": "open_window"}));
+    take_offer(&otto, wait_offers(&otto, 1)[0]);
     wait_for("the second window's pane", || (titled(&state()).len() == 2).then_some(()));
     assert_eq!(titled(&state())[1], (2, "Canary 2".to_string()));
     otto.call(json!({"cmd": "mark_add", "pane": 2, "name": "two", "key": "b"}));
@@ -1451,6 +1468,28 @@ fn splitting_home(name: &str) -> PathBuf {
     home
 }
 
+/// The windows offered (`offers`) once there are `n`.
+fn wait_offers(otto: &Proc, n: usize) -> Vec<u64> {
+    wait_for(&format!("{n} offers"), || {
+        let offers = otto.call(json!({"cmd": "state"}))["state"]["offers"].as_array().cloned().unwrap_or_default();
+        (offers.len() == n).then(|| offers.iter().filter_map(|o| o["window"].as_u64()).collect())
+    })
+}
+
+/// The user's click on Put in a pane in the chip that offers `window`, found by its sneak label.
+fn take_offer(otto: &Proc, window: u64) {
+    let id = format!("offer:{window}");
+    let reply = otto.call(json!({"cmd": "sneak"}));
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    let targets = reply["sneak"]["targets"].as_array().cloned().unwrap_or_default();
+    let target =
+        targets.iter().find(|t| t["source"]["id"] == id.as_str()).unwrap_or_else(|| panic!("no {id}: {reply}"));
+    let [x, y] = middle(["x", "y", "w", "h"].map(|key| target["frame"][key].as_f64().unwrap_or_default()));
+    for action in ["down", "up"] {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": x, "y": y, "as": "user"}));
+    }
+}
+
 /// Hosts the canary's first window and waits for it to park. Returns the parking spot.
 fn host_and_park(otto: &Proc) -> [f64; 2] {
     let reply = otto.call(json!({"cmd": "open_app", "name": CANARY}));
@@ -1582,16 +1621,20 @@ fn a_window_the_app_remade_while_hosted_is_not_stranded() {
     wait_for("the canary window", || global_frame(&canary, 0));
     let otto = otto_for(&canary, "otto-remade", &[]);
     let spot = host_and_park(&otto);
-    // The app closes its window and opens a new one where the old one stood: parked.
+    // The app closes its window and opens a new one where the old one stood: parked, offered.
     canary.call(json!({"cmd": "recreate", "index": 0, "at": [spot[0], spot[1] - 200.0]}));
     let titles = || -> Vec<String> {
         let panes = otto.call(json!({"cmd": "state"}))["state"]["panes"].as_array().cloned().unwrap_or_default();
         panes.iter().filter_map(|p| p["kind"]["title"].as_str().map(str::to_string)).collect()
     };
+    // Its pane waits, empty, offering the new window: the user's Bring it here puts it there.
+    let offered = wait_offers(&otto, 1);
+    wait_for("the pane to wait for it", || {
+        (otto.call(json!({"cmd": "state"}))["state"]["panes"][0]["kind"]["type"] == "empty").then_some(())
+    });
+    take_offer(&otto, offered[0]);
     wait_for("the new window's pane alone", || (titles() == ["Canary 2"]).then_some(()));
-    // It was found off screen: what is recorded is the middle of the screen.
-    let state = otto.call(json!({"cmd": "state"}));
-    assert!(state["notice"].as_str().is_some_and(|n| n.contains("off screen")), "{}", state["notice"]);
+    // It floated onto the screen over its pane before it was offered: what is recorded is on screen.
     otto.call(json!({"cmd": "quit"}));
     wait_for("the new window on screen", || {
         let windows = canary.call(json!({"cmd": "state"}))["windows"].clone();
@@ -2446,6 +2489,7 @@ fn clicks_reach_hosted_windows_as_the_user_switches_between_their_panes() {
     let state = || otto.call(json!({"cmd": "state"}));
     let spot = host_and_park(&otto);
     canary.call(json!({"cmd": "open_window"}));
+    take_offer(&otto, wait_offers(&otto, 1)[0]);
     wait_for("the second window's pane", || (state()["tab_panes"] == json!([[1, 2]])).then_some(()));
     let clicks = |i: usize| canary.call(json!({"cmd": "state"}))["windows"][i]["clicks"].as_array().map_or(0, Vec::len);
     // Waits up to 2 s for window `i` to have more clicks than `before`.

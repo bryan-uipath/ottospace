@@ -163,6 +163,8 @@ fn fields_of(event: &str) -> &'static [&'static str] {
         "listen_audio_filter" => &["bundle", "pids"],
         "listen_quiet" => &["bundle", "pids", "buffers"],
         "listen_counts" => &["bundle", "buffers", "loud", "lines"],
+        // Where a new window of a hosted app went, and why: never its title.
+        "place" => &["bundle", "subrole", "modal", "sheet", "size", "pane", "min_width", "place", "why", "rule"],
         _ => &[],
     }
 }
