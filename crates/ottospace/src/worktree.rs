@@ -1,6 +1,8 @@
-//! `git worktree add` for the Repos section's +: the one git the app runs. A fixed argv, the branch
-//! checked by the core (`repos::check_branch`), the folder checked here to be new and inside
-//! `worktrees_dir`. Runs off the main thread; nothing is ever deleted but a folder made here, empty.
+//! `git worktree add` for the Repos section's +, and `git worktree remove` of a done task's own
+//! worktree (the core says which). Fixed argvs, the branch checked by the core
+//! (`repos::check_branch`), the folder checked here to be new and inside `worktrees_dir`. Runs off
+//! the main thread. Nothing is deleted but a folder made here, empty, and a worktree git removes
+//! without `--force`: a dirty one stays.
 
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
@@ -35,6 +37,38 @@ pub fn start(repo: String, branch: String, path: String, root: String, fresh: bo
         let _ = done.send(Made { repo, asked: path, fresh, result });
         ottospace_mac::wake::post();
     });
+}
+
+/// What a removal came to: `kept` none, removed; else why it stays.
+pub struct Removed {
+    pub task: ottospace_core::tasks::TaskId,
+    pub path: String,
+    pub kept: Option<String>,
+}
+
+/// Removes a done task's own worktree at `path`, of the repository at `repo`. Its end comes on `done`.
+pub fn start_remove(task: ottospace_core::tasks::TaskId, repo: String, path: String, done: mpsc::Sender<Removed>) {
+    std::thread::spawn(move || {
+        let kept = remove(Path::new(&repo), Path::new(&path)).err();
+        let _ = done.send(Removed { task, path, kept });
+        ottospace_mac::wake::post();
+    });
+}
+
+/// `git worktree remove` with no `--force`: git refuses one with changes or untracked files, and
+/// it stays; its branch always does. Why it stays, for the status bar: "Kept the worktree: 3
+/// uncommitted changes".
+fn remove(repo: &Path, path: &Path) -> Result<(), String> {
+    let (ok, said) = git(repo, &[OsStr::new("worktree"), OsStr::new("remove"), OsStr::new("--"), path.as_os_str()])?;
+    if ok {
+        return Ok(());
+    }
+    let changes = git(path, &["status", "--porcelain"]).ok().filter(|(ok, _)| *ok).map(|(_, out)| out.lines().count());
+    Err(match changes {
+        Some(1) => "Kept the worktree: 1 uncommitted change".into(),
+        Some(n) if n > 1 => format!("Kept the worktree: {n} uncommitted changes"),
+        _ => format!("Kept the worktree: {}", git_said(&said)),
+    })
 }
 
 /// Makes the worktree: a local branch is checked out; one only a remote has (`origin/feat`, of one
@@ -248,5 +282,26 @@ mod tests {
         let mut branch = Command::new("git");
         branch.arg("-C").arg(&made).args(["rev-parse", "--abbrev-ref", "HEAD"]);
         assert_eq!(String::from_utf8_lossy(&branch.output().unwrap().stdout).trim(), "new-task");
+    }
+
+    /// Done's removal: a clean worktree goes, its branch stays; one with an edit or an untracked
+    /// file stays, and says how many.
+    #[test]
+    fn a_clean_worktree_is_removed_and_a_dirty_one_kept_with_its_count() {
+        let scratch = Scratch::dir(&format!("ottospace-worktree-remove-{}", std::process::id()));
+        let repo = scratch.join("app");
+        repository(&repo);
+        let root = scratch.join("worktrees");
+        let clean = add(&repo, "fix-login", &root.join("app/fix-login"), &root, true).unwrap();
+        remove(&repo, &clean).unwrap();
+        assert!(!clean.exists());
+        let mut branch = Command::new("git");
+        branch.arg("-C").arg(&repo).args(["rev-parse", "--verify", "--quiet", "refs/heads/fix-login"]);
+        assert!(branch.status().unwrap().success(), "the branch stays");
+        let dirty = add(&repo, "docs", &root.join("app/docs"), &root, true).unwrap();
+        fs::write(dirty.join("a.md"), "a").unwrap();
+        fs::write(dirty.join("b.md"), "b").unwrap();
+        assert_eq!(remove(&repo, &dirty), Err("Kept the worktree: 2 uncommitted changes".into()));
+        assert!(dirty.join("a.md").exists(), "nothing of it went");
     }
 }

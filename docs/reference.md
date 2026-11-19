@@ -308,8 +308,19 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    idles. While a turn runs there is no Done: the composer's Stop (or Esc Esc) stops that turn,
    the one stop button; in the terminal view, its Stop. Done (also ⌘↵ in the
    conversation) makes the task done and stops its agent; the drawer folds into its rail and the
-   task leaves the rail, its workspace stays on the top row. The notice bar says
-   `Done · <task>` with Undo for six seconds: Undo brings it back as it was, in front. Later
+   task leaves the rail, its workspace stays on the top row. In about 0.8 s, no sound: the drawer
+   seals into a green ring with a tick that draws itself and a few sparks, slides into the rail,
+   and the task's rail item pops with a ✓ on its corner before it goes. With Reduce Motion the
+   tick shows still and the drawer fades, no sparks. The notice bar says
+   `Done · <task>` with Undo for six seconds: Undo brings it back as it was, in front; New task
+   here (⌘N) opens the box in that workspace. A worktree the new-task box made for the task is
+   removed (`git worktree remove`, never `--force`; its branch stays, and Undo adds it back):
+   kept, and the line says why, while it has uncommitted or untracked changes ("Kept the
+   worktree: 3 uncommitted changes"), a terminal is in it, or another task works there. A
+   workspace whose folder it was falls back to its repository, so the next task there starts in
+   it (a new worktree offered as usual). The repository's own checkout and a worktree the task
+   did not make are never touched. Done tasks are under Done today in Tasks, below the open
+   ones; a click there makes it a task again and goes on with its session. Later
    (also the dim × on a rail item's hover, and ⌘W while the keyboard is in the drawer) stops the
    agent and parks the task under Later in Tasks, off the rail; the next task of the workspace
    comes in front. While a turn runs it asks first: Stop "<task>" and put it away? (↵ stops, Esc

@@ -68,7 +68,11 @@ impl Workspace {
         };
         let (top, foot): (Vec<RailItem>, Vec<RailItem>) =
             items.iter().partition(|it| it.section() == RailSection::Workspace);
-        let (shown, top): (Vec<RailItem>, Vec<Stateful<Div>>) = top.into_iter().filter_map(item).unzip();
+        let (shown, mut top): (Vec<RailItem>, Vec<Stateful<Div>>) = top.into_iter().filter_map(item).unzip();
+        // The task Done takes off keeps its place until its seal lands there (`seal.rs`).
+        if let Some(at) = self.seal_slot() {
+            top.insert(at.min(top.len()), div().id("drawer-rail-landing").flex_none().size(px(ITEM)));
+        }
         // The item the keys or the selection moved to, scrolled into view once: a wheel may move it out again.
         // A space's own: drawn anew, or another space's, it starts at the top.
         // Keyed and selected apart: the keys entering the rail on the selected item scroll to it too.

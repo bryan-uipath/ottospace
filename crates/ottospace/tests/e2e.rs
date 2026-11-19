@@ -8398,12 +8398,13 @@ fn tasks_show_by_state_or_project_with_time_tokens_a_footer_and_a_card() {
     otto.call(json!({"cmd": "task_set_state", "id": 3, "state": "done"}));
     otto.call(json!({"cmd": "task_set_state", "id": 2, "state": "needs_you"}));
 
-    // By state: Needs you, Running (the adopted session's task, its live line and model), Later; Done folded.
+    // By state: Needs you, Running (the adopted session's task, its live line and model), Later;
+    // what was done today under Done today, open.
     let reply = otto.call(json!({"cmd": "state"}));
     let sections = reply["tasks_bar"]["sections"].as_array().unwrap().clone();
     let headings: Vec<&str> = sections.iter().map(|s| s["heading"].as_str().unwrap()).collect();
-    assert_eq!(headings, ["needs_you", "running", "later", "done"]);
-    assert_eq!((&sections[3]["count"], &sections[3]["collapsed"]), (&json!(1), &json!(true)));
+    assert_eq!(headings, ["needs_you", "running", "later", "done_today"]);
+    assert_eq!((&sections[3]["count"], &sections[3]["collapsed"]), (&json!(1), &json!(false)));
     let running = &sections[1]["rows"][0];
     // Its one fact: how long it has run, as its card's Started. Its model is on the card.
     let card = &reply["tasks_progress"]["cards"]["1"];
@@ -11136,7 +11137,11 @@ fn finish_fixtures() -> Vec<(&'static str, String)> {
 
 /// A task's first turn over: launched with `finish_fixtures`, its conversation open and idle.
 fn finish_launch(name: &str) -> (PathBuf, PathBuf, Otto) {
-    let (root, record, env) = native_setup(name, &finish_fixtures(), &[]);
+    finish_launch_with(name, &[])
+}
+
+fn finish_launch_with(name: &str, extra: &[(&str, &str)]) -> (PathBuf, PathBuf, Otto) {
+    let (root, record, env) = native_setup(name, &finish_fixtures(), extra);
     let otto = launch_env(name, &env);
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
@@ -11170,6 +11175,12 @@ fn done_on_an_idle_task_leaves_the_rail_and_undo_brings_it_back() {
     let shown = finish(&otto);
     assert_eq!((&shown["later"], &shown["done"], &shown["offered"]), (&json!(true), &json!(true), &json!(true)));
     assert_eq!((task_state(&otto), rail_of(&otto)), (json!("needs_you"), vec![json!(1)]));
+    // The offer goes once the user types, and comes back with an empty composer.
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("a");
+    assert_eq!(finish(&otto)["offered"], false);
+    otto.user_key("backspace");
+    assert_eq!(finish(&otto)["offered"], true);
     // A client's click on ✓ Done, and on the offer's: nothing.
     let done = rect(&shown["rects"]["done"]);
     let reply = otto.click(at(done, 0.5, 0.5), 1);
@@ -11193,6 +11204,10 @@ fn done_on_an_idle_task_leaves_the_rail_and_undo_brings_it_back() {
     assert_eq!((&space["of"]["id"], &space["front"]), (&json!(1), &Value::Null), "{space}");
     let bar = &state["notice_bar"];
     assert_eq!((&bar["text"], &bar["offer"]), (&json!("Done · fix login"), &json!("undo")), "{bar}");
+    // In Tasks, under Done today, open.
+    let sections = state["tasks_bar"]["sections"].as_array().cloned().unwrap_or_default();
+    let today = sections.iter().find(|s| s["heading"] == "done_today").cloned().unwrap_or_default();
+    assert_eq!((&today["count"], &today["collapsed"]), (&json!(1), &json!(false)), "{sections:?}");
     // Undo: done no more, on the rail, in front, the drawer on it.
     otto.user_click(at(rect(&bar["offer_rect"]), 0.5, 0.5));
     assert_eq!((task_state(&otto), rail_of(&otto)), (json!("needs_you"), vec![json!(1)]));
@@ -11203,6 +11218,64 @@ fn done_on_an_idle_task_leaves_the_rail_and_undo_brings_it_back() {
     otto.user_click(at(otto.control("talk"), 0.5, 0.5));
     otto.user_key("cmd-enter");
     otto.wait_for("done by ⌘↵", |o| (task_state(o) == "done").then_some(()));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The seal, fold and land of the user's Done: frames while it plays (about 0.8 s), sparks among
+/// them, then none: at rest it asks for no frame.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn dones_seal_plays_its_frames_and_stops() {
+    let (root, _record, otto) = finish_launch("seal");
+    let counts = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"].clone();
+    assert_eq!((&counts(&otto)["seal_frames"], &counts(&otto)["seal_spark_frames"]), (&json!(0), &json!(0)));
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("cmd-enter");
+    otto.wait_for("the seal's frames", |o| (counts(o)["seal_spark_frames"].as_u64()? > 0).then_some(()));
+    let done = otto.wait_for("the seal at rest", |o| {
+        let before = counts(o)["seal_frames"].clone();
+        std::thread::sleep(Duration::from_millis(300));
+        (counts(o)["seal_frames"] == before).then_some(before)
+    });
+    assert!(done.as_u64().unwrap() > 2, "{done}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(counts(&otto)["seal_frames"], done, "no frames at rest");
+    assert_eq!(task_state(&otto), json!("done"));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Undo while the seal plays: it stops at once, and draws no ✓ on the task back on the rail.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn an_undo_stops_dones_seal() {
+    let (root, _record, otto) = finish_launch("seal-undo");
+    let counts = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["seal_frames"].clone();
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("cmd-enter");
+    let bar = otto.call(json!({"cmd": "state"}))["notice_bar"].clone();
+    otto.user_click(at(rect(&bar["offer_rect"]), 0.5, 0.5));
+    assert_eq!((task_state(&otto), rail_of(&otto)), (json!("needs_you"), vec![json!(1)]));
+    let after = counts(&otto);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(counts(&otto), after, "no frame after the Undo");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// With Reduce Motion (a test run's `OTTOSPACE_REDUCE_MOTION`): the seal plays still, the drawer
+/// fades; no frame of it has sparks.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn dones_seal_has_no_sparks_with_reduce_motion() {
+    let (root, _record, otto) = finish_launch_with("seal-calm", &[("OTTOSPACE_REDUCE_MOTION", "1")]);
+    let counts = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"].clone();
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("cmd-enter");
+    otto.wait_for("the seal's frames", |o| (counts(o)["seal_frames"].as_u64()? > 2).then_some(()));
+    std::thread::sleep(Duration::from_millis(1000));
+    assert_eq!(counts(&otto)["seal_spark_frames"], 0, "{}", counts(&otto));
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -11260,6 +11333,135 @@ fn later_asks_while_a_turn_runs_and_the_composers_stop_stops_only_the_turn() {
     otto.user_key("cmd-w");
     assert_eq!(panes(&otto), split.map(|n| n - 1));
     drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A real repository `app` listed, the native stand-in `claude` replaying `finish_fixtures`; the
+/// user's workspace of it, and a task "fix login" started there in a new worktree the box made,
+/// its first reply in. Returns the root and home (to remove), `app` and the worktree's path.
+fn made_launch(name: &str) -> (PathBuf, PathBuf, String, String, Otto) {
+    let root = support::temp(&format!("ottospace-e2e-{name}-{}", std::process::id()));
+    let (bin, record, dir, app) =
+        (root.join("bin"), root.join("record"), root.join("fixtures"), root.join("repos/app"));
+    for folder in [&bin, &record, &dir, &app] {
+        std::fs::create_dir_all(folder).unwrap();
+    }
+    for (file, body) in finish_fixtures() {
+        std::fs::write(dir.join(file), format!("{body}\n")).unwrap();
+    }
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-agents/tests/fakes/claude"),
+        bin.join("claude"),
+    )
+    .unwrap();
+    git(&app, &["init", "-q", "-b", "main"]);
+    git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"]);
+    let app = app.canonicalize().unwrap().to_string_lossy().into_owned();
+    let sessions = root.join("sessions/claude");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let settings = json!({"repos": [&app], "conversation_view": "native", "session_dirs": {"claude": [sessions]}});
+    let home = user_folder(name, &settings.to_string());
+    let env = [
+        ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("FAKE_DIR", record.to_str().unwrap()),
+        ("FAKE_FIXTURES", dir.to_str().unwrap()),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ];
+    let otto = Otto::launch_with(name, &env);
+    let made = home.canonicalize().unwrap().join("worktrees/app/fix-login").to_string_lossy().into_owned();
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    otto.user_click(at(otto.control(&format!("repo:{app}")), 0.5, 0.5));
+    otto.user_key("cmd-n");
+    otto.user_key("f i x space l o g i n");
+    otto.user_key("cmd-alt-n");
+    otto.user_key("enter");
+    otto.wait_for("the first reply, in its worktree", |o| (finish(o)["offered"] == true).then_some(()));
+    assert!(Path::new(&made).join(".git").is_file(), "no worktree at {made}");
+    (root, home, app, made, otto)
+}
+
+fn selected_space(o: &Otto) -> Value {
+    let state = o.call(json!({"cmd": "state"}));
+    state["spaces"].as_array().unwrap().iter().find(|s| s["selected"] == true).cloned().unwrap_or_default()
+}
+
+fn branch_there(app: &str, branch: &str) -> bool {
+    let mut git = Command::new("git");
+    git.arg("-C").arg(app).args(["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]);
+    git.env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1");
+    git.stdout(std::process::Stdio::null()).status().unwrap().success()
+}
+
+/// Done on a task whose box made its worktree: dirty (an untracked file), it is kept and the
+/// line says why; clean, git removes it (no `--force`) and its branch stays. The workspace
+/// stays on the row, its folder back on the repository, and the line's New task here opens the
+/// box in it: the next task starts in `app`, in that same workspace.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn done_removes_its_clean_worktree_keeps_a_dirty_one_and_a_new_task_starts_in_the_workspace() {
+    let (root, home, app, made, otto) = made_launch("done-worktree");
+    let space = selected_space(&otto);
+    assert_eq!(space["worktree"], json!(made), "{space}");
+    // Dirty: kept, and said.
+    std::fs::write(Path::new(&made).join("notes.md"), "made-up").unwrap();
+    otto.user_click(at(rect(&finish(&otto)["rects"]["done"]), 0.5, 0.5));
+    let bar = otto.wait_for("why it was kept", |o| {
+        let bar = o.call(json!({"cmd": "state"}))["notice_bar"].clone();
+        bar["text"].as_str().is_some_and(|t| t.contains("Kept")).then_some(bar)
+    });
+    assert_eq!(bar["text"], "Done · fix login · Kept the worktree: 1 uncommitted change", "{bar}");
+    assert!(Path::new(&made).join("notes.md").exists());
+    // Undo, clean it, go on, and Done again: removed, the branch kept.
+    otto.user_click(at(rect(&bar["offer_rect"]), 0.5, 0.5));
+    assert_eq!(task_state(&otto), json!("needs_you"));
+    std::fs::remove_file(Path::new(&made).join("notes.md")).unwrap();
+    otto.user_start();
+    otto.wait_for("its agent again", |o| (finish(o)["done"] == true).then_some(()));
+    otto.user_click(at(rect(&finish(&otto)["rects"]["done"]), 0.5, 0.5));
+    otto.wait_for("the worktree removed", |o| {
+        let gone = !Path::new(&made).exists();
+        let listed = o.call(json!({"cmd": "state"}))["state"]["repos"][0]["worktrees"].as_array().map(Vec::len);
+        (gone && listed == Some(0)).then_some(())
+    });
+    assert!(branch_there(&app, "fix-login"), "the branch stays");
+    let space = selected_space(&otto);
+    assert_eq!((&space["worktree"], &space["front"]), (&json!(app), &Value::Null), "{space}");
+    // New task here, on the line: the box in this workspace, its folder the repository.
+    let bar = otto.call(json!({"cmd": "state"}))["notice_bar"].clone();
+    assert_eq!(bar["text"], "Done · fix login", "{bar}");
+    otto.user_click(at(rect(&bar["new_task"]), 0.5, 0.5));
+    let typed = otto.user_key("w r i t e space d o c s");
+    assert_eq!(typed["compose_plan"]["dir"], "app", "{}", typed["compose_plan"]);
+    assert_eq!(typed["compose_worktree"]["new"], false, "a new worktree offered, not chosen");
+    otto.user_key("enter");
+    let state = otto.call(json!({"cmd": "state"}));
+    let tasks = state["state"]["tasks"]["list"].as_array().cloned().unwrap_or_default();
+    let docs = tasks.iter().find(|t| t["title"] == "write docs").cloned().unwrap_or_default();
+    assert_eq!(docs["repo"], json!(app), "{docs}");
+    let space = selected_space(&otto);
+    assert_eq!((&space["of"], &space["front"]), (&json!({"kind": "task", "id": 1}), &docs["id"]), "{space}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A terminal of the workspace in the task's worktree: Done keeps it, and says so.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn done_keeps_a_worktree_a_terminal_is_in() {
+    let (root, home, _app, made, otto) = made_launch("done-worktree-pane");
+    let pane = otto.call(json!({"cmd": "split", "kind": "terminal"}))["state"]["focused"].clone();
+    otto.call(json!({"cmd": "type", "pane": pane, "text": format!("cd '{made}' && echo IN''SIDE\r")}));
+    otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^INSIDE$"}));
+    otto.user_click(at(rect(&finish(&otto)["rects"]["done"]), 0.5, 0.5));
+    let bar = otto.call(json!({"cmd": "state"}))["notice_bar"].clone();
+    assert_eq!(bar["text"], "Done · fix login · Kept the worktree: a terminal is in it", "{bar}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(Path::new(&made).join(".git").is_file(), "kept");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&root);
 }
 

@@ -1,0 +1,18 @@
+# The seal, fold and land of ✓ Done (⌘↵): the ring and tick with sparks, the drawer into the
+# rail, the task's item popping with a ✓ before it leaves. `--record` films it.
+{"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"plan the week >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.replies","len":1}
+{"click":"talk"}
+{"settle":800}
+{"shot":"before"}
+{"record":"start"}
+{"cmd":"key","keys":"cmd-enter","as":"user"}
+{"shot":"seal"}
+{"sleep_ms":1200}
+{"record":"stop"}
+{"shot":"after"}

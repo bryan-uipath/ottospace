@@ -340,6 +340,10 @@ impl Workspace {
                 }
                 None
             }
+            ("notice", "new-task") => {
+                self.new_task(window, cx);
+                None
+            }
             ("notice", "offer") => {
                 if let Some((drawn, _)) = self.notice_shown().and_then(|shown| self.notice_offer(&shown)) {
                     self.take_notice_offer(drawn, window, cx);

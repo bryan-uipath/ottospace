@@ -313,7 +313,7 @@ function railRow(value: unknown, at: string): Snapshot["drawer"]["rail"][number]
 
 function heading(value: unknown, at: string): Heading {
   if (value === "needs_you" || value === "running" || value === "later") return value;
-  if (value === "done" || value === "sessions") return value;
+  if (value === "done_today" || value === "done" || value === "sessions") return value;
   throw wrong(at, "a heading", value);
 }
 
@@ -582,6 +582,7 @@ function task(value: unknown, at: string): Task {
     repo: orNull(str)(o.repo, `${at}.repo`),
     ...(o.folder === undefined ? {} : { folder: str(o.folder, `${at}.folder`) }),
     ...(o.worktree === undefined ? {} : { worktree: str(o.worktree, `${at}.worktree`) }),
+    ...(o.made === undefined ? {} : { made: made(o.made, `${at}.made`) }),
     agent: orNull(str)(o.agent, `${at}.agent`),
     paths: list(str)(o.paths, `${at}.paths`),
     resolved: list(str)(o.resolved, `${at}.resolved`),
@@ -851,6 +852,7 @@ function noticeBar(value: unknown, at: string): NoticeBar {
     offer: orNull(str)(o.offer, `${at}.offer`),
     offer_rect: orNull(rect)(o.offer_rect, `${at}.offer_rect`),
     close: orNull(rect)(o.close, `${at}.close`),
+    new_task: orNull(rect)(o.new_task, `${at}.new_task`),
     undo: orNull(noticeUndo)(o.undo, `${at}.undo`),
     rect: orNull(rect)(o.rect, `${at}.rect`),
     height: num(o.height, `${at}.height`),
@@ -1450,6 +1452,18 @@ function unsent(value: unknown, at: string): Unsent {
   const o = fields(value, at);
   const kinds = ["message", "answer", "btw", "new_task", "capture", "editor"] as const;
   return { kind: oneOf(kinds, "a draft's kind")(o.kind, `${at}.kind`), place: str(o.place, `${at}.place`) };
+}
+
+function made(value: unknown, at: string): { repo: string; branch: string; path: string; asked: string; root: string; removed: boolean } {
+  const o = fields(value, at);
+  return {
+    repo: str(o.repo, `${at}.repo`),
+    branch: str(o.branch, `${at}.branch`),
+    path: str(o.path, `${at}.path`),
+    asked: str(o.asked, `${at}.asked`),
+    root: str(o.root, `${at}.root`),
+    removed: bool(o.removed, `${at}.removed`),
+  };
 }
 
 function later(value: unknown, at: string): [number, string] {

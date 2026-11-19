@@ -74,15 +74,21 @@ impl Workspace {
     /// The box is about to open: tells the core what a `^reference` may name that only the
     /// shell knows. Each terminal's directory and program, and the apps installed.
     pub fn tell_compose_context(&mut self, cx: &mut Context<Self>) {
+        self.tell_terminals();
+        self.offer_installed(cx);
+    }
+
+    /// Each terminal's directory, its shell's and its program, now.
+    pub fn tell_terminals(&mut self) {
         let info = |(pane, terminal): (&ottospace_core::PaneId, &crate::Terminal)| TerminalInfo {
             pane: *pane,
             cwd: terminal.cwd(),
             program: terminal.running().and_then(|work| work.program),
+            shell: terminal.shell_cwd(),
         };
         let terminals = self.terminals.iter().map(info).collect();
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
         self.model.update(Action::SetTerminals { terminals, home }.sent_by(Origin::System));
-        self.offer_installed(cx);
     }
 
     /// Files or folders for the line: dropped on the box, picked, or pasted. Each goes in at

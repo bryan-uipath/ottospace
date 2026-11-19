@@ -204,7 +204,7 @@ export type RailItem = { kind: "transcript" } | { kind: "task"; id: TaskId };
 export type RailSection = "workspace" | "everywhere";
 
 /** A heading of the Tasks section, in the order drawn. `open`: tasks with tabs open that do not need the user. */
-export type Heading = "needs_you" | "running" | "later" | "done" | "sessions";
+export type Heading = "needs_you" | "running" | "later" | "done_today" | "done" | "sessions";
 
 /** How the Tasks section groups its tasks. */
 export type TasksView = "state" | "project";
@@ -357,6 +357,8 @@ export interface Task {
   folder?: string;
   /** The worktree its agent moved into, as its session said (a sub-agent's never): it works there since. Absent: the checkout of its folder. */
   worktree?: string;
+  /** The worktree the new-task box made for it (`repo`, `branch`, `path`, `asked`), its own: its Done removes it unless it is dirty or in use (`removed`). Absent: none. */
+  made?: { repo: string; branch: string; path: string; asked: string; root: string; removed: boolean };
   /** Who works it: `claude`, `codex`, or a saved agent's name. */
   agent: string | null;
   /** Paths the task is about, as typed. */
@@ -1470,6 +1472,8 @@ export interface NoticeBar {
   offer_rect: Rect | null;
   /** Its ×. Only the user's click dismisses. */
   close: Rect | null;
+  /** On "Done · <task>": its New task here (⌘N), where; else null. */
+  new_task: Rect | null;
   /** A workspace's Undo still offered beside a higher notice (an error, a meeting): its text and its Undo's rect. Only the user's click takes it. */
   undo: { text: string; rect: Rect | null } | null;
   rect: Rect | null;

@@ -250,6 +250,14 @@ impl Workspace {
                 .child(said)
                 .child(take)
         });
+        // "Done · <task>": a new task in its workspace, which stays.
+        let new_task = (self.model.done_notice().as_ref() == Some(&shown) && self.model.done_here()).then(|| {
+            button("notice-new-task")
+                .underline()
+                .child("New task here ⌘N")
+                .child(self.controls.mark("notice:new-task"))
+                .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)))
+        });
         let close = button("notice-close")
             .child("×")
             .child(mark(&self.marks, Mark::NoticeClose))
@@ -264,6 +272,7 @@ impl Workspace {
             .left_0()
             .w_full()
             .children(offer)
+            .children(new_task)
             .children(undo)
             .child(close);
         let bar = recessed(line, DEPTH).flex_none().w_full().h(px(self.bar.height));
@@ -287,6 +296,8 @@ impl Workspace {
             "offer": offer,
             "offer_rect": offer.and_then(|_| drawn(Mark::NoticeOffer)),
             "close": drawn(Mark::NoticeClose),
+            // "Done · <task>"'s New task here: where, or null.
+            "new_task": self.controls.bounds("notice:new-task").map(crate::rect),
             // A workspace's Undo beside a higher notice: its text and where its Undo is; null: none.
             "undo": self.undo_beside(shown).map(|undo| serde_json::json!({ "text": undo.text, "rect": drawn(Mark::NoticeUndo) })),
             // Where it is drawn, and how much of it shows: less than its full height while it moves.

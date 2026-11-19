@@ -109,10 +109,12 @@ impl Workspace {
             }))
     }
 
-    /// Done, as whoever acts: a client's is refused, and told why.
+    /// Done, as whoever acts: a client's is refused, and told why. The core is told first where
+    /// each terminal is now: one in the task's own worktree keeps it.
     pub(crate) fn done(&mut self, id: TaskId, window: &Window, cx: &mut Context<Self>) {
         // Its six seconds of Undo count from now, not from the last tick.
         self.dispatch(Action::Tick { now: crate::now_ms() }, ottospace_core::Origin::System, window, cx);
+        self.tell_terminals();
         self.dispatch(Action::TaskDone { id }, self.input, window, cx);
         cx.notify();
     }
@@ -120,6 +122,15 @@ impl Workspace {
     pub(crate) fn later(&mut self, id: TaskId, window: &Window, cx: &mut Context<Self>) {
         self.dispatch(Action::TaskLater { id }, self.input, window, cx);
         cx.notify();
+    }
+
+    /// The local day's start, when it turns: what Done today counts from.
+    pub(crate) fn tell_day(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let day = crate::day_start(crate::now_ms());
+        if self.told_day != day {
+            self.told_day = day;
+            self.dispatch(Action::LocalDay { day }, ottospace_core::Origin::System, window, cx);
+        }
     }
 
     /// The header's buttons and the offer, for the state: what shows and where (null: not drawn).
