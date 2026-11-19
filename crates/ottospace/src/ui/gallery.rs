@@ -80,7 +80,7 @@ fn rails() -> Div {
     let cells = [Side::Left, Side::Right].map(|side| {
         let looks = [("rest", None, State::Rest), ("hover", None, State::Hover), ("focus", None, State::Focus)]
             .into_iter()
-            .chain([("open", Some(theme::PRIMARY), State::Rest), ("open needs you", Some(theme::SNEAK), State::Rest)])
+            .chain([("open", Some(theme::PRIMARY), State::Rest)])
             .chain([("open focus", Some(theme::PRIMARY), State::Focus)]);
         let name = match side {
             Side::Left => "left",

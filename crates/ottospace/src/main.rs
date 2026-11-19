@@ -639,6 +639,8 @@ enum Mark {
     /// The left column's title strip, and the open section's header.
     Strip,
     BarHeader,
+    /// The Tasks rail cell's needs-you dot.
+    TasksDot,
     /// The meeting timeline's band, its workday marks (0 start, 1 end), now's tick, its n-th block,
     /// and the marker of blocks before (0) or after (1) it.
     Band,
@@ -3678,6 +3680,8 @@ impl Workspace {
             // The left column's title strip, and the open section's header (null: none open).
             "strip": marks.get(&Mark::Strip).copied().map(rect),
             "bar_header": marks.get(&Mark::BarHeader).copied().map(rect),
+            // The Tasks rail cell's needs-you dot (null: not drawn).
+            "tasks_dot": marks.get(&Mark::TasksDot).copied().map(rect),
             // While a pane is dragged: the pane a drop would land on and the zone of it, both
             // null over anything else. Null with no drag.
             "drag": cx.has_active_drag().then(|| serde_json::json!({
@@ -5285,7 +5289,6 @@ impl Workspace {
         // list's background, an accent bar at its left edge and no border on its right: it reads as
         // joined to the list.
         let open = self.model.sidebar;
-        let needs_you = self.model.tasks.needs_you() > 0;
         let sections = self.model.sections();
         div()
             .id("rail")
@@ -5300,9 +5303,7 @@ impl Workspace {
                 |(i, (section, icon, label))| {
                     let (section, label) = (*section, *label);
                     let active = open == Some(section);
-                    // Amber on Tasks while a task needs the user, as its dot is.
-                    let tasks = section == Section::Tasks && needs_you;
-                    let accent = active.then_some(if tasks { theme::SNEAK } else { theme::PRIMARY });
+                    let accent = active.then_some(theme::PRIMARY);
                     let state = ui::State::focus(self.model.rail_focus == Some(RailFocus::Left(section)));
                     ui::rail_cell(("rail", i), ui::Side::Left, accent, state)
                         .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
@@ -5312,6 +5313,7 @@ impl Workspace {
                         })))
                         .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(label.into()))))
                         .children((section == Section::Calendar).then(|| self.calendar_rail_mark()).flatten())
+                        .children(self.model.section_marked(section).then(|| self.needs_you_dot()))
                         .child(self.controls.mark(rail_id(label)))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.dispatch(Action::ToggleSection { section }, this.input, window, cx);
@@ -5319,6 +5321,15 @@ impl Workspace {
                 },
             ))
             .child(div().flex_1().border_r_1().border_color(rgb(theme::BORDER)))
+    }
+
+    /// The Tasks cell's dot while a task needs the user: at the icon's corner, as a badge's state dot.
+    fn needs_you_dot(&self) -> Div {
+        // A 7-point dot centred on the 20-point icon's top right corner.
+        let (top, right) = ((RAIL_CELL - 20.) / 2. - 3.5, (RAIL - 20.) / 2. - 3.5);
+        let dot = div().absolute().top(px(top)).right(px(right)).size(px(7.)).rounded_full();
+        let dot = dot.bg(rgb(theme::task(Group::NeedsYou))).border_1().border_color(rgb(theme::BACKGROUND));
+        dot.child(mark(&self.marks, Mark::TasksDot))
     }
 
     /// The strip over the rail and the section list: the traffic lights, and room to drag the
@@ -7833,6 +7844,7 @@ impl Render for Workspace {
                 Mark::Repo(_)
                     | Mark::Checkout(_)
                     | Mark::BarHeader
+                    | Mark::TasksDot
                     | Mark::Tab(_)
                     | Mark::Space(_)
                     | Mark::KeysKnown

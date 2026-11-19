@@ -1447,6 +1447,8 @@ export interface Snapshot {
   /** The left column's title strip, and the open section's header (null: none open). */
   strip: Rect | null;
   bar_header: Rect | null;
+  /** The Tasks rail cell's needs-you dot, whichever section is open (null: no task needs you). */
+  tasks_dot: Rect | null;
   /** While a pane is dragged: where a drop would land, both null over anything else. */
   drag: { target: PaneId | null; zone: Zone | null } | null;
   /** Each drawn app pane's preview: the part of the window it shows, where it is drawn. */

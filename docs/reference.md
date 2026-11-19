@@ -381,7 +381,8 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    its model, tags and counts, Filed, Started, Agent time, Workspace (tabs · panes), the tokens and how full its context is. The
    Tasks section groups by state (Needs you, Running, Later, Done) or by project (State |
    Project in its header), and says under the list what was done today, what runs, and how
-   long agents worked today. A task waiting on cards has a line for each under its row: a
+   long agents worked today. While a task needs you, the left rail's Tasks icon has an amber dot
+   at its corner, as a badge's, whichever section is open or with the sidebar collapsed. A task waiting on cards has a line for each under its row: a
    question (`? <the question on show>` and `2 of 3`), a permission (`⚠ Wants to run: <its
    command>`), past two `+N more`. A click opens the drawer on the card with the keyboard in
    it; nothing is answered from the list. A key of a task's file this build does not know is kept as it is.
@@ -507,7 +508,9 @@ A native conversation has a dial under its header: where its agent's calls go, a
   turns about its upright axis while the model thinks (it has the turn and no call runs).
 - **Ring**: the context used (tokens in the context over the window); amber from 70%, red from 90%.
 - **Stations**, clockwise from the top: You, Model, Files, Shell, Network, Browser, Agents,
-  Skills, Memory, Hooks, Tools (any other tool). A spoke is heavier for more use, the older uses
+  Skills, Memory, Hooks, Tools (any other tool). Files is the agent's file tools only (Read,
+  Write, Edit, Grep, Glob, `apply_patch`, …); a terminal command is Shell, `ls` and `cat` too, or
+  Network if it reaches the network (`curl`, `git push`). A spoke is heavier for more use, the older uses
   counting less (half after ten minutes). A station is lit while a call there runs (Model while
   the model has the turn, You while a request waits), with two arcs for its time: the inner fills
   in a minute, the outer in ten. A red dot: a call there failed since your last message.

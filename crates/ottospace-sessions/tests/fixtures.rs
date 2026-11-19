@@ -411,12 +411,15 @@ fn codex_snapshot_of_an_older_rollout() {
     assert_eq!(
         recent,
         [
-            ("exec_command", Station::Files, "rg"),
+            ("exec_command", Station::Shell, "rg"),
             ("apply_patch", Station::Files, "src/lib.rs"),
             ("web_search_call", Station::Network, "web_search_call")
         ]
     );
-    assert_eq!(counts(&s), [(Station::You, 1), (Station::Model, 1), (Station::Files, 2), (Station::Network, 1)]);
+    assert_eq!(
+        counts(&s),
+        [(Station::You, 1), (Station::Model, 1), (Station::Files, 1), (Station::Shell, 1), (Station::Network, 1)]
+    );
     assert_eq!(
         (s.errors, s.last_error.as_ref().map(|e| e.1.as_str())),
         (1, Some("usage_limit_exceeded")),
@@ -562,15 +565,15 @@ fn nothing_private_comes_out() {
             "Network Bash: npm publish",
             "Network Bash: gh",
             "Shell Bash: shell",
-            "Files Bash: cat",
+            "Shell Bash: cat",
             "Network Bash: curl",
-            "Files Bash: ls",
+            "Shell Bash: ls",
             "Network Bash: ssh",
             "Network Bash: curl",
             "Shell Bash: shell",
             "Network Bash: diff",
             "Network Bash: curl",
-            "Files Bash: grep",
+            "Shell Bash: grep",
             "Shell Bash: sh",
             "Shell Bash: git",
             "Files Write: ZZSHOWdir/ZZSHOWfile.rs",
@@ -618,10 +621,10 @@ fn nothing_private_comes_out() {
             "Network shell: kubectl get",
             "Shell shell: git status",
             "Network shell: curl",
-            "Files shell: grep",
+            "Shell shell: grep",
             "Network shell: ssh",
             "Network shell: shell",
-            "Files shell: ls",
+            "Shell shell: ls",
             "Network exec: gh",
             "Files apply_patch: ZZSHOWpdir/ZZSHOWpatch.rs",
             "Files apply_patch: file",

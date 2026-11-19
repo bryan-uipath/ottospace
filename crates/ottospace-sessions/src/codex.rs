@@ -376,13 +376,13 @@ mod tests {
     #[test]
     fn commands_are_named_from_their_words() {
         let cases = [
-            (json!("ls -la"), Station::Files, "ls"),
+            (json!("ls -la"), Station::Shell, "ls"),
             (json!(["/bin/zsh", "-lc", "git -C client push"]), Station::Network, "git push"),
-            (json!(["bash", "-c", "ls"]), Station::Files, "ls"),
+            (json!(["bash", "-c", "ls"]), Station::Shell, "ls"),
             (json!(["git", "status"]), Station::Shell, "git status"),
             (json!(["git", "private-thing"]), Station::Shell, "git"),
             (json!(["private tool", "git", "push"]), Station::Shell, "shell"),
-            (json!(["ls", "a; curl private"]), Station::Files, "ls"),
+            (json!(["ls", "a; curl private"]), Station::Shell, "ls"),
         ];
         for (words, station, label) in cases {
             assert_eq!(command(&words), Some((station, label.to_string())), "{words}");
@@ -395,7 +395,7 @@ mod tests {
         let cases = [
             (
                 json!({"name": "exec_command", "arguments": "{\"cmd\":\"rg secret src\",\"workdir\":\"/w\"}"}),
-                Station::Files,
+                Station::Shell,
                 "rg",
             ),
             (
