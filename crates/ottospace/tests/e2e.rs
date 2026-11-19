@@ -624,6 +624,87 @@ fn a_pane_drag_that_ends_nowhere_changes_nothing() {
     assert_eq!(otto.drag_pane(2, 1, 0.1, 0.5)["tab_panes"], json!([[2, 1]]));
 }
 
+/// The point on the divider between frames `a` (left or above) and `b`, halfway along it.
+fn divider(a: [f64; 4], b: [f64; 4], down: bool) -> [f64; 2] {
+    if down { [a[0] + a[2] / 2.0, (a[1] + a[3] + b[1]) / 2.0] } else { [(a[0] + a[2] + b[0]) / 2.0, a[1] + a[3] / 2.0] }
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_users_drag_of_a_divider_resizes_the_panes_beside_it() {
+    let otto = Otto::launch("divider-drag");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let user = |from: [f64; 2], to: [f64; 2]| otto.call(json!({"cmd": "drag", "from": from, "to": to, "as": "user"}));
+    let ratio = |reply: &Value| reply["state"]["layout"]["split"]["ratio"].as_f64();
+    let frames = |o: &Otto, ids: &[u64]| -> Vec<[f64; 4]> {
+        let state = o.drawn();
+        ids.iter().map(|id| rect(&state["frames"][id.to_string()])).collect()
+    };
+    let [one, two] = frames(&otto, &[1, 2])[..] else { panic!() };
+    let line = divider(one, two, false);
+
+    // A client's drag is refused: it resizes with `resize`.
+    let reply = otto.drag(line, [line[0] + 100.0, line[1]]);
+    assert_eq!(ratio(&reply), Some(0.5), "{reply}");
+
+    // The user's moves the divider by what the pointer moved; 1 gets wider, 2 narrower.
+    user(line, [line[0] + 100.0, line[1]]);
+    let [wide, narrow] = otto
+        .wait_for("1 wider by 100", |o| Some(frames(o, &[1, 2])).filter(|f| (f[0][2] - one[2] - 100.0).abs() < 2.0))[..]
+    else {
+        panic!()
+    };
+    assert!((narrow[2] - (two[2] - 100.0)).abs() < 2.0, "{narrow:?} {two:?}");
+
+    // As far left as it goes: the key resize's least share.
+    let reply = user(divider(wide, narrow, false), [one[0] - 50.0, line[1]]);
+    assert_eq!(ratio(&reply), Some(0.1), "{reply}");
+
+    // A double-click evens it out.
+    let [one, two] = frames(&otto, &[1, 2])[..] else { panic!() };
+    let p = divider(one, two, false);
+    for action in ["down", "up"] {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "clicks": 2, "as": "user"}));
+    }
+    assert_eq!(ratio(&otto.drawn()), Some(0.5));
+
+    // 1 | (2 over 3): the horizontal divider moves 2's and 3's heights alone.
+    otto.call(json!({"cmd": "split", "axis": "down", "kind": "empty"}));
+    let [one, two, three] = frames(&otto, &[1, 2, 3])[..] else { panic!() };
+    let low = divider(two, three, true);
+    user(low, [low[0], low[1] - 80.0]);
+    let now = otto
+        .wait_for("2 shorter by 80", |o| Some(frames(o, &[1, 2, 3])).filter(|f| (two[3] - f[1][3] - 80.0).abs() < 2.0));
+    assert_eq!(now[0], one, "1 stays as it was");
+    assert!((now[2][3] - three[3] - 80.0).abs() < 2.0, "3 taller: {now:?}");
+    let reply = otto.drawn();
+    assert_eq!(ratio(&reply), Some(0.5), "the outer divider stays: {reply}");
+
+    // The vertical divider beside both: the inner split keeps its share.
+    let inner = || otto.drawn()["state"]["layout"]["split"]["b"]["split"]["ratio"].clone();
+    let kept = inner();
+    let side = divider(now[0], now[1], false);
+    user(side, [side[0] - 60.0, side[1]]);
+    otto.wait_for("1 narrower by 60", |o| Some(frames(o, &[1])).filter(|f| (one[2] - f[0][2] - 60.0).abs() < 2.0));
+    assert_eq!(inner(), kept);
+
+    // Esc during a drag puts the divider back, and the rest of the drag moves nothing.
+    let before = otto.drawn()["state"]["layout"].clone();
+    let [one, two] = frames(&otto, &[1, 2])[..] else { panic!() };
+    let p = divider(one, two, false);
+    let mouse = |action: &str, x: f64| {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": x, "y": p[1], "as": "user"}))["state"]["layout"].clone()
+    };
+    mouse("down", p[0]);
+    mouse("move", p[0] + 20.0);
+    assert_ne!(mouse("move", p[0] + 50.0), before, "it moves while held");
+    let reply = otto.call(json!({"cmd": "key", "keys": "escape", "as": "user"}));
+    assert_eq!(reply["state"]["layout"], before);
+    assert_eq!(mouse("move", p[0] + 80.0), before);
+    assert_eq!(mouse("up", p[0] + 80.0), before);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_click_on_a_header_or_its_close_button_is_not_a_drag() {

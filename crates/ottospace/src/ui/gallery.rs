@@ -106,6 +106,23 @@ fn tips() -> Div {
     group("tooltip", tips)
 }
 
+fn dividers() -> Div {
+    let looks = [State::Rest, State::Hover, State::Pressed];
+    let cases = looks.into_iter().flat_map(|state| {
+        [ottospace_core::Axis::Right, ottospace_core::Axis::Down].map(|axis| {
+            let grab = super::divider(id(format!("divider-{axis:?}{state:?}")), axis, state);
+            // Two panes' borders, the grab over the line between them.
+            let panes = div().size(px(60.)).relative().border_1().border_color(rgb(theme::BORDER));
+            let grab = match axis {
+                ottospace_core::Axis::Right => div().absolute().top_0().bottom_0().left(px(27.)).child(grab),
+                ottospace_core::Axis::Down => div().absolute().left_0().right_0().top(px(27.)).child(grab),
+            };
+            case(format!("{axis:?} {state:?}"), panes.child(grab))
+        })
+    });
+    group("divider", cases)
+}
+
 fn notices() -> Div {
     let levels = [
         (notice::Level::Error, "!", "error"),
@@ -126,8 +143,15 @@ fn notices() -> Div {
 /// The gallery, over the whole window.
 pub(crate) fn view() -> Div {
     let left = div().flex().flex_col().gap(px(theme::SPACE_3)).child(buttons()).child(pills()).child(tips());
-    let right =
-        div().flex().flex_col().gap(px(theme::SPACE_3)).child(rows()).child(header()).child(rails()).child(notices());
+    let right = div()
+        .flex()
+        .flex_col()
+        .gap(px(theme::SPACE_3))
+        .child(rows())
+        .child(header())
+        .child(rails())
+        .child(dividers())
+        .child(notices());
     div()
         .absolute()
         // Takes the pointer: nothing under it is hovered or clicked.

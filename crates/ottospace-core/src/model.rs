@@ -140,6 +140,7 @@ const NAME_A_TASK: &str = "name a task: {\"cmd\":\"task_brief\",\"id\":7}";
 const STALE_PASS: &str = "this pass is no running agent's: ask the user to start the task's agent again";
 /// Why a client may not link a tab to a task, or unlink it.
 pub const TABS_USERS: &str = "only the user says which space a tab is of";
+pub const DIVIDER_USERS: &str = "only the user drags a divider: resize moves one a step";
 /// Why a client's Open Settings is refused.
 pub const SETTINGS_USERS: &str = "only the user opens the settings";
 
@@ -563,6 +564,18 @@ pub enum Action {
     /// Move the boundary of the nearest split around the focused pane one step toward `dir`.
     Resize {
         dir: Dir,
+    },
+    /// The divider that is `pane`'s right (`axis` is `Right`) or bottom border was dragged to
+    /// share `ratio` of its split (`Node::drag`); the other dividers keep their place. The user's alone.
+    DividerDrag {
+        pane: PaneId,
+        axis: Axis,
+        ratio: f32,
+    },
+    /// That divider double-clicked: evened out as `Equalize` would its row. The user's alone.
+    DividerEven {
+        pane: PaneId,
+        axis: Axis,
     },
     /// The focused pane trades places with its neighbour on that side. Focus stays on it.
     SwapDir {
@@ -2153,6 +2166,8 @@ impl Action {
                 | Action::FocusDir { .. }
                 | Action::FocusCycle { .. }
                 | Action::Resize { .. }
+                | Action::DividerDrag { .. }
+                | Action::DividerEven { .. }
                 | Action::SwapDir { .. }
                 | Action::MovePane { .. }
                 | Action::Equalize
@@ -2259,6 +2274,8 @@ impl Action {
             | Action::FocusDir { .. }
             | Action::FocusCycle { .. }
             | Action::Resize { .. }
+            | Action::DividerDrag { .. }
+            | Action::DividerEven { .. }
             | Action::SwapDir { .. }
             | Action::MovePane { .. }
             | Action::Equalize
@@ -2655,6 +2672,8 @@ impl Action {
             | Action::FocusDir { .. }
             | Action::FocusCycle { .. }
             | Action::Resize { .. }
+            | Action::DividerDrag { .. }
+            | Action::DividerEven { .. }
             | Action::SwapDir { .. }
             | Action::MovePane { .. }
             | Action::Equalize
@@ -4316,6 +4335,8 @@ impl Model {
             }
             // Which space a tab is of is the user's to say.
             Action::TabPlace { .. } => Some(TABS_USERS),
+            // A divider follows the user's pointer: a client resizes with `resize`, a step at a time.
+            Action::DividerDrag { .. } | Action::DividerEven { .. } => Some(DIVIDER_USERS),
             // So is which of a workspace's conversations is in front.
             Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
             // And which workspace the new task the user writes goes to.
@@ -5413,6 +5434,16 @@ impl Model {
             Action::Equalize => {
                 if let Some(layout) = &mut self.layout {
                     layout.equalize();
+                }
+            }
+            Action::DividerDrag { pane, axis, ratio } => {
+                if let Some(layout) = self.tree_mut(pane) {
+                    layout.drag(pane, axis, ratio);
+                }
+            }
+            Action::DividerEven { pane, axis } => {
+                if let Some(layout) = self.tree_mut(pane) {
+                    layout.even(pane, axis);
                 }
             }
             Action::DropPane { source, target, zone } => self.drop_pane(source, target, zone, effects),
@@ -9645,6 +9676,8 @@ mod tests {
         Action::FocusDir { .. },
         Action::FocusCycle { .. },
         Action::Resize { .. },
+        Action::DividerDrag { .. },
+        Action::DividerEven { .. },
         Action::SwapDir { .. },
         Action::MovePane { .. },
         Action::Equalize,
@@ -9989,6 +10022,8 @@ mod tests {
             Action::FocusDir { dir: Dir::Left },
             Action::FocusCycle { delta: 1 },
             Action::Resize { dir: Dir::Left },
+            Action::DividerDrag { pane: 1, axis: Right, ratio: 0.3 },
+            Action::DividerEven { pane: 1, axis: Right },
             Action::SwapDir { dir: Dir::Left },
             Action::MovePane { pane: None, tab: 0 },
             Action::Equalize,
@@ -10611,6 +10646,7 @@ mod tests {
                     | Action::TalkStart
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
+                    Action::DividerDrag { .. } | Action::DividerEven { .. } => Some(DIVIDER_USERS),
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
                     Action::ComposeHere => Some(spaces::PIN_USERS),
                     Action::RailSelect { .. } | Action::ListenShow { .. } | Action::ListenOpenPast { .. } => {
@@ -16208,6 +16244,30 @@ mod tests {
     }
 
     #[test]
+    fn only_the_users_pointer_drags_a_divider_in_any_tab() {
+        let mut m = Model::default();
+        term(&mut m);
+        term(&mut m);
+        for origin in [Origin::Socket, Origin::System] {
+            let refused = m.refusal(&Action::DividerDrag { pane: 1, axis: Right, ratio: 0.3 }, origin);
+            assert_eq!(refused, Some(DIVIDER_USERS));
+            assert_eq!(m.refusal(&Action::DividerEven { pane: 1, axis: Right }, origin), Some(DIVIDER_USERS));
+        }
+        m.update(Action::DividerDrag { pane: 1, axis: Right, ratio: 0.3 });
+        assert_eq!(shares(&m), [(1, 30.0), (2, 70.0)]);
+        // Focus stays where it was: a drag is no click on a pane.
+        assert_eq!(m.focused, Some(2));
+        m.update(Action::DividerEven { pane: 1, axis: Right });
+        assert_eq!(shares(&m), [(1, 50.0), (2, 50.0)]);
+        // A background tab's divider moves too (a tab out shows one).
+        m.update(Action::DividerDrag { pane: 1, axis: Right, ratio: 0.2 });
+        m.update(Action::NewTab);
+        m.update(Action::DividerDrag { pane: 1, axis: Right, ratio: 0.4 });
+        m.update(Action::SelectTab { index: 0 });
+        assert_eq!(shares(&m), [(1, 40.0), (2, 60.0)]);
+    }
+
+    #[test]
     fn resize_and_equalize_act_on_the_focused_panes_splits() {
         let mut m = Model::default();
         term(&mut m);
@@ -16952,6 +17012,7 @@ mod tests {
                     | Action::TalkStart
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
+                    Action::DividerDrag { .. } | Action::DividerEven { .. } => Some(DIVIDER_USERS),
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
                     Action::ComposeHere => Some(spaces::PIN_USERS),
                     Action::RailSelect { .. } | Action::ListenShow { .. } | Action::ListenOpenPast { .. } => {

@@ -1,0 +1,26 @@
+# The divider between panes, under the user's pointer: 1 | (2 over 3); the vertical divider
+# hovered (its line lights), dragged left (3 keeps its height, 2 and 3 widen); the horizontal one
+# dragged up (1 keeps its width); then the vertical one again, in steps, for a recording.
+{"cmd":"split","kind":"empty"}
+{"cmd":"split","kind":"empty"}
+{"cmd":"split","axis":"down","kind":"empty"}
+{"settle":300}
+{"shot":"before"}
+{"hover":{"rect":"frames.1"},"at":[1,0.5]}
+{"settle":200}
+{"shot":"hover"}
+{"drag":{"rect":"frames.1"},"at":[1,0.5],"by":[-200,0]}
+{"settle":300}
+{"shot":"dragged"}
+{"drag":{"rect":"frames.2"},"at":[0.5,1],"by":[0,-150]}
+{"settle":300}
+{"shot":"nested"}
+{"drag":{"rect":"frames.1"},"at":[1,0.5],"by":[100,0]}
+{"sleep_ms":300}
+{"drag":{"rect":"frames.1"},"at":[1,0.5],"by":[100,0]}
+{"sleep_ms":300}
+{"drag":{"rect":"frames.2"},"at":[0.5,1],"by":[0,150]}
+{"sleep_ms":300}
+{"hover":{"rect":"frames.1"},"at":[0.5,0.5]}
+{"settle":300}
+{"shot":"after"}

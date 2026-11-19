@@ -98,6 +98,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘] / ⌘[ | Focus the next / previous pane |
 | ⌘⌥⇧←/→/↑/↓ or ⌘⌥⇧H/L/K/J | Resize: move the focused pane's split that way |
 | ⌘⌃= | Even out the splits of the tab |
+| Drag the divider between two panes | Resize those two: every other divider stays where it is, until a pane reaches its least (a tenth of its split) and pushes the next. Double-click evens it out with its row. Esc during the drag puts it back. A hosted app's window is sized once, on release. Yours alone: a client resizes with `resize` |
 | ⌘⌃0 | Fit the focused pane to its app's window, when the app refused the pane's size |
 | ⌘⌃←/→/↑/↓ or ⌘⌃H/L/K/J | Swap the focused pane with its neighbour on that side |
 | ⌘⇧⌥1 … ⌘⇧⌥9 | Move the focused pane to that tab on the bar. US keyboard layout only |
