@@ -24,7 +24,7 @@ permissions: {}
 # A run that takes no pictures (no label, or another label added) gets a group of its own, so it
 # cannot cancel one that does.
 concurrency:
-  group: shots-${{ github.event.pull_request.number }}${{ github.event_name == 'pull_request' && (!contains(github.event.pull_request.labels.*.name, 'pr-shots') || (github.event.action == 'labeled' && github.event.label.name != 'pr-shots')) && format('-skip-{0}', github.run_id) || '' }}
+  group: shots-${{ github.event.pull_request.number }}${{ (!contains(github.event.pull_request.labels.*.name, 'pr-shots') || (github.event.action == 'labeled' && github.event.label.name != 'pr-shots')) && format('-skip-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 env:

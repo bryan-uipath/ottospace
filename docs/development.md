@@ -227,7 +227,7 @@ whether the regression is real and accepted.
 - `.github/workflows/scripts.yml`, on pull requests that change `install.sh`, `scripts/osi`,
   `scripts/test-osi.sh` or `scripts/package.sh`: tests the installer.
 - `.github/workflows/duped.yml`, on pull requests (not docs-only ones) and `merge_group`, on Linux:
-  `duped check --base origin/<base>` fails when the change adds a helper identical to one
+  `duped check --base origin/<base>` (a merge group: its `base_sha`) fails when the change adds a helper identical to one
   already there, or an identical file of 10 lines or more. A deliberate copy is acknowledged in
   `duped.json`, with a `reason` saying why the two stay separate. The
   release binary is pinned by version and checksum. Run it locally with
