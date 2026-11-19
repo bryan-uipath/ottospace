@@ -214,7 +214,7 @@ impl Model {
 
     /// What the file's header says of a transcript of `source`: its app's name as ottospace reads
     /// it, never a window title. A test run's terminal pane is `Terminal`.
-    fn listen_head(&self, source: Source, mic: bool, started: u64) -> listen::file::Head {
+    pub fn listen_head(&self, source: Source, mic: bool, started: u64) -> listen::file::Head {
         let kind = source.pane().and_then(|pane| self.pane(pane)).map(|pane| &pane.kind);
         let picked = match source {
             Source::App { pid } => self.listen.apps.iter().find(|app| app.pid == pid),
@@ -509,7 +509,11 @@ mod tests {
     fn today_lists_the_finished_ones_and_the_users_click_opens_one() {
         let mut m = model();
         let head = |app: &str, started| listen::file::Head { app: app.into(), bundle: None, mic: false, started };
-        let done = |at: u64| listen::file::header(&head("Zoom", at), Some(at + 120_000), &|_| 0);
+        let said = |at| listen::Record::Line { from: listen::Speaker::Them, at, text: "made-up".into() };
+        let done = |at: u64| {
+            let line = listen::file::line(&said(at + 1_000), &|_| 0).unwrap_or_default();
+            listen::file::header(&head("Zoom", at), Some(at + 120_000), &|_| 0) + &line
+        };
         let files = vec![
             ("2026-11-16-0900-zoom.md".to_string(), done(1_794_819_600_000)),
             ("2026-11-16-1000-zoom.md".to_string(), done(1_794_823_200_000)),

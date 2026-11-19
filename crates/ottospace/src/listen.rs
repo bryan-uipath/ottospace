@@ -753,12 +753,8 @@ impl Workspace {
             return None;
         }
         let Some(on) = self.model.listen.on.as_ref() else { return Some(self.render_listen_idle(width, cx)) };
-        let source = match on.source {
-            listen::Source::Pane(pane) => self.model.pane(pane).map(|pane| self.pane_title(pane)),
-            listen::Source::App { pid } => {
-                self.model.listen.apps.iter().find(|app| app.pid == pid).map(|app| app.name.clone())
-            }
-        };
+        // The app's name, as the file's header has it: a window's title is content.
+        let source = Some(self.model.listen_head(on.source, false, 0).app);
         let paused = on.status == Status::Paused;
         // Paused: the word and Resume where the meter was.
         let paused_note = paused.then(|| {
@@ -793,11 +789,20 @@ impl Workspace {
             .border_color(rgb(theme::BORDER))
             .text_sm()
             .child(if paused { dot(true) } else { pulse(self.listen_level()) })
-            .child(div().flex_1().min_w_0().truncate().child(format!(
-                "Transcript · {} · {}",
-                source.filter(|s| !s.is_empty()).unwrap_or_else(|| "pane".into()),
-                self.listen_clock()
-            )))
+            // The app's name gives way; the time always shows.
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .gap_1()
+                    .child(div().min_w_0().truncate().child(format!(
+                        "{}{}",
+                        if paused { "" } else { "Transcribing " },
+                        source.filter(|s| !s.is_empty()).unwrap_or_else(|| "pane".into())
+                    )))
+                    .child(div().flex_none().child(format!("· {}", self.listen_clock()))),
+            )
             // What it hears now, for the eye alone: never in the state.
             .children(self.listen_hearing().map(|hearing| {
                 let colour = if hearing == Hearing::Silent { theme::SNEAK } else { theme::MUTED };
@@ -962,16 +967,23 @@ impl Workspace {
             .text_sm()
             .child("Transcript")
             .child(self.controls.mark("listen-idle"));
+        // The primary fill (the chat's Send), with the rail's waveform.
         let pick = div()
             .id("listen-pick")
             .px_3()
             .py_2()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_2()
             .rounded_md()
-            .border_1()
-            .border_color(rgb(theme::BORDER_STRONG))
+            .bg(rgb(theme::PRIMARY))
+            .text_color(rgb(theme::BACKGROUND))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
             .cursor_pointer()
-            .hover(|s| s.bg(rgb(theme::SELECTED)))
+            .hover(|s| s.opacity(0.9))
             .text_sm()
+            .child(gpui::svg().path("icons/waveform.svg").size(px(16.)).text_color(rgb(theme::BACKGROUND)))
             .child("Transcribe a window…")
             .child(self.controls.mark("listen-pick"))
             .on_click(cx.listener(|this, _, window, cx| this.listen_pick(window, cx)));
@@ -982,22 +994,26 @@ impl Workspace {
             div()
                 .id(("listen-past", at))
                 .flex()
+                .items_center()
                 .gap_2()
                 .px_2()
                 .py_1()
                 .rounded_sm()
                 .cursor_pointer()
-                .hover(|s| s.bg(rgb(theme::SELECTED)))
+                .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
                 .text_xs()
+                // Finished, read-only: a document, dimmed, never a live control's look.
+                .text_color(rgb(theme::MUTED))
+                .child(gpui::svg().path("icons/workbook.svg").flex_none().size(px(12.)).text_color(rgb(theme::MUTED)))
                 .child(div().flex_1().min_w_0().truncate().child(past.app.clone()))
-                .child(div().flex_none().text_color(rgb(theme::MUTED)).child(format!("{start} · {long}")))
+                .child(div().flex_none().child(format!("{start} · {long}")))
                 .child(self.controls.mark(format!("listen-past:{at}")))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.dispatch(Action::ListenOpenPast { name: Some(name.clone()) }, this.input, window, cx);
                 }))
         });
         let today = (!self.model.transcripts.today.is_empty()).then(|| {
-            let heading = div().pt_3().text_xs().text_color(rgb(theme::MUTED)).child("TODAY");
+            let heading = div().pt_3().text_xs().text_color(rgb(theme::MUTED)).child("EARLIER TODAY");
             div().flex().flex_col().gap_0p5().child(heading).children(rows)
         });
         // Scrolls: a long day's rows stay in reach.
@@ -1020,11 +1036,11 @@ impl Workspace {
     fn render_listen_past(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let name = self.model.transcripts.open.as_ref()?;
         let past = self.model.transcripts.today.iter().find(|past| past.name == *name)?;
-        let back = button("listen-back", "‹ Today").child(self.controls.mark("listen-back")).on_click(cx.listener(
-            |this, _, window, cx| {
+        let back = button("listen-back", "‹ Earlier today").child(self.controls.mark("listen-back")).on_click(
+            cx.listener(|this, _, window, cx| {
                 this.dispatch(Action::ListenOpenPast { name: None }, this.input, window, cx);
-            },
-        ));
+            }),
+        );
         let when = format!(
             "{} · {} min",
             ottospace_core::calendar::clock(past.started_ms, crate::calendar::zone_offset(past.started_ms)),
