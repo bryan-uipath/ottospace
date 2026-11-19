@@ -48,6 +48,7 @@ pub mod row_menu;
 pub mod rules;
 pub mod runner;
 pub mod scrollbar;
+pub mod seal;
 pub mod secrets;
 pub mod selection;
 pub mod sessions;

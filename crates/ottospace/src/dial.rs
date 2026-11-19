@@ -50,12 +50,12 @@ fn at(centre: Point<Pixels>, r: f32, angle: f32) -> Point<Pixels> {
     centre + point(px(r * angle.sin()), px(-r * angle.cos()))
 }
 
-fn colour(rgb_: u32) -> Hsla {
+pub(crate) fn colour(rgb_: u32) -> Hsla {
     Hsla::from(rgb(rgb_))
 }
 
 /// An arc as a polyline, `sweep` radians clockwise from `from`.
-fn arc(width: f32, centre: Point<Pixels>, r: f32, from: f32, sweep: f32) -> PathBuilder {
+pub(crate) fn arc(width: f32, centre: Point<Pixels>, r: f32, from: f32, sweep: f32) -> PathBuilder {
     let mut path = PathBuilder::stroke(px(width));
     let steps = ((sweep.abs() / (PI / 32.)).ceil() as usize).max(2);
     for i in 0..=steps {
@@ -65,13 +65,13 @@ fn arc(width: f32, centre: Point<Pixels>, r: f32, from: f32, sweep: f32) -> Path
     path
 }
 
-fn stroke(window: &mut Window, path: PathBuilder, colour: Hsla) {
+pub(crate) fn stroke(window: &mut Window, path: PathBuilder, colour: Hsla) {
     if let Ok(path) = path.build() {
         window.paint_path(path, colour);
     }
 }
 
-fn disc(window: &mut Window, centre: Point<Pixels>, r: f32, colour: Hsla) {
+pub(crate) fn disc(window: &mut Window, centre: Point<Pixels>, r: f32, colour: Hsla) {
     let bounds = Bounds::centered_at(centre, size(px(r * 2.), px(r * 2.)));
     window.paint_quad(fill(bounds, colour).corner_radii(px(r)));
 }

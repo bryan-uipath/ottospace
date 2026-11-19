@@ -118,6 +118,12 @@ impl Model {
         self.finish(&talk.task)?.done.then_some(Action::TaskDone { id })
     }
 
+    /// The seal of the user's Done plays on while its task is done and put away: an Undo, or the
+    /// task opened again, ends it at once.
+    pub fn seal_plays(&self, id: TaskId) -> bool {
+        self.put_away(id) && self.tasks.live(id).is_some_and(|t| t.state == State::Done)
+    }
+
     /// The Done line offers New task here: its task's workspace is the one on show.
     pub fn done_here(&self) -> bool {
         self.finish.offer.as_ref().is_some_and(|offer| self.task_space(offer.task) == *self.space())
@@ -454,7 +460,9 @@ mod tests {
         m.update(Action::AgentExited { task: ONE }.sent_by(Origin::System));
         assert_eq!(state(&m, 1), Some(State::Done));
         // Undo: as it was, in front, the drawer on it; its agent is not started again.
+        assert!(m.seal_plays(1));
         assert_eq!(m.update(Action::DoneUndo), []);
+        assert!(!m.seal_plays(1), "an Undo ends the seal");
         assert_eq!(
             (state(&m, 1), m.put_away(1), m.rail()),
             (Some(State::NeedsYou), false, vec![RailItem::Task { id: 1 }])

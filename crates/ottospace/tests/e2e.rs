@@ -11137,7 +11137,11 @@ fn finish_fixtures() -> Vec<(&'static str, String)> {
 
 /// A task's first turn over: launched with `finish_fixtures`, its conversation open and idle.
 fn finish_launch(name: &str) -> (PathBuf, PathBuf, Otto) {
-    let (root, record, env) = native_setup(name, &finish_fixtures(), &[]);
+    finish_launch_with(name, &[])
+}
+
+fn finish_launch_with(name: &str, extra: &[(&str, &str)]) -> (PathBuf, PathBuf, Otto) {
+    let (root, record, env) = native_setup(name, &finish_fixtures(), extra);
     let otto = launch_env(name, &env);
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
@@ -11214,6 +11218,64 @@ fn done_on_an_idle_task_leaves_the_rail_and_undo_brings_it_back() {
     otto.user_click(at(otto.control("talk"), 0.5, 0.5));
     otto.user_key("cmd-enter");
     otto.wait_for("done by ⌘↵", |o| (task_state(o) == "done").then_some(()));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The seal, fold and land of the user's Done: frames while it plays (about 0.8 s), sparks among
+/// them, then none: at rest it asks for no frame.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn dones_seal_plays_its_frames_and_stops() {
+    let (root, _record, otto) = finish_launch("seal");
+    let counts = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"].clone();
+    assert_eq!((&counts(&otto)["seal_frames"], &counts(&otto)["seal_spark_frames"]), (&json!(0), &json!(0)));
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("cmd-enter");
+    otto.wait_for("the seal's frames", |o| (counts(o)["seal_spark_frames"].as_u64()? > 0).then_some(()));
+    let done = otto.wait_for("the seal at rest", |o| {
+        let before = counts(o)["seal_frames"].clone();
+        std::thread::sleep(Duration::from_millis(300));
+        (counts(o)["seal_frames"] == before).then_some(before)
+    });
+    assert!(done.as_u64().unwrap() > 2, "{done}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(counts(&otto)["seal_frames"], done, "no frames at rest");
+    assert_eq!(task_state(&otto), json!("done"));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Undo while the seal plays: it stops at once, and draws no ✓ on the task back on the rail.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn an_undo_stops_dones_seal() {
+    let (root, _record, otto) = finish_launch("seal-undo");
+    let counts = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["seal_frames"].clone();
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("cmd-enter");
+    let bar = otto.call(json!({"cmd": "state"}))["notice_bar"].clone();
+    otto.user_click(at(rect(&bar["offer_rect"]), 0.5, 0.5));
+    assert_eq!((task_state(&otto), rail_of(&otto)), (json!("needs_you"), vec![json!(1)]));
+    let after = counts(&otto);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(counts(&otto), after, "no frame after the Undo");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// With Reduce Motion (a test run's `OTTOSPACE_REDUCE_MOTION`): the seal plays still, the drawer
+/// fades; no frame of it has sparks.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn dones_seal_has_no_sparks_with_reduce_motion() {
+    let (root, _record, otto) = finish_launch_with("seal-calm", &[("OTTOSPACE_REDUCE_MOTION", "1")]);
+    let counts = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"].clone();
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("cmd-enter");
+    otto.wait_for("the seal's frames", |o| (counts(o)["seal_frames"].as_u64()? > 2).then_some(()));
+    std::thread::sleep(Duration::from_millis(1000));
+    assert_eq!(counts(&otto)["seal_spark_frames"], 0, "{}", counts(&otto));
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }
