@@ -1546,6 +1546,7 @@ first brainstorm:
 - [zoom-meeting.md](ai/1-initial-brainstorm/zoom-meeting.md): Zoom meeting layout and participants.
 - [zoom-ax.md](ai/1-initial-brainstorm/zoom-ax.md): what a Zoom meeting exposes through accessibility, measured.
 - [accessibility.md](ai/1-initial-brainstorm/accessibility.md): reading app accessibility trees, toward sneak mode and agent actions.
+- [code-city/plan.md](ai/code-city/plan.md): the atlas, a map where a thing keeps its place, and the code city on it (the layout is built; nothing is on screen yet).
 - [file-viewer.md](ai/file-viewer.md): the read-only file viewer pane, and what comes after it (the markdown pass, the explorer, comments).
 - [fill-display.md](ai/fill-display.md): the window over the menu bar and the Dock (⌃⌘F, the green button): what macOS does, measured, and what is left to check by hand.
 - [sneak-apps.md](ai/sneak-apps.md): sneak labels that press controls inside the focused app pane, and why agents still cannot.
