@@ -627,15 +627,18 @@ impl Workspace {
         let paused = on.status == Status::Paused;
         // A browser is heard whole: SCK filters by app, not by tab.
         let tabs = self.hosted.get(&pane).and_then(|hosted| hosted.bundle.as_deref()).is_some_and(browser);
-        let tip = match (paused, tabs) {
-            (true, _) => "Transcript paused",
-            (false, true) => "Transcribing: every tab of this browser is heard",
-            (false, false) => "Transcribing this window",
+        // An app picked is heard whole: each of its windows' panes has the dot.
+        let app = matches!(on.source, listen::Source::App { .. });
+        let tip = match (paused, tabs, app) {
+            (true, ..) => "Transcript paused",
+            (false, true, _) => "Transcribing: every tab of this browser is heard",
+            (false, false, true) => "Transcribing this app",
+            (false, false, false) => "Transcribing this window",
         };
         // The red dot (a click shows the drawer on it) and Stop, where Transcribe was: with the
         // drawer collapsed, the usual case, the header is where it is seen. The time is the drawer's.
         let row = div()
-            .id("listen-header")
+            .id(("listen-header", pane as usize))
             .flex()
             .min_w_0()
             .overflow_hidden()
@@ -645,7 +648,7 @@ impl Workspace {
             .cursor_pointer()
             .hover(|s| s.bg(rgb(theme::SELECTED)))
             .child(if paused { dot(true) } else { pulse(self.listen_level()) })
-            .child(self.controls.mark("listen-header"))
+            .child(self.controls.mark(format!("listen-header:{pane}")))
             .tooltip(move |_, cx| gpui::AnyView::from(cx.new(|_| crate::Tooltip(tip.into()))))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, window, cx| {
@@ -1195,7 +1198,8 @@ impl Workspace {
     }
 
     /// Test runs only: where each of a transcript's controls was drawn, by id (`listen-start:3`,
-    /// `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-file`, `listen-view`,
+    /// `listen-header:<pane>`, `listen-stop:header-<pane>`, `listen-stop:view`, `listen-resume:view`,
+    /// `listen-menu`, `listen-file`, `listen-view`,
     /// `listen-idle`, the off-show dot `listen-dot:space:<place>` or `listen-dot:tab:<id>`).
     /// Null outside a test run.
     pub(crate) fn listen_rects(&self) -> Option<BTreeMap<String, [f32; 4]>> {

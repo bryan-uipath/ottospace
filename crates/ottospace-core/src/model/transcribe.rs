@@ -46,7 +46,7 @@ impl Model {
 
     /// The panes whose header shows the red dot: the source pane; for an app picked
     /// (`Source::App`), each pane of that app's windows, since its whole sound is heard (SCK
-    /// filters by app). By bundle, else by name. None with none on.
+    /// filters by app). By bundle when both have one, else by name. None with none on.
     pub fn listen_marked(&self) -> Vec<PaneId> {
         let Some(on) = &self.listen.on else { return Vec::new() };
         let pid = match on.source {
@@ -54,11 +54,8 @@ impl Model {
             Source::App { pid } => pid,
         };
         let Some(app) = self.listen.apps.iter().find(|app| app.pid == pid) else { return Vec::new() };
-        let of_app = |kind: &Kind| match (kind, &app.bundle) {
-            (Kind::App { bundle: Some(bundle), .. }, Some(heard)) => bundle == heard,
-            (Kind::App { name, bundle: None, .. }, None) => *name == app.name,
-            _ => false,
-        };
+        let heard = (app.bundle.as_deref(), app.name.as_str());
+        let of_app = |kind: &Kind| matches!(kind, Kind::App { bundle, name, .. } if crate::marks::same_app((bundle.as_deref(), name), heard));
         self.panes.iter().filter(|pane| of_app(&pane.kind)).map(|pane| pane.id).collect()
     }
 
@@ -917,18 +914,18 @@ mod tests {
             let kind = Kind::App { window, title: "w".into(), bundle: Some(format!("b.{name}")), name: name.into() };
             m.update(Action::Open { kind, axis: Axis::Right, beside: None });
         }
-        // Pane 2's Zoom has no bundle: matched by name only when the pick has none either.
+        // Pane 2's Zoom has no bundle: matched by name; pane 3's by bundle; Chrome's not.
         m.update(picker(vec![app(10, "Zoom", &["Zoom Meeting"], true), app(20, "Chrome", &[], false)]));
         m.update(Action::PickerChoose { index: Some(0) });
-        assert_eq!(m.listen_marked(), [3]);
+        assert_eq!(m.listen_marked(), [2, 3]);
         // Ended by the shell: no mark at once.
         let ended = Action::ListenEnded { id: "p1".into(), why: Ended::AppQuit, at: 6_000 };
         m.update(Action::ListenBegan { id: "p1".into(), at: 5_000 }.sent_by(Origin::System));
         m.update(ended.sent_by(Origin::System));
         assert_eq!(m.listen_marked(), Vec::<u32>::new());
-        let nameless = listen::SoundApp { bundle: None, ..app(30, "Zoom", &[], true) };
-        m.update(picker(vec![nameless]));
+        let other = listen::SoundApp { bundle: Some("b.Other".into()), ..app(30, "Zoom", &[], true) };
+        m.update(picker(vec![other]));
         m.update(Action::PickerChoose { index: Some(0) });
-        assert_eq!(m.listen_marked(), [2], "by name");
+        assert_eq!(m.listen_marked(), [2], "pane 3's bundle differs; pane 2 has none: by name");
     }
 }
