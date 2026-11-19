@@ -1670,6 +1670,11 @@ const MAKERS: &[Make] = &[
             .collect();
         Action::ListenHeard { id: g.listen_id(), lines }
     },
+    |g| {
+        // The app's windows: the one picked, another, none.
+        let windows = (0..g.rng.below(3)).map(|_| g.rng.pick(&[7, 8, 9])).collect();
+        Action::ListenWindows { id: g.listen_id(), windows, at: g.time() }
+    },
     |g| Action::ListenEnded {
         id: g.listen_id(),
         why: g.rng.pick(&[crate::listen::Ended::AppQuit, crate::listen::Ended::StreamFailed]),
@@ -1683,6 +1688,7 @@ const MAKERS: &[Make] = &[
                 name: g.rng.pick(&["Zoom", "Chrome", "zoom"]).into(),
                 bundle: None,
                 windows: (0..g.rng.pick(&[0, 2])).map(|_| format!("{HEARD} window")).collect(),
+                window_ids: vec![7, 8],
                 playing: g.rng.coin(),
             })
             .collect();
@@ -3436,6 +3442,7 @@ impl Run {
             .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty() && !m.compose_theirs)));
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
+        let armed_before = m.listen.on.as_ref().is_some_and(|on| on.session.armed.is_some());
         let listen_pane = m.listen.on.as_ref().and_then(|on| on.source.pane());
         let transcribe_picker = m.picker.as_ref().is_some_and(|picker| picker.transcribe);
         let filled_before = m.fill_display;
@@ -4433,8 +4440,14 @@ impl Run {
                     let closes = effects.contains(&Effect::ListenClose { id: id.clone() });
                     for record in records {
                         match record {
+                            // Or a session's: its first words after the one before ended.
                             crate::listen::Record::Begin(_) => {
-                                ensure!(opens, "{action:?} began a file with no streams")
+                                ensure!(opens || armed_before, "{action:?} began a file with no streams")
+                            }
+                            // A session's end closes its file alone: the streams go on.
+                            crate::listen::Record::End { .. } if matches!(action, Action::ListenWindows { .. }) => {
+                                let armed = m.listen.on.as_ref().is_some_and(|on| on.session.armed.is_some());
+                                ensure!(armed && !closes, "{action:?} ended a session not armed")
                             }
                             crate::listen::Record::End { .. } | crate::listen::Record::Failed => {
                                 ensure!(closes, "{action:?} ended a file with its streams on")
@@ -5471,11 +5484,11 @@ fn code(sent: &Envelope) -> String {
     }
     if let Action::ListenPicker { apps, id, at } = &sent.action {
         let app = |app: &crate::listen::SoundApp| {
-            let crate::listen::SoundApp { pid, name, bundle, windows, playing } = app;
+            let crate::listen::SoundApp { pid, name, bundle, windows, window_ids, playing } = app;
             let windows: Vec<String> = windows.iter().map(|w| format!("{w:?}.into()")).collect();
             format!(
                 "crate::listen::SoundApp {{ pid: {pid}, name: {name:?}.into(), bundle: {bundle:?}.map(|b: &str| b.to_string()), \
-                 windows: vec![{}], playing: {playing} }}",
+                 windows: vec![{}], window_ids: vec!{window_ids:?}, playing: {playing} }}",
                 windows.join(", ")
             )
         };
@@ -7494,8 +7507,14 @@ fn seed_983_a_clients_hide_leaves_the_close_question_to_the_user() {
 /// ListenToggle (seed 316).
 #[test]
 fn seed_316_the_users_pick_in_the_transcripts_picker_starts_one() {
-    let zoom =
-        |pid, playing| crate::listen::SoundApp { pid, name: "Zoom".into(), bundle: None, windows: vec![], playing };
+    let zoom = |pid, playing| crate::listen::SoundApp {
+        pid,
+        name: "Zoom".into(),
+        bundle: None,
+        windows: vec![],
+        window_ids: vec![],
+        playing,
+    };
     replay(&[
         by(Origin::System, Action::ListenFixture),
         Action::ListenPicker { apps: vec![zoom(10, false), zoom(11, false), zoom(10, true)], id: "".into(), at: 1 }

@@ -198,12 +198,11 @@ pub fn sound_apps() -> Vec<ottospace_core::listen::SoundApp> {
     let mut found = Vec::new();
     for app in &apps {
         let pid = app.process_id();
-        let titles: Vec<String> = windows
+        let (titles, window_ids): (Vec<String>, Vec<u32>) = windows
             .iter()
-            .filter(|w| w.is_on_screen() && w.window_layer() == 0)
-            .filter(|w| w.owning_application().is_some_and(|owner| owner.process_id() == pid))
-            .filter_map(|w| w.title().filter(|t| !t.is_empty()))
-            .collect();
+            .filter(|w| w.is_on_screen() && w.window_layer() == 0 && titled_of(w, pid))
+            .filter_map(|w| Some((w.title()?, w.window_id())))
+            .unzip();
         let plays = playing.contains(&pid);
         let shown = windows.iter().any(|w| {
             w.is_on_screen() && w.window_layer() == 0 && w.owning_application().is_some_and(|o| o.process_id() == pid)
@@ -212,9 +211,31 @@ pub fn sound_apps() -> Vec<ottospace_core::listen::SoundApp> {
             continue;
         }
         let bundle = Some(app.bundle_identifier()).filter(|b| !b.is_empty());
-        found.push(ottospace_core::listen::SoundApp { pid, name: app.application_name(), bundle, windows: titles, playing: plays });
+        let name = app.application_name();
+        found.push(ottospace_core::listen::SoundApp { pid, name, bundle, windows: titles, window_ids, playing: plays });
     }
     found
+}
+
+/// A window of `pid`'s with a title, at any layer: what a session looks for (Zoom's share toolbar
+/// floats). The picker's rows are those of them at layer 0 on screen, so the one picked is found.
+fn titled_of(window: &SCWindow, pid: i32) -> bool {
+    let owned = window.owning_application().is_some_and(|owner| owner.process_id() == pid);
+    owned && window.title().is_some_and(|t| !t.is_empty())
+}
+
+/// The ids of `pid`'s titled windows, at any layer, on screen or not (minimised, parked, another Space): what a
+/// transcript's session is told of its meeting's windows (`Action::ListenWindows`). None if
+/// ScreenCaptureKit could not be asked. Waits on the system: off the main thread.
+pub fn window_ids(pid: i32) -> Option<Vec<u32>> {
+    let content = SCShareableContent::get().ok()?;
+    let ids = content
+        .windows()
+        .iter()
+        .filter(|w| titled_of(w, pid))
+        .map(|w| w.window_id())
+        .collect();
+    Some(ids)
 }
 
 /// Plays a sound file in this process (`NSSound`): for the canary, whose own audio a test hears.

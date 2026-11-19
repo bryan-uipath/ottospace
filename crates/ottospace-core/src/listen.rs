@@ -63,13 +63,20 @@ pub struct SoundApp {
     pub bundle: Option<String>,
     #[serde(default)]
     pub windows: Vec<String>,
+    /// The windows' ids, in the order of `windows`: the one picked is its meeting's (`Session`).
+    #[serde(default)]
+    pub window_ids: Vec<u32>,
     #[serde(default)]
     pub playing: bool,
 }
 
+/// A picker's row: the app's pid and name, a window's title and id (none for an app with none),
+/// and whether it plays.
+pub type SoundRow = (i32, String, Option<(String, Option<u32>)>, bool);
+
 /// The picker's rows, in order: the apps playing sound now first, then by name; each window of
 /// an app a row of its own, an app with none one row. Each app once.
-pub fn sound_rows(all: &[SoundApp]) -> Vec<(i32, String, Option<String>, bool)> {
+pub fn sound_rows(all: &[SoundApp]) -> Vec<SoundRow> {
     let mut apps: Vec<&SoundApp> = Vec::new();
     for app in all {
         if !apps.iter().any(|seen| seen.pid == app.pid) {
@@ -78,9 +85,14 @@ pub fn sound_rows(all: &[SoundApp]) -> Vec<(i32, String, Option<String>, bool)> 
     }
     apps.sort_by_key(|app| (!app.playing, app.name.to_lowercase(), app.pid));
     let rows = apps.into_iter().flat_map(|app| {
-        let windows: Vec<Option<String>> = match app.windows.is_empty() {
+        let windows: Vec<Option<(String, Option<u32>)>> = match app.windows.is_empty() {
             true => vec![None],
-            false => app.windows.iter().map(|title| Some(crate::capture::plain(title, 200))).collect(),
+            false => app
+                .windows
+                .iter()
+                .enumerate()
+                .map(|(n, title)| Some((crate::capture::plain(title, 200), app.window_ids.get(n).copied())))
+                .collect(),
         };
         windows.into_iter().map(|window| (app.pid, app.name.clone(), window, app.playing))
     });
@@ -191,6 +203,59 @@ pub struct Listen {
     volatile: Vec<(Speaker, String)>,
     /// The calendar's entries its file names, by id: in the header, or a line at their start.
     pub meetings: Vec<u64>,
+    /// Its meeting, by the app's windows: when one ends, the file closes and the next words heard
+    /// begin another.
+    pub session: Session,
+}
+
+/// The meeting's windows gone this long end a session: Zoom swaps its meeting window for its
+/// share toolbar while the user shares.
+pub const WINDOW_GONE: u64 = 10_000;
+/// Nothing heard this long after a session ended: the transcript ends.
+pub const ARMED_MAX: u64 = 30 * 60_000;
+/// What the notice bar says then.
+pub const ARMED_ENDED: &str = "Transcript stopped: nothing heard for 30 minutes after the meeting";
+
+/// A transcript's meeting, as the app's windows tell it (`ListenWindows`). Its windows are those the
+/// app has that are not `base`: at the start, every window but the one picked (or the source
+/// pane's); after a session ended, every window it had then, so a new meeting's are those it opens.
+/// None of them for `WINDOW_GONE` ends the session; while `armed`, the first words heard begin a new
+/// file. A participant window opening and closing, a share toolbar swapped in, a silence: none ends
+/// it. With no window known (a test run's terminal pane) it ends when the app has none.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Session {
+    /// The window picked, or the source pane's: the meeting's at the start.
+    pub picked: Option<u32>,
+    /// None until the first look.
+    pub base: Option<Vec<u32>>,
+    /// Since when none of its windows is there, if none is.
+    pub gone_since: Option<u64>,
+    /// The session ended then: no file is open, and the next words begin one.
+    pub armed: Option<u64>,
+}
+
+impl Session {
+    /// The windows the app has now, at `at`: when they went, if that ends the session.
+    pub fn windows(&mut self, windows: &[u32], at: u64) -> Option<u64> {
+        // The first look: every window but the one picked. With none picked, or the one picked
+        // not found, none: then each window the app has is the meeting's.
+        let picked = self.picked.filter(|picked| windows.contains(picked));
+        let base = self.base.get_or_insert_with(|| match picked {
+            Some(picked) => windows.iter().copied().filter(|w| *w != picked).collect(),
+            None => Vec::new(),
+        });
+        let there = windows.iter().any(|w| !base.contains(w));
+        if there || self.armed.is_some() {
+            self.gone_since = None;
+            return None;
+        }
+        let since = *self.gone_since.get_or_insert(at);
+        if at.saturating_sub(since) < WINDOW_GONE {
+            return None;
+        }
+        (self.base, self.gone_since, self.armed) = (Some(windows.to_vec()), None, Some(at));
+        Some(since)
+    }
 }
 
 impl Listen {
@@ -202,6 +267,12 @@ impl Listen {
 
     pub fn rows(&self) -> impl Iterator<Item = &Row> {
         self.rows.iter()
+    }
+
+    /// A session began with the last `kept` rows: the drawer shows it alone.
+    pub fn new_session(&mut self, kept: usize) {
+        let gone = self.rows.len().saturating_sub(kept);
+        self.rows.drain(..gone);
     }
 
     /// The lines still being heard, in the order they began.
@@ -298,7 +369,7 @@ impl Listening {
         let (rows, volatile) = (VecDeque::new(), Vec::new());
         let status = Status::Starting;
         self.lost = None;
-        let meetings = Vec::new();
+        let (meetings, session) = (Vec::new(), Session::default());
         let started = at;
         self.on = Some(Listen {
             id,
@@ -312,6 +383,7 @@ impl Listening {
             rows,
             volatile,
             meetings,
+            session,
         });
         self.shown = true;
         Ok(())
@@ -509,5 +581,63 @@ mod tests {
         assert_eq!(clock(0), "0:00");
         assert_eq!(clock(724_000), "12:04");
         assert_eq!(clock(3_725_000), "1:02:05");
+    }
+
+    /// Zoom: its home window (50) stays; the meeting's (7) is the one picked.
+    fn zoom() -> Session {
+        let mut session = Session { picked: Some(7), ..Session::default() };
+        assert_eq!(session.windows(&[50, 7], 0), None);
+        session
+    }
+
+    #[test]
+    fn a_session_ends_when_its_meetings_windows_are_gone_for_ten_seconds() {
+        let mut session = zoom();
+        assert_eq!(session.windows(&[50], 60_000), None, "gone, not yet for long");
+        assert_eq!(session.windows(&[50], 65_000), None);
+        assert_eq!(session.windows(&[50], 70_000), Some(60_000), "ended when it went");
+        assert_eq!(session.armed, Some(70_000));
+        // The next meeting's window is one it opens: not ended again while armed or once it shows.
+        assert_eq!(session.windows(&[50, 9], 80_000), None);
+        session.armed = None;
+        assert_eq!(session.windows(&[50, 9], 90_000), None);
+        assert_eq!(session.windows(&[50], 100_000), None);
+        assert_eq!(session.windows(&[50], 110_000), Some(100_000), "the next meeting ends too");
+    }
+
+    #[test]
+    fn one_long_meeting_is_not_split_by_a_participant_window_a_share_or_a_short_gap() {
+        let mut session = zoom();
+        // A participant's window opens and closes; the meeting's stays.
+        for (windows, at) in [(&[50, 7, 8][..], 5_000), (&[50, 7], 20_000), (&[50, 7], 40_000)] {
+            assert_eq!(session.windows(windows, at), None);
+        }
+        // Sharing: the meeting window goes as the share toolbar (11) comes, then back.
+        for (windows, at) in [(&[50, 11][..], 60_000), (&[50, 11], 300_000), (&[50, 7], 305_000)] {
+            assert_eq!(session.windows(windows, at), None);
+        }
+        // Gone for 9 seconds, back: no end.
+        assert_eq!(session.windows(&[50], 400_000), None);
+        assert_eq!(session.windows(&[50], 409_000), None);
+        assert_eq!(session.windows(&[50, 7], 410_000), None);
+        assert_eq!(session.windows(&[50], 415_000), None, "the count starts again");
+        assert_eq!(session.windows(&[50], 424_000), None);
+    }
+
+    #[test]
+    fn with_no_window_picked_a_session_ends_when_the_app_has_none() {
+        let mut session = Session::default();
+        for at in [0, 5_000, 10_000, 15_000] {
+            assert_eq!(session.windows(&[7], at), None, "the same window throughout");
+        }
+        assert_eq!(session.windows(&[], 20_000), None);
+        assert_eq!(session.windows(&[], 30_000), Some(20_000));
+        // The window picked not found (an untitled pane window): the same.
+        let mut session = Session { picked: Some(99), ..Session::default() };
+        for at in [0, 5_000, 10_000, 15_000] {
+            assert_eq!(session.windows(&[7, 8], at), None);
+        }
+        assert_eq!(session.windows(&[], 20_000), None);
+        assert_eq!(session.windows(&[], 30_000), Some(20_000));
     }
 }

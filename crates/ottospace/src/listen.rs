@@ -32,6 +32,8 @@ const NO_FIXTURE: &str = "no audio source in a test run";
 const HEADER_ROOM: f32 = 240.;
 /// Narrower still, the dot gives way too: × must stay in the header (measured on CI: 120 points).
 const DOT_ROOM: f32 = 150.;
+/// How often the app's windows are looked at, for its meeting's end (`Session`).
+const WINDOWS: Duration = Duration::from_secs(5);
 /// How often the meter, the label and the clock are drawn while one is on, sound or not.
 const FRAME: Duration = Duration::from_millis(125);
 /// Every this many frames what was heard goes to the core (250 ms), whether anything was or not.
@@ -39,13 +41,16 @@ const BATCH: u32 = 2;
 
 /// A fixture line: `{"after_ms":300,"from":"them","text":"made-up words","final":true}`, heard
 /// `after_ms` after the line before it (or the streams' start). `{"after_ms":100,"level":0.3}`:
-/// the sound's level from then (RMS, 0 to 1), for the meter.
+/// the sound's level from then (RMS, 0 to 1), for the meter. `{"after_ms":100,"windows":[7]}`: the
+/// ids of the app's windows from then, as a look would find them (`ListenWindows`).
 #[derive(Clone, Debug, Deserialize)]
 struct Said {
     #[serde(default)]
     after_ms: u64,
     #[serde(default)]
     level: Option<f32>,
+    #[serde(default)]
+    windows: Option<Vec<u32>>,
     #[serde(flatten)]
     heard: Option<Heard>,
 }
@@ -64,6 +69,8 @@ pub(crate) struct Feed {
     /// The app's streams while they run (none while paused), and the app's pid: none for a fixture.
     live: Option<Live>,
     pid: Option<i32>,
+    /// When the app's windows were last looked at (`WINDOWS`).
+    looked: Option<Instant>,
 }
 
 /// Where a transcript's sound comes from.
@@ -91,8 +98,8 @@ fn read_fixture(path: &str) -> Result<VecDeque<Said>, String> {
     let said = |line: &str| -> Result<Said, String> {
         let said: Said = serde_json::from_str(line).map_err(|why| format!("the fixture: {why}"))?;
         // A flattened `Option` takes words it cannot read as none: `"from":"Them"` is a mistake, not a pause.
-        match (&said.level, &said.heard) {
-            (None, None) => Err(format!("the fixture: neither a level nor words: {line}")),
+        match (&said.level, &said.heard, &said.windows) {
+            (None, None, None) => Err(format!("the fixture: neither a level, words nor windows: {line}")),
             _ => Ok(said),
         }
     };
@@ -318,6 +325,11 @@ impl Workspace {
             if let Record::Begin(head) = record {
                 let writer = config::transcripts_dir()
                     .map(|dir| listen_file::begin(&dir, head.clone()).map_err(|why| format!("transcripts_dir: {why}")));
+                // A session's next file (its words follow) that cannot be made: the status bar says
+                // why. The start's own failure ends the start (`listen_begin`).
+                if let Some(Err(why)) = writer.as_ref().filter(|_| records.len() > 1) {
+                    self.error = Some(why.clone());
+                }
                 self.listen_file = writer.map(|writer| File { id: id.into(), writer });
             }
         }
@@ -360,21 +372,14 @@ impl Workspace {
             self.listen_rest().map(|rest| self.model.update(rest.sent_by(Origin::System))).unwrap_or_default();
         let ended = Action::ListenEnded { id, why: listen::Ended::AppQuit, at: now_ms() };
         effects.extend(self.model.update(ended.sent_by(Origin::System)));
-        let writer = self.listen_file.as_ref().map(|file| file.id.clone());
+        // Each write as usual (a session's next file is made here too); then every file that
+        // ended is written to its end before the app goes.
         for effect in &effects {
             if let Effect::ListenWrite { id, records } = effect {
-                // The last write takes the file: then it is finished, not dropped.
-                let last = records.iter().any(|record| matches!(record, Record::End { .. } | Record::Failed));
-                if last && writer.as_deref() == Some(id.as_str()) {
-                    if let Some(File { writer: Ok(writer), .. }) = self.listen_file.take() {
-                        writer.send(records.clone());
-                        writer.finish();
-                    }
-                } else {
-                    self.listen_write(id, records);
-                }
+                self.listen_write(id, records);
             }
         }
+        std::mem::take(&mut self.listen_ending).into_iter().for_each(listen_file::Writer::finish);
     }
 
     /// The streams of `id`: the source pane's app's sound, or in a test run its fixture's lines.
@@ -482,7 +487,7 @@ impl Workspace {
                 let pending = Vec::new();
                 let paused = false;
                 self.listen_feed =
-                    Some(Feed { id: id.into(), lines, due: None, run_ms: 0, paused, pending, live, pid });
+                    Some(Feed { id: id.into(), lines, due: None, run_ms: 0, paused, pending, live, pid, looked: None });
                 self.listen_meter = Some(Meter::new(Instant::now()));
                 self.dispatch(Action::ListenBegan { id: id.into(), at: now_ms() }, Origin::System, window, cx);
                 // The others in the call are not told by ottospace: the user is reminded to.
@@ -575,6 +580,22 @@ impl Workspace {
                 return false;
             }
         }
+        // The app's windows, every few seconds, off the main thread: ids only.
+        let look = feed.pid.filter(|_| batch && feed.looked.is_none_or(|at| now.duration_since(at) >= WINDOWS));
+        if let Some(pid) = look {
+            feed.looked = Some(now);
+            let id = id.to_string();
+            cx.spawn_in(window, async move |this, cx| {
+                let found = cx.background_executor().spawn(async move { ottospace_mac::app_audio::window_ids(pid) });
+                let Some(windows) = found.await else { return };
+                let _ = this.update_in(cx, |this, window, cx| {
+                    let look = Action::ListenWindows { id, windows, at: now_ms() };
+                    this.dispatch(look, Origin::System, window, cx);
+                });
+            })
+            .detach();
+        }
+        let mut looks = Vec::new();
         while !feed.paused
             && let Some(next) = feed.lines.front()
         {
@@ -588,6 +609,7 @@ impl Workspace {
             if let (Some(level), Some(meter)) = (said.level, self.listen_meter.as_mut()) {
                 meter.level(level, now);
             }
+            looks.extend(said.windows);
             if let Some(heard) = said.heard {
                 feed.pending.push(Heard { start_ms: feed.run_ms, ..heard });
                 if let Some(meter) = self.listen_meter.as_mut() {
@@ -596,6 +618,10 @@ impl Workspace {
             }
             feed.due = feed.lines.front().map(|next| due + Duration::from_millis(next.after_ms));
         }
+        for windows in looks {
+            self.dispatch(Action::ListenWindows { id: id.into(), windows, at: now_ms() }, Origin::System, window, cx);
+        }
+        let Some(feed) = self.listen_feed.as_mut().filter(|feed| feed.id == id) else { return false };
         if batch {
             let lines = std::mem::take(&mut feed.pending);
             self.dispatch(Action::ListenHeard { id: id.into(), lines }, Origin::System, window, cx);
