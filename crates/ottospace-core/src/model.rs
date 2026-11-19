@@ -4137,6 +4137,7 @@ impl Model {
             fronts_were.into_iter().filter(|id| origin == Origin::User && !was_done(id)).collect();
         self.settle_tasks(undo && origin == Origin::User, &finished);
         self.settle_spaces(origin, &home);
+        self.settle_confirm();
         // A terminal opened now, wherever its tab went (Home's go to a workspace), starts in its space's default.
         for effect in &effects {
             if let Effect::Opened(pane) = effect {
@@ -4477,6 +4478,12 @@ impl Model {
         // Its row is gone, or the move was the user's: stay at the same place, on a row.
         let stay = |at: usize| at.min(rows.len().saturating_sub(1));
         self.list = self.list.filter(|_| self.sidebar.is_some()).map(|at| followed.unwrap_or_else(|| stay(at)));
+        effects
+    }
+
+    /// The question over the workspace goes once what it asks about did, after the step's
+    /// tabs settled: an undo that takes a workspace's tab back drops its "Close?" then.
+    fn settle_confirm(&mut self) {
         // A pane that closed is not asked about; with none left there is no question. Never a
         // quit: the user has not answered.
         let later_works =
@@ -4503,7 +4510,6 @@ impl Model {
                 self.confirm = None;
             }
         }
-        effects
     }
 
     /// A typed label in an app: press its element, or focus a text field. The shell gives the app

@@ -3114,12 +3114,20 @@ impl Run {
             .collect();
         // Not while something over the workspace waits for the click (the palette, a question).
         let rail_shown = m.rail_shown().filter(|_| m.waits_for(&action, origin).is_none() && m.confirm.is_none());
+        let brief_before = m.brief;
         let effects = m.update(sent);
         check(m)?;
         // The user's click on the item the drawer shows collapses it, as ⌘⇧R.
         if let (Action::RailSelect { item }, None) = (&action, &refused) {
-            let collapses = rail_shown == Some(*item);
+            // But over that task's brief: the click leaves the drawer open, the brief kept (#282).
+            let over_brief = matches!(item, RailItem::Task { id } if brief_before == Some(*id));
+            let collapses = rail_shown == Some(*item) && !over_brief;
             ensure!(!collapses || m.drawer_collapsed(), "the user's click on the shown {item:?} left the drawer open");
+            let kept = !m.drawer_collapsed() && m.brief == brief_before;
+            ensure!(
+                rail_shown != Some(*item) || !over_brief || kept,
+                "the user's click over the brief of {item:?} dropped it"
+            );
         }
         // A level rises only by the user's own choice. A pane kept by its task keeps its level but
         // for the user's; a pane new to it starts at the default, or Off.
@@ -5288,6 +5296,81 @@ fn random_actions_keep_the_model_sound_for_long() {
 
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
+
+/// The user's undo takes the tab of the workspace a "Close?" asks about: the question goes in
+/// that step, not at a client's next one (it was dropped before the undo's tabs settled).
+#[test]
+fn seed_19637_a_close_question_goes_with_the_undo_not_a_clients_step() {
+    let steps = [
+        Action::TaskAdd {
+            title: "a".into(),
+            priority: 2,
+            state: State::Running,
+            tab: None,
+            assign: Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] },
+        }
+        .sent_by(Origin::User),
+        Action::TaskAdd {
+            title: "b".into(),
+            priority: 1,
+            state: State::NeedsYou,
+            tab: None,
+            assign: Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] },
+        }
+        .sent_by(Origin::User),
+        Action::TaskFromLine {
+            line: "fix zoom #canvas >app p1".into(),
+            known: Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] },
+            open: false,
+        }
+        .sent_by(Origin::User),
+        Action::SpaceOpen { space: Owner::Task { id: 3 } }.sent_by(Origin::User),
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::RowDismiss { id: 3 }.sent_by(Origin::Socket),
+        Action::CloseTabAsked {
+            index: None,
+            running: vec![
+                Running { pane: 1, program: None, background: false },
+                Running { pane: 3, program: None, background: false },
+            ],
+        }
+        .sent_by(Origin::User),
+        Action::TaskUndo.sent_by(Origin::User),
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::Socket),
+    ];
+    replay(&steps).unwrap();
+    // Up after the tab's close was asked; gone with the undo, the user's own step.
+    let mut run = Run::default();
+    for (at, sent) in steps[..8].iter().enumerate() {
+        run.step(sent.clone()).unwrap();
+        assert_eq!(run.m.confirm.is_some(), at == 6, "step {at}");
+    }
+}
+
+/// The user's click on the shown task, over its brief, leaves the drawer open: the check
+/// expected it to collapse, as without a brief.
+#[test]
+fn seed_1793_a_click_over_the_shown_tasks_brief_leaves_the_drawer_open() {
+    replay(&[
+        Action::Split { axis: Axis::Right, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::CaptureStart {
+            pane: None,
+            draft: "u1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![
+                Facts { pane: 7, cwd: None, program: None, title: Some(",ǅ".into()), ignored: false },
+                Facts { pane: 7, cwd: None, program: None, title: None, ignored: false },
+            ],
+            images: false,
+        }
+        .sent_by(Origin::User),
+        Action::RestoreTasks { tasks: vec![], floor: 5 }.sent_by(Origin::User),
+        Action::ComposeSubmit { open: true }.sent_by(Origin::User),
+        Action::TaskGo { id: Some(6) }.sent_by(Origin::Socket),
+        Action::RailSelect { item: RailItem::Task { id: 6 } }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
 
 /// An agent's exit ends its turn: a turn started in the same batch, after the exit, starts none.
 #[test]
