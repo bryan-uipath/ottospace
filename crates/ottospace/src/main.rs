@@ -67,6 +67,7 @@ mod app_wheel;
 mod apps;
 mod ax_debug;
 mod btw;
+mod bug;
 mod calendar;
 mod chat_select;
 mod child;
@@ -1562,6 +1563,7 @@ impl Workspace {
         if let Some(text) = config::get().home.as_ref().map(|_| config::settings_text().unwrap_or_default()) {
             model.update(Action::SettingsRead { text, written: false }.sent_by(Origin::System));
         }
+        model.update(Action::BugRepo { facts: bug::repo_facts(&config::get().settings) }.sent_by(Origin::System));
         let mut this = Self {
             model,
             hosted: HashMap::new(),
@@ -2127,6 +2129,7 @@ impl Workspace {
                 Effect::Clip { text } => self.copy_text(text.clone(), None, Verb::Copied, cx),
                 Effect::ApplySettings { settings } => {
                     self.apply_features(settings, cx);
+                    agents.push(Action::BugRepo { facts: bug::repo_facts(settings) });
                     config::set_live(settings.as_ref().clone())
                 }
                 // The text read at ⌘V, into the pane it was read for.
@@ -2144,6 +2147,8 @@ impl Workspace {
                 Effect::Snapshot { draft, material, pane } => self.ask_snapshot(draft, *material, *pane),
                 Effect::CaptureDropped { draft, material } => self.drop_capture(draft, *material),
                 Effect::CaptureKept { draft, dir, brief } => self.keep_capture(draft, dir, brief, cx),
+                // Nothing in the shell starts a bug report yet.
+                Effect::BugDropped { .. } | Effect::BugFiled { .. } => {}
                 Effect::Quit => {
                     // A moment later, so a socket `quit` gets its reply first; one still held for
                     // a frame goes now.

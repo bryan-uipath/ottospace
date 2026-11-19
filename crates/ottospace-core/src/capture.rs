@@ -175,7 +175,7 @@ pub struct Marks {
     future: Vec<Vec<Shape>>,
 }
 
-fn unit(p: [f64; 2]) -> [f64; 2] {
+pub(crate) fn unit(p: [f64; 2]) -> [f64; 2] {
     let fix = |v: f64| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
     [fix(p[0]), fix(p[1])]
 }
@@ -755,7 +755,7 @@ fn taken(material: &Material) -> Taken {
 }
 
 /// A fence word as the brief uses it: letters and digits only, 32 at most; never empty.
-fn fence_word(given: &str) -> String {
+pub(crate) fn fence_word(given: &str) -> String {
     let word: String = given.chars().filter(char::is_ascii_alphanumeric).take(32).collect();
     if word.is_empty() { "0".into() } else { word }
 }
@@ -812,7 +812,7 @@ pub fn fence_lines(fence: &str) -> (String, String) {
 
 /// A quoted block: `lines` as data. Whatever the lines hold, each line of them comes out
 /// starting with `| `, so none can end the block or pass for the brief's own words.
-fn quoted(fence: &str, lines: &[String]) -> String {
+pub(crate) fn quoted(fence: &str, lines: &[String]) -> String {
     let (first, last) = fence_lines(fence);
     let mut out = first + "\n";
     for line in lines {
@@ -840,7 +840,7 @@ fn source_lines(source: &Source) -> Vec<String> {
     }
 }
 
-fn span(from: f64, size: f64) -> String {
+pub(crate) fn span(from: f64, size: f64) -> String {
     format!("{:.2}–{:.2}", from, from + size)
 }
 

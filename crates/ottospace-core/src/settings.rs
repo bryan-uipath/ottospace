@@ -192,6 +192,19 @@ pub struct Settings {
     /// When ⌘V into a terminal asks first: `multiline` (default: text with a line break) or `never`.
     #[serde(default)]
     pub paste_confirm: Option<crate::clip::PasteConfirm>,
+    /// For working on ottospace itself: `{ "ottospace_repo": "~/code/ottospace" }`.
+    #[serde(default)]
+    pub developer: Developer,
+}
+
+/// `developer`: settings for working on ottospace itself.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Developer {
+    /// A git checkout of ottospace (`~` is the home folder). While it is one, the bug button
+    /// shows; a report is filed as a task in a new worktree of it (`bug`).
+    #[serde(default)]
+    pub ottospace_repo: Option<String>,
 }
 
 /// One of `calendar_colors`: a title that holds `match` (case ignored) takes `color`.
@@ -604,6 +617,8 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         // Told to the core again on each good read, as Features… writes them.
         features: _,
         paste_confirm: _,
+        // Told to the core again on each good read.
+        developer: _,
     } = now;
     let changed = [
         ("terminal", *terminal != started.terminal),
@@ -1290,6 +1305,18 @@ mod tests {
         let text = r#"{"features": {"tabs": true, "marks": true}}"#;
         assert_eq!(retired_flags(text, &["tabs"]).len(), 1);
         assert!(retired_flags(text, crate::features::RETIRED).is_empty());
+    }
+
+    #[test]
+    fn the_developer_names_a_checkout_of_ottospace_and_nothing_else() {
+        let (settings, wrong) = Settings::read(r#"{"developer": {"ottospace_repo": "~/code/ottospace"}}"#);
+        assert_eq!((settings.developer.ottospace_repo.as_deref(), wrong.len()), (Some("~/code/ottospace"), 0));
+        let (settings, wrong) =
+            Settings::read(r#"{"developer": {"ottospace_rep": "~/code/ottospace"}, "tasks": "~/t"}"#);
+        assert_eq!((settings.developer, settings.tasks.as_deref()), (Developer::default(), Some("~/t")));
+        assert!(wrong.len() == 1 && wrong[0].starts_with("developer: unknown field"), "{wrong:?}");
+        let (_, wrong) = Settings::read(r#"{"developer": {"ottospace_repo": 3}}"#);
+        assert_eq!(wrong.len(), 1);
     }
 
     #[test]
