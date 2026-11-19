@@ -1,0 +1,54 @@
+# cargo deny check: advisories, licences, bans, sources. CI: .github/workflows/deps.yml.
+
+[graph]
+# The app builds for Apple Silicon only (scripts/package.sh). CI runs this on Linux: the graph
+# comes from metadata, so Linux- and Windows-only crates are left out by this, not by the host.
+targets = ["aarch64-apple-darwin"]
+
+[advisories]
+# Unmaintained, no fix: every one comes through gpui 0.2.2, the newest release. Reviewed
+# 2026-11-18; drop each when a gpui release no longer pulls it in.
+ignore = [
+    { id = "RUSTSEC-2025-0052", reason = "2026-11-18: async-std, via zed-async-tar, gpui_http_client" },
+    { id = "RUSTSEC-2026-0441", reason = "2026-11-18: pin-utils, via async-std" },
+    { id = "RUSTSEC-2024-0436", reason = "2026-11-18: paste, proc macro of metal and rav1e" },
+    { id = "RUSTSEC-2026-0173", reason = "2026-11-18: proc-macro-error2, via stacksafe-macro" },
+    { id = "RUSTSEC-2025-0134", reason = "2026-11-18: rustls-pemfile, via zed-reqwest" },
+    { id = "RUSTSEC-2026-0206", reason = "2026-11-18: rustybuzz, via usvg" },
+    { id = "RUSTSEC-2026-0192", reason = "2026-11-18: ttf-parser, via usvg and fontdb" },
+]
+
+[licenses]
+# Permissive only, each one the graph uses (`cargo deny list`). Weak copyleft and the like: by
+# crate, in `exceptions`, so a new crate under them fails until someone looks.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+exceptions = [
+    # MPL-2.0, file-level copyleft: unmodified, it imposes nothing on our code. Both via gpui.
+    { allow = ["MPL-2.0"], crate = "cbindgen" }, # build tool, not linked
+    { allow = ["MPL-2.0"], crate = "option-ext" }, # via dirs-sys, zed-font-kit
+    # CC0-1.0, public domain dedication, no patent grant. Via naga.
+    { allow = ["CC0-1.0"], crate = "hexf-parse" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The workspace's own path dependencies (`publish = false`).
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only: no git dependencies (gpui comes from crates.io).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
