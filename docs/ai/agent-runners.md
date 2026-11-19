@@ -740,6 +740,129 @@ Left on disk: the probe's session files (Claude: `projects/<scratch>/…jsonl`; 
 under `sessions/2026/11/13/`), the scratch folder's trust entry in Claude's `.claude.json`, and
 the three stopped, removed `--bg` sessions' records (`claude rm` keeps the conversation).
 
+## Project MCP servers (spike, 2026-11-18)
+
+The report: flow-workbench's `.mcp.json` declares `playwright`. The TUI asks once per project
+whether to use it; the native chat never asks, and the question first shows on a switch to the
+Terminal view. The ask was a card in the chat that saves the answer where the CLI keeps it.
+
+Run against Claude Code 2.1.328, `claude -p` with ottospace's flags, `HOME` and
+`CLAUDE_CONFIG_DIR` in a new `mktemp -d`, `ANTHROPIC_BASE_URL` at a local stand-in API (no real
+API call), a temp git project whose `.mcp.json` declares two stdio servers, `harmless` and
+`other`: a Python script that logs each start and request and answers `initialize` and
+`tools/list`. "Seen" is a run; "code" is the CLI's bundled code, read, never run.
+
+**1. Headless, nothing approved: the servers start.** Seen. Both started (`initialize`,
+`tools/list` in their logs) and `system/init` listed
+`mcp_servers: [{name: "harmless", status: "connected", source: "project"}, …]`, their tools
+`mcp__harmless__ping` in `tools`. Code: the approval check (`status`, then `by`) answers a server
+neither enabled nor disabled `{status: "approved", by: "non_interactive"}` when the session is
+non-interactive and the project setting source is on. `system/init` and `mcp_status` carry no
+per-server approval reason (`by` reaches only a telemetry count): the stream does not tell a
+server the user approved from one the CLI approved for being headless. **So the native chat runs
+every project server not disabled, unasked, as it stands.** The TUI asks first; `-p` also skips
+the workspace-trust dialog. In headless mode only a rejection matters: an approval changes
+nothing a run can see.
+
+| Start | `system/init.mcp_servers` | Started |
+|---|---|---|
+| nothing in the settings | both, `connected`, `source: project` | both |
+| `.claude/settings.local.json` `disabledMcpjsonServers: ["harmless"]` | `other` only: a rejected server is left out, not reported | `other` |
+| `--settings '{"disabledMcpjsonServers":["harmless","other"]}'` (a flag, nothing written) | `[]` | none |
+| local `enabledMcpjsonServers: ["harmless"]`, flag disables `other` | `harmless` | `harmless` (as with no approval) |
+| cwd two folders below the `.mcp.json` | both | both: ancestors' `.mcp.json` count |
+| `--ignore-persisted-trust` or `CLAUDE_CODE_IGNORE_PERSISTED_TRUST=1` | `[]`, even with `enabledMcpjsonServers` or `enableAllProjectMcpServers` in local settings | none: local approvals are not believed either |
+| `--setting-sources user` | `[]` | none (and the project's own settings are dropped) |
+
+A pending server is never reported in headless mode: it is started (above), or, held back by a
+flag or by `--ignore-persisted-trust`, absent from `init` and from `mcp_status`.
+`claude mcp list` does print `⏸ Pending approval (run \`claude\` to approve)` for one, without
+starting it (seen), and `claude mcp get <name>` its scope, command and args; but both are text
+for a person, and `list` health-checks, so can start, every approved server not disabled for
+the project.
+
+**2. Where approval is kept.** Code (the TUI's dialog "New MCP server found in this project:
+<name>", one pending server): the project's local settings, `<project>/.claude/settings.local.json`,
+by the CLI's settings writer, merged:
+
+| Choice | Written |
+|---|---|
+| Use this MCP server | `enabledMcpjsonServers`: the name appended if absent |
+| Use this and all future MCP servers in this project | the same, and `enableAllProjectMcpServers: true` |
+| Continue without using this MCP server (also Esc) | `disabledMcpjsonServers`: the name appended |
+| "N new MCP servers found in this project", Enable selected (two or more pending; Esc rejects all) | the picked names to `enabledMcpjsonServers`, the rest to `disabledMcpjsonServers`; no "all future" |
+
+Plus an in-memory approval for the running session. The check reads `enabledMcpjsonServers` and
+`enableAllProjectMcpServers` from every setting source (user, project, local, flag; project and
+local only under conditions on trust), `disabledMcpjsonServers` first: a rejection wins (code;
+no run set both on one name). **A choice saved to local settings may not last:** in a workspace
+not explicitly trusted, with `settings.local.json` gated, the TUI says "your MCP server choices
+apply to this session only … to persist, add them to enabledMcpjsonServers in
+~/.claude/settings.json" (code). Headless runs never record trust. The dialog's candidates
+include servers from the repository's plugins (`pluginServerNames`), not only `.mcp.json`.
+`claude mcp reset-project-choices` clears the choices. Not driven: the TUI dialog itself (a temp
+`HOME` first needs onboarding and the trust dialog).
+
+**3. Headless control requests.** Seen, each on a running session:
+
+| Request | Result |
+|---|---|
+| `mcp_status` | `mcpServers[]`: `name`, `status`, `serverInfo`, `config` (`type`, `command`, `args`), `transport`, `scope`, `source`, `tools`. Only servers it loaded |
+| held back by the flag: `mcp_reconnect {serverName}` | `error: "Server not found: harmless"` |
+| held back by the flag: a local approval written mid-session, `mcp_status`, a new turn | still absent (the flag's rejection wins either way) |
+| held back by local `disabledMcpjsonServers`: the file rewritten without it, then `mcp_status` 1.5 s later | still absent |
+| … then `mcp_reconnect {serverName: harmless}` | success; `harmless` `connected`, `scope: project`: no restart |
+| … then `mcp_toggle {serverName: other, enabled: true}` | success; `other` connected by the next `init` |
+| `mcp_set_servers {servers: {other: {type: stdio, command, args}}}` | `added: ["other"]`, connected at once, `scope: dynamic`; `ping` in `mcp_status.tools` |
+
+So a server held back by a rejection in a file comes back with `mcp_reconnect` once the rejection
+is gone; one held back by the flag needs a restart (`--resume <id>`, without it in the flag) or
+`mcp_set_servers`. The latter hands the CLI a command line ottospace read from `.mcp.json`,
+skipping the CLI's own reading of it (its docs' `${VAR}` expansion, `env`, `headers`), and
+replaces the whole host-supplied set (`authoritative`, code): a restart is the faithful one.
+
+**4. Codex: differs.** From `codex --help`, `codex mcp --help` and the app server's schema
+(0.169.0, offline): a project's MCP servers live in its `.codex/config.toml` (`mcp_servers`), a
+config layer (`ConfigLayerSource` `project`, one per `.codex/` folder between cwd and the
+project/repo root) loaded only for a trusted project: `projects."<path>".trust_level` in
+`~/.codex/config.toml`. One trust decision for the layer's servers and config, not per server
+(hooks carry their own trust, `hooks.state.<key>.trusted_hash`); a layer not loaded carries
+`disabledReason`. `mcpServerStatus/list` and
+`config/mcpServer/reload` exist. No per-server approval to ask.
+
+### What it means
+
+The premise was wrong: headless mode does not leave the servers waiting, it runs them. The card
+would ask about programs that are already running. A running `-p` session gives no structured,
+side-effect-free list of pending servers (only `claude mcp list`'s text, which may start the
+approved ones): the spike's stop condition, so nothing is built. Options, the
+owner's call:
+
+- **A. Hold back, then ask.** ottospace works out the pending set itself: the names in every
+  `.mcp.json` from the agent's cwd up, minus those the settings enable (user, project, local) or
+  disable; `enableAllProjectMcpServers` empties it. It starts the CLI with
+  `--settings '{"disabledMcpjsonServers":[…pending]}'` (seen: nothing starts, nothing written),
+  draws the card with each name and its command line from `.mcp.json`, and on Use writes
+  `settings.local.json` as the TUI does, then restarts on `--resume` (that a resumed session
+  reads the new settings: seen only for a new start). Not now writes nothing and keeps the
+  flag. Costs: the CLI's approval rules duplicated (name matching, trust conditions, managed
+  settings); a rule missed either asks again (safe) or lets the CLI start a server unasked
+  (today's state). A check after `init` (a `source: project` server ottospace did not count as
+  approved) catches the second and says so. Servers from the repository's plugins
+  (`source: plugin`) are outside A unless it reads plugins too. A saved Use lasts only where the
+  CLI believes local settings (above); else `~/.claude/settings.json`, which covers that name in
+  every project.
+- **B. Tell, then save.** Keep the CLI's behaviour; the chat shows "This project's MCP servers
+  are running: <names, commands>" with Save (writes `enabledMcpjsonServers`; the TUI stops
+  asking where it believes local settings) and Turn off (writes `disabledMcpjsonServers`; then
+  the server's process must be stopped, not tested). Honest about today, but
+  the first run is still unasked.
+- **C. Upstream.** Ask Claude Code for pending servers in `system/init` (`status: "pending"`)
+  and a flag that keeps headless from approving them. Then a `RunnerSpec` capability reads the
+  CLI's own answer; nothing is duplicated.
+
+Recommend A behind a feature flag, with C asked for, A's rule set dropped once C ships.
+
 ## Open questions
 
 1. **Codex through the experimental app server, or Claude-only native first?** Recommend:
