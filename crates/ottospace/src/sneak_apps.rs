@@ -37,7 +37,7 @@ impl Workspace {
         };
         let pane = sneak.app.map(|app| app.pane).or(self.model.focused);
         let Some(pane) = pane else { return };
-        let shown = self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(&pane));
+        let shown = self.model.main_panes().contains(&pane);
         if !shown && sneak.app.is_some() {
             self.dispatch(Action::SneakApp { pane, read: None }, Origin::System, window, cx);
             return;

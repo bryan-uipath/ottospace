@@ -1267,6 +1267,22 @@ export interface TabOut {
   display: number;
 }
 
+/** An ottospace window: the main one (`main`), or a tab out's. */
+export interface AppWindow {
+  main: boolean;
+  /** The tab it shows; null for Home in the main window. */
+  tab: number | null;
+  /** Its display's place in `displays`, if known. */
+  display: number | null;
+  /** The keyboard is there. */
+  key: boolean;
+  /** A tab out's window, once open: its frame and the frames it drew. Absent for the main one. */
+  frame?: Rect | null;
+  frames?: number | null;
+  /** Its window number, for `screencapture -l`. */
+  number?: number | null;
+}
+
 /** A display `displaysSet` makes up, in a test run. */
 export interface MadeUpDisplay {
   uid: string;
@@ -1445,6 +1461,8 @@ export interface Snapshot {
   displays: Display[];
   /** Each tab folded out to another display: its id, and its display's place in `displays`. */
   out: TabOut[];
+  /** The main window first, then each tab out's. */
+  windows: AppWindow[];
   /** Where parked windows go: `[x, y]`. */
   parking: [number, number];
   return_key: string | null;

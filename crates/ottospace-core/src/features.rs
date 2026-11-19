@@ -92,9 +92,7 @@ impl Feature {
             Feature::AgentMode => {
                 "Agent mode (⌘⌃V): let a workspace's task see an app pane, from the robot in its header"
             }
-            Feature::MultiMonitor => {
-                "Multi-monitor: fold a tab out to its own window on another display. In progress: not on screen yet"
-            }
+            Feature::MultiMonitor => "Multi-monitor (⌘⇧O): fold a tab out to its own window on another display",
         }
     }
 

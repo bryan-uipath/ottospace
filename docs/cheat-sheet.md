@@ -45,6 +45,7 @@ ottospace            # opens on the Repos list
 | New workspace | + on the top row, or in the Workspaces section's header |
 | Hide the task or workspace on show | ⌘⌃W, or its × on the top row. Its row in Tasks or Workspaces opens it again |
 | Close the tab and its panes | ⌘⇧W |
+| Tab out to its own window on another display, and back in (`multi_monitor` flag) | ⌘⇧O; or Fold back in on its tab or in its window's strip |
 | Save the tab into its workspace, else as a new one | ⌘⇧S |
 | Fill the whole display, over the menu bar and Dock | ⌃⌘F, the green button, or the expand button at the top right (again to restore) |
 

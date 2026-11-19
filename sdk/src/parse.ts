@@ -3,6 +3,7 @@
 // Keys the types do not name are dropped, so a test can compare the result with the raw reply.
 
 import type {
+  AppWindow,
   Display,
   TabOut,
   AgentChip,
@@ -215,6 +216,20 @@ function display(value: unknown, at: string): Display {
     scale: num(o.scale, `${at}.scale`),
     main: bool(o.main, `${at}.main`),
   };
+}
+
+function appWindow(value: unknown, at: string): AppWindow {
+  const o = fields(value, at);
+  const out: AppWindow = {
+    main: bool(o.main, `${at}.main`),
+    tab: orNull(num)(o.tab, `${at}.tab`),
+    display: orNull(num)(o.display, `${at}.display`),
+    key: bool(o.key, `${at}.key`),
+  };
+  if ("frame" in o) out.frame = orNull(rect)(o.frame, `${at}.frame`);
+  if ("frames" in o) out.frames = orNull(num)(o.frames, `${at}.frames`);
+  if ("number" in o) out.number = orNull(num)(o.number, `${at}.number`);
+  return out;
 }
 
 function tabOut(value: unknown, at: string): TabOut {
@@ -1892,6 +1907,7 @@ export function snapshot(value: unknown): Snapshot {
     window_active: bool(o.window_active, "window_active"),
     displays: list(display)(o.displays, "displays"),
     out: list(tabOut)(o.out, "out"),
+    windows: list(appWindow)(o.windows, "windows"),
     parking: pair(o.parking, "parking"),
     return_key: orNull(str)(o.return_key, "return_key"),
     version: str(o.version, "version"),

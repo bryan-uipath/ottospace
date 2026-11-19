@@ -116,7 +116,7 @@ impl Workspace {
 
     /// File ▸ Keep Workspace and the palette: the selected space's workspace, if temporary, is kept.
     pub(crate) fn keep_workspace(&mut self, window: &Window, cx: &mut Context<Self>) {
-        match self.model.space().clone() {
+        match self.model.shown_space().clone() {
             Owner::Workbook { id } if !self.model.workbooks.is_kept(id) => {
                 let _ = self.workbook_act(Action::WorkbookKeep { workbook: id }, window, cx);
             }

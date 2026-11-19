@@ -12,6 +12,7 @@ below; a folder scripts/shots/<name>/ beside it is copied into the instance's ow
 `{TODAY+34200}` (09:30 today, local) and `{DATE}` (today, `2026-11-17`) are replaced in both. Lines starting with `#` are comments.
 
   {"shot":"name"}             settle, then take the window: <out>/<scenario>/<name>.png
+                              "window":1: a tab out's window instead (`windows`, by place)
   {"settle":true}             wait for the frame that draws the last request (`settle`:500: and 500 ms)
   {"click":"task:1"}          the user's click on a named control (ids: {"controls":true}); "at":[x,y]
   {"hover":"task:1"}          the pointer over a named control, or {"hover":{"rect":"calendar.band.blocks.0.rect"}}
@@ -284,20 +285,21 @@ class Instance:
                   fail=False)
         time.sleep(0.15 + extra_ms / 1000)
 
-    def window_id(self):
-        window = path_get(self.state(), "frame.window")
+    def window_id(self, which=0):
+        path = f"windows.{which}.number" if which else "frame.window"
+        window = path_get(self.state(), path)
         if not isinstance(window, int) or window <= 0:
             raise Failed("could not resolve this instance's window id; no picture taken (never the frontmost window)")
         return window
 
-    def shot(self, path):
+    def shot(self, path, which=0):
         asked = time.time() * 1000
         self.settle()
         if screen_locked():
             raise Failed("the screen is locked: nothing draws. Unlock it and run again")
-        window = self.window_id()
+        window = self.window_id(which)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        if self.recording:
+        if self.recording and not which:
             # While the window is streamed, the window server gives screencapture only the part
             # on screen: the picture is the recording's last frame, one pixel a point.
             frame_png(self.recording, path, asked)
@@ -310,7 +312,7 @@ class Instance:
         if stats["clear"] > 64 * 40 // 20:
             os.remove(path)
             raise Failed(f"{path}: most of the window is missing from the picture (only what is on screen drew)")
-        size = path_get(self.state(), "window") or [0, 0, 0, 0]
+        size = path_get(self.state(), f"windows.{which}.frame" if which else "window") or [0, 0, 0, 0]
         scale = stats["w"] / size[2] if size[2] else 0
         if stats["colors"] <= 1:
             os.remove(path)
@@ -428,7 +430,7 @@ def run_scenario(binary, scenario, out, record=False):
                 inst.ok(step)
             elif "shot" in step:
                 path = os.path.join(folder, step["shot"] + ".png")
-                stats = inst.shot(path)
+                stats = inst.shot(path, step.get("window", 0))
                 shots.append(step["shot"])
                 say(f"  {scenario}/{step['shot']}.png  {stats['w']}x{stats['h']}, {stats['colors']} colours")
             elif "settle" in step:

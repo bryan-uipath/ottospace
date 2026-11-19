@@ -26,6 +26,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
         item("Agent Mode: See and Act", agent_mode::AgentAct),
     ];
     let mark_tab = [MenuItem::separator(), item("Mark Tab", MarkTab), item("Go to Mark…", MarkJump)];
+    let displays = features.on(ottospace_core::features::Feature::MultiMonitor);
     vec![
         Menu {
             name: "ottospace".into(),
@@ -93,6 +94,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
             .chain(transcribe.into_iter().filter(|_| transcripts))
             .chain(agent.into_iter().filter(|_| agents))
             .chain([MenuItem::separator(), item("Next Tab", NextTab), item("Previous Tab", PrevTab)])
+            .chain(displays.then(|| item("Fold Tab Out or In", FoldTab)))
             .chain([
                 MenuItem::separator(),
                 item("Go to Home", GoHome),

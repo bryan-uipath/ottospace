@@ -72,6 +72,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::GoHome => Box::new(GoHome),
         Command::PrevTab => Box::new(PrevTab),
         Command::CloseTab => Box::new(CloseTab),
+        Command::FoldTab => Box::new(FoldTab),
         Command::NewTask => Box::new(NewTask),
         Command::NextTask => Box::new(NextTask),
         Command::CapturePane => Box::new(CapturePane),

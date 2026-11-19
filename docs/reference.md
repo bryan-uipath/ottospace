@@ -116,6 +116,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⌥] / ⌘⌥[ | Next / previous item of the drawer's rail: this workspace's tasks, then the transcript |
 | ⌘⌃W | Hide the selected task or workspace (Hide): it leaves the top row and nothing in it stops; its row in Tasks or Workspaces opens it again. Not Home |
 | ⌘⇧W | Close the tab and its panes |
+| ⌘⇧O | With the `multi_monitor` [flag](#features) on: fold the tab on show out to its own window on another display, the keyboard with it; again there (or its Fold back in) folds it back in. See [Displays](#displays) |
 | ⌘⇧S | Save the tab on show into the [workspace](#workspaces) it is in; in a task's space, as a new one. On a tab that came from one, or was saved into one: update its tab there |
 | ⌘Q | Quit. While a terminal runs something (a program in front of its shell, or a background or stopped job) it asks first, and lists them: ↵, Q or ⌘Q again quits; Esc, any other key or any other shortcut cancels and does nothing else |
 | Wheel / trackpad | Scroll a terminal back through its history |
@@ -1319,7 +1320,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 | `transcripts` | Experimental | off | Transcripts (⌘⌃T): an app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file |
 | `slots` | Experimental | off | Slots: a pane that keeps its place and waits for a window you name (⋯ on an app pane's header) |
 | `agent_mode` | Experimental | off | Agent mode (⌘⌃V): let a workspace's task see an app pane, from the robot in its header |
-| `multi_monitor` | Experimental | off | Multi-monitor: fold a tab out to its own window on another display. In progress: not on screen yet |
+| `multi_monitor` | Experimental | off | Multi-monitor (⌘⇧O): fold a tab out to its own window on another display |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1336,8 +1337,31 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 - `slots` off: no ⋯ in an app pane's header, and a slot, restored or turned off mid-run, is a plain
   app pane of its app that keeps the slot on its record for the flag's return. On, see
   [Slots](#slots) (design: [slots.md](ai/slots.md)).
-- `multi_monitor` off: no tab is out; one out folds back in. In progress: the model only (design:
-  [multi-monitor.md](ai/multi-monitor.md)).
+- `multi_monitor` off: ⌘⇧O does nothing, no Fold Tab item, no tab is out; one out folds back in
+  (design: [multi-monitor.md](ai/multi-monitor.md)).
+
+### Displays
+
+With `multi_monitor` on, ⌘⇧O (View ▸ Fold Tab Out or In, the palette) folds the tab on show out
+to its own window on another display: the next one after the main window's, left to right (the
+one it was on before, if free); with two displays a second fold swaps. The keyboard goes with
+it. The main window (the one ottospace started with: Home, the top row, the left sidebar) shows
+the tab's neighbour; the tab keeps its place in its workspace's row, marked out, with Fold back in
+where its × is. A click on it goes to its window.
+
+- The window out has a "From" strip (its workspace, the tab, Fold back in) and its workspace's
+  rail on its outer edge: its tasks (a click shows one in the main window, whose drawer holds the
+  conversation), + for a new task in that workspace, the transcript. One drawer per conversation:
+  the main window's.
+- ⌘T, ⌘1–9 and ⌘} ⌘{ typed there act on the main window's row; ⌘⇧W closes the tab out. Its red
+  button folds it back in; only the main window's quits.
+- Unplugging the display folds the tab back in; plugging the same display in again (by its UUID)
+  takes it back, unless the main window shows it then. Folded in by you, it stays in.
+- Not yet: a tab holding an app pane stays in the main window (a notice says so), as does a
+  capture of a pane out; the focus arrows stop at a window's edge; a tab out folds in at the next
+  start.
+- Only you fold a tab out or in: a client's ⌘⇧O is refused. The state's `displays`, `windows` and
+  `out` say what is where.
 - `agent_mode` off: no robot in an app pane's header, ⌘⌃V does nothing, no Agent Mode commands,
   the grants are kept as they are (turning it on again raises none), and every read of an app pane by a client (`app_read`,
   `app_look`, `ax_tree`) answers `feature off: agent_mode` (design: [agent-mode.md](ai/agent-mode.md)).
@@ -1511,7 +1535,7 @@ first brainstorm:
 
 [slots.md](ai/slots.md): slots, panes that wait for a window (one window selector for slots, `windows` rules and transcripts' `meeting`), offer it, and empty when it closes. In: the selector (`windows` rules take `identifier`) and, behind `slots`, the model (its states, who may, the record in `layout.json`) and slice 3 on screen: ⋯ and its dialog, a slot's pane, new windows a slot selects. Next: the Zoom measurements, Launch and Close the pane.
 
-[multi-monitor.md](ai/multi-monitor.md): a tab folded out to another display (⌘⇧O), focus arrows across displays, unplug folds it back in; behind `multi_monitor`. Not built.
+[multi-monitor.md](ai/multi-monitor.md): a tab folded out to another display (⌘⇧O), focus arrows across displays, unplug folds it back in; behind `multi_monitor`. Built: the model, ⌘⇧O and the window out (see [Displays](#displays)); its own drawer and the arrows across, not yet.
 
 [repos.md](ai/repos.md): the Repos section: the opt-in list and its order, groups from older settings, folding, the default folder's dot, and how + makes a worktree (the git it runs, what it refuses).
 

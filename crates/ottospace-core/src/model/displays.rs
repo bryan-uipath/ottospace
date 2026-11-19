@@ -91,6 +91,23 @@ impl Model {
         if at == self.active { self.focused } else { self.tabs.get(at)?.focused }
     }
 
+    /// The panes the main window shows. App panes are only ever there (`APPS_STAY`).
+    pub fn main_panes(&self) -> Vec<super::PaneId> {
+        self.tree_at(self.main_at()).map(super::Node::leaves).unwrap_or_default()
+    }
+
+    /// The panes some window shows: the main window's, and each tab out's.
+    pub fn shown_panes(&self) -> Vec<super::PaneId> {
+        let out = self.out.iter().filter_map(|out| self.tabs.iter().position(|tab| tab.id == out.tab));
+        let trees = std::iter::once(self.main_at()).chain(out).filter_map(|at| self.tree_at(at));
+        trees.flat_map(super::Node::leaves).collect()
+    }
+
+    /// The place in `tabs` of tab `id`, if it is out.
+    pub fn out_at(&self, id: u32) -> Option<usize> {
+        self.tabs.iter().position(|tab| tab.id == id).filter(|_| self.is_out(id))
+    }
+
     fn window(&self) -> Window {
         match self.away {
             Some(_) => Window::Out(self.tabs[self.active].id),
@@ -320,8 +337,11 @@ impl Model {
                 talk.keys = false;
             }
         }
+        // So do the boxes and modes it draws: the picker, the palette, ⌘/, a mark's name, the quit question.
         let talking = self.talk.as_ref().is_some_and(|talk| talk.keys);
-        if talking || self.list.is_some() || self.rail_focus.is_some() || self.compose.is_some() {
+        let boxed = self.picker.is_some() || self.palette.is_some() || self.keys || self.confirm.is_some();
+        let boxed = boxed || self.mark_input.is_some();
+        if talking || boxed || self.list.is_some() || self.rail_focus.is_some() || self.compose.is_some() {
             self.key_main(effects);
         }
     }
@@ -648,6 +668,18 @@ mod tests {
         assert_eq!((m.away, m.joins()), (None, Some(of)));
         m.update(Action::CloseCompose);
         assert_eq!(m.compose_joins, None);
+    }
+
+    #[test]
+    fn the_palette_and_the_picker_open_in_the_main_window_with_the_keyboard() {
+        let mut m = two();
+        m.update(Action::TabOut { tab: None });
+        m.update(Action::PaletteOpen);
+        assert_eq!((id(&m), m.away), (1, None));
+        m.update(Action::ClosePalette);
+        m.update(Action::KeyWindow { tab: 2 });
+        m.update(Action::OpenPicker { axis: Axis::Right, new_tab: false, items: Vec::new() });
+        assert_eq!((id(&m), m.away), (1, None));
     }
 
     #[test]

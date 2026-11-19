@@ -1,0 +1,16 @@
+# Multi-monitor: a workspace's second tab folded out (⌘⇧O) to a made-up second display. The main
+# window's row marks it out with Fold back in; its own window has the "From" strip and the
+# workspace's rail on its outer edge.
+{"env":{"OTTOSPACE_FEATURES":"multi_monitor"}}
+{"cmd":"displays_set","displays":[{"uid":"main","frame":[0,0,1728,1117]},{"uid":"right","frame":[1728,0,1400,900]}],"main":"main"}
+{"cmd":"task_new","line":"Fix the login loop #auth p1"}
+{"cmd":"open_space","space":{"kind":"task","id":1}}
+{"cmd":"split"}
+{"cmd":"new_tab"}
+{"cmd":"split"}
+{"cmd":"type","text":"echo logs on the other display\r"}
+{"shot":"before"}
+{"cmd":"key","keys":"cmd-shift-o","as":"user"}
+{"until":"windows.1.frames"}
+{"shot":"main"}
+{"shot":"out","window":1}

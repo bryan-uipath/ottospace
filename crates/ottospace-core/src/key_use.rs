@@ -35,6 +35,7 @@ pub enum Binding {
     TabNumber,
     NextTab,
     CloseTab,
+    FoldTab,
     SaveWorkbook,
     NewTask,
     NextTask,
@@ -86,6 +87,7 @@ pub const ALL: &[Binding] = &[
     Binding::TabNumber,
     Binding::NextTab,
     Binding::CloseTab,
+    Binding::FoldTab,
     Binding::SaveWorkbook,
     Binding::NewTask,
     Binding::NextTask,
@@ -135,6 +137,7 @@ impl Binding {
             Binding::NewTab => &[C::NewTab],
             Binding::NextTab => &[C::NextTab, C::PrevTab],
             Binding::CloseTab => &[C::CloseTab],
+            Binding::FoldTab => &[C::FoldTab],
             Binding::SaveWorkbook => &[C::SaveWorkbook],
             Binding::NewTask => &[C::NewTask],
             Binding::NextTask => &[C::NextTask],
@@ -199,6 +202,7 @@ impl Binding {
             | B::TabNumber
             | B::NextTab
             | B::CloseTab
+            | B::FoldTab
             | B::SaveWorkbook
             | B::MarkPane
             | B::MarkJump
@@ -238,6 +242,7 @@ impl Binding {
             B::TabNumber => "Go to tab",
             B::NextTab => "Next / previous tab",
             B::CloseTab => "Close tab",
+            B::FoldTab => "Tab out to another display / back in",
             B::SaveWorkbook => "Save tab as workspace",
             B::MarkPane => "Mark pane / tab",
             B::MarkJump => "Go to mark by letter",
