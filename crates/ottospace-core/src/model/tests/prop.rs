@@ -3123,6 +3123,11 @@ impl Run {
             let over_brief = matches!(item, RailItem::Task { id } if brief_before == Some(*id));
             let collapses = rail_shown == Some(*item) && !over_brief;
             ensure!(!collapses || m.drawer_collapsed(), "the user's click on the shown {item:?} left the drawer open");
+            let kept = !m.drawer_collapsed() && m.brief == brief_before;
+            ensure!(
+                rail_shown != Some(*item) || !over_brief || kept,
+                "the user's click over the brief of {item:?} dropped it"
+            );
         }
         // A level rises only by the user's own choice. A pane kept by its task keeps its level but
         // for the user's; a pane new to it starts at the default, or Off.
@@ -5296,7 +5301,7 @@ fn random_actions_keep_the_model_sound_for_long() {
 /// that step, not at a client's next one (it was dropped before the undo's tabs settled).
 #[test]
 fn seed_19637_a_close_question_goes_with_the_undo_not_a_clients_step() {
-    replay(&[
+    let steps = [
         Action::TaskAdd {
             title: "a".into(),
             priority: 2,
@@ -5332,8 +5337,14 @@ fn seed_19637_a_close_question_goes_with_the_undo_not_a_clients_step() {
         .sent_by(Origin::User),
         Action::TaskUndo.sent_by(Origin::User),
         Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::Socket),
-    ])
-    .unwrap();
+    ];
+    replay(&steps).unwrap();
+    // Up after the tab's close was asked; gone with the undo, the user's own step.
+    let mut run = Run::default();
+    for (at, sent) in steps[..8].iter().enumerate() {
+        run.step(sent.clone()).unwrap();
+        assert_eq!(run.m.confirm.is_some(), at == 6, "step {at}");
+    }
 }
 
 /// The user's click on the shown task, over its brief, leaves the drawer open: the check
@@ -5342,8 +5353,18 @@ fn seed_19637_a_close_question_goes_with_the_undo_not_a_clients_step() {
 fn seed_1793_a_click_over_the_shown_tasks_brief_leaves_the_drawer_open() {
     replay(&[
         Action::Split { axis: Axis::Right, kind: Kind::Terminal }.sent_by(Origin::User),
-        Action::CaptureStart { pane: None, draft: "u1".into(), word: "k3f9a2c41b7d".into(), facts: vec![Facts { pane: 7, cwd: None, program: None, title: Some(",ǅ".into()), ignored: false }, Facts { pane: 7, cwd: None, program: None, title: None, ignored: false }], images: false }.sent_by(Origin::User),
-        restore_tasks("[{\"id\":1000000001,\"title\":\"x\",\"state\":\"needs_you\",\"priority\":200,\"snoozed_until\":6000,\"dismissed\":false,\"project\":null,\"repo\":null,\"folder\":\"/code/app\",\"agent\":\"codex\",\"paths\":[\"/tmp\"],\"resolved\":[\"/code/canvas\",\"/tmp\"],\"skills\":[],\"created\":0,\"session\":null,\"title_generated\":false,\"materials\":[],\"refs\":[],\"started_at\":18446744073709551615,\"finished_at\":6000,\"colour\":8}]", 5).sent_by(Origin::User),
+        Action::CaptureStart {
+            pane: None,
+            draft: "u1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![
+                Facts { pane: 7, cwd: None, program: None, title: Some(",ǅ".into()), ignored: false },
+                Facts { pane: 7, cwd: None, program: None, title: None, ignored: false },
+            ],
+            images: false,
+        }
+        .sent_by(Origin::User),
+        Action::RestoreTasks { tasks: vec![], floor: 5 }.sent_by(Origin::User),
         Action::ComposeSubmit { open: true }.sent_by(Origin::User),
         Action::TaskGo { id: Some(6) }.sent_by(Origin::Socket),
         Action::RailSelect { item: RailItem::Task { id: 6 } }.sent_by(Origin::User),
