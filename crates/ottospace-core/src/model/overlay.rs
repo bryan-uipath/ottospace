@@ -24,8 +24,7 @@ pub const SLIDE_MS: f32 = 140.;
 /// How far in an overlay is `elapsed` milliseconds after it opened: 0 out of sight, 1 at rest.
 /// Eased out, so it is nearly there at once and never holds up a click. `calm` (Reduce Motion): at rest.
 pub fn slide(elapsed: f32, calm: bool) -> f32 {
-    let t = if calm { 1. } else { (elapsed / SLIDE_MS).clamp(0., 1.) };
-    1. - (1. - t).powi(3)
+    crate::seal::ease_out(if calm { 1. } else { (elapsed / SLIDE_MS).clamp(0., 1.) })
 }
 
 /// What an overlay rule compares a step with: the step's sender and action, and the view before it.
@@ -54,35 +53,41 @@ impl Model {
         !self.drawer_collapsed() && !self.overlays()
     }
 
-    /// A client's step that would open an overlay: refused with `OVERLAY_USERS`. A dismissal too.
+    /// A client's step that would open, switch or close an overlay: refused with `OVERLAY_USERS`.
     pub(super) fn overlay_refusal(&self, action: &Action) -> Option<&'static str> {
+        let boxed = self.compose_host() == Some(super::Host::Drawer);
         let opens = match action {
-            Action::ToggleSection { section } => self.sidebar != Some(*section),
+            Action::ToggleSection { .. } | Action::OverlayDismiss => true,
             Action::FocusList => self.sidebar.is_none(),
+            Action::CloseSidebar => self.sidebar.is_some(),
             Action::OpenCompose { .. } => self.drawer_collapsed(),
-            Action::OverlayDismiss => true,
+            // The user's box over the panes: a client's Esc or × would fold the drawer under them.
+            Action::ComposeEscape | Action::CloseCompose => boxed,
             _ => false,
         };
         (self.overlays() && opens).then_some(OVERLAY_USERS)
     }
 
-    /// The view an overlay rule compares the step with.
-    pub(super) fn overlay_before(&self, sent: &Envelope) -> Before {
+    /// The view an overlay rule compares the step with. None with the flag off: nothing to compare.
+    pub(super) fn overlay_before(&self, sent: &Envelope) -> Option<Before> {
+        if !self.overlays() {
+            return None;
+        }
         let view = (self.tabs[self.main_at()].id, self.shown_space().clone(), self.focused);
-        Before {
+        Some(Before {
             origin: sent.origin,
             action: sent.action.clone(),
             sidebar: self.sidebar.is_some(),
             collapsed: self.drawer_collapsed(),
             target: self.focus_target(),
             view,
-        }
+        })
     }
 
     /// A popup over everything (a row's menu, the palette, the picker, the quit question, the key
     /// reference): a click outside an overlay is its own, and dismisses neither.
     fn popped(&self) -> bool {
-        let menu = self.row_menu.is_some() || self.agent.menu.is_some();
+        let menu = self.row_menu.is_some() || self.agent.menu.is_some() || self.slot_dialog.is_some();
         menu || self.palette.is_some() || self.picker.is_some() || self.confirm.is_some() || self.keys
     }
 
@@ -98,9 +103,13 @@ impl Model {
     /// The drawer folds into its rail, whatever it shows (a brief, the inspector, the box's line put
     /// aside), but a capture's draft: the user's work in progress. What the toggle opens again is kept.
     pub(super) fn fold_drawer(&mut self, effects: &mut Vec<Effect>) {
-        if self.drawer_collapsed() || self.capture.is_some() {
+        // Nor while the user's editor writes the box's line (⌃G): its save would find no box.
+        let editing = self.editing.as_ref().is_some_and(|e| e.target == super::editor::Target::Compose);
+        if self.drawer_collapsed() || self.capture.is_some() || (self.overlays() && editing) {
             return;
         }
+        // Folded: no Esc in the sidebar hands the keyboard back to it.
+        self.overlay_back = false;
         self.folded = Some(match () {
             _ if self.listen.shown => rail::Folded::Transcript,
             _ if self.welcome() || self.compose_host() == Some(super::Host::Drawer) => rail::Folded::Box,
@@ -126,11 +135,11 @@ impl Model {
     }
 
     /// After a step, with the flag on: what opened or closed an overlay by the rules above.
-    pub(super) fn settle_overlays(&mut self, before: Before, effects: &mut Vec<Effect>) {
-        if !self.overlays() {
+    pub(super) fn settle_overlays(&mut self, before: Option<Before>, effects: &mut Vec<Effect>) {
+        let Some(before) = before.filter(|_| self.overlays()) else {
             self.overlay_back = false;
             return;
-        }
+        };
         if before.origin != Origin::User {
             // A client's or a timer's step opens neither: what it put in the drawer waits behind the rail.
             if !before.sidebar && self.sidebar.is_some() {
@@ -144,10 +153,8 @@ impl Model {
         let left = |target: Target| matches!(target, Target::List(_) | Target::Rail(_));
         let right = |target: Target| matches!(target, Target::Drawer | Target::Inspector | Target::DrawerRail(_));
         let target = self.focus_target();
-        let own = matches!(
-            before.action,
-            Action::ToggleSection { .. } | Action::ListSection { .. } | Action::FocusList | Action::CloseSidebar
-        );
+        let own =
+            matches!(before.action, Action::ToggleSection { .. } | Action::ListSection { .. } | Action::CloseSidebar);
         let free = matches!(self.mode(), Mode::Normal | Mode::Talk | Mode::List) && self.away.is_none();
         if !before.sidebar && self.sidebar.is_some() && free {
             // Opened by the user: its list takes the keyboard, from the conversation too. Not from
@@ -201,6 +208,7 @@ impl Model {
                 | Action::FocusCycle { .. }
                 | Action::LeaveList
                 | Action::Enter { .. }
+                | Action::TalkKeys { on: false }
         );
         if !before.collapsed && moves && right(before.target) && matches!(self.focus_target(), Target::Pane(_)) {
             self.fold_drawer(effects);
@@ -219,15 +227,14 @@ mod tests {
     /// Two terminals and a task with its conversation in the drawer, the flag on or off.
     fn workspace(on: bool) -> Model {
         let mut m = Model::default();
-        m.update(
-            Action::SetFeatures { features: Features::all().with(Feature::OverlayPanels, on) }.sent_by(Origin::System),
-        );
         m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
         m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
         m.update(Action::Focus { pane: 1 });
         m.update(Action::OpenCompose { text: "one".into() });
         m.update(Action::ComposeSubmit { open: true });
         m.update(Action::TalkKeys { on: false });
+        let features = Features::all().with(Feature::OverlayPanels, on);
+        m.update(Action::SetFeatures { features }.sent_by(Origin::System));
         assert_eq!((m.drawer_collapsed(), m.focus_target()), (false, Target::Pane(1)));
         m
     }
@@ -323,10 +330,13 @@ mod tests {
         // ← to a pane: it folds, the keyboard on the pane it left.
         m.update(Action::FocusDir { dir: Dir::Left });
         assert_eq!((m.drawer_collapsed(), m.focus_target()), (true, Target::Pane(1)));
-        // Open, its rail item again folds it; its keys elsewhere, a move between panes keeps it.
+        // ⌘L gives the keyboard back to the pane: it folds too.
         m.update(Action::TalkToggle);
         m.update(Action::TalkKeys { on: false });
-        m.update(Action::FocusDir { dir: Dir::Left });
+        assert_eq!((m.drawer_collapsed(), m.focus_target()), (true, Target::Pane(1)));
+        // Open by its rail item, the keys on a pane: a move between panes keeps it.
+        m.update(Action::RailSelect { item: rail::RailItem::Task { id: 1 } });
+        m.update(Action::FocusDir { dir: Dir::Right });
         assert!(!m.drawer_collapsed(), "the keys were not in it");
     }
 
@@ -343,6 +353,13 @@ mod tests {
         // One click outside both closes both.
         m.update(Action::ToggleSection { section: Section::Repos });
         m.update(Action::OverlayDismiss);
+        assert!(m.sidebar.is_none() && m.drawer_collapsed());
+        // Review: the drawer folded while the sidebar had the keyboard; Esc there does not reopen it.
+        m.update(Action::TalkToggle);
+        m.update(Action::ToggleSection { section: Section::Repos });
+        m.update(Action::TalkToggle);
+        assert!(m.sidebar.is_some() && m.drawer_collapsed());
+        m.update(Action::LeaveList);
         assert!(m.sidebar.is_none() && m.drawer_collapsed());
     }
 
@@ -364,11 +381,14 @@ mod tests {
             }
             assert_eq!(m.refusal(&Action::ToggleSection { section: Section::Repos }, origin), Some(OVERLAY_USERS));
         }
-        // Nor dismisses the user's.
+        // Nor dismisses the user's: its click outside, its toggle of the open section, its close.
         m.update(Action::ToggleSection { section: Section::Repos });
         m.update(Action::TalkToggle);
-        m.update(Action::OverlayDismiss.sent_by(Origin::Socket));
-        assert!(m.sidebar.is_some() && !m.drawer_collapsed());
+        for theirs in [Action::OverlayDismiss, Action::ToggleSection { section: Section::Repos }, Action::CloseSidebar]
+        {
+            m.update(theirs.clone().sent_by(Origin::Socket));
+            assert!(m.sidebar.is_some() && !m.drawer_collapsed(), "{theirs:?}");
+        }
         // A needs-you change of the task in front, or its agent's news: the user's drawer stays as left.
         m.update(Action::TalkToggle);
         m.update(Action::TaskSetState { id: 1, state: crate::tasks::State::NeedsYou }.sent_by(Origin::System));

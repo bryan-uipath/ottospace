@@ -5,10 +5,7 @@
 
 use std::time::Instant;
 
-use gpui::{
-    AnyElement, BoxShadow, Context, Div, MouseButton, MouseDownEvent, Pixels, Point, Stateful, Window, black, div,
-    point, prelude::*, px,
-};
+use gpui::{AnyElement, Context, Div, MouseButton, MouseDownEvent, Pixels, Point, Window, div, prelude::*, px};
 use ottospace_core::Action;
 use ottospace_core::model::overlay::slide;
 
@@ -57,32 +54,16 @@ impl Slides {
 impl Workspace {
     /// `body` over the panes, `width` wide, against the left rail (`left`) or the drawer's rail,
     /// `top` points down and `inset` points in from the window's edge. Slid `t` of the way in.
-    /// It takes the pointer: nothing under it is hovered or clicked.
-    pub(crate) fn overlay(
-        &self,
-        body: AnyElement,
-        left: bool,
-        width: f32,
-        (top, inset, t): (f32, f32, f32),
-    ) -> Stateful<Div> {
+    /// Its body takes the pointer where it is drawn, sliding too: nothing under it is hovered or clicked.
+    pub(crate) fn overlay(&self, body: AnyElement, left: bool, width: f32, (top, inset, t): (f32, f32, f32)) -> Div {
         let shift = (1. - t) * width;
-        let inner = div().absolute().top_0().bottom_0().w(px(width)).flex().child(body);
+        let inner = div().id(if left { "overlay-left" } else { "overlay-right" }).absolute().top_0().bottom_0();
+        let inner = inner.w(px(width)).flex().occlude().child(body).child(mark(&self.marks, Mark::Overlay(left)));
         let inner = if left { inner.left(px(-shift)) } else { inner.right(px(-shift)) };
-        let place = div().id(if left { "overlay-left" } else { "overlay-right" }).absolute().top(px(top)).bottom_0();
+        let place = div().absolute().top(px(top)).bottom_0();
         let place = if left { place.left(px(inset)) } else { place.right(px(inset)) };
-        place
-            .w(px(width))
-            .overflow_hidden()
-            .occlude()
-            // As the side zones' shadow onto the workspace, from the overlay's inner edge.
-            .shadow(vec![BoxShadow {
-                color: black().opacity(0.65),
-                offset: point(px(if left { 8. } else { -8. }), px(0.)),
-                blur_radius: px(16.),
-                spread_radius: px(-6.),
-            }])
-            .child(inner)
-            .child(mark(&self.marks, Mark::Overlay(left)))
+        // As the side zones' shadow onto the workspace, from the overlay's inner edge.
+        place.w(px(width)).overflow_hidden().shadow(crate::side_shadow(left)).child(inner)
     }
 
     /// A press anywhere in the window, before what is under it takes it: outside both overlays
@@ -90,7 +71,9 @@ impl Workspace {
     /// on to what is under it. Over an overlay nothing here is hovered: it never arrives.
     pub(crate) fn overlay_press(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let open = self.model.overlays() && (self.model.sidebar.is_some() || !self.model.drawer_collapsed());
-        if !open || event.button != MouseButton::Left || self.on_rails(event.position, window) {
+        // ⌥-click is the new-task box's reference to what is under it (`compose_point`), not outside it.
+        let alt = event.modifiers.alt;
+        if !open || alt || event.button != MouseButton::Left || self.on_rails(event.position, window) {
             return;
         }
         let marks = self.marks.borrow();
@@ -104,9 +87,13 @@ impl Workspace {
     }
 
     /// Over the left rail or the drawer's: their clicks open, switch and close the overlays themselves.
+    /// They reach as low as the overlays: the status bar under them is outside.
     fn on_rails(&self, at: Point<Pixels>, window: &Window) -> bool {
         let width = f32::from(window.viewport_size().width);
+        let marks = self.marks.borrow();
+        let foot =
+            [true, false].into_iter().filter_map(|left| marks.get(&Mark::Overlay(left))).map(|b| b.bottom()).max();
         let x = f32::from(at.x);
-        x < crate::RAIL || x > width - crate::drawer_rail::WIDTH
+        (x < crate::RAIL || x > width - crate::drawer_rail::WIDTH) && foot.is_some_and(|foot| at.y <= foot)
     }
 }

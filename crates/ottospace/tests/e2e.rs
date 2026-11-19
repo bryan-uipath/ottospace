@@ -7526,6 +7526,10 @@ fn overlay_panels_a_socket_client_cannot_open_or_dismiss_them() {
     let far = rect(&otto.drawn()["bounds"][pane_ids(&otto.drawn())[1].to_string()]);
     otto.mouse("down", at(far, 0.5, 0.5));
     assert_eq!(otto.mouse("up", at(far, 0.5, 0.5))["state"]["sidebar"], "repos");
+    // Nor its toggle of the open section.
+    let closes = otto.raw(&json!({"cmd": "section", "section": "repos"}).to_string());
+    assert_eq!(closes["error"], "only the user opens or dismisses a side overlay");
+    assert_eq!(otto.drawn()["state"]["sidebar"], "repos");
 }
 
 /// The owner: the Tasks cell's needs-you mark showed only while Tasks was open. Now a dot at its

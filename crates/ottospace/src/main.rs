@@ -7308,12 +7308,17 @@ fn zone_shadow(width: f32, left: bool) -> Div {
     // Below the title strip, which is higher: no shadow falls on it, and none doubles at its corners.
     let edge = div().absolute().top(px(TOP_BAR)).bottom_0().w(px(1.));
     let edge = if left { edge.left(px(width - 1.)) } else { edge.right(px(width - 1.)) };
-    edge.shadow(vec![BoxShadow {
+    edge.shadow(side_shadow(left))
+}
+
+/// A side's shadow onto the workspace: to the right from the left side (`left`), else to the left.
+fn side_shadow(left: bool) -> Vec<BoxShadow> {
+    vec![BoxShadow {
         color: black().opacity(0.65),
         offset: point(px(if left { 8. } else { -8. }), px(0.)),
         blur_radius: px(16.),
         spread_radius: px(-6.),
-    }])
+    }]
 }
 
 /// The title strip's shadow, down onto everything under it.
