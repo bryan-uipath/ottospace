@@ -58,6 +58,7 @@ impl Workspace {
             line,
             said(Kind::Unsaved, unsaved),
             self.model.workbooks.notice(),
+            self.model.done_notice(),
             said(Kind::Told, told),
             said(self.model.settings_kind(), self.model.settings_line()),
             said(Kind::Start, start),
@@ -135,6 +136,8 @@ impl Workspace {
     pub(crate) fn notice_offer(&self, shown: &Notice) -> Option<(Offer, Action)> {
         match shown.kind.offer()? {
             Offer::OpenSettings => Some((Offer::OpenSettings, Action::EditSettings)),
+            // "Done · <task>"'s, else a workspace's.
+            Offer::Undo if self.model.done_notice().as_ref() == Some(shown) => Some((Offer::Undo, Action::DoneUndo)),
             Offer::Undo => Some((Offer::Undo, Action::WorkbookUndo)),
             Offer::Join => {
                 let (id, link) = self.meeting_shown(shown)?;
@@ -145,7 +148,9 @@ impl Workspace {
 
     /// A workspace's Undo drawn beside the notice the bar shows (`notice::undo_beside`).
     pub(crate) fn undo_beside(&self, shown: &Notice) -> Option<Notice> {
-        notice::undo_beside(shown, self.model.workbooks.notice(), &self.model.notice_hidden)
+        // "Done · <task>"'s first: the newer and the shorter.
+        let undo = self.model.done_notice().or_else(|| self.model.workbooks.notice());
+        notice::undo_beside(shown, undo, &self.model.notice_hidden)
     }
 
     /// A click or label on the Undo beside a higher notice, which said `drawn`: taken back only if
@@ -154,7 +159,9 @@ impl Workspace {
         self.tick_now();
         let still = self.notice_shown().and_then(|shown| self.undo_beside(&shown));
         if still.is_some_and(|undo| undo.text == drawn) {
-            self.dispatch(Action::WorkbookUndo, self.input, window, cx);
+            let done = self.model.done_notice().is_some_and(|done| done.text == drawn);
+            let action = if done { Action::DoneUndo } else { Action::WorkbookUndo };
+            self.dispatch(action, self.input, window, cx);
         }
         cx.notify();
     }

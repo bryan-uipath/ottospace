@@ -54,6 +54,7 @@ impl Workspace {
         let mods = Mods { shift: m.shift || m.function, ..crate::mods(m) };
         match confirm.paste {
             Some(_) => PasteAsk::answer(&key.key, mods, origin == Origin::User),
+            None if confirm.later.is_some() => Confirm::answer_later(&key.key, mods, origin),
             None => Confirm::answer(&key.key, mods, origin),
         }
     }
@@ -115,6 +116,19 @@ impl Workspace {
                 .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(confirm.title()))
                 .child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child(task.title.clone()))
                 .child(dialog::hint("↵ stop and dismiss · esc cancel"));
+            return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(panel);
+        }
+        // "Stop "<task>" and put it away?": Later on a task at work. Its conversation is kept.
+        if confirm.later.is_some() {
+            let said = "It is working. Its conversation is kept; you can resume it from Tasks.";
+            let panel = dialog::floating(320.)
+                .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(confirm.title()))
+                .child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child(said))
+                .child(dialog::hint("↵ stop, resume later · esc keep running"));
             return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
                 .flex()
                 .items_center()

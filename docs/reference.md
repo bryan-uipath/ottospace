@@ -93,7 +93,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘D | Split right, new terminal |
 | ⌘⇧D | Split down, new terminal |
 | ⌘E / ⌘⇧E | Pick what goes in a new pane, right of / below the focused one: a terminal, a file (File…: the open panel, then a [file viewer](#file-viewer)) or a running app. Type to filter: then every installed app that matches is offered too, under "Not running" (those of the `apps` setting first); choosing one starts it in the background. ↑/↓ or ⌃N/⌃P move, ↵ opens, Esc closes |
-| ⌘W | Close the focused pane |
+| ⌘W | Close the focused pane. With the keyboard in the drawer's conversation: Later on its task |
 | ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Focus the pane in that direction. Past the leftmost pane, ← goes to the open section's list (on the row it was left on), then to the left rail; with no section open, straight to the rail. Past the rightmost pane, → goes into the drawer's conversation (as ⌘L), or the accessibility inspector's rows while it has the drawer's place. On the rail ↑/↓ move (its cell gets a pink ring), → and ↵ open it; ←, or Esc, goes back to the pane you came from. Only your own keys cross: a client's move stops at the panes |
 | ⌘] / ⌘[ | Focus the next / previous pane |
 | ⌘⌥⇧←/→/↑/↓ or ⌘⌥⇧H/L/K/J | Resize: move the focused pane's split that way |
@@ -297,10 +297,23 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    so. It stays once the agent ended. Under the header of a native conversation, its
    [dial](#the-agent-dial). Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
-5. **Dismissing.** A dismissed task leaves the top row and the drawer (the drawer shows
+5. **Done, Later.** At the header's right: **Later**, then a green **✓ Done**, once the agent
+   idles. While a turn runs there is no Done: the composer's Stop (or Esc Esc) stops that turn,
+   the one stop button; in the terminal view, its Stop. Done (also ⌘↵ in the
+   conversation) makes the task done and stops its agent; the drawer folds into its rail and the
+   task leaves the rail, its workspace stays on the top row. The notice bar says
+   `Done · <task>` with Undo for six seconds: Undo brings it back as it was, in front. Later
+   (also the dim × on a rail item's hover, and ⌘W while the keyboard is in the drawer) stops the
+   agent and parks the task under Later in Tasks, off the rail; the next task of the workspace
+   comes in front. While a turn runs it asks first: Stop "<task>" and put it away? (↵ stops, Esc
+   keeps it running). A click on its row brings it back. Under the last reply, once the agent
+   answered and idles, a quiet line offers the same: "Got what you needed? ✓ Done · Later"; it
+   goes once you type, or the agent starts again. Only yours: a socket client's click, label
+   or key on any of them is refused.
+6. **Dismissing.** A dismissed task leaves the top row and the drawer (the drawer shows
    nothing, not another conversation); its tabs go to the workspace selected last. Dismissing a task whose agent
    runs asks first: Stop its agent and dismiss?
-6. **Spaces and the drawer.** Home, then each open task (and session, and workspace) is a
+7. **Spaces and the drawer.** Home, then each open task (and session, and workspace) is a
    space with its own tabs; one is selected, and the drawer is only ever on its agent: a task's
    chat, none for Home. Selecting starts nothing; a closed drawer stays closed. A task
    started with ↵ is in the workspace you are in: one you made, or a task's. No space is made
@@ -342,20 +355,20 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    repository's + (on its name, under the pointer) asks for a branch: a local one is checked out, one only a remote has is
    tracked, a new name is made from the repository's HEAD, in `<worktrees_dir>/<repo>/<branch>`; the
    new worktree opens the same way. See `docs/ai/repos.md`.
-7. **Following.** The task runs while its agent works. Claude is given the session's id; Codex
+8. **Following.** The task runs while its agent works. Claude is given the session's id; Codex
    names its own, and ottospace finds it where Codex wrote it: the one session that started in
    the task's folder after the agent did and before the next agent there, that nothing else
    has. When two could be its (another Codex started there at the same moment), neither is
    taken: the task runs, following none. When the agent ends while the task runs, the task needs you.
-8. **A session that is no task's.** A click or ↵ on its row under Elsewhere opens its
+9. **A session that is no task's.** A click or ↵ on its row under Elsewhere opens its
    conversation the same way, with no task: it gets a badge on the rail (from its title, else
    its repository) and Track in the drawer's header. Track, there or on the row, makes the task,
    and the conversation is the task's: the same agent if it runs, else gone on with. Track opens
    no terminal tab.
-9. **Who may.** Only you start or stop an agent, and only you say which task a tab is of: a
+10. **Who may.** Only you start or stop an agent, and only you say which task a tab is of: a
    client's ↵ files the task with no tab, its `task_open` goes to tabs the task has, its
    `session_adopt` makes the task, and none starts anything.
-10. **Progress.** While the task is open its session is read on: what it does now shows on its
+11. **Progress.** While the task is open its session is read on: what it does now shows on its
    row and its model on its card, and the task keeps in its file when its agent started, when it was done, its
    time at work (activity until a quiet gap of two minutes) and its tokens by model (input,
    output, cached; a sub-agent's apart), summed over its sessions. They stay when the session
@@ -367,7 +380,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    question (`? <the question on show>` and `2 of 3`), a permission (`⚠ Wants to run: <its
    command>`), past two `+N more`. A click opens the drawer on the card with the keyboard in
    it; nothing is answered from the list. A key of a task's file this build does not know is kept as it is.
-11. **The native conversation.** The reply is drawn as it streams: markdown, code blocks (a
+12. **The native conversation.** The reply is drawn as it streams: markdown, code blocks (a
    Copy on each), tool calls as rows (a click shows what the call does, as plain text), a
    working row with the call it waits on and the time. A call that edits a file (Claude `Edit`,
    `MultiEdit`, `Write`, `NotebookEdit`; Codex's patch) has a diff card under it: the path

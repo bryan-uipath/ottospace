@@ -10679,6 +10679,157 @@ fn the_dial_holds_still_with_reduce_motion() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Made-up stream-json for Done and Later: a first turn that replies and ends; a second
+/// that works until it is interrupted.
+fn finish_fixtures() -> Vec<(&'static str, String)> {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let init =
+        format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#);
+    let text = format!(
+        r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{{"type":"text","text":"Fixed: the redirect keeps the cookie."}}]}}}}"#
+    );
+    let done = r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01}"#;
+    let working = format!(
+        r#"{{"type":"stream_event",{S},"parent_tool_use_id":null,"event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"Working"}}}}}}"#
+    );
+    let interrupted =
+        r#"{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_streaming"}"#;
+    vec![
+        ("turn1.jsonl", [init, text, done.into()].join("\n")),
+        ("turn2.jsonl", working),
+        ("turn2-interrupted.jsonl", interrupted.into()),
+    ]
+}
+
+/// A task's first turn over: launched with `finish_fixtures`, its conversation open and idle.
+fn finish_launch(name: &str) -> (PathBuf, PathBuf, Otto) {
+    let (root, record, env) = native_setup(name, &finish_fixtures(), &[]);
+    let otto = launch_env(name, &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.wait_for("the first reply", |o| (finish(o)["offered"] == true).then_some(()));
+    (root, record, otto)
+}
+
+/// The open conversation's Later and Done (`drawer.finish`).
+fn finish(o: &Otto) -> Value {
+    o.call(json!({"cmd": "state"}))["drawer"]["finish"].clone()
+}
+
+fn task_state(o: &Otto) -> Value {
+    o.call(json!({"cmd": "state"}))["state"]["tasks"]["list"][0]["state"].clone()
+}
+
+fn rail_of(o: &Otto) -> Vec<Value> {
+    let rail = o.call(json!({"cmd": "state"}))["drawer"]["rail"].clone();
+    rail.as_array().unwrap().iter().filter(|item| item["kind"] == "task").map(|item| item["id"].clone()).collect()
+}
+
+/// ✓ Done on an idle task: a client's click is refused; the user's makes it done, stops its
+/// agent, folds the drawer and takes it off the rail, its workspace still on the row. The notice
+/// bar's Undo brings it back; ⌘↵ in the conversation is Done too.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn done_on_an_idle_task_leaves_the_rail_and_undo_brings_it_back() {
+    let (root, _record, otto) = finish_launch("done");
+    let shown = finish(&otto);
+    assert_eq!((&shown["later"], &shown["done"], &shown["offered"]), (&json!(true), &json!(true), &json!(true)));
+    assert_eq!((task_state(&otto), rail_of(&otto)), (json!("needs_you"), vec![json!(1)]));
+    // A client's click on ✓ Done, and on the offer's: nothing.
+    let done = rect(&shown["rects"]["done"]);
+    let reply = otto.click(at(done, 0.5, 0.5), 1);
+    assert_eq!(reply["notice"], "only the user marks a task done or puts it away", "{reply}");
+    otto.click(at(rect(&shown["rects"]["offer_done"]), 0.5, 0.5), 1);
+    assert_eq!(task_state(&otto), json!("needs_you"));
+    // The user's.
+    otto.user_click(at(done, 0.5, 0.5));
+    let state = otto.wait_for("its agent stopped", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        state["drawer"]["agents"]
+            .as_object()
+            .is_some_and(|a| a.is_empty())
+            .then_some(state)
+            .filter(|s| s["drawer"]["native"]["chats"]["1"]["native"] != true)
+    });
+    assert_eq!(state["state"]["tasks"]["list"][0]["state"], "done");
+    assert_eq!((rail_of(&otto), &state["drawer"]["collapsed"]), (vec![], &json!(true)));
+    let space = state["spaces"].as_array().unwrap().iter().find(|s| s["of"]["kind"] == "task").cloned();
+    let space = space.expect("its workspace stays on the row");
+    assert_eq!((&space["of"]["id"], &space["front"]), (&json!(1), &Value::Null), "{space}");
+    let bar = &state["notice_bar"];
+    assert_eq!((&bar["text"], &bar["offer"]), (&json!("Done · fix login"), &json!("undo")), "{bar}");
+    // Undo: done no more, on the rail, in front, the drawer on it.
+    otto.user_click(at(rect(&bar["offer_rect"]), 0.5, 0.5));
+    assert_eq!((task_state(&otto), rail_of(&otto)), (json!("needs_you"), vec![json!(1)]));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["drawer"]["collapsed"], false);
+    // ⌘↵ with the keyboard in the conversation: Done again (its agent is stopped: Resume, then ⌘↵).
+    otto.user_start();
+    otto.wait_for("its agent again", |o| (finish(o)["done"] == true).then_some(()));
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("cmd-enter");
+    otto.wait_for("done by ⌘↵", |o| (task_state(o) == "done").then_some(()));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// While a turn runs the header has no Done: the composer's Stop stops the turn alone (the one
+/// stop button). Later (⌘W in the drawer)
+/// asks first then; a client cannot answer for the user; Keep running leaves it. Idle, Later and
+/// a rail item's × park it at once; its row brings it back. ⌘W outside the drawer still closes a pane.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn later_asks_while_a_turn_runs_and_the_composers_stop_stops_only_the_turn() {
+    let (root, record, otto) = finish_launch("later");
+    let stdin = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default();
+    let panes = |o: &Otto| o.call(json!({"cmd": "state"}))["state"]["panes"].as_array().map(Vec::len);
+    let before = panes(&otto);
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("g o enter");
+    otto.wait_for("no Done mid-turn", |o| (finish(o)["done"] == false).then_some(()));
+    let mid = finish(&otto);
+    assert_eq!((&mid["offered"], &mid["later"], &mid["rects"]["done"]), (&json!(false), &json!(true), &Value::Null));
+    assert!(otto.control_opt("talk:talk-cancel").is_none(), "one stop button: the composer's");
+    // ⌘W in the drawer: the question, no pane closed.
+    otto.user_key("cmd-w");
+    let confirm = otto.call(json!({"cmd": "state"}))["state"]["confirm"].clone();
+    assert_eq!(confirm["later"], json!([1, "fix login"]), "{confirm}");
+    assert_eq!(panes(&otto), before);
+    let theirs = otto.call(json!({"cmd": "key", "keys": "enter"}));
+    assert_eq!(theirs["notice"], "only the user marks a task done or puts it away", "{theirs}");
+    otto.user_key("escape");
+    assert_eq!(
+        (task_state(&otto), otto.call(json!({"cmd": "state"}))["state"]["confirm"].clone()),
+        (json!("running"), Value::Null)
+    );
+    // The composer's Stop: the turn stops, the conversation and its agent stay; Done is back.
+    otto.user_click(at(otto.control("talk:chat-stop"), 0.5, 0.5));
+    otto.wait_for("the turn's end", |o| (finish(o)["done"] == true).then_some(()));
+    assert!(stdin().contains(r#""subtype":"interrupt""#), "{}", stdin());
+    let chat = otto.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    assert_eq!((&chat["native"], task_state(&otto)), (&json!(true), json!("needs_you")), "{chat}");
+    // Idle: Later at once, parked, off the rail.
+    otto.user_click(at(rect(&finish(&otto)["rects"]["later"]), 0.5, 0.5));
+    assert_eq!((task_state(&otto), rail_of(&otto)), (json!("parked"), vec![]));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["confirm"], Value::Null);
+    // Its row: a task again, its conversation open; the rail's × parks it again.
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    assert_eq!((task_state(&otto), rail_of(&otto)), (json!("needs_you"), vec![json!(1)]));
+    let x = otto.control("drawer-rail:later:1");
+    otto.click(at(x, 0.5, 0.5), 1);
+    assert_eq!(task_state(&otto), json!("needs_you"), "a client's × parks nothing");
+    otto.user_click(at(x, 0.5, 0.5));
+    assert_eq!((task_state(&otto), rail_of(&otto)), (json!("parked"), vec![]));
+    // The drawer folded: ⌘W closes the focused pane, as ever.
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let split = panes(&otto);
+    otto.user_key("cmd-w");
+    assert_eq!(panes(&otto), split.map(|n| n - 1));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A fixture of the agents crate's, by file name.
 fn recorded(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-agents/tests/fixtures/claude").join(name);

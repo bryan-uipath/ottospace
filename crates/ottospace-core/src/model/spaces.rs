@@ -226,7 +226,9 @@ impl Model {
     pub fn front(&self, of: &Owner) -> Option<TaskId> {
         let members = self.members(of);
         let set = self.spaces.iter().find(|space| space.of == *of).and_then(|space| space.front);
-        set.filter(|id| members.contains(id)).or(members.first().copied())
+        // A task the user put away (Done, Later) is never in front: with none else, none is.
+        let away = |id: &TaskId| self.put_away(*id);
+        set.filter(|id| members.contains(id) && !away(id)).or(members.into_iter().find(|id| !away(id)))
     }
 
     /// The space a task is in: the one it joined, else its own.
@@ -444,7 +446,8 @@ impl Model {
         }
         // The question is ottospace's own UI: a live window would cover it.
         self.leave(effects);
-        self.confirm = Some(Confirm { running, dismiss: None, paste: None, unlist: None, close: Some(id) });
+        self.confirm =
+            Some(Confirm { running, dismiss: None, paste: None, unlist: None, close: Some(id), later: None });
     }
 
     /// A space's place on the row: the order tabs keep. One not on the row goes last, and

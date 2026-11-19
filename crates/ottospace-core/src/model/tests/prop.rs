@@ -1461,6 +1461,9 @@ const MAKERS: &[Make] = &[
     },
     |g| Action::SessionMissing { task: g.task(), id: g.session_id() },
     |g| Action::TaskStop { id: g.subject() },
+    |g| Action::TaskDone { id: g.task() },
+    |g| Action::TaskLater { id: g.task() },
+    |_| Action::DoneUndo,
     |_| Action::TalkToggle,
     |g| Action::TalkKeys { on: g.rng.coin() },
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
@@ -1735,6 +1738,16 @@ fn check(m: &Model) -> Result<(), String> {
     let places: Vec<usize> = m.repos.iter().map(|r| m.repo_dirs.place(&r.path).unwrap_or(usize::MAX)).collect();
     ensure!(places.is_sorted(), "the repositories are out of the list's order: {places:?}");
     ensure!(m.repos_open.iter().all(|open| dirs.iter().any(|d| d.path == *open)), "an open group with no entry");
+    // A task the user marked done has no agent at work: none runs, or its stop was asked. Nor
+    // is one put away (Done, Later) on the drawer's rail.
+    for id in m.finish.away.iter().copied() {
+        let subject = Subject::Task(id);
+        let done = m.tasks.get(id).is_some_and(|t| t.state == State::Done);
+        ensure!(!done || !m.agent_runs(&subject) || m.is_ending(&subject), "done task {id} has a running agent");
+        ensure!(!m.rail().contains(&rail::RailItem::Task { id }), "task {id} put away is on the rail");
+    }
+    let offered = m.finish.offer.as_ref().map(|offer| offer.task);
+    ensure!(offered.is_none_or(|id| m.put_away(id)), "Done of task {offered:?} offered back, not put away");
     // A dismissed notice is kept only of a kind that stays until fixed, one of each.
     let kinds: Vec<crate::notice::Kind> = m.notice_hidden.iter().map(|n| n.kind).collect();
     let once = kinds.iter().enumerate().all(|(i, kind)| !kind.held() && !kinds[..i].contains(kind));
@@ -2214,6 +2227,8 @@ fn check(m: &Model) -> Result<(), String> {
             Some(id) => m.agent_runs(&Subject::Task(id)),
             None if let Some(ask) = confirm.paste => m.pane(ask.pane).is_some(),
             None if let Some(path) = &confirm.unlist => m.repos.iter().any(|r| r.path == *path),
+            // "Stop it and put it away?" while its turn runs.
+            None if let Some((id, _)) = &confirm.later => m.works(&Subject::Task(*id)),
             None => !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty() || m.editing.is_some(),
         };
         ensure!(
@@ -2460,7 +2475,10 @@ fn check(m: &Model) -> Result<(), String> {
         let members = m.members(&space.of);
         ensure!(space.front.is_none_or(|id| members.contains(&id)), "{:?}: front {:?}", space.of, space.front);
         ensure!(m.front(&space.of).is_none_or(|id| members.contains(&id)), "{:?}: its front is not its", space.of);
-        ensure!(m.front(&space.of).is_some() == !members.is_empty(), "{:?}: tasks and no front", space.of);
+        // A task the user put away (Done, Later) is never in front: with only those, none is.
+        let shown = members.iter().any(|id| !m.put_away(*id));
+        ensure!(m.front(&space.of).is_some() == shown, "{:?}: tasks and no front", space.of);
+        ensure!(m.front(&space.of).is_none_or(|id| !m.put_away(id)), "{:?}: a task put away in front", space.of);
     }
     // One workspace a task, a live one; and a bound workspace has no space of its own.
     let bound: Vec<TaskId> = books.iter().filter_map(|book| book.task).collect();
@@ -2971,6 +2989,8 @@ impl Run {
         let palette_typing = m.field().is_some_and(|(of, _)| of == "palette");
         // ↵ in list mode on a meeting row of the Calendar section: that row's Join.
         let on_meeting = matches!(m.list.and_then(|at| m.list_rows().into_iter().nth(at)), Some(ListRow::Meeting(_)));
+        // The user's opening of a done task (a click, ↵, ⌘⇧N) makes it a task again, its session gone on with (`revive`).
+        let done_before: Vec<TaskId> = m.tasks.list.iter().filter(|t| t.state == State::Done).map(|t| t.id).collect();
         let tab_before = m.tabs[m.active].id;
         let tabs_before: Vec<u32> = m.tabs.iter().map(|tab| tab.id).collect();
         // Yes to "Close this workspace?" hides it, as its × would.
@@ -3301,6 +3321,12 @@ impl Run {
         }
         let acts =
             |e: &Effect| matches!(e, Effect::StartAgent { .. } | Effect::ReadSession { .. } | Effect::AgentSend { .. });
+        let resumes = |e: &Effect| {
+            matches!(e, Effect::StartAgent { start: agents::Start::Resume { .. }, .. } | Effect::ReadSession { .. })
+        };
+        let reopens = origin == Origin::User
+            && done_before.iter().any(|id| m.tasks.get(*id).is_some_and(|t| t.state != State::Done));
+        let acts = |e: &Effect| acts(e) && !(reopens && resumes(e));
         ensure!(!selects || !effects.iter().any(acts), "{origin:?}'s {action:?} started an agent: {effects:?}");
         ensure!(!selects || m.chats == chats_before, "{origin:?}'s {action:?} changed a transcript");
         // A dial moves only on what its agent did (an app it read too), a message sent, or its process starting or ending.
@@ -4284,6 +4310,14 @@ impl Run {
                 }
                 Effect::Notice { text } => ensure!(user && !text.is_empty(), "{origin:?} is told {text:?}"),
                 Effect::NoticeDismissed { .. } => ensure!(user, "{origin:?} dismissed a notice"),
+                // The seal plays for the user's own Done, of a task now done and put away.
+                Effect::Seal { task } => {
+                    let sealed = m.tasks.get(*task).is_some_and(|t| t.state == State::Done) && m.put_away(*task);
+                    ensure!(
+                        user && matches!(action, Action::TaskDone { .. }) && sealed,
+                        "{origin:?}'s {action:?} sealed {task}"
+                    )
+                }
                 Effect::Told { text } => {
                     ensure!(
                         user && matches!(action, Action::RepoRemove { .. } | Action::QuitConfirm),
@@ -5286,6 +5320,34 @@ fn split(axis: Axis, kind: Kind) -> Envelope {
 
 /// A task's read of an app pane lights the dial's Apps station (`app_used`): the check let only
 /// the agent's events move a dial (seed 501).
+
+/// Seed 3284: Later on a task whose agent works in a terminal asks first; the check of the
+/// question knew no Later.
+#[test]
+fn seed_3284_later_asks_while_its_terminal_agent_works() {
+    replay(&[
+        Action::TaskFromLine {
+            line: ">/src/export,/src/export,  fix  zoom  \r\n/p@z  ".into(),
+            known: Known {
+                names: Names { agents: vec![], skills: vec!["p1".into(), "deploy".into()] },
+                paths: vec![PathFound { typed: "/p@z".into(), resolved: "/code/app/p@z".into() }],
+                entries: vec![],
+            },
+            open: true,
+        }
+        .sent_by(Origin::User),
+        Action::SetAgents {
+            claude: vec!["'ß".into()],
+            codex: vec![],
+            default: Some("\r\nS,".into()),
+            shows: View::Native,
+        }
+        .sent_by(Origin::User),
+        Action::TaskSetState { id: 1, state: State::Running }.sent_by(Origin::User),
+        Action::TaskLater { id: 1 }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
 #[test]
 fn an_app_read_moves_the_dial() {
     replay(&[

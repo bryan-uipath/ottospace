@@ -61,7 +61,8 @@ impl Model {
         let of = self.space();
         let front = self.front(of);
         let done = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| task.state == State::Done);
-        let tasks = self.space_tasks(of).into_iter().filter(|id| Some(*id) == front || !done(id));
+        let shown = |id: &TaskId| (Some(*id) == front || !done(id)) && !self.put_away(*id);
+        let tasks = self.space_tasks(of).into_iter().filter(shown);
         let transcript = self.listen_item().then_some(RailItem::Transcript);
         tasks.map(|id| RailItem::Task { id }).chain(transcript).collect()
     }

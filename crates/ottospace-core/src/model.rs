@@ -139,7 +139,7 @@ pub const TABS_USERS: &str = "only the user says which space a tab is of";
 pub const SETTINGS_USERS: &str = "only the user opens the settings";
 
 /// The quit question: these terminals would lose a running program.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Confirm {
     pub running: Vec<Running>,
     /// Not the quit question: "Stop its agent and dismiss?" for this task, whose agent runs.
@@ -152,6 +152,8 @@ pub struct Confirm {
     /// Not the quit question: "Close this workspace?" for this temporary one, whose terminals
     /// in `running` would end once its Undo runs out.
     pub close: Option<WorkbookId>,
+    /// Not the quit question: "Stop "<title>" and put it away?" for this task, whose turn runs.
+    pub later: Option<(TaskId, String)>,
 }
 
 impl Confirm {
@@ -171,10 +173,24 @@ impl Confirm {
         }
     }
 
+    /// What a key does to "Stop "<task>" and put it away?": ↵ alone stops it (no Q, no ⌘Q: it is
+    /// no quit); Esc, or any other key of the user's, keeps it running. A client's other key: `None`.
+    pub fn answer_later(key: &str, mods: Mods, origin: Origin) -> Option<Action> {
+        match (key, origin) {
+            ("enter", _) if mods == Mods::default() => Some(Action::QuitConfirm),
+            ("escape", _) if mods == Mods::default() => Some(Action::QuitCancel),
+            (_, Origin::User) => Some(Action::QuitCancel),
+            _ => None,
+        }
+    }
+
     /// "3 terminals are running". With none, the question is about a draft's captures alone.
     pub fn title(&self) -> String {
         if self.dismiss.is_some() {
             return "Stop its agent and dismiss?".into();
+        }
+        if let Some((_, title)) = &self.later {
+            return format!("Stop \"{title}\" and put it away?");
         }
         if self.unlist.is_some() {
             return "Unlist this repository?".into();
@@ -1526,6 +1542,19 @@ pub enum Action {
     TaskStop {
         id: Subject,
     },
+    /// ✓ Done in a task's conversation header, ⌘↵ in it, or its offer under the last reply: the
+    /// task is done, its agent stopped, it leaves the rail; the notice bar's Undo brings it back.
+    /// Not while a turn runs: Cancel (`TalkInterrupt`) is in its place. Only the user's.
+    TaskDone {
+        id: TaskId,
+    },
+    /// Later in the header, × on its rail item, ⌘W in the drawer: its agent stops, the task is on
+    /// hold in Tasks, off the rail, to be resumed. Asks first while a turn runs. Only the user's.
+    TaskLater {
+        id: TaskId,
+    },
+    /// Undo on the notice bar's "Done · <task>": the task as it was. Only the user's.
+    DoneUndo,
     /// ⌘⇧R: collapse the drawer into its rail, or open it again (the conversation, else the transcript).
     TalkToggle,
     /// Put a task of the selected workspace in front (its row, or the drawer's rail). The user's alone.
@@ -2152,6 +2181,9 @@ impl Action {
             | Action::AgentExited { .. }
             | Action::SessionRead { .. }
             | Action::TaskStop { .. }
+            | Action::TaskDone { .. }
+            | Action::TaskLater { .. }
+            | Action::DoneUndo
             | Action::TalkToggle
             | Action::TalkKeys { on: false }
             | Action::TalkResize { .. }
@@ -2498,6 +2530,9 @@ impl Action {
             | Action::SessionRead { .. }
             | Action::SessionMissing { .. }
             | Action::TaskStop { .. }
+            | Action::TaskDone { .. }
+            | Action::TaskLater { .. }
+            | Action::DoneUndo
             | Action::TalkToggle
             | Action::TalkKeys { .. }
             | Action::TalkResize { .. }
@@ -2705,6 +2740,10 @@ pub enum Effect {
     /// Say this in the notice bar, as a warning: why a move of the user's did nothing.
     Notice {
         text: String,
+    },
+    /// The user's Done in the drawer on this task: the seal, fold and land play (`motion::seal`).
+    Seal {
+        task: TaskId,
     },
     /// Start the streams of transcript `id`, then `ListenBegan` (or `ListenFailed`).
     ListenOpen {
@@ -2940,6 +2979,7 @@ pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
 mod agent;
 pub mod chat;
 pub mod editor;
+pub mod finish;
 pub mod slots;
 mod transcribe;
 mod viewer;
@@ -3100,6 +3140,9 @@ pub struct Model {
     /// In the snapshot it is `tasks_bar.undo`: `notice` there is the status bar's.
     #[serde(skip)]
     pub undo_offer: Option<Notice>,
+    /// Tasks the user marked done or put away, and the Done offered back (`finish`).
+    #[serde(skip)]
+    pub finish: finish::Finishing,
     /// Sessions the shell found, in the order listed. Shown through `sessions_bar` only.
     #[serde(skip)]
     found: Vec<Found>,
@@ -3333,6 +3376,7 @@ impl Default for Model {
             folded_projects: Vec::new(),
             open_done: Vec::new(),
             undo_offer: None,
+            finish: finish::Finishing::default(),
             found: Vec::new(),
             session_quiet_ms: sessions::QUIET_MS,
             hidden: Vec::new(),
@@ -3738,6 +3782,13 @@ impl Model {
             {
                 Some(workbook::USERS_ALONE)
             }
+            // Done, Later and its Undo are the user's; so is the answer to "Stop it and put it away?".
+            Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
+            Action::QuitConfirm | Action::QuitCancel
+                if self.confirm.as_ref().is_some_and(|confirm| confirm.later.is_some()) =>
+            {
+                Some(finish::USERS_ALONE)
+            }
             // "Stop its agent and dismiss?" is the user's to answer yes to.
             Action::QuitConfirm | Action::QuitCancel
                 if self.confirm.as_ref().is_some_and(|confirm| confirm.dismiss.is_some()) =>
@@ -4057,7 +4108,10 @@ impl Model {
             }
             match kind {
                 crate::notice::Kind::Editor => self.editor_note = None,
-                crate::notice::Kind::Undo => self.workbooks.dismiss(text),
+                crate::notice::Kind::Undo => {
+                    self.workbooks.dismiss(text);
+                    self.done_dismiss(text);
+                }
                 _ => {}
             }
             if !kind.held() {
@@ -4075,6 +4129,7 @@ impl Model {
             self.end_peek(&mut effects);
         }
         self.tasks.finished(&states, self.now);
+        self.settle_finish();
         self.repo_unhold();
         // Only the user's own undo links a dismissed task's tabs again.
         let was_done = |id: &TaskId| states.iter().any(|(task, state)| task == id && *state == State::Done);
@@ -4424,6 +4479,8 @@ impl Model {
         self.list = self.list.filter(|_| self.sidebar.is_some()).map(|at| followed.unwrap_or_else(|| stay(at)));
         // A pane that closed is not asked about; with none left there is no question. Never a
         // quit: the user has not answered.
+        let later_works =
+            self.confirm.as_ref().and_then(|c| c.later.as_ref()).is_some_and(|(id, _)| self.works(&Subject::Task(*id)));
         let panes = &self.panes;
         if let Some(confirm) = &mut self.confirm {
             confirm.running.retain(|r| panes.iter().any(|p| p.id == r.pane));
@@ -4432,6 +4489,8 @@ impl Model {
             // "Stop its agent and dismiss?" goes when that agent stopped some other way.
             let asks = match confirm.dismiss {
                 Some(id) => self.agent_runs(&Subject::Task(id)),
+                // "Stop it and put it away?" goes once its turn is over: Later then needs no question.
+                None if confirm.later.is_some() => later_works,
                 // "Paste 4 lines?" goes with its pane.
                 None if let Some(ask) = confirm.paste => panes.iter().any(|p| p.id == ask.pane),
                 // "Unlist this repository?" goes once it is not listed.
@@ -4481,7 +4540,7 @@ impl Model {
             // A repository a live task works in: asked first (the trash is one hover away).
             Action::RepoRemove { path } if self.repo_worked_in(&path) && self.repo_dirs.to_remove(&path).is_ok() => {
                 self.leave(effects);
-                self.confirm = Some(Confirm { running: Vec::new(), dismiss: None, paste: None, unlist: Some(path), close: None });
+                self.confirm = Some(Confirm { running: Vec::new(), dismiss: None, paste: None, unlist: Some(path), close: None, later: None });
             }
             Action::RepoRemove { path } => self.repo_remove(&path, effects),
             Action::RepoFold { path, fold } => self.repo_fold(&path, fold),
@@ -4562,6 +4621,7 @@ impl Model {
                 self.left.1.get_or_insert(now);
                 self.tasks.tick(now);
                 self.workbooks.tick(now);
+                self.finish_tick(now);
                 self.retry_moves(effects);
                 self.undo_offer = self.undo_offer.filter(|offer| offer.until > now);
                 self.clip = self.clip.take().filter(|clip| clip.shows(now));
@@ -5534,14 +5594,14 @@ impl Model {
                     || self
                         .confirm
                         .as_ref()
-                        .is_some_and(|confirm| confirm.dismiss.is_none() && confirm.paste.is_none() && confirm.unlist.is_none()) =>
+                        .is_some_and(|confirm| confirm.dismiss.is_none() && confirm.paste.is_none() && confirm.unlist.is_none() && confirm.later.is_none()) =>
             {
                 effects.push(Effect::Quit)
             }
             Action::QuitAsked { running } => {
                 // The question is ottospace's own UI: a live window would cover it.
                 self.leave(effects);
-                self.confirm = Some(Confirm { running, dismiss: None, paste: None, unlist: None, close: None });
+                self.confirm = Some(Confirm { running, dismiss: None, paste: None, unlist: None, close: None, later: None });
             }
             // Yes to "Paste 4 lines?": into its pane, if that is still a terminal.
             Action::QuitConfirm if let Some(ask) = self.confirm.as_ref().and_then(|confirm| confirm.paste) => {
@@ -5558,6 +5618,7 @@ impl Model {
                             paste: Some(clip::PasteAsk { pane, amount }),
                             unlist: None,
                             close: None,
+                            later: None,
                         })
                     }
                     false => self.pasted(pane, amount, effects),
@@ -5572,6 +5633,11 @@ impl Model {
                 self.confirm = None;
                 self.act(Action::TaskStop { id: Subject::Task(id) }, effects);
                 self.row_move(id, Moved::Dismissed, |tasks| tasks.dismiss(id));
+            }
+            // Yes to "Stop it and put it away?".
+            Action::QuitConfirm if let Some((id, _)) = self.confirm.as_ref().and_then(|confirm| confirm.later.clone()) => {
+                self.confirm = None;
+                self.later_confirmed(id, effects);
             }
             // Yes to "Unlist this repository?".
             Action::QuitConfirm if let Some(path) = self.confirm.as_ref().and_then(|confirm| confirm.unlist.clone()) => {
@@ -5792,6 +5858,9 @@ impl Model {
             Action::TaskCard { id, ticket } => {
                 self.card_first(&Subject::Task(id), ticket);
                 self.talk_to(Subject::Task(id), false, effects)
+            }
+            action @ (Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo) => {
+                self.finish_act(action, effects)
             }
             Action::TalkStart => {
                 if let Some(subject) = self.talk.as_ref().filter(|talk| talk.open).map(|talk| talk.task.clone()) {
@@ -6369,6 +6438,15 @@ impl Model {
     /// `start`: and starts its agent (or goes on with its session) if it does not run; selecting
     /// a conversation never does. A session's opens while it is listed or its agent runs.
     fn talk_to(&mut self, subject: Subject, start: bool, effects: &mut Vec<Effect>) {
+        // The user's own opening (a click, ↵, ⌘⇧N) of a task put away or done: a task like any
+        // other again; a done one's session gone on with.
+        let start = match &subject {
+            Subject::Task(id) if self.by_user => {
+                let done = self.revive(*id);
+                start || (done && self.tasks.get(*id).is_some_and(|task| task.session.is_some()))
+            }
+            _ => start,
+        };
         let brief = match &subject {
             Subject::Task(id) => match self.tasks.get(*id) {
                 Some(task) => task.materials_dir().map(str::to_string),
@@ -7120,6 +7198,7 @@ impl Model {
             || self.undo_offer.is_some_and(|offer| offer.until <= now)
             || self.clip.as_ref().is_some_and(|clip| !clip.shows(now))
             || self.workbooks.due(now)
+            || self.finish.offer.as_ref().is_some_and(|offer| offer.until <= now)
             || self.calendar.due(now)
     }
 
@@ -7128,7 +7207,8 @@ impl Model {
     pub fn next_due(&self) -> Option<u64> {
         let offer = self.undo_offer.as_ref().map(|offer| offer.until);
         let clip = self.clip.as_ref().map(|clip| clip.at.saturating_add(crate::clip::NOTICE_MS));
-        [self.tasks.next_due(), offer, clip, self.workbooks.next_due()].into_iter().flatten().min()
+        let done = self.finish.offer.as_ref().map(|offer| offer.until);
+        [self.tasks.next_due(), offer, clip, self.workbooks.next_due(), done].into_iter().flatten().min()
     }
 
     /// Everything the marks and the workbooks need, each once: what the shell looks for on
@@ -7172,8 +7252,14 @@ impl Model {
         if self.agent_runs(&Subject::Task(id)) && self.tasks.live(id).is_some() {
             // The question is ottospace's own UI: a live window would cover it.
             self.leave(effects);
-            self.confirm =
-                Some(Confirm { running: Vec::new(), dismiss: Some(id), paste: None, unlist: None, close: None });
+            self.confirm = Some(Confirm {
+                running: Vec::new(),
+                dismiss: Some(id),
+                paste: None,
+                unlist: None,
+                close: None,
+                later: None,
+            });
             return;
         }
         match moved {
@@ -9104,6 +9190,9 @@ mod tests {
         Action::AgentExited { .. },
         Action::SessionRead { .. },
         Action::TaskStop { .. },
+        Action::TaskDone { .. },
+        Action::TaskLater { .. },
+        Action::DoneUndo,
         Action::TalkToggle,
         Action::TalkKeys { .. },
         Action::TalkResize { .. },
@@ -9415,6 +9504,9 @@ mod tests {
             Action::AgentExited { task: Subject::Task(1) },
             Action::SessionRead { runner: "claude".into(), id: String::new(), found: None },
             Action::TaskStop { id: Subject::Task(1) },
+            Action::TaskDone { id: 1 },
+            Action::TaskLater { id: 1 },
+            Action::DoneUndo,
             Action::TalkToggle,
             Action::TalkFront { task: 1 },
             Action::TalkCycle { delta: 1 },
@@ -9789,6 +9881,7 @@ mod tests {
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
                     Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
+                    Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::TalkKeys { on: true } if m.talk.as_ref().is_some_and(|t| !t.open) => {
                         Some(rail::DRAWER_USERS)
                     }
@@ -15768,7 +15861,14 @@ mod tests {
         assert_eq!(m.mode(), Mode::Confirm);
         assert_eq!(
             m.confirm,
-            Some(Confirm { running: vec![running(1, "sleep")], dismiss: None, paste: None, unlist: None, close: None })
+            Some(Confirm {
+                running: vec![running(1, "sleep")],
+                dismiss: None,
+                paste: None,
+                unlist: None,
+                close: None,
+                later: None
+            })
         );
         assert_eq!(m.update(Action::QuitConfirm), [Effect::Quit]);
     }
@@ -15915,7 +16015,14 @@ mod tests {
         m.update(Action::Close { pane: Some(1) });
         assert_eq!(
             m.confirm,
-            Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None, unlist: None, close: None })
+            Some(Confirm {
+                running: vec![running(2, "vim")],
+                dismiss: None,
+                paste: None,
+                unlist: None,
+                close: None,
+                later: None
+            })
         );
         // Nothing left to ask about: no question, and no quit either.
         let effects = m.update(Action::Close { pane: Some(2) });
@@ -16021,6 +16128,7 @@ mod tests {
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
                     Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
+                    Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::TalkKeys { on: true } if m.talk.as_ref().is_some_and(|t| !t.open) => {
                         Some(rail::DRAWER_USERS)
                     }
@@ -16069,7 +16177,14 @@ mod tests {
         m.update(Action::Close { pane: Some(1) }.sent_by(Origin::System));
         assert_eq!(
             m.confirm,
-            Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None, unlist: None, close: None })
+            Some(Confirm {
+                running: vec![running(2, "vim")],
+                dismiss: None,
+                paste: None,
+                unlist: None,
+                close: None,
+                later: None
+            })
         );
         // A client may not take the keyboard from under it, nor ask again as the user's yes.
         for taking in [Action::ToggleKeys, Action::Enter { pane: 2 }, ask.clone()] {
@@ -16108,6 +16223,7 @@ mod tests {
             paste: None,
             unlist: None,
             close: None,
+            later: None,
         };
         assert_eq!((one.title().as_str(), one.lines()), ("1 terminal is running", vec!["pane 4".to_string()]));
         let job = Confirm {
@@ -16116,6 +16232,7 @@ mod tests {
             paste: None,
             unlist: None,
             close: None,
+            later: None,
         };
         assert_eq!(job.lines(), ["pane 2 · sleep (background)"]);
         let seven = Confirm {
@@ -16124,6 +16241,7 @@ mod tests {
             paste: None,
             unlist: None,
             close: None,
+            later: None,
         };
         assert_eq!(seven.title(), "7 terminals are running");
         let lines = seven.lines();
