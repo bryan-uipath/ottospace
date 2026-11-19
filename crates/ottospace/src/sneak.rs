@@ -483,6 +483,11 @@ impl Workspace {
                 None
             }
             ("top", "fill") => Some(Action::FillDisplay),
+            // The bug button's label: a report starts as by its click (the core refuses one not the user's).
+            ("top", "bug") => {
+                self.error = self.bug_start(self.input, window, cx).err();
+                None
+            }
             ("top", _) => {
                 if let Some((.., axis)) = SPLITS.iter().find(|(top, ..)| *top == name) {
                     self.top_button(*axis, window, cx);

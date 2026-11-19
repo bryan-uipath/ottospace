@@ -7837,8 +7837,10 @@ impl Workspace {
                     false => cx.propagate(),
                 },
             ))
-            // With no bug button its key is no key of ottospace's: it goes on as unbound.
+            // With no bug button its key is no key of ottospace's: it goes on as unbound. Only the
+            // main window, where the report is drawn: not a tab out on another display.
             .on_action(cx.listener(|this, _: &ReportBug, window, cx| match this.model.bug_icon() {
+                true if Window::window_handle(window) != this.main_window => {}
                 true => {
                     this.error = this.bug_start(this.input, window, cx).err();
                     cx.notify();

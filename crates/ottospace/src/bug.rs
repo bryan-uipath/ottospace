@@ -16,7 +16,7 @@ use ottospace_core::bug::{Mark, RepoFacts, Report};
 use ottospace_core::settings::{Settings, expand_home};
 use ottospace_core::{Action, Origin, PaneId, theme};
 
-use crate::{Workspace, collect, config, ns_view, rect, sneak, ui};
+use crate::{Workspace, collect, config, dialog, ns_view, rect, sneak, ui};
 
 /// A comment's card, in points.
 const CARD: f32 = 260.;
@@ -43,14 +43,16 @@ impl Workspace {
     /// picture is taken off the main thread, then the report starts over it. `Err`: why nothing
     /// starts. Only the user's: `origin` is theirs, or the core refuses.
     pub(crate) fn bug_start(&mut self, origin: Origin, window: &Window, cx: &mut Context<Self>) -> Result<(), String> {
+        // One at a time: a second press while one is open takes no second picture.
+        if self.model.bug.is_some() {
+            return Ok(());
+        }
         let size = window.viewport_size();
         let points = [f64::from(f32::from(size.width)), f64::from(f32::from(size.height))];
-        let to = |b: gpui::Bounds<gpui::Pixels>| rect(b).map(f64::from);
         let controls: Vec<(String, [f64; 4])> =
-            self.controls.drawn_with("").into_iter().map(|(id, b)| (id, to(b))).collect();
-        let shown = self.model.layout.as_ref().map(ottospace_core::layout::Node::leaves).unwrap_or_default();
-        let panes: Vec<(PaneId, [f64; 4])> =
-            shown.into_iter().filter_map(|id| Some((id, to(self.cells.get(&id)?.get())))).collect();
+            self.controls.drawn_with("").into_iter().map(|(id, b)| (id, rect(b).map(f64::from))).collect();
+        let panes = self.bug_panes();
+        let drawn = (panes.clone(), size);
         let word = collect::new_word().ok_or("bug report: the system's random source could not be read")?;
         let word_kept = word.clone();
         let start = move |picture| Action::BugStart {
@@ -75,6 +77,9 @@ impl Workspace {
             });
             let shot = shot.await;
             let _ = this.update_in(cx, |this, window, cx| {
+                // The panes moved or the window changed while it was taken: what it blanks would
+                // miss them, so no picture is kept.
+                let shot = shot.filter(|_| (this.bug_panes(), window.viewport_size()) == drawn);
                 this.dispatch(start(shot.is_some()), origin, window, cx);
                 // Kept only for the report that started: one was open already, or it was refused.
                 let started = this.model.bug.as_ref().is_some_and(|report| report.word == word_kept);
@@ -86,6 +91,12 @@ impl Workspace {
         })
         .detach();
         Ok(())
+    }
+
+    /// The panes shown and where, in window points.
+    fn bug_panes(&self) -> Vec<(PaneId, [f64; 4])> {
+        let shown = self.model.layout.as_ref().map(ottospace_core::layout::Node::leaves).unwrap_or_default();
+        shown.into_iter().filter_map(|id| Some((id, rect(self.cells.get(&id)?.get()).map(f64::from)))).collect()
     }
 
     /// `Effect::BugDropped`: the picture goes.
@@ -173,17 +184,12 @@ impl Workspace {
     fn bug_bar(&self, report: &Report, cx: &mut Context<Self>) -> Div {
         let apps = if report.apps { "☑ Include app panes" } else { "☐ Include app panes" };
         let secondary = |label: &'static str| ui::Button::Secondary(label.into());
-        let bar = div()
+        let bar = dialog::panel(theme::BORDER_STRONG)
             .flex()
             .flex_col()
             .gap_1()
             .px_3()
             .py_2()
-            .rounded_lg()
-            .border_1()
-            .border_color(rgb(theme::BORDER_STRONG))
-            .bg(rgb(theme::RAISED))
-            .shadow_lg()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 div()
@@ -235,7 +241,7 @@ impl Workspace {
             }
         };
         let label = if mark.rect.is_some() { format!("{n}") } else { format!("{n} · whole app") };
-        div()
+        dialog::panel(if typing { theme::SNEAK } else { theme::BORDER_STRONG })
             .absolute()
             .left(px(x))
             .top(px(y))
@@ -244,11 +250,6 @@ impl Workspace {
             .flex_col()
             .gap_1()
             .p_2()
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(if typing { theme::SNEAK } else { theme::BORDER_STRONG }))
-            .bg(rgb(theme::RAISED))
-            .shadow_lg()
             .text_xs()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(div().flex().items_center().justify_between().child(sneak::chip().text_xs().child(label)).child(
@@ -280,13 +281,15 @@ impl Workspace {
             // No picture (no Screen Recording): the window as it is, dimmed.
             None => div().absolute().top_0().left_0().size_full().bg(rgba(0x09090bb0)).into_any_element(),
         };
+        // In fractions of the frozen window, as the picture is stretched: a resize keeps them on the panes.
+        let [ww, wh] = report.size;
         let blanked = report.blanked().into_iter().map(|[x, y, w, h]| {
             div()
                 .absolute()
-                .left(px(x as f32))
-                .top(px(y as f32))
-                .w(px(w as f32))
-                .h(px(h as f32))
+                .left(relative((x / ww) as f32))
+                .top(relative((y / wh) as f32))
+                .w(relative((w / ww) as f32))
+                .h(relative((h / wh) as f32))
                 .flex()
                 .items_center()
                 .justify_center()

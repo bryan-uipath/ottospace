@@ -14630,6 +14630,7 @@ fn three_app_only_slots_take_three_windows_one_by_one() {
         .collect();
     let want: Vec<(u64, u64)> = panes.iter().zip(710_001..).map(|(p, w)| (*p, w)).collect();
     assert_eq!(held, want, "in reading order, one window each: {state}");
+}
 
 /// A real git checkout standing for ottospace's repository, one commit on `main`, and a home
 /// whose settings name it (`developer.ottospace_repo`). Both under `support::temp`.
