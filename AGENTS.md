@@ -27,6 +27,24 @@ Rules:
   a key or click it injects) or `System` (timers, a shell that exited, lists read again). A rule
   about what may interrupt the user asks the origin, not the action.
 
+## Principle: human attention
+
+> Human attention is the scarcest resource. ottospace interrupts only for what needs the person,
+> brings the context with the question, batches the rest, and never makes the person hunt for
+> what's next.
+
+For every feature:
+
+- A new interruption (notice, notification, badge, sound, focus change) says why it needs the
+  person now. If it can wait, it does not interrupt.
+- A question to the person carries its context and a recommendation: the answer must not need a
+  hunt through the task.
+- What can wait is batched: one digest, one queue, never one ping each.
+- The person never searches for what needs them: one key and one place say what's next (⌘⇧N,
+  the status bar's `needs you`). A new kind of waiting joins them, never a place of its own.
+
+Design note: `docs/ai/attention/plan.md`.
+
 ## Tests
 
 - **Inner loop:** `cargo test`. Core unit tests. Fast, no window.

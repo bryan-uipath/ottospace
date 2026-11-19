@@ -7,6 +7,10 @@
 ottospace puts your terminals and your Mac apps in one tiled workspace. Your agents work in the
 same workspace and tell you when they need you.
 
+Human attention is the scarcest resource. ottospace interrupts only for what needs the person,
+brings the context with the question, batches the rest, and never makes the person hunt for
+what's next.
+
 ![The ottospace window: a Tasks inbox grouped Needs you, Running, Captured and On hold, beside three terminal panes. The status bar reads 2 tasks need you.](site/shots/tasks.png)
 
 Site: <https://bryan-uipath.github.io/ottospace/>
