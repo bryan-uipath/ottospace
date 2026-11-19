@@ -8925,7 +8925,9 @@ impl Model {
     /// True if a live task works in one of the checkouts of the repository at `path`.
     fn repo_worked_in(&self, path: &str) -> bool {
         let repo = self.repos.iter().find(|repo| repo.path == path);
-        repo.is_some_and(|repo| repo.checkouts().iter().any(|c| self.repo_task(&c.path).is_some()))
+        let working =
+            |path: &str| self.tasks.list.iter().any(|t| !t.dismissed && self.task_worktree(t.id) == Some(path));
+        repo.is_some_and(|repo| repo.checkouts().iter().any(|c| working(&c.path)))
     }
 
     /// The open pull request of the branch checked out at `path`, by `prs::pick`.
@@ -11564,11 +11566,16 @@ mod tests {
             (m.repo_task("/code/app"), item)
         };
         assert_eq!(shown(&m), (Some(1), (vec![1], Some(1), Glyph::Tasks, "first".into())));
+        assert_eq!(m.workbook_rows()[0].badge, Some(1));
         m.update(Action::TaskDone { id: 1 });
         assert_eq!(m.tasks.get(1).map(|task| task.state), Some(State::Done));
         // Bound to "Workspace 2": its name again.
         assert_eq!(shown(&m), (None, (vec![], None, Glyph::Name, "Workspace 2".into())));
         assert!(m.spaces().iter().any(|space| space.of == of), "the workspace stays");
+        assert_eq!(m.workbook_rows()[0].badge, None);
+        // Its row's click opens the workspace, with the done task neither in front nor on the rail.
+        m.update(Action::RepoClick { path: "/code/app".into(), axis: Right });
+        assert_eq!((m.space(), m.front(&of), m.rail()), (&of, None, vec![]));
         m.update(Action::DoneUndo);
         assert_eq!(shown(&m), (Some(1), (vec![1], Some(1), Glyph::Tasks, "first".into())));
     }

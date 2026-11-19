@@ -320,8 +320,9 @@ impl Model {
         let latest = |task: &&crate::tasks::Task| (task.started_at, task.created, task.id);
         let mut working: Vec<&crate::tasks::Task> = working.collect();
         working.sort_by_key(latest);
-        let task = working.iter().max_by_key(|task| rank(&self.task_space(task.id)))?;
-        Some((self.task_space(task.id), Some(task.id)))
+        // A task not done first; a done one's workspace opens with none put in front.
+        let task = working.iter().max_by_key(|task| (task.undone(), rank(&self.task_space(task.id))))?;
+        Some((self.task_space(task.id), Some(task.id).filter(|_| task.undone())))
     }
 
     /// A Repos row's click: the workspace of that checkout (`repo_space`), else, the user's, a

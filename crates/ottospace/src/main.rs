@@ -6757,7 +6757,8 @@ impl Workspace {
                         placed.map(|(at, badge)| div().absolute().top_0().left(px(11. * at as f32)).child(badge));
                     Some(div().relative().flex_none().w(px(width)).h(px(18.)).children(placed).into_any_element())
                 }
-                (_, Owner::Workbook { .. }) => Some(
+                // A task's workspace whose tasks are all done draws as a workspace: never blank when small.
+                (_, Owner::Workbook { .. }) | (Glyph::Name, Owner::Task { .. }) => Some(
                     svg()
                         .path("icons/workbook.svg")
                         .size(px(14.))

@@ -81,7 +81,7 @@ pub struct SpaceRow {
     pub hidden: bool,
     pub selected: bool,
     pub tabs: Vec<usize>,
-    /// Its tasks, the most urgent first: needs you, running, later, on hold, done.
+    /// Its tasks, the most urgent first: needs you, running, later, on hold, done. Its badges: `space_badges`.
     pub tasks: Vec<TaskId>,
     /// The task whose conversation is in front, if it has a task.
     pub front: Option<TaskId>,

@@ -452,6 +452,9 @@ pub struct WorkbookRow {
     pub unfolded: bool,
     /// The task it is bound to: its space on the top row is that task's.
     pub task: Option<TaskId>,
+    /// The badge its row shows: its space's task not done (`Model::space_task`). Drawn only.
+    #[serde(skip)]
+    pub badge: Option<TaskId>,
 }
 
 /// A closing temporary workspace, as the section lists it with its Undo.
@@ -727,8 +730,9 @@ impl Model {
             let (id, name, unfolded) = (book.id, book.name.clone(), self.workbooks.unfolded(book.id));
             let of = self.workbooks.space_of(&Owner::Workbook { id });
             let shown = self.spaces.iter().any(|space| space.of == of && !space.hidden);
-            let task = book.task;
-            WorkbookRow { id, name, panes, summary, open: tab.is_some() || shown, tab, tabs, unfolded, task }
+            let (task, badge) = (book.task, book.task.and_then(|_| self.space_task(&of)));
+            let open = tab.is_some() || shown;
+            WorkbookRow { id, name, panes, summary, open, tab, tabs, unfolded, task, badge }
         };
         self.workbooks.listed().map(row).collect()
     }
