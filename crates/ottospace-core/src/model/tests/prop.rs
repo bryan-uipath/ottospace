@@ -5306,20 +5306,7 @@ fn seed_59164_a_turn_after_the_agent_exited_is_none() {
         Action::AgentStarted { task: Subject::Task(1), session: Some("".into()), at: 79 }.sent_by(Origin::User),
         Action::AgentEvents {
             task: Subject::Task(1),
-            events: vec![
-                Said::Exited { code: None, signal: None, details: true },
-                Said::Permission {
-                    ticket: 0,
-                    tool: "Bash".into(),
-                    label: "\u{1b}[31m\u{1b}[31m".into(),
-                    detail: Text::new(&"x".repeat(2)),
-                    len: 9,
-                    cut: true,
-                    claim: Text::new(&"x".repeat(0)),
-                    questions: vec![],
-                },
-                Said::TurnStarted,
-            ],
+            events: vec![Said::Exited { code: None, signal: None, details: true }, Said::TurnStarted],
             at: 5000,
         }
         .sent_by(Origin::System),
