@@ -217,7 +217,7 @@ mod tests {
     const NINE: u64 = 1_794_560_400_000;
 
     fn pane(kind: Kind) -> Pane {
-        Pane { id: 1, kind, cwd: None, fit: None }
+        Pane { id: 1, kind, cwd: None, fit: None, owned: false }
     }
 
     #[test]

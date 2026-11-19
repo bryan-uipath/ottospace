@@ -482,6 +482,10 @@ function pane(value: unknown, at: string): Pane {
   const o = fields(value, at);
   const pane: Pane = { id: num(o.id, `${at}.id`), kind: paneKind(o.kind, `${at}.kind`) };
   if (o.cwd !== undefined) pane.cwd = str(o.cwd, `${at}.cwd`);
+  if (o.owned !== undefined) {
+    if (o.owned !== true) throw wrong(`${at}.owned`, "true", o.owned);
+    pane.owned = true;
+  }
   if (o.fit !== undefined) {
     const fit = fields(o.fit, `${at}.fit`);
     pane.fit = { wants: pair(fit.wants, `${at}.fit.wants`), hint: str(fit.hint, `${at}.fit.hint`) };
@@ -1194,6 +1198,10 @@ function pickItem(value: unknown, at: string): PickItem {
   if (o.type === "terminal") return { type: "terminal" };
   if (o.type === "file") return { type: "file" };
   if (o.type === "app") return { type: "app", name: str(o.name, `${at}.name`) };
+  if (o.type === "new_window") {
+    const bundle = orNull(str)(o.bundle, `${at}.bundle`);
+    return { type: "new_window", app: str(o.app, `${at}.app`), bundle, menu_item: bool(o.menu_item, `${at}.menu_item`) };
+  }
   if (o.type === "window") {
     const pane = orNull(num)(o.pane, `${at}.pane`);
     return { type: "window", app: str(o.app, `${at}.app`), window: num(o.window, `${at}.window`), pane };
@@ -1223,6 +1231,11 @@ function field(value: unknown, at: string): Field {
     bounds: rect(o.bounds, `${at}.bounds`),
     cursor_x: num(o.cursor_x, `${at}.cursor_x`),
   };
+}
+
+function newWindow(value: unknown, at: string): { app: string; since: number } {
+  const o = fields(value, at);
+  return { app: str(o.app, `${at}.app`), since: num(o.since, `${at}.since`) };
 }
 
 function picker(value: unknown, at: string): Picker {
@@ -1374,6 +1387,7 @@ function confirm(value: unknown, at: string): Confirm {
     unlist: orNull(str)(o.unlist, `${at}.unlist`),
     close: orNull(num)(o.close, `${at}.close`),
     later: orNull(later)(o.later, `${at}.later`),
+    edited: orNull(num)(o.edited, `${at}.edited`),
   };
 }
 
@@ -1541,6 +1555,8 @@ function model(value: unknown, at: string): Model {
     folded_projects: list(orNull(str))(o.folded_projects, `${at}.folded_projects`),
     open_done: list(orNull(str))(o.open_done, `${at}.open_done`),
     picker: orNull(picker)(o.picker, `${at}.picker`),
+    new_window: orNull(newWindow)(o.new_window, `${at}.new_window`),
+    edited: list(num)(o.edited, `${at}.edited`),
     palette: orNull(palette)(o.palette, `${at}.palette`),
     inspector: orNull(inspectorState)(o.inspector, `${at}.inspector`),
     confirm: orNull(confirm)(o.confirm, `${at}.confirm`),

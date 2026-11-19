@@ -290,6 +290,11 @@ impl Model {
         let mut run = Run::new(slot, bundle.clone(), name.clone());
         (run.status, run.pid) = (Status::Filled, Some(pid));
         self.slots.insert(id, run);
+        // A slot owns no window: the one it holds, and each it holds later, goes back when it closes.
+        if let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == id) {
+            pane.owned = false;
+        }
+        self.edited.retain(|edited| *edited != id);
     }
 
     /// `SlotNext`: the candidate after the one offered, in the pick's order, round again.

@@ -37,6 +37,7 @@ pub mod listen;
 pub mod marks;
 pub mod model;
 pub mod motion;
+pub mod new_window;
 pub mod notice;
 pub mod palette;
 pub mod progress;

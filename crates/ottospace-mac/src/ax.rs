@@ -7,7 +7,9 @@ use std::ptr::NonNull;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplicationActivationOptions, NSApplicationActivationPolicy, NSRunningApplication, NSWorkspace};
 use objc2_application_services::{AXError, AXIsProcessTrustedWithOptions, AXUIElement, AXValue, AXValueType};
-use objc2_core_foundation::{CFArray, CFBoolean, CFDictionary, CFRetained, CFString, CFType, CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{
+    CFArray, CFBoolean, CFDictionary, CFRetained, CFString, CFType, CGPoint, CGRect, CGSize,
+};
 
 // Private but long-stable; maps an AX window to its CGWindowID (needed to pick the SCWindow).
 unsafe extern "C" {
@@ -55,6 +57,54 @@ pub fn is_trusted(prompt: bool) -> bool {
     unsafe { AXIsProcessTrustedWithOptions(Some(options.as_opaque())) }
 }
 
+/// An element's `AXChildren`.
+fn children(element: &AXUIElement) -> Vec<CFRetained<AXUIElement>> {
+    let Some(all) = copy_attr(element, "AXChildren").and_then(|a| a.downcast::<CFArray>().ok()) else {
+        return Vec::new();
+    };
+    let all = unsafe { CFRetained::cast_unchecked::<CFArray<AXUIElement>>(all) };
+    all.iter().collect()
+}
+
+/// The enabled item of the app's menus titled exactly `title`, in a submenu too (File ▸ New ▸
+/// Window). Asked of the app over Accessibility: it need not be in front.
+fn menu_item(pid: i32, title: &str) -> Option<CFRetained<AXUIElement>> {
+    let app = unsafe { AXUIElement::new_application(pid) };
+    let bar = copy_attr(&app, "AXMenuBar").and_then(|b| b.downcast::<AXUIElement>().ok())?;
+    let named = |item: &AXUIElement| {
+        let text = copy_attr(item, "AXTitle").and_then(|t| t.downcast::<CFString>().ok());
+        let enabled = copy_attr(item, "AXEnabled").and_then(|e| e.downcast::<CFBoolean>().ok());
+        text.is_some_and(|t| t.to_string() == title) && enabled.is_some_and(|e| e.as_bool())
+    };
+    // Each menu of the bar, then its items, and those of its submenus.
+    fn items(element: &AXUIElement, depth: usize, out: &mut Vec<CFRetained<AXUIElement>>) {
+        let level = children(element);
+        out.extend(level.iter().cloned());
+        if depth > 0 {
+            for child in &level {
+                items(child, depth - 1, out);
+            }
+        }
+    }
+    let mut all = Vec::new();
+    items(&bar, 5, &mut all);
+    all.into_iter().find(|item| named(item))
+}
+
+/// Whether the app's menus have an enabled item titled exactly `title`.
+pub fn has_menu_item(pid: i32, title: &str) -> bool {
+    menu_item(pid, title).is_some()
+}
+
+/// Presses the app's menu item titled exactly `title`.
+pub fn press_menu_item(pid: i32, title: &str) -> Result<(), String> {
+    let item = menu_item(pid, title).ok_or_else(|| format!("has no menu item {title}"))?;
+    match unsafe { item.perform_action(&CFString::from_static_str("AXPress")) } {
+        AXError::Success => Ok(()),
+        _ => Err(format!("did not take its {title} menu item")),
+    }
+}
+
 pub struct Window {
     element: CFRetained<AXUIElement>,
     pid: i32,
@@ -70,6 +120,12 @@ impl Window {
     }
 
     /// Every window the app lists: dialogs and panels too.
+    /// Whether the app answers Accessibility at all: an app with no window still names its role.
+    pub fn answers(pid: i32) -> bool {
+        let app = unsafe { AXUIElement::new_application(pid) };
+        copy_attr(&app, "AXRole").is_some()
+    }
+
     pub fn all_of(pid: i32) -> Vec<Self> {
         let app = unsafe { AXUIElement::new_application(pid) };
         let Some(all) = copy_attr(&app, "AXWindows").and_then(|a| a.downcast::<CFArray>().ok()) else {
@@ -219,6 +275,31 @@ impl Window {
             .map(|child| Some(copy_attr(&child, "AXRole")?.downcast::<CFString>().ok()?.to_string()))
             .collect();
         Some(roles?.iter().any(|r| r == role))
+    }
+
+    /// Whether its app says it has unsaved changes (`AXEdited`: on the window, or on its close
+    /// button, which AppKit draws with a dot then). `None`: the window did not answer (gone,
+    /// busy); an app that keeps no such flag answers no.
+    pub fn edited(&self) -> Option<bool> {
+        let flag = |element: &AXUIElement| {
+            copy_attr(element, "AXEdited").and_then(|e| e.downcast::<CFBoolean>().ok()).map(|e| e.as_bool())
+        };
+        let on = flag(&self.element) == Some(true) || self.close_button().and_then(|b| flag(&b)) == Some(true);
+        // Its role answers unless the window is gone or busy.
+        (on || copy_attr(&self.element, "AXRole").is_some()).then_some(on)
+    }
+
+    fn close_button(&self) -> Option<CFRetained<AXUIElement>> {
+        copy_attr(&self.element, "AXCloseButton").and_then(|b| b.downcast::<AXUIElement>().ok())
+    }
+
+    /// Presses its close button, as a click on it would: an app with unsaved changes asks.
+    pub fn close(&self) -> Result<(), &'static str> {
+        let button = self.close_button().ok_or("has no close button")?;
+        match unsafe { button.perform_action(&CFString::from_static_str("AXPress")) } {
+            AXError::Success => Ok(()),
+            _ => Err("did not close"),
+        }
     }
 
     /// Moves the window; returns where it actually landed (macOS may clamp).

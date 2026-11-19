@@ -6,3 +6,7 @@
 {"shot":"apps"}
 {"cmd":"key","keys":"l u enter","as":"user"}
 {"shot":"windows"}
+# New window: a test run asks no app, so none comes, and after about 3 seconds the bar says so.
+{"cmd":"key","keys":"enter","as":"user"}
+{"sleep_ms":3600}
+{"shot":"late"}

@@ -446,8 +446,15 @@ impl Model {
         }
         // The question is ottospace's own UI: a live window would cover it.
         self.leave(effects);
-        self.confirm =
-            Some(Confirm { running, dismiss: None, paste: None, unlist: None, close: Some(id), later: None });
+        self.confirm = Some(Confirm {
+            running,
+            dismiss: None,
+            paste: None,
+            unlist: None,
+            close: Some(id),
+            later: None,
+            edited: None,
+        });
     }
 
     /// A space's place on the row: the order tabs keep. One not on the row goes last, and

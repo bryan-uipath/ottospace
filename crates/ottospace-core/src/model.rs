@@ -80,6 +80,10 @@ pub struct Pane {
     /// An app pane whose window kept another size than the pane's; see `hosted::Fit`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fit: Option<Fit>,
+    /// An app pane whose window ottospace opened ("New window"): closing the pane closes it.
+    /// Else the window is shared, and goes back to the user.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub owned: bool,
 }
 
 /// Who gets the keyboard.
@@ -154,6 +158,8 @@ pub struct Confirm {
     pub close: Option<WorkbookId>,
     /// Not the quit question: "Stop "<title>" and put it away?" for this task, whose turn runs.
     pub later: Option<(TaskId, String)>,
+    /// Not the quit question: "Close <title>? It has unsaved changes" for this owned app pane.
+    pub edited: Option<PaneId>,
 }
 
 impl Confirm {
@@ -340,6 +346,14 @@ pub enum PickItem {
     App {
         name: String,
     },
+    /// The second step's first row: a new window of `app`, owned (it closes with its pane).
+    NewWindow {
+        app: String,
+        bundle: Option<String>,
+        /// It has a menu item titled "New Window" (`new_window::MENU_ITEM`).
+        #[serde(default)]
+        menu_item: bool,
+    },
     /// The second step: one of `app`'s windows, by its window-server id; its title drawn, never
     /// in the state. `pane`: the pane that held it when listed.
     Window {
@@ -379,11 +393,31 @@ impl PickItem {
         match self {
             PickItem::Terminal => "Terminal",
             PickItem::File => "File…",
+            PickItem::NewWindow { .. } => "New window",
             PickItem::App { name } | PickItem::Closed { name, .. } | PickItem::Sound { name, .. } => name,
             PickItem::Window { title, .. } if title.is_empty() => "Untitled window",
             PickItem::Window { title, .. } => title,
         }
     }
+}
+
+/// "New window" waits for the window of `app`, asked for at `since`; it opens along `axis`, or
+/// in a new tab.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct NewWindowWait {
+    pub app: String,
+    pub since: u64,
+    #[serde(skip)]
+    pub axis: Axis,
+    /// In a new tab of this space.
+    #[serde(skip)]
+    pub tab_of: Option<Owner>,
+    /// Else the tab it was asked from (by id), beside the pane focused then: it goes there even
+    /// if the user moved on, as a task goes to the workspace its box was opened in.
+    #[serde(skip)]
+    pub tab: u32,
+    #[serde(skip)]
+    pub beside: Option<PaneId>,
 }
 
 /// One of an app's windows, as the shell read it for the picker's second step.
@@ -643,7 +677,24 @@ pub enum Action {
     /// first. The picker lists them, its second step.
     PickerWindows {
         app: String,
+        bundle: Option<String>,
+        /// The app has a menu item titled "New Window": offered one with no recipe of its own.
+        menu_item: bool,
         windows: Vec<PickWindow>,
+    },
+    /// The shell's: asking for the new window failed, and why. The wait ends with that said.
+    NewWindowFailed {
+        text: String,
+    },
+    /// The shell's: the window asked for by "New window" appeared. It opens in a pane, owned.
+    NewWindowCame {
+        kind: Kind,
+    },
+    /// The shell's reading of an owned app pane's window: whether its app says it has unsaved
+    /// changes.
+    WindowEdited {
+        pane: PaneId,
+        edited: bool,
     },
     /// Replace the picker's filter text.
     PickerQuery {
@@ -2011,6 +2062,9 @@ impl Action {
             Action::Split { .. }
             | Action::Open { .. }
             | Action::Adopt { .. }
+            | Action::NewWindowCame { .. }
+            | Action::NewWindowFailed { .. }
+            | Action::WindowEdited { .. }
             | Action::Close { .. }
             | Action::Focus { .. }
             | Action::FocusDir { .. }
@@ -2362,6 +2416,9 @@ impl Action {
             | Action::Split { .. }
             | Action::Open { .. }
             | Action::Adopt { .. }
+            | Action::NewWindowCame { .. }
+            | Action::NewWindowFailed { .. }
+            | Action::WindowEdited { .. }
             | Action::Close { .. }
             | Action::Focus { .. }
             | Action::FocusDir { .. }
@@ -2699,6 +2756,19 @@ pub enum Effect {
     PickWindows {
         app: String,
     },
+    /// "New window" was picked: ask `app` for one by `recipe`, then send `NewWindowCame` with
+    /// the window that appears. The core says when it is too late (`new_window::WAIT_MS`).
+    NewWindow {
+        app: String,
+        bundle: Option<String>,
+        recipe: crate::new_window::Recipe,
+    },
+    /// An owned pane closed: close its window, once it is back where the user can see it (a
+    /// save question of its app's shows there).
+    CloseWindow {
+        pane: PaneId,
+        window: u32,
+    },
     /// A window of `app` was picked (`PickItem::Window`): host it in a new pane, as `HostApp`.
     HostPicked {
         app: String,
@@ -2776,6 +2846,11 @@ pub enum Effect {
     /// `wheel_to_apps`, `workbook_scrollback_lines`) reads these from now on.
     ApplySettings {
         settings: Box<crate::settings::Settings>,
+    },
+    /// Say this in the notice bar, as an error: what the user asked for did not happen, found
+    /// later (a timer's step).
+    Failed {
+        text: String,
     },
     /// Say this in the notice bar, as a warning: why a move of the user's did nothing.
     Notice {
@@ -3204,6 +3279,10 @@ pub struct Model {
     pub(crate) now: u64,
     /// The pane picker, while it is open.
     pub picker: Option<Picker>,
+    /// "New window" asked an app for a window, which has not come yet.
+    pub new_window: Option<NewWindowWait>,
+    /// Owned app panes whose app says they have unsaved changes (`WindowEdited`).
+    pub edited: Vec<PaneId>,
     /// The command palette, while it is open.
     pub palette: Option<Palette>,
     /// The accessibility inspector, while it is open.
@@ -3425,6 +3504,8 @@ impl Default for Model {
             session_day: 0,
             now: 0,
             picker: None,
+            new_window: None,
+            edited: Vec::new(),
             palette: None,
             inspector: None,
             palette_over_talk: false,
@@ -3816,6 +3897,20 @@ impl Model {
                 if self.confirm.as_ref().is_some_and(|confirm| confirm.unlist.is_some()) =>
             {
                 Some(apps::USERS_ALONE)
+            }
+            // "New window" presses in another app (a menu item, an Apple Event): the user's alone.
+            Action::PickerChoose { index } if self.chooses_new_window(*index) => Some(crate::new_window::PICK_USERS),
+            // Only the shell says a window came, or what its app says of it.
+            Action::NewWindowCame { .. } | Action::NewWindowFailed { .. } | Action::WindowEdited { .. }
+                if origin == Origin::Socket =>
+            {
+                Some(crate::new_window::SHELLS_ALONE)
+            }
+            // So is "Close <title>?": its unsaved changes are the user's to lose.
+            Action::QuitConfirm | Action::QuitCancel
+                if self.confirm.as_ref().is_some_and(|confirm| confirm.edited.is_some()) =>
+            {
+                Some(crate::new_window::USERS_ALONE)
             }
             // So is "Close this workspace?": only the user closes a temporary one.
             Action::QuitConfirm | Action::QuitCancel
@@ -4541,6 +4636,8 @@ impl Model {
                 None if confirm.later.is_some() => later_works,
                 // "Paste 4 lines?" goes with its pane.
                 None if let Some(ask) = confirm.paste => panes.iter().any(|p| p.id == ask.pane),
+                // "Close <title>?" goes with its pane, or once nothing in it is unsaved.
+                None if let Some(pane) = confirm.edited => self.edited.contains(&pane),
                 // "Unlist this repository?" goes once it is not listed.
                 None if let Some(path) = &confirm.unlist => self.repos.iter().any(|r| r.path == *path),
                 // "Close this workspace?" goes once nothing in it runs, or it is not on the row to close.
@@ -4587,7 +4684,7 @@ impl Model {
             // A repository a live task works in: asked first (the trash is one hover away).
             Action::RepoRemove { path } if self.repo_worked_in(&path) && self.repo_dirs.to_remove(&path).is_ok() => {
                 self.leave(effects);
-                self.confirm = Some(Confirm { running: Vec::new(), dismiss: None, paste: None, unlist: Some(path), close: None, later: None });
+                self.confirm = Some(Confirm { running: Vec::new(), dismiss: None, paste: None, unlist: Some(path), close: None, later: None, edited: None });
             }
             Action::RepoRemove { path } => self.repo_remove(&path, effects),
             Action::RepoFold { path, fold } => self.repo_fold(&path, fold),
@@ -4672,6 +4769,7 @@ impl Model {
                 self.retry_moves(effects);
                 self.undo_offer = self.undo_offer.filter(|offer| offer.until > now);
                 self.clip = self.clip.take().filter(|clip| clip.shows(now));
+                self.new_window_late(now, effects);
                 let alerts = self.calendar.tick(now);
                 effects.extend(alerts.into_iter().map(|n| Effect::MeetingAlert { title: n.title, started: n.started }));
             }
@@ -4735,7 +4833,7 @@ impl Model {
                 let beside = beside.filter(|pane| !self.in_closing(*pane));
                 self.next_id += 1;
                 let id = self.next_id;
-                self.panes.push(Pane { id, kind, cwd: None, fit: None });
+                self.panes.push(Pane { id, kind, cwd: None, fit: None, owned: false });
                 // The pane joins the tab that holds `beside`, even if that tab is in the background.
                 let active = self.active;
                 let parked = self.tabs.iter_mut().enumerate().find(|(i, tab)| {
@@ -4753,8 +4851,14 @@ impl Model {
                 effects.push(Effect::Opened(id));
             }
             Action::Close { pane } => {
-                if let Some(id) = pane.or(self.focused) {
-                    self.close_pane(id, effects);
+                // The user's close of an owned window with unsaved changes asks first.
+                match pane.or(self.focused) {
+                    Some(id) if self.by_user && self.edited.contains(&id) => {
+                        self.leave(effects);
+                        self.confirm = Some(Confirm { edited: Some(id), ..Confirm::default() });
+                    }
+                    Some(id) => self.close_pane(id, effects),
+                    None => {}
                 }
             }
             Action::NewTab => {
@@ -5328,7 +5432,16 @@ impl Model {
                     picker.selected = same.unwrap_or(picker.selected.min(rows.len().saturating_sub(1)));
                 }
             }
-            Action::PickerWindows { app, windows } => self.picker_windows(app, windows),
+            Action::PickerWindows { app, bundle, menu_item, windows } => {
+                self.picker_windows(app, bundle, menu_item, windows)
+            }
+            Action::NewWindowFailed { text } => {
+                if self.new_window.take().is_some() {
+                    effects.push(Effect::Failed { text });
+                }
+            }
+            Action::NewWindowCame { kind } => self.new_window_came(kind, effects),
+            Action::WindowEdited { pane, edited } => self.window_edited(pane, edited),
             Action::PickerQuery { query } => {
                 if let Some(picker) = &mut self.picker {
                     picker.query = Field::new(&query, MAX_FILTER);
@@ -5375,6 +5488,9 @@ impl Model {
                         self.picker = Some(picker);
                     }
                     Some(PickItem::Window { app, window, .. }) => self.pick_window(&picker, app, window, effects),
+                    Some(PickItem::NewWindow { app, bundle, menu_item }) => {
+                        self.pick_new_window(&picker, app, bundle, menu_item, effects)
+                    }
                     // The shell asks which file (the open panel), then sends `OpenFile` as the user's.
                     Some(PickItem::File) => {
                         effects.push(Effect::ChooseFile { axis: picker.axis, new_tab: picker.new_tab })
@@ -5646,14 +5762,18 @@ impl Model {
                     || self
                         .confirm
                         .as_ref()
-                        .is_some_and(|confirm| confirm.dismiss.is_none() && confirm.paste.is_none() && confirm.unlist.is_none() && confirm.later.is_none()) =>
+                        .is_some_and(|confirm| {
+                            let other = confirm.dismiss.is_some() || confirm.paste.is_some() || confirm.unlist.is_some();
+                            // "Close <title>?" gives way to the quit question, which asks about what runs.
+                            !other && confirm.later.is_none() && confirm.edited.is_none()
+                        }) =>
             {
                 effects.push(Effect::Quit)
             }
             Action::QuitAsked { running } => {
                 // The question is ottospace's own UI: a live window would cover it.
                 self.leave(effects);
-                self.confirm = Some(Confirm { running, dismiss: None, paste: None, unlist: None, close: None, later: None });
+                self.confirm = Some(Confirm { running, dismiss: None, paste: None, unlist: None, close: None, later: None, edited: None });
             }
             // Yes to "Paste 4 lines?": into its pane, if that is still a terminal.
             Action::QuitConfirm if let Some(ask) = self.confirm.as_ref().and_then(|confirm| confirm.paste) => {
@@ -5671,6 +5791,7 @@ impl Model {
                             unlist: None,
                             close: None,
                             later: None,
+                            edited: None,
                         })
                     }
                     false => self.pasted(pane, amount, effects),
@@ -5690,6 +5811,11 @@ impl Model {
             Action::QuitConfirm if let Some((id, _)) = self.confirm.as_ref().and_then(|confirm| confirm.later.clone()) => {
                 self.confirm = None;
                 self.later_confirmed(id, effects);
+            }
+            // Yes to "Close <title>?": the pane closes, and its window with it.
+            Action::QuitConfirm if let Some(pane) = self.confirm.as_ref().and_then(|confirm| confirm.edited) => {
+                self.confirm = None;
+                self.close_pane(pane, effects);
             }
             // Yes to "Unlist this repository?".
             Action::QuitConfirm if let Some(path) = self.confirm.as_ref().and_then(|confirm| confirm.unlist.clone()) => {
@@ -7252,6 +7378,7 @@ impl Model {
             || self.workbooks.due(now)
             || self.finish.offer.as_ref().is_some_and(|offer| offer.until <= now)
             || self.calendar.due(now)
+            || self.new_window.as_ref().is_some_and(|wait| wait.since + crate::new_window::WAIT_MS <= now)
     }
 
     /// When `due` turns true next, but for the calendar's alerts: the shell looks at those on its
@@ -7260,7 +7387,8 @@ impl Model {
         let offer = self.undo_offer.as_ref().map(|offer| offer.until);
         let clip = self.clip.as_ref().map(|clip| clip.at.saturating_add(crate::clip::NOTICE_MS));
         let done = self.finish.offer.as_ref().map(|offer| offer.until);
-        [self.tasks.next_due(), offer, clip, self.workbooks.next_due(), done].into_iter().flatten().min()
+        let window = self.new_window.as_ref().map(|wait| wait.since + crate::new_window::WAIT_MS);
+        [self.tasks.next_due(), offer, clip, self.workbooks.next_due(), done, window].into_iter().flatten().min()
     }
 
     /// Everything the marks and the workbooks need, each once: what the shell looks for on
@@ -7311,6 +7439,7 @@ impl Model {
                 unlist: None,
                 close: None,
                 later: None,
+                edited: None,
             });
             return;
         }
@@ -8693,6 +8822,10 @@ impl Model {
             self.listen.lost = None;
         }
         self.slots.remove(&id);
+        self.edited.retain(|pane| *pane != id);
+        if let (true, Kind::App { window, .. }) = (closed.owned, &closed.kind) {
+            effects.push(Effect::CloseWindow { pane: id, window: *window });
+        }
         effects.push(Effect::Closed(closed));
     }
 
@@ -8703,7 +8836,7 @@ impl Model {
             Some(root) => root.insert(beside, id, axis),
             None => Node::Leaf(id),
         });
-        self.panes.push(Pane { id, kind, cwd: None, fit: None });
+        self.panes.push(Pane { id, kind, cwd: None, fit: None, owned: false });
         self.focused = Some(id);
         id
     }
@@ -9046,6 +9179,9 @@ mod tests {
         Action::CloseTabAsked { .. },
         Action::PickerQuery { .. },
         Action::PickerWindows { .. },
+        Action::NewWindowCame { .. },
+        Action::NewWindowFailed { .. },
+        Action::WindowEdited { .. },
         Action::SetInstalled { .. },
         Action::PickerMove { .. },
         Action::PickerChoose { .. },
@@ -9349,7 +9485,10 @@ mod tests {
             Action::CloseTab { index: None },
             Action::CloseTabAsked { index: None, running: Vec::new() },
             Action::PickerQuery { query: text() },
-            Action::PickerWindows { app: text(), windows: Vec::new() },
+            Action::PickerWindows { app: text(), bundle: None, menu_item: false, windows: Vec::new() },
+            Action::NewWindowCame { kind: Kind::Empty },
+            Action::NewWindowFailed { text: text() },
+            Action::WindowEdited { pane: 1, edited: true },
             Action::SetInstalled { apps: Vec::new(), running: Vec::new() },
             Action::PickerMove { delta: 1 },
             Action::PickerChoose { index: None },
@@ -9934,6 +10073,11 @@ mod tests {
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
                     Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
+                    Action::NewWindowCame { .. } | Action::NewWindowFailed { .. } | Action::WindowEdited { .. }
+                        if origin == Origin::Socket =>
+                    {
+                        Some(crate::new_window::SHELLS_ALONE)
+                    }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::TalkKeys { on: true } if m.talk.as_ref().is_some_and(|t| !t.open) => {
@@ -10125,7 +10269,7 @@ mod tests {
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         let effects = m.update(Action::Close { pane: None });
-        assert_eq!(effects, [Effect::Closed(Pane { id: 2, kind: Kind::Empty, cwd: None, fit: None })]);
+        assert_eq!(effects, [Effect::Closed(Pane { id: 2, kind: Kind::Empty, cwd: None, fit: None, owned: false })]);
         assert_eq!(m.focused, Some(1));
         m.update(Action::Close { pane: None });
         assert_eq!((m.layout.is_none(), m.focused), (true, None));
@@ -10264,7 +10408,7 @@ mod tests {
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         picker(&mut m);
         assert_eq!(m.update(Action::PickerChoose { index: None }), [Effect::Opened(1)]);
-        assert_eq!(m.panes, [Pane { id: 1, kind: Kind::Terminal, cwd: None, fit: None }]);
+        assert_eq!(m.panes, [Pane { id: 1, kind: Kind::Terminal, cwd: None, fit: None, owned: false }]);
     }
 
     #[test]
@@ -15336,7 +15480,7 @@ mod tests {
         term(&mut m);
         // Close the background tab: the active tab is untouched.
         let effects = m.update(Action::CloseTab { index: Some(0) });
-        assert_eq!(effects, [Effect::Closed(Pane { id: 1, kind: Kind::Terminal, cwd: None, fit: None })]);
+        assert_eq!(effects, [Effect::Closed(Pane { id: 1, kind: Kind::Terminal, cwd: None, fit: None, owned: false })]);
         assert_eq!((m.tabs.len(), m.active, m.focused), (2, 0, Some(3)));
         // Close the last tab: its panes go, and Home is on show.
         assert_eq!(m.update(Action::CloseTab { index: None }).len(), 2);
@@ -15765,8 +15909,8 @@ mod tests {
         m.update(Action::OpenPicker { axis: Right, new_tab: true, items });
         assert_eq!(m.update(Action::PickerChoose { index: None }), [Effect::PickWindows { app: "Slack".into() }]);
         let windows = vec![PickWindow { window: 7, title: "general".into() }];
-        m.update(Action::PickerWindows { app: "Slack".into(), windows });
-        let effects = m.update(Action::PickerChoose { index: None });
+        m.update(Action::PickerWindows { app: "Slack".into(), bundle: None, menu_item: true, windows });
+        let effects = m.update(Action::PickerChoose { index: Some(1) });
         assert_eq!(effects, [Effect::HostPicked { app: "Slack".into(), window: 7, axis: Right, new_tab: true }]);
         // No tab yet: if hosting fails, nothing is left behind.
         assert_eq!(m.tabs.len(), 2);
@@ -15864,7 +16008,7 @@ mod tests {
         // e.g. a hosted window closed: its pane goes, visual mode stays on its own terminal.
         assert_eq!(
             m.update(Action::Close { pane: Some(1) }),
-            [Effect::Closed(Pane { id: 1, kind: Kind::Terminal, cwd: None, fit: None })]
+            [Effect::Closed(Pane { id: 1, kind: Kind::Terminal, cwd: None, fit: None, owned: false })]
         );
         assert_eq!(m.mode(), Mode::Visual);
         // The visual terminal's shell exited.
@@ -15924,7 +16068,8 @@ mod tests {
                 paste: None,
                 unlist: None,
                 close: None,
-                later: None
+                later: None,
+                edited: None
             })
         );
         assert_eq!(m.update(Action::QuitConfirm), [Effect::Quit]);
@@ -16078,7 +16223,8 @@ mod tests {
                 paste: None,
                 unlist: None,
                 close: None,
-                later: None
+                later: None,
+                edited: None
             })
         );
         // Nothing left to ask about: no question, and no quit either.
@@ -16184,6 +16330,11 @@ mod tests {
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
                     Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
+                    Action::NewWindowCame { .. } | Action::NewWindowFailed { .. } | Action::WindowEdited { .. }
+                        if origin == Origin::Socket =>
+                    {
+                        Some(crate::new_window::SHELLS_ALONE)
+                    }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::TalkKeys { on: true } if m.talk.as_ref().is_some_and(|t| !t.open) => {
@@ -16240,7 +16391,8 @@ mod tests {
                 paste: None,
                 unlist: None,
                 close: None,
-                later: None
+                later: None,
+                edited: None
             })
         );
         // A client may not take the keyboard from under it, nor ask again as the user's yes.
@@ -16281,6 +16433,7 @@ mod tests {
             unlist: None,
             close: None,
             later: None,
+            edited: None,
         };
         assert_eq!((one.title().as_str(), one.lines()), ("1 terminal is running", vec!["pane 4".to_string()]));
         let job = Confirm {
@@ -16290,6 +16443,7 @@ mod tests {
             unlist: None,
             close: None,
             later: None,
+            edited: None,
         };
         assert_eq!(job.lines(), ["pane 2 · sleep (background)"]);
         let seven = Confirm {
@@ -16299,6 +16453,7 @@ mod tests {
             unlist: None,
             close: None,
             later: None,
+            edited: None,
         };
         assert_eq!(seven.title(), "7 terminals are running");
         let lines = seven.lines();

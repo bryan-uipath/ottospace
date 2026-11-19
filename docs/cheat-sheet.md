@@ -19,7 +19,7 @@ ottospace            # opens on the Repos list
 | I want to | Press |
 |---|---|
 | Split with a new terminal | ⌘D right · ⌘⇧D down |
-| Choose what goes in a new pane (terminal, file or app) | ⌘E (right) or ⌘⇧E (below), type to filter, ↵. Typing also offers installed apps that are not running. A running app then lists its windows: pick one |
+| Choose what goes in a new pane (terminal, file or app) | ⌘E (right) or ⌘⇧E (below), type to filter, ↵. Typing also offers installed apps that are not running. A running app then lists New window (closes with its pane) and its windows: pick one |
 | Edit the picker's filter or the new-task line | As any Mac text field: ⌥←/→ words, ⌘←/→ line, ⇧ selects, ⌘A, ⌘C/⌘X/⌘V, ⌘Z/⇧⌘Z, ⌥⌫ a word, ⌘⌫ the line; click, drag, double click |
 | Move between panes | ⌘⌥ arrows or ⌘⌥ H J K L · ⌘] ⌘[ cycle |
 | Move to the rails and back | The keys of the row above, on past the panes: left to the section list, then the rail; right to the conversation. On the rail ↑↓ move, ↵ opens, Esc goes back |
@@ -72,7 +72,7 @@ Without it, ⌘E puts an app in a pane.
 
 | I want to | Do |
 |---|---|
-| Put a running app's window in a pane | Apps, click the app (⇧-click: split down). Or ⌘E, pick it, then its window |
+| Put a running app's window in a pane | Apps, click the app (⇧-click: split down). Or ⌘E, pick it, then its window or New window |
 | Start an app that is not running | Apps, click it under "Not running" (pinned apps, then the Dock's) or under "All apps". Or ⌘E, type its name, ↵ |
 | Keep an app at the top of that list | Hover its row, Pin. Or ⌘⌃E on Apps, then `p` (again unpins). It is written to `apps` in the settings |
 | Stop a Dock app being suggested | Hover its row, Hide. Or ⌘⌃E, then `x`. Undo on the line at the top (six seconds), or `u` |

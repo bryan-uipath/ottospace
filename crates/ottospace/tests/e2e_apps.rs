@@ -2801,3 +2801,44 @@ fn a_parked_panes_picture_is_its_window_pixel_for_pixel() {
     );
     assert!(same >= 0.98, "the picture is the window's pixels: {:.1}% within 8 levels", same * 100.0);
 }
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn new_window_hosts_an_owned_window_that_closes_with_its_pane_and_asks_if_unsaved() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-new", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = otto_for(&canary, "otto-new", &[]);
+    let windows = || canary.call(json!({"cmd": "state"}))["windows"].as_array().map_or(0, Vec::len);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys, "as": "user"}));
+    // ⌘E, the canary: "New window" first (it has a "New Window" menu item), then its window.
+    // New window presses that item.
+    otto.call(json!({"cmd": "picker"}));
+    otto.call(json!({"cmd": "picker_query", "query": CANARY}));
+    let reply = otto.call(json!({"cmd": "picker_choose"}));
+    assert_eq!(
+        (reply["picker_rows"][0]["type"].as_str(), reply["picker_rows"][1]["type"].as_str()),
+        (Some("new_window"), Some("window")),
+        "{reply}"
+    );
+    let reply = key("enter");
+    assert_eq!(reply["counts"]["new_windows_menu_item"].as_u64(), Some(1), "{reply}");
+    let owned = || {
+        let panes = state()["state"]["panes"].as_array().cloned().unwrap_or_default();
+        panes.iter().find(|pane| pane["owned"] == true).and_then(|pane| pane["id"].as_u64())
+    };
+    let pane = wait_for("the new window's pane, owned", owned);
+    assert_eq!((windows(), state()["state"]["new_window"].clone()), (2, Value::Null));
+    // Its app says it has unsaved changes: the user's close asks first, and Esc keeps it.
+    canary.call(json!({"cmd": "edited", "index": 1, "on": true}));
+    wait_for("its unsaved changes read", || (state()["state"]["edited"] == json!([pane])).then_some(()));
+    let reply = key("cmd-w");
+    assert_eq!(reply["state"]["confirm"]["edited"].as_u64(), Some(pane), "{reply}");
+    let reply = key("escape");
+    assert_eq!((reply["state"]["confirm"].clone(), owned()), (Value::Null, Some(pane)));
+    // Yes: the pane closes and the window with it. The canary's first window stays open.
+    key("cmd-w");
+    key("enter");
+    wait_for("the owned window closed", || (windows() == 1).then_some(()));
+    assert_eq!(owned(), None);
+}

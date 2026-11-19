@@ -861,6 +861,11 @@ struct Workspace {
     file_prompts: u32,
     /// Windows the picker's second step asked to host (`Effect::HostPicked`).
     window_picks: u32,
+    /// How often "New window" asked by each kind of recipe (`Effect::NewWindow`): open, tell, the
+    /// "New Window" menu item.
+    new_window_asks: [u32; 3],
+    /// The app "New window" waits for, with the windows it had before.
+    asked: Option<pick::Asked>,
     /// Each terminal's header, read from its processes a few times a second: `app-api · cargo test`.
     titles: HashMap<PaneId, String>,
     /// The right drawer: each task's agent, and where its conversation was drawn.
@@ -1306,7 +1311,9 @@ impl Workspace {
                     }
                     this.with_origin(Origin::System, |this| {
                         if ticks.every(30, 0) {
+                            this.host_new_window(window, cx);
                             this.adopt_new_windows(window, cx);
+                            this.read_edited(window, cx);
                             this.drop_closed(window, cx);
                             this.follow_front_app(window, cx);
                             this.host_launched(window, cx);
@@ -1466,6 +1473,8 @@ impl Workspace {
             viewers: HashMap::new(),
             file_prompts: 0,
             window_picks: 0,
+            new_window_asks: [0; 3],
+            asked: None,
             titles: HashMap::new(),
             drawer: talk::Drawer::default(),
             cell: terminal::cell_size(window),
@@ -1673,8 +1682,15 @@ impl Workspace {
         }
         // The time it happens at: a task done now is done now, not at the last read.
         let now = now_ms();
-        if now.saturating_sub(self.model.now()) >= 1_000 && !matches!(action, Action::Tick { .. }) {
+        // "New window" waits from the moment it is picked, not from the last read.
+        let picks_new = matches!(action, Action::PickerChoose { index } if self.model.chooses_new_window(index));
+        let stale = now.saturating_sub(self.model.now()) >= 1_000 || picks_new;
+        if stale && !matches!(action, Action::Tick { .. }) {
             self.dispatch(Action::Tick { now }, Origin::System, window, cx);
+        }
+        // The user's close of an owned window: whether it has unsaved changes, read now.
+        if let (Origin::User, Action::Close { pane }) = (origin, &action) {
+            self.edited_now(pane.or(self.model.focused), window, cx);
         }
         // Opening the Repos section reads the list again: repositories come and go on disk.
         let opens_repos = self.model.sidebar != Some(Section::Repos);
@@ -1881,6 +1897,11 @@ impl Workspace {
                     let _ = self.open_app(name, *axis, *new_tab, window, cx);
                 }
                 Effect::PickWindows { app } => self.pick_windows(app, window, cx),
+                Effect::NewWindow { app, bundle, recipe } => {
+                    self.new_window(app, bundle.as_deref(), *recipe, window, cx)
+                }
+                Effect::CloseWindow { pane, window: id } => self.close_window(*pane, *id),
+                Effect::Failed { text } => self.broke(text.clone()),
                 Effect::HostPicked { app, window: id, axis, new_tab } => {
                     self.host_picked(app, *id, *axis, *new_tab, window, cx)
                 }
@@ -3641,6 +3662,11 @@ impl Workspace {
                 "file_prompts": self.file_prompts,
                 // Windows the picker's second step asked to host (a test run hosts none).
                 "window_picks": self.window_picks,
+                // "New window" asks by recipe: `open` with arguments, `tell` an Apple Event, its
+                // "New Window" menu item (a test run asks no app).
+                "new_windows_open": self.new_window_asks[0],
+                "new_windows_tell": self.new_window_asks[1],
+                "new_windows_menu_item": self.new_window_asks[2],
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
                 // Frames drawn while the calendar band's loading bar slides: none once a read lands.
@@ -4054,6 +4080,10 @@ impl Workspace {
     fn adopt_new_windows(&mut self, window: &Window, cx: &mut Context<Self>) {
         let mut fresh = Vec::new();
         for (pid, seen) in &mut self.known {
+            // "New window" hosts the window it asked for (`host_new_window`).
+            if self.asked.as_ref().is_some_and(|asked| asked.of(*pid)) {
+                continue;
+            }
             for window in ax::Window::all_of(*pid) {
                 // A toast or popover is looked at again next time: it may become a window.
                 if let Some(id) = window.id()
@@ -4801,7 +4831,7 @@ impl Workspace {
                 PickItem::File => ("FILE", theme::PRIMARY),
                 PickItem::App { .. } => ("APP", theme::APP),
                 PickItem::Closed { .. } => ("APP", theme::MUTED),
-                PickItem::Sound { .. } | PickItem::Window { .. } => ("APP", theme::APP),
+                PickItem::Sound { .. } | PickItem::Window { .. } | PickItem::NewWindow { .. } => ("APP", theme::APP),
             };
             dialog::filter_row(("pick", i), i == selected)
                 .child(match item {
