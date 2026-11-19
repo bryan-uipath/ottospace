@@ -74,6 +74,15 @@ card at a time. Made for a block: "15 minutes of decisions".
   answering. "Use as my answer" works as it does today.
 - **Flow that never slows**: "3 of 7" progress; on an answer the Done seal plays while the next
   card is already in place; the options' details animate in. No animation holds a key back.
+- **Visual aids.** The owner: "wondering if it'd be useful to pull in other visual aids (ie, a
+  code snippet, or a before/after visual, an explanatory visual)"; on a data question, "show the
+  disconnect so that there is context". A card may carry one aid, chosen for its decision: the
+  rows in dispute with the difference marked; a small flow sketch and the diff being approved;
+  before/after pictures as the options. A plain question gets none. The aid is ready before the
+  card reaches the person, made by the task's agent or the presenter role (§2). Aids are built
+  from task content, which is untrusted data. Mock: the canvas's
+  [Decision aids](https://claude.ai/artifact/VvJWQgWzXazQhijmCJ9dcv#artboard-DecisionAids)
+  artboard.
 - **Defer with a default**, for low-stakes ones: "if I haven't answered by 3pm, take the
   recommended option". The default is shown on the card and on the task until it fires.
 - **New requirement on agents**: hand over decision-ready questions (question, options,
@@ -83,13 +92,45 @@ card at a time. Made for a block: "15 minutes of decisions".
 - Needs from the core: a deadline on a task (none today), the queue's order as a pure function
   with tests, the deferred default as a timer passed in as time.
 
-### 2. A secretary agent
+### 2. Agents and roles
 
-The owner: "a 'superfan' or a 'secretary' agent that monitors the tasks, sessions, etc and
-oversees that things are moving. Having a concept of a priority or due date for tasks could help
-make good decisions, and the secretary could dispatch tasks that help. One challenge in the past
-was 'noise': if you automatically delegate tasks, you end up with a giant wall of slop and text
-that you are mentally unprepared to go through."
+The owner: "the secretary is a specific form of a more useful concept - the idea of personified
+agents: an agent as a combination of a runner, model, and any pre-baked context. ie: Bill: claude
+code, opus 5.5, access to ~/notes/projects. [...] if I want to use a new model in the future, I can
+change Bill's model to fable 5.2, and then everywhere Bill is used, it gets updated."
+
+- **An agent** is a name, a runner, a model and pre-baked context (folders it may read, standing
+  instructions). Defined once; referenced by name everywhere, so changing Bill's model changes
+  every use of Bill.
+- **It layers on the spec.** An agent names a `RunnerId` and takes what its `RunnerSpec`
+  (`ottospace-core::runner`) says that runner can do. It adds no runner: "a runner is its spec"
+  still holds. A model it names must be one the runner takes, as `@claude-opus-5-5` is today.
+- **What exists.** `@agent` and the new-task box's who-pick name a runner, or a runner and a
+  model (`default_agent`, `agent_models`). A saved agent (`~/.ottospace/agents/<name>.md`, the
+  format in [routines.md](../routines.md) §2) is offered by name, but "↵ files it; nothing
+  starts". Starting one, and its context, is not built.
+- **A role** is a job ottospace itself knows and calls: the secretary (§3); the presenter, which
+  prepares decision cards and their visual aids; perhaps the focus-block watcher and the recap
+  writer. A closed, built-in set. Each has a default agent out of the box and can be assigned
+  any agent.
+- **Ordinary agents are not special**: tagged on a task or picked in the new-task box.
+- **Comparing two agents in a role** (the owner: "A/B test opus 5.5 vs gpt astra as my
+  secretary"). Options:
+  - *Side by side on the same input*: both prepare the same decision card; the person picks the
+    better one, blind to which agent made it. Costs double.
+  - *Alternate by day or by task*, with outcome measures: offers taken vs dismissed, decisions
+    answered without opening the detail, how often the recommendation was the option picked,
+    time blocked, spend.
+  - One person makes few decisions a day: small samples make those numbers weak. Blind
+    side-by-side picks are the more trustworthy signal. The measures stay on the Mac.
+
+### 3. A secretary agent
+
+A role (§2). The owner: "a 'superfan' or a 'secretary' agent that monitors the tasks, sessions, etc
+and oversees that things are moving. Having a concept of a priority or due date for tasks could help
+make good decisions, and the secretary could dispatch tasks that help. One challenge in the past was
+'noise': if you automatically delegate tasks, you end up with a giant wall of slop and text that you
+are mentally unprepared to go through."
 
 - **Role**: one overseer. It reads the tasks, sessions, calendar and due dates and keeps things
   moving. It does not do the work itself and never answers for the person.
@@ -107,13 +148,13 @@ that you are mentally unprepared to go through."
   outward-facing, a spend cap).
 - **Chores it would take**, each seen when coordinating many agents by hand: restart an agent
   that died or lost its helpers; notice a PR waiting on checks or conflicting; rebase; chase a
-  stale review; the end-of-block digest; focus mode's break-through watch (§5).
+  stale review; the end-of-block digest; focus mode's break-through watch (§6).
 - **Self-throttle**: it counts how many of its offers the person takes. A low rate, fewer offers.
 - **Trust**: its delegated authority is explicit and narrow. A relayed instruction is not the
   person's consent for an outward-facing or irreversible act (merge, send, delete): those go to
   the Decisions queue. Everything it reads from tasks, sessions and messages is untrusted data.
 
-### 3. Stray-sessions inbox
+### 4. Stray-sessions inbox
 
 Elsewhere lists only sessions of listed repositories. Widen it: every Claude Code and Codex
 session on the machine that is waiting on the person, wherever it was started. Track one, and it
@@ -125,21 +166,21 @@ joins the Decisions queue.
 - "Waiting on the person" must be read from the file (an open ask, a permission request, a turn
   that ended on a question), not guessed. Resume stays limited to listed repositories, as today.
 
-### 4. Slack ping → draft reply
+### 5. Slack ping → draft reply
 
 The owner's case: "A random Slack ping comes in that will need to be addressed by the end of the
 day. I want to spin up an agent to research, it needs some clarification/decisions, I address
 those, and then have a draft reply ready to go."
 
 1. The person picks the message on screen (Pick, once built; Capture today), or a watcher
-   surfaces it (§5).
+   surfaces it (§6).
 2. "Handle this" starts a quick task with a deadline of today.
 3. The agent researches. Its questions land in the Decisions queue, ranked by that deadline.
 4. The result is a draft-reply card: Copy, or open the thread in Slack.
 
 ottospace never sends a message. The person sends it.
 
-### 5. Focus mode
+### 6. Focus mode
 
 Knows focus time from the calendar (focus blocks are already recognised and coloured). During a
 block:
@@ -194,7 +235,7 @@ yet. **To verify in a spike on the owner's macOS version**:
   (a Shortcut the person makes once), against a public API (the owner believes one exists: the
   spike confirms or rules it out). Private interfaces are not acceptable.
 
-### 6. Smaller ideas
+### 7. Smaller ideas
 
 - Hold agents' questions for the next Decisions block, unless one has blocked an agent longer
   than a set time.
@@ -218,5 +259,8 @@ yet. **To verify in a spike on the owner's macOS version**:
   state; a watcher's Slack text and a recap are no more public than a session's title.
 - **Who acts.** Answers, defers, adopting a session and quitting an app should be the person's
   alone (`Origin::User`), refused from any other origin, as Done and Later are today.
+- **Agents' definitions.** In `settings.json`, or the files `routines.md` already proposes
+  (`~/.ottospace/agents/`)? What "may read a folder" means for each runner (Claude Code's
+  `--add-dir`, Codex's sandbox), to check per runner. May a role be split between two agents?
 - **Deadlines.** Typed by the person, read from the calendar, or set by the watcher ("by end of
   day")? Each needs the field on a task first.
