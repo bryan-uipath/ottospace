@@ -3373,6 +3373,7 @@ impl Run {
             .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty() && !m.compose_theirs)));
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
+        let armed_before = m.listen.on.as_ref().is_some_and(|on| on.session.armed.is_some());
         let listen_pane = m.listen.on.as_ref().and_then(|on| on.source.pane());
         let transcribe_picker = m.picker.as_ref().is_some_and(|picker| picker.transcribe);
         let filled_before = m.fill_display;
@@ -4365,8 +4366,7 @@ impl Run {
                         match record {
                             // Or a session's: its first words after the one before ended.
                             crate::listen::Record::Begin(_) => {
-                                let next = matches!(action, Action::ListenHeard { .. }) && !opens;
-                                ensure!(opens || next, "{action:?} began a file with no streams")
+                                ensure!(opens || armed_before, "{action:?} began a file with no streams")
                             }
                             // A session's end closes its file alone: the streams go on.
                             crate::listen::Record::End { .. } if matches!(action, Action::ListenWindows { .. }) => {

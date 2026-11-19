@@ -237,8 +237,13 @@ pub struct Session {
 impl Session {
     /// The windows the app has now, at `at`: when they went, if that ends the session.
     pub fn windows(&mut self, windows: &[u32], at: u64) -> Option<u64> {
-        let picked = self.picked;
-        let base = self.base.get_or_insert_with(|| windows.iter().copied().filter(|w| Some(*w) != picked).collect());
+        // The first look: every window but the one picked. With none picked, or the one picked
+        // not found, none: then each window the app has is the meeting's.
+        let picked = self.picked.filter(|picked| windows.contains(picked));
+        let base = self.base.get_or_insert_with(|| match picked {
+            Some(picked) => windows.iter().copied().filter(|w| *w != picked).collect(),
+            None => Vec::new(),
+        });
         let there = windows.iter().any(|w| !base.contains(w));
         if there || self.armed.is_some() {
             self.gone_since = None;
@@ -622,8 +627,16 @@ mod tests {
     #[test]
     fn with_no_window_picked_a_session_ends_when_the_app_has_none() {
         let mut session = Session::default();
-        assert_eq!(session.windows(&[7], 0), None);
-        assert_eq!(session.windows(&[7, 8], 10_000), None);
+        for at in [0, 5_000, 10_000, 15_000] {
+            assert_eq!(session.windows(&[7], at), None, "the same window throughout");
+        }
+        assert_eq!(session.windows(&[], 20_000), None);
+        assert_eq!(session.windows(&[], 30_000), Some(20_000));
+        // The window picked not found (an untitled pane window): the same.
+        let mut session = Session { picked: Some(99), ..Session::default() };
+        for at in [0, 5_000, 10_000, 15_000] {
+            assert_eq!(session.windows(&[7, 8], at), None);
+        }
         assert_eq!(session.windows(&[], 20_000), None);
         assert_eq!(session.windows(&[], 30_000), Some(20_000));
     }

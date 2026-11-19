@@ -200,9 +200,8 @@ pub fn sound_apps() -> Vec<ottospace_core::listen::SoundApp> {
         let pid = app.process_id();
         let (titles, window_ids): (Vec<String>, Vec<u32>) = windows
             .iter()
-            .filter(|w| w.is_on_screen() && w.window_layer() == 0)
-            .filter(|w| w.owning_application().is_some_and(|owner| owner.process_id() == pid))
-            .filter_map(|w| Some((w.title().filter(|t| !t.is_empty())?, w.window_id())))
+            .filter(|w| w.is_on_screen() && w.window_layer() == 0 && titled_of(w, pid))
+            .filter_map(|w| Some((w.title()?, w.window_id())))
             .unzip();
         let plays = playing.contains(&pid);
         let shown = windows.iter().any(|w| {
@@ -218,7 +217,14 @@ pub fn sound_apps() -> Vec<ottospace_core::listen::SoundApp> {
     found
 }
 
-/// The ids of `pid`'s titled windows, on screen or not (minimised, parked, another Space): what a
+/// A window of `pid`'s with a title, at any layer: what a session looks for (Zoom's share toolbar
+/// floats). The picker's rows are those of them at layer 0 on screen, so the one picked is found.
+fn titled_of(window: &SCWindow, pid: i32) -> bool {
+    let owned = window.owning_application().is_some_and(|owner| owner.process_id() == pid);
+    owned && window.title().is_some_and(|t| !t.is_empty())
+}
+
+/// The ids of `pid`'s titled windows, at any layer, on screen or not (minimised, parked, another Space): what a
 /// transcript's session is told of its meeting's windows (`Action::ListenWindows`). None if
 /// ScreenCaptureKit could not be asked. Waits on the system: off the main thread.
 pub fn window_ids(pid: i32) -> Option<Vec<u32>> {
@@ -226,8 +232,7 @@ pub fn window_ids(pid: i32) -> Option<Vec<u32>> {
     let ids = content
         .windows()
         .iter()
-        .filter(|w| w.window_layer() == 0 && w.title().is_some_and(|t| !t.is_empty()))
-        .filter(|w| w.owning_application().is_some_and(|owner| owner.process_id() == pid))
+        .filter(|w| titled_of(w, pid))
         .map(|w| w.window_id())
         .collect();
     Some(ids)

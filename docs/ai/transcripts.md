@@ -140,11 +140,15 @@ titles; the shell's alone):
   row, or the source pane's window) is `base`; the meeting's windows are the others. So a
   participant's window or Zoom's share toolbar is the meeting's too, and its home window is not.
 - **Its end**: none of them for 10 s (`WINDOW_GONE`; Zoom swaps its meeting window for the share
-  toolbar). What was being heard is kept, the file ends at the time they went, as on a Stop. The
+  toolbar, which floats: every titled window counts, at any layer). What was being heard is kept,
+  and the file ends at the look that found them gone that long, as on a Stop. A final the recogniser
+  gives later for words before that is the closed file's, and starts no new one. The
   streams go on: no new start, no notice. `base` becomes every window it has then, so the next
   meeting's are those it opens.
 - **The next**: the first words heard begin a new file, with its own header and calendar block at
-  their time, and the drawer shows its lines alone. No words, no file: none is empty.
+  their time, and the drawer shows its lines alone. No words, no file: none is empty. Words still being heard
+  when the user pauses or stops are kept the same way. A next file that cannot be made says why on
+  the status bar.
 - **Nothing heard for 30 minutes** after a session ended (`ARMED_MAX`): the transcript ends, and the
   bar says "Transcript stopped: nothing heard for 30 minutes after the meeting".
 - With no window picked (a test run's terminal pane) a session ends when the app has no window.

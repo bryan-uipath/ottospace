@@ -325,6 +325,11 @@ impl Workspace {
             if let Record::Begin(head) = record {
                 let writer = config::transcripts_dir()
                     .map(|dir| listen_file::begin(&dir, head.clone()).map_err(|why| format!("transcripts_dir: {why}")));
+                // A session's next file (its words follow) that cannot be made: the status bar says
+                // why. The start's own failure ends the start (`listen_begin`).
+                if let Some(Err(why)) = writer.as_ref().filter(|_| records.len() > 1) {
+                    self.error = Some(why.clone());
+                }
                 self.listen_file = writer.map(|writer| File { id: id.into(), writer });
             }
         }
@@ -367,21 +372,14 @@ impl Workspace {
             self.listen_rest().map(|rest| self.model.update(rest.sent_by(Origin::System))).unwrap_or_default();
         let ended = Action::ListenEnded { id, why: listen::Ended::AppQuit, at: now_ms() };
         effects.extend(self.model.update(ended.sent_by(Origin::System)));
-        let writer = self.listen_file.as_ref().map(|file| file.id.clone());
+        // Each write as usual (a session's next file is made here too); then every file that
+        // ended is written to its end before the app goes.
         for effect in &effects {
             if let Effect::ListenWrite { id, records } = effect {
-                // The last write takes the file: then it is finished, not dropped.
-                let last = records.iter().any(|record| matches!(record, Record::End { .. } | Record::Failed));
-                if last && writer.as_deref() == Some(id.as_str()) {
-                    if let Some(File { writer: Ok(writer), .. }) = self.listen_file.take() {
-                        writer.send(records.clone());
-                        writer.finish();
-                    }
-                } else {
-                    self.listen_write(id, records);
-                }
+                self.listen_write(id, records);
             }
         }
+        std::mem::take(&mut self.listen_ending).into_iter().for_each(listen_file::Writer::finish);
     }
 
     /// The streams of `id`: the source pane's app's sound, or in a test run its fixture's lines.
