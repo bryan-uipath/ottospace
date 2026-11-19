@@ -825,4 +825,15 @@ mod tests {
         assert_eq!(code(&json!("sk-secret made up"), "error"), "error");
         assert_eq!(code(&json!({"sk-secret": 1}), "error"), "error");
     }
+
+    #[test]
+    fn an_mcp_call_lights_mcp_whatever_its_server() {
+        for (server, label) in
+            [("github", "github/create_issue"), ("playwright", "playwright/create_issue"), ("a b", "mcp")]
+        {
+            let item = json!({"type": "mcpToolCall", "server": server, "tool": "create_issue", "arguments": {}});
+            let (_, station, got, _) = describe(&item).unwrap();
+            assert_eq!((station, got.as_str()), (Station::Mcp, label), "{server}");
+        }
+    }
 }

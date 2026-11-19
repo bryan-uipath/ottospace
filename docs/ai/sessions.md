@@ -9,7 +9,7 @@ which agent sessions exist, is each active, what tool call runs now and of what 
 lately, errors, sub-agents, the model, and how full the context window is.
 
 Consumers, later: a status marker per pane and repository, and a radial activity view with the
-stations You, Model, Memory, Files, Shell, Network, Browser, Agents, Skills, Hooks. The station
+stations You, Model, Memory, Files, Shell, Network, MCP, Agents, Skills, Hooks. The station
 set and the "names, never content" rule follow the [lot-map](https://github.com/alexeyw/lot-map)
 README (MIT); no code is taken from it.
 
@@ -245,7 +245,7 @@ Records are `{timestamp, type, payload}`. Two generations are on this machine an
 | Compaction | top-level `compacted` | best effort: no token count after; `event_msg/context_compacted` is ignored so one compaction is not counted twice |
 | Errors | `event_msg/error` (`codex_error_info`), `turn_aborted` unless `interrupted` | best effort, one sample. Shown from a table of Codex's error kinds, written from memory of its source and not checked against 0.166; an unlisted kind shows as `error` |
 | Sub-agent start, end | `SubAgentActivity` | best effort, few samples |
-| MCP and web calls | `web_search_call` is read; MCP call records were too rare to map | best effort |
+| MCP and web calls | `web_search_call` is read. An MCP call is a `function_call` in an `mcp__<server>` namespace (the shape `tool_search_output` lists its tools in; no call record seen): MCP, labelled `server/tool` | best effort, no samples |
 
 `~/.codex/state_5.sqlite` has a `threads` table with `cwd`, `rollout_path`, `model` and
 `tokens_used`: an index that would make `sessions` exact and cheap. Not used: it needs a SQLite
