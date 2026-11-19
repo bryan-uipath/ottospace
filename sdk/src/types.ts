@@ -323,7 +323,7 @@ export interface SpaceRow {
   hidden: boolean;
   selected: boolean;
   tabs: number[];
-  /** Its tasks, the most urgent first (needs you, running, later, on hold, done): the badges of its item on the top row. A workspace may hold several. */
+  /** Its tasks, the most urgent first (needs you, running, later, on hold, done). Its item's badges are those not done; with none, `glyph` is `name`. A workspace may hold several. */
   tasks: TaskId[];
   /** The task whose conversation is in front there (the drawer's, the dial's, the agent chip's), or null: it has no task. Only the user changes it. */
   front: TaskId | null;

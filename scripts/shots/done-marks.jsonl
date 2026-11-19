@@ -1,0 +1,16 @@
+# A done task shows only in Tasks' Done: once done, its repository row loses the task's badge and
+# its workspace's item on the top row its badge and title. The workspace stays.
+{"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"plan the week >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.replies","len":1}
+{"cmd":"section","section":"repos"}
+{"click":"talk"}
+{"settle":800}
+{"shot":"before"}
+{"cmd":"key","keys":"cmd-enter","as":"user"}
+{"settle":1500}
+{"shot":"done"}

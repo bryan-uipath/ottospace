@@ -8768,9 +8768,9 @@ impl Model {
         listed.find(|(p, _)| *p == path).map(|(_, name)| name.clone())
     }
 
-    /// The live task working in `path`, the one started last (else filed last): what its row's click selects.
+    /// The task working in `path` that is not done, the one started last (else filed last): its row's badge.
     pub fn repo_task(&self, path: &str) -> Option<TaskId> {
-        let there = self.tasks.list.iter().filter(|task| !task.dismissed && self.task_worktree(task.id) == Some(path));
+        let there = self.tasks.list.iter().filter(|task| task.undone() && self.task_worktree(task.id) == Some(path));
         there.max_by_key(|task| (task.started_at, task.created, task.id)).map(|task| task.id)
     }
 
@@ -8925,7 +8925,9 @@ impl Model {
     /// True if a live task works in one of the checkouts of the repository at `path`.
     fn repo_worked_in(&self, path: &str) -> bool {
         let repo = self.repos.iter().find(|repo| repo.path == path);
-        repo.is_some_and(|repo| repo.checkouts().iter().any(|c| self.repo_task(&c.path).is_some()))
+        let working =
+            |path: &str| self.tasks.list.iter().any(|t| !t.dismissed && self.task_worktree(t.id) == Some(path));
+        repo.is_some_and(|repo| repo.checkouts().iter().any(|c| working(&c.path)))
     }
 
     /// The open pull request of the branch checked out at `path`, by `prs::pick`.
@@ -11551,6 +11553,50 @@ mod tests {
     fn join(m: &mut Model, line: &str) -> Vec<Effect> {
         m.update(Action::OpenCompose { text: line.into() });
         m.update(Action::ComposeEnter)
+    }
+
+    /// The owner: a done task shows only in Tasks' Done group: not as its worktree row's badge,
+    /// nor its workspace's badge, title or colour. The workspace stays; Undo brings them back.
+    #[test]
+    fn a_done_task_leaves_its_repo_row_and_its_workspaces_item_and_undo_brings_them_back() {
+        let mut m = workspace_of_one_task();
+        let of = task_space(1);
+        let shown = |m: &Model| {
+            let item = (m.space_badges(&of), m.space_task(&of), m.glyph(&of), m.space_title(&of));
+            (m.repo_task("/code/app"), item)
+        };
+        assert_eq!(shown(&m), (Some(1), (vec![1], Some(1), Glyph::Tasks, "first".into())));
+        assert_eq!(m.workbook_rows()[0].badge, Some(1));
+        m.update(Action::TaskDone { id: 1 });
+        assert_eq!(m.tasks.get(1).map(|task| task.state), Some(State::Done));
+        // Bound to "Workspace 2": its name again.
+        assert_eq!(shown(&m), (None, (vec![], None, Glyph::Name, "Workspace 2".into())));
+        assert!(m.spaces().iter().any(|space| space.of == of), "the workspace stays");
+        assert_eq!(m.workbook_rows()[0].badge, None);
+        // Its row's click opens the workspace, with the done task neither in front nor on the rail.
+        m.update(Action::RepoClick { path: "/code/app".into(), axis: Right });
+        assert_eq!((m.space(), m.front(&of), m.rail()), (&of, None, vec![]));
+        m.update(Action::DoneUndo);
+        assert_eq!(shown(&m), (Some(1), (vec![1], Some(1), Glyph::Tasks, "first".into())));
+    }
+
+    /// A workspace of no bar workspace: a task joined to it stands for it once its own is done;
+    /// with all done, it is `NO_TASK`.
+    #[test]
+    fn a_tasks_workspace_shows_the_task_not_done_and_with_none_a_plain_name() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::TaskFromLine { line: "first >app".into(), known: Default::default(), open: false });
+        m.update(Action::TaskTalk { id: 1 });
+        let of = task_space(1);
+        assert_eq!((m.space(), m.workbooks.bound_to(1)), (&of, None));
+        join(&mut m, "second");
+        let item = |m: &Model| (m.space_badges(&of), m.space_task(&of), m.space_title(&of));
+        assert_eq!(item(&m), (vec![1, 2], Some(1), "first".into()));
+        m.update(Action::TaskDone { id: 1 });
+        assert_eq!((item(&m), m.repo_task("/code/app")), ((vec![2], Some(2), "second".into()), Some(2)));
+        m.update(Action::TaskDone { id: 2 });
+        assert_eq!((item(&m), m.repo_task("/code/app")), ((vec![], None, spaces::NO_TASK.into()), None));
     }
 
     /// The owner: "a task is always associated with a workspace, but a workspace may have

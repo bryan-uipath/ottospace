@@ -6687,9 +6687,9 @@ impl Workspace {
     /// Top bar, drawn where the system title bar was: tabs on the left, new-tab and split
     /// buttons on the right.
     /// `room`: the points the top row has for its spaces.
-    /// The colour a space is drawn in: its task's, else the accent.
+    /// The colour a space is drawn in: its task's (`Model::space_task`), else the accent.
     fn space_colour(&self, of: &Owner) -> u32 {
-        let task = of.task().and_then(|id| self.model.tasks.get(id));
+        let task = self.model.space_task(of).and_then(|id| self.model.tasks.get(id));
         task.map_or(theme::PRIMARY, |task| theme::identity(task.colour))
     }
 
@@ -6751,7 +6751,7 @@ impl Workspace {
                 }
                 // Its tasks' badges, the most urgent first and on top of the next.
                 (Glyph::Tasks, _) => {
-                    let tasks = self.model.space_tasks(&of);
+                    let tasks = self.model.space_badges(&of);
                     let badges: Vec<Div> = tasks.iter().take(5).filter_map(|id| self.task_badge(*id, 18.)).collect();
                     // Each 11 points right of the one before; drawn last to first, so the first is on top.
                     let width = 18. + 11. * badges.len().saturating_sub(1) as f32;
@@ -6760,7 +6760,8 @@ impl Workspace {
                         placed.map(|(at, badge)| div().absolute().top_0().left(px(11. * at as f32)).child(badge));
                     Some(div().relative().flex_none().w(px(width)).h(px(18.)).children(placed).into_any_element())
                 }
-                (_, Owner::Workbook { .. }) => Some(
+                // A task's workspace whose tasks are all done draws as a workspace: never blank when small.
+                (_, Owner::Workbook { .. }) | (Glyph::Name, Owner::Task { .. }) => Some(
                     svg()
                         .path("icons/workbook.svg")
                         .size(px(14.))

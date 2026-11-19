@@ -370,8 +370,8 @@ impl Workspace {
             let name = self.workbook_name(renaming, row.name.clone(), cx);
             let name = if temporary && !renaming { name.text_color(rgb(theme::MUTED)).italic() } else { name };
             let summary = if temporary { format!("{} · {TEMPORARY_TIP}", row.summary) } else { row.summary.clone() };
-            // Bound to a task: the task's badge, where the dot is.
-            let lead = match row.task.and_then(|task| self.task_badge(task, 16.)) {
+            // Bound to a task not done: the task's badge, where the dot is.
+            let lead = match row.badge.and_then(|task| self.task_badge(task, 16.)) {
                 Some(badge) => badge.flex_none(),
                 None => dot(row.open),
             };

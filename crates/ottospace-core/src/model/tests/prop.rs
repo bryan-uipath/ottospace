@@ -2536,6 +2536,16 @@ fn check(m: &Model) -> Result<(), String> {
     badges.sort_unstable();
     badges.dedup();
     ensure!(badges.len() == count, "two tasks share a badge: {badges:?}");
+    // A done task shows only in Tasks' Done group: on no repository row, as no workspace's badge or title.
+    let undone = |id: &TaskId| m.tasks.get(*id).is_some_and(Task::undone);
+    for path in m.repos.iter().flat_map(Repo::checkouts).map(|checkout| checkout.path) {
+        ensure!(m.repo_task(&path).is_none_or(|id| undone(&id)), "{path}'s row shows a done task");
+    }
+    for of in m.spaces().iter().map(|space| &space.of) {
+        let marked: Vec<TaskId> = m.space_badges(of).into_iter().chain(m.space_task(of)).collect();
+        ensure!(marked.iter().all(undone), "{of:?}'s item shows a done task: {marked:?}");
+        ensure!((m.glyph(of) == Glyph::Tasks) == !m.space_badges(of).is_empty(), "{of:?}'s glyph: {:?}", m.glyph(of));
+    }
     let shown =
         |id: TaskId| m.tab_task() == Some(id) || m.talk.as_ref().is_some_and(|talk| talk.task.task() == Some(id));
     let briefed = |id: TaskId| shown(id) && m.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
