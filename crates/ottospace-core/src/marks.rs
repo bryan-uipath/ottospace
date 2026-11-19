@@ -1085,7 +1085,7 @@ impl Model {
             self.next_id += 1;
             let id = self.next_id;
             ids.push((pane.id, id));
-            self.panes.push(Pane { id, kind: Kind::Empty, cwd: None, fit: None });
+            self.panes.push(Pane { id, kind: Kind::Empty, cwd: None, fit: None, owned: false });
             if matches!(pane.kind, RecordKind::App { .. }) {
                 self.agent.from_record.insert(id);
             }

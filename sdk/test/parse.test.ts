@@ -35,6 +35,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       folded_projects: [],
       open_done: [],
       picker: null,
+      new_window: null,
+      edited: [],
       palette: null,
       inspector: null,
       confirm: null,

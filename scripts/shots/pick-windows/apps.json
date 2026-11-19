@@ -1,5 +1,5 @@
 [
-  {"name": "Lumen", "windows": [
+  {"name": "Lumen", "bundle": "com.google.Chrome", "windows": [
     {"window": 7, "title": "Inbox (12) · Lumen"},
     {"window": 8, "title": "Quarterly plan — Docs"},
     {"window": 9, "title": "Release checklist"}

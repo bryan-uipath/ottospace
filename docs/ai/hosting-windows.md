@@ -122,19 +122,42 @@ by macOS. ottospace does not follow, park, give back or close a pop-up.
 
 ## The picker's second step: which window
 
-Choosing a running app in ⌘E lists its windows (`model/pick.rs`): the shell reads those the
-user's pick may put in a pane (`rules::pickable`), front first: every window but a sheet or
-child window, a helper under 100×100, or one a rule ignores. A pop-up `place` floated (Zoom's
-meeting window, an `AXFloatingWindow`) is listed too, and so is one a `float` rule names: the
-user asked for it. A minimised one is not (its stream would draw nothing). and the core lists them, each with the pane
-that holds it already. Choosing a held one shows its pane; any other is hosted, shared: given
+Choosing a running app in ⌘E lists "New window", then its windows (`model/pick.rs`): the shell
+reads those the user's pick may put in a pane (`rules::pickable`), front first: every window but
+a sheet or child window, a helper under 100×100, or one a rule ignores. A pop-up `place` floated
+(Zoom's meeting window, an `AXFloatingWindow`) is listed too, and so is one a `float` rule names:
+the user asked for it. A minimised one is not (its stream would draw nothing). and the core lists them, each
+with the pane that holds it already. Choosing a held one shows its pane; any other is hosted, shared: given
 back when its pane closes, as before. Titles are drawn, never in the state. A test run lists the
 made-up apps of `OTTOSPACE_PICK_APPS` (a JSON file) and hosts none: `counts.window_picks` counts the asks.
 
-Next slices, not built: "New window" first in that list, an owned window (per-app recipes in
-one table: Chromium `--new-window`, Safari, Finder, VS Code `-n`, terminals, else ⌘N; ~3 s with
-no window and the status bar says so), closed with its pane (asked first when the app reports
-unsaved changes). Later: ⌘⇧T reopens a closed pane; a per-app "always new window" setting.
+"New window" asks the app for a window of its own by its recipe, from one table by bundle id
+(`new_window::RECIPES`): Chromium browsers `open -n -g -b <id> --args --new-window`, VS Code and
+its forks `-n`, Safari, Finder, Terminal and iTerm2 an Apple Event (`osascript`, fixed text; the
+first one asks for Automation permission). An app the table does not name is offered "New
+window" only if a menu of its has an item titled exactly "New Window" (`new_window::MENU_ITEM`,
+English for now; a submenu's counts, File ▸ New ▸ Window), which is pressed over Accessibility
+(the app need not be in front). Never ⌘N by guess: in Notes it makes a note. Only the user's pick asks:
+it presses in another app. One ask at a time: a second while one waits is refused. The shell notes the app's windows first; the first new one that may
+go in a pane is hosted, owned (`Pane::owned`), in the tab it was asked from beside the pane
+focused then, even if the user moved on (the tab on show stays; a tab that closed: the one on
+show), as the new-task box pins its workspace; before `adopt_new_windows` could split it in as a
+pop-up. An app that does not say which windows it has is not asked: an old window would pass for
+the new one. An ask that fails (`NewWindowFailed`) is said as it failed, and ends the wait: no
+timeout notice after it. No window within `new_window::WAIT_MS` (3 s, from the pick: a tick is sent with it):
+the core says so on a tick, and one that comes later (looked for 30 s) stays outside.
+
+Closing an owned pane closes its window (`Effect::CloseWindow`): it goes back where it was first,
+then its close button is pressed, so a save question of the app's shows where the user can
+answer it; one that does not come back on a screen stays open, and the bar says so. A shared
+window goes back. The shell reads `AXEdited` (on the window, or its close
+button) of each owned window about twice a second, and again at the user's close (one that does
+not answer counts as unsaved); the user's close of one that has unsaved changes asks first, "Close <title>? It has unsaved changes". A client's close, a tab closed and
+a quit do not ask: the app's own question is the backstop (a quit gives every window back,
+owned or not). The canary marks its windows edited (`edited`) and has File ▸ New Window (⌘N),
+so `cargo e2e-apps` checks the flag and the menu press on CI.
+
+Later, not built: ⌘⇧T reopens a closed pane; a per-app "always new window" setting.
 
 ## Risks
 

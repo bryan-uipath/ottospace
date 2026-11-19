@@ -917,8 +917,21 @@ const MAKERS: &[Make] = &[
         let app = g.one_of(&listed, |g| g.name(APPS));
         let window = |g: &mut Gen| PickWindow { window: g.rng.below(5) as u32, title: g.name(&["general", "w1"]) };
         let windows = (0..g.rng.below(4)).map(|_| window(g)).collect();
-        Action::PickerWindows { app, windows }
+        let bundle = g.rng.coin().then(|| g.name(&["com.google.Chrome", "com.apple.Safari", "com.slack"]));
+        Action::PickerWindows { app, bundle, menu_item: g.rng.coin(), windows }
     },
+    |g| Action::NewWindowFailed { text: g.name(&["Chrome did not take ⌘N", ""]) },
+    // The window "New window" asked for, by the shell; a window id panes may hold too.
+    |g| {
+        let kind = match g.kind() {
+            Kind::App { title, bundle, name, .. } => {
+                Kind::App { window: 40 + g.rng.below(3) as u32, title, bundle, name }
+            }
+            other => other,
+        };
+        Action::NewWindowCame { kind }
+    },
+    |g| Action::WindowEdited { pane: g.pane(), edited: g.rng.coin() },
     |_| Action::ClosePicker,
     |_| Action::PaletteOpen,
     |_| Action::PaletteTasks,
@@ -1742,6 +1755,12 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 fn check(m: &Model) -> Result<(), String> {
     check_slots(m)?;
     check_viewers(m)?;
+    // An owned pane holds an app's window; only an owned pane's unsaved changes are kept.
+    for pane in m.panes.iter().filter(|p| p.owned) {
+        ensure!(matches!(pane.kind, Kind::App { .. }), "owned pane {} holds {:?}", pane.id, pane.kind);
+    }
+    let owned = |id: &PaneId| m.pane(*id).is_some_and(|p| p.owned);
+    ensure!(m.edited.iter().all(owned), "unsaved changes kept for {:?}", m.edited);
     // The shell's loop sleeps until `next_due`: nothing but the calendar comes due sooner.
     if let Some(at) = m.next_due() {
         ensure!(m.due(at), "next due at {at}, not due then");
@@ -2993,6 +3012,17 @@ impl Run {
         let box_folder = m.compose_folder().map(String::from);
         // Each pane's kind before: a terminal made now with no folder given starts in its space's default.
         let kinds_before: Vec<(PaneId, Kind)> = m.panes.iter().map(|p| (p.id, p.kind.clone())).collect();
+        // Owned app panes and their windows, and the window "New window" waited for.
+        let owned_before: Vec<(PaneId, u32)> = m
+            .panes
+            .iter()
+            .filter(|p| p.owned)
+            .filter_map(|p| match p.kind {
+                Kind::App { window, .. } => Some((p.id, window)),
+                _ => None,
+            })
+            .collect();
+        let waited = m.new_window.clone();
         // A row taken reads back as the tag it is, of that very name.
         let taken = match (&action, m.dropdown()) {
             (Action::ComposeAccept { index }, Some(menu)) => {
@@ -4355,6 +4385,26 @@ impl Run {
                     ensure!(parts.len() == 2 && parts.iter().all(plain), "a worktree at {path:?}, outside {root:?}");
                 }
                 Effect::Notice { text } => ensure!(user && !text.is_empty(), "{origin:?} is told {text:?}"),
+                // Only a window that did not come in time, by a tick.
+                // Or why the ask itself failed, as the shell said it.
+                Effect::Failed { text } => {
+                    let late = waited.as_ref().map(|wait| crate::new_window::late(&wait.app));
+                    let tick = matches!(action, Action::Tick { .. }) && late.as_ref() == Some(text);
+                    let failed = matches!(&action, Action::NewWindowFailed { text: why } if why == text);
+                    ensure!((tick || failed) && waited.is_some() && m.new_window.is_none(), "{action:?} said {text:?}")
+                }
+                Effect::NewWindow { app, .. } => {
+                    let waits = m.new_window.as_ref().is_some_and(|wait| wait.app == *app);
+                    ensure!(
+                        matches!(action, Action::PickerChoose { .. }) && waits,
+                        "{action:?} asked {app:?} for a window"
+                    )
+                }
+                // Only an owned pane's window closes, with its pane.
+                Effect::CloseWindow { pane, window } => {
+                    let was = owned_before.contains(&(*pane, *window));
+                    ensure!(was && m.pane(*pane).is_none(), "{action:?} closed window {window} of pane {pane}")
+                }
                 Effect::NoticeDismissed { .. } => ensure!(user, "{origin:?} dismissed a notice"),
                 // The seal plays for the user's own Done, of a task now done and put away.
                 Effect::Seal { task } => {

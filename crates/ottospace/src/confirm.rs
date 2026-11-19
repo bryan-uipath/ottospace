@@ -4,7 +4,7 @@ use gpui::{Context, Keystroke, Window, div, prelude::*, px, relative, rgb};
 use ottospace_core::clip::PasteAsk;
 use ottospace_core::keys::Mods;
 use ottospace_core::model::{Confirm, Owner, Running};
-use ottospace_core::{Action, Origin, theme};
+use ottospace_core::{Action, Kind, Origin, theme};
 
 use crate::{Workspace, dialog};
 
@@ -129,6 +129,23 @@ impl Workspace {
                 .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(confirm.title()))
                 .child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child(said))
                 .child(dialog::hint("↵ stop, resume later · esc keep running"));
+            return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(panel);
+        }
+        // "Close <title>?": an owned window whose app says it has unsaved changes.
+        if let Some(pane) = confirm.edited {
+            let title = match self.model.pane(pane).map(|pane| &pane.kind) {
+                Some(Kind::App { title, .. }) if !title.is_empty() => title.clone(),
+                Some(Kind::App { name, .. }) => format!("this {name} window"),
+                _ => "this window".into(),
+            };
+            let panel = dialog::floating(320.)
+                .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(format!("Close {title}?")))
+                .child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("It has unsaved changes"))
+                .child(dialog::hint("↵ close · esc cancel"));
             return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
                 .flex()
                 .items_center()

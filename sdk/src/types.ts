@@ -270,6 +270,8 @@ export interface Pane {
   cwd?: string;
   /** Only on an app pane whose window kept another size than the pane's. */
   fit?: PaneFit;
+  /** Only on an app pane whose window "New window" opened: it closes with the pane. */
+  owned?: true;
 }
 
 export interface PaneFit {
@@ -749,6 +751,8 @@ export type PickItem =
   | { type: "file" }
   /** A running app. Choosing it lists its windows: the picker's second step (`Picker.app`). */
   | { type: "app"; name: string }
+  /** The second step's first row: a new window of `app`, opened by its recipe, owned. */
+  | { type: "new_window"; app: string; bundle: string | null; menu_item: boolean }
   /** The second step: one of `app`'s windows, by its window-server id (its title is never in the
    * state); `pane`: the pane that held it when listed. Choosing a held one shows its pane. */
   | { type: "window"; app: string; window: number; pane: number | null }
@@ -930,6 +934,8 @@ export interface Confirm {
   close: number | null;
   /** Not the quit question: "Stop "<title>" and put it away?" for this task (id, title), whose turn runs: Later. Only the user answers it. */
   later: [TaskId, string] | null;
+  /** Not the quit question: "Close <title>? It has unsaved changes" for this owned app pane. Only the user answers it. */
+  edited: PaneId | null;
 }
 
 /**
@@ -1076,6 +1082,10 @@ export interface Model {
   folded_projects: (string | null)[];
   open_done: (string | null)[];
   picker: Picker | null;
+  /** "New window" waits for `app`'s window, asked for at `since` (ms); null once it came or ~3 s passed. */
+  new_window: { app: string; since: number } | null;
+  /** Owned app panes whose app says they have unsaved changes. */
+  edited: PaneId[];
   palette: Palette | null;
   inspector: InspectorState | null;
   /** The quit question while it is up. */

@@ -16,6 +16,10 @@
 //! (`afplay`), as a browser's or an Electron app's helper plays it; with `"app":true` from a child
 //! that is an app ScreenCaptureKit offers (this binary with `CANARY_PLAY`), as Zoom's `aomhost`.
 //!
+//! File ▸ New Window (⌘N) opens another window, as `open_window` does: an app's own way to a new
+//! one. `{"cmd":"edited","index":0,"on":true}` marks a window as having unsaved changes (the dot
+//! in its close button), as a document app does: ottospace reads it over Accessibility.
+//!
 //! With `CANARY_BUTTON` set, the first window has a native button titled "Canary button" in
 //! its content: a control its accessibility tree names. Below it, a checkbox "Canary press"
 //! (`pressed` in the state: whether it is on) and a disabled one, "Canary disabled".
@@ -33,11 +37,14 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
 use gpui::{
-    App, Application, Bounds, Context, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent, ScrollWheelEvent,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, rgb, size,
+    App, Application, Bounds, Context, FocusHandle, KeyBinding, KeyDownEvent, Menu, MenuItem, MouseButton,
+    MouseDownEvent, ScrollWheelEvent, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, actions, div,
+    prelude::*, px, rgb, size,
 };
 use serde::Deserialize;
 use serde_json::json;
+
+actions!(canary, [NewWindow]);
 
 #[derive(Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case", deny_unknown_fields)]
@@ -79,6 +86,11 @@ enum Request {
     },
     Minimize {
         index: usize,
+    },
+    /// Says whether the window has unsaved changes, as a document app does.
+    Edited {
+        index: usize,
+        on: bool,
     },
     /// Plays a sound file: in this process, or in a child (`afplay`, or with `app` this binary).
     Play {
@@ -317,6 +329,12 @@ fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mu
                     open(windows, None, None, Some(at), cx);
                 }
             }
+            Request::Edited { index, on } => {
+                let handle = windows.borrow().get(index).copied();
+                if let Some(handle) = handle {
+                    let _ = handle.update(cx, |_, window, _| window.set_window_edited(on));
+                }
+            }
             Request::Minimize { index } => {
                 let handle = windows.borrow().get(index).copied();
                 if let Some(handle) = handle {
@@ -402,6 +420,12 @@ fn main() {
     Application::new().run(move |cx: &mut App| {
         let windows: Windows = Rc::default();
         open(&windows, None, None, None, cx);
+        // File ▸ New Window, ⌘N: the menu item ottospace's "New window" presses.
+        let menu_windows = windows.clone();
+        cx.on_action(move |_: &NewWindow, cx| open(&menu_windows, None, None, None, cx));
+        cx.bind_keys([KeyBinding::new("cmd-n", NewWindow, None)]);
+        let file = Menu { name: "File".into(), items: vec![MenuItem::action("New Window", NewWindow)] };
+        cx.set_menus(vec![Menu { name: "Canary".into(), items: vec![] }, file]);
         cx.spawn(async move |cx| {
             loop {
                 cx.background_executor().timer(Duration::from_millis(16)).await;

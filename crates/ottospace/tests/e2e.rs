@@ -3282,12 +3282,13 @@ fn the_picker_filter_is_a_field_and_offers_apps_that_are_not_running() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn choosing_an_app_in_the_picker_lists_its_windows() {
-    // Made-up running apps: a test run runs none, and hosts no window.
+fn choosing_an_app_in_the_picker_lists_new_window_then_its_windows() {
+    // Made-up running apps: a test run runs none, asks none for a window, and hosts none.
     let fixture = support::temp(&format!("ottospace-e2e-pick-apps-{}.json", std::process::id()));
     let apps = json!([
-        {"name": "Lumen", "windows": [{"window": 7, "title": "Inbox"}, {"window": 8, "title": "Docs"}]},
-        {"name": "Quill", "windows": []},
+        {"name": "Lumen", "bundle": "com.google.Chrome", "windows": [{"window": 7, "title": "Inbox"}, {"window": 8, "title": "Docs"}]},
+        {"name": "Quill", "new_window_item": true, "windows": []},
+        {"name": "Pebble", "windows": [{"window": 9, "title": "Notes"}]},
     ]);
     std::fs::write(&fixture, apps.to_string()).unwrap();
     let otto = Otto::launch_with("pick-windows", &[("OTTOSPACE_PICK_APPS", fixture.to_str().unwrap())]);
@@ -3299,12 +3300,12 @@ fn choosing_an_app_in_the_picker_lists_its_windows() {
         reply["picker_rows"].as_array().map(|rows| rows.iter().map(row).collect()).unwrap_or_default()
     };
     let reply = otto.call(json!({"cmd": "picker"}));
-    assert_eq!(rows(&reply), ["terminal ", "file ", "app Lumen", "app Quill"]);
-    // The app: its windows, in the picker's place. Titles are drawn, never in the state.
+    assert_eq!(rows(&reply), ["terminal ", "file ", "app Lumen", "app Quill", "app Pebble"]);
+    // The app: "New window", then its windows, in the picker's place. Titles are drawn, never in the state.
     let reply = otto.call(json!({"cmd": "picker_choose", "index": 2}));
     assert_eq!(
         (reply["mode"].as_str(), reply["state"]["picker"]["app"].as_str(), rows(&reply)),
-        (Some("pick"), Some("Lumen"), vec!["window 7 null".to_string(), "window 8 null".to_string()])
+        (Some("pick"), Some("Lumen"), vec!["new_window ".to_string(), "window 7 null".into(), "window 8 null".into()])
     );
     assert!(!reply.to_string().contains("Inbox"), "{reply}");
     // The filter narrows them by title. A window chosen is asked for, and the run hosts none.
@@ -3314,12 +3315,37 @@ fn choosing_an_app_in_the_picker_lists_its_windows() {
     assert_eq!(reply["error"], "window hosting is off in e2e runs", "{reply}");
     let reply = otto.call(json!({"cmd": "state"}));
     assert_eq!((reply["mode"].as_str(), reply["counts"]["window_picks"].as_u64()), (Some("normal"), Some(1)));
-    // An app with no window to host: the second step says so, and Esc closes it.
+    // "New window" presses in another app: a client's is refused. The user's is asked by the
+    // app's recipe (Chrome's `--new-window`), then waited for.
+    otto.call(json!({"cmd": "picker"}));
+    otto.call(json!({"cmd": "picker_choose", "index": 2}));
+    let reply = otto.raw(&json!({"cmd": "picker_choose", "index": 0}).to_string());
+    assert_eq!(reply["error"], "only the user asks an app for a new window", "{reply}");
+    let reply = otto.call(json!({"cmd": "key", "keys": "enter", "as": "user"}));
+    let (open, app) = (reply["counts"]["new_windows_open"].as_u64(), reply["state"]["new_window"]["app"].as_str());
+    assert_eq!((open, app), (Some(1), Some("Lumen")), "{reply}");
+    // None comes: about 3 seconds later the notice bar says so, and the wait ends.
+    let reply = otto.wait_for("the late window's notice", |o| {
+        let reply = o.call(json!({"cmd": "state"}));
+        (reply["notice"] == "Lumen opened no new window in 3 seconds").then_some(reply)
+    });
+    assert_eq!(reply["state"]["new_window"], Value::Null);
+    // An app the table does not name: a new window only by its "New Window" menu item, which
+    // an app with no window to host offers still. One with neither, none.
     otto.call(json!({"cmd": "picker"}));
     let reply = otto.call(json!({"cmd": "picker_choose", "index": 3}));
-    assert_eq!((reply["state"]["picker"]["app"].as_str(), rows(&reply).len()), (Some("Quill"), 0));
-    let reply = otto.call(json!({"cmd": "key", "keys": "escape"}));
-    assert_eq!((reply["mode"].as_str(), reply["counts"]["window_picks"].as_u64()), (Some("normal"), Some(1)));
+    assert_eq!(
+        (reply["state"]["picker"]["app"].as_str(), rows(&reply)),
+        (Some("Quill"), vec!["new_window ".to_string()])
+    );
+    let reply = otto.call(json!({"cmd": "key", "keys": "enter", "as": "user"}));
+    assert_eq!(reply["counts"]["new_windows_menu_item"].as_u64(), Some(1), "{reply}");
+    otto.call(json!({"cmd": "picker"}));
+    let reply = otto.call(json!({"cmd": "picker_choose", "index": 4}));
+    assert_eq!(
+        (reply["state"]["picker"]["app"].as_str(), rows(&reply)),
+        (Some("Pebble"), vec!["window 9 null".to_string()])
+    );
 }
 
 /// Made-up apps in a folder of the test's own: never the user's, and none is ever started.
