@@ -10123,16 +10123,22 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     let card = &first["transcript"]["cards"][0];
     assert_eq!((&card["tool"], &card["cut"]), (&json!("Bash"), &json!(false)), "{card}");
     // Copy on the code block, while it is in view: the code, to the clipboard (a test run's own).
-    let targets = otto.call(json!({"cmd": "sneak"}))["sneak"]["targets"].clone();
-    otto.call(json!({"cmd": "key", "keys": "escape"}));
-    let copy = targets
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|t| t["source"]["id"].as_str().is_some_and(|id| id.starts_with("chat-code-copy:1:")));
+    // In a short window (CI's) Copy is above the view: scrolled up to it, then back down.
+    let body = otto.call(json!({"cmd": "state"}))["drawer"]["body"].clone();
+    let over = [body[0].as_f64().unwrap() + 100., body[1].as_f64().unwrap() + 20.];
+    let copy_in_view =
+        |o: &Otto| o.controls().into_iter().find(|(id, _)| id.starts_with("chat-code-copy:1:")).map(|(_, f)| f);
+    let mut copy = copy_in_view(&otto);
+    for _ in 0..20 {
+        if copy.is_some() {
+            break;
+        }
+        otto.wheel(over, 20., true);
+        copy = copy_in_view(&otto);
+    }
     let copy = copy.expect("a Copy on the code block");
-    let f = |key: &str| copy["frame"][key].as_f64().unwrap();
-    assert_eq!(otto.user_click(at([f("x"), f("y"), f("w"), f("h")], 0.5, 0.5))["copied"], "fn main() {}");
+    assert_eq!(otto.user_click(at(copy, 0.5, 0.5))["copied"], "fn main() {}");
+    otto.wheel(over, -2000., true);
 
     // A client answers nothing, by key or click; ↵ on a card does nothing.
     assert_eq!(otto.call(json!({"cmd": "key", "keys": "a"}))["notice"], "only the user starts or stops a task's agent");

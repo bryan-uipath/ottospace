@@ -4969,7 +4969,14 @@ impl Model {
                         let making = self.making.remove(at);
                         // The folder it was asked in (`<root>/<repo>/<branch>`), not the setting now.
                         let root = asked.rsplitn(3, '/').nth(2).unwrap_or_default().to_string();
-                        let made = tasks::Made { repo, branch: making.branch, path: path.clone(), asked, root, removed: false };
+                        let made = tasks::Made {
+                            repo,
+                            branch: making.branch,
+                            path: path.clone(),
+                            asked,
+                            root,
+                            removed: false,
+                        };
                         if let Some(task) = self.tasks.list.iter_mut().find(|task| task.id == making.task) {
                             task.made = Some(made);
                         }
@@ -6295,9 +6302,7 @@ impl Model {
             action @ (Action::TaskDone { .. }
             | Action::TaskLater { .. }
             | Action::DoneUndo
-            | Action::WorktreeRemoved { .. }) => {
-                self.finish_act(action, effects)
-            }
+            | Action::WorktreeRemoved { .. }) => self.finish_act(action, effects),
             Action::TalkStart => {
                 if let Some(subject) = self.talk.as_ref().filter(|talk| talk.open).map(|talk| talk.task.clone()) {
                     self.talk_to(subject, true, effects);
