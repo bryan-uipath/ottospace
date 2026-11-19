@@ -115,10 +115,11 @@ pub fn token(capture: &str) -> Option<Token> {
     let first = capture.split('.').next().unwrap_or(capture);
     Some(match (first, capture) {
         (_, "string.special.key") | ("property", _) => Token::Key,
-        (_, "constant.builtin") | ("keyword" | "boolean" | "label", _) => Token::Keyword,
+        ("keyword" | "label", _) => Token::Keyword,
         ("string" | "escape", _) => Token::String,
         ("comment", _) => Token::Comment,
-        ("number" | "constant", _) => Token::Number,
+        // Rust's numbers are `constant.builtin`, as JSON's `true`.
+        ("number" | "constant" | "boolean", _) => Token::Number,
         ("type" | "constructor" | "attribute", _) => Token::Type,
         ("function", _) => Token::Function,
         ("punctuation", _) => Token::Punctuation,
@@ -194,7 +195,7 @@ impl Colours {
         cursor.set_byte_range(bytes.clone());
         let mut captures = cursor.captures(query, self.tree.root_node(), self.text.as_bytes());
         while let Some((matched, index)) = captures.next() {
-            let capture = matched.captures[*index];
+            let capture = matched.captures()[*index];
             let Some(token) = tokens.get(capture.index as usize).copied().flatten() else { continue };
             let node = capture.node.byte_range();
             let (start, end) = (node.start.max(bytes.start), node.end.min(bytes.end));
@@ -266,7 +267,7 @@ mod tests {
             ("string.special", Some(Token::String)),
             ("function.method", Some(Token::Function)),
             ("type.builtin", Some(Token::Type)),
-            ("constant.builtin", Some(Token::Keyword)),
+            ("constant.builtin", Some(Token::Number)),
             ("punctuation.bracket", Some(Token::Punctuation)),
             ("variable", None),
             ("operator", None),
@@ -322,9 +323,28 @@ mod tests {
         let big = "fn a() {}\n".repeat(MAX_PARSE / 10 + 1);
         assert!(parse(Lang::Rust, &big, BUDGET).is_none(), "past MAX_PARSE");
         // A budget already spent: the parse stops at its first check.
-        let long = "fn a() { let x = [1, 2, 3]; }\n".repeat(20_000);
+        let long = "fn a() { let x = [1, 2, 3]; }\n".repeat(2_000);
         assert!(parse(Lang::Rust, &long, Duration::ZERO).is_none());
-        assert!(parse(Lang::Rust, &long, BUDGET).is_some(), "600 KB parses within the budget");
+        assert!(parse(Lang::Rust, &long, BUDGET).is_some(), "60 KB parses within the budget, in a debug build too");
+    }
+
+    /// How long the largest file parsed takes, and its first lines' colours: `cargo test --release
+    /// -p ottospace --bin ottospace -- --ignored --nocapture timings`.
+    #[test]
+    #[ignore = "timings, by hand"]
+    fn timings() {
+        let fixture = include_str!("../tests/fixtures/code/seeds.rs");
+        let text = fixture.repeat(MAX_PARSE / fixture.len());
+        let start = Instant::now();
+        let tree = parse(Lang::Rust, &text, Duration::from_secs(60)).expect("parsed");
+        let parsed = start.elapsed();
+        let colours = Colours::new(Lang::Rust, tree, text.clone());
+        let start = Instant::now();
+        let _ = colours.line(0);
+        let chunk = start.elapsed();
+        let start = Instant::now();
+        let marks = crate::highlight::by_line(&text, &crate::highlight::marks("rs", &text));
+        println!("{} KB: parse {parsed:?}, a chunk {chunk:?}; the lexer {:?} ({} lines)", text.len() / 1024, start.elapsed(), marks.len());
     }
 
     /// Runs on character boundaries, in order, inside the line, whatever the text.
