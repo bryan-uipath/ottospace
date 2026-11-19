@@ -1887,6 +1887,9 @@ impl Workspace {
                     self.native_input(task, answers);
                 }
                 Effect::AgentInterrupt { task } => self.native_input(task, NativeInput::Interrupt),
+                Effect::AgentSideQuestion { task, id, question, history } => {
+                    agents.extend(self.side_question(task, *id, question, history))
+                }
                 Effect::AgentMoved { from, to } => self.move_agent(from, to),
                 Effect::MeetingAlert { .. } | Effect::OpenLink { .. } | Effect::CalendarRetry => {
                     self.meeting_effect(effect)

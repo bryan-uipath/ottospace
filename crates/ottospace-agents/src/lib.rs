@@ -207,6 +207,14 @@ pub enum Input {
     },
     /// End the current turn. The session goes on.
     Interrupt,
+    /// A side question ("btw", `RunnerSpec::structured.side_question`): answered from the
+    /// session's context with no tools, never written to it. `history`: the earlier questions
+    /// and answers of the same side thread, in order. `id` pairs it with its `Side*` events.
+    SideQuestion {
+        id: u64,
+        question: String,
+        history: Vec<(String, String)>,
+    },
 }
 
 /// What comes out of a runner. Ids are opaque (a hash), good only to pair a start with its end.
@@ -310,6 +318,20 @@ pub enum Event {
     Compaction,
     TurnFinished {
         outcome: Outcome,
+    },
+    /// The CLI took side question `id` (`Input::SideQuestion`) and is working on it.
+    SideStarted {
+        id: u64,
+    },
+    /// Its answer. `synthetic`: the CLI's own words (an API error, say), not the model's.
+    SideAnswer {
+        id: u64,
+        text: Untrusted,
+        synthetic: bool,
+    },
+    /// The CLI refused it or its answer could not be read.
+    SideFailed {
+        id: u64,
     },
     /// `kind` from a table. `retrying`: the CLI tries again by itself.
     Error {

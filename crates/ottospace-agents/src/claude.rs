@@ -90,6 +90,8 @@ pub struct Claude {
     next: u64,
     /// The error code an assistant message of this turn carried: a failed `result` names it.
     error: Option<String>,
+    /// Side questions sent and not answered yet, by our id: only their lines are read as side events.
+    sides: Vec<u64>,
 }
 
 impl Claude {
@@ -145,6 +147,12 @@ impl Claude {
                         }
                         None => emit
                             .push(Event::Unknown { kind: format!("system.{}", kind_of(record["subtype"].as_str())) }),
+                    }
+                }
+                // A side question's progress: `started`, or `api_retry` (the CLI retries by itself).
+                Some("control_request_progress") if let Some(id) = self.side_of(record) => {
+                    if record["status"] == "started" {
+                        emit.push(Event::SideStarted { id });
                     }
                 }
                 other => emit.push(unread(record, format!("system.{}", kind_of(other)))),
@@ -210,10 +218,30 @@ impl Claude {
                     emit.push(Event::PermissionClosed { ticket: Ticket::new(id, TicketKind::Closed) });
                 }
             }
-            // The answer to our interrupt.
-            Some("control_response") => {}
+            Some("control_response") => self.side_answer(&record["response"], emit),
             other => emit.push(unread(record, kind_of(other))),
         }
+    }
+
+    /// The side question a line names by its `request_id` (`btw-<id>`), if it is one waiting.
+    fn side_of(&self, record: &Value) -> Option<u64> {
+        let named = record["request_id"].as_str()?;
+        // The whole id as we wrote it: `btw-01` is not `btw-1`.
+        self.sides.iter().copied().find(|id| named == format!("{SIDE}{id}"))
+    }
+
+    /// The answer to a request of ours: a side question's, else our interrupt's (nothing to read).
+    /// Seen in 2.1.327: `{subtype: success, response: {response, synthetic}}` or `{subtype: error, error}`.
+    fn side_answer(&mut self, response: &Value, emit: &mut Vec<Event>) {
+        let Some(id) = self.side_of(response) else { return };
+        self.sides.retain(|of| *of != id);
+        let answer = &response["response"];
+        emit.push(match (response["subtype"].as_str(), answer["response"].as_str()) {
+            (Some("success"), Some(text)) => {
+                Event::SideAnswer { id, text: Untrusted::new(text, MAX_TEXT), synthetic: answer["synthetic"] == true }
+            }
+            _ => Event::SideFailed { id },
+        });
     }
 
     /// A request from the CLI. A tool's permission is the user's to answer; anything else is
@@ -255,6 +283,9 @@ impl Claude {
         out.events.push(event);
     }
 }
+
+/// The start of a side question's `request_id`: `btw-1`.
+const SIDE: &str = "btw-";
 
 /// Why a request is denied when a field that says what it does cannot be read.
 const UNREADABLE: &str = "a field of it cannot be read";
@@ -496,6 +527,21 @@ impl Wire for Claude {
                 self.next += 1;
                 let id = format!("ottospace-{}", self.next);
                 json!({"type": "control_request", "request_id": id, "request": {"subtype": "interrupt"}})
+            }
+            Input::SideQuestion { .. } if !RunnerId::Claude.spec().structured.side_question => {
+                return Err(Refused("no side questions"));
+            }
+            Input::SideQuestion { id, question, .. } if question.trim().is_empty() || self.sides.contains(&id) => {
+                return Err(Refused("nothing to ask"));
+            }
+            Input::SideQuestion { id, question, history } => {
+                self.sides.push(id);
+                let mut request = json!({"subtype": "side_question", "question": question});
+                if !history.is_empty() {
+                    let history = history.into_iter().map(|(q, a)| json!({"question": q, "response": a}));
+                    request["history"] = Value::Array(history.collect());
+                }
+                json!({"type": "control_request", "request_id": format!("{SIDE}{id}"), "request": request})
             }
         };
         Ok(vec![line.to_string()])

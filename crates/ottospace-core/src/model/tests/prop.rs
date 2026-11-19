@@ -309,6 +309,18 @@ impl Gen<'_> {
     }
 
     /// A card's ticket: mostly the one shown, else another (one withdrawn, or none).
+    /// A side question: mostly the one waiting in the shown conversation's btw.
+    fn btw(&mut self) -> (Subject, u64) {
+        let shown = self.m.shown_chat().map(|chat| chat.subject.clone());
+        let pairs =
+            self.m.shown_btw().map(|btw| btw.pairs.iter().map(|p| p.id).collect::<Vec<_>>()).unwrap_or_default();
+        let id = match pairs.last().filter(|_| !self.rng.one_in(4)) {
+            Some(id) => *id,
+            None => self.rng.below(3) as u64,
+        };
+        (shown.filter(|_| !self.rng.one_in(5)).unwrap_or_else(|| self.subject()), id)
+    }
+
     fn card(&mut self) -> u64 {
         let front = self.m.shown_chat().and_then(|chat| chat.transcript.cards.front().map(|card| card.ticket));
         match front.filter(|_| !self.rng.one_in(4)) {
@@ -1460,6 +1472,20 @@ const MAKERS: &[Make] = &[
     |_| Action::TalkEscape,
     |_| Action::TalkInterrupt,
     |g| Action::TalkView { shows: g.rng.pick(&[View::Native, View::Terminal]) },
+    |_| Action::BtwOpen,
+    |g| Action::BtwKeys { on: g.rng.coin() },
+    |_| Action::BtwAsk,
+    |g| {
+        let (task, id) = g.btw();
+        let text = crate::transcript::Text::new(&g.name(&["Redis", "**bold** `code`", ""]));
+        Action::BtwAnswered { task, id, text, synthetic: g.rng.one_in(4) }
+    },
+    |g| {
+        let (task, id) = g.btw();
+        Action::BtwFailed { task, id }
+    },
+    |g| Action::BtwUse { id: g.btw().1 },
+    |_| Action::BtwClose,
     |_| Action::EditorOpen,
     |g| Action::EditorKeys { on: g.rng.coin() },
     |g| {
@@ -2259,7 +2285,7 @@ fn check(m: &Model) -> Result<(), String> {
             Mode::Annotate => m.note().is_some(),
             Mode::List => m.app_lists.filtering,
             // A native conversation's composer, while no card has the keys.
-            Mode::Talk => m.talk_typing(),
+            Mode::Talk => m.talk_typing() || m.btw_typing(),
             _ => false,
         };
     ensure!(m.field().is_some() == has_keys, "a text field has the keyboard in {:?} mode", m.mode());
@@ -3956,6 +3982,58 @@ impl Run {
         // Only the shell's runner reports what an agent said.
         let reports = matches!(action, Action::AgentEvents { .. }) && origin != Origin::System;
         ensure!(!reports || m.chats == chats_before, "{origin:?} reported an agent's events");
+        // A btw never reaches the main conversation: no message, answer or interrupt, and its
+        // transcript as it was. Use as my answer fills a field (a card's "Other…"), never a card's answer.
+        let btw = matches!(
+            action,
+            Action::BtwOpen
+                | Action::BtwKeys { .. }
+                | Action::BtwAsk
+                | Action::BtwAnswered { .. }
+                | Action::BtwFailed { .. }
+                | Action::BtwUse { .. }
+                | Action::BtwClose
+        );
+        let main = |e: &Effect| {
+            matches!(
+                e,
+                Effect::AgentSend { .. }
+                    | Effect::AgentAnswer { .. }
+                    | Effect::AgentAnswers { .. }
+                    | Effect::AgentInterrupt { .. }
+                    | Effect::StartAgent { .. }
+                    | Effect::StopAgent { .. }
+            )
+        };
+        ensure!(
+            !btw || !effects.iter().any(main),
+            "{origin:?}'s {action:?} reached the main conversation: {effects:?}"
+        );
+        for chat in m.chats.iter().filter(|_| btw) {
+            let Some(was) = chats_before.iter().find(|was| was.subject == chat.subject) else { continue };
+            let (now, then) = (&chat.transcript, &was.transcript);
+            let items = now.items().eq(then.items());
+            let cards: Vec<u64> = now.cards.iter().map(|card| card.ticket).collect();
+            let cards_then: Vec<u64> = then.cards.iter().map(|card| card.ticket).collect();
+            let form_only = matches!(action, Action::BtwUse { .. }) || now == then;
+            ensure!(
+                items && cards == cards_then && form_only,
+                "{origin:?}'s {action:?} changed the transcript of {:?}",
+                chat.subject
+            );
+            ensure!(now.turn == then.turn, "{action:?} changed the turn of {:?}", chat.subject);
+        }
+        // An open btw is of a conversation that offers one; its in-flight question, one at most.
+        for chat in &m.chats {
+            let Some(btw) = &chat.btw else { continue };
+            ensure!(m.btw_offered(&chat.subject), "a btw open on {:?}, which offers none", chat.subject);
+            let waiting = btw.pairs.iter().filter(|p| p.reply == crate::model::btw::Reply::Waiting).count();
+            ensure!(
+                waiting <= 1 && btw.pairs.len() <= crate::model::btw::MAX_PAIRS,
+                "{:?}'s btw: {waiting} waiting",
+                chat.subject
+            );
+        }
         // A composer's draft is the user's words alone: it starts empty, and only the user changes
         // it, or the user's editor it was given to, as the shell reports it ended.
         let saved = matches!(action, Action::EditorDone { .. }) && origin == Origin::System;
@@ -4465,6 +4543,16 @@ impl Run {
                         user && shown && m.agent_runs(task),
                         "{origin:?} reached {task:?}: not the user, or not shown"
                     );
+                }
+                // A side question: the user's ↵ in the btw of the conversation shown, whose runner takes one.
+                Effect::AgentSideQuestion { task, id, .. } => {
+                    let shown = m.shown_chat().is_some_and(|chat| chat.subject == *task);
+                    ensure!(
+                        user && shown && matches!(action, Action::BtwAsk) && m.btw_offered(task),
+                        "{origin:?}'s {action:?} asked side question {id} of {task:?}"
+                    );
+                    let open = m.shown_btw().is_some_and(|btw| btw.asking() == Some(*id));
+                    ensure!(open, "side question {id} of {task:?} is not the one waiting");
                 }
                 Effect::AgentMoved { from, to } => {
                     let task = to.task().and_then(|id| m.tasks.get(id));
@@ -5107,14 +5195,23 @@ fn code(sent: &Envelope) -> String {
         );
         return format!("restore_layout({layout:?}, {gone:?}, {home:?}, {launch}).sent_by(Origin::{:?})", sent.origin);
     }
+    let subject_code = |task: &Subject| match task {
+        Subject::Task(id) => format!("Subject::Task({id})"),
+        Subject::Session { runner, id } => {
+            format!("Subject::Session {{ runner: {runner:?}.into(), id: {id:?}.into() }}")
+        }
+    };
+    // A side answer's text, as an agent's: that many `x`.
+    if let Action::BtwAnswered { task, id, text, synthetic } = &sent.action {
+        let (task, n) = (subject_code(task), text.len());
+        return format!(
+            "Action::BtwAnswered {{ task: {task}, id: {id}, text: Text::new(&\"x\".repeat({n})), synthetic: {synthetic} }}.sent_by(Origin::{:?})",
+            sent.origin
+        );
+    }
     // An agent's events carry text whose `Debug` is its length: written as that many `x`.
     if let Action::AgentEvents { task, events, at } = &sent.action {
-        let task = match task {
-            Subject::Task(id) => format!("Subject::Task({id})"),
-            Subject::Session { runner, id } => {
-                format!("Subject::Session {{ runner: {runner:?}.into(), id: {id:?}.into() }}")
-            }
-        };
+        let task = subject_code(task);
         let events: Vec<String> = events.iter().map(event_code).collect();
         let events = events.join(", ");
         return format!(
@@ -5748,6 +5845,21 @@ fn seed_49498_a_clients_close_of_the_last_tab_here_waits_for_the_chat() {
         Action::TabOut { tab: Some(2) }.into(),
         Action::TaskFromLine { line: "fix it @claude".into(), known, open: true }.into(),
         Action::CloseTabAsked { index: None, running: vec![] }.sent_by(Origin::Socket),
+    ])
+    .unwrap();
+}
+
+/// A task's runner restored as Codex while its Claude agent's btw is open: the btw goes, as it is
+/// offered no more.
+#[test]
+fn seed_6864_a_btw_goes_once_its_task_names_a_runner_that_takes_none() {
+    replay(&[
+        Action::TaskAdd { title: "deploy".into(), priority: 1, state: State::Running, tab: None, assign: Assign { agent: Some("claude".into()), paths: vec![], resolved: vec![], skills: vec![] } }.sent_by(Origin::User),
+        Action::OpenCompose { text: "$>yǅ".into() }.sent_by(Origin::User),
+        Action::ComposeEnter.sent_by(Origin::User),
+        Action::AgentStarted { task: Subject::Task(2), session: None, at: 40 }.sent_by(Origin::User),
+        Action::BtwOpen.sent_by(Origin::User),
+        restore_tasks("[{\"id\":2,\"title\":\"x\",\"state\":\"review\",\"priority\":200,\"snoozed_until\":null,\"dismissed\":false,\"project\":null,\"repo\":\"/code/app\",\"agent\":\"codex\",\"paths\":[],\"resolved\":[],\"skills\":[],\"created\":1,\"session\":null,\"title_generated\":false,\"materials\":[],\"refs\":[],\"work\":[]}]", 4294967295).sent_by(Origin::System),
     ])
     .unwrap();
 }
