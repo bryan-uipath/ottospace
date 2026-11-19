@@ -1,12 +1,14 @@
 name: Shots
 
-# Before and after pictures of a pull request that changes what is drawn: `scripts/shot
-# --compare` runs the scenario library (scripts/shots/) on the merge base and on the pull
-# request, on a hosted runner whose image grants bash Screen Recording, so nobody's screen is
-# needed. The pictures are a workflow artifact; nothing is posted to the pull request.
+# Before and after pictures of a pull request that changes what is drawn and carries the label
+# pr-shots: `scripts/shot --compare` runs the scenario library (scripts/shots/) on the merge base
+# and on the pull request, on a hosted runner whose image grants bash Screen Recording, so nobody's
+# screen is needed. The pictures are a workflow artifact; nothing is posted to the pull request.
 # Not a required check.
 on:
   pull_request:
+    # Only with the label pr-shots, and only when the paths below change: runners are scarce.
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'crates/ottospace/src/**'
       - 'crates/ottospace-core/src/**'
@@ -19,8 +21,10 @@ on:
 # pull_request, never pull_request_target: a fork's run gets a read-only token and no secrets.
 permissions: {}
 
+# A run that takes no pictures (no label, or another label added) gets a group of its own, so it
+# cannot cancel one that does.
 concurrency:
-  group: shots-${{ github.event.pull_request.number }}
+  group: shots-${{ github.event.pull_request.number }}${{ github.event_name == 'pull_request' && (!contains(github.event.pull_request.labels.*.name, 'pr-shots') || (github.event.action == 'labeled' && github.event.label.name != 'pr-shots')) && format('-skip-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 env:
@@ -28,6 +32,8 @@ env:
 
 jobs:
   shots:
+    # With the label only. Adding another label takes no pictures.
+    if: contains(github.event.pull_request.labels.*.name, 'pr-shots') && (github.event.action != 'labeled' || github.event.label.name == 'pr-shots')
     runs-on: macos-26
     timeout-minutes: 60
     permissions:
