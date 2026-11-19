@@ -11228,6 +11228,33 @@ fn done_on_an_idle_task_leaves_the_rail_and_undo_brings_it_back() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A done task shows only in Tasks' Done (the owner): its repository row loses the task's badge
+/// and the Terminal word that goes with it, its workspace's item its badges. The workspace stays;
+/// Undo brings both back.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_done_task_leaves_its_repo_row_and_its_workspaces_item_until_undo() {
+    let (root, _record, otto) = finish_launch("done-marks");
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    let marked = |o: &Otto| {
+        let row = o.controls().into_iter().any(|(id, _)| id.starts_with("repo-terminal:"));
+        let state = o.call(json!({"cmd": "state"}));
+        let space =
+            state["spaces"].as_array().unwrap().iter().find(|s| s["of"] == json!({"kind": "task", "id": 1})).cloned();
+        (row, space.map(|space| space["glyph"]["kind"].clone()))
+    };
+    assert_eq!(marked(&otto), (true, Some(json!("tasks"))));
+    otto.user_click(at(rect(&finish(&otto)["rects"]["done"]), 0.5, 0.5));
+    otto.wait_for("done", |o| (task_state(o) == "done").then_some(()));
+    assert_eq!(marked(&otto), (false, Some(json!("name"))), "the workspace stays, with no task's badge");
+    let bar = otto.call(json!({"cmd": "state"}))["notice_bar"].clone();
+    otto.user_click(at(rect(&bar["offer_rect"]), 0.5, 0.5));
+    assert_eq!(task_state(&otto), json!("needs_you"));
+    assert_eq!(marked(&otto), (true, Some(json!("tasks"))));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The seal, fold and land of the user's Done: frames while it plays (about 0.8 s), sparks among
 /// them, then none: at rest it asks for no frame.
 #[test]

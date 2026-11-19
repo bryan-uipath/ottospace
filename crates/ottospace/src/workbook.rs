@@ -6,6 +6,7 @@ use gpui::{Context, Div, ElementId, Window, div, prelude::*, px, rgb};
 use ottospace_core::list::ListRow;
 use ottospace_core::marks::MarkInput;
 use ottospace_core::model::{Owner, Section};
+use ottospace_core::tasks::Task;
 use ottospace_core::workbook::{self, History, WorkbookId, WorkbookRow};
 use ottospace_core::{Action, Origin, PaneId, theme};
 
@@ -370,8 +371,9 @@ impl Workspace {
             let name = self.workbook_name(renaming, row.name.clone(), cx);
             let name = if temporary && !renaming { name.text_color(rgb(theme::MUTED)).italic() } else { name };
             let summary = if temporary { format!("{} · {TEMPORARY_TIP}", row.summary) } else { row.summary.clone() };
-            // Bound to a task: the task's badge, where the dot is.
-            let lead = match row.task.and_then(|task| self.task_badge(task, 16.)) {
+            // Bound to a task not done: the task's badge, where the dot is.
+            let undone = row.task.filter(|task| self.model.tasks.get(*task).is_some_and(Task::undone));
+            let lead = match undone.and_then(|task| self.task_badge(task, 16.)) {
                 Some(badge) => badge.flex_none(),
                 None => dot(row.open),
             };

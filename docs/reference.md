@@ -43,7 +43,7 @@ running, and the rest of the design is not built: see the
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar | Works today |
 | The Apps section: the Dock's apps, pins, "Not running" and "All apps" | Works today, behind the `apps_section` [flag](#features), off by default |
-| Repos: each repository's name over its checkouts, one line each (the branch; a dot for the repository's own folder; its open pull request's mark; a task's badge). The chevron folds a repository (a count while folded; kept in `layout.json`; shown while a task there runs or needs you). Open a terminal in one. Opt-in, in your order: + in the bar's header, a dropped folder or Add Folder to Repos adds a repository to the end of `repos`; a folder of repositories from older settings is one folded group. On a name under the pointer, + makes a worktree (`worktrees_dir`) and the trash stops listing it (asked first while a task works there; the status bar says nothing on disk changed) | Works today |
+| Repos: each repository's name over its checkouts, one line each (the branch; a dot for the repository's own folder; its open pull request's mark; the badge of a task there not done). The chevron folds a repository (a count while folded; kept in `layout.json`; shown while a task there runs or needs you). Open a terminal in one. Opt-in, in your order: + in the bar's header, a dropped folder or Add Folder to Repos adds a repository to the end of `repos`; a folder of repositories from older settings is one folded group. On a name under the pointer, + makes a worktree (`worktrees_dir`) and the trash stops listing it (asked first while a task works there; the status bar says nothing on disk changed) | Works today |
 | List mode (⌘⌃E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls, and on the buttons and text fields of the focused app pane; typing it clicks the control, presses the app's button, or focuses its text field | Works today |
 | Scrolling over an app pane you are not in enters it (`APP`), as a click does, and that first scroll reaches the app | Verified on CI (`e2e-apps`): the wheel enters, the window comes up under the pointer and the canary receives the first scroll |
@@ -354,7 +354,8 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    in a pane or not) and **Earlier today**, the day's finished transcripts in `transcripts_dir` of a
    minute or more with a line heard (app, start, length), each a click from read-only in the drawer
    (‹ Earlier today goes back). The top
-   row shows the workspace's badges stacked, the most urgent first. A task dismissed (or one you
+   row shows the workspace's badges stacked, the most urgent first; a done task's shows only in Tasks'
+   Done, so a workspace whose tasks are all done shows its name (`Workspace` if it had none). A task dismissed (or one you
    mark done) leaves the rail and the most urgent remaining is in front; the last one gone, a
    workspace you made is its own again, with its tabs. From Home, the task gets
    a space of its own with one empty tab. ⇧↵ files it for later, in no workspace: started from
@@ -372,7 +373,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    Claude Code task whose agent moves into another worktree of its repository (one it made; never
    a sub-agent's `.claude/worktrees/agent-*`) works there from then on, and so does its
    workspace's default when it is the workspace's one task. A
-   row a live task works in carries its badge (Terminal, on hover, opens a terminal anyway).
+   row a task works in carries its badge until it is done (Terminal, on hover, opens a terminal anyway).
    See `docs/ai/spaces.md`. A
    repository's + (on its name, under the pointer) asks for a branch: a local one is checked out, one only a remote has is
    tracked, a new name is made from the repository's HEAD, in `<worktrees_dir>/<repo>/<branch>`; the

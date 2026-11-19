@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{Action, Confirm, Effect, Envelope, Host, Kind, Model, Origin, PaneId, Running, Tab};
 use crate::talk::{Subject, Talk};
-use crate::tasks::TaskId;
+use crate::tasks::{Task, TaskId};
 use crate::workbook::WorkbookId;
 
 /// Whose a space is.
@@ -121,6 +121,8 @@ pub(crate) struct HomeStep {
 
 /// The first item of the top row, and its screen.
 pub const HOME: &str = "Home";
+/// A task's workspace bound to no workspace of the bar, once its tasks are done: its name.
+pub const NO_TASK: &str = "Workspace";
 /// Home's one tab, always empty: no other tab has this id.
 pub const HOME_TAB: u32 = 0;
 /// Why a client's change of space waits: the user's keys are in the chat.
@@ -198,11 +200,12 @@ impl Model {
     }
 
     /// What a space's item on the top row shows: a workspace whose tabs hold one pane, an
-    /// app's, shows that app (Slack alone: Slack's icon); with tasks, their badges.
+    /// app's, shows that app (Slack alone: Slack's icon); with tasks not done, their badges.
     pub fn glyph(&self, of: &Owner) -> Glyph {
         match of {
             Owner::Home => Glyph::Home,
-            Owner::Task { .. } => Glyph::Tasks,
+            Owner::Task { .. } if !self.space_badges(of).is_empty() => Glyph::Tasks,
+            Owner::Task { .. } => Glyph::Name,
             Owner::Session { .. } => Glyph::Name,
             Owner::Workbook { .. } => {
                 let panes = self.tab_panes();
@@ -215,11 +218,24 @@ impl Model {
         }
     }
 
-    /// A space's tasks, the most urgent first: the badges of its item on the top row.
+    /// A space's tasks, the most urgent first.
     pub fn space_tasks(&self, of: &Owner) -> Vec<TaskId> {
         let mut tasks = self.members(of);
         tasks.sort_by_key(|id| self.urgency(*id));
         tasks
+    }
+
+    /// The badges of a space's item on the top row: its tasks not done, the most urgent first.
+    pub fn space_badges(&self, of: &Owner) -> Vec<TaskId> {
+        let undone = |id: &TaskId| self.tasks.get(*id).is_some_and(Task::undone);
+        self.space_tasks(of).into_iter().filter(undone).collect()
+    }
+
+    /// The task a space's item stands for, by its title and colour: its own while not done,
+    /// else its most urgent one not done. None once all are done: a done task shows only in Tasks.
+    pub fn space_task(&self, of: &Owner) -> Option<TaskId> {
+        let own = of.task().filter(|id| self.tasks.get(*id).is_some_and(Task::undone));
+        own.or_else(|| self.space_badges(of).first().copied())
     }
 
     /// The task in front in a space: the one set, while it is in it, else the space's own.
@@ -262,15 +278,17 @@ impl Model {
         }
     }
 
-    /// A space's name: its task's title, its session's, its workbook's.
+    /// A space's name: its task's title (`space_task`), its session's, its workbook's.
     pub fn space_title(&self, of: &Owner) -> String {
         match of {
             Owner::Home => HOME.into(),
-            // Several tasks in a kept workspace: the workspace's name.
+            // Several tasks in a kept workspace, or none not done: the workspace's name, else `NO_TASK`.
             Owner::Task { id } => {
-                let book = self.workbooks.bound_to(*id).filter(|_| self.members(of).len() > 1);
+                let task = self.space_task(of);
+                let book = self.workbooks.bound_to(*id).filter(|_| self.members(of).len() > 1 || task.is_none());
                 let name = book.and_then(|book| self.workbooks.get(book)).map(|book| book.name.clone());
-                name.or(self.tasks.get(*id).map(|task| task.title.clone())).unwrap_or_default()
+                let title = task.and_then(|id| self.tasks.get(id)).map(|task| task.title.clone());
+                name.or(title).unwrap_or_else(|| NO_TASK.into())
             }
             Owner::Session { runner, id } => self.session_title(runner, id),
             Owner::Workbook { id } => self.workbooks.get(*id).map(|book| book.name.clone()).unwrap_or_default(),

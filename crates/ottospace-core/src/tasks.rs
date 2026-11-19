@@ -397,7 +397,7 @@ pub const COLOURS: u8 = 8;
 /// the one used longest ago (by the newest task that had it) first, never-used ones before
 /// all. With every colour taken, the one used longest ago.
 pub fn colour_for(tasks: &[Task]) -> u8 {
-    let live = |task: &&Task| !task.dismissed && !matches!(task.state, State::Done | State::Cleaned);
+    let live = |task: &&Task| task.undone();
     let taken: Vec<u8> = tasks.iter().filter(live).filter_map(|task| task.colour).collect();
     let last_used = |colour: u8| tasks.iter().filter(|task| task.colour == Some(colour)).map(|task| task.id).max();
     let free = (0..COLOURS).filter(|colour| !taken.contains(colour));
@@ -518,6 +518,12 @@ impl State {
 }
 
 impl Task {
+    /// Live and not done: shown outside the Tasks section's Done group. The owner: a done task
+    /// shows only there, never as a repository row's or a workspace's badge or title.
+    pub fn undone(&self) -> bool {
+        !self.dismissed && !matches!(self.state, State::Done | State::Cleaned)
+    }
+
     /// The folder its captures are in, inside the materials folder. `None`: it has none.
     pub fn materials_dir(&self) -> Option<&str> {
         self.materials.iter().find_map(|file| material_file(self.id, file)).map(|(dir, _)| dir)
