@@ -102,6 +102,7 @@ mod menus;
 mod new_task;
 mod notice_bar;
 mod out_window;
+mod overlays;
 mod pass;
 mod pick;
 mod picture;
@@ -685,6 +686,8 @@ enum Mark {
     Heading(Heading, u8),
     /// A draft's row of the quit question, by its place in `Confirm::unsent`.
     QuitRow(usize),
+    /// A side overlay (`overlay_panels`): the sidebar's (true) or the drawer's.
+    Overlay(bool),
 }
 
 type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
@@ -1006,6 +1009,8 @@ struct Workspace {
     dial_motion: RefCell<dial::DialMotion>,
     /// The seal, fold and land of the user's Done, while it plays.
     seals: seal::Seals,
+    /// The side overlays' slides in (`overlay_panels`).
+    slides: overlays::Slides,
     /// The key that ended sneak mode is still down: its repeats are typed nowhere.
     sneak_spent: bool,
     /// Reads of the focused app pane's tree while sneak mode is on.
@@ -1625,6 +1630,7 @@ impl Workspace {
             chip_line: Rc::default(),
             dial_motion: RefCell::default(),
             seals: seal::Seals::default(),
+            slides: overlays::Slides::default(),
             sneak_spent: false,
             sneak_reads: sneak_apps::Reads::default(),
             wheel: app_wheel::Wheel::default(),
@@ -3724,6 +3730,12 @@ impl Workspace {
             // The left column's title strip, and the open section's header (null: none open).
             "strip": marks.get(&Mark::Strip).copied().map(rect),
             "bar_header": marks.get(&Mark::BarHeader).copied().map(rect),
+            // The side overlays as drawn (`overlay_panels`), at rest: the sidebar's and the drawer's
+            // place over the panes; null while closed or with the flag off.
+            "overlays": {
+                "sidebar": marks.get(&Mark::Overlay(true)).copied().map(rect),
+                "drawer": marks.get(&Mark::Overlay(false)).copied().map(rect),
+            },
             // The Tasks rail cell's needs-you dot (null: not drawn).
             "tasks_dot": marks.get(&Mark::TasksDot).copied().map(rect),
             // While a pane is dragged: the pane a drop would land on and the zone of it, both
@@ -3898,6 +3910,8 @@ impl Workspace {
                 "calendar_frames": self.timeline.day_frames.get(),
                 // The frames the seal of a Done asked for, and those with its sparks: none under Reduce Motion.
                 "seal_frames": self.seals.frames,
+                // Frames a side overlay's slide in asked for (`overlay_panels`): none under Reduce Motion.
+                "overlay_frames": self.slides.frames,
                 "seal_spark_frames": self.seals.spark_frames,
                 // How often GPUI's own handlers were kicked to draw again (`stall`): after a change
                 // of the displays, or frames that stopped.
@@ -7294,12 +7308,17 @@ fn zone_shadow(width: f32, left: bool) -> Div {
     // Below the title strip, which is higher: no shadow falls on it, and none doubles at its corners.
     let edge = div().absolute().top(px(TOP_BAR)).bottom_0().w(px(1.));
     let edge = if left { edge.left(px(width - 1.)) } else { edge.right(px(width - 1.)) };
-    edge.shadow(vec![BoxShadow {
+    edge.shadow(side_shadow(left))
+}
+
+/// A side's shadow onto the workspace: to the right from the left side (`left`), else to the left.
+fn side_shadow(left: bool) -> Vec<BoxShadow> {
+    vec![BoxShadow {
         color: black().opacity(0.65),
         offset: point(px(if left { 8. } else { -8. }), px(0.)),
         blur_radius: px(16.),
         spread_radius: px(-6.),
-    }])
+    }]
 }
 
 /// The title strip's shadow, down onto everything under it.
@@ -7930,6 +7949,7 @@ impl Render for Workspace {
                     | Mark::StatusPlace
                     | Mark::StatusMeeting
                     | Mark::StatusAgents
+                    | Mark::Overlay(_)
             )
         };
         self.marks.borrow_mut().retain(|mark, _| !drawn_anew(mark));
@@ -7948,7 +7968,8 @@ impl Render for Workspace {
         // Home's screen, or an empty tab of a task, a session or a workbook: the floor and what goes in it.
         let home = tree.is_none().then(|| self.render_home(self.model.home(&keep_out), held, cx));
         // The left column's width, and the drawer's: as dragged, or half the window when widened.
-        let left = RAIL + if self.model.sidebar.is_some() { SECTION } else { 0. };
+        // An overlay takes none: the panes lie as with both collapsed (`overlay_panels`).
+        let left = RAIL + if self.model.sidebar_takes_room() { SECTION } else { 0. };
         let half = f32::from(window.viewport_size().width) / 2.;
         let drawer = if self.model.talk_wide { half } else { self.model.talk_width.min(half.max(MIN_DRAWER)) };
         // The editor gets its columns: a narrower drawer widens while it shows, up to half the window.
@@ -7959,8 +7980,17 @@ impl Render for Workspace {
         let most = f32::from(window.viewport_size().width) * 0.75;
         let drawer = if self.btw_drawn() { (drawer + btw::WIDTH).min(most).max(drawer) } else { drawer };
         self.drawer.width = drawer;
-        // The drawer's place and its rail, always: the rail alone while it is collapsed.
-        let (right, right_width) = self.render_right(drawer, cx);
+        // The drawer's place and its rail, always: the rail alone while it is collapsed, or an overlay.
+        let (right, right_width, drawer_over) = self.render_right(drawer, cx);
+        let bar_over = self.model.sidebar.filter(|_| self.model.overlays());
+        let (left_in, right_in) = self.slides.step(bar_over.is_some(), drawer_over.is_some(), window);
+        let bar_over = bar_over.map(|section| {
+            let bar = self.render_bar(section, cx).into_any_element();
+            self.overlay(bar, true, SECTION, (TOP_BAR, RAIL, left_in))
+        });
+        let inner = (drawer - drawer_rail::WIDTH).max(0.);
+        let drawer_over =
+            drawer_over.map(|body| self.overlay(body, false, inner, (TOP_BAR, drawer_rail::WIDTH, right_in)));
         // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
         // the buttons and the agent chip's badge.
         let centre = f32::from(window.viewport_size().width) - left;
@@ -7972,6 +8002,7 @@ impl Render for Workspace {
             .bg(rgb(theme::BACKGROUND))
             .text_color(rgb(theme::TEXT))
             .track_focus(&self.focus)
+            .capture_any_mouse_down(cx.listener(Self::overlay_press))
             .map(|root| self.input_handlers(root, cx))
             .child(
                 div()
@@ -7992,12 +8023,12 @@ impl Render for Workspace {
                             .when(self.model.live.is_some(), |d| d.opacity(0.5))
                             .child(self.render_lights(cx))
                             .child(
-                                div()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .flex()
-                                    .child(self.render_rail(cx))
-                                    .children(self.model.sidebar.map(|section| self.render_bar(section, cx))),
+                                div().flex_1().min_h_0().flex().child(self.render_rail(cx)).children(
+                                    self.model
+                                        .sidebar
+                                        .filter(|_| self.model.sidebar_takes_room())
+                                        .map(|section| self.render_bar(section, cx)),
+                                ),
                             ),
                     )
                     // The top row of spaces from the section list over the drawer; under it the
@@ -8045,6 +8076,9 @@ impl Render for Workspace {
                     // Drawn last, so it lies over the panes. A live app's window is above it all.
                     .child(zone_shadow(left, true))
                     .child(zone_shadow(right_width, false))
+                    // The overlays, over the panes and their shadows (`overlay_panels`).
+                    .children(bar_over)
+                    .children(drawer_over)
                     // Highest, the title strip: its shadow falls on all three zones.
                     .child(title_shadow()),
             )

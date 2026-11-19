@@ -1681,6 +1681,8 @@ pub enum Action {
     },
     /// ⌘⇧R: collapse the drawer into its rail, or open it again (the conversation, else the transcript).
     TalkToggle,
+    /// The user's click outside the side overlays and their rails (`overlay_panels`): each closes.
+    OverlayDismiss,
     /// Put a task of the selected workspace in front (its row, or the drawer's rail). The user's alone.
     TalkFront {
         task: TaskId,
@@ -2375,6 +2377,7 @@ impl Action {
             | Action::WorktreeRemoved { .. }
             | Action::LocalDay { .. }
             | Action::TalkToggle
+            | Action::OverlayDismiss
             | Action::TalkKeys { on: false }
             | Action::TalkResize { .. }
             | Action::TalkWide
@@ -2486,6 +2489,7 @@ impl Action {
             | Action::AppsToggle { .. }
             | Action::AppsFilter { .. } => Some(Feature::AppsSection),
             Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => Some(Feature::MultiMonitor),
+            Action::OverlayDismiss => Some(Feature::OverlayPanels),
             Action::ListenStart { .. }
             | Action::ListenToggle { .. }
             | Action::ListenPause { .. }
@@ -3270,6 +3274,7 @@ pub mod chat;
 pub mod editor;
 pub mod finish;
 pub mod offers;
+pub mod overlay;
 mod pick;
 pub mod quit;
 pub mod slots;
@@ -3350,6 +3355,9 @@ pub struct Model {
     /// The section open last: where ⌘⇧L opens the bar again.
     #[serde(skip)]
     sidebar_last: Option<Section>,
+    /// The sidebar overlay took the keyboard from the conversation: Esc gives it back (`overlay`).
+    #[serde(skip)]
+    overlay_back: bool,
     /// The text in the new-task box, while it is open.
     pub compose: Option<Field>,
     /// The selected row, while the secondary bar has the keyboard.
@@ -3671,6 +3679,7 @@ impl Default for Model {
             compose_joins: None,
             sidebar: None,
             sidebar_last: None,
+            overlay_back: false,
             compose: None,
             list: None,
             rail_focus: None,
@@ -3777,8 +3786,13 @@ impl Default for Model {
             layout_seen: None,
             layout_kept: true,
             calendar: Calendar::default(),
-            // In this crate's tests every feature is on: a test of one that is off turns it off.
-            features: if cfg!(test) { Features::all() } else { Features::default() },
+            // In this crate's tests every feature is on (a test of one that is off turns it off), but
+            // `overlay_panels`: an experiment that changes how the sidebar and the drawer close.
+            features: if cfg!(test) {
+                Features::all().with(Feature::OverlayPanels, false)
+            } else {
+                Features::default()
+            },
             settings_pane: None,
             viewers: Default::default(),
             settings_file: crate::settings::Watch::default(),
@@ -3899,6 +3913,8 @@ impl Model {
         let boxed = self.picker.is_some() || self.compose_keys();
         match action {
             _ if origin == Origin::User => None,
+            // With the flag on, no client opens an overlay over the user's work, or dismisses theirs.
+            _ if self.overlay_refusal(action).is_some() => self.overlay_refusal(action),
             // Only the user's Undo brings a closing workspace back: no client selects its tab or moves its panes.
             _ if origin == Origin::Socket && self.touches_closing(action) => Some(workbook::CLOSING),
             _ if self.opens_in_closing(action, origin) => Some(workbook::CLOSING_OPENS),
@@ -4459,6 +4475,7 @@ impl Model {
             return Vec::new();
         }
         let (origin, line) = (sent.origin, self.compose_line().cloned());
+        let overlays = self.overlay_before(&sent);
         let states: Vec<(TaskId, State)> = self.tasks.list.iter().map(|task| (task.id, task.state)).collect();
         let fronts_were: Vec<TaskId> = self.spaces.iter().filter_map(|space| self.front(&space.of)).collect();
         let listed = self.sidebar.zip(self.list);
@@ -4527,6 +4544,7 @@ impl Model {
         self.settle_row_menu();
         self.settle_viewers(&mut effects);
         self.settle_listen();
+        self.settle_overlays(overlays, &mut effects);
         // Something shows in the drawer's place, or nothing is left to reopen: nothing to keep from a client.
         if !self.drawer_collapsed() || !self.drawer_opens() {
             self.folded = None;
@@ -6470,21 +6488,9 @@ impl Model {
             // ⌘⇧R or a →: the drawer collapses into its rail, whatever it shows (a brief, the
             // inspector, the box's line put aside), but a capture's draft: the user's work in progress.
             Action::TalkToggle if self.by_user && !self.drawer_collapsed() && self.capture.is_none() => {
-                self.folded = Some(match () {
-                    _ if self.listen.shown => rail::Folded::Transcript,
-                    _ if self.welcome() || self.compose_host() == Some(Host::Drawer) => rail::Folded::Box,
-                    _ => rail::Folded::Rest,
-                });
-                self.listen.shown = false;
-                self.talk_keys(false, effects);
-                if let Some(talk) = &mut self.talk {
-                    talk.open = false;
-                }
-                (self.brief, self.inspector, self.drawer_open) = (None, None, false);
-                if self.compose_host() == Some(Host::Drawer) {
-                    self.put_compose_aside();
-                }
+                self.fold_drawer(effects)
             }
+            Action::OverlayDismiss => self.overlay_dismiss(effects),
             // Reopened as it was collapsed: the transcript, or the box (its line back).
             Action::TalkToggle
                 if self.by_user && self.folded == Some(rail::Folded::Transcript) && self.listen_item() =>
@@ -9684,6 +9690,7 @@ mod tests {
         Action::WorktreeRemoved { .. },
         Action::LocalDay { .. },
         Action::TalkToggle,
+        Action::OverlayDismiss,
         Action::TalkKeys { .. },
         Action::TalkResize { .. },
         Action::TalkWide,
@@ -10023,6 +10030,7 @@ mod tests {
             Action::WorktreeRemoved { task: 1, path: String::new(), kept: None },
             Action::LocalDay { day: 0 },
             Action::TalkToggle,
+            Action::OverlayDismiss,
             Action::TalkFront { task: 1 },
             Action::TalkCycle { delta: 1 },
             Action::RailSelect { item: rail::RailItem::Transcript },
@@ -10476,6 +10484,8 @@ mod tests {
                     // A count of the key that turned it on, say: no input to it.
                     Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. } => false,
                     Action::NoticeDismiss { .. } => false,
+                    // Its flag is off here: absent, it ends nothing.
+                    Action::OverlayDismiss => false,
                     _ => origin == Origin::User,
                 };
                 assert_eq!(m.sneak.is_none(), ends, "{action:?} from {origin:?}");

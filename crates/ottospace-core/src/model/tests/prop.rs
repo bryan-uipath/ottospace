@@ -1710,6 +1710,8 @@ const MAKERS: &[Make] = &[
     |g| Action::OfferAccept { window: g.offered() },
     |g| Action::OfferDismiss { window: g.offered() },
     |g| Action::OfferGone { window: g.offered() },
+    // A click outside the side overlays: the user's alone, and only with `overlay_panels` on.
+    |_| Action::OverlayDismiss,
     // Random flags: what a feature turned off shows goes, and its actions do nothing (`Run::step`).
     |g| {
         let on: Vec<&str> = features::ALL.into_iter().filter(|_| g.rng.coin()).map(Feature::name).collect();
@@ -1922,6 +1924,10 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 
 fn check(m: &Model) -> Result<(), String> {
     check_slots(m)?;
+    // With the overlays on, the panes' room never depends on the sidebar or the drawer being open.
+    ensure!(!m.overlays() || !(m.sidebar_takes_room() || m.drawer_takes_room()), "an overlay takes the panes' room");
+    ensure!(m.overlays() || m.sidebar_takes_room() == m.sidebar.is_some(), "the sidebar's room with the flag off");
+    ensure!(m.overlays() || m.drawer_takes_room() != m.drawer_collapsed(), "the drawer's room with the flag off");
     check_offers(m)?;
     check_out(m)?;
     check_viewers(m)?;
@@ -3379,8 +3385,14 @@ impl Run {
         // Not while something over the workspace waits for the click (the palette, a question).
         let rail_shown = m.rail_shown().filter(|_| m.waits_for(&action, origin).is_none() && m.confirm.is_none());
         let brief_before = m.brief;
+        let (sidebar_was, collapsed_was) = (m.sidebar.is_some(), m.drawer_collapsed());
         let effects = m.update(sent);
         check(m)?;
+        // With the overlays on, no client or timer opens one over the user's work.
+        if m.overlays() && origin != Origin::User {
+            ensure!(sidebar_was || m.sidebar.is_none(), "{action:?} from {origin:?} opened the sidebar overlay");
+            ensure!(!collapsed_was || m.drawer_collapsed(), "{action:?} from {origin:?} opened the drawer overlay");
+        }
         // The user's click on the item the drawer shows collapses it, as ⌘⇧R.
         if let (Action::RailSelect { item }, None) = (&action, &refused) {
             // But over that task's brief: the click leaves the drawer open, the brief kept (#282).

@@ -54,7 +54,7 @@ fn part(t: f32, from: f32, to: f32) -> f32 {
     ((t - from) / (to - from)).clamp(0., 1.)
 }
 
-fn ease_out(x: f32) -> f32 {
+pub(crate) fn ease_out(x: f32) -> f32 {
     1. - (1. - x).powi(3)
 }
 
