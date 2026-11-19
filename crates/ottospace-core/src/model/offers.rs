@@ -85,7 +85,7 @@ impl Model {
         if self.offer_of(pane).is_none() {
             return false;
         }
-        if self.live == Some(pane) || self.peek.as_ref().is_some_and(|peek| peek.pane == pane) {
+        if self.live == Some(pane) {
             self.leave(effects);
         }
         if self.listen.pane() == Some(pane) {

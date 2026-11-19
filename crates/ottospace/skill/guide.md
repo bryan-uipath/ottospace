@@ -230,6 +230,7 @@ ottospace ctl '{"cmd":"mouse","action":"exit","x":600,"y":400}'
   8) and a release at `to`.
 - `wheel` turns the scroll wheel at `x`, `y` by `dx`, `dy`: lines of a mouse wheel, or with
   `"precise":true` points of a trackpad. Positive `dy` scrolls back, as `scroll`'s `lines`.
+  Over an app pane it enters nothing: only the user's own wheel enters one.
   `exit`: the pointer leaves the window, and is over nothing until the next `move`. `enter`: it
   comes back; ottospace acts on the `move` that follows, not on this.
 - Caps: `clicks` is at most 3, `steps` is 1 to 256.

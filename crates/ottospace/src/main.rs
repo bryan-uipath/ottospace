@@ -426,7 +426,7 @@ impl Hosted {
         }
     }
 
-    /// Places the window over its pane and activates its app: entering, and a peek. The app may
+    /// Places the window over its pane and activates its app, on entering. The app may
     /// have resized its window since it was parked: a click is judged against what it covers now.
     fn bring_up(&mut self, keep: Option<ottospace_core::ax::Frame>, window: &Window, cx: &App) {
         let rect = on_screen(self.bounds.get(), window, cx);
@@ -963,7 +963,7 @@ struct Workspace {
     sneak_spent: bool,
     /// Reads of the focused app pane's tree while sneak mode is on.
     sneak_reads: sneak_apps::Reads,
-    /// The scroll that started a peek of a parked app pane, and counts.
+    /// Scrolls held for an app pane the wheel entered, and counts.
     wheel: app_wheel::Wheel,
     /// Whose key, click or request is being handled now: the person's, unless the control socket
     /// is being served (also a key or click it injects) or the tick is doing its own work.
@@ -1408,9 +1408,6 @@ impl Workspace {
                         this.sync_row_menu(window, cx);
                         this.sync_agent_looks();
                         this.read_sneak_app(window, cx);
-                        if ticks.every(4, 0) {
-                            this.check_peek(window, cx);
-                        }
                         this.tick_timeline(window, cx);
                         this.take_worktrees(window, cx);
                         this.tick_prs(window, cx);
@@ -1808,8 +1805,7 @@ impl Workspace {
     }
 
     fn carry_out(&mut self, effects: &[Effect], window: &Window, cx: &mut Context<Self>) {
-        // A peek's app takes the keyboard too.
-        let another_goes_live = effects.iter().any(|effect| matches!(effect, Effect::Live(_) | Effect::Peek(_)));
+        let another_goes_live = effects.iter().any(|effect| matches!(effect, Effect::Live(_)));
         // Every window of this pass that could not be hosted, not only the last.
         let asked = effects.iter().any(|effect| matches!(effect, Effect::HostWindow { .. }));
         let mut unhosted: Vec<String> = Vec::new();
@@ -1993,7 +1989,6 @@ impl Workspace {
                 Effect::FillDisplay { on } => self.fill_display(*on, window, cx),
                 Effect::Run { command } => self.run_command(*command, window, cx),
                 Effect::PressApp { pane, path, role, at, .. } => self.press_app(*pane, path, role, *at, window, cx),
-                Effect::Peek(pane) => self.peek(*pane, window, cx),
                 Effect::HostWindow { mark, bundle, name, title, into, axis, launch } => {
                     let (bundle, name, title) = (bundle.clone(), name.clone(), title.clone());
                     let (mark, into, axis, launch) = (*mark, *into, *axis, *launch);
@@ -2271,7 +2266,6 @@ impl Workspace {
             || model.sneak.is_some()
             || model.row_menu().is_some()
             || model.agent.menu.is_some()
-            || model.peek.is_some()
             || clip.is_some_and(|clip| now.saturating_sub(clip.at) < clip::PULSE_MS + 100)
             || self.bar.moves()
             || self.notice_changed()
@@ -3582,7 +3576,7 @@ impl Workspace {
             "tab_panes": tab_panes,
             // ottospace's own window frame, so a test can turn pane bounds into screen positions.
             "window": frame,
-            // Whether that window has the keyboard: a user's wheel over a parked app pane peeks only then.
+            // Whether that window has the keyboard: a user's wheel over a parked app pane enters only then.
             "window_active": window.is_window_active(),
             // Where parked windows go, so a test can tell "parked" from "moved somewhere".
             "parking": [parking.x, parking.y],
@@ -3732,14 +3726,10 @@ impl Workspace {
                 // Runs of the tick (`cadence`): each frame just after a change, else few at rest.
                 "ticks": self.ticks,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
-                // Scrolls over an app pane's picture, peeks they started, and the one on now (its pane; 0:
-                // none).
+                // Scrolls over an app pane's picture, the entries they made, and the scrolls passed on to an app.
                 "wheels": self.wheel.over,
-                "peeks": self.wheel.peeks,
-                // Scrolls that asked for none: with the left button down, or the window not active.
-                "wheels_held": self.wheel.held,
-                "wheels_inactive": self.wheel.inactive,
-                "peek": self.model.peek.as_ref().map_or(0, |peek| peek.pane),
+                "wheel_entries": self.wheel.entries,
+                "wheels_passed": self.wheel.passed,
             })),
             // Test runs only: each press in an app a sneak label asked for, `[pane, path]`; else null.
             "app_presses": std::env::var_os("OTTOSPACE_E2E").map(|_| &self.sneak_reads.presses),
@@ -4076,8 +4066,8 @@ impl Workspace {
             }
         }
         let Some(pane) = self.wanted else { return };
-        // Already the one on screen; or a peek, which activated the app itself.
-        if self.model.live == Some(pane) || self.model.peek.as_ref().is_some_and(|peek| peek.pane == pane) {
+        // Already the one on screen.
+        if self.model.live == Some(pane) {
             self.wanted = None;
             return;
         }
@@ -4135,8 +4125,7 @@ impl Workspace {
                 let _ = hosted.stream.stop_capture();
                 give_back::forget(hosted.window_id);
                 // Its app may still be frontmost with no window here: take the keyboard back.
-                let peeked = self.model.peek.as_ref().is_some_and(|peek| peek.pane == id);
-                if (self.model.live == Some(id) || peeked) && ax::is_frontmost(hosted.pid) {
+                if self.model.live == Some(id) && ax::is_frontmost(hosted.pid) {
                     cx.activate(true);
                 }
             }
@@ -4205,8 +4194,7 @@ impl Workspace {
                     let pane = pane.map(|(b, _)| recovery::to_frame(on_screen(b, window, cx)));
                     let screens = recovery::screens();
                     // Parked: no pane of its app is up and the app is not in front, so ottospace is.
-                    let peek = self.model.peek.as_ref().map(|peek| peek.pane);
-                    let up = |id: &PaneId| self.model.live == Some(*id) || peek == Some(*id);
+                    let up = |id: &PaneId| self.model.live == Some(*id);
                     let parked = !self.hosted.iter().any(|(id, h)| h.pid == pid && up(id)) && !ax::is_active(pid);
                     let ottospace = Some(recovery::to_frame(own_frame(window, cx)));
                     let spots = &screens.spots;
@@ -4239,8 +4227,7 @@ impl Workspace {
         let scale = window.scale_factor() as f64;
         // Only on a check, with windows hosted: it asks each display's mode, and this runs every frame.
         let spot = (check && !self.hosted.is_empty()).then(|| display::parking_spot(scale));
-        // A peeked window is kept over its pane as the live one is.
-        let live = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
+        let live = self.model.live;
         // Under the notice bar as it is in this frame: the windows follow it as it opens and closes.
         let limit = top_limit(window, cx);
         let keep = self.bars_leave();
@@ -6179,9 +6166,7 @@ impl Workspace {
         // Agent mode's level, where a task may use the pane, takes the line's place on any pane.
         let focus = theme::focus_line(self.model.focused == Some(id), self.model.mode());
         let accent = self.agent_header_line(id).or(focus);
-        // A peek raises the window as entering does.
-        let raised = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
-        let covered = bar > 0.0 && raised == Some(id);
+        let covered = bar > 0.0 && self.model.live == Some(id);
         let line = |d: Div| d.absolute().left_0().right_0().h(px(theme::FOCUS_LINE));
         let (line, top_line) = match accent {
             Some(colour) if covered => (None, Some(line(div()).top_0().bg(rgb(colour)))),
@@ -6291,9 +6276,11 @@ impl Workspace {
                         .left_0()
                         .w(px(hosted.shown.width as f32))
                         .h(px(hosted.shown.height as f32))
-                        // The wheel brings the app's window up for the scroll (a peek).
+                        // The wheel enters the app, and the scroll is passed on to its window.
                         .on_scroll_wheel(
-                            cx.listener(move |this, _: &ScrollWheelEvent, window, cx| this.app_wheel(id, window, cx)),
+                            cx.listener(move |this, e: &ScrollWheelEvent, window, cx| {
+                                this.app_wheel(id, e, window, cx)
+                            }),
                         )
                         .child(surface(buffer).size_full())
                         // Record where the preview is drawn (e2e reads it), and mask the window's
@@ -6948,11 +6935,7 @@ impl Workspace {
             Some(key) => format!("{key} returns"),
             None => "click to return".to_string(),
         };
-        let peek = self.model.peek.as_ref().and_then(|peek| self.hosted.get(&peek.pane));
-        let peek_hint = peek.map(|hosted| hosted.app.clone());
         let (mode, hint) = match self.model.mode() {
-            // The app is up for a scroll: it has the keyboard until the peek ends.
-            _ if peek_hint.is_some() => ("PEEK", peek_hint.as_deref().unwrap_or_default()),
             // A key, not the key list: ⌘/ shows the keys of every mode. A mode you can be in by
             // accident names its way out. Normal is the focus line's colour alone: no chip.
             Mode::Normal => ("", ""),

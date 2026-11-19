@@ -153,6 +153,24 @@ raise the app when mousewheel is there". So the app goes live for the scroll.
   and the client's refusal in the status bar. AppKit apps (Finder), Chromium and Electron are not
   verified.
 
+### The wheel enters (replaces the peek)
+
+2026-11-18. The user: "seems like it happens when i scroll in slack. its a little janky. thinking
+when we scroll we should just get into app mode". The peek above is removed: `PEEK`, its park
+when quiet, `PeekCheck` and `Effect::Peek`.
+
+- **What.** The core turns the user's `AppWheel` over a parked app pane on show into that pane's
+  `Enter` (`Model::app_wheel`), so it does what a click does: `APP`, focus, the app activated.
+  Not while dragging, nor while ottospace's window is not active, nor under sneak mode, the
+  palette, a box, the quit question or the overlay. Any other origin is refused (`USERS_ALONE`).
+- **The first scroll.** Held and sent again. Scrolls that reach the live pane's picture are
+  summed and, once the app is in front (looked at every 80 ms, the click replay's wait; until
+  then its window is under ottospace's), sent as one new pixel scroll at the pointer, after a
+  mouse move there, at the HID level (`ottospace_mac::wheel::scroll`). One that comes back is
+  held again and sent at the next look; an entry has 12 looks (about 1 s). The earlier re-post was a copy of the
+  system's event (ottospace's own fields in it) and came back; this one is made fresh, as a
+  test's scroll that did reach the app was. Posting to the app's process is ignored by Chrome.
+
 ## Open questions
 
 - A per-app, user-initiated request for the full tree (`AXManualAccessibility` /

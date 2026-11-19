@@ -150,7 +150,7 @@ fn click_at(x: f64, y: f64, double: bool) {
 
 /// Waits for the system to read the left button as up, releasing again at `x, y` until it does.
 /// About one `cliclick` release in six is not taken on a hosted runner; the button then reads as
-/// down for the tests after, and a wheel over a parked pane (a drag, to ottospace) starts no peek.
+/// down for the tests after, and a wheel over a parked pane (a drag, to ottospace) enters nothing.
 fn released(x: f64, y: f64) {
     let up = (0..20).any(|_| {
         std::thread::sleep(Duration::from_millis(150));
@@ -1747,7 +1747,7 @@ fn hid(x: f64, y: f64, lines: Option<i32>) {
     }
 }
 
-/// The user's wheel at `x, y` over a parked app pane, once what a peek needs holds: ottospace's
+/// The user's wheel at `x, y` over a parked app pane, once what an entry needs holds: ottospace's
 /// window has the keyboard (the front app's may not yet) and the left button is up (else a drag).
 fn user_wheel(otto: &Proc, x: f64, y: f64) {
     let state = || otto.call(json!({"cmd": "state"}));
@@ -1801,10 +1801,12 @@ fn on_picture(otto: &Proc) -> [f64; 2] {
 
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
-fn the_users_wheel_brings_a_parked_app_window_up_and_the_next_scroll_reaches_it() {
-    // The canary's window adds up the scrolls it receives.
+fn the_users_wheel_enters_a_parked_app_pane_and_its_first_scroll_reaches_the_app() {
+    // The canary's window counts the scrolls it receives, and adds them up.
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-wheel", "CANARY_SOCKET", &[]);
-    let scrolled = || canary.call(json!({"cmd": "state"}))["windows"][0]["wheel"].as_f64().unwrap_or(0.0);
+    let canary_state = || canary.call(json!({"cmd": "state"}))["windows"][0].clone();
+    let received = || canary_state()["wheels"].as_u64().unwrap_or(0);
+    let scrolled = || canary_state()["wheel"].as_f64().unwrap_or(0.0);
     let original = wait_for("the canary window", || global_frame(&canary, 0));
     let otto = otto_for(&canary, "otto-wheel", &[]);
     let state = || otto.call(json!({"cmd": "state"}));
@@ -1812,109 +1814,47 @@ fn the_users_wheel_brings_a_parked_app_window_up_and_the_next_scroll_reaches_it(
     let parked = || rect(&state()["hosted"]["1"]).filter(|f| close(f[0], spot[0]));
     let [x, y] = on_picture(&otto);
     let window = rect(&state()["window"]).expect("ottospace window frame");
-    let main = ottospace_mac::display::all()[0];
     let counts = || state()["counts"].clone();
 
-    // A client's wheel brings nothing up, and says why.
+    // A client's wheel enters nothing, and says why.
     let request = json!({"cmd": "mouse", "action": "wheel", "x": x - window[0], "y": y - window[1], "dy": -3});
     otto.call(request);
-    // The reason, in the status bar: printed at the end (not yet seen on CI).
     let told = (0..30).any(|_| {
         std::thread::sleep(Duration::from_millis(100));
         state()["notice"].as_str().is_some_and(|n| n.contains("user's alone"))
     });
     let notice = format!("{} ({})", state()["notice"], counts());
-    assert_eq!((counts()["peeks"].as_u64(), scrolled()), (Some(0), 0.0), "a client's wheel brought the app up");
+    assert_eq!((counts()["wheel_entries"].as_u64(), received()), (Some(0), 0), "a client's wheel entered the app");
+    assert_eq!(state()["mode"], "normal");
     assert!(parked().is_some(), "the window left its parking spot");
 
-    // The user's wheel: the window comes up over the pane, under the pointer.
+    // The user's wheel enters the pane, as a click does: APP mode, the window over its pane.
     user_wheel(&otto, x, y);
     let wheels = || {
         let trace = otto.call(json!({"cmd": "trace"}))["trace"].as_str().unwrap_or_default().to_string();
         let lines: Vec<&str> = trace.lines().filter(|l| l.contains("wheel")).collect();
-        format!("{} {}; {}", counts(), lines.join(" "), in_front())
+        format!("{} {}; canary {}; {}", counts(), lines.join(" "), canary_state(), in_front())
     };
-    wait_or("the peek", wheels, || (counts()["peek"] == 1).then_some(()));
+    wait_or("the entry", wheels, || (state()["mode"] == "app").then_some(()));
+    assert_eq!((state()["state"]["live"].clone(), state()["state"]["focused"].clone()), (json!(1), json!(1)));
     let up = wait_for("the window over its pane", || rect(&state()["hosted"]["1"]).filter(|f| !close(f[0], spot[0])));
     assert!(up[0] <= x && x < up[0] + up[2] && up[1] <= y && y < up[1] + up[3], "{up:?} is not under the pointer");
-    // Within the peek (1.5 s): the app is in front, and the next scroll reaches its window. The
-    // scroll that started the peek reached ottospace's picture and is not passed on (on CI a
-    // re-post of it came back to ottospace even with the canary in front).
-    let soft = |tries: u32, check: &dyn Fn() -> bool| {
-        (0..tries).any(|_| {
-            std::thread::sleep(Duration::from_millis(50));
-            check()
-        })
-    };
-    let front = soft(8, &|| front_app().0 == canary.child.id());
-    let first = scrolled();
-    hid(x, y, Some(-3));
-    let next = soft(8, &|| scrolled().abs() > first.abs());
-    let (mode, live) = (state()["mode"].clone(), state()["state"]["live"].clone());
-    report(&format!(
-        "peek: canary in front {front} ({}), first scroll {first}, next landed {next}, scrolled {}, mode {mode}, live {live}, {}",
-        in_front(),
-        scrolled(),
-        wheels()
-    ));
-    assert!(next, "a scroll over the peeked window did not reach it");
-    assert!(front, "the canary was not activated");
-    // The app is in front for the peek, but it is no entry: the mode is not APP.
-    assert_eq!((&mode, &live), (&json!("normal"), &Value::Null));
-    assert_eq!(counts()["peeks"], 1, "{}", counts());
+    wait_or("the canary in front", in_front, || (front_app().0 == canary.child.id()).then_some(()));
 
-    // Not yet proven on CI, so seen and printed, not asserted: the pointer leaving parks the
-    // window and gives ottospace the keyboard back; a quiet wheel parks it; a click makes it an
-    // entry; a quit puts it back where it was.
-    hid(main.origin.x + 4.0, main.origin.y + 4.0, None);
-    let left = soft(60, &|| parked().is_some() && counts()["peek"] == 0);
-    let back = soft(40, &|| front_app().0 == otto.child.id());
-    hid(x, y, None);
-    std::thread::sleep(Duration::from_millis(300));
-    hid(x, y, Some(-3));
-    let again = soft(40, &|| counts()["peek"] == 1);
-    let at = Instant::now();
-    let quiet = again && soft(80, &|| parked().is_some());
-    let quiet_after = at.elapsed();
-    hid(x, y, Some(-3));
-    let third = soft(40, &|| counts()["peek"] == 1);
-    ottospace_mac::input::click(objc2_core_foundation::CGPoint::new(x, y), 1);
-    released(x, y);
-    let entered = third && soft(40, &|| state()["mode"] == "app");
-    if entered {
-        otto.call(json!({"cmd": "leave"}));
-    }
+    // The scroll that entered reaches the app, with no other sent: down, as the user's was.
+    wait_or("the first scroll in the app", wheels, || (received() > 0).then_some(()));
+    report(&format!("wheel: the first scroll reached the app: {}", wheels()));
+    assert!(scrolled() < 0.0, "the scroll reached the app the wrong way: {}", wheels());
+    assert_eq!(counts()["wheel_entries"], 1, "{}", counts());
+
+    // Leaving is as ever: the leave key parks the window.
+    assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
+    wait_for("the window parked again", parked);
     otto.call(json!({"cmd": "quit"}));
-    let restored = soft(100, &|| global_frame(&canary, 0).is_some_and(|f| (0..4).all(|i| close(f[i], original[i]))));
-    report(&format!(
-        "peek after: parked when the pointer left {left}, ottospace in front again {back}, parked when quiet {quiet} \
-         (after {quiet_after:?}), a click entered {entered}, restored at quit {restored}, the client's wheel told why {told} \
-         ({notice})"
-    ));
-}
-
-#[test]
-#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
-fn a_killed_ottospace_has_its_guardian_give_a_peeked_window_back() {
-    let home = support::temp(&format!("otto-apps-peek-guard-{}", std::process::id()));
-    std::fs::create_dir_all(&home).expect("make the folder");
-    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-peek-guard", "CANARY_SOCKET", &[]);
-    let original = wait_for("the canary window", || global_frame(&canary, 0));
-    let home_str = home.to_str().expect("a plain path");
-    let mut otto = otto_for(&canary, "otto-peek-guard", &[("OTTOSPACE_HOME", home_str), ("OTTOSPACE_GUARD", "1")]);
-    host_and_park(&otto);
-    let [x, y] = on_picture(&otto);
-    user_wheel(&otto, x, y);
-    let counts = || otto.call(json!({"cmd": "state"}))["counts"].clone();
-    wait_or("the peek", || format!("{}; {}", counts(), in_front()), || (counts()["peek"] == 1).then_some(()));
-
-    // Killed while the window is up over its pane: the guardian puts it back where it was.
-    otto.child.kill().expect("kill -9");
-    let _ = otto.child.wait();
-    wait_for("the guardian to put the window back", || {
-        global_frame(&canary, 0).filter(|f| (0..4).all(|i| (f[i] - original[i]).abs() <= 1.0))
+    wait_for("the window put back at quit", || {
+        global_frame(&canary, 0).filter(|f| (0..4).all(|i| close(f[i], original[i])))
     });
-    let _ = std::fs::remove_dir_all(&home);
+    report(&format!("wheel: the client's wheel told why {told} ({notice})"));
 }
 
 #[test]

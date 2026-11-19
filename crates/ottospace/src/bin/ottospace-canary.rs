@@ -128,6 +128,8 @@ struct Canary {
     clicks: Vec<[f32; 2]>,
     /// The scroll wheel's vertical deltas received, in points, added up.
     wheel: f32,
+    /// The scroll wheel events received.
+    wheels: u32,
     focus: FocusHandle,
     /// Draws `CANARY_PATTERN`'s stripes.
     pattern: bool,
@@ -175,6 +177,7 @@ impl Render for Canary {
             )
             .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
                 this.wheel += f32::from(e.delta.pixel_delta(px(16.)).y);
+                this.wheels += 1;
                 cx.notify();
             }))
             .child(div().text_xl().child(self.title.clone()))
@@ -217,7 +220,7 @@ fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, at: O
             let focus = cx.focus_handle();
             window.focus(&focus);
             let pattern = number == 1 && std::env::var_os("CANARY_PATTERN").is_some();
-            Canary { title, keys: Vec::new(), clicks: Vec::new(), wheel: 0.0, focus, pattern }
+            Canary { title, keys: Vec::new(), clicks: Vec::new(), wheel: 0.0, wheels: 0, focus, pattern }
         })
     });
     if let Ok(handle) = handle {
@@ -269,7 +272,7 @@ fn state(windows: &Windows, cx: &mut App) -> String {
             let active = window.is_window_active();
             // `frame`: as Accessibility has it, global, so a test can tell whether it is on a screen.
             let global = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::frame(view) });
-            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "wheel": canary.wheel, "bounds": frame, "frame": global, "active": active, "scale": scale })
+            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "wheel": canary.wheel, "wheels": canary.wheels, "bounds": frame, "frame": global, "active": active, "scale": scale })
         });
         entry.map(|entry| open_windows.push(entry)).is_ok()
     });
