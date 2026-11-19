@@ -220,12 +220,18 @@ is the annotated screen capture, [capture.md](../capture.md).)
 - **Filed as a task not started**, as the new-task box's ⇧↵ does today ("adds it for later:
   nothing starts"; a saved agent's ↵ files the same way). It shows under Tasks and later in the
   where-next list, where one key starts an agent on it, context attached, or clears it.
-- **Privacy**: meeting titles, transcript text and window titles are never in the state or the
-  logs (`AGENTS.md`, `event_log.rs`). The note's own file (in the person's notes, beside the
-  transcripts) may hold the meeting title and the pointer; the state holds only that a note
-  exists, its id and time. Transcript text reached through the pointer is untrusted data for an
-  agent. **Open, owner deciding**: loosening this for a note's meeting title and transcript
-  pointer, on request and in the brief (marked untrusted), or in the state.
+- **Context pills.** The owner: "we should show pills when we create a task or note so it's clear
+  what context it's bringing in." In the box, before ↵, each piece of context to be attached is a
+  pill: "Meeting · <title>", "Transcript · 10:42", the workspace or task in front, picked items
+  (Pick's chips, [pick-and-app-profiles.md](../pick-and-app-profiles.md)). Each has × to leave it
+  out; nothing without a pill is attached. Every task made from the box, not only notes. Drawn
+  from what the app holds; a pill's meeting title is draw-only, never in the state.
+- **Privacy, decided (owner): on request, not broadcast.** A note's record holds the meeting title
+  and the transcript pointer. They are given out by a read-only request and in the task's brief,
+  quoted and marked untrusted, as the `calendar` request gives titles today; never in the state
+  every reply carries, the event log or the unified log. This loosens "titles only via
+  `calendar`" by one more read-only request: `AGENTS.md`'s Control socket section changes when it
+  is built. Transcript text reached through the pointer is untrusted data for an agent.
 - **The key, decided (owner)**: quick note and quick task are one box on ⌘⇧N. ↵ files a note for
   later, nothing starts; ⌘↵ starts it as a task now, in its own temporary workspace. Part of the
   decided remap: ⌘N new task, ⌘⇧N this box, ⌘⌥N resume a session, ⌘J next thing needing you. On
