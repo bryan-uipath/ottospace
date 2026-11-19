@@ -1323,6 +1323,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
   if (value === "multi_monitor") return value;
+  if (value === "overlay_panels") return value;
   throw wrong(at, "a feature", value);
 }
 
@@ -1865,6 +1866,11 @@ function homeNode(value: unknown, at: string): HomeNode {
   };
 }
 
+function overlays(value: unknown, at: string): { sidebar: Rect | null; drawer: Rect | null } {
+  const o = fields(value, at);
+  return { sidebar: orNull(rect)(o.sidebar, `${at}.sidebar`), drawer: orNull(rect)(o.drawer, `${at}.drawer`) };
+}
+
 function home(value: unknown, at: string): Home {
   const o = fields(value, at);
   const counts = fields(o.counts, `${at}.counts`);
@@ -1940,6 +1946,7 @@ export function snapshot(value: unknown): Snapshot {
     agent_chip: orNull(agentChip)(o.agent_chip, "agent_chip"),
     strip: orNull(rect)(o.strip, "strip"),
     bar_header: orNull(rect)(o.bar_header, "bar_header"),
+    overlays: overlays(o.overlays, "overlays"),
     tasks_dot: orNull(rect)(o.tasks_dot, "tasks_dot"),
     drag: orNull(drag)(o.drag, "drag"),
     shown: map(rect)(o.shown, "shown"),

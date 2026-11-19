@@ -1361,6 +1361,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 | `slots` | Experimental | off | Slots: a pane that keeps its place and waits for a window you name (⋯ on an app pane's header) |
 | `agent_mode` | Experimental | off | Agent mode (⌘⌃V): let a workspace's task see an app pane, from the robot in its header |
 | `multi_monitor` | Experimental | off | Multi-monitor (⌘⇧O): fold a tab out to its own window on another display |
+| `overlay_panels` | Experimental | off | Overlay panels (an experiment): the sidebar and the drawer float over the panes, moving nothing, and close after use |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1379,6 +1380,23 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   [Slots](#slots) (design: [slots.md](ai/slots.md)).
 - `multi_monitor` off: ⌘⇧O does nothing, no Fold Tab item, no tab is out; one out folds back in
   (design: [multi-monitor.md](ai/multi-monitor.md)).
+- `overlay_panels` (an experiment, off): the sidebar and the drawer take width from the panes, as
+  described elsewhere in this page. On, both float over the panes from their rails instead, with a
+  short slide in (none under Reduce Motion) and a shadow: the panes, and every hosted window, lie as
+  with both collapsed, so opening either moves nothing. Each is for a quick look or a jump:
+  - The sidebar closes on ⌘⇧L or its rail cell, Esc in its list, a click outside it (not on a rail),
+    the keyboard leaving it for a pane, or a row that goes somewhere (a task, a repository, a tab,
+    a workspace, a mark). Opening it gives its list the keyboard; Esc or ⌘⇧L gives it back to the
+    conversation it came from, else to the pane.
+  - The drawer folds into its rail on ⌘⇧R, →| or its rail item, a click outside it, or the keyboard
+    leaving it for a pane. Esc in a conversation is still the agent's. A capture's draft keeps it open.
+  - Both may be open at once, each over its own side; one click outside both closes both.
+  - Only you open or dismiss one: a client's `section`, ⌘⇧L, ⌘⌃E, ⌘N, a new task or a needs-you
+    change opens neither (what it puts in the drawer waits behind the rail), and its dismissal is
+    refused ("only the user opens or dismisses a side overlay").
+  - An app you are in: its window is above ottospace and may cover part of an open overlay. The
+    part that shows takes clicks; opening the sidebar takes the keyboard back and parks the app.
+  - The state's `overlays` gives each one's rect (`sidebar`, `drawer`), null while closed.
 
 ### Displays
 

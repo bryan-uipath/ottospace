@@ -153,7 +153,7 @@ export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
 export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
 /** A feature flag (`features` in `settings.json`). Off, its requests answer "feature off: <name>". */
-export type Feature = "marks" | "apps_section" | "transcripts" | "slots" | "agent_mode" | "multi_monitor";
+export type Feature = "marks" | "apps_section" | "transcripts" | "slots" | "agent_mode" | "multi_monitor" | "overlay_panels";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
@@ -1506,6 +1506,8 @@ export interface Snapshot {
   /** The left column's title strip, and the open section's header (null: none open). */
   strip: Rect | null;
   bar_header: Rect | null;
+  /** The side overlays as drawn (`overlay_panels`): the sidebar's and the drawer's place over the panes; null while closed or with the flag off. */
+  overlays: { sidebar: Rect | null; drawer: Rect | null };
   /** The Tasks rail cell's needs-you dot, whichever section is open (null: no task needs you). */
   tasks_dot: Rect | null;
   /** While a pane is dragged: where a drop would land, both null over anything else. */

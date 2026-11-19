@@ -1,0 +1,38 @@
+# The `overlay_panels` experiment: the sidebar and the drawer over the panes, moving nothing.
+# First with the flag off (today: both take width from the panes), then on, by the settings file.
+# Made-up task and terminal lines.
+{"click":"top:new_workspace"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"type","pane":1,"text":"clear; echo left pane: build log\r"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"type","pane":2,"text":"clear; echo right pane: notes\r"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"f i x space t h e space l o g i n space l o o p","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
+{"settle":500}
+{"shot":"off-closed"}
+{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
+{"settle":500}
+{"shot":"off-both-open"}
+{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
+{"write":"home/settings.json","text":"{\"repos\": [], \"features\": {\"overlay_panels\": true}}\n"}
+{"until":"state.features","is":["overlay_panels"]}
+{"settle":500}
+{"shot":"on-closed"}
+{"record":"start"}
+{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"settle":500}
+{"shot":"on-sidebar"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
+{"settle":500}
+{"shot":"on-both-open"}
+{"click":"rail:repos"}
+{"settle":300}
+{"shot":"on-drawer"}
+{"click":"pane:1"}
+{"settle":500}
+{"shot":"on-dismissed"}
+{"record":"stop"}

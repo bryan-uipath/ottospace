@@ -33,13 +33,17 @@ impl Workspace {
     /// Right of the panes: the drawer's place, `width` wide with its rail at the right edge, always
     /// shown. In the place, what the core says is there: the inspector, a capture's draft, the
     /// transcript, the new-task box, the conversation or a brief. Nothing: the drawer is collapsed,
-    /// the rail alone. With the width drawn.
-    pub(crate) fn render_right(&self, width: f32, cx: &mut Context<Self>) -> (AnyElement, f32) {
+    /// the rail alone. With the width drawn, and the body to draw over the panes as an overlay.
+    pub(crate) fn render_right(&self, width: f32, cx: &mut Context<Self>) -> (AnyElement, f32, Option<AnyElement>) {
         let inner = (width - WIDTH).max(0.);
         let body = self.render_inspector(inner, cx).or_else(|| self.render_draft(cx));
         let body = body.or_else(|| self.render_listen_view(inner, cx)).or_else(|| self.render_drawer(inner, cx));
+        // An overlay (`overlay_panels`): the rail alone in its place, the body drawn over the panes.
+        if self.model.overlays() {
+            return (div().flex_none().h_full().flex().child(self.drawer_rail(cx)).into_any_element(), WIDTH, body);
+        }
         let drawn = if body.is_some() { width } else { WIDTH };
-        (div().flex_none().h_full().flex().children(body).child(self.drawer_rail(cx)).into_any_element(), drawn)
+        (div().flex_none().h_full().flex().children(body).child(self.drawer_rail(cx)).into_any_element(), drawn, None)
     }
 
     /// The column: the tasks and + scroll; at the foot a divider, then the transcript, always in view.

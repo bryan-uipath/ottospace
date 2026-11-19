@@ -7418,6 +7418,116 @@ fn the_sidebar_collapses_into_the_left_rail_and_opens_on_the_section_open_last()
     assert_eq!(otto.user_click(at(otto.control("rail:repos"), 0.5, 0.5))["state"]["sidebar"], "repos");
 }
 
+/// `overlay_panels` on, and no slide to wait for.
+const OVERLAYS: [(&str, &str); 2] = [("OTTOSPACE_FEATURES", "overlay_panels"), ("OTTOSPACE_REDUCE_MOTION", "1")];
+
+/// A new workspace of two terminals, the drawer collapsed and the sidebar closed: the drawn state.
+fn overlay_panes(otto: &Otto) -> Value {
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.user_key("cmd-d");
+    otto.user_key("cmd-d");
+    let drawn = otto.drawn();
+    assert_eq!(pane_ids(&drawn).len(), 2, "{}", drawn["bounds"]);
+    assert!(drawn["state"]["sidebar"].is_null() && drawn["drawer"]["collapsed"] == true, "{}", drawn["drawer"]);
+    drawn
+}
+
+/// The owner: "the left pane should be an overlay too and not interfere with the window layout".
+/// With `overlay_panels` on, the sidebar (⌘⇧L) and the drawer (⌘N's box) float over the panes
+/// from their rails: every pane keeps its bounds. Off, today's: the panes give them room.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn overlay_panels_opening_the_sidebar_or_the_drawer_moves_no_pane() {
+    let otto = Otto::launch_with("overlay-bounds", &OVERLAYS);
+    let before = overlay_panes(&otto);
+    assert_eq!(before["overlays"], json!({"sidebar": null, "drawer": null}));
+    let window = rect(&before["window"]);
+    otto.user_key("cmd-shift-l");
+    let open = otto.drawn();
+    assert_eq!((&open["state"]["sidebar"], &open["mode"]), (&json!("repos"), &json!("list")));
+    assert_eq!(open["bounds"], before["bounds"], "the sidebar moved a pane");
+    let bar = rect(&open["overlays"]["sidebar"]);
+    assert!((bar[0] - 56.).abs() <= 1. && (bar[2] - 260.).abs() <= 1., "against the left rail: {bar:?}");
+    // Its own Esc closes it; ⌘N's box opens the drawer over the panes, against its rail.
+    otto.user_key("escape");
+    otto.user_key("cmd-n");
+    let boxed = otto.drawn();
+    assert_eq!((&boxed["state"]["sidebar"], &boxed["drawer"]["collapsed"]), (&Value::Null, &json!(false)));
+    assert_eq!(boxed["bounds"], before["bounds"], "the drawer moved a pane");
+    let drawer = rect(&boxed["overlays"]["drawer"]);
+    assert!((drawer[0] + drawer[2] - (window[2] - 48.)).abs() <= 1., "against the drawer's rail: {drawer:?}");
+    // No slide under Reduce Motion: no frame asked for it.
+    assert_eq!(boxed["counts"]["overlay_frames"], 0);
+
+    // The flag off: the panes give the sidebar its room, as before.
+    let off = Otto::launch_with("overlay-bounds-off", &[]);
+    let before = overlay_panes(&off);
+    off.user_key("cmd-shift-l");
+    let open = off.drawn();
+    assert_eq!(open["state"]["sidebar"], "repos");
+    assert_ne!(open["bounds"], before["bounds"], "the flag off, the panes make room");
+    assert_eq!(open["overlays"], json!({"sidebar": null, "drawer": null}));
+    assert_ne!(open["mode"], "list", "the flag off, the keyboard stays where it was");
+}
+
+/// A click outside an overlay (on a pane), Esc in its list, or a row that goes somewhere closes
+/// the sidebar; a click on a pane folds the drawer. A click inside either keeps it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn overlay_panels_a_click_outside_esc_or_a_row_chosen_dismisses_them() {
+    let otto = Otto::launch_with("overlay-dismiss", &OVERLAYS);
+    let before = overlay_panes(&otto);
+    let panes = pane_ids(&before);
+    let far = rect(&before["bounds"][panes[1].to_string()]);
+    // Found before the box takes the keyboard: the rail does not move.
+    let tasks = at(otto.control("rail:tasks"), 0.5, 0.5);
+    // Esc.
+    otto.user_key("cmd-shift-l");
+    assert!(otto.user_key("escape")["state"]["sidebar"].is_null());
+    // A click inside keeps it; one on a pane closes it, and focuses that pane.
+    otto.user_click(tasks);
+    let open = otto.drawn();
+    assert_eq!(open["state"]["sidebar"], "tasks");
+    let inside = rect(&open["overlays"]["sidebar"]);
+    assert_eq!(otto.user_click(at(inside, 0.5, 0.9))["state"]["sidebar"], "tasks");
+    let clicked = otto.user_click(at(far, 0.5, 0.5));
+    assert!(clicked["state"]["sidebar"].is_null(), "a click on a pane");
+    assert_eq!(clicked["state"]["focused"], panes[1]);
+    // Both open; one click on a pane closes both.
+    otto.user_key("cmd-n");
+    otto.user_click(tasks);
+    let both = otto.drawn();
+    assert!(!both["overlays"]["sidebar"].is_null() && !both["overlays"]["drawer"].is_null(), "{}", both["overlays"]);
+    let closed = otto.user_click(at(rect(&both["bounds"][panes[0].to_string()]), 0.5, 0.5));
+    assert_eq!((&closed["state"]["sidebar"], &closed["drawer"]["collapsed"]), (&Value::Null, &json!(true)));
+    // A task's row: the sidebar goes, its conversation shows.
+    otto.call(json!({"cmd": "task_add", "title": "a row to go to"}));
+    otto.user_click(tasks);
+    let went = otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    assert!(went["state"]["sidebar"].is_null(), "a row that goes somewhere");
+}
+
+/// No client opens an overlay over the user's work, or dismisses the user's.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn overlay_panels_a_socket_client_cannot_open_or_dismiss_them() {
+    let otto = Otto::launch_with("overlay-clients", &OVERLAYS);
+    overlay_panes(&otto);
+    let theirs = otto.raw(&json!({"cmd": "section", "section": "tasks"}).to_string());
+    assert_eq!(theirs["error"], "only the user opens or dismisses a side overlay");
+    assert!(otto.drawn()["state"]["sidebar"].is_null());
+    assert!(otto.call(json!({"cmd": "key", "keys": "cmd-shift-l"}))["state"]["sidebar"].is_null());
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-n"}))["drawer"]["collapsed"], true);
+    // A task a client adds, or one that comes to need the user: the drawer stays as left.
+    otto.call(json!({"cmd": "task_add", "title": "theirs", "state": "needs_you"}));
+    assert_eq!(otto.drawn()["overlays"]["drawer"], Value::Null);
+    // The user's open sidebar: a client's click outside it leaves it open.
+    otto.user_key("cmd-shift-l");
+    let far = rect(&otto.drawn()["bounds"][pane_ids(&otto.drawn())[1].to_string()]);
+    otto.mouse("down", at(far, 0.5, 0.5));
+    assert_eq!(otto.mouse("up", at(far, 0.5, 0.5))["state"]["sidebar"], "repos");
+}
+
 /// The owner: the Tasks cell's needs-you mark showed only while Tasks was open. Now a dot at its
 /// icon's corner, whichever section is open, or none.
 #[test]
