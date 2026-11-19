@@ -221,7 +221,8 @@ Design note: `docs/ai/attention/plan.md`.
 
 ## CI
 
-- A pull request takes no macOS runner by default: they are scarce. `.github/workflows/ci.yml`'s
+- A pull request takes no macOS runner by default (an installer change still runs `scripts.yml` on
+  one): they are scarce. `.github/workflows/ci.yml`'s
   `check`, on pull requests, `merge_group` and pushes to `main`, on `ubuntu-latest`: `cargo fmt -p
   ottospace -p ottospace-core -p ottospace-sessions -p ottospace-agents --check`, `cargo clippy --
   -D unused -D unreachable_pub` on the three pure crates, for Linux and again with `--target
@@ -241,8 +242,9 @@ Design note: `docs/ai/attention/plan.md`.
   suite is a step that does not stop the next; the last step fails the job if any failed, and the
   summary lists each suite's outcome and the failed tests.
 - On `main`, `ci.yml` calls it on every push (a newer push cancels the older run, so a burst of
-  merges tests the newest tip). While it fails, `main-red` keeps one issue, "main is red": the failed
-  tests and `git log <last green>..HEAD`; it closes when main passes again (`issues: write` and
+  merges tests the newest tip). While it or `check` fails, `main-red` keeps one issue, "main is red":
+  the failed tests and `git log <last green>..HEAD`; it closes when both pass again (a re-run of an
+  older push leaves it alone) (`issues: write` and
   `actions: read` on that job only). A red main is fixed before more lands.
 - On a pull request, `.github/workflows/e2e.yml`, by label: `pr-e2e` runs `macos.yml` with the e2e
   tests `scripts/e2e-for` selects from the diff (all of them while the script is missing), no
@@ -328,8 +330,8 @@ Design note: `docs/ai/attention/plan.md`.
 - A tool, CLI, parser or CI change pastes the command's output instead.
 - A pull request's checks are Linux only: no e2e, no picture, no compile of `ottospace-mac` or the
   shell (see "CI"). So a visual change's before and after pictures are in its body (Shots runs only
-  with `pr-shots`), and its e2e evidence is the summary of a local `scripts/e2e-for` run pasted in
-  the body, or a green `pr-e2e` run (`pr-e2e-apps` for hosting, parking or adopting windows).
+  with `pr-shots`), and its e2e evidence is the summary of a local `scripts/e2e-for` run (`cargo e2e`
+  while the script is missing) pasted in the body, or a green `pr-e2e` run (`pr-e2e-apps` for hosting, parking or adopting windows).
 
 ## Install scripts
 

@@ -90,15 +90,13 @@ jobs:
     uses: ./.github/workflows/macos.yml
     permissions:
       contents: read
-    with:
-      save-cache: true
 
-  # One issue, "main is red": opened or updated while main's macOS job fails, with the failed tests
-  # and the commits since the last green run; closed when it passes again.
+  # One issue, "main is red": opened or updated while main's `check` or macOS job fails, with the
+  # failed tests and the commits since the last green run; closed when both pass again.
   main-red:
-    needs: macos
-    # `!cancelled()`: without a status function the job is skipped when `macos` fails.
-    if: ${{ !cancelled() && github.event_name == 'push' && (needs.macos.result == 'success' || needs.macos.result == 'failure') }}
+    needs: [check, macos]
+    # `!cancelled()`: without a status function the job is skipped when a job it needs fails.
+    if: ${{ !cancelled() && github.event_name == 'push' && contains(fromJSON('["success","failure"]'), needs.macos.result) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -115,13 +113,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          CHECK: ${{ needs.check.result }}
           RESULT: ${{ needs.macos.result }}
           FAILED: ${{ needs.macos.outputs.failed }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          # A re-run of an older push must not speak for main: only the newest run does.
+          newest="$(gh run list --workflow ci.yml --branch main --event push --limit 1 --json databaseId --jq '.[0].databaseId')"
+          if [ "$newest" != "$GITHUB_RUN_ID" ]; then echo "a newer run ($newest) speaks for main"; exit 0; fi
+          [ "$CHECK" = success ] || FAILED="$(printf 'check (Linux): %s\n%s' "$CHECK" "$FAILED")"
           number="$(gh issue list --state open --search 'in:title "main is red"' --json number,title \
             --jq '[.[] | select(.title == "main is red")][0].number // empty')"
-          if [ "$RESULT" = success ]; then
+          if [ "$RESULT" = success ] && [ "$CHECK" = success ]; then
             if [ -n "$number" ]; then gh issue close "$number" --comment "Green again at $GITHUB_SHA: $RUN_URL"; fi
             exit 0
           fi
@@ -134,7 +137,7 @@ jobs:
           fi
           body="$(mktemp)"
           {
-            echo "main's macOS job failed at $GITHUB_SHA: [run]($RUN_URL). Each failed e2e test's folder is in its artifacts."
+            echo "main failed at $GITHUB_SHA: [run]($RUN_URL). Each failed e2e test's folder is in its artifacts."
             echo
             echo "### Failed"
             echo '```'

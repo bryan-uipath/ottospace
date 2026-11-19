@@ -220,7 +220,7 @@ whether the regression is real and accepted.
   Linux: `cargo fmt --check` on the formatted crates; on the three pure crates `cargo clippy -- -D
   unused -D unreachable_pub`, for Linux and for `aarch64-apple-darwin` (checked, not linked),
   and `cargo test`; `cargo machete`; the SDK's type check and the tests that need no app. A pull
-  request takes no macOS runner unless labelled. `check` does not compile `ottospace-mac` or the
+  request takes no macOS runner unless labelled (an installer change still runs `scripts.yml` on one). `check` does not compile `ottospace-mac` or the
   app: their build scripts need Apple's SDK (Swift bridges, `cc`, `bindgen`), which is not put on
   a Linux runner.
 - `.github/workflows/macos.yml`, the one macOS job: clippy over the workspace, `cargo test
@@ -228,12 +228,12 @@ whether the regression is real and accepted.
   then passes is listed as flaky in the summary, with the slowest tests and waits; failure folders
   are an artifact), the SDK's tests against a private instance, then `cargo e2e-apps`. One build;
   each suite runs though an earlier one failed, and the summary names the failed tests. On every
-  push to `main` (`ci.yml` calls it; a newer push cancels the run). While main's fails, the issue
+  push to `main` (`ci.yml` calls it; a newer push cancels the run). While main's or `check` fails, the issue
   "main is red" lists the failed tests and the commits since the last green run; it closes itself.
 - `.github/workflows/e2e.yml`, on pull requests with the label `pr-e2e`: `macos.yml` with the e2e
   tests `scripts/e2e-for` selects from the diff (all of them without the script), no app-window
   suite; `pr-e2e-apps` adds it. Otherwise a pull request's e2e evidence is a local `scripts/e2e-for`
-  run's summary in its body.
+  run's summary in its body (`cargo e2e` while the script is missing).
 - `.github/workflows/app-windows.yml`, by hand: `cargo e2e-apps`, or one test repeated.
 - `.github/workflows/reliability.yml`, nightly and by hand (`repeat`, `test`): `cargo e2e` and
   `cargo e2e-apps` five times each, tallied. The nightly run keeps the issue "Flaky tests".

@@ -16,10 +16,6 @@ on:
         description: Also run cargo e2e-apps
         type: boolean
         default: true
-      save-cache:
-        description: Save the shared dev-build cache (main only)
-        type: boolean
-        default: false
     outputs:
       failed:
         description: The failed steps and tests, one per line; empty when all passed
@@ -57,7 +53,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: e2e
-          save-if: ${{ inputs.save-cache }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -125,8 +121,9 @@ jobs:
         continue-on-error: true
         working-directory: sdk
         run: |
+          set -o pipefail
           cargo build -p ottospace --locked
-          npm test
+          npm test 2>&1 | tee "$RUNNER_TEMP/logs/sdk.log"
       # `cargo e2e-apps`: real canary windows, hosted. After cargo e2e, never beside it: e2e hosts
       # no window, this one takes the keyboard. The image grants bash Accessibility and Screen
       # Recording. The tests post a few real pointer events with cliclick.
@@ -195,11 +192,12 @@ jobs:
           if [ "$UNIT" = failure ]; then echo "unit tests" >> "$failed"; libtest_failures "$OUT/logs/unit.log" >> "$failed"; fi
           if [ "$E2E" = failure ]; then
             echo "cargo e2e" >> "$failed"
-            sed -n 's/^- /  /p' "$OUT/e2e/failed.md" 2>/dev/null >> "$failed"
+            sed -n 's/^- /  /p' "$OUT/e2e/failed.md" >> "$failed" 2>/dev/null || echo "  (no report: see the log)" >> "$failed"
           fi
-          [ "$SDK" = failure ] && echo "SDK tests" >> "$failed"
+          # node --test marks a failed test `✖ name (time)`.
+          if [ "$SDK" = failure ]; then echo "SDK tests" >> "$failed"; { grep '^✖ .*(' "$OUT/logs/sdk.log" || true; } | sed 's/^/  /' >> "$failed"; fi
           if [ "$APPS" = failure ]; then echo "cargo e2e-apps" >> "$failed"; libtest_failures "$OUT/apps/log" >> "$failed"; fi
-          [ "$TRANSCRIPT" = failure ] && echo "transcript tests" >> "$failed"
+          if [ "$TRANSCRIPT" = failure ]; then echo "transcript tests" >> "$failed"; libtest_failures "$OUT/logs/transcript.log" >> "$failed"; fi
           { echo 'failed<<EOF'; cat "$failed"; echo EOF; } >> "$GITHUB_OUTPUT"
           if [ -s "$failed" ]; then
             { echo; echo "### Failed"; echo; echo '```'; cat "$failed"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

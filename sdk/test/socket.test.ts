@@ -22,9 +22,12 @@ test("the socket path: the variable, then TMPDIR, then macOS's per-user temp dir
   assert.equal(defaultSocketPath({ OTTOSPACE_SOCKET: "", TMPDIR: "" }, () => "/u/T"), "/u/T/ottospace.sock");
 
   // With nothing set, this machine's own answer: what `getconf` says, as the app's `temp_dir` does.
-  const real = execFileSync("/usr/bin/getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf8" }).trim();
-  assert.equal(defaultSocketPath({}), join(real, "ottospace.sock"));
-  assert.ok(!defaultSocketPath({}).startsWith("/tmp/"), defaultSocketPath({}));
+  // macOS only: CI's Linux `check` has no DARWIN_USER_TEMP_DIR.
+  if (process.platform === "darwin") {
+    const real = execFileSync("/usr/bin/getconf", ["DARWIN_USER_TEMP_DIR"], { encoding: "utf8" }).trim();
+    assert.equal(defaultSocketPath({}), join(real, "ottospace.sock"));
+    assert.ok(!defaultSocketPath({}).startsWith("/tmp/"), defaultSocketPath({}));
+  }
 });
 
 test("a socket of another user, or a file that is no socket, is refused before anything is sent", async () => {
