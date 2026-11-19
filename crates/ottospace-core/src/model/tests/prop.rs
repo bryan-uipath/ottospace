@@ -3114,11 +3114,14 @@ impl Run {
             .collect();
         // Not while something over the workspace waits for the click (the palette, a question).
         let rail_shown = m.rail_shown().filter(|_| m.waits_for(&action, origin).is_none() && m.confirm.is_none());
+        let brief_before = m.brief;
         let effects = m.update(sent);
         check(m)?;
         // The user's click on the item the drawer shows collapses it, as ⌘⇧R.
         if let (Action::RailSelect { item }, None) = (&action, &refused) {
-            let collapses = rail_shown == Some(*item);
+            // But over that task's brief: the click leaves the drawer open, the brief kept (#282).
+            let over_brief = matches!(item, RailItem::Task { id } if brief_before == Some(*id));
+            let collapses = rail_shown == Some(*item) && !over_brief;
             ensure!(!collapses || m.drawer_collapsed(), "the user's click on the shown {item:?} left the drawer open");
         }
         // A level rises only by the user's own choice. A pane kept by its task keeps its level but
@@ -5288,6 +5291,21 @@ fn random_actions_keep_the_model_sound_for_long() {
 
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
+
+/// The user's click on the shown task, over its brief, leaves the drawer open: the check
+/// expected it to collapse, as without a brief.
+#[test]
+fn seed_1793_a_click_over_the_shown_tasks_brief_leaves_the_drawer_open() {
+    replay(&[
+        Action::Split { axis: Axis::Right, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::CaptureStart { pane: None, draft: "u1".into(), word: "k3f9a2c41b7d".into(), facts: vec![Facts { pane: 7, cwd: None, program: None, title: Some(",ǅ".into()), ignored: false }, Facts { pane: 7, cwd: None, program: None, title: None, ignored: false }], images: false }.sent_by(Origin::User),
+        restore_tasks("[{\"id\":1000000001,\"title\":\"x\",\"state\":\"needs_you\",\"priority\":200,\"snoozed_until\":6000,\"dismissed\":false,\"project\":null,\"repo\":null,\"folder\":\"/code/app\",\"agent\":\"codex\",\"paths\":[\"/tmp\"],\"resolved\":[\"/code/canvas\",\"/tmp\"],\"skills\":[],\"created\":0,\"session\":null,\"title_generated\":false,\"materials\":[],\"refs\":[],\"started_at\":18446744073709551615,\"finished_at\":6000,\"colour\":8}]", 5).sent_by(Origin::User),
+        Action::ComposeSubmit { open: true }.sent_by(Origin::User),
+        Action::TaskGo { id: Some(6) }.sent_by(Origin::Socket),
+        Action::RailSelect { item: RailItem::Task { id: 6 } }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
 
 /// An agent's exit ends its turn: a turn started in the same batch, after the exit, starts none.
 #[test]
