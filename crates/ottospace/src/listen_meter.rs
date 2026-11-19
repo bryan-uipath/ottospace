@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 /// Below this level (RMS of samples in -1..1, about -40 dBFS) is no sound.
-const SOUND: f32 = 0.01;
+pub(crate) const SOUND: f32 = 0.01;
 /// Words came this recently: "Hearing speech".
 const WORDS: Duration = Duration::from_secs(2);
 /// No sound this long: "No sound for 30 s" (a muted call, or the wrong app).

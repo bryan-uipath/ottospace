@@ -2052,6 +2052,71 @@ fn wav(file: &std::path::Path, parts: &[(f64, bool)]) {
     std::fs::write(file, out).expect("write the sound");
 }
 
+/// An app's helpers (Teams's `com.microsoft.teams2.helper`): the stream of an app names each
+/// child of its own bundle id, or one under it, that ScreenCaptureKit offers as an app (one with
+/// a window), and hears it. The canary runs from a bundle the test makes, so it and its child
+/// have a bundle id; the child has a window never shown. The log says how many pids were heard.
+#[test]
+#[ignore = "hears the canary's child's tone; run with `cargo e2e-apps`"]
+fn a_tone_the_canarys_app_child_plays_is_heard() {
+    let home = support::temp(&format!("otto-apps-child-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("make the folder");
+    std::fs::write(home.join("settings.json"), json!({"restore_layout": false}).to_string()).expect("settings");
+    let tone = home.join("tone.wav");
+    wav(&tone, &[(20., true)]);
+    let contents = home.join("Canary.app/Contents");
+    std::fs::create_dir_all(contents.join("MacOS")).expect("make the bundle");
+    let exe = contents.join("MacOS/ottospace-canary");
+    std::fs::copy(env!("CARGO_BIN_EXE_ottospace-canary"), &exe).expect("copy the canary");
+    let plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>\
+        <key>CFBundleIdentifier</key><string>com.ottospace.canary.test</string>\
+        <key>CFBundleExecutable</key><string>ottospace-canary</string>\
+        <key>CFBundlePackageType</key><string>APPL</string></dict></plist>";
+    std::fs::write(contents.join("Info.plist"), plist).expect("write the bundle's plist");
+
+    let canary = Proc::launch(exe.to_str().expect("a plain path"), "canary-child", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto-child",
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
+        ],
+    );
+    canary.call(json!({"cmd": "play", "path": tone, "app": true}));
+    // The pids each start heard, from the log.
+    let starts = || -> Vec<Value> {
+        let log = std::fs::read_to_string(home.join("log")).unwrap_or_default();
+        let lines = log.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok());
+        lines.filter(|line| line["ev"] == "listen_audio").map(|line| line["pids"].clone()).collect()
+    };
+    // Started again until SCK offers the child (its window reaches the window server).
+    let begun = Instant::now();
+    let reply = loop {
+        otto.call(json!({"cmd": "audio_probe_start"}));
+        if starts().last() == Some(&json!(2)) {
+            std::thread::sleep(Duration::from_secs(4));
+            break Some(otto.call(json!({"cmd": "audio_probe_stop"})));
+        }
+        otto.call(json!({"cmd": "audio_probe_stop"}));
+        if begun.elapsed() > Duration::from_secs(12) {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    let started = starts();
+    eprintln!("the log's starts, pids: {started:?}");
+    let _ = std::fs::remove_dir_all(&home);
+    let reply = reply.unwrap_or_else(|| panic!("no start heard the canary's child: {started:?}"));
+
+    let buffers = reply["buffers"].as_array().expect("buffers");
+    let loud = buffers.iter().filter(|b| b["rms"].as_f64().is_some_and(|rms| rms >= 0.01)).count();
+    assert!(loud > 0, "no sound in {} buffers; the stream said {}", buffers.len(), reply["failed"]);
+}
+
 /// Whether ScreenCaptureKit sends buffers while an app is silent, or none: then the samples fed
 /// to the recogniser lose each silence and a line's time shrinks by it. The canary plays a tone
 /// with 8 s of silence inside the file, then plays nothing for 8 s, then a tone again; each

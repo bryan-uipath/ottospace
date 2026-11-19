@@ -557,6 +557,9 @@ impl Workspace {
         }
         let Some(feed) = self.listen_feed.as_mut().filter(|feed| feed.id == id) else { return false };
         let now = Instant::now();
+        if let Some(audio) = feed.live.as_mut().filter(|_| batch).and_then(|live| live.tick(now)) {
+            cx.background_executor().spawn(async move { listen_live::refresh(&audio) }).detach();
+        }
         if let Some(taken) = feed.live.as_ref().map(Live::take) {
             if let Some(meter) = self.listen_meter.as_mut() {
                 if let Some(level) = taken.level {
