@@ -1079,8 +1079,10 @@ empty, otherwise it splits right. Shift-click splits down.
 
 A new window of a hosted app never splits a pane by itself. It stays a free window at its own size,
 over its app's pane, and it is offered in that pane's header:
-`Zoom opened “Zoom Meeting” · no slot for this window · Put in a pane ×`. Put in a pane (a click,
-or its sneak label) splits it in, to the right of the app's pane; × leaves it floating. The offer
+`Zoom opened “Zoom Meeting” · no slot for this window · ◫ split right ⊟ split down ×`. ◫ splits it
+in to the right of the app's pane, ⊟ below it (a click, or its sneak label); × leaves it floating.
+Several windows offered by one pane group in one chip, `Zoom opened 3 windows ▾`: ▾ opens their
+list over the pane's top right, each window with the same three choices. The offer
 goes when you choose, when the window closes, or when it goes in a pane another way; its pane
 closing moves it to another pane of the app. When an app remakes its window (closes it, opens
 another), the pane stays empty and offers the new one: `Zoom replaced its window · Bring it here ↵ ×`. Only you take

@@ -1974,9 +1974,16 @@ pub enum Action {
         seen: crate::slot::Seen,
         why: String,
     },
-    /// The user's Put in a pane on an offer: the window splits in beside its app's pane.
+    /// The user's split right or split down on an offer: the window splits in beside its app's
+    /// pane, that way.
     OfferAccept {
         window: u32,
+        axis: Axis,
+    },
+    /// The user's ▾ on a chip that groups several offers: their list opens under it (`pane`), or
+    /// closes (`None`).
+    OfferList {
+        pane: Option<PaneId>,
     },
     /// The user waved the offer away: the window stays floating.
     OfferDismiss {
@@ -2454,6 +2461,7 @@ impl Action {
             | Action::WindowOffered { .. }
             | Action::OfferAccept { .. }
             | Action::OfferDismiss { .. }
+            | Action::OfferList { .. }
             | Action::OfferGone { .. }
             | Action::OpenFile { .. }
             | Action::ViewerKey { .. }
@@ -2526,6 +2534,7 @@ impl Action {
             | Action::WindowOffered { .. }
             | Action::OfferAccept { .. }
             | Action::OfferDismiss { .. }
+            | Action::OfferList { .. }
             | Action::OfferGone { .. } => None,
             // Shared with workbooks (a name typed, a row's letter), or data a restore reads.
             Action::MarkType { .. }
@@ -3649,6 +3658,8 @@ pub struct Model {
     /// Empty panes that wait for a window their app remade: each offers it (`offer_keeps`).
     #[serde(skip)]
     offer_panes: std::collections::BTreeSet<PaneId>,
+    /// The app pane whose grouped offers' list is open under its chip (`Action::OfferList`).
+    pub offer_list: Option<PaneId>,
     /// The user's `windows` rules, as the settings say: a slot is offered no window they ignore.
     #[serde(skip)]
     window_rules: Vec<crate::rules::Rule>,
@@ -3795,6 +3806,7 @@ impl Default for Model {
             slot_pick: None,
             offers: Vec::new(),
             offer_panes: Default::default(),
+            offer_list: None,
             window_rules: Vec::new(),
         };
         // Home's own tab, on show.
@@ -3997,7 +4009,9 @@ impl Model {
                 Some(crate::slot::SHELLS_ALONE)
             }
             // A window an app opened by itself goes in a pane only by the user's hand.
-            Action::OfferAccept { .. } | Action::OfferDismiss { .. } => Some(offers::USERS_ALONE),
+            Action::OfferAccept { .. } | Action::OfferDismiss { .. } | Action::OfferList { .. } => {
+                Some(offers::USERS_ALONE)
+            }
             Action::WindowOffered { .. } | Action::OfferGone { .. } if origin == Origin::Socket => {
                 Some(offers::SHELLS_ALONE)
             }
@@ -5110,6 +5124,10 @@ impl Model {
                 // A window opened beside a pane of a closing workspace joins the tab on show: what
                 // that workspace's Undo brings back stays as it was.
                 let beside = beside.filter(|pane| !self.in_closing(*pane));
+                let kind_window = match kind {
+                    Kind::App { window, .. } => Some(window),
+                    _ => None,
+                };
                 self.next_id += 1;
                 let id = self.next_id;
                 self.panes.push(Pane { id, kind, cwd: None, fit: None, owned: false });
@@ -5122,8 +5140,10 @@ impl Model {
                     Some((_, tab)) => (&mut tab.layout, &mut tab.focused),
                     None => (&mut self.layout, &mut self.focused),
                 };
+                // An offer the user took splits the way they chose.
+                let axis = self.offers.iter().find(|o| kind_window == Some(o.window)).and_then(|o| o.split);
                 *layout = Some(match layout.take() {
-                    Some(root) => root.insert(beside, id, Axis::Right),
+                    Some(root) => root.insert(beside, id, axis.unwrap_or(Axis::Right)),
                     None => Node::Leaf(id),
                 });
                 *focused = focused.or(Some(id));
@@ -6612,6 +6632,7 @@ impl Model {
             action @ (Action::WindowOffered { .. }
             | Action::OfferAccept { .. }
             | Action::OfferDismiss { .. }
+            | Action::OfferList { .. }
             | Action::OfferGone { .. }) => self.offer_act(action, effects),
         }
     }
@@ -9772,6 +9793,7 @@ mod tests {
         Action::WindowOffered { .. },
         Action::OfferAccept { .. },
         Action::OfferDismiss { .. },
+        Action::OfferList { .. },
         Action::OfferGone { .. }
     );
 
@@ -10114,8 +10136,9 @@ mod tests {
             Action::SlotTick { at: 0 },
             Action::WindowGone { pane: 9, app_running: true, at: 0 },
             Action::WindowOffered { pane: 1, seen: crate::slot::Seen::default(), why: text() },
-            Action::OfferAccept { window: 9 },
+            Action::OfferAccept { window: 9, axis: Right },
             Action::OfferDismiss { window: 9 },
+            Action::OfferList { pane: Some(1) },
             Action::OfferGone { window: 9 },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
@@ -10184,7 +10207,9 @@ mod tests {
     /// An offered window put in a pane or waved away: the user's alone. A new window: the shell's.
     fn offer_refused(action: &Action, origin: Origin) -> Option<&'static str> {
         match action {
-            Action::OfferAccept { .. } | Action::OfferDismiss { .. } => Some(offers::USERS_ALONE),
+            Action::OfferAccept { .. } | Action::OfferDismiss { .. } | Action::OfferList { .. } => {
+                Some(offers::USERS_ALONE)
+            }
             Action::WindowOffered { .. } | Action::OfferGone { .. } if origin == Origin::Socket => {
                 Some(offers::SHELLS_ALONE)
             }

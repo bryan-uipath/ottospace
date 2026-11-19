@@ -1164,6 +1164,8 @@ export interface Model {
    * window's id, never its title. Only the user puts one in a pane or dismisses the offer.
    */
   offers: Offer[];
+  /** The app pane whose chip groups several offers and has their list open (its ▾), or null. */
+  offer_list: number | null;
   /**
    * The slot dialog while the user has it open (⋯ on an app pane's header): its pane and what is
    * ticked. Never the window's title or id. Only the user opens it or keeps a slot.

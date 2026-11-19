@@ -58,6 +58,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       agent_mode: { panes: { "3": { level: "see", task: 2 } }, default: "act", menu: null },
       slots: {},
       offers: [],
+      offer_list: null,
       slot_dialog: null,
       viewers: {},
     },

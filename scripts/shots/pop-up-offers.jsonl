@@ -1,0 +1,11 @@
+# Several windows one app pane offers group in one chip (`opened 2 windows ▾`); ▾ opens their
+# list over the pane's top right, each with ◫ split right, ⊟ split down, ×. ⊟ splits one in below.
+{"cmd":"split","axis":"right"}
+{"cmd":"app_fixture","name":"Meetings","user":true}
+{"cmd":"window_fixture","pane":2,"title":"Meeting chat","subrole":"AXSystemDialog","size":[360,600]}
+{"cmd":"window_fixture","pane":2,"title":"Participants","size":[360,600]}
+{"shot":"grouped"}
+{"click":"offer-list:2"}
+{"shot":"list"}
+{"click":"offer-down:800001"}
+{"shot":"split-down"}

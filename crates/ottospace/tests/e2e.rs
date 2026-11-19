@@ -14168,6 +14168,8 @@ fn a_new_window_floats_with_an_offer_and_only_the_users_click_puts_it_in_a_pane(
     assert!(!reply.to_string().contains("SECRET"), "{reply}");
     // A dialog is offered too: the user may want it in a pane. Dismissed, it floats on.
     assert_eq!(offers(&opened("Settings", "AXDialog")).as_array().map(Vec::len), Some(2));
+    // Two offers group in one chip: its list holds each.
+    otto.user_click(at(otto.control(&format!("offer-list:{pane}")), 0.5, 0.5));
     otto.user_click(at(otto.control("offer-dismiss:800002"), 0.5, 0.5));
     // A client's click on the chip is refused, and says why.
     let put = otto.control("offer:800001");
@@ -14198,6 +14200,46 @@ fn a_new_window_floats_with_an_offer_and_only_the_users_click_puts_it_in_a_pane(
     assert_eq!(said, [offer.clone(), (json!("offer"), json!("dialog")), offer.clone(), offer], "{log}");
     assert_eq!((&placed[0]["subrole"], &placed[0]["size"]), (&json!("AXStandardWindow"), &json!([1200.0, 800.0])));
     assert!(!log.contains("SECRET") && !log.contains("Second"), "{log}");
+}
+
+/// The owner's call: an offer splits right or down, as the user picks. Several offers of one pane
+/// group in one chip, `opened 2 windows ▾`; only the user's ▾ opens their list, each window with
+/// the same three choices. No title in the reply.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn an_offer_splits_right_or_down_and_several_group_in_one_chip() {
+    let otto = Otto::launch("offer-choices");
+    let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
+    let pane = reply["state"]["focused"].as_u64().unwrap();
+    let opened = |title: &str| {
+        let line = json!({"cmd": "window_fixture", "pane": pane, "title": title, "subrole": "AXStandardWindow",
+            "size": [900, 600]});
+        otto.call(line)
+    };
+    opened("SECRET chat");
+    assert!(otto.control_opt("offer:800001").is_some() && otto.control_opt("offer-down:800001").is_some());
+    let reply = opened("SECRET notes");
+    assert_eq!(reply["state"]["offers"].as_array().map(Vec::len), Some(2), "{reply}");
+    // Grouped: one ▾, no single offer's choices in the header.
+    let list = otto.control(&format!("offer-list:{pane}"));
+    assert_eq!(otto.control_opt("offer-down:800001"), None);
+    assert_eq!(otto.click(at(list, 0.5, 0.5), 1)["state"]["offer_list"], Value::Null, "a client's ▾ is refused");
+    let reply = otto.user_click(at(list, 0.5, 0.5));
+    assert_eq!(reply["state"]["offer_list"], json!(pane), "{reply}");
+    assert!(!reply.to_string().contains("SECRET"), "{reply}");
+    // Each window in the list, with its three choices. ⊟ splits the first in below its app's pane.
+    for id in ["offer:800001", "offer-down:800001", "offer-dismiss:800001", "offer:800002"] {
+        assert!(otto.control_opt(id).is_some(), "{id}");
+    }
+    otto.user_click(at(otto.control("offer-down:800001"), 0.5, 0.5));
+    let state = otto.call(json!({"cmd": "state"}));
+    let panes: Vec<u64> = state["state"]["panes"].as_array().unwrap().iter().filter_map(|p| p["id"].as_u64()).collect();
+    let new = *panes.iter().find(|id| **id != pane).expect("a pane for the window");
+    let (app, below) = (rect(&state["bounds"][pane.to_string()]), rect(&state["bounds"][new.to_string()]));
+    assert!(below[1] > app[1] + app[3] - 1.0 && (below[0] - app[0]).abs() < 1.0, "below: {app:?} {below:?}");
+    // One left: no list, its own choices in the chip again.
+    assert_eq!(state["state"]["offer_list"], Value::Null, "{state}");
+    assert!(otto.control_opt("offer-down:800002").is_some());
 }
 
 /// Slots on screen (`slots` flag): ⋯ on an app pane's header opens the dialog, a checklist made

@@ -102,10 +102,13 @@ a slot they made. `rules::decide` judges it once, on facts the shell reads (`AXS
 - **Float with an offer**: any other window over 100×100, whatever its size (`Why::NoSlot`), and a
   dialog, a panel or a modal window too (`Why::Dialog`, `Why::Modal`: the owner's Zoom meeting
   window was floated as a panel and could not be brought in). The app pane's header shows a chip, `Zoom opened “Zoom Meeting” · no slot
-  for this window · Put in a pane ×` (`Action::WindowOffered`, the shell's alone). Put in a pane
-  (`OfferAccept`, the user's alone: a client's click is refused with `offers::USERS_ALONE`) asks the
-  shell to host it beside that pane (`Effect::HostOffer`, then `Adopt`); × (`OfferDismiss`, the
-  user's) leaves it floating. The offer goes when the window closes (`OfferGone`: the shell checks
+  for this window · ◫ split right ⊟ split down ×` (`Action::WindowOffered`, the shell's alone).
+  ◫ or ⊟ (`OfferAccept { axis }`, the user's alone: a client's click is refused with
+  `offers::USERS_ALONE`) asks the shell to host it beside that pane (`Effect::HostOffer`, then
+  `Adopt`, which splits the way the offer was taken); × (`OfferDismiss`, the user's) leaves it
+  floating. Several offers of one pane group: `Zoom opened 3 windows ▾`; ▾ (`OfferList`, the
+  user's) opens their list over the pane's top right, each with the three choices, while two or
+  more are left (`Model::offer_list`). The offer goes when the window closes (`OfferGone`: the shell checks
   `recovery::window_exists` each tick), when it is in a pane any other way, or when its pane is no
   app pane. Its title is drawn in the chip and never in the state (`offers` holds pane and window
   id).
