@@ -8,6 +8,7 @@
 
 use std::net::IpAddr;
 
+pub mod day;
 pub mod fetch;
 pub mod reply;
 
@@ -347,21 +348,30 @@ fn layout(events: &[Event], day: (u64, u64), band: Band, now: u64) -> Layout {
             out.blocks.push(Under { id: e.id, from: band.at(e.start), to: band.at(e.end), stage: stage(e, now) });
         }
     }
-    // Calls that overlap, one after another, form a cluster: as many lanes as it needs.
     let calls: Vec<&Event> = shown.into_iter().filter(|e| kind(e) == Kind::Call).collect();
+    out.calls = lanes(&calls, band, now);
+    out
+}
+
+/// Events (by start) in columns, as Outlook sets them side by side: those that overlap, one after
+/// another, form a cluster; each takes the first column free at its start, and all of a cluster
+/// share its count. More than `MAX_LANES` at once: merged into the column that frees last. The
+/// band's calls and the Calendar section's day view alike.
+fn lanes(events: &[&Event], band: Band, now: u64) -> Vec<Bar> {
+    let mut out: Vec<Bar> = Vec::new();
     let ends = |e: &Event| e.end.max(e.start + 1);
     let mut at = 0;
-    while at < calls.len() {
-        let (first, mut end) = (at, ends(calls[at]));
-        while at + 1 < calls.len() && calls[at + 1].start < end {
+    while at < events.len() {
+        let (first, mut end) = (at, ends(events[at]));
+        while at + 1 < events.len() && events[at + 1].start < end {
             at += 1;
-            end = end.max(ends(calls[at]));
+            end = end.max(ends(events[at]));
         }
         at += 1;
         // Each lane: when it frees, and its bar.
         let mut lanes: Vec<(u64, usize)> = Vec::new();
-        let base = out.calls.len();
-        for e in &calls[first..at] {
+        let base = out.len();
+        for e in &events[first..at] {
             let lane = match lanes.iter().position(|(until, _)| *until <= e.start) {
                 Some(lane) => lane,
                 None if lanes.len() < usize::from(MAX_LANES) => {
@@ -372,7 +382,7 @@ fn layout(events: &[Event], day: (u64, u64), band: Band, now: u64) -> Layout {
                     // Merged into the lane that frees last; the longer of the two is drawn, so a
                     // long call is never hidden behind a short one.
                     let lane = (0..lanes.len()).max_by_key(|l| lanes[*l].0).unwrap_or(0);
-                    let bar = &mut out.calls[lanes[lane].1];
+                    let bar = &mut out[lanes[lane].1];
                     if ends(e) > lanes[lane].0 {
                         let (from, to, stage) = (band.at(e.start), band.at(e.end), stage(e, now));
                         let id = std::mem::replace(&mut bar.id, e.id);
@@ -385,12 +395,12 @@ fn layout(events: &[Event], day: (u64, u64), band: Band, now: u64) -> Layout {
                     continue;
                 }
             };
-            lanes[lane] = (ends(e), out.calls.len());
+            lanes[lane] = (ends(e), out.len());
             let (from, to, stage) = (band.at(e.start), band.at(e.end), stage(e, now));
-            out.calls.push(Bar { id: e.id, from, to, lane: lane as u8, lanes: 0, stage, more: Vec::new() });
+            out.push(Bar { id: e.id, from, to, lane: lane as u8, lanes: 0, stage, more: Vec::new() });
         }
         let count = lanes.len() as u8;
-        out.calls[base..].iter_mut().for_each(|bar| bar.lanes = count);
+        out[base..].iter_mut().for_each(|bar| bar.lanes = count);
     }
     out
 }
@@ -976,19 +986,14 @@ impl Calendar {
         self.on(self.day).filter(|e| !e.all_day).map(|e| crate::list::ListRow::Meeting(e.id)).collect()
     }
 
-    /// The one quiet fact at a row's end: `now` while it runs, `in 12m` for the next one within
-    /// the hour, else nothing. Only on today.
-    pub fn row_fact(&self, event: &Event, now: u64) -> Option<String> {
-        let next = self.today().filter(|e| !e.all_day && e.start > now).map(|e| e.start).min();
-        match stage(event, now) {
-            _ if self.day != 0 || event.all_day => None,
-            Stage::Running => Some("now".into()),
-            Stage::Past => None,
-            _ if Some(event.start) == next && event.start - now <= 60 * MINUTE => {
-                Some(format!("in {}", span(event.start - now)))
-            }
-            _ => None,
-        }
+    /// The row list mode starts on: the meeting that runs, else the next, else the day's last.
+    /// Another day falls out alike: a past one's last, a day to come's first.
+    pub fn first_row(&self, now: u64) -> usize {
+        let timed: Vec<&Event> = self.on(self.day).filter(|e| !e.all_day).collect();
+        let at = |want: Stage| timed.iter().position(|e| stage(e, now) == want);
+        at(Stage::Running)
+            .or_else(|| timed.iter().position(|e| stage(e, now) != Stage::Past))
+            .unwrap_or(timed.len().saturating_sub(1))
     }
 
     /// The rail cell's mark: the alert's badge, else a dot while a meeting is imminent or runs.
@@ -1019,6 +1024,12 @@ impl Calendar {
         layout(&self.events, today, band(&self.events, today, workday, offset), now)
     }
 
+    /// The Calendar section's day on its axis: the band's span of that day, and its lanes.
+    pub fn day_view(&self, workday: Workday, now: u64, offset: &dyn Fn(u64) -> i64) -> day::DayView {
+        let shown = self.span(self.day);
+        day::day_view(&self.events, shown, band(&self.events, shown, workday, offset), now, offset)
+    }
+
     /// When the feed was read: `updated 09:40`, `not updated since 09:40`, `not read yet`.
     pub fn read_status(&self, offset: i64) -> String {
         match (self.updated, self.stale) {
@@ -1028,11 +1039,10 @@ impl Calendar {
         }
     }
 
-    /// What the Calendar section says with no rows. An empty day only once a read succeeded: before
-    /// it, the fetch's line says loading or what failed.
-    pub fn empty_note(&self) -> Option<&'static str> {
-        self.updated?;
-        Some(if self.day == 0 { "No meetings today" } else { "No meetings" })
+    /// The Calendar section draws its day, an empty one too (one `free` band), only once a read
+    /// succeeded: before it, the fetch's line says loading or what failed.
+    pub fn draws_day(&self) -> bool {
+        self.updated.is_some()
     }
 
     /// The section's muted line: the fetch as it goes (`fetch::Fetch::line`), the last good read's

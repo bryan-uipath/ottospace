@@ -31,6 +31,7 @@ import type {
   NativeChat,
   MeetingShow,
   MeetingStage,
+  CalendarDayView,
   AxNode,
   AxOverlay,
   AxSource,
@@ -2025,6 +2026,47 @@ function meetingShow(value: unknown, at: string): MeetingShow {
   throw wrong(at, "busy, tentative, free or away", value);
 }
 
+function dayView(value: unknown, at: string): CalendarDayView {
+  const o = fields(value, at);
+  const block = (v: unknown, at: string) => {
+    const b = fields(v, at);
+    return {
+      start: num(b.start, `${at}.start`),
+      end: num(b.end, `${at}.end`),
+      rect: orNull(rect)(b.rect, `${at}.rect`),
+      column: num(b.column, `${at}.column`),
+      columns: num(b.columns, `${at}.columns`),
+      stage: meetingStage(b.stage, `${at}.stage`),
+      selected: bool(b.selected, `${at}.selected`),
+      more: num(b.more, `${at}.more`),
+      join: orNull(rect)(b.join, `${at}.join`),
+    };
+  };
+  const gap = (v: unknown, at: string) => {
+    const g = fields(v, at);
+    return {
+      from: num(g.from, `${at}.from`),
+      to: num(g.to, `${at}.to`),
+      minutes: num(g.minutes, `${at}.minutes`),
+      rect: orNull(rect)(g.rect, `${at}.rect`),
+    };
+  };
+  const now = (v: unknown, at: string) => {
+    const n = fields(v, at);
+    return { rect: rect(n.rect, `${at}.rect`), label: orNull(rect)(n.label, `${at}.label`) };
+  };
+  return {
+    rect: rect(o.rect, `${at}.rect`),
+    viewport: orNull(rect)(o.viewport, `${at}.viewport`),
+    scroll: num(o.scroll, `${at}.scroll`),
+    span: pair(o.span, `${at}.span`),
+    hours: num(o.hours, `${at}.hours`),
+    blocks: list(block)(o.blocks, `${at}.blocks`),
+    gaps: list(gap)(o.gaps, `${at}.gaps`),
+    now: orNull(now)(o.now, `${at}.now`),
+  };
+}
+
 function band(value: unknown, at: string): NonNullable<Snapshot["calendar"]["band"]> {
   const o = fields(value, at);
   const block = (v: unknown, at: string) => {
@@ -2098,10 +2140,10 @@ function calendar(value: unknown, at: string): Snapshot["calendar"] {
     day_start: num(o.day_start, `${at}.day_start`),
     all_day_line: orNull(rect)(o.all_day_line, `${at}.all_day_line`),
     first_row: orNull(rect)(o.first_row, `${at}.first_row`),
+    day_view: orNull(dayView)(o.day_view, `${at}.day_view`),
     nav: nav(o.nav, `${at}.nav`),
     fetch: calendarFetch(o.fetch, `${at}.fetch`),
     fetch_line: str(o.fetch_line, `${at}.fetch_line`),
-    empty_note: orNull(str)(o.empty_note, `${at}.empty_note`),
     fetch_rect: orNull(rect)(o.fetch_rect, `${at}.fetch_rect`),
     retry: orNull(rect)(o.retry, `${at}.retry`),
     retries: orNull(num)(o.retries, `${at}.retries`),

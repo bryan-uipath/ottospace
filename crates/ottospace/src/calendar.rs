@@ -22,7 +22,7 @@ use ottospace_mac::meeting;
 
 use serde_json::json;
 
-use crate::{Mark, Tooltip, Workspace, config, event_log, home, mark, now_ms, progress, words};
+use crate::{Mark, Tooltip, Workspace, config, event_log, mark, now_ms, progress, words};
 
 /// The band's height above the status bar, its 1-point top line included; hover takes all of it.
 const BAND: f32 = 12.;
@@ -93,6 +93,9 @@ pub struct Timeline {
     pub(crate) sliding: bool,
     /// Frames drawn with the bar sliding (the state's `counts.band_frames`, test runs).
     pub(crate) band_frames: std::cell::Cell<u64>,
+    /// Frames that drew the Calendar section's day (the state's `counts.calendar_frames`, test
+    /// runs): its now line moves on the minute's redraw, never on a frame of its own.
+    pub(crate) day_frames: std::cell::Cell<u64>,
     /// Links a test run's Join would have opened.
     joins: u32,
 }
@@ -447,6 +450,12 @@ impl Workspace {
                     | Mark::CalendarAllDay
                     | Mark::CalendarFirstRow
                     | Mark::CalendarFetch
+                    | Mark::DayView
+                    | Mark::DayViewport
+                    | Mark::DayBlock(_)
+                    | Mark::DayGap(_)
+                    | Mark::DayNow
+                    | Mark::DayNowLabel
             )
         };
         self.marks.borrow_mut().retain(|m, _| !gone(m));
@@ -683,14 +692,14 @@ impl Workspace {
             },
             "day": calendar.day,
             "day_start": calendar.span(calendar.day).0,
-            // Where its all-day line and first row are drawn, and the open section's header.
+            // Where its all-day strip and first block are drawn.
             "all_day_line": drawn(Mark::CalendarAllDay),
             "first_row": drawn(Mark::CalendarFirstRow),
+            "day_view": self.day_view_snapshot(now),
             // The fetch: its state, its progress or what failed (a kind and a code, never the link),
             // the section's line and empty note as drawn, the line's rect and its Retry's.
             "fetch": fetch_snapshot(calendar.fetch),
             "fetch_line": calendar.fetch_line(now, zone_offset(now)),
-            "empty_note": calendar.empty_note(),
             "fetch_rect": drawn(Mark::CalendarFetch),
             "retry": at("calendar-retry".into()),
             "retries": std::env::var_os("OTTOSPACE_E2E").map(|_| self.timeline.retries),
@@ -700,6 +709,51 @@ impl Workspace {
                 "today": at("calendar-day:today".into()),
             }),
             "joins": std::env::var_os("OTTOSPACE_E2E").map(|_| self.timeline.joins),
+        })
+    }
+}
+
+impl Workspace {
+    /// The Calendar section's day as drawn, while it is: its rect, the scroll's (`viewport`) and
+    /// how far down it is, its span, hour lines counted, each block's times, rect, column of
+    /// `columns`, stage, selection, merged count and Join's rect (while it shows), each pressed
+    /// free band's times and rect, and now's line and time label. Never a title or a place.
+    fn day_view_snapshot(&self, now: u64) -> serde_json::Value {
+        let marks = self.marks.borrow();
+        let drawn = |m: Mark| marks.get(&m).copied().map(crate::rect);
+        let Some(rect) = drawn(Mark::DayView) else { return serde_json::Value::Null };
+        let calendar = &self.model.calendar;
+        let view = calendar.day_view(self.timeline.workday, now, &zone_offset);
+        let selected = self.selected_meeting();
+        let chosen = |b: &calendar::day::Block| selected.filter(|id| *id == b.id || b.more.contains(id));
+        let blocks: Vec<serde_json::Value> = view
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(n, b)| {
+                json!({
+                    "start": b.start, "end": b.end, "rect": drawn(Mark::DayBlock(n)),
+                    "column": b.column, "columns": b.columns, "stage": b.stage.name(),
+                    "selected": chosen(b).is_some(),
+                    "more": b.more.len(),
+                    "join": self.controls.bounds(&format!("meeting-row-join:{}", chosen(b).unwrap_or(b.id))).map(crate::rect),
+                })
+            })
+            .collect();
+        let gaps: Vec<serde_json::Value> = view
+            .gaps()
+            .enumerate()
+            .map(|(n, g)| json!({ "from": g.from, "to": g.to, "minutes": (g.to - g.from) / 60_000, "rect": drawn(Mark::DayGap(n)) }))
+            .collect();
+        json!({
+            "rect": rect,
+            "viewport": drawn(Mark::DayViewport),
+            "scroll": -f32::from(self.calendar_scroll.offset().y),
+            "span": [view.from, view.to],
+            "hours": view.hours.len(),
+            "blocks": blocks,
+            "gaps": gaps,
+            "now": drawn(Mark::DayNow).map(|line| json!({ "rect": line, "label": drawn(Mark::DayNowLabel) })),
         })
     }
 }
@@ -743,59 +797,182 @@ fn notify(body: &str) {
     let _ = command.arg(body).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
 }
 
+/// The day view's hour column, and the room above its first hour line for that hour's label.
+const GUTTER: f32 = 34.;
+const VIEW_TOP: f32 = 6.;
+/// The scroll's padding over the day view (`p_2`).
+const LIST_PAD: f32 = 8.;
+/// A block this tall has its start on a line of its own, under its title.
+const TWO_LINES: f32 = 34.;
+
 impl Workspace {
-    /// The Calendar section: the day's all-day events on one line, then one row per meeting:
-    /// its colour, start, title and at most one quiet fact (`now`, `in 12m`). The rest is on the
-    /// row's hover card, the band's. Join on hover or selection. Display only: titles and places
-    /// are other people's text.
+    /// The Calendar section, as Outlook's day: the day's all-day events in a strip at the top,
+    /// then its hours, each meeting a block as tall as it lasts, side by side where they overlap,
+    /// long free time a short band, and now's line across. Opens with now in view. The geometry
+    /// is the core's (`calendar::day`). Display only: titles and places are other people's text.
     pub(crate) fn render_calendar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let calendar = &self.model.calendar;
         let now = now_ms();
         let offset = ottospace_mac::time::utc_offset((now / 1_000) as i64);
         let mut children: Vec<AnyElement> = Vec::new();
         let all_day: Vec<&Event> = calendar.on(calendar.day).filter(|e| e.all_day).collect();
-        if !all_day.is_empty() {
-            let titles: Vec<&str> = all_day.iter().map(|e| e.title.as_str()).collect();
+        let strip = (!all_day.is_empty()).then(|| {
             let tip = all_day.iter().map(|e| calendar::describe(e, offset)).collect::<Vec<_>>().join("\n");
-            // Not shrunk away when the rows overflow: its text is cut, so it has no height of its own.
-            let line = div().id("meetings-all-day").flex_none().relative().px_2().pb_1().truncate();
-            let line = line.text_xs().text_color(rgb(theme::MUTED)).child(mark(&self.marks, Mark::CalendarAllDay));
-            let line = line.child(format!("All day · {}", titles.join(", ")));
-            children.push(
-                line.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into())))).into_any_element(),
-            );
-        }
+            let chips = all_day.iter().map(|e| {
+                let paint = calendar.paint(e, now, true);
+                let chip = div().flex_1().min_w_0().relative().px_1().rounded_sm().truncate();
+                let tint = div().absolute().inset_0().rounded_sm().bg(rgb(paint.color)).opacity(0.18);
+                chip.child(tint).child(crate::cut_text(e.title.clone()))
+            });
+            let strip = div().id("meetings-all-day").flex_none().relative().flex().gap_1().mx_2().mb_1();
+            let strip = strip.text_xs().text_color(rgb(theme::TEXT)).child(mark(&self.marks, Mark::CalendarAllDay));
+            strip.children(chips).tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
+        });
         let rows = calendar.agenda();
-        // An empty day only once a read succeeded; before, the fetch's line below says how it goes.
-        if let Some(note) = calendar.empty_note().filter(|_| rows.is_empty()) {
-            children.push(div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(note).into_any_element());
+        let view = calendar.day_view(self.timeline.workday, now, &zone_offset);
+        // An empty day too, once a read succeeded; before, the fetch's line below says how it goes.
+        if calendar.draws_day() {
+            children.push(self.day_view(&view, &rows, now, cx));
         }
-        let mut meetings = Vec::new();
-        for (index, row) in rows.iter().enumerate() {
-            let ListRow::Meeting(id) = row else { continue };
-            let Some(event) = calendar.events.iter().find(|e| e.id == *id) else { continue };
-            let row = self.meeting_row(event, (index, self.model.list == Some(index)), now, cx);
-            let first = (index == 0).then(|| mark(&self.marks, Mark::CalendarFirstRow));
-            meetings.push(div().flex_none().relative().children(first).child(row).into_any_element());
-        }
-        // Level, as Workspaces' rows: a list of the day, not an opened-up group (no `well`).
-        children.extend(meetings);
         children.push(self.fetch_line(now, offset, cx));
-        // Its own scroll, at the top when the section opens (it was not drawn the frame before)
-        // or its day changes; never another section's.
+        // Its own scroll, with now in view when the section opens (it was not drawn the frame
+        // before) or its day changes, at the top on another day; never another section's. Before
+        // the scroll was ever laid out its height is not known: the frame after, then.
         let (frame, day) = self.calendar_shown.get();
         if frame + 1 != self.renders || day != calendar.day {
-            self.calendar_scroll.set_offset(gpui::point(px(0.), px(0.)));
+            self.calendar_opening.set(true);
         }
         self.calendar_shown.set((self.renders, calendar.day));
+        let viewport = f32::from(self.calendar_scroll.bounds().size.height);
+        if self.calendar_opening.get() {
+            let down = if calendar.day == 0 { view.opening_scroll(now, viewport, LIST_PAD + VIEW_TOP) } else { 0. };
+            self.calendar_scroll.set_offset(gpui::point(px(0.), px(-down)));
+            // Until the first read too: an empty day would scroll nowhere.
+            self.calendar_opening.set(viewport <= 0. || calendar.updated.is_none());
+            if viewport <= 0. {
+                cx.notify();
+            }
+        }
+        // A new selection, by a key or ⌘⌃E's first row, is brought into view: ↵ never joins one unseen.
+        let selected = self.selected_meeting();
+        if self.calendar_revealed.replace(selected) != selected {
+            self.reveal_meeting();
+        }
         let list = div().id("calendar").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         let list = list.track_scroll(&self.calendar_scroll).children(children);
-        div().flex_1().min_h_0().flex().flex_col().child(self.bars.tracked(
-            "calendar",
-            list,
-            &self.calendar_scroll,
-            theme::RAISED,
-        ))
+        let scrolled = self.bars.tracked("calendar", list, &self.calendar_scroll, theme::RAISED);
+        div().flex_1().min_h_0().flex().flex_col().children(strip).child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .relative()
+                .child(scrolled)
+                .child(mark(&self.marks, Mark::DayViewport)),
+        )
+    }
+
+    /// The meeting list mode selects in the Calendar section, if any.
+    fn selected_meeting(&self) -> Option<u64> {
+        match self.model.list.and_then(|at| self.model.calendar.agenda().get(at).cloned()) {
+            Some(ListRow::Meeting(id)) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// The selected meeting's block brought into view: list mode's ↑ and ↓ go from block to block.
+    pub(crate) fn reveal_meeting(&self) {
+        let calendar = &self.model.calendar;
+        let Some(id) = self.selected_meeting() else { return };
+        let view = calendar.day_view(self.timeline.workday, now_ms(), &zone_offset);
+        let Some(block) = view.blocks.iter().find(|b| b.id == id || b.more.contains(&id)) else { return };
+        let (viewport, scroll) =
+            (f32::from(self.calendar_scroll.bounds().size.height), -f32::from(self.calendar_scroll.offset().y));
+        let top = LIST_PAD + VIEW_TOP + block.top;
+        let to = calendar::day::reveal(scroll, viewport, (top, top + block.height));
+        self.calendar_scroll.set_offset(gpui::point(px(0.), px(-to)));
+    }
+
+    /// The day's hours, its free bands, its blocks and now's line: Outlook's day, in the sidebar.
+    fn day_view(
+        &self,
+        view: &calendar::day::DayView,
+        rows: &[ListRow],
+        now: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.timeline.day_frames.set(self.timeline.day_frames.get() + 1);
+        let at_y = |y: f32| px(VIEW_TOP + y);
+        let now_y = if self.model.calendar.day == 0 { view.now(now) } else { None };
+        let mut out = div().relative().flex_none().w_full().h(px(VIEW_TOP * 2. + view.height));
+        out = out.child(mark(&self.marks, Mark::DayView));
+        for hour in &view.hours {
+            let line = div().absolute().top(at_y(hour.y)).left(px(GUTTER)).right_0().h(px(1.)).bg(rgb(theme::BORDER));
+            out = out.child(line);
+            // Now's label stands in for an hour's it would cover.
+            if now_y.is_some_and(|y| (y - hour.y).abs() < 14.) {
+                continue;
+            }
+            let label = div().absolute().top(at_y(hour.y - 6.)).left_0().w(px(GUTTER - 6.)).flex().justify_end();
+            out = out.child(
+                label.text_size(px(9.)).line_height(px(12.)).text_color(rgb(theme::MUTED)).child(hour.hour.to_string()),
+            );
+        }
+        for (n, gap) in view.gaps().enumerate() {
+            let band =
+                div().absolute().top(at_y(gap.top + 2.)).h(px(gap.height - 4.)).left(px(GUTTER + 2.)).right(px(4.));
+            let band = band.flex().items_center().justify_center().rounded_sm().bg(rgb(theme::WELL));
+            let band = band
+                .text_size(px(10.))
+                .text_color(rgb(theme::MUTED))
+                .child(calendar::day::free_label(gap.to - gap.from));
+            out = out.child(band.child(mark(&self.marks, Mark::DayGap(n))));
+        }
+        let mut blocks = div().absolute().top(px(VIEW_TOP)).left(px(GUTTER + 2.)).right(px(4.)).h(px(view.height));
+        for (n, block) in view.blocks.iter().enumerate() {
+            let Some(event) = self.model.calendar.events.iter().find(|e| e.id == block.id) else { continue };
+            let index = rows.iter().position(|row| *row == ListRow::Meeting(block.id)).unwrap_or(n);
+            let chosen = self.selected_meeting().filter(|id| *id == block.id || block.more.contains(id));
+            let columns = f32::from(block.columns.max(1));
+            let place = div()
+                .absolute()
+                .top(px(block.top))
+                .h(px(block.height))
+                .left(relative(f32::from(block.column) / columns))
+                .w(relative(1. / columns))
+                .pr(px(1.))
+                .pb(px(1.));
+            let more: Vec<&Event> =
+                block.more.iter().filter_map(|id| self.model.calendar.events.iter().find(|e| e.id == *id)).collect();
+            // Join opens the selected meeting, also one merged into this block, as ↵ does.
+            let join = chosen.and_then(|id| self.model.calendar.events.iter().find(|e| e.id == id)).unwrap_or(event);
+            let drawn = self.meeting_block((event, join), &more, (index, chosen.is_some()), block.height, now, cx);
+            let first = (n == 0).then(|| mark(&self.marks, Mark::CalendarFirstRow));
+            // The slot's rect: as tall as the meeting lasts, the gap to the next block included.
+            let place = place.child(mark(&self.marks, Mark::DayBlock(n))).children(first);
+            blocks = blocks.child(place.child(drawn));
+        }
+        out = out.child(blocks);
+        // Now, last, over the blocks: a line in the accent colour with a dot at its left end, and
+        // the time in the hour column.
+        if let Some(y) = now_y {
+            let line = div().absolute().top(at_y(y - 1.)).left(px(GUTTER)).right_0().h(px(2.)).bg(rgb(theme::PRIMARY));
+            let dot = div().absolute().top(at_y(y - 4.)).left(px(GUTTER - 4.)).size(px(8.)).rounded_full();
+            let label =
+                div().absolute().top(at_y(y - 6.5)).left(px(1.)).w(px(GUTTER - 6.)).h(px(13.)).flex().items_center();
+            let label = label
+                .justify_center()
+                .rounded_sm()
+                .bg(rgb(theme::PRIMARY))
+                .text_size(px(9.))
+                .font_weight(gpui::FontWeight::SEMIBOLD);
+            let clock = calendar::clock(now, zone_offset(now));
+            out = out.child(line.child(mark(&self.marks, Mark::DayNow))).child(dot.bg(rgb(theme::PRIMARY))).child(
+                label.text_color(rgb(theme::BACKGROUND)).child(clock).child(mark(&self.marks, Mark::DayNowLabel)),
+            );
+        }
+        out.into_any_element()
     }
 
     /// The fetch's muted line under the rows: loading with its progress, what failed with a Retry
@@ -866,26 +1043,27 @@ impl Workspace {
             )
     }
 
-    /// One meeting on one line, as a Tasks row (`sidebar_row`): a dot and a faint tint in its
-    /// colour (the band's), its title and one quiet fact, else its start; the band's card on hover.
-    /// Past ones faded, the one that runs stronger, with now's colour at its edge.
-    fn meeting_row(
+    /// One meeting's block: a faint tint in its colour (the band's) with a bar of it at its left
+    /// edge, its title and start; on one line when short (`Standup 9:00`). The band's card on hover,
+    /// Join on hover or selection. Past ones faded; the one that runs stronger, edged in its colour.
+    fn meeting_block(
         &self,
-        event: &Event,
+        (event, join): (&Event, &Event),
+        more: &[&Event],
         (index, selected): (usize, bool),
+        height: f32,
         now: u64,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let id = event.id;
+    ) -> gpui::Stateful<Div> {
+        let id = join.id;
         let calendar = &self.model.calendar;
         let stage = calendar::stage(event, now);
         let paint = calendar.paint(event, now, true);
         // Each time in the offset it has: another day may be across a clock change.
-        let clock = |ms: u64| calendar::clock(ms, ottospace_mac::time::utc_offset((ms / 1_000) as i64));
-        let card = calendar::facts(event, &[], ottospace_mac::time::utc_offset((event.start / 1_000) as i64));
-        let card = progress::meeting_tip(card, paint.color);
+        let offset = ottospace_mac::time::utc_offset((event.start / 1_000) as i64);
+        let card = progress::meeting_tip(calendar::facts(event, more, offset), paint.color);
         let group: &'static str = "meeting-row";
-        let join = event.link.as_ref().map(|_| {
+        let join = join.link.as_ref().map(|_| {
             words::words(group, selected).child(self.word(
                 format!("meeting-row-join:{id}"),
                 ("Join", "Open the meeting's link"),
@@ -894,27 +1072,40 @@ impl Workspace {
             ))
         });
         let running = stage == Stage::Running;
-        let tint = div().absolute().inset_0().rounded_md().bg(rgb(paint.color));
-        // At rest faint (3 to 5%), so a list of meetings stays calm; the one that runs, clearly more.
-        let tint = tint.opacity(if running { 0.22 } else { 0.05 * paint.alpha.max(0.6) });
-        let fact = calendar.row_fact(event, now);
-        // Now's colour, as the band's tick: a bar at the edge of the meeting that runs, where a
-        // Tasks row marks the task on show.
-        let bar = div().absolute().left(px(-1.)).top(px(5.)).bottom(px(5.)).w(px(3.)).rounded_full();
-        // One muted detail: `now` or `in 12m` when it says one, else when it starts.
-        let meta = crate::row_meta(fact.unwrap_or_else(|| clock(event.start))).relative();
-        crate::sidebar_row(("meeting", index), selected)
+        let tint = div().absolute().inset_0().rounded_sm().bg(rgb(paint.color));
+        // Calm at rest; the one that runs clearly more.
+        let tint = tint.opacity(if running { 0.32 } else { 0.16 * paint.alpha.max(0.6) });
+        let bar = div().absolute().left_0().top_0().bottom_0().w(px(3.)).rounded_sm().bg(rgb(paint.color));
+        let start = calendar::day::short_clock(event.start, offset);
+        let title = crate::cut_text(event.title.clone()).min_w_0();
+        let time = div().flex_none().text_color(rgb(theme::MUTED)).child(start);
+        let text = if height >= TWO_LINES {
+            div().flex().flex_col().min_w_0().child(title).child(time)
+        } else {
+            div().flex().gap_1().min_w_0().child(title.flex_1()).child(time)
+        };
+        div()
+            .id(("meeting", index))
             .group(group)
             .relative()
+            .size_full()
+            .overflow_hidden()
+            .rounded_sm()
+            .border_1()
+            .border_color(gpui::transparent_black())
+            .when(running, |d| d.border_color(rgb(paint.color)))
+            .when(selected, |d| d.border_color(rgb(theme::LIST)))
             .when(stage == Stage::Past, |d| d.opacity(0.5))
+            .pl(px(6.))
+            .pr(px(2.))
+            .text_xs()
+            .line_height(px(16.))
+            .text_color(rgb(theme::TEXT))
             .child(tint)
-            .children(running.then(|| bar.bg(rgb(theme::TEXT))))
-            .child(home::dot(paint.color).opacity(paint.alpha.max(0.5)))
-            .child(crate::cut_text(event.title.clone()).flex_1())
-            .child(meta)
-            .children(join.map(|join| join.top(px(3.5))))
+            .child(bar.opacity(paint.alpha.max(0.5)))
+            .child(text.relative())
+            .children(join.map(|join| join.top(px(1.))))
             .tooltip(card)
-            .into_any_element()
     }
 
     /// The Calendar rail cell's mark: a steady dot while a meeting is imminent or runs, a filled

@@ -2,12 +2,12 @@
 
 use super::*;
 
-const M: u64 = MINUTE;
-const H: u64 = 60 * M;
+pub(super) const M: u64 = MINUTE;
+pub(super) const H: u64 = 60 * M;
 /// 09:00 of a day, in ms.
-const NINE: u64 = 1_794_560_400_000;
+pub(super) const NINE: u64 = 1_794_560_400_000;
 
-fn event(id: u64, start: u64, minutes: u64) -> Event {
+pub(super) fn event(id: u64, start: u64, minutes: u64) -> Event {
     Event {
         id,
         start,
@@ -92,8 +92,8 @@ fn the_glow_eases_and_holds_still_with_reduced_motion() {
 }
 
 /// Today's midnight and the next, UTC.
-const DAY: (u64, u64) = (NINE - 9 * H, NINE + 15 * H);
-const UTC: &dyn Fn(u64) -> i64 = &|_| 0;
+pub(super) const DAY: (u64, u64) = (NINE - 9 * H, NINE + 15 * H);
+pub(super) const UTC: &dyn Fn(u64) -> i64 = &|_| 0;
 
 fn workday(text: &str) -> Workday {
     Workday::parse(text).unwrap()
@@ -836,40 +836,40 @@ fn the_read_status_says_when() {
 /// Bryan, 2026-11-17: "shows no meetings but i definitely have some today". Before the first
 /// read landed, and after a first read failed, the section said "No meetings", as for an empty day.
 #[test]
-fn the_section_says_loading_or_what_failed_and_no_meetings_only_after_a_good_read() {
+fn the_section_says_loading_or_what_failed_and_draws_its_day_only_after_a_good_read() {
     use crate::model::Model;
     use crate::{Action, Origin};
     use fetch::{Failure, Fetch};
     let mut m = Model::default();
     m.update(Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() });
-    let line = |m: &Model, now: u64| (m.calendar.empty_note(), m.calendar.fetch_line(now, 0));
-    assert_eq!(line(&m, NINE), (None, "Loading the calendar…".into()), "before the thread's first word");
+    let line = |m: &Model, now: u64| (m.calendar.draws_day(), m.calendar.fetch_line(now, 0));
+    assert_eq!(line(&m, NINE), (false, "Loading the calendar…".into()), "before the thread's first word");
     m.update(Action::CalendarFetching { since: NINE, bytes: 0 });
-    assert_eq!(line(&m, NINE + 3_000), (None, "Loading the calendar… 3 s".into()));
+    assert_eq!(line(&m, NINE + 3_000), (false, "Loading the calendar… 3 s".into()));
     m.update(Action::CalendarFetching { since: NINE, bytes: 300 * 1024 });
-    assert_eq!(line(&m, NINE + 4_000), (None, "Loading the calendar… 300 KB".into()));
-    // A first read that fails says why, and no "No meetings".
+    assert_eq!(line(&m, NINE + 4_000), (false, "Loading the calendar… 300 KB".into()));
+    // A first read that fails says why, and draws no day.
     m.update(Action::CalendarFetched { at: NINE + 30_000, events: 0, failure: Some(Failure::TimedOut { secs: 30 }) });
     m.update(Action::CalendarRead { events: None, days: days_of(NINE), at: NINE + 30_000, held_from: 0 });
     let failed = "Couldn't reach the calendar (timed out after 30 s)".to_string();
-    assert_eq!(line(&m, NINE + 31_000), (None, failed));
+    assert_eq!(line(&m, NINE + 31_000), (false, failed));
     // The user's Retry fetches; a client's, or the system's, does not.
     for origin in [Origin::Socket, Origin::System] {
         assert_eq!(m.refusal(&Action::CalendarRetry, origin), Some(USERS_RETRY));
     }
     assert_eq!(m.update(Action::CalendarRetry.sent_by(Origin::User)), [crate::Effect::CalendarRetry]);
-    // Read: an empty day says so, with when and how many.
+    // Read: an empty day is drawn (its hours, one free band), with when and how many.
     m.update(Action::CalendarFetching { since: NINE + 40_000, bytes: 0 });
     assert!(m.update(Action::CalendarRetry.sent_by(Origin::User)).is_empty(), "not while one runs");
     m.update(Action::CalendarFetched { at: NINE + 45_000, events: 1858, failure: None });
     m.update(Action::CalendarRead { events: Some(Vec::new()), days: days_of(NINE), at: NINE + 45_000, held_from: 0 });
     assert_eq!(m.calendar.fetch, Fetch::Read { at: NINE + 45_000, events: 1858 });
-    let read = (Some("No meetings today"), "Updated 2 min ago · 1858 events".to_string());
+    let read = (true, "Updated 2 min ago · 1858 events".to_string());
     assert_eq!(line(&m, NINE + 45_000 + 2 * M), read);
     // A later failure keeps what was read, and says when that was.
     m.update(Action::CalendarFetched { at: NINE + H, events: 0, failure: Some(Failure::Http(403)) });
     m.update(Action::CalendarRead { events: None, days: days_of(NINE), at: NINE + 45_000, held_from: 0 });
-    let after = (Some("No meetings today"), "The calendar answered 403 · last read 09:00".to_string());
+    let after = (true, "The calendar answered 403 · last read 09:00".to_string());
     assert_eq!(line(&m, NINE + H), after);
 }
 
@@ -1008,23 +1008,36 @@ fn the_sections_day_stays_within_the_days_held_and_comes_back_when_the_day_turns
 }
 
 #[test]
-fn a_rows_fact_is_now_or_the_next_within_the_hour() {
-    let (one, two, later) = (event(1, NINE, 30), event(2, NINE + 45 * M, 30), event(3, NINE + 3 * H, 30));
-    let mut c = calendar(vec![one.clone(), two.clone(), later.clone()]);
-    // (now, the fact of each)
-    let table: [(u64, [Option<&str>; 3]); 4] = [
-        (NINE - 20 * M, [Some("in 20m"), None, None]),
-        (NINE + 10 * M, [Some("now"), Some("in 35m"), None]),
-        (NINE + H + 30 * M, [None, None, None]),
-        (NINE + 2 * H + 15 * M, [None, None, Some("in 45m")]),
+fn list_mode_starts_on_the_meeting_that_runs_else_the_next_else_the_last() {
+    use crate::model::{Action, Model, Origin, Section};
+    let c = calendar(vec![event(1, NINE, 30), event(2, NINE + H, 30), event(3, NINE + 2 * H, 30)]);
+    let table = [
+        (NINE - H, 0, "before them all: the first, the next"),
+        (NINE + 10 * M, 0, "the one that runs"),
+        (NINE + H + 5 * M, 1, "the one that runs, not the first"),
+        (NINE + 40 * M, 1, "between: the next"),
+        (NINE + 5 * H, 2, "all past: the last"),
     ];
-    for (now, want) in table {
-        let facts: Vec<Option<String>> = [&one, &two, &later].map(|e| c.row_fact(e, now)).into();
-        assert_eq!(facts, want.map(|f| f.map(String::from)), "at {}", clock(now, 0));
+    for (now, want, name) in table {
+        assert_eq!(c.first_row(now), want, "{name}");
     }
-    // On another day: nothing.
-    c.step(DayStep::Forward);
-    assert_eq!(c.row_fact(&one, NINE + 10 * M), None);
+    // Two that run: the one that started first.
+    let both = calendar(vec![event(1, NINE, 60), event(2, NINE + 15 * M, 30)]);
+    assert_eq!(both.first_row(NINE + 20 * M), 0);
+    // No meetings: row 0.
+    assert_eq!(calendar(Vec::new()).first_row(NINE), 0);
+    // ⌘⌃E in the open section, the time passed in a tick first.
+    let mut m = Model::default();
+    m.update(
+        Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() }
+            .sent_by(Origin::System),
+    );
+    let events = Some(vec![event(1, NINE, 30), event(2, NINE + H, 30), event(3, NINE + 2 * H, 30)]);
+    m.update(Action::CalendarRead { events, days: days_of(NINE), at: NINE, held_from: 0 }.sent_by(Origin::System));
+    m.update(Action::ToggleSection { section: Section::Calendar });
+    m.update(Action::Tick { now: NINE + H + 5 * M }.sent_by(Origin::System));
+    m.update(Action::FocusList);
+    assert_eq!(m.list, Some(1));
 }
 
 #[test]

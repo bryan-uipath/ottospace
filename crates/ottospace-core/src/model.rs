@@ -7622,6 +7622,11 @@ impl Model {
 
     /// The row list mode starts on: the first that is not a heading.
     fn first_row(&self) -> usize {
+        // The Calendar: the meeting that runs or comes next (`Calendar::first_row`); the shell
+        // passes the time in a `Tick` before entering list mode.
+        if self.sidebar == Some(Section::Calendar) {
+            return self.calendar.first_row(self.now);
+        }
         let heading = |row: &ListRow| matches!(row, ListRow::Heading(_) | ListRow::RepoHead(_) | ListRow::RepoGroup(_));
         self.list_rows().iter().position(|row| !heading(row)).unwrap_or(0)
     }

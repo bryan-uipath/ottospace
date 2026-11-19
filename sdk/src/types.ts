@@ -1319,6 +1319,33 @@ export interface KeyReference {
 /** How near the next meeting is. */
 export type MeetingStage = "far" | "approaching" | "imminent" | "running" | "past";
 
+/**
+ * The Calendar section's day, as Outlook's: its rect, the scroll's (`viewport`) and how far down
+ * it is, its span (ms), how many hour lines; each block's times, rect, column of `columns`, stage,
+ * list mode's selection, meetings merged into it and its Join (while it shows); each free stretch
+ * over an hour pressed into a band; now's line and its time label (null off the day). No title.
+ */
+export interface CalendarDayView {
+  rect: Rect;
+  viewport: Rect | null;
+  scroll: number;
+  span: [number, number];
+  hours: number;
+  blocks: {
+    start: number;
+    end: number;
+    rect: Rect | null;
+    column: number;
+    columns: number;
+    stage: MeetingStage;
+    selected: boolean;
+    more: number;
+    join: Rect | null;
+  }[];
+  gaps: { from: number; to: number; minutes: number; rect: Rect | null }[];
+  now: { rect: Rect; label: Rect | null } | null;
+}
+
 /** A rect in points, top-left origin. */
 export interface Frame {
   x: number;
@@ -1736,9 +1763,11 @@ export interface Snapshot {
     /** The day shown, from today (0; -1 yesterday, 7 back to 7 on), and its local midnight (ms). */
     day: number;
     day_start: number;
-    /** Where its all-day line and first row are drawn (null when there is none, or it is closed). */
+    /** Where its all-day strip and first block are drawn (null when there is none, or it is closed). */
     all_day_line: Rect | null;
     first_row: Rect | null;
+    /** The section's day as drawn (null while closed or empty). */
+    day_view: CalendarDayView | null;
     /** Its header's ‹ and ›, and Today while on another day. */
     nav: { back: Rect | null; forward: Rect | null; today: Rect | null };
     /**
@@ -1747,9 +1776,8 @@ export interface Snapshot {
      * `too_big`, `not_calendar`, `file`, `curl`) and the HTTP status or curl's exit code. Never the link.
      */
     fetch: CalendarFetch;
-    /** The section's fetch line and its empty day's note (null before a good read), as drawn. */
+    /** The section's fetch line, as drawn. */
     fetch_line: string;
-    empty_note: string | null;
     /** Where the fetch line and its Retry (only after a failure) are drawn. */
     fetch_rect: Rect | null;
     retry: Rect | null;
