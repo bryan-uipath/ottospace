@@ -114,6 +114,9 @@ ignore / not manage". The rule, from what was measured:
 | `Reactions`, untitled banners and other `AXUnknown` windows | Short-lived pop-ups |
 | `Meeting chat` (while sharing) | A system dialog, not a standard window; it goes back into the main window when sharing ends |
 
+2026-11-19: `Meeting chat` is no longer a built-in rule. The owner wanted it in a pane in a call;
+it floats with an offer and the picker lists it.
+
 All of these have a subrole other than `AXStandardWindow`, so "host standard windows only"
 already skips them. The rule set should still name them, so a later change to what is hosted
 does not pick them up, and so a new-window watcher does not open panes for them. Done: they

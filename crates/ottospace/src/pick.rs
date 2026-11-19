@@ -69,9 +69,22 @@ pub(crate) fn fixture_apps() -> Vec<FixtureApp> {
 /// A window the user's pick may put in a pane (`rules::pickable`): a pop-up the rules floated
 /// too. Not a minimised one: its stream would draw nothing.
 fn pickable(window: &ax::Window) -> bool {
+    unpickable(window).is_none()
+}
+
+/// Why `pickable` says no, for the log: `minimised`, `sheet`, `tiny`, or the rule (`built-in rule 0: ignore`).
+fn unpickable(window: &ax::Window) -> Option<String> {
     let (frame, sheet) = window.quick(|w| (w.frame(), w.sheet()));
     let shape = Shape { sheet, size: frame.map(|f| [f.size.width, f.size.height]), ..Shape::default() };
-    !window.minimized() && with_facts(window, |facts| rules::pickable(&config::live().windows, facts, &shape))
+    if window.minimized() {
+        return Some("minimised".into());
+    }
+    let why = with_facts(window, |facts| rules::unpickable(&config::live().windows, facts, &shape))?;
+    Some(match why {
+        rules::Unpickable::Sheet => "sheet".into(),
+        rules::Unpickable::Tiny => "tiny".into(),
+        rules::Unpickable::Rule(source) => format!("{}: ignore", source.label()),
+    })
 }
 
 impl Workspace {
@@ -84,8 +97,17 @@ impl Workspace {
         let mut windows: Vec<PickWindow> = fixture.map(|w| PickWindow { window: w.window, title: w.title }).collect();
         if let Some(pid) = self.pid_of(app) {
             let read = |w: ax::Window| Some(PickWindow { window: w.id()?, title: w.title().unwrap_or_default() });
-            windows.extend(ax::Window::all_of(pid).into_iter().filter(pickable).filter_map(read));
+            let mut skipped = Vec::new();
+            for w in ax::Window::all_of(pid) {
+                match unpickable(&w) {
+                    None => windows.extend(read(w)),
+                    Some(why) => skipped.push(serde_json::json!({ "why": why, "subrole": w.subrole() })),
+                }
+            }
             bundle = ax::app_identity(pid).0;
+            // What the list left out and why, so a window that cannot be picked can be told apart: never a title.
+            let fields = serde_json::json!({ "bundle": bundle, "listed": windows.len(), "skipped": skipped });
+            crate::event_log::event("pick_list", fields);
             // Read only for an app with no recipe of its own: it walks the menus.
             menu_item =
                 new_window::recipe(bundle.as_deref(), false).is_none() && ax::has_menu_item(pid, new_window::MENU_ITEM);

@@ -163,6 +163,8 @@ fn fields_of(event: &str) -> &'static [&'static str] {
         "listen_audio_filter" => &["bundle", "pids"],
         "listen_quiet" => &["bundle", "pids", "buffers"],
         "listen_counts" => &["bundle", "buffers", "loud", "lines"],
+        // The picker's list of an app's windows: how many, and why each other was left out.
+        "pick_list" => &["bundle", "listed", "skipped"],
         // Where a new window of a hosted app went, and why: never its title.
         "place" => {
             &["bundle", "subrole", "modal", "sheet", "size", "pane", "min_width", "place", "why", "rule", "slot"]
@@ -376,6 +378,11 @@ mod tests {
                     "size": [1200.0, 800.0], "pane": [900.0, 700.0], "min_width": null, "place": "slot_offer",
                     "why": "slot", "rule": "windows[0]: manage", "slot": 3 }),
             ),
+            (
+                "pick_list",
+                json!({ "bundle": "us.zoom.xos", "listed": 2,
+                    "skipped": [{ "why": "built-in rule 0: ignore", "subrole": "AXSystemDialog" }] }),
+            ),
             ("panic", panic_fields(Some((&main, 12)), Some("main"))),
             ("panic", panic_fields(Some((&format!("{home}/src/app/target/debug/build/x-1/out/gen.rs"), 3)), None)),
             // The first line only.
@@ -400,7 +407,7 @@ mod tests {
             write(event, fields, Some(&*dir));
         }
         let text = fs::read_to_string(dir.join(NAME)).unwrap();
-        assert_eq!(text.lines().count(), 21, "{text}");
+        assert_eq!(text.lines().count(), 22, "{text}");
         // `at` is each line's time, never overwritten by a field.
         assert!(
             text.lines().all(|line| serde_json::from_str::<Value>(line).unwrap()["at"].as_str().unwrap().len() == 25)

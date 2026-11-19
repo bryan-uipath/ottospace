@@ -161,6 +161,14 @@ the user asked for it. A minimised one is not (its stream would draw nothing). a
 with the pane that holds it already. Choosing a held one shows its pane; any other is hosted, shared: given
 back when its pane closes, as before. Titles are drawn, never in the state. A test run lists the
 made-up apps of `OTTOSPACE_PICK_APPS` (a JSON file) and hosts none: `counts.window_picks` counts the asks.
+Each list is one `pick_list` line in the log: how many were listed, and each window left out
+with why (`minimised`, `sheet`, `tiny`, the rule) and its subrole; never a title.
+
+Zoom's popped-out `Meeting chat` (an `AXSystemDialog`, seen while sharing) was a built-in `ignore`
+until 2026-11-19, so it was neither offered nor listed: the owner could not put it in a pane. Now
+it floats with an offer, and the picker lists it, as any dialog. Zoom's share controls, its
+annotation layer and its reactions picker stay ignored (`docs/ai/dock-strip.md` weighs a place
+for the share toolbar).
 
 "New window" asks the app for a window of its own by its recipe, from one table by bundle id
 (`new_window::RECIPES`): Chromium browsers `open -n -g -b <id> --args --new-window`, VS Code and

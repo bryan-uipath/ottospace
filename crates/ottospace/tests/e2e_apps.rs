@@ -319,6 +319,32 @@ fn a_pop_up_floats_over_its_apps_pane_at_its_own_size_and_a_big_window_is_offere
     assert_eq!(state()["state"]["panes"][1]["kind"]["title"], if room { "Canary 5" } else { "Canary 4" });
 }
 
+/// The owner's Zoom call: a popped-out chat (an `AXSystemDialog`) could not be put in a pane. A
+/// system dialog of the hosted canary is offered and listed by the picker; the user's click on
+/// the offer puts it in a pane of its own.
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_system_dialog_is_offered_and_listed_and_the_users_click_puts_it_in_a_pane() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-sysdialog", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = otto_for(&canary, "otto-sysdialog", &[]);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let spot = host_and_park(&otto);
+    canary.call(json!({"cmd": "dialog", "at": spot, "subrole": "AXSystemDialog"}));
+    let offered = wait_offers(&otto, 1);
+    // ⌘E, the canary: its two windows listed, the system dialog too.
+    otto.call(json!({"cmd": "picker"}));
+    otto.call(json!({"cmd": "picker_query", "query": CANARY}));
+    let reply = otto.call(json!({"cmd": "picker_choose"}));
+    let rows = reply["picker_rows"].as_array().cloned().unwrap_or_default();
+    let listed: Vec<u64> = rows.iter().filter(|r| r["type"] == "window").filter_map(|r| r["window"].as_u64()).collect();
+    assert!(listed.contains(&offered[0]) && listed.len() == 2, "{reply}");
+    otto.call(json!({"cmd": "key", "keys": "escape", "as": "user"}));
+    take_offer(&otto, offered[0]);
+    wait_for("the dialog's pane", || (state()["tab_panes"] == json!([[1, 2]])).then_some(()));
+    assert_eq!(state()["hosted"].as_object().map(|hosted| hosted.len()), Some(2));
+}
+
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
 fn a_canary_window_is_hosted_entered_left_and_restored() {
