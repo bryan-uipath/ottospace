@@ -62,15 +62,31 @@ at a time. Made for a block: "15 minutes of decisions".
 - **A decision is a workspace.** The owner: "I picture the decision would be a special workspace
   with a single pane (that we could have side conversations or still spin up other panes for
   reference)." One pane fills the window: the exposition on one side, the question and options on
-  the other. btw opens inside that pane. Ordinary splits add reference panes (a sheet, a terminal,
-  a file); they close with the card, and the next card starts as one pane again. Mock:
+  the other. Shown in the full chrome. Mock:
   [Decision workspace](https://claude.ai/artifact/VvJWQgWzXazQhijmCJ9dcv#artboard-DecisionWorkspace).
+- **It reuses the chrome.** The owner: "right rail / conversations / side conversations should go
+  through that existing right pane ui". No conversation UI of its own: talking a card over opens
+  the right drawer on the card's task (its conversation and btw column; ⌘⇧R, or the task on the
+  right rail, which shows the card's task). Ordinary splits and the ⌘E picker add panes ("if I
+  wanted to check something in the terminal"); they close with the card, and the next card starts
+  as one pane again.
+- **Evidence drill-in.** The owner: "I could click on them to see the raw data in a separate pane
+  (using an existing or incoming file view)." A card carries a list of evidence, each item a
+  source plus a location (a file and its rows or lines, a URL or app view, a record id, a session
+  message), attached to the claim it supports. A click or a key opens it in a pane beside the
+  card, in the ordinary viewer for its kind, never a one-off view. The framework is the list, not
+  the viewers: any source that can name a location can offer evidence.
+  - The file viewer on main ([file-viewer.md](../file-viewer.md)) shows a regular file of at
+    most 5 MB read-only, markdown drawn, code with line numbers, other text (a CSV too) plain.
+    `OpenFile` takes no line: opening at the cited rows, and marking them, is new.
+  - The card's agent or presenter supplies the list. Paths in it are untrusted data: opened
+    read-only, only inside what the person could already open from the task (its repository,
+    listed repositories and worktrees, folders the agent was given). Today the viewer opens any
+    readable absolute path; evidence would be narrower.
 - **A card**: the question; a three-line recap of where the task stands; the options; the
   agent's recommendation, marked. Keys 1–4 answer (ask cards have number keys today); the agent
   resumes at once.
 - **Order**: an agent blocked now, then deadline, then age. Each card says why it is where it is.
-- **Talk it over**: btw asks the agent about an option without answering; "Use as my answer" as
-  today.
 - **Flow that never slows**: "3 of 7"; on an answer the seal plays while the next card is already
   usable; the options' details animate in.
 - **Visual aids.** The owner: "a code snippet, or a before/after visual, an explanatory visual";
