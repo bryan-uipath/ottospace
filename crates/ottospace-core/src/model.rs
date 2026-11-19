@@ -5927,8 +5927,9 @@ impl Model {
             // Yes to "Stop its agent and dismiss?": the agent stops as Stop stops it, then the task goes.
             Action::QuitConfirm if let Some(id) = self.confirm.as_ref().and_then(|confirm| confirm.dismiss) => {
                 self.confirm = None;
+                let moved = if self.done_row(id) { Moved::Cleared } else { Moved::Dismissed };
                 self.act(Action::TaskStop { id: Subject::Task(id) }, effects);
-                self.row_move(id, Moved::Dismissed, |tasks| tasks.dismiss(id));
+                self.row_move(id, moved, |tasks| tasks.dismiss(id));
             }
             // Yes to "Stop it and put it away?".
             Action::QuitConfirm if let Some((id, _)) = self.confirm.as_ref().and_then(|confirm| confirm.later.clone()) => {
@@ -12571,6 +12572,14 @@ mod tests {
         assert_eq!(m.update(Action::QuitConfirm), [Effect::StopAgent { task: Subject::Task(a) }]);
         m.update(Action::AgentExited { task: Subject::Task(a) }.sent_by(Origin::System));
         assert_eq!((m.tasks.get(a).map(|t| t.dismissed), m.spaces().len(), m.confirm.is_none()), (Some(true), 2, true));
+        // A done task's Clear, confirmed: its notice says Cleared.
+        m.update(Action::TaskUndo);
+        started(&mut m, Action::TaskTalk { id: a });
+        m.update(Action::TaskSetState { id: a, state: State::Done });
+        assert!(m.agent_runs(&Subject::Task(a)) && m.done_row(a));
+        m.update(Action::RowDismiss { id: a });
+        m.update(Action::QuitConfirm);
+        assert_eq!(m.undo_offer.map(|n| n.moved), Some(Moved::Cleared));
     }
 
     #[test]
