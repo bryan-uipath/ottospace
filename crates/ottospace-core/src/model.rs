@@ -7490,6 +7490,12 @@ impl Model {
         zones::SECTIONS.into_iter().filter(|s| (*s != Section::Calendar || self.calendar.on) && flagged(s)).collect()
     }
 
+    /// A left rail cell's needs-you dot: Tasks while a task needs the user, whichever section is
+    /// open, or the sidebar collapsed. The drawer's rail dots its tasks the same way.
+    pub fn section_marked(&self, section: Section) -> bool {
+        section == Section::Tasks && self.tasks.needs_you() > 0
+    }
+
     /// The section ⌘⇧L toggles (`ToggleSection`): the open one, which closes
     /// the bar; else the one open last, else the rail's first.
     pub fn sidebar_toggled(&self) -> Section {

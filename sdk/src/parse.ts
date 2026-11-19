@@ -1900,6 +1900,7 @@ export function snapshot(value: unknown): Snapshot {
     agent_chip: orNull(agentChip)(o.agent_chip, "agent_chip"),
     strip: orNull(rect)(o.strip, "strip"),
     bar_header: orNull(rect)(o.bar_header, "bar_header"),
+    tasks_dot: orNull(rect)(o.tasks_dot, "tasks_dot"),
     drag: orNull(drag)(o.drag, "drag"),
     shown: map(rect)(o.shown, "shown"),
     tab_panes: list(list(num))(o.tab_panes, "tab_panes"),

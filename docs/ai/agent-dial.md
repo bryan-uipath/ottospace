@@ -39,8 +39,8 @@ the enum moved to the core so the dial can name it. All eleven are kept: each ca
 |---|---|
 | You | a user message; `AskUserQuestion`; lit while a permission request waits |
 | Model | a model step; lit while the model has the turn and no call runs |
-| Files | `Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Grep`, `Glob`, `LS`, `apply_patch`, `view_image`; a shell line of file commands only |
-| Shell | `Bash`, `BashOutput`, `KillShell`, `PowerShell`, `Monitor`, Codex's `exec`/`shell` |
+| Files | `Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Grep`, `Glob`, `LS`, `apply_patch`, `view_image`; never a shell line |
+| Shell | `Bash`, `BashOutput`, `KillShell`, `PowerShell`, `Monitor`, Codex's `exec`/`shell`: any shell line that reaches no network, `ls` and `cat` too |
 | Network | `WebFetch`, `WebSearch`; a shell line that reaches the network (`git push`, `curl`); MCP servers other than browser and memory ones |
 | Browser | MCP servers named `playwright`, `chrome`, `browser`, `puppeteer` |
 | Agents | `Task`, `Agent`, `SendMessage`, `TaskOutput`, `TaskStop`, `Workflow`; Codex's agent tools |

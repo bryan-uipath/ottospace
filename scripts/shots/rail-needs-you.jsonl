@@ -1,0 +1,13 @@
+# The left rail's Tasks cell while a task needs you: its dot with Tasks open, Repos open, and the
+# sidebar collapsed.
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"Review the zoom fix #canvas p1"}
+{"cmd":"task_new","line":"Minimap spike #canvas"}
+{"cmd":"task_set_state","id":1,"state":"needs_you"}
+{"cmd":"task_set_state","id":2,"state":"running"}
+{"cmd":"section","section":"tasks"}
+{"shot":"tasks-open"}
+{"cmd":"section","section":"repos"}
+{"shot":"repos-open"}
+{"cmd":"section","section":"repos"}
+{"shot":"collapsed"}

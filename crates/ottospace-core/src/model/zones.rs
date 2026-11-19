@@ -276,6 +276,24 @@ mod tests {
         assert_eq!((rail, m.focus_target()), (Target::Rail(Section::Apps), Target::Pane(1)));
     }
 
+    /// The Tasks cell's dot showed only while Tasks was open.
+    #[test]
+    fn the_tasks_cell_is_marked_whichever_section_is_open() {
+        let mut m = Model::default();
+        m.update(Action::OpenCompose { text: "one".into() });
+        m.update(Action::ComposeSubmit { open: true });
+        let marked = |m: &Model| SECTIONS.into_iter().filter(|s| m.section_marked(*s)).collect::<Vec<_>>();
+        assert_eq!(marked(&m), []);
+        let needs = crate::tasks::State::NeedsYou;
+        m.update(Action::TaskSetState { id: 1, state: needs }.sent_by(Origin::System));
+        for open in [Some(Section::Tasks), Some(Section::Repos), None] {
+            m.sidebar = open;
+            assert_eq!(marked(&m), [Section::Tasks], "{open:?}");
+        }
+        m.update(Action::TaskSetState { id: 1, state: crate::tasks::State::Running }.sent_by(Origin::System));
+        assert_eq!(marked(&m), []);
+    }
+
     /// A click on a pane while a rail had the keyboard left the keys with the rail.
     #[test]
     fn a_pane_taken_another_way_takes_the_keyboard_from_the_rail() {

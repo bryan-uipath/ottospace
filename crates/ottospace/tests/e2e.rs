@@ -7372,6 +7372,29 @@ fn the_sidebar_collapses_into_the_left_rail_and_opens_on_the_section_open_last()
     assert_eq!(otto.user_click(at(otto.control("rail:repos"), 0.5, 0.5))["state"]["sidebar"], "repos");
 }
 
+/// The owner: the Tasks cell's needs-you mark showed only while Tasks was open. Now a dot at its
+/// icon's corner, whichever section is open, or none.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_tasks_cell_is_marked_while_a_task_needs_you_whichever_section_is_open() {
+    let otto = Otto::launch("tasks-dot");
+    assert!(otto.drawn()["tasks_dot"].is_null(), "no task needs you");
+    otto.call(json!({"cmd": "task_add", "title": "question", "state": "needs_you"}));
+    let cell = otto.control("rail:tasks");
+    let inside = |dot: &Value| {
+        let [x, y, w, h] = [0, 1, 2, 3].map(|i| dot[i].as_f64().expect("dot drawn"));
+        x >= cell[0] && y >= cell[1] && x + w <= cell[0] + cell[2] && y + h <= cell[1] + cell[3]
+    };
+    let repos = otto.call(json!({"cmd": "section", "section": "repos"}));
+    assert_eq!(repos["state"]["sidebar"], "repos");
+    assert!(inside(&repos["tasks_dot"]), "{} in {cell:?}", repos["tasks_dot"]);
+    let closed = otto.user_click(at(otto.control("bar:close"), 0.5, 0.5));
+    assert!(closed["state"]["sidebar"].is_null());
+    assert!(inside(&closed["tasks_dot"]), "{} in {cell:?}", closed["tasks_dot"]);
+    let running = otto.call(json!({"cmd": "task_set_state", "id": 1, "state": "running"}));
+    assert!(running["tasks_dot"].is_null(), "none needs you");
+}
+
 /// A workspace keeps what is open in it: made with +, a terminal in a folder, closed with × and
 /// opened from the list; and closed, then after a restart, opened from the list again.
 #[test]
