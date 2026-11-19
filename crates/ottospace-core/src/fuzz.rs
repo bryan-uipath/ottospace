@@ -151,12 +151,14 @@ pub(crate) fn shrink<T: Clone>(mut steps: Vec<T>, fails: impl Fn(&[T]) -> bool) 
     }
 }
 
-/// How many sequences run at once.
+/// How many sequences run at once: `OTTOSPACE_PROP_WORKERS` (1 up to every core), else every core.
 pub(crate) fn workers() -> usize {
-    std::thread::available_parallelism().map_or(1, usize::from)
+    let cores = std::thread::available_parallelism().map_or(1, usize::from);
+    let asked = std::env::var("OTTOSPACE_PROP_WORKERS").ok().and_then(|n| n.parse::<usize>().ok());
+    asked.filter(|n| *n > 0).map_or(cores, |n| n.min(cores))
 }
 
-/// Runs `one(seed)` for `count` seeds from `first`, on every core. The failure of the lowest
+/// Runs `one(seed)` for `count` seeds from `first`, on `workers()` threads. The failure of the lowest
 /// seed, if any failed.
 pub(crate) fn each_seed<F: Send>(first: u64, count: u64, one: impl Fn(u64) -> Option<F> + Sync) -> Option<F> {
     let workers = workers() as u64;

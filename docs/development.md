@@ -58,6 +58,11 @@ cargo e2e    # launches the app and drives it over the socket.
 cargo e2e-apps   # hosts real windows of the canary test app; needs both permissions.
 ```
 
+The property tests run seeded random sequences of actions. The long run is
+`cargo test -p ottospace-core --release -- --ignored random_actions`. `OTTOSPACE_PROP_SEED=<n>`
+runs one sequence again, and `OTTOSPACE_PROP_WORKERS=<n>` caps each property test's threads (every
+core by default; `nice -n 15` and 4 workers leave the machine usable).
+
 Terminal panes run your login shell. Set `OTTOSPACE_SHELL` to run another program instead (the
 tests use `/bin/sh`). `cargo install` also installs the test app; use `--bin ottospace` to skip it.
 
