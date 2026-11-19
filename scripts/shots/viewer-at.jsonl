@@ -1,0 +1,5 @@
+# A made-up code file opened at lines (`open_file` with `line`, `last`): those lines marked, a few
+# below the top (`crates/ottospace/tests/fixtures/code/seeds.rs`). Before/after for the viewer's lines.
+{"cmd":"open_file","path":"{REPO}/crates/ottospace/tests/fixtures/code/seeds.rs","line":24,"last":26}
+{"until":"state.viewers.1.most","exists":true}
+{"shot":"marked"}
