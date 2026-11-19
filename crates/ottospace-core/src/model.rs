@@ -1658,6 +1658,27 @@ pub enum Action {
     /// The shell saw the window leave the display's frame (dragged, zoomed, a display gone): the
     /// mode is over, the bars come back.
     FillEnded,
+    /// The displays as the shell's watcher reads them, and the main window's (`main`, a uid).
+    /// Only the shell's (System). A tab out on a display gone folds in; plugged in again, the
+    /// display takes it back (`displays`).
+    SetDisplays {
+        displays: Vec<displays::Display>,
+        main: Option<String>,
+    },
+    /// ⌘⇧O: fold tab `tab` (default: the keyboard's) out to another display, the keyboard with
+    /// it; a tab out folds back in. Only the user's.
+    TabOut {
+        tab: Option<u32>,
+    },
+    /// Fold tab `tab` (default: the keyboard's) back into the main window: its Fold back in.
+    /// Only the user's.
+    TabIn {
+        tab: Option<u32>,
+    },
+    /// The user is in the window that shows tab `tab`: the keyboard goes there. Only the user's.
+    KeyWindow {
+        tab: u32,
+    },
     /// Start the shown conversation's agent, or go on with its session: the drawer's Resume
     /// session (Start agent), Take over, ↵ in an ended composer. Selecting a conversation (its
     /// row, its rail cell, its tab) never starts one. Only the user's.
@@ -2045,6 +2066,9 @@ impl Action {
                 | Action::TalkToggle
                 | Action::TalkKeys { .. }
                 | Action::ListenShow { on: true }
+                | Action::TabOut { .. }
+                | Action::TabIn { .. }
+                | Action::KeyWindow { .. }
         )
     }
 
@@ -2299,6 +2323,10 @@ impl Action {
             | Action::DialToggle
             | Action::FillDisplay
             | Action::FillEnded
+            | Action::SetDisplays { .. }
+            | Action::TabOut { .. }
+            | Action::TabIn { .. }
+            | Action::KeyWindow { .. }
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
             | Action::CallSeen { .. }
@@ -2393,6 +2421,7 @@ impl Action {
             | Action::ListPin
             | Action::AppsToggle { .. }
             | Action::AppsFilter { .. } => Some(Feature::AppsSection),
+            Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => Some(Feature::MultiMonitor),
             Action::ListenStart { .. }
             | Action::ListenToggle { .. }
             | Action::ListenPause { .. }
@@ -2667,6 +2696,7 @@ impl Action {
             | Action::DialToggle
             | Action::FillDisplay
             | Action::FillEnded
+            | Action::SetDisplays { .. }
             | Action::TalkStart
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
@@ -3124,6 +3154,10 @@ pub struct Tab {
     pub(crate) layout: Option<Node>,
     #[serde(skip)]
     pub(crate) focused: Option<PaneId>,
+    /// The display it was folded out to, by uid: where ⌘⇧O sends it, and what takes it back
+    /// when plugged in again. Cleared by the user's fold in.
+    #[serde(skip)]
+    pub(crate) display: Option<String>,
 }
 
 /// Where `TabPlace` puts a tab: at the end of a space's tabs, or just before another tab, in
@@ -3137,6 +3171,7 @@ pub enum TabAt {
 
 pub mod zones;
 
+pub mod displays;
 pub mod rail;
 pub mod spaces;
 pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
@@ -3171,6 +3206,21 @@ pub struct Model {
     pub live: Option<PaneId>,
     /// The window fills its display, over the menu bar and the Dock (`Action::FillDisplay`).
     pub fill_display: bool,
+    /// The displays, in screen order (`displays`). Not in the state: uids name hardware.
+    #[serde(skip)]
+    pub(crate) displays: Vec<displays::Display>,
+    /// The uid of the main window's display.
+    #[serde(skip)]
+    pub(crate) main_display: Option<String>,
+    /// The tabs folded out, one per display.
+    #[serde(skip)]
+    pub(crate) out: Vec<displays::Out>,
+    /// The main window's tab, by id, while the keyboard is on a tab out.
+    #[serde(skip)]
+    pub(crate) away: Option<u32>,
+    /// The space of the tab out whose window opened the new-task box: its task starts there.
+    #[serde(skip)]
+    pub(crate) compose_joins: Option<Owner>,
     /// The top row, hidden spaces too, in order. In the state it is `spaces` (`space_rows`).
     #[serde(skip)]
     pub(crate) spaces: Vec<Space>,
@@ -3518,6 +3568,11 @@ impl Default for Model {
             focused: None,
             live: None,
             fill_display: false,
+            displays: Vec::new(),
+            main_display: None,
+            out: Vec::new(),
+            away: None,
+            compose_joins: None,
             sidebar: None,
             sidebar_last: None,
             compose: None,
@@ -3645,7 +3700,8 @@ impl Default for Model {
             window_rules: Vec::new(),
         };
         // Home's own tab, on show.
-        let home = Tab { id: HOME_TAB, title: HOME.into(), space: Owner::Home, layout: None, focused: None };
+        let home =
+            Tab { id: HOME_TAB, title: HOME.into(), space: Owner::Home, layout: None, focused: None, display: None };
         model.tabs.push(home);
         model
     }
@@ -4049,6 +4105,9 @@ impl Model {
             // How the user keeps their drawer, and the layout file that keeps it.
             Action::DialToggle => Some(chat::DIAL_USERS),
             Action::FillDisplay => Some(crate::fill::USERS_ALONE),
+            Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => Some(displays::USERS_ALONE),
+            // Only the shell's display watcher says what the displays are.
+            Action::SetDisplays { .. } if origin == Origin::Socket => Some(displays::SHELLS_ALONE),
             // The editor writes what ↵ will send, and has the keyboard: only the user opens it or
             // moves to it; only the shell says what it saved.
             Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
@@ -4297,7 +4356,7 @@ impl Model {
         // Home before the step: what the user makes there is a new workspace's (`settle_home`).
         let home = spaces::HomeStep {
             new_tab: matches!(sent.action, Action::NewTab | Action::NewEmptyTab),
-            on_show: *self.space() == Owner::Home,
+            on_show: *self.shown_space() == Owner::Home,
             tabs: self.tabs.iter().map(|tab| tab.id).collect(),
             typing: origin != Origin::User && (self.talk.as_ref().is_some_and(|talk| talk.keys) || self.composing()),
         };
@@ -4328,7 +4387,9 @@ impl Model {
             // A closed temporary workspace whose offer ended goes at the next `Tick`: only time ends one.
             return vec![Effect::NoticeDismissed { kind: *kind }];
         }
+        let out_from = self.out_from();
         let mut effects = self.step(sent);
+        self.settle_out(out_from.clone(), origin == Origin::User, &mut effects);
         self.tasks.finished(&states, self.now);
         self.settle_finish();
         self.repo_unhold();
@@ -4338,6 +4399,7 @@ impl Model {
             fronts_were.into_iter().filter(|id| origin == Origin::User && !was_done(id)).collect();
         self.settle_tasks(undo && origin == Origin::User, &finished);
         self.settle_spaces(origin, &home);
+        self.settle_out(out_from.clone(), origin == Origin::User, &mut effects);
         self.settle_confirm();
         // A terminal opened now, wherever its tab went (Home's go to a workspace), starts in its space's default.
         for effect in &effects {
@@ -4447,6 +4509,11 @@ impl Model {
             inspector.filtering = false;
         }
         if self.refusal(&action, origin).is_some() || unfielded {
+            return effects;
+        }
+        // A capture of a pane out: an end of the user's modes, as any move of theirs, and no more.
+        if self.captures_out(&action) {
+            effects.push(Effect::Notice { text: displays::CAPTURE_HERE.into() });
             return effects;
         }
         // "Add and start" from anyone but the user adds the task and leaves the tabs on show
@@ -4623,9 +4690,14 @@ impl Model {
             Action::SpaceHideAsked { index, .. } if !user => Action::SpaceHide { index },
             action => action,
         };
+        let out_from = self.out_from();
+        let action = self.main_first(action, &mut effects);
         let (temporary, tick) = (self.temporary_shown(), matches!(action, Action::Tick { .. }));
-        let on_show = self.tabs.get(self.active).map(|tab| tab.id);
+        // The main window's: what a closing workspace gives way to there.
+        let on_show = self.tabs.get(self.main_at()).map(|tab| tab.id);
         self.act(action, &mut effects);
+        // Which tab the main window shows, before what asks it (a closing workspace on the row).
+        self.settle_out(out_from, user, &mut effects);
         // A temporary workspace the user took off the row closes; one whose Undo ran out goes.
         self.settle_closing(user, tick, (&temporary, on_show), &mut effects);
         if let Some((id, talk)) = shown {
@@ -6241,7 +6313,7 @@ impl Model {
                 }
             }
             Action::TalkFront { task } => {
-                if self.task_space(task) == *self.space() && self.members(self.space()).contains(&task) {
+                if self.task_space(task) == *self.shown_space() && self.members(self.shown_space()).contains(&task) {
                     self.set_front(task);
                 }
             }
@@ -6300,6 +6372,10 @@ impl Model {
                     effects.push(Effect::FillDisplay { on: false });
                 }
             }
+            Action::SetDisplays { displays, main } => self.set_displays(displays, main),
+            Action::TabOut { tab } => self.tab_out(tab, effects),
+            Action::TabIn { tab } => self.tab_in(tab, effects),
+            Action::KeyWindow { tab } => self.key_window(tab, effects),
             Action::SetCalendar { on, notify, links_only, hide_free, colors } => {
                 (self.calendar.on, self.calendar.notify, self.calendar.links_only) = (on, notify, links_only);
                 self.calendar.options(hide_free, colors);
@@ -7591,10 +7667,11 @@ impl Model {
         self.tabs.iter().zip(self.tab_panes()).any(|(tab, panes)| tab.space == *of && !panes.is_empty())
     }
 
-    /// The workspace a task started now by the user's ↵ would be in: the box's space
-    /// (`box_space`), if it is a kept workspace or a task's. Not the first "Workspace", nor a session's.
+    /// The workspace a task started now by the user's ↵ would be in: a tab out's space, for the box
+    /// its window opened, else the box's (`box_space`), if it is a kept workspace or a task's. Not
+    /// the first "Workspace", nor a session's.
     pub fn joins(&self) -> Option<Owner> {
-        let of = &self.box_space();
+        let of = &self.compose_joins.clone().unwrap_or_else(|| self.box_space());
         let kept = |id: &WorkbookId| self.workbooks.get(*id).is_some_and(|book| book.task.is_none());
         match of {
             Owner::Workbook { id } if kept(id) => Some(of.clone()),
@@ -8245,7 +8322,7 @@ impl Model {
         let title = self.free_title();
         self.add_space(&of);
         let at = self.space_end(&of);
-        self.tabs.insert(at, Tab { id: self.next_tab, title, space: of, layout: None, focused: None });
+        self.tabs.insert(at, Tab { id: self.next_tab, title, space: of, layout: None, focused: None, display: None });
         self.active = at;
     }
 
@@ -8260,7 +8337,7 @@ impl Model {
 
     /// The task in front in the selected space, if it has one.
     pub fn tab_task(&self) -> Option<TaskId> {
-        self.front(self.space())
+        self.front(self.shown_space())
     }
 
     /// Whose brief `task_brief` gives: the task named; else the caller's (its pass); else the
@@ -8488,8 +8565,8 @@ impl Model {
     /// `keep_out`: where the shell draws text over the lattice (see `home::home`).
     pub fn home(&self, keep_out: &[Rect]) -> Option<Home<'_>> {
         // A task's empty tab is its own, not the home screen: the shell says what goes in it.
-        let workspace = *self.space() == Owner::Home;
-        (self.layout.is_none() && workspace).then(|| home::home(&self.tasks, keep_out))
+        let workspace = *self.shown_space() == Owner::Home;
+        (self.tree_at(self.main_at()).is_none() && workspace).then(|| home::home(&self.tasks, keep_out))
     }
 
     /// Pane ids of each tab, in tab order. The state dump uses it to show which tab holds a pane.
@@ -9427,6 +9504,10 @@ mod tests {
         Action::DialToggle,
         Action::FillDisplay,
         Action::FillEnded,
+        Action::SetDisplays { .. },
+        Action::TabOut { .. },
+        Action::TabIn { .. },
+        Action::KeyWindow { .. },
         Action::TalkStart,
         Action::SetCalendar { .. },
         Action::CalendarRead { .. },
@@ -9755,6 +9836,10 @@ mod tests {
             Action::DialToggle,
             Action::FillDisplay,
             Action::FillEnded,
+            Action::SetDisplays { displays: Vec::new(), main: None },
+            Action::TabOut { tab: None },
+            Action::TabIn { tab: None },
+            Action::KeyWindow { tab: 1 },
             Action::TalkStart,
             Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() },
             Action::CalendarRead { events: None, days: [0; calendar::DAYS], at: 0, held_from: 0 },
@@ -10109,6 +10194,10 @@ mod tests {
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::DialToggle => Some(chat::DIAL_USERS),
                     Action::FillDisplay => Some(crate::fill::USERS_ALONE),
+                    Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => {
+                        Some(displays::USERS_ALONE)
+                    }
+                    Action::SetDisplays { .. } if origin == Origin::Socket => Some(displays::SHELLS_ALONE),
                     Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
@@ -16367,6 +16456,10 @@ mod tests {
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::DialToggle => Some(chat::DIAL_USERS),
                     Action::FillDisplay => Some(crate::fill::USERS_ALONE),
+                    Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => {
+                        Some(displays::USERS_ALONE)
+                    }
+                    Action::SetDisplays { .. } if origin == Origin::Socket => Some(displays::SHELLS_ALONE),
                     Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),

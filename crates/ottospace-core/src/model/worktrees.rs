@@ -354,7 +354,7 @@ impl Model {
             self.workbooks.set_worktree(id, Some(path.clone()));
         }
         // After the selected workspace; from Home, at the row's end, as what Home makes goes.
-        let after = self.spaces.iter().position(|space| space.of == *self.space() && space.of != Owner::Home);
+        let after = self.spaces.iter().position(|space| space.of == *self.shown_space() && space.of != Owner::Home);
         self.spaces.insert(after.map_or(self.spaces.len(), |at| at + 1), Space::new(of.clone()));
         self.list = None;
         self.open_space(of, effects);

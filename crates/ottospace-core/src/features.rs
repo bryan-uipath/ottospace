@@ -34,11 +34,18 @@ pub enum Feature {
     Transcripts,
     Slots,
     AgentMode,
+    MultiMonitor,
 }
 
 /// Every flag, in the order the docs and the palette list them.
-pub const ALL: [Feature; 5] =
-    [Feature::Marks, Feature::AppsSection, Feature::Transcripts, Feature::Slots, Feature::AgentMode];
+pub const ALL: [Feature; 6] = [
+    Feature::Marks,
+    Feature::AppsSection,
+    Feature::Transcripts,
+    Feature::Slots,
+    Feature::AgentMode,
+    Feature::MultiMonitor,
+];
 
 /// Flags whose feature is stable now: a setting of one is ignored, with a warning.
 pub const RETIRED: &[&str] = &[];
@@ -52,14 +59,18 @@ impl Feature {
             Feature::Transcripts => "transcripts",
             Feature::Slots => "slots",
             Feature::AgentMode => "agent_mode",
+            Feature::MultiMonitor => "multi_monitor",
         }
     }
 
     pub fn stage(self) -> Stage {
         match self {
-            Feature::Marks | Feature::AppsSection | Feature::Transcripts | Feature::Slots | Feature::AgentMode => {
-                Stage::Experimental
-            }
+            Feature::Marks
+            | Feature::AppsSection
+            | Feature::Transcripts
+            | Feature::Slots
+            | Feature::AgentMode
+            | Feature::MultiMonitor => Stage::Experimental,
         }
     }
 
@@ -81,6 +92,9 @@ impl Feature {
             Feature::AgentMode => {
                 "Agent mode (⌘⌃V): let a workspace's task see an app pane, from the robot in its header"
             }
+            Feature::MultiMonitor => {
+                "Multi-monitor: fold a tab out to its own window on another display. In progress: not on screen yet"
+            }
         }
     }
 
@@ -96,6 +110,7 @@ impl Feature {
             Feature::Transcripts => "feature off: transcripts",
             Feature::Slots => "feature off: slots",
             Feature::AgentMode => "feature off: agent_mode",
+            Feature::MultiMonitor => "feature off: multi_monitor",
         }
     }
 }
@@ -202,14 +217,24 @@ mod tests {
         );
         assert_eq!(
             Features::all().with(Feature::Marks, false),
-            Features(vec![Feature::AppsSection, Feature::Transcripts, Feature::Slots, Feature::AgentMode])
+            Features(vec![
+                Feature::AppsSection,
+                Feature::Transcripts,
+                Feature::Slots,
+                Feature::AgentMode,
+                Feature::MultiMonitor
+            ])
         );
         let three = Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true);
         assert_eq!(
-            three.with(Feature::Transcripts, true).with(Feature::Slots, true).with(Feature::AgentMode, true),
+            three
+                .with(Feature::Transcripts, true)
+                .with(Feature::Slots, true)
+                .with(Feature::AgentMode, true)
+                .with(Feature::MultiMonitor, true),
             Features::all()
         );
-        let list = " agent_mode,slots,transcripts,apps_section,marks ";
+        let list = " multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
         assert_eq!(Features::parse_list(list).unwrap(), Features::all());
         assert_eq!(Features::parse_list("").unwrap(), Features(Vec::new()));
         assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts, slots"));
@@ -314,7 +339,8 @@ mod tests {
                     ("apps_section", false),
                     ("transcripts", false),
                     ("slots", false),
-                    ("agent_mode", false)
+                    ("agent_mode", false),
+                    ("multi_monitor", false)
                 ]
             );
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
@@ -331,7 +357,7 @@ mod tests {
         assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
             wrong("bookmarks", &yes).unwrap(),
-            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode"
+            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor"
         );
         assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
         assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());

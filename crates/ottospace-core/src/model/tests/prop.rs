@@ -17,6 +17,7 @@ use crate::ics::Show;
 use crate::layout_file;
 use crate::listen::Heard;
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
+use crate::model::displays::Display;
 use crate::model::rail::RailItem;
 use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
@@ -161,6 +162,25 @@ impl Gen<'_> {
     /// How much a clipboard holds: nothing, a word, lines, a command that would run.
     fn amount(&mut self) -> Amount {
         Amount::of(self.rng.pick(&["", "ls", "a\nb", "rm -rf build\n", "é\r\n\r\n"]))
+    }
+
+    /// One to three displays, from a pool that keeps their uids: some go and come back. Most
+    /// often two side by side, the main window on the left one.
+    fn displays(&mut self) -> Action {
+        let pool = [("d1", 0.), ("d2", 1728.), ("d3", -1920.), ("", 4000.)];
+        let n = self.rng.pick(&[1, 2, 2, 2, 3]);
+        let mut displays: Vec<Display> = Vec::new();
+        for (uid, x) in pool {
+            if displays.len() < n && (uid == "d1" || uid == "d2" || self.rng.coin()) {
+                displays.push(Display { uid: uid.into(), frame: Frame::new(x, 0., 1728., 1117.), scale: 2. });
+            }
+        }
+        let main = match self.rng.below(4) {
+            0 => None,
+            1 => displays.last().map(|d| d.uid.clone()),
+            _ => Some("d1".into()),
+        };
+        Action::SetDisplays { displays, main }
     }
 
     fn tab_id(&mut self) -> u32 {
@@ -1502,6 +1522,10 @@ const MAKERS: &[Make] = &[
     |_| Action::DialToggle,
     |_| Action::FillDisplay,
     |_| Action::FillEnded,
+    OUT_MAKERS[0],
+    OUT_MAKERS[1],
+    OUT_MAKERS[2],
+    OUT_MAKERS[3],
     |g| {
         let colors = g.rng.coin().then(|| ColorRule { text: g.text().to_lowercase(), color: 1 });
         let (on, notify, links_only, hide_free) = (g.rng.coin(), g.rng.coin(), g.rng.coin(), g.rng.coin());
@@ -1676,6 +1700,14 @@ const SLOT_MAKERS: [Make; 16] = [
     |_| Action::SlotDialogKeep,
 ];
 
+/// Displays and folds, also picked now and then once there are displays.
+const OUT_MAKERS: [Make; 4] = [
+    |g| g.displays(),
+    |g| Action::TabOut { tab: g.rng.coin().then(|| g.tab_id()) },
+    |g| Action::TabIn { tab: g.rng.coin().then(|| g.tab_id()) },
+    |g| Action::KeyWindow { tab: g.tab_id() },
+];
+
 /// The way out of each box and mode. Picked one time in 8: with every action as likely as any
 /// other, a run would sit behind the key reference for 40 steps.
 const WAYS_OUT: &[Action] = &[
@@ -1702,6 +1734,8 @@ fn random(rng: &mut Rng, m: &Model) -> Envelope {
         // The shell's look as the shell sends it: from anyone else it is refused or ignored, and a
         // slot would hardly ever take a window.
         3 if !m.slots.is_empty() => return Action::SlotWindows { look: Gen { rng, m }.look() }.sent_by(Origin::System),
+        // Folds, now and then, once there are displays: else a tab would hardly ever be out.
+        4 if !m.displays.is_empty() && rng.one_in(3) => rng.pick(&OUT_MAKERS)(&mut Gen { rng, m }),
         _ => rng.pick(MAKERS)(&mut Gen { rng, m }),
     };
     action.sent_by(rng.pick(&[Origin::User, Origin::User, Origin::Socket, Origin::System]))
@@ -1773,7 +1807,49 @@ fn selects_tab(action: &Action) -> bool {
             | Action::ListenShow { on: true }
             // The user's ⌘⇧R with no conversation is `ListenShow`.
             | Action::TalkToggle
+            // The keyboard to a tab out's window and back, a tab folding in, the flag off.
+            | Action::TabOut { .. }
+            | Action::TabIn { .. }
+            | Action::KeyWindow { .. }
+            | Action::SetDisplays { .. }
+            | Action::SetFeatures { .. }
     )
+}
+
+/// Tabs out: each a tab, not Home's, on a listed display that is not the main window's, one per
+/// display, holding no app pane; none with the flag off. The keyboard is on a tab out exactly while
+/// the main window shows another (`away`), and then nothing of the main window's has it.
+fn check_out(m: &Model) -> Result<(), String> {
+    let on = m.features.on(Feature::MultiMonitor);
+    ensure!(on || (m.out.is_empty() && m.away.is_none()), "tabs out with the flag off: {:?}", m.out);
+    let tabs: Vec<u32> = m.out.iter().map(|out| out.tab).collect();
+    let shown: Vec<&String> = m.out.iter().map(|out| &out.display).collect();
+    ensure!(unique(&tabs) && unique(&shown), "a tab or a display out twice: {:?}", m.out);
+    for out in &m.out {
+        let at = m.tabs.iter().position(|tab| tab.id == out.tab);
+        ensure!(at.is_some() && out.tab != HOME_TAB, "tab {} out is no tab, or Home's", out.tab);
+        let listed = m.displays.iter().any(|d| d.uid == out.display);
+        ensure!(listed && !out.display.is_empty(), "tab {} out on display {:?}, not listed", out.tab, out.display);
+        ensure!(m.main_display.as_ref() != Some(&out.display), "tab {} out on the main window's display", out.tab);
+        let leaves = at.and_then(|at| m.tree_at(at)).map(Node::leaves).unwrap_or_default();
+        let app = leaves.iter().any(|id| matches!(m.pane(*id).map(|p| &p.kind), Some(Kind::App { .. })));
+        ensure!(!app, "tab {} out holds an app pane", out.tab);
+    }
+    let keys_out = m.is_out(m.tabs[m.active].id);
+    ensure!(keys_out == m.away.is_some(), "keyboard on tab {}, out {keys_out}, away {:?}", m.tabs[m.active].id, m.away);
+    if let Some(away) = m.away {
+        ensure!(m.tabs.iter().any(|tab| tab.id == away) && !m.is_out(away), "the main window shows tab {away}");
+        let chrome = m.talk.as_ref().is_some_and(|talk| talk.keys) || m.list.is_some() || m.rail_focus.is_some();
+        ensure!(!chrome && m.compose.is_none(), "the main window's chrome has the keyboard while it is out");
+        ensure!(m.live.is_none(), "an app live while the keyboard is out");
+    }
+    // The selection history names the main window's tab, never one out.
+    let main = m.tabs[m.main_at()].id;
+    for space in &m.spaces {
+        let names_out = space.last.is_some_and(|last| m.is_out(last) && last != main);
+        ensure!(!names_out || space.of != *m.shown_space(), "the selected space's last tab is out");
+    }
+    Ok(())
 }
 
 fn unique<T: PartialEq>(list: &[T]) -> bool {
@@ -1793,6 +1869,7 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 fn check(m: &Model) -> Result<(), String> {
     check_slots(m)?;
     check_offers(m)?;
+    check_out(m)?;
     check_viewers(m)?;
     // An owned pane holds an app's window; only an owned pane's unsaved changes are kept.
     for pane in m.panes.iter().filter(|p| p.owned) {
@@ -1971,7 +2048,7 @@ fn check(m: &Model) -> Result<(), String> {
     let holder = m.listen.pane().and_then(|pane| m.tab_panes().iter().position(|panes| panes.contains(&pane)));
     let want = holder.filter(|at| *at != m.active).map(|at| &m.tabs[at]).and_then(|tab| {
         let hidden = m.spaces().iter().any(|space| space.of == tab.space && space.hidden);
-        match (hidden, tab.space == *m.space()) {
+        match (hidden, tab.space == *m.shown_space()) {
             (true, _) => None,
             (false, true) => Some(crate::listen::Dot::Tab(tab.id)),
             (false, false) => Some(crate::listen::Dot::Space(tab.space.clone())),
@@ -2018,14 +2095,14 @@ fn check(m: &Model) -> Result<(), String> {
         let last = space.last.is_none_or(|id| tabs.iter().any(|at| m.tabs[*at].id == id));
         ensure!(last, "space {:?} last showed tab {:?}, not its", space.of, space.last);
     }
-    let selected: Vec<&Space> = m.spaces.iter().filter(|space| space.of == *m.space()).collect();
+    let selected: Vec<&Space> = m.spaces.iter().filter(|space| space.of == *m.shown_space()).collect();
     ensure!(selected.len() == 1 && !selected[0].hidden, "the selected space is hidden or not one: {selected:?}");
     // One selection: the drawer is only ever on the selected space's conversation.
     ensure!(
-        m.talk.as_ref().is_none_or(|talk| Some(&talk.task) == m.space_subject(m.space()).as_ref()),
+        m.talk.as_ref().is_none_or(|talk| Some(&talk.task) == m.space_subject(m.shown_space()).as_ref()),
         "the drawer is on {:?}, the selected space is {:?}",
         m.talk,
-        m.space()
+        m.shown_space()
     );
     // The agent chip is there exactly while the selected space has a conversation and nothing
     // is in the drawer's place: no conversation open, new task, draft, brief, inspector or
@@ -2034,19 +2111,19 @@ fn check(m: &Model) -> Result<(), String> {
     let busy = busy || m.brief.is_some() || m.inspector.is_some() || m.listen.shown;
     let chip = m.agent_chip();
     ensure!(
-        chip.is_some() == (m.space_subject(m.space()).is_some() && !busy),
+        chip.is_some() == (m.space_subject(m.shown_space()).is_some() && !busy),
         "the agent chip is {chip:?}: the selected space is {:?}, the drawer {:?}",
-        m.space(),
+        m.shown_space(),
         m.talk
     );
     if let Some(chip) = &chip {
         let its = m.shown_spaces().get(chip.space).map(|space| &space.of);
         ensure!(
-            Some(&chip.task) == m.space_subject(m.space()).as_ref(),
+            Some(&chip.task) == m.space_subject(m.shown_space()).as_ref(),
             "the agent chip is not the selected space's: {chip:?}"
         );
         ensure!(
-            its == Some(m.space()) && !chip.line.is_empty(),
+            its == Some(m.shown_space()) && !chip.line.is_empty(),
             "the agent chip names no space or says nothing: {chip:?}"
         );
     }
@@ -2561,7 +2638,7 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(!book.kept, "workspace {:?} is kept and closing", book.name);
         ensure!(!m.workbook_rows().iter().any(|row| row.id == book.id), "closing workspace {:?} is listed", book.name);
         ensure!(
-            *m.space() != of && m.shown_spaces().iter().all(|s| s.of != of),
+            *m.shown_space() != of && m.shown_spaces().iter().all(|s| s.of != of),
             "closing {:?} is on the row",
             book.name
         );
@@ -3097,7 +3174,7 @@ impl Run {
         let on_meeting = matches!(m.list.and_then(|at| m.list_rows().into_iter().nth(at)), Some(ListRow::Meeting(_)));
         // The user's opening of a done task (a click, ↵, ⌘⇧N) makes it a task again, its session gone on with (`revive`).
         let done_before: Vec<TaskId> = m.tasks.list.iter().filter(|t| t.state == State::Done).map(|t| t.id).collect();
-        let tab_before = m.tabs[m.active].id;
+        let tab_before = m.tabs[m.main_at()].id;
         let tabs_before: Vec<u32> = m.tabs.iter().map(|tab| tab.id).collect();
         // Yes to "Close this workspace?" hides it, as its × would.
         let closes = matches!(action, Action::QuitConfirm) && m.confirm.as_ref().is_some_and(|c| c.close.is_some());
@@ -3169,7 +3246,7 @@ impl Run {
         };
         let task_worktrees_before = task_worktrees(m);
         let menu_before = m.row_menu.clone();
-        let rail_before = (m.space().clone(), m.rail_selected());
+        let rail_before = (m.shown_space().clone(), m.rail_selected());
         let fronts_before: Vec<(Owner, TaskId)> =
             m.spaces().iter().filter_map(|space| Some((space.of.clone(), m.front(&space.of)?))).collect();
         let joined_before: Vec<(Owner, TaskId)> =
@@ -3233,6 +3310,12 @@ impl Run {
                 rail_shown != Some(*item) || !over_brief || kept,
                 "the user's click over the brief of {item:?} dropped it"
             );
+        }
+        // The same displays again move no tab: only a display plugged in takes one back.
+        if let (Action::SetDisplays { .. }, None) = (&action, &refused) {
+            let out = m.tabs_out();
+            m.update(action.clone().sent_by(Origin::System));
+            ensure!(m.tabs_out() == out, "the same displays again moved a tab: {out:?}, then {:?}", m.tabs_out());
         }
         // A level rises only by the user's own choice. A pane kept by its task keeps its level but
         // for the user's; a pane new to it starts at the default, or Off.
@@ -3560,7 +3643,7 @@ impl Run {
         // editor took the drawer from the transcript.
         if let (of, Some(item)) = &rail_before
             && origin != Origin::User
-            && m.space() == of
+            && m.shown_space() == of
             && m.rail().contains(item)
             && m.compose.is_none()
             && m.editing.is_none()
@@ -3726,7 +3809,7 @@ impl Run {
             for book in new {
                 let made = origin == Origin::User && book.tabs.is_empty() && book.live.is_empty();
                 ensure!(made, "{origin:?}'s + made workbook {:?} with {} tabs", book.name, book.tabs.len());
-                let shown = *m.space() == Owner::Workbook { id: book.id } && m.layout.is_none();
+                let shown = *m.shown_space() == Owner::Workbook { id: book.id } && m.layout.is_none();
                 ensure!(shown && !tabs_before.contains(&m.tabs[m.active].id), "+ did not show a new empty tab");
             }
         }
@@ -3768,7 +3851,7 @@ impl Run {
         ensure!(m.capture.is_none() || !m.compose_theirs, "a draft's title holds what a client wrote");
         // Only a move to a tab changes the tab on show, or its closing, or a pane put on Home:
         // the tab made for it is on show.
-        let tab_now = m.tabs[m.active].id;
+        let tab_now = m.tabs[m.main_at()].id;
         let left_home = tab_before == HOME_TAB && !tabs_before.contains(&tab_now);
         ensure!(
             tab_now == tab_before
@@ -4936,6 +5019,7 @@ fn code(sent: &Envelope) -> String {
         "Link",
         "Target",
         "Frame",
+        "Display",
         "Running",
         "Installed",
         "Entry",
@@ -5548,6 +5632,45 @@ fn seed_1793_a_click_over_the_shown_tasks_brief_leaves_the_drawer_open() {
     .unwrap();
 }
 
+#[test]
+fn seed_2876_a_hidden_workspace_gives_way_to_home_not_to_a_tab_out() {
+    let d = |uid: &str, x: f64| Display { uid: uid.into(), frame: Frame::new(x, 0., 1728., 1117.), scale: 2. };
+    replay(&[
+        Action::SetDisplays { displays: vec![d("d1", 0.), d("d2", 1728.)], main: Some("d1".into()) }
+            .sent_by(Origin::System),
+        Action::NewEmptyTab.into(),
+        Action::Split { axis: Axis::Right, kind: Kind::Terminal }.into(),
+        Action::TabOut { tab: None }.into(),
+        // A second temporary workspace, on show in the main window, then closed with ⌘⌃W.
+        Action::EditSettings.into(),
+        Action::SpaceHide { index: None }.into(),
+    ])
+    .unwrap();
+}
+
+/// A pane dropped from a tab out into a closing workspace's tab brings that workspace back: the
+/// main window shows it before the closing is settled.
+#[test]
+fn seed_4686_a_drop_from_a_tab_out_into_a_closing_workspace_brings_it_back() {
+    replay(&[
+        Action::Open { kind: Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() }, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::Split { axis: Axis::Right, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::Open { kind: Kind::App { window: 2, title: "general".into(), bundle: Some("com.slack".into()), name: "Slack".into() }, axis: Axis::Down, beside: Some(1) }.sent_by(Origin::User),
+        Action::Open { kind: Kind::App { window: 3, title: "w3".into(), bundle: None, name: "app".into() }, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::WorktreeAdded { repo: "/tmp".into(), path: "/Users/me/My Notes".into(), asked: "relative".into(), fresh: true, repos: vec![Repo { name: "Ottospace".into(), path: "/code/canvas".into(), branch: Some("main".into()), worktrees: vec![Worktree { name: "2048".into(), path: "/Users/me/My Notes".into(), branch: Some("fix/zoom".into()) }, Worktree { name: "My Project".into(), path: "/Users/me/My Notes".into(), branch: None }] }, Repo { name: "2048".into(), path: "🏳\u{fe0f}\u{200d}🌈\u{202e}abcp1".into(), branch: None, worktrees: vec![Worktree { name: "canvas".into(), path: "relative".into(), branch: None }, Worktree { name: "My Project".into(), path: "e\u{301}>".into(), branch: None }] }, Repo { name: "My Project".into(), path: "/code/app".into(), branch: None, worktrees: vec![Worktree { name: "'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''".into(), path: "/tmp".into(), branch: None }, Worktree { name: "app".into(), path: "/code/canvas".into(), branch: None }] }] }.sent_by(Origin::User),
+        Action::Adopt { kind: Kind::Empty, beside: Some(1), seen: None }.sent_by(Origin::User),
+        Action::SpaceHide { index: None }.sent_by(Origin::User),
+        Action::NewEmptyTab.sent_by(Origin::System),
+        Action::SpaceHide { index: None }.sent_by(Origin::User),
+        Action::OpenRepo { path: "🏳\u{fe0f}\u{200d}🌈\u{202e}abcp1".into(), axis: Axis::Right }.sent_by(Origin::System),
+        Action::SetDisplays { displays: vec![Display { uid: "d1".into(), frame: Frame { x: 0.0, y: 0.0, w: 1728.0, h: 1117.0 }, scale: 2.0 }, Display { uid: "d2".into(), frame: Frame { x: 1728.0, y: 0.0, w: 1728.0, h: 1117.0 }, scale: 2.0 }], main: Some("d2".into()) }.sent_by(Origin::System),
+        Action::TabOut { tab: None }.sent_by(Origin::User),
+        Action::DropPane { source: 8, target: 2, zone: Zone::Left }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
 /// An agent's exit ends its turn: a turn started in the same batch, after the exit, starts none.
 #[test]
 fn seed_59164_a_turn_after_the_agent_exited_is_none() {
@@ -5573,14 +5696,85 @@ fn seed_59164_a_turn_after_the_agent_exited_is_none() {
     .unwrap();
 }
 
+/// The capture key on a pane out is dropped before any step: the Apps filter keeps its place.
+#[test]
+fn seed_8444_a_capture_of_a_pane_out_changes_nothing() {
+    let d = |uid: &str, x: f64| Display { uid: uid.into(), frame: Frame::new(x, 0., 1728., 1117.), scale: 2. };
+    replay(&[
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.into(),
+        Action::SetDisplays { displays: vec![d("d1", 0.), d("d2", 1728.)], main: Some("d1".into()) }
+            .sent_by(Origin::System),
+        Action::TabOut { tab: None }.into(),
+        Action::ToggleSection { section: Section::Apps }.into(),
+        Action::AppsFilter { on: true }.into(),
+        Action::CaptureStart { pane: Some(1), draft: "@z".into(), word: "$s/".into(), facts: vec![], images: false }
+            .into(),
+    ])
+    .unwrap();
+}
+
+/// A system's step into a closing workspace leaves it closing: the main window gives way to its
+/// own tab before, not to the keyboard's tab out.
+#[test]
+fn seed_43608_a_closing_workspace_gives_way_to_the_main_windows_tab() {
+    let d = |uid: &str, x: f64| Display { uid: uid.into(), frame: Frame::new(x, 0., 1728., 1117.), scale: 2. };
+    let app = |window: u32| Kind::App { window, title: format!("w{window}"), bundle: None, name: "app".into() };
+    replay(&[
+        Action::Open { kind: app(9), axis: Axis::Right, beside: None }.into(),
+        Action::Open { kind: app(12), axis: Axis::Right, beside: None }.into(),
+        Action::SetDisplays { displays: vec![d("d1", 0.), d("d2", 1728.)], main: Some("d1".into()) }
+            .sent_by(Origin::System),
+        Action::SpaceHide { index: Some(1) }.into(),
+        Action::EditSettings.into(),
+        Action::NewTab.into(),
+        Action::TabOut { tab: None }.into(),
+        Action::Enter { pane: 2 }.sent_by(Origin::System),
+    ])
+    .unwrap();
+}
+
+/// A client's close of the main window's last tab here (its other one out) waits while the user
+/// types in the chat: the main window would show another space.
+#[test]
+fn seed_49498_a_clients_close_of_the_last_tab_here_waits_for_the_chat() {
+    let d = |uid: &str, x: f64| Display { uid: uid.into(), frame: Frame::new(x, 0., 1728., 1117.), scale: 2. };
+    let known =
+        Known { names: Names { agents: vec!["claude".into()], skills: vec![] }, paths: vec![], entries: vec![] };
+    replay(&[
+        Action::Split { axis: Axis::Right, kind: Kind::Terminal }.into(),
+        Action::NewTab.into(),
+        Action::SetDisplays { displays: vec![d("d1", 0.), d("d2", 1728.)], main: Some("d1".into()) }
+            .sent_by(Origin::System),
+        Action::TabOut { tab: Some(2) }.into(),
+        Action::TaskFromLine { line: "fix it @claude".into(), known, open: true }.into(),
+        Action::CloseTabAsked { index: None, running: vec![] }.sent_by(Origin::Socket),
+    ])
+    .unwrap();
+}
+
 /// A client's refused filter-off on a fresh model leaves the model as it was.
 #[test]
 fn seed_83240_a_refused_inspector_filter_changes_nothing() {
     replay(&[Action::InspectorFilter { on: false }.sent_by(Origin::Socket)]).unwrap();
 }
 
+/// A mark's tab made and closed again in one step under a tab out: the selection history never
+/// names the tab out.
+#[test]
+fn seed_60520_the_selection_history_never_names_a_tab_out() {
+    replay(&[
+        restore_marks("[{\"id\":\"u2\",\"name\":\"\",\"key\":\"b\",\"target\":{\"tab\":{\"title\":\"app\",\"focused\":1,\"layout\":null,\"panes\":[],\"future\":1,\"x\":1}},\"future\":1,\"x\":1}]", "{\"z\":{\"a\":[1,null],\"b\":{\"c\":true}}}").sent_by(Origin::System),
+        Action::NewEmptyTab.sent_by(Origin::Socket),
+        Action::SetDisplays { displays: vec![Display { uid: "d1".into(), frame: Frame { x: 0.0, y: 0.0, w: 1728.0, h: 1117.0 }, scale: 2.0 }, Display { uid: "d2".into(), frame: Frame { x: 1728.0, y: 0.0, w: 1728.0, h: 1117.0 }, scale: 2.0 }], main: Some("d1".into()) }.sent_by(Origin::System),
+        Action::TabOut { tab: None }.sent_by(Origin::User),
+        Action::NewTab.sent_by(Origin::Socket),
+        Action::MarkGo { mark: MarkRef::Place(0), axis: Axis::Right }.sent_by(Origin::System),
+    ])
+    .unwrap();
+}
+
 /// git's answer to a + opens the checkout as the user's click would, but leaves the task in front
-/// of a workspace as it was: only the user's step says who is in front.
+/// of a workspace as it was: only the user's step says who is in front. Fails on main too.
 #[test]
 fn seed_81412_a_worktree_answer_takes_no_task_from_the_front() {
     replay(&[
@@ -5590,6 +5784,45 @@ fn seed_81412_a_worktree_answer_takes_no_task_from_the_front() {
         Action::TaskFromLine { line: "#\"\u{202e}abcمرحبا  $deploy  >canvas  $code-review".into(), known: Known { names: Names { agents: vec!["claude".into(), "claude".into()], skills: vec!["code-review".into(), "\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}".into()] }, paths: vec![], entries: vec!["~/My Notes/".into(), "~/My Notes/".into()] }, open: true }.sent_by(Origin::User),
         Action::RepoClick { path: "/code/app-2".into(), axis: Axis::Right }.sent_by(Origin::User),
         Action::WorktreeAdded { repo: "relative".into(), path: "/code/app".into(), asked: "/code/app-2".into(), fresh: true, repos: vec![Repo { name: "canvas".into(), path: "relative".into(), branch: None, worktrees: vec![Worktree { name: "canvas".into(), path: "/code/app".into(), branch: None }] }, Repo { name: "app".into(), path: "/tmp".into(), branch: Some("main".into()), worktrees: vec![] }, Repo { name: "app".into(), path: "/code/app".into(), branch: Some("main".into()), worktrees: vec![Worktree { name: "canvas".into(), path: "/Users/me/My Notes".into(), branch: None }, Worktree { name: "$#".into(), path: "İ#".into(), branch: Some("fix/zoom".into()) }] }] }.sent_by(Origin::System),
+    ])
+    .unwrap();
+}
+
+#[test]
+fn seed_2676_no_capture_of_a_pane_out() {
+    let d = |uid: &str, x: f64| Display { uid: uid.into(), frame: Frame::new(x, 0., 1728., 1117.), scale: 2. };
+    replay(&[
+        Action::SetDisplays { displays: vec![d("d1", 0.), d("d2", 1728.)], main: Some("d1".into()) }
+            .sent_by(Origin::System),
+        Action::Adopt { kind: Kind::Terminal, beside: Some(7), seen: None }.into(),
+        Action::TabOut { tab: Some(1) }.into(),
+        // The capture would annotate a pane the main window does not show.
+        Action::CaptureStart {
+            pane: None,
+            draft: "u1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![],
+            images: true,
+        }
+        .into(),
+    ])
+    .unwrap();
+}
+
+#[test]
+fn seed_1400_the_keyboards_tab_out_closed_leaves_the_main_windows_tab() {
+    let d = |uid: &str, x: f64| Display { uid: uid.into(), frame: Frame::new(x, 0., 1728., 1117.), scale: 2. };
+    let displays = vec![d("d1", 0.), d("d2", 1728.), d("d3", -1920.)];
+    replay(&[
+        Action::SetDisplays { displays, main: Some("d3".into()) }.sent_by(Origin::System),
+        Action::EditSettings.into(),
+        Action::Close { pane: Some(1) }.sent_by(Origin::System),
+        Action::NewTab.sent_by(Origin::Socket),
+        Action::WorkbookKeep { workbook: 1 }.into(),
+        Action::Adopt { kind: Kind::Terminal, beside: Some(1), seen: None }.into(),
+        Action::TabOut { tab: Some(1) }.into(),
+        // Tab 1, empty, closes with its workspace: the main window still shows tab 2.
+        restore_workbooks("[]").sent_by(Origin::System),
     ])
     .unwrap();
 }

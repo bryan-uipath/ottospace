@@ -53,7 +53,11 @@ impl Model {
         if self.spaces().iter().any(|space| space.of == tab.space && space.hidden) {
             return None;
         }
-        Some(if tab.space == *self.space() { listen::Dot::Tab(tab.id) } else { listen::Dot::Space(tab.space.clone()) })
+        Some(if tab.space == *self.shown_space() {
+            listen::Dot::Tab(tab.id)
+        } else {
+            listen::Dot::Space(tab.space.clone())
+        })
     }
 
     /// The drawer shows the transcript only while nothing that takes keys is in it: the new-task

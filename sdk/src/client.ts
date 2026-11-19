@@ -26,6 +26,7 @@ import {
 } from "./parse.ts";
 import { checkOwned, defaultSocketPath } from "./socket.ts";
 import type {
+  MadeUpDisplay,
   AxNode,
   Frame,
   SlotLook,
@@ -614,6 +615,14 @@ export class Client {
    */
   uiGallery(args: { on: boolean }): Promise<Snapshot> {
     return this.snapshot({ cmd: "ui_gallery", ...args });
+  }
+  /**
+   * For tests (`OTTOSPACE_E2E`): made-up displays in place of the real ones from now on, and the
+   * one the main window is on (`main`, a uid; default the first). Leaving one out unplugs it.
+   * Rejects outside a test run.
+   */
+  displaysSet(args: { displays: MadeUpDisplay[]; main?: string }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "displays_set", ...args });
   }
   /**
    * The user's meetings of `day` and the `days` after it, busy and free time: what the app holds

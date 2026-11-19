@@ -846,7 +846,7 @@ impl Model {
     /// them. Refused whole rather than saved in part: more than `MAX_TABS`, or one that cannot be kept.
     fn workbook_all_records(&self, read: Read) -> Result<Vec<(u32, TabRecord)>, String> {
         let mut tabs = Vec::new();
-        for at in self.space_tabs(self.space()) {
+        for at in self.space_tabs(self.shown_space()) {
             match self.workbook_record(at, read.0, read.1) {
                 Ok(record) => tabs.push((self.tabs[at].id, record)),
                 Err(why) if why == EMPTY => {}
@@ -958,7 +958,7 @@ impl Model {
             return;
         }
         let id = self.workbooks.add(Workbook::new(uid, self.free_name(), Vec::new()));
-        let after = self.spaces.iter().position(|space| space.of == *self.space());
+        let after = self.spaces.iter().position(|space| space.of == *self.shown_space());
         let space = Space::new(Owner::Workbook { id });
         self.spaces.insert(after.map_or(self.spaces.len(), |at| at + 1), space);
         self.list = None;
@@ -1352,7 +1352,7 @@ impl Model {
     fn on_row(&self, id: WorkbookId) -> bool {
         let of = Owner::Workbook { id };
         let shown = self.spaces.iter().any(|space| space.of == of && !space.hidden);
-        (shown && self.tabs.iter().any(|tab| tab.space == of)) || *self.space() == of
+        (shown && self.tabs.iter().any(|tab| tab.space == of)) || *self.shown_space() == of
     }
 
     /// Whether the user's step taking workspace `id` off the row would close it: temporary, on the row.
@@ -1424,7 +1424,9 @@ impl Model {
     /// (`on_show`), else the one beside it.
     fn keep_closing(&mut self, id: WorkbookId, on_show: Option<u32>, effects: &mut Vec<Effect>) {
         let of = Owner::Workbook { id };
-        if *self.space() == of {
+        if *self.shown_space() == of {
+            // The main window's tab is what gives way: the keyboard there first.
+            self.key_main(effects);
             let before = self.tabs.iter().position(|tab| Some(tab.id) == on_show && tab.space != of);
             // Else Home's own tab, always there and on the row.
             let other = || self.tabs.iter().position(|tab| tab.id == crate::model::spaces::HOME_TAB);

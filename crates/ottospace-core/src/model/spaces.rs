@@ -158,7 +158,7 @@ impl Model {
         let row = |space: &Space| SpaceRow {
             of: space.of.clone(),
             hidden: space.hidden,
-            selected: *self.space() == space.of,
+            selected: *self.shown_space() == space.of,
             tabs: self.space_tabs(&space.of).into_iter().filter(|at| self.tabs[*at].id != HOME_TAB).collect(),
             tasks: self.space_tasks(&space.of),
             front: self.front(&space.of),
@@ -282,14 +282,17 @@ impl Model {
         (0..self.tabs.len()).filter(|at| self.tabs[*at].space == *of).collect()
     }
 
-    /// The place in `tabs` of the selected space's `n`th tab, as the second row draws them (⌘1…).
+    /// The place in `tabs` of the main window's space's `n`th tab, as its tab row draws them (⌘1…).
     pub fn visible_tab(&self, n: usize) -> Option<usize> {
-        self.space_tabs(self.space()).get(n).copied()
+        self.space_tabs(self.shown_space()).get(n).copied()
     }
 
-    /// The place in `tabs` of the tab a space shows when selected: its last, else its first.
+    /// The place in `tabs` of the tab a space shows when selected: its last, else its first; one
+    /// that is not out on another display before one that is.
     fn space_tab(&self, of: &Owner) -> Option<usize> {
-        let tabs = self.space_tabs(of);
+        let all = self.space_tabs(of);
+        let here: Vec<usize> = all.iter().copied().filter(|at| !self.is_out(self.tabs[*at].id)).collect();
+        let tabs = if here.is_empty() { all } else { here };
         let last = self.spaces.iter().find(|space| space.of == *of).and_then(|space| space.last);
         let last = last.and_then(|id| tabs.iter().copied().find(|at| self.tabs[*at].id == id));
         last.or(tabs.first().copied())
@@ -397,7 +400,7 @@ impl Model {
     /// The next (positive) or previous space on the row. It wraps.
     pub(crate) fn cycle_space(&mut self, delta: i32, effects: &mut Vec<Effect>) {
         let shown = self.shown_spaces();
-        let at = shown.iter().position(|space| space.of == *self.space()).unwrap_or(0);
+        let at = shown.iter().position(|space| space.of == *self.shown_space()).unwrap_or(0);
         let to = (at as i64 + i64::from(delta)).rem_euclid(shown.len() as i64) as usize;
         self.select_space(to, effects);
     }
@@ -406,7 +409,7 @@ impl Model {
     /// selected one gives way to its right neighbour, else its left.
     pub(crate) fn hide_space(&mut self, place: Option<usize>, effects: &mut Vec<Effect>) {
         let Some(of) = self.space_to_hide(place) else { return };
-        if *self.space() == of
+        if *self.shown_space() == of
             && let Some(tab) = self.space_after(&of)
         {
             self.select_tab(tab, effects);
@@ -419,7 +422,7 @@ impl Model {
     /// The space `hide_space` takes off the row: at `place`, else the selected one. Never Home.
     fn space_to_hide(&self, place: Option<usize>) -> Option<Owner> {
         let shown = self.shown_spaces();
-        let at = place.unwrap_or_else(|| shown.iter().position(|space| space.of == *self.space()).unwrap_or(0));
+        let at = place.unwrap_or_else(|| shown.iter().position(|space| space.of == *self.shown_space()).unwrap_or(0));
         shown.get(at).map(|space| space.of.clone()).filter(|of| *of != Owner::Home)
     }
 
@@ -465,34 +468,39 @@ impl Model {
     }
 
     /// The tab to show instead of space `of`, hidden or left with no tab: its right neighbour's
-    /// on the row, else its left one's.
+    /// on the row, else its left one's. One that is out on another display: Home's.
     pub(crate) fn space_after(&self, of: &Owner) -> Option<usize> {
         let shown = self.shown_spaces();
         let at = shown.iter().position(|space| space.of == *of)?;
         let next = shown.get(at + 1).or(shown.get(at.wrapping_sub(1)))?;
-        self.space_tab(&next.of)
+        let tab = self.space_tab(&next.of)?;
+        match self.is_out(self.tabs[tab].id) {
+            true => self.tabs.iter().position(|tab| tab.id == HOME_TAB),
+            false => Some(tab),
+        }
     }
 
     /// Whether a selection would change the selected space: what a client may not do while the
     /// user types in the chat.
     pub(crate) fn changes_space(&self, action: &Action) -> bool {
         let shown = self.shown_spaces();
-        let selected = shown.iter().position(|space| space.of == *self.space());
-        let other = |of: Option<&Owner>| of.is_some_and(|of| of != self.space());
+        let selected = shown.iter().position(|space| space.of == *self.shown_space());
+        let other = |of: Option<&Owner>| of.is_some_and(|of| of != self.shown_space());
         match action {
             Action::SelectTab { index } => other(self.tabs.get(*index).map(|tab| &tab.space)),
             Action::SpaceSelect { index } | Action::SpaceClick { index } => {
                 other(shown.get(*index).map(|space| &space.of))
             }
             Action::SpaceCycle { .. } => shown.len() > 1,
-            Action::SpaceHide { index } => index.or(selected) == selected && *self.space() != Owner::Home,
+            Action::SpaceHide { index } => index.or(selected) == selected && *self.shown_space() != Owner::Home,
             Action::SpaceOpen { space: of } => other(Some(of)),
             Action::TaskGo { id } => id.is_none_or(|id| other(Some(&self.task_space(id)))),
-            Action::OpenRepo { .. } | Action::RepoClick { .. } => *self.space() != Owner::Home,
-            // The selected space's last tab closed: the space goes.
+            Action::OpenRepo { .. } | Action::RepoClick { .. } => *self.shown_space() != Owner::Home,
+            // The selected space's last tab closed (its tabs out on other displays do not count): the space goes.
             Action::CloseTab { index } => {
                 let at = index.unwrap_or(self.active);
-                at == self.active && self.space_tabs(self.space()).len() == 1
+                let here = self.space_tabs(self.shown_space()).into_iter().filter(|at| !self.is_out(self.tabs[*at].id));
+                at == self.active && here.count() == 1
             }
             _ => false,
         }
@@ -538,7 +546,9 @@ impl Model {
         first.hidden = false;
         self.spaces.insert(0, first);
         self.regroup();
-        let (of, id) = (self.tabs[self.active].space.clone(), self.tabs[self.active].id);
+        // The main window's: a tab out is no space's selection.
+        let main = self.main_at();
+        let (of, id) = (self.tabs[main].space.clone(), self.tabs[main].id);
         // The workspace selected last: where a stray tab goes.
         let before = std::mem::take(&mut self.last_spaces);
         self.last_spaces = before.into_iter().filter(|last| *last != of && self.owner_valid(last)).collect();
@@ -546,8 +556,10 @@ impl Model {
             self.last_spaces.push(of.clone());
         }
         let tabs: Vec<(Owner, u32)> = self.tabs.iter().map(|tab| (tab.space.clone(), tab.id)).collect();
+        let out = self.is_out(id);
         for space in &mut self.spaces {
-            if space.of == of {
+            // Never a tab out (the main window's tab closed mid-step: `settle_out` picks another).
+            if space.of == of && !out {
                 (space.hidden, space.last) = (false, Some(id));
             }
             space.last = space.last.filter(|last| tabs.contains(&(space.of.clone(), *last)));
@@ -635,7 +647,14 @@ impl Model {
         }
         let closes: Vec<u32> = closes.into_iter().map(|at| self.tabs[at].id).collect();
         if !self.tabs.iter().any(|tab| tab.id == HOME_TAB) {
-            let tab = Tab { id: HOME_TAB, title: HOME.into(), space: Owner::Home, layout: None, focused: None };
+            let tab = Tab {
+                id: HOME_TAB,
+                title: HOME.into(),
+                space: Owner::Home,
+                layout: None,
+                focused: None,
+                display: None,
+            };
             self.tabs.push(tab);
         }
         if stays {
@@ -667,7 +686,8 @@ impl Model {
         if let Some(talk) = &self.talk {
             self.drawer_open = talk.open;
         }
-        let Some(subject) = self.space_subject(self.space()) else {
+        // The main window's drawer: one per conversation, and the main window has it.
+        let Some(subject) = self.space_subject(self.shown_space()) else {
             self.talk = None;
             return;
         };

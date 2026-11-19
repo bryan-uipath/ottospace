@@ -19,6 +19,21 @@ unsafe extern "C" {
     ) -> i32;
 }
 
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn CGDisplayCreateUUIDFromDisplayID(display: u32) -> *const c_void;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFUUIDGetUUIDBytes(uuid: *const c_void) -> UuidBytes;
+    fn CFRelease(cf: *const c_void);
+}
+
+/// `CFUUIDBytes`: sixteen bytes, returned by value.
+#[repr(C)]
+struct UuidBytes([u8; 16]);
+
 /// Set when the displays were reconfigured (plugged, unplugged, mirrored, a lid shut), taken by `take_change`.
 static CHANGED: AtomicBool = AtomicBool::new(false);
 
@@ -55,6 +70,28 @@ pub fn bounds(display: u32) -> CGRect {
 
 pub fn all() -> Vec<CGRect> {
     ids().into_iter().map(bounds).collect()
+}
+
+/// The display's UUID: the same monitor keeps it across unplugs and restarts, unlike its id.
+/// `None` when macOS has none for it.
+pub fn uuid(display: u32) -> Option<String> {
+    let id = unsafe { CGDisplayCreateUUIDFromDisplayID(display) };
+    if id.is_null() {
+        return None;
+    }
+    let bytes = unsafe { CFUUIDGetUUIDBytes(id) };
+    unsafe { CFRelease(id) };
+    Some(bytes.0.iter().map(|b| format!("{b:02X}")).collect())
+}
+
+/// The active displays, for the core: each one's UUID (empty when it has none), frame and scale.
+pub fn list() -> Vec<ottospace_core::model::displays::Display> {
+    let display = |id: u32| {
+        let b = bounds(id);
+        let frame = Frame::new(b.origin.x, b.origin.y, b.size.width, b.size.height);
+        ottospace_core::model::displays::Display { uid: uuid(id).unwrap_or_default(), frame, scale: scale(id) as f32 }
+    };
+    ids().into_iter().map(display).collect()
 }
 
 fn ids() -> Vec<u32> {

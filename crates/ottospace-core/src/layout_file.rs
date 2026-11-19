@@ -329,7 +329,8 @@ impl Model {
             record.layout = record.layout.as_ref().and_then(|tree| marks::renumber(tree, &ids));
             record.focused = record.focused.and_then(new_id);
             record.panes.iter_mut().for_each(|pane| pane.id = new_id(pane.id).unwrap_or(0));
-            if index == self.active {
+            // The main window's: a tab out folds in at the next start.
+            if index == self.main_at() {
                 selected = Some(records.len());
             }
             let book = self
@@ -378,7 +379,7 @@ impl Model {
         // Of listed repositories only: one gone from the list takes its fold with it.
         let listed = |path: &&String| folded_path(path) && self.repos.iter().any(|repo| repo.path == **path);
         let repos_folded = self.repos_folded.iter().filter(listed).take(MAX_FOLDED).cloned().collect();
-        let home = *self.space() == Owner::Home;
+        let home = *self.shown_space() == Owner::Home;
         let (fill, extra) = (self.fill_display, Extra::new());
         let mut layout =
             Layout { version: VERSION, selected, home, section, drawer, tabs, spaces, repos_folded, fill, extra };
