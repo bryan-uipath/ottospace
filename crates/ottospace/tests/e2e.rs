@@ -13794,6 +13794,67 @@ fn a_transcript_during_a_meeting_names_it_in_its_header() {
     assert!(!text.contains("Made-up room") && !text.contains("Made-up later") && !text.contains("sync"), "{text}");
 }
 
+/// The owner: "the zoom meeting ended, and then I joined a new one. The transcript didn't start a
+/// new session". The fixture's app has a window, then none for longer than `WINDOW_GONE`, then a
+/// new one and new words: two files, each with its own header and meeting; the streams ran on.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_meeting_that_ends_and_a_new_one_make_two_transcript_files() {
+    let notes = support::temp(&format!("ottospace-e2e-listen-sessions-{}", std::process::id()));
+    let dir = notes.join("transcripts");
+    std::fs::create_dir_all(&notes).unwrap();
+    // The first meeting is on now and ends in 20 s; the second starts in 5 min 20 s: in the
+    // window of "starting soon" for the second session (30 s on), not for the first.
+    let events = [("a", "Made-up first meeting", -60, 20, ""), ("b", "Made-up second meeting", 320, 2_000, "")];
+    std::fs::write(notes.join("today.ics"), feed(&events)).unwrap();
+    let fixture = r#"{"after_ms":100,"windows":[7]}
+{"after_ms":100,"from":"them","text":"made-up words of the first","final":true}
+{"after_ms":500,"windows":[]}
+{"after_ms":30000,"windows":[]}
+{"after_ms":500,"windows":[9]}
+{"after_ms":500,"from":"them","text":"made-up words of the second","final":true}
+{"after_ms":600000,"from":"them","text":"never heard","final":true}
+"#;
+    let settings = json!({
+        "repos": [], "restore_layout": false, "transcripts_dir": dir, "calendar_ics": notes.join("today.ics"),
+    });
+    let otto = listen_otto_with("sessions", fixture, &settings.to_string());
+    calendar_read(&otto);
+    otto.call(json!({"cmd": "split"}));
+    otto.user_key("cmd-ctrl-t");
+    // The fixture's gap is 30 s: longer than a wait's timeout.
+    std::thread::sleep(Duration::from_secs(25));
+    let both = otto.wait_for("two files", |_| {
+        let files = files_in(&dir);
+        let second = files.iter().any(|f| std::fs::read_to_string(f).is_ok_and(|t| t.contains("of the second")));
+        (files.len() == 2 && second).then_some(files)
+    });
+    // Still on, one transcript: the streams never stopped.
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(state["state"]["listen"]["status"], "on", "{}", state["state"]["listen"]);
+    let text = state.to_string();
+    assert!(!text.contains("Made-up first") && !text.contains("Made-up second"), "a title in the state");
+    otto.user_key("cmd-ctrl-t");
+    let read = |f: &PathBuf| {
+        otto.wait_for("its end", |_| {
+            let text = std::fs::read_to_string(f).ok()?;
+            (!text.contains("still transcribing")).then_some(text)
+        })
+    };
+    let (mut first, mut second) = (read(&both[0]), read(&both[1]));
+    if first.contains("of the second") {
+        std::mem::swap(&mut first, &mut second);
+    }
+    let possibly = |text: &str| -> Vec<String> {
+        let block = text.split_once("- Possibly, by your calendar:\n").map(|(_, rest)| rest).unwrap_or_default();
+        block.lines().take_while(|l| l.starts_with("  - ")).map(|l| l.split(" (").next().unwrap_or("").into()).collect()
+    };
+    assert_eq!(possibly(&first), ["  - Made-up first meeting"], "{first}");
+    assert_eq!(possibly(&second), ["  - Made-up second meeting"], "{second}");
+    assert!(first.contains("of the first") && !first.contains("of the second"), "{first}");
+    assert!(second.contains("of the second") && !second.contains("of the first"), "{second}");
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_transcript_with_no_meeting_on_has_no_calendar_block() {

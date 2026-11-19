@@ -197,13 +197,26 @@ impl Model {
             // so neither the reply nor the trace says when someone spoke.
             Action::ListenHeard { id, lines } => {
                 if self.listen.on.as_ref().is_some_and(|on| on.id == id) {
-                    let records = lines
+                    let mut records: Vec<Record> = lines
                         .into_iter()
                         .filter_map(|line| self.listen.heard(&id, line.from, line.start_ms, &line.text, line.is_final))
                         .collect();
+                    // After a session ended, the first words begin the next one's file, from them.
+                    if let (Some(Record::Line { at, .. }), Some(on)) = (records.first(), &self.listen.on)
+                        && on.session.armed.is_some()
+                    {
+                        let (source, mic, at) = (on.source, on.mic, *at);
+                        let (head, meetings) = self.listen_file_head(source, mic, at);
+                        if let Some(on) = self.listen.on.as_mut() {
+                            (on.meetings, on.session.armed) = (meetings, None);
+                            on.new_session(records.len());
+                        }
+                        records.insert(0, Record::Begin(head));
+                    }
                     effects.push(Effect::ListenWrite { id, records });
                 }
             }
+            Action::ListenWindows { id, windows, at } => self.listen_windows(&id, &windows, at, effects),
             // The shell that reports the end says why on the notice bar (`Ended::said`).
             Action::ListenFailed { id, .. } => {
                 self.listen_end(Some(&id), None, effects);
@@ -226,16 +239,41 @@ impl Model {
         if let Some(why) = refused {
             return effects.push(Effect::Notice { text: why.into() });
         }
-        let possible = if self.calendar.on { crate::calendar::possible(&self.calendar.events, at) } else { Vec::new() };
-        let meetings = possible.iter().map(|e| listen::file::Meeting::of(e)).collect();
-        let head = listen::file::Head { meetings, ..self.listen_head(source, mic, at) };
+        let (head, meetings) = self.listen_file_head(source, mic, at);
+        // The source pane's window is its meeting's.
+        let picked = match source.pane().and_then(|pane| self.pane(pane)).map(|pane| &pane.kind) {
+            Some(Kind::App { window, .. }) => Some(*window),
+            _ => None,
+        };
         if self.listen.start(source, mic, id.clone(), at).is_ok() {
             if let Some(on) = self.listen.on.as_mut() {
-                on.meetings = possible.iter().map(|e| e.id).collect();
+                (on.meetings, on.session.picked) = (meetings, picked);
             }
             effects.push(Effect::ListenWrite { id: id.clone(), records: vec![Record::Begin(head)] });
             effects.push(Effect::ListenOpen { id, source, mic });
         }
+    }
+
+    /// A file's header for a transcript of `source` from `at`, with the calendar's meetings it is
+    /// possibly of, and their ids.
+    fn listen_file_head(&self, source: Source, mic: bool, at: u64) -> (listen::file::Head, Vec<u64>) {
+        let possible = if self.calendar.on { crate::calendar::possible(&self.calendar.events, at) } else { Vec::new() };
+        let meetings = possible.iter().map(|e| listen::file::Meeting::of(e)).collect();
+        let head = listen::file::Head { meetings, ..self.listen_head(source, mic, at) };
+        (head, possible.iter().map(|e| e.id).collect())
+    }
+
+    /// The app's windows, as the shell looked: a meeting whose windows went ends its session. What
+    /// was being heard is kept, the file closes at the time they went, and the streams go on: the
+    /// next words heard begin a new file (`ListenHeard`).
+    fn listen_windows(&mut self, id: &str, windows: &[u32], at: u64, effects: &mut Vec<Effect>) {
+        let Some(on) = self.listen.on.as_mut().filter(|on| on.id == id && on.status != Status::Starting) else {
+            return;
+        };
+        let Some(went) = on.session.windows(windows, at) else { return };
+        let went = went.max(on.started);
+        let records = on.settle(went).into_iter().chain([Record::End { at: went }]).collect();
+        effects.push(Effect::ListenWrite { id: id.into(), records });
     }
 
     /// What the file's header says of a transcript of `source`: its app's name as ottospace reads
@@ -258,7 +296,15 @@ impl Model {
     /// the file, once. On the clock's tick, never when someone spoke. Not while paused: the pause's
     /// own line comes at its end, and the file stays in time order.
     pub(super) fn listen_meetings(&mut self, now: u64, effects: &mut Vec<Effect>) {
-        let Some(on) = self.listen.on.as_mut().filter(|on| on.status == Status::On && self.calendar.on) else {
+        // Nothing heard for long after its meeting ended: it ends.
+        let armed = self.listen.on.as_ref().and_then(|on| on.session.armed);
+        if armed.is_some_and(|since| now.saturating_sub(since) >= listen::ARMED_MAX) {
+            self.listen_end(None, Some(now), effects);
+            return effects.push(Effect::Notice { text: listen::ARMED_ENDED.into() });
+        }
+        let Some(on) =
+            self.listen.on.as_mut().filter(|on| on.status == Status::On && armed.is_none() && self.calendar.on)
+        else {
             return;
         };
         let began = |e: &&crate::calendar::Event| {
@@ -453,8 +499,9 @@ mod tests {
     }
 
     fn app(pid: i32, name: &str, windows: &[&str], playing: bool) -> listen::SoundApp {
-        let windows = windows.iter().map(|w| w.to_string()).collect();
-        listen::SoundApp { pid, name: name.into(), bundle: Some(format!("b.{name}")), windows, playing }
+        let windows: Vec<String> = windows.iter().map(|w| w.to_string()).collect();
+        let window_ids = (0..windows.len() as u32).map(|n| pid as u32 * 100 + n).collect();
+        listen::SoundApp { pid, name: name.into(), bundle: Some(format!("b.{name}")), windows, window_ids, playing }
     }
 
     fn picker(apps: Vec<listen::SoundApp>) -> Action {
@@ -464,7 +511,7 @@ mod tests {
     fn rows(m: &Model) -> Vec<(String, Option<String>, bool)> {
         let items = m.picker.as_ref().map(|picker| picker.items.clone()).unwrap_or_default();
         let row = |item: PickItem| match item {
-            PickItem::Sound { name, window, playing, .. } => Some((name, window, playing)),
+            PickItem::Sound { name, window, playing, .. } => Some((name, window.map(|(title, _)| title), playing)),
             _ => None,
         };
         items.into_iter().filter_map(row).collect()
@@ -927,5 +974,66 @@ mod tests {
         m.update(picker(vec![other]));
         m.update(Action::PickerChoose { index: Some(0) });
         assert_eq!(m.listen_marked(), [2], "pane 3's bundle differs; pane 2 has none: by name");
+    }
+
+    /// The owner: "the zoom meeting ended, and then I joined a new one. The transcript didn't
+    /// start a new session". Its meeting's window gone: the file closes; the next words begin a
+    /// new file with its own header; the streams run on throughout.
+    #[test]
+    fn a_meeting_that_ends_closes_its_file_and_the_next_words_begin_another() {
+        let mut m = model();
+        with_calendar(&mut m, &[0, 7_200_000]);
+        // Pane 2's window (7) is the meeting's; Zoom's home window (50) stays.
+        m.update(start(2));
+        m.update(Action::ListenBegan { id: "t2".into(), at: 1_000 }.sent_by(Origin::System));
+        let look = |windows: &[u32], at| Action::ListenWindows { id: "t2".into(), windows: windows.to_vec(), at };
+        let heard_at = |m: &mut Model, start_ms| {
+            let line = Heard { from: Speaker::Them, start_ms, text: "made-up".into(), is_final: true };
+            m.update(Action::ListenHeard { id: "t2".into(), lines: vec![line] }.sent_by(Origin::System))
+        };
+        assert_eq!(m.update(look(&[50, 7], 2_000).sent_by(Origin::System)), []);
+        heard_at(&mut m, 1_000);
+        // Gone at 1:00, still gone 10 s later: the file ends at 1:00, the streams stay.
+        assert_eq!(m.update(look(&[50], 60_000).sent_by(Origin::System)), []);
+        let ended = m.update(look(&[50], 70_000).sent_by(Origin::System));
+        assert_eq!(ended, [Effect::ListenWrite { id: "t2".into(), records: vec![Record::End { at: 60_000 }] }]);
+        assert_eq!(status(&m), Some(Status::On));
+        assert_eq!(m.listen.pane(), Some(2), "still on: its dot stays");
+        // A new meeting at 2:00, in a window of its own; its first words, at 2:05, begin a file.
+        m.update(look(&[50, 9], 7_200_000).sent_by(Origin::System));
+        let begun = heard_at(&mut m, 7_300_000 - 1_000);
+        let [Effect::ListenWrite { records, .. }] = begun.as_slice() else { panic!("{begun:?}") };
+        let Some(Record::Begin(head)) = records.first() else { panic!("{records:?}") };
+        assert_eq!(head.started, 7_300_000);
+        let titles: Vec<&str> = head.meetings.iter().map(|m| m.title.as_str()).collect();
+        assert_eq!(titles, ["Made-up meeting 2"], "the new meeting's header");
+        assert!(matches!(records.get(1), Some(Record::Line { at: 7_300_000, .. })), "{records:?}");
+        assert_eq!(m.listen.on.as_ref().map(|on| on.rows().count()), Some(1), "the drawer shows the new one");
+        // Its window gone too: that file ends as well.
+        m.update(look(&[50], 8_000_000).sent_by(Origin::System));
+        let again = m.update(look(&[50], 8_010_000).sent_by(Origin::System));
+        assert_eq!(again, [Effect::ListenWrite { id: "t2".into(), records: vec![Record::End { at: 8_000_000 }] }]);
+        // Nothing heard for 30 minutes after: the transcript ends, and the bar says why.
+        assert_eq!(m.update(Action::Tick { now: 8_010_000 + listen::ARMED_MAX - 1 }.sent_by(Origin::System)), []);
+        let over = m.update(Action::Tick { now: 8_010_000 + listen::ARMED_MAX }.sent_by(Origin::System));
+        assert!(over.contains(&Effect::Notice { text: listen::ARMED_ENDED.into() }), "{over:?}");
+        assert!(over.contains(&Effect::ListenClose { id: "t2".into() }), "{over:?}");
+        assert_eq!(m.listen.on, None);
+    }
+
+    #[test]
+    fn a_client_reports_no_windows_and_the_users_stop_while_armed_stops_all() {
+        let mut m = model();
+        m.update(start(2));
+        m.update(Action::ListenBegan { id: "t2".into(), at: 1_000 }.sent_by(Origin::System));
+        let look = |windows: &[u32], at| Action::ListenWindows { id: "t2".into(), windows: windows.to_vec(), at };
+        assert_eq!(m.refusal(&look(&[], 0), Origin::Socket), Some(listen::SHELLS_ALONE));
+        m.update(look(&[7], 2_000).sent_by(Origin::System));
+        m.update(look(&[], 3_000).sent_by(Origin::System));
+        m.update(look(&[], 13_000).sent_by(Origin::System));
+        assert!(m.listen.on.as_ref().is_some_and(|on| on.session.armed.is_some()));
+        let stopped = m.update(Action::ListenStop { at: 20_000 });
+        assert!(stopped.contains(&Effect::ListenClose { id: "t2".into() }), "{stopped:?}");
+        assert_eq!(m.listen.on, None);
     }
 }

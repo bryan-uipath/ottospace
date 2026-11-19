@@ -129,6 +129,34 @@ settings, and the Features list shows each app set to auto.
 
 ## 1b. When a meeting is on, and when it is over
 
+**Built: one file a meeting** (owner, 2026-11-19: "the zoom meeting ended, and then I joined a new
+one. The transcript didn't start a new session, it kept recording my new zoom session"). A
+transcript runs on; each meeting is a session with a file of its own. `listen::Session`, in the
+core, decides from the app's windows, which the shell looks at every 5 s while one is on
+(`ListenWindows`: ids of the app's titled windows, on screen or not, from ScreenCaptureKit; never
+titles; the shell's alone):
+
+- **The meeting's windows**: at the start, every window the app has but the one picked (the picker's
+  row, or the source pane's window) is `base`; the meeting's windows are the others. So a
+  participant's window or Zoom's share toolbar is the meeting's too, and its home window is not.
+- **Its end**: none of them for 10 s (`WINDOW_GONE`; Zoom swaps its meeting window for the share
+  toolbar). What was being heard is kept, the file ends at the time they went, as on a Stop. The
+  streams go on: no new start, no notice. `base` becomes every window it has then, so the next
+  meeting's are those it opens.
+- **The next**: the first words heard begin a new file, with its own header and calendar block at
+  their time, and the drawer shows its lines alone. No words, no file: none is empty.
+- **Nothing heard for 30 minutes** after a session ended (`ARMED_MAX`): the transcript ends, and the
+  bar says "Transcript stopped: nothing heard for 30 minutes after the meeting".
+- With no window picked (a test run's terminal pane) a session ends when the app has no window.
+- The calendar never ends a session (meetings run over): it names them in each header only.
+- Not chosen: a long silence. ScreenCaptureKit sends silent buffers (measured: "Silence timing"), so silence is
+  measurable; but a meeting left and another joined a minute later is the reported case, and no
+  silence that short leaves a meeting's quiet stretch whole.
+- Accepted: a meeting window that closes for over 10 s within one meeting splits it; a new meeting
+  in the window the last one used (an app that reuses it) is not split.
+
+The rest of this section, the `meeting` rules and the start offer, is not built.
+
 Signals, by what the app's rule names:
 
 | App | Meeting starts | Meeting is over |

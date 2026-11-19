@@ -5189,7 +5189,7 @@ impl Workspace {
                 false => div().w(px(28.)).flex_none(),
             };
             let label = match window {
-                Some(window) => format!("{name} · {window}"),
+                Some((window, _)) => format!("{name} · {window}"),
                 None => name.clone(),
             };
             let now = playing.then(|| {

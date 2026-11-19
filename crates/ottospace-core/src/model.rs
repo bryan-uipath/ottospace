@@ -379,8 +379,9 @@ pub enum PickItem {
         #[serde(skip)]
         pid: i32,
         name: String,
+        /// The window's title and id.
         #[serde(skip)]
-        window: Option<String>,
+        window: Option<(String, Option<u32>)>,
         playing: bool,
     },
 }
@@ -389,7 +390,7 @@ impl PickItem {
     /// What the filter matches: the label, and a sound app's window as its row shows it.
     fn filter_text(&self) -> String {
         match self {
-            PickItem::Sound { name, window: Some(window), .. } => format!("{name} · {window}"),
+            PickItem::Sound { name, window: Some((window, _)), .. } => format!("{name} · {window}"),
             _ => self.label().to_string(),
         }
     }
@@ -1840,6 +1841,14 @@ pub enum Action {
         id: String,
         why: String,
     },
+    /// The shell's: the windows of the app heard (ids, never titles), looked at every few seconds
+    /// while a transcript is on. Its meeting's windows gone for `listen::WINDOW_GONE` end the
+    /// session: the file closes, and the next words heard begin a new one (`listen::Session`).
+    ListenWindows {
+        id: String,
+        windows: Vec<u32>,
+        at: u64,
+    },
     /// The shell's: the lines heard since its last tick, empty or not. A fixed tick, so a reply's
     /// `seq` moves the same whether someone spoke or not.
     ListenHeard {
@@ -2428,6 +2437,7 @@ impl Action {
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
+            | Action::ListenWindows { .. }
             | Action::ListenEnded { .. }
             | Action::ListenPicker { .. }
             | Action::ListenPast { .. }
@@ -2500,6 +2510,7 @@ impl Action {
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
+            | Action::ListenWindows { .. }
             | Action::ListenEnded { .. }
             | Action::ListenPicker { .. }
             | Action::ListenPast { .. }
@@ -3954,6 +3965,7 @@ impl Model {
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
+            | Action::ListenWindows { .. }
             | Action::ListenEnded { .. }
             | Action::ListenPast { .. }
                 if origin == Origin::Socket =>
@@ -5758,9 +5770,15 @@ impl Model {
                 if let Some((id, at)) = picker.start.clone() {
                     let choice = picker.matches().get(index.unwrap_or(picker.selected)).copied().cloned();
                     match choice {
-                        Some(PickItem::Sound { pid, .. }) => {
+                        Some(PickItem::Sound { pid, window, .. }) => {
                             let at = at.max(self.now);
+                            let picked = window.and_then(|(_, id)| id);
                             self.listen_start(listen::Source::App { pid }, false, id, at, effects);
+                            if let Some(on) =
+                                self.listen.on.as_mut().filter(|on| on.source == listen::Source::App { pid })
+                            {
+                                on.session.picked = picked;
+                            }
                         }
                         _ => self.picker = Some(picker),
                     }
@@ -6589,6 +6607,7 @@ impl Model {
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
+            | Action::ListenWindows { .. }
             | Action::ListenEnded { .. }
             | Action::ListenPicker { .. }
             | Action::ListenPast { .. }
@@ -9750,6 +9769,7 @@ mod tests {
         Action::ListenBegan { .. },
         Action::ListenFailed { .. },
         Action::ListenHeard { .. },
+        Action::ListenWindows { .. },
         Action::ListenEnded { .. },
         Action::ListenPicker { .. },
         Action::ListenPast { .. },
@@ -10095,6 +10115,7 @@ mod tests {
             Action::ListenBegan { id: text(), at: 0 },
             Action::ListenFailed { id: text(), why: text() },
             Action::ListenHeard { id: text(), lines: Vec::new() },
+            Action::ListenWindows { id: text(), windows: Vec::new(), at: 0 },
             Action::ListenEnded { id: text(), why: listen::Ended::AppQuit, at: 0 },
             Action::ListenPicker { apps: Vec::new(), id: text(), at: 0 },
             Action::ListenPast { files: Vec::new(), today: text() },
@@ -10161,6 +10182,7 @@ mod tests {
             | Action::ListenBegan { .. }
             | Action::ListenFailed { .. }
             | Action::ListenHeard { .. }
+            | Action::ListenWindows { .. }
             | Action::ListenEnded { .. }
             | Action::ListenPast { .. }
                 if origin == Origin::Socket =>
