@@ -97,7 +97,8 @@ jobs:
   # and the commits since the last green run; closed when it passes again.
   main-red:
     needs: macos
-    if: ${{ github.event_name == 'push' && (needs.macos.result == 'success' || needs.macos.result == 'failure') }}
+    # `!cancelled()`: without a status function the job is skipped when `macos` fails.
+    if: ${{ !cancelled() && github.event_name == 'push' && (needs.macos.result == 'success' || needs.macos.result == 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
