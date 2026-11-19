@@ -591,8 +591,8 @@ impl Model {
                 });
                 let front = chat.transcript.cards.front().map(|card| card.ticket);
                 for event in events {
-                    // An agent that exited in this batch asks nothing: no card waits on it.
-                    if chat.transcript.live || !matches!(event, Event::Permission { .. }) {
+                    // An agent that exited in this batch asks nothing and starts no turn: nothing to answer or stop.
+                    if chat.transcript.live || !matches!(event, Event::Permission { .. } | Event::TurnStarted) {
                         chat.transcript.fold(event, at);
                     }
                 }

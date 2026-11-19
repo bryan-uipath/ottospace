@@ -5289,6 +5289,31 @@ fn random_actions_keep_the_model_sound_for_long() {
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
 
+/// An agent's exit ends its turn: a turn started in the same batch, after the exit, starts none.
+#[test]
+fn seed_59164_a_turn_after_the_agent_exited_is_none() {
+    replay(&[
+        Action::TaskFromLine {
+            line: "@claude @Claude Code #Ottospace".into(),
+            known: Known {
+                names: Names { agents: vec!["codex".into(), "codex-gpt-6-astra".into()], skills: vec![] },
+                paths: vec![],
+                entries: vec!["/src/export".into()],
+            },
+            open: true,
+        }
+        .sent_by(Origin::User),
+        Action::AgentStarted { task: Subject::Task(1), session: Some("".into()), at: 79 }.sent_by(Origin::User),
+        Action::AgentEvents {
+            task: Subject::Task(1),
+            events: vec![Said::Exited { code: None, signal: None, details: true }, Said::TurnStarted],
+            at: 5000,
+        }
+        .sent_by(Origin::System),
+    ])
+    .unwrap();
+}
+
 /// A client's refused filter-off on a fresh model leaves the model as it was.
 #[test]
 fn seed_83240_a_refused_inspector_filter_changes_nothing() {
