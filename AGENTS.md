@@ -35,7 +35,8 @@ Rules:
   `Origin`; `layout.rs`, `compose.rs` and `edit.rs` have their own. A new `Action` needs a maker in
   `MAKERS` (a test fails until it has one), and a new rule about the model belongs in `check`. A
   failure prints its seed and the least steps that still fail, as a test: paste it under
-  "Regressions" and fix the bug. `OTTOSPACE_PROP_SEED=<n>` runs one sequence again;
+  "Regressions" and fix the bug. `OTTOSPACE_PROP_SEED=<n>` runs one sequence again, and
+  `OTTOSPACE_PROP_WORKERS=<n>` caps each property test's threads (every core by default);
   `cargo test -p ottospace-core --release -- --ignored random_actions` is the long run.
 - **Outer loop:** `cargo e2e`. Launches the real app and drives it over the control socket
   (`crates/ottospace/tests/e2e.rs`). Use it for anything the core cannot prove: drawing, layout
