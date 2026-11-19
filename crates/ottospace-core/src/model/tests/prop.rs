@@ -48,6 +48,8 @@ const HEARD: &str = "HEARDWORDS";
 const SLOT_SEEN: &str = "SLOTSEEN";
 /// In the title of every window the shell hosts in a pane: may reach the state, never a slot.
 const HOSTED: &str = "HOSTEDTITLE";
+/// In the title of every window the slot dialog is shown: the user may keep it, never in the state.
+const PICKED: &str = "PICKEDTITLE";
 /// In the title of every window an app pane offers: never in the state.
 const OFFERED: &str = "OFFEREDTITLE";
 const LISTEN_IDS: &[&str] = &["t1", "t2", ""];
@@ -1621,13 +1623,15 @@ const MAKERS: &[Make] = &[
     SLOT_MAKERS[8],
     SLOT_MAKERS[9],
     SLOT_MAKERS[10],
+    SLOT_MAKERS[12],
+    SLOT_MAKERS[13],
+    SLOT_MAKERS[14],
+    SLOT_MAKERS[15],
     // A new window offered by its app's pane, the user's take or wave, and its close.
-    |g| Action::WindowOffered {
-        pane: g.app_pane(),
-        pid: g.rng.below(3) as i32,
-        window: g.rng.pick(&[1, 2, 10, 11, 12]),
-        title: format!("{OFFERED} {}", g.name(&["w1", "general"])),
-        why: "no slot for this window".into(),
+    // Its facts are a slot's look's: of a slot's app half the time (`Gen::adopt`), so a slot may take it.
+    |g| {
+        let seen = crate::slot::Seen { title: format!("{OFFERED} {}", g.name(&["w1", "general"])), ..g.seen() };
+        Action::WindowOffered { pane: g.app_pane(), seen, why: "no slot for this window".into() }
     },
     |g| Action::OfferAccept { window: g.offered() },
     |g| Action::OfferDismiss { window: g.offered() },
@@ -1641,7 +1645,7 @@ const MAKERS: &[Make] = &[
 
 /// A slot's actions, also picked one time in 8 while there is a slot: among all the others, the
 /// chain from a look to an offer to a fill would hardly ever be met.
-const SLOT_MAKERS: [Make; 12] = [
+const SLOT_MAKERS: [Make; 16] = [
     |g| Action::SlotMake { pane: g.pane(), pid: g.rng.below(3) as i32, slot: g.slot() },
     |g| Action::SlotClear { pane: g.slot_pane() },
     |g| Action::SlotAccept { pane: g.slot_pane() },
@@ -1655,6 +1659,25 @@ const SLOT_MAKERS: [Make; 12] = [
     |g| Action::WindowGone { pane: g.slot_pane(), app_running: g.rng.coin(), at: g.time() },
     // Not in `MAKERS`, which has its own `Adopt`.
     |g| g.adopt(),
+    // The dialog: on any pane, with a look of its app's windows half the time. Its titles are
+    // the user's to keep (Title is “…”), so they are not a look's (`SLOT_SEEN`): never in the state.
+    |g| {
+        let mut look = g.look();
+        look.windows.iter_mut().for_each(|seen| seen.title = seen.title.replacen(SLOT_SEEN, PICKED, 1));
+        Action::SlotDialogOpen { pane: g.pane(), look }
+    },
+    |g| {
+        use crate::model::slots::Choice;
+        let choice = match g.rng.below(4) {
+            0 => Choice::ById(g.rng.coin()),
+            1 => Choice::ByTitle(g.rng.coin()),
+            2 => Choice::Pick(g.slot().pick),
+            _ => Choice::Matching(g.slot().matching),
+        };
+        Action::SlotDialogSet { choice }
+    },
+    |_| Action::SlotDialogClose,
+    |_| Action::SlotDialogKeep,
 ];
 
 /// The way out of each box and mode. Picked one time in 8: with every action as likely as any
@@ -2661,6 +2684,12 @@ fn check_slots(m: &Model) -> Result<(), String> {
         }
     }
     ensure!(m.slots.keys().all(|id| m.pane(*id).is_some()), "a slot with no pane");
+    // Only the user opens the dialog: on an app pane or a slot, with the flag on.
+    if let Some(dialog) = &m.slot_dialog {
+        let kind = m.pane(dialog.pane).map(|p| &p.kind);
+        ensure!(matches!(kind, Some(Kind::App { .. } | Kind::Slot { .. })), "the dialog on {kind:?}");
+        ensure!(!dialog.by_id || dialog.has_id, "by id with no id");
+    }
     let in_pane = |w: u32| m.panes.iter().any(|p| matches!(p.kind, Kind::App { window, .. } if window == w));
     let shown = m.layout.as_ref().map(Node::leaves).unwrap_or_default();
     let offered: Vec<u32> = m.slots.values().filter_map(|run| run.offered).collect();
@@ -2913,6 +2942,7 @@ fn check_state(m: &Model) -> Result<(), String> {
     // as every app pane does, and nothing more.
     let state = serde_json::to_value(StateWithoutApps(m)).unwrap_or_default().to_string();
     ensure!(!state.to_lowercase().contains(&SLOT_SEEN.to_lowercase()), "a slot's look reached the state");
+    ensure!(!state.contains(PICKED), "a title the slot dialog showed reached the state");
     let _ = (
         m.draft(m.compose_line().map(String::as_str).unwrap_or_default()),
         m.mark_refusal(MarkOf::Pane(None)),
@@ -3262,8 +3292,24 @@ impl Run {
         // Else a restore of the user's own (a layout, a tab's mark): new panes, waiting.
         let restored =
             made.iter().all(|id| m.slots[id].status != crate::slot::Status::Filled && !ids_before.contains(id));
+        // A slot that fills takes a window no other pane holds: several slots of one app fill one
+        // by one, never two with one window.
+        let filled = |id: &PaneId| {
+            let was = slots_before.get(id).is_some_and(|run| run.status == crate::slot::Status::Filled);
+            !was && m.slots.get(id).is_some_and(|run| run.status == crate::slot::Status::Filled)
+        };
+        if !matches!(action, Action::SlotMake { .. } | Action::SlotDialogKeep) {
+            for id in m.slots.keys().filter(|id| filled(id)) {
+                let Some(Kind::App { window, .. }) = m.pane(*id).map(|p| &p.kind) else { continue };
+                let others = m.panes.iter().filter(|p| p.id != *id);
+                let twice = others.into_iter().any(|p| matches!(p.kind, Kind::App { window: w, .. } if w == *window));
+                ensure!(!twice, "{action:?} filled slot {id} with window {window}, which another pane holds");
+            }
+        }
         ensure!(
-            made.is_empty() || (users && matches!(action, Action::SlotMake { .. })) || restored,
+            made.is_empty()
+                || (users && matches!(action, Action::SlotMake { .. } | Action::SlotDialogKeep))
+                || restored,
             "{origin:?}'s {action:?} made slot {made:?}"
         );
         for (id, run) in &slots_before {
@@ -4121,8 +4167,15 @@ impl Run {
                         "{action:?} hosts {window} in {pane}, not asked"
                     );
                     let users = origin == Origin::User && matches!(action, Action::SlotAccept { .. });
+                    // Or a new window the shell saw: only Away's return, of the process the slot held.
+                    let back = match &action {
+                        Action::WindowOffered { seen, .. } => slots_before.get(pane).is_some_and(|run| {
+                            run.away.is_some() && run.pid == Some(seen.pid) && origin == Origin::System
+                        }),
+                        _ => false,
+                    };
                     ensure!(
-                        users || matches!(action, Action::SlotWindows { .. }),
+                        users || back || matches!(action, Action::SlotWindows { .. }),
                         "{origin:?}'s {action:?} filled a slot"
                     );
                     // A look takes only for Away's return or Automatic, on the tab on show, never
@@ -4142,6 +4195,7 @@ impl Run {
                     }
                 }
                 // A window an app opened goes in a pane only by the user's Put in a pane.
+                Effect::Placed { .. } => {}
                 Effect::HostOffer { window, .. } => {
                     let users = origin == Origin::User && action == Action::OfferAccept { window: *window };
                     ensure!(users, "{origin:?}'s {action:?} put offered window {window} in a pane");
@@ -5068,6 +5122,26 @@ fn code(sent: &Envelope) -> String {
         let look = serde_json::to_string(look).unwrap_or_default();
         return format!("slot_windows({look:?}).sent_by(Origin::{:?})", sent.origin);
     }
+    if let Action::SlotDialogSet { choice } = &sent.action {
+        use crate::model::slots::Choice;
+        let choice = match choice {
+            Choice::ById(on) => format!("ById({on})"),
+            Choice::ByTitle(on) => format!("ByTitle({on})"),
+            Choice::Pick(crate::slot::Pick::Display(n)) => format!("Pick(crate::slot::Pick::Display({n}))"),
+            Choice::Pick(pick) => format!("Pick(crate::slot::Pick::{pick:?})"),
+            Choice::Matching(matching) => format!("Matching(crate::slot::Matching::{matching:?})"),
+        };
+        let choice = format!("crate::model::slots::Choice::{choice}");
+        return format!("Action::SlotDialogSet {{ choice: {choice} }}.sent_by(Origin::{:?})", sent.origin);
+    }
+    if let Action::SlotDialogOpen { pane, look } = &sent.action {
+        let look = serde_json::to_string(look).unwrap_or_default();
+        return format!("slot_dialog_open({pane}, {look:?}).sent_by(Origin::{:?})", sent.origin);
+    }
+    if let Action::WindowOffered { pane, seen, why } = &sent.action {
+        let seen = serde_json::to_string(seen).unwrap_or_default();
+        return format!("window_offered({pane}, {seen:?}, {why:?}).sent_by(Origin::{:?})", sent.origin);
+    }
     if let Action::Adopt { kind, beside, seen: Some(seen) } = &sent.action {
         let (kind, seen) =
             (serde_json::to_string(kind).unwrap_or_default(), serde_json::to_string(seen).unwrap_or_default());
@@ -5269,6 +5343,17 @@ fn adopt(kind: &str, beside: Option<PaneId>, seen: &str) -> Action {
     Action::Adopt { kind, beside, seen: Some(serde_json::from_str(seen).expect("a regression's window is JSON")) }
 }
 
+/// `SlotDialogOpen` with its look's JSON, as `code` writes it.
+fn slot_dialog_open(pane: PaneId, look: &str) -> Action {
+    Action::SlotDialogOpen { pane, look: serde_json::from_str(look).expect("a regression's look is JSON") }
+}
+
+/// `WindowOffered` with its window's JSON, as `code` writes it.
+fn window_offered(pane: PaneId, seen: &str, why: &str) -> Action {
+    let seen = serde_json::from_str(seen).expect("a regression's window is JSON");
+    Action::WindowOffered { pane, seen, why: why.into() }
+}
+
 /// `SlotHosted` with its kind's JSON, as `code` writes it.
 fn slot_hosted(pane: PaneId, kind: &str) -> Action {
     Action::SlotHosted { pane, kind: serde_json::from_str(kind).expect("a regression's kind is JSON") }
@@ -5315,7 +5400,9 @@ fn every_start_is_in_its_mode() {
 fn a_slots_actions_are_written_as_code_that_builds_them() {
     let (mut rng, mut run) = (Rng::new(3), Run::default());
     start(BASES.len() as u64 - 1).2.for_each(|make| drop(run.m.update(make(&run.m))));
-    for make in SLOT_MAKERS {
+    // And a new window's offer, which carries a look's window.
+    let offered: Make = |g| Action::WindowOffered { pane: g.pane(), seen: g.seen(), why: "no slot".into() };
+    for make in SLOT_MAKERS.into_iter().chain([offered]) {
         let action = make(&mut Gen { rng: &mut rng, m: &run.m });
         let written = code(&action.clone().sent_by(Origin::System));
         // Its string literals: Debug text, which is JSON's but for an escape such as `\u{200b}`.
@@ -5347,6 +5434,8 @@ fn a_slots_actions_are_written_as_code_that_builds_them() {
             Action::SlotWindows { .. } => slot_windows(&json(0)),
             Action::SlotHosted { pane, .. } => slot_hosted(*pane, &json(0)),
             Action::Adopt { beside, .. } => adopt(&json(0), *beside, &json(1)),
+            Action::SlotDialogOpen { pane, .. } => slot_dialog_open(*pane, &json(0)),
+            Action::WindowOffered { pane, .. } => window_offered(*pane, &json(0), &json(1)),
             _ => continue,
         };
         assert_eq!(rebuilt, action, "{written}");

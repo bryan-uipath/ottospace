@@ -128,6 +128,16 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.appFixture({ name: "Mail", user: true }),
   (c) => c.windowFixture({ pane: 2, size: [900, 700], title: "Meeting" }),
   (c) => c.windowFixtureClose({ window: 800001 }),
+  (c) =>
+    c.slotWindows({
+      look: {
+        name: "Meetings",
+        running: true,
+        windows: [{ pid: 0, window: 700001, title: "Weekly", subrole: "AXStandardWindow", frame: { x: 0, y: 0, w: 900, h: 700 } }],
+        displays: [{ x: 0, y: 0, w: 1920, h: 1080 }],
+      },
+    }),
+  (c) => c.slotMake({ pane: 2, slot: { select: { identifier: "zm.meeting.window.main" } } }),
   (c) => c.audioProbeStart(),
   (c) => c.audioProbeStop(),
   (c) => c.windowWidth({ width: 340 }),

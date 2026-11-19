@@ -1,0 +1,4 @@
+# An app pane's header with the `slots` flag on: ⋯ opens the slot dialog. Before slice 3 it had none.
+{"env":{"OTTOSPACE_FEATURES":"slots"}}
+{"cmd":"app_fixture","name":"Meetings","user":true}
+{"shot":"header"}

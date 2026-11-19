@@ -17,6 +17,7 @@ import type {
   ListenLine,
   Slot,
   Offer,
+  SlotDialog,
   Viewer,
   ViewerDrawn,
   ViewerRead,
@@ -1579,7 +1580,25 @@ function model(value: unknown, at: string): Model {
     agent_mode: agentMode(o.agent_mode, `${at}.agent_mode`),
     slots: map(slot)(o.slots, `${at}.slots`),
     offers: list(offer)(o.offers, `${at}.offers`),
+    slot_dialog: orNull(slotDialog)(o.slot_dialog, `${at}.slot_dialog`),
     viewers: map(viewer)(o.viewers, `${at}.viewers`),
+  };
+}
+
+function slotDialog(value: unknown, at: string): SlotDialog {
+  const o = fields(value, at);
+  const pick = (value: unknown, at: string): SlotDialog["pick"] => {
+    if (value === "largest" || value === "smallest" || value === "any") return value;
+    return { display: num(fields(value, at).display, `${at}.display`) };
+  };
+  return {
+    pane: num(o.pane, `${at}.pane`),
+    has_id: bool(o.has_id, `${at}.has_id`),
+    by_id: bool(o.by_id, `${at}.by_id`),
+    by_title: bool(o.by_title, `${at}.by_title`),
+    pick: pick(o.pick, `${at}.pick`),
+    matching: oneOf(["manual", "automatic"] as const, "a slot's matching")(o.matching, `${at}.matching`),
+    editing: bool(o.editing, `${at}.editing`),
   };
 }
 

@@ -481,11 +481,28 @@ pub enum Request {
         pane: PaneId,
         #[serde(default)]
         title: String,
+        /// Its `AXIdentifier`, if it has one: Zoom's main meeting window is `zm.meeting.window.main`.
+        #[serde(default)]
+        identifier: Option<String>,
         #[serde(default = "standard")]
         subrole: String,
         size: [f64; 2],
         #[serde(default)]
         modal: bool,
+    },
+    /// For tests (`test_refusal`): what a look at an app's windows found (`slots` flag), as if read
+    /// (a test run hosts none): `{"cmd":"slot_windows","look":{"name":"Meetings","running":true,
+    /// "windows":[{"pid":0,"window":700001,"title":"Weekly","subrole":"AXStandardWindow",
+    /// "frame":{..}}],"displays":[..]}}`. A slot's Bring it here then fills with no window.
+    /// Never for an agent: only ottospace reports windows.
+    SlotWindows {
+        look: ottospace_core::slot::Look,
+    },
+    /// For tests (`test_refusal`): the slot dialog's Keep, as the user's act: app pane `pane`
+    /// becomes a filled slot of `slot`. Never for an agent: only the user makes a slot.
+    SlotMake {
+        pane: PaneId,
+        slot: ottospace_core::slot::Slot,
     },
     /// For tests (`test_refusal`): fixture window `window` closed, as the shell sees a window go.
     WindowFixtureClose {
@@ -630,6 +647,7 @@ pub enum Modifier {
 /// would raise or silence the user's meeting alert. `record_start`: it would film the window.
 /// `listen_end`: it would end the user's transcript. `app_fixture`: it would make an app pane.
 /// `audio_probe_start`: it would hear an app. `window_fixture`: it would make up another app's windows.
+/// `slot_windows` would too, and `slot_make` would make a slot for the user.
 /// `zoom_press`: it would put the window over the menu bar and the Dock as the user.
 /// `display_change`: no client needs it, and it makes the window draw by GPUI's own paths.
 pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
@@ -663,6 +681,12 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
             Some("listen_end is for tests (OTTOSPACE_E2E): only the user, the app or its sound ends a transcript")
         }
         Request::AppFixture { .. } => Some("app_fixture is for tests (OTTOSPACE_E2E): app panes hold real windows"),
+        Request::SlotWindows { .. } => {
+            Some("slot_windows is for tests (OTTOSPACE_E2E): only ottospace reports windows")
+        }
+        Request::SlotMake { .. } => {
+            Some("slot_make is for tests (OTTOSPACE_E2E): only the user makes a slot, with ⋯ on an app pane's header")
+        }
         Request::WindowFixture { .. } | Request::WindowFixtureClose { .. } => {
             Some("window_fixture is for tests (OTTOSPACE_E2E): ottospace sees an app's new windows itself")
         }
@@ -981,6 +1005,10 @@ mod tests {
                 .chain([r#"{"cmd":"ui_gallery","on":true}"#])
                 .chain([r#"{"cmd":"window_fixture","pane":1,"size":[900,700]}"#])
                 .chain([r#"{"cmd":"window_fixture_close","window":800001}"#])
+                .chain([
+                    r#"{"cmd":"slot_windows","look":{"name":"Meetings","running":true,"windows":[],"displays":[]}}"#,
+                ])
+                .chain([r#"{"cmd":"slot_make","pane":2,"slot":{"select":{}}}"#])
         {
             assert!(test_refusal(&parse(line), false).expect(line).contains("for tests"));
             assert_eq!(test_refusal(&parse(line), true), None);

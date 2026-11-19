@@ -1045,8 +1045,9 @@ closing moves it to another pane of the app. When an app remakes its window (clo
 another), the pane stays empty and offers the new one: `Zoom replaced its window · Bring it here ↵ ×`. Only you take
 or wave away an offer: a client's click is refused, and the window's title is never in the state.
 While you are in the app's pane its window covers the header: the offer shows once you leave.
-Later: ottospace remembers where you put a window of each app, and slots (`slots` flag) take the
-windows you name. ottospace asks for a floating window in front once, and then leaves it to the app, which closes it. One
+A slot (`slots` flag, [Slots](#slots)) that selects the new window comes first: it offers it in its
+own pane, or takes back the window it held, and there is no chip. Later: ottospace remembers where
+you put a window of each app. ottospace asks for a floating window in front once, and then leaves it to the app, which closes it. One
 you can reach stays where the app put it: its title bar on screen and, while the app's pane is
 parked, not under ottospace's window unless it is over that pane. Any other (off screen, by its
 parked window, under ottospace) is first moved to the middle of its app's pane, wholly onto that
@@ -1120,6 +1121,26 @@ above it. A pane that spans the tab on an axis keeps its size there. When no spl
 the word `fit` is not shown and the hint says why (`fixed size 160×120 · no split to move`,
 `· splits at their limit`). In a narrow pane the hint is cut short; `fit` and × stay. Nothing
 is resized unless you ask.
+
+### Slots
+
+With the `slots` flag on, ⋯ in an app pane's header keeps the pane as a slot: a pane that keeps its
+place and waits for a window you name. The dialog is a checklist made from the pane's window, each
+row a choice: App (fixed), `Window id is zm.meeting.window.main` (the app's own name for the window,
+shown when it has one, ticked then), `Title is “Weekly sync”`, which window when several match now
+(the largest, the smallest, on display N, any), and Matching: Manual (the default: it offers) or
+Automatic (it takes a window that opens while it waits, on the tab on show, never the one you are
+in). Its foot says what the slot will wait for, `Waits for: Zoom · window id zm.meeting.window.main`,
+and Keep (↵) makes it. A title pattern (`*Incident*`) is written by hand in `layout.json`, under the
+pane's `slot.select.title`. ⋯ on a slot edits it, with Look Again (forget the windows passed over),
+Give Back the Window and Clear Slot at its foot.
+
+A slot that waits says so in its pane, in the dialog's words: `Waiting for a Zoom window ·
+Waits for: Zoom · window id zm.meeting.window.main`, or `Zoom is not running`, or `Zoom's window is
+away`. A window it selects is offered there, `“Weekly sync” is open · Matches this slot: …`, with
+Bring it here (↵ while the slot is focused), Not this one and `N more match`. Several slots that select the same windows take them
+one by one, in reading order: one window a slot. ⌘E there and a pick end the slot. A filled slot's
+header says `slot`. Only you make, fill or clear a slot; a client's click on one is refused.
 
 ## The return key
 
@@ -1298,7 +1319,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 | `marks` | Experimental | off | Marks: name a pane or a tab, and go back to it with a letter |
 | `apps_section` | Experimental | off | The Apps section: the Dock's apps, pins, Not running and All apps |
 | `transcripts` | Experimental | off | Transcripts (⌘⌃T): an app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file |
-| `slots` | Experimental | off | Slots: a pane that keeps its place and waits for a window you name. In progress: not on screen yet |
+| `slots` | Experimental | off | Slots: a pane that keeps its place and waits for a window you name (⋯ on an app pane's header) |
 | `agent_mode` | Experimental | off | Agent mode (⌘⌃V): let a workspace's task see an app pane, from the robot in its header |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
@@ -1313,8 +1334,9 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   nothing, no Transcribe or Pause command or menu item, and the state's `listen` is null. Turning it off
   ends a transcript that is on. On, an app pane's header offers `Transcribe` on macOS 26 (design:
   [transcripts.md](ai/transcripts.md)).
-- `slots` off: a slot, restored or turned off mid-run, is a plain app pane of its app that keeps
-  the slot on its record for the flag's return. In progress: the model only (design: [slots.md](ai/slots.md)).
+- `slots` off: no ⋯ in an app pane's header, and a slot, restored or turned off mid-run, is a plain
+  app pane of its app that keeps the slot on its record for the flag's return. On, see
+  [Slots](#slots) (design: [slots.md](ai/slots.md)).
 - `agent_mode` off: no robot in an app pane's header, ⌘⌃V does nothing, no Agent Mode commands,
   the grants are kept as they are (turning it on again raises none), and every read of an app pane by a client (`app_read`,
   `app_look`, `ax_tree`) answers `feature off: agent_mode` (design: [agent-mode.md](ai/agent-mode.md)).
@@ -1486,7 +1508,7 @@ first brainstorm:
 
 [transcripts.md](ai/transcripts.md): an app's audio transcribed on the Mac, live, started and stopped by the user alone. Slice 1 is in (behind `transcripts`): the model, ⌘⌃T, the indicator and the drawer's lines, fed only by a test fixture. Then the file in `transcripts_dir`, heard lines handed over on a fixed tick, and the level meter with its label (Hearing speech, Listening, No sound for 30 s), drawn only. Then the app's real audio (ScreenCaptureKit) and Apple's on-device recogniser, the model's download, the menu bar's dot and the start reminder.
 
-[slots.md](ai/slots.md): slots, panes that wait for a window (one window selector for slots, `windows` rules and transcripts' `meeting`), offer it, and empty when it closes. In: the selector (`windows` rules take `identifier`) and, behind `slots`, the model: its states, who may, and the record in `layout.json`. Not on screen yet.
+[slots.md](ai/slots.md): slots, panes that wait for a window (one window selector for slots, `windows` rules and transcripts' `meeting`), offer it, and empty when it closes. In: the selector (`windows` rules take `identifier`) and, behind `slots`, the model (its states, who may, the record in `layout.json`) and slice 3 on screen: ⋯ and its dialog, a slot's pane, new windows a slot selects. Next: the Zoom measurements, Launch and Close the pane.
 
 [multi-monitor.md](ai/multi-monitor.md): a tab folded out to another display (⌘⇧O), focus arrows across displays, unplug folds it back in; behind `multi_monitor`. Not built.
 

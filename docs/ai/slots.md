@@ -3,7 +3,8 @@
 A slot is a pane that keeps its place in the layout and says which window belongs in it: "Zoom's
 main meeting window", "the Figma window titled `*Roadmap*`". When no such window is open it is
 empty and says what it waits for; when one opens it offers it (or, if the user chose so, takes it);
-when the window closes it goes back to waiting. Not built. Design to react to.
+when the window closes it goes back to waiting. Slices 1 to 3 built (the selector, the model, on
+screen); 4 to 6 not.
 
 The owner, 2026-11-16: "i wonder if we'd want like a selector (like has certain ui) to
 differentiate. its unclear how we'd differentiate the main meeting for zoom. but i guess we need
@@ -142,7 +143,22 @@ The dialog, filled in from the live window; the user narrows:
 | More options (folded): when the app is not running | `Wait` (default) / `Launch it` | Folded |
 | More options (folded): when its window closes | `Keep the slot` (default) / `Close the pane` | Folded |
 
-Cancel, Keep (↵). Keep sends `SlotMake` (User only). `subrole` and `has` are not in the dialog:
+Cancel, Keep (↵). Keep sends `SlotMake` (User only).
+
+**As built (slice 3, the owner's call 2026-11-18): a checklist, no free text.** The rows are made
+from the live window and each is a choice: App (fixed); `☑ Window id is zm.meeting.window.main`
+(shown when it has one, ticked then); `☐ Title is “Weekly sync”` (the whole title, ticked when the
+window has no id); `When several match` (the largest, the smallest, on display N, any), shown when
+more than one of the app's windows open now passes the ticked rows; Matching, Manual or Automatic.
+Its foot says, in the words the empty slot will show, what it waits for: `Waits for: Zoom · window
+id zm.meeting.window.main`. "Contains" and other patterns are not typed in the dialog: write one by
+hand in `layout.json`, under the pane's record, `"slot": {"select": {"title": "*Incident*"}}`; the
+slot then says `title matching “*Incident*”`. More options (Launch, Close the pane) come with slice 5.
+⋯ on a slot opens the same dialog, its rows as the slot has them, with Look Again, Give Back the
+Window and Clear Slot at its foot; each does its act and closes the dialog. The dialog is the core's
+(`Model::slot_dialog`, `SlotDialogOpen` with a look the shell reads on the user's click, then
+`SlotDialogSet`, `SlotDialogKeep`, `SlotDialogClose`, all the user's); the state has what is ticked,
+never the title or id. `subrole` and `has` are not in the dialog:
 they are for hand-written rules, and a slot gets them only by hand in `layout.json` once `has`
 exists.
 
@@ -185,7 +201,8 @@ Rejected:
   Not by title: a recurring meeting keeps its title, and one decline would hide it for good. Not
   kept across a restart: window ids start again, and a remembered id could hide another window.
 - **⌘E Put something else here** opens the picker into that pane; choosing ends the slot (the
-  user's act; the pane is then what was picked).
+  user's act; the pane is then what was picked). Built in the core's `PickerChoose`: a client's pick
+  opens beside the slot.
 
 ### Away: a window that goes and comes back
 
@@ -210,7 +227,15 @@ window id, is not measured: slice 4 measures it, and the design holds either way
   tab closed, ottospace quit): it goes back to the frame it had before it was hosted, as every
   hosted window does (`give_back.rs`). `Give Back the Window` empties the slot and passes over that
   window, or an Automatic slot would take it straight back.
-- **A new window of a hosted app** is adopted as a pane today (`adopt_new_windows`, every tick, for
+- **As built: a new window goes to a slot before it is offered.** Since pop-ups no longer split
+  (hosting-windows.md), a new window of a hosted app floats and the shell sends
+  `WindowOffered { pane, seen, why }` (System) with its facts, before anything is hosted. The core
+  gives it to the first slot on show that waits and selects it: Away's return asks the shell to host
+  it (`HostSlot`), any other is offered in the slot; else the app pane's chip offers it. The core
+  says which (`Effect::Placed`), and the log's `place` line is written from that: `slot_return`,
+  `slot_offer` (with the slot) or `offer`. A slot that waits with no other pane of its app learns of
+  new windows from its looks (every 2 s).
+- **A new window of a hosted app** was adopted as a pane (`adopt_new_windows`, every tick, for
   each app in `known`), which would beat the slot's 2 s look and make the window no candidate for
   good. So adoption asks the core first: `Adopt` carries the new window's facts, and the core either
   gives it to a slot on the tab on show (offer or return, as above) or opens it as a new pane
@@ -234,9 +259,12 @@ Rejected:
 
 ### Several slots, one window
 
-A window is offered or taken by one slot at a time: the first, in the order of the tab on show's
-panes (`Node::leaves`: left to right, top to bottom, as drawn), whose selector selects it. Declined
-there, it may be offered in the next. Moving or swapping panes changes that order, visibly.
+The owner, 2026-11-18: "if we have 4 zoom slots, we could just take them one by one if all windows
+match". A window is offered or taken by one slot at a time: the first **that waits**, in the order
+of the tab on show's panes (`Node::leaves`: left to right, top to bottom, as drawn), whose selector
+selects it. A slot that already offers or holds a window is passed: the next window goes to the
+next slot, so four slots that each select only `app` take four windows one by one. Manual still
+offers; a window is still in one pane at most. Declined there, it may be offered in the next. Moving or swapping panes changes that order, visibly.
 Rejected: the most specific selector first (which is more specific, `identifier` or a long
 `title`, has no answer a user could predict), and offering in every matching slot at once (two
 `Bring it here` for one window).

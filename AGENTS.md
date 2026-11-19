@@ -112,8 +112,12 @@ Rules:
     rect). Null outside a test run: what the user's keys are used for is never on the socket.
   - `window_fixture` (`"pane"`, `"size"`, optional `"title"`, `"subrole"`, `"modal"`): a new window of
     that app pane's app, as if just seen (a test run hosts none), judged, logged and offered as a real
-    one; its id (800001 on) is in `offers`. Put in a pane on it opens a pane with no window.
+    one (to a slot that selects it first); its id (800001 on) is in `offers`. Put in a pane on it opens a pane with no window.
     `window_fixture_close` (`"window"`): it closed. Outside a test run only ottospace sees an app's windows.
+    `window_fixture` also takes `"identifier"` (its `AXIdentifier`).
+  - `slot_windows` (`"look"`: an app's windows as a slot's look reads them) and `slot_make` (`"pane"`,
+    `"slot"`: the slot dialog's Keep, as the user's act), for slots (`slots` flag) in a test run, which
+    hosts no window. A slot's Bring it here then fills with a pane of no window.
   - `record_start` (`"dir"`) and `record_stop`: ScreenCaptureKit films ottospace's own window
     into `dir`, a raw BGRA file a change and `frames.jsonl` (`record.rs`), for
     `scripts/shot --record`. Outside a test run no client films the window.

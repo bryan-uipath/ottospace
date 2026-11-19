@@ -76,7 +76,7 @@ impl Feature {
                 "Transcripts (⌘⌃T): an app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file"
             }
             Feature::Slots => {
-                "Slots: a pane that keeps its place and waits for a window you name. In progress: not on screen yet"
+                "Slots: a pane that keeps its place and waits for a window you name (⋯ on an app pane's header)"
             }
             Feature::AgentMode => {
                 "Agent mode (⌘⌃V): let a workspace's task see an app pane, from the robot in its header"

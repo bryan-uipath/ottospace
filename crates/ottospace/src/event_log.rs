@@ -164,7 +164,9 @@ fn fields_of(event: &str) -> &'static [&'static str] {
         "listen_quiet" => &["bundle", "pids", "buffers"],
         "listen_counts" => &["bundle", "buffers", "loud", "lines"],
         // Where a new window of a hosted app went, and why: never its title.
-        "place" => &["bundle", "subrole", "modal", "sheet", "size", "pane", "min_width", "place", "why", "rule"],
+        "place" => {
+            &["bundle", "subrole", "modal", "sheet", "size", "pane", "min_width", "place", "why", "rule", "slot"]
+        }
         _ => &[],
     }
 }
@@ -368,6 +370,12 @@ mod tests {
             ("listen_audio_filter", json!({ "bundle": "us.zoom.xos", "pids": 3 })),
             ("listen_quiet", json!({ "bundle": "us.zoom.xos", "pids": 1, "buffers": 0 })),
             ("listen_counts", json!({ "bundle": "us.zoom.xos", "buffers": 500, "loud": 0, "lines": 0 })),
+            (
+                "place",
+                json!({ "bundle": "us.zoom.xos", "subrole": "AXStandardWindow", "modal": false, "sheet": false,
+                    "size": [1200.0, 800.0], "pane": [900.0, 700.0], "min_width": null, "place": "slot_offer",
+                    "why": "slot", "rule": "windows[0]: manage", "slot": 3 }),
+            ),
             ("panic", panic_fields(Some((&main, 12)), Some("main"))),
             ("panic", panic_fields(Some((&format!("{home}/src/app/target/debug/build/x-1/out/gen.rs"), 3)), None)),
             // The first line only.
@@ -392,7 +400,7 @@ mod tests {
             write(event, fields, Some(&*dir));
         }
         let text = fs::read_to_string(dir.join(NAME)).unwrap();
-        assert_eq!(text.lines().count(), 20, "{text}");
+        assert_eq!(text.lines().count(), 21, "{text}");
         // `at` is each line's time, never overwritten by a field.
         assert!(
             text.lines().all(|line| serde_json::from_str::<Value>(line).unwrap()["at"].as_str().unwrap().len() == 25)

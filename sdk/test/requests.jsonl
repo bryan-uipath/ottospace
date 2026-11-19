@@ -78,6 +78,8 @@
 {"cmd":"app_fixture","name":"Mail","user":true}
 {"cmd":"window_fixture","pane":2,"size":[900,700],"title":"Meeting"}
 {"cmd":"window_fixture_close","window":800001}
+{"cmd":"slot_windows","look":{"name":"Meetings","running":true,"windows":[{"pid":0,"window":700001,"title":"Weekly","subrole":"AXStandardWindow","frame":{"x":0,"y":0,"w":900,"h":700}}],"displays":[{"x":0,"y":0,"w":1920,"h":1080}]}}
+{"cmd":"slot_make","pane":2,"slot":{"select":{"identifier":"zm.meeting.window.main"}}}
 {"cmd":"audio_probe_start"}
 {"cmd":"audio_probe_stop"}
 {"cmd":"window_width","width":340}

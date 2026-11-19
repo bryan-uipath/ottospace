@@ -1134,6 +1134,11 @@ export interface Model {
    * window's id, never its title. Only the user puts one in a pane or dismisses the offer.
    */
   offers: Offer[];
+  /**
+   * The slot dialog while the user has it open (⋯ on an app pane's header): its pane and what is
+   * ticked. Never the window's title or id. Only the user opens it or keeps a slot.
+   */
+  slot_dialog: SlotDialog | null;
   /** Each file viewer's view, by pane id. */
   viewers: Record<string, Viewer>;
 }
@@ -1144,6 +1149,42 @@ export interface Slot {
   /** How many windows it could offer now. */
   matches: number;
   matching: "manual" | "automatic";
+}
+
+/** What a look at an app's windows found (`slot_windows`, tests only). */
+export interface SlotLook {
+  bundle?: string | null;
+  name: string;
+  running: boolean;
+  windows: {
+    pid: number;
+    window: number;
+    title: string;
+    identifier?: string | null;
+    subrole: string;
+    frame: Frame;
+  }[];
+  displays: Frame[];
+  frontmost?: number | null;
+}
+
+/** A slot as its pane's record keeps it (`slot_make`, tests only). */
+export interface SlotRecord {
+  select?: { title?: string; identifier?: string; subrole?: string };
+  pick?: SlotDialog["pick"];
+  matching?: "manual" | "automatic";
+}
+
+/** The slot dialog's rows: by the window's id, by its title, which when several match, and matching. */
+export interface SlotDialog {
+  pane: PaneId;
+  has_id: boolean;
+  by_id: boolean;
+  by_title: boolean;
+  pick: "largest" | "smallest" | "any" | { display: number };
+  matching: "manual" | "automatic";
+  /** A slot already: the dialog edits it. */
+  editing: boolean;
 }
 
 /** A window an app opened by itself, floating over its app pane, which offers it. */
