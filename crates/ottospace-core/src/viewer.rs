@@ -106,18 +106,98 @@ pub struct Viewer {
     /// The pane that opened it to be reused (`OpenFile`'s `reuse`): its next file goes here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opener: Option<PaneId>,
+    /// The lines it was opened at, drawn marked: within the file once read. Until the pane is
+    /// asked for another place or file, or Esc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marked: Option<Lines>,
 }
 
 impl Viewer {
     pub fn new(path: &str, top: u32, opener: Option<PaneId>) -> Self {
         Viewer { shows: shows(path), top, opener, ..Viewer::default() }
     }
+
+    /// A new view of `path` at `at`: a markdown file shows its source, so the lines can be marked.
+    pub fn at(path: &str, at: Option<Lines>, opener: Option<PaneId>) -> Self {
+        let mut view = Viewer::new(path, 0, opener);
+        if at.is_some() && view.shows == Shows::Markdown {
+            view.shows = Shows::Code;
+        }
+        view.mark(at);
+        view
+    }
+
+    /// `at` marked and put in view, `CONTEXT` lines below the top, fewer when the lines would not
+    /// fit the page laid out; past the end once read, the last line. `None`: no mark, the view stays.
+    pub fn mark(&mut self, at: Option<Lines>) {
+        let Some(at) = at else { return };
+        let at = match self.read {
+            Read::Shown { lines } => at.within(lines),
+            _ => Some(at),
+        };
+        if let Some(at) = at {
+            let room = if self.page == 0 { CONTEXT } else { self.page.saturating_sub(at.last - at.first + 1) };
+            self.top = at.first.saturating_sub(1 + CONTEXT.min(room));
+            self.top = self.most.map_or(self.top, |most| self.top.min(most));
+        }
+        self.marked = at;
+    }
 }
 
-/// The path-like word at `col` of a terminal's `line`, as written: `src/main.rs:12:3` gives
-/// `src/main.rs`; quotes, brackets and a trailing `.` or `,` are not of it. `None`: no word there,
-/// or one that names no file (`http://…`).
-pub fn path_at(line: &str, col: usize) -> Option<String> {
+/// Lines shown above a marked range when the view goes to it.
+pub const CONTEXT: u32 = 3;
+
+/// Lines of a file, from 1, both ends in: `12` is `12-12`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lines {
+    pub first: u32,
+    pub last: u32,
+}
+
+impl Lines {
+    /// `None` for line 0, which no file has. Written backwards (`14-12`), the same lines.
+    pub fn new(first: u32, last: u32) -> Option<Lines> {
+        let (first, last) = (first.min(last), first.max(last));
+        (first > 0).then_some(Lines { first, last })
+    }
+
+    /// Cut to a file of `lines`: past its end, its last line. `None`: an empty file.
+    pub fn within(self, lines: u32) -> Option<Lines> {
+        Lines::new(self.first.min(lines), self.last.min(lines))
+    }
+
+    /// `12` or `12-14`; a number past `u32` is past any file's end. `None`: anything else, or line 0.
+    pub fn parse(text: &str) -> Option<Lines> {
+        let (first, last) = text.split_once('-').unwrap_or((text, text));
+        let number = |part: &str| digits(part).then(|| part.parse().unwrap_or(u32::MAX));
+        Lines::new(number(first)?, number(last)?)
+    }
+}
+
+fn digits(part: &str) -> bool {
+    !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// `path` without a line written after it, and those lines: `a.rs:12` (`:12:3`, its column
+/// dropped), `a.rs:12-14`. Line 0 is dropped and names none.
+pub(crate) fn split_lines(path: &str) -> (&str, Option<Lines>) {
+    let (mut path, mut lines) = (path, None);
+    for _ in 0..2 {
+        let Some((before, tail)) = path.rsplit_once(':') else { break };
+        let (first, last) = tail.split_once('-').unwrap_or((tail, tail));
+        if !(digits(first) && digits(last)) {
+            break;
+        }
+        // Of two, the first is the line: `:12:3` is line 12.
+        (path, lines) = (before, Lines::parse(tail));
+    }
+    (path, lines)
+}
+
+/// The path-like word at `col` of a terminal's `line`, as written, and the lines after it:
+/// `src/main.rs:12:3` gives `src/main.rs` and line 12; quotes, brackets and a trailing `.` or `,`
+/// are not of it. `None`: no word there, or one that names no file (`http://…`).
+pub fn path_at(line: &str, col: usize) -> Option<(String, Option<Lines>)> {
     let chars: Vec<char> = line.chars().collect();
     let part = |c: char| !c.is_whitespace() && !matches!(c, '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '<' | '>' | '|');
     if !chars.get(col).is_some_and(|c| part(*c)) {
@@ -130,17 +210,8 @@ pub fn path_at(line: &str, col: usize) -> Option<String> {
     if word.contains("://") {
         return None;
     }
-    // `path:12` and `path:12:3` name a line; the file is before them.
-    let mut path = word;
-    for _ in 0..2 {
-        if let Some((before, line)) = path.rsplit_once(':')
-            && !line.is_empty()
-            && line.chars().all(|c| c.is_ascii_digit())
-        {
-            path = before;
-        }
-    }
-    (!path.is_empty() && !path.contains(':')).then(|| path.to_string())
+    let (path, lines) = split_lines(word);
+    (!path.is_empty() && !path.contains(':')).then(|| (path.to_string(), lines))
 }
 
 /// `typed` as an absolute path: as is, from `home` for `~/…`, else from `cwd`. `.` and `..`
@@ -187,16 +258,62 @@ mod tests {
 
     #[test]
     fn the_path_under_a_click() {
+        let path = |line: &str, col| path_at(line, col).map(|(path, _)| path);
         let line = "error: src/main.rs:12:3: expected `;`";
-        assert_eq!(path_at(line, 9).as_deref(), Some("src/main.rs"));
-        assert_eq!(path_at(line, 20).as_deref(), Some("src/main.rs"), "on its line number too");
+        assert_eq!(path_at(line, 9), Some(("src/main.rs".into(), Lines::new(12, 12))));
+        assert_eq!(path(line, 20).as_deref(), Some("src/main.rs"), "on its line number too");
         assert_eq!(path_at(line, 6), None, "a space");
-        assert_eq!(path_at("see (docs/a.md).", 7).as_deref(), Some("docs/a.md"));
-        assert_eq!(path_at("open 'My.md', now", 7).as_deref(), Some("My.md"));
+        assert_eq!(path_at("see a.rs:12-14.", 5), Some(("a.rs".into(), Lines::new(12, 14))));
+        assert_eq!(path_at("a.rs:0", 0), Some(("a.rs".into(), None)), "line 0 is none");
+        assert_eq!(path("see (docs/a.md).", 7).as_deref(), Some("docs/a.md"));
+        assert_eq!(path("open 'My.md', now", 7).as_deref(), Some("My.md"));
         assert_eq!(path_at("https://example.com/a.md", 3), None);
-        assert_eq!(path_at("~/notes/today.md", 0).as_deref(), Some("~/notes/today.md"));
+        assert_eq!(path("~/notes/today.md", 0).as_deref(), Some("~/notes/today.md"));
         assert_eq!(path_at("a:b", 0), None);
         assert_eq!(path_at("x", 9), None, "past the end");
+    }
+
+    #[test]
+    fn lines_are_from_one_both_ends_in() {
+        assert_eq!(Lines::parse("12"), Some(Lines { first: 12, last: 12 }));
+        assert_eq!(Lines::parse("14-12"), Some(Lines { first: 12, last: 14 }), "backwards, the same lines");
+        assert_eq!(
+            Lines::parse("99999999999"),
+            Lines::new(u32::MAX, u32::MAX),
+            "past any end: the last line, once read"
+        );
+        for bad in ["0", "0-3", "", "-", "12-", "a", "1-2-3"] {
+            assert_eq!(Lines::parse(bad), None, "{bad}");
+        }
+        let at = Lines { first: 40, last: 60 };
+        assert_eq!((at.within(50), at.within(10), at.within(0)), (Lines::new(40, 50), Lines::new(10, 10), None));
+        assert_eq!(split_lines("/a.rs:3:9"), ("/a.rs", Lines::new(3, 3)));
+        assert_eq!(split_lines("/a.rs:x"), ("/a.rs:x", None));
+    }
+
+    #[test]
+    fn a_view_opened_at_lines_marks_them_with_some_above() {
+        let view = Viewer::at("/a/x.rs", Lines::new(40, 42), None);
+        assert_eq!((view.top, view.marked, view.shows), (36, Lines::new(40, 42), Shows::Code));
+        assert_eq!(Viewer::at("/a/x.rs", Lines::new(2, 2), None).top, 0, "near the top: from the top");
+        // Markdown opened at a line shows its source; without one, drawn.
+        assert_eq!(
+            (Viewer::at("/a/x.md", Lines::new(1, 1), None).shows, Viewer::at("/a/x.md", None, None).shows),
+            (Shows::Code, Shows::Markdown)
+        );
+        // Read: past the end is the last line, an empty file has none.
+        let mut view = Viewer { read: Read::Shown { lines: 10 }, most: Some(4), ..Viewer::default() };
+        view.mark(Lines::new(30, 30));
+        assert_eq!((view.marked, view.top), (Lines::new(10, 10), 4));
+        // Laid out: only as many lines above as leave the range in view.
+        let mut view = Viewer { read: Read::Shown { lines: 100 }, page: 10, ..Viewer::default() };
+        view.mark(Lines::new(40, 47));
+        assert_eq!(view.top, 37, "40 to 47 in rows 38 to 47");
+        view.mark(Lines::new(40, 60));
+        assert_eq!(view.top, 39, "taller than the page: its first line at the top");
+        view.read = Read::Shown { lines: 0 };
+        view.mark(Lines::new(3, 3));
+        assert_eq!((view.marked, view.top), (None, 39));
     }
 
     #[test]

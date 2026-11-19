@@ -1052,7 +1052,7 @@ as links, `#heading` links that scroll to it, pictures beside the file; raw HTML
 is, a web picture only a link), code as lines with their numbers coloured by the file's extension
 (Rust, TypeScript and JavaScript, Python, shell, JSON, YAML, TOML, Go, Swift, SQL, diffs), other
 text plain, a PNG, JPEG, GIF or WebP as a picture. Open one with ⌘E's **File…** (the open panel), a ⌘-click
-on a path in a terminal (from the shell's folder, `~` too; `src/main.rs:12` opens `src/main.rs`)
+on a path in a terminal (from the shell's folder, `~` too; `src/main.rs:12` opens `src/main.rs` at line 12)
 or on a file link in the conversation, or `ottospace ctl '{"cmd":"open_file","path":"/abs/a.md"}'`.
 A ⌘-click opens only markdown, code and text files there; any other file does what a click did
 before. A terminal's ⌘-clicks reuse the one viewer they opened beside it, and the keyboard stays
@@ -1065,6 +1065,11 @@ in the terminal.
 - Keys: `j`/`k` or ↓/↑ a line, ⌃D/⌃U half a page, Space or ⌃F/⌃B a page, `gg`/`G` the top and
   the end. A count before a move repeats it (`10j`) or names a line (`3G`, `3gg`); the status bar
   shows it while typed, Esc takes it back, another key drops it.
+- At lines: `src/main.rs:12` or `src/main.rs:12-14` ⌘-clicked in a terminal, or `open_file` with
+  `line` and `last`, opens the file with those lines marked (a tint and a bar at the left), a few
+  lines below the top. Past the end: the last line. A viewer of the file in the tab moves there
+  instead of a new one opening. A markdown file opened at a line shows its source. The mark stays
+  until the viewer is asked for other lines or another file; Esc takes it off.
 - ⌃G or **Edit** in its header: your editor (`$VISUAL`, else `$EDITOR`, else `vi`) on the file in a
   terminal beside it.
 - Links in it open only on your click: a web page in the browser; a file in the file's folder is

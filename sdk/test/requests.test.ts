@@ -73,6 +73,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.repos(),
   (c) => c.openRepo({ path: "/Users/me/code/app", axis: "down" }),
   (c) => c.openFile({ path: "/Users/me/code/app/README.md", beside: 3 }),
+  (c) => c.openFile({ path: "/Users/me/code/app/src/main.rs", line: 12, last: 14 }),
   (c) => c.repoAdd({ path: "/Users/me/code/app" }),
   (c) =>
     c.taskAdd({

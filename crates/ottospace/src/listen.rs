@@ -933,7 +933,7 @@ impl Workspace {
             self.error = Some(why.into());
             return cx.notify();
         }
-        let open = Action::OpenFile { path, axis: ottospace_core::Axis::Right, beside: None, reuse: false };
+        let open = Action::OpenFile { path, axis: ottospace_core::Axis::Right, beside: None, reuse: false, at: None };
         self.dispatch(open, self.input, window, cx);
     }
 

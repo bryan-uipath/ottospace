@@ -1398,6 +1398,11 @@ const MAKERS: &[Make] = &[
         axis: g.axis(),
         beside: g.rng.coin().then(|| g.pane()),
         reuse: g.rng.coin(),
+        // Line 0, backwards, past the end of any file read.
+        at: g
+            .rng
+            .coin()
+            .then(|| crate::viewer::Lines { first: g.rng.below(400) as u32, last: g.rng.below(400) as u32 }),
     },
     |g| Action::ViewerKey { key: g.name(VIEWER_KEYS) },
     |g| {
@@ -2758,7 +2763,8 @@ fn check(m: &Model) -> Result<(), String> {
 }
 
 /// One view for each viewer pane and none for another; its file by a path it opens; its line no
-/// further than the shell says it goes; a count typed only where the keys go now.
+/// further than the shell says it goes; a count typed only where the keys go now; marked lines
+/// from 1, in order, within the file read.
 fn check_viewers(m: &Model) -> Result<(), String> {
     for pane in &m.panes {
         if let Kind::File { path } = &pane.kind {
@@ -2771,6 +2777,13 @@ fn check_viewers(m: &Model) -> Result<(), String> {
         ensure!(file, "a view for pane {id}, no viewer");
         ensure!(view.most.is_none_or(|most| view.top <= most), "viewer {id} at {} past {:?}", view.top, view.most);
         ensure!(view.opener.is_none_or(|o| o != *id && m.pane(o).is_some()), "viewer {id} opened by {:?}", view.opener);
+        if let Some(at) = view.marked {
+            let lines = match view.read {
+                crate::viewer::Read::Shown { lines } => lines,
+                _ => u32::MAX,
+            };
+            ensure!(0 < at.first && at.first <= at.last && at.last <= lines, "viewer {id} marks {at:?} of {lines}");
+        }
         let typing = m.keyboard_viewer() == Some(*id);
         ensure!(typing || view.pending.pending().is_none(), "viewer {id} keeps a count it has no keys for");
     }
@@ -7390,7 +7403,13 @@ fn seed_835_nothing_opens_in_a_closing_workspace() {
         Action::SpaceHideAsked { index: Some(1), running: vec![] }.into(),
         by(
             Origin::System,
-            Action::OpenFile { path: "/w/app/src/main.rs".into(), axis: Axis::Right, beside: Some(2), reuse: true },
+            Action::OpenFile {
+                path: "/w/app/src/main.rs".into(),
+                axis: Axis::Right,
+                beside: Some(2),
+                reuse: true,
+                at: None,
+            },
         ),
     ])
     .unwrap();

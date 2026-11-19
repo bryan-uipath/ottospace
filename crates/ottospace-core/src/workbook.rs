@@ -2479,7 +2479,7 @@ mod tests {
         m.update(adopt.sent_by(Origin::System));
         assert_eq!(tab_of(&m, m.next_id), Some(Owner::Workbook { id: 2 }));
         // Nor does anyone but the user open a pane in it, or another file in its viewer.
-        let file = |beside, reuse| Action::OpenFile { path: "/w/a.md".into(), axis: Right, beside, reuse };
+        let file = |beside, reuse| Action::OpenFile { path: "/w/a.md".into(), axis: Right, beside, reuse, at: None };
         let opens = [
             Action::Open { kind: Kind::Terminal, axis: Right, beside: Some(1) },
             file(Some(1), false),

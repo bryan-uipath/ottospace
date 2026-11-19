@@ -617,7 +617,8 @@ impl Workspace {
                             Links::File { pane, .. } => (Some(*pane), true),
                             Links::Chat(_) => (None, false),
                         };
-                        let open = Action::OpenFile { path, axis: ottospace_core::Axis::Right, beside, reuse };
+                        let open =
+                            Action::OpenFile { path, axis: ottospace_core::Axis::Right, beside, reuse, at: None };
                         self.dispatch(open, Origin::User, window, cx);
                     }
                     Some((real, _)) => {

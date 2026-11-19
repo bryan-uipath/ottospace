@@ -42,6 +42,7 @@
 {"cmd":"repos"}
 {"cmd":"open_repo","path":"/Users/me/code/app","axis":"down"}
 {"cmd":"open_file","path":"/Users/me/code/app/README.md","beside":3}
+{"cmd":"open_file","path":"/Users/me/code/app/src/main.rs","line":12,"last":14}
 {"cmd":"repo_add","path":"/Users/me/code/app"}
 {"cmd":"task_add","title":"Fix the zoom flicker","priority":1,"state":"needs_you","tab":2,"agent":"codex","paths":["/src/export"],"skills":["code-review"]}
 {"cmd":"task_set_state","id":1,"state":"running"}

@@ -93,19 +93,10 @@ fn host(rest: &str) -> bool {
 }
 
 /// A path inside `repo`, resolved without the disk: relative to it, `.` and `..` taken out, a
-/// line suffix (`:12`, `:12:3`) and a fragment (`#L12`) dropped.
+/// line suffix (`:12`, `:12:3`, `:12-14`) and a fragment (`#L12`) dropped.
 fn file(path: &str, repo: Option<&str>) -> Option<Target> {
     let repo = normal(repo?)?;
-    let path = path.split(['#', '?']).next().unwrap_or("");
-    let mut path = path;
-    for _ in 0..2 {
-        if let Some((before, line)) = path.rsplit_once(':')
-            && !line.is_empty()
-            && line.chars().all(|c| c.is_ascii_digit())
-        {
-            path = before;
-        }
-    }
+    let path = crate::viewer::split_lines(path.split(['#', '?']).next().unwrap_or("")).0;
     if path.is_empty() || path.contains(':') || path.contains('\\') {
         return None;
     }

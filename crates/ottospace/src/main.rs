@@ -688,6 +688,8 @@ enum Mark {
     QuitRow(usize),
     /// A side overlay (`overlay_panels`): the sidebar's (true) or the drawer's.
     Overlay(bool),
+    /// A viewer's first marked line: a test run's `marked_rect`.
+    ViewerMarked(PaneId),
 }
 
 type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
@@ -1995,9 +1997,9 @@ impl Workspace {
                 Effect::Closed(pane) => {
                     self.cells.remove(&pane.id);
                     self.frames.remove(&pane.id);
-                    self.marks
-                        .borrow_mut()
-                        .retain(|mark, _| ![Mark::Header(pane.id), Mark::Close(pane.id)].contains(mark));
+                    self.marks.borrow_mut().retain(|mark, _| {
+                        ![Mark::Header(pane.id), Mark::Close(pane.id), Mark::ViewerMarked(pane.id)].contains(mark)
+                    });
                     self.terminals.remove(&pane.id); // drop ends its shell
                     self.viewers.remove(&pane.id);
                     if let Some(hosted) = self.hosted.remove(&pane.id) {
@@ -2907,12 +2909,23 @@ impl Workspace {
                     failure = Some(format!("no pane {pane}"));
                     None
                 }
-                Request::OpenFile { path, beside } => match viewer::open_refusal(&path) {
+                Request::OpenFile { line: None, last: Some(_), .. } => {
+                    failure = Some("open_file: `last` needs a `line`".into());
+                    None
+                }
+                Request::OpenFile { line: Some(0), .. } | Request::OpenFile { last: Some(0), .. } => {
+                    failure = Some("open_file: lines count from 1".into());
+                    None
+                }
+                Request::OpenFile { path, beside, line, last } => match viewer::open_refusal(&path) {
                     Some(why) => {
                         failure = Some(why);
                         None
                     }
-                    None => Some(Action::OpenFile { path, axis: Axis::Right, beside, reuse: false }),
+                    None => {
+                        let at = line.and_then(|line| ottospace_core::viewer::Lines::new(line, last.unwrap_or(line)));
+                        Some(Action::OpenFile { path, axis: Axis::Right, beside, reuse: false, at })
+                    }
                 },
                 // A test run only (refused above otherwise): the folder the user's picker would give.
                 Request::RepoAdd { path } => {

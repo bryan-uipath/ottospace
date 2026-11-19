@@ -271,6 +271,8 @@ export interface Viewer {
   pending: string | null;
   /** The pane that opened it to be reused: its next file goes here. */
   opener?: PaneId;
+  /** The lines it was opened at (`open_file`'s `line`, `last`), from 1, drawn marked. */
+  marked?: { first: number; last: number };
 }
 
 /** A file viewer as drawn, by pane id: never its text. */
@@ -279,6 +281,8 @@ export interface ViewerDrawn {
   /** A markdown file's blocks by kind, and its links that open. */
   shape?: { blocks: Record<string, number>; links: { web: number; file: number } };
   lines?: number;
+  /** A test run's: where the first marked line is drawn, while it shows. */
+  marked_rect?: Rect | null;
 }
 
 export interface Pane {
