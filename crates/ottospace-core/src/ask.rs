@@ -162,6 +162,15 @@ impl Form {
         self.on_other().then(|| self.other.get_mut(q)).flatten()
     }
 
+    /// `text` as the "Other…" words of the question on show (the first, on Review), picked, the
+    /// cursor on it: what the user would type there. Nothing is sent.
+    pub fn fill_other(&mut self, text: &str) {
+        let q = if self.review() { 0 } else { self.cursor.0 };
+        self.cursor = (q, self.rows(q) - 1);
+        self.other[q].replace_all(text);
+        self.typed();
+    }
+
     /// Words typed under the cursor pick its "Other…" row: in a single-select question, alone.
     pub fn typed(&mut self) {
         let (q, r) = self.cursor;

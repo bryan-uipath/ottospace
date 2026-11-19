@@ -39,6 +39,10 @@ pub struct Chat {
     pub armed: bool,
     /// A message ↵ sent while its agent was not running: sent once the agent it started has.
     pub queued: Option<String>,
+    /// Its btw column, while open (`btw`): side questions to its running agent.
+    pub btw: Option<super::btw::Btw>,
+    /// The draft holds a btw answer ("Use as my answer"): the model's words, never in the state.
+    pub untrusted: bool,
 }
 
 impl Chat {
@@ -59,6 +63,12 @@ impl Chat {
 
     /// What `key` does in it: a question card's keys while one is shown, else `key`'s.
     pub fn key(&self, key: &str, mods: crate::keys::Mods) -> Key {
+        if self.btw.as_ref().is_some_and(|btw| btw.keys) {
+            return super::btw::Btw::key(key, mods);
+        }
+        if super::btw::is_key(key, mods) {
+            return Key::Act(Action::BtwOpen);
+        }
         let ticket = self.transcript.cards.front().map(|card| card.ticket).filter(|_| !self.deny);
         match (ticket, self.form()) {
             (Some(ticket), Some(form)) => ask_key(key, mods, ticket, form.on_other()),
@@ -68,7 +78,7 @@ impl Chat {
 
     fn new(subject: Subject) -> Self {
         let (transcript, draft) = (Transcript::default(), Field::lines(MAX_DRAFT));
-        Self { subject, transcript, draft, deny: false, armed: false, queued: None }
+        Self { subject, transcript, draft, deny: false, armed: false, queued: None, btw: None, untrusted: false }
     }
 }
 
@@ -173,7 +183,7 @@ impl Model {
         self.chat(&talk.task).filter(|chat| chat.transcript.live)
     }
 
-    fn shown_chat_mut(&mut self) -> Option<&mut Chat> {
+    pub(super) fn shown_chat_mut(&mut self) -> Option<&mut Chat> {
         let subject = self.talk.as_ref().filter(|talk| talk.open)?.task.clone();
         self.chat_mut(&subject).filter(|chat| chat.transcript.live)
     }
@@ -217,7 +227,9 @@ impl Model {
     pub fn talk_typing(&self) -> bool {
         let keys = self.talk.as_ref().is_some_and(|talk| talk.keys);
         let free = |chat: &Chat| {
-            chat.answers_other() || ((chat.transcript.cards.is_empty() || chat.deny) && !self.edits(&chat.subject))
+            let btw = chat.btw.as_ref().is_some_and(|btw| btw.keys);
+            !btw && (chat.answers_other()
+                || ((chat.transcript.cards.is_empty() || chat.deny) && !self.edits(&chat.subject)))
         };
         keys && self.shown_draft_chat().is_some_and(free)
     }
@@ -314,7 +326,7 @@ impl Model {
         let now = self.now;
         if let Some(chat) = self.chat_mut(subject) {
             chat.transcript.started(resumed);
-            (chat.deny, chat.armed) = (false, false);
+            (chat.deny, chat.armed, chat.btw) = (false, false, None);
             if let Some(title) = title.filter(|_| !resumed) {
                 chat.transcript.send(&agents::prompt(&title, None), now);
             }
@@ -333,8 +345,9 @@ impl Model {
         {
             chat.transcript.fold(crate::transcript::Event::Exited { code: None, signal: None, details: false }, 0);
         }
+        // A btw is of its process: it ends with it.
         if let Some(chat) = self.chat_mut(subject) {
-            (chat.deny, chat.armed) = (false, false);
+            (chat.deny, chat.armed, chat.btw) = (false, false, None);
         }
         let switching = self.switching.contains(subject);
         self.switching.retain(|of| of != subject);
@@ -537,6 +550,27 @@ impl Model {
             if let Some(chat) = self.chat_mut(&subject) {
                 unqueue(chat);
             }
+        }
+        // A btw only where one is offered (its task's runner restored as one that takes none, say);
+        // its input never has the keys while the user's editor has a draft.
+        let btws: Vec<(Subject, bool)> = self
+            .chats
+            .iter()
+            .filter(|c| c.btw.is_some())
+            .map(|c| (c.subject.clone(), self.btw_offered(&c.subject)))
+            .collect();
+        let editing = self.editing.is_some();
+        for (subject, offered) in btws {
+            let Some(chat) = self.chat_mut(&subject) else { continue };
+            match &mut chat.btw {
+                Some(_) if !offered => chat.btw = None,
+                Some(btw) if editing => btw.keys = false,
+                _ => {}
+            }
+        }
+        // A draft that took a btw answer keeps it out of the state until it is empty again.
+        for chat in self.chats.iter_mut().filter(|chat| chat.draft.text().is_empty()) {
+            chat.untrusted = false;
         }
         let tasks = &self.tasks;
         let gone = |subject: &Subject| subject.task().is_some_and(|id| tasks.get(id).is_none());

@@ -378,10 +378,25 @@ impl Workspace {
         }
     }
 
+    /// A btw's question to the agent, beside its turn. `BtwFailed` if it could not be sent.
+    pub(crate) fn side_question(
+        &mut self,
+        subject: &Subject,
+        id: u64,
+        question: &str,
+        history: &[(String, String)],
+    ) -> Option<Action> {
+        let input = Input::SideQuestion { id, question: question.to_string(), history: history.to_vec() };
+        let sent = self.drawer.native.get(subject).map(|native| native.driver.send(input));
+        (!matches!(sent, Some(Ok(())))).then(|| Action::BtwFailed { task: subject.clone(), id })
+    }
+
     /// Takes what each native agent said since the last tick to the core, and tells it of an
     /// agent that ended. Lays out the replies that changed.
     pub(crate) fn sync_native(&mut self, window: &Window, cx: &mut Context<Self>) {
         let mut news: Vec<(Subject, Vec<Event>)> = Vec::new();
+        // What came of side questions: beside the transcript, never in it.
+        let mut sides: Vec<Action> = Vec::new();
         let mut ended = Vec::new();
         let mut details = Vec::new();
         for (subject, native) in &mut self.drawer.native {
@@ -391,6 +406,19 @@ impl Workspace {
             }
             let mut events = Vec::new();
             while let Ok(said) = native.driver.events().try_recv() {
+                let task = subject.clone();
+                match said {
+                    Said::SideAnswer { id, text, synthetic } => {
+                        let text = Text::new(text.text());
+                        sides.push(Action::BtwAnswered { task, id, text, synthetic });
+                        continue;
+                    }
+                    Said::SideFailed { id } => {
+                        sides.push(Action::BtwFailed { task, id });
+                        continue;
+                    }
+                    _ => {}
+                }
                 let mut kept = false;
                 if let Said::Exited { stderr, .. } = &said {
                     ended.push(subject.clone());
@@ -408,7 +436,7 @@ impl Workspace {
                 news.push((subject.clone(), events));
             }
         }
-        let changed = !news.is_empty() || !ended.is_empty();
+        let changed = !news.is_empty() || !ended.is_empty() || !sides.is_empty();
         for (subject, shown) in details {
             self.drawer.looks.entry(subject.clone()).or_default().details = false;
             match shown.is_empty() {
@@ -418,6 +446,9 @@ impl Workspace {
         }
         for (task, events) in news {
             self.dispatch(Action::AgentEvents { task, events, at: crate::now_ms() }, Origin::System, window, cx);
+        }
+        for side in sides {
+            self.dispatch(side, Origin::System, window, cx);
         }
         for task in ended {
             // A session id it never wrote is not followed: the next click starts a new one.
@@ -2184,6 +2215,8 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
         Said::Compaction => Event::Compaction,
         Said::TurnFinished { outcome } => Event::TurnFinished { outcome },
         Said::Error { kind, retrying } => Event::Error { kind, retrying },
+        // A side question's: `sync_native` takes them aside; one started is nothing to show.
+        Said::SideStarted { .. } | Said::SideAnswer { .. } | Said::SideFailed { .. } => return None,
         // Its stderr may hold tokens: the core hears only that there is some.
         Said::Exited { code, signal, .. } => Event::Exited { code, signal, details },
         // A hook of the user's that starts: the dial's Hooks station. Its other lines are quiet.

@@ -97,6 +97,9 @@ pub struct Structured {
     /// The tool by which the agent asks the user questions with choices: its request is a
     /// question card, answered with the user's picks (`ask`). `None`: none known.
     pub asks: Option<&'static str>,
+    /// A side question ("btw") to the running agent: answered from its context, with no tools,
+    /// never written to the session and never in the main conversation.
+    pub side_question: bool,
 }
 
 /// How far a structured mode is known to work.
@@ -184,6 +187,9 @@ const CLAUDE: RunnerSpec = RunnerSpec {
         interrupt: true,
         // Probe 2026-11-18 (2.1.327): allowed with `updatedInput.answers`, question → label.
         asks: Some("AskUserQuestion"),
+        // Probe 2026-11-18 (2.1.327): `control_request` `side_question`, mid-turn and while a
+        // `can_use_tool` waits; no tools, nothing written to the session. Undocumented.
+        side_question: true,
     },
     // `sessions/<pid>.json` names the process; each record carries the `cwd` the agent is in.
     disk: Disk { held: true, cwd: true, cwd_moves: true },
@@ -216,6 +222,8 @@ const CODEX: RunnerSpec = RunnerSpec {
         answers: &[Reply::AllowOnce, Reply::Deny],
         interrupt: true,
         asks: None,
+        // None yet: `thread/fork`, read-only and ephemeral, is the possible route.
+        side_question: false,
     },
     // No process is recorded; `session_meta` carries `cwd`. A `turn_context`'s `cwd` is the
     // client's choice for the turn, never the agent's: ottospace sets none, so it never moves.
@@ -272,6 +280,7 @@ mod tests {
         table += &row("permission answers", &answers);
         table += &row("interrupt", &|spec| spec.structured.interrupt.to_string());
         table += &row("asks the user", &|spec| format!("{:?}", spec.structured.asks));
+        table += &row("side question (btw)", &|spec| spec.structured.side_question.to_string());
         table += &row("held (live holder on disk)", &|spec| spec.disk.held.to_string());
         table += &row("cwd on disk", &|spec| spec.disk.cwd.to_string());
         table += &row("cwd moves with the agent", &|spec| spec.disk.cwd_moves.to_string());

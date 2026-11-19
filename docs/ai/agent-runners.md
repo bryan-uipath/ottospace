@@ -21,6 +21,7 @@ as a tab for what only the TUI does (option c's fallback).**
 | Text out | `stream_event` text deltas, then the whole `assistant` message | `item/agentMessage/delta`, then `item/completed` |
 | Approvals | `control_request` `can_use_tool` → our `control_response` | server requests `item/commandExecution/requestApproval`, `item/fileChange/requestApproval` → our response |
 | Interrupt | `control_request` `interrupt` | `turn/interrupt` |
+| Side question (btw) | `control_request` `side_question` (undocumented) | none yet |
 | Resume | `--resume <uuid>` | `thread/resume` |
 
 Not `codex exec --json`: it has no approval channel. Its docs offer a read-only sandbox,
@@ -193,7 +194,7 @@ read with `RunnerId::named` where a decision needs it.
   `Chosen { flag }` (we pick the id: `--session-id`) or `Found { how: NewInFolder }` (the CLI
   names it; `agents::find_sessions` finds it). `chooses_session()` asks which.
 - **Structured.** `status` (`Verified | Experimental | None`), `answers` (`AllowOnce`, `Deny`;
-  never a session grant), `interrupt`.
+  never a session grant), `interrupt`, `asks`, `side_question` (a btw: see "Side questions").
 - **Disk.** `held` (the files name the live process) and `cwd` (the files record where it started).
 - **Attach.** `watch`, `take_over_when_idle` (`Yes | No`) and `attach_live`
   (`No | ViaOwnTerminal | ViaDaemon`), stated even where the answer is no.
@@ -214,6 +215,7 @@ The table, written by a test from the specs (`runner::tests`): every capability 
 | permission answers | [AllowOnce, Deny] | [AllowOnce, Deny] |
 | interrupt | true | true |
 | asks the user | Some("AskUserQuestion") | None |
+| side question (btw) | true | false |
 | held (live holder on disk) | true | false |
 | cwd on disk | true | true |
 | cwd moves with the agent | true | false |
@@ -588,6 +590,46 @@ OTTOSPACE_PROBE_ISOLATED=1 OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents -
 OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --nocapture codex_real
 ```
 
+## Side questions (btw)
+
+A question on the side while the agent works or waits on a card: answered from its context,
+never in the main conversation, never an interrupt. Opt-in per runner:
+`RunnerSpec::structured.side_question`. Every btw control and action asks it; Codex says no, and
+nothing is offered.
+
+**Claude Code** (probed on 2.1.327 against a local stand-in API, no real call; undocumented, so
+`real-2.1.327-side.jsonl` pins it). A control request on the drawer's own `claude -p` process:
+
+```
+→ {"type":"control_request","request_id":"btw-1","request":{"subtype":"side_question","question":"…","history":[{"question":"…","response":"…"}]}}
+← {"type":"system","subtype":"control_request_progress","request_id":"btw-1","status":"started"}
+← {"type":"control_response","response":{"subtype":"success","request_id":"btw-1","response":{"response":"…","synthetic":false}}}
+```
+
+- Works mid-turn and while a `can_use_tool` waits; the model sees a pending call as still in
+  progress. It uses no tools and writes nothing to the session file.
+- The CLI keeps no thread: the caller passes the earlier answers back in `history` (omitted
+  when empty). Only the model's own answers go there, never a `synthetic` one.
+- `synthetic: true`: the CLI's own words, such as `(API error: 400 …)`. Shown, marked.
+- A refused one is `control_response` `{subtype: error, error}`: `SideFailed`. A progress
+  `status: api_retry` is the CLI retrying: nothing shown.
+- The wire (`claude.rs`) numbers requests `btw-<id>` and reads a progress or response line only
+  for an id it sent and has not had answered: `SideStarted`, `SideAnswer { text: Untrusted,
+  synthetic }`, `SideFailed`. One question at a time per thread (the CLI has a
+  `side_question_busy`).
+
+**Core** (`model/btw.rs`). A thread per conversation (`Chat::btw`): question/answer pairs, the one
+in flight, its input. `BtwOpen`, `BtwKeys`, `BtwAsk`, `BtwUse` and `BtwClose` are the user's
+alone (`btw::USERS_ALONE`); `BtwAnswered` and `BtwFailed` the shell's runner's (`System`). Answer
+text is `Text`, never in the state. The thread ends with the agent's process (`AgentExited`, or a
+new start), with its conversation (the task closed), or on ×. Interrupting the main turn leaves
+it. "Use as my answer" fills the open question card's "Other…", else the composer: never sent.
+The property check holds that a btw step sends no message, answers no card, interrupts nothing
+and leaves the transcript as it was.
+
+**Codex: none yet.** Its app server's `thread/fork`, read-only and ephemeral, is the possible
+later route: a fork answers, the main thread never sees it.
+
 ## Real-CLI check
 
 0.1.0 shipped the native view as the default, tested only against the fake `claude`, and it
@@ -631,6 +673,7 @@ came from, and the CLI version if recorded.
 |---|---|
 | `turn1*.jsonl`, `turn2*.jsonl` | hand-written from the SDK reference and the probes above |
 | `real-2.1.325-turn.jsonl` | recorded: one turn of 2.1.325 that answers "ok" (hooks, `system/init`, `system/status`, the stream events with the whole `assistant` before `content_block_stop`, `rate_limit_event`, `result/success`) |
+| `real-2.1.327-side.jsonl` | recorded against a stand-in API: four `side_question` requests while a `can_use_tool` waits (an answer, a follow-up with `history`, a `synthetic` API error, an `error` for a malformed history), then the turn completes. Its `sent` lines are what the client wrote; `tests/side.rs` writes the same |
 | `real-2.1.325-no-reply.jsonl` | its hook lines alone: all a run prints when stdin closes before a message; it then exits 0 |
 | `synthetic-auth-failure.jsonl` | SYNTHETIC: an API key's failure as the docs describe it, never recorded |
 | `synthetic-error-result.jsonl` | SYNTHETIC: a retry, failed turns, a subtype and a record type no table has |

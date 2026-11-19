@@ -572,6 +572,8 @@ impl Wire for Codex {
                 };
                 Ok(vec![self.request("turn/interrupt", json!({"threadId": thread, "turnId": turn}), Asked::Other)])
             }
+            // `RunnerSpec::structured.side_question` is false: none is offered.
+            Input::SideQuestion { .. } => Err(Refused("Codex takes no side questions yet")),
         }
     }
 }

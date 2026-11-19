@@ -1547,6 +1547,36 @@ pub enum Action {
     TalkView {
         shows: crate::transcript::View,
     },
+    /// ⌘⇧K or the composer's "btw": the shown conversation's btw column opens (if its runner
+    /// takes side questions and its agent runs here), its input with the keyboard. Only the user's.
+    BtwOpen,
+    /// The keyboard to the btw's input (`on`), or back to the composer. Only the user's.
+    BtwKeys {
+        on: bool,
+    },
+    /// ↵ in the btw's input: its question to the agent, beside the conversation, with the
+    /// thread's answers as history. One at a time. Only the user's.
+    BtwAsk,
+    /// What came back for side question `id` (`synthetic`: the CLI's own words). Only the shell's
+    /// runner sends it (`Origin::System`).
+    BtwAnswered {
+        task: Subject,
+        id: u64,
+        text: crate::transcript::Text,
+        synthetic: bool,
+    },
+    /// Side question `id` got no answer: the CLI refused it, or it ended. The runner's alone.
+    BtwFailed {
+        task: Subject,
+        id: u64,
+    },
+    /// "Use as my answer": answer `id` into the open question card's "Other…", else the
+    /// composer. Never sent. Only the user's.
+    BtwUse {
+        id: u64,
+    },
+    /// × on the btw column: its thread ends. Only the user's.
+    BtwClose,
     /// ⌃G in a composer or the new-task box: its text in the user's editor, in the drawer; while
     /// that runs, the keyboard back to it. Only the user's.
     EditorOpen,
@@ -2109,7 +2139,9 @@ impl Action {
             | Action::TaskCard { .. }
             | Action::SessionOpen { .. }
             | Action::TalkStart
-            | Action::TalkKeys { on: true } => true,
+            | Action::TalkKeys { on: true }
+            | Action::BtwOpen
+            | Action::BtwKeys { on: true } => true,
             Action::Split { .. }
             | Action::Open { .. }
             | Action::Adopt { .. }
@@ -2346,6 +2378,12 @@ impl Action {
             | Action::TalkEscape
             | Action::TalkInterrupt
             | Action::TalkView { .. }
+            | Action::BtwKeys { on: false }
+            | Action::BtwAsk
+            | Action::BtwAnswered { .. }
+            | Action::BtwFailed { .. }
+            | Action::BtwUse { .. }
+            | Action::BtwClose
             | Action::EditorOpen
             | Action::EditorKeys { .. }
             | Action::EditorDone { .. }
@@ -2677,6 +2715,13 @@ impl Action {
             | Action::TalkEscape
             | Action::TalkInterrupt
             | Action::TalkView { .. }
+            | Action::BtwOpen
+            | Action::BtwKeys { .. }
+            | Action::BtwAsk
+            | Action::BtwAnswered { .. }
+            | Action::BtwFailed { .. }
+            | Action::BtwUse { .. }
+            | Action::BtwClose
             | Action::TaskTalk { .. }
             | Action::TaskCard { .. }
             | Action::ComposeEnter
@@ -3097,6 +3142,13 @@ pub enum Effect {
         ticket: u64,
         answers: Vec<crate::ask::Chosen>,
     },
+    /// The user's side question to a native agent (`btw`): answered beside its conversation.
+    AgentSideQuestion {
+        task: Subject,
+        id: u64,
+        question: String,
+        history: Vec<(String, String)>,
+    },
     /// End a native agent's turn; its session goes on.
     AgentInterrupt {
         task: Subject,
@@ -3177,6 +3229,7 @@ pub mod spaces;
 pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
 
 mod agent;
+pub mod btw;
 pub mod chat;
 pub mod editor;
 pub mod finish;
@@ -3475,6 +3528,9 @@ pub struct Model {
     /// The conversations drawn natively, with their transcripts and drafts (`chat`).
     #[serde(skip)]
     chats: Vec<chat::Chat>,
+    /// The last side question's id (`btw`): never used twice, so a late answer finds no other.
+    #[serde(skip)]
+    btw_next: u64,
     /// The view the user picked for a conversation, and the settings' default for Claude Code.
     #[serde(skip)]
     views: Vec<(Subject, crate::transcript::View)>,
@@ -3656,6 +3712,7 @@ impl Default for Model {
             models: agents::Models::default(),
             default_agent: None,
             chats: Vec::new(),
+            btw_next: 0,
             views: Vec::new(),
             dials: Vec::new(),
             conversation_view: crate::settings::DEFAULT_VIEW,
@@ -4102,6 +4159,13 @@ impl Model {
             | Action::TalkEscape
             | Action::TalkInterrupt
             | Action::TalkView { .. } => Some(chat::USERS_ALONE),
+            // A side question is the user's words to their agent, and what it fills theirs.
+            Action::BtwOpen | Action::BtwKeys { .. } | Action::BtwAsk | Action::BtwUse { .. } | Action::BtwClose => {
+                Some(btw::USERS_ALONE)
+            }
+            Action::BtwAnswered { .. } | Action::BtwFailed { .. } if origin == Origin::Socket => {
+                Some(btw::RUNNERS_ALONE)
+            }
             // How the user keeps their drawer, and the layout file that keeps it.
             Action::DialToggle => Some(chat::DIAL_USERS),
             Action::FillDisplay => Some(crate::fill::USERS_ALONE),
@@ -4114,6 +4178,7 @@ impl Model {
             Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
             // So is the composer's text: what ↵ sends must be the user's own words.
             Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "talk") => Some(chat::USERS_ALONE),
+            Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "btw") => Some(btw::USERS_ALONE),
             // Only the shell's runner reports events (System); a client never does.
             // Only the shell's runner reports an agent's events (a user's is dropped in `chat_act`).
             Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
@@ -5207,6 +5272,7 @@ impl Model {
                 }
                 Some("apps") => drop(self.app_lists.filter.apply(edit)),
                 Some("talk") => self.talk_edit(edit),
+                Some("btw") => self.btw_edit(edit),
                 Some(_) => {
                     if let Some(exact) = self.spelled_out(&edit) {
                         // A space after a name that is one of the rows takes that row.
@@ -6143,6 +6209,13 @@ impl Model {
             | Action::TalkEscape
             | Action::TalkInterrupt
             | Action::TalkView { .. }) => self.chat_act(action, effects),
+            action @ (Action::BtwOpen
+            | Action::BtwKeys { .. }
+            | Action::BtwAsk
+            | Action::BtwAnswered { .. }
+            | Action::BtwFailed { .. }
+            | Action::BtwUse { .. }
+            | Action::BtwClose) => self.btw_act(action, effects),
             Action::EditorOpen => self.editor_open(effects),
             Action::EditorKeys { on } => self.editor_keys_to(on, effects),
             // The shell's report alone: a key or click of the user's is none.
@@ -8159,6 +8232,7 @@ impl Model {
             "inspector" => self.inspector.as_ref().map(|inspector| &inspector.filter),
             "note" => self.note(),
             "talk" => self.talk_draft(),
+            "btw" => self.btw_field(),
             "apps" => Some(&self.app_lists.filter),
             "mark" => match &self.mark_input {
                 Some(MarkInput::Rename { text, .. }) => Some(text),
@@ -8193,6 +8267,7 @@ impl Model {
             Mode::Compose if self.edits_compose() => return None,
             Mode::Compose => "compose",
             Mode::Annotate => "note",
+            Mode::Talk if self.btw_typing() => "btw",
             Mode::Talk if self.talk_typing() => "talk",
             Mode::List if self.app_lists.filtering => "apps",
             _ => return None,
@@ -9528,6 +9603,13 @@ mod tests {
         Action::TalkEscape,
         Action::TalkInterrupt,
         Action::TalkView { .. },
+        Action::BtwOpen,
+        Action::BtwKeys { .. },
+        Action::BtwAsk,
+        Action::BtwAnswered { .. },
+        Action::BtwFailed { .. },
+        Action::BtwUse { .. },
+        Action::BtwClose,
         Action::EditorOpen,
         Action::EditorKeys { .. },
         Action::EditorDone { .. },
@@ -9860,6 +9942,18 @@ mod tests {
             Action::TalkEscape,
             Action::TalkInterrupt,
             Action::TalkView { shows: View::Terminal },
+            Action::BtwOpen,
+            Action::BtwKeys { on: true },
+            Action::BtwAsk,
+            Action::BtwAnswered {
+                task: Subject::Task(1),
+                id: 1,
+                text: crate::transcript::Text::new("x"),
+                synthetic: false,
+            },
+            Action::BtwFailed { task: Subject::Task(1), id: 1 },
+            Action::BtwUse { id: 1 },
+            Action::BtwClose,
             Action::EditorOpen,
             Action::EditorKeys { on: false },
             Action::EditorDone { saved: None, more: false },
@@ -10192,6 +10286,14 @@ mod tests {
                     Action::CalendarRetry => Some(calendar::USERS_RETRY),
                     Action::CopyPath { .. } => Some(crate::status_bar::USERS_COPY),
                     _ if talks(action) => Some(chat::USERS_ALONE),
+                    Action::BtwOpen
+                    | Action::BtwKeys { .. }
+                    | Action::BtwAsk
+                    | Action::BtwUse { .. }
+                    | Action::BtwClose => Some(btw::USERS_ALONE),
+                    Action::BtwAnswered { .. } | Action::BtwFailed { .. } if origin == Origin::Socket => {
+                        Some(btw::RUNNERS_ALONE)
+                    }
                     Action::DialToggle => Some(chat::DIAL_USERS),
                     Action::FillDisplay => Some(crate::fill::USERS_ALONE),
                     Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => {
@@ -16454,6 +16556,14 @@ mod tests {
                     Action::CalendarRetry => Some(calendar::USERS_RETRY),
                     Action::CopyPath { .. } => Some(crate::status_bar::USERS_COPY),
                     _ if talks(action) => Some(chat::USERS_ALONE),
+                    Action::BtwOpen
+                    | Action::BtwKeys { .. }
+                    | Action::BtwAsk
+                    | Action::BtwUse { .. }
+                    | Action::BtwClose => Some(btw::USERS_ALONE),
+                    Action::BtwAnswered { .. } | Action::BtwFailed { .. } if origin == Origin::Socket => {
+                        Some(btw::RUNNERS_ALONE)
+                    }
                     Action::DialToggle => Some(chat::DIAL_USERS),
                     Action::FillDisplay => Some(crate::fill::USERS_ALONE),
                     Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => {
