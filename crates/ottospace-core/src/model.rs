@@ -112,7 +112,8 @@ pub enum Mode {
     Confirm,
     /// A mark has the keyboard: the jump prefix waits for a letter, or a row for its name or letter.
     Mark,
-    /// A frozen picture of a pane is drawn on: drags circle, a click places a note.
+    /// A frozen picture of a pane is drawn on: drags circle, a click places a note. Or of the
+    /// window, for a bug report: drags box, and a comment is typed for each.
     Annotate,
     /// The conversation in the right drawer: keys go to the task's agent.
     Talk,
@@ -1294,6 +1295,55 @@ pub enum Action {
         facts: Vec<Facts>,
         images: bool,
     },
+    /// The bug button, its key or the menu: the user marks what is wrong in ottospace on a frozen
+    /// picture of its own window, to file it as a task in a new worktree of its repository. The
+    /// shell took the picture first (`picture`: there is one). `size`: the window's, in points;
+    /// `controls` and `panes`: what the shell drew where, in points. `word`: letters and digits
+    /// the shell made up for its folder and fence. Only the user starts one, and only while
+    /// `developer.ottospace_repo` is a checkout.
+    BugStart {
+        word: String,
+        size: [f64; 2],
+        controls: Vec<(String, [f64; 4])>,
+        panes: Vec<(PaneId, [f64; 4])>,
+        picture: bool,
+    },
+    /// The button went down on the report's picture, at `at` (0..1 of it).
+    BugPress {
+        at: [f64; 2],
+    },
+    BugDrag {
+        to: [f64; 2],
+    },
+    BugRelease {
+        at: [f64; 2],
+    },
+    /// "Whole app": a mark on all of the window.
+    BugWhole,
+    /// Mark `mark`'s comment takes the keyboard. `None`: none does.
+    BugEdit {
+        mark: Option<u32>,
+    },
+    BugRemove {
+        mark: u32,
+    },
+    /// "Include app panes": shown as they are, or blanked (the default). `None`: the other.
+    BugApps {
+        on: Option<bool>,
+    },
+    /// Esc or Cancel: the report goes, and nothing of it is kept.
+    BugCancel,
+    /// Send: the report becomes a task in a new worktree of the repository, with its brief.
+    /// `build`, `os`: what the shell says of itself; `log`: the event log's last lines as written.
+    BugSend {
+        build: String,
+        os: String,
+        log: Vec<String>,
+    },
+    /// What `developer.ottospace_repo` names, as the shell found it. `None`: it is not set.
+    BugRepo {
+        facts: Option<crate::bug::RepoFacts>,
+    },
     /// The shell froze the picture of a capture. `picture`: there was one to take. `stale`: the
     /// window's stream had stopped, so it may show the window as it was a while ago.
     CaptureTaken {
@@ -2053,6 +2103,24 @@ impl Action {
         matches!(kind, Some(Kind::File { path }) if !crate::viewer::sound(path))
     }
 
+    /// Whether it is the bug report's own: it runs while the report covers the window.
+    pub fn bugs(&self) -> bool {
+        matches!(
+            self,
+            Action::BugStart { .. }
+                | Action::BugPress { .. }
+                | Action::BugDrag { .. }
+                | Action::BugRelease { .. }
+                | Action::BugWhole
+                | Action::BugEdit { .. }
+                | Action::BugRemove { .. }
+                | Action::BugApps { .. }
+                | Action::BugCancel
+                | Action::BugSend { .. }
+                | Action::BugRepo { .. }
+        )
+    }
+
     /// Whether the action acts on panes, tabs or the bar: it waits while the picker, the new-task
     /// box, the key reference or visual mode has the keyboard.
     pub fn for_panes(&self) -> bool {
@@ -2153,6 +2221,7 @@ impl Action {
             | Action::CaptureEdit { .. }
             | Action::CaptureTitle
             | Action::CaptureBack
+            | Action::BugStart { .. }
             // A new workbook's name is typed in its row.
             | Action::WorkbookSave { .. }
             | Action::WorkbookSaveAll { .. }
@@ -2459,7 +2528,17 @@ impl Action {
             | Action::ViewerKey { .. }
             | Action::ViewerScrolled { .. }
             | Action::ViewerRead { .. }
-            | Action::ViewerEdit { .. } => false,
+            | Action::ViewerEdit { .. }
+            | Action::BugPress { .. }
+            | Action::BugDrag { .. }
+            | Action::BugRelease { .. }
+            | Action::BugWhole
+            | Action::BugEdit { .. }
+            | Action::BugRemove { .. }
+            | Action::BugApps { .. }
+            | Action::BugCancel
+            | Action::BugSend { .. }
+            | Action::BugRepo { .. } => false,
         }
     }
 
@@ -2794,7 +2873,18 @@ impl Action {
             | Action::ViewerScrolled { .. }
             | Action::ViewerRead { .. }
             | Action::ViewerEdit { .. }
-            | Action::SetFeatures { .. } => None,
+            | Action::SetFeatures { .. }
+            | Action::BugStart { .. }
+            | Action::BugPress { .. }
+            | Action::BugDrag { .. }
+            | Action::BugRelease { .. }
+            | Action::BugWhole
+            | Action::BugEdit { .. }
+            | Action::BugRemove { .. }
+            | Action::BugApps { .. }
+            | Action::BugCancel
+            | Action::BugSend { .. }
+            | Action::BugRepo { .. } => None,
         }
     }
 }
@@ -3146,6 +3236,19 @@ pub enum Effect {
         dir: String,
         brief: Box<capture::Brief>,
     },
+    /// Bug report `word` went: its picture is dropped.
+    BugDropped {
+        word: String,
+    },
+    /// Bug report `word` became task `brief.task`: write into `dir` (a new folder inside the
+    /// materials folder) its picture with the `blank` rects (window points) filled, a copy with
+    /// the marks drawn on it, and the brief.
+    BugFiled {
+        word: String,
+        dir: String,
+        blank: Vec<[f64; 4]>,
+        brief: Box<crate::bug::Brief>,
+    },
     /// Start `task`'s agent in a terminal for the right drawer, in `cwd` (none: the home
     /// folder), and answer `AgentStarted` or `AgentExited`. `brief`: the task's folder in the
     /// materials folder, if it has captures. The shell makes the session's id and asks
@@ -3266,6 +3369,7 @@ pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
 
 mod agent;
 pub mod btw;
+mod bug;
 pub mod chat;
 pub mod editor;
 pub mod finish;
@@ -3525,6 +3629,13 @@ pub struct Model {
     pub mark_input: Option<MarkInput>,
     /// The draft in the right bar, while there is one: `compose` is its title.
     pub capture: Option<Collection>,
+    /// The bug report being made, over a frozen picture of the window.
+    #[serde(skip)]
+    pub bug: Option<crate::bug::Report>,
+    /// The repository a bug report files into (`developer.ottospace_repo`, a checkout). `None`:
+    /// no bug button.
+    #[serde(skip)]
+    pub bug_repo: Option<String>,
     /// The app pane the capture key took the keyboard from: the way back is offered.
     pub back_to: Option<PaneId>,
     /// The task whose brief the right bar shows.
@@ -3736,6 +3847,8 @@ impl Default for Model {
             row_menu: None,
             mark_input: None,
             capture: None,
+            bug: None,
+            bug_repo: None,
             back_to: None,
             brief: None,
             talk: None,
@@ -3842,6 +3955,8 @@ impl Model {
     pub fn mode(&self) -> Mode {
         if self.confirm.is_some() {
             Mode::Confirm
+        } else if self.bug.is_some() {
+            Mode::Annotate
         } else if self.sneak.is_some() {
             Mode::Sneak
         } else if self.mark_input.is_some() {
@@ -3884,7 +3999,8 @@ impl Model {
         // The Apps section's filter is a text field with the keyboard, as the picker's is.
         let filtering = self.app_lists.filtering;
         let menu = self.row_menu.is_some();
-        boxed || filtering || menu || self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some()
+        let bug = self.bug.is_some();
+        boxed || filtering || menu || bug || self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some()
     }
 
     /// Why an action does nothing because of who sent it. Only the user may take the keyboard
@@ -4235,6 +4351,24 @@ impl Model {
             action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
             // The user's keys are in a row's menu: nothing of another's takes the keyboard under it.
             action if self.row_menu.is_some() && action.takes_keyboard() => Some(crate::row_menu::MENU_OPEN),
+            // A bug report hands over a picture of the window and what was drawn there: only the
+            // user starts one, draws on it, writes its comments, sends it or cancels it. Only the
+            // shell says what the setting names.
+            Action::BugStart { .. } if self.confirm.is_none() => Some(crate::bug::USERS_ALONE),
+            Action::BugPress { .. }
+            | Action::BugDrag { .. }
+            | Action::BugRelease { .. }
+            | Action::BugWhole
+            | Action::BugEdit { .. }
+            | Action::BugRemove { .. }
+            | Action::BugApps { .. }
+            | Action::BugCancel
+            | Action::BugSend { .. } => Some(crate::bug::USERS_ALONE),
+            Action::BugRepo { .. } if origin == Origin::Socket => Some("only ottospace reads settings.json"),
+            Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "bug") => {
+                Some(crate::bug::USERS_ALONE)
+            }
+            action if self.bug.is_some() && action.takes_keyboard() => Some(crate::bug::OPEN),
             // A capture hands over a pane's picture and its text: no client's request, key or
             // label asks for one. Sneak mode and the quit question say their own reason first.
             Action::CaptureStart { .. } if self.confirm.is_none() => Some(capture::USERS_ALONE),
@@ -4330,6 +4464,10 @@ impl Model {
         // A close of a named pane still runs: the shell sends it when a window or shell is
         // gone, and must not leave a dead pane.
         let named_close = matches!(action, Action::Close { pane: Some(_) });
+        // A bug report covers the window: what is behind it waits, and nothing opens over it.
+        if self.bug.is_some() && !action.bugs() && !named_close && (for_panes || picker || action.takes_keyboard()) {
+            return Some(crate::bug::OPEN);
+        }
         // The key reference covers the workspace, so pane actions wait behind it, and the
         // picker cannot open under it. Visual mode holds the keyboard on its terminal the same way.
         if self.keys && (for_panes || picker) {
@@ -4526,6 +4664,7 @@ impl Model {
         self.settle_brief();
         self.settle_row_menu();
         self.settle_viewers(&mut effects);
+        self.settle_bug(&mut effects);
         self.settle_listen();
         // Something shows in the drawer's place, or nothing is left to reopen: nothing to keep from a client.
         if !self.drawer_collapsed() || !self.drawer_opens() {
@@ -4683,6 +4822,7 @@ impl Model {
                     | Action::CaptureEdit { .. }
                     | Action::CaptureTitle
                     | Action::CaptureBack
+                    | Action::BugStart { .. }
             );
         if self.confirm.is_some() && (cancels || (user && answers_no)) {
             self.confirm = None;
@@ -5346,6 +5486,7 @@ impl Model {
                         field.apply(edit);
                     }
                 }
+                Some("bug") => drop(self.bug.as_mut().and_then(crate::bug::Report::comment_mut).map(|f| f.apply(edit))),
                 Some("apps") => drop(self.app_lists.filter.apply(edit)),
                 Some("talk") => self.talk_edit(edit),
                 Some("btw") => self.btw_edit(edit),
@@ -6188,6 +6329,24 @@ impl Model {
             Action::CaptureStart { pane, draft, word, facts, images } => {
                 self.capture_start(pane, (draft, word), facts, images, effects)
             }
+            Action::BugStart { word, size, controls, panes, picture } => {
+                self.bug_start(word, size, (controls, panes), picture, effects)
+            }
+            Action::BugPress { at } => drop(self.bug.as_mut().map(|report| report.press(at))),
+            Action::BugDrag { to } => drop(self.bug.as_mut().map(|report| report.drag_to(to))),
+            Action::BugRelease { at } => drop(self.bug.as_mut().map(|report| report.release(at))),
+            Action::BugWhole => drop(self.bug.as_mut().map(crate::bug::Report::whole)),
+            Action::BugEdit { mark } => drop(self.bug.as_mut().map(|report| report.edit(mark))),
+            Action::BugRemove { mark } => drop(self.bug.as_mut().map(|report| report.remove(mark))),
+            Action::BugApps { on } => drop(self.bug.as_mut().map(|report| report.apps = on.unwrap_or(!report.apps))),
+            Action::BugCancel => self.bug_drop(effects),
+            Action::BugSend { build, os, log } => self.bug_send(&build, &os, &log, effects),
+            Action::BugRepo { facts } => {
+                self.bug_repo = facts.as_ref().and_then(crate::bug::repo_of);
+                if self.bug_repo.is_none() {
+                    self.bug_drop(effects);
+                }
+            }
             Action::CaptureTaken { draft, material, picture, stale } => {
                 let mine = self.capture.as_mut().filter(|c| c.draft == draft);
                 if let Some(material) = mine.and_then(|c| c.material_mut(material)) {
@@ -7014,7 +7173,7 @@ impl Model {
     /// The keyboard goes into the open conversation, if its agent runs, or leaves it.
     fn talk_keys(&mut self, on: bool, effects: &mut Vec<Effect>) {
         let Some(talk) = &self.talk else { return };
-        let on = on && self.talk_writable(&talk.task) && self.annotated().is_none();
+        let on = on && self.talk_writable(&talk.task) && self.annotated().is_none() && self.bug.is_none();
         if on {
             self.leave(effects);
             self.list = None;
@@ -7038,7 +7197,7 @@ impl Model {
         self.ending.retain(|id| !gone(id));
         self.talk = self.talk.take().filter(|talk| !gone(&talk.task));
         // A picture being drawn on keeps the keyboard, as an app, the list and visual mode do.
-        let drawing = self.annotated().is_some();
+        let drawing = self.annotated().is_some() || self.bug.is_some();
         let elsewhere = self.live.is_some() || self.list.is_some() || self.visual.is_some() || drawing;
         let runs = self.talk.as_ref().is_some_and(|talk| self.talk_writable(&talk.task));
         if let Some(talk) = &mut self.talk {
@@ -8337,6 +8496,7 @@ impl Model {
             "palette" => self.palette.as_ref().map(|palette| &palette.query),
             "inspector" => self.inspector.as_ref().map(|inspector| &inspector.filter),
             "note" => self.note(),
+            "bug" => self.bug.as_ref().and_then(crate::bug::Report::comment),
             "talk" => self.talk_draft(),
             "btw" => self.btw_field(),
             "apps" => Some(&self.app_lists.filter),
@@ -8372,6 +8532,7 @@ impl Model {
             // The editor has the box's line: nothing types in it meanwhile.
             Mode::Compose if self.edits_compose() => return None,
             Mode::Compose => "compose",
+            Mode::Annotate if self.bug.is_some() => "bug",
             Mode::Annotate => "note",
             Mode::Talk if self.btw_typing() => "btw",
             Mode::Talk if self.talk_typing() => "talk",
@@ -9628,6 +9789,17 @@ mod tests {
         Action::ListMarkEdit { .. },
         Action::ListReorder { .. },
         Action::CaptureStart { .. },
+        Action::BugStart { .. },
+        Action::BugPress { .. },
+        Action::BugDrag { .. },
+        Action::BugRelease { .. },
+        Action::BugWhole,
+        Action::BugEdit { .. },
+        Action::BugRemove { .. },
+        Action::BugApps { .. },
+        Action::BugCancel,
+        Action::BugSend { .. },
+        Action::BugRepo { .. },
         Action::CaptureTaken { .. },
         Action::CaptureFacts { .. },
         Action::CaptureContent { .. },
@@ -9955,6 +10127,23 @@ mod tests {
             Action::ListMarkEdit { field: marks::Field::Key },
             Action::ListReorder { delta: 1 },
             Action::CaptureStart { pane: None, draft: text(), word: text(), facts: Vec::new(), images: true },
+            Action::BugStart {
+                word: text(),
+                size: [100., 100.],
+                controls: Vec::new(),
+                panes: Vec::new(),
+                picture: true,
+            },
+            Action::BugPress { at: [0.5, 0.5] },
+            Action::BugDrag { to: [0.5, 0.5] },
+            Action::BugRelease { at: [0.5, 0.5] },
+            Action::BugWhole,
+            Action::BugEdit { mark: None },
+            Action::BugRemove { mark: 1 },
+            Action::BugApps { on: None },
+            Action::BugCancel,
+            Action::BugSend { build: text(), os: text(), log: Vec::new() },
+            Action::BugRepo { facts: None },
             Action::CaptureTaken { draft: text(), material: 1, picture: true, stale: false },
             Action::CaptureFacts { facts: Vec::new() },
             Action::CaptureContent { draft: text(), material: 1, content: Content::Missing(text()) },
@@ -10460,6 +10649,11 @@ mod tests {
                     Action::TalkKeys { on: true } if m.talk.as_ref().is_some_and(|t| !t.open) => {
                         Some(rail::DRAWER_USERS)
                     }
+                    Action::BugRepo { .. } if origin == Origin::Socket => Some("only ottospace reads settings.json"),
+                    Action::BugRepo { .. } | Action::BugStart { .. } => {
+                        action.takes_keyboard().then_some("sneak mode is on")
+                    }
+                    action if action.bugs() => Some(crate::bug::USERS_ALONE),
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -16794,6 +16988,9 @@ mod tests {
                     Action::TalkKeys { on: true } if m.talk.as_ref().is_some_and(|t| !t.open) => {
                         Some(rail::DRAWER_USERS)
                     }
+                    Action::BugRepo { .. } if origin == Origin::Socket => Some("only ottospace reads settings.json"),
+                    Action::BugRepo { .. } | Action::BugStart { .. } => action.takes_keyboard().then_some(CONFIRM_UP),
+                    action if action.bugs() => Some(crate::bug::USERS_ALONE),
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");

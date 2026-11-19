@@ -9,6 +9,7 @@ pub mod apps;
 pub mod ask;
 pub mod atlas;
 pub mod ax;
+pub mod bug;
 pub mod cadence;
 pub mod calendar;
 pub mod capture;

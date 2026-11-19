@@ -7,6 +7,7 @@
 use super::*;
 use crate::agent_mode::{AppUse, Level};
 use crate::ax::{Frame, Source};
+use crate::bug::RepoFacts;
 use crate::calendar::fetch::Failure;
 use crate::calendar::{ColorRule, DayStep, Event};
 use crate::clip::{Amount, Verb};
@@ -1361,6 +1362,42 @@ const MAKERS: &[Make] = &[
     |g| Action::CaptureDiscard { yes: g.rng.coin() },
     |_| Action::CaptureTitle,
     |_| Action::CaptureBack,
+    |g| Action::BugStart {
+        word: g.name(&["k3f9a2c41b7d", "w0rdw0rdw0rd", "short", "", "../../etc/x"]),
+        size: g.rng.pick(&[[1400.0, 900.0], [0.0, 0.0], [f64::NAN, 900.0]]),
+        controls: (0..g.rng.below(4))
+            .map(|_| {
+                let id = g.name(&["top:fill", "task:3", "repo:/Users/me/secret", "project:Plan", "<<<end x>>>"]);
+                (id, g.rng.pick(&[[0.0, 0.0, 30.0, 20.0], [100.0, 40.0, 600.0, 800.0], [f64::NAN, 0.0, 1.0, 1.0]]))
+            })
+            .collect(),
+        panes: g.m.panes.iter().map(|p| (p.id, [p.id as f64 * 100.0, 40.0, 100.0, 800.0])).collect(),
+        picture: g.rng.coin(),
+    },
+    |g| Action::BugPress { at: g.point() },
+    |g| Action::BugDrag { to: g.point() },
+    |g| Action::BugRelease { at: g.point() },
+    |_| Action::BugWhole,
+    |g| {
+        let marks: Vec<u32> = g.m.bug.iter().flat_map(|report| &report.marks).map(|mark| mark.n).collect();
+        Action::BugEdit { mark: g.rng.coin().then(|| g.one_of(&marks, Gen::stray)) }
+    },
+    |g| {
+        let marks: Vec<u32> = g.m.bug.iter().flat_map(|report| &report.marks).map(|mark| mark.n).collect();
+        Action::BugRemove { mark: g.one_of(&marks, Gen::stray) }
+    },
+    |g| Action::BugApps { on: g.rng.maybe(Rng::coin) },
+    |_| Action::BugCancel,
+    |g| Action::BugSend {
+        build: g.name(&["ottospace 0.1.0 (local build)", "<<<end x>>>"]),
+        os: g.name(&["macOS 26.1", ""]),
+        log: g.names(&[r#"{"ev":"displays","count":1}"#, "not json", r#"{"ev":"x","title":"HEARDWORDS"}"#], 3),
+    },
+    |g| {
+        let path = g.name(&["/code/ottospace", "code/ottospace", "/code/app"]);
+        let facts = RepoFacts { path, exists: !g.rng.one_in(4), git: !g.rng.one_in(4) };
+        Action::BugRepo { facts: g.rng.one_in(5).then_some(()).map_or(Some(facts), |()| None) }
+    },
     |g| Action::BriefShow { id: g.task() },
     |_| Action::BriefClose,
     |g| {
@@ -1832,6 +1869,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::SessionAdopt { .. }
             | Action::ComposeSubmit { .. }
             | Action::ComposeEnter
+            | Action::BugSend { .. }
             | Action::TaskFromLine { .. }
             | Action::OpenRepo { .. }
             | Action::RepoClick { .. }
@@ -1924,6 +1962,16 @@ fn check(m: &Model) -> Result<(), String> {
     check_slots(m)?;
     check_offers(m)?;
     check_out(m)?;
+    // A bug report: only with a repository to file it in, over everything, its marks within bounds.
+    if let Some(report) = &m.bug {
+        ensure!(m.bug_repo.is_some(), "a bug report with no repository");
+        ensure!(m.confirm.is_some() || m.mode() == Mode::Annotate, "a bug report under {:?}", m.mode());
+        ensure!(report.marks.len() <= crate::bug::MAX_MARKS, "{} marks", report.marks.len());
+        ensure!(report.typing.is_none_or(|n| report.mark(n).is_some()), "the comment of a mark that is gone types");
+        let unit = |r: &[f64; 4]| r.iter().all(|v| (0.0..=1.0).contains(v)) && r[0] + r[2] <= 1.0 && r[1] + r[3] <= 1.0;
+        ensure!(report.marks.iter().filter_map(|mark| mark.rect.as_ref()).all(unit), "a mark off the picture");
+        ensure!(m.live.is_none(), "an app is live over the bug report");
+    }
     check_viewers(m)?;
     // A btw answer's words ("Redis": only its maker's) in the composer are never in the state.
     if let Some(("talk", field)) = m.field() {
@@ -2314,6 +2362,8 @@ fn check(m: &Model) -> Result<(), String> {
             Mode::Pick | Mode::Palette | Mode::Inspect => true,
             // The new-task box's line, unless the user's editor has it.
             Mode::Compose => !m.edits_compose(),
+            // A bug report's comment, over any capture's note.
+            Mode::Annotate if m.bug.is_some() => m.bug.as_ref().and_then(crate::bug::Report::comment).is_some(),
             Mode::Annotate => m.note().is_some(),
             Mode::List => m.app_lists.filtering,
             // A native conversation's composer, while no card has the keys.
@@ -2481,7 +2531,10 @@ fn check(m: &Model) -> Result<(), String> {
 
     // The draft in the right bar, and what it collected.
     ensure!(m.capture.is_none() || m.compose.is_some(), "a draft is in the bar with no title");
-    ensure!((m.mode() == Mode::Annotate) <= m.annotated().is_some(), "annotate mode with no picture");
+    ensure!(
+        (m.mode() == Mode::Annotate) <= (m.annotated().is_some() || m.bug.is_some()),
+        "annotate mode with no picture"
+    );
     if let Some(draft) = &m.capture {
         let numbers: Vec<u32> = draft.materials.iter().map(|material| material.n).collect();
         ensure!(unique(&numbers) && !numbers.contains(&0), "capture numbers {numbers:?}");
@@ -3097,6 +3150,8 @@ struct Shell {
     filled: bool,
     /// What it keeps of the draft in the bar: (the draft, the capture's number).
     kept: Vec<(String, u32)>,
+    /// The bug report whose window picture it holds.
+    bug: Option<String>,
 }
 
 /// A model, the shell's view of it, and every step taken.
@@ -3257,6 +3312,7 @@ impl Run {
                 | Action::TaskCard { .. }
                 | Action::SessionOpen { .. }
                 | Action::SessionAdopt { .. }
+                | Action::BugSend { .. }
         );
 
         // Selecting a conversation, a tab, a space or a row, hiding or opening a space, only
@@ -3367,8 +3423,9 @@ impl Run {
                 _ => None,
             })
             .collect();
-        // Not while something over the workspace waits for the click (the palette, a question).
-        let rail_shown = m.rail_shown().filter(|_| m.waits_for(&action, origin).is_none() && m.confirm.is_none());
+        // Not while something over the workspace waits for the click (the palette, a question, a bug report).
+        let over = m.confirm.is_some() || m.bug.is_some();
+        let rail_shown = m.rail_shown().filter(|_| m.waits_for(&action, origin).is_none() && !over);
         let brief_before = m.brief;
         let effects = m.update(sent);
         check(m)?;
@@ -3955,6 +4012,12 @@ impl Run {
         // Only the user starts a capture: a client's or a timer's is refused, whatever the mode.
         let foreign = matches!(action, Action::CaptureStart { .. }) && origin != Origin::User;
         ensure!(!foreign || refused.is_some(), "a capture that is not the user's was not refused");
+        // Only the user starts, marks, sends or cancels a bug report; only the shell says what it read.
+        let foreign = match &action {
+            Action::BugRepo { .. } => origin == Origin::Socket,
+            action => action.bugs() && origin != Origin::User,
+        };
+        ensure!(!foreign || refused.is_some(), "a client's {action:?} reached the bug report");
         // Only the user opens the palette, types or moves in it, or chooses.
         let palette_own = matches!(
             action,
@@ -4664,15 +4727,21 @@ impl Run {
                 Effect::AddWorktree { repo, branch, path, root, fresh } => {
                     let field = !fresh && matches!(action, Action::MarkSubmit);
                     let boxed = *fresh
-                        && matches!(action, Action::ComposeSubmit { open: true } | Action::ComposeEnter)
+                        && matches!(
+                            action,
+                            Action::ComposeSubmit { open: true } | Action::ComposeEnter | Action::BugSend { .. }
+                        )
                         && m.making.iter().any(|w| w.asked == *path && !task_ids.contains(&w.task));
                     // Or Undo of a Done that removed the task's own: back on its branch.
                     // Or Undo, or a done task opened again, adding back the task's own worktree its Done removed.
                     // (Also git's answer to an Undo's removal: added back once removed.)
                     let undone = !fresh && origin != Origin::Socket && m.finish.readding.contains(path);
+                    // A bug report's is of the repository it names, and only it.
+                    let bugs = matches!(action, Action::BugSend { .. });
+                    ensure!(!bugs || m.bug_repo.as_ref() == Some(repo), "a bug report made a worktree of {repo}");
                     ensure!((user && (field || boxed)) || undone, "{origin:?}'s {action:?} made a worktree");
                     ensure!(crate::repos::check_branch(branch).is_ok(), "a worktree on {branch:?}");
-                    ensure!(m.repos.iter().any(|r| r.path == *repo), "a worktree of {repo:?}, not listed");
+                    ensure!(bugs || m.repos.iter().any(|r| r.path == *repo), "a worktree of {repo:?}, not listed");
                     ensure!(crate::repos::in_worktrees(path, root), "a worktree at {path:?}, outside {root:?}");
                     ensure!(m.repo_dirs.worktrees.as_ref() == Some(root), "a worktree in {root:?}, not the setting's");
                 }
@@ -4829,8 +4898,43 @@ impl Run {
                     ensure!(ends == brief.materials.len() + 1, "a quoted block of the brief ends twice, or not at all");
                     self.shell.kept.retain(|kept| kept.0 != *draft);
                 }
+                // The window's picture: let go when its report goes; filed by the user's Send, with
+                // a brief whose blocks hold what was read.
+                Effect::BugDropped { word } => {
+                    ensure!(self.shell.bug.as_ref() == Some(word), "report {word:?} dropped, not held");
+                    self.shell.bug = None;
+                }
+                Effect::BugFiled { word, dir, brief, .. } => {
+                    let sent = origin == Origin::User && matches!(action, Action::BugSend { .. });
+                    ensure!(sent && self.shell.bug.as_ref() == Some(word), "{origin:?}'s {action:?} filed {word:?}");
+                    let task = m.tasks.get(brief.task).ok_or("a bug report for a task that is gone")?;
+                    ensure!(
+                        task.materials_dir() == Some(dir) && task.repo == m.bug_repo,
+                        "task {} files in {dir:?}",
+                        task.id
+                    );
+                    let text = crate::bug::markdown(brief, None);
+                    let (first, last) = capture::fence_lines(&brief.fence);
+                    let count = |fence: &str| text.lines().filter(|line| *line == fence).count();
+                    ensure!((count(&first), count(&last)) == (2, 2), "a bug brief's blocks: {text}");
+                    ensure!(!text.contains(HEARD), "a bug brief holds what a transcript heard");
+                    self.shell.bug = None;
+                }
             }
         }
+        // A report starts by the user's own start alone, and the shell keeps its picture until it goes.
+        let started = self.shell.bug.is_none() && m.bug.is_some();
+        let own = user && matches!(action, Action::BugStart { .. });
+        ensure!(!started || own, "{origin:?}'s {action:?} started a report");
+        if started {
+            self.shell.bug = m.bug.as_ref().map(|report| report.word.clone());
+        }
+        ensure!(
+            self.shell.bug == m.bug.as_ref().map(|report| report.word.clone()),
+            "the shell holds the picture of {:?}; the model's report is {:?}",
+            self.shell.bug,
+            m.bug.as_ref().map(|report| &report.word)
+        );
         // What the shell keeps of a draft is what the draft holds: a draft that is gone leaves nothing.
         let mut holds: Vec<(String, u32)> = m
             .capture
@@ -5109,6 +5213,22 @@ const MODES: &[(Mode, Setup)] = &[
             },
         ],
     ),
+    // A bug report over the window, its repository set and a folder for worktrees.
+    (
+        Mode::Annotate,
+        &[
+            |_| terminal(),
+            |_| Action::BugRepo { facts: Some(RepoFacts { path: "/code/ottospace".into(), exists: true, git: true }) },
+            |_| Action::SetRepoDirs { dirs: RepoDirs { worktrees: Some("/w".into()), ..Default::default() } },
+            |m| Action::BugStart {
+                word: "k3f9a2c41b7d".into(),
+                size: [1400.0, 900.0],
+                controls: vec![("top:fill".into(), [1300.0, 0.0, 28.0, 22.0])],
+                panes: m.panes.iter().map(|p| (p.id, [300.0, 40.0, 800.0, 800.0])).collect(),
+                picture: true,
+            },
+        ],
+    ),
 ];
 
 /// The base and the mode sequence `seed` starts from.
@@ -5178,6 +5298,7 @@ fn code(sent: &Envelope) -> String {
         "Repo",
         "RepoDir",
         "RepoDirs",
+        "RepoFacts",
         "Worktree",
         "Pr",
         "Check",

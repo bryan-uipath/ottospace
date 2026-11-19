@@ -31,6 +31,8 @@ pub(crate) struct Making {
     pub(crate) task: TaskId,
     pub(crate) asked: String,
     pub(crate) branch: String,
+    /// A bug report's (`bug_send`): its repository need not be listed.
+    pub(crate) bug: bool,
 }
 
 /// The new-task box's choice, while it offers one: the task works in its checkout, or (`new`)
@@ -220,7 +222,7 @@ impl Model {
         self.join_space(id);
         let NewWorktree { repo, branch, root } = new;
         let path = crate::repos::worktree_dir(&root, &repo, &self.repos, &branch);
-        self.making.push(Making { task: id, asked: path.clone(), branch: branch.clone() });
+        self.making.push(Making { task: id, asked: path.clone(), branch: branch.clone(), bug: false });
         effects.push(Effect::AddWorktree { repo, branch, path, root, fresh: true });
         self.talk_to(subject, true, effects);
     }
