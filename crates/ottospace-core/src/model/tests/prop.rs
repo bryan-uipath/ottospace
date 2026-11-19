@@ -1230,6 +1230,7 @@ const MAKERS: &[Make] = &[
     },
     |_| Action::QuitConfirm,
     |_| Action::QuitCancel,
+    |g| Action::QuitGo { row: g.rng.below(3) },
     |_| Action::Quit,
     |g| {
         let verb = g.rng.pick(&[Verb::Copied, Verb::Cut, Verb::Pasted]);
@@ -2397,12 +2398,15 @@ fn check(m: &Model) -> Result<(), String> {
             None if let Some(path) = &confirm.unlist => m.repos.iter().any(|r| r.path == *path),
             // "Stop it and put it away?" while its turn runs.
             None if let Some((id, _)) = &confirm.later => m.works(&Subject::Task(*id)),
-            None => !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty() || m.editing.is_some(),
+            None => !confirm.running.is_empty() || !confirm.agents.is_empty() || !confirm.unsent.is_empty(),
         };
-        ensure!(
-            loses,
-            "the quit question names no terminal, no draft holds a capture, no agent runs, and no editor has a message"
-        );
+        ensure!(loses, "the question asks about nothing: no terminal, agent or draft");
+        if confirm.quits() {
+            ensure!(
+                (&confirm.agents, &confirm.unsent) == (&m.quit_agents(), &m.unsent()),
+                "the quit question's rows are not what quitting loses now"
+            );
+        }
         ensure!(
             confirm.running.iter().all(|r| m.pane(r.pane).is_some()),
             "the quit question names a pane that is gone"

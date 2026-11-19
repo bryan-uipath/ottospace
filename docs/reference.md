@@ -118,7 +118,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧W | Close the tab and its panes |
 | ⌘⇧O | With the `multi_monitor` [flag](#features) on: fold the tab on show out to its own window on another display, the keyboard with it; again there (or its Fold back in) folds it back in. See [Displays](#displays) |
 | ⌘⇧S | Save the tab on show into the [workspace](#workspaces) it is in; in a task's space, as a new one. On a tab that came from one, or was saved into one: update its tab there |
-| ⌘Q | Quit. While a terminal runs something (a program in front of its shell, or a background or stopped job) it asks first, and lists them: ↵, Q or ⌘Q again quits; Esc, any other key or any other shortcut cancels and does nothing else |
+| ⌘Q | Quit. Asks first while a terminal runs something (a program in front of its shell, or a background or stopped job) or an agent runs ("Quitting ends these:"), or a draft has words ("Not sent yet": an unsent message, the new-task line, a capture, a card's typed answer, a btw question, a message in your editor; never one of only spaces). Click a draft's row to go to it. ↵, Q or ⌘Q again quits; Esc, any other key or any other shortcut cancels and does nothing else |
 | Wheel / trackpad | Scroll a terminal back through its history |
 | ⇧PageUp / ⇧PageDown | Scroll a terminal a page |
 | ⇧Home / ⇧End | Top / bottom of a terminal's history |
@@ -240,7 +240,13 @@ a click that would put it aside waits too.
   Files left out (a name too long, one with a line break) are counted in the same place.
 
 **The quit question.** ⌘Q, Quit in the menu and the window's red close button all ask the same
-question (status chip `QUIT?`). A quit ends every terminal and what runs in it, so it asks when:
+question (status chip `QUIT?`). A quit ends every terminal and agent, and loses every draft not
+sent. Its box has a section for each, only when it has rows: "Quitting ends these:" (`pane 2 ·
+cargo`, `agent · Fix the login`) and "Not sent yet" (`Unsent message · Fix the login`, `New task, not
+started`, `Capture draft · Slack`, `Unsent answer · <task>`, `Unsent side question · <task>` (btw), `Message open in your editor · <task>`).
+A draft is named by where it is, never by its words; one of only spaces or line breaks is none. A
+draft in a conversation not on show, or kept for a task put away or done, is listed too. A click on
+its row cancels the quit and opens it, the keyboard in it. A terminal asks when:
 
 | In a terminal | Asks? |
 |---|---|
@@ -255,8 +261,8 @@ question (status chip `QUIT?`). A quit ends every terminal and what runs in it, 
 - While the question is up, ↵, Q or ⌘Q quits. Every other key or shortcut cancels it and does
   nothing else: ⌘W closes nothing, ⌘V pastes nothing. A held key answers nothing. A click outside
   the box cancels.
-- A terminal that closes by itself leaves the list. When the list empties the question goes away;
-  ottospace does not quit.
+- A terminal that closes by itself, an agent that ends or a draft emptied leaves the list. When
+  nothing is left the question goes away; ottospace does not quit.
 - Not asked: Quit in the Dock menu, and logout, restart or shutdown. macOS ends the app directly
   there, and GPUI 0.2.2 gives no hook to answer first. The socket's `quit` never asks.
 - A shell whose prompt keeps a helper process as its child is asked about every time.
@@ -676,7 +682,7 @@ once, read-only: nothing in the app is pressed or set), for a terminal the rows.
 - Only you start a capture. No socket request does (outside a test run), so no program can ask
   ottospace for a hosted app's picture or text.
 - With no title typed, the task is named "Capture from an app" or "Capture from a terminal".
-- ⌘Q with a draft that holds a capture asks before it discards it.
+- ⌘Q with a draft that holds a capture or a title asks before it discards it.
 - If a window was minimised or on another Space, the brief says its picture may be stale.
 - The annotated picture is what an agent is sent to first. Electron and Chrome windows (Slack,
   VS Code) expose little text to accessibility; their capture is the picture, your notes and

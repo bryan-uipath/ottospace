@@ -1,0 +1,26 @@
+# The quit question: an agent running natively, no draft (what the owner saw as "A draft is
+# open" over an empty list); then a program running and a message unsent.
+{"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"plan the week >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.replies","len":1}
+{"click":"talk"}
+{"cmd":"key","keys":"cmd-q","as":"user"}
+{"settle":500}
+{"shot":"agent"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"cmd":"key","keys":"cmd-p","as":"user"}
+{"cmd":"key","keys":"s t o p space t h e space a g e n t","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"until":"drawer.native.chats.1.transcript.live","is":false}
+{"click":"talk"}
+{"cmd":"key","keys":"f i x space t h e space r e d i r e c t","as":"user"}
+{"cmd":"split"}
+{"cmd":"type","pane":2,"text":"sleep 300\r"}
+{"sleep_ms":1500}
+{"cmd":"key","keys":"cmd-q","as":"user"}
+{"settle":500}
+{"shot":"both"}

@@ -246,11 +246,6 @@ impl Model {
         })
     }
 
-    /// How many captures quitting now would discard.
-    pub fn quit_discards(&self) -> usize {
-        self.capture.as_ref().map_or(0, |bar| bar.materials.len())
-    }
-
     /// What an action means while a draft is in the bar. ⌘N goes to its title, and the text it
     /// may come with is dropped: one draft at a time. While the bar asks before discarding, ↵
     /// says yes, and Esc or × says no.
@@ -325,7 +320,7 @@ mod tests {
     use crate::capture::{Shape, Tool};
     use crate::edit::Edit;
     use crate::layout::Axis::Right;
-    use crate::model::{Confirm, Mode, Origin, PickItem, Running};
+    use crate::model::{Mode, Origin, PickItem, Running};
 
     fn app(window: u32) -> Kind {
         Kind::App { window, title: "old title".into(), bundle: Some("com.example.chat".into()), name: "Chat".into() }
@@ -811,10 +806,8 @@ mod tests {
         assert_eq!(m.capture_title().as_deref(), Some("Capture from a terminal"));
         // ⌘Q with nothing running but a draft that holds a capture: it asks. "No" keeps the draft.
         assert_eq!((m.update(Action::QuitAsked { running: Vec::new() }), m.mode()), (vec![], Mode::Confirm));
-        assert_eq!(
-            (m.quit_discards(), m.confirm.as_ref().map(Confirm::title).as_deref()),
-            (1, Some("A draft is open"))
-        );
+        let lines = |m: &Model| m.confirm.as_ref().map(|c| c.unsent.iter().map(|u| u.line()).collect::<Vec<_>>());
+        assert_eq!(lines(&m), Some(vec!["Capture draft · pane 1".to_string()]));
         m.update(Action::QuitCancel);
         assert_eq!((m.mode(), bar(&m).materials.len()), (Mode::Annotate, 1));
         // The draft goes while the question is up, with nothing else to lose: so does the question.
@@ -823,6 +816,29 @@ mod tests {
         assert!(m.confirm.is_none());
         // An empty draft is nothing to ask about.
         assert_eq!(m.update(Action::QuitAsked { running: Vec::new() }), [Effect::Quit]);
+    }
+
+    /// A new-task line put aside and a capture in the bar: both listed. The line's row only
+    /// cancels: one draft at a time, so the capture's title keeps what it had.
+    #[test]
+    fn a_line_put_aside_under_a_capture_is_listed_and_its_row_takes_nothing_from_the_bar() {
+        let mut m = terminal_and_app();
+        let assign = crate::tasks::Assign::default();
+        let state = crate::tasks::State::Triaged;
+        m.update(Action::TaskAdd { title: "fix login".into(), priority: 3, state, tab: None, assign });
+        m.update(Action::OpenCompose { text: "plan the week".into() });
+        m.update(Action::TaskTalk { id: m.tasks.list[0].id });
+        start(&mut m, Some(1));
+        m.update(Action::AnnotateLeave { title: true });
+        typed(&mut m, "login");
+        m.update(Action::QuitAsked { running: Vec::new() });
+        let lines = |m: &Model| m.unsent().iter().map(|u| u.line()).collect::<Vec<_>>();
+        assert_eq!(lines(&m), ["New task, not started", "Capture draft"]);
+        let (typing, title_was) = (bar(&m).typing, title(&m).map(str::to_string));
+        m.update(Action::QuitGo { row: 0 });
+        assert!(m.confirm.is_none());
+        assert_eq!((bar(&m).typing, title(&m).map(str::to_string)), (typing, title_was));
+        assert_eq!(lines(&m), ["New task, not started", "Capture draft"], "nothing lost");
     }
 
     #[test]

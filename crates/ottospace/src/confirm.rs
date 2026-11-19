@@ -1,12 +1,12 @@
-//! The quit question: ⌘Q asks before it ends a program running in a terminal.
+//! The quit question: ⌘Q asks before it ends a running program or agent, or loses a draft.
 
 use gpui::{Context, Keystroke, Window, div, prelude::*, px, relative, rgb};
 use ottospace_core::clip::PasteAsk;
 use ottospace_core::keys::Mods;
-use ottospace_core::model::{Confirm, Owner, Running};
+use ottospace_core::model::{Confirm, Owner, Running, quit};
 use ottospace_core::{Action, Kind, Origin, theme};
 
-use crate::{Workspace, dialog};
+use crate::{Workspace, dialog, ui};
 
 impl Workspace {
     /// ⌘Q, Quit in the menu or the window's close button: the core quits, or asks if a terminal
@@ -76,6 +76,13 @@ impl Workspace {
             self.pasting = None;
         }
         true
+    }
+
+    /// Where the quit question's draft rows are drawn, in its list's order. Empty: no such question.
+    pub fn quit_rows(&self) -> Vec<[f32; 4]> {
+        let rows = self.model.confirm.as_ref().filter(|c| c.quits()).map_or(0, |c| c.unsent.len());
+        let marks = self.marks.borrow();
+        (0..rows).filter_map(|at| marks.get(&crate::Mark::QuitRow(at)).copied().map(crate::rect)).collect()
     }
 
     /// "Paste 4 lines?" over its pane: the first lines of the text, and what ↵ does.
@@ -195,43 +202,28 @@ impl Workspace {
                 .justify_center()
                 .child(panel);
         }
-        // A draft in the right bar goes with the app: its captures are named with the terminals.
-        let draft = match self.model.quit_discards() {
-            0 => None,
-            1 => Some("a draft with 1 material will be discarded".to_string()),
-            n => Some(format!("a draft with {n} materials will be discarded")),
-        };
-        // So do the drawer's agents.
-        let agents = match self.drawer.agents.values().filter(|agent| !agent.terminal.exited()).count() {
-            0 => None,
-            1 => Some("1 task's agent will be stopped".to_string()),
-            n => Some(format!("{n} tasks' agents will be stopped")),
-        };
-        // And the user's editor on a message: what it has not saved.
-        let editor = self.model.editing.as_ref().map(|_| "your editor's unsaved message".to_string());
-        let lines = confirm.lines().into_iter().chain(draft).chain(agents).chain(editor).map(|line| div().child(line));
+        // What quitting ends, then the drafts it loses: a section only with rows. A draft's row
+        // cancels and goes to it.
+        let section = |head: &'static str| div().pt_1().text_color(rgb(theme::TEXT)).child(head);
+        let sections = confirm.sections().into_iter().map(|(head, rows)| {
+            let drafts = head == quit::NOT_SENT;
+            let row = |(at, line): (usize, String)| match drafts {
+                // A list row, its words in line with the section's.
+                true => ui::list_row(("quit-row", at), ui::Row::Normal, ui::State::Rest)
+                    .mx(px(-theme::SPACE_2))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.dispatch(Action::QuitGo { row: at }, this.input, window, cx);
+                    }))
+                    .child(crate::mark(&self.marks, crate::Mark::QuitRow(at)))
+                    .child(line)
+                    .into_any_element(),
+                false => div().child(line).into_any_element(),
+            };
+            div().flex().flex_col().gap_1().child(section(head)).children(rows.into_iter().enumerate().map(row))
+        });
         let panel = dialog::floating(320.)
-            .child(
-                div()
-                    .px_3()
-                    .pt_3()
-                    .flex()
-                    .gap_2()
-                    .text_sm()
-                    .child(div().text_color(rgb(theme::TEXT)).child(confirm.title()))
-                    .child(div().text_color(rgb(theme::CONFIRM)).child("Quit?")),
-            )
-            .child(
-                div()
-                    .p_3()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .text_xs()
-                    .text_color(rgb(theme::MUTED))
-                    .child("Quitting ends these:")
-                    .children(lines),
-            )
+            .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::CONFIRM)).child(confirm.title()))
+            .child(div().p_3().flex().flex_col().gap_2().text_xs().text_color(rgb(theme::MUTED)).children(sections))
             .child(dialog::hint("↵ quit · esc cancel"));
         dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
             .flex()
