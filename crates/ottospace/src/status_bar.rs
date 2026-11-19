@@ -3,7 +3,7 @@
 //! here the focused folder's branch and changes are read, off the main thread, and drawn.
 
 use std::path::Path;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
 use gpui::{AnyView, Context, Div, FontWeight, Stateful, TextRun, Window, div, prelude::*, px, rems, rgb, svg};
@@ -37,18 +37,9 @@ pub struct Reader {
 
 impl Reader {
     pub fn new() -> Self {
-        let (jobs, inbox) = channel::<(String, Vec<String>)>();
-        let (done, reads) = channel();
-        std::thread::spawn(move || {
-            while let Ok(job) = inbox.recv() {
-                // Only the newest: a focus that moved on while git ran needs no read of the old one.
-                let (dir, roots) = inbox.try_iter().last().unwrap_or(job);
-                let read = read(Path::new(&dir), &roots);
-                if done.send((dir, read)).is_err() {
-                    return;
-                }
-                ottospace_mac::wake::post();
-            }
+        let (jobs, reads) = crate::child::newest(|(dir, roots): (String, Vec<String>)| {
+            let read = read(Path::new(&dir), &roots);
+            (dir, read)
         });
         Self { jobs, reads, asked: None, held: None }
     }

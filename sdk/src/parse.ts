@@ -80,6 +80,7 @@ import type {
   Home,
   Glyph,
   HomeDrawn,
+  CityDrawn,
   HomeNode,
   InboxReply,
   InboxRow,
@@ -1385,7 +1386,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
   if (value === "multi_monitor") return value;
-  if (value === "overlay_panels" || value === "decisions") return value;
+  if (value === "overlay_panels" || value === "decisions" || value === "code_city") return value;
   throw wrong(at, "a feature", value);
 }
 
@@ -1977,6 +1978,20 @@ function home(value: unknown, at: string): Home {
   };
 }
 
+function cityDrawn(value: unknown, at: string): CityDrawn {
+  const o = fields(value, at);
+  return {
+    places: num(o.places, `${at}.places`),
+    groups: num(o.groups, `${at}.groups`),
+    lit: list(rect)(o.lit, `${at}.lit`),
+    reads: num(o.reads, `${at}.reads`),
+    paints: num(o.paints, `${at}.paints`),
+    quads: num(o.quads, `${at}.quads`),
+    labels: num(o.labels, `${at}.labels`),
+    paint_us: num(o.paint_us, `${at}.paint_us`),
+  };
+}
+
 function homeDrawn(value: unknown, at: string): HomeDrawn {
   const o = fields(value, at);
   return {
@@ -2089,6 +2104,7 @@ export function snapshot(value: unknown): Snapshot {
     repos_bar: list(reposGroup)(o.repos_bar, "repos_bar"),
     home: orNull(home)(o.home, "home"),
     home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
+    city: orNull(cityDrawn)(o.city, "city"),
     closed_apps: list(str)(o.closed_apps, "closed_apps"),
     apps_bar: appsBar(o.apps_bar, "apps_bar"),
     apps: list(appEntry)(o.apps, "apps"),

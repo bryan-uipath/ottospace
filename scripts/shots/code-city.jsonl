@@ -1,0 +1,19 @@
+# The code city (flag `code_city`): a task's empty tab draws its checkout as a plan where the
+# lattice was. The file the agent reads is lit in the task's colour, then the two it is at
+# next; a shell command lights none; the turn over, none. The stand-in `claude` replays
+# code-city/fixtures; code-city/repos/app is a made-up repository (`_git`: an empty one).
+{"env":{"OTTOSPACE_FEATURES":"code_city"}}
+{"cmd":"task_new","line":"fix the login loop >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"city.lit","len":1}
+{"shot":"one-file"}
+{"until":"city.lit","len":2,"timeout_ms":60000}
+{"shot":"two-files"}
+{"until":"city.lit","len":0,"timeout_ms":60000}
+{"shot":"shell"}
+{"until":"drawer.native.chats.1.transcript.turn","is":null,"timeout_ms":60000}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
+{"settle":300}
+{"shot":"at-rest"}

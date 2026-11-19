@@ -484,11 +484,13 @@ impl Workspace {
                 paint_lattice(&shared, None, (bounds, [panel, legend]), build, window);
             },
         );
+        // A task's empty tab, with the `code_city` flag and its files read: the city is the floor.
+        let floor = self.render_city().unwrap_or_else(|| lines.absolute().size_full().into_any_element());
         div()
             .relative()
             .size_full()
             .overflow_hidden()
-            .child(lines.absolute().size_full())
+            .child(floor)
             .children(nodes)
             .child(panel)
             .children(legend)

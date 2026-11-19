@@ -166,6 +166,10 @@ Design note: `docs/ai/attention/plan.md`.
     (`room`) and its shaped width (`drawn`). Null outside a test run.
   - State field `viewers[n].marked_rect` (drawn): where a viewer's first marked line is drawn, while
     its pane shows. Null outside a test run.
+  - State field `city`: what was drawn of the code city in a task's empty tab (`code_city`):
+    `places`, `groups`, `reads` (file lists read), `paints`, `lit` (each lit building's rect),
+    and of the last paint `quads`, `labels` and `paint_us`. `counts.city_reads`: the reads,
+    a city on show or not. Never a path or a name. Null outside a test run and while none is drawn.
   - State fields `keys_known` (the ids of the key bindings the user knows) and `key_reference`
     (while ⌘/ shows: its groups' row ids, the known ids, whether Known is open, its header's
     rect). Null outside a test run: what the user's keys are used for is never on the socket.

@@ -60,6 +60,20 @@ pub struct Atlas {
     pub places: Vec<Place>,
 }
 
+impl Atlas {
+    /// The leaves of a `repo` plan that a file's label names (`station::path_label`: the last
+    /// two parts of its path, or its name): each whose id is the label or ends with it after
+    /// a `/`. `folder` is the repository's own folder's name: a file in the root is labelled
+    /// `folder/name`.
+    pub fn labelled<'a>(&'a self, label: &'a str, folder: &'a str) -> impl Iterator<Item = &'a Place> {
+        let root = label.strip_prefix(folder).and_then(|rest| rest.strip_prefix('/')).filter(|_| !folder.is_empty());
+        let ends =
+            move |id: &str| id.strip_suffix(label).is_some_and(|before| before.is_empty() || before.ends_with('/'));
+        let named = move |id: &str| ends(id) || Some(id) == root;
+        self.places.iter().filter(move |place| !place.group && named(&place.id))
+    }
+}
+
 /// A group's weight: its children's sum, rounded up to 4, 5, 6 or 7 times a power of two
 /// (100 → 112). At most a fifth of a group is free ground.
 fn step(sum: u64) -> u64 {
@@ -267,6 +281,28 @@ mod tests {
         // src is cut across too: a.rs over the other two, which are then side by side.
         assert_eq!(rect_of(&city, "src/a.rs"), Rect { x: 0., y: 0., w: 0.5, h: 0.25 });
         assert_eq!(rect_of(&city, "src/z.rs"), Rect { x: 1. / 3., y: 0.25, w: 0.5 - 1. / 3., h: 0.75 });
+    }
+
+    #[test]
+    fn a_label_names_the_files_whose_path_ends_with_it() {
+        let files =
+            [("src/ui/mod.rs", 1), ("src/mod.rs", 1), ("ui/mod.rs", 1), ("gui/mod.rs", 1), ("ui/mod.rs.bak", 1)];
+        let city = city(&[&files[..], &[("top.rs", 1)]].concat());
+        fn named<'a>(city: &'a Atlas, label: &'a str) -> Vec<&'a str> {
+            city.labelled(label, "app").map(|place| place.id.as_str()).collect()
+        }
+        assert_eq!(named(&city, "ui/mod.rs"), ["src/ui/mod.rs", "ui/mod.rs"]);
+        assert_eq!(named(&city, "src/mod.rs"), ["src/mod.rs"]);
+        assert_eq!(named(&city, "mod.rs").len(), 4);
+        // A file in the root is labelled with the repository's folder: `/code/app/top.rs`.
+        assert_eq!(named(&city, "app/top.rs"), ["top.rs"]);
+        // A folder is never lit, nor a label that names nothing here (`file`: what is no path).
+        let none: Vec<&str> = Vec::new();
+        assert_eq!(
+            (named(&city, "ui"), named(&city, "file"), named(&city, "")),
+            (none.clone(), none.clone(), none.clone())
+        );
+        assert_eq!((named(&city, "app/mod.rs"), named(&city, "other/top.rs")), (none.clone(), none));
     }
 
     #[test]
@@ -592,6 +628,45 @@ mod tests {
                 still += usize::from(moved == 0);
             }
             (sum / seeds as f32, still as f32 / seeds as f32)
+        }
+
+        /// How long a plan takes, for the design note's costs:
+        /// `cargo test -p ottospace-core --release -- --ignored a_plan_is_timed --nocapture`.
+        /// There is no shorter path for one change: a change is the whole plan again.
+        #[test]
+        #[ignore = "prints timings; run it by name, in release"]
+        fn a_plan_is_timed() {
+            for count in [500, 5_000, 20_000, 50_000] {
+                let mut rng = Rng::new(count as u64);
+                let folder = |rng: &mut Rng| format!("d{}", rng.below(12));
+                let mut files: Vec<(String, u64)> = (0..count)
+                    .map(|i| {
+                        let folders: Vec<String> = (0..1 + rng.below(5)).map(|_| folder(&mut rng)).collect();
+                        (format!("{}/f{i}.rs", folders.join("/")), bytes(&mut rng))
+                    })
+                    .collect();
+                let timed = |files: &[(String, u64)]| {
+                    let started = std::time::Instant::now();
+                    let (mut tree, mut plan) = (0., 0.);
+                    for _ in 0..5 {
+                        let before = std::time::Instant::now();
+                        let root = repo(files);
+                        tree += before.elapsed().as_secs_f64();
+                        let before = std::time::Instant::now();
+                        let places = atlas(&root).places.len();
+                        plan += before.elapsed().as_secs_f64();
+                        assert!(places > files.len());
+                    }
+                    (tree * 200., plan * 200., started.elapsed().as_secs_f64() * 200.)
+                };
+                let whole = timed(&files);
+                files.push(("d0/d1/new.rs".into(), 5_000));
+                let after = timed(&files);
+                println!(
+                    "{count} files: tree {:.2} ms, plan {:.2} ms, both {:.2} ms; after one more file {:.2} ms",
+                    whole.0, whole.1, whole.2, after.2
+                );
+            }
         }
 
         /// The numbers in the design note: `cargo test -p ottospace-core atlas -- --nocapture`.

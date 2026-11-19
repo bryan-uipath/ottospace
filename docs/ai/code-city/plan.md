@@ -101,8 +101,9 @@ Costs, known:
 change and kept (as the lattice's lines are: `home::Drawn::lattices`), painted again only when
 something changes. A hit test is a point in a rectangle. It reads at any size and behind text.
 
-- District: its ground a step lighter per depth, a hairline border; names of the top districts
-  only, muted. Building: a quad inset one point (the gap is the street).
+- District: its ground a step lighter per depth, a hairline (stronger for a folder of the
+  root), the root's folders named, muted. Building: a quad inset a point and a half (the gap is
+  the street), its name quieter than a district's.
 - **Height without 3D**: shade (taller is lighter), and for the top class a second outline
   inside the first, as stacked floors seen from above.
 - **Activity**: the building filled in the agent's colour. **Beacon**: a ring around the
@@ -112,10 +113,11 @@ something changes. A hit test is a point in a rectangle. It reads at any size an
   not one quad (GPUI has no depth buffer: painted back to front), tall buildings hide the ones
   behind, hit testing needs the projection, and labels do not fit. Not before 2D has been used.
 
-**Level of detail** (by a place's size on screen, so it holds at any zoom): under 1 pt nothing;
-a district under 24 pt is one block with no buildings; buildings from 3 pt; a district's name
-from 120 pt wide; a building's name from 60 pt wide (only when zoomed in: never at rest behind
-a workspace).
+**Level of detail** (by a place's size on screen, so it holds at any zoom). Built: a building
+under 3 pt is not drawn (its district's ground is; a lit one is drawn however small); a folder
+of the root from 90 by 40 pt has its name; a building from 64 by 34 pt has its name if the name
+fits (never cut), at most 300 names a frame. Proposed: a district under 24 pt as one block; names
+of deeper districts once the camera is near.
 
 **Frames**: none at rest. A paint happens when the file list, the lit set, the bounds or the
 camera's target changes. A camera move is the only animation, and it ends.
@@ -175,8 +177,10 @@ What ottospace knows today, exactly:
 - A shell command is `Shell`, never a guessed file. A search (`Grep`, `Glob`) names a folder.
 
 So, built: a building is lit, in its task's identity colour (`Task::colour`, the colour of its
-badge and tab), while its path ends with the label of a `Files` call of that task's
-conversation that runs now, or that was its last call while the agent still has the turn. No
+badge and tab), while its path ends with the label of a `Files` call that runs now, or that was
+the last call while the agent still has the turn, in the conversation of any task working in
+that checkout (two tasks in one checkout: each in its colour; a file in the root is labelled
+`<folder>/<name>` and matched so). No
 clock is read: the lit set changes only with an event. Two files that share their last two
 parts are both lit: honest about what is known, and wrong for one of them (open question 3).
 
@@ -261,8 +265,9 @@ issue waiting on them; for code, the task working in that folder asks a question
 
 - Paths and names are the person's. They are drawn, and kept in the shell's memory only. Not
   in the control socket's state, the event log, or anything written to disk.
-- The state gains, under the test gate only (`OTTOSPACE_E2E`): `atlas`, with counts (places, groups,
-  lit, builds, paints) and the lit rectangles. No id, label or path.
+- The state gains, under the test gate only (`OTTOSPACE_E2E`): `city`, with counts (places, groups,
+  reads, paints, and the last paint's quads, names and time) and the lit buildings'
+  rectangles; `counts.city_reads`. No id, label or path.
 - A source's text is data, never instructions: a file named like a command is a label.
 - git is run with a fixed argv, in the task's folder, and never a hook, a pager or the network.
 

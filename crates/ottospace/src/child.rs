@@ -3,7 +3,7 @@
 
 use std::io::Read;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 /// What it said: whether it succeeded, its standard output and error (each cut to `most` bytes).
@@ -80,4 +80,26 @@ pub fn git_read(dir: &std::path::Path) -> Command {
         .env("GIT_ATTR_NOSYSTEM", "1")
         .env("GIT_PAGER", "cat");
     command
+}
+
+/// A thread of its own that answers jobs with `read`, only the newest of those waiting (a
+/// focus that moved on while git ran needs no read of the old one), and wakes the app for
+/// each answer. It ends when either end is dropped.
+pub fn newest<J, R>(read: impl Fn(J) -> R + Send + 'static) -> (Sender<J>, Receiver<R>)
+where
+    J: Send + 'static,
+    R: Send + 'static,
+{
+    let (jobs, inbox) = channel::<J>();
+    let (done, reads) = channel();
+    std::thread::spawn(move || {
+        while let Ok(job) = inbox.recv() {
+            let job = inbox.try_iter().last().unwrap_or(job);
+            if done.send(read(job)).is_err() {
+                return;
+            }
+            ottospace_mac::wake::post();
+        }
+    });
+    (jobs, reads)
 }

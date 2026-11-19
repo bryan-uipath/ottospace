@@ -153,7 +153,16 @@ export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
 export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
 /** A feature flag (`features` in `settings.json`). Off, its requests answer "feature off: <name>". */
-export type Feature = "marks" | "apps_section" | "transcripts" | "slots" | "agent_mode" | "multi_monitor" | "overlay_panels" | "decisions";
+export type Feature =
+  | "marks"
+  | "apps_section"
+  | "transcripts"
+  | "slots"
+  | "agent_mode"
+  | "multi_monitor"
+  | "overlay_panels"
+  | "decisions"
+  | "code_city";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
@@ -1506,6 +1515,22 @@ export interface Home {
   counts: Record<Group, number>;
 }
 
+/** What was drawn of the code city in a task's empty tab (`code_city`): counts, and no name. */
+export interface CityDrawn {
+  /** Folders and files placed, and how many of them are folders. */
+  places: number;
+  groups: number;
+  /** Each lit building, in window points. */
+  lit: Rect[];
+  /** How often the file list was read, and the city painted. */
+  reads: number;
+  paints: number;
+  /** Of the last paint: quads and names drawn, and how long it took, in microseconds. */
+  quads: number;
+  labels: number;
+  paint_us: number;
+}
+
 /** What the home screen drew, in window points. */
 export interface HomeDrawn {
   area: Rect;
@@ -1673,6 +1698,8 @@ export interface Snapshot {
   /** Null while the tab on show has a pane. */
   home: Home | null;
   home_drawn: HomeDrawn;
+  /** Null outside a test run, and while no city is drawn. */
+  city: CityDrawn | null;
   /** Names of `apps_bar.not_running`. */
   closed_apps: string[];
   apps_bar: AppsBar;
