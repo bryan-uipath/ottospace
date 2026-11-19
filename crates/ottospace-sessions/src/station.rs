@@ -11,7 +11,7 @@ use Station::*;
 const UNKNOWN: &str = "shell";
 
 /// The station of a tool call. `arg` is the command line of a shell tool or the path of a file tool.
-/// e.g. `("Bash", Some("git push"))` → Network, `("Read", Some("/a/b.rs"))` → Files.
+/// e.g. `("Bash", Some("git push"))` → Shell, `("Read", Some("/a/b.rs"))` → Files.
 pub fn classify(tool: &str, arg: Option<&str>) -> Station {
     // MCP tools are `mcp__<server>__<tool>`: the server's name decides.
     if let Some(rest) = tool.strip_prefix("mcp__") {
@@ -34,7 +34,7 @@ pub fn classify(tool: &str, arg: Option<&str>) -> Station {
             }
         }
         "Bash" | "PowerShell" | "Monitor" | "BashOutput" | "KillShell" | "exec_command" | "shell"
-        | "local_shell_call" | "exec" | "write_stdin" => arg.map_or(Shell, |line| describe_command(line).0),
+        | "local_shell_call" | "exec" | "write_stdin" => Shell,
         "WebFetch" | "WebSearch" | "web_search" | "web_search_call" => Network,
         "Agent" | "Task" | "SendMessage" | "TaskStop" | "TaskOutput" | "Workflow" | "spawn_agent" | "send_message"
         | "wait_agent" | "close_agent" => Agents,
@@ -49,24 +49,22 @@ fn is_memory_path(path: &str) -> bool {
     path.contains("/.codex/memories/") || (path.contains("/.claude") && path.contains("/memory/"))
 }
 
-/// A shell command line's station and label, by the names of the commands in it.
-/// Station: Network if any command reaches the network, else Shell; never Files, which only file
-/// tools light. Label: the first command's, e.g. `cd x && git -C y push -f` → `git push`.
-pub fn describe_command(line: &str) -> (Station, String) {
-    describe(&parse(line, 0))
+/// A shell command line's label: its first command's name, e.g. `cd x && git -C y push -f` →
+/// `git push`. A command always lights Shell: what it did is never guessed from its line.
+pub fn command_label(line: &str) -> String {
+    label(&parse(line, 0))
 }
 
 /// The same for a command already split into words, e.g. `["git", "push"]`. The words are never
 /// joined and split again. `["zsh", "-lc", "<line>"]` is read as the line.
-pub fn describe_argv(words: &[&str]) -> (Station, String) {
+pub fn argv_label(words: &[&str]) -> String {
     let words: Vec<String> = words.iter().map(|w| w.to_string()).collect();
-    describe(&command(&words, 0))
+    label(&command(&words, 0))
 }
 
-fn describe(commands: &[Cmd]) -> (Station, String) {
-    let station = if commands.iter().any(|c| c.station == Network) { Network } else { Shell };
-    // The first command names the call, known or not: never a later one in its place.
-    (station, commands.first().map_or(UNKNOWN.to_string(), |c| c.label.clone()))
+/// The first command names the call, known or not: never a later one in its place.
+fn label(commands: &[String]) -> String {
+    commands.first().map_or(UNKNOWN.to_string(), String::clone)
 }
 
 /// A file's label: the last two parts of its path, e.g. `/Users/me/app/src/main.rs` → `src/main.rs`.
@@ -216,21 +214,14 @@ pub fn tool_label(tool: &str) -> String {
     TOOLS.iter().find(|t| **t == tool).copied().unwrap_or("tool").to_string()
 }
 
-/// One command of a line: its station, and a label made of table entries.
-#[derive(Clone, Debug, PartialEq)]
-struct Cmd {
-    station: Station,
-    label: String,
-}
-
 /// A longer command line is read by its first part only. The label is the first command's anyway.
 const MAX_CHARS: usize = 256 << 10;
 
 /// A shell inside a shell is followed this deep, e.g. `bash -c "sh -c 'curl x'"`.
 const MAX_DEPTH: u8 = 3;
 
-/// Every command in a line, in order. `cd`, `echo` and the like are left out.
-fn parse(line: &str, depth: u8) -> Vec<Cmd> {
+/// Every command in a line, in order, by its label. `cd`, `echo` and the like are left out.
+fn parse(line: &str, depth: u8) -> Vec<String> {
     split(line).iter().flat_map(|words| command(words, depth)).collect()
 }
 
@@ -364,19 +355,16 @@ fn split(line: &str) -> Vec<Vec<String>> {
     commands
 }
 
-/// A program the labels may name. `subs`: the subcommands a label may add. `network`: the
-/// subcommands that reach the network. `values`: options that take the next word as their value,
-/// so `git -C dir push` finds `push`.
+/// A program the labels may name. `subs`: the subcommands a label may add. `values`: options that
+/// take the next word as their value, so `git -C dir push` finds `push`.
 struct Program {
     name: &'static str,
-    station: Station,
     subs: &'static [&'static str],
-    network: &'static [&'static str],
     values: &'static [&'static str],
 }
 
-const fn plain(name: &'static str, station: Station) -> Program {
-    Program { name, station, subs: &[], network: &[], values: &[] }
+const fn plain(name: &'static str) -> Program {
+    Program { name, subs: &[], values: &[] }
 }
 
 const NODE_SUBS: &[&str] = &[
@@ -410,8 +398,6 @@ const NODE_SUBS: &[&str] = &[
     "format",
     "typecheck",
 ];
-const NODE_NETWORK: &[&str] =
-    &["install", "i", "ci", "add", "update", "upgrade", "publish", "create", "dlx", "audit", "outdated"];
 const NODE_VALUES: &[&str] = &[
     "--otp",
     "--registry",
@@ -437,7 +423,6 @@ const PIP_SUBS: &[&str] = &["install", "uninstall", "download", "list", "show", 
 const PROGRAMS: &[Program] = &[
     Program {
         name: "git",
-        station: Shell,
         subs: &[
             "add",
             "am",
@@ -479,12 +464,10 @@ const PROGRAMS: &[Program] = &[
             "tag",
             "worktree",
         ],
-        network: &["push", "pull", "fetch", "clone", "ls-remote"],
         values: &["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"],
     },
     Program {
         name: "gh",
-        station: Network,
         subs: &[
             "pr",
             "issue",
@@ -507,41 +490,25 @@ const PROGRAMS: &[Program] = &[
             "project",
             "ruleset",
         ],
-        network: &[],
         values: &["-R", "--repo", "--hostname"],
     },
     Program {
         name: "cargo",
-        station: Shell,
         subs: &[
             "build", "check", "test", "run", "clippy", "fmt", "doc", "bench", "clean", "update", "install", "add",
             "remove", "publish", "fetch", "search", "tree", "metadata", "new", "init", "e2e", "e2e-apps", "nextest",
             "expand", "fix", "vendor",
         ],
-        network: &["install", "fetch", "publish", "update", "add", "search"],
         values: &["-C", "--config", "--color", "-Z", "--manifest-path"],
     },
-    Program { name: "npm", station: Shell, subs: NODE_SUBS, network: NODE_NETWORK, values: NODE_VALUES },
-    Program { name: "pnpm", station: Shell, subs: NODE_SUBS, network: NODE_NETWORK, values: NODE_VALUES },
-    Program { name: "yarn", station: Shell, subs: NODE_SUBS, network: NODE_NETWORK, values: NODE_VALUES },
-    Program { name: "bun", station: Shell, subs: NODE_SUBS, network: NODE_NETWORK, values: NODE_VALUES },
-    Program {
-        name: "docker",
-        station: Shell,
-        subs: CONTAINER_SUBS,
-        network: &["pull", "push", "login"],
-        values: CONTAINER_VALUES,
-    },
-    Program {
-        name: "podman",
-        station: Shell,
-        subs: CONTAINER_SUBS,
-        network: &["pull", "push", "login"],
-        values: CONTAINER_VALUES,
-    },
+    Program { name: "npm", subs: NODE_SUBS, values: NODE_VALUES },
+    Program { name: "pnpm", subs: NODE_SUBS, values: NODE_VALUES },
+    Program { name: "yarn", subs: NODE_SUBS, values: NODE_VALUES },
+    Program { name: "bun", subs: NODE_SUBS, values: NODE_VALUES },
+    Program { name: "docker", subs: CONTAINER_SUBS, values: CONTAINER_VALUES },
+    Program { name: "podman", subs: CONTAINER_SUBS, values: CONTAINER_VALUES },
     Program {
         name: "kubectl",
-        station: Network,
         subs: &[
             "get",
             "describe",
@@ -565,7 +532,6 @@ const PROGRAMS: &[Program] = &[
             "annotate",
             "wait",
         ],
-        network: &[],
         values: &[
             "--token",
             "-n",
@@ -590,7 +556,6 @@ const PROGRAMS: &[Program] = &[
     },
     Program {
         name: "helm",
-        station: Network,
         subs: &[
             "install",
             "upgrade",
@@ -604,12 +569,10 @@ const PROGRAMS: &[Program] = &[
             "pull",
             "push",
         ],
-        network: &[],
         values: &["-n", "--namespace", "--kube-context", "--kubeconfig", "--kube-token", "--kube-apiserver"],
     },
     Program {
         name: "brew",
-        station: Shell,
         subs: &[
             "install",
             "uninstall",
@@ -623,229 +586,208 @@ const PROGRAMS: &[Program] = &[
             "fetch",
             "doctor",
         ],
-        network: &["install", "update", "upgrade", "fetch", "tap", "search"],
         values: &[],
     },
     Program {
         name: "go",
-        station: Shell,
         subs: &[
             "build", "test", "run", "get", "install", "mod", "fmt", "vet", "generate", "work", "clean", "list", "env",
         ],
-        network: &["get", "install"],
         values: &["-C"],
     },
     Program {
         name: "make",
-        station: Shell,
         subs: &[
             "all", "build", "test", "check", "clean", "install", "lint", "fmt", "run", "dev", "release", "dist", "deps",
         ],
-        network: &[],
         values: &["-C", "-f", "-j", "-I", "-o", "-W", "--directory", "--file", "--jobs"],
     },
     Program {
         name: "just",
-        station: Shell,
         subs: &["build", "test", "check", "clean", "install", "lint", "fmt", "run", "dev", "release"],
-        network: &[],
         values: &["-f", "--justfile", "-d", "--working-directory", "--set"],
     },
-    Program { name: "pip", station: Shell, subs: PIP_SUBS, network: &["install", "download"], values: &[] },
-    Program { name: "pip3", station: Shell, subs: PIP_SUBS, network: &["install", "download"], values: &[] },
+    Program { name: "pip", subs: PIP_SUBS, values: &[] },
+    Program { name: "pip3", subs: PIP_SUBS, values: &[] },
     Program {
         name: "uv",
-        station: Shell,
         subs: &["add", "remove", "sync", "lock", "run", "pip", "venv", "tool", "python", "build", "publish", "init"],
-        network: &["add", "sync", "pip", "publish", "lock"],
         values: &["--directory", "--project", "--config-file"],
     },
-    Program {
-        name: "gem",
-        station: Shell,
-        subs: &["install", "uninstall", "list", "build", "push"],
-        network: &["install", "push"],
-        values: &[],
-    },
+    Program { name: "gem", subs: &["install", "uninstall", "list", "build", "push"], values: &[] },
     Program {
         name: "terraform",
-        station: Shell,
         subs: &["init", "plan", "apply", "destroy", "fmt", "validate", "output", "state", "import", "workspace"],
-        network: &["init", "plan", "apply", "destroy", "import"],
         values: &["-chdir"],
     },
     Program {
         name: "dotnet",
-        station: Shell,
         subs: &["build", "test", "run", "restore", "publish", "pack", "clean", "new", "add", "format", "tool"],
-        network: &["restore", "publish"],
         values: &[],
     },
     Program {
         name: "rustup",
-        station: Network,
         subs: &["update", "install", "default", "show", "toolchain", "target", "component", "run", "which"],
-        network: &[],
         values: &[],
     },
-    // Programs that work on files: named in labels, Shell as any command.
-    plain("cat", Shell),
-    plain("head", Shell),
-    plain("tail", Shell),
-    plain("less", Shell),
-    plain("more", Shell),
-    plain("nl", Shell),
-    plain("ls", Shell),
-    plain("grep", Shell),
-    plain("egrep", Shell),
-    plain("fgrep", Shell),
-    plain("rg", Shell),
-    plain("ag", Shell),
-    plain("find", Shell),
-    plain("fd", Shell),
-    plain("mv", Shell),
-    plain("cp", Shell),
-    plain("rm", Shell),
-    plain("rmdir", Shell),
-    plain("mkdir", Shell),
-    plain("touch", Shell),
-    plain("sed", Shell),
-    plain("awk", Shell),
-    plain("tee", Shell),
-    plain("wc", Shell),
-    plain("sort", Shell),
-    plain("uniq", Shell),
-    plain("cut", Shell),
-    plain("tr", Shell),
-    plain("tree", Shell),
-    plain("stat", Shell),
-    plain("file", Shell),
-    plain("diff", Shell),
-    plain("ln", Shell),
-    plain("chmod", Shell),
-    plain("chown", Shell),
-    plain("du", Shell),
-    plain("df", Shell),
-    plain("basename", Shell),
-    plain("dirname", Shell),
-    plain("realpath", Shell),
-    plain("readlink", Shell),
-    plain("jq", Shell),
-    plain("yq", Shell),
-    plain("xxd", Shell),
-    plain("od", Shell),
-    plain("strings", Shell),
-    plain("tar", Shell),
-    plain("zip", Shell),
-    plain("unzip", Shell),
-    plain("gzip", Shell),
-    plain("gunzip", Shell),
-    plain("bat", Shell),
-    plain("patch", Shell),
-    plain("cmp", Shell),
-    plain("comm", Shell),
-    plain("column", Shell),
-    plain("shasum", Shell),
-    plain("md5", Shell),
-    plain("plutil", Shell),
-    // Programs that reach the network whatever their arguments.
-    plain("curl", Network),
-    plain("wget", Network),
-    plain("ssh", Network),
-    plain("scp", Network),
-    plain("sftp", Network),
-    plain("rsync", Network),
-    plain("nc", Network),
-    plain("ncat", Network),
-    plain("telnet", Network),
-    plain("ftp", Network),
-    plain("ping", Network),
-    plain("dig", Network),
-    plain("nslookup", Network),
-    plain("host", Network),
-    plain("http", Network),
-    plain("https", Network),
-    plain("aws", Network),
-    plain("az", Network),
-    plain("gcloud", Network),
-    plain("psql", Network),
-    plain("mysql", Network),
-    plain("redis-cli", Network),
+    // Programs that work on files.
+    plain("cat"),
+    plain("head"),
+    plain("tail"),
+    plain("less"),
+    plain("more"),
+    plain("nl"),
+    plain("ls"),
+    plain("grep"),
+    plain("egrep"),
+    plain("fgrep"),
+    plain("rg"),
+    plain("ag"),
+    plain("find"),
+    plain("fd"),
+    plain("mv"),
+    plain("cp"),
+    plain("rm"),
+    plain("rmdir"),
+    plain("mkdir"),
+    plain("touch"),
+    plain("sed"),
+    plain("awk"),
+    plain("tee"),
+    plain("wc"),
+    plain("sort"),
+    plain("uniq"),
+    plain("cut"),
+    plain("tr"),
+    plain("tree"),
+    plain("stat"),
+    plain("file"),
+    plain("diff"),
+    plain("ln"),
+    plain("chmod"),
+    plain("chown"),
+    plain("du"),
+    plain("df"),
+    plain("basename"),
+    plain("dirname"),
+    plain("realpath"),
+    plain("readlink"),
+    plain("jq"),
+    plain("yq"),
+    plain("xxd"),
+    plain("od"),
+    plain("strings"),
+    plain("tar"),
+    plain("zip"),
+    plain("unzip"),
+    plain("gzip"),
+    plain("gunzip"),
+    plain("bat"),
+    plain("patch"),
+    plain("cmp"),
+    plain("comm"),
+    plain("column"),
+    plain("shasum"),
+    plain("md5"),
+    plain("plutil"),
+    // Network clients.
+    plain("curl"),
+    plain("wget"),
+    plain("ssh"),
+    plain("scp"),
+    plain("sftp"),
+    plain("rsync"),
+    plain("nc"),
+    plain("ncat"),
+    plain("telnet"),
+    plain("ftp"),
+    plain("ping"),
+    plain("dig"),
+    plain("nslookup"),
+    plain("host"),
+    plain("http"),
+    plain("https"),
+    plain("aws"),
+    plain("az"),
+    plain("gcloud"),
+    plain("psql"),
+    plain("mysql"),
+    plain("redis-cli"),
     // Other tools a label may name.
-    plain("npx", Shell),
-    plain("bunx", Shell),
-    plain("node", Shell),
-    plain("deno", Shell),
-    plain("tsc", Shell),
-    plain("tsx", Shell),
-    plain("eslint", Shell),
-    plain("prettier", Shell),
-    plain("jest", Shell),
-    plain("vitest", Shell),
-    plain("playwright", Shell),
-    plain("python", Shell),
-    plain("python3", Shell),
-    plain("pytest", Shell),
-    plain("ruff", Shell),
-    plain("mypy", Shell),
-    plain("ruby", Shell),
-    plain("bundle", Shell),
-    plain("rake", Shell),
-    plain("rustc", Shell),
-    plain("rustfmt", Shell),
-    plain("gcc", Shell),
-    plain("cc", Shell),
-    plain("clang", Shell),
-    plain("cmake", Shell),
-    plain("ninja", Shell),
-    plain("swift", Shell),
-    plain("xcodebuild", Shell),
-    plain("xcrun", Shell),
-    plain("codesign", Shell),
-    plain("java", Shell),
-    plain("javac", Shell),
-    plain("mvn", Shell),
-    plain("gradle", Shell),
-    plain("bash", Shell),
-    plain("sh", Shell),
-    plain("zsh", Shell),
-    plain("fish", Shell),
-    plain("pwsh", Shell),
-    plain("open", Shell),
-    plain("osascript", Shell),
-    plain("date", Shell),
-    plain("which", Shell),
-    plain("ps", Shell),
-    plain("kill", Shell),
-    plain("pkill", Shell),
-    plain("pgrep", Shell),
-    plain("lsof", Shell),
-    plain("top", Shell),
-    plain("uname", Shell),
-    plain("whoami", Shell),
-    plain("sqlite3", Shell),
-    plain("tmux", Shell),
-    plain("vim", Shell),
-    plain("nvim", Shell),
-    plain("code", Shell),
-    plain("claude", Shell),
-    plain("codex", Shell),
-    plain("ottospace", Shell),
-    plain("osi", Shell),
-    plain("rtk", Shell),
-    plain("defaults", Shell),
-    plain("launchctl", Shell),
-    plain("hdiutil", Shell),
-    plain("ditto", Shell),
-    plain("say", Shell),
-    plain("pbcopy", Shell),
-    plain("pbpaste", Shell),
-    plain("perl", Shell),
-    plain("php", Shell),
-    plain("lua", Shell),
-    plain("shellcheck", Shell),
-    plain("actionlint", Shell),
-    plain("hyperfine", Shell),
+    plain("npx"),
+    plain("bunx"),
+    plain("node"),
+    plain("deno"),
+    plain("tsc"),
+    plain("tsx"),
+    plain("eslint"),
+    plain("prettier"),
+    plain("jest"),
+    plain("vitest"),
+    plain("playwright"),
+    plain("python"),
+    plain("python3"),
+    plain("pytest"),
+    plain("ruff"),
+    plain("mypy"),
+    plain("ruby"),
+    plain("bundle"),
+    plain("rake"),
+    plain("rustc"),
+    plain("rustfmt"),
+    plain("gcc"),
+    plain("cc"),
+    plain("clang"),
+    plain("cmake"),
+    plain("ninja"),
+    plain("swift"),
+    plain("xcodebuild"),
+    plain("xcrun"),
+    plain("codesign"),
+    plain("java"),
+    plain("javac"),
+    plain("mvn"),
+    plain("gradle"),
+    plain("bash"),
+    plain("sh"),
+    plain("zsh"),
+    plain("fish"),
+    plain("pwsh"),
+    plain("open"),
+    plain("osascript"),
+    plain("date"),
+    plain("which"),
+    plain("ps"),
+    plain("kill"),
+    plain("pkill"),
+    plain("pgrep"),
+    plain("lsof"),
+    plain("top"),
+    plain("uname"),
+    plain("whoami"),
+    plain("sqlite3"),
+    plain("tmux"),
+    plain("vim"),
+    plain("nvim"),
+    plain("code"),
+    plain("claude"),
+    plain("codex"),
+    plain("ottospace"),
+    plain("osi"),
+    plain("rtk"),
+    plain("defaults"),
+    plain("launchctl"),
+    plain("hdiutil"),
+    plain("ditto"),
+    plain("say"),
+    plain("pbcopy"),
+    plain("pbpaste"),
+    plain("perl"),
+    plain("php"),
+    plain("lua"),
+    plain("shellcheck"),
+    plain("actionlint"),
+    plain("hyperfine"),
 ];
 
 /// Words in front of a command that run it, as (name, options that take a value, words to skip after the options).
@@ -907,8 +849,8 @@ fn first_plain<'a>(words: &[&'a str], values: &[&str]) -> Option<&'a str> {
 }
 
 /// The commands one list of words runs: usually one; none for `cd` and the like; several for `bash -c '<line>'`.
-/// e.g. `["sudo", "-u", "deploy", "git", "-C", "x", "push"]` → [(Network, "git push")].
-fn command(words: &[String], depth: u8) -> Vec<Cmd> {
+/// e.g. `["sudo", "-u", "deploy", "git", "-C", "x", "push"]` → ["git push"].
+fn command(words: &[String], depth: u8) -> Vec<String> {
     let all: Vec<&str> = words.iter().map(String::as_str).filter(|w| !is_redirection(w)).collect();
     // Skip `A=b` and wrappers, with each wrapper's own options. By index: a line may hold very many of them.
     let mut at = 0;
@@ -956,19 +898,16 @@ fn command(words: &[String], depth: u8) -> Vec<Cmd> {
     {
         let inner: Vec<String> = rest[i + 1..].iter().map(|w| w.to_string()).collect();
         let inner = command(&inner, depth + 1);
-        return if inner.is_empty() { vec![Cmd { station: Shell, label: "find".to_string() }] } else { inner };
+        return if inner.is_empty() { vec!["find".to_string()] } else { inner };
     }
     let Some(known) = PROGRAMS.iter().find(|p| p.name == program) else {
-        return vec![Cmd { station: Shell, label: UNKNOWN.to_string() }];
+        return vec![UNKNOWN.to_string()];
     };
     let sub = first_plain(&rest[1..], known.values).filter(|sub| known.subs.contains(sub));
-    let network = sub.is_some_and(|sub| known.network.contains(&sub))
-        || (known.name == "npx" && rest.iter().any(|w| matches!(*w, "-y" | "--yes")));
-    let station = if network { Network } else { known.station };
     // Both parts come from the tables, not from the command line.
     let sub = sub.and_then(|sub| known.subs.iter().find(|s| **s == sub));
     let label = sub.map_or(known.name.to_string(), |sub| format!("{} {sub}", known.name));
-    vec![Cmd { station, label }]
+    vec![label]
 }
 
 #[cfg(test)]
@@ -989,7 +928,6 @@ mod tests {
             // A terminal command lights Shell, never Files: only the file tools above do.
             ("Bash", Some("ls -la"), Shell),
             ("Bash", Some("cat Cargo.toml"), Shell),
-            ("Bash", Some("git push origin main"), Network),
             ("exec_command", Some("rg TODO src"), Shell),
             ("exec", None, Shell),
             ("WebFetch", None, Network),
@@ -1015,6 +953,28 @@ mod tests {
         }
     }
 
+    /// A command lights Shell whatever it runs: whether it reached the network is not guessed.
+    #[test]
+    fn a_shell_command_always_lights_shell() {
+        let lines = [
+            "curl -s https://example.com",
+            "git push origin main",
+            "ssh host uptime",
+            "npm install left-pad",
+            "npx -y cowsay hi",
+            "gh pr view 1",
+            "kubectl get pods",
+            "ls | xargs -n1 curl",
+            "cargo build && git fetch | tee log; ssh host 'curl x'",
+            "bash -lc 'wget http://example.com'",
+        ];
+        for tool in ["Bash", "PowerShell", "exec_command", "shell", "local_shell_call", "exec", "write_stdin"] {
+            for line in lines {
+                assert_eq!(classify(tool, Some(line)), Shell, "{tool} {line}");
+            }
+        }
+    }
+
     /// Every word of a label is a name from the tables.
     fn from_tables(label: &str) -> bool {
         let mut words = label.split(' ');
@@ -1026,113 +986,113 @@ mod tests {
 
     #[test]
     fn commands_go_by_name() {
-        let cases: &[(&str, Station, &str)] = &[
-            ("cat a.txt", Shell, "cat"),
-            ("grep -rn foo src | head -5", Shell, "grep"),
-            ("rm -rf target && mkdir out", Shell, "rm"),
-            ("sed -i '' 's/a;b/c|d/' f.txt", Shell, "sed"),
-            ("find . -name '*.rs' -delete", Shell, "find"),
-            ("find . -name '*.o' -exec rm {} +", Shell, "rm"),
-            ("find . -exec curl -T {} https://example.com \\;", Network, "curl"),
-            ("cargo test --workspace", Shell, "cargo test"),
-            ("cd crates && cargo build", Shell, "cargo build"),
-            ("ls && cargo build", Shell, "ls"),
-            ("python -c \"import urllib\"", Shell, "python"),
-            ("make test", Shell, "make test"),
-            ("make -C sub deploy-prod", Shell, "make"),
-            ("curl -s https://example.com/a?token=secret", Network, "curl"),
-            ("gh pr create --draft --title 'secret title'", Network, "gh pr"),
-            ("git push -f origin main", Network, "git push"),
-            ("git status", Shell, "git status"),
-            ("git commit -m 'curl is mentioned; rm too'", Shell, "git commit"),
-            ("npm install left-pad", Network, "npm install"),
-            ("npm test", Shell, "npm test"),
-            ("cargo install ripgrep", Network, "cargo install"),
-            ("docker pull alpine", Network, "docker pull"),
-            ("npx -y cowsay hi", Network, "npx"),
-            ("npx tsc", Shell, "npx"),
-            ("sudo curl example.com", Network, "curl"),
-            ("FOO=1 BAR=2 env -i timeout 30 ssh host uptime", Network, "ssh"),
-            ("ls | xargs rm", Shell, "ls"),
-            ("ls | xargs -n1 curl", Network, "ls"),
-            ("nohup /usr/local/bin/wget http://example.com &", Network, "wget"),
-            ("CURL.EXE http://example.com", Network, "curl"),
-            ("echo \"$(curl -s example.com)\"", Network, "curl"),
-            ("echo \"`curl -s example.com` done\"", Network, "curl"),
-            ("x=`git fetch`", Network, "git fetch"),
-            ("cargo build 2>&1 | tail -5", Shell, "cargo build"),
-            ("cat a.txt > b.txt 2>/dev/null", Shell, "cat"),
-            ("if grep -q x f; then rm f; fi", Shell, "grep"),
-            ("cat > notes.md <<'EOF'\ncurl is only text here\nrm -rf /\nEOF", Shell, "cat"),
-            ("cat <<EOF | tee out.txt\nssh host\nEOF\ncargo test", Shell, "cat"),
-            ("cargo \\\n  test", Shell, "cargo test"),
-            ("./scripts/deploy.sh prod && git push", Network, "shell"),
-            ("cd /tmp", Shell, "shell"),
-            ("", Shell, "shell"),
-            ("echo 'unterminated", Shell, "shell"),
+        let cases: &[(&str, &str)] = &[
+            ("cat a.txt", "cat"),
+            ("grep -rn foo src | head -5", "grep"),
+            ("rm -rf target && mkdir out", "rm"),
+            ("sed -i '' 's/a;b/c|d/' f.txt", "sed"),
+            ("find . -name '*.rs' -delete", "find"),
+            ("find . -name '*.o' -exec rm {} +", "rm"),
+            ("find . -exec curl -T {} https://example.com \\;", "curl"),
+            ("cargo test --workspace", "cargo test"),
+            ("cd crates && cargo build", "cargo build"),
+            ("ls && cargo build", "ls"),
+            ("python -c \"import urllib\"", "python"),
+            ("make test", "make test"),
+            ("make -C sub deploy-prod", "make"),
+            ("curl -s https://example.com/a?token=secret", "curl"),
+            ("gh pr create --draft --title 'secret title'", "gh pr"),
+            ("git push -f origin main", "git push"),
+            ("git status", "git status"),
+            ("git commit -m 'curl is mentioned; rm too'", "git commit"),
+            ("npm install left-pad", "npm install"),
+            ("npm test", "npm test"),
+            ("cargo install ripgrep", "cargo install"),
+            ("docker pull alpine", "docker pull"),
+            ("npx -y cowsay hi", "npx"),
+            ("npx tsc", "npx"),
+            ("sudo curl example.com", "curl"),
+            ("FOO=1 BAR=2 env -i timeout 30 ssh host uptime", "ssh"),
+            ("ls | xargs rm", "ls"),
+            ("ls | xargs -n1 curl", "ls"),
+            ("nohup /usr/local/bin/wget http://example.com &", "wget"),
+            ("CURL.EXE http://example.com", "curl"),
+            ("echo \"$(curl -s example.com)\"", "curl"),
+            ("echo \"`curl -s example.com` done\"", "curl"),
+            ("x=`git fetch`", "git fetch"),
+            ("cargo build 2>&1 | tail -5", "cargo build"),
+            ("cat a.txt > b.txt 2>/dev/null", "cat"),
+            ("if grep -q x f; then rm f; fi", "grep"),
+            ("cat > notes.md <<'EOF'\ncurl is only text here\nrm -rf /\nEOF", "cat"),
+            ("cat <<EOF | tee out.txt\nssh host\nEOF\ncargo test", "cat"),
+            ("cargo \\\n  test", "cargo test"),
+            ("./scripts/deploy.sh prod && git push", "shell"),
+            ("cd /tmp", "shell"),
+            ("", "shell"),
+            ("echo 'unterminated", "shell"),
         ];
-        for (line, station, label) in cases {
-            assert_eq!(describe_command(line), (*station, label.to_string()), "{line}");
+        for (line, label) in cases {
+            assert_eq!(command_label(line), *label, "{line}");
             assert!(from_tables(label), "{label}");
         }
     }
 
     #[test]
     fn nothing_from_a_command_line_reaches_a_label() {
-        // (line, station, label, what must not show)
-        let cases: &[(&str, Station, &str, &str)] = &[
-            ("kubectl --token s3cr3tt0k3n get pods", Network, "kubectl get", "s3cr3t"),
-            ("kubectl --made-up-option s3cr3t get pods", Network, "kubectl", "s3cr3t"),
-            ("npm --otp 123456 publish", Network, "npm publish", "123456"),
-            ("git -C clientacme push", Network, "git push", "clientacme"),
-            ("git -c http.extraheader=s3cr3t fetch", Network, "git fetch", "s3cr3t"),
-            ("git s3cr3t-branch", Shell, "git", "s3cr3t"),
-            ("gh SECRET123", Network, "gh", "SECRET123"),
-            ("SECRET123 --flag", Shell, "shell", "SECRET123"),
-            ("/opt/acme-client/bin/deploy now", Shell, "shell", "acme"),
-            ("ls -la # password is hunter2; hunter2", Shell, "ls", "hunter2"),
-            ("cat notes.txt # token | s3cr3t", Shell, "cat", "s3cr3t"),
-            ("# s3cr3t\nls", Shell, "ls", "s3cr3t"),
-            ("TOKENS=(abc123 def456); ls", Shell, "ls", "abc123"),
-            ("grep foo url?a=1&s3cr3t", Shell, "grep", "s3cr3t"),
-            ("TOKEN=s3cr3t curl https://x", Network, "curl", "s3cr3t"),
-            ("curl -H 'Authorization: Bearer s3cr3t' https://x", Network, "curl", "s3cr3t"),
-            ("cat <<\"E OF\"\ns3cr3t\nE OF\nls", Shell, "cat", "s3cr3t"),
-            ("cat <<$DELIM\ncurl s3cr3t\n$DELIM", Shell, "cat", "s3cr3t"),
-            ("cat <<-'END-1'\n\ts3cr3t; curl x\n\tEND-1\n", Shell, "cat", "s3cr3t"),
-            ("cat <<EOF\ns3cr3t; curl x\n", Shell, "cat", "s3cr3t"),
-            ("sudo -u deploy curl https://x", Network, "curl", "deploy"),
-            ("timeout -s KILL 30 curl x", Network, "curl", "KILL"),
-            ("xargs -I {} curl {}", Network, "curl", "{}"),
-            ("bash -c 'curl https://x/s3cr3t'", Network, "curl", "s3cr3t"),
-            ("bash -lc \"cd s3cr3t && git -C s3cr3t push\"", Network, "git push", "s3cr3t"),
-            ("zsh -c 's3cr3t --run'", Shell, "shell", "s3cr3t"),
-            ("bash s3cr3t.sh", Shell, "bash", "s3cr3t"),
-            ("echo s3cr3t; s3cr3t", Shell, "shell", "s3cr3t"),
-            ("s3\u{202e}cr3t\u{200b} x", Shell, "shell", "cr3t"),
+        // (line, label, what must not show)
+        let cases: &[(&str, &str, &str)] = &[
+            ("kubectl --token s3cr3tt0k3n get pods", "kubectl get", "s3cr3t"),
+            ("kubectl --made-up-option s3cr3t get pods", "kubectl", "s3cr3t"),
+            ("npm --otp 123456 publish", "npm publish", "123456"),
+            ("git -C clientacme push", "git push", "clientacme"),
+            ("git -c http.extraheader=s3cr3t fetch", "git fetch", "s3cr3t"),
+            ("git s3cr3t-branch", "git", "s3cr3t"),
+            ("gh SECRET123", "gh", "SECRET123"),
+            ("SECRET123 --flag", "shell", "SECRET123"),
+            ("/opt/acme-client/bin/deploy now", "shell", "acme"),
+            ("ls -la # password is hunter2; hunter2", "ls", "hunter2"),
+            ("cat notes.txt # token | s3cr3t", "cat", "s3cr3t"),
+            ("# s3cr3t\nls", "ls", "s3cr3t"),
+            ("TOKENS=(abc123 def456); ls", "ls", "abc123"),
+            ("grep foo url?a=1&s3cr3t", "grep", "s3cr3t"),
+            ("TOKEN=s3cr3t curl https://x", "curl", "s3cr3t"),
+            ("curl -H 'Authorization: Bearer s3cr3t' https://x", "curl", "s3cr3t"),
+            ("cat <<\"E OF\"\ns3cr3t\nE OF\nls", "cat", "s3cr3t"),
+            ("cat <<$DELIM\ncurl s3cr3t\n$DELIM", "cat", "s3cr3t"),
+            ("cat <<-'END-1'\n\ts3cr3t; curl x\n\tEND-1\n", "cat", "s3cr3t"),
+            ("cat <<EOF\ns3cr3t; curl x\n", "cat", "s3cr3t"),
+            ("sudo -u deploy curl https://x", "curl", "deploy"),
+            ("timeout -s KILL 30 curl x", "curl", "KILL"),
+            ("xargs -I {} curl {}", "curl", "{}"),
+            ("bash -c 'curl https://x/s3cr3t'", "curl", "s3cr3t"),
+            ("bash -lc \"cd s3cr3t && git -C s3cr3t push\"", "git push", "s3cr3t"),
+            ("zsh -c 's3cr3t --run'", "shell", "s3cr3t"),
+            ("bash s3cr3t.sh", "bash", "s3cr3t"),
+            ("echo s3cr3t; s3cr3t", "shell", "s3cr3t"),
+            ("s3\u{202e}cr3t\u{200b} x", "shell", "cr3t"),
         ];
-        for (line, station, label, secret) in cases {
-            let got = describe_command(line);
-            assert_eq!(got, (*station, label.to_string()), "{line}");
-            assert!(from_tables(&got.1) && !got.1.contains(secret), "{line} → {}", got.1);
+        for (line, label, secret) in cases {
+            let got = command_label(line);
+            assert_eq!(got, *label, "{line}");
+            assert!(from_tables(&got) && !got.contains(secret), "{line} → {got}");
         }
     }
 
     #[test]
     fn argv_is_not_joined_and_split_again() {
-        let cases: &[(&[&str], Station, &str)] = &[
-            (&["git", "push"], Network, "git push"),
-            (&["git", "-C", "client acme", "push"], Network, "git push"),
-            (&["/bin/zsh", "-lc", "curl -s https://x | jq ."], Network, "curl"),
-            (&["bash", "-c", "ls"], Shell, "ls"),
+        let cases: &[(&[&str], &str)] = &[
+            (&["git", "push"], "git push"),
+            (&["git", "-C", "client acme", "push"], "git push"),
+            (&["/bin/zsh", "-lc", "curl -s https://x | jq ."], "curl"),
+            (&["bash", "-c", "ls"], "ls"),
             // One word with a separator in it is one argument, not two commands.
-            (&["ls", "a; curl s3cr3t"], Shell, "ls"),
-            (&["s3cr3t tool", "--x"], Shell, "shell"),
-            (&["gh", "s3cr3t"], Network, "gh"),
-            (&[], Shell, "shell"),
+            (&["ls", "a; curl s3cr3t"], "ls"),
+            (&["s3cr3t tool", "--x"], "shell"),
+            (&["gh", "s3cr3t"], "gh"),
+            (&[], "shell"),
         ];
-        for (words, station, label) in cases {
-            assert_eq!(describe_argv(words), (*station, label.to_string()), "{words:?}");
+        for (words, label) in cases {
+            assert_eq!(argv_label(words), *label, "{words:?}");
         }
     }
 
@@ -1257,22 +1217,22 @@ mod tests {
 
     #[test]
     fn more_command_forms() {
-        let cases: &[(&str, Station, &str)] = &[
-            ("curl --header=X-Key:s3cr3t -us3cr3t:pw https://x", Network, "curl"),
-            ("git --git-dir=s3cr3t -Cs3cr3t status", Shell, "git status"),
-            ("echo $(s3cr3t --x) `s3cr3t2`", Shell, "shell"),
-            ("diff <(curl -s https://x/s3cr3t) <(cat s3cr3t)", Network, "diff"),
-            ("env -S 'curl https://x/s3cr3t' s3cr3t", Network, "curl"),
-            ("env --split-string 's3cr3t run'", Shell, "shell"),
-            ("find s3cr3t -name s3cr3t -exec grep s3cr3t {} \\;", Shell, "grep"),
-            ("ssh s3cr3t@s3cr3t.example 'rm -rf s3cr3t; curl s3cr3t'", Network, "ssh"),
-            ("bash -c \"bash -c 'zsh -c \\\"curl s3cr3t\\\"'\"", Network, "curl"),
-            ("bash -c \"bash -c 'zsh -c \\\"sh -c s3cr3t\\\"'\"", Shell, "sh"),
+        let cases: &[(&str, &str)] = &[
+            ("curl --header=X-Key:s3cr3t -us3cr3t:pw https://x", "curl"),
+            ("git --git-dir=s3cr3t -Cs3cr3t status", "git status"),
+            ("echo $(s3cr3t --x) `s3cr3t2`", "shell"),
+            ("diff <(curl -s https://x/s3cr3t) <(cat s3cr3t)", "diff"),
+            ("env -S 'curl https://x/s3cr3t' s3cr3t", "curl"),
+            ("env --split-string 's3cr3t run'", "shell"),
+            ("find s3cr3t -name s3cr3t -exec grep s3cr3t {} \\;", "grep"),
+            ("ssh s3cr3t@s3cr3t.example 'rm -rf s3cr3t; curl s3cr3t'", "ssh"),
+            ("bash -c \"bash -c 'zsh -c \\\"curl s3cr3t\\\"'\"", "curl"),
+            ("bash -c \"bash -c 'zsh -c \\\"sh -c s3cr3t\\\"'\"", "sh"),
         ];
-        for (line, station, label) in cases {
-            let got = describe_command(line);
-            assert_eq!(got, (*station, label.to_string()), "{line}");
-            assert!(from_tables(&got.1) && !got.1.contains("s3cr3t"), "{line}");
+        for (line, label) in cases {
+            let got = command_label(line);
+            assert_eq!(got, *label, "{line}");
+            assert!(from_tables(&got) && !got.contains("s3cr3t"), "{line}");
         }
     }
 
@@ -1295,9 +1255,9 @@ mod tests {
         ];
         let started = std::time::Instant::now();
         for line in &lines {
-            assert!(from_tables(&describe_command(line).1));
+            assert!(from_tables(&command_label(line)));
             let words: Vec<&str> = line.split(' ').collect();
-            assert!(from_tables(&describe_argv(&words).1));
+            assert!(from_tables(&argv_label(&words)));
         }
         // Linear work on at most the first 256 KiB of each: well under a second here, even unoptimised.
         assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());

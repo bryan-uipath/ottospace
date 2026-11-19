@@ -245,11 +245,11 @@ mod tests {
 
     #[test]
     fn an_end_can_move_the_call_to_another_station() {
-        let mut s = Snapshot::fold(&[start(10, "a", Station::Shell)]);
-        let (station, summary) = (Some(Station::Network), Some("git push".to_string()));
+        let mut s = Snapshot::fold(&[start(10, "a", Station::Other)]);
+        let (station, summary) = (Some(Station::Shell), Some("git push".to_string()));
         s.apply(&at(20, What::ToolEnd { id: "a".into(), failed: false, station, summary, output: None }));
-        assert_eq!(s.counts.get(&Station::Shell), Some(&0));
-        assert_eq!(s.counts.get(&Station::Network), Some(&1));
+        assert_eq!(s.counts.get(&Station::Other), Some(&0));
+        assert_eq!(s.counts.get(&Station::Shell), Some(&1));
         assert_eq!(s.recent[0].summary, "git push");
     }
 
