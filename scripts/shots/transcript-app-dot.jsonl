@@ -1,0 +1,16 @@
+# The owner's case: Zoom picked in Transcribe a window… while its window is in a pane, the drawer
+# collapsed. The Zoom pane's header shows the red dot and Stop; the terminal's does not. A test
+# run hosts no window: `app_fixture` makes the app pane. Made-up apps and lines.
+{"env":{"OTTOSPACE_FEATURES":"transcripts","OTTOSPACE_LISTEN_FIXTURE":"{ROOT}/fixture.jsonl","OTTOSPACE_LISTEN_APPS":"{ROOT}/apps.json"}}
+{"click":"top:new_workspace"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"app_fixture","name":"zoom.us","user":true}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
+{"settle":300}
+{"click":"listen-pick"}
+{"settle":300}
+{"cmd":"key","keys":"enter","as":"user"}
+{"until":"listen_lines","len":6}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
+{"settle":500}
+{"shot":"collapsed"}

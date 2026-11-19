@@ -1620,7 +1620,8 @@ export interface Snapshot {
   /** Test runs only: the transcript drawer's rows, the volatile lines last. Else null. */
   listen_lines: ListenLine[] | null;
   /** Test runs only: where a transcript's controls were drawn, by id (`listen-start:3`,
-   * `listen-header`, `listen-stop:view`, `listen-resume:view`, `listen-menu`, `listen-view`,
+   * `listen-header:<pane>`, `listen-stop:header-<pane>`, `listen-stop:view`, `listen-resume:view`,
+   * `listen-menu`, `listen-view`,
    * `listen-idle`, the off-show dot `listen-dot:space:<place>` or `listen-dot:tab:<id>`). Else null. */
   listen_rects: Record<string, Rect> | null;
   /** Test runs only: where each Tasks heading's fold mark, name and count were drawn

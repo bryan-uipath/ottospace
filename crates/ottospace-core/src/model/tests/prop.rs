@@ -2113,6 +2113,15 @@ fn check(m: &Model) -> Result<(), String> {
         }
     });
     ensure!(m.listen_dot() == want, "the dot {:?}, not {want:?}", m.listen_dot());
+    // The headers' red dots: none with none on; else the source pane, or panes of the app heard.
+    let marked = m.listen_marked();
+    ensure!(m.listen.on.is_some() || marked.is_empty(), "marked {marked:?} with none on");
+    let source = m.listen.on.as_ref().map(|on| on.source);
+    ensure!(
+        marked.iter().all(|pane| source == Some(crate::listen::Source::Pane(*pane))
+            || matches!(m.pane(*pane).map(|p| &p.kind), Some(Kind::App { .. }))),
+        "marked {marked:?}, not of {source:?}"
+    );
     // A grey mark of a lost stream is of a pane that is there, with none on, the flag on.
     if let Some(lost) = m.listen.lost {
         ensure!(m.pane(lost).is_some() && m.listen.on.is_none(), "a lost mark on {lost} with {:?}", m.listen.on);

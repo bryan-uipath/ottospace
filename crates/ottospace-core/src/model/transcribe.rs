@@ -44,6 +44,21 @@ impl Model {
         self.features.on(crate::features::Feature::Transcripts) && here
     }
 
+    /// The panes whose header shows the red dot: the source pane; for an app picked
+    /// (`Source::App`), each pane of that app's windows, since its whole sound is heard (SCK
+    /// filters by app). By bundle when both have one, else by name. None with none on.
+    pub fn listen_marked(&self) -> Vec<PaneId> {
+        let Some(on) = &self.listen.on else { return Vec::new() };
+        let pid = match on.source {
+            Source::Pane(pane) => return vec![pane],
+            Source::App { pid } => pid,
+        };
+        let Some(app) = self.listen.apps.iter().find(|app| app.pid == pid) else { return Vec::new() };
+        let heard = (app.bundle.as_deref(), app.name.as_str());
+        let of_app = |kind: &Kind| matches!(kind, Kind::App { bundle, name, .. } if crate::marks::same_app((bundle.as_deref(), name), heard));
+        self.panes.iter().filter(|pane| of_app(&pane.kind)).map(|pane| pane.id).collect()
+    }
+
     /// The red dot of the pane being heard, off show: none while its tab is on show (its header
     /// has the dot), none for a source in no pane, and none in a hidden space (off the row).
     pub fn listen_dot(&self) -> Option<listen::Dot> {
@@ -883,5 +898,34 @@ mod tests {
                 .sent_by(Origin::System),
         );
         assert_eq!(begun(&m.update(start)).unwrap().meetings, []);
+    }
+
+    /// An app picked is heard whole: each pane of its windows is marked, none of another app's.
+    #[test]
+    fn the_panes_marked_are_the_source_or_every_window_of_the_app_heard() {
+        let mut m = model();
+        assert_eq!(m.listen_marked(), Vec::<u32>::new(), "none on");
+        m.update(start(2));
+        assert_eq!(m.listen_marked(), [2], "the source pane");
+        m.update(Action::ListenStop { at: 2_000 });
+        assert_eq!(m.listen_marked(), Vec::<u32>::new(), "stopped");
+        // Zoom's second window, and Chrome's, in panes 3 and 4.
+        for (window, name) in [(8, "Zoom"), (9, "Chrome")] {
+            let kind = Kind::App { window, title: "w".into(), bundle: Some(format!("b.{name}")), name: name.into() };
+            m.update(Action::Open { kind, axis: Axis::Right, beside: None });
+        }
+        // Pane 2's Zoom has no bundle: matched by name; pane 3's by bundle; Chrome's not.
+        m.update(picker(vec![app(10, "Zoom", &["Zoom Meeting"], true), app(20, "Chrome", &[], false)]));
+        m.update(Action::PickerChoose { index: Some(0) });
+        assert_eq!(m.listen_marked(), [2, 3]);
+        // Ended by the shell: no mark at once.
+        let ended = Action::ListenEnded { id: "p1".into(), why: Ended::AppQuit, at: 6_000 };
+        m.update(Action::ListenBegan { id: "p1".into(), at: 5_000 }.sent_by(Origin::System));
+        m.update(ended.sent_by(Origin::System));
+        assert_eq!(m.listen_marked(), Vec::<u32>::new());
+        let other = listen::SoundApp { bundle: Some("b.Other".into()), ..app(30, "Zoom", &[], true) };
+        m.update(picker(vec![other]));
+        m.update(Action::PickerChoose { index: Some(0) });
+        assert_eq!(m.listen_marked(), [2], "pane 3's bundle differs; pane 2 has none: by name");
     }
 }
