@@ -463,6 +463,13 @@ export class Client {
     return this.snapshot({ cmd: "capture_start", ...args });
   }
   /**
+   * For tests (`OTTOSPACE_E2E`): the user's bug key, pressed by the test. The window is frozen as a
+   * picture to mark, while `developer.ottospace_repo` is a checkout. Rejects outside a test run.
+   */
+  bugStart(): Promise<Snapshot> {
+    return this.snapshot({ cmd: "bug_start" });
+  }
+  /**
    * For tests (`OTTOSPACE_E2E`): opens the accessibility inspector on a pane (default: the focused
    * one) with `tree` as if read from its window. Rejects outside a test run: only the user opens it.
    */

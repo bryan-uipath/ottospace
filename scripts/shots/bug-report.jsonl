@@ -1,0 +1,18 @@
+# The bug button at the top bar's right end, beside Fill the Whole Display; the marking overlay
+# over a frozen picture of the window: a box with its comment, the whole app, app panes blanked.
+# A made-up terminal; the setting names a made-up checkout.
+{"cmd":"split"}
+{"cmd":"type","pane":1,"text":"printf 'tab row flickers here\\n'\r"}
+{"cmd":"wait","pane":1,"pattern":"^tab row flickers here$"}
+{"until":"bug.icon","is":true}
+{"hover":"top:bug"}
+{"settle":900}
+{"shot":"button"}
+{"click":"top:bug"}
+{"until":"bug.report"}
+{"settle":300}
+{"shot":"marking"}
+{"drag":{"rect":"bounds.1"},"at":[0.05,0.02],"by":[260,40]}
+{"cmd":"key","keys":"t h e space r o w space f l i c k e r s","as":"user"}
+{"settle":300}
+{"shot":"comment"}

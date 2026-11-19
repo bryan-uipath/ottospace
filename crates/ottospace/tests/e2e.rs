@@ -14630,4 +14630,97 @@ fn three_app_only_slots_take_three_windows_one_by_one() {
         .collect();
     let want: Vec<(u64, u64)> = panes.iter().zip(710_001..).map(|(p, w)| (*p, w)).collect();
     assert_eq!(held, want, "in reading order, one window each: {state}");
+
+/// A real git checkout standing for ottospace's repository, one commit on `main`, and a home
+/// whose settings name it (`developer.ottospace_repo`). Both under `support::temp`.
+fn bug_setup(name: &str) -> (PathBuf, PathBuf) {
+    let root = support::temp(&format!("ottospace-e2e-bug-{name}-{}", std::process::id()));
+    let repo = root.join("ottospace");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"]);
+    let repo = repo.canonicalize().unwrap();
+    let settings = json!({"developer": {"ottospace_repo": repo}, "restore_layout": false}).to_string();
+    (repo, user_folder(&format!("bug-{name}"), &settings))
+}
+
+/// The report once it is drawn: the picture is taken off the main thread first.
+fn bug_report(otto: &Otto) -> Value {
+    otto.wait_for("the bug report", |o| {
+        let s = o.call(json!({"cmd": "state"}));
+        (!s["bug"]["report"].is_null()).then_some(s)
+    })
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn bug_button_shows_only_for_a_checkout_and_only_the_user_starts_a_report() {
+    // No setting: no button.
+    let plain = user_folder("bug-none", r#"{"restore_layout": false}"#);
+    let otto = Otto::launch_with("bug-none", &[("OTTOSPACE_HOME", plain.to_str().unwrap())]);
+    let state = otto.drawn();
+    assert_eq!(state["bug"]["icon"], false, "{}", state["bug"]);
+    assert!(!otto.controls().iter().any(|(id, _)| id == "top:bug"), "a bug button with no setting");
+    drop(otto);
+    let (_repo, home) = bug_setup("button");
+    let otto = Otto::launch_with("bug-button", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    assert_eq!(otto.drawn()["bug"]["icon"], true);
+    let button = otto.control("top:bug");
+    // A client's click and key start nothing.
+    otto.click(at(button, 0.5, 0.5), 1);
+    otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-b"}));
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(otto.call(json!({"cmd": "state"}))["bug"]["report"].is_null(), "a client started a report");
+    // The user's key does.
+    otto.user_key("cmd-ctrl-b");
+    let state = bug_report(&otto);
+    assert_eq!((&state["mode"], &state["bug"]["report"]["marks"]), (&json!("annotate"), &json!([])));
+    // Esc cancels: nothing is kept.
+    otto.user_key("escape");
+    assert!(otto.call(json!({"cmd": "state"}))["bug"]["report"].is_null());
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn bug_the_users_drag_marks_a_box_with_a_comment_and_a_client_types_none() {
+    let (_repo, home) = bug_setup("mark");
+    let otto = Otto::launch_with("bug-mark", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    otto.call(json!({"cmd": "split"}));
+    let pane = otto.bounds(&[1])[0];
+    otto.user_click(at(otto.control("top:bug"), 0.5, 0.5));
+    let state = bug_report(&otto);
+    let size = &state["bug"]["report"]["size"];
+    let (w, h) = (size[0].as_f64().unwrap(), size[1].as_f64().unwrap());
+    // A drag over the pane's top left leaves a box there, its comment typed next.
+    let (from, to) = (at(pane, 0.1, 0.3), at(pane, 0.5, 0.6));
+    let reply = otto.user_drag(from, to);
+    let mark = &reply["bug"]["report"]["marks"][0];
+    assert!(mark["rect"].is_array(), "no box from {from:?} to {to:?}: {}", reply["bug"]);
+    let r = rect(&mark["rect"]);
+    let near = |a: f64, b: f64| (a - b).abs() < 0.01;
+    assert!(near(r[0], from[0] / w) && near(r[1], from[1] / h) && near(r[2], (to[0] - from[0]) / w), "{mark}");
+    assert_eq!(reply["bug"]["report"]["typing"], mark["n"]);
+    // A client's keys type nothing in it.
+    otto.call(json!({"cmd": "key", "keys": "x"}));
+    let reply = otto.user_key("t h e space r o w");
+    assert_eq!(reply["bug"]["report"]["marks"][0]["comment"], "the row", "{}", reply["bug"]);
+    // ↵ ends the comment; Whole app adds a mark; a client's click on it does not.
+    assert!(otto.user_key("enter")["bug"]["report"]["typing"].is_null());
+    let control = |id: &str| at(rect(&otto.call(json!({"cmd": "state"}))["bug"]["controls"][id]), 0.5, 0.5);
+    let whole = control("bug:whole");
+    otto.click(whole, 1);
+    assert_eq!(otto.call(json!({"cmd": "state"}))["bug"]["report"]["marks"].as_array().unwrap().len(), 1);
+    let reply = otto.user_click(whole);
+    let marks = reply["bug"]["report"]["marks"].as_array().unwrap().clone();
+    assert!(marks.len() == 2 && marks[1]["rect"].is_null(), "{marks:?}");
+    // "Include app panes" is the user's toggle; nothing is blanked with no app pane.
+    let apps = control("bug:apps");
+    assert_eq!(otto.user_click(apps)["bug"]["report"]["apps"], true);
+    assert_eq!(otto.call(json!({"cmd": "state"}))["bug"]["blanked"], json!([]));
+    // A client's Esc cancels nothing; the user's ends the comment, then the report.
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    assert!(!otto.call(json!({"cmd": "state"}))["bug"]["report"].is_null());
+    otto.user_key("escape");
+    otto.user_key("escape");
+    assert!(otto.call(json!({"cmd": "state"}))["bug"]["report"].is_null());
 }

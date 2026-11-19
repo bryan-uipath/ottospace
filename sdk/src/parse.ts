@@ -6,6 +6,8 @@ import type {
   AppWindow,
   Display,
   TabOut,
+  BugMark,
+  BugReport,
   AgentChip,
   AgentDial,
   ChatSelection,
@@ -689,6 +691,33 @@ function captureDrawn(value: unknown, at: string): Snapshot["capture"] {
     encoded: list(num)(o.encoded, `${at}.encoded`),
     dir: orNull(str)(o.dir, `${at}.dir`),
     brief: orNull(shown)(o.brief, `${at}.brief`),
+  };
+}
+
+function bugReport(value: unknown, at: string): BugReport {
+  const o = fields(value, at);
+  const mark = (value: unknown, at: string): BugMark => {
+    const m = fields(value, at);
+    return { n: num(m.n, `${at}.n`), rect: orNull(rect)(m.rect, `${at}.rect`), comment: str(m.comment, `${at}.comment`) };
+  };
+  return {
+    size: pair(o.size, `${at}.size`),
+    marks: list(mark)(o.marks, `${at}.marks`),
+    typing: orNull(num)(o.typing, `${at}.typing`),
+    drag: orNull(rect)(o.drag, `${at}.drag`),
+    apps: bool(o.apps, `${at}.apps`),
+    picture: bool(o.picture, `${at}.picture`),
+  };
+}
+
+function bugDrawn(value: unknown, at: string): Snapshot["bug"] {
+  const o = fields(value, at);
+  return {
+    icon: bool(o.icon, `${at}.icon`),
+    report: orNull(bugReport)(o.report, `${at}.report`),
+    blanked: orNull(list(rect))(o.blanked, `${at}.blanked`),
+    pixels: orNull(pair)(o.pixels, `${at}.pixels`),
+    controls: orNull(map(rect))(o.controls, `${at}.controls`),
   };
 }
 
@@ -2034,6 +2063,7 @@ export function snapshot(value: unknown): Snapshot {
     scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),
     overflow: orNull(map(map(bool)))(o.overflow, "overflow"),
     capture: captureDrawn(o.capture, "capture"),
+    bug: bugDrawn(o.bug, "bug"),
     spaces: list(spaceRow)(o.spaces, "spaces"),
     badges: map(str)(o.badges, "badges"),
     drawer: drawerDrawn(o.drawer, "drawer"),

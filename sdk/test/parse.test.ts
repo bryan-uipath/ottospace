@@ -151,6 +151,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     scrollbars: {},
     overflow: null,
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
+    bug: { icon: false, report: null, blanked: null, pixels: null, controls: null },
     spaces: [
       { of: { kind: "home" }, hidden: false, selected: false, tabs: [], tasks: [], front: null, worktree: null, glyph: { kind: "home" }, kept: true },
       { of: { kind: "workbook", id: 1 }, hidden: false, selected: true, tabs: [0], tasks: [], front: null, worktree: "/code/app", glyph: { kind: "app", name: "Notes" }, kept: true },

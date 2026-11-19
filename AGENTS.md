@@ -152,6 +152,10 @@ Design note: `docs/ai/attention/plan.md`.
   - `capture_start`: the user's capture key, pressed by the test (`"pane"` optional). Outside a
     test run only the user starts a capture; the core also refuses a `CaptureStart` of any other
     origin, so a client's key, click or sneak label starts none in a test run either.
+  - `bug_start`: the user's bug key, pressed by the test, while `developer.ottospace_repo` is a
+    checkout. Outside a test run only the user starts a bug report (it pictures the window); the
+    core refuses a `BugStart` of any other origin. The state's `bug.controls` (the overlay's
+    controls, by id) is drawn only while a report is open.
   - `sneak_app_tree`: a fixture tree as if read from the focused pane's window while sneak mode
     is on (a test run hosts no window), so its elements get labels. The state's `app_presses`
     (null outside a test run) lists each press a label asked for.

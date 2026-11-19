@@ -705,6 +705,22 @@ once, read-only: nothing in the app is pressed or set), for a terminal the rows.
 
 Design: [capture.md](ai/capture.md).
 
+## Bug reports
+
+For working on ottospace itself. With `developer.ottospace_repo` naming a git checkout of
+ottospace, a bug button shows at the top row's right end (⌃⌘B, in its tooltip only). It takes a
+picture of ottospace's own window as it is (by its window id, never the screen or another app's
+window; Screen Recording), then lays it over the window:
+
+- Drag a box round what is wrong, or Whole app; a comment card opens beside the mark and takes
+  the keyboard. Several marks, a comment each. A click in a box or on a card's comment goes back
+  to it; × removes the mark. ↵ or Esc ends a comment; Esc again cancels the report.
+- App panes (other apps' windows) are blanked unless you tick Include app panes.
+- The picture may show anything ottospace draws at that moment (a meeting title, a transcript, a
+  terminal's text). It stays on this Mac.
+- Only your click or key starts, marks or cancels a report: a socket client's key, click or
+  label does none of it. Design: [bug-reporter.md](ai/bug-reporter.md).
+
 ## Sessions
 
 An agent is a saved definition. A session is one running conversation of Claude Code or Codex.
@@ -1327,6 +1343,7 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 | `sessions_range` | Which sessions Elsewhere lists: `today`, `week` (7 days), `month` (30 days) or `all`. Set by hand: nothing on screen picks it | `week` |
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
+| `developer.ottospace_repo` | A git checkout of ottospace (`~` is your home). While it is one, the [bug button](#bug-reports) shows. Applies at once | none |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |
 | `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title`, `identifier` (the app's own name for the window, its `AXIdentifier`: Zoom's main meeting window is `zm.meeting.window.main`; a window without one has empty text: `""` or `*` matches it) and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later, and is never moved. `"do": "manage"` undoes a built-in rule. A new window of a hosted app: `"do": "split"` puts it in a pane of its own even if it is a pop-up (a dialog, a small window; a sheet stays on its window); `"do": "float"` keeps it a free window over its app's pane, as a pop-up, and it never becomes a pane. Without either, a new window floats and is offered in its app's pane ([App panes](#app-panes)): none splits by itself. Your rules come first, but a `split` or `float` rule never moves a window a built-in rule leaves alone (Zoom's share toolbar): only `manage` does. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; a changed rule applies to windows seen after it | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
 | `apps` | The pinned apps: listed first under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. Each is the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`), looked for in `/Applications`, `~/Applications` and `/System/Applications` (and their `Utilities`), or the path of its bundle (`~/Tools/Lumen.app`). One that is not found is left out of the list and kept in the file. Pin and Unpin in the Apps section write this list: the name if it means that same bundle when read back (the first of that name in those folders, in that order), else its path. A name that is found only once ottospace runs (the app was installed since) is listed from the next scan. (Once you type in the picker it offers every installed app in those folders, these first) | none |
@@ -1574,6 +1591,7 @@ first brainstorm:
 - [accessibility.md](ai/1-initial-brainstorm/accessibility.md): reading app accessibility trees, toward sneak mode and agent actions.
 - [code-city/plan.md](ai/code-city/plan.md): the atlas, a map where a thing keeps its place, and the code city on it (the layout is built; nothing is on screen yet).
 - [file-viewer.md](ai/file-viewer.md): the read-only file viewer pane, and what comes after it (the markdown pass, the explorer, comments).
+- [bug-reporter.md](ai/bug-reporter.md): marking a bug in ottospace's own window and handing it to an agent.
 - [fill-display.md](ai/fill-display.md): the window over the menu bar and the Dock (⌃⌘F, the green button): what macOS does, measured, and what is left to check by hand.
 - [sneak-apps.md](ai/sneak-apps.md): sneak labels that press controls inside the focused app pane, and why agents still cannot.
 - [multi-monitor.md](ai/1-initial-brainstorm/multi-monitor.md): options for more than one display, and a staged recommendation. Nothing measured yet.
