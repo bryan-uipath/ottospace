@@ -506,6 +506,9 @@ impl Workspace {
                 match (kind, number) {
                     ("tab", Some(tab)) => self.select_tab(tab, window, cx),
                     ("tab-close", Some(tab)) => self.close_tab(tab, window, cx),
+                    ("tab-in", Some(tab)) => {
+                        drop(self.dispatch(Action::TabIn { tab: Some(tab) }, self.input, window, cx))
+                    }
                     ("close", Some(pane)) => self.close_pane(pane, window, cx),
                     ("fit", Some(pane)) => self.fit_pane(pane, window, cx),
                     ("mark", Some(mark)) => self.choose_mark(mark, Axis::Right, window, cx),

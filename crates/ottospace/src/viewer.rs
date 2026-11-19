@@ -306,7 +306,7 @@ impl Workspace {
             }
         }
         // Where each drawn view is, once laid out: put at the core's line after a read, then told.
-        let drawn = self.model.layout.as_ref().map(ottospace_core::Node::leaves).unwrap_or_default();
+        let drawn = self.model.shown_panes();
         for id in drawn {
             let (Some(view), Some(core)) = (self.viewers.get_mut(&id), self.model.viewer(id)) else { continue };
             if view.reading.is_some() || matches!(view.body, Body::None) {

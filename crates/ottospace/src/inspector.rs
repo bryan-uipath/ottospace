@@ -128,7 +128,7 @@ impl Workspace {
     /// live window covers ottospace).
     fn inspector_outline(&self) -> Option<Frame> {
         let inspector = self.model.inspector.as_ref()?;
-        let drawn = self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(&inspector.pane));
+        let drawn = self.model.main_panes().contains(&inspector.pane);
         if !drawn || self.model.live == Some(inspector.pane) {
             return None;
         }

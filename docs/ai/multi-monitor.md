@@ -16,7 +16,11 @@ the owner's later word: a display plugged in again **takes back** the tab an unp
 (unless the main window shows it then; the user's own fold in clears that); with two displays a
 second fold out swaps; a tab holding an app pane stays in the main window; the second window's
 drawer and the focus arrows across displays wait (slices 4 and 6), and so does `layout.json`
-(a tab out folds in at the next start). No window opens yet (slice 3).
+(a tab out folds in at the next start). Slice 3 is in the shell (`out_window.rs`): ⌘⇧O, the window
+out with its "From" strip and its workspace's rail on its outer edge (tasks, +, the transcript; a
+task's click shows it in the main window, whose drawer is the only one), Fold back in on its tab in
+the main row; each window out is kicked to draw while a display change settles. Not yet: the
+window out's own drawer (slice 4), the arrows across (slice 6), its own stall watchdog.
 
 Nothing here was measured on two displays: the CI runners have one, and so had every run
 behind this note. What GPUI 0.2.2 offers was read from its source in the cargo registry.

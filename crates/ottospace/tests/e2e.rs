@@ -13088,6 +13088,84 @@ fn the_state_lists_the_displays_and_a_test_makes_them_up() {
     assert_eq!(state["displays"].as_array().map(Vec::len), Some(1));
 }
 
+/// ⌘⇧O folds the tab on show out to the other display, in a window of its own that draws its
+/// panes, the keyboard with it; ⌘T there acts on the main window. Its tab in the main window's row
+/// folds it back in; so does unplugging the display, and plugging it in again takes it back.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_tab_folds_out_to_another_display_and_back_in() {
+    let otto = Otto::launch_with("tab-out", &[("OTTOSPACE_FEATURES", "multi_monitor")]);
+    // The real screens: macOS keeps a window no wider than the one it is on (CI's is 1024 wide).
+    let real = otto.wait_for("the real displays", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        Some(state["displays"].clone()).filter(|d| d.as_array().is_some_and(|d| !d.is_empty()))
+    });
+    let main = json!({"uid": "main", "frame": [0, 0, 1728, 1117]});
+    let other = json!({"uid": "other", "frame": [1728, 0, 1920, 1080], "scale": 1});
+    otto.call(json!({"cmd": "displays_set", "displays": [main, other], "main": "main"}));
+    // A workspace of two tabs, a terminal in each; the second on show.
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "new_tab"}));
+    let state = otto.call(json!({"cmd": "split"}));
+    let tabs = &state["state"]["tabs"];
+    let (first, second) = (tabs[0]["id"].as_u64().unwrap(), tabs[1]["id"].as_u64().unwrap());
+    // A client's ⌘⇧O is refused: only the user folds a tab out.
+    let refused = otto.call(json!({"cmd": "key", "keys": "cmd-shift-o"}));
+    assert_eq!(refused["out"], json!([]), "{refused}");
+    let state = otto.call(json!({"cmd": "key", "keys": "cmd-shift-o", "as": "user"}));
+    assert_eq!(state["out"], json!([{"tab": second, "display": 1}]), "{state}");
+    // The main window shows the workspace's other tab; the keyboard went with the tab.
+    let windows = &state["windows"];
+    assert_eq!((&windows[0]["tab"], &windows[0]["key"]), (&json!(first), &json!(false)), "{windows}");
+    assert_eq!((&windows[1]["tab"], &windows[1]["key"]), (&json!(second), &json!(true)), "{windows}");
+    // Its window opens and draws, the made-up display's width, or the real screen's it sits on if
+    // narrower (macOS keeps it no larger than the screen).
+    let frame = otto.wait_for("the tab out's window", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        let window = &state["windows"][1];
+        window["frames"].as_u64().is_some_and(|n| n > 0).then(|| window["frame"].clone())
+    });
+    let x = frame[0].as_f64().expect("x");
+    let screen = real.as_array().into_iter().flatten().find(|d| {
+        let (left, w) = (d["frame"][0].as_f64().unwrap_or(0.), d["frame"][2].as_f64().unwrap_or(0.));
+        (left..left + w).contains(&x)
+    });
+    let screen_w = screen.and_then(|d| d["frame"][2].as_f64()).expect("the window on a real screen");
+    assert_eq!(frame[2].as_f64(), Some(screen_w.min(1920.)), "{frame} {real}");
+    // Typed keys reach its terminal.
+    otto.call(json!({"cmd": "type", "text": "echo out-$((6*7))\r"}));
+    let pane = state["state"]["focused"].as_u64().unwrap();
+    otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^out-42$"}));
+    // Its tab in the main window's row is marked out, with Fold back in.
+    otto.control(&format!("tab-in:{second}"));
+    // ⌘T there opens a tab in the main window's workspace, the keyboard with it.
+    let state = otto.call(json!({"cmd": "key", "keys": "cmd-t", "as": "user"}));
+    assert_eq!(state["out"], json!([{"tab": second, "display": 1}]));
+    assert_eq!(state["windows"][0]["key"], json!(true), "{state}");
+    let made = state["windows"][0]["tab"].clone();
+    assert!(made != json!(first) && made != json!(second), "{state}");
+    // Fold back in, from the main window's row: a client's click is refused; the user's closes the
+    // window, and the main window keeps its tab.
+    let [x, y, w, h] = otto.control(&format!("tab-in:{second}"));
+    let state = otto.click([x + w / 2., y + h / 2.], 1);
+    assert_eq!(state["out"], json!([{"tab": second, "display": 1}]), "{state}");
+    let state = otto.user_click([x + w / 2., y + h / 2.]);
+    assert_eq!(state["out"], json!([]), "{state}");
+    assert_eq!(state["windows"].as_array().map(Vec::len), Some(1), "{state}");
+    assert_eq!(state["windows"][0]["tab"], made);
+    // Out again, then the display unplugged: folded in. Plugged in again: back out.
+    otto.call(json!({"cmd": "select_tab", "index": 1}));
+    otto.call(json!({"cmd": "key", "keys": "cmd-shift-o", "as": "user"}));
+    let state = otto.call(json!({"cmd": "displays_set", "displays": [main], "main": "main"}));
+    assert_eq!((&state["out"], &state["windows"][0]["key"]), (&json!([]), &json!(true)), "{state}");
+    let state = otto.call(json!({"cmd": "displays_set", "displays": [main, other], "main": "main"}));
+    assert_eq!(state["out"], json!([{"tab": second, "display": 1}]), "{state}");
+    otto.wait_for("the window back", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        state["windows"][1]["frames"].as_u64().filter(|n| *n > 0)
+    });
+}
+
 /// At rest the tick sleeps: each frame only for a moment after something happened, then about
 /// once a second for the slow looks. It wakes for what happens with no request: a terminal's
 /// output, seconds later, is drawn.

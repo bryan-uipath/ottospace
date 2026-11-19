@@ -72,7 +72,7 @@ impl Workspace {
         // The item the keys or the selection moved to, scrolled into view once: a wheel may move it out again.
         // A space's own: drawn anew, or another space's, it starts at the top.
         // Keyed and selected apart: the keys entering the rail on the selected item scroll to it too.
-        let key = (self.model.space().clone(), keyed, selected);
+        let key = (self.model.shown_space().clone(), keyed, selected);
         let (frame, last) = self.rail_scrolled.replace((self.renders, Some(key.clone())));
         let anew = frame + 1 != self.renders;
         if anew || last.as_ref().map(|(space, ..)| space) != Some(&key.0) {
@@ -154,7 +154,7 @@ impl Workspace {
     /// What an item shows, and its hover: the transcript's waveform, grey while idle, in the
     /// accent while one is on, with a red dot while it records; a task's badge, whose dot is its
     /// state's colour.
-    fn rail_face(&self, item: RailItem) -> Option<(AnyElement, gpui::SharedString)> {
+    pub(crate) fn rail_face(&self, item: RailItem) -> Option<(AnyElement, gpui::SharedString)> {
         match item {
             RailItem::Transcript => {
                 let status = self.model.listen.on.as_ref().map(|on| on.status);

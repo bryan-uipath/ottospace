@@ -299,7 +299,7 @@ impl Workspace {
     /// The room the top row keeps for the chip's badge while the chip is there (a space of one
     /// tab has no second row): the badge, the marker of a native one, and its edges.
     pub(crate) fn chip_reserve(&self) -> f32 {
-        if self.model.space_tabs(self.model.space()).len() > 1 {
+        if self.model.space_tabs(self.model.shown_space()).len() > 1 {
             return 0.;
         }
         self.chip_badge()

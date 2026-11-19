@@ -98,6 +98,7 @@ mod marks;
 mod menus;
 mod new_task;
 mod notice_bar;
+mod out_window;
 mod pass;
 mod pick;
 mod picture;
@@ -491,6 +492,8 @@ impl AssetSource for Assets {
             "icons/folder.svg" => Some(include_bytes!("../assets/icons/folder.svg")),
             "icons/waveform.svg" => Some(include_bytes!("../assets/icons/waveform.svg")),
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
+            "icons/display-out.svg" => Some(include_bytes!("../assets/icons/display-out.svg")),
+            "icons/fold-in.svg" => Some(include_bytes!("../assets/icons/fold-in.svg")),
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
             "icons/fill-expand.svg" => Some(include_bytes!("../assets/icons/fill-expand.svg")),
@@ -711,6 +714,7 @@ actions!(
         NextTab,
         PrevTab,
         CloseTab,
+        FoldTab,
         ShowKeys,
         AxOverlay
     ]
@@ -790,6 +794,8 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-ctrl-j", SwapDown, None),
         // The Mac's Enter Full Screen key, free: native full screen is off (`zoom_instead_of_fullscreen`).
         KeyBinding::new("cmd-ctrl-f", FillDisplay, None),
+        // A tab out to another display, and back in (`multi_monitor`).
+        KeyBinding::new("cmd-shift-o", FoldTab, None),
         // Debug: outline the focused app pane's accessibility tree.
         KeyBinding::new("cmd-ctrl-a", AxOverlay, None),
         // Tabs. ⌘1..⌘9 select one (handled in `key_down`).
@@ -957,6 +963,16 @@ struct Workspace {
     displays_on: Option<u32>,
     /// A test run's made-up displays stand for the real ones (`displays_set`).
     displays_made_up: bool,
+    /// The window of each tab out (`out_window`).
+    out_windows: out_window::OutWindows,
+    /// The tab out whose window has the keyboard, as last made key.
+    keys_in: Option<u32>,
+    /// The window ottospace started with: the main one.
+    main_window: gpui::AnyWindowHandle,
+    /// Each tab out's window as last drawn: its frame, and how many frames it drew.
+    out_frames: HashMap<u32, ([f32; 4], u64, isize)>,
+    /// The controls a tab out's window draws, apart from the main window's (`out_window`).
+    out_controls: sneak::Controls,
     /// A terminal's or hosted window's output asked for a frame not drawn yet: a stall too.
     output: bool,
     /// What the home screen last drew, and the lattice lines kept between frames.
@@ -1182,6 +1198,16 @@ fn displays() -> serde_json::Value {
 
 fn size_of(rect: CGRect) -> String {
     format!("{}x{}", rect.size.width.round(), rect.size.height.round())
+}
+
+/// A test run's window floats on every Space; clicks pass through it unless it is put on show
+/// (`OTTOSPACE_E2E_SHOW`): tests use the socket, not the mouse.
+fn keep_on_top(window: &Window) {
+    let click_through = std::env::var_os("OTTOSPACE_E2E_SHOW").is_none();
+    if let Some(view) = ns_view(window) {
+        // SAFETY: GPUI's own view, on the main thread.
+        unsafe { ottospace_mac::window::keep_on_top(view, click_through) };
+    }
 }
 
 /// The window's `NSView`, for the test requests that hand it an event.
@@ -1444,17 +1470,23 @@ impl Workspace {
             unsafe { ottospace_mac::window::zoom_instead_of_fullscreen(appkit.ns_view.as_ptr()) };
             // SAFETY: GPUI's own view, on the main thread.
             zoom_asks = unsafe { ottospace_mac::window::zoom_asks(appkit.ns_view.as_ptr()) };
-            // A run with hosting off never activates the app, so keep its window visible another
-            // way. Not with hosting on: a floating ottospace would cover the live app window.
-            if !hosting {
-                // Tests use the socket, not the mouse. A window put on show can be clicked.
-                let click_through = std::env::var_os("OTTOSPACE_E2E_SHOW").is_none();
-                unsafe { ottospace_mac::window::keep_on_top(appkit.ns_view.as_ptr(), click_through) };
-            }
+        }
+        // A run with hosting off never activates the app, so keep its window visible another
+        // way. Not with hosting on: a floating ottospace would cover the live app window.
+        if !hosting {
+            keep_on_top(window);
         }
 
         let focus = cx.focus_handle();
         window.focus(&focus);
+        // The user went back to the main window: the keyboard goes there from a tab out's.
+        cx.observe_window_activation(window, |this, window, cx| {
+            let main = this.model.tabs.get(this.model.main_at()).map(|tab| tab.id);
+            if let Some(tab) = main.filter(|_| window.is_window_active() && this.model.main_at() != this.model.active) {
+                this.dispatch(Action::KeyWindow { tab }, Origin::User, window, cx);
+            }
+        })
+        .detach();
         let mut model = Model::default();
         model.update(Action::SetRepoDirs { dirs: config::repo_dirs() }.sent_by(Origin::System));
         // The Tasks section as the user last grouped it.
@@ -1547,6 +1579,11 @@ impl Workspace {
             displays_changed: None,
             displays_on: None,
             displays_made_up: false,
+            out_windows: Vec::new(),
+            keys_in: None,
+            main_window: Window::window_handle(window),
+            out_frames: HashMap::new(),
+            out_controls: sneak::Controls::default(),
             output: false,
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
@@ -1813,6 +1850,8 @@ impl Workspace {
         }
         // What an effect dispatches in turn (a picked app's pane, a label's control) has the same sender.
         self.with_origin(origin, |this| this.carry_out(&effects, window, cx));
+        self.sync_out_windows(cx);
+        self.follow_keys(cx);
         cx.notify();
         effects
     }
@@ -2330,6 +2369,17 @@ impl Workspace {
         }
         self.displays_on = on;
         let settled = self.displays_changed.is_none_or(|at| at.elapsed() >= Duration::from_secs(1));
+        // Each tab out's window too is kicked to draw while the change settles (`stall`, #207).
+        if !settled {
+            for handle in self.out_windows.iter().filter_map(|(_, handle)| *handle) {
+                cx.defer(move |cx| {
+                    let _ = handle.update(cx, |_, window, _| {
+                        // SAFETY: GPUI's own view, on the main thread, outside any update of its window.
+                        ns_view(window).map(|view| unsafe { ottospace_mac::window::redraw(view) })
+                    });
+                });
+            }
+        }
         let mut list = display::list();
         if !settled {
             let known: Vec<String> =
@@ -3532,8 +3582,8 @@ impl Workspace {
         let frame = window.bounds();
         let frame: [f32; 4] =
             [frame.origin.x.into(), frame.origin.y.into(), frame.size.width.into(), frame.size.height.into()];
-        // Only panes of the active tab are drawn; a background pane's last bounds are stale.
-        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
+        // Only panes of the tabs on show are drawn; a background pane's last bounds are stale.
+        let drawn = self.model.shown_panes();
         let drawn_rects = |cells: &HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>| -> BTreeMap<PaneId, [f32; 4]> {
             cells
                 .iter()
@@ -3641,6 +3691,9 @@ impl Workspace {
                 "id": id, "frame": [d.frame.x, d.frame.y, d.frame.w, d.frame.h], "scale": d.scale,
                 "main": self.model.main_display() == Some(id),
             })).collect::<Vec<_>>(),
+            // Each window: the main one, then each tab out's (`tab`, its display's place, whether
+            // it has the keyboard, its frame and frames drawn once open).
+            "windows": self.windows_state(),
             // Each tab folded out to another display: its id, and its display's place in `displays`.
             "out": self.model.tabs_out().into_iter().map(|(tab, display)| serde_json::json!({ "tab": tab, "display": display }))
                 .collect::<Vec<_>>(),
@@ -3935,7 +3988,7 @@ impl Workspace {
         if let Some(Effect::Opened(id)) = opened {
             // A pane in a background tab is not drawn, so the layout sync never parks its
             // window. Move it off screen now; it is sized when its tab is first shown.
-            let drawn = self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(id));
+            let drawn = self.model.main_panes().contains(id);
             if !drawn {
                 let _ = hosted.window.set_position(display::parking_spot(window.scale_factor() as f64));
             }
@@ -4225,7 +4278,7 @@ impl Workspace {
                 }
             }
         }
-        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
+        let drawn = self.model.main_panes();
         // The id read when it was first seen: read again later it may fail, and it is never seen again.
         for (id, ax_window) in fresh {
             let pid = ax_window.pid();
@@ -4290,8 +4343,8 @@ impl Workspace {
     /// On a `check`, returns each settled pane's content size, whole size and window size.
     fn sync_layout(&mut self, window: &Window, cx: &App, check: bool) -> Vec<(PaneId, [f32; 2], [f32; 2], [f32; 2])> {
         let mut measured = Vec::new();
-        // Only panes of the active tab are drawn; a background pane's bounds are stale.
-        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
+        // Only panes of the main window's tab are drawn; a background pane's bounds are stale.
+        let drawn = self.model.main_panes();
         let scale = window.scale_factor() as f64;
         // Only on a check, with windows hosted: it asks each display's mode, and this runs every frame.
         let spot = (check && !self.hosted.is_empty()).then(|| display::parking_spot(scale));
@@ -5524,7 +5577,7 @@ impl Workspace {
     /// Only the drawn panes' are read again; others keep their last, so a tab comes back titled.
     fn read_titles(&mut self, cx: &mut Context<Self>) {
         let home = std::env::var("HOME").ok();
-        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
+        let drawn = self.model.shown_panes();
         let titles: HashMap<PaneId, String> = self
             .terminals
             .iter()
@@ -6559,7 +6612,7 @@ impl Workspace {
     /// raised with a line in its colour along its top; a quiet × hides one. They shrink, then
     /// clip: the + and the buttons on the right always show.
     fn render_spaces(&self, left: f32, room: f32, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected = self.model.space().clone();
+        let selected = self.model.shown_space().clone();
         let shown = self.model.shown_spaces();
         // Home is its icon alone, always. Short of room, a space not selected is its badge
         // alone, its title on hover. Shorter still, the badges that do not fit after the selected
@@ -6862,7 +6915,7 @@ impl Workspace {
     /// The second row: the selected space's tabs, only while it has more than one. The one on
     /// show is underlined in the space's colour. A tab drags onto another tab or a space.
     fn render_space_tabs(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let of = self.model.space().clone();
+        let of = self.model.shown_space().clone();
         let places = self.model.space_tabs(&of);
         if places.len() < 2 {
             // Back on this row (e.g. from Home), its tab on show scrolls into view again.
@@ -6874,8 +6927,9 @@ impl Workspace {
         let dot = self.model.listen_dot();
         // The tab on show scrolls into view once, when it changes: a scroll may move it out again.
         // Asked after the row's layout: `scroll_to_item` reads the row's bounds of the frame before.
-        let at = places.iter().position(|place| *place == self.model.active);
-        let on_show = at.and_then(|_| self.model.tabs.get(self.model.active)).map(|tab| tab.id);
+        let main = self.model.main_at();
+        let at = places.iter().position(|place| *place == main);
+        let on_show = at.and_then(|_| self.model.tabs.get(main)).map(|tab| tab.id);
         let changed = self.tabs_shown.replace(on_show) != on_show;
         let follow = at.filter(|_| changed).map(|at| {
             let handle = self.tabs_scroll.clone();
@@ -6887,7 +6941,8 @@ impl Workspace {
         });
         let tabs =
             places.into_iter().filter_map(|place| Some((place, self.model.tabs.get(place)?))).map(|(place, tab)| {
-                let (active, id) = (place == self.model.active, tab.id);
+                let (active, id) = (place == main, tab.id);
+                let out = self.model.is_out(id);
                 let title = SharedString::from(tab.title.clone());
                 div()
                     .id(("tab", tab.id))
@@ -6946,23 +7001,31 @@ impl Workspace {
                             AnyView::from(cx.new(|_| Tooltip(format!("Workspace: {book}").into())))
                         })
                     })
+                    // Out on another display: its mark, and Fold back in where its × is.
+                    .when(out, |d| {
+                        let icon = svg().path("icons/display-out.svg").size(px(12.)).flex_none();
+                        d.child(icon.text_color(rgb(colour)))
+                    })
                     .child(cut_text(tab.title.clone()).flex_1())
                     .child(self.controls.mark(format!("tab:{}", tab.id)))
-                    .child(
-                        div()
-                            .id(("tab-close", tab.id))
-                            .flex_none()
-                            .px_1()
-                            .rounded_sm()
-                            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::ERROR)))
-                            .child("×")
-                            .child(self.controls.mark(format!("tab-close:{}", tab.id)))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                // Do not also select the tab that is going away.
-                                cx.stop_propagation();
-                                this.close_tab(id, window, cx);
-                            })),
-                    )
+                    .when(out, |d| d.child(self.fold_in_button(id, cx)))
+                    .when(!out, |d| {
+                        d.child(
+                            div()
+                                .id(("tab-close", tab.id))
+                                .flex_none()
+                                .px_1()
+                                .rounded_sm()
+                                .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::ERROR)))
+                                .child("×")
+                                .child(self.controls.mark(format!("tab-close:{}", tab.id)))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    // Do not also select the tab that is going away.
+                                    cx.stop_propagation();
+                                    this.close_tab(id, window, cx);
+                                })),
+                        )
+                    })
                     .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
             });
         // Tabs past the row's width scroll across, under the overflow motif.
@@ -7458,79 +7521,11 @@ fn own_frame(window: &Window, cx: &App) -> CGRect {
     on_screen(Bounds { origin: point(px(0.), window.viewport_size().height - size.height), size }, window, cx)
 }
 
-impl Render for Workspace {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.renders += 1;
-        // A frame: the tick runs each frame for a while, to take what follows it.
-        ottospace_mac::wake::post();
-        // Every task's letters, worked out once a frame for each badge drawn (`task_badge`).
-        *self.badges.borrow_mut() = self.model.badges();
-        // This frame draws every action so far: the replies held for it can go (`settle`).
-        self.drawn_seq = self.seq;
-        self.output = false;
-        self.frame_start.set(Some(Instant::now()));
-        for pane in &self.model.panes {
-            self.cells.entry(pane.id).or_default();
-            self.frames.entry(pane.id).or_default();
-        }
-        self.controls.begin();
-        self.chip_line.set(None);
-        self.dial_motion.borrow_mut().moving = false;
-        self.bars.begin();
-        self.move_notice_bar(window);
-        // The Repos list, the tabs and spaces, and ⌘/'s Known are noted again only while drawn.
-        let drawn_anew = |mark: &Mark| {
-            matches!(
-                mark,
-                Mark::Repo(_)
-                    | Mark::Checkout(_)
-                    | Mark::BarHeader
-                    | Mark::Tab(_)
-                    | Mark::Space(_)
-                    | Mark::KeysKnown
-                    | Mark::ComposeSwitch
-                    | Mark::StatusPlace
-                    | Mark::StatusMeeting
-                    | Mark::StatusAgents
-            )
-        };
-        self.marks.borrow_mut().retain(|mark, _| !drawn_anew(mark));
-        // The pane drag is over, however it ended (a drop, Esc, a release outside the window):
-        // no drop zone may stay drawn.
-        if !cx.has_active_drag() {
-            self.drop_at = None;
-        }
-        let tree = self.model.layout.as_ref().map(|root| self.render_node(root, cx));
-        // Only while the tab on show has no panes. Its lines are built once and kept: a frame
-        // that moves nothing (a terminal printing in another tab) only paints them again.
-        let keep_out = self.home.borrow().keep_out();
-        // The modifiers down now light their caps in the list of an empty tab.
-        let held = keycaps::held(window);
-        // Home's screen, or an empty tab of a task, a session or a workbook: the floor and what goes in it.
-        let home = self.model.layout.is_none().then(|| self.render_home(self.model.home(&keep_out), held, cx));
-        // The left column's width, and the drawer's: as dragged, or half the window when widened.
-        let left = RAIL + if self.model.sidebar.is_some() { SECTION } else { 0. };
-        let half = f32::from(window.viewport_size().width) / 2.;
-        let drawer = if self.model.talk_wide { half } else { self.model.talk_width.min(half.max(MIN_DRAWER)) };
-        // The editor gets its columns: a narrower drawer widens while it shows, up to half the window.
-        let columns =
-            ottospace_core::model::editor::COLUMNS as f32 * f32::from(self.cell.width) + 10. + drawer_rail::WIDTH;
-        let drawer = if self.model.editor_shown() { drawer.max(columns.min(half.max(MIN_DRAWER))) } else { drawer };
-        self.drawer.width = drawer;
-        // The drawer's place and its rail, always: the rail alone while it is collapsed.
-        let (right, right_width) = self.render_right(drawer, cx);
-        // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
-        // the buttons and the agent chip's badge.
-        let centre = f32::from(window.viewport_size().width) - left;
-        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve();
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(rgb(theme::BACKGROUND))
-            .text_color(rgb(theme::TEXT))
-            .track_focus(&self.focus)
-            .on_key_down(cx.listener(Self::key_down))
+impl Workspace {
+    /// The keys, actions and pointer handlers of a window's root: the main window's and each tab
+    /// out's. Each runs in the workspace, for the window it fires in.
+    fn input_handlers(&self, root: Div, cx: &mut Context<Self>) -> Div {
+        root.on_key_down(cx.listener(Self::key_down))
             // A held modifier lights its caps in an empty tab's list.
             .on_modifiers_changed(cx.listener(|this, _, window, cx| this.modifiers_changed(window, cx)))
             .map(|root| self.command_actions(root, cx))
@@ -7706,8 +7701,11 @@ impl Render for Workspace {
             }))
             // As the green button: `zoom_asks` turns it into Fill the Whole Display.
             .on_action(cx.listener(|_, _: &ZoomWindow, window, _| window.zoom_window()))
+            // The main window's alone: a tab out's fills nothing yet (slice 8).
             .on_action(cx.listener(|this, _: &FillDisplay, window, cx| {
-                this.dispatch(Action::FillDisplay, this.input, window, cx);
+                if Window::window_handle(window) == this.main_window {
+                    this.dispatch(Action::FillDisplay, this.input, window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &Quit, window, cx| this.ask_quit(window, cx)))
             .on_action(cx.listener(|this, _: &ShowKeys, window, cx| {
@@ -7751,6 +7749,10 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 this.ask_close_tab(None, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FoldTab, window, cx| match this.on(Feature::MultiMonitor) {
+                true => drop(this.dispatch(Action::TabOut { tab: None }, this.input, window, cx)),
+                false => cx.propagate(),
             }))
             // ⌘W: the focused pane closes; with the keyboard in the drawer, Later on its task.
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
@@ -7798,6 +7800,83 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FitPane, window, cx| {
                 this.dispatch(Action::Fit { pane: None }, this.input, window, cx);
             }))
+    }
+}
+
+impl Render for Workspace {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.renders += 1;
+        // A frame: the tick runs each frame for a while, to take what follows it.
+        ottospace_mac::wake::post();
+        // Every task's letters, worked out once a frame for each badge drawn (`task_badge`).
+        *self.badges.borrow_mut() = self.model.badges();
+        // This frame draws every action so far: the replies held for it can go (`settle`).
+        self.drawn_seq = self.seq;
+        self.output = false;
+        self.frame_start.set(Some(Instant::now()));
+        for pane in &self.model.panes {
+            self.cells.entry(pane.id).or_default();
+            self.frames.entry(pane.id).or_default();
+        }
+        self.controls.begin();
+        self.chip_line.set(None);
+        self.dial_motion.borrow_mut().moving = false;
+        self.bars.begin();
+        self.move_notice_bar(window);
+        // The Repos list, the tabs and spaces, and ⌘/'s Known are noted again only while drawn.
+        let drawn_anew = |mark: &Mark| {
+            matches!(
+                mark,
+                Mark::Repo(_)
+                    | Mark::Checkout(_)
+                    | Mark::BarHeader
+                    | Mark::Tab(_)
+                    | Mark::Space(_)
+                    | Mark::KeysKnown
+                    | Mark::ComposeSwitch
+                    | Mark::StatusPlace
+                    | Mark::StatusMeeting
+                    | Mark::StatusAgents
+            )
+        };
+        self.marks.borrow_mut().retain(|mark, _| !drawn_anew(mark));
+        // The pane drag is over, however it ended (a drop, Esc, a release outside the window):
+        // no drop zone may stay drawn.
+        if !cx.has_active_drag() {
+            self.drop_at = None;
+        }
+        // The main window's tab: the live tree, unless the keyboard is in a tab out's window.
+        let tree = self.model.tree_at(self.model.main_at()).map(|root| self.render_node(root, cx));
+        // Only while the tab on show has no panes. Its lines are built once and kept: a frame
+        // that moves nothing (a terminal printing in another tab) only paints them again.
+        let keep_out = self.home.borrow().keep_out();
+        // The modifiers down now light their caps in the list of an empty tab.
+        let held = keycaps::held(window);
+        // Home's screen, or an empty tab of a task, a session or a workbook: the floor and what goes in it.
+        let home = tree.is_none().then(|| self.render_home(self.model.home(&keep_out), held, cx));
+        // The left column's width, and the drawer's: as dragged, or half the window when widened.
+        let left = RAIL + if self.model.sidebar.is_some() { SECTION } else { 0. };
+        let half = f32::from(window.viewport_size().width) / 2.;
+        let drawer = if self.model.talk_wide { half } else { self.model.talk_width.min(half.max(MIN_DRAWER)) };
+        // The editor gets its columns: a narrower drawer widens while it shows, up to half the window.
+        let columns =
+            ottospace_core::model::editor::COLUMNS as f32 * f32::from(self.cell.width) + 10. + drawer_rail::WIDTH;
+        let drawer = if self.model.editor_shown() { drawer.max(columns.min(half.max(MIN_DRAWER))) } else { drawer };
+        self.drawer.width = drawer;
+        // The drawer's place and its rail, always: the rail alone while it is collapsed.
+        let (right, right_width) = self.render_right(drawer, cx);
+        // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
+        // the buttons and the agent chip's badge.
+        let centre = f32::from(window.viewport_size().width) - left;
+        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve();
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(theme::BACKGROUND))
+            .text_color(rgb(theme::TEXT))
+            .track_focus(&self.focus)
+            .map(|root| self.input_handlers(root, cx))
             .child(
                 div()
                     .relative()
@@ -7883,7 +7962,7 @@ impl Render for Workspace {
                 self.ax_overlay
                     .as_ref()
                     .filter(|o| self.model.ax_overlay && self.model.live != Some(o.pane))
-                    .filter(|o| self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(&o.pane)))
+                    .filter(|o| self.model.main_panes().contains(&o.pane))
                     .map(ax_debug::Overlay::render),
             )
             .children(self.render_inspector_outline())
@@ -8118,7 +8197,14 @@ fn main() {
                 false
             });
         });
-        cx.on_window_closed(|cx| cx.quit()).detach();
+        // Only the main window's closing quits: a tab out's folds in.
+        let main: gpui::AnyWindowHandle = workspace.into();
+        cx.on_window_closed(move |cx| {
+            if !cx.windows().contains(&main) {
+                cx.quit();
+            }
+        })
+        .detach();
         if hosting {
             cx.activate(true);
             // The return key works from any app, so it is only useful with hosting on.

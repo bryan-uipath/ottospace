@@ -296,7 +296,7 @@ impl Workspace {
                 ignored,
             }
         };
-        let shown = self.model.layout.as_ref().map(ottospace_core::Node::leaves).unwrap_or_default();
+        let shown = self.model.main_panes();
         self.model.panes.iter().filter(|pane| shown.contains(&pane.id)).map(fact).collect()
     }
 

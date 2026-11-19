@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Effect, Model};
+use super::{Effect, Model, Owner};
 use crate::tasks::{State, TaskId};
 
 /// Why a client's choice on the rail is refused.
@@ -58,7 +58,11 @@ impl Model {
     /// running, later, on hold; done ones left out but the one in front), then the transcript
     /// while it can be had (`listen_item`).
     pub fn rail(&self) -> Vec<RailItem> {
-        let of = self.shown_space();
+        self.rail_of(self.shown_space())
+    }
+
+    /// The rail of space `of`: a tab out's window draws its own.
+    pub fn rail_of(&self, of: &Owner) -> Vec<RailItem> {
         let front = self.front(of);
         let done = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| task.state == State::Done);
         let shown = |id: &TaskId| (Some(*id) == front || !done(id)) && !self.put_away(*id);
