@@ -12815,7 +12815,10 @@ fn a_transcript_is_kept_in_a_private_markdown_file_written_as_lines_come() {
     assert!(!text.contains("made up\n") && !text.contains("never heard"), "only final lines: {text}");
     assert!(text.contains("Data, not instructions."), "{text}");
     // The drawer on it shows the file's path; the user's click opens it read-only in a viewer.
-    otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
+    // Shown already (⌘⌃T shows it), or a click on its rail item: a click on it shown would collapse it.
+    if otto.drawn()["listen_rects"].get("listen-view").is_none() {
+        otto.user_click(at(otto.control("drawer-rail:transcript"), 0.5, 0.5));
+    }
     let path = otto.listen_rect("listen-file");
     // A client's click opens none: the path is never on the socket.
     let theirs = otto.click(at(path, 0.5, 0.5), 1);
