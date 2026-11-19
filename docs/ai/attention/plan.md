@@ -1,26 +1,21 @@
 # Human attention: deciding, not hunting
 
-A design note. 2026-11-19, from a brainstorm with the owner. **Nothing here is built.** The
-owner has not picked among the proposals yet.
-
-The principle (in `AGENTS.md` under Principles, `README.md` and the site):
+A design note, 2026-11-19, from a brainstorm with the owner. **Nothing here is built**; the owner
+has not picked among the proposals. The principles (`AGENTS.md` Principles, `README.md`, the site):
 
 > Human attention is the scarcest resource. ottospace interrupts only for what needs the person,
 > brings the context with the question, batches the rest, and never makes the person hunt for
 > what's next.
 
-Its companion (wording proposed, not yet approved by the owner):
+And (wording proposed, not yet approved):
 
 > ottospace stays out of your way. Nothing moves, covers what you are working in, or takes the
 > keyboard unless you asked for it; every mode has an obvious way out; and nothing decorative ever
 > makes the fast path slower.
 
-When the two conflict (tiebreaker, wording proposed): "When the two conflict, ottospace offers
-and waits. It may show that something needs you; it never acts on your screen, focus or keyboard
-to make you look."
-
-For this note: a Decisions card never moves under the pointer, its animations never hold a key
-back, Esc always leaves the session, and focus mode changes nothing the person did not ask for.
+Tiebreaker (proposed): ottospace offers and waits. It may show that something needs you; it
+never acts on your screen, focus or keyboard to make you look. So a Decisions card never moves
+under the pointer, no animation holds a key back, and Esc always leaves.
 
 ## The problem
 
@@ -28,19 +23,18 @@ The owner: "in my workday I end up with lots of random sessions, scattered acros
 and it's just going through each one to unblock or think through the next decision. One energy
 sink is just figuring out what to do next."
 
-Two costs: finding what waits (the hunt), and loading each one back into the head before
-deciding (the switch). The proposals below cut both.
+Two costs: finding what waits (the hunt), and loading each back into the head (the switch).
 
 ## What exists on main
 
-Checked against the code on 2026-11-19. Each proposal builds on these.
+Checked against the code, 2026-11-19.
 
 | Building block | State | Where |
 |---|---|---|
 | Needs you: a task state; the Tasks section groups by it, needs-you first | Built | `ottospace-core/src/tasks.rs`; reference "Tasks inbox" |
 | The rail of open tasks; after a Done the most urgent remaining is in front | Built | `model/rail.rs`, `Model::front` (`model/spaces.rs`) |
 | Next task that needs you: ⌘⇧N, and a click on the status bar's `● 1 needs you` | Built | reference "Status bar", `status_bar.rs` |
-| ⌘J | **Not in the repository.** No code or doc names it; ⌘⇧N is the "what's next" key today | grep, 2026-11-19 |
+| ⌘J, "where next" | **Decided, not built.** No code or doc names it; ⌘⇧N is today's key | grep, 2026-11-19 |
 | Priority (1–9, `P1` drawn), snooze (`snoozed_until`), hold | Built | `tasks.rs` |
 | A task's deadline | **None.** Tasks have no due time (they keep when they started and finished, and a snooze's end) | `tasks.rs` |
 | Ask cards (`AskUserQuestion`): options, Other…, number keys 1–9 pick a row, ↵ answers, Esc declines | Built (Claude Code) | `ottospace-core/src/ask.rs` |
@@ -62,49 +56,50 @@ All **proposed**.
 
 ### 1. Decisions session
 
-An ephemeral tab, full window, that walks the person through everything waiting on them, one
-card at a time. Made for a block: "15 minutes of decisions".
+A special, ephemeral workspace that walks the person through everything waiting on them, one card
+at a time. Made for a block: "15 minutes of decisions".
 
+- **A decision is a workspace.** The owner: "I picture the decision would be a special workspace
+  with a single pane (that we could have side conversations or still spin up other panes for
+  reference)." One pane fills the window: the exposition on one side, the question and options on
+  the other. btw opens inside that pane. Ordinary splits add reference panes (a sheet, a terminal,
+  a file); they close with the card, and the next card starts as one pane again. Mock:
+  [Decision workspace](https://claude.ai/artifact/VvJWQgWzXazQhijmCJ9dcv#artboard-DecisionWorkspace).
 - **A card**: the question; a three-line recap of where the task stands; the options; the
-  agent's recommendation, marked. Keys 1–4 answer (the ask card's number keys already exist), and
-  the agent resumes at once.
-- **Order**: an agent blocked right now first, then by deadline, then by age. Each card says why
-  it is where it is (see Open questions).
-- **Talk it over**: the btw column, attached to the card, asks the agent about an option without
-  answering. "Use as my answer" works as it does today.
-- **Flow that never slows**: "3 of 7" progress; on an answer the Done seal plays while the next
-  card is already in place; the options' details animate in. No animation holds a key back.
-- **Visual aids.** The owner: "wondering if it'd be useful to pull in other visual aids (ie, a
-  code snippet, or a before/after visual, an explanatory visual)"; on a data question, "show the
-  disconnect so that there is context". A card may carry one aid, chosen for its decision: the
-  rows in dispute with the difference marked; a small flow sketch and the diff being approved;
-  before/after pictures as the options. A plain question gets none. The aid is ready before the
-  card reaches the person, made by the task's agent or the presenter role (§2). Aids are built
-  from task content, which is untrusted data. Mock: the canvas's
-  [Decision aids](https://claude.ai/artifact/VvJWQgWzXazQhijmCJ9dcv#artboard-DecisionAids)
-  artboard.
-- **Defer with a default**, for low-stakes ones: "if I haven't answered by 3pm, take the
-  recommended option". The default is shown on the card and on the task until it fires.
-- **New requirement on agents**: hand over decision-ready questions (question, options,
-  recommendation, why). The guide says so. For a session that just stopped without asking, a
-  cheap model writes the recap and the question; that needs a model call ottospace does not make
+  agent's recommendation, marked. Keys 1–4 answer (ask cards have number keys today); the agent
+  resumes at once.
+- **Order**: an agent blocked now, then deadline, then age. Each card says why it is where it is.
+- **Talk it over**: btw asks the agent about an option without answering; "Use as my answer" as
   today.
-- Needs from the core: a deadline on a task (none today), the queue's order as a pure function
-  with tests, the deferred default as a timer passed in as time.
+- **Flow that never slows**: "3 of 7"; on an answer the seal plays while the next card is already
+  usable; the options' details animate in.
+- **Visual aids.** The owner: "a code snippet, or a before/after visual, an explanatory visual";
+  on a data question, "show the disconnect so that there is context". At most one aid per card,
+  chosen for its decision: the rows in dispute with the difference marked; a flow sketch and the
+  diff being approved; before/after pictures as the options. A plain question gets none. Made
+  before the card is shown, by the task's agent or the presenter role (§2), from task content
+  (untrusted data). Mock:
+  [Decision aids](https://claude.ai/artifact/VvJWQgWzXazQhijmCJ9dcv#artboard-DecisionAids).
+- **Defer with a default**, for low-stakes ones: "if I haven't answered by 3pm, take the
+  recommendation". Shown on the card and the task until it fires.
+- **Where next** (⌘J): one card kind, the choice of what to focus on next (§6).
+- **Agents hand over decision-ready questions** (question, options, recommendation, why); the
+  guide says so. For a session that stopped without asking, a cheap model writes the recap and
+  question: a model call ottospace does not make today.
+- Core: a deadline on a task, the queue's order as a pure tested function, the deferred default
+  as a timer fed time.
 
 ### 2. Agents and roles
 
-The owner: "the secretary is a specific form of a more useful concept - the idea of personified
-agents: an agent as a combination of a runner, model, and any pre-baked context. ie: Bill: claude
-code, opus 5.5, access to ~/notes/projects. [...] if I want to use a new model in the future, I can
-change Bill's model to fable 5.2, and then everywhere Bill is used, it gets updated."
+The owner: "an agent as a combination of a runner, model, and any pre-baked context. ie: Bill:
+claude code, opus 5.5, access to ~/notes/projects. [...] change Bill's model to fable 5.2, and
+then everywhere Bill is used, it gets updated."
 
 - **An agent** is a name, a runner, a model and pre-baked context (folders it may read, standing
   instructions). Defined once; referenced by name everywhere, so changing Bill's model changes
   every use of Bill.
-- **It layers on the spec.** An agent names a `RunnerId` and takes what its `RunnerSpec`
-  (`ottospace-core::runner`) says that runner can do. It adds no runner: "a runner is its spec"
-  still holds. A model it names must be one the runner takes, as `@claude-opus-5-5` is today.
+- **It layers on the spec**: it names a `RunnerId` and gets what its `RunnerSpec`
+  (`ottospace-core::runner`) allows. It adds no runner; "a runner is its spec" holds.
 - **What exists.** `@agent` and the new-task box's who-pick name a runner, or a runner and a
   model (`default_agent`, `agent_models`). A saved agent (`~/.ottospace/agents/<name>.md`, the
   format in [routines.md](../routines.md) §2) is offered by name, but "↵ files it; nothing
@@ -114,6 +109,10 @@ change Bill's model to fable 5.2, and then everywhere Bill is used, it gets upda
   writer. A closed, built-in set. Each has a default agent out of the box and can be assigned
   any agent.
 - **Ordinary agents are not special**: tagged on a task or picked in the new-task box.
+- **An agents pane** (later than the roles themselves). The owner: "an agents pane that can show
+  the different agents, which ones are assigned as assistants, and what tasks/workspaces they are
+  working on." Each agent's name, runner, model and context, its roles, and the tasks and
+  workspaces it works in now. The place to change an agent's model or assign a role.
 - **Comparing two agents in a role** (the owner: "A/B test opus 5.5 vs gpt astra as my
   secretary"). Options:
   - *Side by side on the same input*: both prepare the same decision card; the person picks the
@@ -126,29 +125,24 @@ change Bill's model to fable 5.2, and then everywhere Bill is used, it gets upda
 
 ### 3. A secretary agent
 
-A role (§2). The owner: "a 'superfan' or a 'secretary' agent that monitors the tasks, sessions, etc
-and oversees that things are moving. Having a concept of a priority or due date for tasks could help
-make good decisions, and the secretary could dispatch tasks that help. One challenge in the past was
-'noise': if you automatically delegate tasks, you end up with a giant wall of slop and text that you
-are mentally unprepared to go through."
+A role (§2). The owner: "a 'superfan' or a 'secretary' agent that monitors the tasks, sessions,
+etc and oversees that things are moving. [...] if you automatically delegate tasks, you end up with
+a giant wall of slop and text that you are mentally unprepared to go through."
 
-- **Role**: one overseer. It reads the tasks, sessions, calendar and due dates and keeps things
-  moving. It does not do the work itself and never answers for the person.
-- **Priority and due date** on tasks: set by the person, or inferred with its reason shown
-  ("due today: from the Slack message"). The Decisions queue orders by them. Today a task has a
-  priority (1–9) and no due date.
-- **The output contract is the answer to noise.** A speculative attempt stays invisible until it
-  ends. Failed: one line, what was tried and what stopped it. Succeeded: two or three lines on
-  the approach, plus the thing itself (a draft, a PR, a decision card). Never a transcript;
-  detail only on request. Speculative work sits on a separate shelf of offers, not in Tasks,
-  until the person takes it.
-- **Levels the person sets**: Watch (notices only: "idle 2 h, blocked on you", "its agent
-  stopped", "needs a rebase"); Prepare (writes the recap and a recommendation for each pending
-  decision, researches ahead); Act (dispatches work inside rules: reversible, nothing
-  outward-facing, a spend cap).
+- **One overseer**: reads tasks, sessions, calendar and due dates, keeps things moving. Does not
+  do the work, never answers for the person.
+- **Priority and due date** on tasks: set by the person, or inferred with its reason shown ("due
+  today: from the Slack message"). Today a task has a priority and no due date.
+- **The output contract answers noise.** A speculative attempt is invisible until it ends.
+  Failed: one line, what was tried and what stopped it. Succeeded: two or three lines on the
+  approach, plus the thing (a draft, a PR, a decision card). Never a transcript. It sits on a
+  shelf of offers, not in Tasks, until the person takes it.
+- **Levels the person sets**: Watch (notices only: "idle 2 h, blocked on you", "needs a
+  rebase"); Prepare (recaps and recommendations for pending decisions, research ahead); Act
+  (dispatches work inside rules: reversible, nothing outward-facing, a spend cap).
 - **Chores it would take**, each seen when coordinating many agents by hand: restart an agent
   that died or lost its helpers; notice a PR waiting on checks or conflicting; rebase; chase a
-  stale review; the end-of-block digest; focus mode's break-through watch (§6).
+  stale review; rank the where-next card; focus mode's break-through watch (§6).
 - **Self-throttle**: it counts how many of its offers the person takes. A low rate, fewer offers.
 - **Trust**: its delegated authority is explicit and narrow. A relayed instruction is not the
   person's consent for an outward-facing or irreversible act (merge, send, delete): those go to
@@ -185,64 +179,56 @@ ottospace never sends a message. The person sends it.
 Knows focus time from the calendar (focus blocks are already recognised and coloured). During a
 block:
 
-- **Distractions removed.** The owner: "the problem with Slack is that it also can make noise on
-  notifications and show a red dot in the dock, both of which can pull me away mentally." So
-  parking or hiding Slack's window is not enough: the sound and the Dock badge still reach the
-  person. Hiding is cheap and instant, and fails for that reason. The options:
+- **Distractions removed.** The owner: Slack "can make noise on notifications and show a red dot
+  in the dock, both of which can pull me away mentally." Hiding or parking its window is cheap and
+  fails for that reason: the sound and the badge still reach the person. The options:
   - **(a) Quit the app for the block, reopen it at the end.** Complete: no sound, no badge. The
     watcher reads Slack through its API or CLI, read-only, so it needs no app running. Costs: the
     person shows as away in Slack; a call or huddle rings nowhere; relaunch time at the end; the
     app's own state (a half-typed message) is the app's to keep.
-  - **(b) Turn on a macOS Focus for the block.** Silences sounds and banners for all apps.
-    Whether it hides Dock badges is to verify. The first brainstorm's plan already proposed this
-    (a macOS Focus through Shortcuts, and covering the Dock). See "macOS Focus" below for how
-    ottospace could read, follow or set one.
+  - **(b) A macOS Focus for the block.** Silences sounds and banners for all apps; whether it
+    hides Dock badges is to verify. The first brainstorm's plan proposed it too (through
+    Shortcuts, and covering the Dock). See "macOS Focus" below.
   - **(c) Slack's own "pause notifications".** A write to Slack, seen by others. It conflicts
     with ottospace never writing to Slack: rejected unless that rule changes.
   - **Lean**: (a) for the apps the person names, with (b) alongside for everything else.
-  - The phone still buzzes unless its own Focus is on: out of ottospace's reach, unless the
-    Focus is shared across devices (below).
-- **Notices held.** ottospace's own notice bar and notifications wait for the block's end,
-  except what breaks through.
-- **A break-through watcher.** An agent reads Slack on a timer against rules the person sets (an
-  incident, their manager, "urgent"), so nothing needs the person's mental energy. A match
-  breaks through with its reason. Everything else becomes one digest when the block ends.
-- **Immersion.** The unit is the shown workspace, whole: all its panes stay fully on screen,
-  on every display it spans (tabs folded out with ⌘⇧O, behind `multi_monitor`: built in #261 and
-  #262; the folded-out window's own drawer and the arrows across are not). What recedes is
-  everything outside it: other workspaces' tabs, the drawer and sidebar (collapsed into their rails, as ⌘⇧R and ⌘⇧L do today),
-  notices, other apps. A quiet timer in the status bar.
-- **Decided (owner, 2026-11-19)**:
-  - Displays the shown workspace does not use are left alone: no blanking, no dimming.
-  - The person may switch workspace during a block. Switching does not end the block, and
-    ottospace does not ask. The block belongs to the person's time, not to one workspace:
-    immersion applies to whichever workspace is shown. What stays held for the whole block is
-    the outside world: notices, the named apps quit, the watcher.
+  - The phone buzzes unless its own Focus is on (shared Focus: below).
+- **Notices held**, ottospace's own too, except what breaks through.
+- **A break-through watcher.** An agent reads Slack on a timer against the person's rules (an
+  incident, their manager, "urgent"). A match breaks through with its reason. The rest is held.
+- **The block ends quietly** (status bar: "5 held"). The owner: "it's really a decision of where
+  to focus next... I press command+j to jump to the next thing after a focus block." ⌘J opens the
+  Decisions workspace on a where-next card: held messages and waiting decisions in one ranked
+  list, the suggested next first. ⌘J again takes the first; the rest stay queued. During a block
+  ⌘J stays inside the work and never surfaces what is held. This replaces a separate digest.
+- **Immersion.** The shown workspace, whole, on every display it spans (⌘⇧O folds a tab out,
+  behind `multi_monitor`, #261/#262). Everything outside it recedes: other workspaces' tabs, the
+  drawer and sidebar (into their rails, as ⌘⇧R and ⌘⇧L do today), notices, other apps. A quiet
+  timer in the status bar.
+- **Decided (owner, 2026-11-19)**: displays the workspace does not use are left alone. Switching
+  workspace neither ends the block nor asks: the block is the person's time, immersion follows
+  the shown workspace, and the outside world (notices, the named apps, the watcher) stays held.
 
 #### macOS Focus
 
-Known: `/usr/bin/shortcuts run <name>` exists (checked on macOS 26.7.3); it runs a Shortcut the
-person made, and cannot make one. Nothing else below is checked against Apple's documentation
-yet. **To verify in a spike on the owner's macOS version**:
+Known: `/usr/bin/shortcuts run <name>` exists (macOS 26.7.3); it runs a Shortcut the person made.
+The rest is unchecked against Apple's documentation: **to verify in a spike on the owner's
+macOS version**.
 
-- **Read whether a Focus is on**: `INFocusStatusCenter`, after the person grants permission.
-  Whether it says which Focus, or only on or off.
-- **Follow a Focus**: a Focus filter (`SetFocusFilterIntent`, App Intents), so macOS is the one
-  switch: the person's Work Focus turns on, and ottospace enters focus mode. With Focus sharing
-  the phone follows too. Whether a binary started from a terminal, with no bundle, can offer one
-  (the app bundle may be needed).
-- **Set a Focus from ottospace**: the Shortcuts "Set Focus" action through `shortcuts run`
-  (a Shortcut the person makes once), against a public API (the owner believes one exists: the
-  spike confirms or rules it out). Private interfaces are not acceptable.
+- **Read** whether a Focus is on: `INFocusStatusCenter`, with permission; which one, or only on/off.
+- **Follow** one: a Focus filter (`SetFocusFilterIntent`, App Intents), so macOS is the one
+  switch (Work Focus on, focus mode on; the phone follows through Focus sharing). Whether a
+  binary with no bundle can offer one.
+- **Set** one: the Shortcuts "Set Focus" action via `shortcuts run`, against a public API (the
+  owner believes one exists). Private interfaces are not acceptable.
 
 ### 7. Smaller ideas
 
-- Hold agents' questions for the next Decisions block, unless one has blocked an agent longer
-  than a set time.
+- Hold agents' questions for the next Decisions block, unless one has blocked an agent too long.
 - A two-line "where we were" on returning to a task.
 - Standing rules: "always take the recommendation for this kind of question".
-- Attention metrics: how long agents sat blocked on the person; decisions per day.
-- A meeting transcript's action items become tasks (transcripts: [transcripts.md](../transcripts.md)).
+- Attention metrics: time agents sat blocked on the person; decisions per day.
+- A meeting transcript's action items become tasks ([transcripts.md](../transcripts.md)).
 
 ## Open questions
 
@@ -255,8 +241,8 @@ yet. **To verify in a spike on the owner's macOS version**:
 - **Recaps.** Where they are made (which model, local or not) and what they may read. Task
   content and session text are untrusted data: a recap quotes and labels it, as a capture's
   brief does, and nothing in it is obeyed.
-- **Privacy.** The rules already in `AGENTS.md` hold: meeting titles and places are never in the
-  state; a watcher's Slack text and a recap are no more public than a session's title.
+- **Privacy.** `AGENTS.md`'s rules hold (meeting titles and places never in the state); a
+  watcher's Slack text and a recap are no more public than a session's title.
 - **Who acts.** Answers, defers, adopting a session and quitting an app should be the person's
   alone (`Origin::User`), refused from any other origin, as Done and Later are today.
 - **Agents' definitions.** In `settings.json`, or the files `routines.md` already proposes
