@@ -396,7 +396,10 @@ impl Workspace {
                 return true;
             }
             ("talk", "chat-stop", _) => Action::TalkInterrupt,
-            ("talk", "talk-done" | "offer-done", Some(id)) => Action::TaskDone { id },
+            ("talk", "talk-done" | "offer-done", Some(id)) => {
+                self.done(id, window, cx);
+                return true;
+            }
             ("talk", "talk-later" | "offer-later", Some(id)) => Action::TaskLater { id },
             ("talk", "chat-btw", _) => Action::BtwOpen,
             ("talk", "btw-close", _) => Action::BtwClose,

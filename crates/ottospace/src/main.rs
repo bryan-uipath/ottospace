@@ -1080,6 +1080,10 @@ struct Workspace {
     tags_repo: Option<Option<String>>,
     /// Worktrees asked for (`Effect::AddWorktree`) and made, or not, off the main thread.
     worktrees: (Sender<worktree::Made>, Receiver<worktree::Made>),
+    /// The local day's start last told to the core (`LocalDay`).
+    told_day: u64,
+    /// Done's removals of a task's own worktree, off the main thread.
+    removals: (Sender<worktree::Removed>, Receiver<worktree::Removed>),
     /// What the user's last step did, said for a few seconds as information (`Effect::Told`).
     told: Option<(String, Instant)>,
     /// Pull requests read with gh; why none are, when the settings say `"repos_prs": "on"`; how many
@@ -1470,6 +1474,7 @@ impl Workspace {
                         this.read_sneak_app(window, cx);
                         this.tick_timeline(window, cx);
                         this.take_worktrees(window, cx);
+                        this.tell_day(window, cx);
                         this.tick_prs(window, cx);
                         this.watch_displays(window, cx);
                     });
@@ -1640,6 +1645,8 @@ impl Workspace {
             tags: tags::Reader::start(),
             tags_repo: None,
             worktrees: std::sync::mpsc::channel(),
+            removals: std::sync::mpsc::channel(),
+            told_day: 0,
             told: None,
             prs: prs::Reader::new(),
             pr_note: None,
@@ -2051,6 +2058,9 @@ impl Workspace {
                 Effect::AddWorktree { repo, branch, path, root, fresh } => {
                     let done = self.worktrees.0.clone();
                     worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), *fresh, done);
+                }
+                Effect::RemoveWorktree { task, repo, path } => {
+                    worktree::start_remove(*task, repo.clone(), path.clone(), self.removals.0.clone());
                 }
                 Effect::Notice { text } => (self.error, self.refused) = (Some(text.clone()), Some(text.clone())),
                 // The seal, fold and land: drawn by the next change.
@@ -5489,6 +5499,11 @@ impl Workspace {
 
     /// Worktrees git made, or did not: the list is read again; a made one opens, a failure is said.
     fn take_worktrees(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let removed: Vec<worktree::Removed> = self.removals.1.try_iter().collect();
+        for worktree::Removed { task, path, kept } in removed {
+            self.dispatch(Action::WorktreeRemoved { task, path, kept }, Origin::System, window, cx);
+            cx.notify();
+        }
         let made: Vec<worktree::Made> = self.worktrees.1.try_iter().collect();
         for worktree::Made { repo, asked, fresh, result } in made {
             let repos = repos::scan();
@@ -7694,8 +7709,8 @@ impl Workspace {
             .on_action(cx.listener(|this, _: &TalkGo, window, cx| {
                 if this.model.compose_keys() {
                     this.dispatch(Action::ComposeSubmit { open: true }, this.input, window, cx);
-                } else if let Some(done) = this.model.done_key() {
-                    this.dispatch(done, this.input, window, cx);
+                } else if let Some(Action::TaskDone { id }) = this.model.done_key() {
+                    this.done(id, window, cx);
                 }
             }))
             .on_action(cx.listener(

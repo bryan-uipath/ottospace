@@ -565,6 +565,13 @@ impl Gen<'_> {
             repo: self.rng.coin().then(|| self.name(DIRS)),
             folder: self.rng.one_in(4).then(|| self.name(DIRS)),
             worktree: self.rng.one_in(4).then(|| self.name(CWDS)),
+            made: self.rng.one_in(4).then(|| {
+                // Half the time where an Undo may add it back: `<root>/<repo>/<branch>`.
+                let branch = self.name(WORDS);
+                let path = if self.rng.coin() { format!("/w/app/{branch}") } else { self.name(CWDS) };
+                let removed = self.rng.coin();
+                tasks::Made { repo: self.name(DIRS), branch, asked: path.clone(), path, root: "/w".into(), removed }
+            }),
             agent: self.rng.coin().then(|| self.name(AGENTS)),
             paths: self.names(DIRS, 2),
             resolved: self.names(DIRS, 2),
@@ -1150,6 +1157,7 @@ const MAKERS: &[Make] = &[
             pane: g.pane(),
             cwd: g.rng.coin().then(|| g.name(DIRS)),
             program: g.rng.coin().then(|| g.name(&["vim", "cargo", ""])),
+            shell: g.rng.one_in(4).then(|| g.name(CWDS)),
         };
         let terminals = (0..g.rng.below(3)).map(|_| info(g)).collect();
         Action::SetTerminals { terminals, home: g.rng.coin().then(|| "/code".to_string()) }
@@ -1543,6 +1551,15 @@ const MAKERS: &[Make] = &[
     |g| Action::TaskDone { id: g.task() },
     |g| Action::TaskLater { id: g.task() },
     |_| Action::DoneUndo,
+    |g| Action::LocalDay { day: g.rng.pick(&[0, 1_000_000, 86_400_000]) },
+    |g| {
+        // A task's own worktree half the time.
+        let task = g.task();
+        let own = g.m.tasks.get(task).and_then(|t| t.made.as_ref()).map(|made| made.path.clone());
+        let path = own.filter(|_| g.rng.coin()).unwrap_or_else(|| g.name(CWDS));
+        let kept = g.rng.coin().then(|| "Kept the worktree: 2 uncommitted changes".to_string());
+        Action::WorktreeRemoved { task, path, kept }
+    },
     |_| Action::TalkToggle,
     |g| Action::TalkKeys { on: g.rng.coin() },
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
@@ -3204,6 +3221,7 @@ impl Run {
         // ↵ in list mode on a meeting row of the Calendar section: that row's Join.
         let on_meeting = matches!(m.list.and_then(|at| m.list_rows().into_iter().nth(at)), Some(ListRow::Meeting(_)));
         // The user's opening of a done task (a click, ↵, ⌘⇧N) makes it a task again, its session gone on with (`revive`).
+        let resume_before: Vec<TaskId> = m.finish.resume.clone();
         let done_before: Vec<TaskId> = m.tasks.list.iter().filter(|t| t.state == State::Done).map(|t| t.id).collect();
         let tab_before = m.tabs[m.main_at()].id;
         let tabs_before: Vec<u32> = m.tabs.iter().map(|tab| tab.id).collect();
@@ -3761,6 +3779,8 @@ impl Run {
         let follows = match action {
             Action::SessionWork { .. } => origin != Origin::Socket,
             Action::SetRepos { .. } | Action::WorktreeAdded { .. } | Action::WorktreeFailed { .. } => true,
+            // A done task's own worktree removed: its workspace falls back to the repository.
+            Action::WorktreeRemoved { .. } => origin != Origin::Socket,
             _ => false,
         };
         if defaults(m).iter().any(moved) {
@@ -3791,7 +3811,13 @@ impl Run {
                     let members = m.members(&of);
                     let one = members.len() == 1
                         && m.tasks.get(members[0]).and_then(|t| t.worktree.as_ref()) == book.worktree.as_ref();
-                    ensure!(one, "{action:?} moved the default of {:?} with tasks {members:?}", book.name);
+                    // Or a Done's removal of its task's own worktree: from it to its repository.
+                    let was =
+                        defaults_before.iter().find(|(uid, _)| *uid == book.uid).and_then(|(_, was)| was.as_ref());
+                    let fell = matches!(&action, Action::WorktreeRemoved { task, path, kept: None }
+                        if was == Some(path)
+                            && book.worktree.as_ref() == m.tasks.get(*task).and_then(|t| t.made.as_ref()).map(|made| &made.repo));
+                    ensure!(one || fell, "{action:?} moved the default of {:?} with tasks {members:?}", book.name);
                 }
             }
         }
@@ -4501,6 +4527,12 @@ impl Run {
                     let made = matches!(&action, Action::WorktreeAdded { asked: at, fresh: true, .. }
                         if making_before.iter().any(|w| Subject::Task(w.task) == *subject && w.asked == *at));
                     let made = made && !resumes && origin == Origin::System;
+                    // And a done task opened again, once its worktree is back.
+                    let back = resumes
+                        && origin == Origin::System
+                        && matches!(&action, Action::WorktreeAdded { fresh: false, .. })
+                        && subject.task().is_some_and(|id| resume_before.contains(&id));
+                    let made = made || back;
                     ensure!(
                         user || made || ((asked || switched) && resumes),
                         "{origin:?} started an agent for {subject:?}"
@@ -4606,13 +4638,14 @@ impl Run {
                     let boxed = *fresh
                         && matches!(action, Action::ComposeSubmit { open: true } | Action::ComposeEnter)
                         && m.making.iter().any(|w| w.asked == *path && !task_ids.contains(&w.task));
-                    ensure!(user && (field || boxed), "{origin:?}'s {action:?} made a worktree");
+                    // Or Undo of a Done that removed the task's own: back on its branch.
+                    // Or Undo, or a done task opened again, adding back the task's own worktree its Done removed.
+                    // (Also git's answer to an Undo's removal: added back once removed.)
+                    let undone = !fresh && origin != Origin::Socket && m.finish.readding.contains(path);
+                    ensure!((user && (field || boxed)) || undone, "{origin:?}'s {action:?} made a worktree");
                     ensure!(crate::repos::check_branch(branch).is_ok(), "a worktree on {branch:?}");
                     ensure!(m.repos.iter().any(|r| r.path == *repo), "a worktree of {repo:?}, not listed");
-                    let rest = path.strip_prefix(root.as_str()).and_then(|rest| rest.strip_prefix('/'));
-                    let parts: Vec<&str> = rest.map(|rest| rest.split('/').collect()).unwrap_or_default();
-                    let plain = |part: &&str| !matches!(*part, "" | "." | "..");
-                    ensure!(parts.len() == 2 && parts.iter().all(plain), "a worktree at {path:?}, outside {root:?}");
+                    ensure!(crate::repos::in_worktrees(path, root), "a worktree at {path:?}, outside {root:?}");
                 }
                 Effect::Notice { text } => ensure!(user && !text.is_empty(), "{origin:?} is told {text:?}"),
                 // Only a window that did not come in time, by a tick.
@@ -4636,6 +4669,17 @@ impl Run {
                     ensure!(was && m.pane(*pane).is_none(), "{action:?} closed window {window} of pane {pane}")
                 }
                 Effect::NoticeDismissed { .. } => ensure!(user, "{origin:?} dismissed a notice"),
+                // Only the user's Done (or git's late answer to one) removes a worktree: its task's own, listed, never a checkout.
+                Effect::RemoveWorktree { task, repo, path } => {
+                    let own = m.tasks.get(*task).and_then(|t| t.made.as_ref()).is_some_and(|made| made.path == *path);
+                    let listed = m.repos.iter().any(|r| r.path == *repo && r.worktrees.iter().any(|w| w.path == *path));
+                    let done = user && matches!(action, Action::TaskDone { id } if id == *task);
+                    // Or Done while git made it: removed once made.
+                    let late = origin == Origin::System
+                        && matches!(&action, Action::WorktreeAdded { asked, fresh: true, .. }
+                            if making_before.iter().any(|w| w.task == *task && w.asked == *asked));
+                    ensure!((done || late) && own && listed && repo != path, "{origin:?}'s {action:?} removed {path}");
+                }
                 // The seal plays for the user's own Done, of a task now done and put away.
                 Effect::Seal { task } => {
                     let sealed = m.tasks.get(*task).is_some_and(|t| t.state == State::Done) && m.put_away(*task);
@@ -4663,6 +4707,8 @@ impl Run {
                     let reads = match action {
                         Action::SessionWork { cwd: Some(_), .. } => origin != Origin::Socket,
                         Action::Tick { .. } => true,
+                        // And once git removed the worktree a Done asked it to.
+                        Action::WorktreeRemoved { kept: None, .. } => origin != Origin::Socket,
                         _ => false,
                     };
                     ensure!(reads, "{origin:?}'s {action:?} asked for the Repos list");
@@ -5658,6 +5704,17 @@ fn random_actions_keep_the_model_sound_for_long() {
 
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
+
+/// A done task restored with its own worktree removed, its record from disk: opening it again
+/// (its card) added it back on a branch git refuses. A record is checked before it is added back.
+#[test]
+fn seed_633_a_restored_worktree_record_is_checked_before_it_is_added_back() {
+    replay(&[
+        restore_tasks("[{\"id\":4294967295,\"title\":\"deploy\",\"state\":\"triaged\",\"priority\":1,\"snoozed_until\":200000000,\"dismissed\":true,\"project\":null,\"repo\":\"/code/canvas\",\"folder\":\"$s\",\"agent\":null,\"paths\":[\"............................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................\",\"/Users/me/My Notes\"],\"resolved\":[\"/code/canvas\"],\"skills\":[\"deploy\",\"$s\"],\"created\":null,\"session\":null,\"title_generated\":true,\"materials\":[\"/etc/passwd\",\"1-w0rdw0rdw0rd/2.json\"],\"refs\":[],\"started_at\":0,\"work\":[{\"runner\":\"claude\",\"session\":\"\\\\ \",\"clock\":{\"ms\":0,\"last\":60000,\"day\":6000,\"day_ms\":0},\"tokens\":[{\"model\":\"claude-opus-5-5\",\"sub\":false,\"input\":18446744073709551615,\"output\":7,\"cached\":30000}],\"context\":null,\"window\":null}]},{\"id\":6,\"title\":\"fix\",\"state\":\"done\",\"priority\":9,\"snoozed_until\":null,\"dismissed\":false,\"project\":null,\"repo\":null,\"made\":{\"repo\":\"/Users/me/My Notes\",\"branch\":\"\u{200b}\\tq\",\"path\":\"/code/app-2/src\",\"asked\":\"/code/app-2/src\",\"root\":\"/w\",\"removed\":true},\"agent\":\"Claude Code\",\"paths\":[],\"resolved\":[],\"skills\":[],\"created\":null,\"session\":null,\"title_generated\":false,\"materials\":[],\"refs\":[],\"started_at\":0,\"finished_at\":1,\"work\":[{\"runner\":\"\u{feff}a\",\"session\":\"@z/p\",\"clock\":{\"ms\":0,\"last\":0,\"day\":60000,\"day_ms\":0},\"tokens\":[{\"model\":\"claude-haiku-5\",\"sub\":false,\"input\":40000,\"output\":18446744073709551615,\"cached\":0}],\"context\":6000,\"window\":null}],\"colour\":3,\"tabs\":[1]},{\"id\":1000000001,\"title\":\"\",\"state\":\"parked\",\"priority\":0,\"snoozed_until\":200000000,\"dismissed\":false,\"project\":\"My Project\",\"repo\":\"\",\"folder\":\"/tmp\",\"agent\":null,\"paths\":[\"@\"],\"resolved\":[\"/code/canvas\",\"/code/canvas\"],\"skills\":[],\"created\":null,\"session\":{\"runner\":\"claude\",\"id\":\"s2\",\"state\":null},\"title_generated\":false,\"materials\":[],\"refs\":[],\"work\":[{\"runner\":\"claude\",\"session\":\"\",\"clock\":{\"ms\":0,\"last\":1,\"day\":0,\"day_ms\":0},\"tokens\":[{\"model\":\"#123a\u{300}\u{301}\u{302}\\t@\",\"sub\":true,\"input\":0,\"output\":0,\"cached\":0},{\"model\":\"claude-haiku-5\",\"sub\":true,\"input\":40000,\"output\":0,\"cached\":0}],\"context\":null,\"window\":null},{\"runner\":\"claude\",\"session\":\"s3\",\"clock\":{\"ms\":6000,\"last\":6000,\"day\":1,\"day_ms\":5999},\"tokens\":[{\"model\":\"gpt-6-astra\",\"sub\":true,\"input\":0,\"output\":7,\"cached\":0},{\"model\":\"not a model\",\"sub\":true,\"input\":1,\"output\":7,\"cached\":0},{\"model\":\"not a model\",\"sub\":false,\"input\":40000,\"output\":7,\"cached\":30000}],\"context\":null,\"window\":null}],\"colour\":7}]", 5).sent_by(Origin::Socket),
+        Action::TaskCard { id: 6, ticket: None }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
 
 /// The user's undo takes the tab of the workspace a "Close?" asks about: the question goes in
 /// that step, not at a client's next one (it was dropped before the undo's tabs settled).
@@ -7613,4 +7670,74 @@ fn seed_150464_a_reference_copies_a_panes_title_not_the_look() {
         Action::ComposeSubmit { open: true }.into(),
     ])
     .unwrap();
+}
+
+/// A Done's worktree, its git answers late (xreview of #274): Undo while git removes it (the
+/// default falls back, then the worktree is added back), Done while git makes it (removed once
+/// made), and a dirty one kept after an Undo (no notice for an act not the user's).
+mod done_worktree_races {
+    use super::*;
+
+    const ROOT: &str = "/home/.ottospace/worktrees";
+    const WT: &str = "/home/.ottospace/worktrees/app/fix-login";
+
+    fn app(trees: &[&str]) -> Vec<crate::repos::Repo> {
+        let tree =
+            |p: &&str| Worktree { name: "fix-login".into(), path: p.to_string(), branch: Some("fix-login".into()) };
+        let worktrees = trees.iter().map(tree).collect();
+        vec![crate::repos::Repo {
+            name: "app".into(),
+            path: "/code/app".into(),
+            branch: Some("main".into()),
+            worktrees,
+        }]
+    }
+
+    fn added() -> Envelope {
+        let repos = app(&[WT]);
+        Action::WorktreeAdded { repo: "/code/app".into(), path: WT.into(), asked: WT.into(), fresh: true, repos }
+            .sent_by(Origin::System)
+    }
+
+    /// A task started in a new worktree of `app` the box asks for; git's answer `made` or not yet.
+    fn started(made: bool) -> Vec<Envelope> {
+        let dirs = RepoDirs { worktrees: Some(ROOT.into()), ..Default::default() };
+        let mut steps = vec![
+            Action::SetRepos { repos: app(&[]) }.sent_by(Origin::System),
+            Action::SetRepoDirs { dirs }.sent_by(Origin::System),
+            Action::RepoClick { path: "/code/app".into(), axis: Axis::Right }.sent_by(Origin::User),
+            Action::OpenCompose { text: "fix login".into() }.sent_by(Origin::User),
+            Action::ComposeWorktree { new: Some(true) }.sent_by(Origin::User),
+            Action::ComposeEnter.sent_by(Origin::User),
+        ];
+        steps.extend(made.then(added));
+        steps
+    }
+
+    fn removed(kept: Option<&str>) -> Envelope {
+        Action::WorktreeRemoved { task: 1, path: WT.into(), kept: kept.map(String::from) }.sent_by(Origin::System)
+    }
+
+    #[test]
+    fn undo_while_git_removes_it() {
+        let mut steps = started(true);
+        steps.extend([Action::TaskDone { id: 1 }.sent_by(Origin::User), Action::DoneUndo.sent_by(Origin::User)]);
+        steps.push(removed(None));
+        replay(&steps).unwrap();
+    }
+
+    #[test]
+    fn done_while_git_makes_it() {
+        let mut steps = started(false);
+        steps.extend([Action::TaskDone { id: 1 }.sent_by(Origin::User), added()]);
+        replay(&steps).unwrap();
+    }
+
+    #[test]
+    fn kept_after_an_undo() {
+        let mut steps = started(true);
+        steps.extend([Action::TaskDone { id: 1 }.sent_by(Origin::User), Action::DoneUndo.sent_by(Origin::User)]);
+        steps.push(removed(Some("Kept the worktree: 1 uncommitted change")));
+        replay(&steps).unwrap();
+    }
 }

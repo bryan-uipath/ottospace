@@ -519,6 +519,21 @@ impl Workbooks {
         self.list.iter().find(|book| book.task == Some(task)).map(|book| book.id)
     }
 
+    /// A done task's own worktree at `path` was removed: a workspace whose default it was falls
+    /// back to the repository it came from, so a new task there starts in a folder that is.
+    /// Which ones, for an Undo to give back (`default_back`).
+    pub(crate) fn default_gone(&mut self, path: &str, repo: &str) -> Vec<WorkbookId> {
+        let books = self.list.iter_mut().filter(|book| book.worktree.as_deref() == Some(path));
+        books.map(|book| (book.worktree = Some(repo.to_string()), book.id).1).collect()
+    }
+
+    /// The worktree is back: each of `ids` still on `repo` has it as its default again.
+    pub(crate) fn default_back(&mut self, ids: &[WorkbookId], repo: &str, path: &str) {
+        let books =
+            self.list.iter_mut().filter(|book| ids.contains(&book.id) && book.worktree.as_deref() == Some(repo));
+        books.for_each(|book| book.worktree = Some(path.to_string()));
+    }
+
     /// Binds a workbook to a task, or (`None`) unbinds it. Bound, it is kept. A closing one is
     /// bound to none: it goes when its Undo runs out.
     pub(crate) fn bind(&mut self, id: WorkbookId, task: Option<TaskId>) {
