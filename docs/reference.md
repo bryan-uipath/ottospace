@@ -308,7 +308,10 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    idles. While a turn runs there is no Done: the composer's Stop (or Esc Esc) stops that turn,
    the one stop button; in the terminal view, its Stop. Done (also ⌘↵ in the
    conversation) makes the task done and stops its agent; the drawer folds into its rail and the
-   task leaves the rail, its workspace stays on the top row. The notice bar says
+   task leaves the rail, its workspace stays on the top row. In about 0.8 s, no sound: the drawer
+   seals into a green ring with a tick that draws itself and a few sparks, slides into the rail,
+   and the task's rail item pops with a ✓ on its corner before it goes. With Reduce Motion the
+   tick shows still and the drawer fades, no sparks. The notice bar says
    `Done · <task>` with Undo for six seconds: Undo brings it back as it was, in front; New task
    here (⌘N) opens the box in that workspace. A worktree the new-task box made for the task is
    removed (`git worktree remove`, never `--force`; its branch stays, and Undo adds it back):

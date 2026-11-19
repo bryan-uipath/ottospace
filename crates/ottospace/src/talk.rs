@@ -555,7 +555,7 @@ impl Workspace {
     }
 
     /// The conversation's header: state, title, Chat | Terminal, then what can be done.
-    fn talk_header(&self, subject: &Subject, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    pub(crate) fn talk_header(&self, subject: &Subject, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let shown = match subject {
             Subject::Task(id) => Some(self.model.tasks.get(*id)?),
             Subject::Session { .. } => None,

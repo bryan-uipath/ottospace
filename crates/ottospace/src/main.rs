@@ -115,6 +115,7 @@ mod running;
 #[cfg(test)]
 mod scratch;
 mod scrollbar;
+mod seal;
 mod sessions;
 mod signal_pipe;
 mod slide;
@@ -1003,6 +1004,8 @@ struct Workspace {
     chip_line: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The shown dial's moving parts: view state, stepped each frame it is drawn.
     dial_motion: RefCell<dial::DialMotion>,
+    /// The seal, fold and land of the user's Done, while it plays.
+    seals: seal::Seals,
     /// The key that ended sneak mode is still down: its repeats are typed nowhere.
     sneak_spent: bool,
     /// Reads of the focused app pane's tree while sneak mode is on.
@@ -1621,6 +1624,7 @@ impl Workspace {
             controls: sneak::Controls::default(),
             chip_line: Rc::default(),
             dial_motion: RefCell::default(),
+            seals: seal::Seals::default(),
             sneak_spent: false,
             sneak_reads: sneak_apps::Reads::default(),
             wheel: app_wheel::Wheel::default(),
@@ -2063,8 +2067,7 @@ impl Workspace {
                     worktree::start_remove(*task, repo.clone(), path.clone(), self.removals.0.clone());
                 }
                 Effect::Notice { text } => (self.error, self.refused) = (Some(text.clone()), Some(text.clone())),
-                // The seal, fold and land: drawn by the next change.
-                Effect::Seal { .. } => {}
+                Effect::Seal { task } => self.seal_start(*task),
                 Effect::ListenWrite { .. }
                 | Effect::ListenOpen { .. }
                 | Effect::ListenPauseStreams { .. }
@@ -3890,6 +3893,9 @@ impl Workspace {
                 "band_frames": self.timeline.band_frames.get(),
                 // Frames that drew the Calendar section's day: none at rest, its now line moves on the minute.
                 "calendar_frames": self.timeline.day_frames.get(),
+                // The frames the seal of a Done asked for, and those with its sparks: none under Reduce Motion.
+                "seal_frames": self.seals.frames,
+                "seal_spark_frames": self.seals.spark_frames,
                 // How often GPUI's own handlers were kicked to draw again (`stall`): after a change
                 // of the displays, or frames that stopped.
                 "redraws": self.redraws,
@@ -7900,6 +7906,8 @@ impl Render for Workspace {
         self.controls.begin();
         self.chip_line.set(None);
         self.dial_motion.borrow_mut().moving = false;
+        // Before anything is drawn this frame: where the drawer and the rail were is last frame's.
+        let seal = self.render_seal(window, cx);
         self.bars.begin();
         self.move_notice_bar(window);
         // The Repos list, the tabs and spaces, and ⌘/'s Known are noted again only while drawn.
@@ -8061,6 +8069,7 @@ impl Render for Workspace {
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
             .children(self.model.confirm.as_ref().map(|confirm| self.render_confirm(confirm, cx)))
             .when(self.gallery, |d| d.child(ui::gallery::view()))
+            .children(seal)
             .child(frame_probe(self.frame_start.clone(), self.renders, self.seq))
     }
 }

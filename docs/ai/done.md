@@ -52,7 +52,14 @@ asking"; the workspace stays, "we might want to start a new task in that workspa
   it: `talk_to` revives it), Undo, a state reported since, or the task goes.
 - What its stopping agent reports last moves a task put away nowhere (`chat_state`).
 - `Model::finish(subject)`: the header's buttons. `done_offered`, `close_key` (⌘W), `done_key` (⌘↵).
-- `Effect::Seal`: the user's Done in the drawer on that task. The shell plays the animation.
+- `Effect::Seal`: the user's Done in the drawer on that task (the core says it plays). Where each
+  part is at `t` ms is `seal::frame(t, calm)` (pure, tested): seal 0–250 ms (ring overshoots
+  and settles, tick draws, four sparks to 400 ms), fold 250–550 (into the rail), land 550–800
+  (the item pops, a ✓ flashes), then `None`. Calm: tick and ring still, the drawer fades, no
+  sparks, no pop. The shell (`seal.rs`) draws a ghost of the drawer and the rail item where
+  they were last drawn; the drawer's own header and conversation stay drawn in it and fade out
+  over the first 150 ms (`Frame::content`) while the ring and tick draw over them: a crossfade,
+  as GPUI cannot scale an element's picture, over everything, and asks for frames only while it plays.
 - A click on a done task's row makes it a task again and goes on with its session, if it has one.
 - Who: the user alone. `TaskDone`, `TaskLater`, `DoneUndo` and the answer to Later's question
   from any other origin are refused (`finish::USERS_ALONE`).
