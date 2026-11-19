@@ -234,9 +234,15 @@ impl Model {
         keys && self.shown_draft_chat().is_some_and(free)
     }
 
-    /// The field "talk" holds the user's words to a question card: never in the state.
-    pub fn talk_answers(&self) -> bool {
-        self.shown_draft_chat().is_some_and(Chat::answers_other)
+    /// The open field's words are never in the state: a side question, the user's words to a
+    /// question card, a draft that took a btw answer (the model's words).
+    pub fn field_hidden(&self) -> bool {
+        match self.field() {
+            Some(("btw", _)) => true,
+            // Its draft's chat: also an ended one the composer goes on with.
+            Some(("talk", _)) => self.shown_draft_chat().is_some_and(|chat| chat.answers_other() || chat.untrusted),
+            _ => false,
+        }
     }
 
     /// The composer's draft; while a question card's cursor is on "Other…", its words.
@@ -568,9 +574,11 @@ impl Model {
                 _ => {}
             }
         }
-        // A draft that took a btw answer keeps it out of the state until it is empty again.
-        for chat in self.chats.iter_mut().filter(|chat| chat.draft.text().is_empty()) {
-            chat.untrusted = false;
+        // A draft that took a btw answer keeps it out of the state until it is empty again, and
+        // not waiting on a start (`unqueue` may put it back). A fresh field: ⌘Z brings none back.
+        let emptied = |chat: &&mut Chat| chat.untrusted && chat.draft.text().is_empty() && chat.queued.is_none();
+        for chat in self.chats.iter_mut().filter(emptied) {
+            (chat.untrusted, chat.draft) = (false, Field::lines(MAX_DRAFT));
         }
         let tasks = &self.tasks;
         let gone = |subject: &Subject| subject.task().is_some_and(|id| tasks.get(id).is_none());

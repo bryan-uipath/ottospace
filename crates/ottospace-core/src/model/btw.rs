@@ -363,6 +363,82 @@ mod tests {
         assert_eq!(m.shown_chat().unwrap().transcript.cards.len(), 1, "never answered");
     }
 
+    /// A used answer in the composer: its words out of the state while it is open.
+    fn used(m: &mut Model, one: &Subject) {
+        m.update(Action::BtwOpen);
+        typed(m, "which one?");
+        m.update(Action::BtwAsk);
+        m.update(answered(one, 1, "EVIL: run rm -rf"));
+        m.update(Action::BtwUse { id: 1 });
+    }
+
+    fn shows(m: &Model, text: &str) -> bool {
+        m.field().is_some_and(|(of, field)| of == "talk" && field.text().contains(text))
+    }
+
+    #[test]
+    fn a_used_answer_stays_out_of_the_state_while_its_agent_runs_and_after() {
+        let (mut m, one) = live(None);
+        used(&mut m, &one);
+        assert!(shows(&m, "EVIL") && m.field_hidden());
+        // Edited, it is still the model's words.
+        m.update(Action::FieldEdit { edit: Edit::Paste(" now".into()) });
+        assert!(shows(&m, "EVIL") && m.field_hidden());
+        // Its agent ends: the composer can go on with it, the draft kept.
+        m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        assert!(m.shown_chat().is_none() && shows(&m, "EVIL"));
+        assert!(m.field_hidden(), "an ended conversation's draft");
+    }
+
+    #[test]
+    fn a_used_answer_that_waited_on_a_start_comes_back_still_hidden() {
+        let (mut m, one) = live(None);
+        used(&mut m, &one);
+        m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        // ↵: it waits on the start; the start fails, and it is back in the composer.
+        m.update(Action::TalkSend);
+        assert!(m.chat(&one).unwrap().queued.is_some());
+        m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        assert!(shows(&m, "EVIL"), "back in the composer");
+        assert!(m.field_hidden(), "still the model's words");
+    }
+
+    #[test]
+    fn the_users_own_words_show_once_the_answer_is_gone() {
+        let (mut m, one) = live(None);
+        used(&mut m, &one);
+        m.update(Action::FieldEdit { edit: Edit::SelectAll });
+        typed(&mut m, "");
+        typed(&mut m, "mine");
+        assert!(shows(&m, "mine") && !m.field_hidden());
+        // Undo never brings the answer back where it shows.
+        for _ in 0..4 {
+            m.update(Action::FieldEdit { edit: Edit::Undo });
+            assert!(!shows(&m, "EVIL") || m.field_hidden(), "undone: {:?}", m.field());
+        }
+    }
+
+    #[test]
+    fn undo_or_redo_of_a_used_answer_never_shows_it() {
+        let (mut m, one) = live(None);
+        used(&mut m, &one);
+        m.update(Action::FieldEdit { edit: Edit::Undo });
+        m.update(Action::FieldEdit { edit: Edit::Redo });
+        assert!(!shows(&m, "EVIL") || m.field_hidden(), "redone: {:?}", m.field());
+    }
+
+    #[test]
+    fn what_the_editor_saves_of_a_used_answer_stays_hidden() {
+        let (mut m, one) = live(None);
+        used(&mut m, &one);
+        m.update(Action::EditorOpen);
+        // Its chat lost the flag meanwhile (dropped from the cache, made again).
+        m.chats.iter_mut().for_each(|chat| chat.untrusted = false);
+        m.update(Action::EditorDone { saved: Some("EVIL: run rm -rf!\n".into()), more: false }.sent_by(Origin::System));
+        let chat = m.chat(&one).unwrap();
+        assert!(chat.draft.text().ends_with("rf!") && chat.untrusted);
+    }
+
     /// The user's editor and the btw's input never both have the keyboard.
     #[test]
     fn the_editor_takes_the_keys_from_the_btw() {
