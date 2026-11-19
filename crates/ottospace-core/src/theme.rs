@@ -47,6 +47,25 @@ pub const SELECTION: u32 = 0x155e75;
 /// Sneak labels: a solid amber pill with dark text, readable over any app.
 pub const SNEAK: u32 = 0xffb900;
 
+/// Spacing in points: GPUI's steps (`p_0p5` … `p_3`) at its 16-point rem. The shell's
+/// components (`ui`) take these, not GPUI's names.
+pub const SPACE_0_5: f32 = 2.;
+pub const SPACE_1: f32 = 4.;
+pub const SPACE_1_5: f32 = 6.;
+pub const SPACE_2: f32 = 8.;
+pub const SPACE_3: f32 = 12.;
+/// Type sizes in points: a small key cap, `text_xs`, a sidebar row.
+pub const TEXT_2XS: f32 = 10.;
+pub const TEXT_XS: f32 = 12.;
+pub const TEXT_ROW: f32 = 13.;
+/// Corner radii in points: `rounded_sm`, `rounded_md`.
+pub const RADIUS_SM: f32 = 4.;
+pub const RADIUS_MD: f32 = 6.;
+/// A labelled button's height, and icon sizes, in points.
+pub const CONTROL: f32 = 22.;
+pub const ICON_SM: f32 = 14.;
+pub const ICON: f32 = 20.;
+
 /// The notice bar by level, `(background, text)`: apollo-ui's future-dark semantic tokens
 /// `--color-{error,warning,info}-background` and `--color-{error,warning,info}-text`. A meeting:
 /// the band's meeting amber on indigo (Tailwind indigo-950), apart from a warning's brown.

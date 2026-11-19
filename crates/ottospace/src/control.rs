@@ -492,6 +492,11 @@ pub enum Request {
     /// taken away (a test cannot unplug one). The shell kicks GPUI to draw again, as it then
     /// does (`stall`). Never for an agent: it makes the window draw by paths of its own.
     DisplayChange,
+    /// For tests (`test_refusal`): the components' gallery (`ui::gallery`) over the whole window,
+    /// every component in every state, or the workspace again (`on`: false). For `scripts/shot`.
+    UiGallery {
+        on: bool,
+    },
     /// The user's meetings of `day` (`today`, the default, `tomorrow` or `YYYY-MM-DD`) and the
     /// `days` (1 to 7) from it, busy and free time: `{"ok":true,"configured":true,"meetings":[..],..}`,
     /// not the state. Only what the app holds (today and the next 7 days), never a fetch. Titles
@@ -648,6 +653,7 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         Request::DisplayChange => {
             Some("display_change is for tests (OTTOSPACE_E2E): macOS says when the displays change")
         }
+        Request::UiGallery { .. } => Some("ui_gallery is for tests (OTTOSPACE_E2E): it covers the user's workspace"),
         _ => None,
     }
 }
@@ -947,6 +953,7 @@ mod tests {
             [r#"{"cmd":"record_start","dir":"/tmp/rec"}"#, r#"{"cmd":"record_stop"}"#, r#"{"cmd":"display_change"}"#]
                 .into_iter()
                 .chain(probe)
+                .chain([r#"{"cmd":"ui_gallery","on":true}"#])
         {
             assert!(test_refusal(&parse(line), false).expect(line).contains("for tests"));
             assert_eq!(test_refusal(&parse(line), true), None);

@@ -120,6 +120,7 @@ mod tags;
 mod talk;
 mod terminal;
 mod trace;
+mod ui;
 mod viewer;
 mod words;
 mod workbook;
@@ -592,16 +593,7 @@ struct Tooltip(SharedString);
 
 impl Render for Tooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .bg(rgb(theme::SELECTED))
-            .border_1()
-            .border_color(rgb(theme::BORDER_STRONG))
-            .text_xs()
-            .text_color(rgb(theme::TEXT))
-            .child(self.0.clone())
+        ui::tooltip(self.0.clone(), ui::Tip::Hint)
     }
 }
 
@@ -620,18 +612,8 @@ struct DragChip {
 
 impl Render for DragChip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().pl(self.offset.x + px(8.)).pt(self.offset.y + px(8.)).child(
-            div()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .bg(rgb(theme::RAISED))
-                .border_1()
-                .border_color(rgb(theme::PRIMARY))
-                .text_xs()
-                .text_color(rgb(theme::TEXT))
-                .child(self.label.clone()),
-        )
+        let chip = ui::tooltip(self.label.clone(), ui::Tip::Drag);
+        div().pl(self.offset.x + px(8.)).pt(self.offset.y + px(8.)).child(chip)
     }
 }
 
@@ -1098,6 +1080,8 @@ struct Workspace {
     filled: Option<Filled>,
     /// A zoom of the window (its green button) fills the display instead (`zoom_asks`).
     zoom_asks: bool,
+    /// A test run's `ui_gallery`: the components' gallery over the window.
+    gallery: bool,
     /// Test runs: the pid of the one app that may be hosted.
     host_only: Option<i32>,
     control: Option<Receiver<Call>>,
@@ -1594,6 +1578,7 @@ impl Workspace {
             hosting,
             filled: None,
             zoom_asks,
+            gallery: false,
             host_only,
             control,
             ax_overlay: None,
@@ -2921,6 +2906,11 @@ impl Workspace {
                 // A test run only: as macOS says it; the next tick kicks GPUI to draw again.
                 Request::DisplayChange => {
                     display::note_change();
+                    None
+                }
+                Request::UiGallery { on } => {
+                    self.gallery = on;
+                    cx.notify();
                     None
                 }
                 Request::Trace => {
@@ -5022,23 +5012,11 @@ impl Workspace {
                 |(i, (section, icon, label))| {
                     let (section, label) = (*section, *label);
                     let active = open == Some(section);
-                    div()
-                        .id(("rail", i))
-                        .flex_none()
-                        .w(px(RAIL))
-                        .h(px(RAIL_CELL))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .when(!active, |d| d.border_r_1().border_color(rgb(theme::BORDER)))
-                        .hover(|s| s.bg(rgb(theme::SELECTED)))
-                        .when(active, |d| {
-                            // Amber on Tasks while a task needs the user, as its dot is.
-                            let tasks = section == Section::Tasks && needs_you;
-                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false)
-                        })
-                        .when(self.model.rail_focus == Some(RailFocus::Left(section)), |d| focus_ring(d.relative()))
+                    // Amber on Tasks while a task needs the user, as its dot is.
+                    let tasks = section == Section::Tasks && needs_you;
+                    let accent = active.then_some(if tasks { theme::SNEAK } else { theme::PRIMARY });
+                    let state = ui::State::focus(self.model.rail_focus == Some(RailFocus::Left(section)));
+                    ui::rail_cell(("rail", i), ui::Side::Left, accent, state)
                         .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
                             theme::TEXT
                         } else {
@@ -5075,20 +5053,6 @@ impl Workspace {
     /// something, and ← to collapse the bar into the rail.
     fn bar_header(&self, section: Section, cx: &mut Context<Self>) -> Stateful<Div> {
         let title = SECTIONS.iter().find(|(s, ..)| *s == section).map_or("", |(_, _, label)| label);
-        let button = |id: &'static str, icon: &'static str, tip: &'static str| {
-            div()
-                .id(id)
-                .size(px(28.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_md()
-                .cursor_pointer()
-                .hover(|s| s.bg(rgb(theme::SELECTED)))
-                .child(svg().path(icon).size(px(14.)).text_color(rgb(theme::MUTED)))
-                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-                .relative()
-        };
         // What + adds, and its sneak id. Apps and Marks have nothing to add from here.
         let add = match section {
             Section::Tasks => Some(("New task (⌘N)", "bar:add")),
@@ -5096,21 +5060,8 @@ impl Workspace {
             Section::Workbook => Some(("New workspace", "bar:add")),
             _ => None,
         };
-        let header = div()
-            .relative()
-            .flex_none()
-            .h(px(RAIL_CELL))
+        let header = ui::panel_header(title)
             .child(mark(&self.marks, Mark::BarHeader))
-            .pl_3()
-            .pr_1()
-            .flex()
-            .items_center()
-            .justify_between()
-            .border_b_1()
-            .border_color(rgb(theme::BORDER))
-            .text_xs()
-            .text_color(rgb(theme::MUTED))
-            .child(title.to_uppercase())
             // How many tasks wait for the user.
             .children(Some(self.model.tasks.needs_you()).filter(|n| section == Section::Tasks && *n > 0).map(|n| {
                 let badge = div().ml_2().h(px(18.)).min_w(px(18.)).px_1().pt(px(1.)).flex_none().flex();
@@ -5121,7 +5072,8 @@ impl Workspace {
             .children((section == Section::Calendar).then(|| self.calendar_day_switch(cx)))
             .child(div().flex_1())
             .children(add.map(|(tip, mark)| {
-                button("bar-add", "icons/plus.svg", tip)
+                ui::button("bar-add", ui::Button::Ghost(ui::Face::Icon("icons/plus.svg")), ui::State::Rest)
+                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
                     .child(self.controls.mark(mark))
                     .on_click(cx.listener(move |this, _, window, cx| this.bar_add(section, window, cx)))
             }))
@@ -5928,23 +5880,10 @@ impl Workspace {
         };
         let tip =
             format!("{} · a folder of repositories from your old settings: remove it, add the ones you use", dir.path);
-        list_row(("repo-group", at), selected)
+        let name = format!("{}/", dir.text.trim_end_matches('/'));
+        ui::section_heading(("repo-group", at), open, name, count, ui::State::focus(selected))
             .group("repo-name")
             .when(at > 0, |d| d.mt_2())
-            .h(px(26.))
-            .px_2()
-            .py_0()
-            .flex()
-            .items_center()
-            .gap_1p5()
-            .child(div().flex_none().w(px(10.)).text_xs().text_color(rgb(theme::MUTED)).child(if open {
-                "▾"
-            } else {
-                "▸"
-            }))
-            .child(cut_text(format!("{}/", dir.text.trim_end_matches('/'))).flex_shrink().text_xs())
-            .child(div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(format!("· {count}")))
-            .child(div().flex_1())
             .child(words::words("repo-name", selected).top(px(3.)).child(remove))
             .child(self.controls.mark(format!("repo-fold:{path}")))
             .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
@@ -5981,26 +5920,9 @@ impl Workspace {
             let tip = ("icons/trash.svg", "Stop listing this repository (nothing on disk is touched)");
             self.icon_word(format!("repo-remove:{}", repo.path), tip, click, cx)
         });
-        // A group's heading, as in every section: its name and how many it holds.
-        let count = div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(format!("· {count}"));
-        // A checkout row's look (hover, selection), on one line of its own height.
-        list_row(("repo-head", n), selected)
+        ui::section_heading(("repo-head", n), !folded, repo.name.clone(), count, ui::State::focus(selected))
             .group("repo-name")
             .when(n > 0, |d| d.mt_2())
-            .h(px(26.))
-            .px_2()
-            .py_0()
-            .flex()
-            .items_center()
-            .gap_1p5()
-            .child(div().flex_none().w(px(10.)).text_xs().text_color(rgb(theme::MUTED)).child(if folded {
-                "▸"
-            } else {
-                "▾"
-            }))
-            .child(cut_text(repo.name.clone()).flex_shrink().text_xs())
-            .child(count)
-            .child(div().flex_1())
             .child(words::words("repo-name", selected).top(px(3.)).child(add).children(remove))
             .child(mark(&self.marks, Mark::Repo(n)))
             .child(self.controls.mark(format!("repo-fold:{path}")))
@@ -6922,17 +6844,7 @@ impl Workspace {
                         let (commit, date) = (option_env!("OTTOSPACE_COMMIT"), option_env!("OTTOSPACE_BUILD_DATE"));
                         AnyView::from(cx.new(|_| Tooltip(version_line(env!("CARGO_PKG_VERSION"), commit, date).into())))
                     })
-                    .when(!mode.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .flex_none()
-                                .px_2()
-                                .rounded_sm()
-                                .bg(rgb(color))
-                                .text_color(rgb(theme::BACKGROUND))
-                                .child(mode),
-                        )
-                    })
+                    .when(!mode.is_empty(), |d| d.child(ui::pill(mode, ui::Pill::Mode(color))))
                     .child(cut_text(hint))
                     // A count or `g` typed in the viewer, waiting for its move (`10j`).
                     .children(pending.map(|typed| div().flex_none().text_color(rgb(theme::TEXT)).child(typed)))
@@ -7059,25 +6971,6 @@ pub(crate) fn well(rows: Vec<AnyElement>, gap: f32) -> impl Iterator<Item = AnyE
     rows.into_iter().enumerate().map(move |(at, row)| in_well(row, at == 0, at == last, gap).into_any_element())
 }
 
-/// A rail's open cell, raised: the panel's background, a soft shadow below it, and an accent bar
-/// at the window's edge (the right rail's: `right`). No line or shadow above: every cell reads as the first one does, under one border.
-pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool) -> Stateful<Div> {
-    let shadow = BoxShadow {
-        color: black().opacity(0.85),
-        offset: point(px(0.), px(7.)),
-        blur_radius: px(9.),
-        spread_radius: px(-6.),
-    };
-    let bar = div().absolute().top_0().w(px(2.)).h_full().bg(rgb(accent));
-    let bar = if right { bar.right_0() } else { bar.left_0() };
-    cell.relative().bg(rgb(theme::RAISED)).shadow(vec![shadow]).child(bar)
-}
-
-/// A rail cell with the keyboard (`zones`): a ring in list mode's colour, apart from "open".
-pub(crate) fn focus_ring(cell: Stateful<Div>) -> Stateful<Div> {
-    cell.child(div().absolute().inset(px(4.)).rounded(px(8.)).border_2().border_color(rgb(theme::LIST)))
-}
-
 /// A row's height in a sidebar section (`sidebar_row`).
 pub(crate) const ROW: f32 = 28.;
 
@@ -7085,24 +6978,7 @@ pub(crate) const ROW: f32 = 28.;
 /// state's colour, the title cut with "…", one muted detail at the right, its actions on hover.
 /// No outline at rest, so a long list stays quiet; hover and list mode's selection fill it.
 pub(crate) fn sidebar_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex_none()
-        .relative()
-        .min_h(px(ROW))
-        .px_2()
-        .flex()
-        .items_center()
-        .gap_2()
-        .rounded_md()
-        // Always there, so a row does not shift by a point when it is selected.
-        .border_1()
-        .border_color(transparent_black())
-        .text_size(px(13.))
-        .text_color(rgb(theme::TEXT))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(theme::SELECTED)))
-        .when(selected, |row| row.bg(rgb(theme::SELECTED)).border_color(rgb(theme::LIST)))
+    ui::list_row(id, ui::Row::Normal, ui::State::focus(selected))
 }
 
 /// A row's muted detail at its right: `4m`, `09:00`, `2 tabs`.
@@ -7113,24 +6989,7 @@ pub(crate) fn row_meta(text: impl Into<SharedString>) -> Div {
 /// A row under a heading (a repository's checkout): no outline at rest, so a long list stays
 /// quiet. Hover and selection mark it.
 fn list_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex_none()
-        .relative()
-        // Room on the left for the row's icon.
-        .pl(px(26.))
-        .pr_2()
-        .py_0p5()
-        .rounded_md()
-        // Always there, so a row does not shift by a point when it is selected.
-        .border_1()
-        .border_color(transparent_black())
-        .text_size(px(13.))
-        .line_height(px(17.))
-        .text_color(rgb(theme::MUTED))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
-        .when(selected, |row| row.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)).border_color(rgb(theme::LIST)))
+    ui::list_row(id, ui::Row::Dim, ui::State::focus(selected))
 }
 
 /// The time now, in milliseconds since 1970. The core has no clock: actions carry this.
@@ -7777,6 +7636,7 @@ impl Render for Workspace {
             .children(self.render_pointing())
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
             .children(self.model.confirm.as_ref().map(|confirm| self.render_confirm(confirm, cx)))
+            .when(self.gallery, |d| d.child(ui::gallery::view()))
             .child(frame_probe(self.frame_start.clone(), self.renders, self.seq))
     }
 }
@@ -8091,7 +7951,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 14] = [
+        const TESTS_ONLY: [&str; 15] = [
             "capture_start",
             "repo_add",
             "inspector_fixture",
@@ -8106,6 +7966,7 @@ mod tests {
             "zoom_press",
             "window_width",
             "display_change",
+            "ui_gallery",
         ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
         for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {

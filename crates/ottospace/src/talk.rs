@@ -17,7 +17,7 @@ use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::{Action, Axis, Kind, Mode, Origin, theme};
 
 use crate::terminal::{self, Terminal};
-use crate::{Tooltip, Workspace, collect, home};
+use crate::{Tooltip, Workspace, collect, home, ui};
 
 /// A task's agent, running in a terminal of the drawer's or ended there.
 pub struct Agent {
@@ -467,20 +467,7 @@ pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> D
 impl Workspace {
     /// A small button of the drawer's header, named for sneak mode and tests.
     pub(crate) fn talk_button(&self, name: &'static str, label: &str, tip: &'static str) -> Stateful<Div> {
-        div()
-            .id(name)
-            .relative()
-            .flex_none()
-            .px_1p5()
-            .h(px(22.))
-            .flex()
-            .items_center()
-            .rounded_sm()
-            .cursor_pointer()
-            .text_xs()
-            .text_color(rgb(theme::MUTED))
-            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
-            .child(label.to_string())
+        ui::button(name, ui::Button::Ghost(ui::Face::Label(label.to_string().into())), ui::State::Rest)
             .child(self.controls.mark(format!("talk:{name}")))
             .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
             // The press must not reach the drawer, which takes the keyboard on a press.

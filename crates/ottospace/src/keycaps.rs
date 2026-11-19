@@ -1,11 +1,11 @@
 //! Key caps: a key from the keymap as one small box per key, and what to do in an empty tab
 //! listed with them. The same list on the home screen and in an empty tab.
 
-use gpui::{Context, Div, Keymap, Keystroke, Modifiers, SharedString, Stateful, Window, div, prelude::*, px, rgb};
+use gpui::{Context, Div, Keymap, Keystroke, Modifiers, Stateful, Window, div, prelude::*, px, rgb};
 use ottospace_core::commands::Command;
 use ottospace_core::{Action, Axis, Kind, Picker, theme};
 
-use crate::{Workspace, commands, key_use};
+use crate::{Workspace, commands, key_use, ui};
 
 /// A key as caps, each with whether it is lit: ⌘E with ⌘ held is [("⌘", true), ("E", false)].
 /// A modifier's cap is lit while it is held and the keys held are all the chord's; `fired`
@@ -18,34 +18,11 @@ fn caps(stroke: &Keystroke, held: Modifiers, fired: bool) -> Vec<(String, bool)>
     signs.chars().map(|sign| (sign.to_string(), lit(sign))).chain([(key, fired)]).collect()
 }
 
-/// One cap: a small rounded box. Lit: a lighter fill, never the primary colour. `small`: the
-/// size under the new-task line, beside text of its own size.
-pub(crate) fn cap(text: impl Into<SharedString>, lit: bool, small: bool) -> Div {
-    let (fill, edge, ink) = match lit {
-        true => (theme::BORDER_STRONG, theme::SCROLL_THUMB_HELD, theme::TEXT),
-        false => (theme::RAISED, theme::BORDER_STRONG, theme::MUTED),
-    };
-    let (side, round) = if small { (16., 4.) } else { (22., 5.) };
-    div()
-        .min_w(px(side))
-        .h(px(side))
-        .px_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(round))
-        .border_1()
-        .border_color(rgb(edge))
-        .bg(rgb(fill))
-        .text_xs()
-        .when(small, |d| d.text_size(px(10.)))
-        .text_color(rgb(ink))
-        .child(text.into())
-}
-
 /// A key's caps in a row, e.g. [⌘] [E]. `held`: the modifiers down now.
 pub fn key_caps(stroke: &Keystroke, held: Modifiers, fired: bool) -> Div {
-    div().flex().gap_1().children(caps(stroke, held, fired).into_iter().map(|(text, lit)| cap(text, lit, false)))
+    div().flex().gap_1().children(
+        caps(stroke, held, fired).into_iter().map(|(text, lit)| ui::pill(text, ui::Pill::Key { lit, small: false })),
+    )
 }
 
 /// A command's first key in the keymap.

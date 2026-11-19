@@ -11,7 +11,7 @@ use ottospace_core::model::zones::RailFocus;
 use ottospace_core::talk::Subject;
 use ottospace_core::{Action, theme};
 
-use crate::{RAIL_CELL, Tooltip, Workspace, focus_ring, raised_cell, rect};
+use crate::{Tooltip, Workspace, rect, ui};
 
 /// The rail's width, and +'s, in points.
 pub(crate) const WIDTH: f32 = 48.;
@@ -215,17 +215,9 @@ impl Workspace {
             RailItem::Task { .. } => None,
             RailItem::Transcript => None,
         };
-        div()
-            .id(ElementId::Name(control(item).into()))
+        let id = ElementId::Name(control(item).into());
+        ui::rail_cell(id, ui::Side::Right, selected.then_some(theme::PRIMARY), ui::State::focus(keyed))
             .group(group)
-            .relative()
-            .flex_none()
-            .w_full()
-            .h(px(RAIL_CELL))
-            .cursor_pointer()
-            .when(selected, |d| raised_cell(d, theme::PRIMARY, true))
-            .when(!selected, |d| d.border_l_1().border_color(rgb(theme::BORDER)).hover(|s| s.bg(rgb(theme::SELECTED))))
-            .when(keyed, focus_ring)
             .child(face)
             .child(self.controls.mark(control(item)))
             .children(later)

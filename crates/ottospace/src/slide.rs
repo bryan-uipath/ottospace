@@ -1,10 +1,10 @@
 //! The arrows that slide the sidebar and the drawer into their rails and out again: one button
 //! for both sides. Its key is in its tooltip only (the owner: shortcuts of small buttons in tooltips).
 
-use gpui::{AnyView, Context, Div, ElementId, MouseButton, Stateful, Window, div, prelude::*, px, rgb, svg};
-use ottospace_core::{Action, theme};
+use gpui::{AnyView, Context, Div, ElementId, MouseButton, Stateful, Window, prelude::*};
+use ottospace_core::Action;
 
-use crate::{Tooltip, Workspace};
+use crate::{Tooltip, Workspace, ui};
 
 /// The arrows: `|←` slides toward the left edge, `→|` toward the right.
 pub(crate) const LEFT: &str = "icons/slide-left.svg";
@@ -23,22 +23,7 @@ impl Workspace {
         tip: &'static str,
     ) -> Stateful<Div> {
         let tip: gpui::SharedString = format!("{tip} · {key}").into();
-        let arrow = svg().path(icon).size(px(14.)).text_color(rgb(theme::MUTED));
-        div()
-            .id(ElementId::Name(control.into()))
-            .relative()
-            .flex_none()
-            .p_1()
-            .flex()
-            .items_center()
-            .rounded_md()
-            // Reads as a button: outlined, filled, brighter under the pointer.
-            .border_1()
-            .border_color(rgb(theme::BORDER_STRONG))
-            .bg(rgb(theme::RAISED))
-            .cursor_pointer()
-            .hover(|s| s.bg(rgb(theme::SELECTED)))
-            .child(arrow)
+        ui::button(ElementId::Name(control.into()), ui::Button::Icon(icon), ui::State::Rest)
             .child(self.controls.mark(control))
             .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
             // The press must not reach the drawer, which takes the keyboard on a press.
