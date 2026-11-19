@@ -654,6 +654,7 @@ impl Workspace {
             .gap_2()
             .children(dropped)
             .children(items)
+            .children(self.done_offer_line(subject, cx))
             .children((t.unread_lines() > 0).then(|| self.chat_unread(subject, t, cx)))
             .on_scroll_wheel(cx.listener({
                 let subject = subject.clone();

@@ -247,6 +247,12 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       },
       line: null,
       note: null,
+      finish: {
+        later: true,
+        done: true,
+        offered: false,
+        rects: { later: [0, 0, 40, 20], done: [44, 0, 50, 20], offer_done: null, offer_later: null },
+      },
     },
     frame: { number: 3, seq: 2, drawn: 2, waited_ms: 0, window: 41 },
   };

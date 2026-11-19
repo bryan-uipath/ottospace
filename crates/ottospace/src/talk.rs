@@ -396,6 +396,8 @@ impl Workspace {
                 return true;
             }
             ("talk", "chat-stop", _) => Action::TalkInterrupt,
+            ("talk", "talk-done" | "offer-done", Some(id)) => Action::TaskDone { id },
+            ("talk", "talk-later" | "offer-later", Some(id)) => Action::TaskLater { id },
             ("talk", "view-chat", _) => Action::TalkView { shows: ottospace_core::transcript::View::Native },
             ("talk", "view-terminal", _) => Action::TalkView { shows: ottospace_core::transcript::View::Terminal },
             ("talk", "", _) => Action::TalkKeys { on: true },
@@ -655,6 +657,7 @@ impl Workspace {
             .children(brief)
             .children(adopt)
             .children(stop)
+            .children(self.finish_buttons(subject, cx))
             .child(close);
         Some(header.id("drawer-head"))
     }
@@ -897,6 +900,8 @@ impl Workspace {
             "note": self.model.talk_note(),
             // The drawer's rail (`drawer_rail`): its items, in order.
             "rail": self.rail_json(),
+            // The open conversation's Later and Done, and the offer under its reply (`finish`).
+            "finish": self.model.talk.as_ref().filter(|talk| talk.open).map(|talk| self.finish_snapshot(&talk.task)),
         })
     }
 }

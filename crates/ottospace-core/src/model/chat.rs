@@ -737,6 +737,10 @@ impl Model {
     /// waits or once the turn is over.
     fn chat_state(&mut self, subject: &Subject) {
         let (Some(task), Some(chat)) = (subject.task(), self.chat(subject)) else { return };
+        // Done or put away by the user: what its stopping agent says last moves it nowhere.
+        if self.put_away(task) {
+            return;
+        }
         let transcript = &chat.transcript;
         let state =
             if transcript.turn.is_some() && transcript.cards.is_empty() { State::Running } else { State::NeedsYou };

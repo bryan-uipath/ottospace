@@ -237,7 +237,8 @@ impl Model {
             (task.repo, task.folder) = (Some(path), None);
         }
         let subject = super::Subject::Task(id);
-        let busy = self.talk_live(&subject) || self.starting.iter().any(|(of, _)| *of == subject);
+        // Nor one the user marked done or put away while git made it.
+        let busy = self.talk_live(&subject) || self.starting.iter().any(|(of, _)| *of == subject) || self.put_away(id);
         if let Some(start) = self.agent_start(&subject).filter(|_| !busy) {
             self.launch(subject, start, brief, effects);
         }

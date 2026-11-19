@@ -12,6 +12,7 @@ import type {
   NoticeLevel,
   AppEntry,
   Feature,
+  Finish,
   Listen,
   ListenLine,
   Slot,
@@ -1049,6 +1050,7 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
     native: native(o.native, `${at}.native`),
     line: orNull(agentLine)(o.line, `${at}.line`),
     note: orNull(str)(o.note, `${at}.note`),
+    finish: orNull(finish)(o.finish, `${at}.finish`),
   };
 }
 
@@ -1366,6 +1368,29 @@ function confirm(value: unknown, at: string): Confirm {
     paste: orNull(pasteAsk)(o.paste, `${at}.paste`),
     unlist: orNull(str)(o.unlist, `${at}.unlist`),
     close: orNull(num)(o.close, `${at}.close`),
+    later: orNull(later)(o.later, `${at}.later`),
+  };
+}
+
+function later(value: unknown, at: string): [number, string] {
+  if (!Array.isArray(value) || value.length !== 2) throw wrong(at, "[id, title]", value);
+  return [num(value[0], `${at}[0]`), str(value[1], `${at}[1]`)];
+}
+
+function finish(value: unknown, at: string): Finish {
+  const o = fields(value, at);
+  const r = fields(o.rects, `${at}.rects`);
+  const at2 = `${at}.rects`;
+  return {
+    later: bool(o.later, `${at}.later`),
+    done: bool(o.done, `${at}.done`),
+    offered: bool(o.offered, `${at}.offered`),
+    rects: {
+      later: orNull(rect)(r.later, `${at2}.later`),
+      done: orNull(rect)(r.done, `${at2}.done`),
+      offer_done: orNull(rect)(r.offer_done, `${at2}.offer_done`),
+      offer_later: orNull(rect)(r.offer_later, `${at2}.offer_later`),
+    },
   };
 }
 

@@ -81,6 +81,7 @@ mod editor;
 mod event_log;
 mod features;
 mod field;
+mod finish;
 mod give_back;
 mod highlight;
 mod home;
@@ -1699,9 +1700,13 @@ impl Workspace {
             self.refresh_apps();
             self.offer_installed(cx);
         }
-        // A client's key, click or label at the user's draft, or at the drawer's ⌘⇧R or →: its
+        // A client's key, click or label at the user's draft, the drawer's ⌘⇧R or →, or Done and Later: its
         // reply's `notice` says why it did nothing.
-        let said = [ottospace_core::capture::DRAFT_USERS, ottospace_core::model::rail::DRAWER_USERS];
+        let said = [
+            ottospace_core::capture::DRAFT_USERS,
+            ottospace_core::model::rail::DRAWER_USERS,
+            ottospace_core::model::finish::USERS_ALONE,
+        ];
         if let Some(why) =
             self.model.refusal(&action, origin).filter(|why| origin == Origin::Socket && said.contains(why))
         {
@@ -1919,6 +1924,8 @@ impl Workspace {
                     worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), *fresh, done);
                 }
                 Effect::Notice { text } => (self.error, self.refused) = (Some(text.clone()), Some(text.clone())),
+                // The seal, fold and land: drawn by the next change.
+                Effect::Seal { .. } => {}
                 Effect::ListenWrite { .. }
                 | Effect::ListenOpen { .. }
                 | Effect::ListenPauseStreams { .. }
@@ -6855,6 +6862,7 @@ impl Workspace {
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.unlist.is_some()) => ("UNLIST?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.paste.is_some()) => ("PASTE?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.close.is_some()) => ("CLOSE?", ""),
+            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.later.is_some()) => ("LATER?", ""),
             Mode::Confirm => ("QUIT?", ""),
             // The capture bar lists the annotate keys.
             Mode::Annotate => ("ANNOTATE", ""),
@@ -7503,10 +7511,12 @@ impl Render for Workspace {
                     this.dispatch(Action::TaskStop { id }, this.input, window, cx);
                 }
             }))
-            // ⌘↵ is the new-task box's "start" while it has the keyboard.
+            // ⌘↵ is the new-task box's "start" while it has the keyboard; in a conversation, its Done.
             .on_action(cx.listener(|this, _: &TalkGo, window, cx| {
                 if this.model.compose_keys() {
                     this.dispatch(Action::ComposeSubmit { open: true }, this.input, window, cx);
+                } else if let Some(done) = this.model.done_key() {
+                    this.dispatch(done, this.input, window, cx);
                 }
             }))
             .on_action(cx.listener(
@@ -7622,8 +7632,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 this.ask_close_tab(None, window, cx);
             }))
+            // ⌘W: the focused pane closes; with the keyboard in the drawer, Later on its task.
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
-                this.dispatch(Action::Close { pane: None }, this.input, window, cx);
+                this.dispatch(this.model.close_key(), this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &FocusLeft, window, cx| {
                 this.dispatch(Action::FocusDir { dir: Dir::Left }, this.input, window, cx);

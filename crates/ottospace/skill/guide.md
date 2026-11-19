@@ -388,6 +388,14 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   and only the user does that (the user is asked first). A dismissed task leaves the top row
   and the drawer, and its tabs go to the workspace selected last (one is made if there is none; a
 tab that holds nothing is closed); `task_undo` brings them back to its space.
+- Done and Later are the user's alone, in the drawer's header (`drawer.finish`: `later`, `done`
+  (false while a turn runs), `offered` and their `rects`), the quiet "Got what you needed? ✓ Done ·
+  Later" under the last reply, a rail item's ×, ⌘W and ⌘↵ in the drawer: a click, label or key of
+  yours on them is refused ("only the user marks a task done or puts it away"), and so is your
+  answer to "Stop "<task>" and put it away?" (`state.confirm.later`). Done makes the task `done`
+  and stops its idle agent; Later stops it and parks the task (`parked`). Either takes it off the
+  drawer's rail and out of `spaces[].front`; its workspace stays on the top row. The notice bar
+  says `Done · <task>` with `undo` for six seconds.
 - `task_snooze`, `task_hold` and `task_dismiss` are the user's moves; send them only when asked.
   A snoozed or dismissed task leaves the inbox. A snoozed task returns when its time is up;
   a dismissed task does not. Either returns when it moves under `needs_you`. `task_hold` sets

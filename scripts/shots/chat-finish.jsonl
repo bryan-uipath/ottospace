@@ -1,0 +1,26 @@
+# Native chat's header: idle (Later, ✓ Done, the offer under the reply), mid-turn (Later
+# alone: the composer's Stop), Later's question while it runs, then Done: the drawer folded, "Done · <task>".
+{"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"plan the week >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.replies","len":1}
+{"click":"talk"}
+{"settle":800}
+{"shot":"idle"}
+{"cmd":"key","keys":"g o space o n enter","as":"user"}
+{"until":"drawer.native.chats.1.transcript.turn"}
+{"settle":800}
+{"shot":"turn"}
+{"cmd":"key","keys":"cmd-w","as":"user"}
+{"settle":300}
+{"shot":"later-asks"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"click":"talk:chat-stop"}
+{"until":"drawer.finish.done","is":true}
+{"click":"talk"}
+{"cmd":"key","keys":"cmd-enter","as":"user"}
+{"settle":300}
+{"shot":"done"}

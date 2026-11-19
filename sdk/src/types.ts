@@ -922,6 +922,25 @@ export interface Confirm {
   unlist: string | null;
   /** Not the quit question: "Close this workspace?" for this temporary one, whose terminals in `running` end once its Undo runs out. Only the user answers it. */
   close: number | null;
+  /** Not the quit question: "Stop "<title>" and put it away?" for this task (id, title), whose turn runs: Later. Only the user answers it. */
+  later: [TaskId, string] | null;
+}
+
+/**
+ * The open conversation's Later and Done (none while a turn runs: the composer's Stop), and whether the quiet "Got what you
+ * needed? ✓ Done · Later" shows under its last reply (`offered`), with where each was drawn.
+ * Only the user's click or key acts on them.
+ */
+export interface Finish {
+  later: boolean;
+  done: boolean;
+  offered: boolean;
+  rects: {
+    later: Rect | null;
+    done: Rect | null;
+    offer_done: Rect | null;
+    offer_later: Rect | null;
+  };
 }
 
 /** What a mark waits for while it has the keyboard (`mode` is `mark`). */
@@ -1504,6 +1523,8 @@ export interface Snapshot {
      */
     line: AgentLine | null;
     note: string | null;
+    /** The open conversation's Later and Done; null with none open. */
+    finish: Finish | null;
   };
   /**
    * The status bar's segments: the focused pane's folder and branch, or its app (`place`, null on

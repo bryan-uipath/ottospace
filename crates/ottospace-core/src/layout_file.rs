@@ -105,6 +105,9 @@ pub struct Drawer {
     /// Each task's dial as the user left it: collapsed (true) or open.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dials: Vec<(TaskId, bool)>,
+    /// The tasks the user put away (Done, Later): off the rail and out of front until opened.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub away: Vec<TaskId>,
 }
 
 fn width() -> f32 {
@@ -113,7 +116,15 @@ fn width() -> f32 {
 
 impl Default for Drawer {
     fn default() -> Self {
-        Drawer { task: None, open: false, width: talk::WIDTH, wide: false, views: Vec::new(), dials: Vec::new() }
+        Drawer {
+            task: None,
+            open: false,
+            width: talk::WIDTH,
+            wide: false,
+            views: Vec::new(),
+            dials: Vec::new(),
+            away: Vec::new(),
+        }
     }
 }
 
@@ -360,6 +371,7 @@ impl Model {
             // Of live tasks only, as a restore keeps them: a dismissed task's pick goes with it.
             views: self.saved_views().into_iter().filter(|(task, _)| self.tasks.live(*task).is_some()).collect(),
             dials: self.saved_dials().into_iter().filter(|(task, _)| self.tasks.live(*task).is_some()).collect(),
+            away: self.finish.away.iter().copied().filter(|task| self.tasks.live(*task).is_some()).collect(),
         };
         // Not the Calendar: a build without it could not read the file back.
         let section = self.sidebar.filter(|s| *s != Section::Calendar);
@@ -553,8 +565,10 @@ impl Model {
         let views: Vec<_> = views.collect();
         let dials = layout.drawer.dials.iter().filter(|(task, _)| live(task)).map(|(task, c)| (*task, *c));
         let dials: Vec<_> = dials.collect();
+        let away: Vec<TaskId> = layout.drawer.away.iter().copied().filter(live).collect();
         self.restore_views(views);
         self.restore_dials(dials);
+        self.finish.away = away;
         // The selected space's conversation, shown to go on with: never started here.
         self.drawer_open = layout.drawer.open;
         if let Some(subject) = self.space_subject(self.space()) {
@@ -930,6 +944,13 @@ mod tests {
         assert_eq!(file.drawer.dials, [(1, false)], "a task that is gone is not kept");
         let (back, _) = restored(&opened, file, &[], false);
         assert!(!back.dial_collapsed(&Subject::Task(1)) && workspace().dial_collapsed(&Subject::Task(1)));
+        // And a task the user put away stays off the rail and out of front.
+        let mut away = workspace();
+        away.update(Action::TaskLater { id: 1 });
+        let file = parse(&write(&away.layout_file(&[], &[], 0))).unwrap();
+        assert_eq!(file.drawer.away, [1]);
+        let (back, _) = restored(&away, file, &[], false);
+        assert!(back.put_away(1) && back.rail().is_empty() && back.front(&Owner::Task { id: 1 }).is_none());
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::StartAgent { .. } | Effect::ReadSession { .. })));
         // The app pane waits for its window: no app is started for it.
         let hosts: Vec<&Effect> = effects.iter().filter(|e| matches!(e, Effect::HostWindow { .. })).collect();

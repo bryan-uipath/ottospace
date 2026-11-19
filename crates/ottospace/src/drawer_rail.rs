@@ -8,6 +8,7 @@ use ottospace_core::listen::Status;
 use ottospace_core::model::Owner;
 use ottospace_core::model::rail::{RailItem, RailSection};
 use ottospace_core::model::zones::RailFocus;
+use ottospace_core::talk::Subject;
 use ottospace_core::{Action, theme};
 
 use crate::{Tooltip, Workspace, rect};
@@ -205,8 +206,18 @@ impl Workspace {
         cx: &Context<Self>,
     ) -> Stateful<Div> {
         let edge = div().absolute().left_0().top(px(6.)).bottom(px(6.)).w(px(2.)).rounded_sm().bg(rgb(theme::PRIMARY));
+        // A task's dim × on hover: Later.
+        let group = control(item);
+        let later = match item {
+            RailItem::Task { id } if self.model.finish(&Subject::Task(id)).is_some_and(|b| b.later) => {
+                Some(self.rail_later(id, &group, cx))
+            }
+            RailItem::Task { .. } => None,
+            RailItem::Transcript => None,
+        };
         div()
             .id(ElementId::Name(control(item).into()))
+            .group(group)
             .relative()
             .flex_none()
             .size(px(ITEM))
@@ -217,6 +228,7 @@ impl Workspace {
             .when(keyed, |d| d.border_1().border_color(rgb(theme::LIST)))
             .child(face)
             .child(self.controls.mark(control(item)))
+            .children(later)
             .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
             .on_click(cx.listener(move |this, _, window, cx| this.rail_click(item, window, cx)))
     }
@@ -245,6 +257,9 @@ impl Workspace {
         match name {
             "new" => self.new_task(window, cx),
             "transcript" => self.rail_click(RailItem::Transcript, window, cx),
+            later if let Some(id) = later.strip_prefix("later:").and_then(|id| id.parse().ok()) => {
+                self.later(id, window, cx)
+            }
             id => {
                 if let Ok(id) = id.parse() {
                     self.rail_click(RailItem::Task { id }, window, cx);
