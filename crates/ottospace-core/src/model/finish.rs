@@ -343,17 +343,16 @@ impl Model {
         self.tasks.get(*id)?.made.as_ref()
     }
 
-    /// The worktrees folder, if the task's record names a place in it as the box makes one
-    /// (`<worktrees_dir>/<repo>/<branch>`, git's `path` ending so), of a listed repository, on a
-    /// branch git takes. The record is read from the tasks folder, maybe a shared notes
-    /// repository: its own `root` is not trusted, the setting is.
+    /// The worktrees folder, if the task's record names the place the box makes for its repository
+    /// and branch (`worktree_dir`), git's `path` that same place (the setting is resolved), of a
+    /// listed repository, on a branch git takes. The record is read from the tasks folder, maybe
+    /// a shared notes repository: its own `root` is not trusted, the setting is.
     fn own_worktree(&self, made: &crate::tasks::Made) -> Option<String> {
         let root = self.repo_dirs.worktrees.clone()?;
-        let place = made.asked.strip_prefix(root.trim_end_matches('/'))?; // `/app/fix-zoom`
-        let ends = made.path.strip_suffix(place).is_some_and(|head| !head.is_empty());
         let listed = self.repos.iter().any(|r| r.path == made.repo);
         let branch = crate::repos::check_branch(&made.branch).is_ok();
-        (crate::repos::in_worktrees(&made.asked, &root) && ends && listed && branch).then_some(root)
+        let at = made.asked == crate::repos::worktree_dir(&root, &made.repo, &self.repos, &made.branch);
+        (at && made.path == made.asked && listed && branch).then_some(root)
     }
 
     /// Undo of a Done that removed its worktree: git adds it back on its branch, where it was.
@@ -911,7 +910,8 @@ mod tests {
         removed(&mut m, None);
         let dirs = crate::repos::RepoDirs { worktrees: Some("/elsewhere".into()), ..Default::default() };
         m.update(Action::SetRepoDirs { dirs });
-        assert!(!adds_back(&m.update(Action::DoneUndo)));
+        let effects = m.update(Action::DoneUndo);
+        assert!(!effects.iter().any(|e| matches!(e, Effect::AddWorktree { .. })), "{effects:?}");
     }
 
     /// Opened again, then put away (Later) before git adds its worktree back: no resume.
@@ -998,8 +998,12 @@ mod tests {
         let mut m = planted("needs_you", false, "/code/app-hand-made", "/code");
         let effects = m.update(Action::TaskDone { id: 1 });
         assert!(!effects.iter().any(|e| matches!(e, Effect::RemoveWorktree { .. })), "{effects:?}");
-        // Its `asked` inside, git's `path` not that place: not the one the box made there.
-        let mut m = planted("needs_you", false, "/code/app-2", ROOT);
+        // In the folder, not where the box puts its repository's branch: one the user put there.
+        let mut m = planted("needs_you", false, &format!("{ROOT}/manual/keep"), ROOT);
+        let effects = m.update(Action::TaskDone { id: 1 });
+        assert!(!effects.iter().any(|e| matches!(e, Effect::RemoveWorktree { .. })), "{effects:?}");
+        // Its `asked` inside, git's `path` elsewhere, ending the same: not the one the box made there.
+        let mut m = planted("needs_you", false, "/code/app/fix-login", ROOT);
         if let Some(made) = m.tasks.list[0].made.as_mut() {
             made.asked = WORKTREE.into();
         }

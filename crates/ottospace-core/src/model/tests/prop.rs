@@ -4677,7 +4677,10 @@ impl Run {
                     let made = m.tasks.get(*task).and_then(|t| t.made.as_ref());
                     // In the worktrees folder the setting names, whatever the record says.
                     let inside = |made: &tasks::Made| {
-                        m.repo_dirs.worktrees.as_ref().is_some_and(|root| crate::repos::in_worktrees(&made.asked, root))
+                        m.repo_dirs.worktrees.as_ref().is_some_and(|root| {
+                            crate::repos::in_worktrees(&made.asked, root)
+                                && crate::repos::in_worktrees(&made.path, root)
+                        })
                     };
                     let own = made.is_some_and(|made| made.path == *path && inside(made));
                     let listed = m.repos.iter().any(|r| r.path == *repo && r.worktrees.iter().any(|w| w.path == *path));

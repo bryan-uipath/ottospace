@@ -128,11 +128,22 @@ pub fn repo_dirs() -> RepoDirs {
 
 /// Where the Repos section's + makes worktrees: `worktrees_dir` (`~` expanded), else `worktrees` in
 /// the ottospace folder; a relative path is inside it. `None` in a test run with no folder of its own.
+/// Resolved (links, as git lists a worktree's path), also before it is made: so a task's record
+/// is checked against it (`own_worktree`).
 pub fn worktrees_dir() -> Option<String> {
     let home = get().home.as_ref()?;
     let named = live().worktrees_dir.as_ref().map(|dir| home.join(expand_home(dir, &user_home())));
     let dir = named.unwrap_or_else(|| home.join("worktrees"));
-    dir.is_absolute().then(|| dir.to_string_lossy().into_owned())
+    dir.is_absolute().then(|| resolved(&dir).to_string_lossy().into_owned())
+}
+
+/// `dir` with its links resolved, as far as it is there: `/var/x/new` → `/private/var/x/new`.
+fn resolved(dir: &Path) -> PathBuf {
+    match (dir.canonicalize(), dir.parent(), dir.file_name()) {
+        (Ok(dir), ..) => dir,
+        (Err(_), Some(parent), Some(name)) => resolved(parent).join(name),
+        _ => dir.to_path_buf(),
+    }
 }
 
 /// Where transcripts are kept: `transcripts_dir` (`~` expanded), else `transcripts` in the
@@ -524,5 +535,21 @@ pub fn layout_aside(end: Option<&str>) -> io::Result<()> {
     match end {
         Some(end) => removed(fs::rename(&file, file.with_extension(format!("json.{end}")))),
         None => removed(fs::remove_file(&file)).and(removed(fs::remove_file(bad))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scratch::Scratch;
+
+    /// A worktrees folder not made yet, through a link: resolved as far as it is there.
+    #[test]
+    fn a_folder_not_made_yet_is_resolved_as_far_as_it_is_there() {
+        let scratch = Scratch::dir(&format!("ottospace-config-resolved-{}", std::process::id()));
+        let real = scratch.canonicalize().unwrap();
+        fs::create_dir_all(real.join("a")).unwrap();
+        std::os::unix::fs::symlink(real.join("a"), real.join("l")).unwrap();
+        assert_eq!(resolved(&scratch.join("l/new/x")), real.join("a/new/x"));
     }
 }
