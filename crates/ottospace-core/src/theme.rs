@@ -117,7 +117,7 @@ pub fn station(station: Station) -> u32 {
         Station::Files => PICK,
         Station::Shell => APP,
         Station::Network => PRIMARY,
-        Station::Browser => INSPECT,
+        Station::Mcp => INSPECT,
         Station::Apps => AGENT_SEE,
         Station::Agents => COMMAND,
         Station::Skills => COMPOSE,

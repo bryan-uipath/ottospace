@@ -95,7 +95,7 @@ export type Station =
   | "files"
   | "shell"
   | "network"
-  | "browser"
+  | "mcp"
   | "apps"
   | "agents"
   | "skills"

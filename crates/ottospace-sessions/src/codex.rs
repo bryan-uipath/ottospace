@@ -351,6 +351,11 @@ fn describe(tool: &str, payload: &Value) -> (Station, String) {
     if payload["namespace"] == "collaboration" {
         return (Station::Agents, station::tool_label(tool));
     }
+    // An MCP server's tools come in its namespace, e.g. `mcp__github__…` with `name` `create_issue`.
+    if let Some(server) = payload["namespace"].as_str().and_then(|n| n.strip_prefix("mcp__")) {
+        let server = server.split("__").next().unwrap_or("");
+        return (Station::Mcp, station::tool_label(&format!("mcp__{server}__{tool}")));
+    }
     // `function_call` arguments are a JSON string; a `custom_tool_call` input is plain text.
     let arguments: Value =
         payload["arguments"].as_str().and_then(|a| serde_json::from_str(a).ok()).unwrap_or(Value::Null);
@@ -431,6 +436,22 @@ mod tests {
                 json!({"name": "sleep", "namespace": "clock", "arguments": "{\"duration_ms\":5}"}),
                 Station::Other,
                 "sleep",
+            ),
+            (
+                json!({"name": "create_issue", "namespace": "mcp__github__", "arguments": "{\"title\":\"private\"}"}),
+                Station::Mcp,
+                "github/create_issue",
+            ),
+            (
+                json!({"name": "search", "namespace": "mcp__memory__x", "arguments": "{}"}),
+                Station::Mcp,
+                "memory/search",
+            ),
+            (json!({"name": "private thing", "namespace": "mcp__my server", "arguments": "{}"}), Station::Mcp, "mcp"),
+            (
+                json!({"name": "mcp__playwright__browser_click", "arguments": "{}"}),
+                Station::Mcp,
+                "playwright/browser_click",
             ),
             (json!({"name": "update_plan", "arguments": "not json"}), Station::Other, "update_plan"),
             (json!({"name": "private_tool", "arguments": "{\"cmd\":\"curl x\"}"}), Station::Other, "tool"),

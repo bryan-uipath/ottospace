@@ -1025,7 +1025,7 @@ function chatSelection(value: unknown, at: string): ChatSelection {
 
 function station(value: unknown, at: string): Station {
   if (value === "you" || value === "model" || value === "memory" || value === "files") return value;
-  if (value === "shell" || value === "network" || value === "browser" || value === "agents") return value;
+  if (value === "shell" || value === "network" || value === "mcp" || value === "agents") return value;
   if (value === "skills" || value === "hooks" || value === "other" || value === "apps") return value;
   throw wrong(at, "a station", value);
 }

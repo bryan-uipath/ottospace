@@ -13,16 +13,9 @@ const UNKNOWN: &str = "shell";
 /// The station of a tool call. `arg` is the command line of a shell tool or the path of a file tool.
 /// e.g. `("Bash", Some("git push"))` → Shell, `("Read", Some("/a/b.rs"))` → Files.
 pub fn classify(tool: &str, arg: Option<&str>) -> Station {
-    // MCP tools are `mcp__<server>__<tool>`: the server's name decides.
-    if let Some(rest) = tool.strip_prefix("mcp__") {
-        let server = rest.split("__").next().unwrap_or("").to_ascii_lowercase();
-        return if server.contains("memory") {
-            Memory
-        } else if ["playwright", "chrome", "browser", "puppeteer"].iter().any(|b| server.contains(b)) {
-            Browser
-        } else {
-            Network
-        };
+    // MCP tools are `mcp__<server>__<tool>`: MCP whatever the server, never guessed from its name.
+    if tool.starts_with("mcp__") {
+        return Mcp;
     }
     match tool {
         "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" | "Grep" | "Glob" | "LS" | "apply_patch"
@@ -933,10 +926,12 @@ mod tests {
             ("WebFetch", None, Network),
             ("WebSearch", None, Network),
             ("web_search_call", None, Network),
-            ("mcp__github__create_issue", None, Network),
-            ("mcp__memory__search", None, Memory),
-            ("mcp__playwright__browser_click", None, Browser),
-            ("mcp__chrome-devtools__take_screenshot", None, Browser),
+            ("mcp__github__create_issue", None, Mcp),
+            ("mcp__memory__search", None, Mcp),
+            ("mcp__playwright__browser_click", None, Mcp),
+            ("mcp__chrome-devtools__take_screenshot", None, Mcp),
+            ("mcp__browser__open", None, Mcp),
+            ("mcp__puppeteer__goto", None, Mcp),
             ("Agent", None, Agents),
             ("Task", None, Agents),
             ("SendMessage", None, Agents),

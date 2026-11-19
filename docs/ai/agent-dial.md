@@ -33,7 +33,7 @@ an agent's events, a message, or a start or end moves any dial.
 ## Stations
 
 One table classifies calls: `ottospace_sessions::station::classify` (the session list's too);
-the enum moved to the core so the dial can name it. All eleven are kept: each can be fed.
+the enum moved to the core so the dial can name it. Each station can be fed.
 
 | Station | From |
 |---|---|
@@ -41,16 +41,16 @@ the enum moved to the core so the dial can name it. All eleven are kept: each ca
 | Model | a model step; lit while the model has the turn and no call runs |
 | Files | `Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Grep`, `Glob`, `LS`, `apply_patch`, `view_image`; never a shell line |
 | Shell | `Bash`, `BashOutput`, `KillShell`, `PowerShell`, `Monitor`, Codex's `exec`/`shell`: any command, `ls`, `curl` and `git push` alike. It says a command ran; ottospace does not guess what the command did |
-| Network | `WebFetch`, `WebSearch`, Codex's web search; MCP servers other than browser and memory ones. Never a shell line |
-| Browser | MCP servers named `playwright`, `chrome`, `browser`, `puppeteer` |
+| Network | `WebFetch`, `WebSearch`, Codex's web search. Never a shell line or an MCP call |
+| MCP | every MCP tool call, whatever its server: Claude Code's `mcp__<server>__<tool>`, Codex's `mcpToolCall` and calls in an `mcp__<server>` namespace. Never guessed from the server's name. It took Browser's place on the dial, which only browser-named MCP servers fed |
 | Agents | `Task`, `Agent`, `SendMessage`, `TaskOutput`, `TaskStop`, `Workflow`; Codex's agent tools |
 | Skills | `Skill`, `ToolSearch` |
-| Memory | memory MCP servers; file tools on a runner's memory files |
+| Memory | file tools on a runner's memory files |
 | Hooks | `system.hook_started` lines (Claude Code) |
 | Tools | any other tool |
 
-Differences from the mock: an MCP server that is not a browser or memory one goes to Network
-(the shared table's rule), not to Tools. Colours are theme tokens (`theme::station`).
+Differences from the mock: MCP calls have their own station, not Tools, and there is no Browser
+station. Colours are theme tokens (`theme::station`).
 
 ## Drawing
 

@@ -16,7 +16,8 @@ pub enum Station {
     Files,
     Shell,
     Network,
-    Browser,
+    /// Every MCP tool call, whatever its server.
+    Mcp,
     /// An app pane the user let the task see (agent mode): fed only by ottospace's own rows.
     Apps,
     Agents,
@@ -33,7 +34,8 @@ impl Station {
         Station::Files,
         Station::Shell,
         Station::Network,
-        Station::Browser,
+        // Where Browser was: the other stations keep their places.
+        Station::Mcp,
         Station::Apps,
         Station::Agents,
         Station::Skills,
@@ -50,7 +52,7 @@ impl Station {
             Station::Files => "Files",
             Station::Shell => "Shell",
             Station::Network => "Network",
-            Station::Browser => "Browser",
+            Station::Mcp => "MCP",
             Station::Apps => "Apps",
             Station::Agents => "Agents",
             Station::Skills => "Skills",
@@ -621,6 +623,17 @@ mod tests {
         // Four uses a half-life ago weigh two; the newest one, one.
         assert_eq!((weight(Station::Files), weight(Station::Shell)), (Some(1.), Some(0.5)));
         assert_eq!(weight(Station::Network), Some(0.));
+    }
+
+    #[test]
+    fn mcp_has_its_own_place_and_name() {
+        assert_eq!((Station::Mcp.at(), Station::Mcp.name()), (5, "MCP"));
+        assert_eq!(serde_json::to_string(&Station::Mcp).unwrap(), "\"mcp\"");
+        let mut a = Activity::default();
+        a.start("1", Station::Mcp, "github/create_issue", 1_000);
+        let dial = a.dial(2_000, &live());
+        assert_eq!(dial.spot(Station::Mcp).map(|s| s.lit), Some(true));
+        assert_eq!(dial.spot(Station::Mcp).map(Spot::tip).as_deref(), Some("MCP · 1 call"));
     }
 
     #[test]

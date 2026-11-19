@@ -588,9 +588,9 @@ fn nothing_private_comes_out() {
             "Agents Agent: ZZSHOWagent",
             "Agents Agent: agent",
             "Agents Agent: agent",
-            "Network ZZSHOWserver/ZZSHOWtool: ZZSHOWserver/ZZSHOWtool",
-            "Network mcp: mcp",
-            "Network mcp: mcp",
+            "Mcp ZZSHOWserver/ZZSHOWtool: ZZSHOWserver/ZZSHOWtool",
+            "Mcp mcp: mcp",
+            "Mcp mcp: mcp",
             "Other tool: tool",
             "Other tool: tool",
         ]
