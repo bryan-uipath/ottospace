@@ -1,5 +1,6 @@
 //! A new window of a hosted app never splits a pane by itself (`rules::place`): it floats, and its
-//! app's pane offers it (`Zoom opened a window · Put in a pane`). Only the user takes the offer.
+//! app's pane offers it (`Zoom opened “Chat” · ◫ ⊟ ×`: split right, split down, dismiss). Several
+//! group in one chip (`Zoom opened 3 windows ▾`), whose list holds each. Only the user takes one.
 //! Its title is drawn in the chip, never in the state while offered; once the user puts it in a
 //! pane it is an app pane, whose title the state carries as every app pane's.
 //! An app pane whose window closes while a window of its app is offered there stays, empty, and
@@ -8,6 +9,7 @@
 use serde::Serialize;
 
 use super::{Action, Effect, Kind, Model, PaneId};
+use crate::layout::Axis;
 
 /// Only the user puts a window an app opened by itself into a pane, or waves the offer away.
 pub const USERS_ALONE: &str = "an offered window is the user's: only they put it in a pane or dismiss the offer";
@@ -30,6 +32,9 @@ pub struct Offer {
     /// Its app, as the pane that first offered it names it: the offer moves to another of its panes.
     #[serde(skip)]
     pub app: (Option<String>, String),
+    /// The way the user chose to split it in, once they took it: kept until it is in a pane.
+    #[serde(skip)]
+    pub split: Option<Axis>,
 }
 
 /// Where a window that would be offered went: the log's line says so (`Effect::Placed`).
@@ -67,6 +72,11 @@ impl Model {
         self.offers.iter().rev().find(|offer| offer.pane == pane)
     }
 
+    /// Every offer of app pane `pane`, newest first: more than one, its chip groups them.
+    pub fn offers_at(&self, pane: PaneId) -> Vec<&Offer> {
+        self.offers.iter().rev().filter(|offer| offer.pane == pane).collect()
+    }
+
     /// True if `pane` is an empty pane that waits for a window its app remade: it offers it.
     pub fn offer_waits(&self, pane: PaneId) -> bool {
         self.offer_panes.contains(&pane) && self.offer_of(pane).is_some()
@@ -102,12 +112,18 @@ impl Model {
         match action {
             // The offer stays until its window is in a pane (`settle_offers`): a host that failed
             // (a busy app) can be tried again.
-            Action::OfferAccept { window } => {
-                if let Some(Offer { pane, pid, window, .. }) = self.offers.iter().find(|offer| offer.window == window) {
-                    effects.push(Effect::HostOffer { pane: *pane, pid: *pid, window: *window });
+            Action::OfferAccept { window, axis } => {
+                if let Some(offer) = self.offers.iter_mut().find(|offer| offer.window == window) {
+                    offer.split = Some(axis);
+                    effects.push(Effect::HostOffer { pane: offer.pane, pid: offer.pid, window });
                 }
             }
             Action::OfferDismiss { window } => self.offers.retain(|offer| offer.window != window),
+            // Only a chip that groups offers has a list; ▾ again closes it.
+            Action::OfferList { pane } => {
+                let open = pane.filter(|id| self.offer_list != Some(*id) && self.offers_at(*id).len() > 1);
+                self.offer_list = open;
+            }
             // The shell's alone from here: a key or click of the user's reports no window.
             _ if self.by_user => {}
             Action::WindowOffered { pane, seen, why } => {
@@ -120,7 +136,8 @@ impl Model {
                     None => {
                         self.offers.retain(|offer| offer.window != window);
                         let crate::slot::Seen { pid, title, .. } = seen;
-                        self.offers.push(Offer { pane, window, pid, title, why, app: (bundle.clone(), name.clone()) });
+                        let app = (bundle.clone(), name.clone());
+                        self.offers.push(Offer { pane, window, pid, title, why, app, split: None });
                         Placed::Offer
                     }
                 };
@@ -169,13 +186,16 @@ impl Model {
                 self.marks.forget_unlike(pane);
             }
         }
+        // A list lasts while its chip groups offers.
+        self.offer_list = self.offer_list.filter(|id| self.offers_at(*id).len() > 1);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::Axis::Right;
+    use crate::layout::Axis::{Down, Right};
+    use crate::layout::Node;
     use crate::model::Origin;
 
     fn app(window: u32) -> Kind {
@@ -204,7 +224,7 @@ mod tests {
         assert_eq!(m.offer_of(1).map(|offer| offer.window), Some(9));
         assert_eq!(m.panes.len(), 1, "no split by itself");
         // A client's accept or dismiss is refused, with a reason, and does nothing.
-        for action in [Action::OfferAccept { window: 9 }, Action::OfferDismiss { window: 9 }] {
+        for action in [Action::OfferAccept { window: 9, axis: Right }, Action::OfferDismiss { window: 9 }] {
             for origin in [Origin::Socket, Origin::System] {
                 assert_eq!(m.refusal(&action, origin), Some(USERS_ALONE));
                 assert!(m.update(action.clone().sent_by(origin)).is_empty());
@@ -212,7 +232,7 @@ mod tests {
         }
         assert_eq!(m.offers.len(), 1);
         // The user's asks the shell to host it beside its app's pane; the offer goes.
-        let effects = m.update(Action::OfferAccept { window: 9 });
+        let effects = m.update(Action::OfferAccept { window: 9, axis: Right });
         assert!(effects.contains(&Effect::HostOffer { pane: 1, pid: 7, window: 9 }), "{effects:?}");
         // Kept until the window is in a pane: a failed host can be tried again.
         assert_eq!(m.offers.len(), 1);
@@ -303,7 +323,7 @@ mod tests {
         m.update(Action::Focus { pane: 1 });
         assert_eq!(m.offer_enter(), Some(9));
         // Bring it here asks the shell to host it in that pane.
-        let effects = m.update(Action::OfferAccept { window: 9 });
+        let effects = m.update(Action::OfferAccept { window: 9, axis: Right });
         assert!(effects.contains(&Effect::HostOffer { pane: 1, pid: 7, window: 9 }), "{effects:?}");
         m.update(Action::Fill { pane: 1, kind: app(9) }.sent_by(Origin::System));
         assert!(m.offers.is_empty() && !m.offer_waits(1));
@@ -332,5 +352,52 @@ mod tests {
         m.update(Action::Close { pane: Some(1) });
         m.update(Action::Open { kind: other, axis: Right, beside: None });
         assert!(m.offers.is_empty());
+    }
+
+    /// The owner's call: each offer splits right or down, as the user picks; a client's pick is refused.
+    #[test]
+    fn an_offer_splits_the_way_the_user_picks() {
+        let mut m = offered();
+        let down = Action::OfferAccept { window: 9, axis: Down };
+        assert_eq!(m.refusal(&down, Origin::Socket), Some(USERS_ALONE));
+        assert!(m.update(down.clone()).contains(&Effect::HostOffer { pane: 1, pid: 7, window: 9 }));
+        m.update(Action::Adopt { kind: app(9), beside: Some(1), seen: None }.sent_by(Origin::System));
+        let below = Node::Split { axis: Down, ratio: 0.5, a: Box::new(Node::Leaf(1)), b: Box::new(Node::Leaf(2)) };
+        assert_eq!(m.layout, Some(below), "split down, as picked");
+        assert_eq!(m.focused, Some(1), "the focus stays where it was");
+        // Untaken, a window the app opened splits right, as before (a `split` rule's).
+        let mut m = offered();
+        m.update(Action::Adopt { kind: app(10), beside: Some(1), seen: None }.sent_by(Origin::System));
+        assert!(matches!(m.layout, Some(Node::Split { axis: Right, .. })), "{:?}", m.layout);
+    }
+
+    /// Several offers of one pane group in its chip; ▾ (the user's) opens their list, which lasts
+    /// while more than one is left.
+    #[test]
+    fn several_offers_group_and_their_list_opens_only_for_the_user() {
+        let mut m = offered();
+        m.update(Action::OfferList { pane: Some(1) });
+        assert_eq!(m.offer_list, None, "one offer: no list");
+        m.update(new_window(1, 10, "b").sent_by(Origin::System));
+        m.update(new_window(1, 11, "c").sent_by(Origin::System));
+        assert_eq!(m.offers_at(1).iter().map(|o| o.window).collect::<Vec<_>>(), [11, 10, 9], "newest first");
+        let list = Action::OfferList { pane: Some(1) };
+        assert_eq!(m.refusal(&list, Origin::Socket), Some(USERS_ALONE));
+        m.update(list.clone().sent_by(Origin::Socket));
+        assert_eq!(m.offer_list, None);
+        m.update(list.clone());
+        assert_eq!(m.offer_list, Some(1));
+        let state = serde_json::to_string(&m).unwrap_or_default();
+        assert!(state.contains(r#""offer_list":1"#) && !state.contains("SECRET"), "{state}");
+        // One dismissed: two left, still open. Another: one left, it closes.
+        m.update(Action::OfferDismiss { window: 10 });
+        assert_eq!(m.offer_list, Some(1));
+        m.update(Action::OfferGone { window: 11 }.sent_by(Origin::System));
+        assert_eq!(m.offer_list, None);
+        // ▾ again closes it.
+        m.update(new_window(1, 12, "d").sent_by(Origin::System));
+        m.update(list.clone());
+        m.update(list);
+        assert_eq!(m.offer_list, None);
     }
 }

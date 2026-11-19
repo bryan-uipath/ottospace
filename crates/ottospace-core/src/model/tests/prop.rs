@@ -1829,7 +1829,8 @@ const MAKERS: &[Make] = &[
         let seen = crate::slot::Seen { title: format!("{OFFERED} {}", g.name(&["w1", "general"])), ..g.seen() };
         Action::WindowOffered { pane: g.app_pane(), seen, why: "no slot for this window".into() }
     },
-    |g| Action::OfferAccept { window: g.offered() },
+    |g| Action::OfferAccept { window: g.offered(), axis: if g.rng.coin() { Axis::Right } else { Axis::Down } },
+    |g| Action::OfferList { pane: g.rng.coin().then(|| g.app_pane()) },
     |g| Action::OfferDismiss { window: g.offered() },
     |g| Action::OfferGone { window: g.offered() },
     // A click outside the side overlays: the user's alone, and only with `overlay_panels` on.
@@ -3138,6 +3139,10 @@ fn check_offers(m: &Model) -> Result<(), String> {
         let shown = m.pane(offer.pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }) || m.offer_waits(offer.pane));
         ensure!(shown, "window {} offered in pane {}, which shows no chip", offer.window, offer.pane);
         ensure!(m.offers[..at].iter().all(|o| o.window != offer.window), "window {} offered twice", offer.window);
+    }
+    // A list is open only under a chip that groups offers.
+    if let Some(pane) = m.offer_list {
+        ensure!(m.offers_at(pane).len() > 1, "pane {pane}'s offer list is open with fewer than two offers");
     }
     let state = serde_json::to_string(m).unwrap_or_default();
     ensure!(!state.contains(OFFERED), "an offered window's title reached the state");
@@ -4725,7 +4730,8 @@ impl Run {
                 // A window an app opened goes in a pane only by the user's Put in a pane.
                 Effect::Placed { .. } => {}
                 Effect::HostOffer { window, .. } => {
-                    let users = origin == Origin::User && action == Action::OfferAccept { window: *window };
+                    let users = origin == Origin::User
+                        && matches!(action, Action::OfferAccept { window: w, .. } if w == *window);
                     ensure!(users, "{origin:?}'s {action:?} put offered window {window} in a pane");
                 }
                 Effect::GiveBack { pane } => {

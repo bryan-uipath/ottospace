@@ -1570,18 +1570,31 @@ fn wait_offers(otto: &Proc, n: usize) -> Vec<u64> {
     })
 }
 
-/// The user's click on Put in a pane in the chip that offers `window`, found by its sneak label.
+/// The user's click on ◫ (split right) for `window`, found by its sneak label. Several offers
+/// group in one chip: its ▾ opens their list first.
 fn take_offer(otto: &Proc, window: u64) {
+    let targets = || {
+        let reply = otto.call(json!({"cmd": "sneak"}));
+        otto.call(json!({"cmd": "key", "keys": "escape"}));
+        reply["sneak"]["targets"].as_array().cloned().unwrap_or_default()
+    };
+    let click = |target: &Value| {
+        let [x, y] = middle(["x", "y", "w", "h"].map(|key| target["frame"][key].as_f64().unwrap_or_default()));
+        for action in ["down", "up"] {
+            otto.call(json!({"cmd": "mouse", "action": action, "x": x, "y": y, "as": "user"}));
+        }
+    };
     let id = format!("offer:{window}");
-    let reply = otto.call(json!({"cmd": "sneak"}));
-    otto.call(json!({"cmd": "key", "keys": "escape"}));
-    let targets = reply["sneak"]["targets"].as_array().cloned().unwrap_or_default();
-    let target =
-        targets.iter().find(|t| t["source"]["id"] == id.as_str()).unwrap_or_else(|| panic!("no {id}: {reply}"));
-    let [x, y] = middle(["x", "y", "w", "h"].map(|key| target["frame"][key].as_f64().unwrap_or_default()));
-    for action in ["down", "up"] {
-        otto.call(json!({"cmd": "mouse", "action": action, "x": x, "y": y, "as": "user"}));
+    let named = |targets: &[Value], id: &str| targets.iter().find(|t| t["source"]["id"] == id).cloned();
+    let mut found = targets();
+    if named(&found, &id).is_none()
+        && let Some(list) =
+            found.iter().find(|t| t["source"]["id"].as_str().is_some_and(|s| s.starts_with("offer-list:")))
+    {
+        click(list);
+        found = targets();
     }
+    click(&named(&found, &id).unwrap_or_else(|| panic!("no {id}: {found:?}")));
 }
 
 /// Hosts the canary's first window and waits for it to park. Returns the parking spot.
