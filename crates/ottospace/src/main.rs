@@ -114,6 +114,7 @@ mod scrollbar;
 mod sessions;
 mod signal_pipe;
 mod slide;
+mod slot_panes;
 mod sneak;
 mod sneak_apps;
 mod stall;
@@ -1106,6 +1107,11 @@ struct Workspace {
     gone_since: HashMap<PaneId, u64>,
     /// A test run's fixture windows on offer (`window_fixture`), by id: their titles.
     offer_fixtures: HashMap<u32, String>,
+    /// The apps the core asked to look at (`Effect::WatchSlots`), the looks last sent, and a
+    /// test run's fixture looks (`slot_windows`).
+    slot_watch: Vec<(Option<String>, String)>,
+    slot_seen: Vec<ottospace_core::slot::Look>,
+    slot_fixtures: Vec<ottospace_core::slot::Look>,
     next_fixture_window: u32,
     /// The file of the transcript on, if one is kept.
     listen_file: Option<listen::File>,
@@ -1316,6 +1322,10 @@ impl Workspace {
                         cx.notify();
                     }
                     this.with_origin(Origin::System, |this| {
+                        // About every 2 s: slots' looks and Away's clock.
+                        if ticks.every(120, 0) {
+                            this.look_at_slots(window, cx);
+                        }
                         if ticks.every(30, 0) {
                             this.host_new_window(window, cx);
                             this.adopt_new_windows(window, cx);
@@ -1607,6 +1617,9 @@ impl Workspace {
             looks: agent_mode::Looks::default(),
             offer_fixtures: HashMap::new(),
             gone_since: HashMap::new(),
+            slot_watch: Vec::new(),
+            slot_seen: Vec::new(),
+            slot_fixtures: Vec::new(),
             next_fixture_window: 0,
             listen_file: None,
             listen_ending: Vec::new(),
@@ -1831,8 +1844,18 @@ impl Workspace {
                     self.meeting_effect(effect)
                 }
                 Effect::ReadSession { runner, id } => agents.extend(self.read_session(runner, id)),
-                // Slots are not on screen yet (slice 3), and their flag is off.
-                Effect::HostSlot { .. } | Effect::WatchSlots { .. } | Effect::GiveBack { .. } => {}
+                Effect::HostSlot { pane, pid, window: id } => self.host_slot(*pane, *pid, *id, window, cx),
+                Effect::WatchSlots { apps } => {
+                    self.slot_watch = apps.clone();
+                    self.slot_seen.retain(|look| {
+                        apps.iter().any(|(b, n)| {
+                            ottospace_core::marks::same_app((b.as_deref(), n), (look.bundle.as_deref(), &look.name))
+                        })
+                    });
+                }
+                Effect::GiveBack { pane } => self.give_back_slot(*pane),
+                // The log's line is written where the offer was sent (`offer_window`).
+                Effect::Placed { .. } => {}
                 Effect::HostOffer { pane, pid, window: id } => self.host_offer(*pane, *pid, *id, window, cx),
                 Effect::Opened(id) => {
                     if self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal) {
@@ -2851,9 +2874,18 @@ impl Workspace {
                     self.dispatch(Action::Open { kind, axis: Axis::Right, beside: None }, origin, window, cx);
                     None
                 }
-                Request::WindowFixture { pane, title, subrole, size, modal } => {
-                    let new = pop_ups::Fixture { pane, title, subrole, size, modal };
+                Request::WindowFixture { pane, title, identifier, subrole, size, modal } => {
+                    let new = pop_ups::Fixture { pane, title, identifier, subrole, size, modal };
                     failure = self.window_fixture(new, window, cx).err();
+                    None
+                }
+                Request::SlotWindows { look } => {
+                    self.slot_windows_fixture(look, window, cx);
+                    None
+                }
+                // The dialog's Keep, as the user's act.
+                Request::SlotMake { pane, slot } => {
+                    self.dispatch(Action::SlotMake { pane, pid: 0, slot }, Origin::User, window, cx);
                     None
                 }
                 Request::WindowFixtureClose { window: id } => {
@@ -4108,7 +4140,7 @@ impl Workspace {
                     cx.activate(true);
                 }
             }
-            // A pane that offers a window its app remade waits for it; any other closes.
+            // A slot waits for it, and so does a pane offering a window its app remade; any other closes.
             let gone = Action::WindowGone { pane: id, app_running, at: now_ms() };
             self.dispatch(gone, Origin::System, window, cx);
         }
@@ -4154,8 +4186,13 @@ impl Workspace {
                 min_width: pane.and_then(|(_, min)| min),
                 alone: beside.is_none(),
             };
-            let (decided, bundle, subrole, title) = ax_window.quick(|w| window_decide(w, &shape));
-            pop_ups::log(&pop_ups::Seen { bundle: bundle.as_deref(), subrole: &subrole }, &shape, &decided);
+            let (decided, bundle, subrole, title, identifier) = ax_window.quick(|w| window_decide(w, &shape));
+            let logged = pop_ups::Seen { bundle: bundle.as_deref(), subrole: &subrole };
+            // An offer's line says what the core made of it: a slot's, or the chip's.
+            let offers = decided.place == (rules::Place::Float { offer: true }) && beside.is_some();
+            if !offers {
+                pop_ups::log(&logged, &shape, &decided, None);
+            }
             match decided.place {
                 rules::Place::Split => {
                     if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
@@ -4180,9 +4217,10 @@ impl Workspace {
                     ax_window.raise_only();
                     trace::record("float", serde_json::json!({ "window": id, "moved": moved }));
                     if offer {
-                        let why = decided.reason();
-                        let action = Action::WindowOffered { pane: pane_id, pid, window: id, title, why };
-                        self.dispatch(action, Origin::System, window, cx);
+                        let frame = frame.map(recovery::to_frame).unwrap_or_default();
+                        let subrole = subrole.clone();
+                        let seen = ottospace_core::slot::Seen { pid, window: id, title, identifier, subrole, frame };
+                        self.offer_window(pane_id, seen, (&logged, &shape, &decided), window, cx);
                     }
                 }
                 rules::Place::Float { .. } | rules::Place::Leave => {}
@@ -4301,6 +4339,11 @@ impl Workspace {
         }
         // A row's open menu takes the user's plain keys: its own, and any other closes it.
         let plain = !(key.modifiers.platform || key.modifiers.control || key.modifiers.alt);
+        // The slot dialog: ↵ keeps, Esc closes, other keys wait.
+        if plain && self.model.sneak.is_none() && self.slot_dialog_key(&key.key, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if plain && self.model.sneak.is_none() && self.agent_menu_key(&key.key, window, cx) {
             cx.stop_propagation();
             return;
@@ -4408,6 +4451,15 @@ impl Workspace {
             && let Some(id) = self.model.offer_enter()
         {
             self.offer_send(Action::OfferAccept { window: id }, window, cx);
+            cx.stop_propagation();
+            return;
+        }
+        // ↵ on a focused slot that offers a window: Bring it here (the core says which).
+        if key.key == "enter"
+            && !key.modifiers.modified()
+            && let Some(pane) = self.model.enter_accepts()
+        {
+            self.offer_send(Action::SlotAccept { pane }, window, cx);
             cx.stop_propagation();
             return;
         }
@@ -5400,10 +5452,11 @@ impl Workspace {
     }
 
     /// A pane's header text: a terminal's directory and program, an app's window title, nothing
-    /// for an empty pane.
+    /// for an empty pane, `Slot · Zoom` for a slot that waits.
     fn pane_title(&self, pane: &Pane) -> String {
         match &pane.kind {
-            Kind::Empty | Kind::Slot { .. } => String::new(),
+            Kind::Empty => String::new(),
+            Kind::Slot { name, .. } => format!("Slot · {name}"),
             Kind::Terminal => self.titles.get(&pane.id).cloned().unwrap_or_default(),
             // A window with no title says whose it is.
             Kind::App { title, name, .. } if title.is_empty() => name.clone(),
@@ -6176,7 +6229,9 @@ impl Workspace {
                     .items_center()
                     .children(icon.map(|icon| img(icon).size(px(14.)).flex_none()))
                     .child(cut_text(title))
-                    .children(marked.map(|sign| div().flex_none().text_color(rgb(theme::MARK)).child(sign))),
+                    .children(marked.map(|sign| div().flex_none().text_color(rgb(theme::MARK)).child(sign)))
+                    // A filled slot says so.
+                    .children(self.slot_mark(id)),
             )
             .child(self.controls.mark(format!("header:{id}")))
             // A transcript's indicator never shrinks: it shows while one is on.
@@ -6198,6 +6253,8 @@ impl Workspace {
                     .children(word)
                     .children(edit)
                     .children(strip)
+                    // ⋯: keep this pane as a slot, or edit the slot it is (the `slots` flag).
+                    .children(self.slot_dots(id, cx))
                     .child(
                         div()
                             .id(("close", id))
@@ -6312,6 +6369,8 @@ impl Workspace {
                 }
                 // An app that remade its window: the pane waits, offering the new one.
                 Kind::Empty if let Some(body) = self.offer_body(id, cx) => body,
+                // A slot that waits says what for, and what it offers.
+                Kind::Slot { .. } if let Some(body) = self.slot_body(id, cx) => body,
                 _ => {
                     // A pane a mark's tab could not fill says why.
                     let hint = self.unfilled_why(id).unwrap_or_else(|| "⌘E to pick what goes here".into());
@@ -7227,11 +7286,15 @@ fn window_managed(window: &ax::Window) -> bool {
 }
 
 /// Where a new window of a hosted app goes and why, by the window rules and its `shape`; with its
-/// bundle id, subrole (for the log) and title (for the offer's chip).
-fn window_decide(window: &ax::Window, shape: &rules::Shape) -> (rules::Decision, Option<String>, String, String) {
+/// bundle id, subrole (for the log), title and identifier (for a slot and the offer's chip).
+fn window_decide(
+    window: &ax::Window,
+    shape: &rules::Shape,
+) -> (rules::Decision, Option<String>, String, String, Option<String>) {
     with_facts(window, |facts| {
         let decided = rules::decide(&config::live().windows, facts, shape);
-        (decided, facts.bundle.map(String::from), facts.subrole.to_string(), facts.title.to_string())
+        let identifier = facts.identifier.map(String::from);
+        (decided, facts.bundle.map(String::from), facts.subrole.to_string(), facts.title.to_string(), identifier)
     })
 }
 
@@ -7776,6 +7839,7 @@ impl Render for Workspace {
             // Over everything of ottospace's own. It is never on while an app's window is.
             .children(self.render_row_menu(window, cx))
             .children(self.render_agent_menu(window, cx))
+            .children(self.render_slot_dialog(cx))
             .children(self.model.sneak.as_ref().map(sneak::labels))
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
             .children(self.model.palette.as_ref().map(|palette| self.render_palette(palette, cx)))
@@ -8097,7 +8161,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 17] = [
+        const TESTS_ONLY: [&str; 19] = [
             "capture_start",
             "repo_add",
             "inspector_fixture",
@@ -8115,6 +8179,8 @@ mod tests {
             "ui_gallery",
             "window_fixture",
             "window_fixture_close",
+            "slot_windows",
+            "slot_make",
         ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
         for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {

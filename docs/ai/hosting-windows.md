@@ -108,7 +108,9 @@ a slot they made. `rules::decide` judges it once, on facts the shell reads (`AXS
   user's) leaves it floating. The offer goes when the window closes (`OfferGone`: the shell checks
   `recovery::window_exists` each tick), when it is in a pane any other way, or when its pane is no
   app pane. Its title is drawn in the chip and never in the state (`offers` holds pane and window
-  id). While the app's pane is live its window covers the header: the chip shows once it parks.
+  id).
+  **Known limit:** while the app's pane is live its window covers the header, so the chip is not
+  seen until the pane parks (the user leaves it). The window floats in front meanwhile.
 - **A window the app remade.** An app pane whose window closes while a window of its app is
   offered there stays, empty, and offers it in its body: `Zoom replaced its window · Bring it here
   ↵ ×` (`offers::offer_keeps`, on `WindowGone`). The user's click or ↵ fills that pane

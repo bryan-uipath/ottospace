@@ -32,6 +32,35 @@ pub struct Offer {
     pub app: (Option<String>, String),
 }
 
+/// Where a window that would be offered went: the log's line says so (`Effect::Placed`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placed {
+    /// Its app's pane offers it: no slot selects it.
+    Offer,
+    /// Slot `slot` offers it (Manual), or takes it at its next look (Automatic).
+    SlotOffer { slot: PaneId },
+    /// Slot `slot`, Away, takes its window back.
+    SlotReturn { slot: PaneId },
+}
+
+impl Placed {
+    /// For the log: `offer`, `slot_offer`, `slot_return`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Placed::Offer => "offer",
+            Placed::SlotOffer { .. } => "slot_offer",
+            Placed::SlotReturn { .. } => "slot_return",
+        }
+    }
+
+    pub fn slot(self) -> Option<PaneId> {
+        match self {
+            Placed::Offer => None,
+            Placed::SlotOffer { slot } | Placed::SlotReturn { slot } => Some(slot),
+        }
+    }
+}
+
 impl Model {
     /// The newest offer of app pane `pane`, the one its header shows.
     pub fn offer_of(&self, pane: PaneId) -> Option<&Offer> {
@@ -81,11 +110,21 @@ impl Model {
             Action::OfferDismiss { window } => self.offers.retain(|offer| offer.window != window),
             // The shell's alone from here: a key or click of the user's reports no window.
             _ if self.by_user => {}
-            Action::WindowOffered { pane, pid, window, title, why } => {
-                let Some(Kind::App { bundle, name, .. }) = self.pane(pane).map(|p| &p.kind) else { return };
-                let app = (bundle.clone(), name.clone());
-                self.offers.retain(|offer| offer.window != window);
-                self.offers.push(Offer { pane, window, pid, title, why, app });
+            Action::WindowOffered { pane, seen, why } => {
+                let Some(Kind::App { bundle, name, .. }) = self.pane(pane).map(|p| p.kind.clone()) else { return };
+                // A slot comes first: its own window back, or one it offers (`docs/ai/slots.md`).
+                let window = seen.window;
+                let placed = match self.slot_new_window((bundle.as_deref(), &name), &seen, effects) {
+                    Some((slot, true)) => Placed::SlotReturn { slot },
+                    Some((slot, false)) => Placed::SlotOffer { slot },
+                    None => {
+                        self.offers.retain(|offer| offer.window != window);
+                        let crate::slot::Seen { pid, title, .. } = seen;
+                        self.offers.push(Offer { pane, window, pid, title, why, app: (bundle.clone(), name.clone()) });
+                        Placed::Offer
+                    }
+                };
+                effects.push(Effect::Placed { window, placed });
             }
             Action::OfferGone { window } => self.offers.retain(|offer| offer.window != window),
             _ => {}
@@ -135,17 +174,18 @@ mod tests {
         Kind::App { window, title: "Main".into(), bundle: Some("us.zoom.xos".into()), name: "zoom.us".into() }
     }
 
+    /// Window `window` of process 7, a standard one titled `title`, opened beside pane `pane`.
+    fn new_window(pane: PaneId, window: u32, title: &str) -> Action {
+        let subrole = "AXStandardWindow".into();
+        let seen = crate::slot::Seen { pid: 7, window, title: title.into(), subrole, ..Default::default() };
+        Action::WindowOffered { pane, seen, why: "no slot".into() }
+    }
+
     /// Zoom's pane 1, and window 9 it opened by itself, offered.
     fn offered() -> Model {
         let mut m = Model::default();
         m.update(Action::Open { kind: app(1), axis: Right, beside: None });
-        let offer = Action::WindowOffered {
-            pane: 1,
-            pid: 7,
-            window: 9,
-            title: "Zoom SECRET Meeting".into(),
-            why: "no slot".into(),
-        };
+        let offer = new_window(1, 9, "Zoom SECRET Meeting");
         m.update(offer.sent_by(Origin::System));
         m
     }
@@ -193,16 +233,13 @@ mod tests {
     fn only_the_shell_offers_and_the_state_never_holds_the_title() {
         let mut m = Model::default();
         m.update(Action::Open { kind: app(1), axis: Right, beside: None });
-        let offer = Action::WindowOffered { pane: 1, pid: 7, window: 9, title: "x".into(), why: "no slot".into() };
+        let offer = new_window(1, 9, "x");
         assert_eq!(m.refusal(&offer, Origin::Socket), Some(SHELLS_ALONE));
         assert_eq!(m.refusal(&Action::OfferGone { window: 9 }, Origin::Socket), Some(SHELLS_ALONE));
         m.update(offer.clone());
         assert!(m.offers.is_empty(), "the user's key reports no window");
         // Of a pane that is no app pane: none.
-        m.update(
-            Action::WindowOffered { pane: 5, pid: 7, window: 9, title: "x".into(), why: "no slot".into() }
-                .sent_by(Origin::System),
-        );
+        m.update(new_window(5, 9, "x").sent_by(Origin::System));
         assert!(m.offers.is_empty());
         let m = offered();
         let state = serde_json::to_string(&m).unwrap_or_default();
@@ -213,14 +250,8 @@ mod tests {
     #[test]
     fn a_window_offered_again_is_offered_once() {
         let mut m = offered();
-        m.update(
-            Action::WindowOffered { pane: 1, pid: 7, window: 9, title: "b".into(), why: "no slot".into() }
-                .sent_by(Origin::System),
-        );
-        m.update(
-            Action::WindowOffered { pane: 1, pid: 7, window: 10, title: "c".into(), why: "no slot".into() }
-                .sent_by(Origin::System),
-        );
+        m.update(new_window(1, 9, "b").sent_by(Origin::System));
+        m.update(new_window(1, 10, "c").sent_by(Origin::System));
         assert_eq!(m.offers.iter().map(|o| o.window).collect::<Vec<_>>(), [9, 10]);
         assert_eq!(m.offer_of(1).map(|o| o.title.as_str()), Some("c"), "the newest shows");
     }

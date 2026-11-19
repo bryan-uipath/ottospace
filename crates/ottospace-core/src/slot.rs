@@ -36,6 +36,32 @@ pub struct Slot {
     pub closed: Closed,
 }
 
+impl Slot {
+    /// What it waits for, in the dialog's words: `Zoom · window id zm.meeting.window.main`,
+    /// `Zoom · title “Weekly sync” · the largest`. Only `app`: any window of it.
+    pub fn words(&self, app: &str) -> String {
+        let select = &self.select;
+        let mut words = vec![app.to_string()];
+        words.extend(select.identifier.as_ref().map(|id| format!("window id {id}")));
+        // A pattern written by hand in layout.json says so.
+        words.extend(select.title.as_ref().map(|t| match t.contains('*') {
+            true => format!("title matching “{t}”"),
+            false => format!("title “{t}”"),
+        }));
+        words.extend(select.subrole.as_ref().map(|subrole| format!("subrole {subrole}")));
+        if words.len() == 1 {
+            words.push("any window".into());
+        }
+        words.extend(match self.pick {
+            Pick::Largest => Some("the largest".to_string()),
+            Pick::Smallest => Some("the smallest".to_string()),
+            Pick::Display(n) => Some(format!("on display {n}")),
+            Pick::Any => None,
+        });
+        words.join(" · ")
+    }
+}
+
 /// Which window, when several match: `"largest"`, `"smallest"`, `{ "display": 2 }`, `"any"`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -228,6 +254,17 @@ mod tests {
         // A user's rule that ignores the main window wins over the slot.
         let ignore: Rule = serde_json::from_str(r#"{"identifier": "zm.*", "do": "ignore"}"#).unwrap();
         assert!(look.candidates(&by_id, &[ignore], |_| false).is_empty());
+    }
+
+    #[test]
+    fn a_slot_says_what_it_waits_for_in_plain_words() {
+        let by_id = slot(r#"{"select": {"identifier": "zm.meeting.window.main"}}"#);
+        assert_eq!(by_id.words("Zoom"), "Zoom · window id zm.meeting.window.main");
+        let titled = slot(r#"{"select": {"title": "Weekly sync"}, "pick": "largest"}"#);
+        assert_eq!(titled.words("Zoom"), "Zoom · title “Weekly sync” · the largest");
+        let pattern = slot(r#"{"select": {"title": "*Incident*"}, "pick": {"display": 2}}"#);
+        assert_eq!(pattern.words("Meetings"), "Meetings · title matching “*Incident*” · on display 2");
+        assert_eq!(Slot::default().words("Zoom"), "Zoom · any window");
     }
 
     #[test]

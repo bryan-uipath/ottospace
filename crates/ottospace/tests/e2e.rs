@@ -13398,3 +13398,98 @@ fn a_new_window_floats_with_an_offer_and_only_the_users_click_puts_it_in_a_pane(
     assert_eq!((&placed[0]["subrole"], &placed[0]["size"]), (&json!("AXStandardWindow"), &json!([1200.0, 800.0])));
     assert!(!log.contains("SECRET") && !log.contains("Second"), "{log}");
 }
+
+/// Slots on screen (`slots` flag): ⋯ on an app pane's header opens the dialog, a checklist made
+/// from the pane's window (its id ticked); Keep makes the pane a filled slot, marked `slot`. Give
+/// Back leaves it waiting, saying what for; a window the slot selects is offered there, not in a
+/// chip, and only the user's Bring it here fills it. No title or id the looks carried is in the
+/// state while it waits. A test run hosts no window: the looks are fixtures (`slot_windows`).
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_slot_is_made_from_the_dialog_waits_says_what_for_and_only_the_user_fills_it() {
+    let otto = Otto::launch_with("slot-dialog", &[("OTTOSPACE_FEATURES", "slots")]);
+    let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
+    let pane = reply["state"]["focused"].as_u64().unwrap();
+    let window = reply["state"]["panes"][0]["kind"]["window"].as_u64().unwrap();
+    let seen = |window: u64, title: &str, id: Option<&str>| {
+        json!({"pid": 0, "window": window, "title": title, "identifier": id, "subrole": "AXStandardWindow",
+            "frame": {"x": 0, "y": 0, "w": 900, "h": 700}})
+    };
+    let look = |windows: Vec<Value>| {
+        let displays = [json!({"x": 0, "y": 0, "w": 1920, "h": 1080})];
+        json!({"cmd": "slot_windows", "look": {"name": "Meetings", "running": true, "windows": windows, "displays": displays}})
+    };
+    otto.call(look(vec![seen(window, "SECRET sync", Some("zm.meeting.window.main"))]));
+    // A client's ⋯ is refused; the user's opens the dialog, by the window's id.
+    let dots = otto.control(&format!("slot-dots:{pane}"));
+    let reply = otto.click(at(dots, 0.5, 0.5), 1);
+    assert_eq!(reply["state"]["slot_dialog"], Value::Null, "{reply}");
+    let reply = otto.user_click(at(dots, 0.5, 0.5));
+    let dialog = &reply["state"]["slot_dialog"];
+    assert_eq!(
+        (&dialog["by_id"], &dialog["by_title"], &dialog["editing"]),
+        (&json!(true), &json!(false), &json!(false))
+    );
+    assert!(!reply.to_string().contains("SECRET") && !reply.to_string().contains("zm.meeting"), "{reply}");
+    let reply = otto.user_click(at(otto.control("slot-dialog:keep"), 0.5, 0.5));
+    let slot = |reply: &Value| reply["state"]["slots"][pane.to_string()].clone();
+    assert_eq!((slot(&reply)["status"].clone(), reply["state"]["slot_dialog"].clone()), (json!("filled"), Value::Null));
+    // Give Back: the slot waits, passing over that window.
+    otto.user_click(at(otto.control(&format!("slot-dots:{pane}")), 0.5, 0.5));
+    let reply = otto.user_click(at(otto.control("slot-dialog:give-back"), 0.5, 0.5));
+    assert_eq!(reply["state"]["panes"][0]["kind"]["type"], "slot", "{reply}");
+    // Its window comes back as another one: offered in the slot, not in a chip.
+    let reply = otto.call(look(vec![seen(700_001, "SECRET sync", Some("zm.meeting.window.main"))]));
+    assert_eq!((slot(&reply)["status"].clone(), reply["state"]["offers"].clone()), (json!("offered"), json!([])));
+    assert!(!reply.to_string().contains("SECRET") && !reply.to_string().contains("zm.meeting"), "{reply}");
+    // A client's Bring it here, click or ↵, is refused; the user's ↵ fills it.
+    let accept = otto.control(&format!("slot-accept:{pane}"));
+    assert_eq!(slot(&otto.click(at(accept, 0.5, 0.5), 1))["status"], "offered");
+    assert_eq!(slot(&otto.call(json!({"cmd": "key", "keys": "enter"})))["status"], "offered");
+    let reply = otto.call(json!({"cmd": "key", "keys": "enter", "as": "user"}));
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(slot(&state)["status"], "filled", "{reply}");
+    assert_eq!(state["state"]["panes"][0]["kind"]["window"], 700_001);
+}
+
+/// The owner's call: three slots that each select any Meetings window take three new windows one
+/// by one, in reading order: one window a slot, never two slots one window. Manual offers; the
+/// user's Bring it here fills each.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn three_app_only_slots_take_three_windows_one_by_one() {
+    let otto = Otto::launch_with("slot-three", &[("OTTOSPACE_FEATURES", "slots")]);
+    let mut panes = Vec::new();
+    for _ in 0..3 {
+        let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
+        let pane = reply["state"]["focused"].as_u64().unwrap();
+        otto.call(json!({"cmd": "slot_make", "pane": pane, "slot": {"select": {}}}));
+        otto.user_click(at(otto.control(&format!("slot-dots:{pane}")), 0.5, 0.5));
+        otto.user_click(at(otto.control("slot-dialog:give-back"), 0.5, 0.5));
+        panes.push(pane);
+    }
+    let windows: Vec<Value> = (1..=3)
+        .map(|n| {
+            json!({"pid": 0, "window": 710_000 + n, "title": format!("Meeting {n}"), "subrole": "AXStandardWindow",
+                "frame": {"x": 0, "y": 0, "w": 900, "h": 700}})
+        })
+        .collect();
+    let displays = [json!({"x": 0, "y": 0, "w": 1920, "h": 1080})];
+    let reply = otto.call(
+        json!({"cmd": "slot_windows", "look": {"name": "Meetings", "running": true, "windows": windows, "displays": displays}}),
+    );
+    let status: Vec<Value> = panes.iter().map(|p| reply["state"]["slots"][p.to_string()]["status"].clone()).collect();
+    assert_eq!(status, [json!("offered"), json!("offered"), json!("offered")], "{reply}");
+    for pane in &panes {
+        otto.user_click(at(otto.control(&format!("slot-accept:{pane}")), 0.5, 0.5));
+    }
+    let state = otto.call(json!({"cmd": "state"}));
+    let held: Vec<(u64, u64)> = state["state"]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p["id"].as_u64().unwrap(), p["kind"]["window"].as_u64().unwrap_or(0)))
+        .collect();
+    let want: Vec<(u64, u64)> = panes.iter().zip(710_001..).map(|(p, w)| (*p, w)).collect();
+    assert_eq!(held, want, "in reading order, one window each: {state}");
+}

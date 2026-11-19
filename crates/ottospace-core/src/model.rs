@@ -1841,6 +1841,19 @@ pub enum Action {
         pid: i32,
         slot: crate::slot::Slot,
     },
+    /// The user's ⋯ on an app pane's or a slot's header: the slot dialog, filled in from what a
+    /// look at the pane's app found now (its windows' facts, the pane's own first if it has one).
+    SlotDialogOpen {
+        pane: PaneId,
+        look: crate::slot::Look,
+    },
+    /// The user ticks a row of the slot dialog, or picks in it.
+    SlotDialogSet {
+        choice: slots::Choice,
+    },
+    SlotDialogClose,
+    /// The dialog's Keep (↵): the pane becomes a slot of what is ticked, or a slot takes it.
+    SlotDialogKeep,
     /// The slot ends: a filled one stays an app pane, one that waits is an empty pane.
     SlotClear {
         pane: PaneId,
@@ -1885,14 +1898,13 @@ pub enum Action {
         app_running: bool,
         at: u64,
     },
-    /// App pane `pane`'s app opened window `window` (of process `pid`) by itself, and it floats
-    /// (`rules::Place::Float { offer: true }`): the pane offers it. `title`, and `why` it is in
-    /// no pane (`rules::Decision::reason`), are drawn in the offer, never in the state. The shell's alone.
+    /// App pane `pane`'s app opened window `seen` by itself, and it floats
+    /// (`rules::Place::Float { offer: true }`): a slot on show that selects it takes it back or
+    /// offers it (`docs/ai/slots.md`), else the pane offers it. Its title, and `why` it is in no
+    /// pane (`rules::Decision::reason`), are drawn in the offer, never in the state. The shell's alone.
     WindowOffered {
         pane: PaneId,
-        pid: i32,
-        window: u32,
-        title: String,
+        seen: crate::slot::Seen,
         why: String,
     },
     /// The user's Put in a pane on an offer: the window splits in beside its app's pane.
@@ -2341,6 +2353,10 @@ impl Action {
             | Action::AgentOfferAccept { .. }
             | Action::AppUsed { .. }
             | Action::SlotMake { .. }
+            | Action::SlotDialogOpen { .. }
+            | Action::SlotDialogSet { .. }
+            | Action::SlotDialogClose
+            | Action::SlotDialogKeep
             | Action::SlotClear { .. }
             | Action::SlotAccept { .. }
             | Action::SlotDecline { .. }
@@ -2407,6 +2423,10 @@ impl Action {
             | Action::AgentOfferAccept { .. }
             | Action::AppUsed { .. } => Some(Feature::AgentMode),
             Action::SlotMake { .. }
+            | Action::SlotDialogOpen { .. }
+            | Action::SlotDialogSet { .. }
+            | Action::SlotDialogClose
+            | Action::SlotDialogKeep
             | Action::SlotClear { .. }
             | Action::SlotAccept { .. }
             | Action::SlotDecline { .. }
@@ -2925,6 +2945,11 @@ pub enum Effect {
         pane: PaneId,
         pid: i32,
         window: u32,
+    },
+    /// Where a window that would be offered went (`Action::WindowOffered`): for the log's line.
+    Placed {
+        window: u32,
+        placed: offers::Placed,
     },
     /// Look at these apps' windows every 2 s and send `SlotWindows` when they change. Empty: none.
     WatchSlots {
@@ -3482,6 +3507,12 @@ pub struct Model {
     /// its app: a pane of that app writes it back, so turning the flag on again loses none.
     #[serde(skip)]
     slot_dormant: std::collections::BTreeMap<PaneId, (Option<String>, String, serde_json::Value)>,
+    /// The slot dialog, while open. In the state: its pane and what is ticked, never the
+    /// window's title or identifier.
+    pub slot_dialog: Option<slots::Dialog>,
+    /// A slot that waits the user's ⌘E pick is for: it ends when the pick opens there.
+    #[serde(skip)]
+    slot_pick: Option<PaneId>,
     /// Windows apps opened by themselves, floating, each offered by its app's pane. In the state:
     /// the pane and the window id, never the title.
     pub offers: Vec<offers::Offer>,
@@ -3624,6 +3655,8 @@ impl Default for Model {
             slot_looks: Vec::new(),
             slot_watch: Vec::new(),
             slot_dormant: Default::default(),
+            slot_dialog: None,
+            slot_pick: None,
             offers: Vec::new(),
             offer_panes: Default::default(),
             window_rules: Vec::new(),
@@ -3807,6 +3840,10 @@ impl Model {
             // A slot is the user's: no client's request, key, click or label makes, fills or
             // clears one, and only the shell says what a look found.
             Action::SlotMake { .. }
+            | Action::SlotDialogOpen { .. }
+            | Action::SlotDialogSet { .. }
+            | Action::SlotDialogClose
+            | Action::SlotDialogKeep
             | Action::SlotClear { .. }
             | Action::SlotAccept { .. }
             | Action::SlotDecline { .. }
@@ -5523,6 +5560,13 @@ impl Model {
                     return;
                 }
                 let choice = picker.matches().get(index.unwrap_or(picker.selected)).copied().cloned();
+                // The user's pick into a slot that waits (⌘E Put something else here) ends the slot
+                // once what was picked opens there (`open`): a cancelled file panel or a failed
+                // host leaves it as it was.
+                let into_slot = self.focused.filter(|id| {
+                    self.pane(*id).is_some_and(|p| matches!(p.kind, Kind::Slot { .. })) && !picker.new_tab
+                });
+                self.slot_pick = into_slot.filter(|_| self.by_user && choice.is_some());
                 match choice {
                     // Same rule as an app: fill the focused pane if it is empty, else split it.
                     Some(PickItem::Terminal) => {
@@ -6375,6 +6419,10 @@ impl Model {
             | Action::AgentOfferAccept { .. }
             | Action::AppUsed { .. }) => self.agent_act(action, effects),
             action @ (Action::SlotMake { .. }
+            | Action::SlotDialogOpen { .. }
+            | Action::SlotDialogSet { .. }
+            | Action::SlotDialogClose
+            | Action::SlotDialogKeep
             | Action::SlotClear { .. }
             | Action::SlotAccept { .. }
             | Action::SlotDecline { .. }
@@ -8216,6 +8264,10 @@ impl Model {
         self.leave(effects);
         self.leave_visual(effects);
         let target = beside.or(self.focused);
+        // What the user picked into a slot that waits: the slot ends, and its pane takes it.
+        if let Some(slot) = self.slot_pick.take().filter(|slot| self.by_user && target == Some(*slot)) {
+            self.slot_end(slot);
+        }
         let empty = target.filter(|t| self.pane(*t).is_some_and(|p| p.kind == Kind::Empty));
         let id = match empty.and_then(|t| self.panes.iter_mut().find(|p| p.id == t)) {
             Some(pane) => {
@@ -9499,6 +9551,10 @@ mod tests {
         Action::AgentOfferAccept { .. },
         Action::AppUsed { .. },
         Action::SlotMake { .. },
+        Action::SlotDialogOpen { .. },
+        Action::SlotDialogSet { .. },
+        Action::SlotDialogClose,
+        Action::SlotDialogKeep,
         Action::SlotClear { .. },
         Action::SlotAccept { .. },
         Action::SlotDecline { .. },
@@ -9820,6 +9876,10 @@ mod tests {
             Action::AgentOfferAccept { pane: 1 },
             Action::AppUsed { task: 1, pane: 1, what: crate::agent_mode::AppUse::Read, refused: None, at: 0 },
             Action::SlotMake { pane: 1, pid: 1, slot: crate::slot::Slot::default() },
+            Action::SlotDialogOpen { pane: 1, look: crate::slot::Look::default() },
+            Action::SlotDialogSet { choice: slots::Choice::ById(true) },
+            Action::SlotDialogClose,
+            Action::SlotDialogKeep,
             Action::SlotClear { pane: 1 },
             Action::SlotAccept { pane: 1 },
             Action::SlotDecline { pane: 1 },
@@ -9830,7 +9890,7 @@ mod tests {
             Action::SlotHosted { pane: 1, kind: None },
             Action::SlotTick { at: 0 },
             Action::WindowGone { pane: 9, app_running: true, at: 0 },
-            Action::WindowOffered { pane: 1, pid: 1, window: 9, title: text(), why: text() },
+            Action::WindowOffered { pane: 1, seen: crate::slot::Seen::default(), why: text() },
             Action::OfferAccept { window: 9 },
             Action::OfferDismiss { window: 9 },
             Action::OfferGone { window: 9 },
@@ -9913,6 +9973,10 @@ mod tests {
     fn slot_refused(action: &Action, origin: Origin) -> Option<&'static str> {
         match action {
             Action::SlotMake { .. }
+            | Action::SlotDialogOpen { .. }
+            | Action::SlotDialogSet { .. }
+            | Action::SlotDialogClose
+            | Action::SlotDialogKeep
             | Action::SlotClear { .. }
             | Action::SlotAccept { .. }
             | Action::SlotDecline { .. }

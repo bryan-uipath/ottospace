@@ -28,6 +28,8 @@ import { checkOwned, defaultSocketPath } from "./socket.ts";
 import type {
   AxNode,
   Frame,
+  SlotLook,
+  SlotRecord,
   AxTreeArgs,
   InspectorFixtureArgs,
   AppLookReply,
@@ -546,8 +548,29 @@ export class Client {
    * For tests (`OTTOSPACE_E2E`): a new window of app pane `pane`'s app, as if just seen: judged,
    * logged and offered as a real one. Rejects outside a test run.
    */
-  windowFixture(args: { pane: number; size: [number, number]; title?: string; subrole?: string; modal?: boolean }): Promise<Snapshot> {
+  windowFixture(args: {
+    pane: number;
+    size: [number, number];
+    title?: string;
+    identifier?: string;
+    subrole?: string;
+    modal?: boolean;
+  }): Promise<Snapshot> {
     return this.snapshot({ cmd: "window_fixture", ...args });
+  }
+  /**
+   * For tests (`OTTOSPACE_E2E`, `slots` flag): what a look at an app's windows found, as if read.
+   * Rejects outside a test run: only ottospace reports windows.
+   */
+  slotWindows(args: { look: SlotLook }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "slot_windows", ...args });
+  }
+  /**
+   * For tests (`OTTOSPACE_E2E`, `slots` flag): the slot dialog's Keep, as the user's act. Rejects
+   * outside a test run: only the user makes a slot.
+   */
+  slotMake(args: { pane: number; slot: SlotRecord }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "slot_make", ...args });
   }
   /** For tests (`OTTOSPACE_E2E`): fixture window `window` closed. */
   windowFixtureClose(args: { window: number }): Promise<Snapshot> {

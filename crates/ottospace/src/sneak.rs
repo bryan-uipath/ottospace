@@ -306,6 +306,7 @@ impl Workspace {
             || self.click_listen(kind, name, window, cx)
             || self.click_agent(kind, name, window, cx)
             || self.click_offer(kind, name, window, cx)
+            || self.click_slot(kind, name, window, cx)
             || self.click_drawer_rail(kind, name, window, cx)
         {
             return;

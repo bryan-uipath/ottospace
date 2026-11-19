@@ -6,8 +6,11 @@ use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, StatefulInteractiveElement,
     Styled, Window, div, rgb,
 };
-use ottospace_core::model::{Action, Kind, Origin, PaneId};
+use ottospace_core::model::offers::Placed;
+use ottospace_core::model::{Action, Effect, Kind, Origin, PaneId};
 use ottospace_core::{rules, theme};
+
+use ottospace_core::slot::Seen as SlotSeen;
 
 use crate::{Hosted, Workspace, capture, cut_text, event_log};
 
@@ -18,13 +21,20 @@ pub(crate) struct Seen<'a> {
 }
 
 /// One line in `<home>/log` a placement: the app, the window's kind and size, its pane's size,
-/// where it went and why (the rule, if one decided). Never the title.
-pub(crate) fn log(seen: &Seen, shape: &rules::Shape, decided: &rules::Decision) {
-    let place = match decided.place {
-        rules::Place::Split => "split",
-        rules::Place::Float { offer: true } => "offer",
-        rules::Place::Float { offer: false } => "float",
-        rules::Place::Leave => "leave",
+/// where it went and why (the rule, if one decided; the slot, if one took or offers it). Never the
+/// title. `placed`: what the core made of an offer (`Effect::Placed`), so the log says what the
+/// pane shows.
+pub(crate) fn log(seen: &Seen, shape: &rules::Shape, decided: &rules::Decision, placed: Option<Placed>) {
+    let place = match (decided.place, placed) {
+        (_, Some(placed)) => placed.name(),
+        (rules::Place::Split, _) => "split",
+        (rules::Place::Float { offer: true }, _) => "offer",
+        (rules::Place::Float { offer: false }, _) => "float",
+        (rules::Place::Leave, _) => "leave",
+    };
+    let why = match placed.and_then(Placed::slot) {
+        Some(_) => "slot",
+        None => decided.why.name(),
     };
     let rule = decided.rule.map(|(source, action)| format!("{}: {}", source.label(), action.name()));
     event_log::event(
@@ -38,8 +48,9 @@ pub(crate) fn log(seen: &Seen, shape: &rules::Shape, decided: &rules::Decision) 
             "pane": shape.pane,
             "min_width": shape.min_width,
             "place": place,
-            "why": decided.why.name(),
+            "why": why,
             "rule": rule,
+            "slot": placed.and_then(Placed::slot),
         }),
     );
 }
@@ -48,6 +59,7 @@ pub(crate) fn log(seen: &Seen, shape: &rules::Shape, decided: &rules::Decision) 
 pub(crate) struct Fixture {
     pub(crate) pane: PaneId,
     pub(crate) title: String,
+    pub(crate) identifier: Option<String>,
     pub(crate) subrole: String,
     pub(crate) size: [f64; 2],
     pub(crate) modal: bool,
@@ -146,7 +158,7 @@ impl Workspace {
         Some(body.child(buttons).into_any_element())
     }
 
-    /// Sends an offer's action as whoever is acting; refused, the status bar says why.
+    /// Sends an offer's (or a slot's) action as whoever is acting; refused, the status bar says why.
     pub(crate) fn offer_send(&mut self, action: Action, window: &Window, cx: &mut Context<Self>) {
         if let Some(why) = self.model.refusal(&action, self.input) {
             self.error = Some(why.into());
@@ -216,6 +228,27 @@ impl Workspace {
         }
     }
 
+    /// A new window that would float with an offer: the core gives it to a slot or to its app
+    /// pane's chip (`Action::WindowOffered`), and the log's line says which.
+    pub(crate) fn offer_window(
+        &mut self,
+        pane: PaneId,
+        seen: SlotSeen,
+        (logged, shape, decided): (&Seen, &rules::Shape, &rules::Decision),
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The core's look gains the window: the next look is sent, not taken for one already sent.
+        self.slot_seen.clear();
+        let action = Action::WindowOffered { pane, seen, why: decided.reason() };
+        let effects = self.dispatch(action, Origin::System, window, cx);
+        let placed = effects.iter().find_map(|effect| match effect {
+            Effect::Placed { placed, .. } => Some(*placed),
+            _ => None,
+        });
+        log(logged, shape, decided, placed);
+    }
+
     /// `window_fixture`: a new window of app pane `pane`'s app, as if just seen (a test run hosts
     /// none). Judged, logged and offered as a real one; its id is returned in the reply's offers.
     pub(crate) fn window_fixture(
@@ -224,30 +257,37 @@ impl Workspace {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let Fixture { pane, title, subrole, size, modal } = new;
+        let Fixture { pane, title, identifier, subrole, size, modal } = new;
         let Some(Kind::App { bundle, name, .. }) = self.model.pane(pane).map(|p| p.kind.clone()) else {
             return Err(format!("pane {pane} is no app pane"));
         };
-        let facts =
-            rules::Facts { app: &name, bundle: bundle.as_deref(), title: &title, subrole: &subrole, identifier: None };
+        let facts = rules::Facts {
+            app: &name,
+            bundle: bundle.as_deref(),
+            title: &title,
+            subrole: &subrole,
+            identifier: identifier.as_deref(),
+        };
         let pane_size = self.cells.get(&pane).map(|b| b.get().size).map(|s| [f64::from(s.width), f64::from(s.height)]);
         let shape = rules::Shape { modal, size: Some(size), pane: pane_size, ..Default::default() };
         let decided = rules::decide(&crate::config::live().windows, &facts, &shape);
-        log(&Seen { bundle: bundle.as_deref(), subrole: &subrole }, &shape, &decided);
+        let logged = Seen { bundle: bundle.as_deref(), subrole: &subrole };
         self.next_fixture_window += 1;
         let id = 800_000 + self.next_fixture_window;
         match decided.place {
             rules::Place::Float { offer: true } => {
                 self.offer_fixtures.insert(id, title.clone());
-                let action = Action::WindowOffered { pane, pid: 0, window: id, title, why: decided.reason() };
-                self.dispatch(action, Origin::System, window, cx);
+                let frame = ottospace_core::ax::Frame::new(0., 0., size[0], size[1]);
+                let seen = SlotSeen { pid: 0, window: id, title, identifier, subrole: subrole.clone(), frame };
+                self.offer_window(pane, seen, (&logged, &shape, &decided), window, cx);
             }
             // A `split` rule's: a pane with no window, as `app_fixture` makes.
             rules::Place::Split => {
+                log(&logged, &shape, &decided, None);
                 let kind = Kind::App { window: id, title, bundle, name };
                 self.dispatch(Action::Adopt { kind, beside: Some(pane), seen: None }, Origin::System, window, cx);
             }
-            rules::Place::Float { offer: false } | rules::Place::Leave => {}
+            rules::Place::Float { offer: false } | rules::Place::Leave => log(&logged, &shape, &decided, None),
         }
         Ok(())
     }

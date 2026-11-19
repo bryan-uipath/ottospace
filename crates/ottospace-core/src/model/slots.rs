@@ -87,12 +87,85 @@ impl Run {
     }
 }
 
+/// The slot dialog (⋯ on an app pane's header): a checklist made from the pane's window, no free
+/// text. In the state: what is ticked; never the window's title or identifier.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Dialog {
+    pub pane: PaneId,
+    /// The app's windows as a look found them when it opened: the pane's own first, if it has one.
+    #[serde(skip)]
+    pub look: Look,
+    /// The pane's window: its process, title and identifier.
+    #[serde(skip)]
+    pub window: Option<Seen>,
+    /// The slot's own selector when the dialog edits one: a ticked row keeps its pattern, and
+    /// fields the dialog has no row for (`subrole`) stay.
+    #[serde(skip)]
+    pub kept: Option<crate::rules::Selector>,
+    /// The window's id is a row: it has one.
+    pub has_id: bool,
+    /// "Window id is …" ticked.
+    pub by_id: bool,
+    /// "Title is “…”" ticked.
+    pub by_title: bool,
+    pub pick: crate::slot::Pick,
+    pub matching: Matching,
+    /// A slot already: the dialog edits it, and its foot has Look Again, Give Back and Clear.
+    pub editing: bool,
+}
+
+/// A row of the dialog ticked or chosen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Choice {
+    ById(bool),
+    ByTitle(bool),
+    Pick(crate::slot::Pick),
+    Matching(Matching),
+}
+
+impl Dialog {
+    /// The slot of what is ticked. Editing one, a ticked row keeps the slot's own pattern.
+    pub fn slot(&self) -> Slot {
+        let seen = self.window.as_ref();
+        let kept = self.kept.clone().unwrap_or_default();
+        let identifier = kept.identifier.or_else(|| seen.and_then(|s| s.identifier.clone()));
+        let title = kept.title.or_else(|| seen.map(|s| s.title.clone()));
+        let select = crate::rules::Selector {
+            identifier: identifier.filter(|_| self.by_id),
+            title: title.filter(|_| self.by_title),
+            subrole: kept.subrole,
+            app: None,
+        };
+        Slot { select, pick: self.pick, matching: self.matching, ..Default::default() }
+    }
+
+    /// The id and title rows, as the dialog words them: the slot's own pattern when editing one.
+    pub fn rows(&self) -> (Option<String>, Option<String>) {
+        let slot = Dialog { by_id: true, by_title: true, ..self.clone() }.slot();
+        (slot.select.identifier, slot.select.title)
+    }
+
+    /// How many of the app's windows open now the ticked rows select: over one, it asks which.
+    pub fn matches(&self, rules: &[crate::rules::Rule]) -> usize {
+        let slot = Slot { pick: crate::slot::Pick::Any, ..self.slot() };
+        self.look.candidates(&slot, rules, |_| false).len()
+    }
+}
+
 impl Model {
     /// The window slot `pane` offers, as its look found it: for the pane to draw, never the state.
     pub fn slot_offer(&self, pane: PaneId) -> Option<&Seen> {
         let run = self.slots.get(&pane)?;
         let look = self.slot_looks.iter().find(|look| run.of(look))?;
         look.windows.iter().find(|seen| Some(seen.window) == run.offered)
+    }
+
+    /// The slot ↵ brings a window into: the focused pane, a slot that offers one, while
+    /// ottospace has the keyboard in normal mode. The shell sends `SlotAccept` for it.
+    pub fn enter_accepts(&self) -> Option<PaneId> {
+        let id = self.focused.filter(|_| self.mode() == super::Mode::Normal && !self.keys)?;
+        let offers = self.slots.get(&id).is_some_and(|run| run.status == Status::Offered && run.offered.is_some());
+        (offers && self.slot_dialog.is_none() && self.features.on(Feature::Slots)).then_some(id)
     }
 
     /// True if a slot that waits selects `window`: a restored app pane passes over it
@@ -164,8 +237,41 @@ impl Model {
     }
 
     pub(super) fn slot_act(&mut self, action: Action, effects: &mut Vec<Effect>) {
+        // The dialog's foot does its act and closes it.
+        if let Action::SlotClear { pane } | Action::SlotLookAgain { pane } | Action::SlotGiveBack { pane } = &action
+            && self.by_user
+            && self.slot_dialog.as_ref().is_some_and(|dialog| dialog.pane == *pane)
+        {
+            self.slot_dialog = None;
+        }
         match action {
             Action::SlotMake { pane, pid, slot } => self.slot_make(pane, pid, slot),
+            Action::SlotDialogOpen { pane, look } => self.slot_dialog_open(pane, look),
+            Action::SlotDialogSet { choice } => {
+                if let Some(dialog) = self.slot_dialog.as_mut() {
+                    match choice {
+                        Choice::ById(on) => dialog.by_id = on && dialog.has_id,
+                        Choice::ByTitle(on) => dialog.by_title = on && dialog.rows().1.is_some(),
+                        Choice::Pick(pick) => dialog.pick = pick,
+                        Choice::Matching(matching) => dialog.matching = matching,
+                    }
+                }
+            }
+            Action::SlotDialogClose => self.slot_dialog = None,
+            Action::SlotDialogKeep => {
+                let Some(dialog) = self.slot_dialog.take() else { return };
+                let slot = dialog.slot();
+                match (self.slots.get(&dialog.pane), &dialog.window) {
+                    // Settings the dialog has no row for (slice 5's) stay.
+                    (Some(run), _) => {
+                        let slot = Slot { absent: run.slot.absent, closed: run.slot.closed, ..slot };
+                        self.slot_make(dialog.pane, run.pid.unwrap_or_default(), slot);
+                    }
+                    (None, Some(seen)) => self.slot_make(dialog.pane, seen.pid, slot),
+                    // An app pane whose window the look did not list: nothing to make it from.
+                    (None, None) => {}
+                }
+            }
             Action::SlotClear { pane } => {
                 if self.slots.remove(&pane).is_some() {
                     self.slot_emptied(pane);
@@ -265,6 +371,13 @@ impl Model {
         }
     }
 
+    /// Slot `id` that waits ends: its pane is empty, for what the user picked.
+    pub(super) fn slot_end(&mut self, id: PaneId) {
+        if self.slots.remove(&id).is_some() {
+            self.slot_emptied(id);
+        }
+    }
+
     /// A slot that ended while it waited: its pane is an empty one, and a mark of it stands for none.
     fn slot_emptied(&mut self, id: PaneId) {
         if let Some(pane) = self.panes.iter_mut().find(|p| p.id == id && matches!(p.kind, Kind::Slot { .. })) {
@@ -281,6 +394,38 @@ impl Model {
         }
         run.waits();
         (run.pending, run.status) = (None, Status::Empty);
+    }
+
+    /// The dialog on app pane or slot `id`, its rows ticked from the slot it is, else from the
+    /// pane's window: its id if it has one, else its title.
+    fn slot_dialog_open(&mut self, id: PaneId, mut look: Look) {
+        let window = match self.pane(id).map(|pane| &pane.kind) {
+            Some(Kind::App { window, bundle, name, .. }) => {
+                if !same_app((look.bundle.as_deref(), &look.name), (bundle.as_deref(), name)) {
+                    return;
+                }
+                look.windows.iter().find(|seen| seen.window == *window).cloned()
+            }
+            Some(Kind::Slot { .. }) => None,
+            _ => return,
+        };
+        let run = self.slots.get(&id);
+        let kept = run.map(|run| run.slot.select.clone());
+        let has_id = window.as_ref().is_some_and(|seen| seen.identifier.is_some())
+            || kept.as_ref().is_some_and(|select| select.identifier.is_some());
+        let (by_id, by_title) = match &kept {
+            Some(select) => (select.identifier.is_some(), select.title.is_some()),
+            None => (has_id, !has_id && window.is_some()),
+        };
+        let (pick, matching) = run.map_or_else(Default::default, |run| (run.slot.pick, run.slot.matching));
+        // The pane's own window first: the rows are made from it.
+        if let Some(seen) = &window {
+            look.windows.retain(|other| other.window != seen.window);
+            look.windows.insert(0, seen.clone());
+        }
+        let editing = run.is_some();
+        self.slot_dialog =
+            Some(Dialog { pane: id, look, window, kept, has_id, by_id, by_title, pick, matching, editing });
     }
 
     /// The user's Keep: a live app pane becomes a filled slot, or a slot takes its new settings.
@@ -432,12 +577,39 @@ impl Model {
         if *window != seen.window {
             return false;
         }
-        let app = (bundle.as_deref(), name.as_str());
+        let Some((id, take)) = self.slot_choose((bundle.as_deref(), name), &seen) else { return false };
+        // Else offered by the settle after this step, and still new to an Automatic slot.
+        if take {
+            self.slot_fill(id, kind.clone(), Some(seen.pid), effects);
+        }
+        true
+    }
+
+    /// A new window of a hosted app that would float with an offer (`Action::WindowOffered`): the
+    /// first slot that selects it takes it back (Away's return: the shell is asked to host it) or
+    /// offers it. `None`: no slot selects it, and its app's pane offers it.
+    pub(super) fn slot_new_window(
+        &mut self,
+        app: (Option<&str>, &str),
+        seen: &Seen,
+        effects: &mut Vec<Effect>,
+    ) -> Option<(PaneId, bool)> {
+        let (id, take) = self.slot_choose(app, seen)?;
+        if let Some(run) = self.slots.get_mut(&id).filter(|_| take) {
+            run.pending = Some(seen.window);
+            effects.push(Effect::HostSlot { pane: id, pid: seen.pid, window: seen.window });
+        }
+        Some((id, take))
+    }
+
+    /// Which slot on the tab on show, in reading order, a new window of `app` goes to, and whether
+    /// it takes it now (Away's return) or offers it. The app's last look gains the window, in front.
+    fn slot_choose(&mut self, app: (Option<&str>, &str), seen: &Seen) -> Option<(PaneId, bool)> {
         // The app's last look with this window in front: what the slots choose from.
         let at = self.slot_looks.iter().position(|look| same_app((look.bundle.as_deref(), &look.name), app));
         let mut look = at.map(|at| self.slot_looks[at].clone()).unwrap_or_else(|| Look {
-            bundle: bundle.clone(),
-            name: name.clone(),
+            bundle: app.0.map(String::from),
+            name: app.1.to_string(),
             ..Look::default()
         });
         look.running = true;
@@ -446,24 +618,25 @@ impl Model {
         let shown = self.layout.as_ref().map(super::Node::leaves).unwrap_or_default();
         let chosen = shown.into_iter().find_map(|id| {
             let filled = self.slot_filled(id);
-            let run = self.slots.get(&id).filter(|run| !filled && run.pending.is_none() && run.of(&look))?;
+            // The first that waits: one that offers another window already passes it on.
+            let free = |run: &&Run| {
+                run.offered.is_none_or(|w| w == seen.window || !look.windows.iter().any(|s| s.window == w))
+            };
+            let run =
+                self.slots.get(&id).filter(|run| !filled && run.pending.is_none() && run.of(&look)).filter(free)?;
+            // What a slot earlier in the order offers is no candidate here: one window, one slot.
             let claimed = self.slot_claims(Some(id), true);
             let passed = |window: u32| claimed.contains(&window) || run.declined.contains(&window);
             let found = look.candidates(&run.slot, &self.window_rules, passed);
             // Only a return goes in now: whether the user is in a new window, the next look says.
-            let back = run.away.is_some() && run.takes(&seen, look.frontmost);
+            let back = run.away.is_some() && run.takes(seen, look.frontmost);
             found.iter().any(|s| s.window == seen.window).then_some((id, back))
-        });
-        let Some((id, take)) = chosen else { return false };
+        })?;
         match at {
             Some(at) => self.slot_looks[at] = look,
             None => self.slot_looks.push(look),
         }
-        // Else offered by the settle after this step, and still new to an Automatic slot.
-        if take {
-            self.slot_fill(id, kind.clone(), Some(seen.pid), effects);
-        }
-        true
+        Some(chosen)
     }
 
     /// After every step: each slot's status and offer, from the last looks, in the order of the
@@ -472,6 +645,15 @@ impl Model {
     pub(super) fn settle_slots(&mut self, effects: &mut Vec<Effect>) {
         let panes = &self.panes;
         self.slots.retain(|id, _| panes.iter().any(|pane| pane.id == *id));
+        // The dialog goes with its pane (or what it holds: a slot cleared to empty), and with the flag.
+        let on = self.features.on(Feature::Slots);
+        let dialog_on = |d: &Dialog| {
+            let kind = panes.iter().find(|pane| pane.id == d.pane).map(|pane| &pane.kind);
+            on && matches!(kind, Some(Kind::App { .. } | Kind::Slot { .. }))
+        };
+        // A picker or the palette over it takes the keyboard: the dialog closes.
+        let over = self.picker.is_some() || self.palette.is_some();
+        self.slot_dialog = self.slot_dialog.take().filter(dialog_on).filter(|_| !over);
         // Kept while its pane waits or holds its app: another app put there takes no slot of it.
         self.slot_dormant.retain(|id, (bundle, name, _)| {
             panes.iter().find(|pane| pane.id == *id).is_some_and(|pane| match &pane.kind {
@@ -546,6 +728,19 @@ impl Model {
                 }
             }
         }
+        // `N more match` counts what Next can offer: not the windows later slots offer.
+        let offering: Vec<PaneId> =
+            self.slots.iter().filter(|(_, run)| run.status == Status::Offered).map(|(id, _)| *id).collect();
+        for id in offering {
+            let claimed = self.slot_claims(Some(id), true);
+            let Some(run) = self.slots.get(&id) else { continue };
+            let Some(look) = self.slot_looks.iter().find(|look| run.of(look)) else { continue };
+            let passed = |window: u32| claimed.contains(&window) || run.declined.contains(&window);
+            let matches = look.candidates(&run.slot, &self.window_rules, passed).len();
+            if let Some(run) = self.slots.get_mut(&id) {
+                run.matches = matches;
+            }
+        }
         // Look at the apps of the slots on show that wait; none with no such slot.
         let shown = self.layout.as_ref().map(super::Node::leaves).unwrap_or_default();
         let mut apps: Vec<(Option<String>, String)> = Vec::new();
@@ -566,6 +761,7 @@ impl Model {
 
 #[cfg(test)]
 mod tests {
+    use super::Choice;
     use super::*;
     use crate::ax::Frame;
     use crate::layout::Axis::Right;
@@ -684,6 +880,20 @@ mod tests {
         // Any other pane's window going closes it.
         m.update(system(Action::WindowGone { pane: 3, app_running: true, at: 6 }));
         assert!(m.pane(3).is_none());
+        // The user's pick into it (⌘E Put something else here) ends the slot: the pane is what was picked.
+        m.update(Action::Focus { pane: 2 });
+        let picker = |m: &mut Model| {
+            let items = vec![crate::model::PickItem::Terminal];
+            m.update(Action::OpenPicker { axis: Right, new_tab: false, items })
+        };
+        // A client's pick splits beside it.
+        picker(&mut m);
+        m.update(Action::PickerChoose { index: Some(0) }.sent_by(Origin::Socket));
+        assert!(m.slots.contains_key(&2));
+        m.update(Action::Focus { pane: 2 });
+        picker(&mut m);
+        m.update(Action::PickerChoose { index: Some(0) });
+        assert_eq!((m.slots.contains_key(&2), m.pane(2).map(|p| p.kind.clone())), (false, Some(Kind::Terminal)));
     }
 
     #[test]
@@ -969,5 +1179,216 @@ mod tests {
             (m.slots.is_empty(), m.pane(2).map(|p| p.kind.clone())),
             (true, Some(meetings(1, "Incident review")))
         );
+    }
+
+    /// What the shell sends for a new window of Meetings beside pane `pane`: it would be offered.
+    fn new_window(pane: PaneId, pid: i32, window: u32, title: &str) -> crate::model::Envelope {
+        system(Action::WindowOffered { pane, seen: seen(pid, window, title), why: "no slot for this window".into() })
+    }
+
+    fn placed(effects: &[Effect]) -> Option<crate::model::offers::Placed> {
+        effects.iter().find_map(|effect| match effect {
+            Effect::Placed { placed, .. } => Some(*placed),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_new_window_a_slot_selects_is_the_slots_not_the_chips() {
+        use crate::model::offers::Placed;
+        // A slot that waits for `*incident*`, beside its app's pane 3.
+        let mut m = waiting(Matching::Manual);
+        m.update(system(look(Vec::new())));
+        m.update(Action::Open { kind: meetings(8, "Lunch"), axis: Right, beside: None });
+        let effects = m.update(new_window(3, 7, 4, "Incident review"));
+        assert_eq!(placed(&effects), Some(Placed::SlotOffer { slot: 2 }));
+        assert!(m.offers.is_empty() && hosts(&effects).is_empty(), "Manual offers in the slot, nothing hosted");
+        assert_eq!(m.slot_offer(2).map(|s| s.window), Some(4));
+        // One it does not select: the app pane's chip.
+        let effects = m.update(new_window(3, 7, 5, "Notes"));
+        assert_eq!((placed(&effects), m.offers.len()), (Some(Placed::Offer), 1));
+        // Away: its own process's window comes back, hosted at once.
+        let mut m = kept(Matching::Manual);
+        m.update(Action::Open { kind: meetings(8, "Lunch"), axis: Right, beside: None });
+        m.update(system(Action::WindowGone { pane: 2, app_running: true, at: 0 }));
+        let effects = m.update(new_window(3, 7, 6, "Incident review"));
+        assert_eq!(placed(&effects), Some(Placed::SlotReturn { slot: 2 }));
+        assert_eq!(hosts(&effects), [(2, 6)]);
+        // With the flag off: the chip, as with no slot.
+        let mut m = waiting(Matching::Manual);
+        m.update(Action::Open { kind: meetings(8, "Lunch"), axis: Right, beside: None });
+        m.update(system(Action::SetFeatures { features: crate::features::Features::default() }));
+        assert_eq!(placed(&m.update(new_window(3, 7, 4, "Incident review"))), Some(Placed::Offer));
+    }
+
+    /// The owner's call: "if we have 4 zoom slots, we could just take them one by one if all
+    /// windows match". Slots that each select any window of the app fill in reading order.
+    #[test]
+    fn several_slots_of_one_app_take_its_windows_one_by_one_in_reading_order() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: meetings(1, "One"), axis: Right, beside: None });
+        m.update(Action::Open { kind: meetings(2, "Two"), axis: Right, beside: None });
+        m.update(Action::Open { kind: meetings(3, "Three"), axis: Right, beside: None });
+        let any = Slot { matching: Matching::Automatic, ..Slot::default() };
+        for pane in 1..=3 {
+            m.update(Action::SlotMake { pane, pid: 7, slot: any.clone() });
+            m.update(system(Action::WindowGone { pane, app_running: true, at: 0 }));
+        }
+        m.update(system(Action::SlotTick { at: slot::AWAY_MS }));
+        m.update(system(look(Vec::new())));
+        // Three windows open while they wait: the first slot takes the first, and so on.
+        let windows = vec![seen(7, 11, "a"), seen(7, 12, "b"), seen(7, 13, "c")];
+        let effects = m.update(system(look(windows)));
+        assert_eq!(hosts(&effects), [(1, 11), (2, 12), (3, 13)]);
+        for (pane, window) in [(1, 11), (2, 12), (3, 13)] {
+            m.update(system(Action::SlotHosted { pane, kind: Some(meetings(window, "x")) }));
+        }
+        assert!(m.slots.values().all(|run| run.status == Status::Filled));
+        // Manual: each offers a different one, never two the same.
+        let mut m = Model::default();
+        m.update(Action::Open { kind: meetings(1, "One"), axis: Right, beside: None });
+        m.update(Action::Open { kind: meetings(2, "Two"), axis: Right, beside: None });
+        for pane in 1..=2 {
+            m.update(Action::SlotMake { pane, pid: 7, slot: Slot::default() });
+            m.update(system(Action::WindowGone { pane, app_running: true, at: 0 }));
+        }
+        m.update(system(Action::SlotTick { at: slot::AWAY_MS }));
+        m.update(system(look(vec![seen(7, 11, "a"), seen(7, 12, "b")])));
+        assert_eq!((m.slot_offer(1).map(|s| s.window), m.slot_offer(2).map(|s| s.window)), (Some(11), Some(12)));
+    }
+
+    #[test]
+    fn the_dialog_is_a_checklist_from_the_panes_window_and_keep_makes_the_slot_it_says() {
+        use crate::slot::Pick;
+        let mut m = Model::default();
+        // The pane's title is the shell's (an app pane carries it); the look's is the dialog's.
+        m.update(Action::Open { kind: meetings(1, "Pane title"), axis: Right, beside: None });
+        let main = Seen { identifier: Some("zm.meeting.window.main".into()), ..seen(7, 1, "Weekly sync") };
+        let viewer = seen(7, 2, "Weekly sync");
+        let Action::SlotWindows { look: mut found } = look(vec![viewer, main]) else { return };
+        found.windows.iter_mut().for_each(|s| s.frame.w = 900.);
+        let open = Action::SlotDialogOpen { pane: 1, look: found };
+        // Only the user opens it.
+        assert_eq!(m.refusal(&open, Origin::Socket), Some(slot::USERS_ALONE));
+        m.update(open);
+        let dialog = m.slot_dialog.clone().unwrap_or_else(|| panic!("open"));
+        // With an id: by id, not by title; the pane's own window is first.
+        assert_eq!((dialog.has_id, dialog.by_id, dialog.by_title), (true, true, false));
+        assert_eq!(dialog.look.windows[0].window, 1);
+        assert_eq!(dialog.slot().words("Meetings"), "Meetings · window id zm.meeting.window.main");
+        assert_eq!(dialog.matches(&[]), 1);
+        // By title instead: both windows match, so it asks which.
+        m.update(Action::SlotDialogSet { choice: Choice::ById(false) });
+        m.update(Action::SlotDialogSet { choice: Choice::ByTitle(true) });
+        m.update(Action::SlotDialogSet { choice: Choice::Pick(Pick::Largest) });
+        let dialog = m.slot_dialog.clone().unwrap_or_else(|| panic!("open"));
+        assert_eq!(dialog.matches(&[]), 2);
+        assert_eq!(dialog.slot().words("Meetings"), "Meetings · title “Weekly sync” · the largest");
+        // The state has what is ticked, never the title or the id.
+        let state = serde_json::to_string(&m).unwrap_or_default();
+        assert!(!state.contains("Weekly") && !state.contains("zm.meeting") && state.contains(r#""by_title":true"#));
+        m.update(Action::SlotDialogKeep);
+        assert!(m.slot_dialog.is_none());
+        assert_eq!(
+            m.slots.get(&1).map(|run| (run.slot.select.title.clone(), run.status)),
+            Some((Some("Weekly sync".into()), Status::Filled))
+        );
+        // Opened again on the slot it edits: ticked as the slot is; Clear ends it.
+        let Action::SlotWindows { look: again } = look(vec![seen(7, 1, "Weekly sync")]) else { return };
+        m.update(Action::SlotDialogOpen { pane: 1, look: again });
+        assert_eq!(m.slot_dialog.as_ref().map(|d| (d.editing, d.by_title)), Some((true, true)));
+        m.update(Action::SlotClear { pane: 1 });
+        assert!(m.slots.is_empty() && m.slot_dialog.is_none(), "the foot's act closes it");
+    }
+
+    /// Review: editing a slot keeps its own pattern and its hand-written `subrole`.
+    #[test]
+    fn editing_a_slot_keeps_its_pattern_and_the_rows_it_has_none_for() {
+        let mut m = kept(Matching::Manual);
+        let mut select = crate::rules::Selector { title: Some("*incident*".into()), ..Default::default() };
+        select.subrole = Some("AXStandardWindow".into());
+        m.update(Action::SlotMake { pane: 2, pid: 7, slot: Slot { select, ..Slot::default() } });
+        let Action::SlotWindows { look: found } = look(vec![seen(7, 1, "Incident review 11/18")]) else { return };
+        m.update(Action::SlotDialogOpen { pane: 2, look: found });
+        m.update(Action::SlotDialogSet { choice: Choice::Matching(Matching::Automatic) });
+        let words = m.slot_dialog.as_ref().map(|d| d.slot().words("Meetings"));
+        assert_eq!(words.as_deref(), Some("Meetings · title matching “*incident*” · subrole AXStandardWindow"));
+        m.update(Action::SlotDialogKeep);
+        let run = &m.slots[&2];
+        assert_eq!(
+            (run.slot.select.title.as_deref(), run.slot.select.subrole.as_deref()),
+            (Some("*incident*"), Some("AXStandardWindow"))
+        );
+        assert_eq!((run.matching, run.pid), (Matching::Automatic, Some(7)));
+    }
+
+    /// Review: a second new window goes to the next slot that waits, and the log says that one.
+    #[test]
+    fn a_second_new_window_is_the_next_slots_and_placed_says_so() {
+        use crate::model::offers::Placed;
+        let mut m = Model::default();
+        for (window, title) in [(1, "One"), (2, "Two"), (3, "Lunch")] {
+            m.update(Action::Open { kind: meetings(window, title), axis: Right, beside: None });
+        }
+        for pane in 1..=2 {
+            m.update(Action::SlotMake { pane, pid: 7, slot: Slot::default() });
+            m.update(system(Action::WindowGone { pane, app_running: true, at: 0 }));
+        }
+        m.update(system(Action::SlotTick { at: slot::AWAY_MS }));
+        m.update(system(look(Vec::new())));
+        assert_eq!(placed(&m.update(new_window(3, 8, 11, "a"))), Some(Placed::SlotOffer { slot: 1 }));
+        assert_eq!(placed(&m.update(new_window(3, 8, 12, "b"))), Some(Placed::SlotOffer { slot: 2 }));
+        assert_eq!((m.slot_offer(1).map(|s| s.window), m.slot_offer(2).map(|s| s.window)), (Some(11), Some(12)));
+        // Each counts what Next could offer it: not the other's.
+        assert_eq!((m.slots[&1].matches, m.slots[&2].matches), (1, 1));
+    }
+
+    /// Review: the picker or the palette over the dialog closes it; a pick that opens nothing
+    /// (a cancelled file panel) leaves a slot that waits as it was; Keep with no window makes none.
+    #[test]
+    fn the_dialog_gives_way_to_the_picker_and_a_pick_ends_a_slot_only_once_it_opens() {
+        let mut m = waiting(Matching::Manual);
+        m.update(Action::SlotDialogOpen { pane: 2, look: Look::default() });
+        assert!(m.slot_dialog.is_some());
+        let items = vec![crate::model::PickItem::File, crate::model::PickItem::Terminal];
+        m.update(Action::OpenPicker { axis: Right, new_tab: false, items: items.clone() });
+        assert!(m.slot_dialog.is_none());
+        // File: the shell asks which; cancelled, nothing opens and the slot stays.
+        m.update(Action::PickerChoose { index: Some(0) });
+        assert!(m.slots.contains_key(&2) && matches!(m.pane(2).map(|p| &p.kind), Some(Kind::Slot { .. })));
+        // Picked and opened: the slot ends, its pane holds it.
+        m.update(Action::Focus { pane: 2 });
+        m.update(Action::OpenPicker { axis: Right, new_tab: false, items });
+        m.update(Action::PickerChoose { index: Some(0) });
+        m.update(Action::Open { kind: Kind::File { path: "/tmp/a.md".into() }, axis: Right, beside: None });
+        assert_eq!(m.pane(2).map(|p| p.kind.clone()), Some(Kind::File { path: "/tmp/a.md".into() }));
+        assert!(!m.slots.contains_key(&2));
+        // An app pane whose window no look listed: Keep makes no slot.
+        let mut m = Model::default();
+        m.update(Action::Open { kind: meetings(1, "x"), axis: Right, beside: None });
+        m.update(Action::SlotDialogOpen {
+            pane: 1,
+            look: Look { name: "Meetings".into(), bundle: Some(BUNDLE.into()), ..Look::default() },
+        });
+        m.update(Action::SlotDialogKeep);
+        assert!(m.slots.is_empty());
+    }
+
+    /// slots.md: `Bring it here ↵`. The user's ↵ on a focused slot that offers a window accepts it.
+    #[test]
+    fn enter_on_a_focused_slot_that_offers_brings_its_window_in() {
+        let mut m = waiting(Matching::Manual);
+        assert_eq!(m.enter_accepts(), None, "nothing offered");
+        m.update(system(look(vec![seen(7, 4, "Incident review")])));
+        m.update(Action::Focus { pane: 2 });
+        assert_eq!(m.enter_accepts(), Some(2));
+        let effects = m.update(Action::SlotAccept { pane: 2 });
+        assert_eq!(hosts(&effects), [(2, 4)]);
+        // Not on another pane, nor with the dialog open.
+        m.update(Action::Focus { pane: 1 });
+        assert_eq!(m.enter_accepts(), None);
+        m.update(Action::Focus { pane: 2 });
+        m.update(Action::SlotDialogOpen { pane: 2, look: Look::default() });
+        assert_eq!(m.enter_accepts(), None);
     }
 }
