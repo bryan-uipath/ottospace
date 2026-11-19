@@ -1475,5 +1475,7 @@ first brainstorm:
 
 [repos.md](ai/repos.md): the Repos section: the opt-in list and its order, groups from older settings, folding, the default folder's dot, and how + makes a worktree (the git it runs, what it refuses).
 
+[pick-and-app-profiles.md](ai/pick-and-app-profiles.md): Pick on screen (task context picked in panes), the apps' extended accessibility mode on demand with its header icon, and app profiles as data; the spike's measurements and the slices. Not built.
+
 [`docs/ai/backlog.md`](ai/backlog.md) is an older backlog. `docs/ideas/` holds the owner's own
 notes.
