@@ -45,6 +45,8 @@ const SESSIONS: &[&str] = &["s1", "s2", "s3", "8f14e45f-ceea-467f-a8d3-0242ac130
 const SAVED: &str = "SAVEDHISTORY";
 /// What a transcript heard: never in the state.
 const HEARD: &str = "HEARDWORDS";
+/// In every meeting's title and place: never in the state, though a transcript's file names it.
+const MEETING: &str = "MEETINGTITLE";
 /// In every title and identifier a slot's look found: never in the state.
 const SLOT_SEEN: &str = "SLOTSEEN";
 /// In the title of every window the shell hosts in a pane: may reach the state, never a slot.
@@ -382,8 +384,8 @@ impl Gen<'_> {
             start,
             end: start.saturating_add(self.rng.pick(&[0, 60_000, 1_800_000])),
             all_day: self.rng.one_in(5),
-            title: self.text(),
-            location: self.text(),
+            title: format!("{MEETING} {}", self.text()),
+            location: format!("{MEETING} {}", self.text()),
             link: link.map(String::from),
             show: self.rng.pick(&[Show::Busy, Show::Tentative, Show::Free, Show::Away]),
         }
@@ -1643,8 +1645,13 @@ const MAKERS: &[Make] = &[
         Action::ListenPicker { apps, id: g.name(LISTEN_IDS), at: g.time() }
     },
     |g| {
-        let head =
-            |app: &str, started| crate::listen::file::Head { app: app.into(), bundle: None, mic: false, started };
+        let head = |app: &str, started| crate::listen::file::Head {
+            app: app.into(),
+            bundle: None,
+            mic: false,
+            started,
+            meetings: Vec::new(),
+        };
         // A line heard: an empty one is not listed.
         let said = |at| crate::listen::Record::Line { from: crate::listen::Speaker::Them, at, text: "made-up".into() };
         let ended = |app: &str, at: u64| {
@@ -3048,6 +3055,7 @@ fn check_state(m: &Model) -> Result<(), String> {
     let rows = serde_json::to_string(&m.workbook_rows()).unwrap_or_default();
     ensure!(!state.to_string().contains(SAVED) && !rows.contains(SAVED), "a saved history reached the state");
     ensure!(!state.to_string().contains(HEARD), "what a transcript heard reached the state");
+    ensure!(!state.to_string().contains(MEETING), "a meeting's title or place reached the state");
     // Nor a title or identifier a slot's look found; a filled slot's pane carries its window's title,
     // as every app pane does, and nothing more.
     let state = serde_json::to_value(StateWithoutApps(m)).unwrap_or_default().to_string();
@@ -4322,6 +4330,10 @@ impl Run {
                                 ensure!(!text.is_empty(), "an empty line written")
                             }
                             crate::listen::Record::Paused { .. } => {}
+                            // A meeting's line comes with the clock, never with what was heard.
+                            crate::listen::Record::Meeting(_) => {
+                                ensure!(matches!(action, Action::Tick { .. }), "{action:?} wrote a meeting's line")
+                            }
                         }
                     }
                 }

@@ -211,8 +211,13 @@ impl Model {
         if let Some(why) = refused {
             return effects.push(Effect::Notice { text: why.into() });
         }
-        let head = self.listen_head(source, mic, at);
+        let possible = if self.calendar.on { crate::calendar::possible(&self.calendar.events, at) } else { Vec::new() };
+        let meetings = possible.iter().map(|e| listen::file::Meeting::of(e)).collect();
+        let head = listen::file::Head { meetings, ..self.listen_head(source, mic, at) };
         if self.listen.start(source, mic, id.clone(), at).is_ok() {
+            if let Some(on) = self.listen.on.as_mut() {
+                on.meetings = possible.iter().map(|e| e.id).collect();
+            }
             effects.push(Effect::ListenWrite { id: id.clone(), records: vec![Record::Begin(head)] });
             effects.push(Effect::ListenOpen { id, source, mic });
         }
@@ -231,7 +236,26 @@ impl Model {
             (Some(Kind::App { name, bundle, .. }), _) => (name.clone(), bundle.clone()),
             _ => ("Terminal".into(), None),
         };
-        listen::file::Head { app, bundle, mic, started }
+        listen::file::Head { app, bundle, mic, started, meetings: Vec::new() }
+    }
+
+    /// A meeting that began since the transcript on did, and is still on: a line at its start in
+    /// the file, once. On the clock's tick, never when someone spoke.
+    pub(super) fn listen_meetings(&mut self, now: u64, effects: &mut Vec<Effect>) {
+        let Some(on) = self.listen.on.as_mut().filter(|on| on.status != Status::Starting && self.calendar.on) else {
+            return;
+        };
+        let began = |e: &&crate::calendar::Event| {
+            crate::calendar::meeting(e) && e.start > on.started && e.start <= now && now < e.end
+        };
+        let new: Vec<&crate::calendar::Event> =
+            self.calendar.events.iter().filter(began).filter(|e| !on.meetings.contains(&e.id)).collect();
+        if new.is_empty() {
+            return;
+        }
+        on.meetings.extend(new.iter().map(|e| e.id));
+        let records = new.into_iter().map(|e| Record::Meeting(listen::file::Meeting::of(e))).collect();
+        effects.push(Effect::ListenWrite { id: on.id.clone(), records });
     }
 
     /// Ends the transcript on (of `id`, if given), its streams and its file, at `at` (else the
@@ -285,7 +309,8 @@ mod tests {
 
     /// The effects of a start on pane 2 (Zoom's), as `id`: the file's header, then its streams.
     fn opened(id: &str, pane: u32, app: &str) -> [Effect; 2] {
-        let head = listen::file::Head { app: app.into(), bundle: None, mic: false, started: 1_000 };
+        let head =
+            listen::file::Head { app: app.into(), bundle: None, mic: false, started: 1_000, meetings: Vec::new() };
         let source = Source::Pane(pane);
         let begin = Effect::ListenWrite { id: id.into(), records: vec![Record::Begin(head)] };
         [begin, Effect::ListenOpen { id: id.into(), source, mic: false }]
@@ -485,8 +510,13 @@ mod tests {
         m.update(Action::PickerQuery { query: String::new() });
         // The user's pick of Chrome's second window: Chrome's sound, its name in the file.
         let effects = m.update(Action::PickerChoose { index: Some(2) });
-        let head =
-            listen::file::Head { app: "Chrome".into(), bundle: Some("b.Chrome".into()), mic: false, started: 5_000 };
+        let head = listen::file::Head {
+            app: "Chrome".into(),
+            bundle: Some("b.Chrome".into()),
+            mic: false,
+            started: 5_000,
+            meetings: Vec::new(),
+        };
         let source = Source::App { pid: 20 };
         assert_eq!(
             effects,
@@ -514,7 +544,13 @@ mod tests {
     #[test]
     fn today_lists_the_finished_ones_and_the_users_click_opens_one() {
         let mut m = model();
-        let head = |app: &str, started| listen::file::Head { app: app.into(), bundle: None, mic: false, started };
+        let head = |app: &str, started| listen::file::Head {
+            app: app.into(),
+            bundle: None,
+            mic: false,
+            started,
+            meetings: Vec::new(),
+        };
         let said = |at| listen::Record::Line { from: listen::Speaker::Them, at, text: "made-up".into() };
         let done = |at: u64| {
             let line = listen::file::line(&said(at + 1_000), &|_| 0).unwrap_or_default();
@@ -766,5 +802,74 @@ mod tests {
         let listen = serde_json::to_value(&m).unwrap()["listen"].clone();
         assert_eq!(listen["status"], "on");
         assert_eq!(listen["source"], serde_json::json!({"pane": 2}));
+    }
+
+    /// A calendar of made-up meetings at `start`s (ms), 30 minutes each, read at 0.
+    fn with_calendar(m: &mut Model, starts: &[u64]) {
+        let calendar =
+            Action::SetCalendar { on: true, notify: false, links_only: false, hide_free: false, colors: vec![] };
+        m.update(calendar.sent_by(Origin::System));
+        let event = |(n, start): (usize, &u64)| crate::calendar::Event {
+            id: n as u64 + 1,
+            start: *start,
+            end: start + 1_800_000,
+            all_day: false,
+            title: format!("Made-up meeting {}", n + 1),
+            location: "Room MADEUP".into(),
+            link: None,
+            show: crate::ics::Show::Busy,
+        };
+        let events = Some(starts.iter().enumerate().map(event).collect());
+        let days = std::array::from_fn(|n| n as u64 * 86_400_000);
+        m.update(Action::CalendarRead { events, days, at: 0, held_from: 0 }.sent_by(Origin::System));
+    }
+
+    fn begun(effects: &[Effect]) -> Option<&listen::file::Head> {
+        effects.iter().find_map(|effect| match effect {
+            Effect::ListenWrite { records, .. } => records.iter().find_map(|r| match r {
+                Record::Begin(head) => Some(head),
+                _ => None,
+            }),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_transcript_during_a_meeting_names_it_and_one_that_begins_later_gets_a_line() {
+        let mut m = model();
+        // 1 on since 0:00; 2 begins at 0:10; 3 at 0:40, after the transcript ends.
+        with_calendar(&mut m, &[0, 600_000, 2_400_000]);
+        let effects =
+            m.update(Action::ListenStart { source: Source::Pane(2), mic: false, id: "t2".into(), at: 60_000 });
+        let titles: Vec<&str> = begun(&effects).unwrap().meetings.iter().map(|m| m.title.as_str()).collect();
+        assert_eq!(titles, ["Made-up meeting 1"]);
+        m.update(Action::ListenBegan { id: "t2".into(), at: 60_000 }.sent_by(Origin::System));
+        let tick = |m: &mut Model, now| m.update(Action::Tick { now }.sent_by(Origin::System));
+        assert_eq!(tick(&mut m, 300_000), [], "nothing begins");
+        let line = Record::Meeting(listen::file::Meeting {
+            title: "Made-up meeting 2".into(),
+            start: 600_000,
+            end: 2_400_000,
+        });
+        assert_eq!(tick(&mut m, 601_000), [Effect::ListenWrite { id: "t2".into(), records: vec![line] }]);
+        assert_eq!(tick(&mut m, 602_000), [], "once");
+        // The state says neither title nor place.
+        let state = serde_json::to_string(&m).unwrap();
+        assert!(!state.contains("Made-up meeting") && !state.contains("MADEUP"), "{state}");
+    }
+
+    #[test]
+    fn with_no_meeting_on_or_no_calendar_the_header_names_none() {
+        let start = Action::ListenStart { source: Source::Pane(2), mic: false, id: "t2".into(), at: 60_000 };
+        let mut m = model();
+        with_calendar(&mut m, &[3_600_000]);
+        assert_eq!(begun(&m.update(start.clone())).unwrap().meetings, []);
+        let mut m = model();
+        with_calendar(&mut m, &[0]);
+        m.update(
+            Action::SetCalendar { on: false, notify: false, links_only: false, hide_free: false, colors: vec![] }
+                .sent_by(Origin::System),
+        );
+        assert_eq!(begun(&m.update(start)).unwrap().meetings, []);
     }
 }

@@ -5048,6 +5048,7 @@ impl Model {
                 self.undo_offer = self.undo_offer.filter(|offer| offer.until > now);
                 self.clip = self.clip.take().filter(|clip| clip.shows(now));
                 self.new_window_late(now, effects);
+                self.listen_meetings(now, effects);
                 let alerts = self.calendar.tick(now);
                 effects.extend(alerts.into_iter().map(|n| Effect::MeetingAlert { title: n.title, started: n.started }));
             }

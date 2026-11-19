@@ -17,6 +17,23 @@ pub struct Head {
     pub mic: bool,
     /// When it started, ms since 1970.
     pub started: u64,
+    /// The calendar's entries it is possibly of (`calendar::possible`), the likeliest first.
+    pub meetings: Vec<Meeting>,
+}
+
+/// A calendar entry, as a transcript's file names it: its title (other people's text, cleaned)
+/// and times. Only in the file: never in the state or a log.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Meeting {
+    pub title: String,
+    pub start: u64,
+    pub end: u64,
+}
+
+impl Meeting {
+    pub fn of(event: &crate::calendar::Event) -> Meeting {
+        Meeting { title: event.title.clone(), start: event.start, end: event.end }
+    }
 }
 
 /// The quote under the header: what follows is a recogniser's guess at other people's words.
@@ -26,7 +43,7 @@ pub const UNTRUSTED: &str = "> Heard on this Mac and transcribed by ottospace: o
 /// The header's `Ended` while it is on: a file that still says it after a crash ended at its last line.
 pub const STILL: &str = "still transcribing";
 
-/// The most characters of the app's name in the header.
+/// The most characters of the app's name in the header, and of a meeting's title.
 const MAX_APP: usize = 100;
 
 /// Local `(y, m, d, h, min, s)` of `ms`, in a zone `offset` seconds east of UTC.
@@ -47,6 +64,15 @@ fn day_time(ms: u64, offset: i64) -> String {
 fn clock(ms: u64, offset: i64) -> String {
     let (.., h, min, s) = local(ms, offset);
     format!("{h:02}:{min:02}:{s:02}")
+}
+
+/// `Design review (10:00–10:30)`: the end's day too when it is another.
+fn meeting(meeting: &Meeting, offset: &dyn Fn(u64) -> i64) -> String {
+    let title = escape(&meeting.title, MAX_APP);
+    let title = if title.is_empty() { "untitled".to_string() } else { title };
+    let (start, end) = (day_time(meeting.start, offset(meeting.start)), day_time(meeting.end, offset(meeting.end)));
+    let end = if end[..10] == start[..10] { &end[11..] } else { &end };
+    format!("{title} ({}–{end})", &start[11..])
 }
 
 /// `+01:00`, `-05:30`.
@@ -135,13 +161,21 @@ pub fn header(head: &Head, ended: Option<u64>, offset: &dyn Fn(u64) -> i64) -> S
         None => format!("- App: {app}\n"),
     };
     out += &format!("- Microphone: {}\n", if head.mic { "on" } else { "off" });
-    out += "- Started by: you\n\n";
+    out += "- Started by: you\n";
+    if !head.meetings.is_empty() {
+        out += "- Possibly, by your calendar:\n";
+        for each in &head.meetings {
+            out += &format!("  - {}\n", meeting(each, offset));
+        }
+    }
+    out += "\n";
     out += UNTRUSTED;
     out += "\n";
     out
 }
 
-/// A record's line in the file: `- 10:00:12 **them**: words` or `- 10:12:40 *paused 3 minutes*`.
+/// A record's line in the file: `- 10:00:12 **them**: words`, `- 10:12:40 *paused 3 minutes*`, or
+/// `- 10:30:00 *calendar*: Weekly sync (10:30–11:00)`.
 /// None for a record that is no line.
 pub fn line(record: &Record, offset: &dyn Fn(u64) -> i64) -> Option<String> {
     match record {
@@ -153,6 +187,9 @@ pub fn line(record: &Record, offset: &dyn Fn(u64) -> i64) -> Option<String> {
             Some(format!("- {} **{who}**: {}\n", clock(*at, offset(*at)), escape(text, super::MAX_LINE)))
         }
         Record::Paused { at, ms } => Some(format!("- {} *paused {}*\n", clock(*at, offset(*at)), minutes(*ms))),
+        Record::Meeting(each) => {
+            Some(format!("- {} *calendar*: {}\n", clock(each.start, offset(each.start)), meeting(each, offset)))
+        }
         Record::Begin(_) | Record::End { .. } | Record::Failed => None,
     }
 }
@@ -288,7 +325,13 @@ mod tests {
     const START: u64 = 1_794_819_600_000;
 
     fn head() -> Head {
-        Head { app: "Zoom".into(), bundle: Some("us.zoom.xos".into()), mic: false, started: START }
+        Head {
+            app: "Zoom".into(),
+            bundle: Some("us.zoom.xos".into()),
+            mic: false,
+            started: START,
+            meetings: Vec::new(),
+        }
     }
 
     /// One hour east of UTC.
@@ -332,6 +375,49 @@ mod tests {
         let west = header(&Head { mic: true, bundle: None, ..head() }, Some(START + 30_000), &|_| -19_800);
         assert!(west.contains("(-05:30)") && west.contains("less than a minute") && west.contains("- App: Zoom\n"));
         assert!(west.contains("- Microphone: on\n"), "{west}");
+    }
+
+    #[test]
+    fn the_header_names_the_meetings_it_is_possibly_of_and_a_later_one_is_a_line() {
+        let meeting = |title: &str, start: u64, minutes: u64| Meeting {
+            title: title.into(),
+            start,
+            end: start + minutes * 60_000,
+        };
+        let meetings =
+            vec![meeting("Design review", START - 600_000, 40), meeting("[1:1](x) *Sam*", START + 120_000, 30)];
+        let on = header(&Head { meetings, ..head() }, None, &paris);
+        assert!(
+            on.contains(
+                "- Started by: you\n\
+                 - Possibly, by your calendar:\n  \
+                 - Design review (09:50–10:30)\n  \
+                 - \\[1\\:1\\](x) \\*Sam\\* (10:02–10:32)\n\n\
+                 > Heard"
+            ),
+            "{on}"
+        );
+        // None: no block at all.
+        assert!(header(&head(), None, &paris).contains("- Started by: you\n\n> Heard"));
+        // Past midnight, the end's day too.
+        let late = meeting("Late", START + 13 * 3_600_000 + 30 * 60_000, 60);
+        assert_eq!(super::meeting(&late, &paris), "Late (23:30–2026-11-17 00:30)");
+        let line = line(&Record::Meeting(meeting("Weekly sync", START + 1_800_000, 30)), &paris).unwrap();
+        assert_eq!(line, "- 10:30:00 *calendar*: Weekly sync (10:30–11:00)\n");
+        // Neither is read back as a line heard, and the header still reads back.
+        let ended = header(&Head { meetings: vec![late], ..head() }, Some(START + 60_000), &paris) + &line;
+        assert_eq!(read_lines(&ended), []);
+        assert_eq!(read_head("x.md", &ended).map(|past| past.app), Some("Zoom".into()));
+    }
+
+    /// Today's list reads a file's first `HEAD_BYTES` (the shell's, 4 KB) for its header and a line.
+    #[test]
+    fn the_longest_header_leaves_room_for_a_line() {
+        let title = "\u{1f4ac}*".repeat(200);
+        let meetings = vec![Meeting { title, start: START, end: START + 60_000 }; crate::calendar::MAX_POSSIBLE];
+        let app = "*".repeat(200);
+        let long = header(&Head { app: app.clone(), bundle: Some(app), meetings, ..head() }, None, &paris);
+        assert!(long.len() < 3_000, "{}", long.len());
     }
 
     #[test]
