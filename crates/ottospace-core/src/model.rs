@@ -324,6 +324,8 @@ pub struct TerminalInfo {
     pub cwd: Option<String>,
     /// The program in front of the shell, if one is.
     pub program: Option<String>,
+    /// The shell's own directory, when a program in front of it is elsewhere.
+    pub shell: Option<String>,
 }
 
 /// What an ⌥-click in the workspace points at while the new-task box is open.
@@ -1666,6 +1668,17 @@ pub enum Action {
     },
     /// Undo on the notice bar's "Done · <task>": the task as it was. Only the user's.
     DoneUndo,
+    /// The local day began at `day` (ms since 1970): what Done today counts from. The shell's.
+    LocalDay {
+        day: u64,
+    },
+    /// What `git worktree remove` did with a done task's own worktree at `path`: removed
+    /// (`kept` none), or kept and why ("Kept the worktree: 3 uncommitted changes"). The shell's.
+    WorktreeRemoved {
+        task: TaskId,
+        path: String,
+        kept: Option<String>,
+    },
     /// ⌘⇧R: collapse the drawer into its rail, or open it again (the conversation, else the transcript).
     TalkToggle,
     /// Put a task of the selected workspace in front (its row, or the drawer's rail). The user's alone.
@@ -2359,6 +2372,8 @@ impl Action {
             | Action::TaskDone { .. }
             | Action::TaskLater { .. }
             | Action::DoneUndo
+            | Action::WorktreeRemoved { .. }
+            | Action::LocalDay { .. }
             | Action::TalkToggle
             | Action::TalkKeys { on: false }
             | Action::TalkResize { .. }
@@ -2746,6 +2761,8 @@ impl Action {
             | Action::TaskDone { .. }
             | Action::TaskLater { .. }
             | Action::DoneUndo
+            | Action::WorktreeRemoved { .. }
+            | Action::LocalDay { .. }
             | Action::TalkToggle
             | Action::TalkKeys { .. }
             | Action::TalkResize { .. }
@@ -2983,6 +3000,13 @@ pub enum Effect {
     /// Say this in the notice bar, as a warning: why a move of the user's did nothing.
     Notice {
         text: String,
+    },
+    /// Done's removal of the task's own worktree at `path`, of the repository at `repo`:
+    /// `git worktree remove` without `--force`, so a dirty one stays; then `WorktreeRemoved`.
+    RemoveWorktree {
+        task: TaskId,
+        repo: String,
+        path: String,
     },
     /// The user's Done in the drawer on this task: the seal, fold and land play (`motion::seal`).
     Seal {
@@ -3422,6 +3446,9 @@ pub struct Model {
     /// Tasks the user marked done or put away, and the Done offered back (`finish`).
     #[serde(skip)]
     pub finish: finish::Finishing,
+    /// When the local day began (`LocalDay`): Done today's start. 0: not told.
+    #[serde(skip)]
+    pub(crate) local_day: u64,
     /// Sessions the shell found, in the order listed. Shown through `sessions_bar` only.
     #[serde(skip)]
     found: Vec<Found>,
@@ -3679,6 +3706,7 @@ impl Default for Model {
             open_done: Vec::new(),
             undo_offer: None,
             finish: finish::Finishing::default(),
+            local_day: 0,
             found: Vec::new(),
             session_quiet_ms: sessions::QUIET_MS,
             hidden: Vec::new(),
@@ -4117,6 +4145,8 @@ impl Model {
             }
             // Done, Later and its Undo are the user's; so is the answer to "Stop it and put it away?".
             Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
+            Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
+            Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
             Action::QuitConfirm | Action::QuitCancel
                 if self.confirm.as_ref().is_some_and(|confirm| confirm.later.is_some()) =>
             {
@@ -4937,8 +4967,18 @@ impl Model {
                     // The box's choice: the task works there, and its agent starts.
                     Some(at) => {
                         let making = self.making.remove(at);
+                        // The folder it was asked in (`<root>/<repo>/<branch>`), not the setting now.
+                        let root = asked.rsplitn(3, '/').nth(2).unwrap_or_default().to_string();
+                        let made = tasks::Made { repo, branch: making.branch, path: path.clone(), asked, root, removed: false };
+                        if let Some(task) = self.tasks.list.iter_mut().find(|task| task.id == making.task) {
+                            task.made = Some(made);
+                        }
                         self.worktree_made(making.task, path, effects);
+                        // Done while git made it: it goes now, as Done would have taken it.
+                        self.late_worktree(making.task, effects);
                     }
+                    // Its Done's Undo: back as it was, nothing opened.
+                    None if self.readded(&asked, true, effects) => {}
                     // The user's + made it: it opens as their click on its row would.
                     None => self.repo_click(path, Axis::Right, true, effects),
                 }
@@ -4949,6 +4989,7 @@ impl Model {
                 self.follow_moves();
                 // A new task's waits in its checkout, unstarted: its Start is the user's.
                 self.making.retain(|making| !fresh || making.asked != asked);
+                self.readded(&asked, false, effects);
             }
             Action::RestoreTasks { tasks, floor } => {
                 self.tasks.restore(tasks, floor);
@@ -6250,7 +6291,11 @@ impl Model {
                 self.card_first(&Subject::Task(id), ticket);
                 self.talk_to(Subject::Task(id), false, effects)
             }
-            action @ (Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo) => {
+            Action::LocalDay { day } => self.local_day = day,
+            action @ (Action::TaskDone { .. }
+            | Action::TaskLater { .. }
+            | Action::DoneUndo
+            | Action::WorktreeRemoved { .. }) => {
                 self.finish_act(action, effects)
             }
             Action::TalkStart => {
@@ -6849,7 +6894,7 @@ impl Model {
         // other again; a done one's session gone on with.
         let start = match &subject {
             Subject::Task(id) if self.by_user => {
-                let done = self.revive(*id);
+                let done = self.revive(*id, effects);
                 start || (done && self.tasks.get(*id).is_some_and(|task| task.session.is_some()))
             }
             _ => start,
@@ -7802,10 +7847,22 @@ impl Model {
     fn shared_place(&self) -> (Option<String>, Option<String>) {
         let joins = self.joins();
         if let Some(default) = joins.as_ref().and_then(|of| self.space_worktree(of)) {
-            return (Some(default.to_string()), None);
+            // One Done is removing: its repository, not a folder about to go.
+            let gone = self.removing(default).map(|made| made.repo.clone());
+            return (Some(gone.unwrap_or_else(|| default.to_string())), None);
         }
-        let front = joins.and_then(|of| self.front(&of)).and_then(|id| self.tasks.get(id));
-        front.map_or((None, None), |task| (task.repo.clone(), task.folder.clone()))
+        // None in front (each put away, Done): the newest of them. Its own worktree removed by its
+        // Done: the repository it came from, not a folder that is gone.
+        let of = joins.as_ref();
+        let away =
+            || of.map(|of| self.members(of)).unwrap_or_default().into_iter().filter(|id| self.put_away(*id)).max();
+        let front = of.and_then(|of| self.front(of)).or_else(away).and_then(|id| self.tasks.get(id));
+        match front
+            .and_then(|task| task.made.as_ref().filter(|made| made.removed && task.repo.as_ref() == Some(&made.path)))
+        {
+            Some(made) => (Some(made.repo.clone()), None),
+            None => front.map_or((None, None), |task| (task.repo.clone(), task.folder.clone())),
+        }
     }
 
     /// A task started in a workspace is in it: no space is made, no pane moves, nothing closes,
@@ -7943,8 +8000,15 @@ impl Model {
     /// heading, most urgent first, then oldest first. `list_rows` asks for the order alone.
     fn task_places(&self) -> Vec<TaskPlace<'_>> {
         let mut places: Vec<TaskPlace> = Vec::new();
+        // Done since the local day began, as the shell says it.
+        let day = self.local_day;
+        let today = |task: &Task| day > 0 && task.finished_at.is_some_and(|at| at >= day);
         for (group, task) in self.tasks.inbox() {
-            places.push(TaskPlace { heading: group.into(), group, task });
+            let heading = match group.into() {
+                Heading::Done if today(task) => Heading::DoneToday,
+                heading => heading,
+            };
+            places.push(TaskPlace { heading, group, task });
         }
         places.sort_by_key(|place| (place.heading, place.task.priority, place.task.id));
         places
@@ -9609,6 +9673,8 @@ mod tests {
         Action::TaskDone { .. },
         Action::TaskLater { .. },
         Action::DoneUndo,
+        Action::WorktreeRemoved { .. },
+        Action::LocalDay { .. },
         Action::TalkToggle,
         Action::TalkKeys { .. },
         Action::TalkResize { .. },
@@ -9946,6 +10012,8 @@ mod tests {
             Action::TaskDone { id: 1 },
             Action::TaskLater { id: 1 },
             Action::DoneUndo,
+            Action::WorktreeRemoved { task: 1, path: String::new(), kept: None },
+            Action::LocalDay { day: 0 },
             Action::TalkToggle,
             Action::TalkFront { task: 1 },
             Action::TalkCycle { delta: 1 },
@@ -10379,6 +10447,8 @@ mod tests {
                     }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
+                    Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
+                    Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
                     Action::TalkKeys { on: true } if m.talk.as_ref().is_some_and(|t| !t.open) => {
                         Some(rail::DRAWER_USERS)
                     }
@@ -13328,7 +13398,8 @@ mod tests {
         m.update(Action::NewTab);
         m.tabs[1].title = m.tabs[0].title.clone();
         m.update(Action::SelectTab { index: 0 });
-        let info = TerminalInfo { pane: 1, cwd: Some("/code/flow app".into()), program: Some("vim".into()) };
+        let info =
+            TerminalInfo { pane: 1, cwd: Some("/code/flow app".into()), program: Some("vim".into()), shell: None };
         m.update(Action::SetTerminals { terminals: vec![info], home: Some("/code".into()) });
         let sketch = Installed { name: "Sketchpad".into(), path: "/Applications/Sketchpad.app".into() };
         m.update(Action::SetInstalled { apps: vec![sketch], running: Vec::new() });
@@ -13490,7 +13561,7 @@ mod tests {
         let mut m = Model::default();
         m.update(Action::Split { axis: Right, kind: Kind::Terminal });
         m.update(Action::Split { axis: Right, kind: Kind::Terminal });
-        let info = |pane, cwd: &str| TerminalInfo { pane, cwd: Some(cwd.into()), program: None };
+        let info = |pane, cwd: &str| TerminalInfo { pane, cwd: Some(cwd.into()), program: None, shell: None };
         m.update(Action::SetTerminals { terminals: vec![info(1, "/code/repo"), info(2, "/code/other")], home: None });
         m.update(Action::OpenCompose { text: String::new() });
         // ⌥-click pane 1 (`repo`). It exits; pane 2 moves into a directory of that name; ⌥-click it.
@@ -13557,7 +13628,12 @@ mod tests {
         let mut m = Model::default();
         m.update(Action::Split { axis: Right, kind: Kind::Terminal });
         m.update(Action::Open { kind: app(7), axis: Right, beside: None });
-        let info = TerminalInfo { pane: 1, cwd: Some("/Users/me/clients/acme".into()), program: Some("vim".into()) };
+        let info = TerminalInfo {
+            pane: 1,
+            cwd: Some("/Users/me/clients/acme".into()),
+            program: Some("vim".into()),
+            shell: None,
+        };
         m.update(Action::SetTerminals { terminals: vec![info], home: None });
         let sketch = Installed { name: "Sketchpad".into(), path: "/Applications/Sketchpad.app".into() };
         m.update(Action::SetInstalled { apps: vec![sketch], running: Vec::new() });
@@ -16661,6 +16737,8 @@ mod tests {
                     }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
+                    Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
+                    Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
                     Action::TalkKeys { on: true } if m.talk.as_ref().is_some_and(|t| !t.open) => {
                         Some(rail::DRAWER_USERS)
                     }

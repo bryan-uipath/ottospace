@@ -355,6 +355,11 @@ impl Terminal {
         foreground.and_then(process::cwd).or_else(|| process::cwd(self.child as i32))
     }
 
+    /// The shell's own directory, whatever program is in front of it.
+    pub fn shell_cwd(&self) -> Option<String> {
+        process::cwd(self.child as i32)
+    }
+
     /// Sends bytes to the shell, as if typed. Typing while scrolled back returns to the bottom.
     /// A command still waiting to be typed is not: the user's own keys came first.
     pub fn write(&self, bytes: Vec<u8>) {

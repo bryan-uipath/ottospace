@@ -90,6 +90,8 @@ pub enum Heading {
     NeedsYou,
     Running,
     Later,
+    /// Done since the local day began, under the active ones.
+    DoneToday,
     Done,
     Sessions,
 }
@@ -100,6 +102,7 @@ impl Heading {
             Heading::NeedsYou => Group::NeedsYou.title(),
             Heading::Running => Group::Running.title(),
             Heading::Later => "Later",
+            Heading::DoneToday => "Done today",
             Heading::Done => Group::Done.title(),
             Heading::Sessions => "Elsewhere",
         }
@@ -207,7 +210,7 @@ impl Segments {
             match Heading::from(*group) {
                 Heading::NeedsYou => s.needs_you += 1,
                 Heading::Running => s.running += 1,
-                Heading::Done => s.done += 1,
+                Heading::Done | Heading::DoneToday => s.done += 1,
                 Heading::Later | Heading::Sessions => s.later += 1,
             }
         }
@@ -288,6 +291,21 @@ pub fn age(then: u64, now: u64) -> String {
     }
 }
 
+/// A worktree made for a task (`Task::made`): of the repository at `repo`, on `branch`, at `path`
+/// (as git listed it), asked for at `asked`. `removed`: its Done removed it; the branch stays.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Made {
+    pub repo: String,
+    pub branch: String,
+    pub path: String,
+    pub asked: String,
+    /// The worktrees folder it was made in (`worktrees_dir` then): where an Undo adds it back.
+    #[serde(default)]
+    pub root: String,
+    #[serde(default)]
+    pub removed: bool,
+}
+
 /// Also the shape of a task's file on disk; fields a hand-written file leaves out take a default.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Task {
@@ -317,6 +335,9 @@ pub struct Task {
     /// the checkout of `dir` (`Model::task_worktree`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+    /// The worktree the new-task box made for it: its own, removed when it is done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub made: Option<Made>,
     /// Who works it, from an `@name`. Stored and shown; nothing acts on it yet.
     #[serde(default)]
     pub agent: Option<String>,
@@ -611,6 +632,7 @@ impl Tasks {
             title_generated: false,
             started_at: None,
             finished_at: None,
+            made: None,
             work: Vec::new(),
             colour: Some(colour_for(&self.list)),
             extra: Default::default(),
@@ -1039,6 +1061,7 @@ mod tests {
             title_generated: false,
             started_at: None,
             finished_at: None,
+            made: None,
             work: Vec::new(),
             colour: None,
             extra: Default::default(),

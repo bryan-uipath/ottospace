@@ -15,11 +15,41 @@ conversation.
 - **The offer**: "Got what you needed? ✓ Done · Later" under the last reply, while the agent is
   alive and idle, no card waits, the draft is empty and its last word is a reply.
 
+## Its worktree, and the workspace after
+
+The owner (2026-11-18): Done "deletes the task's own worktree if the task made one, without
+asking"; the workspace stays, "we might want to start a new task in that workspace".
+
+- `Task::made`: the worktree the new-task box made for it (`WorktreeAdded` of its `making`).
+  Done asks `Effect::RemoveWorktree` while it is listed, unless another live task works there
+  (`KEPT_TASK`) or a terminal is in it (`KEPT_TERMINAL`: decided in the core from the terminals'
+  directories the shell tells first, so the worktree is kept, never pulled from under a shell).
+- The shell runs `git worktree remove -- <path>` (no `--force`): git refuses a dirty one, and
+  the shell counts `git status --porcelain` for why. `WorktreeRemoved` (the shell's alone; one
+  the core asked for, else nothing): kept → the Done line says why; removed → `made.removed`,
+  `ReadRepos`, and a workspace whose default it was falls back to its repository
+  (`Workbooks::default_gone`).
+- Only its own: listed at its path *on its branch* (one made there since, or switched, stays).
+  A terminal counts by its shell's folder, its front program's and the folder it started in.
+- Undo: `AddWorktree { fresh: false }` on its branch at the folder first asked for, in the
+  worktrees folder it was made in (`Made::root`); the answer (`readded`) opens nothing and gives
+  the workspaces that fell back their default again. Undo while git still removes it: added back
+  once the removal is answered. A done task opened again (Done today) gets it back the same way,
+  and its session goes on once it is (`Finishing::resume`).
+- Done while git still makes it: removed once made (`late_worktree`).
+- A new task in that workspace: with no task in front, it shares the newest put-away task's
+  place, and a removed worktree's repository in its place (`shared_place`); so while one is
+  being removed.
+- New task here shows only while the done task's workspace is on show (`done_here`).
+- Tasks: `Heading::DoneToday`, done since the local day began (`LocalDay`, the shell's, on its
+  tick), above Done.
+
 ## The model (`model/finish.rs`)
 
 - `Finishing::away`: the tasks the user put away. Never in front (`Model::front` skips them: with
   only those, a workspace has none, so the drawer has no conversation), never on the rail. Kept
-  until the user opens the task again (`TaskTalk`, `revive`), Undo, or the task goes.
+  in `layout.json` (`drawer.away`) until the user opens the task again (a click, ↵ or ⌘⇧N on
+  it: `talk_to` revives it), Undo, a state reported since, or the task goes.
 - What its stopping agent reports last moves a task put away nowhere (`chat_state`).
 - `Model::finish(subject)`: the header's buttons. `done_offered`, `close_key` (⌘W), `done_key` (⌘↵).
 - `Effect::Seal`: the user's Done in the drawer on that task. The shell plays the animation.

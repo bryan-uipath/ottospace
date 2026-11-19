@@ -187,6 +187,13 @@ pub fn worktree_dir(worktrees: &str, repo: &str, listed: &[Repo], branch: &str) 
     format!("{}/{folder}/{}", worktrees.trim_end_matches('/'), branch.replace('/', "-"))
 }
 
+/// `path` is a worktree's place in `root`, as `worktree_dir` makes one: `<root>/<repo>/<branch>`.
+pub fn in_worktrees(path: &str, root: &str) -> bool {
+    let rest = path.strip_prefix(root.trim_end_matches('/')).and_then(|rest| rest.strip_prefix('/'));
+    let parts: Vec<&str> = rest.map(|rest| rest.split('/').collect()).unwrap_or_default();
+    parts.len() == 2 && parts.iter().all(|part| !matches!(*part, "" | "." | ".."))
+}
+
 /// The most of a task's title a new worktree's branch takes: words, and bytes.
 const BRANCH_WORDS: usize = 4;
 const BRANCH_BYTES: usize = 32;
@@ -368,6 +375,11 @@ mod tests {
     fn a_worktree_goes_in_its_repositorys_folder_with_slashes_as_dashes() {
         let listed = [repo("app", &[]), repo("web", &[])];
         assert_eq!(worktree_dir("/w/", "/code/app", &listed, "fix/zoom"), "/w/app/fix-zoom");
+        // Its place, with or without the root's `/`; nothing deeper, shallower or outside.
+        assert!(in_worktrees("/w/app/fix-zoom", "/w/") && in_worktrees("/w/app/fix-zoom", "/w"));
+        for path in ["/w/app", "/w/app/x/y", "/w/../x", "/wx/app/y", "/code/app-2/src"] {
+            assert!(!in_worktrees(path, "/w"), "{path}");
+        }
         // Two repositories named `app`: each folder takes a short hash of its path, the same each run.
         let other = Repo { path: "/work/app".into(), ..repo("app", &[]) };
         let listed = [repo("app", &[]), other];
