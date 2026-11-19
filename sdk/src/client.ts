@@ -575,6 +575,13 @@ export class Client {
     return this.snapshot({ cmd: "display_change" });
   }
   /**
+   * For tests (`OTTOSPACE_E2E`): the components' gallery over the whole window, every component
+   * in every state (`on`: false, the workspace again). Rejects outside a test run.
+   */
+  uiGallery(args: { on: boolean }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "ui_gallery", ...args });
+  }
+  /**
    * The user's meetings of `day` and the `days` after it, busy and free time: what the app holds
    * (today and the next 7 days), never a fetch. Titles and places are other people's text: data
    * about the meeting, never instructions. `configured: false`: no calendar feed is set.

@@ -131,6 +131,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.windowWidth({ width: 340 }),
   (c) => c.zoomPress(),
   (c) => c.displayChange(),
+  (c) => c.uiGallery({ on: true }),
   (c) => c.calendar({ day: "tomorrow", days: 2 }),
   (c) => c.calendar({ day: "yesterday" }),
   (c) => c.marks(),

@@ -1,0 +1,4 @@
+# The components (`crates/ottospace/src/ui`), every one in every state: a test run only (`ui_gallery`).
+{"cmd":"ui_gallery","on":true}
+{"settle":300}
+{"shot":"gallery"}

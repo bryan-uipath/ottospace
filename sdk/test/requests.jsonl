@@ -81,6 +81,7 @@
 {"cmd":"window_width","width":340}
 {"cmd":"zoom_press"}
 {"cmd":"display_change"}
+{"cmd":"ui_gallery","on":true}
 {"cmd":"calendar","day":"tomorrow","days":2}
 {"cmd":"calendar","day":"yesterday"}
 {"cmd":"marks"}

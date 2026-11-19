@@ -13,7 +13,7 @@ use ottospace_core::complete::{self, Dropdown, Enter, Row};
 use ottospace_core::model::{Pointed, TAG_KEYS, TerminalInfo};
 use ottospace_core::{Action, Origin, theme};
 
-use crate::{Workspace, dialog, keycaps};
+use crate::{Workspace, dialog, ui};
 
 /// The dropdown's width, and a row's height: the shell knows its room from them.
 const MENU_WIDTH: f32 = 340.;
@@ -253,7 +253,7 @@ impl Workspace {
                 .rounded_sm()
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
-                .child(keycaps::cap(key, false, true))
+                .child(ui::pill(key, ui::Pill::Key { lit: false, small: true }))
                 .child(word)
                 .child(self.controls.mark(id))
                 .when_some(mark, |d, mark| {
@@ -327,7 +327,7 @@ impl Workspace {
         };
         // As wide whatever it says: the tags beside it wrap the same, and the line above stays put.
         let caps = keys.split_last().map(|(word, caps)| {
-            let caps = caps.iter().map(|text| keycaps::cap(*text, false, true));
+            let caps = caps.iter().map(|text| ui::pill(*text, ui::Pill::Key { lit: false, small: true }));
             div().flex().items_center().gap_1().children(caps).child(muted(*word))
         });
         let keys = div().w(px(96.)).flex_none().flex().justify_end().children(caps);

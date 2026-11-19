@@ -124,6 +124,9 @@ Rules:
     cannot unplug one). The shell then kicks GPUI to draw again, as after a real change
     (`stall.rs`, `ottospace_mac::window::redraw`); the state's `counts.redraws` counts the kicks.
     Outside a test run only macOS says the displays changed.
+  - `ui_gallery` (`"on"`): every component of `ui/` in every state over the window
+    (`docs/ai/ui.md`), for `scripts/shot ui-gallery`. Outside a test run no client covers the
+    user's workspace.
   - `"repeat":true` on `key`: each key as one still held down. A key that types is a real repeat
     to `keyDown:`: `enter`, `tab`, `space`, or a character the layout types with no modifier on
     key codes 0 to 50 (`a`, `7`, `/`; not `A`). A `cmd-` shortcut, by the flag alone, is pressed as
