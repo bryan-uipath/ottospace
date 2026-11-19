@@ -5593,9 +5593,10 @@ impl Workspace {
             let repos = repos::scan();
             match result {
                 // Made from a repository listed only as a worktree of another: not in the list to open.
-                // A bug report's repository need not be listed (`developer.ottospace_repo`).
+                // A bug report's repository need not be listed (`developer.ottospace_repo`): made
+                // where it was asked, in `worktrees_dir`.
                 Ok(path)
-                    if !self.model.bug_worktree(&asked)
+                    if !(self.model.bug_worktree(&asked) && path == asked)
                         && !repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == path)) =>
                 {
                     self.error = Some(format!("Made {path}: its repository is not listed"));

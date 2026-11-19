@@ -14762,8 +14762,10 @@ fn bug_send_files_a_task_in_a_new_worktree_with_a_brief_of_no_titles() {
     assert_eq!(task["repo"].as_str().map(Path::new), Some(repo.as_path()), "{task}");
     let file = task["materials"][0].as_str().expect("its brief's folder").to_string();
     let dir = home.join("materials").join(file.split('/').next().unwrap());
-    // The worktree, made from the repository's HEAD on a new branch, not listed in Repos.
-    let worktree = home.canonicalize().unwrap().join("worktrees/ottospace/bug-tabs-flicker");
+    // The worktree, made from the repository's HEAD on a new branch, not listed in Repos. Its
+    // branch ends with the report's word, as its folder does: `<task>-<word>`.
+    let tag = &dir.file_name().unwrap().to_str().unwrap().split_once('-').unwrap().1[..4];
+    let worktree = home.canonicalize().unwrap().join(format!("worktrees/ottospace/bug-tabs-flicker-{tag}"));
     otto.wait_for("the worktree", |_| worktree.join(".git").is_file().then_some(()));
     // The agent starts there with the brief.
     let stdin = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default();
