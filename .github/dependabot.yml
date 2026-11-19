@@ -1,0 +1,52 @@
+# Weekly, a week behind each release (as `.cargo/config.toml`'s cooldown), minor and patch in one
+# pull request. Each pull request takes macOS runners, so few are open at once.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
+        # A new gpui (0.2 to 0.3: breaking) comes alone, not holding up the rest.
+        exclude-patterns: [gpui]
+    ignore:
+      # Same versions gpui uses (crates/ottospace/Cargo.toml): moved by hand with gpui. A 0.x
+      # minor is breaking, so only patches come.
+      - dependency-name: core-video
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: core-foundation
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: objc2-core-foundation
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: raw-window-handle
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # Pinned on purpose (`=0.13.6`).
+      - dependency-name: pulldown-cmark
+    open-pull-requests-limit: 2
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
+    open-pull-requests-limit: 2
+
+  # The SDK's dev dependencies (`sdk/package-lock.json`).
+  - package-ecosystem: npm
+    directory: /sdk
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+    open-pull-requests-limit: 2

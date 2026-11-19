@@ -222,6 +222,17 @@ Rules:
   added helper identical to one already there, or an identical file of 10 lines or more. A deliberate
   copy goes in `duped.json` (never also a `duped.toml`: duped refuses both), with a `reason` that
   says why the two must stay separate. A new release: change `DUPED_VERSION` and `DUPED_SHA256` together.
+- `.github/workflows/deps.yml`, on pull requests that change `Cargo.lock`, a `Cargo.toml`, `deny.toml`
+  or the workflow, and weekly on `main`, on `ubuntu-latest` (no build): `cargo audit` (a vulnerability
+  fails) and `cargo deny --locked check` (`deny.toml`: advisories, licences, bans, sources, for the
+  `aarch64-apple-darwin` graph). An advisory with no fix is ignored in `deny.toml` with a dated
+  reason; a licence outside the allow-list goes in `exceptions`, by crate, never in `allow`.
+- Dependency cooldown: `.cargo/config.toml` resolves only versions published 7 days ago or more
+  (`global-min-publish-age`, Cargo 1.100; older Cargo warns and ignores it). Every cargo build, test,
+  clippy and run in a workflow passes `--locked` (`cargo --locked e2e-apps` for an alias), so CI
+  fails on a stale `Cargo.lock` instead of resolving. `.github/dependabot.yml`: cargo,
+  github-actions and `sdk/` npm, weekly, 7-day cooldown, minor and patch grouped, at most 2 open
+  pull requests each (each takes macOS runners).
 - `.github/workflows/release.yml`, on a `v*` tag: `scripts/package.sh`, GitHub Release.
 - `.github/workflows/pages.yml`, on pushes to `main` that touch `site/**`: deploys `site/` to GitHub
   Pages. Never on pull requests. Only its deploy job has `pages: write` and `id-token: write`.

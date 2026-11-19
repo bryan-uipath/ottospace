@@ -537,7 +537,8 @@ def build_ref(ref, scratch, args=()):
                 if name == "ottospace-mac" or name.startswith("ottospace-mac-"):
                     shutil.rmtree(os.path.join(build_dir, name), ignore_errors=True)
     try:
-        return build(tree, os.path.join(scratch, "ottospace-before"), target, args)
+        # A committed tree: its Cargo.lock as is, never resolved again.
+        return build(tree, os.path.join(scratch, "ottospace-before"), target, ("--locked", *args))
     finally:
         subprocess.run(["git", "-C", REPO, "worktree", "remove", "--force", tree], check=False)
 

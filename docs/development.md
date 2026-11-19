@@ -241,6 +241,13 @@ whether the regression is real and accepted.
   `scripts/bench`, `scripts/shot` or the shots fixtures it copies: `scripts/bench --compare` against the base branch's tip (the pull request merged into it after), the table
   in the job summary, the JSON as an artifact (see "Benchmarks"). Nightly and by hand on `main`:
   this tree alone, the JSON kept 90 days for trends.
+- `.github/workflows/deps.yml`, on pull requests that change `Cargo.lock`, a `Cargo.toml`,
+  `deny.toml` or the workflow, and weekly on `main`, on Linux: `cargo audit` and `cargo deny --locked check`
+  (`deny.toml`: advisories, licences, bans, sources, for the macOS graph). Both run locally as
+  they are.
+- Dependencies: `.cargo/config.toml` resolves only versions published at least 7 days ago (Cargo
+  1.100), CI builds with `--locked`, and Dependabot (`.github/dependabot.yml`) opens weekly,
+  grouped updates with the same cooldown.
 - `.github/workflows/release.yml`, on a `v*` tag: the GitHub Release.
 - `.github/workflows/pages.yml`, on pushes to `main` that change `site/`: deploys `site/` to
   GitHub Pages. Pages must be on for the repository, with GitHub Actions as its source.

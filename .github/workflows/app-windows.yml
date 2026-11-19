@@ -66,18 +66,18 @@ jobs:
         run: |
           defaults read -g AppleLocale || true
           defaults read -g AppleLanguages || true
-          cargo run -p ottospace-mac --example speech_status -- --install || true
+          cargo run --locked -p ottospace-mac --example speech_status -- --install || true
       # Finder is hosted only here: the runner's Finder has no windows of anyone's.
       - name: App-window tests
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.repeat == '0' }}
         env:
           OTTOSPACE_E2E_FINDER: '1'
           OTTOSPACE_SHARP_OUT: ${{ runner.temp }}/sharp
-        run: cargo e2e-apps --skip canarys
+        run: cargo --locked e2e-apps --skip canarys
       # The canary's transcript, shown: what the recogniser heard, or why it skipped.
       - name: Transcript tests
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.repeat == '0' }}
-        run: cargo e2e-apps canarys --nocapture
+        run: cargo --locked e2e-apps canarys --nocapture
       # To measure a flaky step: every attempt runs, and the step fails if any did.
       - name: One test, repeated
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.repeat != '0' }}
@@ -90,7 +90,7 @@ jobs:
           failed=0
           for i in $(seq 1 "$REPEAT"); do
             echo "== attempt $i of $REPEAT"
-            cargo e2e-apps "$TEST" || { failed=$((failed + 1)); echo "== FAILED attempt $i"; }
+            cargo --locked e2e-apps "$TEST" || { failed=$((failed + 1)); echo "== FAILED attempt $i"; }
           done
           echo "== $failed of $REPEAT failed"
           test "$failed" -eq 0

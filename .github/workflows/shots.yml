@@ -56,7 +56,7 @@ jobs:
           save-if: false
       - name: Build the pull request
         run: |
-          cargo build -p ottospace --bin ottospace
+          cargo build -p ottospace --bin ottospace --locked
           cp target/debug/ottospace "$RUNNER_TEMP/ottospace-after"
       - name: The tool's own test
         run: scripts/test-shot.sh "$RUNNER_TEMP/ottospace-after"
