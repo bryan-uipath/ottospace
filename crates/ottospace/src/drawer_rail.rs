@@ -121,7 +121,10 @@ impl Workspace {
         let tasks = self.bars.tracked_under("drawer-rail", tasks, &self.rail_scroll, theme::BACKGROUND).w_full();
         // Collapsed, a click on any item opens the drawer on it (the owner: no expand button).
         let column = column.child(tasks).child(self.rail_follow()).children(foot);
-        column.child(edged().h_2()).child(self.controls.mark("drawer-rail"))
+        // Its frame starts past the line toward the drawer, as when the line was the column's: the
+        // top row's labels keep their spot under their buttons, off the rail.
+        let frame = div().absolute().top_0().bottom_0().left(px(1.)).right_0().child(self.controls.mark("drawer-rail"));
+        column.child(edged().h_2()).child(frame)
     }
 
     /// After the tasks are laid out: the pending item wholly in view, else scrolled to and checked

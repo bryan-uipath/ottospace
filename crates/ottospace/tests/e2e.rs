@@ -6909,7 +6909,8 @@ fn the_rail_of_five_tasks_is_one_column_at_the_drawers_right_edge() {
     assert!(new[1] >= items[4][1] + items[4][3] - 0.5, "{items:?} {new:?}");
     assert!(talk[0] + talk[2] <= rail[0] + 0.5 && rail[0] + rail[2] >= window[2] - 1., "{talk:?} {rail:?} {window:?}");
     assert!(
-        items.iter().chain([&new]).all(|item| item[0] >= rail[0] && item[0] + item[2] <= rail[0] + rail[2]),
+        // The selected one also covers the line left of the rail's frame.
+        items.iter().chain([&new]).all(|item| item[0] >= rail[0] - 1. && item[0] + item[2] <= rail[0] + rail[2]),
         "{items:?}"
     );
     drop(otto);
@@ -6921,7 +6922,10 @@ fn the_rail_of_five_tasks_is_one_column_at_the_drawers_right_edge() {
 fn joined(otto: &Otto, item: [f64; 4], drawer: [f64; 4]) {
     let (rail, window) = (otto.control("drawer-rail"), rect(&otto.drawn()["window"]));
     assert!((item[0] - (drawer[0] + drawer[2])).abs() <= 0.5, "{item:?} {drawer:?}");
-    assert!((item[0] + item[2] - window[2]).abs() <= 0.5 && (item[2] - rail[2]).abs() <= 0.5, "{item:?} {window:?}");
+    // The rail's frame starts past its line toward the drawer: the selected cell covers that line too.
+    let right = item[0] + item[2];
+    assert!((right - window[2]).abs() <= 0.5 && (right - (rail[0] + rail[2])).abs() <= 0.5, "{item:?} {window:?}");
+    assert!((item[0] - (rail[0] - 1.)).abs() <= 0.5, "{item:?} {rail:?}");
     assert!((item[3] - 40.).abs() <= 0.5, "{item:?}");
 }
 
