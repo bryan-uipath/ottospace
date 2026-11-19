@@ -221,32 +221,50 @@ Design note: `docs/ai/attention/plan.md`.
 
 ## CI
 
-- `.github/workflows/ci.yml`, on pull requests and pushes to `main`, macOS arm64:
-  `cargo fmt -p ottospace -p ottospace-core -p ottospace-sessions -p ottospace-agents --check`, `cargo
-  clippy -- -D unused` (errors and unused code fail, other warnings do not; locally unused code only
-  warns), the libraries again with `-D unreachable_pub` (a `pub` the crate root cannot reach: make
-  it `pub(crate)`), `cargo machete --with-metadata` (an unused dependency fails),
-  `cargo test --workspace`, and the SDK's type check and request-fixture tests (`sdk/`, Node). `cargo e2e` runs in a separate job that may fail without blocking, under
-  cargo-nextest (`.config/nextest.toml`): up to three tries, a test that passes on a retry is
-  listed as flaky in the job summary. The same job then runs the SDK's tests against a private
-  instance.
+- A pull request takes no macOS runner by default: they are scarce. `.github/workflows/ci.yml`'s
+  `check`, on pull requests, `merge_group` and pushes to `main`, on `ubuntu-latest`: `cargo fmt -p
+  ottospace -p ottospace-core -p ottospace-sessions -p ottospace-agents --check`, `cargo clippy --
+  -D unused -D unreachable_pub` on the three pure crates, for Linux and again with `--target
+  aarch64-apple-darwin` (no link, no Apple SDK) (errors and unused code fail, other warnings do not;
+  locally unused code only warns; a `pub` the crate root cannot reach: make it `pub(crate)`),
+  `cargo machete --with-metadata` (an unused dependency fails), `cargo test` of the pure crates, and
+  the SDK's type check and request-fixture tests (`sdk/`, Node).
+- What `check` does not prove: that `ottospace-mac` and the shell compile (their build scripts run
+  `swift build` against Apple's frameworks; GPUI's run `cc` and `bindgen` over the SDK), their
+  clippy and unit tests, `cargo e2e`, the SDK against an instance, `cargo e2e-apps`. Those run in
+  `.github/workflows/macos.yml`, the one macOS job, on every push to `main` and on a pull request
+  that asks.
+- `macos.yml`, one build: clippy `-D unused` over the workspace and `-D unreachable_pub` on
+  `ottospace-mac`, `cargo test --workspace`, `cargo e2e` under cargo-nextest (`.config/nextest.toml`:
+  up to three tries, a test that passes on a retry is listed as flaky), the SDK's tests against a
+  private instance, then `cargo e2e-apps` (after e2e, never beside it: it takes the keyboard). Each
+  suite is a step that does not stop the next; the last step fails the job if any failed, and the
+  summary lists each suite's outcome and the failed tests.
+- On `main`, `ci.yml` calls it on every push (a newer push cancels the older run, so a burst of
+  merges tests the newest tip). While it fails, `main-red` keeps one issue, "main is red": the failed
+  tests and `git log <last green>..HEAD`; it closes when main passes again (`issues: write` and
+  `actions: read` on that job only). A red main is fixed before more lands.
+- On a pull request, `.github/workflows/e2e.yml`, by label: `pr-e2e` runs `macos.yml` with the e2e
+  tests `scripts/e2e-for` selects from the diff (all of them while the script is missing), no
+  app-window suite; `pr-e2e-apps` adds `cargo e2e-apps`. One job either way. Another label tests
+  nothing. Not a required check.
 - Unused code is deleted, or its `cfg`/visibility fixed. A library's `pub` item that no crate uses
   is not caught: make `pub(crate)` what only its own crate uses. `#[allow(dead_code)]` only with a one-line
   reason; a machete false positive goes in `[package.metadata.cargo-machete] ignored`, with one.
 - `.github/workflows/reliability.yml`, nightly and by hand: `cargo e2e` and `cargo e2e-apps` five
   times each, tallied; the nightly run keeps the issue "Flaky tests" (`issues: write` on that job
   only). Never on pull requests.
-- A change that touches only `docs/`, `site/`, `README.md`, `AGENTS.md` or `LICENSE` runs neither
-  workflow on the pull request: macOS runners are scarce. Such a pull request has no checks to wait
+- A change that touches only `docs/`, `site/`, `README.md`, `AGENTS.md` or `LICENSE` runs no
+  workflow on the pull request. Such a pull request has no checks to wait
   for (the merge queue still runs `ci.yml` and `duped.yml`), and after such a push `main-latest`
   trails `main` by docs commits.
 - `ci.yml` and `duped.yml` also run on `merge_group` (the merge queue), with no path filter: the
-  queue tests every pull request. Its ref (`gh-readonly-queue/...`) is its own concurrency group;
-  it saves no cache. A label-gated workflow (`build`, `bench`, `shots`) skips its jobs without the
-  label, before a runner is taken; a skipped job is not a failure.
-- `.github/workflows/app-windows.yml`, on pull requests and pushes to `main`: `cargo e2e-apps` on a
-  hosted runner, whose image grants bash Accessibility and Screen Recording. Not a required check.
-  Prefer it to a local run, which takes the keyboard.
+  queue tests every pull request, on Linux only (`check`). Its ref (`gh-readonly-queue/...`) is its
+  own concurrency group; it saves no cache. A label-gated workflow (`build`, `bench`, `shots`, `e2e`)
+  skips its jobs without the label, before a runner is taken; a skipped job is not a failure.
+- `.github/workflows/app-windows.yml`, by hand only: `cargo e2e-apps` once, or one test repeated
+  (`repeat`, `test`), on a hosted runner, whose image grants bash Accessibility and Screen Recording.
+  Prefer it, or `pr-e2e-apps`, to a local run, which takes the keyboard.
 - Not in CI: rustfmt on
   `ottospace-mac` (not formatted yet), clippy `-D warnings` (main has warnings).
 - `.github/workflows/build.yml`, on pushes to `main` and on pull requests that carry the label
@@ -258,9 +276,10 @@ Design note: `docs/ai/attention/plan.md`.
   (`install.sh`, `scripts/osi`, `scripts/test-osi.sh`, `scripts/package.sh`): `scripts/test-osi.sh`;
   and on changes to `scripts/e2e-for`, its table or its test: `scripts/test-e2e-for.sh`.
   A file the test starts to read is added to its `paths`.
-- One Rust cache for the dev build: `ci.yml`'s `e2e` job saves it, on `main` only (`shared-key: e2e`);
-  `app-windows.yml`, `shots.yml`, `bench.yml` and `reliability.yml` restore it and save none (`save-if: false`).
-  A job that builds the same dependencies joins it; one that saves from a pull request does not.
+- One Rust cache for the macOS dev build: `macos.yml` saves it, on `main` only, red or green
+  (`shared-key: e2e`); `e2e.yml`'s run of it, `app-windows.yml`, `shots.yml`, `bench.yml` and
+  `reliability.yml` restore it and save none (`save-if: false`). A job that builds the same
+  dependencies joins it; one that saves from a pull request does not. Linux's `check` keeps its own.
 - `.github/workflows/shots.yml`, on pull requests that carry the label `pr-shots` and change `crates/ottospace/src/**`,
   `crates/ottospace-core/src/**`, `crates/ottospace-mac/**`, `scripts/shot`, `scripts/shots/**` or `scripts/test-shot.sh`:
   `scripts/test-shot.sh`, then `scripts/shot --compare` of every scenario against the merge base;
@@ -307,6 +326,10 @@ Design note: `docs/ai/attention/plan.md`.
 - Visual evidence: `scripts/shot --compare <base> <scenario>…` (or the `shots.yml` artifact: label the pull request `pr-shots`); add
   a scenario under `scripts/shots/` for a view none covers. See `docs/development.md`.
 - A tool, CLI, parser or CI change pastes the command's output instead.
+- A pull request's checks are Linux only: no e2e, no picture, no compile of `ottospace-mac` or the
+  shell (see "CI"). So a visual change's before and after pictures are in its body (Shots runs only
+  with `pr-shots`), and its e2e evidence is the summary of a local `scripts/e2e-for` run pasted in
+  the body, or a green `pr-e2e` run (`pr-e2e-apps` for hosting, parking or adopting windows).
 
 ## Install scripts
 

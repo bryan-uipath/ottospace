@@ -1,9 +1,10 @@
 name: App windows
 
-# `cargo e2e-apps`: real windows of the canary app, hosted, entered, dragged. It needs
-# Accessibility and Screen Recording for the process that starts ottospace, which the hosted
-# macOS image grants to bash, and a window server. Run here so nobody's keyboard is taken.
-# Not a required check: a pointer test can still be flaky.
+# `cargo e2e-apps` by hand: the suite once, or one test repeated to measure a flaky one. Real
+# windows of the canary app, hosted, entered, dragged. It needs Accessibility and Screen
+# Recording for the process that starts ottospace, which the hosted macOS image grants to bash,
+# and a window server. On main and on a pull request labelled `pr-e2e-apps` the suite runs in
+# macos.yml instead.
 on:
   workflow_dispatch:
     inputs:
@@ -13,18 +14,12 @@ on:
       test:
         description: The test to repeat
         default: a_hosted_pane_is_dragged_by_its_header
-  pull_request:
-    # Text nobody compiles: no macOS runner for it.
-    paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
-  push:
-    branches: [main]
-    paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
 
 permissions:
   contents: read
 
 concurrency:
-  group: app-windows-${{ github.event.pull_request.number || github.ref }}
+  group: app-windows-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -42,7 +37,7 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-      # Same dependencies as ci.yml's e2e job: reads the cache it saves on main, saves none.
+      # Same dependencies as macos.yml: reads the cache it saves on main, saves none.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: e2e
@@ -69,18 +64,18 @@ jobs:
           cargo run --locked -p ottospace-mac --example speech_status -- --install || true
       # Finder is hosted only here: the runner's Finder has no windows of anyone's.
       - name: App-window tests
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.repeat == '0' }}
+        if: ${{ inputs.repeat == '0' }}
         env:
           OTTOSPACE_E2E_FINDER: '1'
           OTTOSPACE_SHARP_OUT: ${{ runner.temp }}/sharp
         run: cargo --locked e2e-apps --skip canarys
       # The canary's transcript, shown: what the recogniser heard, or why it skipped.
       - name: Transcript tests
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.repeat == '0' }}
+        if: ${{ inputs.repeat == '0' }}
         run: cargo --locked e2e-apps canarys --nocapture
       # To measure a flaky step: every attempt runs, and the step fails if any did.
       - name: One test, repeated
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.repeat != '0' }}
+        if: ${{ inputs.repeat != '0' }}
         env:
           REPEAT: ${{ inputs.repeat }}
           TEST: ${{ inputs.test }}

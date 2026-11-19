@@ -1,21 +1,25 @@
 name: CI
 
+# Pull requests and the merge queue: Linux only (`check`), no macOS runner. Pushes to main: also
+# the one macOS job (macos.yml: every suite), and an issue "main is red" while it fails. A pull
+# request gets a macOS run only by label (e2e.yml).
 on:
   pull_request:
-    # Text nobody compiles: no macOS runner for it. (`crates/**/*.md` is compiled in: not listed.)
+    # Text nobody compiles: no runner for it. (`crates/**/*.md` is compiled in: not listed.)
     paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
   # The merge queue's commit. No path filter: the queue tests every pull request.
   merge_group:
   push:
     branches: [main]
-    # Text nobody compiles: no macOS runner for it. (`crates/**/*.md` is compiled in: not listed.)
+    # Text nobody compiles: no runner for it. (`crates/**/*.md` is compiled in: not listed.)
     paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
 
 permissions:
   contents: read
 
-# A new push to the same PR or branch cancels the run it supersedes. A merge group's ref
-# (`gh-readonly-queue/main/pr-<n>-<sha>`) is its own: groups never cancel each other.
+# A new push to the same PR or branch cancels the run it supersedes: a burst of merges tests main's
+# newest tip. A merge group's ref (`gh-readonly-queue/main/pr-<n>-<sha>`) is its own: groups never
+# cancel each other.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -25,41 +29,48 @@ env:
 
 jobs:
   check:
-    # Apple Silicon. The build links macOS frameworks (ScreenCaptureKit, AppKit).
-    runs-on: macos-26
-    timeout-minutes: 60
+    # Linux: everything that needs no Mac. ottospace-mac and the shell compile only on macOS (their
+    # build scripts run Swift; GPUI's needs Apple's SDK): macos.yml checks them.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Rust toolchain
         run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy --target aarch64-apple-darwin
           rustup default stable
           rustc --version
-      # A merge group's ref is gone once it merges: its cache would only fill the quota.
+      # Linux's own cache, apart from macOS's `e2e` one. A merge group's ref is gone once it
+      # merges: its cache would only fill the quota.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
-      # ottospace-mac is not rustfmt-clean yet, so check only the crates that are.
+      # rustfmt needs no build: the shell is checked here too. ottospace-mac is not rustfmt-clean yet.
       - name: Format
         run: cargo fmt -p ottospace -p ottospace-core -p ottospace-sessions -p ottospace-agents --check
-      # Fails on errors and unused code (`-D unused`); other clippy warnings do not fail.
+      # Fails on errors and unused code (`-D unused`); other clippy warnings do not fail. A library's
+      # `pub` in a private module fails: as `pub(crate)` the dead-code check sees it.
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D unused
-      # A library's `pub` in a private module fails: as `pub(crate)` the dead-code check sees it.
-      - name: Unreachable pub in the libraries
         run: >-
-          cargo clippy -p ottospace-core -p ottospace-sessions -p ottospace-agents -p ottospace-mac
-          --all-targets --locked -- -D unused -D unreachable_pub
+          cargo clippy -p ottospace-core -p ottospace-sessions -p ottospace-agents --all-targets --locked
+          -- -D unused -D unreachable_pub
+      # The same crates as macOS compiles them (its `cfg`s, its libc), without linking: no Apple SDK.
+      - name: Clippy for macOS
+        run: >-
+          cargo clippy -p ottospace-core -p ottospace-sessions -p ottospace-agents --all-targets --locked
+          --target aarch64-apple-darwin -- -D unused -D unreachable_pub
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-machete@0.9.2
-      # A dependency no source names fails. False positives: `[package.metadata.cargo-machete]`.
+      # A dependency no source names fails: reads source only, every crate. False positives:
+      # `[package.metadata.cargo-machete]`.
       - name: Unused dependencies
         run: cargo machete --with-metadata
+      # The pure crates. The shell's and ottospace-mac's tests run in macos.yml.
       - name: Unit tests
-        run: cargo test --workspace --locked
+        run: cargo test -p ottospace-core -p ottospace-sessions -p ottospace-agents --locked
       # The SDK without the app: its types, and that it has a method for every request.
       # Node, not bun: Node 22.18+ runs TypeScript as it is, and setup-node is GitHub's own action.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -72,62 +83,71 @@ jobs:
           npm run typecheck
           node --test test/requests.test.ts test/parse.test.ts test/socket.test.ts
 
-  e2e:
-    # Needs a window server, which a hosted runner may lack, so it does not block.
-    runs-on: macos-26
-    timeout-minutes: 60
-    continue-on-error: true
+  # Main only: every suite on macOS. Not after `check`: main's macOS result is wanted even when
+  # its formatting fails, and the queue for a Mac is the long wait.
+  macos:
+    if: ${{ github.event_name == 'push' }}
+    uses: ./.github/workflows/macos.yml
+    permissions:
+      contents: read
+    with:
+      save-cache: true
+
+  # One issue, "main is red": opened or updated while main's macOS job fails, with the failed tests
+  # and the commits since the last green run; closed when it passes again.
+  main-red:
+    needs: macos
+    if: ${{ github.event_name == 'push' && (needs.macos.result == 'success' || needs.macos.result == 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: write
     steps:
+      # History for the range; nothing from the checkout is run.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustc --version
-      # The one cache of the dev build's dependencies: app-windows.yml, shots.yml and
-      # reliability.yml restore it by the same shared-key and never save. Saved here, on main
-      # only: this job builds the test targets and, in its last step, the plain binary shots needs.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: e2e
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Hosting off. Never cargo e2e-apps here: it needs Accessibility and Screen Recording.
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
-        with:
-          tool: cargo-nextest@0.9.149
-      # `cargo e2e` under nextest (`.config/nextest.toml`): each test in its own process, one at a
-      # time, up to three tries. One that passes on a retry is flaky: the summary says so.
-      - name: E2E
+          fetch-depth: 0
+      - name: Open, update or close "main is red"
         env:
-          OTTOSPACE_E2E_OUT: ${{ runner.temp }}/e2e
-        run: cargo nextest run -p ottospace --test e2e --run-ignored only --profile e2e --locked
-      - name: E2E summary
-        if: ${{ !cancelled() }}
-        env:
-          OUT: ${{ runner.temp }}/e2e
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULT: ${{ needs.macos.result }}
+          FAILED: ${{ needs.macos.outputs.failed }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          mkdir -p "$OUT"
-          cp target/nextest/e2e/junit.xml "$OUT/" || true
-          python3 -I scripts/e2e-report "$OUT" --markdown "$OUT/summary.md" || true
-          cat "$OUT/summary.md" >> "$GITHUB_STEP_SUMMARY"
-      # Each failed attempt's folder: state, timeline, trace, stack sample, screenshot.
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !cancelled() }}
-        with:
-          name: e2e-failures
-          path: ${{ runner.temp }}/e2e/failures
-          if-no-files-found: ignore
-          retention-days: 14
-      # The TypeScript client against a private instance, as cargo e2e runs one: hosting off, its
-      # own socket, no user folder. No npm install: the SDK has no runtime dependencies.
-      - name: SDK tests
-        if: ${{ !cancelled() }}
-        working-directory: sdk
-        run: |
-          cargo build -p ottospace --locked
-          npm test
+          number="$(gh issue list --state open --search 'in:title "main is red"' --json number,title \
+            --jq '[.[] | select(.title == "main is red")][0].number // empty')"
+          if [ "$RESULT" = success ]; then
+            if [ -n "$number" ]; then gh issue close "$number" --comment "Green again at $GITHUB_SHA: $RUN_URL"; fi
+            exit 0
+          fi
+          last="$(gh run list --workflow ci.yml --branch main --event push --status success --limit 1 \
+            --json headSha --jq '.[0].headSha // empty')"
+          if [ -n "$last" ] && git cat-file -e "$last^{commit}" 2>/dev/null; then
+            range="$(git log --oneline "$last..HEAD")"
+          else
+            last="none found"; range="$(git log --oneline -1)"
+          fi
+          body="$(mktemp)"
+          {
+            echo "main's macOS job failed at $GITHUB_SHA: [run]($RUN_URL). Each failed e2e test's folder is in its artifacts."
+            echo
+            echo "### Failed"
+            echo '```'
+            echo "${FAILED:-see the run}"
+            echo '```'
+            echo
+            echo "### Commits since the last green run ($last)"
+            echo '```'
+            echo "$range"
+            echo '```'
+          } > "$body"
+          { echo "## main is red"; echo; cat "$body"; } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body-file "$body"
+          else
+            gh issue create --title "main is red" --body-file "$body"
+          fi

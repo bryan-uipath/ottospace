@@ -1,0 +1,207 @@
+name: macOS
+
+# The one macOS job: what Linux cannot build or run. Called by ci.yml on pushes to main (every
+# e2e test) and by e2e.yml on a labelled pull request (the tests its diff selects). One build:
+# clippy, unit tests, e2e, the SDK against a private instance, then the app-window suite. Each
+# suite is its own step that does not stop the next; the last step fails the job if any failed,
+# and the summary says which.
+on:
+  workflow_call:
+    inputs:
+      subset:
+        description: Only the e2e tests the diff selects (scripts/e2e-for), when it exists
+        type: boolean
+        default: false
+      apps:
+        description: Also run cargo e2e-apps
+        type: boolean
+        default: true
+      save-cache:
+        description: Save the shared dev-build cache (main only)
+        type: boolean
+        default: false
+    outputs:
+      failed:
+        description: The failed steps and tests, one per line; empty when all passed
+        value: ${{ jobs.macos.outputs.failed }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    # Apple Silicon. The build links macOS frameworks (ScreenCaptureKit, AppKit) and runs Swift.
+    runs-on: macos-26
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      failed: ${{ steps.verdict.outputs.failed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # A pull request's merge commit and its base: what scripts/e2e-for diffs.
+          fetch-depth: 2
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+          rustc --version
+      # The one cache of the dev build's dependencies: app-windows.yml, shots.yml, bench.yml and
+      # reliability.yml restore it by the same shared-key and never save. Saved on main only, red
+      # or green: the last step fails the job whenever a suite fails.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: e2e
+          save-if: ${{ inputs.save-cache }}
+          cache-on-failure: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.149
+      - name: Logs folder
+        run: mkdir -p "$RUNNER_TEMP/logs" "$RUNNER_TEMP/e2e" "$RUNNER_TEMP/apps"
+      # The workspace for macOS: what ci.yml's Linux `check` cannot compile (ottospace-mac, the
+      # shell). Errors and unused code fail; other warnings do not.
+      - name: Clippy
+        id: clippy
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          { cargo clippy --workspace --all-targets --locked -- -D unused &&
+            cargo clippy -p ottospace-mac --all-targets --locked -- -D unused -D unreachable_pub; } 2>&1 |
+            tee "$RUNNER_TEMP/logs/clippy.log"
+      # Every crate, the pure ones too: macOS paths and its case-insensitive file system.
+      - name: Unit tests
+        id: unit
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo test --workspace --locked 2>&1 | tee "$RUNNER_TEMP/logs/unit.log"
+      # `cargo e2e` under nextest (`.config/nextest.toml`): each test in its own process, one at a
+      # time, up to three tries. One that passes on a retry is flaky: the summary says so. On a
+      # pull request, the tests scripts/e2e-for selects from the diff, when the script exists.
+      - name: E2E
+        id: e2e
+        continue-on-error: true
+        env:
+          OTTOSPACE_E2E_OUT: ${{ runner.temp }}/e2e
+          SUBSET: ${{ inputs.subset }}
+        run: |
+          set -o pipefail
+          if [ "$SUBSET" = true ] && [ -x scripts/e2e-for ]; then
+            scripts/e2e-for "$(git rev-parse HEAD^1)" --run --ci-size
+          else
+            [ "$SUBSET" = true ] && echo "scripts/e2e-for not here: every e2e test"
+            cargo nextest run -p ottospace --test e2e --run-ignored only --profile e2e --locked
+          fi 2>&1 | tee "$RUNNER_TEMP/logs/e2e.log"
+      - name: E2E summary
+        if: ${{ !cancelled() }}
+        env:
+          OUT: ${{ runner.temp }}/e2e
+        run: |
+          cp target/nextest/e2e/junit.xml "$OUT/" 2>/dev/null || cp "$RUNNER_TEMP/logs/e2e.log" "$OUT/log"
+          python3 -I scripts/e2e-report "$OUT" --markdown "$OUT/summary.md" --flaky "$OUT/failed.md" || true
+          { echo "## cargo e2e"; cat "$OUT/summary.md" 2>/dev/null; } >> "$GITHUB_STEP_SUMMARY"
+      # Each failed attempt's folder: state, timeline, trace, stack sample, screenshot.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: e2e-failures
+          path: ${{ runner.temp }}/e2e/failures
+          if-no-files-found: ignore
+          retention-days: 14
+      # The TypeScript client against a private instance, as cargo e2e runs one: hosting off, its
+      # own socket, no user folder. No npm install: the SDK has no runtime dependencies.
+      - name: SDK tests
+        id: sdk
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        working-directory: sdk
+        run: |
+          cargo build -p ottospace --locked
+          npm test
+      # `cargo e2e-apps`: real canary windows, hosted. After cargo e2e, never beside it: e2e hosts
+      # no window, this one takes the keyboard. The image grants bash Accessibility and Screen
+      # Recording. The tests post a few real pointer events with cliclick.
+      - name: cliclick
+        if: ${{ inputs.apps && !cancelled() }}
+        run: command -v cliclick || HOMEBREW_NO_AUTO_UPDATE=1 brew install cliclick
+      # Apple's on-device speech model, for the canary's transcript test: the system downloads it
+      # into its own store, on this runner only (a test run downloads none). If it cannot, the
+      # test says it skipped.
+      - name: Speech model
+        if: ${{ inputs.apps && !cancelled() }}
+        run: cargo run --locked -p ottospace-mac --example speech_status -- --install || true
+      # Finder is hosted only here: the runner's Finder has no windows of anyone's.
+      - name: App-window tests
+        id: apps
+        if: ${{ inputs.apps && !cancelled() }}
+        continue-on-error: true
+        env:
+          OTTOSPACE_E2E_FINDER: '1'
+          OTTOSPACE_SHARP_OUT: ${{ runner.temp }}/sharp
+        run: |
+          set -o pipefail
+          cargo --locked e2e-apps --skip canarys 2>&1 | tee "$RUNNER_TEMP/apps/log"
+      # The canary's transcript, shown: what the recogniser heard, or why it skipped.
+      - name: Transcript tests
+        id: transcript
+        if: ${{ inputs.apps && !cancelled() }}
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo --locked e2e-apps canarys --nocapture 2>&1 | tee "$RUNNER_TEMP/logs/transcript.log"
+      # The sharpness test's crops: a parked pane's picture, and its live window cropped alike.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ inputs.apps && !cancelled() }}
+        with:
+          name: sharp
+          path: ${{ runner.temp }}/sharp
+          if-no-files-found: ignore
+      # One line per suite in the summary, and the failed tests by name. Fails the job if any failed.
+      - name: Verdict
+        id: verdict
+        if: ${{ !cancelled() }}
+        env:
+          CLIPPY: ${{ steps.clippy.outcome }}
+          UNIT: ${{ steps.unit.outcome }}
+          E2E: ${{ steps.e2e.outcome }}
+          SDK: ${{ steps.sdk.outcome }}
+          APPS: ${{ steps.apps.outcome }}
+          TRANSCRIPT: ${{ steps.transcript.outcome }}
+          OUT: ${{ runner.temp }}
+        run: |
+          failed="$OUT/failed.txt"
+          : > "$failed"
+          # libtest's closing list: the names indented under the last `failures:`.
+          libtest_failures() { awk '/^failures:$/{n=1; next} /^test result/{n=0} n && /^    [A-Za-z0-9_:]+$/{print "  " $1}' "$1" 2>/dev/null | sort -u; }
+          {
+            echo "## Suites"
+            echo
+            echo "| Suite | Outcome |"
+            echo "|---|---|"
+            for s in "clippy:$CLIPPY" "unit tests:$UNIT" "cargo e2e:$E2E" "SDK tests:$SDK" "cargo e2e-apps:$APPS" "transcript tests:$TRANSCRIPT"; do
+              echo "| ${s%%:*} | ${s#*:} |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$CLIPPY" = failure ] && echo "clippy" >> "$failed"
+          if [ "$UNIT" = failure ]; then echo "unit tests" >> "$failed"; libtest_failures "$OUT/logs/unit.log" >> "$failed"; fi
+          if [ "$E2E" = failure ]; then
+            echo "cargo e2e" >> "$failed"
+            sed -n 's/^- /  /p' "$OUT/e2e/failed.md" 2>/dev/null >> "$failed"
+          fi
+          [ "$SDK" = failure ] && echo "SDK tests" >> "$failed"
+          if [ "$APPS" = failure ]; then echo "cargo e2e-apps" >> "$failed"; libtest_failures "$OUT/apps/log" >> "$failed"; fi
+          [ "$TRANSCRIPT" = failure ] && echo "transcript tests" >> "$failed"
+          { echo 'failed<<EOF'; cat "$failed"; echo EOF; } >> "$GITHUB_OUTPUT"
+          if [ -s "$failed" ]; then
+            { echo; echo "### Failed"; echo; echo '```'; cat "$failed"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi

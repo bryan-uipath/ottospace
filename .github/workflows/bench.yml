@@ -54,7 +54,7 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-      # The dev build, as ci.yml's e2e job builds it: reads the cache it saves on main, saves none.
+      # The dev build, as macos.yml builds it: reads the cache it saves on main, saves none.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: e2e

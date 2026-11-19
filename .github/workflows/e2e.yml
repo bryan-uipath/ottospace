@@ -1,0 +1,32 @@
+name: E2E
+
+# A pull request's one macOS run, by label: `pr-e2e` runs macos.yml with the e2e tests the diff
+# selects (`scripts/e2e-for`; every e2e test until it exists), `pr-e2e-apps` adds `cargo
+# e2e-apps`. Both labels start the same one job. Without a label no Mac is taken: ci.yml's Linux
+# `check` is a pull request's only check. Not a required check.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
+
+# pull_request, never pull_request_target: a fork's run gets a read-only token and no secrets.
+permissions: {}
+
+# A run that tests nothing (no label, or another label added) gets a group of its own, so it
+# cannot cancel one that does.
+concurrency:
+  group: e2e-${{ github.event.pull_request.number }}${{ (!(contains(github.event.pull_request.labels.*.name, 'pr-e2e') || contains(github.event.pull_request.labels.*.name, 'pr-e2e-apps')) || (github.event.action == 'labeled' && github.event.label.name != 'pr-e2e' && github.event.label.name != 'pr-e2e-apps')) && format('-skip-{0}', github.run_id) || '' }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    # With a label only. Adding another label tests nothing.
+    if: >-
+      (contains(github.event.pull_request.labels.*.name, 'pr-e2e') || contains(github.event.pull_request.labels.*.name, 'pr-e2e-apps'))
+      && (github.event.action != 'labeled' || github.event.label.name == 'pr-e2e' || github.event.label.name == 'pr-e2e-apps')
+    uses: ./.github/workflows/macos.yml
+    permissions:
+      contents: read
+    with:
+      subset: true
+      apps: ${{ contains(github.event.pull_request.labels.*.name, 'pr-e2e-apps') }}
