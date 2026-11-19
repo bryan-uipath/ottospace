@@ -5292,6 +5292,50 @@ fn random_actions_keep_the_model_sound_for_long() {
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
 
+/// The user's undo takes the tab of the workspace a "Close?" asks about: the question goes in
+/// that step, not at a client's next one (it was dropped before the undo's tabs settled).
+#[test]
+fn seed_19637_a_close_question_goes_with_the_undo_not_a_clients_step() {
+    replay(&[
+        Action::TaskAdd {
+            title: "a".into(),
+            priority: 2,
+            state: State::Running,
+            tab: None,
+            assign: Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] },
+        }
+        .sent_by(Origin::User),
+        Action::TaskAdd {
+            title: "b".into(),
+            priority: 1,
+            state: State::NeedsYou,
+            tab: None,
+            assign: Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] },
+        }
+        .sent_by(Origin::User),
+        Action::TaskFromLine {
+            line: "fix zoom #canvas >app p1".into(),
+            known: Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] },
+            open: false,
+        }
+        .sent_by(Origin::User),
+        Action::SpaceOpen { space: Owner::Task { id: 3 } }.sent_by(Origin::User),
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::RowDismiss { id: 3 }.sent_by(Origin::Socket),
+        Action::CloseTabAsked {
+            index: None,
+            running: vec![
+                Running { pane: 1, program: None, background: false },
+                Running { pane: 3, program: None, background: false },
+            ],
+        }
+        .sent_by(Origin::User),
+        Action::TaskUndo.sent_by(Origin::User),
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::Socket),
+    ])
+    .unwrap();
+}
+
 /// The user's click on the shown task, over its brief, leaves the drawer open: the check
 /// expected it to collapse, as without a brief.
 #[test]
