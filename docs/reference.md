@@ -716,6 +716,14 @@ window; Screen Recording), then lays it over the window:
   the keyboard. Several marks, a comment each. A click in a box or on a card's comment goes back
   to it; × removes the mark. ↵ or Esc ends a comment; Esc again cancels the report.
 - App panes (other apps' windows) are blanked unless you tick Include app panes.
+- **Send to an agent** (⌘↵) files a task "Bug: <your first comment>" with your default agent,
+  in a new worktree of that repository (`<worktrees_dir>/<repo>/bug-…`, a new branch from its
+  HEAD; the repository need not be in Repos); the agent starts there once git has made it. Its
+  brief, in `~/.ottospace/materials/<task>-<word>/`: the picture (`report.png`) and a copy with
+  the marks (`report.annotated.png`), each mark's place and your comment, and, fenced as
+  untrusted data, the build, the OS version, what was drawn under each mark (control ids, pane
+  numbers and kinds, rects: no text) and the event log's last 50 lines (names and numbers only).
+  No folder for worktrees: nothing is filed, and the notice bar says so.
 - The picture may show anything ottospace draws at that moment (a meeting title, a transcript, a
   terminal's text). It stays on this Mac.
 - Only your click or key starts, marks or cancels a report: a socket client's key, click or

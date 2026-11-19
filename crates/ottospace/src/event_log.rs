@@ -43,6 +43,16 @@ fn write(event: &str, fields: Value, home: Option<&Path>) {
     }
 }
 
+/// The log's last `most` lines as written (`log.1`'s before `log`'s), for a bug report's brief,
+/// which keeps their names and numbers only. None kept (a test run with no folder): none.
+pub(crate) fn last_lines(most: usize) -> Vec<String> {
+    let Some(home) = config::get().home.clone() else { return Vec::new() };
+    let read = |name: &str| crate::collect::read_plain(&home.join(name), LIMIT * 2).unwrap_or_default();
+    let text = String::from_utf8_lossy(&[read(OLD), read(NAME)].concat()).into_owned();
+    let lines: Vec<&str> = text.lines().filter(|line| !line.is_empty()).collect();
+    lines[lines.len().saturating_sub(most)..].iter().map(|line| line.to_string()).collect()
+}
+
 /// Every panic, where it happened (`crate/src/file.rs:line`) and on which thread; never its
 /// message, which may carry any text. And GPUI's own errors and warnings from its macOS layer
 /// (`log_err`), which went nowhere: where, and what it said only when that is fixed words and a

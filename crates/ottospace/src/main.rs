@@ -2179,8 +2179,7 @@ impl Workspace {
                 Effect::CaptureDropped { draft, material } => self.drop_capture(draft, *material),
                 Effect::CaptureKept { draft, dir, brief } => self.keep_capture(draft, dir, brief, cx),
                 Effect::BugDropped { word } => self.bug_dropped(word),
-                // Send comes with the brief's files.
-                Effect::BugFiled { .. } => {}
+                Effect::BugFiled { word, dir, blank, brief } => self.bug_file(word, dir, blank, brief, cx),
                 Effect::Quit => {
                     // A moment later, so a socket `quit` gets its reply first; one still held for
                     // a frame goes now.
@@ -5594,7 +5593,11 @@ impl Workspace {
             let repos = repos::scan();
             match result {
                 // Made from a repository listed only as a worktree of another: not in the list to open.
-                Ok(path) if !repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == path)) => {
+                // A bug report's repository need not be listed (`developer.ottospace_repo`).
+                Ok(path)
+                    if !self.model.bug_worktree(&asked)
+                        && !repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == path)) =>
+                {
                     self.error = Some(format!("Made {path}: its repository is not listed"));
                     self.dispatch(Action::WorktreeFailed { asked, fresh, repos }, Origin::System, window, cx);
                 }
@@ -7809,7 +7812,9 @@ impl Workspace {
             }))
             // ⌘↵ is the new-task box's "start" while it has the keyboard; in a conversation, its Done.
             .on_action(cx.listener(|this, _: &TalkGo, window, cx| {
-                if this.model.compose_keys() {
+                if this.model.bug.is_some() {
+                    this.bug_send(window, cx);
+                } else if this.model.compose_keys() {
                     this.dispatch(Action::ComposeSubmit { open: true }, this.input, window, cx);
                 } else if let Some(Action::TaskDone { id }) = this.model.done_key() {
                     this.done(id, window, cx);

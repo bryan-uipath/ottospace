@@ -14725,3 +14725,59 @@ fn bug_the_users_drag_marks_a_box_with_a_comment_and_a_client_types_none() {
     otto.user_key("escape");
     assert!(otto.call(json!({"cmd": "state"}))["bug"]["report"].is_null());
 }
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn bug_send_files_a_task_in_a_new_worktree_with_a_brief_of_no_titles() {
+    let (repo, home) = bug_setup("send");
+    let root = support::temp(&format!("ottospace-e2e-bug-send-agent-{}", std::process::id()));
+    let (bin, record) = (root.join("bin"), root.join("record"));
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&record).unwrap();
+    // The agents crate's stand-in, as `claude`: it records what it was given.
+    let fake = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-agents/tests/fakes/claude");
+    std::fs::copy(&fake, bin.join("claude")).unwrap();
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
+        ("FAKE_DIR", record.to_str().unwrap()),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ];
+    let otto = Otto::launch_with("bug-send", &env);
+    // A made-up title on screen: the brief holds none.
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "task_new", "line": "Secretplan meeting"}));
+    let pane = otto.bounds(&[1])[0];
+    otto.user_key("cmd-ctrl-b");
+    bug_report(&otto);
+    otto.user_drag(at(pane, 0.1, 0.3), at(pane, 0.5, 0.6));
+    otto.user_key("t a b s space f l i c k e r");
+    // A client's ⌘↵ sends nothing.
+    otto.call(json!({"cmd": "key", "keys": "cmd-enter"}));
+    let tasks = |o: &Otto| o.call(json!({"cmd": "state"}))["state"]["tasks"]["list"].as_array().unwrap().clone();
+    assert_eq!(tasks(&otto).len(), 1, "a client filed the report");
+    otto.user_key("cmd-enter");
+    let task = otto.wait_for("the bug's task", |o| tasks(o).into_iter().find(|t| t["title"] == "Bug: tabs flicker"));
+    assert_eq!(task["repo"].as_str().map(Path::new), Some(repo.as_path()), "{task}");
+    let file = task["materials"][0].as_str().expect("its brief's folder").to_string();
+    let dir = home.join("materials").join(file.split('/').next().unwrap());
+    // The worktree, made from the repository's HEAD on a new branch, not listed in Repos.
+    let worktree = home.canonicalize().unwrap().join("worktrees/ottospace/bug-tabs-flicker");
+    otto.wait_for("the worktree", |_| worktree.join(".git").is_file().then_some(()));
+    // The agent starts there with the brief.
+    let stdin = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default();
+    otto.wait_for("the agent", |_| stdin().contains("brief.md").then_some(()));
+    let brief = std::fs::read_to_string(dir.join("brief.md")).unwrap();
+    assert!(brief.contains("1. box over x") && brief.contains("\"tabs flicker\""), "{brief}");
+    assert!(brief.contains("| build: ottospace") && brief.contains("<<<captured "), "{brief}");
+    assert!(!brief.contains("Secretplan") && !brief.contains("meeting"), "a title in the brief: {brief}");
+    let json = std::fs::read_to_string(dir.join("brief.json")).unwrap();
+    assert!(json.contains("\"untrusted\": true") && !json.contains("Secretplan"), "{json}");
+    // The picture and its marked copy, if the window could be pictured here.
+    if brief.contains("report.annotated.png") {
+        otto.wait_for("the pictures", |_| dir.join("report.annotated.png").is_file().then_some(()));
+        assert!(std::fs::read(dir.join("report.png")).unwrap().starts_with(b"\x89PNG"));
+    }
+    assert!(otto.call(json!({"cmd": "state"}))["bug"]["report"].is_null());
+}
