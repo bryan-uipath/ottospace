@@ -269,6 +269,7 @@ impl Model {
     /// touched. `Some`: why it was kept.
     fn remove_worktree(&mut self, id: TaskId, effects: &mut Vec<Effect>) -> Option<String> {
         let made = self.tasks.get(id)?.made.clone().filter(|made| !made.removed)?;
+        self.own_worktree(&made)?;
         // Listed, on its own branch: one the user made in its place since, or switched, is not its.
         let mut listed = self.repos.iter().filter(|r| r.path == made.repo).flat_map(|r| &r.worktrees);
         if !listed.any(|w| w.path == made.path && w.branch.as_deref() == Some(made.branch.as_str())) {
@@ -342,23 +343,31 @@ impl Model {
         self.tasks.get(*id)?.made.as_ref()
     }
 
+    /// The worktrees folder, if the task's record names a place in it as the box makes one
+    /// (`<worktrees_dir>/<repo>/<branch>`, git's `path` ending so), of a listed repository, on a
+    /// branch git takes. The record is read from the tasks folder, maybe a shared notes
+    /// repository: its own `root` is not trusted, the setting is.
+    fn own_worktree(&self, made: &crate::tasks::Made) -> Option<String> {
+        let root = self.repo_dirs.worktrees.clone()?;
+        let place = made.asked.strip_prefix(root.trim_end_matches('/'))?; // `/app/fix-zoom`
+        let ends = made.path.strip_suffix(place).is_some_and(|head| !head.is_empty());
+        let listed = self.repos.iter().any(|r| r.path == made.repo);
+        let branch = crate::repos::check_branch(&made.branch).is_ok();
+        (crate::repos::in_worktrees(&made.asked, &root) && ends && listed && branch).then_some(root)
+    }
+
     /// Undo of a Done that removed its worktree: git adds it back on its branch, where it was.
-    /// True if one is asked for. In the worktrees folder it was made in, whatever the setting says now.
+    /// True if one is asked for. Only in the worktrees folder the setting names now.
     pub(super) fn readd_worktree(&mut self, id: TaskId, effects: &mut Vec<Effect>) -> bool {
         let Some(made) = self.tasks.get(id).and_then(|t| t.made.clone()).filter(|made| made.removed) else {
             return false;
         };
-        // A record read from disk is not trusted: a branch git takes, a listed repository, `<root>/<repo>/<branch>`.
-        let inside = crate::repos::in_worktrees(&made.asked, &made.root);
-        let listed = self.repos.iter().any(|r| r.path == made.repo);
-        if !inside || !listed || crate::repos::check_branch(&made.branch).is_err() {
-            return false;
-        }
+        let Some(root) = self.own_worktree(&made) else { return false };
         if self.finish.readding.contains(&made.asked) {
             return true;
         }
         self.finish.readding.push(made.asked.clone());
-        let crate::tasks::Made { repo, branch, asked, root, .. } = made;
+        let crate::tasks::Made { repo, branch, asked, .. } = made;
         effects.push(Effect::AddWorktree { repo, branch, path: asked, root, fresh: false });
         true
     }
@@ -865,8 +874,7 @@ mod tests {
         assert_eq!((m.space_worktree(&of), state(&m, 1)), (Some(WORKTREE), Some(State::NeedsYou)));
     }
 
-    /// A done task opened again from Done today: its worktree back first, in the folder it was
-    /// made in, then its session goes on there.
+    /// A done task opened again from Done today: its worktree back first, then its session goes on there.
     #[test]
     fn a_done_task_opened_again_gets_its_worktree_back_then_resumes() {
         let mut m = in_its_worktree();
@@ -875,9 +883,6 @@ mod tests {
         m.update(Action::AgentExited { task: ONE }.sent_by(Origin::System));
         m.update(Action::SetRepos { repos: app(&[]) }.sent_by(Origin::System));
         m.update(Action::Tick { now: 99_000 }.sent_by(Origin::System));
-        // The setting moved since: it goes back where it was made.
-        let dirs = crate::repos::RepoDirs { worktrees: Some("/elsewhere".into()), ..Default::default() };
-        m.update(Action::SetRepoDirs { dirs });
         let effects = m.update(Action::TaskTalk { id: 1 });
         assert!(adds_back(&effects), "{effects:?}");
         assert!(
@@ -896,6 +901,17 @@ mod tests {
         );
         let resumed = effects.iter().any(|e| matches!(e, Effect::StartAgent { start: crate::agents::Start::Resume { .. }, cwd: Some(cwd), .. } if cwd == WORKTREE));
         assert!(resumed, "{effects:?}");
+    }
+
+    /// The setting moved since its Done: not added back, outside the worktrees folder it names.
+    #[test]
+    fn a_worktree_made_in_another_worktrees_folder_is_not_added_back() {
+        let mut m = in_its_worktree();
+        m.update(Action::TaskDone { id: 1 });
+        removed(&mut m, None);
+        let dirs = crate::repos::RepoDirs { worktrees: Some("/elsewhere".into()), ..Default::default() };
+        m.update(Action::SetRepoDirs { dirs });
+        assert!(!adds_back(&m.update(Action::DoneUndo)));
     }
 
     /// Opened again, then put away (Later) before git adds its worktree back: no resume.
@@ -950,6 +966,45 @@ mod tests {
         };
         m.update(Action::SetTerminals { terminals: vec![info], home: None }.sent_by(Origin::System));
         assert!(!removes(&m.update(Action::TaskDone { id: 1 })));
+    }
+
+    /// A task read from the tasks folder (maybe a shared notes repository) whose record names a
+    /// worktree elsewhere: `root` and all, it is not trusted.
+    fn planted(state: &str, removed: bool, path: &str, root: &str) -> Model {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: app(&[path]) });
+        let dirs = crate::repos::RepoDirs { worktrees: Some(ROOT.into()), ..Default::default() };
+        m.update(Action::SetRepoDirs { dirs });
+        let kept = format!(
+            r#"{{"id":1,"title":"x","state":"{state}","priority":3,"repo":"{path}","made":{{"repo":"/code/app",
+                "branch":"fix-login","path":"{path}","asked":"{path}","root":"{root}","removed":{removed}}}}}"#
+        );
+        let task: crate::tasks::Task = serde_json::from_str(&kept).expect("a task as kept");
+        m.update(Action::RestoreTasks { tasks: vec![task], floor: 1 }.sent_by(Origin::System));
+        m
+    }
+
+    /// Opened again: no worktree is made outside the worktrees folder the settings name.
+    #[test]
+    fn a_kept_record_adds_back_no_worktree_outside_the_worktrees_folder() {
+        let mut m = planted("done", true, "/Users/me/Dropbox/app/fix-login", "/Users/me/Dropbox");
+        let effects = m.update(Action::TaskTalk { id: 1 });
+        assert!(!effects.iter().any(|e| matches!(e, Effect::AddWorktree { .. })), "{effects:?}");
+    }
+
+    /// Done: a listed worktree outside the worktrees folder is not the task's to remove.
+    #[test]
+    fn a_kept_record_removes_no_worktree_outside_the_worktrees_folder() {
+        let mut m = planted("needs_you", false, "/code/app-hand-made", "/code");
+        let effects = m.update(Action::TaskDone { id: 1 });
+        assert!(!effects.iter().any(|e| matches!(e, Effect::RemoveWorktree { .. })), "{effects:?}");
+        // Its `asked` inside, git's `path` not that place: not the one the box made there.
+        let mut m = planted("needs_you", false, "/code/app-2", ROOT);
+        if let Some(made) = m.tasks.list[0].made.as_mut() {
+            made.asked = WORKTREE.into();
+        }
+        let effects = m.update(Action::TaskDone { id: 1 });
+        assert!(!effects.iter().any(|e| matches!(e, Effect::RemoveWorktree { .. })), "{effects:?}");
     }
 
     /// New task here only while the done task's workspace is on show.

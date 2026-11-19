@@ -299,7 +299,7 @@ pub struct Made {
     pub branch: String,
     pub path: String,
     pub asked: String,
-    /// The worktrees folder it was made in (`worktrees_dir` then): where an Undo adds it back.
+    /// The worktrees folder it was made in (`worktrees_dir` then). Not trusted: read from disk.
     #[serde(default)]
     pub root: String,
     #[serde(default)]

@@ -128,7 +128,7 @@ pub fn repo_dirs() -> RepoDirs {
 
 /// Where the Repos section's + makes worktrees: `worktrees_dir` (`~` expanded), else `worktrees` in
 /// the ottospace folder; a relative path is inside it. `None` in a test run with no folder of its own.
-fn worktrees_dir() -> Option<String> {
+pub fn worktrees_dir() -> Option<String> {
     let home = get().home.as_ref()?;
     let named = live().worktrees_dir.as_ref().map(|dir| home.join(expand_home(dir, &user_home())));
     let dir = named.unwrap_or_else(|| home.join("worktrees"));

@@ -2061,10 +2061,13 @@ impl Workspace {
                 Effect::OpenPr { .. } => {}
                 Effect::AddWorktree { repo, branch, path, root, fresh } => {
                     let done = self.worktrees.0.clone();
-                    worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), *fresh, done);
+                    // Only in the folder the settings name now, whatever the core was told.
+                    let root = Some(root.clone()).filter(|root| config::worktrees_dir().as_ref() == Some(root));
+                    worktree::start(repo.clone(), branch.clone(), path.clone(), root, *fresh, done);
                 }
                 Effect::RemoveWorktree { task, repo, path } => {
-                    worktree::start_remove(*task, repo.clone(), path.clone(), self.removals.0.clone());
+                    let root = config::worktrees_dir();
+                    worktree::start_remove(*task, repo.clone(), path.clone(), root, self.removals.0.clone());
                 }
                 Effect::Notice { text } => (self.error, self.refused) = (Some(text.clone()), Some(text.clone())),
                 Effect::Seal { task } => self.seal_start(*task),
