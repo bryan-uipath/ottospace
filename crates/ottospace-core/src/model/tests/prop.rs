@@ -48,6 +48,8 @@ const HEARD: &str = "HEARDWORDS";
 const SLOT_SEEN: &str = "SLOTSEEN";
 /// In the title of every window the shell hosts in a pane: may reach the state, never a slot.
 const HOSTED: &str = "HOSTEDTITLE";
+/// In the title of every window an app pane offers: never in the state.
+const OFFERED: &str = "OFFEREDTITLE";
 const LISTEN_IDS: &[&str] = &["t1", "t2", ""];
 /// Keys in a viewer: counts, moves, ⌃G, and others.
 const VIEWER_KEYS: &[&str] = &["j", "k", "g", "G", "0", "1", "9", "escape", "ctrl-d", "ctrl-u", "space", "ctrl-g", "x"];
@@ -124,6 +126,12 @@ impl Gen<'_> {
             subrole: self.rng.pick(&["AXStandardWindow", "AXStandardWindow", "AXDialog"]).into(),
             frame,
         }
+    }
+
+    /// A window an app pane offers, more often than not.
+    fn offered(&mut self) -> u32 {
+        let real: Vec<u32> = self.m.offers.iter().map(|offer| offer.window).collect();
+        self.one_of(&real, |g| g.rng.below(13) as u32)
     }
 
     /// A new window the shell adopts, of a slot's app half the time, with its facts.
@@ -1613,6 +1621,17 @@ const MAKERS: &[Make] = &[
     SLOT_MAKERS[8],
     SLOT_MAKERS[9],
     SLOT_MAKERS[10],
+    // A new window offered by its app's pane, the user's take or wave, and its close.
+    |g| Action::WindowOffered {
+        pane: g.app_pane(),
+        pid: g.rng.below(3) as i32,
+        window: g.rng.pick(&[1, 2, 10, 11, 12]),
+        title: format!("{OFFERED} {}", g.name(&["w1", "general"])),
+        why: "no slot for this window".into(),
+    },
+    |g| Action::OfferAccept { window: g.offered() },
+    |g| Action::OfferDismiss { window: g.offered() },
+    |g| Action::OfferGone { window: g.offered() },
     // Random flags: what a feature turned off shows goes, and its actions do nothing (`Run::step`).
     |g| {
         let on: Vec<&str> = features::ALL.into_iter().filter(|_| g.rng.coin()).map(Feature::name).collect();
@@ -1754,6 +1773,7 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 
 fn check(m: &Model) -> Result<(), String> {
     check_slots(m)?;
+    check_offers(m)?;
     check_viewers(m)?;
     // An owned pane holds an app's window; only an owned pane's unsaved changes are kept.
     for pane in m.panes.iter().filter(|p| p.owned) {
@@ -2664,6 +2684,22 @@ fn check_slots(m: &Model) -> Result<(), String> {
         ensure!(run.offered.is_none() || run.offered != run.pending, "slot {id} offers what it asked for");
         ensure!(run.matching == run.slot.matching, "slot {id}'s matching");
     }
+    Ok(())
+}
+
+/// An offered window is in no pane, offered once, with a chip in a pane that exists; its title is
+/// never in the state.
+fn check_offers(m: &Model) -> Result<(), String> {
+    for (at, offer) in m.offers.iter().enumerate() {
+        let held = m.panes.iter().any(|p| matches!(p.kind, Kind::App { window, .. } if window == offer.window));
+        ensure!(!held, "offered window {} is in a pane", offer.window);
+        // Its chip is in a pane that exists: its app's, or an empty one that waits for it.
+        let shown = m.pane(offer.pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }) || m.offer_waits(offer.pane));
+        ensure!(shown, "window {} offered in pane {}, which shows no chip", offer.window, offer.pane);
+        ensure!(m.offers[..at].iter().all(|o| o.window != offer.window), "window {} offered twice", offer.window);
+    }
+    let state = serde_json::to_string(m).unwrap_or_default();
+    ensure!(!state.contains(OFFERED), "an offered window's title reached the state");
     Ok(())
 }
 
@@ -4104,6 +4140,11 @@ impl Run {
                         });
                         ensure!(may && shown && !front && !old, "a look took {window} into slot {pane}");
                     }
+                }
+                // A window an app opened goes in a pane only by the user's Put in a pane.
+                Effect::HostOffer { window, .. } => {
+                    let users = origin == Origin::User && action == Action::OfferAccept { window: *window };
+                    ensure!(users, "{origin:?}'s {action:?} put offered window {window} in a pane");
                 }
                 Effect::GiveBack { pane } => {
                     ensure!(origin == Origin::User, "{origin:?}'s {action:?} gave back {pane}'s window");

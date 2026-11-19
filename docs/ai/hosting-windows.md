@@ -90,30 +90,59 @@ the on-screen rate while parked.
 ## Pop-ups: a new window that does not split
 
 A new window of a hosted app (`adopt_new_windows`, every tick) used to split its app's pane if it
-was standard: a Zoom dialog halved Zoom's pane and cut its main window off. Now `rules::place`
-judges it once, on facts the shell reads (`AXSubrole`, `AXModal`, `AXRole`/`AXParent` for a sheet,
-its size, the app pane's size, the width that pane's window has refused to go below):
+was standard and not small: a Zoom dialog halved Zoom's pane, and in a real call the owner ended up
+with "3 windows and 1 stays a popup while 2 end up in splits… i just don't understand the
+criteria". The size rule judged each window once, at first sight; nothing on screen said why.
 
-- **Split**: a standard window that is not small, or any window a `"do": "split"` rule selects.
-- **Float**: a dialog or panel subrole, a modal window, a standard window under 600×400 or under
-  half the pane both ways, one whose split would leave the pane narrower than its window refused
-  to go, or a `"do": "float"` rule. No pane, no stream: the window is `AXRaise`d once without
+Now **no window goes in a pane unless the user puts it there**: the offer's chip now, or (slots)
+a slot they made. `rules::decide` judges it once, on facts the shell reads (`AXSubrole`,
+`AXModal`, `AXRole`/`AXParent` for a sheet, its size, the app pane's size), and says why:
+
+- **Split**: only a window a `"do": "split"` rule selects.
+- **Float with an offer**: any other window over 100×100, whatever its size (`Why::NoSlot`), and a
+  dialog, a panel or a modal window too (`Why::Dialog`, `Why::Modal`: the owner's Zoom meeting
+  window was floated as a panel and could not be brought in). The app pane's header shows a chip, `Zoom opened “Zoom Meeting” · no slot
+  for this window · Put in a pane ×` (`Action::WindowOffered`, the shell's alone). Put in a pane
+  (`OfferAccept`, the user's alone: a client's click is refused with `offers::USERS_ALONE`) asks the
+  shell to host it beside that pane (`Effect::HostOffer`, then `Adopt`); × (`OfferDismiss`, the
+  user's) leaves it floating. The offer goes when the window closes (`OfferGone`: the shell checks
+  `recovery::window_exists` each tick), when it is in a pane any other way, or when its pane is no
+  app pane. Its title is drawn in the chip and never in the state (`offers` holds pane and window
+  id). While the app's pane is live its window covers the header: the chip shows once it parks.
+- **A window the app remade.** An app pane whose window closes while a window of its app is
+  offered there stays, empty, and offers it in its body: `Zoom replaced its window · Bring it here
+  ↵ ×` (`offers::offer_keeps`, on `WindowGone`). The user's click or ↵ fills that pane
+  (`Action::Fill`); × closes it, and the window floats on. No offer vanishes while its app has a
+  pane: one whose pane closes moves to the newest other pane of its app (`settle_offers`).
+- **Float, no offer**: only a `"do": "float"` rule. A floating window has no
+  pane, no stream: the window is `AXRaise`d once without
   activating the app. It is moved first only if the user cannot reach it (`rules::reachable`):
   its top has no 120×60 on a screen's visible frame, or, while no pane of the app is up and the
   app is not active (ottospace is in front), no 120 of it beside ottospace's window and its middle
   not over its app's pane, or it lies over a parking spot (put by its parked parent). A cover counts where it lies over the title bar's middle row. Then `rules::float_to` puts it, at its own size, in the middle of the pane, wholly on
   the visible frame of the pane's screen (a pane whose middle is on no screen: the main one's).
+  A window that floats with an offer is placed the same way.
 - **Leave**: a sheet or a child window (macOS keeps it on its parent), an `ignore` rule (a built-in
   `ignore` beats a user's `split` or `float`; only `manage` undoes it), a window
   under 100×100 with no rule (the canary, a GPUI app, has a 66×20 one off screen). Any other
   subrole (a toast, a popover) is not judged at all, a `split` rule or not, and is looked at again
   each tick in case it becomes a window.
 
-Each window is judged once, at first sight: one that opens small and grows stays floating.
-A pop-up of an app with no pane left is not touched.
+**The decision log.** Each judgement is one `place` line in `<home>/log` (`event_log`, a test run
+writes only its own `OTTOSPACE_HOME`): `bundle`, `subrole`, `modal`, `sheet`, `size`, `pane`,
+`min_width`, `place` (`split`, `offer`, `float`, `leave`), `why`, and `rule`: the user's
+`windows[n]` or a built-in rule that decided or let it through (`manage`), with its action. Never
+the title. The chip names the rule too: `no slot for this window (windows[1]: manage)`.
+
+Each window is judged once, at first sight. A pop-up of an app with no pane left is not touched.
+
+Later, not built: per-app memory of where the user put a window (a pane, floating), so the next
+one of the same kind is offered there, or put there once the user says so. Slots (slots.md) come
+first: a slot that selects the window fills it under its rules before any offer.
 
 AX has no minimum size. The width a window kept when its pane asked for less (read on the
-half-second check) stands for one; a window never squeezed has none, and splits.
+half-second check) stands for one; a window never squeezed has none. It no longer decides a split
+(none splits by itself); the log keeps it, to say why an accepted window squeezed its app's.
 
 A floating pop-up is placed once, then left to its app. Live, the app is in front and its pop-up
 with it. Parked, ottospace is in front of it, as of every window of the app; entering the pane

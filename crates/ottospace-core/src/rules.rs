@@ -83,7 +83,7 @@ impl From<RuleFields> for Rule {
 }
 
 /// What a rule does with a window it selects.
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
     /// Never put it in a pane, nor move it: not when its app is hosted, and not when it opens later.
@@ -120,10 +120,36 @@ pub fn judged(subrole: &str) -> bool {
 /// What the first rule that selects the window says, the user's rules before the built-in ones.
 /// A user's `split` or `float` never moves a window a built-in rule protects: only `manage` does.
 fn first(user: &[Rule], window: &Facts) -> Option<Action> {
-    let of = |rules: &[Rule]| rules.iter().find(|rule| rule.select.selects(window)).map(|rule| rule.action);
+    first_of(user, window).map(|(action, _)| action)
+}
+
+/// `first`, and which rule said it.
+fn first_of(user: &[Rule], window: &Facts) -> Option<(Action, Source)> {
+    let of =
+        |rules: &[Rule]| rules.iter().position(|rule| rule.select.selects(window)).map(|at| (rules[at].action, at));
     match (of(user), of(&built_in())) {
-        (Some(Action::Split | Action::Float), Some(Action::Ignore)) => Some(Action::Ignore),
-        (mine, built) => mine.or(built),
+        (Some((Action::Split | Action::Float, _)), Some((Action::Ignore, at))) => {
+            Some((Action::Ignore, Source::BuiltIn(at)))
+        }
+        (Some((action, at)), _) => Some((action, Source::User(at))),
+        (None, built) => built.map(|(action, at)| (action, Source::BuiltIn(at))),
+    }
+}
+
+/// Which rule decided: the user's `windows` rule at this index (from 0), or a built-in one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    User(usize),
+    BuiltIn(usize),
+}
+
+impl Source {
+    /// `windows[2]`, `built-in rule 0`: for the log and the chip.
+    pub fn label(self) -> String {
+        match self {
+            Source::User(at) => format!("windows[{at}]"),
+            Source::BuiltIn(at) => format!("built-in rule {at}"),
+        }
     }
 }
 
@@ -137,58 +163,161 @@ pub struct Shape {
     pub size: Option<[f64; 2]>,
     /// The content size of the app pane it would split (`Adopt`'s `beside`), if drawn.
     pub pane: Option<[f64; 2]>,
-    /// The least width that pane's window kept when asked for less: it refuses narrower.
+    /// The least width that pane's window kept when asked for less: it refuses narrower. For the
+    /// log: a split would squeeze it.
     pub min_width: Option<f64>,
+    /// No pane of its app is left (it was given back): a pop-up is not touched, nor offered.
+    pub alone: bool,
 }
 
-/// Where a new window of a hosted app goes.
+/// Where a new window of a hosted app goes. None goes in a pane by itself: only a `split` rule,
+/// or the user taking the offer (`Float { offer: true }`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Place {
-    /// A pane of its own, beside its app's (`Action::Adopt`).
+    /// A pane of its own, beside its app's (`Action::Adopt`): a `split` rule said so.
     Split,
-    /// A free window at its own size, over its app's pane (`float_to`).
-    Float,
+    /// A free window at its own size, over its app's pane (`float_to`). `offer`: its app's pane
+    /// offers to put it in a pane (`Action::WindowOffered`).
+    Float { offer: bool },
     /// Left as it is: ignored, a sheet, or not a kind of window ottospace hosts.
     Leave,
+}
+
+/// Why a window went where it did: said in the log and, for an offer, in its chip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Why {
+    /// A sheet, or a window whose parent is another: macOS keeps it there.
+    Sheet,
+    /// A toast, a popover: not a kind of window ottospace places.
+    Kind,
+    /// A rule said so (`Decision::rule`).
+    Rule,
+    /// Under 100×100: an app's helper.
+    Tiny,
+    /// A dialog or a panel: floats, and is offered (Zoom's meeting window can be an
+    /// `AXFloatingWindow`).
+    Dialog,
+    /// It blocks its app until answered: floats, and is offered.
+    Modal,
+    /// A standard window no slot selects: offered.
+    NoSlot,
+    /// Its app has no pane left: nothing to float it over or offer it in.
+    NoPane,
+}
+
+impl Why {
+    /// Plain words: `no slot for this window`.
+    pub fn words(self) -> &'static str {
+        match self {
+            Why::Sheet => "a sheet or child window: it stays on its parent",
+            Why::Kind => "not a window ottospace places",
+            Why::Rule => "a windows rule",
+            Why::Tiny => "under 100×100: an app's helper",
+            Why::Dialog => "a dialog or panel, so it floats",
+            Why::Modal => "modal, so it floats",
+            Why::NoSlot => "no slot for this window",
+            Why::NoPane => "its app has no pane",
+        }
+    }
+
+    /// A word for the log: `no_slot`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Why::Sheet => "sheet",
+            Why::Kind => "kind",
+            Why::Rule => "rule",
+            Why::Tiny => "tiny",
+            Why::Dialog => "dialog",
+            Why::Modal => "modal",
+            Why::NoSlot => "no_slot",
+            Why::NoPane => "no_pane",
+        }
+    }
+}
+
+/// Where a new window goes, why, and the rule that decided or let it through (`manage`), if one did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Decision {
+    pub place: Place,
+    pub why: Why,
+    pub rule: Option<(Source, Action)>,
+}
+
+impl Decision {
+    /// Why, in plain words, with the rule that decided or let it through: `no slot for this
+    /// window`, `a windows rule (windows[1]: float)`.
+    pub fn reason(&self) -> String {
+        match self.rule {
+            Some((source, action)) => format!("{} ({}: {})", self.why.words(), source.label(), action.name()),
+            None => self.why.words().to_string(),
+        }
+    }
+}
+
+impl Action {
+    /// As written after `do`: `ignore`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Action::Ignore => "ignore",
+            Action::Manage => "manage",
+            Action::Split => "split",
+            Action::Float => "float",
+        }
+    }
 }
 
 /// Subroles of dialogs and panels: never split, unless a rule says so.
 const POP_UP: [&str; 4] = ["AXDialog", "AXSystemDialog", "AXFloatingWindow", "AXSystemFloatingWindow"];
 
-/// A standard window under this, both ways, is a pop-up: a join or login dialog is about 400×300.
-const SMALL: [f64; 2] = [600.0, 400.0];
-
 /// Under this, both ways, a window is an app's helper, not a pop-up: left where the app keeps it.
 /// A GPUI app has a 66×20 one off screen.
 const TINY: [f64; 2] = [100.0, 100.0];
 
-/// Where a new window of a hosted app goes. A sheet stays on its window. Then the first rule that
-/// selects it decides, both ways; else a window under 100×100 is left alone (an app's helper), a
-/// dialog, a panel or a modal window floats, and so does a
-/// standard window under 600×400, under half its app's pane both ways, or whose split would
-/// leave its app's pane narrower than that pane's window kept. Other standard windows split.
-pub fn place(user: &[Rule], window: &Facts, shape: &Shape) -> Place {
-    if shape.sheet || !judged(window.subrole) {
-        return Place::Leave;
+/// Where a new window of a hosted app goes (`decide`, without the why).
+#[cfg(test)]
+fn place(user: &[Rule], window: &Facts, shape: &Shape) -> Place {
+    decide(user, window, shape).place
+}
+
+/// Where a new window of a hosted app goes, and why. A sheet or child window stays on its parent.
+/// Then the first rule that selects it decides; else a window under 100×100 is left alone (an
+/// app's helper), and any other floats with an offer, a dialog, a panel or a modal one too: no
+/// size or subrole decides a split, only the user (or a `split` rule).
+pub fn decide(user: &[Rule], window: &Facts, shape: &Shape) -> Decision {
+    let decided = judge(user, window, shape);
+    // A pop-up of an app with no pane left is not touched: a `split` rule still opens one.
+    match decided.place {
+        Place::Float { .. } if shape.alone => Decision { place: Place::Leave, why: Why::NoPane, ..decided },
+        _ => decided,
     }
-    match first(user, window) {
-        Some(Action::Ignore) => return Place::Leave,
-        Some(Action::Split) => return Place::Split,
-        Some(Action::Float) => return Place::Float,
+}
+
+fn judge(user: &[Rule], window: &Facts, shape: &Shape) -> Decision {
+    let decided = |place, why, rule| Decision { place, why, rule };
+    if shape.sheet {
+        return decided(Place::Leave, Why::Sheet, None);
+    }
+    if !judged(window.subrole) {
+        return decided(Place::Leave, Why::Kind, None);
+    }
+    let rule = first_of(user, window).map(|(action, source)| (source, action));
+    match rule.map(|(_, action)| action) {
+        Some(Action::Ignore) => return decided(Place::Leave, Why::Rule, rule),
+        Some(Action::Split) => return decided(Place::Split, Why::Rule, rule),
+        Some(Action::Float) => return decided(Place::Float { offer: false }, Why::Rule, rule),
         Some(Action::Manage) | None => {}
     }
     let under = |size: [f64; 2], limit: [f64; 2]| size[0] < limit[0] && size[1] < limit[1];
     if shape.size.is_some_and(|size| under(size, TINY)) {
-        return Place::Leave;
+        return decided(Place::Leave, Why::Tiny, rule);
     }
-    if window.subrole != STANDARD || shape.modal {
-        return Place::Float;
+    if window.subrole != STANDARD {
+        return decided(Place::Float { offer: true }, Why::Dialog, rule);
     }
-    let half = shape.pane.map(|pane| [pane[0] / 2.0, pane[1] / 2.0]);
-    let small = shape.size.is_some_and(|size| under(size, SMALL) || half.is_some_and(|half| under(size, half)));
-    // A split to the right halves the pane's width; its height stays.
-    let squeezed = shape.pane.zip(shape.min_width).is_some_and(|(pane, min)| min > pane[0] / 2.0);
-    if small || squeezed { Place::Float } else { Place::Split }
+    if shape.modal {
+        return decided(Place::Float { offer: true }, Why::Modal, rule);
+    }
+    decided(Place::Float { offer: true }, Why::NoSlot, rule)
 }
 
 /// True if the user's own pick (⌘E's list of an app's windows) may put this window in a pane:
@@ -319,7 +448,7 @@ mod tests {
         let share = zoom("Zoom Meeting", STANDARD);
         let meeting = Facts { identifier: Some("zm.meeting.window.main"), ..zoom("Zoom Meeting", "AXFloatingWindow") };
         let shape = Shape { size: Some([1200.0, 800.0]), ..Shape::default() };
-        assert_eq!(place(&[], &meeting, &shape), Place::Float);
+        assert!(matches!(place(&[], &meeting, &shape), Place::Float { .. }));
         for window in [main, share, meeting] {
             assert!(pickable(&[], &window, &shape), "{window:?}");
         }
@@ -423,15 +552,20 @@ mod tests {
         Shape { size: Some(size), pane: Some([1600.0, 1000.0]), ..Shape::default() }
     }
 
+    const OFFER: Place = Place::Float { offer: true };
+    const FLOAT: Place = Place::Float { offer: false };
+
     #[test]
     fn a_dialog_a_panel_a_modal_window_and_a_sheet_never_split() {
+        // A dialog, a panel, a modal window float, and are offered: the user may put one in a pane.
         let big = beside([1200.0, 900.0]);
         for subrole in ["AXDialog", "AXSystemDialog", "AXFloatingWindow", "AXSystemFloatingWindow"] {
-            assert_eq!(place(&[], &zoom("Settings", subrole), &big), Place::Float, "{subrole}");
+            let decided = decide(&[], &zoom("Settings", subrole), &big);
+            assert_eq!((decided.place, decided.why), (OFFER, Why::Dialog), "{subrole}");
         }
         let standard = zoom("Zoom Workplace", "AXStandardWindow");
-        assert_eq!(place(&[], &standard, &big), Place::Split);
-        assert_eq!(place(&[], &standard, &Shape { modal: true, ..big }), Place::Float);
+        assert_eq!(decide(&[], &standard, &Shape { modal: true, ..big }).why, Why::Modal);
+        assert_eq!(place(&[], &standard, &Shape { modal: true, ..big }), OFFER);
         // A sheet stays on its window, whatever a rule says.
         let split = serde_json::from_str::<Rule>(r#"{"app": "zoom.us", "do": "split"}"#).unwrap();
         assert_eq!(place(&[split], &standard, &Shape { sheet: true, ..big }), Place::Leave);
@@ -441,33 +575,68 @@ mod tests {
     }
 
     #[test]
-    fn a_standard_window_much_smaller_than_its_apps_pane_floats() {
-        let standard = zoom("Zoom", "AXStandardWindow");
-        // Under 600×400 both ways, with or without a pane.
-        assert_eq!(place(&[], &standard, &Shape { size: Some([420.0, 300.0]), ..Shape::default() }), Place::Float);
-        assert_eq!(place(&[], &standard, &beside([599.0, 399.0])), Place::Float);
-        // Under half the pane (800×500) both ways.
-        assert_eq!(place(&[], &standard, &beside([790.0, 490.0])), Place::Float);
-        // One side as big as that is enough to split: a tall chat window, a wide bar.
-        assert_eq!(place(&[], &standard, &beside([500.0, 800.0])), Place::Split);
-        assert_eq!(place(&[], &standard, &beside([900.0, 300.0])), Place::Split);
-        // Unknown size: as before.
-        assert_eq!(place(&[], &standard, &Shape::default()), Place::Split);
+    fn no_size_splits_a_standard_window_it_floats_with_an_offer() {
+        let standard = zoom("Zoom Meeting", "AXStandardWindow");
+        // Big or small, squeezing its app's window or not: offered, never split by itself.
+        for shape in [
+            beside([1200.0, 900.0]),
+            beside([420.0, 300.0]),
+            Shape { min_width: Some(900.0), ..beside([1000.0, 800.0]) },
+            Shape::default(),
+        ] {
+            let decided = decide(&[], &standard, &shape);
+            assert_eq!((decided.place, decided.why, decided.rule), (OFFER, Why::NoSlot, None), "{shape:?}");
+        }
+        assert_eq!(Why::NoSlot.words(), "no slot for this window");
         // A helper under 100×100 is left alone, a dialog too; a rule still decides.
         assert_eq!(place(&[], &standard, &beside([66.0, 20.0])), Place::Leave);
         assert_eq!(place(&[], &zoom("x", "AXFloatingWindow"), &beside([66.0, 20.0])), Place::Leave);
         let float = serde_json::from_str::<Rule>(r#"{"app": "zoom.us", "do": "float"}"#).unwrap();
-        assert_eq!(place(&[float], &standard, &beside([66.0, 20.0])), Place::Float);
+        assert_eq!(place(&[float], &standard, &beside([66.0, 20.0])), FLOAT);
+    }
+
+    /// The owner's call: Zoom's main window, the share viewer (same title, no id) and the meeting
+    /// window as a panel. None splits; each is offered, the panel too, and its reason says why it floats.
+    #[test]
+    fn zooms_three_meeting_windows_are_each_offered_none_split() {
+        let main = Facts { identifier: Some("zm.meeting.window.main"), ..zoom("Zoom Meeting", "AXStandardWindow") };
+        let viewer = zoom("Zoom Meeting", "AXStandardWindow");
+        let meeting = zoom("Zoom Meeting", "AXFloatingWindow");
+        let shape = beside([1083.0, 935.0]);
+        let reasons: Vec<(Place, String)> = [main, viewer, meeting]
+            .iter()
+            .map(|window| decide(&[], window, &shape))
+            .map(|decided| (decided.place, decided.reason()))
+            .collect();
+        let offer = |why: &str| (OFFER, why.to_string());
+        let said = [
+            offer("no slot for this window"),
+            offer("no slot for this window"),
+            offer("a dialog or panel, so it floats"),
+        ];
+        assert_eq!(reasons, said);
+        // An app given back (no pane left) is not touched, said so.
+        let alone = decide(&[], &main, &Shape { alone: true, ..shape });
+        assert_eq!((alone.place, alone.why), (Place::Leave, Why::NoPane));
+        // Only sheets, child windows and helpers get no offer.
+        assert_eq!(place(&[], &meeting, &Shape { sheet: true, ..shape }), Place::Leave);
+        assert_eq!(place(&[], &meeting, &beside([56.0, 56.0])), Place::Leave);
     }
 
     #[test]
-    fn a_split_never_squeezes_the_apps_window_below_what_it_kept() {
-        let standard = zoom("Zoom", "AXStandardWindow");
-        let shape = |min_width| Shape { min_width, ..beside([1000.0, 800.0]) };
-        // The pane is 1600 wide: a split leaves 800.
-        assert_eq!(place(&[], &standard, &shape(Some(900.0))), Place::Float);
-        assert_eq!(place(&[], &standard, &shape(Some(700.0))), Place::Split);
-        assert_eq!(place(&[], &standard, &shape(None)), Place::Split);
+    fn the_rule_that_decided_is_named() {
+        let rule = |text: &str| serde_json::from_str::<Rule>(text).unwrap();
+        let rules = [rule(r#"{"title": "Lunch", "do": "ignore"}"#), rule(r#"{"app": "zoom.us", "do": "manage"}"#)];
+        let decided = decide(&rules, &zoom("Zoom Meeting", "AXStandardWindow"), &Shape::default());
+        assert_eq!((decided.place, decided.rule), (OFFER, Some((Source::User(1), Action::Manage))));
+        assert_eq!(Source::User(1).label(), "windows[1]");
+        assert_eq!(decided.reason(), "no slot for this window (windows[1]: manage)");
+        let decided = decide(&[], &zoom("Reactions", "AXStandardWindow"), &Shape::default());
+        assert_eq!((decided.why, decided.rule), (Why::Rule, Some((Source::BuiltIn(3), Action::Ignore))));
+        // A user's split under a built-in ignore: the built-in one is named.
+        let split = [rule(r#"{"app": "zoom.us", "do": "split"}"#)];
+        let decided = decide(&split, &zoom("Meeting chat", "AXStandardWindow"), &Shape::default());
+        assert_eq!((decided.place, decided.rule), (Place::Leave, Some((Source::BuiltIn(4), Action::Ignore))));
     }
 
     #[test]
@@ -484,16 +653,16 @@ mod tests {
         assert!(manages(&rules, &zoom("Settings", "AXDialog")));
         assert_eq!(place(&rules, &zoom("Settings", "AXUnknown"), &tiny), Place::Leave);
         assert!(!manages(&rules, &zoom("Settings", "AXUnknown")));
-        // A big standard window kept free, and never hosted with its app either.
+        // A big standard window kept free, with no offer, and never hosted with its app either.
         let workplace = zoom("Zoom Workplace", "AXStandardWindow");
-        assert_eq!(place(&rules, &workplace, &beside([1400.0, 900.0])), Place::Float);
+        assert_eq!(place(&rules, &workplace, &beside([1400.0, 900.0])), FLOAT);
         assert!(!manages(&rules, &workplace) && manages(&rules, &zoom("Settings", "AXStandardWindow")));
         // `ignore` leaves it alone; `manage` is the rules above.
         let ignore = rule(r#"{"app": "zoom.us", "do": "ignore"}"#);
         assert_eq!(place(&[ignore], &zoom("Settings", "AXDialog"), &tiny), Place::Leave);
         let manage = rule(r#"{"app": "zoom.us", "do": "manage"}"#);
-        assert_eq!(place(std::slice::from_ref(&manage), &zoom("Settings", "AXDialog"), &tiny), Place::Float);
-        assert_eq!(place(&[manage], &zoom("Meeting chat", "AXStandardWindow"), &beside([900.0, 700.0])), Place::Split);
+        assert_eq!(place(std::slice::from_ref(&manage), &zoom("Settings", "AXDialog"), &tiny), OFFER);
+        assert_eq!(place(&[manage], &zoom("Meeting chat", "AXStandardWindow"), &beside([900.0, 700.0])), OFFER);
     }
 
     #[test]
@@ -511,10 +680,10 @@ mod tests {
         }
         // Other windows of the app still follow the user's rule.
         assert_eq!(place(&[split], &zoom("Settings", "AXDialog"), &big), Place::Split);
-        assert_eq!(place(&[float], &zoom("Zoom Workplace", "AXStandardWindow"), &big), Place::Float);
-        // Only a `manage` rule undoes the built-in one.
+        assert_eq!(place(&[float], &zoom("Zoom Workplace", "AXStandardWindow"), &big), FLOAT);
+        // Only a `manage` rule undoes the built-in one: then offered, as any standard window.
         let manage = rule(r#"{"app": "zoom.us", "title": "Meeting chat", "do": "manage"}"#);
-        assert_eq!(place(&[manage], &zoom("Meeting chat", "AXStandardWindow"), &big), Place::Split);
+        assert_eq!(place(&[manage], &zoom("Meeting chat", "AXStandardWindow"), &big), OFFER);
     }
 
     /// One screen; ottospace's window over most of it, its app's pane in it.

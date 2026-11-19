@@ -16,6 +16,7 @@ import type {
   Listen,
   ListenLine,
   Slot,
+  Offer,
   Viewer,
   ViewerDrawn,
   ViewerRead,
@@ -1577,8 +1578,14 @@ function model(value: unknown, at: string): Model {
     transcripts: transcripts(o.transcripts, `${at}.transcripts`),
     agent_mode: agentMode(o.agent_mode, `${at}.agent_mode`),
     slots: map(slot)(o.slots, `${at}.slots`),
+    offers: list(offer)(o.offers, `${at}.offers`),
     viewers: map(viewer)(o.viewers, `${at}.viewers`),
   };
+}
+
+function offer(value: unknown, at: string): Offer {
+  const o = fields(value, at);
+  return { pane: num(o.pane, `${at}.pane`), window: num(o.window, `${at}.window`) };
 }
 
 function slot(value: unknown, at: string): Slot {

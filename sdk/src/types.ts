@@ -1129,6 +1129,11 @@ export interface Model {
    * is the user's: a client cannot make, fill, clear, close, move or swap one.
    */
   slots: Record<string, Slot>;
+  /**
+   * Windows apps opened by themselves, floating, each offered by its app pane (`pane`): the
+   * window's id, never its title. Only the user puts one in a pane or dismisses the offer.
+   */
+  offers: Offer[];
   /** Each file viewer's view, by pane id. */
   viewers: Record<string, Viewer>;
 }
@@ -1139,6 +1144,12 @@ export interface Slot {
   /** How many windows it could offer now. */
   matches: number;
   matching: "manual" | "automatic";
+}
+
+/** A window an app opened by itself, floating over its app pane, which offers it. */
+export interface Offer {
+  pane: PaneId;
+  window: number;
 }
 
 /** What the task of a workspace may do in an app pane: `act` grants what `see` does, presses later. */

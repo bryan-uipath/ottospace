@@ -110,6 +110,10 @@ Rules:
   - State fields `keys_known` (the ids of the key bindings the user knows) and `key_reference`
     (while ⌘/ shows: its groups' row ids, the known ids, whether Known is open, its header's
     rect). Null outside a test run: what the user's keys are used for is never on the socket.
+  - `window_fixture` (`"pane"`, `"size"`, optional `"title"`, `"subrole"`, `"modal"`): a new window of
+    that app pane's app, as if just seen (a test run hosts none), judged, logged and offered as a real
+    one; its id (800001 on) is in `offers`. Put in a pane on it opens a pane with no window.
+    `window_fixture_close` (`"window"`): it closed. Outside a test run only ottospace sees an app's windows.
   - `record_start` (`"dir"`) and `record_stop`: ScreenCaptureKit films ottospace's own window
     into `dir`, a raw BGRA file a change and `frames.jsonl` (`record.rs`), for
     `scripts/shot --record`. Outside a test run no client films the window.

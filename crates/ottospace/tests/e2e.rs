@@ -13341,3 +13341,60 @@ fn a_cmd_click_on_a_path_in_a_terminal_opens_the_viewer_beside_and_reuses_it() {
     });
     assert_eq!((pane_ids(&reply), view(&reply, 2)["shows"].as_str()), (vec![1, 2], Some("text")));
 }
+
+/// A new window of a hosted app never splits its pane by itself: it floats, and the app pane's
+/// header offers it, saying why it is in no pane. Only the user's click puts it in a pane; a
+/// client's is refused. Dismissed, or closed, the offer goes. A dialog is offered too. Each
+/// placement is one line in the log, never with the title, nor is the title in the state.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_new_window_floats_with_an_offer_and_only_the_users_click_puts_it_in_a_pane() {
+    let home = user_folder("pop-up", r#"{"repos": [], "restore_layout": false}"#);
+    let otto = Otto::launch_with("pop-up", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
+    let pane = reply["state"]["focused"].as_u64().unwrap();
+    let opened = |title: &str, subrole: &str| {
+        let line =
+            json!({"cmd": "window_fixture", "pane": pane, "title": title, "subrole": subrole, "size": [1200, 800]});
+        otto.call(line)
+    };
+    let offers = |reply: &Value| reply["state"]["offers"].clone();
+    let panes = |reply: &Value| reply["state"]["panes"].as_array().map_or(0, Vec::len);
+    // A big standard window: offered, no split, its title nowhere in the reply.
+    let reply = opened("Meeting SECRET room", "AXStandardWindow");
+    assert_eq!(offers(&reply), json!([{"pane": pane, "window": 800001}]), "{reply}");
+    assert_eq!(panes(&reply), 1, "no split by itself");
+    assert!(!reply.to_string().contains("SECRET"), "{reply}");
+    // A dialog is offered too: the user may want it in a pane. Dismissed, it floats on.
+    assert_eq!(offers(&opened("Settings", "AXDialog")).as_array().map(Vec::len), Some(2));
+    otto.user_click(at(otto.control("offer-dismiss:800002"), 0.5, 0.5));
+    // A client's click on the chip is refused, and says why.
+    let put = otto.control("offer:800001");
+    let reply = otto.click(at(put, 0.5, 0.5), 1);
+    assert_eq!(offers(&reply).as_array().map(Vec::len), Some(1), "{reply}");
+    assert!(reply["notice"].as_str().is_some_and(|n| n.contains("only they put it in a pane")), "{reply}");
+    // The user's puts it in a pane beside its app's; the offer goes.
+    let reply = otto.user_click(at(put, 0.5, 0.5));
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((panes(&state), offers(&state)), (2, json!([])), "{reply}");
+    let held = state["state"]["panes"].as_array().unwrap().iter().any(|p| p["kind"]["window"] == 800001);
+    assert!(held, "{state}");
+    // Dismissed: it stays floating, no pane.
+    opened("Second", "AXStandardWindow");
+    otto.user_click(at(otto.control("offer-dismiss:800003"), 0.5, 0.5));
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((panes(&state), offers(&state)), (2, json!([])));
+    // Closed: the offer goes.
+    opened("Third", "AXStandardWindow");
+    let reply = otto.call(json!({"cmd": "window_fixture_close", "window": 800004}));
+    assert_eq!(offers(&reply), json!([]));
+    // One line a placement: where it went and why; never a title.
+    let log = std::fs::read_to_string(home.join("log")).unwrap();
+    let placed: Vec<Value> =
+        log.lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).filter(|e| e["ev"] == "place").collect();
+    let said: Vec<(Value, Value)> = placed.iter().map(|e| (e["place"].clone(), e["why"].clone())).collect();
+    let offer = (json!("offer"), json!("no_slot"));
+    assert_eq!(said, [offer.clone(), (json!("offer"), json!("dialog")), offer.clone(), offer], "{log}");
+    assert_eq!((&placed[0]["subrole"], &placed[0]["size"]), (&json!("AXStandardWindow"), &json!([1200.0, 800.0])));
+    assert!(!log.contains("SECRET") && !log.contains("Second"), "{log}");
+}

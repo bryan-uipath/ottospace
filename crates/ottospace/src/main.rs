@@ -101,6 +101,7 @@ mod notice_bar;
 mod pass;
 mod pick;
 mod picture;
+mod pop_ups;
 mod progress;
 mod prs;
 mod record;
@@ -1101,6 +1102,11 @@ struct Workspace {
     listen_feed: Option<listen::Feed>,
     /// Agent mode's pictures of app panes, by pane: their folders (`agent_mode::Looks`).
     looks: agent_mode::Looks,
+    /// Panes whose window is gone while their app runs, since when (`drop_closed`).
+    gone_since: HashMap<PaneId, u64>,
+    /// A test run's fixture windows on offer (`window_fixture`), by id: their titles.
+    offer_fixtures: HashMap<u32, String>,
+    next_fixture_window: u32,
     /// The file of the transcript on, if one is kept.
     listen_file: Option<listen::File>,
     /// Files of transcripts that ended, until their end is written.
@@ -1314,6 +1320,7 @@ impl Workspace {
                             this.host_new_window(window, cx);
                             this.adopt_new_windows(window, cx);
                             this.read_edited(window, cx);
+                            this.drop_gone_offers(window, cx);
                             this.drop_closed(window, cx);
                             this.follow_front_app(window, cx);
                             this.host_launched(window, cx);
@@ -1598,6 +1605,9 @@ impl Workspace {
             timeline: calendar::Timeline::start(),
             listen_feed: None,
             looks: agent_mode::Looks::default(),
+            offer_fixtures: HashMap::new(),
+            gone_since: HashMap::new(),
+            next_fixture_window: 0,
             listen_file: None,
             listen_ending: Vec::new(),
             listen_meter: None,
@@ -1823,6 +1833,7 @@ impl Workspace {
                 Effect::ReadSession { runner, id } => agents.extend(self.read_session(runner, id)),
                 // Slots are not on screen yet (slice 3), and their flag is off.
                 Effect::HostSlot { .. } | Effect::WatchSlots { .. } | Effect::GiveBack { .. } => {}
+                Effect::HostOffer { pane, pid, window: id } => self.host_offer(*pane, *pid, *id, window, cx),
                 Effect::Opened(id) => {
                     if self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal) {
                         // The shell learns where it runs, so a program in it can name its own pane.
@@ -2838,6 +2849,18 @@ impl Workspace {
                     let kind = Kind::App { window: id, title: name.clone(), bundle: None, name };
                     let origin = if user { Origin::User } else { Origin::Socket };
                     self.dispatch(Action::Open { kind, axis: Axis::Right, beside: None }, origin, window, cx);
+                    None
+                }
+                Request::WindowFixture { pane, title, subrole, size, modal } => {
+                    let new = pop_ups::Fixture { pane, title, subrole, size, modal };
+                    failure = self.window_fixture(new, window, cx).err();
+                    None
+                }
+                Request::WindowFixtureClose { window: id } => {
+                    match self.offer_fixtures.remove(&id) {
+                        Some(_) => drop(self.dispatch(Action::OfferGone { window: id }, Origin::System, window, cx)),
+                        None => failure = Some(format!("no fixture window {id}")),
+                    }
                     None
                 }
                 Request::ListenEnd { why } => {
@@ -4057,10 +4080,25 @@ impl Workspace {
         // window would be stranded. The window server says whether the window is still there.
         let gone = |h: &Hosted| h.window.frame().is_none() && !recovery::window_exists(h.window_id);
         let gone: Vec<PaneId> = self.hosted.iter().filter(|(_, h)| gone(h)).map(|(id, _)| *id).collect();
+        // An app that remakes its window closes the old one, then opens the new: while it runs, a
+        // gone window is reported after `REMADE_MS`, so its new one is seen and offered first.
+        let now = now_ms();
+        self.gone_since.retain(|id, _| gone.contains(id));
+        let gone: Vec<PaneId> = gone
+            .into_iter()
+            .filter(|id| {
+                let running = self.hosted.get(id).is_some_and(|h| ax::app_identity(h.pid).1.is_some());
+                let since = *self.gone_since.entry(*id).or_insert(now);
+                !running || now.saturating_sub(since) >= REMADE_MS
+            })
+            .collect();
         for id in gone {
-            eprintln!("pane {id}: window gone; closing");
+            self.gone_since.remove(&id);
+            eprintln!("pane {id}: window gone");
             // Nothing to put back, so stop the stream here instead of `release` in `dispatch`.
+            let mut app_running = false;
             if let Some(hosted) = self.hosted.remove(&id) {
+                app_running = ax::app_identity(hosted.pid).1.is_some();
                 trace::record("window_gone", serde_json::json!({ "pane": id, "window": hosted.window_id }));
                 let _ = hosted.stream.stop_capture();
                 give_back::forget(hosted.window_id);
@@ -4070,13 +4108,16 @@ impl Workspace {
                     cx.activate(true);
                 }
             }
-            self.dispatch(Action::Close { pane: Some(id) }, Origin::System, window, cx);
+            // A pane that offers a window its app remade waits for it; any other closes.
+            let gone = Action::WindowGone { pane: id, app_running, at: now_ms() };
+            self.dispatch(gone, Origin::System, window, cx);
         }
     }
 
-    /// Hosts windows that appeared since we started watching their app (e.g. a second browser
-    /// window), each to the right of its app's newest pane. A pop-up stays a free window over that
-    /// pane (`rules::place`). Each window is judged once, when first seen as standard or a dialog.
+    /// Judges windows that appeared since we started watching their app (e.g. a second browser
+    /// window), each by its app's newest pane (`rules::decide`): none splits it by itself (only a
+    /// `split` rule). It stays a free window over that pane, and a standard one is offered there.
+    /// Each window is judged once, when first seen as standard or a dialog, and logged.
     fn adopt_new_windows(&mut self, window: &Window, cx: &mut Context<Self>) {
         let mut fresh = Vec::new();
         for (pid, seen) in &mut self.known {
@@ -4091,12 +4132,13 @@ impl Workspace {
                     && window.quick(ax::Window::judged)
                 {
                     seen.insert(id);
-                    fresh.push(window);
+                    fresh.push((id, window));
                 }
             }
         }
         let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
-        for ax_window in fresh {
+        // The id read when it was first seen: read again later it may fail, and it is never seen again.
+        for (id, ax_window) in fresh {
             let pid = ax_window.pid();
             let beside = self.hosted.iter().filter(|(_, h)| h.pid == pid).map(|(id, _)| *id).max();
             // The pane it would split, if drawn: a background tab's bounds are stale.
@@ -4110,8 +4152,11 @@ impl Workspace {
                 size: frame.map(|f| [f.size.width, f.size.height]),
                 pane: pane.map(|(b, _)| to_cg(b.size)).map(|s| [s.width, s.height]),
                 min_width: pane.and_then(|(_, min)| min),
+                alone: beside.is_none(),
             };
-            match ax_window.quick(|w| window_place(w, &shape)) {
+            let (decided, bundle, subrole, title) = ax_window.quick(|w| window_decide(w, &shape));
+            pop_ups::log(&pop_ups::Seen { bundle: bundle.as_deref(), subrole: &subrole }, &shape, &decided);
+            match decided.place {
                 rules::Place::Split => {
                     if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
                         let action = Action::Adopt { kind: hosted.kind(), beside, seen: None };
@@ -4119,7 +4164,7 @@ impl Workspace {
                     }
                 }
                 // Only while its app has a pane: an app given back is left alone.
-                rules::Place::Float if beside.is_some() => {
+                rules::Place::Float { offer } if let Some(pane_id) = beside => {
                     let pane = pane.map(|(b, _)| recovery::to_frame(on_screen(b, window, cx)));
                     let screens = recovery::screens();
                     // Parked: no pane of its app is up and the app is not in front, so ottospace is.
@@ -4133,9 +4178,14 @@ impl Workspace {
                     let to = frame.and_then(|f| rules::float_to(recovery::to_frame(f), pane, &sight));
                     let moved = to.is_some_and(|(x, y)| ax_window.set_position(CGPoint::new(x, y)).is_ok());
                     ax_window.raise_only();
-                    trace::record("float", serde_json::json!({ "window": ax_window.id(), "moved": moved }));
+                    trace::record("float", serde_json::json!({ "window": id, "moved": moved }));
+                    if offer {
+                        let why = decided.reason();
+                        let action = Action::WindowOffered { pane: pane_id, pid, window: id, title, why };
+                        self.dispatch(action, Origin::System, window, cx);
+                    }
                 }
-                rules::Place::Float | rules::Place::Leave => {}
+                rules::Place::Float { .. } | rules::Place::Leave => {}
             }
         }
     }
@@ -4349,6 +4399,15 @@ impl Workspace {
             return self.talk_key(event, window, cx);
         }
         if self.model.keyboard_viewer().is_some() && self.viewer_key(event, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        // ↵ on a focused pane that waits for a window its app remade: Bring it here.
+        if key.key == "enter"
+            && !key.modifiers.modified()
+            && let Some(id) = self.model.offer_enter()
+        {
+            self.offer_send(Action::OfferAccept { window: id }, window, cx);
             cx.stop_propagation();
             return;
         }
@@ -6124,6 +6183,8 @@ impl Workspace {
             .children(self.listen_header(id, cx))
             // Agent mode's robot: what the workspace's task may do here. Never shrinks.
             .children(self.agent_header(id, cx))
+            // A window its app opened by itself, floating: offered here, with why it is in no pane.
+            .children(self.offer_header(id, cx))
             // `fit` and × never shrink, so they stay in the header however narrow the pane.
             .child(
                 // The task of its tab: the same badge as on the bar.
@@ -6249,6 +6310,8 @@ impl Workspace {
                 Kind::Terminal => {
                     div().text_sm().text_color(rgb(theme::ERROR)).child("the shell did not start").into_any_element()
                 }
+                // An app that remade its window: the pane waits, offering the new one.
+                Kind::Empty if let Some(body) = self.offer_body(id, cx) => body,
                 _ => {
                     // A pane a mark's tab could not fill says why.
                     let hint = self.unfilled_why(id).unwrap_or_else(|| "⌘E to pick what goes here".into());
@@ -7154,14 +7217,22 @@ fn list_button(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
         .when(selected, |row| row.bg(rgb(theme::SELECTED)).border_color(rgb(theme::LIST)))
 }
 
+/// How long a hosted window may be gone while its app runs before its pane hears so: an app that
+/// remakes a window opens the new one within it (the canary at once).
+const REMADE_MS: u64 = 1_500;
+
 /// True if the window rules (the user's, then the built-in ones) let this window be put in a pane.
 fn window_managed(window: &ax::Window) -> bool {
     with_facts(window, |facts| rules::manages(&config::live().windows, facts))
 }
 
-/// Where a new window of a hosted app goes, by the window rules and its `shape`.
-fn window_place(window: &ax::Window, shape: &rules::Shape) -> rules::Place {
-    with_facts(window, |facts| rules::place(&config::live().windows, facts, shape))
+/// Where a new window of a hosted app goes and why, by the window rules and its `shape`; with its
+/// bundle id, subrole (for the log) and title (for the offer's chip).
+fn window_decide(window: &ax::Window, shape: &rules::Shape) -> (rules::Decision, Option<String>, String, String) {
+    with_facts(window, |facts| {
+        let decided = rules::decide(&config::live().windows, facts, shape);
+        (decided, facts.bundle.map(String::from), facts.subrole.to_string(), facts.title.to_string())
+    })
 }
 
 /// `judge` given what the window rules select by, read from the window.
@@ -8026,7 +8097,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 15] = [
+        const TESTS_ONLY: [&str; 17] = [
             "capture_start",
             "repo_add",
             "inspector_fixture",
@@ -8042,6 +8113,8 @@ mod tests {
             "window_width",
             "display_change",
             "ui_gallery",
+            "window_fixture",
+            "window_fixture_close",
         ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
         for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {
