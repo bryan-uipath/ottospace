@@ -309,6 +309,11 @@ pub fn opaque(id: &str) -> Option<String> {
     (!id.is_empty()).then(|| format!("{:016x}", id.bytes().fold(0xcbf2_9ce4_8422_2325, step)))
 }
 
+/// A call, message or thread id, made opaque. `None` if it is missing or empty.
+fn id_of(value: &serde_json::Value) -> Option<String> {
+    value.as_str().and_then(opaque)
+}
+
 /// Adds `id` to a bounded set of open things. True if it was not there.
 fn track(open: &mut BTreeSet<String>, id: String) -> bool {
     if open.len() >= MAX_OPEN {
