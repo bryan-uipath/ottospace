@@ -1194,6 +1194,10 @@ function pickItem(value: unknown, at: string): PickItem {
   if (o.type === "terminal") return { type: "terminal" };
   if (o.type === "file") return { type: "file" };
   if (o.type === "app") return { type: "app", name: str(o.name, `${at}.name`) };
+  if (o.type === "window") {
+    const pane = orNull(num)(o.pane, `${at}.pane`);
+    return { type: "window", app: str(o.app, `${at}.app`), window: num(o.window, `${at}.window`), pane };
+  }
   if (o.type === "closed") {
     return { type: "closed", name: str(o.name, `${at}.name`), path: str(o.path, `${at}.path`) };
   }
@@ -1230,6 +1234,7 @@ function picker(value: unknown, at: string): Picker {
     query: str(o.query, `${at}.query`),
     selected: num(o.selected, `${at}.selected`),
     transcribe: bool(o.transcribe, `${at}.transcribe`),
+    app: orNull(str)(o.app, `${at}.app`),
   };
 }
 

@@ -106,7 +106,9 @@ impl Model {
         let query = Field::new("", MAX_FILTER);
         let start = Some((id, at));
         let (axis, new_tab, installed) = (Axis::Right, false, Vec::new());
-        self.picker = Some(Picker { axis, new_tab, items, query, selected: 0, installed, transcribe: true, start });
+        let app = None;
+        self.picker =
+            Some(Picker { axis, new_tab, items, query, selected: 0, installed, transcribe: true, start, app });
     }
 
     /// Whether the close would take the pane being transcribed.

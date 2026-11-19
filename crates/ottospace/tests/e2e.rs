@@ -3280,6 +3280,48 @@ fn the_picker_filter_is_a_field_and_offers_apps_that_are_not_running() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn choosing_an_app_in_the_picker_lists_its_windows() {
+    // Made-up running apps: a test run runs none, and hosts no window.
+    let fixture = support::temp(&format!("ottospace-e2e-pick-apps-{}.json", std::process::id()));
+    let apps = json!([
+        {"name": "Lumen", "windows": [{"window": 7, "title": "Inbox"}, {"window": 8, "title": "Docs"}]},
+        {"name": "Quill", "windows": []},
+    ]);
+    std::fs::write(&fixture, apps.to_string()).unwrap();
+    let otto = Otto::launch_with("pick-windows", &[("OTTOSPACE_PICK_APPS", fixture.to_str().unwrap())]);
+    let rows = |reply: &Value| -> Vec<String> {
+        let row = |row: &Value| match row["type"].as_str() {
+            Some("window") => format!("window {} {}", row["window"], row["pane"]),
+            _ => format!("{} {}", row["type"].as_str().unwrap(), row["name"].as_str().unwrap_or("")),
+        };
+        reply["picker_rows"].as_array().map(|rows| rows.iter().map(row).collect()).unwrap_or_default()
+    };
+    let reply = otto.call(json!({"cmd": "picker"}));
+    assert_eq!(rows(&reply), ["terminal ", "file ", "app Lumen", "app Quill"]);
+    // The app: its windows, in the picker's place. Titles are drawn, never in the state.
+    let reply = otto.call(json!({"cmd": "picker_choose", "index": 2}));
+    assert_eq!(
+        (reply["mode"].as_str(), reply["state"]["picker"]["app"].as_str(), rows(&reply)),
+        (Some("pick"), Some("Lumen"), vec!["window 7 null".to_string(), "window 8 null".to_string()])
+    );
+    assert!(!reply.to_string().contains("Inbox"), "{reply}");
+    // The filter narrows them by title. A window chosen is asked for, and the run hosts none.
+    let reply = otto.call(json!({"cmd": "picker_query", "query": "doc"}));
+    assert_eq!(rows(&reply), ["window 8 null"]);
+    let reply = otto.raw(&json!({"cmd": "picker_choose"}).to_string());
+    assert_eq!(reply["error"], "window hosting is off in e2e runs", "{reply}");
+    let reply = otto.call(json!({"cmd": "state"}));
+    assert_eq!((reply["mode"].as_str(), reply["counts"]["window_picks"].as_u64()), (Some("normal"), Some(1)));
+    // An app with no window to host: the second step says so, and Esc closes it.
+    otto.call(json!({"cmd": "picker"}));
+    let reply = otto.call(json!({"cmd": "picker_choose", "index": 3}));
+    assert_eq!((reply["state"]["picker"]["app"].as_str(), rows(&reply).len()), (Some("Quill"), 0));
+    let reply = otto.call(json!({"cmd": "key", "keys": "escape"}));
+    assert_eq!((reply["mode"].as_str(), reply["counts"]["window_picks"].as_u64()), (Some("normal"), Some(1)));
+}
+
 /// Made-up apps in a folder of the test's own: never the user's, and none is ever started.
 fn fake_apps(name: &str, apps: &[&str]) -> PathBuf {
     let root = support::temp(&format!("ottospace-e2e-{name}-{}", std::process::id()));

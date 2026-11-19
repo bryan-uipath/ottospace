@@ -1,0 +1,8 @@
+# The picker's second step: an app chosen in ⌘E lists its windows. A test run runs no app: the
+# fixture's made-up ones (pick-windows/apps.json) stand for running apps.
+{"env":{"OTTOSPACE_PICK_APPS":"{ROOT}/apps.json"}}
+{"cmd":"split"}
+{"cmd":"key","keys":"cmd-e","as":"user"}
+{"shot":"apps"}
+{"cmd":"key","keys":"l u enter","as":"user"}
+{"shot":"windows"}

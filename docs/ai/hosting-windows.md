@@ -120,6 +120,22 @@ with it. Parked, ottospace is in front of it, as of every window of the app; ent
 brings the app, and its key window, forward again. A child window or sheet moves with its parent,
 by macOS. ottospace does not follow, park, give back or close a pop-up.
 
+## The picker's second step: which window
+
+Choosing a running app in ⌘E lists its windows (`model/pick.rs`): the shell reads those the
+user's pick may put in a pane (`rules::pickable`), front first: every window but a sheet or
+child window, a helper under 100×100, or one a rule ignores. A pop-up `place` floated (Zoom's
+meeting window, an `AXFloatingWindow`) is listed too, and so is one a `float` rule names: the
+user asked for it. A minimised one is not (its stream would draw nothing). and the core lists them, each with the pane
+that holds it already. Choosing a held one shows its pane; any other is hosted, shared: given
+back when its pane closes, as before. Titles are drawn, never in the state. A test run lists the
+made-up apps of `OTTOSPACE_PICK_APPS` (a JSON file) and hosts none: `counts.window_picks` counts the asks.
+
+Next slices, not built: "New window" first in that list, an owned window (per-app recipes in
+one table: Chromium `--new-window`, Safari, Finder, VS Code `-n`, terminals, else ⌘N; ~3 s with
+no window and the status bar says so), closed with its pane (asked first when the app reports
+unsaved changes). Later: ⌘⇧T reopens a closed pane; a per-app "always new window" setting.
+
 ## Risks
 
 - Capture costs input: while ScreenCaptureKit streams a Finder window, macOS loses a release of

@@ -907,6 +907,18 @@ const MAKERS: &[Make] = &[
         Action::SetInstalled { apps, running }
     },
     |g| Action::PickerChoose { index: g.rng.coin().then(|| g.index(3)) },
+    |g| {
+        // The shell's reading of an app's windows: mostly the picker's app, ids that panes hold too.
+        let app = |item: &PickItem| match item {
+            PickItem::App { name } => Some(name.clone()),
+            _ => None,
+        };
+        let listed: Vec<String> = g.m.picker.iter().flat_map(|picker| &picker.items).filter_map(app).collect();
+        let app = g.one_of(&listed, |g| g.name(APPS));
+        let window = |g: &mut Gen| PickWindow { window: g.rng.below(5) as u32, title: g.name(&["general", "w1"]) };
+        let windows = (0..g.rng.below(4)).map(|_| window(g)).collect();
+        Action::PickerWindows { app, windows }
+    },
     |_| Action::ClosePicker,
     |_| Action::PaletteOpen,
     |_| Action::PaletteTasks,
@@ -2948,6 +2960,16 @@ impl Run {
         let app_rows: Vec<String> =
             apps_before.not_running.iter().chain(&apps_before.all).map(|row| row.name.clone()).collect();
         let offered: Vec<String> = offered.into_iter().chain(app_rows).collect();
+        // The second step's windows, by app and id: only one of them is hosted.
+        let window_rows: Vec<(String, u32)> = m
+            .picker
+            .iter()
+            .flat_map(|picker| picker.matches())
+            .filter_map(|row| match row {
+                PickItem::Window { app, window, .. } => Some((app.clone(), *window)),
+                _ => None,
+            })
+            .collect();
         let chosen = m.picker.as_ref().and_then(|picker| picker.matches().get(picker.selected).copied().cloned());
         let field = (m.field().is_some(), m.open_field().map(|(_, field)| field.text().to_string()));
         let task_ids: Vec<TaskId> = m.tasks.list.iter().map(|task| task.id).collect();
@@ -4182,6 +4204,17 @@ impl Run {
                 Effect::HostApp { name, .. } | Effect::LaunchApp { name, .. } => {
                     ensure!(offered.contains(name), "an app that was not offered is hosted: {name:?}")
                 }
+                // The picker's second step: an app it listed, then one of the windows it listed, in no pane.
+                Effect::PickWindows { app } => {
+                    let step = m.picker.as_ref().is_some_and(|picker| picker.app.is_none());
+                    let chose = matches!(action, Action::PickerChoose { .. });
+                    ensure!(chose && step && offered.contains(app), "{action:?} listed the windows of {app:?}")
+                }
+                Effect::HostPicked { app, window, .. } => {
+                    let listed = window_rows.contains(&(app.clone(), *window));
+                    let free = m.pane_holding(*window).is_none() && m.picker.is_none();
+                    ensure!(listed && free, "{action:?} hosted window {window} of {app:?}")
+                }
                 Effect::HostWindow { mark, into, .. } => {
                     ensure!(
                         mark.is_none_or(|id| m.marks.get(id).is_some()),
@@ -4814,6 +4847,7 @@ fn code(sent: &Envelope) -> String {
         "AppRead",
         "Event",
         "ColorRule",
+        "PickWindow",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("verb", "Verb"),

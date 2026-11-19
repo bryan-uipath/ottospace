@@ -191,6 +191,14 @@ pub fn place(user: &[Rule], window: &Facts, shape: &Shape) -> Place {
     if small || squeezed { Place::Float } else { Place::Split }
 }
 
+/// True if the user's own pick (⌘E's list of an app's windows) may put this window in a pane:
+/// any but a sheet or child window (macOS keeps it on its parent), an app's tiny helper, or one a
+/// rule ignores. A pop-up's subrole or a `float` rule does not stop it: the user asked for it.
+pub fn pickable(user: &[Rule], window: &Facts, shape: &Shape) -> bool {
+    let tiny = shape.size.is_some_and(|size| size[0] < TINY[0] && size[1] < TINY[1]);
+    !shape.sheet && !tiny && first(user, window) != Some(Action::Ignore)
+}
+
 /// Where a floating pop-up could be seen, as the shell read it. Global frames, points.
 #[derive(Clone, Copy, Debug)]
 pub struct Sight<'a> {
@@ -301,6 +309,35 @@ mod tests {
 
     fn zoom<'a>(title: &'a str, subrole: &'a str) -> Facts<'a> {
         Facts { app: "zoom.us", bundle: Some("us.zoom.xos"), title, subrole, identifier: None }
+    }
+
+    #[test]
+    fn the_users_pick_may_host_a_floated_pop_up_but_never_a_sheet_a_helper_or_an_ignored_window() {
+        // Zoom in a meeting: its main window, the share viewer, and the meeting window, which
+        // `place` floated (a floating window's subrole).
+        let main = zoom("Zoom Workplace", STANDARD);
+        let share = zoom("Zoom Meeting", STANDARD);
+        let meeting = Facts { identifier: Some("zm.meeting.window.main"), ..zoom("Zoom Meeting", "AXFloatingWindow") };
+        let shape = Shape { size: Some([1200.0, 800.0]), ..Shape::default() };
+        assert_eq!(place(&[], &meeting, &shape), Place::Float);
+        for window in [main, share, meeting] {
+            assert!(pickable(&[], &window, &shape), "{window:?}");
+        }
+        // A user's `float` rule is overridden by their own pick; `ignore`, built in or theirs, is not.
+        let float = Rule {
+            select: Selector { title: Some("Zoom Meeting".into()), ..Selector::default() },
+            action: Action::Float,
+        };
+        assert!(pickable(&[float], &meeting, &shape));
+        let ignore = Rule {
+            select: Selector { title: Some("Zoom Meeting".into()), ..Selector::default() },
+            action: Action::Ignore,
+        };
+        assert!(!pickable(&[ignore], &meeting, &shape));
+        assert!(!pickable(&[], &zoom("Zoom Share Toolbar Window", "AXFloatingWindow"), &shape));
+        // A sheet stays on its window; a helper under 100×100 is no window to show.
+        assert!(!pickable(&[], &main, &Shape { sheet: true, ..shape }));
+        assert!(!pickable(&[], &main, &Shape { size: Some([66.0, 20.0]), ..shape }));
     }
 
     #[test]

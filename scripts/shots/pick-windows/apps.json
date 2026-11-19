@@ -1,0 +1,8 @@
+[
+  {"name": "Lumen", "windows": [
+    {"window": 7, "title": "Inbox (12) · Lumen"},
+    {"window": 8, "title": "Quarterly plan — Docs"},
+    {"window": 9, "title": "Release checklist"}
+  ]},
+  {"name": "Quill", "windows": [{"window": 21, "title": "notes.md"}]}
+]
