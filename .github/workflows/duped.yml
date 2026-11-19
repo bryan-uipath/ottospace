@@ -5,12 +5,14 @@ name: duped
 on:
   pull_request:
     paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
+  # The merge queue's commit, checked against the main it lands on.
+  merge_group:
 
 permissions:
   contents: read
 
 concurrency:
-  group: duped-${{ github.event.pull_request.number }}
+  group: duped-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -36,6 +38,7 @@ jobs:
           tar xzf duped.tar.gz -C "$RUNNER_TEMP" duped
           rm duped.tar.gz
       - name: Check for added copies
-        run: '"$RUNNER_TEMP/duped" check --base "origin/$BASE" --color never'
+        run: '"$RUNNER_TEMP/duped" check --base "$BASE" --color never'
         env:
-          BASE: ${{ github.base_ref }}
+          # A merge group has no base_ref: its base commit instead.
+          BASE: ${{ github.base_ref && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha }}

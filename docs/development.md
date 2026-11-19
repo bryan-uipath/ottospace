@@ -123,7 +123,7 @@ pictures with the `pr-image-upload` skill, never commit them.
   writes one labelled side-by-side per shot. A scenario that fails on the base (its view did not
   exist) gives an "after only" picture. `--bin-before`/`--bin-after` skip the builds.
 - **CI.** `.github/workflows/shots.yml` runs `--compare` against the merge base on a hosted runner
-  for a pull request that changes the app's sources or the scenarios, and keeps the pictures as
+  for a pull request with the label `pr-shots` that changes the app's sources or the scenarios, and keeps the pictures as
   the artifact `shots`. It writes nothing to the pull request: fetch them with
   `gh run download <run id> -n shots`, then upload them with the `pr-image-upload` skill.
 - **Its test.** `scripts/test-shot.sh [binary]`: one scenario, a compare of a build with itself,
@@ -217,7 +217,8 @@ whether the regression is real and accepted.
   `pub` item that no crate uses is not caught. `cargo e2e` runs in a separate job that may fail without blocking, under
   cargo-nextest: a failed test is tried twice more, and one that then passes is listed as flaky in
   the job's summary, with the slowest tests and waits. Failure folders are an artifact. The same
-  job then runs the SDK's tests against a private instance.
+  job then runs the SDK's tests against a private instance. It also runs on `merge_group` (the
+  merge queue), every pull request, docs-only ones too.
 - `.github/workflows/reliability.yml`, nightly and by hand (`repeat`, `test`): `cargo e2e` and
   `cargo e2e-apps` five times each, tallied. The nightly run keeps the issue "Flaky tests".
 - `.github/workflows/build.yml`, on pushes to `main` and on pull requests with the label
@@ -225,8 +226,8 @@ whether the regression is real and accepted.
   prerelease. `osi install pr <n>` adds the label.
 - `.github/workflows/scripts.yml`, on pull requests that change `install.sh`, `scripts/osi`,
   `scripts/test-osi.sh` or `scripts/package.sh`: tests the installer.
-- `.github/workflows/duped.yml`, on pull requests (not docs-only ones), on Linux:
-  `duped check --base origin/<base>` fails when the change adds a helper identical to one
+- `.github/workflows/duped.yml`, on pull requests (not docs-only ones) and `merge_group`, on Linux:
+  `duped check --base origin/<base>` (a merge group: its `base_sha`) fails when the change adds a helper identical to one
   already there, or an identical file of 10 lines or more. A deliberate copy is acknowledged in
   `duped.json`, with a `reason` saying why the two stay separate. The
   release binary is pinned by version and checksum. Run it locally with
@@ -234,9 +235,9 @@ whether the regression is real and accepted.
 - The Rust build cache: the `e2e` job of `ci.yml` saves one, on `main` only; `app-windows.yml`,
   `shots.yml`, `bench.yml` and `reliability.yml` read it (`shared-key: e2e`) and save none. `check` and
   `build` keep their own.
-- `.github/workflows/shots.yml`, on pull requests that change the app's, core's or mac crate's sources or the
-  scenarios: before and after pictures, an artifact (see "Screenshots and recordings").
-- `.github/workflows/bench.yml`, on pull requests that change a crate, `Cargo.lock`,
+- `.github/workflows/shots.yml`, on pull requests with the label `pr-shots` that change the app's,
+  core's or mac crate's sources or the scenarios: before and after pictures, an artifact (see "Screenshots and recordings").
+- `.github/workflows/bench.yml`, on pull requests with the label `pr-bench` that change a crate, `Cargo.lock`,
   `scripts/bench`, `scripts/shot` or the shots fixtures it copies: `scripts/bench --compare` against the base branch's tip (the pull request merged into it after), the table
   in the job summary, the JSON as an artifact (see "Benchmarks"). Nightly and by hand on `main`:
   this tree alone, the JSON kept 90 days for trends.

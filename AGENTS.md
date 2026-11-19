@@ -184,8 +184,13 @@ Rules:
   times each, tallied; the nightly run keeps the issue "Flaky tests" (`issues: write` on that job
   only). Never on pull requests.
 - A change that touches only `docs/`, `site/`, `README.md`, `AGENTS.md` or `LICENSE` runs neither
-  workflow: macOS runners are scarce. Such a pull request has no checks to wait for, and
-  after such a push `main-latest` trails `main` by docs commits.
+  workflow on the pull request: macOS runners are scarce. Such a pull request has no checks to wait
+  for (the merge queue still runs `ci.yml` and `duped.yml`), and after such a push `main-latest`
+  trails `main` by docs commits.
+- `ci.yml` and `duped.yml` also run on `merge_group` (the merge queue), with no path filter: the
+  queue tests every pull request. Its ref (`gh-readonly-queue/...`) is its own concurrency group;
+  it saves no cache. A label-gated workflow (`build`, `bench`, `shots`) skips its jobs without the
+  label, before a runner is taken; a skipped job is not a failure.
 - `.github/workflows/app-windows.yml`, on pull requests and pushes to `main`: `cargo e2e-apps` on a
   hosted runner, whose image grants bash Accessibility and Screen Recording. Not a required check.
   Prefer it to a local run, which takes the keyboard.
@@ -202,18 +207,18 @@ Rules:
 - One Rust cache for the dev build: `ci.yml`'s `e2e` job saves it, on `main` only (`shared-key: e2e`);
   `app-windows.yml`, `shots.yml`, `bench.yml` and `reliability.yml` restore it and save none (`save-if: false`).
   A job that builds the same dependencies joins it; one that saves from a pull request does not.
-- `.github/workflows/shots.yml`, on pull requests that change `crates/ottospace/src/**`,
+- `.github/workflows/shots.yml`, on pull requests that carry the label `pr-shots` and change `crates/ottospace/src/**`,
   `crates/ottospace-core/src/**`, `crates/ottospace-mac/**`, `scripts/shot`, `scripts/shots/**` or `scripts/test-shot.sh`:
   `scripts/test-shot.sh`, then `scripts/shot --compare` of every scenario against the merge base;
   the pictures are the artifact `shots`. Read-only token, no comment on the pull request. Not a
   required check. (`test-shot.sh` needs a screen that draws, so it runs here, not in scripts.yml.)
-- `.github/workflows/bench.yml`, on pull requests that change `crates/**`, `Cargo.lock`, `scripts/bench`,
+- `.github/workflows/bench.yml`, on pull requests that carry the label `pr-bench` and change `crates/**`, `Cargo.lock`, `scripts/bench`,
   `scripts/shot`, the fixtures it copies or `bench.yml`: `scripts/bench --compare` against the base branch's tip, the pull request merged into it after (dev build, both sides on one
   runner), the table in the job summary, the JSON as an artifact. Red past the thresholds in
   `scripts/bench`; not a required check: whoever merges a red run says in the pull request whether
   the regression is real and accepted. Nightly and by hand on `main`: the JSON alone, for trends.
 - `.github/workflows/duped.yml`, on pull requests (not docs-only ones), on `ubuntu-latest`:
-  `duped check --base origin/<base>` (the release binary, pinned by version and checksum) fails on an
+  `duped check --base origin/<base>` (a merge group: its `base_sha`; the release binary, pinned by version and checksum) fails on an
   added helper identical to one already there, or an identical file of 10 lines or more. A deliberate
   copy goes in `duped.json` (never also a `duped.toml`: duped refuses both), with a `reason` that
   says why the two must stay separate. A new release: change `DUPED_VERSION` and `DUPED_SHA256` together.
@@ -234,7 +239,7 @@ Rules:
   They go in the pull request's body through a secret gist, never into the repository.
 - If a picture cannot be taken (the screen is locked: a locked screen draws nothing), the pull
   request says so and waits; it is not merged unseen.
-- Visual evidence: `scripts/shot --compare <base> <scenario>…` (or the `shots.yml` artifact); add
+- Visual evidence: `scripts/shot --compare <base> <scenario>…` (or the `shots.yml` artifact: label the pull request `pr-shots`); add
   a scenario under `scripts/shots/` for a view none covers. See `docs/development.md`.
 - A tool, CLI, parser or CI change pastes the command's output instead.
 

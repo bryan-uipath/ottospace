@@ -4,6 +4,8 @@ on:
   pull_request:
     # Text nobody compiles: no macOS runner for it. (`crates/**/*.md` is compiled in: not listed.)
     paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
+  # The merge queue's commit. No path filter: the queue tests every pull request.
+  merge_group:
   push:
     branches: [main]
     # Text nobody compiles: no macOS runner for it. (`crates/**/*.md` is compiled in: not listed.)
@@ -12,7 +14,8 @@ on:
 permissions:
   contents: read
 
-# A new push to the same PR or branch cancels the run it supersedes.
+# A new push to the same PR or branch cancels the run it supersedes. A merge group's ref
+# (`gh-readonly-queue/main/pr-<n>-<sha>`) is its own: groups never cancel each other.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -34,7 +37,10 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt,clippy
           rustup default stable
           rustc --version
+      # A merge group's ref is gone once it merges: its cache would only fill the quota.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
       # ottospace-mac is not rustfmt-clean yet, so check only the crates that are.
       - name: Format
         run: cargo fmt -p ottospace -p ottospace-core -p ottospace-sessions -p ottospace-agents --check
