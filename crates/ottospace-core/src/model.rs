@@ -336,9 +336,18 @@ pub enum PickItem {
     Terminal,
     /// "File…": the open panel, then the file in a viewer.
     File,
-    /// A running app, by name. The shell hosts its main window.
+    /// A running app, by name. Choosing it lists its windows: the picker's second step.
     App {
         name: String,
+    },
+    /// The second step: one of `app`'s windows, by its window-server id; its title drawn, never
+    /// in the state. `pane`: the pane that held it when listed.
+    Window {
+        app: String,
+        window: u32,
+        #[serde(skip)]
+        title: String,
+        pane: Option<PaneId>,
     },
     /// An installed app that is not running, by where it is. Choosing it starts it.
     Closed {
@@ -371,8 +380,18 @@ impl PickItem {
             PickItem::Terminal => "Terminal",
             PickItem::File => "File…",
             PickItem::App { name } | PickItem::Closed { name, .. } | PickItem::Sound { name, .. } => name,
+            PickItem::Window { title, .. } if title.is_empty() => "Untitled window",
+            PickItem::Window { title, .. } => title,
         }
     }
+}
+
+/// One of an app's windows, as the shell read it for the picker's second step.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PickWindow {
+    /// Its window-server id.
+    pub window: u32,
+    pub title: String,
 }
 
 /// The open picker: what a new pane can show, narrowed by what the user typed.
@@ -392,6 +411,8 @@ pub struct Picker {
     pub installed: Vec<PickItem>,
     /// The transcript's picker ("Transcribe a window…"): its rows are apps that can play sound.
     pub transcribe: bool,
+    /// The second step: the app whose windows are the rows.
+    pub app: Option<String>,
     /// Its pick's transcript id and the time it was opened.
     #[serde(skip)]
     pub start: Option<(String, u64)>,
@@ -617,6 +638,12 @@ pub enum Action {
     SetInstalled {
         apps: Vec<Installed>,
         running: Vec<String>,
+    },
+    /// The shell's answer to `Effect::PickWindows`: `app`'s windows that may go in a pane, front
+    /// first. The picker lists them, its second step.
+    PickerWindows {
+        app: String,
+        windows: Vec<PickWindow>,
     },
     /// Replace the picker's filter text.
     PickerQuery {
@@ -2005,6 +2032,7 @@ impl Action {
             | Action::CloseTab { .. }
             | Action::CloseTabAsked { .. }
             | Action::PickerQuery { .. }
+            | Action::PickerWindows { .. }
             | Action::SetInstalled { .. }
             | Action::PickerMove { .. }
             | Action::PickerChoose { .. }
@@ -2367,6 +2395,7 @@ impl Action {
             | Action::CloseTabAsked { .. }
             | Action::SetInstalled { .. }
             | Action::PickerQuery { .. }
+            | Action::PickerWindows { .. }
             | Action::PickerMove { .. }
             | Action::PickerChoose { .. }
             | Action::ClosePicker
@@ -2666,6 +2695,17 @@ pub enum Effect {
     Live(PaneId),
     /// The app pane's real window goes back off screen.
     Parked(PaneId),
+    /// A running app was picked: send `PickerWindows` with its windows.
+    PickWindows {
+        app: String,
+    },
+    /// A window of `app` was picked (`PickItem::Window`): host it in a new pane, as `HostApp`.
+    HostPicked {
+        app: String,
+        window: u32,
+        axis: Axis,
+        new_tab: bool,
+    },
     /// The user picked a running app: host its main window in a new pane.
     /// With `new_tab`, in a new tab (send `NewTab` first, once hosting has succeeded).
     HostApp {
@@ -2980,6 +3020,7 @@ mod agent;
 pub mod chat;
 pub mod editor;
 pub mod finish;
+mod pick;
 pub mod slots;
 mod transcribe;
 mod viewer;
@@ -5268,13 +5309,16 @@ impl Model {
                 self.leave(effects);
                 let installed = offered(&self.installed.0, &self.installed.1, &items);
                 let (query, transcribe, start) = (Field::new("", MAX_FILTER), false, None);
-                self.picker = Some(Picker { axis, new_tab, items, query, selected: 0, installed, transcribe, start });
+                let app = None;
+                self.picker =
+                    Some(Picker { axis, new_tab, items, query, selected: 0, installed, transcribe, start, app });
             }
             Action::SetInstalled { apps, running } => {
                 self.app_lists.resolve(&apps);
                 self.installed = (apps, running);
                 // The transcript's picker lists sound apps alone: no installed app joins it.
-                if let Some(picker) = self.picker.as_mut().filter(|picker| !picker.transcribe) {
+                // Nor the second step: its rows are one app's windows.
+                if let Some(picker) = self.picker.as_mut().filter(|picker| !picker.transcribe && picker.app.is_none()) {
                     // The rows change under the selection: it stays on its item, so ↵ opens
                     // what was highlighted. If the item is gone, on a row.
                     let chosen = picker.matches().get(picker.selected).copied().cloned();
@@ -5284,6 +5328,7 @@ impl Model {
                     picker.selected = same.unwrap_or(picker.selected.min(rows.len().saturating_sub(1)));
                 }
             }
+            Action::PickerWindows { app, windows } => self.picker_windows(app, windows),
             Action::PickerQuery { query } => {
                 if let Some(picker) = &mut self.picker {
                     picker.query = Field::new(&query, MAX_FILTER);
@@ -5324,11 +5369,12 @@ impl Model {
                         }
                         self.open(Kind::Terminal, picker.axis, None, effects);
                     }
-                    // The shell makes the tab only once the window is in hand, so a failed
-                    // host does not leave an empty tab.
+                    // Its windows first: the shell lists them (`PickerWindows`).
                     Some(PickItem::App { name }) => {
-                        effects.push(Effect::HostApp { name, axis: picker.axis, new_tab: picker.new_tab })
+                        effects.push(Effect::PickWindows { app: name });
+                        self.picker = Some(picker);
                     }
+                    Some(PickItem::Window { app, window, .. }) => self.pick_window(&picker, app, window, effects),
                     // The shell asks which file (the open panel), then sends `OpenFile` as the user's.
                     Some(PickItem::File) => {
                         effects.push(Effect::ChooseFile { axis: picker.axis, new_tab: picker.new_tab })
@@ -8999,6 +9045,7 @@ mod tests {
         Action::CloseTab { .. },
         Action::CloseTabAsked { .. },
         Action::PickerQuery { .. },
+        Action::PickerWindows { .. },
         Action::SetInstalled { .. },
         Action::PickerMove { .. },
         Action::PickerChoose { .. },
@@ -9302,6 +9349,7 @@ mod tests {
             Action::CloseTab { index: None },
             Action::CloseTabAsked { index: None, running: Vec::new() },
             Action::PickerQuery { query: text() },
+            Action::PickerWindows { app: text(), windows: Vec::new() },
             Action::SetInstalled { apps: Vec::new(), running: Vec::new() },
             Action::PickerMove { delta: 1 },
             Action::PickerChoose { index: None },
@@ -10265,7 +10313,7 @@ mod tests {
         assert_eq!(m.picker.as_ref().map(|p| p.selected), Some(0));
         // The selection is on row 0; the click is on row 1.
         let effects = m.update(Action::PickerChoose { index: Some(1) });
-        assert_eq!(effects, [Effect::HostApp { name: "Google Slides".into(), axis: Down, new_tab: false }]);
+        assert_eq!(effects, [Effect::PickWindows { app: "Google Slides".into() }]);
     }
 
     #[test]
@@ -10280,13 +10328,13 @@ mod tests {
     }
 
     #[test]
-    fn choosing_an_app_asks_the_shell_to_host_it() {
+    fn choosing_an_app_asks_the_shell_for_its_windows() {
         let mut m = Model::default();
         picker(&mut m);
         m.update(Action::PickerQuery { query: "chrome".into() });
         let effects = m.update(Action::PickerChoose { index: None });
-        assert_eq!(effects, [Effect::HostApp { name: "Google Chrome".into(), axis: Down, new_tab: false }]);
-        assert!(m.picker.is_none());
+        assert_eq!(effects, [Effect::PickWindows { app: "Google Chrome".into() }]);
+        assert!(m.picker.as_ref().is_some_and(|picker| picker.app.is_none()));
     }
 
     #[test]
@@ -15715,8 +15763,11 @@ mod tests {
         term(&mut m);
         let items = vec![PickItem::App { name: "Slack".into() }];
         m.update(Action::OpenPicker { axis: Right, new_tab: true, items });
+        assert_eq!(m.update(Action::PickerChoose { index: None }), [Effect::PickWindows { app: "Slack".into() }]);
+        let windows = vec![PickWindow { window: 7, title: "general".into() }];
+        m.update(Action::PickerWindows { app: "Slack".into(), windows });
         let effects = m.update(Action::PickerChoose { index: None });
-        assert_eq!(effects, [Effect::HostApp { name: "Slack".into(), axis: Right, new_tab: true }]);
+        assert_eq!(effects, [Effect::HostPicked { app: "Slack".into(), window: 7, axis: Right, new_tab: true }]);
         // No tab yet: if hosting fails, nothing is left behind.
         assert_eq!(m.tabs.len(), 2);
     }

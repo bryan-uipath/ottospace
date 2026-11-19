@@ -71,7 +71,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.layout` | The active tab's split tree, or null: `{"leaf":3}` or `{"split":{"axis":"right","ratio":0.5,"a":..,"b":..}}`. `ratio` is the share of the split that `a` (the left or top side) takes |
 | `state.live` | The app pane that has the keyboard, if any |
 | `state.fill_display` | The window fills its display, over the menu bar and the Dock. Only the user turns it on (⌃⌘F, the window's green button, the top row's button): a client's key, click, sneak label or palette choice is refused |
-| `state.picker` | Null, or the open picker: `axis`, `new_tab`, `items` (`{"type":"terminal"}`, `{"type":"app","name":"..."}` for a running app, or `{"type":"closed","name":"...","path":"..."}` for a pinned app (the `apps` setting) that is not running), `query` (the filter's text), and `selected` (an index into `picker_rows`). `transcribe` true: the transcript's picker the user opened ("Transcribe a window…"), its items `{"type":"sound","name":"...","playing":true}` (an app that can play sound, a row per window; window titles are never here). Only the user moves, filters or picks in it: your keys there are refused |
+| `state.picker` | Null, or the open picker: `axis`, `new_tab`, `items` (`{"type":"terminal"}`, `{"type":"app","name":"..."}` for a running app (choosing it lists its windows, the second step: `app` is then its name and the items are `{"type":"window","app":"...","window":7,"pane":null}`, by window-server id, `pane` the one that held it when listed; titles are never here), or `{"type":"closed","name":"...","path":"..."}` for a pinned app (the `apps` setting) that is not running), `query` (the filter's text), and `selected` (an index into `picker_rows`). `transcribe` true: the transcript's picker the user opened ("Transcribe a window…"), its items `{"type":"sound","name":"...","playing":true}` (an app that can play sound, a row per window; window titles are never here). Only the user moves, filters or picks in it: your keys there are refused |
 | `picker_rows` | Null, or the open picker's rows as drawn: `items` narrowed by the filter, then, once something is typed, every installed app that is not running and matches, as `closed` items. Choosing a `closed` row starts that app on the user's Mac: leave those to the user |
 | `state.inspector`, `inspector` | Null, or the user's accessibility inspector on an app pane: `state.inspector` has `pane`, `app`, `filter`, `filtering`; the top-level `inspector` has `counts` (`nodes`, `pressable`, `settable`, `roles` as `[role, count]`, `sparse`), and its `rows` by `depth`, `role` and flags only (null while a filter is typed). The app's text is never in the state; read a tree with `ax_tree`. Only the user opens it or moves in it |
 | `state.palette`, `palette_rows` | Null, or the user's command palette (⌘P): `query`, `selected`, `tasks` (null, or while Move Tab to… lists them: each `to`, a space as in `spaces[].of`, and `title`), and its rows as drawn, each `command`, `name`, `group` and `key` (a listed task: `move_tab_to_task`, its title, `Move to`). It is the user's alone: a `key` you send while it is open is refused ("only the user runs the command palette"), and pane requests wait behind it as they do behind the picker |
@@ -720,7 +720,9 @@ ottospace ctl '{"cmd":"keys"}'
 ottospace ctl '{"cmd":"quit"}'
 ```
 
-`picker_choose` opens the selected match, or the match at `"index":N`. `section` is `apps`,
+`picker_choose` opens the selected match, or the match at `"index":N`. On a running app it lists
+that app's windows instead (`state.picker.app`); on one of those it hosts the window, or shows
+the pane that holds it. `section` is `apps`,
 `workbook`, `tasks`, `repos` or `marks`; the open section's name closes the bar.
 `keys` shows or hides the key reference; it fails while the picker or the new-task box is open,
 which it would close. `picker_choose` fails if the picker is not open.

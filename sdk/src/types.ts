@@ -747,7 +747,11 @@ export type PickItem =
   | { type: "terminal" }
   /** "File…": the open panel, then the file in a viewer. */
   | { type: "file" }
+  /** A running app. Choosing it lists its windows: the picker's second step (`Picker.app`). */
   | { type: "app"; name: string }
+  /** The second step: one of `app`'s windows, by its window-server id (its title is never in the
+   * state); `pane`: the pane that held it when listed. Choosing a held one shows its pane. */
+  | { type: "window"; app: string; window: number; pane: number | null }
   /** An installed app that is not running, by its bundle's path. Choosing it starts it. */
   | { type: "closed"; name: string; path: string }
   /** In the transcript's picker: an app that can play sound (one row per window; titles are
@@ -781,6 +785,8 @@ export interface Picker {
   selected: number;
   /** The transcript's picker ("Transcribe a window…"): only the user moves, filters or picks. */
   transcribe: boolean;
+  /** The second step: the app whose windows are the items, or null. */
+  app: string | null;
 }
 
 /** The command palette, while it is open. Only the user types, moves or runs in it. */

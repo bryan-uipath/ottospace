@@ -99,6 +99,7 @@ mod menus;
 mod new_task;
 mod notice_bar;
 mod pass;
+mod pick;
 mod picture;
 mod progress;
 mod prs;
@@ -858,6 +859,8 @@ struct Workspace {
     viewers: HashMap<PaneId, viewer::FileView>,
     /// "File…" choices that would have shown the open panel: a test run shows none.
     file_prompts: u32,
+    /// Windows the picker's second step asked to host (`Effect::HostPicked`).
+    window_picks: u32,
     /// Each terminal's header, read from its processes a few times a second: `app-api · cargo test`.
     titles: HashMap<PaneId, String>,
     /// The right drawer: each task's agent, and where its conversation was drawn.
@@ -1462,6 +1465,7 @@ impl Workspace {
             terminals: HashMap::new(),
             viewers: HashMap::new(),
             file_prompts: 0,
+            window_picks: 0,
             titles: HashMap::new(),
             drawer: talk::Drawer::default(),
             cell: terminal::cell_size(window),
@@ -1875,6 +1879,10 @@ impl Workspace {
                 }
                 Effect::HostApp { name, axis, new_tab } => {
                     let _ = self.open_app(name, *axis, *new_tab, window, cx);
+                }
+                Effect::PickWindows { app } => self.pick_windows(app, window, cx),
+                Effect::HostPicked { app, window: id, axis, new_tab } => {
+                    self.host_picked(app, *id, *axis, *new_tab, window, cx)
                 }
                 Effect::LaunchApp { name, path, axis, new_tab } => self.launch_picked(name, path, *axis, *new_tab),
                 Effect::SaveApps { changes } => self.save_apps(changes),
@@ -2979,7 +2987,9 @@ impl Workspace {
                     _ => false,
                 });
                 // A picked app that could not be hosted: `open_app` left the reason in `error`.
-                let picked = |e: &Effect| matches!(e, Effect::HostApp { .. } | Effect::LaunchApp { .. });
+                let picked = |e: &Effect| {
+                    matches!(e, Effect::HostApp { .. } | Effect::HostPicked { .. } | Effect::LaunchApp { .. })
+                };
                 let unhosted = effects.iter().any(picked) && self.error.is_some();
                 if dead || unhosted {
                     failure = self.error.clone().or(Some("the shell did not start".into()));
@@ -3629,6 +3639,8 @@ impl Workspace {
                 "pr_opens": self.pr_opens,
                 // "File…" choices: the open panel a test run does not show.
                 "file_prompts": self.file_prompts,
+                // Windows the picker's second step asked to host (a test run hosts none).
+                "window_picks": self.window_picks,
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
                 // Frames drawn while the calendar band's loading bar slides: none once a read lands.
@@ -3852,13 +3864,25 @@ impl Workspace {
             return Ok(());
         }
         let hosted = Hosted::new(target)?;
+        self.host_in_new_pane(hosted, axis, new_tab, window, cx);
+        Ok(())
+    }
+
+    /// A captured window in a new pane along `axis`, or a new tab first. `None`: no pane opened.
+    fn host_in_new_pane(
+        &mut self,
+        hosted: Hosted,
+        axis: Axis,
+        new_tab: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<PaneId> {
         // The window is in hand, so the tab will not be left empty.
         if new_tab {
             self.dispatch(Action::NewTab, self.input, window, cx);
         }
         let action = Action::Open { kind: hosted.kind(), axis, beside: None };
-        self.attach(hosted, action, window, cx);
-        Ok(())
+        self.attach(hosted, action, window, cx)
     }
 
     /// Starts an app that is not running, in the background: its window is wanted in a pane, not
@@ -4645,6 +4669,8 @@ impl Workspace {
         self.refresh_apps();
         // What `refresh_apps` just listed: running apps, then the pinned ones that are not.
         let apps = self.apps.iter().map(|app| PickItem::App { name: app.name.clone() });
+        // A test run's made-up running apps (it runs none of its own).
+        let apps = apps.chain(pick::fixture_apps().into_iter().map(|app| PickItem::App { name: app.name }));
         let closed = self.pinned_closed().map(|app| PickItem::Closed { name: app.name, path: app.path });
         let items = [PickItem::Terminal, PickItem::File].into_iter().chain(apps).chain(closed).collect();
         self.offer_installed(cx);
@@ -4765,6 +4791,9 @@ impl Workspace {
         if picker.transcribe {
             return self.render_sound_picker(picker, cx);
         }
+        if let Some(app) = &picker.app {
+            return self.render_window_picker(picker, app, cx);
+        }
         let selected = picker.selected;
         let rows = picker.matches().into_iter().enumerate().map(|(i, item)| {
             let (tag, color) = match item {
@@ -4772,7 +4801,7 @@ impl Workspace {
                 PickItem::File => ("FILE", theme::PRIMARY),
                 PickItem::App { .. } => ("APP", theme::APP),
                 PickItem::Closed { .. } => ("APP", theme::MUTED),
-                PickItem::Sound { .. } => ("APP", theme::APP),
+                PickItem::Sound { .. } | PickItem::Window { .. } => ("APP", theme::APP),
             };
             dialog::filter_row(("pick", i), i == selected)
                 .child(match item {
@@ -4797,18 +4826,25 @@ impl Workspace {
             let heading = div().px_3().pt_2().pb_1().text_xs().text_color(rgb(theme::MUTED)).child("NOT RUNNING");
             rows.insert(at, heading.into_any_element());
         }
-        let title = match (picker.new_tab, picker.axis) {
-            (true, _) => "New tab with",
-            (false, Axis::Right) => "Split right with",
-            (false, Axis::Down) => "Split down with",
-        };
-        let panel = dialog::floating(320.).absolute().top(px(TOP_BAR + 6.)).right(px(8.)).max_h(px(420.));
+        self.picker_panel(320., picker_title(picker).into(), rows, "No match", cx)
+    }
+
+    /// ⌘E's dropdown, `width` wide: `title` and the filter over `rows`. A click outside closes it.
+    fn picker_panel(
+        &self,
+        width: f32,
+        title: SharedString,
+        rows: Vec<AnyElement>,
+        empty: &'static str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let panel = dialog::floating(width).absolute().top(px(TOP_BAR + 6.)).right(px(8.)).max_h(px(420.));
         let header = div()
             .h(px(34.))
             .text_xs()
-            .child(div().text_color(rgb(theme::PICK)).child(title))
+            .child(div().flex_none().text_color(rgb(theme::PICK)).child(title))
             .child(self.render_field("type to filter", cx));
-        let panel = self.list_panel(panel, header, "picker", rows, "No match");
+        let panel = self.list_panel(panel, header, "picker", rows, empty);
         dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel).into_any_element()
     }
 
@@ -7142,6 +7178,15 @@ fn paint_corner_mask(bounds: Bounds<Pixels>, clip: Bounds<Pixels>, radius: f64, 
     window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
         window.paint_quad(quad(ring, r * 2., transparent_black(), r, rgb(theme::BACKGROUND), BorderStyle::Solid));
     });
+}
+
+/// What the picker's header says it opens: "Split right with".
+fn picker_title(picker: &Picker) -> &'static str {
+    match (picker.new_tab, picker.axis) {
+        (true, _) => "New tab with",
+        (false, Axis::Right) => "Split right with",
+        (false, Axis::Down) => "Split down with",
+    }
 }
 
 /// Lowest global y a raised live window may reach: the bottom of ottospace's top bar.
