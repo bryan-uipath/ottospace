@@ -1578,6 +1578,8 @@ first brainstorm:
 
 [multi-monitor.md](ai/multi-monitor.md): a tab folded out to another display (⌘⇧O), focus arrows across displays, unplug folds it back in; behind `multi_monitor`. Built: the model, ⌘⇧O and the window out (see [Displays](#displays)); its own drawer and the arrows across, not yet.
 
+[dock-strip.md](ai/dock-strip.md): a strip at the workspace's top or bottom edge for an app's small accessory window (Zoom's share control bar), sized by the window, not a ratio; options weighed, slices. Not built.
+
 [repos.md](ai/repos.md): the Repos section: the opt-in list and its order, groups from older settings, folding, the default folder's dot, and how + makes a worktree (the git it runs, what it refuses).
 
 [pick-and-app-profiles.md](ai/pick-and-app-profiles.md): Pick on screen (task context picked in panes), the apps' extended accessibility mode on demand with its header icon, and app profiles as data; the spike's measurements and the slices. Not built.
