@@ -217,11 +217,8 @@ impl Workspace {
     /// window points.
     pub fn field_snapshot(&self) -> serde_json::Value {
         let Some((of, field)) = self.model.field() else { return serde_json::Value::Null };
-        // The user's words to a question card: only where its cursor is, never the words.
-        // A side question, and a draft that took a btw answer (the model's words): neither.
-        let untrusted = self.model.shown_chat().is_some_and(|chat| chat.untrusted);
-        let hidden = of == "btw" || (of == "talk" && (self.model.talk_answers() || untrusted));
-        let (text, selected) = match hidden {
+        // Where the cursor is, never the words (`Model::field_hidden`).
+        let (text, selected) = match self.model.field_hidden() {
             true => ("", ""),
             false => (field.text(), field.selected()),
         };

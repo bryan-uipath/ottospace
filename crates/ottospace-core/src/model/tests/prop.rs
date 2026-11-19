@@ -1916,6 +1916,10 @@ fn check(m: &Model) -> Result<(), String> {
     check_offers(m)?;
     check_out(m)?;
     check_viewers(m)?;
+    // A btw answer's words ("Redis": only its maker's) in the composer are never in the state.
+    if let Some(("talk", field)) = m.field() {
+        ensure!(!field.text().contains("Redis") || m.field_hidden(), "a btw answer in the state: {:?}", field.text());
+    }
     // An owned pane holds an app's window; only an owned pane's unsaved changes are kept.
     for pane in m.panes.iter().filter(|p| p.owned) {
         ensure!(matches!(pane.kind, Kind::App { .. }), "owned pane {} holds {:?}", pane.id, pane.kind);

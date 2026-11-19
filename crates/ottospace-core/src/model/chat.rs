@@ -239,6 +239,17 @@ impl Model {
         self.shown_draft_chat().is_some_and(Chat::answers_other)
     }
 
+    /// The open field's words are never in the state: a side question, the user's words to a
+    /// question card, a draft that took a btw answer (the model's words).
+    pub fn field_hidden(&self) -> bool {
+        match self.field() {
+            Some(("btw", _)) => true,
+            // Its draft's chat: also an ended one the composer goes on with.
+            Some(("talk", _)) => self.talk_answers() || self.shown_draft_chat().is_some_and(|chat| chat.untrusted),
+            _ => false,
+        }
+    }
+
     /// The composer's draft; while a question card's cursor is on "Other…", its words.
     pub(super) fn talk_draft(&self) -> Option<&Field> {
         let chat = self.shown_draft_chat()?;
@@ -568,8 +579,9 @@ impl Model {
                 _ => {}
             }
         }
-        // A draft that took a btw answer keeps it out of the state until it is empty again.
-        for chat in self.chats.iter_mut().filter(|chat| chat.draft.text().is_empty()) {
+        // A draft that took a btw answer keeps it out of the state until it is empty again, and
+        // not waiting on a start (`unqueue` may put it back).
+        for chat in self.chats.iter_mut().filter(|chat| chat.draft.text().is_empty() && chat.queued.is_none()) {
             chat.untrusted = false;
         }
         let tasks = &self.tasks;
