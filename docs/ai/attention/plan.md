@@ -129,15 +129,25 @@ then everywhere Bill is used, it gets updated."
   the different agents, which ones are assigned as assistants, and what tasks/workspaces they are
   working on." Each agent's name, runner, model and context, its roles, and the tasks and
   workspaces it works in now. The place to change an agent's model or assign a role.
-- **Comparing two agents in a role** (the owner: "A/B test opus 5.5 vs gpt astra as my
-  secretary"). Options:
-  - *Side by side on the same input*: both prepare the same decision card; the person picks the
-    better one, blind to which agent made it. Costs double.
-  - *Alternate by day or by task*, with outcome measures: offers taken vs dismissed, decisions
-    answered without opening the detail, how often the recommendation was the option picked,
-    time blocked, spend.
-  - One person makes few decisions a day: small samples make those numbers weak. Blind
-    side-by-side picks are the more trustworthy signal. The measures stay on the Mac.
+- **Audit and feedback.** The owner: "audit and review actions it took on my behalf (and give
+  feedback good or bad...)". Every act of a role on the person's behalf goes in a log: what, when,
+  why (the rule or trigger), what it read, the result, and Undo where the act can be undone. Each
+  entry takes a good/bad mark and an optional note. Shown in the agents pane and as each role's
+  "what it did" list; the shelf of offers is that list filtered to results.
+  - Feedback to the agent: marked entries are handed to it as examples. A change to its standing
+    instructions or skills is proposed and the person approves it; nothing rewrites itself.
+  - Kept local, under `<home>`, private as the event log (`event_log.rs`, 0600). That log holds
+    names, counts, ids and versions, never terminal or transcript text, titles, meetings, passes,
+    paths or file contents. The audit log needs more (what it read, why): it may name a task, a
+    repository and a PR; never message or transcript text, meeting titles, window titles or
+    passes. Fed back to an agent, entries are data, never instructions.
+- **Comparing two agents in a role** (the owner: "A/B test opus 5.5 vs gpt astra"):
+  - *Side by side, blind*: both prepare the same card; the person picks the better. Costs double.
+  - *Alternate by day or task*, with outcome measures: offers taken vs dismissed, decisions
+    answered without opening the detail, how often the recommendation was picked, time blocked,
+    spend; and the audit log's good/bad marks, a direct signal.
+  - Few decisions a day make small samples: blind picks and marks beat the derived numbers. The
+    measures stay on the Mac.
 
 ### 3. A secretary agent
 
@@ -192,10 +202,17 @@ ottospace never sends a message. The person sends it.
 
 ### 6. Focus mode
 
-Knows focus time from the calendar (focus blocks are already recognised and coloured). During a
-block:
+Knows focus time from the calendar (focus blocks are already recognised and coloured).
 
-- **Distractions removed.** The owner: Slack "can make noise on notifications and show a red dot
+- **Where it starts.** The secretary picks the place: the existing workspace of the task the block
+  is for (the block's title, if it names one; else the top of the where-next ranking), or a new
+  workspace when none fits. A new one is temporary as + makes one today, but becomes kept once it
+  gets a task; closing it when its tasks are done and no panes are left is new. The pick is shown
+  with its reason; one key picks another. Started by the person (their key, or their macOS Focus
+  turning on), going there is their own act's consequence: it switches. Started by the calendar
+  alone, it offers ("Focus time: go to Login loop?") and waits.
+
+- **Distractions removed** during the block. The owner: Slack "can make noise on notifications and show a red dot
   in the dock, both of which can pull me away mentally." Hiding or parking its window is cheap and
   fails for that reason: the sound and the badge still reach the person. The options:
   - **(a) Quit the app for the block, reopen it at the end.** Complete: no sound, no badge. The
