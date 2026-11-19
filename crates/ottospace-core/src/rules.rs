@@ -327,22 +327,17 @@ pub fn pickable(user: &[Rule], window: &Facts, shape: &Shape) -> bool {
     unpickable(user, window, shape).is_none()
 }
 
-/// Why the user's pick may not put a window in a pane (`pickable`): for the log, never a title.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Unpickable {
-    Sheet,
-    Tiny,
-    /// An `ignore` rule, the user's or a built-in one.
-    Rule(Source),
-}
-
-/// `pickable`'s no, and why.
-pub fn unpickable(user: &[Rule], window: &Facts, shape: &Shape) -> Option<Unpickable> {
-    let tiny = shape.size.is_some_and(|size| size[0] < TINY[0] && size[1] < TINY[1]);
+/// `pickable`'s no, and why (`Sheet`, `Tiny`, or `Rule` with the `ignore` rule that said it): for
+/// the log, never a title.
+pub fn unpickable(user: &[Rule], window: &Facts, shape: &Shape) -> Option<(Why, Option<Source>)> {
+    if shape.sheet {
+        return Some((Why::Sheet, None));
+    }
+    if shape.size.is_some_and(|size| size[0] < TINY[0] && size[1] < TINY[1]) {
+        return Some((Why::Tiny, None));
+    }
     match first_of(user, window) {
-        _ if shape.sheet => Some(Unpickable::Sheet),
-        _ if tiny => Some(Unpickable::Tiny),
-        Some((Action::Ignore, source)) => Some(Unpickable::Rule(source)),
+        Some((Action::Ignore, source)) => Some((Why::Rule, Some(source))),
         _ => None,
     }
 }
@@ -712,12 +707,12 @@ mod tests {
         assert!(pickable(&[], &chat, &shape) && pickable(&[], &zoom("Meeting chat", STANDARD), &shape));
         let toolbar = zoom("zoom share toolbar window", "AXSystemDialog");
         assert_eq!(decide(&[], &toolbar, &beside([961.0, 58.0])).place, Place::Leave);
-        assert_eq!(unpickable(&[], &toolbar, &beside([961.0, 58.0])), Some(Unpickable::Rule(Source::BuiltIn(0))));
+        assert_eq!(unpickable(&[], &toolbar, &beside([961.0, 58.0])), Some((Why::Rule, Some(Source::BuiltIn(0)))));
         // A user's own `ignore` still keeps it out; the log learns which rule, never the title.
         let ignore = serde_json::from_str::<Rule>(r#"{"title": "Meeting chat", "do": "ignore"}"#).unwrap();
-        assert_eq!(unpickable(&[ignore], &chat, &shape), Some(Unpickable::Rule(Source::User(0))));
-        assert_eq!(unpickable(&[], &chat, &Shape { sheet: true, ..shape }), Some(Unpickable::Sheet));
-        assert_eq!(unpickable(&[], &chat, &beside([40.0, 40.0])), Some(Unpickable::Tiny));
+        assert_eq!(unpickable(&[ignore], &chat, &shape), Some((Why::Rule, Some(Source::User(0)))));
+        assert_eq!(unpickable(&[], &chat, &Shape { sheet: true, ..shape }), Some((Why::Sheet, None)));
+        assert_eq!(unpickable(&[], &chat, &beside([40.0, 40.0])), Some((Why::Tiny, None)));
     }
 
     /// One screen; ottospace's window over most of it, its app's pane in it.

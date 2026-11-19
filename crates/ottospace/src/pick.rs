@@ -79,12 +79,18 @@ fn unpickable(window: &ax::Window) -> Option<String> {
     if window.minimized() {
         return Some("minimised".into());
     }
-    let why = with_facts(window, |facts| rules::unpickable(&config::live().windows, facts, &shape))?;
-    Some(match why {
-        rules::Unpickable::Sheet => "sheet".into(),
-        rules::Unpickable::Tiny => "tiny".into(),
-        rules::Unpickable::Rule(source) => format!("{}: ignore", source.label()),
+    let (why, rule) = with_facts(window, |facts| rules::unpickable(&config::live().windows, facts, &shape))?;
+    Some(match rule {
+        Some(source) => format!("{}: {}", source.label(), rules::Action::Ignore.name()),
+        None => why.name().into(),
     })
+}
+
+/// A window's subrole for the log: an app may give any text, so only an `AX` word, else `other`.
+fn logged_subrole(window: &ax::Window) -> String {
+    let subrole = window.quick(ax::Window::subrole).unwrap_or_default();
+    let word = subrole.len() <= 40 && subrole.starts_with("AX") && subrole.chars().all(|c| c.is_ascii_alphanumeric());
+    if word { subrole } else { "other".into() }
 }
 
 impl Workspace {
@@ -99,9 +105,11 @@ impl Workspace {
             let read = |w: ax::Window| Some(PickWindow { window: w.id()?, title: w.title().unwrap_or_default() });
             let mut skipped = Vec::new();
             for w in ax::Window::all_of(pid) {
-                match unpickable(&w) {
+                // A window that closed while read has no id: said, not lost.
+                let why = unpickable(&w).or_else(|| w.id().is_none().then(|| "no_id".into()));
+                match why {
                     None => windows.extend(read(w)),
-                    Some(why) => skipped.push(serde_json::json!({ "why": why, "subrole": w.subrole() })),
+                    Some(why) => skipped.push(serde_json::json!({ "why": why, "subrole": logged_subrole(&w) })),
                 }
             }
             bundle = ax::app_identity(pid).0;

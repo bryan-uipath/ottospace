@@ -332,6 +332,10 @@ fn a_system_dialog_is_offered_and_listed_and_the_users_click_puts_it_in_a_pane()
     let spot = host_and_park(&otto);
     canary.call(json!({"cmd": "dialog", "at": spot, "subrole": "AXSystemDialog"}));
     let offered = wait_offers(&otto, 1);
+    // The window Accessibility reads is the system dialog asked for.
+    let pid = canary.child.id() as i32;
+    let read = ottospace_mac::ax::Window::all_of(pid).into_iter().find(|w| w.id() == Some(offered[0] as u32));
+    assert_eq!(read.and_then(|w| w.subrole()).as_deref(), Some("AXSystemDialog"));
     // ⌘E, the canary: its two windows listed, the system dialog too.
     otto.call(json!({"cmd": "picker"}));
     otto.call(json!({"cmd": "picker_query", "query": CANARY}));
