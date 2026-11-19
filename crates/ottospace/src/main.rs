@@ -126,6 +126,7 @@ mod sneak;
 mod sneak_apps;
 mod stall;
 mod status_bar;
+mod syntax;
 mod tags;
 mod talk;
 mod terminal;

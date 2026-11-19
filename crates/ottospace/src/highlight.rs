@@ -17,6 +17,10 @@ pub enum Token {
     Comment,
     /// A JSON, YAML or TOML key.
     Key,
+    /// A function's name, where it is made or called (a grammar's, `syntax`).
+    Function,
+    /// Brackets and separators (a grammar's).
+    Punctuation,
     /// A diff's lines.
     Added,
     Removed,
@@ -84,6 +88,8 @@ pub fn colour(token: Token) -> u32 {
         Token::Number => theme::APP,
         Token::Comment => theme::MUTED,
         Token::Key => theme::PRIMARY,
+        Token::Function => theme::SNEAK,
+        Token::Punctuation => theme::CODE_PUNCTUATION,
         Token::Removed => theme::ERROR,
         Token::Hunk => theme::MARK,
     }

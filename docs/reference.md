@@ -1050,7 +1050,9 @@ code blocks coloured by their language with Copy, task boxes, tables aligned as 
 scrolled across when wide, quotes and `> [!NOTE]` callouts, footnotes at the foot, bare addresses
 as links, `#heading` links that scroll to it, pictures beside the file; raw HTML as the text it
 is, a web picture only a link), code as lines with their numbers coloured by the file's extension
-(Rust, TypeScript and JavaScript, Python, shell, JSON, YAML, TOML, Go, Swift, SQL, diffs), other
+(by its tree-sitter grammar for Rust, TypeScript and TSX, JavaScript, JSON, TOML, Python and shell,
+functions and punctuation too; by a small lexer for YAML, Go, Swift, SQL, diffs, and for a file of
+over 2 MB or one that takes over half a second to parse), other
 text plain, a PNG, JPEG, GIF or WebP as a picture. Open one with ⌘E's **File…** (the open panel), a ⌘-click
 on a path in a terminal (from the shell's folder, `~` too; `src/main.rs:12` opens `src/main.rs` at line 12)
 or on a file link in the conversation, or `ottospace ctl '{"cmd":"open_file","path":"/abs/a.md"}'`.

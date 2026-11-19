@@ -19,6 +19,8 @@ pub const SCROLL_THUMB_HOVER: u32 = 0x52525b;
 pub const SCROLL_THUMB_HELD: u32 = 0x71717a;
 pub const TEXT: u32 = 0xfafafa;
 pub const MUTED: u32 = 0x9f9fa9;
+/// Code's brackets and separators: a step under `TEXT`, above `MUTED` comments.
+pub const CODE_PUNCTUATION: u32 = 0xd4d4d8;
 pub const PRIMARY: u32 = 0x00b8db;
 pub const APP: u32 = 0xff8904;
 pub const PICK: u32 = 0x00d492;
