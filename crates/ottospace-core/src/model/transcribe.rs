@@ -240,9 +240,10 @@ impl Model {
     }
 
     /// A meeting that began since the transcript on did, and is still on: a line at its start in
-    /// the file, once. On the clock's tick, never when someone spoke.
+    /// the file, once. On the clock's tick, never when someone spoke. Not while paused: the pause's
+    /// own line comes at its end, and the file stays in time order.
     pub(super) fn listen_meetings(&mut self, now: u64, effects: &mut Vec<Effect>) {
-        let Some(on) = self.listen.on.as_mut().filter(|on| on.status != Status::Starting && self.calendar.on) else {
+        let Some(on) = self.listen.on.as_mut().filter(|on| on.status == Status::On && self.calendar.on) else {
             return;
         };
         let began = |e: &&crate::calendar::Event| {
@@ -853,6 +854,17 @@ mod tests {
         });
         assert_eq!(tick(&mut m, 601_000), [Effect::ListenWrite { id: "t2".into(), records: vec![line] }]);
         assert_eq!(tick(&mut m, 602_000), [], "once");
+        // Paused through one's start: its line comes after the pause's, at the first tick resumed.
+        m.update(Action::ListenPause { at: 700_000 });
+        let later = listen::file::Meeting { title: "Made-up meeting 4".into(), start: 900_000, end: 2_700_000 };
+        with_calendar(&mut m, &[0, 600_000, 2_400_000, 900_000]);
+        assert_eq!(tick(&mut m, 901_000), [], "paused");
+        let resumed = m.update(Action::ListenResume { at: 1_000_000 });
+        assert!(
+            matches!(resumed.as_slice(), [Effect::ListenWrite { records, .. }, ..] if matches!(records.as_slice(), [Record::Paused { .. }]))
+        );
+        let line = Record::Meeting(later);
+        assert_eq!(tick(&mut m, 1_001_000), [Effect::ListenWrite { id: "t2".into(), records: vec![line] }]);
         // The state says neither title nor place.
         let state = serde_json::to_string(&m).unwrap();
         assert!(!state.contains("Made-up meeting") && !state.contains("MADEUP"), "{state}");

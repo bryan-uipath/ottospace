@@ -359,9 +359,8 @@ from the model.
   Markdown back with the core's own parser for this format (unit-tested). Lines it does not
   recognise (the user edited the file) are skipped, and a file it cannot read is listed as "not
   readable".
-- **Linked to a meeting by time**: the calendar meeting running at the start (if several, the one
-  with a call link; otherwise none). Its times go in the header. Its title goes in only if the owner
-  decides so (open question 2), and never in the state.
+- **Linked to meetings by time**: the header's `Possibly` block (below, "The calendar's
+  meetings"), never in the state.
 - **Synced folders**: a folder such as `~/notes` may be a git repository or synced to other
   machines, and the files then carry other people's words wherever it syncs. The first-use
   explanation says so when `transcripts_dir` is set (§7); ottospace does not block it or look
