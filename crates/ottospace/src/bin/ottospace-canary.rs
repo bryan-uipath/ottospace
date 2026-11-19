@@ -6,7 +6,8 @@
 //! `{"cmd":"state"}`, `{"cmd":"open_window"}`, `{"cmd":"close_window","index":1}`, `{"cmd":"quit"}`.
 //! A window that refuses a pane's size: `{"cmd":"open_window","min":[900,700]}` cannot be made
 //! smaller than that; `{"cmd":"open_window","fixed":[240,180]}` cannot be resized at all.
-//! `{"cmd":"dialog","at":[x,y]}` opens a 700×450 window Accessibility reads as an `AXDialog`.
+//! `{"cmd":"dialog","at":[x,y]}` opens a 700×450 window Accessibility reads as an `AXDialog`
+//! (`"subrole":"AXSystemDialog"` another: Zoom's popped-out chat is one).
 //! `{"cmd":"retitle","index":0,"title":"Private"}` gives a window another title.
 //! `{"cmd":"move","index":0,"to":[x,y]}` and `{"cmd":"recreate","index":0,"at":[x,y]}` put a
 //! window, or a new one in its place, anywhere, off screen too. `{"cmd":"hang","ms":8000}` makes
@@ -61,6 +62,8 @@ enum Request {
     Dialog {
         #[serde(default)]
         at: Option<[f64; 2]>,
+        #[serde(default)]
+        subrole: Option<String>,
     },
     CloseWindow {
         index: usize,
@@ -292,13 +295,14 @@ fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mu
         match request {
             Request::State => {}
             Request::OpenWindow { min, fixed } => open(windows, min, fixed, None, cx),
-            Request::Dialog { at } => {
+            Request::Dialog { at, subrole } => {
+                let subrole = subrole.unwrap_or_else(|| "AXDialog".into());
                 open(windows, None, Some([700., 450.]), at, cx);
                 let handle = windows.borrow().last().copied();
                 let _ = handle.map(|handle| {
                     handle.update(cx, |_, window, _| {
                         if let Some(view) = ns_view(window) {
-                            unsafe { ottospace_mac::window::set_subrole(view, "AXDialog") };
+                            unsafe { ottospace_mac::window::set_subrole(view, &subrole) };
                         }
                     })
                 });

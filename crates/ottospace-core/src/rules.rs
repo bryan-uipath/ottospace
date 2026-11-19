@@ -324,8 +324,22 @@ fn judge(user: &[Rule], window: &Facts, shape: &Shape) -> Decision {
 /// any but a sheet or child window (macOS keeps it on its parent), an app's tiny helper, or one a
 /// rule ignores. A pop-up's subrole or a `float` rule does not stop it: the user asked for it.
 pub fn pickable(user: &[Rule], window: &Facts, shape: &Shape) -> bool {
-    let tiny = shape.size.is_some_and(|size| size[0] < TINY[0] && size[1] < TINY[1]);
-    !shape.sheet && !tiny && first(user, window) != Some(Action::Ignore)
+    unpickable(user, window, shape).is_none()
+}
+
+/// `pickable`'s no, and why (`Sheet`, `Tiny`, or `Rule` with the `ignore` rule that said it): for
+/// the log, never a title.
+pub fn unpickable(user: &[Rule], window: &Facts, shape: &Shape) -> Option<(Why, Option<Source>)> {
+    if shape.sheet {
+        return Some((Why::Sheet, None));
+    }
+    if shape.size.is_some_and(|size| size[0] < TINY[0] && size[1] < TINY[1]) {
+        return Some((Why::Tiny, None));
+    }
+    match first_of(user, window) {
+        Some((Action::Ignore, source)) => Some((Why::Rule, Some(source))),
+        _ => None,
+    }
 }
 
 /// Where a floating pop-up could be seen, as the shell read it. Global frames, points.
@@ -399,14 +413,9 @@ pub fn built_in() -> Vec<Rule> {
         select: Selector { app: Some("us.zoom.xos".into()), title: Some(title.into()), ..Selector::default() },
         action: Action::Ignore,
     };
-    // Zoom's floating controls while sharing, its annotation layer, and its pop-ups.
-    vec![
-        zoom("zoom share*"),
-        zoom("zoom annotation*"),
-        zoom("Annotation - Zoom"),
-        zoom("Reactions"),
-        zoom("Meeting chat"),
-    ]
+    // Zoom's floating controls while sharing, its annotation layer, and its reactions picker.
+    // Not `Meeting chat`: a chat the user popped out is theirs to put in a pane.
+    vec![zoom("zoom share*"), zoom("zoom annotation*"), zoom("Annotation - Zoom"), zoom("Reactions")]
 }
 
 /// `pattern` against the whole of `text`: `*` is any run of characters (none too), and letters
@@ -635,8 +644,8 @@ mod tests {
         assert_eq!((decided.why, decided.rule), (Why::Rule, Some((Source::BuiltIn(3), Action::Ignore))));
         // A user's split under a built-in ignore: the built-in one is named.
         let split = [rule(r#"{"app": "zoom.us", "do": "split"}"#)];
-        let decided = decide(&split, &zoom("Meeting chat", "AXStandardWindow"), &Shape::default());
-        assert_eq!((decided.place, decided.rule), (Place::Leave, Some((Source::BuiltIn(4), Action::Ignore))));
+        let decided = decide(&split, &zoom("Annotation - Zoom", "AXStandardWindow"), &Shape::default());
+        assert_eq!((decided.place, decided.rule), (Place::Leave, Some((Source::BuiltIn(2), Action::Ignore))));
     }
 
     #[test]
@@ -671,7 +680,7 @@ mod tests {
         let (split, float) =
             (rule(r#"{"app": "zoom.us", "do": "split"}"#), rule(r#"{"app": "zoom.us", "do": "float"}"#));
         let big = beside([1200.0, 900.0]);
-        for title in ["zoom share toolbar window", "Meeting chat", "Reactions"] {
+        for title in ["zoom share toolbar window", "Annotation - Zoom", "Reactions"] {
             let window = zoom(title, "AXStandardWindow");
             for user in [&split, &float] {
                 assert_eq!(place(std::slice::from_ref(user), &window, &big), Place::Leave, "{title}");
@@ -682,8 +691,28 @@ mod tests {
         assert_eq!(place(&[split], &zoom("Settings", "AXDialog"), &big), Place::Split);
         assert_eq!(place(&[float], &zoom("Zoom Workplace", "AXStandardWindow"), &big), FLOAT);
         // Only a `manage` rule undoes the built-in one: then offered, as any standard window.
-        let manage = rule(r#"{"app": "zoom.us", "title": "Meeting chat", "do": "manage"}"#);
-        assert_eq!(place(&[manage], &zoom("Meeting chat", "AXStandardWindow"), &big), OFFER);
+        let manage = rule(r#"{"app": "zoom.us", "title": "Reactions", "do": "manage"}"#);
+        assert_eq!(place(&[manage], &zoom("Reactions", "AXStandardWindow"), &big), OFFER);
+    }
+
+    /// The owner's call, 2026-11-19: Zoom's popped-out `Meeting chat` (an `AXSystemDialog` while
+    /// sharing, zoom-ax.md) could not be put in a pane: a built-in rule ignored it, so it was
+    /// neither offered nor listed by the picker. Now it is both. Zoom's share controls stay ignored.
+    #[test]
+    fn zooms_meeting_chat_is_offered_and_listed_its_share_controls_are_not() {
+        let chat = zoom("Meeting chat", "AXSystemDialog");
+        let shape = beside([360.0, 600.0]);
+        let decided = decide(&[], &chat, &shape);
+        assert_eq!((decided.place, decided.why, decided.rule), (OFFER, Why::Dialog, None));
+        assert!(pickable(&[], &chat, &shape) && pickable(&[], &zoom("Meeting chat", STANDARD), &shape));
+        let toolbar = zoom("zoom share toolbar window", "AXSystemDialog");
+        assert_eq!(decide(&[], &toolbar, &beside([961.0, 58.0])).place, Place::Leave);
+        assert_eq!(unpickable(&[], &toolbar, &beside([961.0, 58.0])), Some((Why::Rule, Some(Source::BuiltIn(0)))));
+        // A user's own `ignore` still keeps it out; the log learns which rule, never the title.
+        let ignore = serde_json::from_str::<Rule>(r#"{"title": "Meeting chat", "do": "ignore"}"#).unwrap();
+        assert_eq!(unpickable(&[ignore], &chat, &shape), Some((Why::Rule, Some(Source::User(0)))));
+        assert_eq!(unpickable(&[], &chat, &Shape { sheet: true, ..shape }), Some((Why::Sheet, None)));
+        assert_eq!(unpickable(&[], &chat, &beside([40.0, 40.0])), Some((Why::Tiny, None)));
     }
 
     /// One screen; ottospace's window over most of it, its app's pane in it.

@@ -69,9 +69,28 @@ pub(crate) fn fixture_apps() -> Vec<FixtureApp> {
 /// A window the user's pick may put in a pane (`rules::pickable`): a pop-up the rules floated
 /// too. Not a minimised one: its stream would draw nothing.
 fn pickable(window: &ax::Window) -> bool {
+    unpickable(window).is_none()
+}
+
+/// Why `pickable` says no, for the log: `minimised`, `sheet`, `tiny`, or the rule (`built-in rule 0: ignore`).
+fn unpickable(window: &ax::Window) -> Option<String> {
     let (frame, sheet) = window.quick(|w| (w.frame(), w.sheet()));
     let shape = Shape { sheet, size: frame.map(|f| [f.size.width, f.size.height]), ..Shape::default() };
-    !window.minimized() && with_facts(window, |facts| rules::pickable(&config::live().windows, facts, &shape))
+    if window.minimized() {
+        return Some("minimised".into());
+    }
+    let (why, rule) = with_facts(window, |facts| rules::unpickable(&config::live().windows, facts, &shape))?;
+    Some(match rule {
+        Some(source) => format!("{}: {}", source.label(), rules::Action::Ignore.name()),
+        None => why.name().into(),
+    })
+}
+
+/// A window's subrole for the log: an app may give any text, so only an `AX` word, else `other`.
+fn logged_subrole(window: &ax::Window) -> String {
+    let subrole = window.quick(ax::Window::subrole).unwrap_or_default();
+    let word = subrole.len() <= 40 && subrole.starts_with("AX") && subrole.chars().all(|c| c.is_ascii_alphanumeric());
+    if word { subrole } else { "other".into() }
 }
 
 impl Workspace {
@@ -84,8 +103,19 @@ impl Workspace {
         let mut windows: Vec<PickWindow> = fixture.map(|w| PickWindow { window: w.window, title: w.title }).collect();
         if let Some(pid) = self.pid_of(app) {
             let read = |w: ax::Window| Some(PickWindow { window: w.id()?, title: w.title().unwrap_or_default() });
-            windows.extend(ax::Window::all_of(pid).into_iter().filter(pickable).filter_map(read));
+            let mut skipped = Vec::new();
+            for w in ax::Window::all_of(pid) {
+                // A window that closed while read has no id: said, not lost.
+                let why = unpickable(&w).or_else(|| w.id().is_none().then(|| "no_id".into()));
+                match why {
+                    None => windows.extend(read(w)),
+                    Some(why) => skipped.push(serde_json::json!({ "why": why, "subrole": logged_subrole(&w) })),
+                }
+            }
             bundle = ax::app_identity(pid).0;
+            // What the list left out and why, so a window that cannot be picked can be told apart: never a title.
+            let fields = serde_json::json!({ "bundle": bundle, "listed": windows.len(), "skipped": skipped });
+            crate::event_log::event("pick_list", fields);
             // Read only for an app with no recipe of its own: it walks the menus.
             menu_item =
                 new_window::recipe(bundle.as_deref(), false).is_none() && ax::has_menu_item(pid, new_window::MENU_ITEM);
