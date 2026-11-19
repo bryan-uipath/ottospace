@@ -566,11 +566,13 @@ impl Gen<'_> {
             folder: self.rng.one_in(4).then(|| self.name(DIRS)),
             worktree: self.rng.one_in(4).then(|| self.name(CWDS)),
             made: self.rng.one_in(4).then(|| {
-                // Half the time where an Undo may add it back: `<root>/<repo>/<branch>`.
+                // Half the time where an Undo may add it back: `<root>/<repo>/<branch>`, `root`
+                // the setting's or another (a record from disk is not trusted).
                 let branch = self.name(WORDS);
-                let path = if self.rng.coin() { format!("/w/app/{branch}") } else { self.name(CWDS) };
+                let root = self.rng.pick(&["/w", "/w", "/elsewhere"]).to_string();
+                let path = if self.rng.coin() { format!("{root}/app/{branch}") } else { self.name(CWDS) };
                 let removed = self.rng.coin();
-                tasks::Made { repo: self.name(DIRS), branch, asked: path.clone(), path, root: "/w".into(), removed }
+                tasks::Made { repo: self.name(DIRS), branch, asked: path.clone(), path, root, removed }
             }),
             agent: self.rng.coin().then(|| self.name(AGENTS)),
             paths: self.names(DIRS, 2),
@@ -4646,6 +4648,7 @@ impl Run {
                     ensure!(crate::repos::check_branch(branch).is_ok(), "a worktree on {branch:?}");
                     ensure!(m.repos.iter().any(|r| r.path == *repo), "a worktree of {repo:?}, not listed");
                     ensure!(crate::repos::in_worktrees(path, root), "a worktree at {path:?}, outside {root:?}");
+                    ensure!(m.repo_dirs.worktrees.as_ref() == Some(root), "a worktree in {root:?}, not the setting's");
                 }
                 Effect::Notice { text } => ensure!(user && !text.is_empty(), "{origin:?} is told {text:?}"),
                 // Only a window that did not come in time, by a tick.
@@ -4671,7 +4674,15 @@ impl Run {
                 Effect::NoticeDismissed { .. } => ensure!(user, "{origin:?} dismissed a notice"),
                 // Only the user's Done (or git's late answer to one) removes a worktree: its task's own, listed, never a checkout.
                 Effect::RemoveWorktree { task, repo, path } => {
-                    let own = m.tasks.get(*task).and_then(|t| t.made.as_ref()).is_some_and(|made| made.path == *path);
+                    let made = m.tasks.get(*task).and_then(|t| t.made.as_ref());
+                    // In the worktrees folder the setting names, whatever the record says.
+                    let inside = |made: &tasks::Made| {
+                        m.repo_dirs.worktrees.as_ref().is_some_and(|root| {
+                            crate::repos::in_worktrees(&made.asked, root)
+                                && crate::repos::in_worktrees(&made.path, root)
+                        })
+                    };
+                    let own = made.is_some_and(|made| made.path == *path && inside(made));
                     let listed = m.repos.iter().any(|r| r.path == *repo && r.worktrees.iter().any(|w| w.path == *path));
                     let done = user && matches!(action, Action::TaskDone { id } if id == *task);
                     // Or Done while git made it: removed once made.

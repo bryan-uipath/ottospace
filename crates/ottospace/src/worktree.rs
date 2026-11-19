@@ -30,9 +30,13 @@ pub struct Made {
 /// Starts the worktree of the repository at `repo` on `branch` at `path`, inside `root`. Its end
 /// comes on `done`.
 /// `fresh`: a new task's, on a branch no local or remote ref has (else nothing is made).
-pub fn start(repo: String, branch: String, path: String, root: String, fresh: bool, done: mpsc::Sender<Made>) {
+/// `root` `None`: not `worktrees_dir`, nothing is made.
+pub fn start(repo: String, branch: String, path: String, root: Option<String>, fresh: bool, done: mpsc::Sender<Made>) {
     std::thread::spawn(move || {
-        let made = add(Path::new(&repo), &branch, Path::new(&path), Path::new(&root), fresh);
+        let made = match &root {
+            Some(root) => add(Path::new(&repo), &branch, Path::new(&path), Path::new(root), fresh),
+            None => Err(format!("{path} is not inside worktrees_dir")),
+        };
         let result = made.map(|target| target.to_string_lossy().into_owned());
         let _ = done.send(Made { repo, asked: path, fresh, result });
         ottospace_mac::wake::post();
@@ -46,10 +50,17 @@ pub struct Removed {
     pub kept: Option<String>,
 }
 
-/// Removes a done task's own worktree at `path`, of the repository at `repo`. Its end comes on `done`.
-pub fn start_remove(task: ottospace_core::tasks::TaskId, repo: String, path: String, done: mpsc::Sender<Removed>) {
+/// Removes a done task's own worktree at `path`, of the repository at `repo`, in `root`
+/// (`worktrees_dir`). Its end comes on `done`.
+pub fn start_remove(
+    task: ottospace_core::tasks::TaskId,
+    repo: String,
+    path: String,
+    root: Option<String>,
+    done: mpsc::Sender<Removed>,
+) {
     std::thread::spawn(move || {
-        let kept = remove(Path::new(&repo), Path::new(&path)).err();
+        let kept = remove(Path::new(&repo), Path::new(&path), root.as_deref().map(Path::new)).err();
         let _ = done.send(Removed { task, path, kept });
         ottospace_mac::wake::post();
     });
@@ -57,8 +68,16 @@ pub fn start_remove(task: ottospace_core::tasks::TaskId, repo: String, path: Str
 
 /// `git worktree remove` with no `--force`: git refuses one with changes or untracked files, and
 /// it stays; its branch always does. Why it stays, for the status bar: "Kept the worktree: 3
-/// uncommitted changes".
-fn remove(repo: &Path, path: &Path) -> Result<(), String> {
+/// uncommitted changes". Only one at `<root>/<repo>/<branch>`, both resolved: as `target` makes one.
+fn remove(repo: &Path, path: &Path, root: Option<&Path>) -> Result<(), String> {
+    let resolved = (path.canonicalize().ok(), root.and_then(|root| root.canonicalize().ok()));
+    let rest = match &resolved {
+        (Some(path), Some(root)) => path.strip_prefix(root).ok(),
+        _ => None,
+    };
+    if rest.is_none_or(|rest| rest.components().count() != 2) {
+        return Err("Kept the worktree: it is not in worktrees_dir".into());
+    }
     let (ok, said) = git(repo, &[OsStr::new("worktree"), OsStr::new("remove"), OsStr::new("--"), path.as_os_str()])?;
     if ok {
         return Ok(());
@@ -293,7 +312,7 @@ mod tests {
         repository(&repo);
         let root = scratch.join("worktrees");
         let clean = add(&repo, "fix-login", &root.join("app/fix-login"), &root, true).unwrap();
-        remove(&repo, &clean).unwrap();
+        remove(&repo, &clean, Some(&root)).unwrap();
         assert!(!clean.exists());
         let mut branch = Command::new("git");
         branch.arg("-C").arg(&repo).args(["rev-parse", "--verify", "--quiet", "refs/heads/fix-login"]);
@@ -301,7 +320,28 @@ mod tests {
         let dirty = add(&repo, "docs", &root.join("app/docs"), &root, true).unwrap();
         fs::write(dirty.join("a.md"), "a").unwrap();
         fs::write(dirty.join("b.md"), "b").unwrap();
-        assert_eq!(remove(&repo, &dirty), Err("Kept the worktree: 2 uncommitted changes".into()));
+        assert_eq!(remove(&repo, &dirty, Some(&root)), Err("Kept the worktree: 2 uncommitted changes".into()));
         assert!(dirty.join("a.md").exists(), "nothing of it went");
+    }
+
+    /// A clean worktree outside `worktrees_dir` (one the user made by hand, named by a task's
+    /// record from disk) stays: Done removes only one made there.
+    #[test]
+    fn a_worktree_outside_the_worktrees_folder_is_never_removed() {
+        let scratch = Scratch::dir(&format!("ottospace-worktree-outside-{}", std::process::id()));
+        let repo = scratch.join("app");
+        repository(&repo);
+        let root = scratch.join("worktrees");
+        fs::create_dir_all(&root).unwrap();
+        let elsewhere = scratch.join("code/app");
+        fs::create_dir_all(scratch.join("code")).unwrap();
+        git_in(&repo, &["worktree", "add", "-q", "-b", "fix-login", elsewhere.to_str().unwrap()]);
+        let kept = Err("Kept the worktree: it is not in worktrees_dir".into());
+        assert_eq!(remove(&repo, &elsewhere, Some(&root)), kept);
+        assert_eq!(remove(&repo, &elsewhere, None), kept);
+        // Its `<repo>/<branch>` through a link into the folder: resolved, still outside.
+        std::os::unix::fs::symlink(scratch.join("code"), root.join("code")).unwrap();
+        assert_eq!(remove(&repo, &root.join("code/app"), Some(&root)), kept);
+        assert!(elsewhere.join(".git").is_file(), "it stays");
     }
 }
