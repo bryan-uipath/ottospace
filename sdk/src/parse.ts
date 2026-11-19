@@ -53,6 +53,7 @@ import type {
   Amount,
   Clip,
   Confirm,
+  Unsent,
   PasteAsk,
   ComposeMenu,
   Field,
@@ -1423,7 +1424,15 @@ function confirm(value: unknown, at: string): Confirm {
     close: orNull(num)(o.close, `${at}.close`),
     later: orNull(later)(o.later, `${at}.later`),
     edited: orNull(num)(o.edited, `${at}.edited`),
+    agents: list(str)(o.agents, `${at}.agents`),
+    unsent: list(unsent)(o.unsent, `${at}.unsent`),
   };
+}
+
+function unsent(value: unknown, at: string): Unsent {
+  const o = fields(value, at);
+  const kinds = ["message", "answer", "btw", "new_task", "capture", "editor"] as const;
+  return { kind: oneOf(kinds, "a draft's kind")(o.kind, `${at}.kind`), place: str(o.place, `${at}.place`) };
 }
 
 function later(value: unknown, at: string): [number, string] {
@@ -1917,6 +1926,7 @@ export function snapshot(value: unknown): Snapshot {
     notice: orNull(str)(o.notice, "notice"),
     notice_level: orNull(noticeLevel)(o.notice_level, "notice_level"),
     notice_bar: orNull(noticeBar)(o.notice_bar, "notice_bar"),
+    quit_rows: list(rect)(o.quit_rows, "quit_rows"),
     settings_errors: num(o.settings_errors, "settings_errors"),
     editor: orNull(editor)(o.editor, "editor"),
     hosted: map(rect)(o.hosted, "hosted"),

@@ -88,6 +88,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     notice: null,
     notice_level: null,
     notice_bar: null,
+    quit_rows: [],
     settings_errors: 0,
     editor: null,
     hosted: {},

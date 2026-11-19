@@ -160,6 +160,10 @@ pub struct Confirm {
     pub later: Option<(TaskId, String)>,
     /// Not the quit question: "Close <title>? It has unsaved changes" for this owned app pane.
     pub edited: Option<PaneId>,
+    /// The quit question's agents quitting stops, by their conversation's name (`quit_agents`).
+    pub agents: Vec<String>,
+    /// The quit question's drafts quitting loses (`Model::unsent`).
+    pub unsent: Vec<quit::Unsent>,
 }
 
 impl Confirm {
@@ -190,7 +194,7 @@ impl Confirm {
         }
     }
 
-    /// "3 terminals are running". With none, the question is about a draft's captures alone.
+    /// The question's title, e.g. "Quit?".
     pub fn title(&self) -> String {
         if self.dismiss.is_some() {
             return "Stop its agent and dismiss?".into();
@@ -207,14 +211,11 @@ impl Confirm {
         if let Some(ask) = self.paste {
             return ask.title();
         }
-        match self.running.len() {
-            0 => "A draft is open".into(),
-            1 => "1 terminal is running".into(),
-            n => format!("{n} terminals are running"),
-        }
+        "Quit?".into()
     }
 
-    /// One line a terminal, e.g. "pane 2 · cargo" or "pane 3 · sleep (background)": at most 5, then "and 2 more".
+    /// What quitting ends, one line each: a terminal ("pane 2 · cargo", "pane 3 · sleep
+    /// (background)"), then an agent ("agent · Fix the login"). At most 5, then "and 2 more".
     pub fn lines(&self) -> Vec<String> {
         let line = |r: &Running| match (&r.program, r.background) {
             (Some(program), true) => format!("pane {} · {program} (background)", r.pane),
@@ -222,9 +223,11 @@ impl Confirm {
             (None, true) => format!("pane {} · (background)", r.pane),
             (None, false) => format!("pane {}", r.pane),
         };
-        let mut lines: Vec<String> = self.running.iter().take(5).map(line).collect();
-        if self.running.len() > 5 {
-            lines.push(format!("and {} more", self.running.len() - 5));
+        let agents = self.agents.iter().map(|title| format!("agent · {title}"));
+        let all: Vec<String> = self.running.iter().map(line).chain(agents).collect();
+        let mut lines: Vec<String> = all.iter().take(5).cloned().collect();
+        if all.len() > 5 {
+            lines.push(format!("and {} more", all.len() - 5));
         }
         lines
     }
@@ -1167,6 +1170,11 @@ pub enum Action {
     /// Answers to the quit question.
     QuitConfirm,
     QuitCancel,
+    /// The user's click on a draft's row of the quit question (`Confirm::unsent`, by place): no
+    /// quit, and that draft's place opens with the keyboard in it.
+    QuitGo {
+        row: usize,
+    },
     /// Quit without asking: the socket's `quit`.
     Quit,
     /// Text went to the clipboard: pane `pane`'s selection, or from no pane (a text field, a
@@ -2121,6 +2129,7 @@ impl Action {
             // The Apps section's filter is a text field: typing in it takes the keyboard.
             | Action::AppsFilter { on: true }
             | Action::QuitAsked { .. }
+            | Action::QuitGo { .. }
             | Action::SpaceHideAsked { .. }
             | Action::MarkPrefix
             | Action::MarkEdit { .. }
@@ -2663,6 +2672,7 @@ impl Action {
             | Action::QuitAsked { .. }
             | Action::QuitConfirm
             | Action::QuitCancel
+            | Action::QuitGo { .. }
             | Action::Quit
             | Action::CaptureStart { .. }
             | Action::CaptureTaken { .. }
@@ -3235,6 +3245,7 @@ pub mod editor;
 pub mod finish;
 pub mod offers;
 mod pick;
+pub mod quit;
 pub mod slots;
 mod transcribe;
 mod viewer;
@@ -4407,6 +4418,9 @@ impl Model {
 
     pub fn update(&mut self, sent: impl Into<Envelope>) -> Vec<Effect> {
         let sent = self.close_tab_asked(self.space_click(self.app_wheel(sent.into())));
+        if let Some(go) = self.quit_go(&sent) {
+            return go.into_iter().flat_map(|action| self.update(action.sent_by(Origin::User))).collect();
+        }
         // A feature that is off is absent: its actions change nothing and ask for nothing.
         // Nor does a pane become a slot but by `SlotMake`.
         if self.disabled(&sent.action).is_some() || sent.action.makes_slot_kind() || sent.action.makes_unsound_file() {
@@ -4830,11 +4844,11 @@ impl Model {
         // quit: the user has not answered.
         let later_works =
             self.confirm.as_ref().and_then(|c| c.later.as_ref()).is_some_and(|(id, _)| self.works(&Subject::Task(*id)));
+        // The quit question's agents and drafts, as they are now.
+        let rows = self.confirm.as_ref().is_some_and(Confirm::quits).then(|| (self.quit_agents(), self.unsent()));
         let panes = &self.panes;
         if let Some(confirm) = &mut self.confirm {
             confirm.running.retain(|r| panes.iter().any(|p| p.id == r.pane));
-            // Nor is there one once the draft it would discard, and every agent, is gone too.
-            let discards = self.capture.as_ref().is_some_and(|bar| !bar.materials.is_empty());
             // "Stop its agent and dismiss?" goes when that agent stopped some other way.
             let asks = match confirm.dismiss {
                 Some(id) => self.agent_runs(&Subject::Task(id)),
@@ -4848,7 +4862,11 @@ impl Model {
                 None if let Some(path) = &confirm.unlist => self.repos.iter().any(|r| r.path == *path),
                 // "Close this workspace?" goes once nothing in it runs, or it is not on the row to close.
                 None if let Some(id) = confirm.close => !confirm.running.is_empty() && self.closable(id),
-                None => !confirm.running.is_empty() || discards || !self.agents.is_empty() || self.editing.is_some(),
+                // Nor is there one once every draft and agent it names is gone too.
+                None => {
+                    (confirm.agents, confirm.unsent) = rows.unwrap_or_default();
+                    !confirm.running.is_empty() || !confirm.agents.is_empty() || !confirm.unsent.is_empty()
+                }
             };
             if !asks {
                 self.confirm = None;
@@ -4890,7 +4908,7 @@ impl Model {
             // A repository a live task works in: asked first (the trash is one hover away).
             Action::RepoRemove { path } if self.repo_worked_in(&path) && self.repo_dirs.to_remove(&path).is_ok() => {
                 self.leave(effects);
-                self.confirm = Some(Confirm { running: Vec::new(), dismiss: None, paste: None, unlist: Some(path), close: None, later: None, edited: None });
+                self.confirm = Some(Confirm { unlist: Some(path), ..Confirm::default() });
             }
             Action::RepoRemove { path } => self.repo_remove(&path, effects),
             Action::RepoFold { path, fold } => self.repo_fold(&path, fold),
@@ -5859,7 +5877,10 @@ impl Model {
                 self.keys_known_open = self.keys && known && !self.keys_known_open;
             }
             // Taken by `update` before any step.
-            Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. } | Action::NoticeDismiss { .. } => {}
+            Action::KeyUsed { .. }
+            | Action::ResetKeyUse
+            | Action::RestoreKeyUse { .. }
+            | Action::NoticeDismiss { .. } => {}
             Action::ToggleVisual => {
                 if self.visual.is_some() {
                     self.leave_visual(effects);
@@ -5944,26 +5965,22 @@ impl Model {
                 }
             }
             Action::LeaveSneak => self.sneak = None,
-            // Nothing to lose: no terminal runs anything, and no draft holds a capture.
+            // Nothing to lose: no terminal runs anything, no agent, and no draft has words.
             Action::QuitAsked { running }
-                // The user's editor on a message is asked about too: its unsaved text would go.
-                if (running.is_empty() && self.quit_discards() == 0 && self.agents.is_empty() && self.editing.is_none())
-                    || self
-                        .confirm
-                        .as_ref()
-                        .is_some_and(|confirm| {
-                            let other = confirm.dismiss.is_some() || confirm.paste.is_some() || confirm.unlist.is_some();
-                            // "Close <title>?" gives way to the quit question, which asks about what runs.
-                            !other && confirm.later.is_none() && confirm.edited.is_none()
-                        }) =>
+                if (running.is_empty() && self.quit_agents().is_empty() && self.unsent().is_empty())
+                    // ⌘Q again over the quit question, or over "Close this workspace?".
+                    || self.confirm.as_ref().is_some_and(|confirm| confirm.quits() || confirm.close.is_some()) =>
             {
                 effects.push(Effect::Quit)
             }
             Action::QuitAsked { running } => {
                 // The question is ottospace's own UI: a live window would cover it.
                 self.leave(effects);
-                self.confirm = Some(Confirm { running, dismiss: None, paste: None, unlist: None, close: None, later: None, edited: None });
+                let (agents, unsent) = (self.quit_agents(), self.unsent());
+                self.confirm = Some(Confirm { running, agents, unsent, ..Confirm::default() });
             }
+            // Its rows are the user's to click (`quit_go`).
+            Action::QuitGo { .. } => {}
             // Yes to "Paste 4 lines?": into its pane, if that is still a terminal.
             Action::QuitConfirm if let Some(ask) = self.confirm.as_ref().and_then(|confirm| confirm.paste) => {
                 self.confirm = None;
@@ -5973,15 +5990,8 @@ impl Model {
             Action::Paste { pane, amount } if self.keyboard_terminal() == Some(pane) => {
                 match clip::asks(amount, self.paste_confirm) {
                     true => {
-                        self.confirm = Some(Confirm {
-                            running: Vec::new(),
-                            dismiss: None,
-                            paste: Some(clip::PasteAsk { pane, amount }),
-                            unlist: None,
-                            close: None,
-                            later: None,
-                            edited: None,
-                        })
+                        self.confirm =
+                            Some(Confirm { paste: Some(clip::PasteAsk { pane, amount }), ..Confirm::default() })
                     }
                     false => self.pasted(pane, amount, effects),
                 }
@@ -5998,7 +6008,9 @@ impl Model {
                 self.row_move(id, moved, |tasks| tasks.dismiss(id));
             }
             // Yes to "Stop it and put it away?".
-            Action::QuitConfirm if let Some((id, _)) = self.confirm.as_ref().and_then(|confirm| confirm.later.clone()) => {
+            Action::QuitConfirm
+                if let Some((id, _)) = self.confirm.as_ref().and_then(|confirm| confirm.later.clone()) =>
+            {
                 self.confirm = None;
                 self.later_confirmed(id, effects);
             }
@@ -6008,7 +6020,9 @@ impl Model {
                 self.close_pane(pane, effects);
             }
             // Yes to "Unlist this repository?".
-            Action::QuitConfirm if let Some(path) = self.confirm.as_ref().and_then(|confirm| confirm.unlist.clone()) => {
+            Action::QuitConfirm
+                if let Some(path) = self.confirm.as_ref().and_then(|confirm| confirm.unlist.clone()) =>
+            {
                 self.confirm = None;
                 self.repo_remove(&path, effects);
             }
@@ -6419,7 +6433,9 @@ impl Model {
                 }
             }
             // Reopened as it was collapsed: the transcript, or the box (its line back).
-            Action::TalkToggle if self.by_user && self.folded == Some(rail::Folded::Transcript) && self.listen_item() => {
+            Action::TalkToggle
+                if self.by_user && self.folded == Some(rail::Folded::Transcript) && self.listen_item() =>
+            {
                 self.rail_select(rail::RailItem::Transcript, effects)
             }
             Action::TalkToggle if self.by_user && self.folded == Some(rail::Folded::Box) => {
@@ -6492,7 +6508,9 @@ impl Model {
                 }
             }
             Action::CalendarJoin { id } => effects.extend(self.calendar.join(id).map(|url| Effect::OpenLink { url })),
-            Action::CalendarFetching { since, bytes } => self.calendar.fetch = calendar::fetch::Fetch::Loading { since, bytes },
+            Action::CalendarFetching { since, bytes } => {
+                self.calendar.fetch = calendar::fetch::Fetch::Loading { since, bytes }
+            }
             Action::CalendarFetched { at, events, failure } => self.calendar.fetched(at, events, failure),
             Action::CalendarRetry => {
                 if self.calendar.retry() {
@@ -7652,15 +7670,7 @@ impl Model {
         if self.agent_runs(&Subject::Task(id)) && self.tasks.live(id).is_some() {
             // The question is ottospace's own UI: a live window would cover it.
             self.leave(effects);
-            self.confirm = Some(Confirm {
-                running: Vec::new(),
-                dismiss: Some(id),
-                paste: None,
-                unlist: None,
-                close: None,
-                later: None,
-                edited: None,
-            });
+            self.confirm = Some(Confirm { dismiss: Some(id), ..Confirm::default() });
             return;
         }
         match moved {
@@ -9513,6 +9523,7 @@ mod tests {
         Action::QuitAsked { .. },
         Action::QuitConfirm,
         Action::QuitCancel,
+        Action::QuitGo { .. },
         Action::Quit,
         Action::Copied { .. },
         Action::Paste { .. },
@@ -9837,6 +9848,7 @@ mod tests {
             Action::QuitAsked { running: Vec::new() },
             Action::QuitConfirm,
             Action::QuitCancel,
+            Action::QuitGo { row: 0 },
             Action::Quit,
             Action::Copied { pane: Some(1), verb: clip::Verb::Copied, amount: Default::default() },
             Action::Paste { pane: 1, amount: Default::default() },
@@ -16373,18 +16385,7 @@ mod tests {
         assert_eq!(m.update(Action::QuitConfirm), [], "no question, no answer");
         assert_eq!(m.update(Action::QuitAsked { running: vec![running(1, "sleep")] }), []);
         assert_eq!(m.mode(), Mode::Confirm);
-        assert_eq!(
-            m.confirm,
-            Some(Confirm {
-                running: vec![running(1, "sleep")],
-                dismiss: None,
-                paste: None,
-                unlist: None,
-                close: None,
-                later: None,
-                edited: None
-            })
-        );
+        assert_eq!(m.confirm, Some(Confirm { running: vec![running(1, "sleep")], ..Confirm::default() }));
         assert_eq!(m.update(Action::QuitConfirm), [Effect::Quit]);
     }
 
@@ -16528,18 +16529,7 @@ mod tests {
         m.update(Action::Close { pane: Some(3) });
         assert_eq!(m.confirm.as_ref().map(|c| c.running.len()), Some(2), "pane 3 ran nothing");
         m.update(Action::Close { pane: Some(1) });
-        assert_eq!(
-            m.confirm,
-            Some(Confirm {
-                running: vec![running(2, "vim")],
-                dismiss: None,
-                paste: None,
-                unlist: None,
-                close: None,
-                later: None,
-                edited: None
-            })
-        );
+        assert_eq!(m.confirm, Some(Confirm { running: vec![running(2, "vim")], ..Confirm::default() }));
         // Nothing left to ask about: no question, and no quit either.
         let effects = m.update(Action::Close { pane: Some(2) });
         assert!(!effects.contains(&Effect::Quit), "{effects:?}");
@@ -16709,18 +16699,7 @@ mod tests {
         assert_eq!((m.mode(), ids(&m)), (Mode::Confirm, vec![1, 2]));
         // A shell exits: its pane drops off the list.
         m.update(Action::Close { pane: Some(1) }.sent_by(Origin::System));
-        assert_eq!(
-            m.confirm,
-            Some(Confirm {
-                running: vec![running(2, "vim")],
-                dismiss: None,
-                paste: None,
-                unlist: None,
-                close: None,
-                later: None,
-                edited: None
-            })
-        );
+        assert_eq!(m.confirm, Some(Confirm { running: vec![running(2, "vim")], ..Confirm::default() }));
         // A client may not take the keyboard from under it, nor ask again as the user's yes.
         for taking in [Action::ToggleKeys, Action::Enter { pane: 2 }, ask.clone()] {
             assert_eq!(m.refusal(&taking, Origin::Socket), Some(CONFIRM_UP), "{taking:?}");
@@ -16752,37 +16731,21 @@ mod tests {
 
     #[test]
     fn the_quit_question_lists_five_terminals_then_counts_the_rest() {
-        let one = Confirm {
-            running: vec![Running { pane: 4, program: None, background: false }],
-            dismiss: None,
-            paste: None,
-            unlist: None,
-            close: None,
-            later: None,
-            edited: None,
-        };
-        assert_eq!((one.title().as_str(), one.lines()), ("1 terminal is running", vec!["pane 4".to_string()]));
+        let one =
+            Confirm { running: vec![Running { pane: 4, program: None, background: false }], ..Confirm::default() };
+        assert_eq!((one.title().as_str(), one.lines()), ("Quit?", vec!["pane 4".to_string()]));
         let job = Confirm {
             running: vec![Running { pane: 2, program: Some("sleep".into()), background: true }],
-            dismiss: None,
-            paste: None,
-            unlist: None,
-            close: None,
-            later: None,
-            edited: None,
+            ..Confirm::default()
         };
         assert_eq!(job.lines(), ["pane 2 · sleep (background)"]);
-        let seven = Confirm {
-            running: (1..=7).map(|pane| running(pane, "claude")).collect(),
-            dismiss: None,
-            paste: None,
-            unlist: None,
-            close: None,
-            later: None,
-            edited: None,
-        };
-        assert_eq!(seven.title(), "7 terminals are running");
+        let seven = Confirm { running: (1..=7).map(|pane| running(pane, "claude")).collect(), ..Confirm::default() };
         let lines = seven.lines();
         assert_eq!((lines.len(), lines[0].as_str(), lines[5].as_str()), (6, "pane 1 · claude", "and 2 more"));
+        // Agents after the terminals, counted with them.
+        let agents =
+            Confirm { running: vec![running(1, "vim")], agents: vec!["fix login".into(); 5], ..Confirm::default() };
+        let lines = agents.lines();
+        assert_eq!((lines[1].as_str(), lines[5].as_str()), ("agent · fix login", "and 1 more"));
     }
 }

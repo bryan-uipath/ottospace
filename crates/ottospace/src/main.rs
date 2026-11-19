@@ -673,6 +673,8 @@ enum Mark {
     ComposeSwitch,
     /// A Tasks heading's fold mark (0), name (1) and count (2): a test run's `heading_rects`.
     Heading(Heading, u8),
+    /// A draft's row of the quit question, by its place in `Confirm::unsent`.
+    QuitRow(usize),
 }
 
 type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
@@ -3730,6 +3732,8 @@ impl Workspace {
             "notice_level": status.as_ref().map(Notice::level),
             // The bar as drawn: its rect, and its height while it opens or closes. Null: no bar.
             "notice_bar": self.notice_snapshot(),
+            // Where each draft's row of the quit question is drawn, by its place in `confirm.unsent`.
+            "quit_rows": self.quit_rows(),
             // How many problems the last read of `settings.json` found.
             "settings_errors": self.model.settings_errors(),
             // The user's editor on a draft (⌃G): what it edits, never the text. Null: none runs.

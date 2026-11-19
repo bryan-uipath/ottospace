@@ -1,0 +1,19 @@
+# The quit question with a message unsent and nothing running: its row alone, under "Not sent
+# yet". (Before: no question, and the message was lost.)
+{"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"plan the week >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.replies","len":1}
+{"click":"talk"}
+{"cmd":"key","keys":"cmd-p","as":"user"}
+{"cmd":"key","keys":"s t o p space t h e space a g e n t","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"until":"drawer.native.chats.1.transcript.live","is":false}
+{"click":"talk"}
+{"cmd":"key","keys":"f i x space t h e space r e d i r e c t","as":"user"}
+{"cmd":"key","keys":"cmd-q","as":"user"}
+{"settle":500}
+{"shot":"draft"}

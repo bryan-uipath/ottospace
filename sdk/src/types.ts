@@ -936,6 +936,16 @@ export interface Confirm {
   later: [TaskId, string] | null;
   /** Not the quit question: "Close <title>? It has unsaved changes" for this owned app pane. Only the user answers it. */
   edited: PaneId | null;
+  /** The quit question's running agents, by their conversation's name. */
+  agents: string[];
+  /** The quit question's drafts quitting loses: kind and place, never the words. Only the user's click on one goes to it. */
+  unsent: Unsent[];
+}
+
+/** A draft quitting would lose. `place`: a conversation's name, a capture's app or pane; "" for the new-task box. */
+export interface Unsent {
+  kind: "message" | "answer" | "btw" | "new_task" | "capture" | "editor";
+  place: string;
 }
 
 /**
@@ -1479,6 +1489,8 @@ export interface Snapshot {
   notice_level: NoticeLevel | null;
   /** The notice bar as drawn, or null while it takes no room. */
   notice_bar: NoticeBar | null;
+  /** Where each draft row of the quit question is drawn, in `confirm.unsent`'s order. */
+  quit_rows: Rect[];
   /** How many problems the last read of `settings.json` found: the first is in `notice`. */
   settings_errors: number;
   /** The user's editor on a draft, or null while none runs. */

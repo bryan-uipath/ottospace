@@ -11473,6 +11473,78 @@ fn stop_the_agent(otto: &Otto) {
     otto.user_key("enter");
 }
 
+/// A task's conversation whose agent answered and was stopped, its composer with the keyboard,
+/// and pane 1's shell at its prompt: nothing runs.
+fn stopped_conversation(name: &str) -> (PathBuf, Otto) {
+    let (root, _, env) = native_setup(name, &[("turn1.jsonl", recorded("real-2.1.325-turn.jsonl"))], &[]);
+    let otto = launch_env(name, &env);
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo up-$((1+1))\r"}));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^up-2$", "timeout_ms": 30000}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    otto.start_task(1);
+    otto.wait_for("the reply", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["turn"].is_null() && chat["replies"].as_array()?.len() == 1).then_some(())
+    });
+    stop_the_agent(&otto);
+    otto.wait_for("the end", |o| (chat(o)["transcript"]["live"] == false).then_some(()));
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    (root, otto)
+}
+
+/// The user's ⌘Q with a message unsent and nothing running: the question lists that row alone,
+/// with no "Quitting ends these" (no terminal, no agent). A click on the row cancels and gives
+/// the composer the keyboard. With a program running too, both are listed.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn quit_names_an_unsent_message_and_its_row_goes_to_the_composer() {
+    let (root, otto) = stopped_conversation("quit-draft");
+    otto.user_key("f i x space i t");
+    let asked = otto.user_key("cmd-q");
+    let confirm = &asked["state"]["confirm"];
+    let message = json!([{"kind": "message", "place": "plan the week"}]);
+    assert_eq!(asked["mode"], "confirm", "{asked}");
+    assert_eq!((&confirm["running"], &confirm["agents"], &confirm["unsent"]), (&json!([]), &json!([]), &message));
+    assert!(!asked.to_string().contains("fix it"), "a draft's words are never in the state");
+    let row = rect(&asked["quit_rows"][0]);
+    let went = otto.user_click(at(row, 0.5, 0.5));
+    assert_eq!((&went["mode"], &went["state"]["confirm"]), (&json!("talk"), &Value::Null), "{went}");
+    assert_eq!(went["field"]["of"], "talk", "{}", went["field"]);
+    assert_eq!(went["drawer"]["native"]["chats"]["1"]["draft_chars"], 6);
+    // A program in pane 1 as well: both, the program with what quitting ends.
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "sh -c 'echo go; exec sleep 30'\r"}));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^go$", "timeout_ms": 30000}));
+    let sleep = json!([{"pane": 1, "program": "sleep", "background": false}]);
+    let both = otto.wait_for("the program", |o| {
+        let reply = o.user_key("cmd-q");
+        let found = reply["state"]["confirm"]["running"] == sleep;
+        if !found {
+            o.user_key("escape");
+        }
+        found.then_some(reply)
+    });
+    assert_eq!(both["state"]["confirm"]["unsent"], message, "{both}");
+    assert_eq!(otto.user_key("escape")["state"]["confirm"], Value::Null);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Only spaces in the composer: nothing to lose, so ⌘Q quits without a question.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn quit_with_only_spaces_in_the_composer_asks_nothing() {
+    let (root, mut otto) = stopped_conversation("quit-spaces");
+    let typed = otto.user_key("space space");
+    assert_eq!(typed["drawer"]["native"]["chats"]["1"]["draft_chars"], 2, "{}", typed["drawer"]);
+    otto.user_key("cmd-q");
+    exits(&mut otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Stop is at the composer while a turn runs, nowhere else. The agent stopped: nothing says it
 /// cannot be resumed, no Resume until its process is gone; Resume (the composer's button) goes
 /// on with the session, and the conversation reads on: one quiet divider, no sentence of an end
