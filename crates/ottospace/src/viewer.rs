@@ -60,8 +60,6 @@ enum Loaded {
 /// A viewer pane's file as the shell holds it.
 pub struct FileView {
     path: String,
-    /// What it was read as: a markdown file opened at a line is read again as its source.
-    shows: Shows,
     body: Body,
     reading: Option<Receiver<(Read, Option<Loaded>, Stamp)>>,
     /// What the file was when last read; a change seen since, and when it was first seen.
@@ -82,7 +80,6 @@ impl FileView {
     fn new(path: String, shows: Shows) -> Self {
         let mut view = FileView {
             path,
-            shows,
             body: Body::None,
             reading: None,
             stamp: None,
@@ -251,8 +248,7 @@ impl Workspace {
                 _ => None,
             })
             .collect();
-        self.viewers
-            .retain(|id, view| files.get(id).is_some_and(|(path, shows)| (path, shows) == (&view.path, &view.shows)));
+        self.viewers.retain(|id, view| files.get(id).is_some_and(|(path, _)| *path == view.path));
         let mut actions = Vec::new();
         for (id, (path, shows)) in &files {
             let view = self.viewers.entry(*id).or_insert_with(|| FileView::new(path.clone(), *shows));
@@ -418,7 +414,7 @@ impl Workspace {
     }
 
     /// A key while the focused viewer has the keyboard. True: it was the viewer's. Esc with
-    /// nothing typed is left for the notice bar, a shortcut for its binding.
+    /// nothing typed and no lines marked is left for the notice bar, a shortcut for its binding.
     pub(crate) fn viewer_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) -> bool {
         let Some(key) = key_name(event) else { return false };
         // Not the viewer's (a shortcut such as ⌃Tab): it goes on to its binding, and drops a count.
@@ -514,6 +510,8 @@ impl Workspace {
                                 let on = marked.as_ref().is_some_and(|marked| marked.contains(&at));
                                 div()
                                     .h(px(LINE))
+                                    // The pane's width at least: a mark's tint spans the row, not its text.
+                                    .min_w(gpui::relative(1.))
                                     .relative()
                                     .when(on, |row| {
                                         // A tint and a bar at its left edge, in mark mode's colour.
@@ -566,8 +564,11 @@ impl Workspace {
     /// The viewers for the state: what is drawn of each, never its text. A picture's size, a
     /// markdown file's blocks by kind.
     pub(crate) fn viewers_snapshot(&self) -> serde_json::Value {
+        let drawn_panes = self.model.shown_panes();
         let marked = |id: PaneId| {
             std::env::var_os("OTTOSPACE_E2E")?;
+            // A viewer off show draws no row: what it last drew is not where it is.
+            drawn_panes.contains(&id).then_some(())?;
             self.marks.borrow().get(&crate::Mark::ViewerMarked(id)).copied().map(crate::rect)
         };
         let drawn = |id: PaneId, view: &FileView| match &view.body {

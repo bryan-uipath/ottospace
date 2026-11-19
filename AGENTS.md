@@ -146,6 +146,8 @@ Design note: `docs/ai/attention/plan.md`.
     (null outside a test run) lists each press a label asked for.
   - State field `overflow`: each scroll area laid out (not a terminal), also one that fits, and which of its edges
     fade (`top`/`bottom`, the tab row's `left`/`right`). Null outside a test run.
+  - State field `viewers[n].marked_rect` (drawn): where a viewer's first marked line is drawn, while
+    its pane shows. Null outside a test run.
   - State fields `keys_known` (the ids of the key bindings the user knows) and `key_reference`
     (while ⌘/ shows: its groups' row ids, the known ids, whether Known is open, its header's
     rect). Null outside a test run: what the user's keys are used for is never on the socket.

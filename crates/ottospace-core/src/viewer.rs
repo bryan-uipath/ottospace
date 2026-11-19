@@ -127,8 +127,8 @@ impl Viewer {
         view
     }
 
-    /// `at` marked and put in view, `CONTEXT` lines below the top; past the end once read, the
-    /// last line. `None`: no mark, the view stays.
+    /// `at` marked and put in view, `CONTEXT` lines below the top, fewer when the lines would not
+    /// fit the page laid out; past the end once read, the last line. `None`: no mark, the view stays.
     pub fn mark(&mut self, at: Option<Lines>) {
         let Some(at) = at else { return };
         let at = match self.read {
@@ -136,7 +136,8 @@ impl Viewer {
             _ => Some(at),
         };
         if let Some(at) = at {
-            self.top = at.first.saturating_sub(1 + CONTEXT);
+            let room = if self.page == 0 { CONTEXT } else { self.page.saturating_sub(at.last - at.first + 1) };
+            self.top = at.first.saturating_sub(1 + CONTEXT.min(room));
             self.top = self.most.map_or(self.top, |most| self.top.min(most));
         }
         self.marked = at;
@@ -165,10 +166,10 @@ impl Lines {
         Lines::new(self.first.min(lines), self.last.min(lines))
     }
 
-    /// `12` or `12-14`. `None`: anything else, or line 0.
+    /// `12` or `12-14`; a number past `u32` is past any file's end. `None`: anything else, or line 0.
     pub fn parse(text: &str) -> Option<Lines> {
         let (first, last) = text.split_once('-').unwrap_or((text, text));
-        let number = |part: &str| digits(part).then(|| part.parse().ok()).flatten();
+        let number = |part: &str| digits(part).then(|| part.parse().unwrap_or(u32::MAX));
         Lines::new(number(first)?, number(last)?)
     }
 }
@@ -179,7 +180,7 @@ fn digits(part: &str) -> bool {
 
 /// `path` without a line written after it, and those lines: `a.rs:12` (`:12:3`, its column
 /// dropped), `a.rs:12-14`. Line 0 is dropped and names none.
-pub fn split_lines(path: &str) -> (&str, Option<Lines>) {
+pub(crate) fn split_lines(path: &str) -> (&str, Option<Lines>) {
     let (mut path, mut lines) = (path, None);
     for _ in 0..2 {
         let Some((before, tail)) = path.rsplit_once(':') else { break };
@@ -276,7 +277,12 @@ mod tests {
     fn lines_are_from_one_both_ends_in() {
         assert_eq!(Lines::parse("12"), Some(Lines { first: 12, last: 12 }));
         assert_eq!(Lines::parse("14-12"), Some(Lines { first: 12, last: 14 }), "backwards, the same lines");
-        for bad in ["0", "0-3", "", "-", "12-", "a", "1-2-3", "99999999999"] {
+        assert_eq!(
+            Lines::parse("99999999999"),
+            Lines::new(u32::MAX, u32::MAX),
+            "past any end: the last line, once read"
+        );
+        for bad in ["0", "0-3", "", "-", "12-", "a", "1-2-3"] {
             assert_eq!(Lines::parse(bad), None, "{bad}");
         }
         let at = Lines { first: 40, last: 60 };
@@ -299,9 +305,15 @@ mod tests {
         let mut view = Viewer { read: Read::Shown { lines: 10 }, most: Some(4), ..Viewer::default() };
         view.mark(Lines::new(30, 30));
         assert_eq!((view.marked, view.top), (Lines::new(10, 10), 4));
+        // Laid out: only as many lines above as leave the range in view.
+        let mut view = Viewer { read: Read::Shown { lines: 100 }, page: 10, ..Viewer::default() };
+        view.mark(Lines::new(40, 47));
+        assert_eq!(view.top, 37, "40 to 47 in rows 38 to 47");
+        view.mark(Lines::new(40, 60));
+        assert_eq!(view.top, 39, "taller than the page: its first line at the top");
         view.read = Read::Shown { lines: 0 };
         view.mark(Lines::new(3, 3));
-        assert_eq!((view.marked, view.top), (None, 4));
+        assert_eq!((view.marked, view.top), (None, 39));
     }
 
     #[test]

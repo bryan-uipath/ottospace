@@ -99,6 +99,14 @@ impl Model {
         }
         // Line 0 is none; a range written backwards, the same lines.
         let at = at.and_then(|at| Lines::new(at.first, at.last));
+        // At lines, a viewer of the file first: the opener's viewer is not made a second one.
+        if let Some((id, at)) = at.and_then(|at| Some((self.viewer_of(&path, from?)?, at))) {
+            self.mark_lines(id, &path, at, effects);
+            if !reuse {
+                self.focus(id, effects);
+            }
+            return;
+        }
         if let Some(id) = from.filter(|_| reuse).and_then(|from| self.reusable(from)) {
             let same = self.pane(id).is_some_and(|pane| pane.kind == Kind::File { path: path.clone() });
             if !same {
@@ -109,15 +117,6 @@ impl Model {
                 self.marks.forget_pane(id);
                 self.viewers.insert(id, Viewer::at(&path, at, from));
                 effects.push(Effect::ViewFile { pane: id });
-            } else if let Some(at) = at {
-                self.mark_lines(id, &path, at, effects);
-            }
-            return;
-        }
-        if let Some((id, at)) = at.and_then(|at| Some((self.viewer_of(&path, from?)?, at))) {
-            self.mark_lines(id, &path, at, effects);
-            if !reuse {
-                self.focus(id, effects);
             }
             return;
         }
@@ -380,6 +379,10 @@ mod tests {
         // Another file in the reused viewer: no mark of the last one.
         open(&mut m, CODE, Some(terminal), true);
         assert_eq!(marked(&m, doc), None);
+        // At lines of a file another viewer shows: that one, not the terminal's own made a second.
+        let panes = m.panes.len();
+        open_at(&mut m, CODE, Some(terminal), true, (5, 5));
+        assert_eq!((m.panes.len(), file(&m, doc).as_deref(), marked(&m, id)), (panes, Some(CODE), Some((5, 5))));
     }
 
     #[test]
