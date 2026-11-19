@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""The e2e tests worth running for a change: what it touches, by a small table, not the suite.
+
+usage: scripts/e2e-for [<base>] [--head <rev>] [--run] [--ci-size]
+       scripts/e2e-for --check
+
+  <base>      what the change is against (default origin/main). The diff is from the merge base
+              to --head, or with no --head to the working tree, untracked files too.
+  --run       run them one at a time, under nextest as CI does (`--profile e2e`), or plain
+              `cargo test` when cargo-nextest is not installed.
+  --ci-size   run at CI's window, 1024x674 (OTTOSPACE_E2E_WINDOW).
+  --check     the table against the tests that exist: a name or regex that matches none, or a
+              source file no row knows, fails.
+
+Picked: (a) tests the diff adds or changes in crates/ottospace/tests/e2e.rs; (b) tests of the
+areas the changed paths are in (scripts/e2e-for.areas); (c) a smoke set, always. A path the table
+does not know, or one that reaches every test, gives the full-suite command instead; `--run` then
+runs nothing. Never `cargo e2e-apps` (CI's). Refuses to run with the screen locked or while
+another e2e run is on.
+"""
+
+import os
+import re
+import subprocess
+import sys
+
+E2E = "crates/ottospace/tests/e2e.rs"
+CI_SIZE = "1024x674"
+FULL = "cargo nextest run -p ottospace --test e2e --run-ignored only --profile e2e --locked"
+SRC = re.compile(r"^crates/[^/]+/src/")
+
+
+def git(*args):
+    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
+
+
+def load_table(path):
+    """Smoke names, broad names, and rows of (path regex, what)."""
+    smoke, broad, rows = [], [], []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            key, _, rest = line.partition(" ")
+            if key in ("smoke:", "broad:"):
+                (smoke if key == "smoke:" else broad).extend(rest.split())
+            else:
+                path_re, what = line.rsplit(None, 1)
+                rows.append((path_re.strip(), what))
+    return smoke, broad, rows
+
+
+def items_in(source):
+    """Each top-level item of e2e.rs: {(name, first line): (first, last, is_test)}, 1-based, its
+    doc and attributes included. `use` and `mod` lines are left out: the compiler checks them."""
+    lines, items = source.splitlines(), {}
+    lead, test, i = None, False, 0
+    while i < len(lines):
+        line, n = lines[i], i + 1
+        if line.startswith(("///", "#[")):
+            lead, test = lead or n, test or line.startswith("#[test]")
+        elif line and not line[0].isspace() and not line.startswith(("//", "}", ")", "]")):
+            end = n
+            # A raw string runs to its `"#`; a block (fn, impl) to a `}` in the first column;
+            # anything else (a const) to a `;`.
+            raw = "r#\"" in line and "\"#" not in line.split("r#\"", 1)[1]
+            block = line.rstrip().endswith("{")
+
+            def ends(t):
+                return "\"#" in t if raw else re.match(r"[})\]]", t) if block else t.rstrip().endswith(";")
+
+            if raw or not line.rstrip().endswith((";", "}")):
+                end = next((j + 1 for j in range(i + 1, len(lines)) if ends(lines[j])), len(lines))
+            if not re.match(r"(pub )?(use|mod) ", line):
+                m = re.search(r"\b(?:fn|struct|impl|const|static|enum|type|trait)\s+(\w+)", line)
+                name = m.group(1) if m else line.split()[0]
+                items[(name, lead or n)] = (lead or n, end, test and line.startswith("fn "))
+            lead, test, i = None, False, end
+            continue
+        elif not line.strip():
+            lead, test = None, False
+        i += 1
+    return items
+
+
+def test_names(source):
+    return [name for (name, _), (_, _, is_test) in items_in(source).items() if is_test]
+
+
+def e2e_changes(diff, source):
+    """From a unified diff of e2e.rs (-U0): changed tests, and changed items that are not tests."""
+    items = items_in(source)
+    tests, helpers = set(), set()
+    for m in re.finditer(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", diff, re.M):
+        first, count = int(m.group(1)), int(m.group(2) or 1)
+        span = range(first, first + count) if count else [first]
+        for (name, _), (begin, end, is_test) in items.items():
+            if any(begin <= line <= end for line in span):
+                (tests if is_test else helpers).add(name)
+    return tests, helpers
+
+
+def select(paths, diff, source, table):
+    """{test: [reasons]}, the unknown paths, the paths that reach every test."""
+    smoke, broad, rows = table
+    items, lines = items_in(source), source.splitlines()
+    names = test_names(source)
+    picked, unknown, everything = {}, [], []
+
+    def pick(name, why):
+        picked.setdefault(name, []).append(why)
+
+    for name in smoke:
+        pick(name, "smoke")
+    for path in paths:
+        if path == E2E:
+            tests, helpers = e2e_changes(diff, source)
+            for name in sorted(tests):
+                pick(name, "changed in e2e.rs")
+            # A changed helper: the tests that name it, or name a helper that does (`rect` -> `at`
+            # -> a test). One the harness (`Otto`) names, or no test reaches, reaches every test.
+            body = {}
+            for (name, _), (b, e, t) in items.items():
+                body[(name, t)] = body.get((name, t), "") + "\n".join(lines[b - 1:e])
+
+            def names_any(seen, text):
+                return re.search(r"\b(?:" + "|".join(map(re.escape, seen)) + r")\b", text)
+
+            for helper in sorted(helpers):
+                seen = {helper}
+                while more := {n for (n, t), text in body.items() if not t and n not in seen and names_any(seen, text)}:
+                    seen |= more
+                users = [n for (n, t), text in body.items() if t and names_any(seen, text)]
+                if not users or "Otto" in seen:
+                    everything.append(f"{E2E} ({helper}, not a test)")
+                for name in users:
+                    pick(name, f"uses {helper}, changed in e2e.rs")
+            continue
+        hits = [(rx, what) for rx, what in rows if re.search(rx, path)]
+        if any(what == "-" for _, what in hits):
+            continue
+        if not hits:
+            unknown.append(path)
+        for rx, what in hits:
+            if what == "ALL":
+                everything.append(path)
+            elif what == "BROAD":
+                for name in broad:
+                    pick(name, f"broad: {path}")
+            else:
+                for name in names:
+                    hit = re.search(what, name)
+                    if hit:
+                        pick(name, f"{path} (\"{hit.group(0)}\")")
+    # Only tests that exist at the head (a removed one cannot run).
+    picked = {name: why for name, why in picked.items() if name in names}
+    return picked, unknown, everything
+
+
+def check(table, source, files):
+    smoke, broad, rows = table
+    names = test_names(source)
+    bad = [f"no test {n}" for n in smoke + broad if n not in names]
+    for rx, what in rows:
+        re.compile(rx)
+        if what not in ("-", "ALL", "BROAD") and not any(re.search(what, n) for n in names):
+            bad.append(f"no test matches {what!r} (row {rx})")
+    for path in files:
+        if SRC.search(path) and not any(re.search(rx, path) for rx, _ in rows):
+            bad.append(f"no row knows {path}")
+    for line in bad:
+        print(f"e2e-for --check: {line}")
+    print(f"e2e-for --check: {len(names)} tests, {len(rows)} rows, {'ok' if not bad else f'{len(bad)} problems'}")
+    return 1 if bad else 0
+
+
+def screen_locked():
+    plist = subprocess.run(["ioreg", "-n", "Root", "-d1", "-a"], capture_output=True).stdout
+    out = subprocess.run(["plutil", "-extract", "IOConsoleLocked", "raw", "-o", "-", "-"], input=plist,
+                         capture_output=True, text=True).stdout
+    return out.strip() == "true"
+
+
+def e2e_running():
+    """Another run: its test binary (cargo test and nextest both run target/../deps/e2e-<hash>), or
+    nextest between two tests."""
+    pattern = r"/deps/e2e(_apps)?-[0-9a-f]+( |$)|cargo-nextest .*--test e2e"
+    return subprocess.run(["pgrep", "-fl", pattern], capture_output=True, text=True).stdout.strip()
+
+
+def run(names, ci_size):
+    env = dict(os.environ)
+    if ci_size:
+        env["OTTOSPACE_E2E_WINDOW"] = CI_SIZE
+    nextest = subprocess.run(["cargo", "nextest", "--version"], capture_output=True).returncode == 0
+    if nextest:
+        cmd = FULL.split() + ["-E", " | ".join(f"test(={n})" for n in names)]
+    else:
+        print("e2e-for: cargo-nextest is not installed: plain cargo test, no retries", file=sys.stderr)
+        cmd = ["cargo", "test", "-p", "ottospace", "--test", "e2e", "--locked", "--", "--ignored",
+               "--test-threads=1", "--exact", *names]
+    print("+ " + ("OTTOSPACE_E2E_WINDOW=" + CI_SIZE + " " if ci_size else "") + " ".join(cmd), flush=True)
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    summary = []
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        if re.search(r"^\s*(Summary|FAIL|TRY \d+ FAIL|FLAKY)\b|^test result:|^failures:$|^    \w+$", line):
+            summary.append(line.rstrip())
+    proc.wait()
+    return proc.returncode, summary
+
+
+def main(argv):
+    args = argv[1:]
+    if any(a in ("-h", "--help") for a in args):
+        print(__doc__.strip())
+        return 0
+    flags = {a for a in args if a.startswith("--") and a != "--head"}
+    head = args[args.index("--head") + 1] if "--head" in args else None
+    rest = [a for i, a in enumerate(args) if not a.startswith("--") and (i == 0 or args[i - 1] != "--head")]
+    unknown_flags = flags - {"--run", "--ci-size", "--check"}
+    if unknown_flags or len(rest) > 1 or ("--head" in args and head is None):
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    if head and "--run" in flags:
+        print(f"e2e-for: --run runs the working tree: check out {head} instead of --head", file=sys.stderr)
+        return 2
+    os.chdir(git("rev-parse", "--show-toplevel").strip())
+    table = load_table(os.path.join(os.path.dirname(os.path.abspath(__file__)), "e2e-for.areas"))
+
+    if "--check" in flags:
+        with open(E2E) as f:
+            return check(table, f.read(), git("ls-files").split("\n"))
+
+    base = rest[0] if rest else "origin/main"
+    since = git("merge-base", base, head or "HEAD").strip()
+    span = [since, head] if head else [since]
+    paths = git("diff", "--name-only", *span).split()
+    if not head:
+        paths += git("ls-files", "--others", "--exclude-standard").split()
+    paths = sorted(set(paths))
+    diff = git("diff", "-U0", *span, "--", E2E)
+    if head:
+        source = git("show", f"{head}:{E2E}")
+    else:
+        with open(E2E) as f:
+            source = f.read()
+    picked, unknown, everything = select(paths, diff, source, table)
+
+    where = f"{base} ({since[:8]}) to {head or 'the working tree'}"
+    print(f"e2e-for: {len(paths)} changed paths, {where}")
+    if unknown or everything:
+        for path in unknown:
+            print(f"e2e-for: the table does not know {path}")
+        for path in everything:
+            print(f"e2e-for: {path} reaches every test")
+        size = f"OTTOSPACE_E2E_WINDOW={CI_SIZE} " if "--ci-size" in flags else ""
+        print(f"e2e-for: run the full suite instead:\n  {size}{FULL}\n  (no nextest: {size}cargo e2e)")
+        return 3 if "--run" in flags else 0
+    # Smoke first, then by name; each with why it was picked.
+    for name in sorted(picked, key=lambda n: (picked[n] != ["smoke"], n)):
+        why = picked[name]
+        print(f"  {name}\n      " + "; ".join(why[:3]) + (f" (+{len(why) - 3} more)" if len(why) > 3 else ""))
+    print(f"e2e-for: {len(picked)} tests")
+    if "--run" not in flags:
+        return 0
+
+    if screen_locked():
+        print("e2e-for: the screen is locked: a locked screen draws nothing, every test would time out")
+        return 2
+    other = e2e_running()
+    if other:
+        print(f"e2e-for: another e2e run is on, one at a time:\n{other}")
+        return 2
+    code, summary = run(sorted(picked), "--ci-size" in flags)
+    size = CI_SIZE if "--ci-size" in flags else "1400x900"
+    rev = git("rev-parse", "--short", "HEAD").strip()
+    dirty = " + working tree" if not head and git("status", "--porcelain") else ""
+    print(f"\n## e2e-for summary\n{len(picked)} tests picked against {where}; ran at {rev}{dirty}, window {size}; exit {code}")
+    for line in summary:
+        print(line)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

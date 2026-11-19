@@ -1,0 +1,86 @@
+# scripts/e2e-for's table: which e2e tests a changed path can affect.
+#
+#   smoke: <test> ..   always run
+#   broad: <test> ..   one or two of each area, for a change that reaches everything (main.rs, model.rs)
+#   <path regex> <what>
+#
+# A path takes every row whose regex it matches (Python `re.search`). <what> is a regex of test
+# names (`re.search`), `BROAD`, `-` (no e2e test reads it: docs, unit tests, other tools) or `ALL`
+# (the full suite). A path no row matches is unknown: the script says so and prints the full suite.
+# `scripts/e2e-for --check` fails on a name or regex that matches no test, or a source file no row
+# knows: run it after adding a test area or a source file.
+
+smoke: splits_are_drawn_where_the_layout_says the_users_pane_keys_focus_resize_and_swap
+smoke: terminal_runs_a_typed_command bad_requests_are_refused_and_quit_exits a_test_leaves_nothing_in_the_temp_dir
+
+broad: focus_and_close_follow_the_layout tasks_are_listed_as_an_inbox_and_pop_opens_the_next
+broad: the_rail_holds_the_tasks_then_the_transcript_always_and_only_the_user_switches_it
+broad: a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back a_question_card_sends_the_users_pick
+broad: sneak_mode_labels_the_controls_and_a_typed_label_clicks_one
+broad: nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_open_or_not
+broad: the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in_a_narrow_window
+broad: the_key_reference_fits_the_window_and_the_wheel_closes_nothing
+broad: a_long_list_fades_where_more_lies_beyond_and_a_short_one_nowhere
+broad: the_notice_bar_sits_at_the_foot_moves_nothing_above_and_only_the_user_dismisses_it
+broad: the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view
+broad: tabs_and_layout_come_back_after_quitting_and_no_agent_starts
+broad: the_timeline_band_spans_the_workday_directly_above_the_status_bar
+broad: a_transcript_starts_pauses_and_stops_by_the_users_hand_alone
+broad: done_on_an_idle_task_leaves_the_rail_and_undo_brings_it_back
+broad: a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen
+
+# Read by no e2e test.
+^(docs|site)/|^(README|AGENTS|CLAUDE)\.md$|^LICENSE$|^\.gitignore$          -
+^\.github/(dependabot\.yml|pull_request_template\.md)$                       -
+^\.github/workflows/                                                         -
+^sdk/                                                                        -
+^install\.sh$|^deny\.toml$                                                   -
+^scripts/                                                                    -
+^crates/ottospace/skill/                                                     -
+^crates/ottospace/src/bin/                                                   -
+^crates/ottospace/tests/e2e_apps\.rs$                                        -
+^crates/ottospace-core/src/(.*/)?tests(\.rs|/)|^crates/ottospace-core/src/fixtures/   -
+^crates/ottospace-(agents|sessions)/tests/(?!fakes/)                         -
+^crates/ottospace-mac/(examples|swift)/                                      -
+
+# Reaches every test.
+^Cargo\.(toml|lock)$|/Cargo\.toml$|^\.cargo/|^\.config/nextest\.toml$|^rust-toolchain   ALL
+^crates/ottospace/tests/support/|^crates/ottospace/tests/fixtures/[^/]*$     ALL
+^crates/ottospace-mac/(src|build\.rs)                                        ALL
+^crates/ottospace-core/src/(lib|model|theme|keys|commands)\.rs$              BROAD
+^crates/ottospace/src/(main|control|ui/.*|child|trace|running|signal_pipe|scratch|stall)\.rs$   BROAD
+^crates/ottospace/assets/                                                    BROAD
+^crates/ottospace-sessions/src/(lib|jsonl|cache|git|report|tally)\.rs$       BROAD
+
+# By area. Paths are the shell's (crates/ottospace/src) and the core's (crates/ottospace-core/src).
+/src/(.*/)?(layout|layout_file|restore|workbook|motion)(\.rs|/)              split|layout|resize|swap|drop|dragged|drag_|header|workbook|restart|quitting|restored|tabs_keep|kept_between
+/src/(.*/)?(terminal|selection|vim|clip|clipboard|words)(\.rs|/)             terminal|scrolls_back|select|copy|paste|visual_mode|cmd_click|capture_and_wait|held_key|typed_command|tick_sleeps
+/src/(.*/)?(edit|field|compose|complete|tags)(\.rs|/)                        text_field|new_task|tag|dropdown|path_typed|files_dropped|composer|ctrl_g|multi_select|several_questions|long_question|side_question|message_
+/src/(.*/)?(conversation|chat|chat_select|btw|ask|talk|agent|agents|editor)(\.rs|/)   conversation|(?<!quit_)question|btw|cards|tool_rows|transcript_text|composer|talked|stopped_agent|later_asks|real_cli|agent_chip|agent_that_ends|message_|ctrl_g|unsent
+^crates/ottospace-agents/(src|tests/fakes)/                                  conversation|(?<!quit_)question|btw|cards|tool_rows|talked|stopped_agent|later_asks|real_cli|agent_chip|agent_that_ends|message_|dial|follows_its_agent
+/src/(.*/)?(sessions|activity|cadence|station|snapshot|claude|codex)(\.rs|/) session|dial|watched|tool_rows|native_conversation
+/src/(.*/)?(tasks|new_task|progress|list)(\.rs|/)                            tasks_|task_|new_task|a_done_row|inbox|later_asks
+/src/(.*/)?(finish|seal)(\.rs|/)                                             done|seal
+/src/(.*/)?pass(\.rs|/)                                                      pass
+/src/(.*/)?(worktree|worktrees|repos|prs)(\.rs|/)                            worktree|repo|pull_request
+/src/(.*/)?(home|spaces|zones|rail|drawer_rail|titlebar|slide)(\.rs|/)       rail|drawer|sidebar|collapse|home|workspace|space|window_buttons|focus_moves|secondary_bar|tab_strip
+/src/(.*/)?(notice|notice_bar|give_back)(\.rs|/)                             notice|undo
+/src/(.*/)?(confirm|quit)(\.rs|/)                                            quit|cmd_q|asks_first|closing
+/src/(.*/)?(sneak|sneak_place|sneak_apps)(\.rs|/)                            sneak
+/src/(.*/)?marks(\.rs|/)                                                     mark
+/src/(.*/)?scrollbar(\.rs|/)                                                 scrollbar|scrolls|fades|long_list|wheel
+/src/(.*/)?(status_bar|calendar|ics)(\.rs|/)                                 calendar|timeline|meeting|feed|band|status_bar|busy_day|focus_block
+/src/(.*/)?(listen|listen_file|listen_live|listen_meter|transcribe|transcript)(\.rs|/)   transcript|hears|lost_stream|speaks|heard
+/src/(.*/)?dial(\.rs|/)                                                      dial
+/src/(.*/)?(capture|capture_model|collect|picture|gist|secrets)(\.rs|/)      capture
+/src/(.*/)?record(\.rs|/)                                                    records_its_own_window
+/src/(.*/)?(pick|apps|new_window|slot|slots|slot_panes|pop_ups|offers|rules|hosted|dialog|app_wheel)(\.rs|/)   picker|apps_section|app_pane|slot|new_window|_window_floats
+/src/(.*/)?(agent_mode|ax|ax_debug|inspect|inspector)(\.rs|/)                agent_mode|inspector|sneak_labels_an_apps
+/src/(.*/)?(viewer|markdown|highlight)(\.rs|/)|^crates/ottospace/tests/fixtures/markdown/   viewer|markdown|cmd_click|native_conversation|tool_rows
+/src/(.*/)?(displays|out_window|display|fill)(\.rs|/)                        display|folds|draws_on
+/src/(.*/)?(palette|menus|row_menu|fuzz|commands)(\.rs|/)                    palette|command|done_row
+/src/(.*/)?(key_use|keycaps)(\.rs|/)                                         key|caps
+/src/(.*/)?(settings|config|features)(\.rs|/)                                settings|feature|font|marks_file
+/src/(.*/)?event_log(\.rs|/)                                                 log_says
+/src/(.*/)?(links|diff)(\.rs|/)                                              tool_rows|watched|cmd_click
+/src/(.*/)?runner(\.rs|/)                                                    native_conversation|codex|btw|agent_tag|real_cli

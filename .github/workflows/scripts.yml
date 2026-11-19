@@ -1,16 +1,20 @@
 name: Scripts
 
 # install.sh and osi against fixture builds in a temp directory, for a pull request that changes
-# them. build.yml runs the same test on main and on a pull request with the label pr-build.
+# them. build.yml runs the same test on main and on a pull request with the label pr-build. Also
+# e2e-for's selection, for one that changes it.
 on:
   pull_request:
-    # Only what scripts/test-osi.sh reads (package.sh: its shellcheck). Not `scripts/**`: a new
-    # scenario under scripts/shots/ took a macOS runner here for nothing.
+    # Only what scripts/test-osi.sh and scripts/test-e2e-for.sh read (package.sh: its shellcheck).
+    # Not `scripts/**`: a new scenario under scripts/shots/ took a macOS runner here for nothing.
     paths:
       - 'install.sh'
       - 'scripts/osi'
       - 'scripts/test-osi.sh'
       - 'scripts/package.sh'
+      - 'scripts/e2e-for'
+      - 'scripts/e2e-for.areas'
+      - 'scripts/test-e2e-for.sh'
       - '.github/workflows/scripts.yml'
 
 # pull_request, never pull_request_target: a fork's run gets a read-only token and no secrets.
@@ -33,3 +37,6 @@ jobs:
           persist-credentials: false
       - name: Test osi
         run: scripts/test-osi.sh
+      # git and python3 only: no build, no screen.
+      - name: Test e2e-for
+        run: scripts/test-e2e-for.sh

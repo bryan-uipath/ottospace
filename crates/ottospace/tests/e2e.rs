@@ -14006,6 +14006,28 @@ fn the_window_draws_on_after_the_displays_change() {
     assert_eq!(redraws(&otto), kicked);
 }
 
+/// `OTTOSPACE_E2E_WINDOW` sizes a test run's window: CI's, 1024x674, on a larger screen. One asked
+/// larger than every screen is kept no larger than the screen it is on, as 1400x900 is on CI's.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen() {
+    let otto = Otto::launch_with("window-size", &[("OTTOSPACE_E2E_WINDOW", "1024x674")]);
+    let window = rect(&otto.call(json!({"cmd": "state"}))["window"]);
+    assert_eq!((window[2], window[3]), (1024., 674.), "{window:?}");
+    drop(otto);
+    let env = [("OTTOSPACE_E2E_WINDOW", "8000x8000"), ("OTTOSPACE_FEATURES", "multi_monitor")];
+    let otto = Otto::launch_with("window-huge", &env);
+    let displays = otto.wait_for("the real displays", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        Some(state["displays"].clone()).filter(|d| d.as_array().is_some_and(|d| !d.is_empty()))
+    });
+    let window = rect(&otto.call(json!({"cmd": "state"}))["window"]);
+    let largest = |at: usize| {
+        displays.as_array().into_iter().flatten().filter_map(|d| d["frame"][at].as_f64()).fold(0., f64::max)
+    };
+    assert!(window[2] <= largest(2) && window[3] <= largest(3), "{window:?} on {displays}");
+}
+
 /// The state lists the displays by place, the main window's marked, never a uid. A test's
 /// made-up ones stand for them, in screen order; one left out is unplugged.
 #[test]

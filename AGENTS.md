@@ -83,6 +83,17 @@ Design note: `docs/ai/attention/plan.md`.
 - In an E2E run a reply with the state waits for the frame that draws its request: read bounds
   from it, no poll needed. A failed test writes a folder that explains it (its panic names it),
   and `scripts/e2e-repeat N [filter]` tallies flaky tests. See `docs/ai/e2e-reliability.md`.
+- `OTTOSPACE_E2E_WINDOW=1024x674` (read only under `OTTOSPACE_E2E`) sizes a test run's window:
+  CI's screen is 1024 wide, so there the default 1400x900 is 1024x674. macOS keeps it no larger
+  than the screen.
+- `scripts/e2e-for [<base>]` lists the e2e tests a change can affect, each with why: tests it
+  changes in `e2e.rs` (and those using a helper it changes), the areas of its paths
+  (`scripts/e2e-for.areas`), a smoke set. A path the table does not know prints the full suite
+  instead. `--run` runs them under nextest, `--ci-size` at CI's window. It refuses a locked
+  screen or another e2e run, and never runs `cargo e2e-apps`. `scripts/test-e2e-for.sh` tests it;
+  `scripts/e2e-for --check` fails on a source file the table does not know.
+- **A pull request merged on local evidence** first runs `scripts/e2e-for --run --ci-size` and
+  pastes its summary in the pull request.
 - A test leaves nothing in `$TMPDIR`, pass or fail. An e2e test makes its paths with
   `support::temp`, removed when it ends; a unit test holds a guard that removes its folder on
   drop. `a_test_leaves_nothing_in_the_temp_dir` checks it.
@@ -244,7 +255,8 @@ Design note: `docs/ai/attention/plan.md`.
   artifact. On `main` a third job, the only one with a write token, replaces the assets of the
   `main-latest` prerelease and moves its tag. Not a required check.
 - `.github/workflows/scripts.yml`, on pull requests that change what `scripts/test-osi.sh` reads
-  (`install.sh`, `scripts/osi`, `scripts/test-osi.sh`, `scripts/package.sh`): `scripts/test-osi.sh`.
+  (`install.sh`, `scripts/osi`, `scripts/test-osi.sh`, `scripts/package.sh`): `scripts/test-osi.sh`;
+  and on changes to `scripts/e2e-for`, its table or its test: `scripts/test-e2e-for.sh`.
   A file the test starts to read is added to its `paths`.
 - One Rust cache for the dev build: `ci.yml`'s `e2e` job saves it, on `main` only (`shared-key: e2e`);
   `app-windows.yml`, `shots.yml`, `bench.yml` and `reliability.yml` restore it and save none (`save-if: false`).
