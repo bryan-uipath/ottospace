@@ -968,22 +968,32 @@ the way.
   and `calendar_hide_free: true` leaves every free entry out. The address stays in
   `settings.json`: it is not sent with the feed's request, shown, logged or in the state.
 - **The Calendar section** (its rail cell, second, is there only while `calendar_ics` is set):
-  one day's meetings, its all-day events on one line at the top, then one row a meeting as the
-  Tasks section's rows: a dot and a faint tint in the meeting's colour (the band's), its start, its
-  title, and at most one quiet fact at the end (`now`, or `in 12m` for the next within the hour).
-  Hover a row for the band's card. Past meetings are faded; the one that runs is stronger, with a
-  white bar at its edge, as now's tick. `Join` shows on hover or selection for a meeting with an
-  `https:` link. Under the rows a muted line says how the feed's fetch goes: `Loading the
+  one day drawn as Outlook's day view. Its all-day events sit in a strip at the top; under it
+  an hour column (`9`, `10`, `11`…) with a line across at each hour, and each meeting a block as
+  tall as it lasts, one point a minute (a 09:00 to 17:00 day is about 480 points), at least 20
+  points so a 15-minute meeting still reads `Standup 9:00`. A block is tinted in the meeting's
+  colour (the band's) with a bar of it at its left edge, its title and start. Meetings that
+  overlap sit side by side in columns, as in Outlook (up to 4; more at once merge into one,
+  named on its card). Free time up to an hour is empty space; longer, a short band that says how
+  long (`2 h free`), so the day stays on one screen. The day spans the workday, widened to its
+  meetings and, on today, to now, out to whole hours. Now is a line across in the accent colour, a dot at its left end
+  and the time (`14:12`) in the hour column; it moves with the minute, with no frame of its own,
+  and inside a `free` band sits where now falls in it. Past meetings are faded; the one that runs
+  is tinted stronger and edged in its colour. The section opens with now in view (at the top on
+  another day). Hover a block for the band's card. `Join` shows on hover or selection for a meeting with an
+  `https:` link. Under the day a muted line says how the feed's fetch goes: `Loading the
   calendar… 412 KB` (or the seconds before a byte), `Updated 2 min ago · 1858 events`, or what
   failed in plain words (`Couldn't reach the calendar (timed out after 30 s)`, `The calendar
   answered 403`, `Couldn't read the calendar: not an iCalendar feed`) with the time of the last
-  good read and `Retry`, which fetches at once (your click only). "No meetings today" ("No
-  meetings" on another day) only once a read succeeded. The header: `‹ Today ›`, or `‹ Mon 16 Nov ›`
+  good read and `Retry`, which fetches at once (your click only). A day with no
+  meetings is its hours with one `free` band (and now's line on today), drawn only once a read
+  succeeded. The header: `‹ Today ›`, or `‹ Mon 16 Nov ›`
   and `Today` on another day, from 7 days back to 7 on; its date's tooltip says when the feed was
   read. The section goes back to today when the day turns and at start; the band, the alerts and
   now's tick are always of today. The rail cell shows a steady amber dot while a meeting is 2
-  minutes off or runs, and a filled amber badge while its notice stands (also under an error that covers it). In list mode (⌘⌃E)
-  `j`/`k` move, ↵ joins, ← and → go a day back and on, `t` back to today; the View menu and the
+  minutes off or runs, and a filled amber badge while its notice stands (also under an error that covers it). In list mode (⌘⌃E,
+  which starts on the meeting that runs, else the next, else the day's last)
+  `j`/`k` (↓/↑) go from meeting to meeting by start, the block scrolled into view, ↵ joins, ← and → go a day back and on, `t` back to today; the View menu and the
   palette have the same (`Previous Day in Calendar`, `Next Day in Calendar`, `Today in
   Calendar`). The open Calendar is not kept in the restored layout: a build without the section
   could not read the file.

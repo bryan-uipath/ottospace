@@ -9301,13 +9301,13 @@ fn the_calendar_says_it_loads_what_failed_and_tries_again() {
             (c["fetch"]["state"] == state && c["fetch_line"].as_str().is_some_and(|l| l.starts_with(line))).then_some(c)
         })
     };
-    // At once at start: loading, and no "No meetings".
+    // At once at start: loading, and no day drawn, as for an empty one.
     let loading = fetching(&otto, "loading", "Loading the calendar…");
-    assert_eq!((&loading["empty_note"], loading["fetch_rect"].is_array()), (&Value::Null, true), "{loading}");
+    assert_eq!((&loading["day_view"], loading["fetch_rect"].is_array()), (&Value::Null, true), "{loading}");
     std::fs::write(home.join("go"), "").unwrap();
-    // Timed out: what failed, a Retry, still no "No meetings".
+    // Timed out: what failed, a Retry, still no day.
     let failed = fetching(&otto, "failed", "Couldn't reach the calendar (timed out after");
-    assert_eq!((&failed["fetch"]["error"], &failed["empty_note"]), (&json!("timed_out"), &Value::Null), "{failed}");
+    assert_eq!((&failed["fetch"]["error"], &failed["day_view"]), (&json!("timed_out"), &Value::Null), "{failed}");
     // A client's click on Retry fetches nothing.
     otto.click(centre(&failed["retry"]), 1);
     assert_eq!(calendar(&otto)["retries"], 0);
@@ -9327,10 +9327,12 @@ fn the_calendar_says_it_loads_what_failed_and_tries_again() {
     assert_eq!((slow["fetch_line"].as_str(), &slow["retry"]), (Some(said.as_str()), &Value::Null), "{slow}");
     assert!(bytes <= 2048, "before the rest: {slow}");
     let read = fetching(&otto, "read", "Updated just now · 1 event");
-    assert_eq!(
-        (&read["empty_note"], &read["rows"], &read["stale"]),
-        (&json!("No meetings today"), &json!(0), &json!(false))
-    );
+    assert_eq!((&read["rows"], &read["stale"]), (&json!(0), &json!(false)), "{read}");
+    // The empty day: its hours, one free band, no block.
+    let empty =
+        otto.wait_for("the empty day drawn", |o| Some(calendar(o)["day_view"].clone()).filter(Value::is_object));
+    let (blocks, gaps) = (empty["blocks"].as_array().unwrap(), empty["gaps"].as_array().unwrap());
+    assert!(blocks.is_empty() && gaps.len() == 1 && empty["hours"].as_u64() >= Some(2), "{empty}");
     // The app's log: each fetch, its outcome's kind, sizes and times. No link, no title.
     let log = std::fs::read_to_string(home.join("log")).unwrap();
     let events: Vec<Value> = log.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
@@ -9776,14 +9778,20 @@ fn the_calendar_section_goes_back_and_on_a_day_by_click_or_key_and_the_band_stay
     let today = opened["calendar"].clone();
     // Today: every timed entry of the busy day is a row; no Today control.
     assert_eq!((&today["day"], &today["rows"], &today["nav"]["today"]), (&json!(0), &json!(16), &Value::Null));
-    // At the top on open, under the header: the all-day line whole, then the first row.
+    // Opened on today with now in view (at the top when now is off the day's hours), the all-day
+    // strip whole under the header.
     let r = |v: &Value| -> Vec<f64> { v.as_array().expect("a rect").iter().filter_map(Value::as_f64).collect() };
     let header = r(&opened["bar_header"]);
     let at_top = |c: &Value| {
-        let (line, row) = (r(&c["all_day_line"]), r(&c["first_row"]));
-        line[1] >= header[1] + header[3] - 0.5 && line[3] >= 10. && row[1] >= line[1] + line[3]
+        let (line, view) = (r(&c["all_day_line"]), &c["day_view"]);
+        let port = r(&view["viewport"]);
+        let shown = match view["now"]["rect"].as_array() {
+            Some(now) => (port[1]..=port[1] + port[3]).contains(&now[1].as_f64().unwrap()),
+            None => view["scroll"] == 0.0,
+        };
+        line[1] >= header[1] + header[3] - 0.5 && line[3] >= 10. && port[1] >= line[1] + line[3] && shown
     };
-    assert!(at_top(&today), "{today} under {header:?}");
+    let today = otto.wait_for("today's day drawn", |o| Some(calendar(o)).filter(|c| at_top(c)));
     let day = |c: &Value| c["day"].as_i64().unwrap();
     let start = |c: &Value| c["day_start"].as_f64().unwrap();
     // The user's click on › shows tomorrow, and Today comes.
@@ -9793,14 +9801,13 @@ fn the_calendar_section_goes_back_and_on_a_day_by_click_or_key_and_the_band_stay
     assert!(on["nav"]["today"].is_array(), "{on}");
     // The band stays on the real today.
     assert_eq!(on["band"]["span"], today["band"]["span"]);
-    // Scrolled down, then back to today: at the top again.
-    let row = r(&today["first_row"]);
+    // Scrolled, then back to today: now in view again.
+    let row = r(&today["day_view"]["viewport"]);
     otto.call(
-        json!({"cmd": "mouse", "action": "wheel", "x": row[0] + 20., "y": row[1] + 10., "dy": -20, "as": "user"}),
+        json!({"cmd": "mouse", "action": "wheel", "x": row[0] + 40., "y": row[1] + 40., "dy": -20, "as": "user"}),
     );
     otto.user_click(centre(&on["nav"]["today"]));
-    let again = otto.wait_for("today again", |o| Some(calendar(o)).filter(|c| day(c) == 0));
-    assert!(at_top(&again), "{again}");
+    otto.wait_for("today again", |o| Some(calendar(o)).filter(|c| day(c) == 0 && at_top(c)));
     // In list mode: left and right a day, t today; never more than 7 back.
     otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-e", "as": "user"}));
     for _ in 0..9 {
@@ -9812,6 +9819,149 @@ fn the_calendar_section_goes_back_and_on_a_day_by_click_or_key_and_the_band_stay
     otto.call(json!({"cmd": "key", "keys": "t", "as": "user"}));
     let back = calendar(&otto);
     assert_eq!((day(&back), &back["rows"]), (0, &json!(16)));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Minutes since local midnight now, as `date` says.
+fn local_minutes() -> i64 {
+    let out = Command::new("/bin/date").arg("+%H %M").output().expect("date");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut parts = text.split_whitespace().map(|p| p.parse::<i64>().unwrap());
+    parts.next().unwrap() * 60 + parts.next().unwrap()
+}
+
+/// Bryan, 2026-11-18: "i prefer the outlook calendar view vs our pane". The section draws the day
+/// as Outlook does: blocks as tall as they last, overlaps side by side, a long gap pressed into a
+/// band, now's line across in the accent colour with its time, opened with now in view. A feed
+/// by a stand-in curl.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_calendar_section_draws_the_day_to_scale_with_overlaps_side_by_side_and_now_across() {
+    use std::os::unix::fs::PermissionsExt;
+    // Minutes from now: one past, one running (a call), a half hour, two that overlap, 80 minutes
+    // free, one more. Mirrored (the past ahead) late in the day, so all are today's.
+    let link = "LOCATION:https://example.zoom.us/j/123\r\n";
+    let mut shape: Vec<(&str, i64, i64, &str)> = vec![
+        ("Past", -60, -40, ""),
+        ("Running", -20, 10, link),
+        ("Half hour", 20, 50, link),
+        ("Long", 50, 110, link),
+        ("Overlaps", 80, 130, link),
+        ("After the gap", 210, 240, link),
+    ];
+    let minutes = local_minutes();
+    if minutes + 245 >= 24 * 60 {
+        shape = shape.into_iter().map(|(t, s, e, more)| (t, -e, -s, more)).collect();
+    }
+    let (lo, hi) = (shape.iter().map(|e| e.1).min().unwrap(), shape.iter().map(|e| e.2).max().unwrap());
+    if minutes + lo < 1 || minutes + hi >= 24 * 60 - 1 {
+        eprintln!("skipped: the day is too near its end for 5 hours of meetings ({minutes} minutes in)");
+        return;
+    }
+    let events: Vec<(String, &str, i64, i64, &str)> =
+        shape.iter().enumerate().map(|(n, (t, s, e, more))| (format!("u{n}"), *t, s * 60, e * 60, *more)).collect();
+    let events: Vec<(&str, &str, i64, i64, &str)> =
+        events.iter().map(|(u, t, s, e, m)| (u.as_str(), *t, *s, *e, *m)).collect();
+    let link_feed = "https://calendar.example.com/private-s3cret/day.ics";
+    let home = calendar_folder("calendar-day-view", &feed(&events), Some(link_feed));
+    let dir = home.to_str().unwrap();
+    let script = format!("#!/bin/sh\ncat > /dev/null\ncat '{dir}/today.ics'\nprintf 200 >&2\n");
+    std::fs::write(home.join("curl"), script).unwrap();
+    std::fs::set_permissions(home.join("curl"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let curl = home.join("curl");
+    let otto =
+        Otto::launch_with("calendar-day-view", &[("OTTOSPACE_HOME", dir), ("OTTOSPACE_CURL", curl.to_str().unwrap())]);
+    let now = calendar_read(&otto)["updated"].as_f64().unwrap();
+    otto.call(json!({"cmd": "section", "section": "calendar"}));
+    let view_of = |o: &Otto| o.call(json!({"cmd": "state"}))["calendar"]["day_view"].clone();
+    let view = otto.wait_for("the day drawn, now in view", |o| {
+        let v = view_of(o);
+        let (line, port) = (v["now"]["rect"].as_array()?.clone(), rect(&v["viewport"]));
+        let y = line[1].as_f64()?;
+        (y >= port[1] && y <= port[1] + port[3]).then_some(v)
+    });
+    let blocks = view["blocks"].as_array().unwrap().clone();
+    assert_eq!(blocks.len(), 6, "{view}");
+    // Each block by its start: the fixture's, in order.
+    let at = |b: &Value| (b["start"].as_f64().unwrap() - now) / 60_000.;
+    let mut starts: Vec<f64> = blocks.iter().map(at).collect();
+    let sorted = starts.clone();
+    starts.sort_by(f64::total_cmp);
+    assert_eq!(starts, sorted, "ordered by start: {view}");
+    let by = |minutes: i64| {
+        blocks.iter().find(|b| (at(b) - minutes as f64).abs() < 2.).unwrap_or_else(|| panic!("{minutes}: {view}"))
+    };
+    let r = |b: &Value| rect(&b["rect"]);
+    // Ordered down the axis, and as tall as they last: a point a minute.
+    let tops: Vec<f64> = blocks.iter().map(|b| r(b)[1]).collect();
+    assert!(tops.windows(2).all(|w| w[1] >= w[0] - 0.5), "{tops:?}");
+    let (half, long) = (by(shape[2].1), by(shape[3].1));
+    assert!((r(half)[3] - 30.).abs() <= 1.5 && (r(long)[3] - 60.).abs() <= 1.5, "{half} {long}");
+    // The two that overlap: side by side, as wide as each other.
+    // The one that starts first takes the left column (mirrored, that is the other one).
+    let (left, right) = if shape[3].1 < shape[4].1 { (long, by(shape[4].1)) } else { (by(shape[4].1), long) };
+    assert_eq!(
+        (&left["column"], &right["column"], &left["columns"], &right["columns"]),
+        (&json!(0), &json!(1), &json!(2), &json!(2))
+    );
+    // Whole pixels: one may be a point wider.
+    assert!((r(left)[2] - r(right)[2]).abs() <= 1.5 && r(right)[0] >= r(left)[0] + r(left)[2] - 1., "{left} {right}");
+    // 80 minutes free between the overlap and the last: a short band, not 80 points.
+    let gap = view["gaps"].as_array().unwrap().iter().find(|g| g["minutes"] == 80).cloned();
+    let gap = gap.unwrap_or_else(|| panic!("the gap: {view}"));
+    assert!(rect(&gap["rect"])[3] < 30., "{gap}");
+    // Now's line: under every block that ended, over every one to come, across the running one;
+    // its time label in the hour column, left of the blocks.
+    let y = rect(&view["now"]["rect"])[1];
+    for b in &blocks {
+        let (top, bottom) = (r(b)[1], r(b)[1] + r(b)[3]);
+        match b["stage"].as_str().unwrap() {
+            "past" => assert!(bottom <= y + 1., "{b} above {y}"),
+            "running" => assert!(top < y && y < bottom, "{b} across {y}"),
+            _ => assert!(top >= y - 1., "{b} below {y}"),
+        }
+    }
+    assert_eq!(blocks.iter().filter(|b| b["stage"] == "running").count(), 1, "{view}");
+    let label = rect(&view["now"]["label"]);
+    assert!(label[0] + label[2] <= r(&blocks[0])[0] && (label[1] + label[3] / 2. - y).abs() <= 2., "{view}");
+    // The band below agrees: each of its meetings is a block at the same times.
+    let band = otto.call(json!({"cmd": "state"}))["calendar"]["band"]["blocks"].clone();
+    for b in band.as_array().unwrap() {
+        assert!(blocks.iter().any(|d| d["start"] == b["start"] && d["end"] == b["end"]), "{b} in {view}");
+    }
+    // No title or place reaches a client.
+    let said = otto.call(json!({"cmd": "state"})).to_string();
+    assert!(!said.contains("Running") && !said.contains("example.zoom.us") && !said.contains("s3cret"), "{said}");
+    // At rest, no frame: now moves on the minute's redraw (a 20-second redraw may fall between).
+    let frames = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["calendar_frames"].as_u64().unwrap();
+    let still = (0..3).any(|_| {
+        let before = frames(&otto);
+        std::thread::sleep(Duration::from_millis(700));
+        frames(&otto) == before
+    });
+    assert!(still, "the day view draws at rest");
+    // List mode starts on the running one; ↓ and ↑ go block to block by start; its Join shows.
+    otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-e", "as": "user"}));
+    let selected = |o: &Otto| {
+        let v = view_of(o);
+        v["blocks"].as_array().unwrap().iter().position(|b| b["selected"] == true)
+    };
+    let running = blocks.iter().position(|b| b["stage"] == "running").unwrap();
+    assert_eq!(selected(&otto), Some(running));
+    otto.call(json!({"cmd": "key", "keys": "down", "as": "user"}));
+    assert_eq!(selected(&otto), Some(running + 1));
+    otto.call(json!({"cmd": "key", "keys": "up", "as": "user"}));
+    assert_eq!(selected(&otto), Some(running));
+    let join = otto.wait_for("its Join", |o| {
+        let v = view_of(o);
+        Some(v["blocks"][running]["join"].clone()).filter(Value::is_array)
+    });
+    // A client's click joins nothing; the user's opens its link.
+    otto.click(centre(&join), 1);
+    assert_eq!(otto.call(json!({"cmd": "state"}))["calendar"]["joins"], 0);
+    otto.user_click(centre(&join));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["calendar"]["joins"], 1);
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }

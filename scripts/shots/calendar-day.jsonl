@@ -1,0 +1,15 @@
+# The Calendar section as Outlook's day (made up, times from now): past meetings, three at once
+# over now, a 15-minute standup, two hours and a half free, two that overlap later, a focus block,
+# an all-day entry. Opened with now in view; then list mode on the running call (its Join shows).
+# A run within six hours of midnight puts some on another day.
+{"cmd":"split","kind":"empty"}
+{"until":"calendar.updated"}
+{"cmd":"section","section":"calendar"}
+{"settle":500}
+{"shot":"day"}
+{"cmd":"key","keys":"cmd-ctrl-e","as":"user"}
+{"cmd":"key","keys":"down","as":"user"}
+{"cmd":"key","keys":"down","as":"user"}
+{"cmd":"key","keys":"down","as":"user"}
+{"settle":300}
+{"shot":"selected"}

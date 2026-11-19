@@ -1,0 +1,79 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//ottospace//made-up day view//EN
+BEGIN:VEVENT
+UID:allday@example.com
+SUMMARY:Company offsite planning week
+DTSTART;VALUE=DATE:20260101
+DTEND;VALUE=DATE:20260102
+RRULE:FREQ=DAILY
+END:VEVENT
+BEGIN:VEVENT
+UID:inbox@example.com
+SUMMARY:Inbox zero
+DTSTART:{NOW-9000}
+DTEND:{NOW-7200}
+END:VEVENT
+BEGIN:VEVENT
+UID:crit@example.com
+SUMMARY:Design critique
+DTSTART:{NOW-6000}
+DTEND:{NOW-4200}
+LOCATION:https://example.zoom.us/j/100200300
+END:VEVENT
+BEGIN:VEVENT
+UID:standup@example.com
+SUMMARY:Standup
+DTSTART:{NOW-3600}
+DTEND:{NOW-2700}
+LOCATION:https://example.zoom.us/j/100200300
+END:VEVENT
+BEGIN:VEVENT
+UID:roadmap@example.com
+SUMMARY:Platform roadmap
+DTSTART:{NOW-1800}
+DTEND:{NOW+1800}
+LOCATION:https://example.zoom.us/j/100200300
+END:VEVENT
+BEGIN:VEVENT
+UID:ana@example.com
+SUMMARY:Ana / Bo 1:1
+DTSTART:{NOW-900}
+DTEND:{NOW+900}
+LOCATION:https://example.zoom.us/j/100200300
+END:VEVENT
+BEGIN:VEVENT
+UID:hiring@example.com
+SUMMARY:Hiring sync
+DTSTART:{NOW+0}
+DTEND:{NOW+2700}
+LOCATION:https://example.zoom.us/j/100200300
+END:VEVENT
+BEGIN:VEVENT
+UID:release@example.com
+SUMMARY:Release readiness
+DTSTART:{NOW+3600}
+DTEND:{NOW+5400}
+LOCATION:https://example.zoom.us/j/100200300
+END:VEVENT
+BEGIN:VEVENT
+UID:escalation@example.com
+SUMMARY:Customer escalation follow-up
+DTSTART:{NOW+14400}
+DTEND:{NOW+18000}
+LOCATION:https://example.zoom.us/j/100200300
+END:VEVENT
+BEGIN:VEVENT
+UID:vendor@example.com
+SUMMARY:Vendor call
+DTSTART:{NOW+16200}
+DTEND:{NOW+18900}
+LOCATION:https://example.zoom.us/j/100200300
+END:VEVENT
+BEGIN:VEVENT
+UID:focus@example.com
+SUMMARY:Focus: writing
+DTSTART:{NOW+19800}
+DTEND:{NOW+25200}
+END:VEVENT
+END:VCALENDAR

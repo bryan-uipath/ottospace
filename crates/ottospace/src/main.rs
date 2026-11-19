@@ -657,6 +657,14 @@ enum Mark {
     CalendarAllDay,
     CalendarFirstRow,
     CalendarFetch,
+    /// The Calendar section's day: the view, the scroll it is in, its n-th block and pressed free
+    /// band, now's line and its time.
+    DayView,
+    DayViewport,
+    DayBlock(usize),
+    DayGap(usize),
+    DayNow,
+    DayNowLabel,
     /// The status bar, and its place, meeting and agents segments.
     Status,
     StatusPlace,
@@ -1048,6 +1056,10 @@ struct Workspace {
     /// it was last drawn in and the day it showed (`calendar::render_calendar`).
     calendar_scroll: ScrollHandle,
     calendar_shown: std::cell::Cell<(u64, i32)>,
+    /// The section opened or its day changed: scrolled to now once its height is known.
+    calendar_opening: std::cell::Cell<bool>,
+    /// The meeting last brought into view: a new selection is (`calendar::render_calendar`).
+    calendar_revealed: std::cell::Cell<Option<u64>>,
     /// The drawer rail's tasks; the frame and what it last drew (a new one scrolls to it
     /// once); the item still to bring into view, and the tries left (`drawer_rail`).
     rail_scroll: ScrollHandle,
@@ -1389,7 +1401,9 @@ impl Workspace {
                             // An age shown ("5m") changes at most once a minute: draw again then,
                             // while the Tasks section or the drawer is open to show one.
                             let minute = now / 60_000;
-                            let shown = this.model.sidebar == Some(Section::Tasks) || this.model.talk.is_some();
+                            // The Calendar's now line and its time too.
+                            let shown = matches!(this.model.sidebar, Some(Section::Tasks | Section::Calendar))
+                                || this.model.talk.is_some();
                             if minute != this.minute && shown {
                                 cx.notify();
                             }
@@ -1612,6 +1626,8 @@ impl Workspace {
             list_scroll: ScrollHandle::new(),
             calendar_scroll: ScrollHandle::new(),
             calendar_shown: std::cell::Cell::new((0, 0)),
+            calendar_opening: std::cell::Cell::new(false),
+            calendar_revealed: std::cell::Cell::new(None),
             rail_scroll: ScrollHandle::new(),
             rail_scrolled: RefCell::new((0, None)),
             rail_pending: Rc::new(Cell::new(None)),
@@ -3858,6 +3874,8 @@ impl Workspace {
                 "dial_frames": self.dial_motion.borrow().frames,
                 // Frames drawn while the calendar band's loading bar slides: none once a read lands.
                 "band_frames": self.timeline.band_frames.get(),
+                // Frames that drew the Calendar section's day: none at rest, its now line moves on the minute.
+                "calendar_frames": self.timeline.day_frames.get(),
                 // How often GPUI's own handlers were kicked to draw again (`stall`): after a change
                 // of the displays, or frames that stopped.
                 "redraws": self.redraws,
@@ -4752,6 +4770,7 @@ impl Workspace {
             Some(ListKey::Letter) => Action::ListMarkEdit { field: Field::Key },
             Some(ListKey::Section(delta)) => {
                 self.refresh_lists(cx); // the section it lands on shows what is there now
+                self.dispatch(Action::Tick { now: now_ms() }, Origin::System, window, cx);
                 Action::ListSection { delta }
             }
             Some(ListKey::Snooze) => Action::ListSnooze { until: now_ms().saturating_add(SNOOZE_MS) },
@@ -4780,9 +4799,10 @@ impl Workspace {
             Some(ListKey::Side(_) | ListKey::Today) | None => return,
         };
         self.dispatch(action, self.input, window, cx);
-        if let Some(child) = self.selected_child() {
-            let calendar = self.model.sidebar == Some(Section::Calendar);
-            (if calendar { &self.calendar_scroll } else { &self.list_scroll }).scroll_to_item(child);
+        if self.model.sidebar == Some(Section::Calendar) {
+            self.reveal_meeting();
+        } else if let Some(child) = self.selected_child() {
+            self.list_scroll.scroll_to_item(child);
         }
         cx.notify();
     }
@@ -4807,11 +4827,6 @@ impl Workspace {
             Some(Section::Apps) => return Some(self.apps_child(at)),
             // The offer to put a mark back, if it shows, is above the rows.
             Some(Section::Marks) => return Some(at + usize::from(self.mark_offered().is_some())),
-            // The day's all-day line is above the rows.
-            Some(Section::Calendar) => {
-                let calendar = &self.model.calendar;
-                return Some(at + usize::from(calendar.on(calendar.day).any(|e| e.all_day)));
-            }
             _ => return Some(at),
         }
         // The offer to undo, if it shows; how to add a task, if none is listed; then the headings
@@ -7644,6 +7659,8 @@ impl Workspace {
             }))
             .on_action(cx.listener(|this, _: &ListMode, window, cx| {
                 this.refresh_lists(cx);
+                // The time, for the row it starts on (the Calendar's meeting that runs).
+                this.dispatch(Action::Tick { now: now_ms() }, Origin::System, window, cx);
                 this.dispatch(Action::FocusList, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SneakMode, window, cx| this.toggle_sneak(window, cx)))

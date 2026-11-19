@@ -132,10 +132,9 @@ His feed has no attendees, so "only me in it" cannot be read: the title and no l
 
 ## The Calendar section
 
-Since the design pass: one line a meeting as the Tasks section's rows (`list_row`): a dot and a
+Since the design pass (until the day view, below): one line a meeting as the Tasks section's rows (`list_row`): a dot and a
 faint tint in its colour (`calendar::paint`, the band's), its start in a fixed column, its title,
-and one quiet fact (`Calendar::row_fact`: `now`, or `in 12m` for the next within the hour, on
-today only). Place, length and link kind are on the hover card, `calendar::describe`, the band's.
+and one quiet fact (`now`, or `in 12m` for the next within the hour, on today only). Place, length and link kind are on the hover card, `calendar::describe`, the band's.
 All-day events are one line above the rows, no row. "No meetings" when empty; no footer (when the
 feed was read is on the date's tooltip). The "Tomorrow" fold went: the day changes instead.
 The section scrolls by itself (`calendar_scroll`), at the top when it opens and when its day
@@ -174,6 +173,19 @@ rail's keyboard to Tasks.
 - Fixed with it: a layout restored after the user had opened the drawer's task listed that task
   twice on the right rail (found by the property test once its makers changed; `layout_file`).
 
+## The day view
+
+Bryan, 2026-11-18: "i prefer the outlook calendar view vs our pane". The section draws its day as
+Outlook's day view (`calendar::day`, pure): an hour column, each meeting a block at 1 pt a minute
+(20 pt at least, the stretch pushing what follows down), free time over an hour pressed into a
+24 pt band (`2 h free`), overlaps side by side in `calendar::lanes`, the band's own lanes, of every
+timed event. The axis is the day's `band` widened to every timed event, out to whole hours. Now's
+line is `DayView::y(now)`, redrawn on the minute tick; the section opens with now a third down.
+An empty day is its hours and one `free` band, no "No meetings" line (`Calendar::draws_day`:
+once a read succeeded); today's axis reaches now. List mode starts on the meeting that runs, else
+the next, else the last (`Calendar::first_row`, the time passed in a `Tick` before ⌘⌃E). The
+state's `calendar.day_view` carries rects, times and columns, never a title.
+
 ## The fetch, said
 
 Bryan, 2026-11-17: "just opened up ottospace, shows no meetings but i definitely have some
@@ -199,7 +211,7 @@ just showing no events)".
 - **The section**: under the rows, `Fetch::line` (`Loading the calendar… 412 KB`, `… 3 s` before
   a byte, `Updated 2 min ago · 1858 events`, or the failure's words and `· last read 09:40`) and,
   after a failure, `Retry`. "No meetings today" only once a read succeeded
-  (`Calendar::empty_note`). The band: below.
+  (then `Calendar::empty_note`; the day view drew an empty day instead, `Calendar::draws_day`). The band: below.
 
 ## The band while it loads
 
@@ -232,7 +244,7 @@ was drawn only once a read landed (and, after a failed first read, as an empty w
 - **The log** (`event_log`): `calendar_fetch` (`try`), `calendar_read` (`bytes`, `vevents`, `held`,
   `ms`, `parse_ms`), `calendar_failed` (`error`, `curl_exit`, `http`, `ms`, `try`).
 - **State**: `calendar.fetch` (its state, times, bytes, events, the error's kind and code),
-  `fetch_line`, `empty_note`, `fetch_rect`, `retry` and `retries`. No link, no title.
+  `fetch_line`, `fetch_rect`, `retry` and `retries`. No link, no title.
 
 ## Is the user in a call?
 
