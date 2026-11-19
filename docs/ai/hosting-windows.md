@@ -114,10 +114,15 @@ a slot they made. `rules::decide` judges it once, on facts the shell reads (`AXS
   id).
   **Known limit:** while the app's pane is live its window covers the header, so the chip is not
   seen until the pane parks (the user leaves it). The window floats in front meanwhile.
-- **A window the app remade.** An app pane whose window closes while a window of its app is
-  offered there stays, empty, and offers it in its body: `Zoom replaced its window · Bring it here
-  ↵ ×` (`offers::offer_keeps`, on `WindowGone`). The user's click or ↵ fills that pane
-  (`Action::Fill`); × closes it, and the window floats on. No offer vanishes while its app has a
+- **A window that closed.** The owner's call, 2026-11-19 ("explicit, not magical"): a shared
+  window's pane (one it found open) waits, empty, while its app runs: `Zoom's window closed ·
+  waiting for its next window ×` (`offers::offer_keeps`, on `WindowGone`, sent as soon as the
+  window is gone: the 1.5 s wait for a remade window is gone). The app's next window is offered
+  in its body, `Zoom opened a window · Bring it here ↵ ×`; several waiting panes of one app take
+  its windows in reading order (`Model::waiting_pane`), and a waiting pane with no app pane left
+  beside it still hears of them (`adopt_new_windows`). An owned window's pane (New window) closes
+  with it; so does a pane whose app quit. The user's click or ↵ fills a waiting pane
+  (`Action::Fill`); × closes it, and a window it offered floats on. No offer vanishes while its app has a
   pane: one whose pane closes moves to the newest other pane of its app (`settle_offers`).
 - **Float, no offer**: only a `"do": "float"` rule. A floating window has no
   pane, no stream: the window is `AXRaise`d once without

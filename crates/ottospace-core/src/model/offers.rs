@@ -3,12 +3,14 @@
 //! group in one chip (`Zoom opened 3 windows ▾`), whose list holds each. Only the user takes one.
 //! Its title is drawn in the chip, never in the state while offered; once the user puts it in a
 //! pane it is an app pane, whose title the state carries as every app pane's.
-//! An app pane whose window closes while a window of its app is offered there stays, empty, and
-//! offers it (`Zoom replaced its window · Bring it here ↵ ×`): the app remade its window.
+//! An app pane whose window closes waits, empty, for another window of its app when the window
+//! was shared (one it found open); the next new window of that app is offered in its body
+//! (`Bring it here ↵ ×`), several such panes in reading order. A pane whose window it asked for
+//! (owned) closes with it. No delay: the owner's call, 2026-11-19, "explicit, not magical".
 
 use serde::Serialize;
 
-use super::{Action, Effect, Kind, Model, PaneId};
+use super::{Action, Effect, Kind, Model, Pane, PaneId};
 use crate::layout::Axis;
 
 /// Only the user puts a window an app opened by itself into a pane, or waves the offer away.
@@ -77,9 +79,23 @@ impl Model {
         self.offers.iter().rev().filter(|offer| offer.pane == pane).collect()
     }
 
-    /// True if `pane` is an empty pane that waits for a window its app remade: it offers it.
+    /// True if `pane` is an empty pane that waits for a window of its app and offers one now.
     pub fn offer_waits(&self, pane: PaneId) -> bool {
-        self.offer_panes.contains(&pane) && self.offer_of(pane).is_some()
+        self.offer_panes.contains_key(&pane) && self.offer_of(pane).is_some()
+    }
+
+    /// The app empty pane `pane` waits for a window of, since its shared window closed.
+    pub fn waits_for(&self, pane: PaneId) -> Option<&(Option<String>, String)> {
+        self.offer_panes.get(&pane)
+    }
+
+    /// The first pane on show, in reading order, that waits for a window of `app` and offers none.
+    pub fn waiting_pane(&self, app: (Option<&str>, &str)) -> Option<PaneId> {
+        let shown = self.layout.as_ref().map(super::Node::leaves).unwrap_or_default();
+        shown.into_iter().find(|id| {
+            self.offer_of(*id).is_none()
+                && self.offer_panes.get(id).is_some_and(|(b, n)| crate::marks::same_app((b.as_deref(), n), app))
+        })
     }
 
     /// The window ↵ brings in: the one the focused waiting pane offers, while ottospace has the
@@ -89,12 +105,17 @@ impl Model {
         self.offer_of(id).filter(|_| self.offer_waits(id)).map(|offer| offer.window)
     }
 
-    /// App pane `pane`'s window is gone while a window of its app is offered there: the pane stays,
-    /// empty, and offers it. False: no offer there, and the pane closes as before.
-    pub(super) fn offer_keeps(&mut self, pane: PaneId, effects: &mut Vec<Effect>) -> bool {
-        if self.offer_of(pane).is_none() {
+    /// App pane `pane`'s shared window is gone while its app runs: the pane stays, empty, and
+    /// waits for another window of the app (one offered there already shows at once). False: it
+    /// closes instead, its window being owned (asked for, it closes with its pane) or its app gone.
+    pub(super) fn offer_keeps(&mut self, pane: PaneId, app_running: bool, effects: &mut Vec<Effect>) -> bool {
+        let Some(Pane { kind: Kind::App { bundle, name, .. }, owned: false, .. }) = self.pane(pane) else {
+            return false;
+        };
+        if !app_running {
             return false;
         }
+        let app = (bundle.clone(), name.clone());
         if self.live == Some(pane) {
             self.leave(effects);
         }
@@ -104,7 +125,7 @@ impl Model {
         if let Some(p) = self.panes.iter_mut().find(|p| p.id == pane) {
             (p.kind, p.fit) = (Kind::Empty, None);
         }
-        self.offer_panes.insert(pane);
+        self.offer_panes.insert(pane, app);
         true
     }
 
@@ -127,7 +148,13 @@ impl Model {
             // The shell's alone from here: a key or click of the user's reports no window.
             _ if self.by_user => {}
             Action::WindowOffered { pane, seen, why } => {
-                let Some(Kind::App { bundle, name, .. }) = self.pane(pane).map(|p| p.kind.clone()) else { return };
+                let app = match self.pane(pane).map(|p| p.kind.clone()) {
+                    Some(Kind::App { bundle, name, .. }) => (bundle, name),
+                    // A pane that waits for a window of its app: no app pane of it is left.
+                    Some(Kind::Empty) if let Some(app) = self.waits_for(pane) => app.clone(),
+                    _ => return,
+                };
+                let (bundle, name) = app;
                 // A slot comes first: its own window back, or one it offers (`docs/ai/slots.md`).
                 let window = seen.window;
                 let placed = match self.slot_new_window((bundle.as_deref(), &name), &seen, effects) {
@@ -136,6 +163,8 @@ impl Model {
                     None => {
                         self.offers.retain(|offer| offer.window != window);
                         let crate::slot::Seen { pid, title, .. } = seen;
+                        // A pane that waits for a window of its app takes it in its body, the first in reading order.
+                        let pane = self.waiting_pane((bundle.as_deref(), &name)).unwrap_or(pane);
                         let app = (bundle.clone(), name.clone());
                         self.offers.push(Offer { pane, window, pid, title, why, app, split: None });
                         Placed::Offer
@@ -153,7 +182,7 @@ impl Model {
     /// window floats on). A waiting pane is one while it is empty and offers something.
     pub(super) fn settle_offers(&mut self) {
         let panes = &self.panes;
-        self.offer_panes.retain(|id| panes.iter().any(|p| p.id == *id && p.kind == Kind::Empty));
+        self.offer_panes.retain(|id, _| panes.iter().any(|p| p.id == *id && p.kind == Kind::Empty));
         let held = |w: u32| panes.iter().any(|p| matches!(p.kind, Kind::App { window, .. } if window == w));
         let of_app = |id: PaneId, app: &(Option<String>, String)| {
             panes.iter().any(|p| {
@@ -168,7 +197,7 @@ impl Model {
             if held(offer.window) {
                 return false;
             }
-            if of_app(offer.pane, &offer.app) || waiting.contains(&offer.pane) {
+            if of_app(offer.pane, &offer.app) || waiting.contains_key(&offer.pane) {
                 return true;
             }
             // Its pane went: the newest other pane of its app offers it.
@@ -176,8 +205,6 @@ impl Model {
             other.map(|id| offer.pane = id).is_some()
         });
         self.offers = offers;
-        let offers = &self.offers;
-        self.offer_panes.retain(|id| offers.iter().any(|offer| offer.pane == *id));
         // A list lasts while its chip groups offers.
         self.offer_list = self.offer_list.filter(|id| self.offers_at(*id).len() > 1);
     }
@@ -296,11 +323,53 @@ mod tests {
         m.update(Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System));
         m.update(Action::Close { pane: Some(1) });
         assert!(m.pane(1).is_none() && m.offers.is_empty());
-        // With no offer, a pane whose window went closes as before.
+    }
+
+    /// The owner's call: a shared window's pane waits for another of its app; an owned one's
+    /// closes; one whose app quit closes. No delay. The next window is offered in the waiting
+    /// pane's body, two waiting panes in reading order.
+    #[test]
+    fn a_shared_windows_pane_waits_an_owned_ones_closes() {
+        let gone = |pane, app_running| Action::WindowGone { pane, app_running, at: 0 }.sent_by(Origin::System);
         let mut m = Model::default();
         m.update(Action::Open { kind: app(1), axis: Right, beside: None });
-        m.update(Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System));
+        m.update(gone(1, true));
+        assert_eq!(m.pane(1).map(|p| p.kind.clone()), Some(Kind::Empty), "kept, empty");
+        assert_eq!(m.waits_for(1).map(|app| app.1.as_str()), Some("zoom.us"));
+        assert!(!m.offer_waits(1), "nothing to offer yet");
+        // Its app's next window, reported for the waiting pane (no app pane is left), is offered there.
+        m.update(new_window(1, 9, "SECRET chat").sent_by(Origin::System));
+        assert!(m.offer_waits(1) && m.offer_of(1).is_some_and(|o| o.window == 9));
+        // Dismissed, the pane still waits.
+        m.update(Action::OfferDismiss { window: 9 });
+        assert_eq!(m.waits_for(1).map(|app| app.1.as_str()), Some("zoom.us"));
+        // Owned: it closes with its window.
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.panes[0].owned = true;
+        m.update(gone(1, true));
         assert!(m.pane(1).is_none());
+        // Its app quit: it closes.
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(gone(1, false));
+        assert!(m.pane(1).is_none());
+        // Two waiting panes and the app's pane: new windows fill the waiting ones in reading order.
+        let mut m = Model::default();
+        for window in [1, 2, 3] {
+            m.update(Action::Open { kind: app(window), axis: Right, beside: None });
+        }
+        m.update(gone(3, true));
+        m.update(gone(2, true));
+        m.update(new_window(1, 9, "a").sent_by(Origin::System));
+        m.update(new_window(1, 10, "b").sent_by(Origin::System));
+        m.update(new_window(1, 11, "c").sent_by(Origin::System));
+        let at: Vec<(PaneId, u32)> = m.offers.iter().map(|o| (o.pane, o.window)).collect();
+        assert_eq!(at, [(2, 9), (3, 10), (1, 11)], "waiting panes first, in reading order; then the chip");
+        // Bring it here fills the waiting pane.
+        m.update(Action::OfferAccept { window: 9, axis: Right });
+        m.update(Action::Fill { pane: 2, kind: app(9) }.sent_by(Origin::System));
+        assert!(m.waits_for(2).is_none() && m.pane(2).is_some_and(|p| p.kind == app(9)));
     }
 
     /// No offer vanishes while its app has a pane: one whose pane closes moves to another of its app.

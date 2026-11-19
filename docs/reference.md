@@ -1084,8 +1084,11 @@ in to the right of the app's pane, ⊟ below it (a click, or its sneak label); �
 Several windows offered by one pane group in one chip, `Zoom opened 3 windows ▾`: ▾ opens their
 list over the pane's top right, each window with the same three choices. The offer
 goes when you choose, when the window closes, or when it goes in a pane another way; its pane
-closing moves it to another pane of the app. When an app remakes its window (closes it, opens
-another), the pane stays empty and offers the new one: `Zoom replaced its window · Bring it here ↵ ×`. Only you take
+closing moves it to another pane of the app. When a window you put in a pane closes while its
+app runs, the pane stays, empty, at once: `Zoom's window closed · waiting for its next window ×`.
+The app's next window is offered there (`Zoom opened a window · Bring it here ↵ ×`); several
+waiting panes of one app take its windows in reading order. A window opened with New window
+closes its pane when it closes, and a pane whose app quit closes. Only you take
 or wave away an offer: a client's click is refused, and the window's title is never in the state.
 While you are in the app's pane its window covers the header: the offer shows once you leave.
 A slot (`slots` flag, [Slots](#slots)) that selects the new window comes first: it offers it in its

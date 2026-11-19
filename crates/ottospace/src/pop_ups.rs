@@ -201,14 +201,19 @@ impl Workspace {
         Some(list.into_any_element())
     }
 
-    /// An empty pane that waits for a window its app remade, in its body: `Zoom replaced its
-    /// window`, its title, Bring it here ↵ and ×.
+    /// An empty pane whose shared window closed, in its body: `Zoom's window closed · waiting
+    /// for its next window` and ×; once its app opens one, `Zoom opened a window`, its title,
+    /// Bring it here ↵ and ×.
     pub(crate) fn offer_body(&self, pane: PaneId, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let offer = self.model.offer_of(pane).filter(|_| self.model.offer_waits(pane))?;
-        let window = offer.window;
-        let said = format!("{} replaced its window", offer.app.1);
-        let title = (!offer.title.is_empty())
-            .then(|| div().text_sm().text_color(rgb(theme::MUTED)).child(format!("“{}”", offer.title)));
+        let (_, app) = self.model.waits_for(pane)?;
+        let offer = self.model.offer_of(pane);
+        let said = match offer {
+            Some(_) => format!("{app} opened a window"),
+            None => format!("{app}'s window closed · waiting for its next window"),
+        };
+        let title = offer
+            .filter(|offer| !offer.title.is_empty())
+            .map(|offer| div().text_sm().text_color(rgb(theme::MUTED)).child(format!("“{}”", offer.title)));
         let button = |id: String, label: &'static str, colour: u32| {
             div()
                 .id(gpui::SharedString::from(id.clone()))
@@ -223,13 +228,18 @@ impl Workspace {
                 .child(label)
                 .child(self.controls.mark(id))
         };
-        let bring = button(accept_control(window), "Bring it here ↵", theme::PRIMARY).on_click(cx.listener(
-            move |this, _, window_, cx| this.offer_send(Action::OfferAccept { window, axis: Axis::Right }, window_, cx),
-        ));
-        // ×: the pane closes; the window floats on.
+        let bring = offer.map(|offer| {
+            let window = offer.window;
+            button(accept_control(window), "Bring it here ↵", theme::PRIMARY).on_click(cx.listener(
+                move |this, _, window_, cx| {
+                    this.offer_send(Action::OfferAccept { window, axis: Axis::Right }, window_, cx)
+                },
+            ))
+        });
+        // ×: the pane closes; a window it offers floats on.
         let close = button(format!("offer-close:{pane}"), "×", theme::MUTED)
             .on_click(cx.listener(move |this, _, window_, cx| this.close_pane(pane, window_, cx)));
-        let buttons = div().flex().gap_2().child(bring).child(close);
+        let buttons = div().flex().gap_2().children(bring).child(close);
         let body = div().flex().flex_col().items_center().gap_2();
         let body = body.child(div().text_sm().text_color(rgb(theme::TEXT)).child(said)).children(title);
         Some(body.child(buttons).into_any_element())
@@ -340,8 +350,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let Fixture { pane, title, identifier, subrole, size, modal } = new;
-        let Some(Kind::App { bundle, name, .. }) = self.model.pane(pane).map(|p| p.kind.clone()) else {
-            return Err(format!("pane {pane} is no app pane"));
+        let (bundle, name) = match self.model.pane(pane).map(|p| p.kind.clone()) {
+            Some(Kind::App { bundle, name, .. }) => (bundle, name),
+            Some(Kind::Empty) if let Some(app) = self.model.waits_for(pane) => app.clone(),
+            _ => return Err(format!("pane {pane} is no app pane")),
         };
         let facts = rules::Facts {
             app: &name,

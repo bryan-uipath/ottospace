@@ -344,8 +344,8 @@ impl Model {
             return;
         }
         if !self.slots.contains_key(&pane) {
-            // An app that remade its window: the pane waits, empty, offering the new one.
-            if self.offer_keeps(pane, effects) {
+            // A shared window: the pane waits, empty, for another of its app. An owned one closes.
+            if self.offer_keeps(pane, app_running, effects) {
                 return;
             }
             return self.act(Action::Close { pane: Some(pane) }, effects);

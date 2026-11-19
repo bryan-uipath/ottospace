@@ -14242,6 +14242,50 @@ fn an_offer_splits_right_or_down_and_several_group_in_one_chip() {
     assert!(otto.control_opt("offer-down:800002").is_some());
 }
 
+/// The owner's call: a shared window that closes leaves its pane waiting, empty, at once; its
+/// app's next windows are offered there, two waiting panes in reading order. Only the user's
+/// Bring it here fills one; × closes it. No title in the reply.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_closed_shared_windows_pane_waits_and_its_apps_next_window_is_offered_there() {
+    let otto = Otto::launch("closed-window");
+    let mut panes = Vec::new();
+    for _ in 0..2 {
+        let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
+        let pane = reply["state"]["focused"].as_u64().unwrap();
+        let held = reply["state"]["panes"].as_array().unwrap().iter().find(|p| p["id"] == pane).cloned().unwrap();
+        panes.push((pane, held["kind"]["window"].as_u64().unwrap()));
+    }
+    let kind = |reply: &Value, pane: u64| {
+        let panes = reply["state"]["panes"].as_array().cloned().unwrap_or_default();
+        panes.iter().find(|p| p["id"] == pane).map(|p| p["kind"]["type"].clone())
+    };
+    for (pane, window) in &panes {
+        let reply = otto.call(json!({"cmd": "window_fixture_close", "window": window}));
+        assert_eq!(kind(&reply, *pane), Some(json!("empty")), "kept, waiting: {reply}");
+    }
+    let [(first, _), (second, _)] = [panes[0], panes[1]];
+    for title in ["SECRET one", "SECRET two"] {
+        let line = json!({"cmd": "window_fixture", "pane": first, "title": title, "size": [900, 600]});
+        otto.call(line);
+    }
+    let reply = otto.call(json!({"cmd": "state"}));
+    let offers = json!([{"pane": first, "window": 800001}, {"pane": second, "window": 800002}]);
+    assert_eq!(reply["state"]["offers"], offers, "in reading order: {reply}");
+    assert!(!reply.to_string().contains("SECRET"), "{reply}");
+    // A client's Bring it here is refused; the user's fills the pane.
+    let bring = otto.control("offer:800001");
+    assert_eq!(kind(&otto.click(at(bring, 0.5, 0.5), 1), first), Some(json!("empty")));
+    otto.user_click(at(bring, 0.5, 0.5));
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(kind(&state, first), Some(json!("app")), "{state}");
+    // ×: the other waiting pane closes; its window floats on, offered by its app's pane.
+    otto.user_click(at(otto.control(&format!("offer-close:{second}")), 0.5, 0.5));
+    let state = otto.call(json!({"cmd": "state"}));
+    let moved = json!([{"pane": first, "window": 800002}]);
+    assert_eq!((kind(&state, second), state["state"]["offers"].clone()), (None, moved), "{state}");
+}
+
 /// Slots on screen (`slots` flag): ⋯ on an app pane's header opens the dialog, a checklist made
 /// from the pane's window (its id ticked); Keep makes the pane a filled slot, marked `slot`. Give
 /// Back leaves it waiting, saying what for; a window the slot selects is offered there, not in a

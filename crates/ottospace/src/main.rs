@@ -1159,7 +1159,6 @@ struct Workspace {
     /// Agent mode's pictures of app panes, by pane: their folders (`agent_mode::Looks`).
     looks: agent_mode::Looks,
     /// Panes whose window is gone while their app runs, since when (`drop_closed`).
-    gone_since: HashMap<PaneId, u64>,
     /// A test run's fixture windows on offer (`window_fixture`), by id: their titles.
     offer_fixtures: HashMap<u32, String>,
     /// The apps the core asked to look at (`Effect::WatchSlots`), the looks last sent, and a
@@ -1703,7 +1702,6 @@ impl Workspace {
             listen_feed: None,
             looks: agent_mode::Looks::default(),
             offer_fixtures: HashMap::new(),
-            gone_since: HashMap::new(),
             slot_watch: Vec::new(),
             slot_seen: Vec::new(),
             slot_fixtures: Vec::new(),
@@ -3028,9 +3026,15 @@ impl Workspace {
                     None
                 }
                 Request::WindowFixtureClose { window: id } => {
-                    match self.offer_fixtures.remove(&id) {
-                        Some(_) => drop(self.dispatch(Action::OfferGone { window: id }, Origin::System, window, cx)),
-                        None => failure = Some(format!("no fixture window {id}")),
+                    // An app fixture's pane's window: gone, its app running, as `drop_closed` says.
+                    let holder = self.model.pane_holding(id).filter(|_| !self.hosted.values().any(|h| h.window_id == id));
+                    match (self.offer_fixtures.remove(&id), holder) {
+                        (Some(_), _) => drop(self.dispatch(Action::OfferGone { window: id }, Origin::System, window, cx)),
+                        (None, Some(pane)) => {
+                            let gone = Action::WindowGone { pane, app_running: true, at: now_ms() };
+                            drop(self.dispatch(gone, Origin::System, window, cx))
+                        }
+                        (None, None) => failure = Some(format!("no fixture window {id}")),
                     }
                     None
                 }
@@ -4293,20 +4297,7 @@ impl Workspace {
         // window would be stranded. The window server says whether the window is still there.
         let gone = |h: &Hosted| h.window.frame().is_none() && !recovery::window_exists(h.window_id);
         let gone: Vec<PaneId> = self.hosted.iter().filter(|(_, h)| gone(h)).map(|(id, _)| *id).collect();
-        // An app that remakes its window closes the old one, then opens the new: while it runs, a
-        // gone window is reported after `REMADE_MS`, so its new one is seen and offered first.
-        let now = now_ms();
-        self.gone_since.retain(|id, _| gone.contains(id));
-        let gone: Vec<PaneId> = gone
-            .into_iter()
-            .filter(|id| {
-                let running = self.hosted.get(id).is_some_and(|h| ax::app_identity(h.pid).1.is_some());
-                let since = *self.gone_since.entry(*id).or_insert(now);
-                !running || now.saturating_sub(since) >= REMADE_MS
-            })
-            .collect();
         for id in gone {
-            self.gone_since.remove(&id);
             eprintln!("pane {id}: window gone");
             // Nothing to put back, so stop the stream here instead of `release` in `dispatch`.
             let mut app_running = false;
@@ -4320,7 +4311,7 @@ impl Workspace {
                     cx.activate(true);
                 }
             }
-            // A slot waits for it, and so does a pane offering a window its app remade; any other closes.
+            // A slot waits for it, and so does a shared window's pane; an owned one's closes.
             let gone = Action::WindowGone { pane: id, app_running, at: now_ms() };
             self.dispatch(gone, Origin::System, window, cx);
         }
@@ -4353,6 +4344,9 @@ impl Workspace {
         for (id, ax_window) in fresh {
             let pid = ax_window.pid();
             let beside = self.hosted.iter().filter(|(_, h)| h.pid == pid).map(|(id, _)| *id).max();
+            // No pane of its app holds a window: one whose shared window closed waits for this one.
+            let (bundle, name) = ax::app_identity(pid);
+            let waiting = name.as_deref().and_then(|name| self.model.waiting_pane((bundle.as_deref(), name)));
             // The pane it would split, if drawn: a background tab's bounds are stale.
             let pane = beside.filter(|id| drawn.contains(id)).and_then(|id| self.hosted.get(&id));
             let pane = pane.map(|h| (h.bounds.get(), h.min_width)).filter(|(b, _)| f32::from(b.size.width) >= 1.0);
@@ -4364,11 +4358,12 @@ impl Workspace {
                 size: frame.map(|f| [f.size.width, f.size.height]),
                 pane: pane.map(|(b, _)| to_cg(b.size)).map(|s| [s.width, s.height]),
                 min_width: pane.and_then(|(_, min)| min),
-                alone: beside.is_none(),
+                alone: beside.is_none() && waiting.is_none(),
             };
             let (decided, bundle, subrole, title, identifier) = ax_window.quick(|w| window_decide(w, &shape));
             let logged = pop_ups::Seen { bundle: bundle.as_deref(), subrole: &subrole };
             // An offer's line says what the core made of it: a slot's, or the chip's.
+            let beside = beside.or(waiting);
             let offers = decided.place == (rules::Place::Float { offer: true }) && beside.is_some();
             if !offers {
                 pop_ups::log(&logged, &shape, &decided, None);
@@ -6561,7 +6556,7 @@ impl Workspace {
                 Kind::Terminal => {
                     div().text_sm().text_color(rgb(theme::ERROR)).child("the shell did not start").into_any_element()
                 }
-                // An app that remade its window: the pane waits, offering the new one.
+                // A shared window closed: the pane waits for its app's next window, and offers it.
                 Kind::Empty if let Some(body) = self.offer_body(id, cx) => body,
                 // A slot that waits says what for, and what it offers.
                 Kind::Slot { .. } if let Some(body) = self.slot_body(id, cx) => body,
@@ -7478,10 +7473,6 @@ fn list_button(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
         .hover(|s| s.bg(rgb(theme::SELECTED)).border_color(rgb(theme::BORDER_STRONG)).shadow(vec![lifted]))
         .when(selected, |row| row.bg(rgb(theme::SELECTED)).border_color(rgb(theme::LIST)))
 }
-
-/// How long a hosted window may be gone while its app runs before its pane hears so: an app that
-/// remakes a window opens the new one within it (the canary at once).
-const REMADE_MS: u64 = 1_500;
 
 /// True if the window rules (the user's, then the built-in ones) let this window be put in a pane.
 fn window_managed(window: &ax::Window) -> bool {

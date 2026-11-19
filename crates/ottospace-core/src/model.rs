@@ -3655,9 +3655,10 @@ pub struct Model {
     /// Windows apps opened by themselves, floating, each offered by its app's pane. In the state:
     /// the pane and the window id, never the title.
     pub offers: Vec<offers::Offer>,
-    /// Empty panes that wait for a window their app remade: each offers it (`offer_keeps`).
+    /// Empty panes whose shared window closed, each with its app: each waits for another window
+    /// of it, and offers the next one in its body (`offer_keeps`).
     #[serde(skip)]
-    offer_panes: std::collections::BTreeSet<PaneId>,
+    offer_panes: std::collections::BTreeMap<PaneId, (Option<String>, String)>,
     /// The app pane whose grouped offers' list is open under its chip (`Action::OfferList`).
     pub offer_list: Option<PaneId>,
     /// The user's `windows` rules, as the settings say: a slot is offered no window they ignore.

@@ -2861,6 +2861,10 @@ fn check_offers(m: &Model) -> Result<(), String> {
         ensure!(shown, "window {} offered in pane {}, which shows no chip", offer.window, offer.pane);
         ensure!(m.offers[..at].iter().all(|o| o.window != offer.window), "window {} offered twice", offer.window);
     }
+    // A pane waits for its app's next window only while it is empty.
+    for pane in &m.panes {
+        ensure!(m.waits_for(pane.id).is_none() || pane.kind == Kind::Empty, "pane {} waits, not empty", pane.id);
+    }
     // A list is open only under a chip that groups offers.
     if let Some(pane) = m.offer_list {
         ensure!(m.offers_at(pane).len() > 1, "pane {pane}'s offer list is open with fewer than two offers");
