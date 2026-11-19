@@ -60,11 +60,31 @@ impl Group {
             Group::Done => "Done",
         }
     }
+
+    /// The words its rows offer on hover. A done task has nothing to snooze or finish: only Clear.
+    pub fn row_actions(self) -> &'static [RowAction] {
+        match self {
+            Group::Done => &[RowAction::Clear],
+            _ => &[RowAction::Snooze, RowAction::Dismiss],
+        }
+    }
 }
+
+/// A word on a task's row (`Group::row_actions`). Dismiss and Clear both take the row out of the
+/// inbox (`RowDismiss`); Clear is a done task's, and the user's alone (`CLEAR_USERS`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowAction {
+    Snooze,
+    Dismiss,
+    Clear,
+}
+
+/// Why a client's Clear is refused.
+pub const CLEAR_USERS: &str = "only the user clears a done task from the list";
 
 /// A heading of the Tasks section's State view, in the order drawn: what needs the user, what
 /// runs, what waits (captured or on hold), what is done. Last, the sessions that are no task's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Heading {
     NeedsYou,
@@ -215,6 +235,8 @@ pub enum Moved {
     Snoozed,
     Held,
     Dismissed,
+    /// A done task taken off the list (its row's Clear).
+    Cleared,
     /// Not a task's: a mark was taken off. The Marks section offers it back.
     MarkRemoved,
     /// Not a task's either: the Apps section offers a pin, an unpin or a hidden suggestion back.
@@ -229,6 +251,7 @@ impl Moved {
             Moved::Snoozed => "Snoozed",
             Moved::Held => "On hold",
             Moved::Dismissed => "Dismissed",
+            Moved::Cleared => "Cleared",
             Moved::MarkRemoved => "Mark removed",
             Moved::AppPinned => "Pinned",
             Moved::AppUnpinned => "Unpinned",
@@ -801,6 +824,27 @@ impl Tasks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each listed state's row words: a done task's Clear alone; an open one's Snooze and Dismiss.
+    #[test]
+    fn a_rows_words_follow_its_state() {
+        use RowAction::*;
+        let open: &[RowAction] = &[Snooze, Dismiss];
+        for (state, words) in [
+            (State::Captured, open),
+            (State::Triaged, open),
+            (State::Running, open),
+            (State::NeedsYou, open),
+            (State::Review, open),
+            (State::Stale, open),
+            (State::Parked, open),
+            (State::Done, &[Clear]),
+        ] {
+            assert_eq!(state.group().map(Group::row_actions), Some(words), "{state:?}");
+        }
+        // Cleaned is not listed: no row.
+        assert_eq!(State::Cleaned.group(), None);
+    }
 
     fn titles(tasks: &Tasks) -> Vec<(Group, &str)> {
         tasks.inbox().into_iter().map(|(group, task)| (group, task.title.as_str())).collect()

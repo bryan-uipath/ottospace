@@ -344,7 +344,7 @@ impl Workspace {
                 .cursor_pointer()
                 .hover(|s| s.text_color(rgb(theme::TEXT)))
                 .when(self.model.list == Some(at), |d| d.pb_0p5().rounded_md().bg(rgb(theme::SELECTED)))
-                .child(div().w(px(8.)).child(if open { "▾" } else { "▸" }))
+                .child(crate::ui::fold_mark(open).text_color(rgb(theme::MUTED)))
                 .child(label)
                 .child(self.controls.mark(id))
                 .on_click(cx.listener(move |this, _, window, cx| this.click_apps_control(id, window, cx)))

@@ -168,7 +168,7 @@ Key Counts forgets it.
 | See tasks by project | Project in the Tasks header (State goes back): a group a `#project` with a bar of its states, then "no project". Today's work is under the list |
 | See a task's time and tokens | Hover its row: started, agent time, workspace, tokens by model |
 | See agent sessions that are no task (a Claude Code or Codex started by hand) | Tasks on the rail, under Elsewhere (folded at first: click its heading; the last 7 days, `sessions_range` for another): one line a row, its title (else repository) and runner; hover for what it does now, the model, when last active. A click shows its conversation in the drawer: Resume session goes on with it, unless it is at work in another terminal (then watched: its calls and edits, a message at a time). Hover a row: Track makes it a task (its conversation too), Hide removes it until the next start. [More](reference.md#sessions) |
-| Snooze 1 hour / hold / dismiss / undo | ⌘⌃E on Tasks, then `s` / `h` / `x` / `u`. By mouse: Snooze and Done on a row you hover (hold is `h` only); "Undo" then shows at the top for 6 seconds |
+| Snooze 1 hour / hold / dismiss / undo | ⌘⌃E on Tasks, then `s` / `h` / `x` / `u`. By mouse: Snooze and Done on a row you hover, Clear on a done one (hold is `h` only); "Undo" then shows at the top for 6 seconds |
 
 The status bar shows how many tasks work and need you. Tasks are kept in `~/.ottospace/tasks`, or the `tasks` setting.
 A tag counts only if its name is known (`>repo` in the Repos list, `@claude` or `@codex`, a runner with a model as `@claude-opus-5-5` or `@codex-gpt-6-astra`, a skill that is installed, a path that exists); any other word stays in the title.
