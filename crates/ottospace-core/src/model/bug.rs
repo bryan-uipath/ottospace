@@ -64,6 +64,9 @@ impl Model {
             return effects.push(Effect::Notice { text: bug::NO_WORKTREES.into() });
         };
         let Some(report) = self.bug.take() else { return };
+        // The report's own word after its branch: a repository not in Repos lists no branch, so
+        // "Bug report" twice would ask git for one it has (`bug-report-k3f9`).
+        let tag = report.word.chars().take(4).collect::<String>().to_ascii_lowercase();
         let (title, generated) = report.title();
         let id = self.file(title.clone(), 2, State::Captured);
         if generated {
@@ -89,7 +92,8 @@ impl Model {
                 || self.repo_listed(&dir)
                 || self.making.iter().any(|making| making.asked == dir)
         };
-        let branch = crate::repos::branch_for(&title, taken);
+        let base = crate::repos::branch_for(&title, |base| taken(&format!("{base}-{tag}")));
+        let branch = format!("{base}-{tag}");
         let path = crate::repos::worktree_dir(&root, &repo, &self.repos, &branch);
         self.making.push(Making { task: id, asked: path.clone(), branch: branch.clone(), bug: true });
         effects.push(Effect::AddWorktree { repo, branch, path, root, fresh: true });
@@ -233,10 +237,10 @@ mod tests {
             panic!("no brief: {effects:?}")
         };
         assert_eq!((dir.as_str(), blank.len(), brief.marks.len()), ("1-k3f9a2c41b7d", 0, 1));
-        let path = "/home/.ottospace/worktrees/ottospace/bug-the-tab-row";
+        let path = "/home/.ottospace/worktrees/ottospace/bug-the-tab-row-k3f9";
         let asked = Effect::AddWorktree {
             repo: REPO.into(),
-            branch: "bug-the-tab-row".into(),
+            branch: "bug-the-tab-row-k3f9".into(),
             path: path.into(),
             root: "/home/.ottospace/worktrees".into(),
             fresh: true,

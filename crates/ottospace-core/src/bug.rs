@@ -39,8 +39,34 @@ pub const CLICK: f64 = 4.0;
 const TITLE: usize = 80;
 
 /// Control kinds whose rest is fixed words of ottospace's own (`top:fill`, `rail:apps`): kept
-/// as they are. Any other kind keeps only numbers after it (`task:3`); text goes (`repo:…`).
+/// as they are. Kinds whose rest is ids keep their numbers (`task:3`); any other's rest goes,
+/// numbers too: a name may be digits (`project:104729`, `repo:…`).
 const FIXED_KINDS: &[&str] = &["top", "rail", "bar", "drawer-rail", "talk", "draft", "bug", "status"];
+const NUMBERED_KINDS: &[&str] = &[
+    "task",
+    "task-pending",
+    "tab",
+    "tab-close",
+    "tab-in",
+    "pane",
+    "close",
+    "header",
+    "fit",
+    "home",
+    "home-node",
+    "home-row",
+    "mark",
+    "mark-key",
+    "mark-remove",
+    "mark-rename",
+    "inspector-fold",
+    "inspector-row",
+    "listen-past",
+    "listen-start",
+    "unfilled-open",
+    "viewer-edit",
+    "workbook",
+];
 
 /// `developer.ottospace_repo`, as the shell found it: `~` expanded, whether it is a folder, and
 /// whether it is a git checkout (has `.git`).
@@ -68,9 +94,10 @@ pub fn control_id(raw: &str) -> String {
     };
     let mut parts = raw.split(':');
     let kind = parts.next().filter(|kind| word(kind, 24)).unwrap_or("…");
-    let fixed = FIXED_KINDS.contains(&kind);
+    let (fixed, numbered) = (FIXED_KINDS.contains(&kind), NUMBERED_KINDS.contains(&kind));
     let number = |part: &str| !part.is_empty() && part.len() <= 10 && part.bytes().all(|b| b.is_ascii_digit());
-    let rest = parts.take(3).map(|part| if number(part) || (fixed && word(part, 32)) { part } else { "…" });
+    let kept = |part: &str| ((fixed || numbered) && number(part)) || (fixed && word(part, 32));
+    let rest = parts.take(3).map(|part| if kept(part) { part } else { "…" });
     std::iter::once(kind).chain(rest).collect::<Vec<_>>().join(":")
 }
 
@@ -211,7 +238,15 @@ impl Report {
         self.drag_to(at);
         let (Some(from), drag) = (self.from.take(), self.drag.take()) else { return };
         match drag.filter(|r| r[2] * self.size[0] >= CLICK && r[3] * self.size[1] >= CLICK) {
-            Some(rect) => self.add(Some(rect.map(|v| (v * 1e4).round() / 1e4))),
+            // Its edges rounded, not its size: the far edge stays within the picture.
+            Some([x, y, w, h]) => {
+                let span = |from: f64, size: f64| {
+                    let (a, b) = ((from * 1e4).round(), ((from + size) * 1e4).round());
+                    (a / 1e4, ((b - a) / 1e4).min(1.0 - a / 1e4))
+                };
+                let ((x, w), (y, h)) = (span(x, w), span(y, h));
+                self.add(Some([x, y, w, h]));
+            }
             None => {
                 let inside = |mark: &&Mark| {
                     mark.rect.is_some_and(|r| {
@@ -479,6 +514,18 @@ mod tests {
         report.release(to);
     }
 
+    /// A box to the far edge stays within the picture, wherever it starts.
+    #[test]
+    fn a_box_to_the_edge_ends_on_it() {
+        for at in 0..2000 {
+            let mut r = Report::new("w".into(), [1000.0, 1000.0], vec![], vec![]);
+            let from = f64::from(at) * 0.000_05;
+            drag(&mut r, [from, 0.0], [1.0, 1.0]);
+            let [x, _, w, _] = r.marks[0].rect.expect("a box");
+            assert!(x + w <= 1.0, "{from}: {x} + {w}");
+        }
+    }
+
     fn typed(report: &mut Report, text: &str) {
         report.comment_mut().expect("a comment has the keyboard").apply(Edit::Insert(text.into()));
     }
@@ -494,6 +541,7 @@ mod tests {
         assert_eq!(control_id("session:claude:8f14e45f"), "session:…:…");
         assert_eq!(control_id("Meeting with Bob"), "…");
         assert_eq!(control_id("task-pending:3:0"), "task-pending:3:0");
+        assert_eq!(control_id("project:104729"), "project:…", "a name of digits is a name");
     }
 
     #[test]

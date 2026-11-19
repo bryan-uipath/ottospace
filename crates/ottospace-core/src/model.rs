@@ -6341,12 +6341,8 @@ impl Model {
             Action::BugApps { on } => drop(self.bug.as_mut().map(|report| report.apps = on.unwrap_or(!report.apps))),
             Action::BugCancel => self.bug_drop(effects),
             Action::BugSend { build, os, log } => self.bug_send(&build, &os, &log, effects),
-            Action::BugRepo { facts } => {
-                self.bug_repo = facts.as_ref().and_then(crate::bug::repo_of);
-                if self.bug_repo.is_none() {
-                    self.bug_drop(effects);
-                }
-            }
+            // Gone: the report goes with it (`settle_bug`).
+            Action::BugRepo { facts } => self.bug_repo = facts.as_ref().and_then(crate::bug::repo_of),
             Action::CaptureTaken { draft, material, picture, stale } => {
                 let mine = self.capture.as_mut().filter(|c| c.draft == draft);
                 if let Some(material) = mine.and_then(|c| c.material_mut(material)) {

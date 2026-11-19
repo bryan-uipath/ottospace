@@ -27,8 +27,9 @@ same fenced brief, the same new-worktree path the new-task box takes.
    or Send sends it.
 5. **Send.** A task in a new worktree of the repository, with the user's default agent
    (`default_agent`), by the new-task box's "new worktree" path: git makes
-   `<worktrees_dir>/<repo>/<branch>` from HEAD on a new branch named for the first comment
-   (`bug-the-tab-row`), and the agent starts there once it is made. The repository need not be in
+   `<worktrees_dir>/<repo>/<branch>` from HEAD on a new branch named for the first comment and
+   the report's made-up word (`bug-the-tab-row-k3f9`: an unlisted repository lists no branches to
+   avoid), and the agent starts there once it is made. The repository need not be in
    Repos. The task has its own workspace, its conversation in the drawer.
 
 ## The brief
