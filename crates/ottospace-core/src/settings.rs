@@ -1267,7 +1267,7 @@ mod tests {
             wrong,
             [
                 "features: \"apps_section\" must be true or false",
-                "features: \"tabs\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode"
+                "features: \"tabs\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor"
             ]
         );
         assert!(Settings::parse(r#"{"features": {"tabs": true}}"#).unwrap_err().contains("marks, apps_section"));
@@ -1280,7 +1280,8 @@ mod tests {
         let both = crate::features::Features::all()
             .with(crate::features::Feature::Transcripts, false)
             .with(crate::features::Feature::Slots, false)
-            .with(crate::features::Feature::AgentMode, false);
+            .with(crate::features::Feature::AgentMode, false)
+            .with(crate::features::Feature::MultiMonitor, false);
         assert_eq!(Settings::read(&set).0.features(), both);
         assert_eq!(with_feature("", "marks", false).unwrap(), "{\n  \"features\": {\n    \"marks\": false\n  }\n}\n");
         assert!(with_feature(r#"{"features": true}"#, "marks", true).unwrap_err().contains("not an object"));

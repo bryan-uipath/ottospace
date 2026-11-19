@@ -144,6 +144,14 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.zoomPress(),
   (c) => c.displayChange(),
   (c) => c.uiGallery({ on: true }),
+  (c) =>
+    c.displaysSet({
+      displays: [
+        { uid: "a", frame: [0, 0, 1728, 1117] },
+        { uid: "b", frame: [1728, 0, 1920, 1080], scale: 1 },
+      ],
+      main: "a",
+    }),
   (c) => c.calendar({ day: "tomorrow", days: 2 }),
   (c) => c.calendar({ day: "yesterday" }),
   (c) => c.marks(),

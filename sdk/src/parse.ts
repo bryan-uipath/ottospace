@@ -3,6 +3,8 @@
 // Keys the types do not name are dropped, so a test can compare the result with the raw reply.
 
 import type {
+  Display,
+  TabOut,
   AgentChip,
   AgentDial,
   ChatSelection,
@@ -203,6 +205,21 @@ function range(value: unknown, at: string): [[number, number], [number, number]]
 function rect(value: unknown, at: string): Rect {
   if (!Array.isArray(value) || value.length !== 4) throw wrong(at, "[x, y, w, h]", value);
   return [num(value[0], at), num(value[1], at), num(value[2], at), num(value[3], at)];
+}
+
+function display(value: unknown, at: string): Display {
+  const o = fields(value, at);
+  return {
+    id: num(o.id, `${at}.id`),
+    frame: rect(o.frame, `${at}.frame`),
+    scale: num(o.scale, `${at}.scale`),
+    main: bool(o.main, `${at}.main`),
+  };
+}
+
+function tabOut(value: unknown, at: string): TabOut {
+  const o = fields(value, at);
+  return { tab: num(o.tab, `${at}.tab`), display: num(o.display, `${at}.display`) };
 }
 
 function axis(value: unknown, at: string): Axis {
@@ -1270,6 +1287,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 
 function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
+  if (value === "multi_monitor") return value;
   throw wrong(at, "a feature", value);
 }
 
@@ -1872,6 +1890,8 @@ export function snapshot(value: unknown): Snapshot {
     tab_panes: list(list(num))(o.tab_panes, "tab_panes"),
     window: rect(o.window, "window"),
     window_active: bool(o.window_active, "window_active"),
+    displays: list(display)(o.displays, "displays"),
+    out: list(tabOut)(o.out, "out"),
     parking: pair(o.parking, "parking"),
     return_key: orNull(str)(o.return_key, "return_key"),
     version: str(o.version, "version"),

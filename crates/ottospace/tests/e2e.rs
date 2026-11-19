@@ -13063,6 +13063,31 @@ fn the_window_draws_on_after_the_displays_change() {
     assert_eq!(redraws(&otto), kicked);
 }
 
+/// The state lists the displays by place, the main window's marked, never a uid. A test's
+/// made-up ones stand for them, in screen order; one left out is unplugged.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_state_lists_the_displays_and_a_test_makes_them_up() {
+    let otto = Otto::launch_with("displays", &[("OTTOSPACE_FEATURES", "multi_monitor")]);
+    let real = otto.wait_for("the real displays", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        Some(state["displays"].clone()).filter(|d| d.as_array().is_some_and(|d| !d.is_empty()))
+    });
+    let mains = real.as_array().iter().flat_map(|d| d.iter()).filter(|d| d["main"] == true).count();
+    assert_eq!(mains, 1, "{real}");
+    let left = json!({"uid": "left", "frame": [-1920, 0, 1920, 1080], "scale": 1});
+    let built_in = json!({"uid": "built-in", "frame": [0, 0, 1728, 1117]});
+    let state = otto.call(json!({"cmd": "displays_set", "displays": [built_in, left], "main": "built-in"}));
+    let expected = json!([
+        {"id": 0, "frame": [-1920.0, 0.0, 1920.0, 1080.0], "scale": 1.0, "main": false},
+        {"id": 1, "frame": [0.0, 0.0, 1728.0, 1117.0], "scale": 2.0, "main": true},
+    ]);
+    assert_eq!((&state["displays"], &state["out"]), (&expected, &json!([])), "{state}");
+    assert!(!state.to_string().contains("built-in"), "no uid in the state");
+    let state = otto.call(json!({"cmd": "displays_set", "displays": [built_in]}));
+    assert_eq!(state["displays"].as_array().map(Vec::len), Some(1));
+}
+
 /// At rest the tick sleeps: each frame only for a moment after something happened, then about
 /// once a second for the slow looks. It wakes for what happens with no request: a terminal's
 /// output, seconds later, is drawn.

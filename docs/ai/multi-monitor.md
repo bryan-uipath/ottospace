@@ -10,7 +10,15 @@ Yes, it is possible, and this note decides how. It supersedes the parked survey
 [`1-initial-brainstorm/multi-monitor.md`](1-initial-brainstorm/multi-monitor.md) (options A–D, its
 experiments table is still the list of things to measure) for the model and the slices.
 
-Not built. Nothing here was measured on two displays: the CI runners have one, and so had every run
+**Status.** Slices 1 and 2 are in the core (`model/displays.rs`): displays, tabs out, the keyboard
+between windows, unplug and replug, behind `multi_monitor`. As built, and differing from below by
+the owner's later word: a display plugged in again **takes back** the tab an unplug folded in
+(unless the main window shows it then; the user's own fold in clears that); with two displays a
+second fold out swaps; a tab holding an app pane stays in the main window; the second window's
+drawer and the focus arrows across displays wait (slices 4 and 6), and so does `layout.json`
+(a tab out folds in at the next start). No window opens yet (slice 3).
+
+Nothing here was measured on two displays: the CI runners have one, and so had every run
 behind this note. What GPUI 0.2.2 offers was read from its source in the cargo registry.
 
 ## The decision in one paragraph

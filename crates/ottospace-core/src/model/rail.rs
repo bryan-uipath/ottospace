@@ -58,7 +58,7 @@ impl Model {
     /// running, later, on hold; done ones left out but the one in front), then the transcript
     /// while it can be had (`listen_item`).
     pub fn rail(&self) -> Vec<RailItem> {
-        let of = self.space();
+        let of = self.shown_space();
         let front = self.front(of);
         let done = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| task.state == State::Done);
         let shown = |id: &TaskId| (Some(*id) == front || !done(id)) && !self.put_away(*id);
@@ -73,7 +73,7 @@ impl Model {
         let rail = self.rail();
         let shown = match self.listen.shown {
             true => Some(RailItem::Transcript),
-            false => self.front(self.space()).map(|id| RailItem::Task { id }),
+            false => self.front(self.shown_space()).map(|id| RailItem::Task { id }),
         };
         shown.filter(|item| rail.contains(item))
     }

@@ -949,6 +949,14 @@ struct Workspace {
     stall_log: event_log::Streak,
     /// The display the window was last on, by number, for the log.
     on_display: Option<u32>,
+    /// The displays last told to the core, and the main window's (`watch_displays`).
+    displays_told: Option<(Vec<ottospace_core::model::displays::Display>, Option<String>)>,
+    /// When the displays last changed: a display new since waits for 1 s of quiet.
+    displays_changed: Option<Instant>,
+    /// The main window's display, by number, as last told.
+    displays_on: Option<u32>,
+    /// A test run's made-up displays stand for the real ones (`displays_set`).
+    displays_made_up: bool,
     /// A terminal's or hosted window's output asked for a frame not drawn yet: a stall too.
     output: bool,
     /// What the home screen last drew, and the lattice lines kept between frames.
@@ -1411,6 +1419,7 @@ impl Workspace {
                         this.tick_timeline(window, cx);
                         this.take_worktrees(window, cx);
                         this.tick_prs(window, cx);
+                        this.watch_displays(window, cx);
                     });
                     this.take_snapshots(window, cx);
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
@@ -1534,6 +1543,10 @@ impl Workspace {
             redraws: 0,
             stall_log: event_log::Streak::default(),
             on_display: None,
+            displays_told: None,
+            displays_changed: None,
+            displays_on: None,
+            displays_made_up: false,
             output: false,
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
@@ -2302,12 +2315,45 @@ impl Workspace {
         cadence::Load { busy, slow, due }
     }
 
+    /// The displays, told to the core at start, when the main window changes display, and after
+    /// a change: one gone at once, one new after 1 s of quiet, so no window opens on a display
+    /// still in flux. A test run's made-up list stands for them from its first (`displays_set`).
+    fn watch_displays(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.displays_made_up {
+            return;
+        }
+        // By number, cheaply each tick; its UUID only when told.
+        let on = window.display(cx).map(|d| u32::from(d.id()));
+        let moved = self.displays_told.is_some() && on != self.displays_on;
+        if !(self.displays_told.is_none() || self.displays_changed.is_some() || moved) {
+            return;
+        }
+        self.displays_on = on;
+        let settled = self.displays_changed.is_none_or(|at| at.elapsed() >= Duration::from_secs(1));
+        let mut list = display::list();
+        if !settled {
+            let known: Vec<String> =
+                self.displays_told.iter().flat_map(|(told, _)| told.iter().map(|d| d.uid.clone())).collect();
+            list.retain(|d| known.contains(&d.uid));
+        }
+        if settled {
+            self.displays_changed = None;
+        }
+        let told = (list, on.and_then(display::uuid));
+        if self.displays_told.as_ref() != Some(&told) {
+            self.displays_told = Some(told.clone());
+            let (displays, main) = told;
+            self.dispatch(Action::SetDisplays { displays, main }, Origin::System, window, cx);
+        }
+    }
+
     /// Each tick: after a change of the displays, or while the shown window has something to draw
     /// and draws nothing, GPUI is kicked to draw again (`stall`). The tick is a timer, not a
     /// frame: it goes on when frames stop.
     fn watch_frames(&mut self, window: &mut Window, cx: &App) {
         let now = Instant::now();
         if display::take_change() {
+            self.displays_changed = Some(now);
             self.stall.displays_changed(now);
             trace::record("displays", serde_json::json!({ "count": display::all().len() }));
             event_log::event("displays", displays());
@@ -2981,6 +3027,20 @@ impl Workspace {
                     }
                     None
                 }
+                // A test run only: made-up displays, from now on in place of the real ones.
+                Request::DisplaysSet { displays, main } => {
+                    let displays: Vec<_> = (displays.into_iter())
+                        .map(|d| ottospace_core::model::displays::Display {
+                            uid: d.uid,
+                            frame: ottospace_core::ax::Frame::new(d.frame[0], d.frame[1], d.frame[2], d.frame[3]),
+                            scale: d.scale,
+                        })
+                        .collect();
+                    let main = main.or_else(|| displays.first().map(|d| d.uid.clone()));
+                    self.displays_made_up = true;
+                    self.dispatch(Action::SetDisplays { displays, main }, Origin::System, window, cx);
+                    None
+                }
                 // A test run only: as macOS says it; the next tick kicks GPUI to draw again.
                 Request::DisplayChange => {
                     display::note_change();
@@ -3576,6 +3636,14 @@ impl Workspace {
             "tab_panes": tab_panes,
             // ottospace's own window frame, so a test can turn pane bounds into screen positions.
             "window": frame,
+            // The displays, left to right, by place: no uid or name, which would name the user's hardware.
+            "displays": self.model.displays().iter().enumerate().map(|(id, d)| serde_json::json!({
+                "id": id, "frame": [d.frame.x, d.frame.y, d.frame.w, d.frame.h], "scale": d.scale,
+                "main": self.model.main_display() == Some(id),
+            })).collect::<Vec<_>>(),
+            // Each tab folded out to another display: its id, and its display's place in `displays`.
+            "out": self.model.tabs_out().into_iter().map(|(tab, display)| serde_json::json!({ "tab": tab, "display": display }))
+                .collect::<Vec<_>>(),
             // Whether that window has the keyboard: a user's wheel over a parked app pane enters only then.
             "window_active": window.is_window_active(),
             // Where parked windows go, so a test can tell "parked" from "moved somewhere".
@@ -8144,7 +8212,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 19] = [
+        const TESTS_ONLY: [&str; 20] = [
             "capture_start",
             "repo_add",
             "inspector_fixture",
@@ -8164,6 +8232,7 @@ mod tests {
             "window_fixture_close",
             "slot_windows",
             "slot_make",
+            "displays_set",
         ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
         for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {

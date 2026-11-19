@@ -135,7 +135,7 @@ export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
 export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
 /** A feature flag (`features` in `settings.json`). Off, its requests answer "feature off: <name>". */
-export type Feature = "marks" | "apps_section" | "transcripts" | "slots" | "agent_mode";
+export type Feature = "marks" | "apps_section" | "transcripts" | "slots" | "agent_mode" | "multi_monitor";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
@@ -1252,6 +1252,28 @@ export interface Terminal {
 /** `[x, y, w, h]` in points. */
 export type Rect = [number, number, number, number];
 
+/** A display, by its place left to right. `frame` is global, top-left origin, in points. */
+export interface Display {
+  id: number;
+  frame: Rect;
+  scale: number;
+  /** The main window is on it. */
+  main: boolean;
+}
+
+/** A tab folded out to its own window on another display. */
+export interface TabOut {
+  tab: number;
+  display: number;
+}
+
+/** A display `displaysSet` makes up, in a test run. */
+export interface MadeUpDisplay {
+  uid: string;
+  frame: Rect;
+  scale?: number;
+}
+
 /** The key reference as a test run's state gives it: ids only, no counts. */
 export interface KeyReference {
   groups: { group: string; rows: string[] }[];
@@ -1419,6 +1441,10 @@ export interface Snapshot {
   window: Rect;
   /** Whether that window has the keyboard. */
   window_active: boolean;
+  /** The displays, left to right: by place, never a uid or a name. */
+  displays: Display[];
+  /** Each tab folded out to another display: its id, and its display's place in `displays`. */
+  out: TabOut[];
   /** Where parked windows go: `[x, y]`. */
   parking: [number, number];
   return_key: string | null;

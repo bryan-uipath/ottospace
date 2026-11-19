@@ -472,7 +472,7 @@ impl Model {
         if self.drawer_view().shows() || self.inspector.is_some() || self.listen.shown {
             return None;
         }
-        let space = self.shown_spaces().iter().position(|space| space.of == *self.space())?;
+        let space = self.shown_spaces().iter().position(|space| space.of == *self.shown_space())?;
         let chat = self.chat(subject);
         // Its transcript says it while it is fed: drawn natively, or watched.
         let fed = chat.filter(|chat| chat.transcript.live || chat.transcript.watched);

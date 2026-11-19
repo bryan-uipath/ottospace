@@ -135,6 +135,10 @@ Rules:
   - `ui_gallery` (`"on"`): every component of `ui/` in every state over the window
     (`docs/ai/ui.md`), for `scripts/shot ui-gallery`. Outside a test run no client covers the
     user's workspace.
+  - `displays_set` (`"displays": [{"uid", "frame": [x, y, w, h], "scale"}]`, `"main"`: a uid, default
+    the first): made-up displays in place of the real ones from then on, sent to the core as the
+    display watcher would (`Action::SetDisplays`). Leaving one out unplugs it, putting it back
+    plugs it in again (`model/displays.rs`). Outside a test run only ottospace reads the displays.
   - `"repeat":true` on `key`: each key as one still held down. A key that types is a real repeat
     to `keyDown:`: `enter`, `tab`, `space`, or a character the layout types with no modifier on
     key codes 0 to 50 (`a`, `7`, `/`; not `A`). A `cmd-` shortcut, by the flag alone, is pressed as

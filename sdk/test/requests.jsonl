@@ -86,6 +86,7 @@
 {"cmd":"zoom_press"}
 {"cmd":"display_change"}
 {"cmd":"ui_gallery","on":true}
+{"cmd":"displays_set","displays":[{"uid":"a","frame":[0,0,1728,1117]},{"uid":"b","frame":[1728,0,1920,1080],"scale":1}],"main":"a"}
 {"cmd":"calendar","day":"tomorrow","days":2}
 {"cmd":"calendar","day":"yesterday"}
 {"cmd":"marks"}

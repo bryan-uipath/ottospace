@@ -532,6 +532,16 @@ pub enum Request {
     UiGallery {
         on: bool,
     },
+    /// For tests (`test_refusal`): made-up displays (`uid`, `frame` as `[x, y, w, h]` global,
+    /// top-left origin, `scale`) in place of the real ones from now on, as the watcher would
+    /// report them, and the one the main window is on (`main`, a uid; default the first).
+    /// Leaving one out unplugs it; putting it back plugs it in again. Never for an agent: it
+    /// would move tabs between the user's displays.
+    DisplaysSet {
+        displays: Vec<MadeUpDisplay>,
+        #[serde(default)]
+        main: Option<String>,
+    },
     /// The user's meetings of `day` (`today`, the default, `tomorrow` or `YYYY-MM-DD`) and the
     /// `days` (1 to 7) from it, busy and free time: `{"ok":true,"configured":true,"meetings":[..],..}`,
     /// not the state. Only what the app holds (today and the next 7 days), never a fetch. Titles
@@ -637,6 +647,20 @@ pub enum Modifier {
     Shift,
 }
 
+/// A display `displays_set` makes up.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MadeUpDisplay {
+    pub uid: String,
+    pub frame: [f64; 4],
+    #[serde(default = "two")]
+    pub scale: f32,
+}
+
+fn two() -> f32 {
+    2.
+}
+
 /// Why a request is refused, if it is: what only a test run answers (`e2e`: `OTTOSPACE_E2E` is
 /// set). `mouse`, `drag` and `compose_drop`: coordinates would reach every control with no
 /// request of its own. `as` and `repeat` on `key`: a client's key would pass for the user's
@@ -650,6 +674,7 @@ pub enum Modifier {
 /// `slot_windows` would too, and `slot_make` would make a slot for the user.
 /// `zoom_press`: it would put the window over the menu bar and the Dock as the user.
 /// `display_change`: no client needs it, and it makes the window draw by GPUI's own paths.
+/// `displays_set`: it would fold the user's tabs in and out by displays that are not there.
 pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
     match request {
         _ if e2e => None,
@@ -703,6 +728,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
             Some("display_change is for tests (OTTOSPACE_E2E): macOS says when the displays change")
         }
         Request::UiGallery { .. } => Some("ui_gallery is for tests (OTTOSPACE_E2E): it covers the user's workspace"),
+        Request::DisplaysSet { .. } => {
+            Some("displays_set is for tests (OTTOSPACE_E2E): ottospace reads the displays itself")
+        }
         _ => None,
     }
 }
@@ -997,7 +1025,11 @@ mod tests {
         assert!(test_refusal(&add, false).expect("refused").contains("only the user"));
         assert_eq!(test_refusal(&add, true), None);
         // Nor a recording of the window, nor hearing an app.
-        let probe = [r#"{"cmd":"audio_probe_start"}"#, r#"{"cmd":"audio_probe_stop"}"#];
+        let probe = [
+            r#"{"cmd":"audio_probe_start"}"#,
+            r#"{"cmd":"audio_probe_stop"}"#,
+            r#"{"cmd":"displays_set","displays":[{"uid":"a","frame":[0,0,800,600]}]}"#,
+        ];
         for line in
             [r#"{"cmd":"record_start","dir":"/tmp/rec"}"#, r#"{"cmd":"record_stop"}"#, r#"{"cmd":"display_change"}"#]
                 .into_iter()

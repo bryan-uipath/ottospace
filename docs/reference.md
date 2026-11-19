@@ -1319,6 +1319,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 | `transcripts` | Experimental | off | Transcripts (⌘⌃T): an app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file |
 | `slots` | Experimental | off | Slots: a pane that keeps its place and waits for a window you name (⋯ on an app pane's header) |
 | `agent_mode` | Experimental | off | Agent mode (⌘⌃V): let a workspace's task see an app pane, from the robot in its header |
+| `multi_monitor` | Experimental | off | Multi-monitor: fold a tab out to its own window on another display. In progress: not on screen yet |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1335,6 +1336,8 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 - `slots` off: no ⋯ in an app pane's header, and a slot, restored or turned off mid-run, is a plain
   app pane of its app that keeps the slot on its record for the flag's return. On, see
   [Slots](#slots) (design: [slots.md](ai/slots.md)).
+- `multi_monitor` off: no tab is out; one out folds back in. In progress: the model only (design:
+  [multi-monitor.md](ai/multi-monitor.md)).
 - `agent_mode` off: no robot in an app pane's header, ⌘⌃V does nothing, no Agent Mode commands,
   the grants are kept as they are (turning it on again raises none), and every read of an app pane by a client (`app_read`,
   `app_look`, `ax_tree`) answers `feature off: agent_mode` (design: [agent-mode.md](ai/agent-mode.md)).
