@@ -383,7 +383,7 @@ pane.
   outcome }` as `System`. The core adds a row to that task's transcript and feeds the dial. The
   model cannot hide or forge it: it is ottospace's record, not the agent's account.
 - **Station.** A new `Apps` station (a twelfth in `Station::DIAL`), fed by those rows only. Not
-  Browser (MCP browsers) and not Tools (unknown tools): the user should tell "it looked at Spotify"
+  MCP (MCP calls) and not Tools (unknown tools): the user should tell "it looked at Spotify"
   from "it ran a tool". The Bash line that carried the request still counts as Shell.
 - **On the pane.** The pulse while a read or action runs; the header's tooltip says the last use
   ("pressed Play 4 s ago").

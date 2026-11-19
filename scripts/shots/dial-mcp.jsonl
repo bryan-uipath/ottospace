@@ -1,12 +1,12 @@
 # The dial with MCP calls: a browser server's, a memory server's, then one that runs (lit). Each
 # MCP call lights MCP, whatever its server. The stand-in `claude` replays dial-mcp/fixtures.
-{"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
 {"cmd":"split","kind":"empty"}
 {"cmd":"task_new","line":"file the login bug >app"}
 {"cmd":"section","section":"tasks"}
 {"click":"task:1","at":[0.3,0.3]}
 {"click":"talk:talk-start"}
-{"sleep_ms":4000}
+{"until":"drawer.native.chats.1.transcript.turn","is":"github/create_issue","timeout_ms":30000}
+{"sleep_ms":1500}
 {"shot":"running"}
 {"until":"drawer.native.chats.1.transcript.turn","is":null,"timeout_ms":40000}
 {"settle":2500}

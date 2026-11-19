@@ -279,16 +279,10 @@ fn record_events(record: &Value, cursor: &mut Cursor, events: &mut Vec<Event>) {
             let tool = payload["name"].as_str().unwrap_or(kind);
             let Some(id) = id_of(&payload["call_id"]).or(id_of(&payload["id"])) else { return };
             let (station, summary) = describe(tool, payload);
+            let label = mcp(tool, payload).unwrap_or_else(|| station::tool_label(tool));
             let patch = payload["input"].as_str().filter(|_| cursor.edits && tool == "apply_patch");
             let diff = patch.and_then(ottospace_core::diff::codex_patch);
-            emit(What::ToolStart {
-                id: id.clone(),
-                tool: station::tool_label(tool),
-                station,
-                summary,
-                diff,
-                gist: None,
-            });
+            emit(What::ToolStart { id: id.clone(), tool: label, station, summary, diff, gist: None });
             if kind == "web_search_call" {
                 // A web search is written once, when it is over.
                 emit(What::ToolEnd { id, failed: false, station: None, summary: None, output: None });
@@ -346,15 +340,21 @@ fn subagent(activity: &Value, emit: &mut impl FnMut(What)) {
     }
 }
 
+/// An MCP call's label, `server/tool` (else `mcp`): its server's tools come in its namespace,
+/// e.g. `mcp__github` with `name` `create_issue`. None for any other call.
+fn mcp(tool: &str, payload: &Value) -> Option<String> {
+    let server = payload["namespace"].as_str()?.strip_prefix("mcp__")?.trim_end_matches("__");
+    Some(if station::is_name(server) && station::is_name(tool) { format!("{server}/{tool}") } else { "mcp".into() })
+}
+
 /// A tool call's station and label, from its name and the names in its arguments.
 fn describe(tool: &str, payload: &Value) -> (Station, String) {
     if payload["namespace"] == "collaboration" {
         return (Station::Agents, station::tool_label(tool));
     }
-    // An MCP server's tools come in its namespace, e.g. `mcp__github__…` with `name` `create_issue`.
-    if let Some(server) = payload["namespace"].as_str().and_then(|n| n.strip_prefix("mcp__")) {
-        let server = server.split("__").next().unwrap_or("");
-        return (Station::Mcp, station::tool_label(&format!("mcp__{server}__{tool}")));
+    if let Some(label) = mcp(tool, payload) {
+        // The one table decides: MCP, as for any `mcp__` tool.
+        return (station::classify("mcp__", None), label);
     }
     // `function_call` arguments are a JSON string; a `custom_tool_call` input is plain text.
     let arguments: Value =
@@ -443,9 +443,9 @@ mod tests {
                 "github/create_issue",
             ),
             (
-                json!({"name": "search", "namespace": "mcp__memory__x", "arguments": "{}"}),
+                json!({"name": "search", "namespace": "mcp__team__east", "arguments": "{}"}),
                 Station::Mcp,
-                "memory/search",
+                "team__east/search",
             ),
             (json!({"name": "private thing", "namespace": "mcp__my server", "arguments": "{}"}), Station::Mcp, "mcp"),
             (
@@ -496,6 +496,21 @@ mod tests {
             _ => None,
         });
         ends.collect()
+    }
+
+    #[test]
+    fn an_mcp_call_is_named_by_its_server_and_tool() {
+        let call = json!({"type": "function_call", "call_id": "m", "name": "create_issue", "namespace": "mcp__github", "arguments": "{}"});
+        let (_, events) = fold(&[record("response_item", call)]);
+        let starts: Vec<_> = events
+            .into_iter()
+            .filter_map(|e| match e.what {
+                What::ToolStart { tool, station, summary, .. } => Some((tool, station, summary)),
+                _ => None,
+            })
+            .collect();
+        let label = "github/create_issue".to_string();
+        assert_eq!(starts, [(label.clone(), Station::Mcp, label)]);
     }
 
     #[test]

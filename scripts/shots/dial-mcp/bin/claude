@@ -1,3 +1,0 @@
-#!/bin/sh
-# The agents crate's stand-in, replaying dial-mcp/fixtures.
-exec "{REPO}/crates/ottospace-agents/tests/fakes/claude" "$@"
