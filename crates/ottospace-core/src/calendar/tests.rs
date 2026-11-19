@@ -1127,3 +1127,63 @@ fn the_sections_day_moves_by_key_or_click_from_anyone_and_opens_the_section() {
     assert_eq!((m.calendar.day, m.list), (1, Some(0)), "no meeting tomorrow: still in list mode");
     assert!(m.calendar.agenda().is_empty());
 }
+
+/// The ids `possible` gives for a transcript started at `at`.
+fn possible_ids(events: &[Event], at: u64) -> Vec<u64> {
+    possible(events, at).into_iter().map(|e| e.id).collect()
+}
+
+#[test]
+fn a_transcript_is_possibly_of_the_meetings_on_the_likeliest_first() {
+    // 09:00–10:00, 09:50–10:20, 10:03–10:30, 10:10–10:40; started at 10:00 (09:00 + H).
+    let events = [
+        event(1, NINE, 60),
+        event(2, NINE + 50 * M, 30),
+        event(3, NINE + H + 3 * M, 27),
+        event(4, NINE + H + 10 * M, 30),
+    ];
+    // The one about to start (3 minutes off) is nearer than the one on for 10 minutes; the one at
+    // 09:00 has just ended; 10:10 is too far off.
+    assert_eq!(possible_ids(&events, NINE + H), [3, 2]);
+    assert_eq!(possible_ids(&events, NINE + 58 * M), [3, 2, 1]);
+    // Never more than three.
+    let many: Vec<Event> = (1..=5).map(|id| event(id, NINE + id * M, 60)).collect();
+    assert_eq!(possible_ids(&many, NINE + 30 * M), [5, 4, 3]);
+}
+
+#[test]
+fn one_that_just_ended_counts_only_when_nothing_else_does() {
+    let ended = [event(1, NINE, 30), event(2, NINE - H, 89)];
+    // 09:30 + 4 minutes: both ended within five, the last to end first and alone.
+    assert_eq!(possible_ids(&ended, NINE + 34 * M), [1]);
+    assert_eq!(possible_ids(&ended, NINE + 36 * M), Vec::<u64>::new(), "ended too long ago");
+    let mut on = ended.to_vec();
+    on.push(event(3, NINE + 30 * M, 30));
+    assert_eq!(possible_ids(&on, NINE + 34 * M), [3]);
+}
+
+#[test]
+fn no_meeting_on_is_none() {
+    assert_eq!(possible_ids(&[], NINE), Vec::<u64>::new());
+    assert_eq!(possible_ids(&[event(1, NINE + 6 * M, 30)], NINE), Vec::<u64>::new(), "six minutes off");
+    assert_eq!(possible_ids(&[event(1, NINE + 5 * M, 30)], NINE), [1], "five minutes off");
+}
+
+#[test]
+fn all_day_free_away_focus_cancelled_and_empty_entries_are_no_meetings() {
+    use crate::ics::Show;
+    let on = |e: Event| possible_ids(&[e], NINE + 10 * M);
+    assert_eq!(on(Event { all_day: true, ..event(1, NINE, 24 * 60) }), Vec::<u64>::new());
+    assert_eq!(on(Event { show: Show::Free, ..event(1, NINE, 60) }), Vec::<u64>::new());
+    assert_eq!(on(Event { show: Show::Away, ..event(1, NINE, 60) }), Vec::<u64>::new());
+    assert_eq!(on(Event { title: "Focus: writing".into(), ..block(1, NINE, 60) }), Vec::<u64>::new());
+    for title in ["Canceled: Standup", "cancelled: Standup", " CANCELED: x"] {
+        assert_eq!(on(Event { title: title.into(), ..event(1, NINE, 60) }), Vec::<u64>::new(), "{title}");
+    }
+    assert_eq!(on(event(1, NINE, 0)), Vec::<u64>::new(), "no length");
+    // A tentative one, a block that is no focus block, and a call titled Focus are meetings.
+    assert_eq!(on(Event { show: Show::Tentative, ..event(1, NINE, 60) }), [1]);
+    assert_eq!(on(block(1, NINE, 60)), [1]);
+    assert_eq!(on(Event { title: "Focus sync".into(), ..event(1, NINE, 60) }), [1]);
+    assert_eq!(on(Event { title: "Cancellation policy review".into(), ..event(1, NINE, 60) }), [1]);
+}

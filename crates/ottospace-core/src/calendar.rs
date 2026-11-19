@@ -153,6 +153,38 @@ fn focus_title(title: &str) -> bool {
     rest.is_some_and(|rest| !rest.starts_with(char::is_alphanumeric))
 }
 
+/// A transcript started this long before a meeting is possibly of it: people start early.
+pub const SOON: u64 = 5 * MINUTE;
+/// One that ended this long before a transcript started, when nothing else matches: it ran over.
+pub const JUST_ENDED: u64 = 5 * MINUTE;
+/// Most entries a transcript's header names.
+pub const MAX_POSSIBLE: usize = 3;
+
+/// An entry a transcript may be of: timed, held busy or tentative, not a focus block, and not one
+/// its organiser cancelled that stays on the calendar (Outlook's `Canceled: Standup`).
+pub fn meeting(event: &Event) -> bool {
+    let title = event.title.trim_start().to_lowercase();
+    let cancelled = title.starts_with("canceled:") || title.starts_with("cancelled:");
+    let held = matches!(event.show, Show::Busy | Show::Tentative);
+    !event.all_day && event.end > event.start && held && !focus(event) && !cancelled
+}
+
+/// The meetings a transcript started at `at` is possibly of, the likeliest first: those on at
+/// `at` and those starting within `SOON`, by how near their start is; else the last to end within
+/// `JUST_ENDED`. At most `MAX_POSSIBLE`; none, often.
+pub fn possible<'a>(events: impl IntoIterator<Item = &'a Event>, at: u64) -> Vec<&'a Event> {
+    let meetings: Vec<&Event> = events.into_iter().filter(|e| meeting(e)).collect();
+    let mut near: Vec<&Event> =
+        meetings.iter().copied().filter(|e| e.start <= at.saturating_add(SOON) && at < e.end).collect();
+    near.sort_by_key(|e| (e.start.abs_diff(at), e.end, e.id));
+    if near.is_empty() {
+        let ended = meetings.into_iter().filter(|e| e.end <= at && at - e.end <= JUST_ENDED);
+        near.extend(ended.max_by_key(|e| (e.end, e.start)));
+    }
+    near.truncate(MAX_POSSIBLE);
+    near
+}
+
 /// Most lanes calls share on the band; a call more at once goes into a lane's hover card.
 pub const MAX_LANES: u8 = 4;
 

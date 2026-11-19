@@ -152,6 +152,8 @@ pub enum Record {
     Line { from: Speaker, at: u64, text: String },
     /// A pause of `ms` that began at `at`.
     Paused { at: u64, ms: u64 },
+    /// A meeting on the calendar began while it was on: a line at its start.
+    Meeting(file::Meeting),
     /// It ended at `at`: the header is written again with the end.
     End { at: u64 },
     /// It never began: the streams did not start. The file, with no line, goes.
@@ -187,6 +189,8 @@ pub struct Listen {
     rows: VecDeque<Row>,
     /// The line still being heard, per speaker: replaced until it is final.
     volatile: Vec<(Speaker, String)>,
+    /// The calendar's entries its file names, by id: in the header, or a line at their start.
+    pub meetings: Vec<u64>,
 }
 
 impl Listen {
@@ -294,8 +298,21 @@ impl Listening {
         let (rows, volatile) = (VecDeque::new(), Vec::new());
         let status = Status::Starting;
         self.lost = None;
-        self.on =
-            Some(Listen { id, source, mic, status, started: at, paused_total, paused_at, run_from, rows, volatile });
+        let meetings = Vec::new();
+        let started = at;
+        self.on = Some(Listen {
+            id,
+            source,
+            mic,
+            status,
+            started,
+            paused_total,
+            paused_at,
+            run_from,
+            rows,
+            volatile,
+            meetings,
+        });
         self.shown = true;
         Ok(())
     }

@@ -13563,6 +13563,60 @@ fn a_transcript_is_kept_in_a_private_markdown_file_written_as_lines_come() {
     assert_eq!(mode_of(&file), 0o600);
 }
 
+/// A transcript started during made-up meetings of the test's own feed: the file's header names
+/// them, the likeliest first; their titles are in no reply.
+fn transcript_header(name: &str, events: &[(&str, &str, i64, i64, &str)]) -> String {
+    let notes = support::temp(&format!("ottospace-e2e-listen-{name}-{}", std::process::id()));
+    let dir = notes.join("transcripts");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(notes.join("today.ics"), feed(events)).unwrap();
+    let settings = json!({
+        "repos": [], "restore_layout": false, "transcripts_dir": dir, "calendar_ics": notes.join("today.ics"),
+    });
+    let otto = listen_otto_with(name, LISTEN_FIXTURE, &settings.to_string());
+    calendar_read(&otto);
+    otto.call(json!({"cmd": "split"}));
+    otto.user_key("cmd-ctrl-t");
+    otto.listen_finals(2);
+    let file = otto.wait_for("the transcript's file", |_| files_in(&dir).pop());
+    let text = otto.wait_for("a line in the file", |_| {
+        let text = std::fs::read_to_string(&file).ok()?;
+        text.contains("**me**: ").then_some(text)
+    });
+    let state = otto.call(json!({"cmd": "state"})).to_string();
+    for (_, title, ..) in events {
+        assert!(!state.contains(title), "{title} in the state: {state}");
+    }
+    otto.user_key("cmd-ctrl-t");
+    text
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_transcript_during_a_meeting_names_it_in_its_header() {
+    let text = transcript_header(
+        "meeting",
+        &[
+            ("a", "Made-up review", -600, 1_200, "LOCATION:Made-up room\r\n"),
+            ("b", "Made-up standup", 120, 900, ""),
+            ("c", "Made-up later", 3_600, 5_400, ""),
+            ("d", "Canceled: Made-up sync", -60, 1_800, ""),
+        ],
+    );
+    let possibly = text.split_once("- Possibly, by your calendar:\n").map(|(_, rest)| rest).unwrap_or_default();
+    let items: Vec<&str> = possibly.lines().take_while(|line| line.starts_with("  - ")).collect();
+    assert_eq!(items.len(), 2, "{text}");
+    assert!(items[0].starts_with("  - Made-up standup (") && items[1].starts_with("  - Made-up review ("), "{text}");
+    assert!(!text.contains("Made-up room") && !text.contains("Made-up later") && !text.contains("sync"), "{text}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_transcript_with_no_meeting_on_has_no_calendar_block() {
+    let text = transcript_header("no-meeting", &[("a", "Made-up later", 3_600, 5_400, "")]);
+    assert!(text.contains("- Started by: you\n\n> Heard") && !text.contains("Possibly"), "{text}");
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_transcript_whose_folder_cannot_be_made_does_not_start_and_says_why() {

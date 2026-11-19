@@ -19,7 +19,7 @@ use crate::calendar::zone_offset;
 const TRIES: usize = 100;
 
 /// The most of a file read for Today's list (its header), and for one opened read-only.
-const HEAD_BYTES: u64 = 2_048;
+const HEAD_BYTES: u64 = 4_096;
 const OPEN_BYTES: u64 = 4 << 20;
 
 /// The start of `path`, at most `bytes`, as text (a cut character dropped). None: unreadable, or
@@ -201,7 +201,13 @@ mod tests {
     }
 
     fn head(started: u64) -> Head {
-        Head { app: "Canary".into(), bundle: Some("dev.ottospace.canary".into()), mic: false, started }
+        Head {
+            app: "Canary".into(),
+            bundle: Some("dev.ottospace.canary".into()),
+            mic: false,
+            started,
+            meetings: Vec::new(),
+        }
     }
 
     fn files(dir: &Path) -> Vec<PathBuf> {
