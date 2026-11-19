@@ -361,7 +361,7 @@ impl Codex {
         let ask = match method {
             "item/commandExecution/requestApproval" => {
                 let command = params["command"].as_str().unwrap_or("");
-                let (station, label) = (Station::Shell, station::command_label(command));
+                let label = station::command_label(command);
                 // The command, where it runs, then every other field. No command: nothing to approve.
                 let mut payload = Payload::new();
                 payload.field("command", command);
@@ -379,7 +379,7 @@ impl Codex {
                 let wider = !params["networkApprovalContext"].is_null()
                     || !params["additionalPermissions"].is_null()
                     || no_accept;
-                (!command.is_empty()).then_some(("exec", station, label, payload, known, wider))
+                (!command.is_empty()).then_some(("exec", Station::Shell, label, payload, known, wider))
             }
             "item/fileChange/requestApproval" => {
                 let item = params["itemId"].as_str().and_then(|item| self.files.get(item)).cloned();

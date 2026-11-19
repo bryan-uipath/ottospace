@@ -159,8 +159,8 @@ Changes from the shape first sketched, and why:
 - `SessionRef` gained `pid`, `busy` and `parent`: Claude Code records the first two, and they
   are the strongest signals found. Codex writes each sub-agent as a session of its own.
 - `ToolEnd` may carry a station and a summary. Codex's current tool is `exec`, whose input is a
-  script; the command it ran is only known when it ends. The snapshot then moves the call's
-  count to the station it turned out to use.
+  script; the command it ran is only known when it ends. The snapshot then names the call by
+  that command and notes whether it failed; a command stays on Shell.
 - `git::checkouts(dir)` and `report::report(…)` were added: the first lists a repository's
   worktrees from `.git` without running git, the second is the JSON the subcommand prints.
 - After review: `sessions` takes several directories, `read` takes a byte budget and returns a

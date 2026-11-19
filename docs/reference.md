@@ -715,7 +715,7 @@ unfolds it. A session at work does not unfold it.
 - **What a row shows.** One line: a dot that is lit while the session is active (its file
   changed in the last 30 seconds), its title (below), else its repository or worktree, and the
   runner (`claude` or `codex`). Hover it for its card: the repository, what it does now (`shell ·
-  cargo test`, `network · git push`, `files · src/main.rs`), the model, when it was last active
+  cargo test`, `shell · git push`, `files · src/main.rs`), the model, when it was last active
   and the pane it runs in.
 - **Range.** The sessions active in the last 7 days. Nothing on screen changes it; for
   another, set `sessions_range` in the settings: `today` (since the local day began), `month`

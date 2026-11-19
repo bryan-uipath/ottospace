@@ -690,7 +690,7 @@ const PROGRAMS: &[Program] = &[
     plain("shasum"),
     plain("md5"),
     plain("plutil"),
-    // Programs that reach the network.
+    // Network clients.
     plain("curl"),
     plain("wget"),
     plain("ssh"),
