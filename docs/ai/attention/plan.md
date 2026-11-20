@@ -33,8 +33,8 @@ Checked against the code, 2026-11-19.
 |---|---|---|
 | Needs you: a task state; the Tasks section groups by it, needs-you first | Built | `ottospace-core/src/tasks.rs`; reference "Tasks inbox" |
 | The rail of open tasks; after a Done the most urgent remaining is in front | Built | `model/rail.rs`, `Model::front` (`model/spaces.rs`) |
-| Next task that needs you: ⌘⇧N (to move to ⌘J), and a click on the status bar's `● 1 needs you` | Built | reference "Status bar", `status_bar.rs` |
-| ⌘J, next thing needing you / "where next"; ⌘⇧N the note-or-quick-task box (§6) | **Decided, not built.** No code or doc names ⌘J; ⌘⇧N is today's next-task key | grep, 2026-11-19 |
+| Next task that needs you: ⌘J (⌘⇧N before), and a click on the status bar's `● 1 needs you` | Built | reference "Status bar", `status_bar.rs` |
+| ⌘J, next thing needing you / "where next"; ⌘⇧N the note-or-quick-task box (§6) | ⌘J built as next task; ⌘⇧N unbound until the box (§6). ⌘⌥N is the new-task box's new-worktree key; no "resume a session" action | `main.rs` keymap |
 | Priority (1–9, `P1` drawn), snooze (`snoozed_until`), hold | Built | `tasks.rs` |
 | A task's deadline | **None.** Tasks have no due time (they keep when they started and finished, and a snooze's end) | `tasks.rs` |
 | Ask cards (`AskUserQuestion`): options, Other…, number keys 1–9 pick a row, ↵ answers, Esc declines | Built (Claude Code) | `ottospace-core/src/ask.rs` |
@@ -235,7 +235,7 @@ is the annotated screen capture, [capture.md](../capture.md).)
 - **The key, decided (owner)**: quick note and quick task are one box on ⌘⇧N. ↵ files a note for
   later, nothing starts; ⌘↵ starts it as a task now, in its own temporary workspace. Part of the
   decided remap: ⌘N new task, ⌘⇧N this box, ⌘⌥N resume a session, ⌘J next thing needing you. On
-  main ⌘⇧N is still "next task that needs you".
+  main ⌘J is "next task that needs you" and ⌘⇧N is free.
 
 ### 7. Focus mode
 

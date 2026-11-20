@@ -862,7 +862,7 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new(sneak::KEYS[0], SneakMode, None),
         KeyBinding::new(sneak::KEYS[1], SneakMode, None),
         KeyBinding::new("cmd-n", NewTask, None),
-        KeyBinding::new("cmd-shift-n", NextTask, None),
+        KeyBinding::new("cmd-j", NextTask, None),
         KeyBinding::new("cmd-l", TalkFocus, None),
         KeyBinding::new("cmd-shift-r", TalkToggle, None),
         KeyBinding::new("cmd-shift-l", SidebarToggle, None),
@@ -4949,7 +4949,7 @@ impl Workspace {
         self.model.undo_offer.filter(|offer| tasks(offer.moved) && !offer.moved.of_apps())
     }
 
-    /// ⌘⇧N: the next task that needs you.
+    /// ⌘J: the next task that needs you.
     fn next_task(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.dispatch(Action::Tick { now: now_ms() }, self.input, window, cx);
         self.dispatch(Action::TaskGo { id: None }, self.input, window, cx);

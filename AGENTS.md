@@ -42,7 +42,7 @@ Design rules for every feature. Each change answers to both.
 - A question to the person carries its context and a recommendation: the answer must not need a
   hunt through the task.
 - What can wait is batched: one digest, one queue, never one ping each.
-- The person never searches for what needs them: one key and one place say what's next (⌘⇧N,
+- The person never searches for what needs them: one key and one place say what's next (⌘J,
   the status bar's `needs you`). A new kind of waiting joins them, never a place of its own.
 
 ### Out of the way (wording proposed)

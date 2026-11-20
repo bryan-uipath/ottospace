@@ -387,7 +387,7 @@ impl Workspace {
                 .child(title.child(Group::NeedsYou.title()))
                 .child(muted().child(counts.needs_you.to_string()))
                 .child(div().flex_1())
-                .child(muted().child("⌘⇧N next"));
+                .child(muted().child("⌘J next"));
             let list = div()
                 .occlude()
                 .rounded_lg()

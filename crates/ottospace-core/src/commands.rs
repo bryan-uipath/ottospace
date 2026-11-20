@@ -108,7 +108,7 @@ commands! {
     NewTask: "New Task", Tasks;
     // After New Task: a query of a name ranks a later tie lower.
     MoveTabToTask: "Move Tab to…", Tabs;
-    NextTask: "Next Task", Tasks;
+    NextNeedsYou: "Next Task", Tasks;
     // After Next Task: a query of its name ranks a later tie lower.
     NextSpace: "Next Tab Group", Tabs;
     PrevSpace: "Previous Tab Group", Tabs;
