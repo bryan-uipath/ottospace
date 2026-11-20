@@ -1,4 +1,4 @@
-//! Notices: app-level messages, by level, drawn as toast cards over the window's top right.
+//! Notices: app-level messages, by level, drawn as toast cards over the window's bottom right.
 //! They take no room: the panes never move for one.
 
 use serde::Serialize;

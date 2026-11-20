@@ -1581,7 +1581,7 @@ export interface ToastCard {
   rect: Rect | null;
 }
 
-/** The toast: notices as cards at the window's top right, over the panes. It takes no room. */
+/** The toast: notices as cards at the window's bottom right, over the panes. It takes no room. */
 export interface Toast {
   /** At most three, the most pressing first: what Esc dismisses. An Undo is never past them. */
   cards: ToastCard[];

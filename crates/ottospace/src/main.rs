@@ -559,6 +559,8 @@ struct Filled {
 const TOP_BAR: f32 = 40.;
 /// The second row: the selected space's tabs.
 const SPACE_TABS: f32 = 30.;
+/// Height of the status bar, at the window's foot.
+const STATUS_BAR: f32 = 24.;
 /// How narrow a space of the top row gets before the row clips, and how wide.
 const MIN_SPACE: f32 = 72.;
 /// What a space wants with its title: past the row's room for that many, the others are badges.
@@ -7549,7 +7551,7 @@ impl Workspace {
         let segments = self.status_segments(middle, window, cx);
         self.status_fit.set(segments.fit);
         div()
-            .h(px(24.))
+            .h(px(STATUS_BAR))
             .px_2()
             .flex()
             .items_center()
@@ -8447,6 +8449,9 @@ impl Render for Workspace {
             self.overlay(bar, true, SECTION, (TOP_BAR, RAIL, left_in))
         });
         let inner = (drawer - drawer_rail::WIDTH).max(0.);
+        // The toast keeps clear of an overlay drawer or bar, as far in as it is.
+        let toast_right = right_width + if drawer_over.is_some() { inner * right_in } else { 0. };
+        let toast_left = if bar_over.is_some() { SECTION * left_in } else { 0. };
         let drawer_over =
             drawer_over.map(|body| self.overlay(body, false, inner, (TOP_BAR, drawer_rail::WIDTH, right_in)));
         // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
@@ -8552,8 +8557,9 @@ impl Render for Workspace {
                     .map(ax_debug::Overlay::render),
             )
             .children(self.render_inspector_outline())
-            // The toast, over the panes at the top right: it takes no room. A live app's window is above it.
-            .children(self.render_toast(right_width, centre - right_width, cx))
+            // The toast, over the panes at the bottom right, clear of the overlays: it takes no room.
+            // A live app's window is above it.
+            .children(self.render_toast(toast_right, centre - toast_right - toast_left, cx))
             // Over everything of ottospace's own. It is never on while an app's window is.
             .children(self.render_row_menu(window, cx))
             .children(self.render_agent_menu(window, cx))

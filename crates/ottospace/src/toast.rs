@@ -1,7 +1,8 @@
-//! The toast: the app's one place for what is transient. Cards in the window's top right, under
-//! the top row and the tabs, over the panes: it takes no room, so nothing moves for it. Each card
+//! The toast: the app's one place for what is transient. Cards in the window's bottom right, over
+//! the panes, just above the status bar (and the timeline's band): it takes no room, so nothing moves for it.
+//! The first card is nearest the status bar; the others stack upward. Each card
 //! has a level's colours and glyph, an optional title, one line of text, up to three actions and ×.
-//! Pointed at, a card shows its whole text, wrapped, and is as tall as that takes.
+//! Pointed at, a card shows its whole text, wrapped, and grows upward as tall as that takes.
 //! Generic: what a card says is its caller's (`notices` for the app's notices).
 //! A card's line is `ui::notice_line`. Over a live app's window each card is drawn in a floating
 //! panel of its own instead (`float_panel`), so a click between two goes to the app.
@@ -124,33 +125,40 @@ pub(crate) fn rest(titled: bool) -> f32 {
     CARD + if titled { TITLE } else { 0. }
 }
 
-/// Where each piece of the stack goes in a window `width_of` wide: `top` down, `right` in from
-/// its right edge, in `room`, a gap between two. `heights`: each piece's, the top one first;
-/// `more`: the last is "+N more". `[x, y, w, h]` from the window's top left, as `stack` draws them.
-pub(crate) fn places([top, right, room]: [f32; 3], width_of: f32, heights: &[f32], more: bool) -> Vec<[f32; 4]> {
-    let (w, mut y) = (width(room), top);
+/// Where each piece of the stack goes in a window `[width, height]`: its foot `bottom` up from the
+/// window's foot, `right` in from its right edge, in `room`, a gap between two. `heights`: each
+/// piece's, the first (lowest) first; `more`: the last (highest) is "+N more". `[x, y, w, h]` from
+/// the window's top left, as `stack` draws them.
+pub(crate) fn places(
+    [bottom, right, room]: [f32; 3],
+    [width_of, height_of]: [f32; 2],
+    heights: &[f32],
+    more: bool,
+) -> Vec<[f32; 4]> {
+    let (w, mut foot) = (width(room), height_of - bottom);
     let x = width_of - right - GAP - w;
     let place = |(at, h): (usize, &f32)| {
         let label = more && at + 1 == heights.len();
+        let y = foot - h;
         let place = if label { [x + w - MORE_WIDTH.min(w), y, MORE_WIDTH.min(w), *h] } else { [x, y, w, *h] };
-        y += h + GAP;
+        foot = y - GAP;
         place
     };
     heights.iter().enumerate().map(place).collect()
 }
 
-/// "+N more", under the cards.
+/// "+N more", over the cards.
 fn more_label(more: usize) -> Div {
     let label = div().h(px(MORE)).w(px(MORE_WIDTH)).max_w_full().flex().items_center().justify_center().rounded_md();
     let label = label.bg(rgb(ottospace_core::theme::RAISED)).text_xs();
     label.text_color(rgb(ottospace_core::theme::MUTED)).child(format!("+{more} more"))
 }
 
-/// The cards, first on top, and "+N more" under them: the stack's inside, `mark` noting where.
+/// The cards, first at the foot, and "+N more" over them: the stack's inside, `mark` noting where.
 fn column(cards: Vec<Card>, more: usize, mark: impl IntoElement) -> Div {
     div()
         .flex()
-        .flex_col()
+        .flex_col_reverse()
         .items_end()
         .gap(px(GAP))
         .children(cards.into_iter().map(card))
@@ -158,11 +166,11 @@ fn column(cards: Vec<Card>, more: usize, mark: impl IntoElement) -> Div {
         .child(mark)
 }
 
-/// The stack in the window: `top` points down the window and `right` in from its right edge, at
-/// most `room` (the panes' width) less its gaps. `shown`: how far in it is (0 to 1); it slides in
-/// from the right and fades.
+/// The stack in the window: its foot `bottom` points up from the window's foot and `right` in from
+/// its right edge, at most `room` (the panes' width) less its gaps. `shown`: how far in it is (0 to
+/// 1); it slides in from the right and fades.
 pub(crate) fn stack(
-    [top, right, room]: [f32; 3],
+    [bottom, right, room]: [f32; 3],
     cards: Vec<Card>,
     more: usize,
     shown: f32,
@@ -170,7 +178,7 @@ pub(crate) fn stack(
 ) -> Div {
     column(cards, more, mark)
         .absolute()
-        .top(px(top))
+        .bottom(px(bottom))
         .right(px(right + GAP - SLIDE * (1. - shown)))
         .w(px(width(room)))
         .opacity(shown)
@@ -192,22 +200,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_pieces_lie_one_under_another_a_gap_between_at_the_panes_top_right() {
-        assert_eq!(places([60., 300., 600.], 1000., &[], false), Vec::<[f32; 4]>::new());
-        // A 1000-point window, 300 of drawer: the panes end at 700, less a gap.
-        let x = 1000. - 300. - GAP - WIDTH;
-        // A card pointed at is taller: the next starts a gap under it.
+    fn the_pieces_lie_one_over_another_a_gap_between_at_the_panes_bottom_right() {
+        assert_eq!(places([44., 300., 600.], [1000., 800.], &[], false), Vec::<[f32; 4]>::new());
+        // A 1000 by 800 window, 300 of drawer: the panes end at 700, less a gap; the foot 44 up.
+        let (x, foot) = (1000. - 300. - GAP - WIDTH, 800. - 44.);
+        // A card pointed at is taller, upward: the next ends a gap over it.
         let (tall, card) = (rest(false) + 30., rest(false));
+        let second = foot - tall - GAP - card;
         assert_eq!(
-            places([60., 300., 600.], 1000., &[tall, card, MORE], true),
+            places([44., 300., 600.], [1000., 800.], &[tall, card, MORE], true),
             [
-                [x, 60., WIDTH, tall],
-                [x, 60. + tall + GAP, WIDTH, card],
-                [x + WIDTH - MORE_WIDTH, 60. + tall + GAP + card + GAP, MORE_WIDTH, MORE]
+                [x, foot - tall, WIDTH, tall],
+                [x, second, WIDTH, card],
+                [x + WIDTH - MORE_WIDTH, second - GAP - MORE, MORE_WIDTH, MORE]
             ]
         );
         assert_eq!(rest(true), CARD + TITLE);
         // Narrow panes: the cards narrow, never past the panes' left.
-        assert_eq!(places([60., 300., 200.], 500., &[28.], false), [[500. - 300. - GAP - 184., 60., 184., 28.]]);
+        let narrow = places([44., 300., 200.], [500., 400.], &[28.], false);
+        assert_eq!(narrow, [[500. - 300. - GAP - 184., 400. - 44. - 28., 184., 28.]]);
     }
 }

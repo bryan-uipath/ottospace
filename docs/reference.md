@@ -23,7 +23,7 @@ running, and the rest of the design is not built: see the
 | [File viewer](#file-viewer): a file read only in a pane (markdown drawn, code coloured and text with line numbers, pictures), reloaded when it changes, vim moves with counts, ⌃G edits it beside | Works today |
 | Key bindings and a status bar showing the mode (`APP`, `PICK`…; none when normal) | Works today |
 | [Status bar](#status-bar): where you are, what's next, who's working | Works today |
-| [Toasts](#toasts): app-level messages as cards at the window's top right, over the panes (they take no room), red, amber or blue by level (error, warning, information) | Works today |
+| [Toasts](#toasts): app-level messages as cards at the window's bottom right, over the panes (they take no room), red, amber or blue by level (error, warning, information) | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page (in a terminal a click beside the thumb is the terminal's). They follow the system's "Show scroll bars" setting. A list's edge fades where more lies beyond it; tabs past the second row's width scroll across | Works today |
@@ -978,7 +978,7 @@ the way.
   ottospace pulses.
 - **At the start**, if you are in no call, or still in an earlier one (on from 10 minutes before,
   or the meeting before, running over): a meeting notice on a [toast](#toasts) at the
-  window's top right (◷, indigo: `Meeting:` the title and how long ago it started, **Join** if the meeting
+  window's bottom right (◷, indigo: `Meeting:` the title and how long ago it started, **Join** if the meeting
   has an `https:` link, × to dismiss; over a warning or information, under an error's card), which stays until
   you dismiss it, join, a call starts or the meeting ends; and a system notification with the
   alert sound, so you see it when ottospace is behind other windows. Once more 2 minutes later
@@ -1243,10 +1243,10 @@ is four spaces.
 
 What ottospace has to say about itself (a settings file it cannot read, a file not saved, a
 shell that did not start, why a move of yours did nothing, a key that needs a restart) shows as
-a toast: cards at the window's top right, under the top row and the tabs, over the panes. It
-takes no room: no pane, terminal or hosted window moves or resizes when one comes or goes. It
+a toast: cards at the window's bottom right, over the panes, just above the status bar (and the
+timeline's band), clear of the sidebar and the drawer. It takes no room: no pane, terminal or hosted window moves or resizes when one comes or goes. It
 slides in from the right and fades, and is there at once under the system's Reduce Motion. A
-live app window over the top-right pane is in front of ottospace's window: while that app is in
+live app window over the bottom-right pane is in front of ottospace's window: while that app is in
 front, each card floats above it in a small panel of its own, which never takes the keyboard; a
 click between two cards goes to the app.
 
@@ -1254,15 +1254,16 @@ click between two cards goes to the app.
   global key not registered), blue for information, and amber on indigo for a meeting that started
   (`meeting`: over a warning, under an error). A glyph says the level too: `!` in a circle, `▲`,
   `ⓘ`, `◷`. The state says a meeting's notice as `Meeting started`, never its title.
-- **Stacked**: at most three cards, the most pressing on top, and of one level the newest; then
-  `+N more`. An error is not pushed down by information; when it goes, the next comes up. A
+- **Stacked**: at most three cards, the most pressing nearest the status bar, and of one level the
+  newest; the others stack upward, then `+N more`. An error is not pushed up by information; when
+  it goes, the next takes its place. A
   workspace's or a task's **Undo** never runs out unseen: under three higher notices it takes the
   third card.
 - **One line**: text too long is cut with an ellipsis; point at the card and it shows all of it,
-  wrapped (at most eight lines), the cards under it moving down meanwhile. A settings
+  wrapped (at most eight lines), growing upward, the cards over it moving up meanwhile. A settings
   problem offers **Open settings**; a meeting with a link, **Join**; a workspace deleted or updated,
   **Undo** (only your click takes it back).
-- **Dismiss**: × on a card, or Esc (the top card) when no mode and no terminal takes it. Only you dismiss a
+- **Dismiss**: × on a card, or Esc (the first card, nearest the status bar) when no mode and no terminal takes it. Only you dismiss a
   notice: a socket client cannot, and its failure never takes the place of what your own step
   said. A dismissed settings line comes back when it says something else.
 - **How long**: as before. What a step did goes after 8 seconds; a settings problem stays until

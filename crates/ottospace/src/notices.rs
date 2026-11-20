@@ -1,4 +1,4 @@
-//! The app's notices, drawn as cards of the toast (`toast`): the window's top right, over the
+//! The app's notices, drawn as cards of the toast (`toast`): the window's bottom right, over the
 //! panes, taking no room. Which notices show, in what order, their level and who may dismiss one
 //! are the core's (`ottospace_core::notice`). While a live app's window is in front, over the
 //! panes, each card is drawn in a floating panel of its own above it (`float_panel`), at the same
@@ -15,7 +15,7 @@ use ottospace_core::notice::{self, Kind, Notice, Offer};
 
 use ottospace_mac::recovery::to_frame;
 
-use crate::{Mark, SPACE_TABS, TOLD_FOR, TOP_BAR, Workspace, ax, float_panel, mark, on_screen, toast};
+use crate::{Mark, STATUS_BAR, TOLD_FOR, Workspace, ax, calendar, float_panel, mark, on_screen, toast};
 
 /// A card's click handler.
 type Click = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -331,10 +331,12 @@ impl Workspace {
         })
     }
 
-    /// The toast in the window, over the panes' top right: `right` points from the window's edge,
-    /// clear of the drawer and its rail; `room`, the panes' width. None while the panels show it.
+    /// The toast in the window, over the panes' bottom right, a gap over the status bar and the
+    /// timeline's band: `right` points from the window's edge, clear of the drawer and its rail;
+    /// `room`, the panes' width. None while the panels show it.
     pub(crate) fn render_toast(&self, right: f32, room: f32, cx: &mut Context<Self>) -> Option<Div> {
-        let at = [TOP_BAR + SPACE_TABS + 8., right, room];
+        let band = self.model.calendar.band_shows() != ottospace_core::calendar::BandShows::Absent;
+        let at = [STATUS_BAR + if band { calendar::BAND } else { 0. } + 8., right, room];
         self.toast.at.set(Some(at));
         if self.toast_floats().is_some() {
             return None;
@@ -380,8 +382,9 @@ impl Workspace {
             drawn.unwrap_or(rest)
         };
         let heights: Vec<f32> = (0..cards + usize::from(more)).map(height).collect();
-        let width = f32::from(window.viewport_size().width);
-        let places = self.toast.at.get().map(|at| toast::places(at, width, &heights, more)).unwrap_or_default();
+        let view = window.viewport_size();
+        let view = [f32::from(view.width), f32::from(view.height)];
+        let places = self.toast.at.get().map(|at| toast::places(at, view, &heights, more)).unwrap_or_default();
         let screen = |[x, y, w, h]: [f32; 4]| {
             to_frame(on_screen(Bounds { origin: point(px(x), px(y)), size: size(px(w), px(h)) }, window, cx))
         };

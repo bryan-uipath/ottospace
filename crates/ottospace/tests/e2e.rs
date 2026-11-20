@@ -404,15 +404,16 @@ fn top_card(state: &Value) -> &Value {
     &state["toast"]["cards"][0]
 }
 
-/// The toast lies in the window's top right, under the top row and the tabs (70 points), over the
-/// panes: with the drawer open, at its left.
-fn in_top_right(state: &Value) {
+/// The toast lies in the window's bottom right, over the panes, its foot over the status bar (and
+/// so over its `needs you`): with the drawer open, at its left.
+fn in_bottom_right(state: &Value) {
     let (toast, window) = (rect(&state["toast"]["rect"]), rect(&state["window"]));
+    let status = rect(&state["status_bar"]["agents"]["rect"]);
     let fits = toast[0] + toast[2] > window[2] / 2.
         && toast[0] + toast[2] <= window[2]
-        && toast[1] >= 70.
-        && toast[1] < window[3] / 2.;
-    assert!(fits, "the toast {toast:?} in the window {window:?}");
+        && toast[1] > window[3] / 2.
+        && toast[1] + toast[3] <= status[1];
+    assert!(fits, "the toast {toast:?} in the window {window:?}, over the status bar's {status:?}");
 }
 
 /// The point at fractions `fx`, `fy` of a rect.
@@ -6342,7 +6343,7 @@ fn agent_argv(dir: &Path, name: &str) -> Option<Vec<String>> {
 }
 
 /// The owner's report: "Workspace deleted" showed above the section's rows and pushed them down.
-/// It is a toast card at the top right: nothing moves, Undo is the user's alone, × ends it.
+/// It is a toast card at the bottom right: nothing moves, Undo is the user's alone, × ends it.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_deleted_workspace_is_offered_back_on_a_toast_and_nothing_moves() {
@@ -6381,7 +6382,7 @@ fn a_deleted_workspace_is_offered_back_on_a_toast_and_nothing_moves() {
         (names(&shown).len(), &shown["workbook_offer"], &drawn["level"], &drawn["text"], &drawn["offer"]),
         (2, &json!("deleted"), &json!("info"), &json!("Workspace deleted"), &json!("undo"))
     );
-    in_top_right(&shown);
+    in_bottom_right(&shown);
     // Nothing moves: the rows that stay and the section's header.
     assert_eq!((above(&shown), &shown["bar_header"]), (above(&before), &before["bar_header"]));
 
@@ -9581,9 +9582,10 @@ fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
     let said = (&bar["kind"], &bar["level"], &bar["text"], &bar["offer"]);
     assert_eq!(said, (&json!("meeting"), &json!("meeting"), &json!("Meeting started"), &json!("join")), "{bar}");
     assert_eq!((&banner["join"], &banner["dismiss"]), (&bar["offer_rect"], &bar["close"]));
-    // Over the panes at the top right, well above the timeline's band.
-    in_top_right(&shown);
-    assert!(rect(&bar["rect"])[1] < rect(&shown["calendar"]["band"]["rect"])[1], "{bar}");
+    // Over the panes at the bottom right, over the timeline's band.
+    in_bottom_right(&shown);
+    let (card, band) = (rect(&bar["rect"]), rect(&shown["calendar"]["band"]["rect"]));
+    assert!(card[1] + card[3] <= band[1], "{card:?} over the band {band:?}");
     let state = shown.to_string();
     assert!(!state.contains("Design review") && !state.contains("example.zoom.us"), "{state}");
     // An error outranks it: the top card. The meeting's stays under it, Join still there; mended, it is on top again.
@@ -13306,7 +13308,7 @@ fn a_tasks_x_hides_it_and_its_row_brings_it_back() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_notice_is_a_toast_at_the_top_right_moves_no_pane_and_only_the_user_dismisses_it() {
+fn a_notice_is_a_toast_at_the_bottom_right_moves_no_pane_and_only_the_user_dismisses_it() {
     const RIGHT: &str = r#"{"repos": [], "restore_layout": false}"#;
     const WRONG: &str = "{\n  \"repos\": [],\n  \"restore_layout\": false,\n}\n";
     let home = user_folder("notices", RIGHT);
@@ -13356,13 +13358,14 @@ fn a_notice_is_a_toast_at_the_top_right_moves_no_pane_and_only_the_user_dismisse
         (&drawn["level"], &drawn["text"], &drawn["offer"]),
         (&json!("error"), &shown["notice"], &json!("open_settings"))
     );
-    // A card at the window's top right, over the pane: under the top row and the tab row.
-    in_top_right(&shown);
+    // A card at the window's bottom right, over the pane, under the tab row.
+    in_bottom_right(&shown);
     // In ottospace's own window: no live app's window is over it (a test run hosts none).
     assert_eq!(shown["toast"]["panel"], Value::Null);
     assert!(shown["counts"]["toast_frames"].as_u64() > Some(0), "it slid in: {}", shown["counts"]);
     let (card, was) = (rect(&drawn["rect"]), rect(&before["frames"][&pane]));
-    assert!(card[1] >= tab(&shown)[1] + tab(&shown)[3] && card[1] < was[1] + was[3], "{card:?} over {was:?}");
+    let over = card[1] >= tab(&shown)[1] + tab(&shown)[3] && card[1] + card[3] <= was[1] + was[3];
+    assert!(over, "{card:?} over {was:?}");
     // Nothing moves: the top row, the strip, the tab row, the pane and its header.
     for key in ["strip", "bar_header", "space_rects"] {
         assert_eq!(shown[key], before[key], "{key}");
@@ -13455,10 +13458,10 @@ fn notices_stack_three_cards_and_more_and_reduce_motion_moves_none() {
     let four = otto.wait_for("four notices", |o| Some(o.drawn()).filter(|s| s["toast"]["more"] == 1));
     let kinds: Vec<Value> = four["toast"]["cards"].as_array().unwrap().iter().map(|c| c["kind"].clone()).collect();
     assert_eq!(kinds, [json!("start"), json!("refused"), json!("undo")], "{}", four["toast"]);
-    in_top_right(&four);
-    // Each card under the one before it.
+    in_bottom_right(&four);
+    // Each card over the one before it: the first nearest the status bar.
     let card = |n: usize| rect(&four["toast"]["cards"][n]["rect"]);
-    assert!(card(0)[1] + card(0)[3] <= card(1)[1] && card(1)[1] + card(1)[3] <= card(2)[1], "{}", four["toast"]);
+    assert!(card(1)[1] + card(1)[3] <= card(0)[1] && card(2)[1] + card(2)[3] <= card(1)[1], "{}", four["toast"]);
     assert_eq!((&four["toast"]["shown"], &four["counts"]["toast_frames"]), (&json!(1.0), &json!(0)));
     // Esc dismisses the top card: the next comes up, and the one past three takes the last place.
     let next = otto.user_key("escape");
@@ -13501,9 +13504,10 @@ fn a_click_between_two_cards_reaches_the_pane_under_the_toast() {
     let two = otto.wait_for("two cards at rest", |o| {
         Some(o.drawn()).filter(|s| s["toast"]["shown"] == 1.0 && s["toast"]["cards"][1]["rect"].is_array())
     });
+    // The second card over the first.
     let (first, second) = (rect(&two["toast"]["cards"][0]["rect"]), rect(&two["toast"]["cards"][1]["rect"]));
-    let gap = [first[0] + first[2] / 2., (first[1] + first[3] + second[1]) / 2.];
-    assert!(second[1] - (first[1] + first[3]) >= 4., "a gap between {first:?} and {second:?}");
+    let gap = [first[0] + first[2] / 2., (second[1] + second[3] + first[1]) / 2.];
+    assert!(first[1] - (second[1] + second[3]) >= 4., "a gap between {second:?} and {first:?}");
     let pane = rect(&two["frames"]["2"]);
     assert!(within([gap[0], gap[1], 0., 0.], pane), "the gap {gap:?} over pane 2 {pane:?}");
     // On a card: the pane under it gets nothing.
@@ -13515,8 +13519,51 @@ fn a_click_between_two_cards_reaches_the_pane_under_the_toast() {
     assert_eq!(otto.drawn()["toast"]["cards"].as_array().map(Vec::len), Some(2));
 }
 
-/// A card whose text is cut shows all of it while the pointer is over it: taller, whole inside
-/// the window and its stack, its × in it, no pane moved. The pointer gone, it is one line again.
+/// The toast keeps clear of the sidebar and the drawer: over the panes as `overlay_panels` floats
+/// them, and beside the drawer that takes room with the flag off. No pane moves for it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_toast_keeps_clear_of_the_sidebar_and_the_drawer() {
+    let card = |s: &Value| rect(&top_card(s)["rect"]);
+    let toast = |otto: &Otto| {
+        otto.wait_for("the card at rest", |o| {
+            Some(o.drawn()).filter(|s| s["toast"]["shown"] == 1.0 && top_card(s)["rect"].is_array())
+        })
+    };
+    let otto = Otto::launch_with("toast-overlays", &OVERLAYS);
+    let before = overlay_panes(&otto);
+    otto.call(json!({"cmd": "repo_add", "path": long_path()}));
+    let alone = toast(&otto);
+    assert_eq!(alone["bounds"], before["bounds"], "a notice moved a pane");
+    // The sidebar over the panes: the card at its right.
+    otto.user_key("cmd-shift-l");
+    let open = toast(&otto);
+    let bar = rect(&open["overlays"]["sidebar"]);
+    assert!(card(&open)[0] >= bar[0] + bar[2], "the card {:?} over the sidebar {bar:?}", card(&open));
+    otto.user_key("escape");
+    // The drawer over the panes: the card at its left.
+    otto.user_key("cmd-n");
+    let boxed = toast(&otto);
+    let drawer = rect(&boxed["overlays"]["drawer"]);
+    let right = card(&boxed)[0] + card(&boxed)[2];
+    assert!(right <= drawer[0], "the card {:?} over the drawer {drawer:?}", card(&boxed));
+    in_bottom_right(&boxed);
+    assert_eq!(boxed["bounds"], before["bounds"], "a pane moved");
+
+    // The flag off: the drawer takes room, and the card stays over the panes.
+    let off = Otto::launch_with("toast-overlays-off", &[]);
+    overlay_panes(&off);
+    off.call(json!({"cmd": "repo_add", "path": long_path()}));
+    off.user_key("cmd-n");
+    let boxed = toast(&off);
+    assert_eq!(boxed["drawer"]["collapsed"], false, "{}", boxed["drawer"]);
+    let panes_right = boxed["frames"].as_object().unwrap().values().map(|f| rect(f)).map(|f| f[0] + f[2]);
+    let panes_right = panes_right.fold(0., f64::max);
+    assert!(card(&boxed)[0] + card(&boxed)[2] <= panes_right, "the card {:?} past the panes", card(&boxed));
+}
+
+/// A card whose text is cut shows all of it while the pointer is over it: taller upward, whole
+/// inside the window and its stack, over the status bar, its × in it, no pane moved. The pointer gone, it is one line again.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_long_card_pointed_at_shows_its_whole_text_inside_the_window() {
@@ -13534,13 +13581,15 @@ fn a_long_card_pointed_at_shows_its_whole_text_inside_the_window() {
     });
     let (tall, stack) = (rect(&top_card(&open)["rect"]), rect(&open["toast"]["rect"]));
     let window = rect(&open["window"]);
-    assert_eq!(tall[..3], card[..3], "it grows downward only");
+    assert_eq!([tall[0], tall[2], tall[1] + tall[3]], [card[0], card[2], card[1] + card[3]], "it grows upward only");
+    let status = rect(&open["status_bar"]["agents"]["rect"]);
+    assert!(tall[1] + tall[3] <= status[1], "the card {tall:?} over the status bar's {status:?}");
     assert!(within(tall, stack), "the card {tall:?} is cut by its stack {stack:?}");
     assert!(within(tall, [0., 0., window[2], window[3]]), "the card {tall:?} leaves the window {window:?}");
     assert!(within(rect(&top_card(&open)["close"]), tall), "its × stays in it");
     assert_eq!(open["frames"], frames, "no pane moved");
     // Off the card: one line again.
-    otto.mouse("move", [card[0] - 40., card[1] + card[3] + 200.]);
+    otto.mouse("move", [card[0] - 40., card[1] - 200.]);
     otto.wait_for("one line again", |o| Some(state(o)).filter(|s| top_card(s)["rect"] == top_card(&rest)["rect"]));
 }
 

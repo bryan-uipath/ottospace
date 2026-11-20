@@ -1994,7 +1994,7 @@ fn a_notice_moves_no_hosted_window_and_floats_over_a_live_one() {
     let clicks = || canary.call(json!({"cmd": "state"}))["windows"][0]["clicks"].as_array().map(Vec::len);
     let clicked = clicks();
 
-    // An error: a card in the panel over the live window, at the window's top right. The pane and
+    // An error: a card in the panel over the live window, at the window's bottom right. The pane and
     // the window stay as they were.
     std::fs::write(home.join("settings.json"), "{ not json").expect("write settings");
     let floats =
@@ -2047,9 +2047,10 @@ fn a_notice_moves_no_hosted_window_and_floats_over_a_live_one() {
         rect(&s["toast"]["panel"])?;
         Some((s.clone(), first, second))
     };
+    // The second card over the first.
     let (s, first, second) = wait_for("two cards in their panels", || two(&state()));
-    assert!(second[1] - (first[1] + first[3]) >= 4., "a gap between {first:?} and {second:?}");
-    let (x, y) = global(&s, [first[0], first[1] + first[3], first[2], second[1] - first[1] - first[3]]);
+    assert!(first[1] - (second[1] + second[3]) >= 4., "a gap between {second:?} and {first:?}");
+    let (x, y) = global(&s, [first[0], second[1] + second[3], first[2], first[1] - second[1] - second[3]]);
     click_at(x, y, false);
     wait_or(
         "the click between the cards in the app",
@@ -2059,7 +2060,7 @@ fn a_notice_moves_no_hosted_window_and_floats_over_a_live_one() {
     assert_eq!(state()["toast"]["cards"].as_array().map(Vec::len), Some(2), "both cards stay");
     report("toast: a click between two cards reached the app");
 
-    // The pointer over the long card: its whole text, the card and the panels' frame taller by as much.
+    // The pointer over the long card: its whole text, upward, the card and the panels' frame taller by as much.
     let long_card = |s: &Value| {
         let cards = s["toast"]["cards"].as_array()?;
         let at = cards.iter().position(|card| card["kind"] == "failed")?;
@@ -2077,6 +2078,7 @@ fn a_notice_moves_no_hosted_window_and_floats_over_a_live_one() {
     let more = tall[3] - card[3];
     let whole = tall[1] >= stack_now[1] && tall[1] + tall[3] <= stack_now[1] + stack_now[3] + 0.5;
     assert!(whole, "the card {tall:?} is cut by its stack {stack_now:?}");
+    assert!(close(tall[1] + tall[3], card[1] + card[3]), "the card {tall:?} grew down from {card:?}");
     assert!(close(panel_now[3], panel[3] + more), "the panels {panel_now:?}, were {panel:?}");
     assert_eq!((pane(), state()["mode"].clone()), (Some(body), json!("app")), "nothing moved, the app has the keys");
     report(&format!("toast: a long card pointed at grew by {more} pt in its panel"));

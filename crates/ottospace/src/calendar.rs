@@ -25,7 +25,7 @@ use serde_json::json;
 use crate::{Mark, Tooltip, Workspace, config, event_log, mark, now_ms, progress, words};
 
 /// The band's height above the status bar, its 1-point top line included; hover takes all of it.
-const BAND: f32 = 12.;
+pub(crate) const BAND: f32 = 12.;
 /// Below the top line: what lanes and hover slices divide.
 const INNER: f32 = BAND - 1.;
 /// Calls and blocks are drawn between these margins; overlapping calls split the room into lanes
