@@ -6202,9 +6202,9 @@ impl Workspace {
                     cx,
                 ))
             });
-            // Its state is the dot's to say: the badge has none.
-            let badge = task.and_then(|id| self.task_badge_plain(id, 16.));
+            // Its state is the dot's to say: the badge has none, and is the dot's task if it has one.
             let dot = self.model.checkout_dot(&checkout.path, now);
+            let badge = dot.task.or(task).and_then(|id| self.task_badge_plain(id, 16.));
             pulsing.set(pulsing.get() || dot.pulse.is_some());
             // At its end, in this order: the pull request's mark, the task's badge. The words sit
             // left of them, so the pull request stays there to click.

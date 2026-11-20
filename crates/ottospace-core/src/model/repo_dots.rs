@@ -45,7 +45,7 @@ pub(crate) struct Head {
 }
 
 /// `now` into a pulse that started `at`: eased, 0 to 1; `None` before it or once it is over.
-pub fn pulse(at: u64, now: u64) -> Option<f32> {
+fn pulse(at: u64, now: u64) -> Option<f32> {
     let t = now.checked_sub(at).filter(|t| *t < PULSE_MS)?;
     Some(crate::seal::ease_out(t as f32 / PULSE_MS as f32))
 }
@@ -66,14 +66,7 @@ impl Model {
         if let Some(task) = working {
             return Dot { activity: Activity::Working, task: Some(task.id), pulse };
         }
-        let adopted = |runner: &str, id: &str| {
-            self.tasks
-                .list
-                .iter()
-                .filter_map(|t| t.session.as_ref())
-                .any(|l| (l.runner.as_str(), l.id.as_str()) == (runner, id))
-        };
-        let session = self.found.iter().any(|s| s.active && s.repo == path && !adopted(&s.runner, &s.id));
+        let session = self.found.iter().any(|s| s.active && s.repo == path && !self.tasks.adopted(&s.runner, &s.id));
         let activity = if session { Activity::Working } else { Activity::Idle };
         Dot { activity, task: None, pulse }
     }
