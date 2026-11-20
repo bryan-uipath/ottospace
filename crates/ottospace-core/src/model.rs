@@ -165,6 +165,8 @@ pub struct Confirm {
     pub later: Option<(TaskId, String)>,
     /// Not the quit question: "Close <title>? It has unsaved changes" for this owned app pane.
     pub edited: Option<PaneId>,
+    /// Not the quit question: "Delete the worktree of <branch>?" for the linked one at this path.
+    pub delete: Option<String>,
     /// The quit question's agents quitting stops, by their conversation's name (`quit_agents`).
     pub agents: Vec<String>,
     /// The quit question's drafts quitting loses (`Model::unsent`).
@@ -199,6 +201,16 @@ impl Confirm {
         }
     }
 
+    /// What a key does to "Delete this worktree?": No is the default. Only the user's ⌘⌫ deletes;
+    /// any other key of theirs keeps it. A client's: `None`, refused (`repos::DELETE_USERS`).
+    pub fn answer_delete(key: &str, mods: Mods, origin: Origin) -> Option<Action> {
+        match (key, origin) {
+            ("backspace", Origin::User) if mods == Mods { cmd: true, ..Mods::default() } => Some(Action::QuitConfirm),
+            (_, Origin::User) => Some(Action::QuitCancel),
+            _ => None,
+        }
+    }
+
     /// The question's title, e.g. "Quit?".
     pub fn title(&self) -> String {
         if self.dismiss.is_some() {
@@ -212,6 +224,9 @@ impl Confirm {
         }
         if self.close.is_some() {
             return "Close this workspace?".into();
+        }
+        if self.delete.is_some() {
+            return "Delete this worktree?".into();
         }
         if let Some(ask) = self.paste {
             return ask.title();
@@ -1795,12 +1810,17 @@ pub enum Action {
     LocalDay {
         day: u64,
     },
-    /// What `git worktree remove` did with a done task's own worktree at `path`: removed
-    /// (`kept` none), or kept and why ("Kept the worktree: 3 uncommitted changes"). The shell's.
+    /// What `git worktree remove` did with the worktree at `path`, a done task's own (`task`) or
+    /// the user's Delete worktree… (none): removed (`kept` none), or kept and why ("Kept the
+    /// worktree: 3 uncommitted changes"). The shell's.
     WorktreeRemoved {
-        task: TaskId,
+        task: Option<TaskId>,
         path: String,
         kept: Option<String>,
+    },
+    /// Delete worktree… on a linked worktree's row: "Delete the worktree of <branch>?" first. The user's alone.
+    WorktreeDelete {
+        path: String,
     },
     /// ⌘⇧R: collapse the drawer into its rail, or open it again (the conversation, else the transcript).
     TalkToggle,
@@ -2385,6 +2405,7 @@ impl Action {
             | Action::SetRepoDirs { .. }
             | Action::RepoAdd { .. }
             | Action::RepoRemove { .. }
+            | Action::WorktreeDelete { .. }
             | Action::OpenRepo { .. }
             | Action::RepoClick { .. }
             | Action::RepoFold { .. }
@@ -2816,6 +2837,7 @@ impl Action {
             | Action::SetRepoDirs { .. }
             | Action::RepoAdd { .. }
             | Action::RepoRemove { .. }
+            | Action::WorktreeDelete { .. }
             | Action::OpenRepo { .. }
             | Action::RepoClick { .. }
             | Action::RepoFold { .. }
@@ -3212,10 +3234,11 @@ pub enum Effect {
     Notice {
         text: String,
     },
-    /// Done's removal of the task's own worktree at `path`, of the repository at `repo`:
-    /// `git worktree remove` without `--force`, so a dirty one stays; then `WorktreeRemoved`.
+    /// Done's removal of the task's own worktree at `path` (in `worktrees_dir`), of the repository
+    /// at `repo`, or (`task` none) the user's delete of any linked one: `git worktree remove`
+    /// without `--force`, so a dirty one stays; then `WorktreeRemoved`.
     RemoveWorktree {
-        task: TaskId,
+        task: Option<TaskId>,
         repo: String,
         path: String,
     },
@@ -3759,6 +3782,9 @@ pub struct Model {
     /// The menu of a row of the bar, while it is open.
     #[serde(skip)]
     pub(crate) row_menu: Option<crate::row_menu::RowMenu>,
+    /// The user's worktree deletes git is at: path, repository, branch.
+    #[serde(skip)]
+    pub(crate) deleting: Vec<worktrees::Deleting>,
     /// What a mark waits for, while one has the keyboard. Also a workbook's name being typed.
     pub mark_input: Option<MarkInput>,
     /// The draft in the right bar, while there is one: `compose` is its title.
@@ -3992,6 +4018,7 @@ impl Default for Model {
             marks: Marks::default(),
             workbooks: Workbooks::default(),
             row_menu: None,
+            deleting: Vec::new(),
             mark_input: None,
             capture: None,
             bug: None,
@@ -4432,6 +4459,13 @@ impl Model {
             Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
             Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
             Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
+            // A removed directory cannot be brought back: only the user asks, and answers.
+            Action::WorktreeDelete { .. } => Some(repos::DELETE_USERS),
+            Action::QuitConfirm | Action::QuitCancel
+                if self.confirm.as_ref().is_some_and(|confirm| confirm.delete.is_some()) =>
+            {
+                Some(repos::DELETE_USERS)
+            }
             Action::QuitConfirm | Action::QuitCancel
                 if self.confirm.as_ref().is_some_and(|confirm| confirm.later.is_some()) =>
             {
@@ -5207,6 +5241,7 @@ impl Model {
             self.confirm.as_ref().and_then(|c| c.later.as_ref()).is_some_and(|(id, _)| self.works(&Subject::Task(*id)));
         // The quit question's agents and drafts, as they are now.
         let rows = self.confirm.as_ref().is_some_and(Confirm::quits).then(|| (self.quit_agents(), self.unsent()));
+        let deletable = self.confirm.as_ref().and_then(|c| c.delete.as_deref()).is_some_and(|p| self.deletable(p));
         let panes = &self.panes;
         if let Some(confirm) = &mut self.confirm {
             confirm.running.retain(|r| panes.iter().any(|p| p.id == r.pane));
@@ -5221,6 +5256,8 @@ impl Model {
                 None if let Some(pane) = confirm.edited => self.edited.contains(&pane),
                 // "Unlist this repository?" goes once it is not listed.
                 None if let Some(path) = &confirm.unlist => self.repos.iter().any(|r| r.path == *path),
+                // "Delete this worktree?" goes once it is not listed, or something works in it.
+                None if confirm.delete.is_some() => deletable,
                 // "Close this workspace?" goes once nothing in it runs, or it is not on the row to close.
                 None if let Some(id) = confirm.close => !confirm.running.is_empty() && self.closable(id),
                 // Nor is there one once every draft and agent it names is gone too.
@@ -5275,6 +5312,7 @@ impl Model {
             Action::RepoFold { path, fold } => self.repo_fold(&path, fold),
             Action::WorktreeEdit { repo } => self.worktree_edit(repo, effects),
             Action::SetHeads { heads, at, calm } => self.set_heads(heads, at, calm),
+            Action::WorktreeDelete { path } => self.worktree_delete_ask(path, effects),
             Action::SetPrs { repo, prs, branches } => {
                 // None to match (gh off, or a failed read): the repository has no marks.
                 self.prs.retain(|(of, ..)| *of != repo);
@@ -6438,6 +6476,13 @@ impl Model {
             Action::QuitConfirm if let Some(pane) = self.confirm.as_ref().and_then(|confirm| confirm.edited) => {
                 self.confirm = None;
                 self.close_pane(pane, effects);
+            }
+            // Yes to "Delete this worktree?".
+            Action::QuitConfirm
+                if let Some(path) = self.confirm.as_ref().and_then(|confirm| confirm.delete.clone()) =>
+            {
+                self.confirm = None;
+                self.worktree_delete(path, effects);
             }
             // Yes to "Unlist this repository?".
             Action::QuitConfirm
@@ -10089,6 +10134,7 @@ mod tests {
         Action::DoneUndo,
         Action::DoneNewTask,
         Action::WorktreeRemoved { .. },
+        Action::WorktreeDelete { .. },
         Action::LocalDay { .. },
         Action::TalkToggle,
         Action::OverlayDismiss,
@@ -10460,7 +10506,8 @@ mod tests {
             Action::TaskLater { id: 1 },
             Action::DoneUndo,
             Action::DoneNewTask,
-            Action::WorktreeRemoved { task: 1, path: String::new(), kept: None },
+            Action::WorktreeRemoved { task: Some(1), path: String::new(), kept: None },
+            Action::WorktreeDelete { path: String::new() },
             Action::LocalDay { day: 0 },
             Action::TalkToggle,
             Action::OverlayDismiss,
@@ -10913,6 +10960,7 @@ mod tests {
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
+                    Action::WorktreeDelete { .. } => Some(crate::repos::DELETE_USERS),
                     Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
                     Action::TalkKeys { on: true } if m.talk.as_ref().is_some_and(|t| !t.open) => {
                         Some(rail::DRAWER_USERS)
@@ -17302,6 +17350,7 @@ mod tests {
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
+                    Action::WorktreeDelete { .. } => Some(crate::repos::DELETE_USERS),
                     Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
                     Action::TalkKeys { on: true } if m.talk.as_ref().is_some_and(|t| !t.open) => {
                         Some(rail::DRAWER_USERS)

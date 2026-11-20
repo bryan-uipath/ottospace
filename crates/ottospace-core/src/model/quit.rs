@@ -74,6 +74,7 @@ impl Confirm {
             && self.close.is_none()
             && self.later.is_none()
             && self.edited.is_none()
+            && self.delete.is_none()
     }
 }
 

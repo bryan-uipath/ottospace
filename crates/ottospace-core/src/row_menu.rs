@@ -3,8 +3,9 @@
 //! (the list under it changed). It holds the keyboard: ↓ ↑ move, ↵ takes, any other key closes.
 //! No item has a letter: a key meant for what is behind the menu must never delete.
 //! Today a workspace's row and its tabs' rows have one, a temporary workspace's item on the top
-//! row (Keep), and the drawer's transcript header (its ⋯: Pause or Resume); another row gets one
-//! by naming its items in `row_items`.
+//! row (Keep), the drawer's transcript header (its ⋯: Pause or Resume), and a linked worktree's
+//! row of the Repos section (a right click: Delete worktree…); another row gets one by naming its
+//! items in `row_items`.
 
 use serde::Serialize;
 
@@ -29,6 +30,8 @@ pub enum Item {
     /// The transcript on: its streams stop, or start again.
     Pause,
     Resume,
+    /// A linked worktree's directory, after a question (`Confirm::delete`). Its branch stays.
+    DeleteWorktree,
 }
 
 impl Item {
@@ -40,6 +43,7 @@ impl Item {
             Item::Keep => "Keep",
             Item::Pause => "Pause",
             Item::Resume => "Resume",
+            Item::DeleteWorktree => "Delete worktree…",
         }
     }
 }
@@ -102,6 +106,8 @@ impl Model {
             MenuOf::Row(ListRow::Workbook(id)) if !self.workbooks.is_kept(*id) => {
                 &[Item::Rename, Item::Keep, Item::Delete]
             }
+            // A linked worktree, never a repository's own folder.
+            MenuOf::Row(ListRow::Repo(path)) if self.linked_worktree(path).is_some() => &[Item::DeleteWorktree],
             MenuOf::Row(row) => row_items(row),
             // On the top row: Keep, while it is temporary.
             MenuOf::Space(id) if !self.workbooks.is_kept(*id) => &[Item::Keep],
@@ -152,6 +158,14 @@ impl Model {
         }
     }
 
+    /// Why the item at `index` of the open menu does nothing now: drawn dimmed, with this.
+    pub fn row_menu_why(&self, index: usize) -> Option<&'static str> {
+        match self.row_menu_action(Some(index))? {
+            Action::WorktreeDelete { path } => self.worktree_busy(&path),
+            _ => None,
+        }
+    }
+
     /// What taking an item (default: the one the keys are on) does: the action its key in list
     /// mode sends. The shell asks why that would wait, to say so.
     pub fn row_menu_action(&self, index: Option<usize>) -> Option<Action> {
@@ -161,6 +175,9 @@ impl Model {
         let (workbook, tab) = match (&menu.row, item) {
             (_, Item::Pause) => return Some(Action::ListenPause { at }),
             (_, Item::Resume) => return Some(Action::ListenResume { at }),
+            (MenuOf::Row(ListRow::Repo(path)), Item::DeleteWorktree) => {
+                return Some(Action::WorktreeDelete { path: path.clone() });
+            }
             (MenuOf::Row(ListRow::Workbook(id)) | MenuOf::Space(id), _) => (*id, None),
             (MenuOf::Row(ListRow::WorkbookTab(id, at)), _) => (*id, Some(*at)),
             _ => return None,
@@ -169,7 +186,7 @@ impl Model {
             Item::Rename => Some(Action::WorkbookEdit { workbook, tab }),
             Item::Delete | Item::Remove => Some(Action::WorkbookRemove { workbook, tab }),
             Item::Keep => Some(Action::WorkbookKeep { workbook }),
-            Item::Pause | Item::Resume => None,
+            Item::Pause | Item::Resume | Item::DeleteWorktree => None,
         }
     }
 
@@ -187,6 +204,7 @@ impl Model {
             Action::WorkbookRemove { workbook, tab } => self.workbook_remove(workbook, tab),
             Action::WorkbookKeep { workbook } => self.workbook_keep(workbook),
             action @ (Action::ListenPause { .. } | Action::ListenResume { .. }) => self.listen_act(action, effects),
+            Action::WorktreeDelete { path } => self.worktree_delete_ask(path, effects),
             _ => {}
         }
     }

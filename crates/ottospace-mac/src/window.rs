@@ -12,7 +12,7 @@ use objc2_app_kit::{
     NSEventType, NSFloatingWindowLevel, NSImage, NSScreen, NSView, NSWindowCollectionBehavior, NSWindowOcclusionState,
 };
 use objc2_core_foundation::CGPoint;
-use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags, CGScrollEventUnit};
+use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags, CGEventType, CGMouseButton, CGScrollEventUnit};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 use ottospace_core::ax::Frame;
 
@@ -37,6 +37,9 @@ pub enum MouseKind {
     Move,
     /// A move with the button held.
     Drag,
+    /// The right button: a press, a release.
+    RightDown,
+    RightUp,
     /// The scroll wheel, by `dx`, `dy`: points if `precise` (a trackpad), else lines (a mouse
     /// wheel); both in whole numbers, rounded. Positive `dy` scrolls back, as AppKit counts.
     Wheel { dx: f64, dy: f64, precise: bool },
@@ -122,6 +125,17 @@ pub unsafe fn send_mouse(ns_view: *mut c_void, mouse: Mouse) -> bool {
         MouseKind::Up => NSEventType::LeftMouseUp,
         MouseKind::Move => NSEventType::MouseMoved,
         MouseKind::Drag => NSEventType::LeftMouseDragged,
+        // AppKit's own constructor leaves the button number 0, which GPUI reads as the left one.
+        MouseKind::RightDown | MouseKind::RightUp => {
+            let down = mouse.kind == MouseKind::RightDown;
+            let event = right(at, down, flags);
+            match &event {
+                Some(event) if down => view.rightMouseDown(event),
+                Some(event) => view.rightMouseUp(event),
+                None => {}
+            }
+            return event.is_some();
+        }
         MouseKind::Wheel { dx, dy, precise } => {
             let event = wheel(at, dx, dy, precise, flags);
             if let Some(event) = &event {
@@ -166,6 +180,17 @@ fn wheel(at: NSPoint, dx: f64, dy: f64, precise: bool, flags: NSEventModifierFla
     let event = CGEvent::new_scroll_wheel_event2(None, units, 2, dy.round() as i32, dx.round() as i32, 0)?;
     let screen = NSScreen::screens(MainThreadMarker::new()?).firstObject()?.frame().size.height;
     CGEvent::set_location(Some(&event), CGPoint::new(at.x, screen - at.y));
+    CGEvent::set_flags(Some(&event), CGEventFlags(flags.0 as u64));
+    NSEvent::eventWithCGEvent(&event)
+}
+
+/// A right-button press or release whose `locationInWindow` is `at`, its button number 1: made
+/// by Quartz as `wheel`'s is, and placed the same way.
+fn right(at: NSPoint, down: bool, flags: NSEventModifierFlags) -> Option<Retained<NSEvent>> {
+    let kind = if down { CGEventType::RightMouseDown } else { CGEventType::RightMouseUp };
+    let screen = NSScreen::screens(MainThreadMarker::new()?).firstObject()?.frame().size.height;
+    let event = CGEvent::new_mouse_event(None, kind, CGPoint::new(at.x, screen - at.y), CGMouseButton::Right)?;
+    CGEvent::set_integer_value_field(Some(&event), CGEventField::MouseEventClickState, 1);
     CGEvent::set_flags(Some(&event), CGEventFlags(flags.0 as u64));
     NSEvent::eventWithCGEvent(&event)
 }

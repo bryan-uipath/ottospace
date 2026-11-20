@@ -1,4 +1,5 @@
-//! The quit question: ⌘Q asks before it ends a running program or agent, or loses a draft.
+//! The quit question: ⌘Q asks before it ends a running program or agent, or loses a draft. And
+//! the other questions the dialog asks (paste, dismiss, unlist, close, delete a worktree).
 
 use gpui::{Context, Keystroke, Window, div, prelude::*, px, relative, rgb};
 use ottospace_core::clip::PasteAsk;
@@ -55,6 +56,7 @@ impl Workspace {
         match confirm.paste {
             Some(_) => PasteAsk::answer(&key.key, mods, origin == Origin::User),
             None if confirm.later.is_some() => Confirm::answer_later(&key.key, mods, origin),
+            None if confirm.delete.is_some() => Confirm::answer_delete(&key.key, mods, origin),
             None => Confirm::answer(&key.key, mods, origin),
         }
     }
@@ -69,6 +71,10 @@ impl Workspace {
         // terminal. (A client's key is no event of the keyboard's.)
         let held = self.input == Origin::User && ottospace_mac::window::key_repeating();
         if let Some(answer) = self.confirm_answer(key, self.input).filter(|_| !held) {
+            // Where each shell is now: the core keeps a worktree a terminal went into since.
+            if self.model.confirm.as_ref().is_some_and(|c| c.delete.is_some()) {
+                self.tell_terminals();
+            }
             self.dispatch(answer, self.input, window, cx);
         }
         // Answered: the text a paste waited with goes.
@@ -172,6 +178,31 @@ impl Workspace {
                         .child("A task works in it. It leaves the Repos list; nothing on disk changes."),
                 )
                 .child(dialog::hint("↵ unlist · esc cancel"));
+            return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(panel);
+        }
+        // "Delete this worktree?": its branch and full path, and that nothing brings it back.
+        if let Some(path) = &confirm.delete {
+            let branch = self.model.linked_worktree(path).and_then(|(_, w)| w.branch.clone());
+            let branch = branch.unwrap_or_else(|| "(no branch)".into());
+            let said = format!("Delete the worktree of {branch} at {path}? Its branch is kept.");
+            let panel = dialog::floating(360.)
+                .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::CONFIRM)).child(confirm.title()))
+                .child(
+                    div()
+                        .p_3()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .text_xs()
+                        .text_color(rgb(theme::MUTED))
+                        .child(said)
+                        .child("Its folder goes, and cannot be brought back. git keeps one with changes."),
+                )
+                .child(dialog::hint("⌘⌫ delete · ↵ esc keep"));
             return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
                 .flex()
                 .items_center()

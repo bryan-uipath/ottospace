@@ -245,12 +245,22 @@ impl Gen<'_> {
 
     /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not; or the transcript's header.
     fn menu_row(&mut self) -> MenuOf {
-        match self.rng.below(6) {
+        match self.rng.below(7) {
             0 => ListRow::Task(self.task()).into(),
             1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)).into(),
             2 => MenuOf::Transcript,
             3 => MenuOf::Space(self.workbook()),
+            4 => ListRow::Repo(self.checkout()).into(),
             _ => ListRow::Workbook(self.workbook()).into(),
+        }
+    }
+
+    /// A listed checkout's path, a linked worktree's or a repository's own, or one that is none.
+    fn checkout(&mut self) -> String {
+        let listed: Vec<String> = self.m.repos.iter().flat_map(|r| r.checkouts()).map(|c| c.path).collect();
+        match listed.is_empty() || self.rng.below(4) == 0 {
+            true => self.name(CWDS),
+            false => self.rng.pick(&listed).clone(),
         }
     }
 
@@ -1662,8 +1672,14 @@ const MAKERS: &[Make] = &[
         let own = g.m.tasks.get(task).and_then(|t| t.made.as_ref()).map(|made| made.path.clone());
         let path = own.filter(|_| g.rng.coin()).unwrap_or_else(|| g.name(CWDS));
         let kept = g.rng.coin().then(|| "Kept the worktree: 2 uncommitted changes".to_string());
-        Action::WorktreeRemoved { task, path, kept }
+        // Or the user's delete, git at it half the time.
+        let deleting = g.m.deleting.first().map(|d| d.path.clone()).filter(|_| g.rng.coin());
+        match g.rng.coin() {
+            true => Action::WorktreeRemoved { task: Some(task), path, kept },
+            false => Action::WorktreeRemoved { task: None, path: deleting.unwrap_or(path), kept },
+        }
     },
+    |g| Action::WorktreeDelete { path: g.checkout() },
     |_| Action::TalkToggle,
     |g| Action::TalkKeys { on: g.rng.coin() },
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
@@ -2661,6 +2677,8 @@ fn check(m: &Model) -> Result<(), String> {
             Some(id) => m.agent_runs(&Subject::Task(id)),
             None if let Some(ask) = confirm.paste => m.pane(ask.pane).is_some(),
             None if let Some(path) = &confirm.unlist => m.repos.iter().any(|r| r.path == *path),
+            // "Delete this worktree?" of a listed linked worktree nothing is in.
+            None if let Some(path) = &confirm.delete => m.deletable(path),
             // "Stop it and put it away?" while its turn runs.
             None if let Some((id, _)) = &confirm.later => m.works(&Subject::Task(*id)),
             None => !confirm.running.is_empty() || !confirm.agents.is_empty() || !confirm.unsent.is_empty(),
@@ -3407,6 +3425,7 @@ impl Run {
         let (why, bar_before) = (m.refusal(&action, origin), bar(m, &self.held));
         let awaiting = m.awaiting.clone();
         let making_before = m.making.clone();
+        let (deleting_before, delete_asked) = (m.deleting.clone(), m.confirm.as_ref().and_then(|c| c.delete.clone()));
         let switching = m.switching.clone();
         let chats_before = m.chats.clone();
         let drafts: Vec<(Subject, String)> =
@@ -4117,9 +4136,14 @@ impl Run {
                     // Or a Done's removal of its task's own worktree: from it to its repository.
                     let was =
                         defaults_before.iter().find(|(uid, _)| *uid == book.uid).and_then(|(_, was)| was.as_ref());
-                    let fell = matches!(&action, Action::WorktreeRemoved { task, path, kept: None }
+                    let fell = matches!(&action, Action::WorktreeRemoved { task: Some(task), path, kept: None }
                         if was == Some(path)
                             && book.worktree.as_ref() == m.tasks.get(*task).and_then(|t| t.made.as_ref()).map(|made| &made.repo));
+                    // Or the user's delete of it: from it to its repository.
+                    let gone = matches!(&action, Action::WorktreeRemoved { task: None, path, kept: None }
+                        if was == Some(path)
+                            && deleting_before.iter().any(|d| d.path == *path && book.worktree.as_ref() == Some(&d.repo)));
+                    let fell = fell || gone;
                     ensure!(one || fell, "{action:?} moved the default of {:?} with tasks {members:?}", book.name);
                 }
             }
@@ -4327,6 +4351,9 @@ impl Run {
             ensure!(self.held.said == *wanted, "{by:?}'s line {now:?} over {stood:?} left {:?}", self.held);
         }
         let user = origin == Origin::User;
+        // git's answer to the user's delete, as the shell says it.
+        let answered = origin != Origin::Socket
+            && matches!(&action, Action::WorktreeRemoved { task: None, path, .. } if deleting_before.iter().any(|d| d.path == *path));
         // Only the shell's runner reports what an agent said.
         let reports = matches!(action, Action::AgentEvents { .. }) && origin != Origin::System;
         ensure!(!reports || m.chats == chats_before, "{origin:?} reported an agent's events");
@@ -4986,7 +5013,9 @@ impl Run {
                     ensure!(crate::repos::in_worktrees(path, root), "a worktree at {path:?}, outside {root:?}");
                     ensure!(m.repo_dirs.worktrees.as_ref() == Some(root), "a worktree in {root:?}, not the setting's");
                 }
-                Effect::Notice { text } => ensure!(user && !text.is_empty(), "{origin:?} is told {text:?}"),
+                Effect::Notice { text } => {
+                    ensure!((user || answered) && !text.is_empty(), "{origin:?} is told {text:?}")
+                }
                 // Only a window that did not come in time, by a tick.
                 // Or why the ask itself failed, as the shell said it.
                 Effect::Failed { text } => {
@@ -5009,7 +5038,16 @@ impl Run {
                 }
                 Effect::NoticeDismissed { .. } => ensure!(user, "{origin:?} dismissed a notice"),
                 // Only the user's Done (or git's late answer to one) removes a worktree: its task's own, listed, never a checkout.
-                Effect::RemoveWorktree { task, repo, path } => {
+                // The user's Yes to "Delete this worktree?": the linked one it named, listed, nothing in it.
+                Effect::RemoveWorktree { task: None, repo, path } => {
+                    let yes = user && matches!(action, Action::QuitConfirm) && delete_asked.as_ref() == Some(path);
+                    let linked = m.linked_worktree(path).is_some_and(|(of, _)| of.path == *repo);
+                    let free = m.worktree_busy(path).is_none()
+                        && !deleting_before.iter().any(|d| d.path == *path)
+                        && m.removing(path).is_none();
+                    ensure!(yes && linked && free && repo != path, "{origin:?}'s {action:?} deleted {path}");
+                }
+                Effect::RemoveWorktree { task: Some(task), repo, path } => {
                     let made = m.tasks.get(*task).and_then(|t| t.made.as_ref());
                     // In the worktrees folder the setting names, whatever the record says.
                     let inside = |made: &tasks::Made| {
@@ -5025,7 +5063,12 @@ impl Run {
                     let late = origin == Origin::System
                         && matches!(&action, Action::WorktreeAdded { asked, fresh: true, .. }
                             if making_before.iter().any(|w| w.task == *task && w.asked == *asked));
-                    ensure!((done || late) && own && listed && repo != path, "{origin:?}'s {action:?} removed {path}");
+                    // Never one the user's delete has at git.
+                    let theirs = deleting_before.iter().any(|d| d.path == *path);
+                    ensure!(
+                        (done || late) && own && listed && repo != path && !theirs,
+                        "{origin:?}'s {action:?} removed {path}"
+                    );
                 }
                 // The seal plays for the user's own Done, of a task now done and put away.
                 Effect::Seal { task } => {
@@ -5037,7 +5080,7 @@ impl Run {
                 }
                 Effect::Told { text } => {
                     ensure!(
-                        user && matches!(action, Action::RepoRemove { .. } | Action::QuitConfirm),
+                        (user && matches!(action, Action::RepoRemove { .. } | Action::QuitConfirm)) || answered,
                         "{origin:?} is told {text:?}"
                     )
                 }
@@ -8409,7 +8452,7 @@ mod done_worktree_races {
     }
 
     fn removed(kept: Option<&str>) -> Envelope {
-        Action::WorktreeRemoved { task: 1, path: WT.into(), kept: kept.map(String::from) }.sent_by(Origin::System)
+        Action::WorktreeRemoved { task: Some(1), path: WT.into(), kept: kept.map(String::from) }.sent_by(Origin::System)
     }
 
     #[test]

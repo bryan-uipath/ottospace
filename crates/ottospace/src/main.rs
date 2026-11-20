@@ -1075,6 +1075,8 @@ struct Workspace {
     row_hovered: Option<ottospace_core::list::ListRow>,
     /// A key closed a row's menu: held on, it is not for what was under the menu.
     row_menu_spent: bool,
+    /// Where the right click that opened a row's menu was: the menu is drawn there.
+    row_menu_at: Option<gpui::Point<Pixels>>,
     /// What a tick with no window brought (`tick_now`), carried out at the next dispatch: a
     /// closed temporary workspace's panes, its Undo run out.
     held_effects: Vec<Effect>,
@@ -1748,6 +1750,7 @@ impl Workspace {
             kept_workbooks: workbook::Kept::default(),
             row_hovered: None,
             row_menu_spent: false,
+            row_menu_at: None,
             held_effects: Vec::new(),
             ticks: 0,
             kept_layout: layout_file::Kept::default(),
@@ -2650,7 +2653,7 @@ impl Workspace {
             }
             // So do pointer events, through the window's own handlers: a drag is GPUI's state.
             let events = match &request {
-                Request::Mouse { action, x, y, clicks, modifiers, dx, dy, precise, .. } => {
+                Request::Mouse { action, button, x, y, clicks, modifiers, dx, dy, precise, .. } => {
                     let has = |m: control::Modifier| modifiers.contains(&m);
                     let mouse = Mouse {
                         kind: match action {
@@ -2669,7 +2672,12 @@ impl Workspace {
                         alt: has(control::Modifier::Alt),
                         shift: has(control::Modifier::Shift),
                     };
-                    let event = self.pointer(*action, mouse);
+                    // The right button: a press or a release, never held for a drag.
+                    let event = match (button, action) {
+                        (control::Button::Right, MouseAction::Down) => Mouse { kind: MouseKind::RightDown, ..mouse },
+                        (control::Button::Right, MouseAction::Up) => Mouse { kind: MouseKind::RightUp, ..mouse },
+                        _ => self.pointer(*action, mouse),
+                    };
                     self.abandoned = self.held.then(|| self.release_later(window, cx));
                     Some(vec![event])
                 }
@@ -6270,6 +6278,17 @@ impl Workspace {
                 .child(mark(&self.marks, Mark::Checkout(index)))
                 .child(self.controls.mark(format!("repo:{}", checkout.path)))
                 .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
+                // A right click: the row's menu at the pointer (a linked worktree's: Delete worktree…).
+                .on_mouse_down(MouseButton::Right, {
+                    let row = ottospace_core::list::ListRow::Repo(checkout.path.clone());
+                    cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.row_menu_at = Some(e.position);
+                        // Where each shell is now: a worktree a terminal is in is not deleted.
+                        this.tell_terminals();
+                        this.open_row_menu(row.clone().into(), false, window, cx);
+                    })
+                })
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
                     this.dispatch(Action::RepoClick { path: checkout.path.clone(), axis }, this.input, window, cx);
@@ -7443,6 +7462,7 @@ impl Workspace {
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.paste.is_some()) => ("PASTE?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.close.is_some()) => ("CLOSE?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.later.is_some()) => ("LATER?", ""),
+            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.delete.is_some()) => ("DELETE?", ""),
             Mode::Confirm => ("QUIT?", ""),
             // The capture bar lists the annotate keys.
             Mode::Annotate => ("ANNOTATE", ""),
