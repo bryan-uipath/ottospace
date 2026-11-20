@@ -62,7 +62,7 @@ ottospace            # opens on the Repos list
 | Add a repository | Repos lists only what you add: its +, "+ Add a repository" while it is empty, a folder dropped on it, or ⌘P ▸ Add Folder to Repos (the focused terminal's folder, else the tab's task's) |
 | Stop listing a repository | Point at its name in Repos: the trash. Nothing on disk is touched. While a task works there it asks first (↵ unlists, Esc keeps it). A folder of repositories from older settings is one folded group: its trash takes it off whole |
 | New worktree | Point at a repository's name in Repos: +, type a branch, ↵. It goes in `~/.ottospace/worktrees/<repo>/<branch>` (`worktrees_dir`) and opens as a terminal tab |
-| Delete a worktree | Right-click its row in Repos: Delete worktree…, then ⌘⌫ (↵ or Esc keeps it). Its folder goes, its branch stays; git keeps one with changes, and the notice says why. Close its terminals, and mark its task done or dismiss it, first |
+| Delete a worktree | Right-click its row in Repos: Delete worktree…, then ↵ (Esc keeps it). Its folder goes, its branch stays; git keeps one with changes, and the notice says why. Close its terminals, and mark its task done or dismiss it, first |
 | Fold a repository | Its chevron, or ← / → in list mode |
 | A worktree's pull request | Its `#number` at the row's end: muted draft, ✓ ready, amber waiting, red failing. Hover for checks, review and merge; click opens it (via `gh`, `repos_prs`) |
 | Close the bar | × in its header |

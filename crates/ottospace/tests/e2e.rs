@@ -1200,7 +1200,7 @@ fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_o
     let reply = otto.call(json!({"cmd": "key", "keys": "escape", "as": "user"}));
     assert!(reply["row_menu"].is_null() || otto.drawn()["row_menu"].is_null());
 
-    // Choose: the question. ↵ keeps it (No is the default).
+    // Choose: the question. Esc keeps it.
     let ask = |otto: &Otto| {
         let state = right_click(p);
         otto.user_click(at(rect(&state["row_menu"]["items"][0]["rect"]), 0.5, 0.5));
@@ -1214,14 +1214,15 @@ fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_o
         );
     };
     ask(&otto);
-    otto.call(json!({"cmd": "key", "keys": "enter", "as": "user"}));
+    otto.call(json!({"cmd": "key", "keys": "escape", "as": "user"}));
     assert!(otto.drawn()["state"]["confirm"].is_null() && clean.exists());
-    // A client's ⌘⌫ answers nothing.
+    // A client's ↵ answers nothing.
     ask(&otto);
-    otto.raw(&json!({"cmd": "key", "keys": "cmd-backspace"}).to_string());
+    let refused = otto.raw(&json!({"cmd": "key", "keys": "enter"}).to_string());
+    assert_eq!(refused["error"], "only the user deletes a worktree", "{refused}");
     assert!(!otto.call(json!({"cmd": "state"}))["state"]["confirm"].is_null() && clean.exists());
-    // The user's ⌘⌫: gone, its row too, its branch kept, said.
-    otto.call(json!({"cmd": "key", "keys": "cmd-backspace", "as": "user"}));
+    // The user's ↵: gone, its row too, its branch kept, said.
+    otto.call(json!({"cmd": "key", "keys": "enter", "as": "user"}));
     let gone = |o: &Otto| Some(o.drawn()).filter(|s| !clean.exists() && row(s, &clean).is_none());
     let state = otto.wait_for("the clean worktree to go", gone);
     assert_eq!(state["notice"], "Deleted the worktree of clean · its branch is kept");
@@ -1232,19 +1233,20 @@ fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_o
     // The dirty one: git refuses, nothing goes, and the notice says why.
     let state = right_click(at(row(&otto.drawn(), &dirty).unwrap(), 0.3, 0.5));
     otto.user_click(at(rect(&state["row_menu"]["items"][0]["rect"]), 0.5, 0.5));
-    otto.call(json!({"cmd": "key", "keys": "cmd-backspace", "as": "user"}));
+    otto.call(json!({"cmd": "key", "keys": "enter", "as": "user"}));
     let said =
         |o: &Otto| Some(o.drawn()).filter(|s| s["notice"].as_str().is_some_and(|n| n.starts_with("Kept the worktree")));
     let state = otto.wait_for("git's reason", said);
     assert_eq!(state["notice"], "Kept the worktree: 1 uncommitted change");
     assert!(dirty.join("notes.md").exists() && row(&state, &dirty).is_some());
-    // A client's right click opens none (last: its refusal stands in the notice bar).
+    // A client's right click opens none, refused in a worktree's words (last: its refusal stands).
     let q = at(row(&state, &dirty).unwrap(), 0.3, 0.5);
     let theirs = |action: &str| json!({"cmd": "mouse", "action": action, "button": "right", "x": q[0], "y": q[1]});
     otto.call(theirs("down"));
     otto.call(theirs("up"));
     let state = otto.drawn();
     assert!(state["row_menu"].is_null(), "{}", state["row_menu"]);
+    assert_eq!(state["notice"], "only the user deletes a worktree", "{}", state["notice"]);
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
