@@ -179,9 +179,12 @@ pub struct Drawn {
     /// Of the last paint: where, in window points, and how many names.
     bounds: Bounds<Pixels>,
     labels: usize,
-    /// The box the user's pointer is over (an index into the scene's blocks), and the beacon's
+    /// The box the user's pointer is over (an index into the scene's blocks), where that pointer
+    /// was (found again in a new picture), the window the city was painted in, and the beacon's
     /// label as the last paint drew it: whether a file's, whether lit, where.
     hovered: Option<usize>,
+    pointer: Option<Point<Pixels>>,
+    window: Option<gpui::WindowId>,
     beacon: Option<(bool, bool, Bounds<Pixels>)>,
     /// Pictures replaced: GPUI keeps each in the window's atlas until it is dropped.
     retired: Vec<Arc<RenderImage>>,
@@ -233,12 +236,12 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>) -> Result<Made, String> {
     let lit = (scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))))
         .filter_map(|b| {
             let [x, y, w, h] = camera.bounds(b)?;
-            let (tx, ty) = camera.project([(b.min[0] + b.max[0]) / 2., b.max[1], (b.min[2] + b.max[2]) / 2.])?;
+            let (tx, ty) = camera.project(b.top())?;
             Some(([x, y, w, h], (tx, ty)))
         })
         .collect();
-    // A district is named at the back left edge of its plate, outer tiers first; a district on
-    // another is named from it (`ui` on `src`, not `src/ui`).
+    // A district is named along the back edge of its plate, from its left end on screen, outer
+    // tiers first; a district on another is named from it (`ui` on `src`, not `src/ui`).
     let mut plates: Vec<(usize, usize, &scene::Block)> = (scene.blocks.iter())
         .filter_map(|b| match (b.kind, b.place) {
             (Kind::Plate(tier), Some(place)) if tier <= NAMED_TIERS => Some((tier, place, b)),
@@ -253,9 +256,10 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>) -> Result<Made, String> {
             let id = plan.places[*place].id.as_str();
             let outer =
                 ids.iter().filter_map(|outer| id.strip_prefix(outer)?.strip_prefix('/')).min_by_key(|rest| rest.len());
-            let at = camera.project([b.min[0], b.max[1], b.max[2]])?;
-            let end = camera.project([b.max[0], b.max[1], b.max[2]])?;
-            Some(Name { text: outer.unwrap_or(id).to_string(), at, room: (end.0 - at.0).abs() })
+            let one = camera.project([b.min[0], b.max[1], b.max[2]])?;
+            let other = camera.project([b.max[0], b.max[1], b.max[2]])?;
+            let at = if one.0 <= other.0 { one } else { other };
+            Some(Name { text: outer.unwrap_or(id).to_string(), at, room: (other.0 - one.0).abs() })
         })
         .take(MOST_NAMES)
         .collect();
@@ -266,6 +270,19 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>) -> Result<Made, String> {
 }
 
 impl Drawn {
+    /// The box under `at` (window points) in the picture on show, by its index; none over the
+    /// hints, off the picture, or with no picture of the folder asked.
+    fn under(&self, at: Point<Pixels>, hints: Bounds<Pixels>) -> Option<usize> {
+        let hints = hints.dilate(px(CLEAR));
+        let bounds = self.bounds;
+        if self.failed.is_some() || !bounds.contains(&at) || (hints.size.width > px(0.) && hints.contains(&at)) {
+            return None;
+        }
+        let made = self.made.as_ref().filter(|made| Some(&made.key.dir) == self.asked.as_ref().map(|key| &key.dir))?;
+        let share = |v: Pixels, from: Pixels, size: Pixels| f32::from(v - from) / f32::from(size);
+        made.scene.hit(share(at.x, bounds.left(), bounds.size.width), share(at.y, bounds.top(), bounds.size.height))
+    }
+
     /// For the state of a test run: counts, the picture's size, where it and the lit buildings
     /// are, in window points.
     pub fn snapshot(&self, reads: usize, scale: f32) -> serde_json::Value {
@@ -304,11 +321,11 @@ impl Workspace {
             redraw = true;
             match made {
                 Ok(made) => {
-                    // Another scene: the box hovered is found again at the next move.
-                    drawn.hovered = None;
                     let old = drawn.made.replace(made);
                     drawn.retired.extend(old.map(|old| old.image));
                     drawn.failed = None;
+                    // Another scene: the box under the pointer, found again in it.
+                    drawn.hovered = drawn.pointer.and_then(|at| drawn.under(at, self.home.borrow().hints()));
                 }
                 // A failure of a picture no longer asked for says nothing.
                 Err(why) if drawn.asked.as_ref() == Some(&key) => {
@@ -380,23 +397,15 @@ impl Workspace {
         }
     }
 
-    /// The pointer moved: the box under it, if it is the user's, over the city's picture and not
-    /// over the hints (they win). Redraws when that changed; nothing is rendered again.
-    pub(crate) fn city_hover(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
-        let hints = self.home.borrow().hints().dilate(px(CLEAR));
+    /// The pointer moved: the box under it, if it is the user's, in the window the city is in,
+    /// over its picture and not over the hints (they win). Redraws when that changed; nothing is
+    /// rendered again.
+    pub(crate) fn city_hover(&mut self, at: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+        let hints = self.home.borrow().hints();
         let mut drawn = self.city_drawn.borrow_mut();
-        let bounds = drawn.bounds;
-        let over = (self.input == Origin::User && self.model.city().is_some() && drawn.failed.is_none())
-            .then_some(())
-            .filter(|_| bounds.contains(&at) && !(hints.size.width > px(0.) && hints.contains(&at)))
-            .and(drawn.made.as_ref())
-            .and_then(|made| {
-                let share = |v: Pixels, from: Pixels, size: Pixels| f32::from(v - from) / f32::from(size);
-                let (x, y) =
-                    (share(at.x, bounds.left(), bounds.size.width), share(at.y, bounds.top(), bounds.size.height));
-                let hit = made.scene.hit(x, y)?;
-                made.scene.blocks.iter().position(|b| std::ptr::eq(b, hit))
-            });
+        let here = drawn.window == Some(window.window_handle().window_id());
+        drawn.pointer = (self.input == Origin::User && here && self.model.city().is_some()).then_some(at);
+        let over = drawn.pointer.and_then(|at| drawn.under(at, hints));
         if std::mem::replace(&mut drawn.hovered, over) != over {
             cx.notify();
         }
@@ -429,6 +438,8 @@ fn area(floor: Bounds<Pixels>, hints: Bounds<Pixels>) -> Bounds<Pixels> {
 fn paint(drawn: &Shared, hints: Bounds<Pixels>, window: &mut Window, cx: &mut gpui::App) {
     let mut drawn = drawn.borrow_mut();
     let bounds = drawn.bounds;
+    // Nothing of an earlier paint is on show until this one draws it.
+    (drawn.beacon, drawn.labels, drawn.window) = (None, 0, Some(window.window_handle().window_id()));
     let Some(made) = drawn.made.as_ref().filter(|made| Some(&made.key.dir) == drawn.asked.as_ref().map(|key| &key.dir))
     else {
         return;
@@ -499,9 +510,7 @@ fn beacon(
 ) -> Option<(bool, bool, Bounds<Pixels>)> {
     let block = made.scene.blocks.get(i)?;
     let place = made.plan.places.get(block.place?)?;
-    let camera = made.scene.camera?;
-    let mid = |a: usize| (block.min[a] + block.max[a]) / 2.;
-    let (x, y) = camera.project([mid(0), block.max[1], mid(2)])?;
+    let (x, y) = made.scene.camera?.project(block.top())?;
     let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     let foot = bounds.origin + point(px(x * w), px(y * h));
     let file = !place.group;
@@ -509,19 +518,45 @@ fn beacon(
         Some((folder, name)) if file => (name, folder),
         _ => (place.id.as_str(), ""),
     };
-    let name = shape(name, theme::TEXT, theme::TEXT_XS, window);
-    let under = (!folder.is_empty()).then(|| shape(folder, theme::MUTED, theme::TEXT_2XS, window));
+    // One line each, as wide as the picture allows: a long path keeps its end (`…ui/views`).
+    let most = bounds.size.width - px(16.);
+    let fit = |text: &str, colour: u32, size: f32, window: &mut Window| {
+        let mut text: String = text.chars().map(|c| if c.is_control() { '?' } else { c }).collect();
+        loop {
+            let line = shape(&text, colour, size, window);
+            let count = text.chars().count();
+            if line.width <= most || count <= 2 {
+                return line;
+            }
+            let keep = ((count as f32 * f32::from(most) / f32::from(line.width)) as usize).clamp(1, count - 2);
+            text = std::iter::once('…').chain(text.chars().skip(count - keep)).collect();
+        }
+    };
+    let name = fit(name, theme::TEXT, theme::TEXT_XS, window);
+    let under = (!folder.is_empty()).then(|| fit(folder, theme::MUTED, theme::TEXT_2XS, window));
     let width = name.width.max(under.as_ref().map_or(px(0.), |line| line.width)) + px(16.);
     let tall = px(if under.is_some() { 34. } else { 20. });
-    let label = |top: Pixels| Bounds { origin: point(foot.x - width / 2., top), size: gpui::size(width, tall) };
-    let up = label(foot.y - px(BEACON) - tall);
-    let down = label(foot.y + px(BEACON));
-    let fits =
-        |b: &Bounds<Pixels>| !b.intersects(&clear) && bounds.contains(&b.origin) && bounds.contains(&b.bottom_right());
+    // Centred over the box, kept inside the picture.
+    let left = (foot.x - width / 2.).max(bounds.left()).min(bounds.right() - width);
+    let label = |top: Pixels| Bounds { origin: point(left, top), size: gpui::size(width, tall) };
+    let (up, down) = (label(foot.y - px(BEACON) - tall), label(foot.y + px(BEACON)));
+    // The label, its line and its dot: none of them over the hints.
+    let stem = |at: &Bounds<Pixels>| {
+        let (from, to) = if at.top() < foot.y { (at.bottom(), foot.y) } else { (foot.y, at.top()) };
+        Bounds::from_corners(point(foot.x - px(3.), from), point(foot.x + px(3.), to + px(3.)))
+    };
+    let fits = |b: &Bounds<Pixels>| {
+        !b.intersects(&clear)
+            && !stem(b).intersects(&clear)
+            && bounds.contains(&b.origin)
+            && bounds.contains(&b.bottom_right())
+    };
     let at = [up, down].into_iter().find(fits)?;
-    let (from, to) = if at == up { (at.bottom(), foot.y) } else { (foot.y, at.top()) };
+    let line = stem(&at);
     let colour = Hsla::from(rgb(theme::PRIMARY));
-    window.paint_quad(fill(Bounds::from_corners(point(foot.x - px(0.5), from), point(foot.x + px(0.5), to)), colour));
+    let line =
+        Bounds::from_corners(point(foot.x - px(0.5), line.top()), point(foot.x + px(0.5), line.bottom() - px(3.)));
+    window.paint_quad(fill(line, colour));
     window.paint_quad(fill(Bounds::centered_at(foot, gpui::size(px(5.), px(5.))), colour).corner_radii(px(2.5)));
     let pill = fill(at, Hsla::from(rgb(theme::BACKGROUND)).opacity(0.88)).corner_radii(px(theme::RADIUS_MD));
     window.paint_quad(pill.border_widths(px(1.)).border_color(colour.opacity(0.6)));
