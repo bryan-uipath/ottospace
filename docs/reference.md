@@ -1452,8 +1452,8 @@ then does nothing (a toast says so). A preference is a normal setting.
 With `decisions` on, ⌘J (Tasks ▸ Decisions, the palette) opens Decisions (with nothing waiting, it
 goes to the next task, as ⌘J does with the flag off): a workspace of one pane, a card, for each question a task's agent waits on
 (a question card, `AskUserQuestion`). The card on show stays first; then P1 first, then the one
-waiting longest. Its place on the top row reads "Decisions · 2 of 5" over a thin bar. On the card: 1–9 answer (one single-select question: sent at once, the agent
-resumes), ↑↓ move, space picks, ↵ sends, S skips it (shown next time), L puts its task off for an
+waiting longest. Its place on the top row reads "Decisions · 2 of 5" over a thin bar. On the card: 1–9 pick, ↑↓ move, space picks, ↵ sends (the agent
+resumes), S skips it (shown next time), L puts its task off for an
 hour (snoozed), Esc closes. Other… is typed in the drawer. ⌘L talks the card over in the drawer,
 on its task; the right rail shows it. Panes you add close when you answer, skip or put off the
 card. A card answered elsewhere leaves; after the last, Decisions closes and the tab you came from is back. Never kept.

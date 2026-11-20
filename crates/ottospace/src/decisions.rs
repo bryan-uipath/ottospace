@@ -67,7 +67,7 @@ impl Workspace {
                     .w_full()
                     .text_xs()
                     .text_color(rgb(theme::MUTED))
-                    .child("1–9 answer · ⌘L talk it over · Esc close"),
+                    .child("1–9 pick · ↵ send · ⌘L talk it over · Esc close"),
             );
         div()
             .size_full()

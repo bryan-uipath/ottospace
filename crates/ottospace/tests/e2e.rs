@@ -10847,8 +10847,8 @@ fn decisions(o: &Otto) -> Value {
     o.call(json!({"cmd": "state"}))["state"]["decisions"].clone()
 }
 
-/// ⌘J opens Decisions on the first card, "1 of 2"; a number answers it at once and the next card
-/// shows; the last answer closes it, and the tab it was opened from is back; then ⌘J is the next task. The
+/// ⌘J opens Decisions on the first card, "1 of 2"; a number picks and sends nothing, ↵ sends and
+/// the next card shows; the last answer closes it, and the tab it was opened from is back; then ⌘J is the next task. The
 /// state has ids and counts, never the question.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
@@ -10864,16 +10864,20 @@ fn decisions_answers_card_by_card_and_closes_after_the_last() {
     let state = otto.call(json!({"cmd": "state"}));
     let tab = &state["state"]["tabs"][state["state"]["active"].as_u64().unwrap() as usize];
     assert_eq!(tab["title"], "Decisions · 1 of 2", "{tab}");
-    // 2: Blue, sent at once; the other card is on show, under Done's seal.
+    // 2: Blue picked, nothing sent, the card stays; ↵ sends it and the other card is on show, under
+    // Done's seal.
     let seals = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["seal_frames"].as_u64().unwrap_or(0);
     let sealed = seals(&otto);
-    otto.user_key("2");
+    let picked = otto.user_key("2");
+    assert_eq!(picked["state"]["decisions"]["task"], first, "{}", picked["state"]["decisions"]);
+    assert_eq!(ask_reply(&record), None, "a number alone sends nothing");
+    otto.user_key("enter");
     let reply = otto.wait_for("the answer", |_| ask_reply(&record));
     assert_eq!(reply["updatedInput"]["answers"], json!({"Which colour?": "Blue"}));
     let next = otto.wait_for("the next card", |o| Some(decisions(o)).filter(|d| d["task"] != first));
     assert_eq!((&next["at"], &next["of"]), (&json!(2), &json!(2)), "{next}");
     otto.wait_for("the seal's frames", |o| (seals(o) > sealed).then_some(()));
-    otto.user_key("1");
+    otto.user_key("1 enter");
     otto.wait_for("Decisions closed", |o| decisions(o).is_null().then_some(()));
     assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["active"], from);
     // Nothing waits: ⌘J goes to the next task that needs you, as with the flag off.

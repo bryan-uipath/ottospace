@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use super::chat::{self, Key};
 use super::{Action, Effect, Kind, Model, Owner, PaneId};
-use crate::ask::{Act, Form};
+use crate::ask::Form;
 use crate::features::Feature;
 use crate::layout::Axis;
 use crate::talk::Subject;
@@ -117,9 +117,8 @@ impl Model {
         queue
     }
 
-    /// A key on the card pane, while it has the keyboard: 1 to 9 answer (on a card of one
-    /// single-select question, sent at once), ↑↓ j k move, space picks, ↵ sends, ⇥ between
-    /// questions; S skips, L puts it off until `now + LATER_MS`, Esc closes Decisions.
+    /// A key on the card pane, while it has the keyboard: 1 to 9 pick, ↑↓ j k move, space picks,
+    /// ↵ sends, ⇥ between questions; S skips, L puts it off until `now + LATER_MS`, Esc closes Decisions.
     pub fn decision_key(&self, key: &str, mods: crate::keys::Mods, now: u64) -> Key {
         let Some((task, ticket)) = self.decision_card().filter(|_| self.keyboard_decision()) else { return Key::Pass };
         let bare = !mods.cmd && !mods.ctrl && !mods.alt && !mods.shift;
@@ -190,15 +189,8 @@ impl Model {
             Action::DecisionsOpen => self.open_decisions(effects),
             Action::DecisionsAsk { task, ticket, act } if self.decision_card() == Some((task, ticket)) => {
                 let subject = Subject::Task(task);
-                let form = self.chat(&subject).and_then(chat::Chat::form);
-                // One single-select question: a number on an option is the answer.
-                let single = form.filter(|form| form.tabs() == 0 && !form.questions[0].multi);
-                let option = |n: usize| single.is_some_and(|f| (1..=f.questions[0].options.len()).contains(&n));
-                let answers = matches!(act, Act::Number { n } if option(n));
+                // As the drawer's card: a number picks, ↵ sends (owner, 2026-11-20).
                 self.ask_act(&subject, ticket, act, effects);
-                if answers {
-                    self.ask_act(&subject, ticket, Act::Submit, effects);
-                }
                 // Answered: the next card starts as one pane, before the step's own clean-ups.
                 if !self.asking().contains(&(task, ticket)) {
                     self.decisions_clear(effects);
@@ -408,6 +400,7 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ask::Act;
     use crate::ask::tests::question;
     use crate::keys::Mods;
     use crate::model::Origin;
@@ -509,16 +502,27 @@ mod tests {
         // The drawer and the right rail are on the card's task.
         assert_eq!(m.talk.as_ref().map(|talk| talk.task.clone()), Some(Subject::Task(b)));
         assert_eq!(m.rail().first(), Some(&crate::model::rail::RailItem::Task { id: b }));
-        // A number answers at once; the agent resumes.
+        // A number picks and sends nothing, pressed twice too; ↵ sends the pick and the agent resumes.
         let key = m.decision_key("2", Mods::default(), 0);
         assert_eq!(key, Key::Act(Action::DecisionsAsk { task: b, ticket: 1, act: Act::Number { n: 2 } }));
-        let Key::Act(answer) = key else { unreachable!() };
-        let effects = m.update(answer);
-        assert!(effects.iter().any(|e| matches!(e, Effect::AgentAnswers { ticket: 1, .. })), "{effects:?}");
+        let Key::Act(pick) = key else { unreachable!() };
+        for _ in 0..2 {
+            let effects = m.update(pick.clone());
+            assert!(!effects.iter().any(|e| matches!(e, Effect::AgentAnswers { .. })), "{effects:?}");
+            assert_eq!(m.decision_card(), Some((b, 1)));
+        }
+        let Key::Act(send) = m.decision_key("enter", Mods::default(), 0) else { panic!() };
+        let effects = m.update(send);
+        let sent = effects.iter().find_map(|e| match e {
+            Effect::AgentAnswers { ticket: 1, answers, .. } => Some(answers[0].options.clone()),
+            _ => None,
+        });
+        assert_eq!(sent, Some(vec![1]), "the second option: {effects:?}");
         assert_eq!(m.decision_card(), Some((a, 1)));
         assert_eq!(m.tabs[m.active].title, "Decisions · 2 of 2");
         // The last: it closes, and the tab it was opened from shows again.
         m.update(Action::DecisionsAsk { task: a, ticket: 1, act: Act::Number { n: 1 } });
+        m.update(Action::DecisionsAsk { task: a, ticket: 1, act: Act::Submit });
         assert!(m.decisions.is_none() && !on_show(&m) && m.tabs[m.active].id == from);
         assert!(
             !m.tabs.iter().any(|t| t.space == Owner::Decisions) && !m.panes.iter().any(|p| p.kind == Kind::Decision)
@@ -534,6 +538,7 @@ mod tests {
         for (task, n) in [(b, 3), (a, 2)] {
             m.update(Action::DecisionsOpen);
             m.update(Action::DecisionsAsk { task, ticket: 1, act: Act::Number { n } });
+            m.update(Action::DecisionsAsk { task, ticket: 1, act: Act::Submit });
         }
         let c = live(&mut m, "docs", 2);
         m.update(Action::TaskTalk { id: a });

@@ -1652,10 +1652,10 @@ pub enum Action {
         ticket: u64,
     },
     /// The user's ⌘J or palette command: the Decisions workspace (`decisions`), with the first
-    /// card of its queue on show. Nothing waits: nothing opens. Open already: it shows.
+    /// card of its queue on show. Nothing waits: the next task (`TaskGo { id: None }`). Open already: it shows.
     DecisionsOpen,
     /// A key or click on the Decisions card (`ask::Act`), of task `task`'s card `ticket`: as
-    /// `TalkAsk`. A number on a card of one single-select question picks and sends.
+    /// `TalkAsk`: a number picks, ↵ sends.
     DecisionsAsk {
         task: TaskId,
         ticket: u64,
