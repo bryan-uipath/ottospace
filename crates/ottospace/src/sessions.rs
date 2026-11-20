@@ -197,6 +197,11 @@ impl Poller {
         }
     }
 
+    /// The next `ask` sends a round at once: the sections that use it changed.
+    pub fn again(&mut self) {
+        self.asked = None;
+    }
+
     /// When `ask` sends the next round (ms): none while one is on its way, or the reader stopped.
     pub fn next_ask(&self) -> Option<u64> {
         let every = if self.open { EVERY_MS } else { SLOW_MS };

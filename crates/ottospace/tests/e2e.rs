@@ -1262,6 +1262,74 @@ fn the_users_clicks_on_the_bar_work_beside_the_new_task() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_checkouts_dot_pulses_once_on_a_commit_and_lights_while_a_session_works_there() {
+    // A real repository and a worktree of it; a made-up Claude Code session folder, empty for now.
+    let home = user_folder("repo-dots", "{}").canonicalize().unwrap();
+    let (app, worktree, claude) = (home.join("src/app"), home.join("src/app-2"), home.join("claude"));
+    std::fs::create_dir_all(&app).unwrap();
+    let commit = |dir: &Path| {
+        git(dir, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c"])
+    };
+    git(&app, &["init", "-q", "-b", "main"]);
+    commit(&app);
+    git(&app, &["worktree", "add", "-q", "-b", "fix", "../app-2"]);
+    let dirs = json!({"claude": [claude], "codex": home.join("codex")});
+    let settings = json!({"repos": [app], "sessions": true, "session_dirs": dirs, "restore_layout": false});
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let launch = |name: &str, calm: bool| {
+        let mut env = vec![("OTTOSPACE_HOME", home.to_str().unwrap()), ("GIT_CONFIG_GLOBAL", "/dev/null")];
+        env.extend(calm.then_some(("OTTOSPACE_REDUCE_MOTION", "1")));
+        let otto = Otto::launch_with(name, &env);
+        otto.call(json!({"cmd": "section", "section": "repos"}));
+        otto.wait_for("the Repos rows", |o| Some(o.drawn()).filter(|s| !s["repos_bar"][0]["rows"][1]["row"].is_null()));
+        // The heads' first read only records them: about a second, then none pulsed.
+        std::thread::sleep(Duration::from_millis(1500));
+        otto
+    };
+    let dot = |s: &Value, n: usize| {
+        (s["repos_bar"][0]["rows"][n]["activity"].clone(), s["repos_bar"][0]["rows"][n]["pulsing"].clone())
+    };
+    let counts = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"].clone();
+    let otto = launch("repo-dots", false);
+    let state = otto.drawn();
+    // Idle: grey, the repository's own folder too.
+    assert_eq!((dot(&state, 0), dot(&state, 1)), ((json!("idle"), json!(false)), (json!("idle"), json!(false))));
+    assert_eq!((&counts(&otto)["repo_pulses"], &counts(&otto)["repo_pulse_frames"]), (&json!(0), &json!(0)));
+
+    // A commit in the worktree: one pulse, a few frames, then still.
+    commit(&worktree);
+    otto.wait_for("the commit's pulse", |o| Some(counts(o)).filter(|c| c["repo_pulses"] == 1));
+    let still = |o: &Otto| {
+        let before = counts(o)["repo_pulse_frames"].clone();
+        std::thread::sleep(Duration::from_millis(700));
+        (counts(o)["repo_pulse_frames"] == before && before.as_u64() > Some(0)).then_some(before)
+    };
+    otto.wait_for("the pulse to end", still);
+    let state = otto.drawn();
+    assert_eq!((dot(&state, 0), dot(&state, 1)), ((json!("idle"), json!(false)), (json!("idle"), json!(false))));
+    assert_eq!(counts(&otto)["repo_pulses"], 1, "one commit, one pulse");
+
+    // A session at work in the worktree (its file changed just now): its row lights, the other does not.
+    let id = "11111111-1111-4111-8111-111111111111";
+    let project = claude.join("projects").join(ottospace_sessions::claude::slug(&worktree));
+    let fixture = format!("claude/projects/-work-app/{id}.jsonl");
+    session_fixture(&fixture, &project.join(format!("{id}.jsonl")), &worktree, Duration::ZERO);
+    let lit = |o: &Otto| Some(o.drawn()).filter(|s| s["repos_bar"][0]["rows"][1]["activity"] == "working");
+    let state = otto.wait_for("the worktree's dot to light", lit);
+    assert_eq!(dot(&state, 0).0, "idle");
+    drop(otto);
+
+    // Under Reduce Motion a commit does not pulse.
+    let otto = launch("repo-dots-calm", true);
+    commit(&worktree);
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!((&counts(&otto)["repo_pulses"], &counts(&otto)["repo_pulse_frames"]), (&json!(0), &json!(0)));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_worktrees_pull_request_is_marked_from_a_stand_in_gh_and_only_the_users_click_opens_it() {
     use std::os::unix::fs::PermissionsExt;
     // A real repository whose origin is on github.com (never fetched), a worktree for each branch.

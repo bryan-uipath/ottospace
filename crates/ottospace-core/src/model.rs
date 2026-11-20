@@ -887,6 +887,13 @@ pub enum Action {
     PrOpen {
         path: String,
     },
+    /// The checkouts' `HEAD` logs, by path, as the shell read them `at` (ms since 1970): their
+    /// length in bytes. `calm`: Reduce Motion is on: no pulse.
+    SetHeads {
+        heads: Vec<(String, u64)>,
+        at: u64,
+        calm: bool,
+    },
     /// Start from the tasks kept on disk. `floor`: new ids start above it (see `Tasks::restore`).
     RestoreTasks {
         tasks: Vec<Task>,
@@ -1063,6 +1070,11 @@ pub enum Action {
     /// milliseconds: the `session_quiet_minutes` setting. 0: never.
     SessionQuiet {
         ms: u64,
+    },
+    /// The sessions the shell read while the Repos section, not Tasks, is open: only for the
+    /// checkouts' dots (`repo_dots`) and the tasks that follow them. Nothing is listed.
+    SessionsAtWork {
+        found: Vec<Found>,
     },
     /// When the files of sessions that tasks were adopted from last changed: read by the shell
     /// while the Tasks section is closed, so those tasks follow their sessions all the same.
@@ -2366,6 +2378,7 @@ impl Action {
             | Action::WorktreeAdded { .. }
             | Action::WorktreeFailed { .. }
             | Action::SetPrs { .. }
+            | Action::SetHeads { .. }
             | Action::PrOpen { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
@@ -2408,6 +2421,7 @@ impl Action {
             | Action::SetSessions { .. }
             | Action::SessionQuiet { .. }
             | Action::SessionsSeen { .. }
+            | Action::SessionsAtWork { .. }
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
             | Action::SessionClick { .. }
@@ -2793,6 +2807,7 @@ impl Action {
             | Action::WorktreeAdded { .. }
             | Action::WorktreeFailed { .. }
             | Action::SetPrs { .. }
+            | Action::SetHeads { .. }
             | Action::PrOpen { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
@@ -2832,6 +2847,7 @@ impl Action {
             | Action::SetSessions { .. }
             | Action::SessionQuiet { .. }
             | Action::SessionsSeen { .. }
+            | Action::SessionsAtWork { .. }
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
             | Action::SessionClick { .. }
@@ -3467,6 +3483,7 @@ pub mod offers;
 pub mod overlay;
 mod pick;
 pub mod quit;
+pub mod repo_dots;
 pub mod slots;
 mod transcribe;
 mod viewer;
@@ -3579,6 +3596,9 @@ pub struct Model {
     /// people's text: never in the state (`checkout_pr` gives what may be).
     #[serde(skip)]
     pub prs: Vec<(String, Vec<crate::prs::Pr>, Vec<crate::prs::Branch>)>,
+    /// Each listed checkout's `HEAD` log as last read, for its dot's pulse (`repo_dots`).
+    #[serde(skip)]
+    heads: std::collections::BTreeMap<String, repo_dots::Head>,
     pub tasks: Tasks,
     /// What the new-task box's tags may name, as the shell last read it.
     #[serde(skip)]
@@ -3650,6 +3670,9 @@ pub struct Model {
     /// Sessions the shell found, in the order listed. Shown through `sessions_bar` only.
     #[serde(skip)]
     found: Vec<Found>,
+    /// Of the sessions last read (Tasks or Repos open), those at work: for the checkouts' dots.
+    #[serde(skip)]
+    at_work: Vec<Found>,
     /// How long an adopted session is quiet before its task needs the user. 0: never.
     #[serde(skip)]
     session_quiet_ms: u64,
@@ -3896,6 +3919,7 @@ impl Default for Model {
             repos_open: Vec::new(),
             repos_held: Vec::new(),
             prs: Vec::new(),
+            heads: Default::default(),
             tasks: Tasks::default(),
             known: compose::Known::default(),
             known_line: None,
@@ -3922,6 +3946,7 @@ impl Default for Model {
             finish: finish::Finishing::default(),
             local_day: 0,
             found: Vec::new(),
+            at_work: Vec::new(),
             session_quiet_ms: sessions::QUIET_MS,
             hidden: Vec::new(),
             sessions_range: sessions::Range::default(),
@@ -4321,6 +4346,7 @@ impl Model {
             // A link opens in the user's browser; only ottospace tells what gh said.
             Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
             Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
+            Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
             Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
             Action::FieldEdit { .. }
             | Action::MarkSubmit
@@ -4771,6 +4797,7 @@ impl Model {
         self.tasks.finished(&states, self.now);
         self.settle_finish();
         self.repo_unhold();
+        self.heads_listed();
         // Only the user's own undo links a dismissed task's tabs again.
         let was_done = |id: &TaskId| states.iter().any(|(task, state)| task == id && *state == State::Done);
         let finished: Vec<TaskId> =
@@ -5224,6 +5251,7 @@ impl Model {
             Action::RepoRemove { path } => self.repo_remove(&path, effects),
             Action::RepoFold { path, fold } => self.repo_fold(&path, fold),
             Action::WorktreeEdit { repo } => self.worktree_edit(repo, effects),
+            Action::SetHeads { heads, at, calm } => self.set_heads(heads, at, calm),
             Action::SetPrs { repo, prs, branches } => {
                 // None to match (gh off, or a failed read): the repository has no marks.
                 self.prs.retain(|(of, ..)| *of != repo);
@@ -5796,11 +5824,20 @@ impl Model {
             }
             Action::SetSessions { found, day } => {
                 self.found = sessions::kept(found);
+                self.at_work = self.found.iter().filter(|s| s.active).cloned().collect();
                 self.session_day = day;
                 let seen = self.found.iter().map(|s| (s.runner.clone(), s.id.clone(), s.active, s.last_activity));
                 self.follow_sessions(seen.collect());
             }
             Action::SessionQuiet { ms } => self.session_quiet_ms = ms,
+            Action::SessionsAtWork { found } => {
+                // Not listed: the Elsewhere group and its actions see none of it.
+                self.found.clear();
+                let found = sessions::kept(found);
+                let seen = found.iter().map(|s| (s.runner.clone(), s.id.clone(), s.active, s.last_activity));
+                self.follow_sessions(seen.collect());
+                self.at_work = found.into_iter().filter(|s| s.active).collect();
+            }
             Action::SessionsSeen { seen } => {
                 let seen = seen.into_iter().map(|s| (s.runner, s.id, s.active, Some(s.last_activity)));
                 self.follow_sessions(seen.collect());
@@ -9847,6 +9884,7 @@ mod tests {
         Action::WorktreeAdded { .. },
         Action::WorktreeFailed { .. },
         Action::SetPrs { .. },
+        Action::SetHeads { .. },
         Action::PrOpen { .. },
         Action::RestoreTasks { .. },
         Action::TaskAdd { .. },
@@ -9896,6 +9934,7 @@ mod tests {
         Action::SetSessions { .. },
         Action::SessionQuiet { .. },
         Action::SessionsSeen { .. },
+        Action::SessionsAtWork { .. },
         Action::SessionAdopt { .. },
         Action::SessionHide { .. },
         Action::SessionClick { .. },
@@ -10202,6 +10241,7 @@ mod tests {
             Action::WorktreeAdded { repo: text(), path: text(), asked: text(), fresh: true, repos: Vec::new() },
             Action::WorktreeFailed { asked: text(), fresh: true, repos: Vec::new() },
             Action::SetPrs { repo: text(), prs: Vec::new(), branches: Vec::new() },
+            Action::SetHeads { heads: Vec::new(), at: 0, calm: false },
             Action::PrOpen { path: text() },
             Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
             Action::TaskAdd { title: text(), priority: 3, state: State::Running, tab: None, assign: Assign::default() },
@@ -10241,6 +10281,7 @@ mod tests {
             Action::SetSessions { found: Vec::new(), day: 0 },
             Action::SessionQuiet { ms: 0 },
             Action::SessionsSeen { seen: Vec::new() },
+            Action::SessionsAtWork { found: Vec::new() },
             Action::SessionAdopt { runner: text(), id: text() },
             Action::SessionHide { runner: text(), id: text() },
             Action::SessionClick { runner: text(), id: text() },
@@ -10824,6 +10865,7 @@ mod tests {
                     }
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
+                    Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
                     Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
                     Action::NewWindowCame { .. } | Action::NewWindowFailed { .. } | Action::WindowEdited { .. }
@@ -17203,6 +17245,7 @@ mod tests {
                     }
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
+                    Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
                     Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
                     Action::NewWindowCame { .. } | Action::NewWindowFailed { .. } | Action::WindowEdited { .. }

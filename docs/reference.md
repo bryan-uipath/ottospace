@@ -43,7 +43,7 @@ running, and the rest of the design is not built: see the
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar | Works today |
 | The Apps section: the Dock's apps, pins, "Not running" and "All apps" | Works today, behind the `apps_section` [flag](#features), off by default |
-| Repos: each repository's name over its checkouts, one line each (the branch; a dot for the repository's own folder; its open pull request's mark; the badge of a task there not done). The chevron folds a repository (a count while folded; kept in `layout.json`; shown while a task there runs or needs you). Open a terminal in one. Opt-in, in your order: + in the bar's header, a dropped folder or Add Folder to Repos adds a repository to the end of `repos`; a folder of repositories from older settings is one folded group. On a name under the pointer, + makes a worktree (`worktrees_dir`) and the trash stops listing it (asked first while a task works there; the status bar says nothing on disk changed) | Works today |
+| Repos: each repository's name over its checkouts, one line each (a dot for what happens there: grey while idle, lit in the task's colour while its agent works there (in the working colour for a session no task has), amber while a task there needs you, one short pulse when a commit lands (none under Reduce Motion); the branch; `default` on the repository's own folder; its open pull request's mark; the badge of a task there not done). The chevron folds a repository (a count while folded; kept in `layout.json`; shown while a task there runs or needs you). Open a terminal in one. Opt-in, in your order: + in the bar's header, a dropped folder or Add Folder to Repos adds a repository to the end of `repos`; a folder of repositories from older settings is one folded group. On a name under the pointer, + makes a worktree (`worktrees_dir`) and the trash stops listing it (asked first while a task works there; the status bar says nothing on disk changed) | Works today |
 | List mode (⌘⌃E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls, and on the buttons and text fields of the focused app pane; typing it clicks the control, presses the app's button, or focuses its text field | Works today |
 | Scrolling over an app pane you are not in enters it (`APP`), as a click does, and that first scroll reaches the app | Verified on CI (`e2e-apps`): the wheel enters, the window comes up under the pointer and the canary receives the first scroll |
@@ -792,7 +792,7 @@ unfolds it. A session at work does not unfold it.
   it opens, so nothing shows what a session did a while ago. If the reader stops, the status
   bar says so once.
 - **Read, then gone on with only by you.** ottospace reads the runners' own session files, every
-  5 seconds while the Tasks section is open and never while it is closed. It does not attach to
+  5 seconds while the Tasks section is open (or the Repos section, for its dots alone: nothing is listed then) and never while both are closed. It does not attach to
   a session, type into it or signal it. Only Open or Track, by you, starts the runner's own
   resume command on it. Only derived facts are shown: names from fixed tables, counts and
   times. Never a prompt, a file's contents or a command line. The one free text is the

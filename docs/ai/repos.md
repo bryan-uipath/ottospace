@@ -41,11 +41,38 @@ workspace of that checkout, else makes one with it as its default worktree: `doc
   while a live task in one of its checkouts runs or needs the user, and folded again when that
   ends. Folded by the user while one does, it stays folded (`repos_held`, not kept) until that
   ends. Anyone may fold (`RepoFold`): it changes what is drawn, not what runs.
-- **The default folder**: the repository's own directory, the first row. A small dot in the
-  accent colour in the row's gutter marks it, in place of the "Default" line; its tooltip says so.
-  Nothing sets a default: there is no "default repository for new tasks".
+- **The default folder**: the repository's own directory, the first row. `default` at its
+  right says so (where a pull request's mark is not), and its tooltip. The dot no longer marks
+  it: the dot is the row's activity (below). Nothing sets a default: there is no "default
+  repository for new tasks".
 - **Rows are one line**: the branch, cut short before what is drawn at the row's end (the task's
   badge), never under it. The path is the row's tooltip.
+
+## The dot (`model/repo_dots.rs`, `SetHeads`)
+
+The dot at a checkout row's left says what happens in that checkout (`Model::checkout_dot`).
+
+- **Needs you** (amber, the needs-you colour): a task there not done needs the user (its group
+  is Needs you; a snoozed one does not). Several: the first, by the Tasks section's order.
+- **Working**: a task's agent works there (its turn runs, as its dial says, or the session it
+  follows is active), in the task's identity colour; several, the one started last. Else a
+  session no task has is active there (the Elsewhere notion: its file changed in the last 30 s),
+  in the working colour. Sessions are read while the Tasks or the Repos section is open, and
+  listed (the Elsewhere group, adopting one) only while Tasks is (`SessionsAtWork`).
+- **Idle**: grey, every idle checkout alike, the repository's own folder too.
+- The row's task badge keeps its letters and identity border, without its corner dot: the left
+  dot says the state, not both.
+- **A commit**: while the Repos section is open the shell stats each checkout's `HEAD` log
+  (`<gitdir>/logs/HEAD`, a worktree's in `.git/worktrees/<name>`) about once a second, no `git`,
+  and tells the core its length (`SetHeads`, `Origin::System`, with the time and Reduce Motion).
+  A log that grew pulses the dot once: a ring widens and fades from it, 500 ms, one ease out,
+  then the dot is as above. The first read of a checkout only records it, and the reads are
+  forgotten when the section closes: a commit made meanwhile does not pulse on its opening. A
+  checkout with no commit yet reads as an empty log, so its first commit pulses. Under Reduce Motion
+  there is no pulse. Frames are asked for only while one plays (`counts.repo_pulse_frames`).
+  Any `HEAD` move grows the log (a checkout of a branch, a reset, a pull): those pulse too.
+- A folded repository draws no rows: no dot, no pulse. A checkout no longer listed keeps no read.
+- The state's rows carry `activity` and `pulsing`; never a commit's message.
 
 ## A new worktree (`WorktreeEdit`, `MarkSubmit`, `Effect::AddWorktree`, `WorktreeAdded`)
 

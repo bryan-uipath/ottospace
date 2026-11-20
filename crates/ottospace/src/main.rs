@@ -1119,6 +1119,8 @@ struct Workspace {
     /// the user opened (a test run counts them and opens none).
     prs: prs::Reader,
     pr_note: Option<&'static str>,
+    /// Frames a checkout dot's pulse asked for (the state's `counts.repo_pulse_frames`, test runs).
+    repo_pulse_frames: Cell<u64>,
     /// The status bar: the focused folder's checkout, read off the main thread; how its segments
     /// were last shortened; the meeting it last said (`id`, minutes to go, Join), to draw again on a change.
     status_git: status_bar::Reader,
@@ -1133,6 +1135,8 @@ struct Workspace {
     sessions: Option<sessions::Poller>,
     /// The core holds sessions that were found: they are cleared when the Tasks section closes.
     sessions_listed: bool,
+    /// The last read went to the Tasks section's list (else only to the Repos section's dots).
+    sessions_tasks: bool,
     /// The core was told the `session_quiet_minutes` setting.
     sessions_quiet_told: bool,
     /// The user was told that the sessions reader stopped.
@@ -1518,6 +1522,9 @@ impl Workspace {
                         this.take_worktrees(window, cx);
                         this.tell_day(window, cx);
                         this.tick_prs(window, cx);
+                        if ticks.every(60, 30) {
+                            this.read_heads(cx);
+                        }
                         this.watch_displays(window, cx);
                     });
                     this.take_snapshots(window, cx);
@@ -1699,6 +1706,7 @@ impl Workspace {
             told: None,
             prs: prs::Reader::new(),
             pr_note: None,
+            repo_pulse_frames: Cell::default(),
             status_git: status_bar::Reader::new(),
             status_fit: Cell::default(),
             status_said: None,
@@ -1707,6 +1715,7 @@ impl Workspace {
             calls: 0,
             sessions: sessions::Poller::start(),
             sessions_listed: false,
+            sessions_tasks: false,
             sessions_stopped: false,
             sessions_quiet_told: false,
             known: Vec::new(),
@@ -3316,19 +3325,24 @@ impl Workspace {
 
     /// The Repos section as laid out: each repository's `name` and `path` with its `header`,
     /// whether it is drawn `folded`, and its `rows` (a checkout's `path`, `branch`, `default`,
-    /// `label`) each with its `row`. Rects are in window points, scrolled out of view or not; null
+    /// `label`, its dot's `activity` and whether a commit's pulse plays) each with its `row`. Rects are in window points, scrolled out of view or not; null
     /// while the section is not drawn (a folded repository's rows too).
     fn repos_bar(&self) -> Vec<serde_json::Value> {
         let marks = self.marks.borrow();
         let drawn = |mark: Mark| marks.get(&mark).copied().map(rect);
-        let mut index = 0;
+        let (mut index, now) = (0, now_ms());
         let group = |(n, repo): (usize, &Repo)| {
             let row = |checkout: Checkout| {
+                let dot = self.model.checkout_dot(&checkout.path, now);
                 // Its pull request by numbers and kinds: no title, name or link.
                 let pr = self.model.checkout_pr(&checkout.path).map(ottospace_core::prs::Pr::summary);
                 let mut row = serde_json::json!(checkout);
                 row["pr"] = serde_json::json!(pr);
-                row["row"] = serde_json::json!(drawn(Mark::Checkout(index)));
+                let drawn = drawn(Mark::Checkout(index));
+                // A folded row draws no dot: no pulse plays on it.
+                let pulsing = dot.pulse.is_some() && drawn.is_some();
+                (row["activity"], row["pulsing"]) = (serde_json::json!(dot.activity), pulsing.into());
+                row["row"] = serde_json::json!(drawn);
                 index += 1;
                 row
             };
@@ -3358,7 +3372,24 @@ impl Workspace {
     /// The reading itself is on the poller's thread.
     fn poll_sessions(&mut self, window: &Window, cx: &mut Context<Self>) {
         let now = now_ms();
-        let open = self.model.sidebar == Some(Section::Tasks);
+        // Read for the Repos section's dots too; listed only while Tasks is open.
+        let tasks = self.model.sidebar == Some(Section::Tasks);
+        let open = tasks || self.model.sidebar == Some(Section::Repos);
+        if tasks != self.sessions_tasks && open {
+            // Tasks closed into Repos: its list goes at once. Either way, read again now.
+            self.sessions_tasks = tasks;
+            if !tasks && self.sessions_listed {
+                self.dispatch(
+                    Action::SetSessions { found: Vec::new(), day: day_start(now) },
+                    Origin::System,
+                    window,
+                    cx,
+                );
+            }
+            if let Some(poller) = &mut self.sessions {
+                poller.again();
+            }
+        }
         if !self.sessions_quiet_told {
             self.sessions_quiet_told = true;
             let live = config::live();
@@ -3404,7 +3435,11 @@ impl Workspace {
             self.sessions_listed = open && !stopped;
             // The time too: ages and the range are counted from it.
             self.dispatch(Action::Tick { now }, Origin::System, window, cx);
-            self.dispatch(Action::SetSessions { found, day: day_start(now) }, Origin::System, window, cx);
+            let read = match tasks || found.is_empty() {
+                true => Action::SetSessions { found, day: day_start(now) },
+                false => Action::SessionsAtWork { found },
+            };
+            self.dispatch(read, Origin::System, window, cx);
             cx.notify();
         }
         if stopped && !self.sessions_stopped {
@@ -3972,6 +4007,10 @@ impl Workspace {
                 // Frames a side overlay's slide in asked for (`overlay_panels`): none under Reduce Motion.
                 "overlay_frames": self.slides.frames,
                 "seal_spark_frames": self.seals.spark_frames,
+                // Commits that pulsed a checkout's dot, and the frames the pulses asked for: none
+                // at rest, none under Reduce Motion.
+                "repo_pulses": self.model.head_pulses(),
+                "repo_pulse_frames": self.repo_pulse_frames.get(),
                 // How often GPUI's own handlers were kicked to draw again (`stall`): after a change
                 // of the displays, or frames that stopped.
                 "redraws": self.redraws,
@@ -5666,6 +5705,21 @@ impl Workspace {
         }
     }
 
+    /// While the Repos section is open: each checkout's `HEAD` log, by one stat, so a commit pulses its dot.
+    fn read_heads(&mut self, cx: &mut Context<Self>) {
+        if self.model.sidebar != Some(Section::Repos) {
+            return;
+        }
+        let checkouts = self.model.repos.iter().flat_map(Repo::checkouts);
+        let heads = checkouts.filter_map(|c| Some((c.path.clone(), repos::head_log(Path::new(&c.path))?))).collect();
+        let pulses = self.model.head_pulses();
+        // Not `dispatch`, which draws again: only a new pulse does, once a second at most.
+        self.model.update(Action::SetHeads { heads, at: now_ms(), calm: dial::calm() }.sent_by(Origin::System));
+        if self.model.head_pulses() != pulses {
+            cx.notify();
+        }
+    }
+
     /// The user's + on a repository's name: the field for a new worktree's branch, with the
     /// worktrees folder as the settings say now.
     pub(crate) fn add_worktree(&mut self, repo: &str, window: &Window, cx: &mut Context<Self>) {
@@ -6154,8 +6208,9 @@ impl Workspace {
     /// Repositories, each with its worktrees under it. A click opens a terminal there: it fills
     /// the focused pane if that is empty, else splits it (right, or down with shift).
     fn render_repos(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // One checkout, on one line: its branch, cut short before the marks at its end. The
-        // repository's own folder has a dot in the gutter; the path is in the tooltip.
+        // One checkout, on one line: its dot (what happens there), its branch, cut short before
+        // the marks at its end; the path is in the tooltip.
+        let (now, pulsing) = (now_ms(), Cell::new(false));
         let row = |index: usize, at: usize, checkout: Checkout, cx: &mut Context<Self>| {
             let selected = self.model.list == Some(at);
             // The task working there: its badge; a click selects it, and a word opens a terminal anyway.
@@ -6173,7 +6228,10 @@ impl Workspace {
                     cx,
                 ))
             });
-            let badge = task.and_then(|id| self.task_badge(id, 16.));
+            // Its state is the dot's to say: the badge has none, and is the dot's task if it has one.
+            let dot = self.model.checkout_dot(&checkout.path, now);
+            let badge = dot.task.or(task).and_then(|id| self.task_badge_plain(id, 16.));
+            pulsing.set(pulsing.get() || dot.pulse.is_some());
             // At its end, in this order: the pull request's mark, the task's badge. The words sit
             // left of them, so the pull request stays there to click.
             let badge_room = if badge.is_some() { 24. } else { 0. };
@@ -6188,7 +6246,7 @@ impl Workspace {
             };
             sidebar_row(("repo", index), selected)
                 .group("repo-row")
-                .child(home::dot(if checkout.default { theme::PRIMARY } else { theme::BORDER_STRONG }))
+                .child(self.activity_dot(dot))
                 .child(cut_text(checkout.branch).flex_1())
                 .children(default)
                 .children(pr.map(|(marker, _)| marker.flex_none()))
@@ -6242,6 +6300,12 @@ impl Workspace {
             }
             items.extend(well(group, 0.));
         }
+        // A pulse plays: the next frame, and none once it is over.
+        if pulsing.get() {
+            self.repo_pulse_frames.set(self.repo_pulse_frames.get() + 1);
+            let next = canvas(|_, _, _| {}, |_, _, window, _| window.request_animation_frame());
+            items.push(next.absolute().size_0().into_any_element());
+        }
         // Opt-in: none until the user adds one, by the + here or in the header, or by a drop.
         let empty = self.model.repos.is_empty().then(|| match self.model.repo_dirs.fixed {
             true => div()
@@ -6289,6 +6353,31 @@ impl Workspace {
             &self.list_scroll,
             theme::RAISED,
         )
+    }
+
+    /// A checkout's dot: grey while idle, the task's colour (or a session's) while at work, the
+    /// needs-you colour; a commit's pulse is a ring that widens and fades from it.
+    fn activity_dot(&self, dot: ottospace_core::model::repo_dots::Dot) -> Div {
+        use ottospace_core::model::repo_dots::Activity;
+        let colour = match (dot.activity, dot.task.and_then(|id| self.model.tasks.get(id))) {
+            (Activity::Idle, _) => theme::BORDER_STRONG,
+            (Activity::NeedsYou, _) => theme::task(Group::NeedsYou),
+            (Activity::Working, Some(task)) => theme::identity(task.colour),
+            (Activity::Working, None) => theme::task(Group::Running),
+        };
+        let ring = dot.pulse.map(|e| {
+            let ring = if dot.activity == Activity::Idle { theme::TEXT } else { colour };
+            div()
+                .absolute()
+                .top(px(-5. * e))
+                .left(px(-5. * e))
+                .size(px(8. + 10. * e))
+                .rounded_full()
+                .border_1()
+                .border_color(rgb(ring))
+                .opacity(1. - e)
+        });
+        div().relative().flex_none().size(px(8.)).child(home::dot(colour)).children(ring)
     }
 
     /// The open pull request of the checkout at `path`, as one small mark: the pull request icon

@@ -1097,6 +1097,10 @@ const MAKERS: &[Make] = &[
     },
     |g| Action::PrOpen { path: g.repo_path() },
     |g| {
+        let heads = (0..g.rng.below(3)).map(|_| (g.repo_path(), g.rng.below(4) as u64 * 80)).collect();
+        Action::SetHeads { heads, at: g.rng.below(2_000) as u64, calm: g.rng.coin() }
+    },
+    |g| {
         let tasks = (0..g.rng.below(4)).map(|_| g.kept_task()).collect();
         Action::RestoreTasks { tasks, floor: g.rng.pick(&[0, 5, tasks::MAX_ID, u32::MAX]) }
     },
@@ -1221,6 +1225,10 @@ const MAKERS: &[Make] = &[
             Seen { runner, id, last_activity: g.time(), active: g.rng.coin() }
         };
         Action::SessionsSeen { seen: (0..g.rng.below(4)).map(|_| seen(g)).collect() }
+    },
+    |g| {
+        let found = (0..g.rng.below(3)).map(|_| g.found()).collect();
+        Action::SessionsAtWork { found }
     },
     |g| {
         let (runner, id) = g.session();
@@ -2108,6 +2116,8 @@ fn check(m: &Model) -> Result<(), String> {
     let places: Vec<usize> = m.repos.iter().map(|r| m.repo_dirs.place(&r.path).unwrap_or(usize::MAX)).collect();
     ensure!(places.is_sorted(), "the repositories are out of the list's order: {places:?}");
     ensure!(m.repos_open.iter().all(|open| dirs.iter().any(|d| d.path == *open)), "an open group with no entry");
+    // A checkout's dot stands only for a listed checkout: one removed keeps no read or pulse.
+    ensure!(m.heads.keys().all(|path| m.repo_listed(path)), "a dot for a checkout that is gone: {:?}", m.heads.keys());
     // A task the user marked done has no agent at work: none runs, or its stop was asked. Nor
     // is one put away (Done, Later) on the drawer's rail.
     for id in m.finish.away.iter().copied() {

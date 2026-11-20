@@ -434,10 +434,19 @@ impl Workspace {
     /// A task's badge as drawn everywhere: its letters (`Model::badges`), its identity colour,
     /// its state's dot. `None`: no such task, or it is dismissed.
     pub(crate) fn task_badge(&self, id: TaskId, size: f32) -> Option<Div> {
+        self.task_badge_of(id, size, true)
+    }
+
+    /// As `task_badge`, with no state's dot: where another mark says the state.
+    pub(crate) fn task_badge_plain(&self, id: TaskId, size: f32) -> Option<Div> {
+        self.task_badge_of(id, size, false)
+    }
+
+    fn task_badge_of(&self, id: TaskId, size: f32, state: bool) -> Option<Div> {
         let task = self.model.tasks.live(id)?;
         let badges = self.badges.borrow();
         let mono = badges.iter().find(|(of, _)| *of == Subject::Task(id)).map(|(_, mono)| mono.clone())?;
-        Some(badge(&mono, theme::identity(task.colour), task.group().map(theme::task), size))
+        Some(badge(&mono, theme::identity(task.colour), task.group().filter(|_| state).map(theme::task), size))
     }
 }
 

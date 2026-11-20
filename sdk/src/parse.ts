@@ -1213,6 +1213,8 @@ function checkoutRow(value: unknown, at: string): CheckoutRow {
     default: bool(o.default, `${at}.default`),
     label: str(o.label, `${at}.label`),
     pr: orNull(pullRequest)(o.pr, `${at}.pr`),
+    activity: oneOf(["idle", "working", "needs_you"] as const, "a checkout's activity")(o.activity, `${at}.activity`),
+    pulsing: bool(o.pulsing, `${at}.pulsing`),
     row: orNull(rect)(o.row, `${at}.row`),
   };
 }
