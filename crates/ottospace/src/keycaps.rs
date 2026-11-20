@@ -5,7 +5,7 @@
 use gpui::{Context, Div, Keymap, Keystroke, Modifiers, SharedString, Stateful, Window, div, prelude::*, px, rgb};
 use ottospace_core::commands::Command;
 use ottospace_core::empty::Hint;
-use ottospace_core::{Action, Axis, Kind, Picker, theme};
+use ottospace_core::{Action, Axis, Kind, PaneId, Picker, theme};
 
 use crate::{Workspace, commands, key_use, ui};
 
@@ -43,13 +43,21 @@ impl Workspace {
     /// A modifier changed: the list is drawn again only if it is on show and its lit caps differ
     /// from those drawn. ⇧ while typing beside an empty tab draws nothing.
     pub(crate) fn modifiers_changed(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.model.layout.is_some() && !self.model.panes.iter().any(|pane| pane.kind == Kind::Empty) {
+        // Only while an empty place is on show: the main window's tab, or one folded out.
+        let tabs = std::iter::once(self.model.main_at()).chain(
+            self.model.tabs_out().into_iter().filter_map(|(id, _)| self.model.tabs.iter().position(|tab| tab.id == id)),
+        );
+        let empty = |at: usize| {
+            self.model.tree_at(at).is_none_or(|tree| {
+                tree.leaves().iter().any(|id| self.model.pane(*id).is_some_and(|pane| pane.kind == Kind::Empty))
+            })
+        };
+        if !tabs.into_iter().any(empty) {
             return;
         }
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
-        let strokes =
-            [Command::PickPane, Command::SplitRight, Command::NewTask].map(|command| stroke(&keymap, command));
+        let strokes = [Hint::OpenApp, Hint::Terminal, Hint::NewTask].map(|hint| stroke(&keymap, hint.command()));
         let lit = |held: Modifiers| strokes.each_ref().map(|s| s.as_ref().map(|s| caps(s, held, false)));
         if lit(held(window)) != lit(self.caps_drawn.get()) {
             cx.notify();
@@ -57,22 +65,25 @@ impl Workspace {
     }
 
     /// What to do in an empty place, a row each: its key's caps, then what it does. A click does
-    /// what the key does. `hints`: the rows, in order; `prefix`: their controls' (`home:open_app`).
-    /// `held`: the modifiers down now, whose caps are lit.
-    pub(crate) fn hint_list(&self, hints: &[Hint], prefix: &str, held: Modifiers, cx: &mut Context<Self>) -> Div {
+    /// what the key does. `hints`: the rows, in order; `prefix`: their controls' (`home:open_app`);
+    /// `pane`: the empty pane it is in, if one. `held`: the modifiers down now, whose caps are lit.
+    pub(crate) fn hint_list(
+        &self,
+        hints: &[Hint],
+        prefix: &str,
+        pane: Option<PaneId>,
+        held: Modifiers,
+        cx: &mut Context<Self>,
+    ) -> Div {
         self.caps_drawn.set(held);
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
-        // This row's picker open is its chord, pressed: its caps stay lit. A terminal fills the
-        // tab at once, so its row has nothing to show.
-        let picking = matches!(self.model.picker, Some(Picker { axis: Axis::Right, new_tab: false, .. }));
+        // This row's picker open is its chord, pressed: its caps stay lit, in the pane it fills
+        // only. A terminal fills the tab at once, so its row has nothing to show.
+        let picking = matches!(self.model.picker, Some(Picker { axis: Axis::Right, new_tab: false, .. }))
+            && pane.is_none_or(|pane| self.model.focused == Some(pane));
         let row = |hint: Hint| -> Stateful<Div> {
-            let command = match hint {
-                Hint::OpenApp => Command::PickPane,
-                Hint::Terminal => Command::SplitRight,
-                Hint::NewTask => Command::NewTask,
-            };
-            let stroke = stroke(&keymap, command);
+            let stroke = stroke(&keymap, hint.command());
             let fired = hint == Hint::OpenApp && picking;
             // Their room also with no key, so the labels line up.
             let keys = div().min_w(px(48.)).children(stroke.map(|stroke| key_caps(&stroke, held, fired)));

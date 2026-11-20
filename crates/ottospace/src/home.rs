@@ -21,7 +21,7 @@ use crate::{HOME_ICON, Workspace, open_task, rect, task_tags_cell, task_title_ce
 /// Where the new-task box starts, as a part of the height.
 const BOX_TOP: f32 = 0.18;
 /// The room kept under an empty place's key caps, a share of its height, so they sit above the
-/// floor: 160 points of a window's 846.
+/// floor: 160 points of a window's 846. (A padding's share is of the width: a box's height.)
 const FLOOR_ROOM: f32 = 0.19;
 /// Lines are cut into pieces about this long, in points, so each can fade by itself.
 const PIECE: f32 = 24.;
@@ -69,6 +69,11 @@ pub struct Drawn {
 pub type Shared = Rc<RefCell<Drawn>>;
 
 impl Drawn {
+    /// Forgets the key caps of empty panes and folded-out tabs no longer there.
+    pub(crate) fn keep_floors(&mut self, there: impl Fn(Floor) -> bool) {
+        self.bare.retain(|floor, _| there(*floor));
+    }
+
     /// Where an empty tab's key caps were drawn last: the code city keeps its names clear of them.
     pub(crate) fn hints(&self) -> Bounds<Pixels> {
         self.bare.get(&Floor::Main).copied().unwrap_or_default()
@@ -305,10 +310,10 @@ impl Workspace {
         held: Modifiers,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (surface, prefix) = match floor {
-            Floor::Out(tab) => (Surface::OutTab, format!("empty-out:{tab}")),
-            Floor::Pane(id) => (Surface::Pane, format!("empty:{id}")),
-            Floor::Main => (Surface::Tab, "home".to_string()),
+        let (surface, prefix, pane) = match floor {
+            Floor::Out(tab) => (Surface::OutTab, format!("empty-out:{tab}"), None),
+            Floor::Pane(id) => (Surface::Pane, format!("empty:{id}"), Some(id)),
+            Floor::Main => (Surface::Tab, "home".to_string(), None),
         };
         let (view, drawn) = (cx.entity_id(), &self.home);
         let hints = empty::empty(surface, (f32::MAX, f32::MAX)).hints;
@@ -322,7 +327,7 @@ impl Workspace {
                 std::mem::replace(drawn.bare.entry(floor).or_default(), bounds) != bounds
             }))
             .children(above)
-            .child(self.hint_list(hints, &prefix, held, cx));
+            .child(self.hint_list(hints, &prefix, pane, held, cx));
         let shared = drawn.clone();
         let lines = canvas(
             |_, _, _| {},
@@ -336,7 +341,8 @@ impl Workspace {
                 paint_lattice(&shared, floor, (bounds, [panel, Bounds::default()]), build, window);
             },
         );
-        let place = div().absolute().inset_0().pb(relative(FLOOR_ROOM)).px_4().flex().items_center().justify_center();
+        let place = div().absolute().top_0().left_0().w_full().h(relative(1. - FLOOR_ROOM));
+        let place = place.px_4().flex().items_center().justify_center();
         div()
             .relative()
             .size_full()
@@ -424,7 +430,7 @@ impl Workspace {
             .items_center()
             .gap_2()
             .children(heading)
-            .child(div().pt_2().child(self.hint_list(empty_hints(on_home), "home", held, cx)));
+            .child(div().pt_2().child(self.hint_list(empty_hints(on_home), "home", None, held, cx)));
 
         let rows: Vec<_> = (home.needs_you.iter().enumerate())
             .map(|(i, task)| {
@@ -489,7 +495,7 @@ impl Workspace {
         // Home's text near the top; an empty tab's caps just above the middle, the floor under them.
         let panel = match on_home {
             true => div().absolute().top(relative(BOX_TOP)).left_0().w_full(),
-            false => div().absolute().inset_0().pb(relative(FLOOR_ROOM)).items_center(),
+            false => div().absolute().top_0().left_0().w_full().h(relative(1. - FLOOR_ROOM)).items_center(),
         };
         let panel = panel.px_4().flex().justify_center().child(text);
 

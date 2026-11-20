@@ -8505,6 +8505,11 @@ impl Render for Workspace {
         // The modifiers down now light their caps in the list of an empty tab or pane.
         let held = keycaps::held(window);
         self.caps_drawn.set(held);
+        self.home.borrow_mut().keep_floors(|floor| match floor {
+            home::Floor::Main => true,
+            home::Floor::Pane(id) => self.model.pane(id).is_some(),
+            home::Floor::Out(tab) => self.model.is_out(tab),
+        });
         // The main window's tab: the live tree, unless the keyboard is in a tab out's window.
         let tree = self.model.tree_at(self.model.main_at()).map(|root| self.render_node(root, cx));
         // Only while the tab on show has no panes. Its lines are built once and kept: a frame

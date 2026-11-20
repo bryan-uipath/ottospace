@@ -1,8 +1,10 @@
 //! One empty state: what a place with nothing in it shows. The same hints, in the same order and
 //! words, wherever their actions work there; one backdrop; one fallback for a small pane. Home
-//! is a different thing by design (its tasks, its heading), and a slot that waits or a pane a
-//! mark could not fill says first what it waits for: both keep their own text, and the hints
-//! they share come from here. Design: `docs/reference.md`, "Empty places".
+//! is a different thing by design (its tasks, its heading); a pane a mark could not fill says
+//! why above the same hints; a slot that waits keeps its own text (not reconciled here).
+//! Design: `docs/reference.md`, "Empty places".
+
+use crate::commands::Command;
 
 /// A place with nothing in it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +31,15 @@ pub enum Hint {
 }
 
 impl Hint {
+    /// The command whose key its caps show and whose action its click does.
+    pub fn command(self) -> Command {
+        match self {
+            Hint::OpenApp => Command::PickPane,
+            Hint::Terminal => Command::SplitRight,
+            Hint::NewTask => Command::NewTask,
+        }
+    }
+
     /// Its row's words, the same everywhere.
     pub fn label(self) -> &'static str {
         match self {
@@ -62,12 +73,14 @@ pub struct Empty {
 const ALL: &[Hint] = &[Hint::OpenApp, Hint::Terminal, Hint::NewTask];
 
 /// What `surface`, `size` points wide and tall, shows. A hint only where its action fills that
-/// place: ⌘D beside a pane splits it, and in a window folded out it acts on the main window's
-/// tab, as ⌘N does; so a pane and a folded-out tab show ⌘E alone.
+/// place: beside a pane ⌘D splits it and ⌘N fills nothing, so a pane shows ⌘E alone; in a
+/// folded-out window the picker opens in the main window and fills its tab, so a folded-out
+/// tab shows ⌘D (a terminal there) and ⌘N (a task in its workspace).
 pub fn empty(surface: Surface, size: (f32, f32)) -> Empty {
     let hints = match surface {
         Surface::Home | Surface::Tab => ALL,
-        Surface::Pane | Surface::OutTab => &ALL[..1],
+        Surface::Pane => &ALL[..1],
+        Surface::OutTab => &ALL[1..],
     };
     let small = surface == Surface::Pane && (size.0 < SMALL.0 || size.1 < SMALL.1);
     Empty { hints, backdrop: !small }
@@ -79,17 +92,17 @@ mod tests {
 
     const EVERY: [Surface; 4] = [Surface::Home, Surface::Tab, Surface::Pane, Surface::OutTab];
 
-    /// Every surface's hints are the one list, cut short: the same words in the same order.
+    /// Every surface's hints are rows of the one list, in its order and words.
     #[test]
     fn every_surface_shows_the_same_hints_in_the_same_order() {
         for surface in EVERY {
             let hints = empty(surface, (1000., 800.)).hints;
-            assert!(!hints.is_empty() && ALL.starts_with(hints), "{surface:?}: {hints:?}");
-            assert_eq!(hints[0], Hint::OpenApp, "⌘E fills every empty place");
+            let at: Vec<usize> = hints.iter().filter_map(|hint| ALL.iter().position(|h| h == hint)).collect();
+            assert!(!hints.is_empty() && at.is_sorted() && at.len() == hints.len(), "{surface:?}: {hints:?}");
         }
         assert_eq!(empty(Surface::Tab, (1000., 800.)).hints, empty(Surface::Home, (1000., 800.)).hints);
         assert_eq!(empty(Surface::Pane, (1000., 800.)).hints, [Hint::OpenApp]);
-        assert_eq!(empty(Surface::OutTab, (1000., 800.)).hints, [Hint::OpenApp]);
+        assert_eq!(empty(Surface::OutTab, (1000., 800.)).hints, [Hint::Terminal, Hint::NewTask]);
         let labels: Vec<&str> = ALL.iter().map(|hint| hint.label()).collect();
         assert_eq!(labels, ["Open an app", "Terminal", "New task"]);
     }
