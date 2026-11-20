@@ -1113,7 +1113,7 @@ gaps between rows. Double lines (`═ ║`) are the font's.
 A program that asks for the kitty keyboard protocol (Claude Code does) gets it: ⇧↵, ⌃↵ and Esc
 reach it as their own keys (flags 1 and 4), so ⇧↵ makes a new line there instead of sending.
 A program that asks to set the clipboard (OSC 52) copies nothing by itself: its pane's header shows
-`<program> wants to copy 1,240 characters “…” · Copy · Always for this pane · ×`, and only your
+`A program here wants to copy 1,240 characters “…” · 3 lines · Copy · Always for this pane · ×`, and only your
 click copies, on the ask you saw: a newer ask has its own pill, and its Copy is dim and does nothing
 for half a second. The preview is the first line, cut short with `…` when it is not the whole text,
 with invisible or reordering characters as `�`; the pill also says how many lines and whether the text
