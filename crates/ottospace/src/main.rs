@@ -7941,6 +7941,8 @@ impl Workspace {
                     .id("status-space")
                     .flex_1()
                     .min_w_0()
+                    // A long `↩ back to …` is clipped: it never spills over, or takes clicks of, the mode's slot.
+                    .overflow_hidden()
                     .h_full()
                     .flex()
                     .items_center()
