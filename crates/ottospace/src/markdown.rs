@@ -9,7 +9,7 @@ use ottospace_core::ax::truncate as cap;
 use ottospace_core::links::{self, Target};
 use ottospace_core::transcript::{clean, cut as head};
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use pulldown_cmark::{Alignment, BlockQuoteKind, CodeBlockKind, Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
@@ -209,8 +209,8 @@ struct Builder<'a> {
     /// Footnotes by name: their numbers, in the order first referred to; their text once defined.
     numbers: HashMap<String, usize>,
     notes: Vec<(String, Vec<Block>)>,
-    /// When its fences' grammars stop: the rest is the lexer's (`Caps::colour`).
-    colour_until: Instant,
+    /// The time its fences' grammars may take: the rest is the lexer's (`Caps::colour`).
+    colour_until: crate::syntax::Until,
 }
 
 /// `text`, a reply's markdown, as blocks. `repo`: the task's repository, whose files may be links.
@@ -240,7 +240,7 @@ pub fn parse_with(text: &str, repo: Option<&str>, caps: Caps) -> Vec<Block> {
         suffixes: HashMap::new(),
         numbers: HashMap::new(),
         notes: Vec::new(),
-        colour_until: crate::syntax::deadline(caps.colour),
+        colour_until: crate::syntax::Until::new(caps.colour),
     };
     // Merged: a bare address or a mention is found whole.
     for event in TextMergeStream::new(Parser::new_ext(text, options)) {
@@ -502,7 +502,7 @@ impl Builder<'_> {
                 let shown = shown.join("\n");
                 let marks = label
                     .as_deref()
-                    .map(|label| crate::syntax::fence(label, &shown, self.colour_until))
+                    .map(|label| crate::syntax::fence(label, &shown, &mut self.colour_until))
                     .unwrap_or_default();
                 self.block(Block::Code { label, shown, copy, more, marks });
             }

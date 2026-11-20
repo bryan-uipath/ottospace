@@ -266,6 +266,43 @@ pub fn deadline(total: Duration) -> Instant {
     now() + total
 }
 
+/// The time a reply's fences may take, all together: started at the first that is parsed, so what
+/// comes before it (text, fences kept) does not use it up, and each draw parses at least one.
+pub struct Until {
+    total: Duration,
+    at: Option<Instant>,
+}
+
+impl Until {
+    pub fn new(total: Duration) -> Self {
+        Until { total, at: None }
+    }
+
+    fn start(&mut self) -> Instant {
+        *self.at.get_or_insert_with(|| deadline(self.total))
+    }
+
+    /// Time that was not parsing (a query built on a read thread) given back.
+    fn extend(&mut self, by: Duration) {
+        if let Some(at) = &mut self.at {
+            *at += by;
+        }
+    }
+}
+
+/// True on the main thread (never in a unit test): what may stall the window is done aside there.
+fn on_main_thread() -> bool {
+    !cfg!(test) && std::thread::current().name() == Some("main")
+}
+
+/// Something was left for lack of time on the main thread: the window draws again and goes on. A
+/// read thread's leftovers stay the lexer's: its file is not read again for them.
+fn redraw() {
+    if on_main_thread() {
+        DEFERRED.store(true, Ordering::SeqCst);
+    }
+}
+
 /// True if a parse that started with `left` and found the deadline passed may try again later:
 /// it started late. One that had at least half the main thread's time is too slow: kept as is.
 fn try_later(left: Duration, deadline: Instant) -> bool {
@@ -283,7 +320,7 @@ fn made(lang: Lang) -> Option<&'static Made> {
         return made.as_ref();
     }
     // Never on the main thread (C#'s takes tens of ms): built aside, plain or the lexer until then.
-    if !cfg!(test) && std::thread::current().name() == Some("main") {
+    if on_main_thread() {
         static ASKED: [AtomicBool; GRAMMARS.len()] = [const { AtomicBool::new(false) }; GRAMMARS.len()];
         if !ASKED[lang as usize].swap(true, Ordering::SeqCst) {
             std::thread::spawn(move || {
@@ -448,11 +485,12 @@ fn ranges(node: Node) -> Vec<tree_sitter::Range> {
     found
 }
 
-/// A fenced block's runs, by byte in `code`: by the grammar `label` names if it parses before
-/// `deadline` (its whole reply's), else `highlight`'s lexer, as before (plain for a label it does
-/// not know). Kept by language and text: a reply drawn again, or streamed past a fence, parses it
-/// no more. One left for lack of time is not kept: a later draw colours it.
-pub fn fence(label: &str, code: &str, deadline: Instant) -> Vec<Mark> {
+/// A fenced block's runs, by byte in `code`: by the grammar `label` names if it parses within
+/// `until` (its whole reply's), else `highlight`'s lexer, as before (plain for a label it does not
+/// know). Kept by language and text: a reply drawn again, or streamed past a fence, parses it no
+/// more. One left for lack of time is not kept: a later draw colours it. One too slow even with
+/// half the time is kept as it is.
+pub fn fence(label: &str, code: &str, until: &mut Until) -> Vec<Mark> {
     type Kept = HashMap<(Lang, u64, usize), Vec<Mark>>;
     static KEPT: LazyLock<Mutex<Kept>> = LazyLock::new(Mutex::default);
     let Some(lang) = lang_named(label).map(|lang| untagged(lang, code)) else {
@@ -464,15 +502,25 @@ pub fn fence(label: &str, code: &str, deadline: Instant) -> Vec<Mark> {
     if let Some(marks) = KEPT.lock().ok().and_then(|kept| kept.get(&key).cloned()) {
         return marks;
     }
+    // A query built here (a read thread) is not parsing: given back to all that follows.
+    let start = now();
+    made(lang);
+    until.extend(now() - start);
+    let deadline = until.start();
     let left = deadline.saturating_duration_since(now());
     let (marks, waiting) = match parse(lang, code, deadline) {
         Some(tree) => {
             let colours = Colours::new(lang, tree, code.to_string());
             colours.outer.set(Some(deadline));
-            (colours.all(), colours.waiting.get())
+            let marks = colours.all();
+            let late = colours.deferred.get() && left < MAIN_TOTAL / 2;
+            if late {
+                redraw();
+            }
+            (marks, colours.pending.get() || late)
         }
         None if try_later(left, deadline) => {
-            DEFERRED.store(true, Ordering::SeqCst);
+            redraw();
             (crate::highlight::marks(label, code), true)
         }
         None => (crate::highlight::marks(label, code), pending(lang)),
@@ -495,12 +543,17 @@ pub struct Colours {
     text: String,
     /// Each line's bytes in `text`, without its newline: as `str::lines` splits it, cut as drawn.
     lines: Vec<Range<usize>>,
-    chunks: RefCell<HashMap<usize, Vec<Vec<Mark>>>>,
+    /// Each chunk's runs, and if some of it was left (`waiting`) the draw it was made in
+    /// (`built`): made again on a later draw, never twice in one.
+    chunks: RefCell<HashMap<usize, (Vec<Vec<Mark>>, Option<usize>)>>,
     /// Each language inside it parsed so far, by its first byte: `None` past the budget (plain).
     inner: RefCell<HashMap<(Lang, usize), Option<Tree>>>,
-    /// Set when a layer was drawn plain for its query not built yet, or for lack of time: not
-    /// kept, drawn again.
+    /// Set when the chunk being coloured had a layer drawn plain for its query not built yet, or
+    /// for lack of time.
     waiting: Cell<bool>,
+    /// Set for good once any chunk had a layer left for lack of time, or for its query.
+    deferred: Cell<bool>,
+    pending: Cell<bool>,
     /// The deadline of all the colouring it is part of (a reply's), if any; else each chunk has
     /// `MAIN_TOTAL` of its own.
     outer: Cell<Option<Instant>>,
@@ -520,29 +573,34 @@ impl Colours {
             lines.push(start..start + shown.len());
             start += line.len();
         }
-        let (chunks, inner, waiting) = (RefCell::default(), RefCell::default(), Cell::new(false));
+        let (chunks, inner) = (RefCell::default(), RefCell::default());
+        let (waiting, deferred, pending) = (Cell::new(false), Cell::new(false), Cell::new(false));
         let (outer, until, parsed) = (Cell::new(None), Cell::new(now()), Cell::new(0));
-        Colours { lang, tree, text, lines, chunks, inner, waiting, outer, until, parsed }
+        Colours { lang, tree, text, lines, chunks, inner, waiting, deferred, pending, outer, until, parsed }
     }
 
     pub fn lang(&self) -> Lang {
         self.lang
     }
 
-    /// Line `at`'s runs, by byte within it: its chunk coloured the first time it is asked for.
+    /// Line `at`'s runs, by byte within it: its chunk coloured the first time it is asked for, and
+    /// again on a later draw while some of it is left.
     pub fn line(&self, at: usize) -> Vec<Mark> {
         let chunk = at / CHUNK;
-        if !self.chunks.borrow().contains_key(&chunk) {
+        let stale = match self.chunks.borrow().get(&chunk) {
+            None => true,
+            Some((_, left)) => left.is_some_and(|draw| draw != built()),
+        };
+        if stale {
             self.waiting.set(false);
             self.until.set(self.outer.get().unwrap_or_else(|| deadline(MAIN_TOTAL)));
             self.parsed.set(0);
             let made = self.colour(chunk * CHUNK..((chunk + 1) * CHUNK).min(self.lines.len()));
-            if self.waiting.get() {
-                return made.get(at % CHUNK).cloned().unwrap_or_default();
-            }
-            self.chunks.borrow_mut().insert(chunk, made);
+            let left = self.waiting.get().then(built);
+            self.chunks.borrow_mut().insert(chunk, (made, left));
         }
-        self.chunks.borrow().get(&chunk).and_then(|lines| lines.get(at % CHUNK)).cloned().unwrap_or_default()
+        let chunks = self.chunks.borrow();
+        chunks.get(&chunk).and_then(|(lines, _)| lines.get(at % CHUNK)).cloned().unwrap_or_default()
     }
 
     /// Every line's runs, by byte in the text.
@@ -609,7 +667,8 @@ impl Colours {
     /// Something left uncoloured for lack of time: this chunk is not kept, and the window draws again.
     fn defer(&self) {
         self.waiting.set(true);
-        DEFERRED.store(true, Ordering::SeqCst);
+        self.deferred.set(true);
+        redraw();
     }
 
     /// The runs of `lines`, one after another in the text. A node inside another is drawn as its
@@ -620,7 +679,10 @@ impl Colours {
         let mut paint: Vec<Option<Token>> = vec![None; bytes.len()];
         for (lang, tree) in self.layers(bytes.clone()) {
             let Some(Made { highlights: query, tokens, .. }) = made(lang) else {
-                self.waiting.set(self.waiting.get() || pending(lang));
+                if pending(lang) {
+                    self.waiting.set(true);
+                    self.pending.set(true);
+                }
                 continue;
             };
             // Code inside a string (`${name}`), a fence's code: plain, then its own colours.
@@ -866,24 +928,24 @@ mod tests {
     fn a_fence_is_coloured_by_the_grammar_its_label_names() {
         let code = "// Sow.\nfn sow() -> &'static str { \"kale\" }";
         for label in ["rust", "rs", "RUST"] {
-            let marks = fence(label, code, deadline(BUDGET));
+            let marks = fence(label, code, &mut Until::new(BUDGET));
             let got: Vec<(&str, Token)> = marks.iter().map(|(range, token)| (&code[range.clone()], *token)).collect();
             for want in [("// Sow.", Token::Comment), ("fn", Token::Keyword), ("\"kale\"", Token::String)] {
                 assert!(got.contains(&want), "{label}: {want:?} in {got:?}");
             }
         }
-        assert_eq!(fence("brainfuck", code, deadline(BUDGET)), Vec::new(), "a language unknown: plain");
+        assert_eq!(fence("brainfuck", code, &mut Until::new(BUDGET)), Vec::new(), "a language unknown: plain");
         // PHP with no `<?php`, and with it.
         for php in ["echo \"kale\";", "<?php echo \"kale\";"] {
             let at = php.find('"').unwrap_or_default();
             assert!(
-                fence("php", php, deadline(BUDGET)).contains(&(at..at + 6, Token::String)),
+                fence("php", php, &mut Until::new(BUDGET)).contains(&(at..at + 6, Token::String)),
                 "{php}: {:?}",
-                fence("php", php, deadline(BUDGET))
+                fence("php", php, &mut Until::new(BUDGET))
             );
         }
         // One a grammar does not have: the lexer's, as before.
-        assert_eq!(fence("diff", "+ a", deadline(BUDGET)), crate::highlight::marks("diff", "+ a"));
+        assert_eq!(fence("diff", "+ a", &mut Until::new(BUDGET)), crate::highlight::marks("diff", "+ a"));
     }
 
     /// A markdown file of many fences parses within the budget: the languages inside are parsed as
@@ -901,10 +963,13 @@ mod tests {
         // `fn sow`, in the 11th chunk: its Rust coloured. 128 lines of 10-line blocks: 13 or 14
         // blocks, 3 languages inside each, `MAX_INNER` a draw: the chunk is not kept yet.
         assert!(colours.line(CHUNK * 10 + 3).contains(&(0..2, Token::Keyword)));
-        assert_eq!((colours.inner.borrow().len(), colours.chunks.borrow().len()), (MAX_INNER, 0));
+        assert_eq!((colours.inner.borrow().len(), left(&colours, 10)), (MAX_INNER, true));
+        colours.line(CHUNK * 10 + 4);
+        assert_eq!(colours.inner.borrow().len(), MAX_INNER, "the same draw: not made again");
+        next_draw();
         colours.line(CHUNK * 10 + 3);
         assert!((36..=45).contains(&colours.inner.borrow().len()), "{}", colours.inner.borrow().len());
-        assert_eq!(colours.chunks.borrow().len(), 1, "all parsed: kept");
+        assert!(!left(&colours, 10), "all parsed: kept");
     }
 
     /// A pattern whose predicate tree-sitter does not test is left out: Ruby's `#is-not? local`
@@ -974,6 +1039,16 @@ mod tests {
         pub(super) static SKEW: Cell<Duration> = const { Cell::new(Duration::ZERO) };
     }
 
+    /// True if chunk `at` has something left for a later draw.
+    fn left(colours: &Colours, at: usize) -> bool {
+        colours.chunks.borrow().get(&at).is_some_and(|(_, left)| left.is_some())
+    }
+
+    /// A later draw, as `take_built` makes one after colouring was left.
+    fn next_draw() {
+        BUILT.fetch_add(1, Ordering::SeqCst);
+    }
+
     /// `draw` with every parse as slow as its deadline allows; how long it took by the clock.
     fn slowly(draw: impl FnOnce()) -> Duration {
         let before = SKEW.with(Cell::get);
@@ -997,8 +1072,8 @@ mod tests {
         assert!(
             drawn.iter().any(|block| matches!(block, crate::markdown::Block::Code { marks, .. } if *marks == lexer))
         );
-        // Drawn again at speed: all but the first (it had the whole time: too slow, kept as is).
-        assert_eq!(parses(|| drop(crate::markdown::parse(&reply, None))), 199);
+        // Drawn again with time: all but the first (it had the whole time: too slow, kept as is).
+        assert_eq!(parses(|| drop(reply_at_leisure(&reply))), 199);
     }
 
     #[test]
@@ -1009,7 +1084,7 @@ mod tests {
         let colours = Colours::new(Lang::Markdown, tree, md.to_string());
         colours.outer.set(Some(deadline(Duration::ZERO)));
         assert_eq!(parses(|| drop(colours.line(1))), 0);
-        assert!(colours.chunks.borrow().is_empty() && colours.inner.borrow().is_empty());
+        assert!(left(&colours, 0) && colours.inner.borrow().is_empty());
     }
 
     /// A chunk of a viewed file has `MAIN_TOTAL` of its own: the first slow language inside takes
@@ -1021,10 +1096,11 @@ mod tests {
         let colours = Colours::new(Lang::Markdown, tree, md.to_string());
         let took = slowly(|| drop(colours.line(1)));
         assert!(took <= MAIN_TOTAL, "{took:?}");
-        assert_eq!((colours.inner.borrow().len(), colours.chunks.borrow().len()), (1, 0));
+        assert_eq!((colours.inner.borrow().len(), left(&colours, 0)), (1, true));
         colours.outer.set(Some(deadline(BUDGET)));
+        next_draw();
         colours.line(1);
-        assert_eq!(colours.chunks.borrow().len(), 1, "all parsed: kept");
+        assert!(!left(&colours, 0), "all parsed: kept");
         assert!(colours.line(5).contains(&(0..2, Token::Keyword)), "{:?}", colours.line(5));
     }
 
@@ -1238,7 +1314,7 @@ mod tests {
         let lexer = time(&|| drop(crate::highlight::marks("rust", shown)));
         let first = time(&|| drop(crate::markdown::parse(&reply, None)));
         let again = time(&|| drop(crate::markdown::parse(&reply, None)));
-        let fence_again = time(&|| drop(fence("rust", shown, deadline(MAIN_TOTAL))));
+        let fence_again = time(&|| drop(fence("rust", shown, &mut Until::new(MAIN_TOTAL))));
         println!("| 200-line Rust fence, calling thread | main | this branch |");
         println!("|---|---|---|");
         println!("| the reply, first draw | {:.1?} | {first:.1?} |", plain + lexer);
