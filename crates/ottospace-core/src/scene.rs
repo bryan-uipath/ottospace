@@ -18,6 +18,9 @@ const LIFT_MIN: f32 = 1.1;
 const UNIT: f32 = TALLEST / 60. * 0.75;
 /// The gap round a district and round a building, at most, in plan units.
 const STREET: f32 = 0.0035;
+/// A folder whose lot's shorter side is under this (plan units, far below a pixel) is no
+/// district: its insets would run a deep chain of folders down to nothing.
+const LEAST_DISTRICT: f32 = 1e-3;
 /// Districts are this many streets apart, so a folder reads as a block of its own.
 const DISTRICT_STREET: f32 = 1.5;
 /// The ground a district keeps free inside its own edge, a share of its shorter side at most
@@ -110,6 +113,11 @@ fn unit(a: [f32; 3]) -> [f32; 3] {
 }
 
 impl Block {
+    /// The middle of its top: what of a lit building must be seen, where a beacon stands.
+    pub fn top(&self) -> [f32; 3] {
+        [(self.min[0] + self.max[0]) / 2., self.max[1], (self.min[2] + self.max[2]) / 2.]
+    }
+
     fn corners(&self) -> impl Iterator<Item = [f32; 3]> + '_ {
         (0..8).map(|i| {
             let pick = |axis: usize| if i >> axis & 1 == 0 { self.min[axis] } else { self.max[axis] };
@@ -302,7 +310,7 @@ pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
         let floor = terrace(parent.tier);
         if place.group {
             let mut room = Room { depth: place.depth, from, to: lot, tier: parent.tier };
-            if children[i] != 1 {
+            if children[i] != 1 && lot.short() >= LEAST_DISTRICT {
                 let plate = lot.shrunk((street * DISTRICT_STREET).min(lot.short() / 4.));
                 let to = plate.shrunk(street.min(plate.short() * KERB));
                 room = Room { depth: place.depth, from, to, tier: parent.tier + 1 };
@@ -336,23 +344,18 @@ pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
 }
 
 impl Scene {
-    /// The box under a point of the picture (shares of it, 0,0 top left): the nearest building
-    /// or district the camera's ray through it meets. Never the ground.
-    pub fn hit(&self, x: f32, y: f32) -> Option<&Block> {
+    /// The box under a point of the picture (shares of it, 0,0 top left), by its index: the
+    /// nearest building or district the camera's ray through it meets. Never the ground.
+    pub fn hit(&self, x: f32, y: f32) -> Option<usize> {
         let camera = self.camera?;
         let (r, u, f) = camera.axes();
         let tan = (camera.fov / 2.).tan();
         let (dx, dy) = ((2. * x - 1.) * tan * camera.aspect, (1. - 2. * y) * tan);
         let to: [f32; 3] = std::array::from_fn(|i| camera.eye[i] + (f[i] + r[i] * dx + u[i] * dy) * camera.far);
-        let near = |b: &&Block| b.crossed(camera.eye, to).map(|(t, _)| t);
-        let hits = self.blocks.iter().filter(|b| b.kind != Kind::Ground);
-        hits.filter_map(|b| Some((near(&b)?, b))).min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, b)| b)
+        let hits = self.blocks.iter().enumerate().filter(|(_, b)| b.kind != Kind::Ground);
+        let near = hits.filter_map(|(i, b)| Some((b.crossed(camera.eye, to)?.0, i)));
+        near.min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, i)| i)
     }
-}
-
-/// The top centre of a box: what of a lit building must be seen.
-fn top(block: &Block) -> [f32; 3] {
-    [(block.min[0] + block.max[0]) / 2., block.max[1], (block.min[2] + block.max[2]) / 2.]
 }
 
 /// Cuts down every building that stands in the line from `eye` to a lit building's top, to just
@@ -362,7 +365,7 @@ fn clear_sight(blocks: &mut [Block], eye: [f32; 3], lit_floor: f32) {
     let lit = |b: &Block| matches!(b.kind, Kind::Lit(_));
     for _ in 0..8 {
         let mut cut = false;
-        for to in blocks.iter().filter(|b| lit(b)).map(top).collect::<Vec<_>>() {
+        for to in blocks.iter().filter(|b| lit(b)).map(Block::top).collect::<Vec<_>>() {
             for block in blocks.iter_mut().filter(|b| b.kind == Kind::Building || lit(b)) {
                 // Only where the line comes down to it: the line is lowest where it leaves the box.
                 let Some((_, leaves)) = block.crossed(eye, to).filter(|(_, leaves)| *leaves < 0.999) else { continue };
@@ -508,6 +511,24 @@ mod tests {
         }
     }
 
+    /// A chain of 80 folders, each with a file: the outer ones are districts, each inside the
+    /// last; the deep ones, too small for a district, are none, and every box keeps a footprint.
+    #[test]
+    fn a_deep_chain_of_folders_keeps_every_footprint() {
+        let files: Vec<(String, u64)> = (1..=80)
+            .flat_map(|depth| {
+                let dir = vec!["d"; depth].join("/");
+                [(format!("{dir}/a.rs"), 1), (format!("{dir}/b.rs"), 1)]
+            })
+            .collect();
+        let atlas = atlas(&repo(&files));
+        let s = scene(&atlas, &[], 1.6);
+        assert!(s.blocks.iter().filter(|b| matches!(b.kind, Kind::Plate(_))).count() > 3);
+        for b in &s.blocks {
+            assert!(b.max[0] > b.min[0] && b.max[2] > b.min[2], "{b:?}");
+        }
+    }
+
     /// A folder with one child is no district: `a` and `a/b` hold only `a/b/c`, which is the
     /// first tier. Its districts are a tier apart by the owner's lifts.
     #[test]
@@ -530,14 +551,14 @@ mod tests {
             let camera = s.camera.unwrap();
             let mut hit = 0;
             for b in s.blocks.iter().filter(|b| b.kind == Kind::Building) {
-                let (x, y) = camera.project(top(b)).unwrap();
+                let (x, y) = camera.project(b.top()).unwrap();
                 // Another building in front may hide it: then the hit is that one, nearer.
-                let got = s.hit(x, y).unwrap();
+                let got = &s.blocks[s.hit(x, y).unwrap()];
                 if got == b {
                     hit += 1;
                 } else {
-                    let d = |b: &Block| (0..3).map(|i| (top(b)[i] - camera.eye[i]).powi(2)).sum::<f32>();
-                    assert!(got.crossed(camera.eye, top(b)).is_some() || d(got) <= d(b), "{got:?} for {b:?}");
+                    let d = |b: &Block| (0..3).map(|i| (b.top()[i] - camera.eye[i]).powi(2)).sum::<f32>();
+                    assert!(got.crossed(camera.eye, b.top()).is_some() || d(got) <= d(b), "{got:?} for {b:?}");
                 }
             }
             assert!(hit > s.blocks.len() / 2, "{hit}");
@@ -549,7 +570,7 @@ mod tests {
         let a = plate(&s, &atlas, "a").unwrap();
         let kerb = [(a.min[0] + a.max[0]) / 2., a.max[1], a.min[2] + 1e-4];
         let (x, y) = s.camera.unwrap().project(kerb).unwrap();
-        assert_eq!(s.hit(x, y), Some(a));
+        assert_eq!(s.hit(x, y).map(|i| &s.blocks[i]), Some(a));
     }
 
     #[test]
@@ -604,7 +625,7 @@ mod tests {
                     let plain = scene(&atlas, &[], aspect);
                     let s = scene(&atlas, &lit, aspect);
                     let eye = s.camera.unwrap().eye;
-                    for to in s.blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))).map(top) {
+                    for to in s.blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))).map(Block::top) {
                         let over: Vec<&Block> =
                             s.blocks.iter().filter(|b| b.crossed(eye, to).is_some_and(|(_, t)| t < 0.999)).collect();
                         assert!(over.is_empty(), "{id}: {over:?}");
