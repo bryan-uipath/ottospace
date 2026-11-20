@@ -1,5 +1,5 @@
 # Decisions (`decisions` flag): two made-up tasks whose agents each wait on a question. ⌘J opens
-# the card workspace, "Decisions · 1 of 2"; 1 answers and the next card shows while the seal plays;
+# the card workspace, "Decisions · 1 of 2"; 1 picks, ↵ sends and the next card shows while the seal plays;
 # ⌘L talks the card over in the drawer, on the card's task. `--record` films the seal.
 {"env":{"OTTOSPACE_FEATURES":"decisions"}}
 {"cmd":"split","kind":"empty"}
@@ -17,8 +17,11 @@
 {"until":"state.decisions.at"}
 {"settle":300}
 {"shot":"card"}
-{"record":"start"}
 {"cmd":"key","keys":"1","as":"user"}
+{"settle":120}
+{"shot":"picked"}
+{"record":"start"}
+{"cmd":"key","keys":"enter","as":"user"}
 {"settle":120}
 {"shot":"answered"}
 {"sleep_ms":1200}

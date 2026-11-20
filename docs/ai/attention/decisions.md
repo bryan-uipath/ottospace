@@ -12,8 +12,8 @@ person through what waits on them, one card at a time, in a 15-minute block.
 - **A workspace like any other**, with one pane, the card, filling the window. Its tab reads
   "Decisions · 4 of 7" over a progress bar. It closes itself after the last card.
 - **A card**: the task (badge, name, priority), a short recap, the question, its options with the
-  agent's recommendation marked. Number keys answer and the agent resumes at once; S skips; L puts
-  it off. The next card takes keys at once while the answered one seals (Done's seal, #278).
+  agent's recommendation marked. A number key picks and ↵ sends, and the agent resumes; S skips; L
+  puts it off. The next card takes keys at once while the answered one seals (Done's seal, #278).
 - **Order**: an agent stopped on the person first, then due/priority, then age.
 - **No conversation UI of its own**: talking a card over opens the right drawer on the card's task
   (its conversation and btw column, #284/#285; ⌘⇧R or its item on the right rail). The right rail
@@ -147,7 +147,7 @@ Nothing on screen. `ottospace-core/src/model/decisions.rs`.
 - The card pane draws the existing ask card (`conversation.rs` `ask_card`, its actions as
   `DecisionsAsk` when hosted there) under a header of `ui::` parts: the task's badge, name and
   priority, why it is first. The tab's "Decisions · n of m" with a thin progress bar.
-- Keys on the card pane: 1–9 answer, ↑↓ j k move, space picks, ↵ sends, ⇥ between questions, S
+- Keys on the card pane: 1–9 pick, ↑↓ j k move, space picks, ↵ sends, ⇥ between questions, S
   skips, L later, Esc closes Decisions. Other… opens the drawer on the card's task with the keys
   there (its words are typed where the composer is).
 - The seal (#278's) plays over the answered card while the next one already takes keys; at once
@@ -209,17 +209,15 @@ Hold agents' questions for the next block unless one waited too long; standing r
 the recommendation for this kind"); attention metrics (time blocked on the person); a secretary
 role that prepares cards (plan.md §3).
 
-## Open questions for the owner
+## Answered by the owner (2026-11-20)
 
-1. **Later**: snooze the task for an hour (slice 1), or until the next Decisions block, or ask how
-   long? Its agent keeps waiting meanwhile; it is not put away (that would stop the agent).
-2. **Skip**: out of this run only (slice 1: shown again next time), or to the back of this run?
-3. **Permission cards' keys** in Decisions: S is Skip there, but Show all on a permission card.
-   Proposal: in Decisions, Show all is ⇧S (or a click), Allow 1, Deny 2.
-4. **Panes added to a card** close on the person's own answer, a terminal running something too.
-   Ask first, as closing a temporary workspace does, or move them to the task's workspace (what
-   slice 1 does when Decisions ends)?
-5. **The number key answers at once** on a single-select question. On a multi-question card it
-   picks, and ↵ sends: acceptable, or should Decisions show one question per card?
-6. **The recommendation**: today an option is "recommended" only if the agent says so in its label.
-   Should ottospace ask agents for it (the guide), or should a presenter role choose?
+1. **Later** snoozes the task for an hour. Its agent keeps waiting; it is not put away.
+2. **Skip** takes the card out of this run only; it is shown again next time.
+3. **Permission cards** keep their usual keys in Decisions.
+4. **Panes added to a card** close on the person's own answer, Skip or Later (not when a card
+   leaves by another's step); when Decisions ends they go to the task's workspace.
+5. **A number key picks, ↵ sends**, on every card: no answer is sent on a number alone (changed
+   from "sends at once" on a single single-select question). Multi-select and multi-question
+   cards are as before.
+6. **The recommendation** is the asking agent's only: an option is recommended when the agent
+   says so in its label.
