@@ -1066,6 +1066,9 @@ screen (vim, less, htop) the wheel does nothing, and ⇧PageUp and friends go to
 A click on a terminal focuses it and clears its selection; a drag there selects, even in an
 unfocused pane. ottospace sends programs no mouse reports: in vim, tmux or htop a drag selects as
 it does at a prompt. Paste is bracketed when the program asks for it.
+Programs see `TERM=xterm-256color`, `COLORTERM=truecolor` (24-bit colour), `TERM_PROGRAM=ottospace`
+and `TERM_PROGRAM_VERSION`, whatever terminal started ottospace. `scripts/term-probe` prints a test
+card of colours, styles, glyphs and replies, to compare terminals side by side.
 Its header names its directory, and the program in front of the shell while one runs:
 `app-api · cargo test`. An app pane's header shows the app's icon and the window's title; an
 empty pane's, nothing.

@@ -1,0 +1,15 @@
+# scripts/term-probe in a terminal: what a program is told, and how styles, glyphs and replies come out.
+{"cmd":"split"}
+{"cmd":"wait","pattern":"^\\$"}
+{"cmd":"type","text":"clear; {REPO}/scripts/term-probe env colour\r"}
+{"cmd":"wait","pattern":"^term-probe done: env colour$"}
+{"shot":"colour"}
+{"cmd":"type","text":"clear; {REPO}/scripts/term-probe style\r"}
+{"cmd":"wait","pattern":"^term-probe done: style$"}
+{"shot":"style"}
+{"cmd":"type","text":"clear; {REPO}/scripts/term-probe glyphs box\r"}
+{"cmd":"wait","pattern":"^term-probe done: glyphs box$"}
+{"shot":"glyphs"}
+{"cmd":"type","text":"clear; {REPO}/scripts/term-probe links replies\r"}
+{"cmd":"wait","pattern":"^term-probe done: links replies$"}
+{"shot":"replies"}

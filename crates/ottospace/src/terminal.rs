@@ -248,7 +248,7 @@ impl Terminal {
         let grid = Grid { cols: 80, rows: 24 };
         let shared = Arc::new(Shared::default());
         let listener = Listener(shared.clone());
-        let mut env = HashMap::from([("TERM".to_string(), "xterm-256color".to_string())]);
+        let mut env = program_env();
         env.extend(vars.iter().map(|(name, value)| (name.to_string(), value.clone())));
         let at_root = std::env::current_dir().is_ok_and(|dir| dir.parent().is_none());
         // A `cwd` that is gone starts in the user's folder: never in `/`, nor where ottospace started.
@@ -866,6 +866,18 @@ pub(crate) fn login_shell() -> String {
     if posix { shell } else { "/bin/zsh".into() }
 }
 
+/// What a program reads to pick its features: 24-bit colour (`COLORTERM`), and who we are. Set
+/// over what ottospace inherited, e.g. another terminal's `TERM_PROGRAM` when started from one.
+fn program_env() -> HashMap<String, String> {
+    let vars = [
+        ("TERM", "xterm-256color"),
+        ("COLORTERM", "truecolor"),
+        ("TERM_PROGRAM", "ottospace"),
+        ("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION")),
+    ];
+    vars.into_iter().map(|(name, value)| (name.to_string(), value.to_string())).collect()
+}
+
 fn window_size(grid: Grid, cell: Size<Pixels>) -> WindowSize {
     WindowSize {
         num_lines: grid.rows as u16,
@@ -1057,6 +1069,15 @@ mod tests {
         // Gone, the pass shows again: it grants nothing.
         drop(live);
         assert_eq!(lines_of(&short)[0], &hex[16..]);
+    }
+
+    /// Programs see 24-bit colour and ottospace's name, whatever terminal started ottospace.
+    #[test]
+    fn programs_are_told_of_24_bit_colour_and_ottospace() {
+        let env = program_env();
+        assert_eq!(env["COLORTERM"], "truecolor");
+        assert_eq!((env["TERM"].as_str(), env["TERM_PROGRAM"].as_str()), ("xterm-256color", "ottospace"));
+        assert_eq!(env["TERM_PROGRAM_VERSION"], env!("CARGO_PKG_VERSION"));
     }
 
     /// What clients read keeps a cell's zero-width characters: a combining accent, a joiner.
