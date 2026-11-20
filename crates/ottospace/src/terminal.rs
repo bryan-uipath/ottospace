@@ -22,8 +22,8 @@ use alacritty_terminal::tty;
 use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 use gpui::{
-    App, Bounds, ContentMask, FontStyle, FontWeight, Hsla, Pixels, Size, StrikethroughStyle, TextRun, UnderlineStyle,
-    Window, fill, font, point, px, rgb, size,
+    App, Bounds, ContentMask, FontFeatures, FontStyle, FontWeight, Hsla, Pixels, Size, StrikethroughStyle, TextRun,
+    UnderlineStyle, Window, fill, font, point, px, rgb, size,
 };
 use ottospace_core::terminal::{
     CellPoint, Motion, Press, Proc, Processes, Scroll, SelectKind, Wheel, Work, running, saved_command,
@@ -702,24 +702,27 @@ fn screen_of<T: EventListener>(term: &Term<T>, rows: usize) -> Screen {
             color: cell.underline_color().map(colour),
         });
         let hidden = cell.c == '\t' || cell.flags.contains(Flags::HIDDEN);
-        let mut text = String::from(if hidden { ' ' } else { cell.c });
+        let c = if hidden { ' ' } else { cell.c };
         // Its zero-width characters: a combining accent, an emoji's joiner or presentation selector.
-        if !hidden {
-            text.extend(cell.zerowidth().into_iter().flatten());
-        }
+        let zero_width = cell.zerowidth().filter(|_| !hidden);
         let (col, wide) = (cell.point.column.0, cell.flags.contains(Flags::WIDE_CHAR));
-        let alone = !text.is_ascii() || wide;
+        let alone = !c.is_ascii() || wide || zero_width.is_some();
         match row.last_mut() {
+            // The next column of a run of plain characters in one style (an erased wide
+            // character's half leaves a gap: a new run after it).
             Some(s)
                 if !alone
                     && !s.alone
+                    && s.col + s.cells == col
                     && (s.fg, s.bg, s.bold, s.italic, s.strike, s.underline)
                         == (fg, bg, bold, italic, strike, underline) =>
             {
-                s.text.push_str(&text);
+                s.text.push(c);
                 s.cells += 1;
             }
             _ => {
+                let mut text = c.to_string();
+                text.extend(zero_width.into_iter().flatten());
                 let cells = if wide { 2 } else { 1 };
                 row.push(Span { text, col, cells, alone, fg, bg, bold, italic, strike, underline })
             }
@@ -738,10 +741,26 @@ impl Screen {
     /// Plain data in and out: for a thread of its own.
     pub fn picture(&self, size: [f64; 2], cell: [f64; 2], scale: f64) -> Option<Vec<u8>> {
         use ottospace_mac::image::{Grid, Run, grid_png};
-        // A character alone without its zero-width ones: the picture counts a cell a character.
-        let text = |span: &Span| if span.alone { span.text.chars().take(1).collect() } else { span.text.clone() };
-        let run = |span: &Span| Run { text: text(span), fg: span.fg, bg: span.bg, bold: span.bold };
-        let rows: Vec<Vec<Run>> = self.rows.iter().map(|row| row.iter().map(run).collect()).collect();
+        // The picture counts a cell a character: a gap before a span is spaces, a wide character
+        // has a space after it, and zero-width characters are left out.
+        let runs = |row: &Vec<Span>| {
+            let mut runs = Vec::new();
+            let mut at = 0;
+            for span in row {
+                let gap = span.col.saturating_sub(at);
+                if gap > 0 {
+                    runs.push(Run { text: " ".repeat(gap), fg: palette::FOREGROUND, bg: None, bold: false });
+                }
+                let text = match span.alone {
+                    true => span.text.chars().take(1).chain(" ".repeat(span.cells - 1).chars()).collect(),
+                    false => span.text.clone(),
+                };
+                runs.push(Run { text, fg: span.fg, bg: span.bg, bold: span.bold });
+                at = span.col + span.cells;
+            }
+            runs
+        };
+        let rows: Vec<Vec<Run>> = self.rows.iter().map(runs).collect();
         let font = terminal_font();
         let (font_size, background) = (f64::from(font.font_size), palette::BACKGROUND);
         grid_png(&Grid { rows: &rows, size, cell, font: &font.font, font_size, background, scale })
@@ -1011,6 +1030,7 @@ pub fn paint(
     cx: &mut App,
 ) {
     let chosen = terminal_font();
+    let mut art = 0;
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for (r, spans) in screen.rows.iter().enumerate() {
             let y = bounds.origin.y + cell.height * r as f32;
@@ -1023,15 +1043,32 @@ pub fn paint(
                 }
             }
             for s in spans.iter().filter(|s| !s.text.trim().is_empty() || s.underline.is_some() || s.strike) {
-                let first = s.text.chars().next().unwrap_or(' ');
-                if let Some(pieces) =
-                    s.alone.then(|| cell_art::pieces(first, f32::from(cell.width), f32::from(cell.height))).flatten()
-                {
+                // One character alone, no mark on it: a box-drawing or block one is drawn as shapes.
+                let mut chars = s.text.chars();
+                let single = chars.next().filter(|_| s.alone && chars.next().is_none());
+                let (w, h) = (f32::from(cell.width), f32::from(cell.height));
+                if let Some(pieces) = single.and_then(|c| cell_art::pieces(c, w, h)) {
                     paint_art(&pieces, at(s), rgb(s.fg).into(), window);
-                    ART_CELLS.fetch_add(1, Relaxed);
+                    // Its underline and strikethrough, straight, across the cell.
+                    let line = |y: f32, color: u32| {
+                        fill(
+                            Bounds { origin: at(s) + point(px(0.), px(y)), size: size(cell.width, px(1.)) },
+                            Hsla::from(rgb(color)),
+                        )
+                    };
+                    if let Some(underline) = s.underline {
+                        window.paint_quad(line(h - 2., underline.color.unwrap_or(s.fg)));
+                    }
+                    if s.strike {
+                        window.paint_quad(line((h / 2.).floor(), s.fg));
+                    }
+                    art += 1;
                     continue;
                 }
                 let mut font = font(chosen.font.clone());
+                // No ligature: `fi` must stay two glyphs on two columns.
+                font.features =
+                    FontFeatures(Arc::new(["calt", "liga", "clig", "dlig"].map(|tag| (tag.into(), 0)).into()));
                 if s.bold {
                     font.weight = FontWeight::BOLD;
                 }
@@ -1069,7 +1106,13 @@ pub fn paint(
             window.paint_quad(fill(Bounds { origin, size: cell }, color.opacity(if focused { 0.6 } else { 0.2 })));
         }
     });
+    // Counted for a test run's state only: once a frame.
+    if art > 0 && *TEST_RUN.get_or_init(|| std::env::var_os("OTTOSPACE_E2E").is_some()) {
+        ART_CELLS.fetch_add(art, Relaxed);
+    }
 }
+
+static TEST_RUN: OnceLock<bool> = OnceLock::new();
 
 /// Box-drawing and block cells drawn as shapes since start (`counts.cell_art`, test runs).
 static ART_CELLS: AtomicU64 = AtomicU64::new(0);
@@ -1261,12 +1304,12 @@ mod tests {
     /// the text after it keeps its own (`⎿` from a fallback font is wider than a cell).
     #[test]
     fn a_character_the_font_may_lack_is_placed_alone_on_its_columns() {
-        let term = term(10, 1, "a\u{23bf}b\u{65e5}c\u{2502}");
-        let screen = screen_of(&term, 1);
-        let placed: Vec<(&str, usize, usize, bool)> =
+        let placed = term(10, 1, "a\u{23bf}b\u{65e5}c\u{2502}");
+        let screen = screen_of(&placed, 1);
+        let spans: Vec<(&str, usize, usize, bool)> =
             screen.rows[0].iter().map(|s| (s.text.as_str(), s.col, s.cells, s.alone)).collect();
         assert_eq!(
-            placed,
+            spans,
             [
                 ("a", 0, 1, false),
                 ("\u{23bf}", 1, 1, true),
@@ -1277,6 +1320,12 @@ mod tests {
                 ("   ", 7, 3, false),
             ]
         );
+        // The first half of a wide character erased: the letter after it keeps its column.
+        let mut erased = term(10, 1, "a\u{65e5}b");
+        print(&mut erased, "\r\x1b[2G\x1b[X");
+        let row = &screen_of(&erased, 1).rows[0];
+        let b = row.iter().find(|s| s.text.starts_with('b')).map(|s| s.col);
+        assert_eq!(b, Some(3), "{:?}", row.iter().map(|s| (&s.text, s.col)).collect::<Vec<_>>());
     }
 
     /// What clients read keeps a cell's zero-width characters: a combining accent, a joiner.
