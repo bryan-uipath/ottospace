@@ -52,6 +52,14 @@ pub(crate) struct NewWorktree {
     root: String,
 }
 
+/// The user's delete of a linked worktree that git is at.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Deleting {
+    pub(crate) path: String,
+    pub(crate) repo: String,
+    pub(crate) branch: String,
+}
+
 /// A repository's checkouts: its own folder, then its worktrees.
 fn paths(repo: &crate::repos::Repo) -> impl Iterator<Item = &str> {
     std::iter::once(repo.path.as_str()).chain(repo.worktrees.iter().map(|worktree| worktree.path.as_str()))
@@ -376,5 +384,80 @@ impl Model {
         let checkout = self.task_worktree(id).and_then(|path| self.repo_name(path));
         let folder = || self.tasks.get(id)?.dir().map(|dir| crate::repos::name_of(dir));
         Some(checkout.or_else(folder).unwrap_or_else(|| "~".into()))
+    }
+}
+
+impl Model {
+    /// The listed linked worktree at `path`, and its repository. Never a repository's own folder.
+    pub fn linked_worktree(&self, path: &str) -> Option<(&crate::repos::Repo, &crate::repos::Worktree)> {
+        if self.repos.iter().any(|repo| repo.path == path) {
+            return None;
+        }
+        self.repos.iter().find_map(|repo| Some((repo, repo.worktrees.iter().find(|w| w.path == path)?)))
+    }
+
+    /// True if a terminal is in `path` or below: its shell, the program in front of it, or the
+    /// folder it started in.
+    pub(crate) fn terminal_in(&self, path: &str) -> bool {
+        let terminal = |pane: &&super::Pane| pane.kind == super::Kind::Terminal;
+        let mut cwds = self.panes.iter().filter(terminal).flat_map(|pane| {
+            let live = self.terminals.iter().filter(|t| t.pane == pane.id);
+            let live: Vec<&str> = live.flat_map(|t| [t.cwd.as_deref(), t.shell.as_deref()]).flatten().collect();
+            live.into_iter().chain(pane.cwd.as_deref())
+        });
+        cwds.any(|dir| sessions::below(dir, path))
+    }
+
+    /// Why the worktree at `path` is not deleted now: a terminal, or a task's running agent, is in it.
+    pub fn worktree_busy(&self, path: &str) -> Option<&'static str> {
+        if self.terminal_in(path) {
+            return Some(crate::repos::TERMINAL_IN);
+        }
+        let runs = |t: &&crate::tasks::Task| self.agent_runs(&crate::talk::Subject::Task(t.id));
+        let inside = |t: &crate::tasks::Task| self.task_worktree(t.id).is_some_and(|w| sessions::below(w, path));
+        self.tasks.list.iter().filter(runs).any(inside).then_some(crate::repos::AGENT_IN)
+    }
+
+    /// The user may be asked to delete it: a listed linked worktree, nothing in it, not being deleted.
+    pub(crate) fn deletable(&self, path: &str) -> bool {
+        let asked = self.deleting.iter().any(|d| d.path == path);
+        self.linked_worktree(path).is_some() && self.worktree_busy(path).is_none() && !asked
+    }
+
+    /// Delete worktree…: the question first, No its default. In use: why not, and no question.
+    pub(crate) fn worktree_delete_ask(&mut self, path: String, effects: &mut Vec<Effect>) {
+        if let Some(why) = self.worktree_busy(&path) {
+            return effects.push(Effect::Notice { text: why.into() });
+        }
+        if !self.deletable(&path) {
+            return;
+        }
+        // The question is ottospace's own UI: a live window would cover it.
+        self.leave(effects);
+        self.confirm = Some(super::Confirm { delete: Some(path), ..super::Confirm::default() });
+    }
+
+    /// Yes to "Delete this worktree?": git removes it, without `--force`; its branch stays.
+    pub(crate) fn worktree_delete(&mut self, path: String, effects: &mut Vec<Effect>) {
+        if !self.deletable(&path) {
+            return;
+        }
+        let Some((repo, worktree)) = self.linked_worktree(&path) else { return };
+        let (repo, branch) = (repo.path.clone(), worktree.branch.clone().unwrap_or_else(|| "(no branch)".into()));
+        self.deleting.push(Deleting { path: path.clone(), repo: repo.clone(), branch });
+        effects.push(Effect::RemoveWorktree { task: None, repo, path });
+    }
+
+    /// What git did with the user's delete: gone (the list is read again; a workspace whose
+    /// default it was falls back to its repository), or kept, and git's reason.
+    pub(crate) fn worktree_deleted(&mut self, path: &str, kept: Option<String>, effects: &mut Vec<Effect>) {
+        let Some(at) = self.deleting.iter().position(|d| d.path == path) else { return };
+        let Deleting { repo, branch, .. } = self.deleting.remove(at);
+        if let Some(why) = kept {
+            return effects.push(Effect::Notice { text: why });
+        }
+        self.workbooks.default_gone(path, &repo);
+        effects.push(Effect::Told { text: format!("Deleted the worktree of {branch} · its branch is kept") });
+        effects.push(Effect::ReadRepos);
     }
 }

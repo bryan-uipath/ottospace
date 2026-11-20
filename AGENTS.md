@@ -139,7 +139,8 @@ Design note: `docs/ai/attention/plan.md`.
   must not learn them.
   - `mouse` (`down`, `move`, `up`, `wheel`, `exit`, `enter`) and `drag` hand events to the window's
     own AppKit handlers, never posted. `wheel` takes `dx`, `dy`: lines, or with `precise` points,
-    both rounded to whole numbers.
+    both rounded to whole numbers. `"button":"right"` makes a `down` or `up` the right button's
+    (a right click: a Repos worktree row's menu), never a drag.
   - `"as":"user"` on `key`, `mouse` and `drag`: the event is `Origin::User`, for what a socket
     client is refused (sneak mode, a mark's wait, the quit question, a pin in the Apps section).
     Every key and pointer event a client sends is otherwise the client's. Outside a test run a

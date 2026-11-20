@@ -15,6 +15,7 @@ below; a folder scripts/shots/<name>/ beside it is copied into the instance's ow
                               "window":1: a tab out's window instead (`windows`, by place)
   {"settle":true}             wait for the frame that draws the last request (`settle`:500: and 500 ms)
   {"click":"task:1"}          the user's click on a named control (ids: {"controls":true}); "at":[x,y]
+                              "button":"right": a right click
   {"hover":"task:1"}          the pointer over a named control, or {"hover":{"rect":"calendar.band.blocks.0.rect"}}
                               "modifiers":["cmd"]: with those keys held
   {"drag":{"rect":"drawer.body"},"at":[0,0.5],"by":[150,0]}   the user's drag from a control or rect, by points
@@ -438,8 +439,9 @@ def run_scenario(binary, scenario, out, record=False):
                 inst.settle(step["settle"] if isinstance(step["settle"], (int, float)) and step["settle"] is not True else 0)
             elif "click" in step:
                 x, y = inst.control(step["click"], step.get("at", [0.5, 0.5]))
+                button = {"button": step["button"]} if "button" in step else {}
                 for action in ["down", "up"]:
-                    inst.ok({"cmd": "mouse", "action": action, "x": x, "y": y, "clicks": step.get("clicks", 1), "as": "user"})
+                    inst.ok({"cmd": "mouse", "action": action, "x": x, "y": y, "clicks": step.get("clicks", 1), "as": "user", **button})
             elif "hover" in step:
                 x, y = inst.control(step["hover"], step.get("at", [0.5, 0.5]))
                 inst.ok({"cmd": "mouse", "action": "move", "x": x, "y": y, "modifiers": step.get("modifiers", []), "as": "user"})

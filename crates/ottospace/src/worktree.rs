@@ -45,30 +45,36 @@ pub fn start(repo: String, branch: String, path: String, root: Option<String>, f
 
 /// What a removal came to: `kept` none, removed; else why it stays.
 pub struct Removed {
-    pub task: ottospace_core::tasks::TaskId,
+    pub task: Option<ottospace_core::tasks::TaskId>,
     pub path: String,
     pub kept: Option<String>,
 }
 
 /// Removes a done task's own worktree at `path`, of the repository at `repo`, in `root`
-/// (`worktrees_dir`). Its end comes on `done`.
+/// (`worktrees_dir`); or (`task` none) the linked one the user deletes, wherever it is. Its end
+/// comes on `done`.
 pub fn start_remove(
-    task: ottospace_core::tasks::TaskId,
+    task: Option<ottospace_core::tasks::TaskId>,
     repo: String,
     path: String,
     root: Option<String>,
     done: mpsc::Sender<Removed>,
 ) {
     std::thread::spawn(move || {
-        let kept = remove(Path::new(&repo), Path::new(&path), root.as_deref().map(Path::new)).err();
+        let kept = match task {
+            Some(_) => remove(Path::new(&repo), Path::new(&path), root.as_deref().map(Path::new)),
+            None => git_remove(Path::new(&repo), Path::new(&path)),
+        };
+        let kept = kept.err();
         let _ = done.send(Removed { task, path, kept });
         ottospace_mac::wake::post();
     });
 }
 
-/// `git worktree remove` with no `--force`: git refuses one with changes or untracked files, and
-/// it stays; its branch always does. Why it stays, for the status bar: "Kept the worktree: 3
-/// uncommitted changes". Only one at `<root>/<repo>/<branch>`, both resolved: as `target` makes one.
+/// `git worktree remove` with no `--force` (`git_remove`): git refuses one with changes or
+/// untracked files, and it stays; its branch always does. Why it stays, for the status bar: "Kept
+/// the worktree: 3 uncommitted changes". Only one at `<root>/<repo>/<branch>`, both resolved: as
+/// `target` makes one.
 fn remove(repo: &Path, path: &Path, root: Option<&Path>) -> Result<(), String> {
     let resolved = (path.canonicalize().ok(), root.and_then(|root| root.canonicalize().ok()));
     let rest = match &resolved {
@@ -78,6 +84,12 @@ fn remove(repo: &Path, path: &Path, root: Option<&Path>) -> Result<(), String> {
     if rest.is_none_or(|rest| rest.components().count() != 2) {
         return Err("Kept the worktree: it is not in worktrees_dir".into());
     }
+    git_remove(repo, path)
+}
+
+/// `git worktree remove` of the worktree at `path`, never `--force`: git refuses a dirty or
+/// locked one, and says why. Never the branch.
+fn git_remove(repo: &Path, path: &Path) -> Result<(), String> {
     let (ok, said) = git(repo, &[OsStr::new("worktree"), OsStr::new("remove"), OsStr::new("--"), path.as_os_str()])?;
     if ok {
         return Ok(());
@@ -343,5 +355,31 @@ mod tests {
         std::os::unix::fs::symlink(scratch.join("code"), root.join("code")).unwrap();
         assert_eq!(remove(&repo, &root.join("code/app"), Some(&root)), kept);
         assert!(elsewhere.join(".git").is_file(), "it stays");
+    }
+
+    /// The user's Delete worktree…: one made by hand, outside the folder, goes and its branch
+    /// stays; a locked one, a dirty one and the repository's own checkout stay, git saying why.
+    #[test]
+    fn the_users_delete_removes_any_clean_linked_worktree_and_never_its_branch() {
+        let scratch = Scratch::dir(&format!("ottospace-worktree-delete-{}", std::process::id()));
+        let repo = scratch.join("app");
+        repository(&repo);
+        let by_hand = scratch.join("app-wheel");
+        git_in(&repo, &["worktree", "add", "-q", "-b", "wheel", by_hand.to_str().unwrap()]);
+        git_remove(&repo, &by_hand).unwrap();
+        assert!(!by_hand.exists());
+        let mut branch = Command::new("git");
+        branch.arg("-C").arg(&repo).args(["rev-parse", "--verify", "--quiet", "refs/heads/wheel"]);
+        assert!(branch.status().unwrap().success(), "the branch stays");
+        let locked = scratch.join("app-locked");
+        git_in(&repo, &["worktree", "add", "-q", "-b", "locked", locked.to_str().unwrap()]);
+        git_in(&repo, &["worktree", "lock", locked.to_str().unwrap()]);
+        let err = git_remove(&repo, &locked).unwrap_err();
+        assert!(err.starts_with("Kept the worktree: ") && err.contains("locked"), "{err}");
+        let dirty = scratch.join("app-dirty");
+        git_in(&repo, &["worktree", "add", "-q", "-b", "dirty", dirty.to_str().unwrap()]);
+        fs::write(dirty.join("a.md"), "a").unwrap();
+        assert_eq!(git_remove(&repo, &dirty), Err("Kept the worktree: 1 uncommitted change".into()));
+        assert!(git_remove(&repo, &repo).is_err() && repo.join(".git").is_dir());
     }
 }

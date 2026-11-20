@@ -148,6 +148,11 @@ impl Repo {
 
 /// Why a client's request adds no worktree: it runs git in the user's repository.
 pub const USERS_ALONE: &str = "only the user adds a worktree";
+/// Why a client's request deletes none: a removed directory cannot be brought back.
+pub const DELETE_USERS: &str = "only the user deletes a worktree";
+/// Why a worktree is not deleted now.
+pub const TERMINAL_IN: &str = "A terminal is in it: close its panes first";
+pub const AGENT_IN: &str = "A task's agent runs in it: stop it first";
 /// Why the + makes none: no `worktrees_dir`, and no ottospace folder to put one in.
 pub const WORKTREES_NONE: &str = "No folder for worktrees in this run";
 

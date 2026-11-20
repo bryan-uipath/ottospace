@@ -1506,6 +1506,7 @@ function confirm(value: unknown, at: string): Confirm {
     close: orNull(num)(o.close, `${at}.close`),
     later: orNull(later)(o.later, `${at}.later`),
     edited: orNull(num)(o.edited, `${at}.edited`),
+    delete: orNull(str)(o.delete, `${at}.delete`),
     agents: list(str)(o.agents, `${at}.agents`),
     unsent: list(unsent)(o.unsent, `${at}.unsent`),
   };
@@ -1650,16 +1651,22 @@ function rowMenu(value: unknown, at: string): RowMenu {
   const item = (value: unknown, at: string): RowMenu["items"][number] => {
     const i = fields(value, at);
     const kind = i.item;
-    const kinds = ["rename", "delete", "remove", "keep", "pause", "resume"] as const;
+    const kinds = ["rename", "delete", "remove", "keep", "pause", "resume", "delete_worktree"] as const;
     const known = kinds.find((k) => k === kind);
     if (known === undefined) throw wrong(`${at}.item`, "a menu item", kind);
-    return { item: known, label: str(i.label, `${at}.label`), rect: orNull(rect)(i.rect, `${at}.rect`) };
+    return {
+      item: known,
+      label: str(i.label, `${at}.label`),
+      why: orNull(str)(i.why, `${at}.why`),
+      rect: orNull(rect)(i.rect, `${at}.rect`),
+    };
   };
   return {
     workbook: orNull(num)(o.workbook, `${at}.workbook`),
     tab: orNull(num)(o.tab, `${at}.tab`),
     space: bool(o.space, `${at}.space`),
     transcript: bool(o.transcript, `${at}.transcript`),
+    worktree: orNull(str)(o.worktree, `${at}.worktree`),
     selected: orNull(num)(o.selected, `${at}.selected`),
     items: list(item)(o.items, `${at}.items`),
   };

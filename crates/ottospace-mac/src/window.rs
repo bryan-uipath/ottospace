@@ -37,6 +37,9 @@ pub enum MouseKind {
     Move,
     /// A move with the button held.
     Drag,
+    /// The right button: a press, a release.
+    RightDown,
+    RightUp,
     /// The scroll wheel, by `dx`, `dy`: points if `precise` (a trackpad), else lines (a mouse
     /// wheel); both in whole numbers, rounded. Positive `dy` scrolls back, as AppKit counts.
     Wheel { dx: f64, dy: f64, precise: bool },
@@ -122,6 +125,8 @@ pub unsafe fn send_mouse(ns_view: *mut c_void, mouse: Mouse) -> bool {
         MouseKind::Up => NSEventType::LeftMouseUp,
         MouseKind::Move => NSEventType::MouseMoved,
         MouseKind::Drag => NSEventType::LeftMouseDragged,
+        MouseKind::RightDown => NSEventType::RightMouseDown,
+        MouseKind::RightUp => NSEventType::RightMouseUp,
         MouseKind::Wheel { dx, dy, precise } => {
             let event = wheel(at, dx, dy, precise, flags);
             if let Some(event) = &event {
@@ -153,6 +158,8 @@ pub unsafe fn send_mouse(ns_view: *mut c_void, mouse: Mouse) -> bool {
         MouseKind::Down => view.mouseDown(&event),
         MouseKind::Up => view.mouseUp(&event),
         MouseKind::Move => view.mouseMoved(&event),
+        MouseKind::RightDown => view.rightMouseDown(&event),
+        MouseKind::RightUp => view.rightMouseUp(&event),
         _ => view.mouseDragged(&event),
     }
     true

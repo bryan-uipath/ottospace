@@ -1,7 +1,8 @@
-//! A row's menu in the shell: the … on a row, and the short list it opens under it. What it
-//! offers, what a key does and when it closes are the core's (`ottospace_core::row_menu`).
+//! A row's menu in the shell: the … on a row, and the short list it opens under it (a Repos row
+//! has none: a right click opens its menu at the pointer). What it offers, what a key does and
+//! when it closes are the core's (`ottospace_core::row_menu`).
 
-use gpui::{Context, ElementId, MouseDownEvent, Stateful, Window, div, prelude::*, px, rgb};
+use gpui::{Context, ElementId, MouseButton, MouseDownEvent, Stateful, Window, div, prelude::*, px, rgb};
 use ottospace_core::layout::Rect;
 use ottospace_core::list::ListRow;
 use ottospace_core::row_menu::{MenuOf, menu_key};
@@ -12,6 +13,9 @@ use crate::{Workspace, dialog, rect};
 /// The menu's width, and an item's height, in points.
 const WIDTH: f32 = 150.;
 const ITEM: f32 = 31.;
+/// A menu with an item that says why it does nothing: wider, and that line's height.
+const WIDE: f32 = 240.;
+const WHY: f32 = 16.;
 /// The status bar's height: the menu stays above it.
 const FOOT: f32 = 28.;
 
@@ -27,6 +31,8 @@ fn dots_control(row: &MenuOf) -> Option<String> {
         MenuOf::Row(ListRow::WorkbookTab(id, at)) => Some(format!("workbook-tab-menu:{id}:{at}")),
         MenuOf::Space(id) => Some(format!("space-menu:{id}")),
         MenuOf::Transcript => Some("listen-menu".into()),
+        // A right click's: the row itself.
+        MenuOf::Row(ListRow::Repo(path)) => Some(format!("repo:{path}")),
         _ => None,
     }
 }
@@ -144,7 +150,10 @@ impl Workspace {
         }
         self.sync_row_menu(window, cx);
         let Some((menu, items)) = self.model.row_menu() else { return true };
-        let own = (0..items.len()).map(item_control).chain(dots_control(&menu.row));
+        // A left press on the row a right click opened the menu of is not the menu's: it closes it.
+        let row = dots_control(&menu.row)
+            .filter(|_| !matches!(menu.row, MenuOf::Row(ListRow::Repo(_))) || event.button == MouseButton::Right);
+        let own = (0..items.len()).map(item_control).chain(row);
         let inside = |control: String| self.controls.bounds(&control).is_some_and(|b| b.contains(&event.position));
         if own.into_iter().any(inside) {
             return false;
@@ -158,29 +167,40 @@ impl Workspace {
     pub(crate) fn render_row_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let (menu, items) = self.model.row_menu()?;
         let dots = menu.dots?;
+        // A right click's: at the pointer, on the row it opened on.
+        let dots = match (&menu.row, self.row_menu_at) {
+            (MenuOf::Row(ListRow::Repo(_)), Some(at)) => Rect { x: f32::from(at.x), y: dots.y, w: 0., h: dots.h },
+            _ => dots,
+        };
+        // An item that does nothing now is dimmed, with why under it.
+        let whys: Vec<Option<&str>> = (0..items.len()).map(|index| self.model.row_menu_why(index)).collect();
+        let width = if whys.iter().any(Option::is_some) { WIDE } else { WIDTH };
         let view = window.viewport_size();
-        let left = dots.x.min(f32::from(view.width) - WIDTH - 4.).max(4.);
-        let height = items.len() as f32 * ITEM + 10.;
+        let left = dots.x.min(f32::from(view.width) - width - 4.).max(4.);
+        let height = items.len() as f32 * ITEM + whys.iter().flatten().count() as f32 * WHY + 10.;
         let under = dots.y + dots.h + 2.;
         let top = if under + height > f32::from(view.height) - FOOT { (dots.y - height - 2.).max(4.) } else { under };
-        let rows = items.iter().enumerate().map(|(index, item)| {
+        let rows = items.iter().zip(whys).enumerate().map(|(index, (item, why))| {
             div()
                 .id(("row-menu", index))
                 .relative()
-                .h(px(ITEM))
+                .min_h(px(ITEM))
                 .px_2()
                 .flex()
-                .items_center()
+                .flex_col()
+                .justify_center()
                 .rounded_sm()
                 .cursor_pointer()
                 .when(menu.selected == Some(index), |d| d.bg(rgb(theme::SELECTED)))
                 .hover(|s| s.bg(rgb(theme::SELECTED)))
+                .when(why.is_some(), |d| d.pb_1().text_color(rgb(theme::MUTED)))
                 .child(item.label())
+                .children(why.map(|why| div().text_xs().child(why)))
                 .child(self.controls.mark(item_control(index)))
                 .on_click(cx.listener(move |this, _, window, cx| this.row_menu_choose(Some(index), window, cx)))
         });
         // What is under the list gets no hover and no click through it.
-        let list = dialog::floating(WIDTH).absolute().left(px(left)).top(px(top)).p_1().text_sm().occlude();
+        let list = dialog::floating(width).absolute().left(px(left)).top(px(top)).p_1().text_sm().occlude();
         Some(list.children(rows))
     }
 
@@ -194,14 +214,19 @@ impl Workspace {
             _ => (None, None),
         };
         let (transcript, space) = (menu.row == MenuOf::Transcript, matches!(menu.row, MenuOf::Space(_)));
+        let worktree = match &menu.row {
+            MenuOf::Row(ListRow::Repo(path)) => Some(path),
+            _ => None,
+        };
         let item = |(index, item): (usize, &ottospace_core::row_menu::Item)| {
             let drawn = self.controls.bounds(&item_control(index)).map(rect);
-            serde_json::json!({"item": item, "label": item.label(), "rect": drawn})
+            let why = self.model.row_menu_why(index);
+            serde_json::json!({"item": item, "label": item.label(), "why": why, "rect": drawn})
         };
         let items: Vec<serde_json::Value> = items.iter().enumerate().map(item).collect();
         serde_json::json!({
-            "workbook": workbook, "tab": tab, "space": space, "transcript": transcript, "selected": menu.selected,
-            "items": items
+            "workbook": workbook, "tab": tab, "space": space, "transcript": transcript, "worktree": worktree,
+            "selected": menu.selected, "items": items
         })
     }
 

@@ -997,6 +997,8 @@ export interface Confirm {
   later: [TaskId, string] | null;
   /** Not the quit question: "Close <title>? It has unsaved changes" for this owned app pane. Only the user answers it. */
   edited: PaneId | null;
+  /** Not the quit question: "Delete this worktree?" for the linked one at this path. ⌘⌫ deletes; ↵ keeps it. Only the user answers it. */
+  delete: string | null;
   /** The quit question's running agents, by their conversation's name. */
   agents: string[];
   /** The quit question's drafts quitting loses: kind and place, never the words. Only the user's click on one goes to it. */
@@ -1070,9 +1072,17 @@ export interface RowMenu {
   space: boolean;
   /** The transcript header's: Pause, or Resume while paused. */
   transcript: boolean;
+  /** A linked worktree's row of the Repos section, by path (a right click opened it). */
+  worktree: string | null;
   /** The item the keys are on; null: none (a click opened it). */
   selected: number | null;
-  items: { item: "rename" | "delete" | "remove" | "keep" | "pause" | "resume"; label: string; rect: Rect | null }[];
+  /** `why`: the item does nothing now, and why (drawn dimmed). */
+  items: {
+    item: "rename" | "delete" | "remove" | "keep" | "pause" | "resume" | "delete_worktree";
+    label: string;
+    why: string | null;
+    rect: Rect | null;
+  }[];
 }
 
 /** A workspace of the user's (the user reads "workspace"; the state keeps `workbook`): a named set of saved tabs, none in a new one. No directory is listed: `panes` names kinds only. */
@@ -2137,6 +2147,8 @@ export interface KeyArgs {
 export interface MouseArgs {
   /** `wheel` turns the scroll wheel; `exit` and `enter`: the pointer leaves the window, and comes back. */
   action: "down" | "move" | "up" | "wheel" | "exit" | "enter";
+  /** `right`: a `down` or `up` of the right button, never a drag. */
+  button?: "left" | "right";
   /** In points from the top-left of ottospace's window, as the state's rects are. */
   x: number;
   y: number;

@@ -201,9 +201,12 @@ pub enum Request {
     /// `wheel` turns the scroll wheel there by `dx`, `dy`: lines of a mouse wheel, or with
     /// `precise` points of a trackpad, both rounded to whole numbers; positive `dy` scrolls
     /// back. `exit` and `enter`: the pointer leaves the window, and comes back. `"as":"user"`:
-    /// the user's event, not a client's, as on `key`.
+    /// the user's event, not a client's, as on `key`. `"button":"right"`: a `down` or `up` of
+    /// the right button (a right click), never a drag.
     Mouse {
         action: MouseAction,
+        #[serde(default)]
+        button: Button,
         x: f32,
         y: f32,
         #[serde(default = "one")]
@@ -641,6 +644,15 @@ pub enum MouseAction {
     Enter,
 }
 
+/// Which button a `mouse` request's `down` or `up` is of. For tests (`test_refusal`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Button {
+    #[default]
+    Left,
+    Right,
+}
+
 /// `"as":"user"`: whose input an injected key or pointer event is. For tests (`test_refusal`).
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -971,6 +983,7 @@ mod tests {
         let pointer = [
             r#"{"cmd":"mouse","action":"down","x":300,"y":60}"#,
             r#"{"cmd":"mouse","action":"down","x":300,"y":60,"as":"user"}"#,
+            r#"{"cmd":"mouse","action":"down","button":"right","x":300,"y":60,"as":"user"}"#,
             r#"{"cmd":"mouse","action":"wheel","x":300,"y":60,"dy":3}"#,
             r#"{"cmd":"mouse","action":"exit","x":300,"y":60}"#,
             r#"{"cmd":"drag","from":[300,60],"to":[900,400]}"#,

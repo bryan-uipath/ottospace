@@ -1125,6 +1125,110 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(git.stdin(std::process::Stdio::null()).status().unwrap().success(), "git {args:?}");
 }
 
+/// The user's right click on a linked worktree's row: its menu, Delete worktree…, the question
+/// (No its default), then git removes a clean one and keeps its branch; a dirty one stays, git's reason said.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_one() {
+    let root = support::temp(&format!("ottospace-e2e-worktree-menu-{}", std::process::id()));
+    let app = root.join("app");
+    std::fs::create_dir_all(&app).unwrap();
+    git(&app, &["init", "-q", "-b", "main"]);
+    git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"]);
+    let root = root.canonicalize().unwrap();
+    let (clean, dirty) = (root.join("app-clean"), root.join("app-dirty"));
+    git(&app, &["worktree", "add", "-q", "-b", "clean", clean.to_str().unwrap()]);
+    git(&app, &["worktree", "add", "-q", "-b", "dirty", dirty.to_str().unwrap()]);
+    std::fs::write(dirty.join("notes.md"), "made-up").unwrap();
+    let settings = json!({"repos": [root.join("app")], "restore_layout": false}).to_string();
+    let home = user_folder("worktree-menu", &settings);
+    let otto = Otto::launch_with(
+        "worktree-menu",
+        &[("OTTOSPACE_HOME", home.to_str().unwrap()), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_CONFIG_NOSYSTEM", "1")],
+    );
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    let drawn = |o: &Otto| Some(o.drawn()).filter(|s| s["repos_bar"][0]["rows"][2]["row"].is_array());
+    otto.wait_for("the worktrees' rows", drawn);
+    let row = |s: &Value, path: &Path| {
+        let rows = s["repos_bar"][0]["rows"].as_array().unwrap();
+        let row = rows.iter().find(|r| r["path"] == path.to_string_lossy().as_ref());
+        row.map(|r| rect(&r["row"]))
+    };
+    let right_click = |p: [f64; 2]| {
+        let event = |action: &str| json!({"cmd": "mouse", "action": action, "button": "right", "x": p[0], "y": p[1], "as": "user"});
+        otto.call(event("down"));
+        otto.call(event("up"));
+        otto.drawn()
+    };
+    // The repository's own folder has no menu: git cannot remove it.
+    let state = right_click(at(rect(&otto.drawn()["repos_bar"][0]["rows"][0]["row"]), 0.5, 0.5));
+    assert!(state["row_menu"].is_null(), "{}", state["row_menu"]);
+    // A client's right click opens none.
+    let p = at(row(&otto.drawn(), &clean).unwrap(), 0.3, 0.5);
+    let theirs = |action: &str| json!({"cmd": "mouse", "action": action, "button": "right", "x": p[0], "y": p[1]});
+    otto.call(theirs("down"));
+    otto.call(theirs("up"));
+    assert!(otto.drawn()["row_menu"].is_null());
+
+    // The user's: at the pointer, inside the window, one item.
+    let state = right_click(p);
+    let menu = &state["row_menu"];
+    assert_eq!(menu["worktree"], clean.to_string_lossy().as_ref(), "{menu}");
+    assert_eq!((&menu["items"][0]["label"], &menu["items"][0]["why"]), (&json!("Delete worktree…"), &Value::Null));
+    let item = rect(&menu["items"][0]["rect"]);
+    let window = rect(&state["window"]);
+    assert!(
+        item[0] >= 0.0 && item[1] >= 0.0 && item[0] + item[2] <= window[2] && item[1] + item[3] <= window[3],
+        "{item:?}"
+    );
+    assert!((item[0] - p[0]).abs() < 8.0, "not at the pointer: {item:?} {p:?}");
+    // Esc closes it.
+    let reply = otto.call(json!({"cmd": "key", "keys": "escape", "as": "user"}));
+    assert!(reply["row_menu"].is_null() || otto.drawn()["row_menu"].is_null());
+
+    // Choose: the question. ↵ keeps it (No is the default).
+    let ask = |otto: &Otto| {
+        let state = right_click(p);
+        otto.user_click(at(rect(&state["row_menu"]["items"][0]["rect"]), 0.5, 0.5));
+        // A client's pointer is refused under the question: the state, not a drawn frame.
+        let state = otto.call(json!({"cmd": "state"}));
+        assert_eq!(
+            state["state"]["confirm"]["delete"],
+            clean.to_string_lossy().as_ref(),
+            "{}",
+            state["state"]["confirm"]
+        );
+    };
+    ask(&otto);
+    otto.call(json!({"cmd": "key", "keys": "enter", "as": "user"}));
+    assert!(otto.drawn()["state"]["confirm"].is_null() && clean.exists());
+    // A client's ⌘⌫ answers nothing.
+    ask(&otto);
+    otto.raw(&json!({"cmd": "key", "keys": "cmd-backspace"}).to_string());
+    assert!(!otto.call(json!({"cmd": "state"}))["state"]["confirm"].is_null() && clean.exists());
+    // The user's ⌘⌫: gone, its row too, its branch kept, said.
+    otto.call(json!({"cmd": "key", "keys": "cmd-backspace", "as": "user"}));
+    let gone = |o: &Otto| Some(o.drawn()).filter(|s| !clean.exists() && row(s, &clean).is_none());
+    let state = otto.wait_for("the clean worktree to go", gone);
+    assert_eq!(state["notice"], "Deleted the worktree of clean · its branch is kept");
+    let mut branch = Command::new("git");
+    branch.arg("-C").arg(&app).args(["rev-parse", "--verify", "--quiet", "refs/heads/clean"]);
+    assert!(branch.status().unwrap().success(), "the branch stays");
+
+    // The dirty one: git refuses, nothing goes, and the notice says why.
+    let state = right_click(at(row(&otto.drawn(), &dirty).unwrap(), 0.3, 0.5));
+    otto.user_click(at(rect(&state["row_menu"]["items"][0]["rect"]), 0.5, 0.5));
+    otto.call(json!({"cmd": "key", "keys": "cmd-backspace", "as": "user"}));
+    let said =
+        |o: &Otto| Some(o.drawn()).filter(|s| s["notice"].as_str().is_some_and(|n| n.starts_with("Kept the worktree")));
+    let state = otto.wait_for("git's reason", said);
+    assert_eq!(state["notice"], "Kept the worktree: 1 uncommitted change");
+    assert!(dirty.join("notes.md").exists() && row(&state, &dirty).is_some());
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_repository_folds_and_the_users_plus_makes_a_worktree_there() {

@@ -201,7 +201,10 @@ impl Model {
                     self.drawer_open = true;
                 }
             }
-            Action::WorktreeRemoved { task, path, kept } => self.worktree_removed(task, &path, kept, effects),
+            Action::WorktreeRemoved { task: Some(task), path, kept } => {
+                self.worktree_removed(task, &path, kept, effects)
+            }
+            Action::WorktreeRemoved { task: None, path, kept } => self.worktree_deleted(&path, kept, effects),
             _ => {}
         }
     }
@@ -294,18 +297,11 @@ impl Model {
         if others {
             return Some(KEPT_TASK.into());
         }
-        // A terminal's shell, or the program in front of it, or the folder it started in.
-        let terminal = |pane: &&super::Pane| pane.kind == super::Kind::Terminal;
-        let mut cwds = self.panes.iter().filter(terminal).flat_map(|pane| {
-            let live = self.terminals.iter().filter(|t| t.pane == pane.id);
-            let live: Vec<&str> = live.flat_map(|t| [t.cwd.as_deref(), t.shell.as_deref()]).flatten().collect();
-            live.into_iter().chain(pane.cwd.as_deref())
-        });
-        if cwds.any(inside) {
+        if self.terminal_in(&made.path) {
             return Some(KEPT_TERMINAL.into());
         }
         self.finish.removing.push((id, made.path.clone()));
-        effects.push(Effect::RemoveWorktree { task: id, repo: made.repo, path: made.path });
+        effects.push(Effect::RemoveWorktree { task: Some(id), repo: made.repo, path: made.path });
         None
     }
 
@@ -712,12 +708,12 @@ mod tests {
     }
 
     fn removes(effects: &[Effect]) -> bool {
-        effects.contains(&Effect::RemoveWorktree { task: 1, repo: "/code/app".into(), path: WORKTREE.into() })
+        effects.contains(&Effect::RemoveWorktree { task: Some(1), repo: "/code/app".into(), path: WORKTREE.into() })
     }
 
     fn removed(m: &mut Model, kept: Option<&str>) -> Vec<Effect> {
         let kept = kept.map(String::from);
-        m.update(Action::WorktreeRemoved { task: 1, path: WORKTREE.into(), kept }.sent_by(Origin::System))
+        m.update(Action::WorktreeRemoved { task: Some(1), path: WORKTREE.into(), kept }.sent_by(Origin::System))
     }
 
     /// Done removes the worktree the task's box made; the branch stays (git's `worktree remove`
@@ -729,7 +725,7 @@ mod tests {
         let of = m.space().clone();
         assert!(removes(&m.update(Action::TaskDone { id: 1 })));
         assert_eq!(
-            m.refusal(&Action::WorktreeRemoved { task: 1, path: WORKTREE.into(), kept: None }, Origin::Socket),
+            m.refusal(&Action::WorktreeRemoved { task: Some(1), path: WORKTREE.into(), kept: None }, Origin::Socket),
             Some(SHELLS_ALONE)
         );
         assert_eq!(removed(&mut m, None), [Effect::ReadRepos]);
@@ -1051,5 +1047,156 @@ mod tests {
         m.update(Action::SpaceSelect { index: 0 });
         m.update(Action::DoneNewTask);
         assert!(m.compose.is_none());
+    }
+
+    /// `in_its_worktree`, its agent stopped, the Repos section open, and `row`'s menu opened by a right click.
+    fn worktree_menu(row: &str) -> Model {
+        let mut m = in_its_worktree();
+        m.update(Action::AgentExited { task: ONE }.sent_by(Origin::System));
+        if m.sidebar != Some(crate::model::Section::Repos) {
+            m.update(Action::ToggleSection { section: crate::model::Section::Repos });
+        }
+        let row = crate::list::ListRow::Repo(row.into());
+        m.update(Action::RowMenu { row: row.into(), dots: None, keys: false });
+        m
+    }
+
+    #[test]
+    fn a_linked_worktrees_row_offers_delete_and_the_repositorys_own_folder_none() {
+        use crate::row_menu::Item;
+        let m = worktree_menu(WORKTREE);
+        assert_eq!(m.row_menu().map(|(_, items)| items.to_vec()), Some(vec![Item::DeleteWorktree]));
+        assert_eq!(Item::DeleteWorktree.label(), "Delete worktree…");
+        assert_eq!(m.row_menu_action(Some(0)), Some(Action::WorktreeDelete { path: WORKTREE.into() }));
+        assert_eq!(m.row_menu_why(0), None);
+        // The `default` row: `git worktree remove` cannot remove it, so no menu.
+        assert!(worktree_menu("/code/app").row_menu().is_none());
+    }
+
+    #[test]
+    fn delete_asks_first_no_is_the_default_and_yes_asks_git_without_touching_the_branch() {
+        use crate::keys::Mods;
+        let mut m = worktree_menu(WORKTREE);
+        m.update(Action::RowMenuChoose { index: Some(0) });
+        let confirm = m.confirm.clone().unwrap_or_default();
+        assert_eq!(
+            (confirm.delete.as_deref(), confirm.title(), confirm.quits()),
+            (Some(WORKTREE), "Delete this worktree?".into(), false)
+        );
+        assert!(m.row_menu().is_none());
+        // ↵ and Esc keep it; only the user's ⌘⌫ deletes.
+        let cmd = Mods { cmd: true, ..Mods::default() };
+        for (key, mods) in
+            [("enter", Mods::default()), ("escape", Mods::default()), ("backspace", Mods::default()), ("d", cmd)]
+        {
+            assert_eq!(Confirm::answer_delete(key, mods, Origin::User), Some(Action::QuitCancel), "{key}");
+        }
+        assert_eq!(Confirm::answer_delete("backspace", cmd, Origin::User), Some(Action::QuitConfirm));
+        assert_eq!(Confirm::answer_delete("backspace", cmd, Origin::Socket), None);
+        let mut no = worktree_menu(WORKTREE);
+        no.update(Action::RowMenuChoose { index: Some(0) });
+        assert!(no.update(Action::QuitCancel).is_empty() && no.confirm.is_none());
+        // Yes: git removes the linked worktree, with no `--force` (`RemoveWorktree`); no branch is deleted.
+        let effects = m.update(Action::QuitConfirm);
+        let remove = Effect::RemoveWorktree { task: None, repo: "/code/app".into(), path: WORKTREE.into() };
+        assert_eq!((effects, m.confirm.is_none()), (vec![remove], true));
+        // Removed: said, and the list read again. Asked again meanwhile: no second removal.
+        assert!(m.update(Action::WorktreeDelete { path: WORKTREE.into() }).is_empty() && m.confirm.is_none());
+        let done = Action::WorktreeRemoved { task: None, path: WORKTREE.into(), kept: None };
+        let told = Effect::Told { text: "Deleted the worktree of fix-login · its branch is kept".into() };
+        assert_eq!(m.update(done.clone().sent_by(Origin::System)), [told, Effect::ReadRepos]);
+        // An answer nobody asked for changes nothing.
+        assert!(m.update(done.sent_by(Origin::System)).is_empty());
+    }
+
+    #[test]
+    fn a_dirty_worktree_stays_and_the_notice_gives_gits_reason() {
+        let mut m = worktree_menu(WORKTREE);
+        m.update(Action::RowMenuChoose { index: Some(0) });
+        m.update(Action::QuitConfirm);
+        let why = "Kept the worktree: 3 uncommitted changes";
+        let kept = Action::WorktreeRemoved { task: None, path: WORKTREE.into(), kept: Some(why.into()) };
+        assert_eq!(m.update(kept.sent_by(Origin::System)), [Effect::Notice { text: why.into() }]);
+        assert!(m.linked_worktree(WORKTREE).is_some() && m.deleting.is_empty());
+    }
+
+    #[test]
+    fn a_worktree_a_terminal_or_a_running_agent_is_in_is_not_deleted() {
+        // The agent runs there: the item says why, and choosing it asks nothing.
+        let mut m = in_its_worktree();
+        m.update(Action::ToggleSection { section: crate::model::Section::Repos });
+        if m.sidebar != Some(crate::model::Section::Repos) {
+            m.update(Action::ToggleSection { section: crate::model::Section::Repos });
+        }
+        m.update(Action::RowMenu { row: crate::list::ListRow::Repo(WORKTREE.into()).into(), dots: None, keys: true });
+        assert_eq!(m.row_menu_why(0), Some(crate::repos::AGENT_IN));
+        let effects = m.update(Action::RowMenuChoose { index: None });
+        assert_eq!(
+            (effects, m.confirm.is_none()),
+            (vec![Effect::Notice { text: crate::repos::AGENT_IN.into() }], true)
+        );
+        // A terminal is in it.
+        let mut m = worktree_menu(WORKTREE);
+        m.update(Action::Split { axis: crate::Axis::Right, kind: crate::model::Kind::Terminal });
+        let pane = m.panes.last().map(|p| p.id).unwrap_or_default();
+        let terminals =
+            vec![crate::model::TerminalInfo { pane, cwd: Some(format!("{WORKTREE}/src")), program: None, shell: None }];
+        m.update(Action::SetTerminals { terminals, home: None }.sent_by(Origin::System));
+        assert_eq!(m.worktree_busy(WORKTREE), Some(crate::repos::TERMINAL_IN));
+        let effects = m.update(Action::WorktreeDelete { path: WORKTREE.into() });
+        assert_eq!(
+            (effects, m.confirm.is_none()),
+            (vec![Effect::Notice { text: crate::repos::TERMINAL_IN.into() }], true)
+        );
+    }
+
+    #[test]
+    fn the_question_goes_when_its_worktree_does_or_something_starts_in_it() {
+        let asked = || {
+            let mut m = worktree_menu(WORKTREE);
+            m.update(Action::RowMenuChoose { index: Some(0) });
+            assert!(m.confirm.as_ref().is_some_and(|c| c.delete.is_some()));
+            m
+        };
+        let mut m = asked();
+        m.update(Action::SetRepos { repos: app(&[]) }.sent_by(Origin::System));
+        assert!(m.confirm.is_none());
+        // A terminal's shell went into it.
+        let mut m = asked();
+        let pane = m.panes.last().map(|p| p.id).unwrap_or_default();
+        let terminals =
+            vec![crate::model::TerminalInfo { pane, cwd: Some(WORKTREE.into()), program: None, shell: None }];
+        m.update(Action::SetTerminals { terminals, home: None }.sent_by(Origin::System));
+        assert!(m.confirm.is_none());
+    }
+
+    #[test]
+    fn only_the_user_deletes_a_worktree() {
+        let mut m = worktree_menu(WORKTREE);
+        for origin in [Origin::Socket, Origin::System] {
+            let theirs = Action::WorktreeDelete { path: WORKTREE.into() };
+            assert_eq!(m.refusal(&theirs, origin), Some(crate::repos::DELETE_USERS));
+            assert!(m.update(theirs.sent_by(origin)).is_empty() && m.confirm.is_none());
+        }
+        m.update(Action::RowMenuChoose { index: Some(0) });
+        for origin in [Origin::Socket, Origin::System] {
+            for answer in [Action::QuitConfirm, Action::QuitCancel] {
+                assert_eq!(m.refusal(&answer, origin), Some(crate::repos::DELETE_USERS));
+                assert!(m.update(answer.sent_by(origin)).is_empty());
+            }
+        }
+        assert!(m.confirm.is_some());
+    }
+
+    /// One the user made by hand, outside `worktrees_dir`, is theirs to delete too.
+    #[test]
+    fn a_worktree_outside_worktrees_dir_is_deleted_by_the_users_act() {
+        const BY_HAND: &str = "/code/app-wheel";
+        let mut m = worktree_menu(WORKTREE);
+        m.update(Action::SetRepos { repos: app(&[WORKTREE, BY_HAND]) }.sent_by(Origin::System));
+        m.update(Action::WorktreeDelete { path: BY_HAND.into() });
+        assert_eq!(m.confirm.as_ref().and_then(|c| c.delete.as_deref()), Some(BY_HAND));
+        let remove = Effect::RemoveWorktree { task: None, repo: "/code/app".into(), path: BY_HAND.into() };
+        assert_eq!(m.update(Action::QuitConfirm), [remove]);
     }
 }
