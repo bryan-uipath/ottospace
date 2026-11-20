@@ -8,6 +8,8 @@
 
 use serde::Serialize;
 
+use crate::capture::{is_break as breaks, shows};
+
 /// The most text a program may ask to copy, in bytes: a larger ask is refused, and says so.
 pub const MOST: usize = 100 * 1024;
 /// How long an ask is on show before its Copy and Always act: longer than a click, so a
@@ -63,26 +65,8 @@ pub struct Preview {
     pub lines: usize,
     /// It ends with a line break: pasted into a shell, its line runs.
     pub ends_with_newline: bool,
-    /// Only spaces, line breaks and invisible characters.
+    /// Only spaces and line breaks.
     pub blank: bool,
-}
-
-/// A line break: `\n`, `\r`, vertical tab, form feed, NEL, U+2028 and U+2029.
-fn breaks(c: char) -> bool {
-    matches!(c, '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}')
-}
-
-/// A control, format or default-ignorable character (bidi overrides and isolates, zero-width
-/// spaces and joiners, the BOM, variation selectors, the grapheme joiner, Hangul fillers, tags):
-/// it draws nothing, or reorders what is drawn.
-fn invisible(c: char) -> bool {
-    c.is_control()
-        || matches!(c as u32,
-            0xad | 0x34f | 0x600..=0x605 | 0x61c | 0x6dd | 0x70f | 0x890..=0x891 | 0x8e2
-            | 0x115f..=0x1160 | 0x17b4..=0x17b5 | 0x180b..=0x180f | 0x200b..=0x200f | 0x202a..=0x202e
-            | 0x2060..=0x206f | 0x3164 | 0xfe00..=0xfe0f | 0xfeff | 0xffa0 | 0xfff0..=0xfffb
-            | 0x110bd | 0x110cd | 0x13430..=0x1343f | 0x1bca0..=0x1bca3 | 0x1d173..=0x1d17a
-            | 0xe0000..=0xe0fff)
 }
 
 /// The pill's view of `text`: e.g. `"ls -la\nrm x"` shows `ls -la`, partial, 2 lines.
@@ -93,7 +77,7 @@ pub fn preview(text: &str, most: usize) -> Preview {
     let mut marked = false;
     let mut shown = String::new();
     for c in first.chars().take(most) {
-        if invisible(c) {
+        if !shows(c) {
             marked = true;
             shown.push('\u{fffd}');
         } else {
