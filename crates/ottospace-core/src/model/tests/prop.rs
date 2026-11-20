@@ -2298,12 +2298,17 @@ fn check(m: &Model) -> Result<(), String> {
     // Agent mode: every app pane has a grant, and only it, the flag on or off. One above Off is to
     // a task that works in the pane's workspace; a pane in no task's is Off. Off, no menu is open.
     ensure!(m.features.on(Feature::AgentMode) || m.agent.menu.is_none(), "the agent menu open with its flag off");
-    // The city is a task's empty tab's, and only with its flag.
-    let floor = *m.shown_space() != Owner::Home && m.tree_at(m.main_at()).is_none();
-    ensure!(
-        m.city().is_none() || (m.features.on(Feature::CodeCity) && floor),
-        "a city with its flag off or over panes"
-    );
+    // A city only with its flag, only on an empty place, only of a listed checkout; never Home's.
+    for at in m.empty_places() {
+        let Some(city) = m.city_at(at) else { continue };
+        ensure!(m.features.on(Feature::CodeCity), "a city with its flag off");
+        ensure!(m.repo_listed(city.dir), "a city of an unlisted folder: {}", city.dir);
+        let tab = match at {
+            crate::model::city::At::Tab(id) => Some(id),
+            crate::model::city::At::Pane(pane) => m.tab_of(pane),
+        };
+        ensure!(tab != Some(crate::model::HOME_TAB), "a city on Home");
+    }
     {
         let apps: Vec<PaneId> = m
             .tab_panes()

@@ -228,10 +228,17 @@ task's folder beside the label (shell-side only, never in the state). Open quest
 
 ### The three uses
 
-1. **Backdrop of a task's workspace** (built, behind the flag `code_city`): an
-   empty tab of a task's workspace draws the city of the task's folder where the lattice floor
-   was, under the same key caps. No folder, no listed checkout, too large, or not read yet: the
-   lattice. Nothing in it takes a click or the keyboard.
+1. **Backdrop of every empty place** (built, behind the flag `code_city`; the owner, 2026-11-20:
+   "why not the other empty experiences?"): an empty tab or pane draws the city of its folder
+   where the lattice was, under the same key caps (`Model::city_at`, `Model::empty_folder`). The
+   folder is the nearest: a pane's own (none keeps one), its tab's (opened in a checkout,
+   `open_repo`; kept after its last pane closes), its space's (a task's checkout, a workspace's
+   default). Lit: in a task's space that task's files; elsewhere every task working in the
+   folder (`task_worktree`, as the Repos dots). A pane under 320 × 220 points keeps the lattice
+   (a district is a few pixels there: chosen from offscreen pictures at 240, 320, 400 and 480
+   wide). Each folder on show is read once; each picture (folder, lit files, size) is rendered
+   once and painted by every place that asks for it. No folder, no listed checkout, too large,
+   or not read yet: the lattice. Nothing in it takes a click or the keyboard.
 2. **Beside the explorer** (proposed). The explorer is not built: `docs/ai/file-viewer.md`
    lists it as step D, "a tree pane of a folder". With it: the map is the explorer's backdrop
    or a pane beside it; the row under the cursor is the lit building; a click on a building
@@ -315,6 +322,7 @@ issue waiting on them; for code, the task working in that folder asks a question
 | 1 | The layout and the repository source, in the core, with the property test | built (this pull request) |
 | 2 | The backdrop behind `code_city`: the file list, the city in 3D rendered on the GPU (by the owner's word, 2026-11-19), lit buildings, a shot scenario, an e2e test | built (stacked) |
 | 2b | The look (the owner's word, 2026-11-20): edges, districts as plates, four tones; hover: a building's name on a beacon | built |
+| 2c | Every empty place with a folder draws its city: tabs and panes, nearest folder, shared pictures | built |
 | 3 | The exact file of a call, shell-side, so a lit building is never a guess (question 3) | |
 | 4 | Agent markers and trails; the task's "needs you" as a beacon on its district | |
 | 5 | Coupling for the hovered building (one `git log`); hover itself is 2b | |
@@ -327,8 +335,8 @@ issue waiting on them; for code, the task working in that folder asks a question
 
 ## Open questions for the owner
 
-1. **Where is the backdrop?** Built: an empty tab of a task's workspace, where the lattice
-   floor was. A workspace with panes shows no backdrop at all (panes cover it). Should the map
+1. **Where is the backdrop?** Built: every empty tab and pane with a folder (2026-11-20). A
+   workspace with panes shows it only in its empty panes. Should the map
    also be a pane of its own, or show through the gaps, or replace Home's lattice (question 6)?
 2. **Bytes or lines** for the footprint? Bytes are free; lines read every file.
 3. **Exact paths.** Lighting by the last two path parts can light two files of one name
