@@ -513,7 +513,7 @@ impl Workspace {
                                 let line: String = line.chars().take(MAX_DRAWN).collect();
                                 // Runs past what is drawn of a long line are cut with it.
                                 let runs = match &colours {
-                                    Some(colours) => highlight::within(&colours.line(at), &line),
+                                    Some(colours) => colours.line(at),
                                     None => marks.get(at).map_or(Vec::new(), |marks| highlight::within(marks, &line)),
                                 };
                                 let styles: Vec<_> = runs

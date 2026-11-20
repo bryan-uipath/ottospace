@@ -195,25 +195,30 @@ impl Colours {
         let (Some(first), Some(last)) = (lines.first(), lines.last()) else { return Vec::new() };
         let Some((query, tokens)) = self.lang.query() else { return Vec::new() };
         let bytes = first.start..last.end;
-        let mut found: Vec<(usize, usize, usize, Token)> = Vec::new();
+        // Code inside a string (`${name}`): plain again, not the string's colour.
+        let embedded = query.capture_index_for_name("embedded");
+        let mut found: Vec<(usize, usize, usize, Option<Token>)> = Vec::new();
         let mut cursor = QueryCursor::new();
         cursor.set_byte_range(bytes.clone());
         let mut captures = cursor.captures(query, self.tree.root_node(), self.text.as_bytes());
         while let Some((matched, index)) = captures.next() {
             let capture = matched.captures()[*index];
-            let Some(token) = tokens.get(capture.index as usize).copied().flatten() else { continue };
-            let node = capture.node.byte_range();
-            let (start, end) = (node.start.max(bytes.start), node.end.min(bytes.end));
-            if start < end {
-                found.push((start, end, matched.pattern_index, token));
+            let token = tokens.get(capture.index as usize).copied().flatten();
+            if token.is_some() || Some(capture.index) == embedded {
+                let node = capture.node.byte_range();
+                found.push((node.start, node.end, matched.pattern_index, token));
             }
         }
         // Outer before inner, so the inner is painted over it; one node's first pattern first.
+        // By the nodes' own ends: cut to these lines first, an outer and its inner could be one.
         found.sort_by_key(|(start, end, pattern, _)| (*start, std::cmp::Reverse(*end), *pattern));
         found.dedup_by_key(|(start, end, _, _)| (*start, *end));
         let mut paint: Vec<Option<Token>> = vec![None; bytes.len()];
         for (start, end, _, token) in found {
-            paint[start - bytes.start..end - bytes.start].fill(Some(token));
+            let (start, end) = (start.max(bytes.start), end.min(bytes.end));
+            if start < end {
+                paint[start - bytes.start..end - bytes.start].fill(token);
+            }
         }
         lines
             .iter()
@@ -262,6 +267,17 @@ mod tests {
             (Some(Lang::Rust), Some(Lang::Tsx), Some(Lang::JavaScript), Some(Lang::Toml))
         );
         assert_eq!((lang("md"), lang("go"), lang("")), (None, None, None));
+        // Each is a code file to the core too, or the viewer would not ask for its grammar.
+        for ext in
+            ["rs", "ts", "mts", "cts", "tsx", "js", "jsx", "mjs", "cjs", "json", "toml", "py", "sh", "bash", "zsh"]
+        {
+            assert!(lang(ext).is_some(), "{ext}");
+            assert_eq!(
+                ottospace_core::viewer::shows(&format!("a.{ext}")),
+                ottospace_core::viewer::Shows::Code,
+                "{ext}"
+            );
+        }
     }
 
     #[test]
@@ -331,6 +347,18 @@ mod tests {
         let end = colours.line(0).last().map(|(range, _)| range.end);
         assert!(end.is_some_and(|end| end > MAX_DRAWN - 4 && end <= MAX_DRAWN), "{end:?}");
         assert!(colours.line(1).contains(&(1..5, Token::Number)), "{:?}", colours.line(1));
+    }
+
+    #[test]
+    fn code_inside_a_string_is_plain_and_a_string_over_chunks_stays_one() {
+        let js: Vec<(String, Token)> =
+            runs(Lang::JavaScript, "const s = `sown ${name} today`;").into_iter().flatten().collect();
+        assert!(js.contains(&("`sown ".to_string(), Token::String)), "{js:?}");
+        assert!(js.iter().all(|(text, token)| !text.contains("name") || *token != Token::String), "{js:?}");
+        // TOML's pair is captured too (a key), around its string: the string wins in every chunk.
+        let toml = format!("note = \"\"\"\n{}\"\"\"\n", "made up\n".repeat(CHUNK * 3));
+        let lines = runs(Lang::Toml, &toml);
+        assert_eq!(lines[CHUNK + 5], [("made up".to_string(), Token::String)]);
     }
 
     #[test]

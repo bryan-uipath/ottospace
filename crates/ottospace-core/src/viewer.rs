@@ -30,10 +30,10 @@ pub enum Shows {
 const MARKDOWN: &[&str] = &["md", "markdown", "mdx", "mdown"];
 const IMAGES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 const CODE: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "swift", "kt", "java", "c", "h", "cc", "cpp",
-    "hpp", "m", "mm", "cs", "sh", "bash", "zsh", "fish", "json", "jsonl", "yaml", "yml", "toml", "sql", "diff",
-    "patch", "html", "css", "scss", "xml", "svg", "lua", "php", "pl", "r", "scala", "zig", "nix", "proto", "graphql",
-    "vue", "svelte",
+    "rs", "ts", "mts", "cts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "swift", "kt", "java", "c", "h",
+    "cc", "cpp", "hpp", "m", "mm", "cs", "sh", "bash", "zsh", "fish", "json", "jsonl", "yaml", "yml", "toml", "sql",
+    "diff", "patch", "html", "css", "scss", "xml", "svg", "lua", "php", "pl", "r", "scala", "zig", "nix", "proto",
+    "graphql", "vue", "svelte",
 ];
 const TEXT: &[&str] = &["txt", "text", "log", "csv", "tsv", "ini", "cfg", "conf", "env", "lock", "gitignore"];
 /// Files known by their whole name.

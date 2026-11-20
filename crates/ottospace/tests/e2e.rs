@@ -14377,7 +14377,7 @@ fn a_code_file_is_coloured_by_its_grammar_or_the_lexer_when_it_has_none_or_is_to
         std::fs::write(&file, text).unwrap();
         // Each in a viewer of its own: the newest pane.
         let id = pane_ids(&otto.call(json!({"cmd": "open_file", "path": file}))).into_iter().max().unwrap();
-        let drawn = view(&viewer_read(&otto, id, line_count(&file)), id);
+        let drawn = viewer_read(&otto, id, line_count(&file))["viewers"][id.to_string()].clone();
         assert_eq!((&drawn["body"], &drawn["syntax"]), (&json!("lines"), &syntax), "{name}");
     }
 }

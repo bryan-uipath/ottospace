@@ -2,5 +2,6 @@
 # their colours, by grammar. Before/after for a change to code colouring.
 {"cmd":"open_file","path":"{REPO}/crates/ottospace/tests/fixtures/code/seeds.rs"}
 {"cmd":"open_file","path":"{REPO}/crates/ottospace/tests/fixtures/code/seeds.ts","beside":1}
+{"until":"state.viewers.1.most","exists":true}
 {"until":"state.viewers.2.most","exists":true}
 {"shot":"rust-and-typescript"}

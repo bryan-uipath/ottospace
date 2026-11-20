@@ -48,7 +48,11 @@ A pane that shows a file, read only. Owner-approved plan: A the viewer, B a mark
   coloured 128 at a time (`CHUNK`, a query cursor over their bytes), each chunk once. A capture's
   name gives its token (`syntax::token`: keyword, string, comment, number, type, function,
   punctuation, key), its colour `highlight::colour`. Of two captures of one node the query's
-  first wins, an inner node over an outer. The state's drawn `syntax` names the grammar.
+  first wins, an inner node over an outer; code inside a string (`${name}`) is plain. A line is
+  coloured as far as it is drawn (2000 characters): a minified file's one line costs no more.
+  The state's drawn `syntax` names the grammar. A 2 MB file of any of them parses in 0.12 to
+  0.22 s (release, M-series; `syntax::tests::timings`); one that does not parse as its language
+  can take over a second, and gets the lexer at 0.5 s.
   Markdown stays the renderer's.
 - **Kept** in `layout.json` (and marks, workspaces) as `RecordKind::File { path, top }`.
 - **B, the fixture**: `crates/ottospace/tests/fixtures/markdown/fixture.md` and `checker.png`.
