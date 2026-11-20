@@ -4,10 +4,10 @@
 pub(crate) mod gallery;
 
 use gpui::{
-    BoxShadow, Div, ElementId, FontWeight, Refineable, SharedString, Stateful, StyleRefinement, Svg, black, div, point,
-    prelude::*, px, rgb, svg, transparent_black,
+    BoxShadow, CursorStyle, Div, ElementId, FontWeight, Refineable, SharedString, Stateful, StyleRefinement, Svg,
+    black, div, point, prelude::*, px, rgb, svg, transparent_black,
 };
-use ottospace_core::{notice, theme};
+use ottospace_core::{Axis, notice, theme};
 
 use crate::{RAIL_CELL, ROW, cut_text};
 
@@ -352,4 +352,32 @@ pub(crate) fn notice_line(level: notice::Level, glyph: &'static str, text: impl 
         .text_color(rgb(ink))
         .child(mark)
         .child(text)
+}
+
+/// How far across a divider its grab reaches: a pane's border and padding on each side (3 points),
+/// so it takes nothing of the panes' content, nor of a hosted window laid over it.
+pub(crate) const DIVIDER_GRAB: f32 = theme::SPACE_1_5;
+
+/// The grab of the divider between two panes, `DIVIDER_GRAB` across, with the resize pointer.
+/// Hover lights a line down its middle, `Pressed` (held, dragging) brighter; at rest it draws
+/// nothing over the panes' borders. The caller places it and adds the drag.
+pub(crate) fn divider(id: impl Into<ElementId>, axis: Axis, state: State) -> Stateful<Div> {
+    let group = SharedString::from("divider");
+    let inset = px((DIVIDER_GRAB - theme::SPACE_0_5) / 2.);
+    let (d, line) = match axis {
+        Axis::Right => {
+            let line = div().absolute().top_0().bottom_0().left(inset).w(px(theme::SPACE_0_5));
+            (div().id(id).w(px(DIVIDER_GRAB)).h_full().cursor(CursorStyle::ResizeLeftRight), line)
+        }
+        Axis::Down => {
+            let line = div().absolute().left_0().right_0().top(inset).h(px(theme::SPACE_0_5));
+            (div().id(id).h(px(DIVIDER_GRAB)).w_full().cursor(CursorStyle::ResizeUpDown), line)
+        }
+    };
+    let line = match state {
+        State::Pressed => line.bg(rgb(theme::SCROLL_THUMB_HELD)),
+        State::Hover => line.bg(rgb(theme::SCROLL_THUMB_HOVER)),
+        _ => line.group_hover(group.clone(), |s| s.bg(rgb(theme::SCROLL_THUMB_HOVER))),
+    };
+    d.group(group).relative().child(line)
 }

@@ -219,17 +219,146 @@ impl Node {
     /// Steps the nearest split on `on` that holds `pane` in `a` (`in_a`) or in `b`.
     /// `None`: there is no such split. Else whether it moved: not if it was at its limit.
     fn nudge(&mut self, pane: u32, on: Axis, step: f32, in_a: bool) -> Option<bool> {
-        let mut moved = None;
-        self.climb(pane, on, &mut |ratio, first| {
-            if first != in_a {
-                return false;
+        let Node::Split { ratio, .. } = self.border(pane, on, in_a)? else { return None };
+        let to = (*ratio + step).clamp(MIN_SHARE, 1.0 - MIN_SHARE);
+        let moved = (to - *ratio).abs() > f32::EPSILON;
+        *ratio = to;
+        Some(moved)
+    }
+
+    /// The nearest split on `on` that holds `pane` in `a` (`in_a`) or in `b`: with `in_a`, the
+    /// split whose divider is the pane's right or bottom border.
+    fn border(&mut self, pane: u32, on: Axis, in_a: bool) -> Option<&mut Node> {
+        let path = self.path(pane)?;
+        let at = (0..path.len())
+            .rev()
+            .find(|&at| path[at] != in_a && matches!(self.at(&path[..at]), Node::Split { axis, .. } if *axis == on))?;
+        Some(self.at_mut(&path[..at]))
+    }
+
+    /// The way from the root to leaf `pane`: `true` where it goes into `b`.
+    fn path(&self, pane: u32) -> Option<Vec<bool>> {
+        match self {
+            Node::Leaf(id) => (*id == pane).then(Vec::new),
+            Node::Split { a, b, .. } => {
+                let (rest, into_b) = a.path(pane).map(|p| (p, false)).or_else(|| Some((b.path(pane)?, true)))?;
+                Some([vec![into_b], rest].concat())
             }
-            let to = (*ratio + step).clamp(MIN_SHARE, 1.0 - MIN_SHARE);
-            moved = Some((to - *ratio).abs() > f32::EPSILON);
-            *ratio = to;
-            true
-        });
-        moved
+        }
+    }
+
+    fn at(&self, path: &[bool]) -> &Node {
+        match (self, path.split_first()) {
+            (Node::Split { a, b, .. }, Some((into_b, rest))) => (if *into_b { b } else { a }).at(rest),
+            _ => self,
+        }
+    }
+
+    fn at_mut(&mut self, path: &[bool]) -> &mut Node {
+        match (self, path.split_first()) {
+            (Node::Split { a, b, .. }, Some((into_b, rest))) => (if *into_b { b } else { a }).at_mut(rest),
+            (node, _) => node,
+        }
+    }
+
+    /// The divider of a split, as `drag` names it: the pane whose right (or bottom) border it
+    /// is, and the split's axis. E.g. 1 | (2 | 3): `(1, Right)` for the root, `(2, Right)` inside.
+    pub fn divider(&self) -> Option<(u32, Axis)> {
+        // Down `a`'s edge toward the divider: past a split on the axis, its `b` touches it.
+        fn edge(node: &Node, on: Axis) -> u32 {
+            match node {
+                Node::Leaf(id) => *id,
+                Node::Split { axis, b, .. } if *axis == on => edge(b, on),
+                Node::Split { a, .. } => edge(a, on),
+            }
+        }
+        match self {
+            Node::Split { axis, a, .. } => Some((edge(a, *axis), *axis)),
+            Node::Leaf(_) => None,
+        }
+    }
+
+    /// Puts the divider that is `pane`'s right (`on` is `Right`) or bottom border at share `to`
+    /// of its split, e.g. 0.3. Each side keeps `MIN_SHARE`, as for `resize`. Every other
+    /// divider on the axis stays where it is: only the panes beside this one change size, until
+    /// one is at its least and pushes the next. False if there is no such divider or it did not move.
+    pub fn drag(&mut self, pane: u32, on: Axis, to: f32) -> bool {
+        // Not a number (a pointer of nowhere): no ratio may become one.
+        if !to.is_finite() {
+            return false;
+        }
+        let Some(Node::Split { ratio, a, b, .. }) = self.border(pane, on, true) else { return false };
+        let (was, now) = (*ratio, to.clamp(MIN_SHARE, 1.0 - MIN_SHARE));
+        // At its limit, or where it is by a rounding's worth: nothing moves.
+        if (now - was).abs() <= f32::EPSILON {
+            return false;
+        }
+        *ratio = now;
+        a.hold(on, (0.0, was), (0.0, now));
+        b.hold(on, (was, 1.0), (now, 1.0));
+        true
+    }
+
+    /// The split whose divider is `pane`'s right or bottom border, as it is at a press and as the
+    /// drag last left it: what `drag_held` counts from.
+    pub fn held(&mut self, pane: u32, on: Axis) -> Option<(Node, Node)> {
+        self.border(pane, on, true).map(|split| (split.clone(), split.clone()))
+    }
+
+    /// `drag` while the pointer holds the divider, counted from its split at the press (`held.0`):
+    /// a drag back, or Esc, also puts back a divider it pushed. False, and nothing moves, if the
+    /// split is not as the drag last left it (`held.1`), e.g. a pane split meanwhile: the hold is over.
+    pub fn drag_held(&mut self, pane: u32, on: Axis, held: &mut (Node, Node), to: f32) -> bool {
+        let Some(split) = self.border(pane, on, true).filter(|split| **split == held.1) else { return false };
+        *split = held.0.clone();
+        split.drag(pane, on, to);
+        held.1 = split.clone();
+        true
+    }
+
+    /// This node's span on `on` went from `was` to `now` (start and end, as shares of the dragged
+    /// split): its dividers on `on` stay where they are, while each side keeps `MIN_SHARE`, e.g.
+    /// 1 | 2 | 3 shrunk at its end: 3 shrinks, 1 and 2 keep their width.
+    fn hold(&mut self, on: Axis, was: (f32, f32), now: (f32, f32)) {
+        if was == now {
+            return;
+        }
+        match self {
+            Node::Leaf(_) => {}
+            Node::Split { axis, a, b, .. } if *axis != on => {
+                a.hold(on, was, now);
+                b.hold(on, was, now);
+            }
+            Node::Split { ratio, a, b, .. } => {
+                let at = was.0 + *ratio * (was.1 - was.0);
+                *ratio = ((at - now.0) / (now.1 - now.0)).clamp(MIN_SHARE, 1.0 - MIN_SHARE);
+                let to = now.0 + *ratio * (now.1 - now.0);
+                a.hold(on, (was.0, at), (now.0, to));
+                b.hold(on, (at, was.1), (to, now.1));
+            }
+        }
+    }
+
+    /// Evens out the divider that is `pane`'s right or bottom border, as `equalize` would its
+    /// row: 1 | (2 | 3) at 1's border gives each a third; the split's other dividers off `on` keep theirs.
+    /// False if there is no such divider or it did not move.
+    pub fn even(&mut self, pane: u32, on: Axis) -> bool {
+        let Some(split) = self.border(pane, on, true) else { return false };
+        let was = split.clone();
+        split.even_run(on);
+        *split != was
+    }
+
+    /// `equalize` for the splits on `along` from here down, the others left as they are.
+    fn even_run(&mut self, along: Axis) {
+        if let Node::Split { axis, ratio, a, b } = self
+            && *axis == along
+        {
+            let (first, second) = (a.run(along), b.run(along));
+            *ratio = first / (first + second);
+            a.even_run(along);
+            b.even_run(along);
+        }
     }
 
     /// Scales `pane`'s width (`on` is `Right`) or height by `by`, e.g. 1.2 for a fifth more, by
@@ -543,6 +672,88 @@ mod tests {
         assert_eq!(widths(&tree), [(1, 33.0, 100.0), (2, 33.0, 100.0), (3, 33.0, 50.0), (4, 33.0, 50.0)]);
     }
 
+    #[test]
+    fn a_drag_moves_only_its_divider_and_the_others_keep_their_place() {
+        // 1 | (2 | 3): the root's divider is 1's right border, the inner one 2's.
+        let mut row = Leaf(1).insert(Some(1), 2, Right).insert(Some(2), 3, Right);
+        assert_eq!(row.divider(), Some((1, Right)));
+        assert!(row.drag(1, Right, 0.3));
+        assert_eq!(sizes(&row), [(1, 300., 800.), (2, 450., 800.), (3, 250., 800.)], "3 keeps its width");
+        assert!(row.drag(2, Right, 0.2));
+        assert_eq!(sizes(&row), [(1, 300., 800.), (2, 140., 800.), (3, 560., 800.)], "1 keeps its width");
+        // The last pane has no right border; an unknown pane none at all; nothing moves.
+        assert!(!row.drag(3, Right, 0.5));
+        assert!(!row.drag(9, Right, 0.5));
+        assert!(!row.drag(1, Down, 0.5));
+        assert!(!row.drag(1, Right, f32::NAN));
+        assert_eq!(sizes(&row), [(1, 300., 800.), (2, 140., 800.), (3, 560., 800.)]);
+    }
+
+    #[test]
+    fn a_drag_stops_at_the_minimum_share_and_then_pushes_the_next_divider() {
+        let mut row = Leaf(1).insert(Some(1), 2, Right).insert(Some(2), 3, Right);
+        assert!(row.drag(1, Right, -4.0));
+        assert_eq!(sizes(&row)[0], (1, 100., 800.), "the key resize's least share");
+        assert!(!row.drag(1, Right, 0.0), "at the limit");
+        // Far right: 2 gets to its least, then 3 gives way; 1 stops at 90%.
+        assert!(row.drag(1, Right, 2.0));
+        assert_eq!(sizes(&row)[0], (1, 900., 800.));
+        row.sound_ratios().unwrap();
+        let [(_, _, _), (_, two, _), (_, three, _)] = sizes(&row)[..] else { panic!() };
+        assert_eq!((two, three), (10., 90.), "each keeps a tenth of its split");
+    }
+
+    #[test]
+    fn a_pushed_divider_moves_alone_and_a_held_drag_back_puts_it_back() {
+        // 1 | ((2 | 3) | 4), borders at 500, 725 and 950 of 1000: 4 is at its least.
+        let mut row = Leaf(1).insert(Some(1), 2, Right).insert(Some(2), 4, Right).insert(Some(2), 3, Right);
+        let Node::Split { b, .. } = &mut row else { panic!() };
+        let Node::Split { ratio, .. } = &mut **b else { panic!() };
+        *ratio = 0.9;
+        let widths = |row: &Node| sizes(row).iter().map(|s| s.1).collect::<Vec<_>>();
+        assert_eq!(widths(&row), [500., 225., 225., 50.]);
+        let (before, mut held) = (row.clone(), row.held(1, Right).unwrap());
+        // 4 grows to keep its tenth and pushes its own divider; the one between 2 and 3 stays at 725.
+        assert!(row.drag_held(1, Right, &mut held, 0.4));
+        assert_eq!(widths(&row), [400., 325., 215., 60.]);
+        // Back where it began, as Esc asks: every divider is where it was.
+        assert!(row.drag_held(1, Right, &mut held, 0.5));
+        assert_eq!(row, before);
+        // The split changed by anything else: the hold is over, nothing moves.
+        assert!(row.even(3, Right));
+        let evened = row.clone();
+        assert!(!row.drag_held(1, Right, &mut held, 0.3));
+        assert_eq!(row, evened);
+    }
+
+    #[test]
+    fn a_drag_at_a_nested_split_moves_that_split_alone() {
+        // (1 over 3) | 2: 1's and 3's right border is the root's divider; 1's bottom the inner one.
+        let mut tree = Leaf(1).insert(Some(1), 2, Right).insert(Some(1), 3, Down);
+        assert!(tree.drag(3, Right, 0.6));
+        assert_eq!(sizes(&tree), [(1, 600., 400.), (3, 600., 400.), (2, 400., 800.)]);
+        assert!(tree.drag(1, Down, 0.25));
+        assert_eq!(sizes(&tree), [(1, 600., 200.), (3, 600., 600.), (2, 400., 800.)]);
+        assert!(!tree.drag(2, Down, 0.5), "2 spans the tab's height");
+        // Each split's divider names a pane whose border it is.
+        let Node::Split { a, .. } = &tree else { panic!() };
+        assert_eq!((tree.divider(), a.divider(), Leaf(1).divider()), (Some((1, Right)), Some((1, Down)), None));
+    }
+
+    #[test]
+    fn even_out_a_divider_as_equalize_would_its_row() {
+        let mut row = Leaf(1).insert(Some(1), 2, Right).insert(Some(2), 3, Right).insert(Some(3), 4, Down);
+        row.drag(1, Right, 0.2);
+        row.drag(2, Right, 0.7);
+        row.drag(3, Down, 0.8);
+        assert!(row.even(2, Right));
+        assert_eq!(sizes(&row), [(1, 200., 800.), (2, 400., 800.), (3, 400., 640.), (4, 400., 160.)]);
+        assert!(row.even(1, Right));
+        assert_eq!(sizes(&row), [(1, 333., 800.), (2, 333., 800.), (3, 333., 640.), (4, 333., 160.)], "3 over 4 kept");
+        assert!(!row.even(1, Right), "even already");
+        assert!(!row.even(4, Right), "no right border");
+    }
+
     /// One change to a tree. A new leaf's id is the next unused one.
     #[derive(Clone, Copy, Debug, PartialEq)]
     enum Op {
@@ -556,6 +767,9 @@ mod tests {
         Drop(u32, u32, Zone),
         /// A fit: the pane's extent on the axis times this.
         Scale(u32, Axis, f32),
+        /// A divider dragged to that share of its split, or evened out.
+        Drag(u32, Axis, f32),
+        Even(u32, Axis),
     }
 
     /// The ratios of the splits on `on` above `pane`, nearest first.
@@ -704,6 +918,29 @@ mod tests {
                         }
                     }
                 }
+                Op::Drag(pane, on, to) => {
+                    let Some(root) = &mut tree else { continue };
+                    let moved = root.drag(pane, on, to);
+                    let was = before.as_ref().map(ratios).unwrap_or_default();
+                    if moved == (ratios(root) == was) {
+                        return fail(format!("drag said {moved}"));
+                    }
+                    // The divider is where it was asked to be, or at its least share.
+                    if let Some(Node::Split { ratio, .. }) = root.border(pane, on, true).map(|split| &*split)
+                        && moved
+                        && (ratio - to.clamp(MIN_SHARE, 1.0 - MIN_SHARE)).abs() > 1e-6
+                    {
+                        return fail(format!("the divider is at {ratio}"));
+                    }
+                }
+                Op::Even(pane, on) => {
+                    let Some(root) = &mut tree else { continue };
+                    root.even(pane, on);
+                    let once = root.clone();
+                    if root.even(pane, on) || *root != once {
+                        return fail("a second even moved a split".into());
+                    }
+                }
             }
             // Every leaf once, and no other.
             let mut leaves = tree.as_ref().map(Node::leaves).unwrap_or_default();
@@ -751,6 +988,7 @@ mod tests {
             Op::Insert(beside, axis) => format!("Op::Insert({beside:?}, {axis:?})"),
             Op::Split(at, axis, first) => format!("Op::Split({at}, {axis:?}, {first})"),
             Op::Resize(pane, dir) => format!("Op::Resize({pane}, Dir::{dir:?})"),
+            Op::Drag(pane, axis, to) if !to.is_finite() => format!("Op::Drag({pane}, {axis:?}, f32::NAN)"),
             Op::Drop(source, target, zone) => format!("Op::Drop({source}, {target}, Zone::{zone:?})"),
             Op::Scale(pane, axis, by) if by.is_nan() => format!("Op::Scale({pane}, {axis:?}, f32::NAN)"),
             Op::Scale(pane, axis, by) if by.is_infinite() => format!("Op::Scale({pane}, {axis:?}, f32::INFINITY)"),
@@ -758,7 +996,7 @@ mod tests {
         }
     }
 
-    /// Random splits, closes, resizes, swaps, drops, fits and equalizes, in any order. A failure
+    /// Random splits, closes, resizes, swaps, drops, fits, drags and equalizes, in any order. A failure
     /// prints the least ops that still fail, as the argument of `run`.
     #[test]
     fn any_changes_in_any_order_leave_a_sound_tree() {
@@ -773,7 +1011,7 @@ mod tests {
                 let axis = rng.pick(&[Right, Down]);
                 let dir = rng.pick(&[Dir::Left, Dir::Right, Dir::Up, Dir::Down]);
                 let by = rng.pick(&[1.2, 0.8, 2.0, 0.5, 1.0, 1.0001, 10.0, 0.01, 0.0, -1.0, f32::NAN, f32::INFINITY]);
-                ops.push(match rng.below(12) {
+                ops.push(match rng.below(14) {
                     0 | 1 => Op::Insert(rng.coin().then(|| leaf(&mut rng)), axis),
                     2 | 3 => Op::Split(leaf(&mut rng), axis, rng.coin()),
                     4 => Op::Remove(leaf(&mut rng)),
@@ -784,7 +1022,11 @@ mod tests {
                         let zone = rng.pick(&[Zone::Left, Zone::Right, Zone::Top, Zone::Bottom, Zone::Center]);
                         Op::Drop(leaf(&mut rng), leaf(&mut rng), zone)
                     }
-                    _ => Op::Scale(leaf(&mut rng), axis, by),
+                    10 | 11 => Op::Scale(leaf(&mut rng), axis, by),
+                    12 => {
+                        Op::Drag(leaf(&mut rng), axis, rng.pick(&[0.0, 0.05, 0.3, 0.5, 0.7, 0.95, 1.0, -1.0, f32::NAN]))
+                    }
+                    _ => Op::Even(leaf(&mut rng), axis),
                 });
             }
             let fails = |ops: &[Op]| fuzz::caught(|| run(ops)).unwrap_or_else(Err).is_err();

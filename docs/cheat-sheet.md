@@ -23,7 +23,7 @@ ottospace            # opens on the Repos list
 | Edit the picker's filter or the new-task line | As any Mac text field: ⌥←/→ words, ⌘←/→ line, ⇧ selects, ⌘A, ⌘C/⌘X/⌘V, ⌘Z/⇧⌘Z, ⌥⌫ a word, ⌘⌫ the line; click, drag, double click |
 | Move between panes | ⌘⌥ arrows or ⌘⌥ H J K L · ⌘] ⌘[ cycle |
 | Move to the rails and back | The keys of the row above, on past the panes: left to the section list, then the rail; right to the conversation. On the rail ↑↓ move, ↵ opens, Esc goes back |
-| Resize the pane | ⌘⌥⇧ arrows or ⌘⌥⇧ H J K L: the split moves that way · ⌘⌃= evens all out |
+| Resize the pane | ⌘⌥⇧ arrows or ⌘⌥⇧ H J K L: the split moves that way · ⌘⌃= evens all out · or drag the divider between panes (double-click evens it, Esc puts it back) |
 | Give an app the room its window needs | ⌘⌃0, or `fit` in the pane header: shown when the app refused the pane's size and a split can move |
 | Swap the pane with its neighbour | ⌘⌃ arrows or ⌘⌃ H J K L |
 | Move the pane to another tab | ⌘⇧⌥1 … ⌘⇧⌥9. US keyboard layout only (US, ABC): on others the keys do nothing |

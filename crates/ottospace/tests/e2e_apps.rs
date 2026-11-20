@@ -740,6 +740,49 @@ fn a_hosted_pane_is_dragged_by_its_header() {
 
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_dragged_divider_sizes_the_hosted_window_once_on_release() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-divider", "CANARY_SOCKET", &[]);
+    let window = || canary.call(json!({"cmd": "state"}))["windows"][0].clone();
+    let frame = || rect(&window()["bounds"]);
+    wait_for("the canary window", frame);
+    let otto = otto_for(&canary, "otto-divider", &[]);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let mouse = |action: &str, x: f64, y: f64| {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": x, "y": y, "as": "user"}));
+    };
+    let body = |s: &Value| rect(&s["bounds"]["1"]).filter(|b| b[2] > 1.0);
+    // Parked as wide as its pane's content.
+    let fits = |what: &str| {
+        wait_for(what, || {
+            let b = body(&state())?;
+            frame().filter(|f| close(f[2], b[2])).map(|_| b)
+        })
+    };
+    // 1 (the canary) | 2 (empty).
+    host_and_park(&otto);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let before = fits("parked at its pane's width");
+    let s = state();
+    let (one, two) = (rect(&s["frames"]["1"]).expect("pane 1"), rect(&s["frames"]["2"]).expect("pane 2"));
+    let (x, y) = ((one[0] + one[2] + two[0]) / 2.0, one[1] + one[3] / 2.0);
+
+    // Held: the pane is narrower at once, the window is not asked to follow each move.
+    mouse("down", x, y);
+    mouse("move", x - 20.0, y);
+    mouse("move", x - 80.0, y);
+    let held = wait_for("the pane narrower", || body(&state()).filter(|b| b[2] < before[2] - 60.0));
+    std::thread::sleep(Duration::from_millis(600));
+    assert!(frame().is_some_and(|f| close(f[2], before[2])), "resized while held: {:?} for {held:?}", frame());
+
+    // Released: sized to its pane once.
+    mouse("up", x - 80.0, y);
+    let after = fits("sized to the pane on release");
+    assert!(close(after[2], before[2] - 80.0), "{before:?} -> {after:?}");
+    assert_eq!(window()["clicks"], json!([]), "the drag reached the app");
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
 fn a_window_that_refuses_the_pane_size_is_shown_unscaled_at_the_pane_top_left() {
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-size", "CANARY_SOCKET", &[]);
     let windows = || canary.call(json!({"cmd": "state"}))["windows"].clone();

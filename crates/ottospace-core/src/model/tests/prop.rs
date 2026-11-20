@@ -898,6 +898,13 @@ const MAKERS: &[Make] = &[
     |g| Action::FocusDir { dir: g.dir() },
     |g| Action::FocusCycle { delta: g.delta() },
     |g| Action::Resize { dir: g.dir() },
+    |g| Action::DividerDrag {
+        pane: g.pane(),
+        axis: g.axis(),
+        ratio: g.rng.pick(&[0.0, 0.3, 0.5, 0.95, 2.0, f32::NAN]),
+    },
+    |g| Action::DividerHold { pane: g.pane(), axis: g.axis() },
+    |g| Action::DividerEven { pane: g.pane(), axis: g.axis() },
     |g| Action::SwapDir { dir: g.dir() },
     |g| Action::MovePane { pane: g.rng.coin().then(|| g.pane()), tab: g.index(g.m.tabs.len()) },
     |_| Action::Equalize,

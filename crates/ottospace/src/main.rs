@@ -80,6 +80,7 @@ mod control;
 mod conversation;
 mod dial;
 mod dialog;
+mod divider;
 mod drawer_rail;
 mod editor;
 mod event_log;
@@ -919,6 +920,8 @@ struct Workspace {
     dragging: Option<PaneId>,
     /// During a pane drag: the pane under the pointer and the zone of it a drop would land on.
     drop_at: Option<(PaneId, Zone)>,
+    /// The divider the button went down on, until it comes up.
+    divider: Option<divider::Hold>,
     /// A `mouse` request holds the button down: a move before its release is a drag.
     held: bool,
     /// Releases a button no request came back for. Replaced, so stopped, by each `mouse` request.
@@ -1606,6 +1609,7 @@ impl Workspace {
             cell: terminal::cell_size(window),
             dragging: None,
             drop_at: None,
+            divider: None,
             held: false,
             abandoned: None,
             injected: false,
@@ -4493,6 +4497,8 @@ impl Workspace {
         // Under the notice bar as it is in this frame: the windows follow it as it opens and closes.
         let limit = top_limit(window, cx);
         let keep = self.bars_leave();
+        // While a divider is dragged, no window is resized: once more on release (`divider_released`), not each frame.
+        let dragging = self.divider_held(cx).is_some();
         for (id, hosted) in &mut self.hosted {
             let rect = on_screen(hosted.bounds.get(), window, cx);
             if rect.size.width < 1.0 {
@@ -4500,22 +4506,25 @@ impl Workspace {
             }
             let crop = hosted.crop_at(rect, limit);
             let rect = pane_rect(rect, keep, live == Some(*id), crop);
-            if live == Some(*id) {
+            if live == Some(*id) && !dragging {
                 let drifted = check && hosted.window_frame().is_some_and(|f| f.origin != raised(rect, crop).origin);
                 if hosted.placed != rect || drifted {
                     hosted.place(rect, crop);
                 }
             // Also when the spot moved: displays changed, or ottospace is on one of another scale.
-            } else if hosted.parked_size != rect.size
-                || hosted.crop != crop
-                || spot.is_some_and(|spot| hosted.parked_at != spot)
+            } else if !dragging
+                && (hosted.parked_size != rect.size
+                    || hosted.crop != crop
+                    || spot.is_some_and(|spot| hosted.parked_at != spot))
             {
                 hosted.park(rect.size, scale, crop);
             }
             // Only on a check: reading a window's size is a synchronous accessibility call.
             // An app that resized its own window: the preview and the click rule follow it.
             // The window was asked for the pane's size: what it has now is what it kept.
+            // Not during a divider's drag: the window was not asked for the pane's size yet.
             if check
+                && !dragging
                 && let Some(kept) = hosted.show(scale)
                 && let Some(frame) = self.frames.get(id)
                 && drawn.contains(id)
@@ -6751,15 +6760,16 @@ impl Workspace {
                 let first = div().flex_none().flex().overflow_hidden();
                 let first = if down { first.w_full().h(relative(*ratio)) } else { first.h_full().w(relative(*ratio)) };
                 let second = div().flex_1().min_w_0().min_h_0().flex().overflow_hidden();
-                div()
+                let split = div()
                     .flex_1()
                     .size_full()
                     .overflow_hidden()
                     .flex()
                     .when(down, |d| d.flex_col())
                     .child(first.child(self.render_node(a, cx)))
-                    .child(second.child(self.render_node(b, cx)))
-                    .into_any_element()
+                    .child(second.child(self.render_node(b, cx)));
+                // Its divider's grab, drawn last: over both sides.
+                self.divider_grab(split, node, cx).into_any_element()
             }
         }
     }
@@ -7707,6 +7717,12 @@ impl Workspace {
     /// out's. Each runs in the workspace, for the window it fires in.
     fn input_handlers(&self, root: Div, cx: &mut Context<Self>) -> Div {
         root.on_key_down(cx.listener(Self::key_down))
+            // Esc during a divider drag puts it back, before a terminal or a box sees the key.
+            .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                if e.keystroke.key == "escape" && this.divider_escape(window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
             // A held modifier lights its caps in an empty tab's list.
             .on_modifiers_changed(cx.listener(|this, _, window, cx| this.modifiers_changed(window, cx)))
             .map(|root| self.command_actions(root, cx))
