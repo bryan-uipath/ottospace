@@ -331,7 +331,8 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The bar's segments in the state: where each is drawn (the mode's block while a mode is on);
+    /// The bar's segments in the state: where each is drawn (the mode's block while a mode is on,
+    /// else the dimmed NORMAL as `resting`);
     /// the place's and the agents' text.
     /// The meeting's title is never here: only whether it shows, and where.
     pub(crate) fn status_snapshot(&self) -> serde_json::Value {
@@ -342,6 +343,7 @@ impl Workspace {
         let join = self.controls.bounds("status:join").map(crate::rect);
         serde_json::json!({
             "mode": drawn(Mark::StatusMode),
+            "resting": drawn(Mark::StatusResting),
             "place": place.map(|p| serde_json::json!({ "text": self.place_line(&p, fit.folder_name), "rect": drawn(Mark::StatusPlace) })),
             "meeting": self.status_meeting().map(|_| serde_json::json!({ "rect": drawn(Mark::StatusMeeting), "join": join })),
             "agents": { "text": self.model.agents().text(fit.agents_short), "rect": drawn(Mark::StatusAgents) },

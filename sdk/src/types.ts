@@ -1896,6 +1896,8 @@ export interface Snapshot {
   status_bar: {
     /** The mode's block at the bar's left, while a mode is on. */
     mode: Rect | null;
+    /** The dimmed `NORMAL` in the mode's place, in normal mode. */
+    resting: Rect | null;
     place: { text: string; rect: Rect | null } | null;
     meeting: { rect: Rect | null; join: Rect | null } | null;
     agents: { text: string; rect: Rect | null };
