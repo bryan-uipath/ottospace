@@ -242,7 +242,7 @@ Design note: `docs/ai/attention/plan.md`.
   suite is a step that does not stop the next; the last step fails the job if any failed, and the
   summary lists each suite's outcome and the failed tests.
 - On `main`, `ci.yml` calls it on every push (a newer push cancels the older run, so a burst of
-  merges tests the newest tip). While it or `check` fails, `main-red` keeps one issue, "main is red":
+  merges tests the newest tip). While it or `check` fails, `main-red` keeps one issue of its own (never one a person opened), "main is red":
   the failed tests and `git log <last green>..HEAD`; it closes when both pass again and opens again at the next red (a re-run of an
   older push leaves it alone) (`issues: write` and
   `actions: read` on that job only). A red main is fixed before more lands.
