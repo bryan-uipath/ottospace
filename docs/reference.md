@@ -792,7 +792,7 @@ unfolds it. A session at work does not unfold it.
   it opens, so nothing shows what a session did a while ago. If the reader stops, the status
   bar says so once.
 - **Read, then gone on with only by you.** ottospace reads the runners' own session files, every
-  5 seconds while the Tasks section is open and never while it is closed. It does not attach to
+  5 seconds while the Tasks section is open (or the Repos section, for its dots alone: nothing is listed then) and never while both are closed. It does not attach to
   a session, type into it or signal it. Only Open or Track, by you, starts the runner's own
   resume command on it. Only derived facts are shown: names from fixed tables, counts and
   times. Never a prompt, a file's contents or a command line. The one free text is the

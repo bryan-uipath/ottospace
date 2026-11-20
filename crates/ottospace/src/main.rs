@@ -1135,6 +1135,8 @@ struct Workspace {
     sessions: Option<sessions::Poller>,
     /// The core holds sessions that were found: they are cleared when the Tasks section closes.
     sessions_listed: bool,
+    /// The last read went to the Tasks section's list (else only to the Repos section's dots).
+    sessions_tasks: bool,
     /// The core was told the `session_quiet_minutes` setting.
     sessions_quiet_told: bool,
     /// The user was told that the sessions reader stopped.
@@ -1521,7 +1523,7 @@ impl Workspace {
                         this.tell_day(window, cx);
                         this.tick_prs(window, cx);
                         if ticks.every(60, 30) {
-                            this.read_heads(window, cx);
+                            this.read_heads(cx);
                         }
                         this.watch_displays(window, cx);
                     });
@@ -1713,6 +1715,7 @@ impl Workspace {
             calls: 0,
             sessions: sessions::Poller::start(),
             sessions_listed: false,
+            sessions_tasks: false,
             sessions_stopped: false,
             sessions_quiet_told: false,
             known: Vec::new(),
@@ -3335,8 +3338,11 @@ impl Workspace {
                 let pr = self.model.checkout_pr(&checkout.path).map(ottospace_core::prs::Pr::summary);
                 let mut row = serde_json::json!(checkout);
                 row["pr"] = serde_json::json!(pr);
-                (row["activity"], row["pulsing"]) = (serde_json::json!(dot.activity), dot.pulse.is_some().into());
-                row["row"] = serde_json::json!(drawn(Mark::Checkout(index)));
+                let drawn = drawn(Mark::Checkout(index));
+                // A folded row draws no dot: no pulse plays on it.
+                let pulsing = dot.pulse.is_some() && drawn.is_some();
+                (row["activity"], row["pulsing"]) = (serde_json::json!(dot.activity), pulsing.into());
+                row["row"] = serde_json::json!(drawn);
                 index += 1;
                 row
             };
@@ -3366,8 +3372,24 @@ impl Workspace {
     /// The reading itself is on the poller's thread.
     fn poll_sessions(&mut self, window: &Window, cx: &mut Context<Self>) {
         let now = now_ms();
-        // The Repos section's dots light by them too.
-        let open = matches!(self.model.sidebar, Some(Section::Tasks | Section::Repos));
+        // Read for the Repos section's dots too; listed only while Tasks is open.
+        let tasks = self.model.sidebar == Some(Section::Tasks);
+        let open = tasks || self.model.sidebar == Some(Section::Repos);
+        if tasks != self.sessions_tasks && open {
+            // Tasks closed into Repos: its list goes at once. Either way, read again now.
+            self.sessions_tasks = tasks;
+            if !tasks && self.sessions_listed {
+                self.dispatch(
+                    Action::SetSessions { found: Vec::new(), day: day_start(now) },
+                    Origin::System,
+                    window,
+                    cx,
+                );
+            }
+            if let Some(poller) = &mut self.sessions {
+                poller.again();
+            }
+        }
         if !self.sessions_quiet_told {
             self.sessions_quiet_told = true;
             let live = config::live();
@@ -3413,7 +3435,11 @@ impl Workspace {
             self.sessions_listed = open && !stopped;
             // The time too: ages and the range are counted from it.
             self.dispatch(Action::Tick { now }, Origin::System, window, cx);
-            self.dispatch(Action::SetSessions { found, day: day_start(now) }, Origin::System, window, cx);
+            let read = match tasks || found.is_empty() {
+                true => Action::SetSessions { found, day: day_start(now) },
+                false => Action::SessionsAtWork { found },
+            };
+            self.dispatch(read, Origin::System, window, cx);
             cx.notify();
         }
         if stopped && !self.sessions_stopped {
@@ -5680,15 +5706,15 @@ impl Workspace {
     }
 
     /// While the Repos section is open: each checkout's `HEAD` log, by one stat, so a commit pulses its dot.
-    fn read_heads(&mut self, window: &Window, cx: &mut Context<Self>) {
+    fn read_heads(&mut self, cx: &mut Context<Self>) {
         if self.model.sidebar != Some(Section::Repos) {
             return;
         }
         let checkouts = self.model.repos.iter().flat_map(Repo::checkouts);
         let heads = checkouts.filter_map(|c| Some((c.path.clone(), repos::head_log(Path::new(&c.path))?))).collect();
         let pulses = self.model.head_pulses();
-        let read = Action::SetHeads { heads, at: now_ms(), calm: dial::calm() };
-        self.dispatch(read, Origin::System, window, cx);
+        // Not `dispatch`, which draws again: only a new pulse does, once a second at most.
+        self.model.update(Action::SetHeads { heads, at: now_ms(), calm: dial::calm() }.sent_by(Origin::System));
         if self.model.head_pulses() != pulses {
             cx.notify();
         }

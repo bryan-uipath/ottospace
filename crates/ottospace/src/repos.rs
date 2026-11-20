@@ -64,10 +64,14 @@ pub fn checkout_of(dir: &Path) -> Option<(PathBuf, Option<String>)> {
 }
 
 /// The length of a checkout's `HEAD` log (`<gitdir>/logs/HEAD`): it grows by a line per commit.
-/// One stat, no `git`. `None`: no log.
+/// One stat, no `git`. A checkout with no log yet (no commit) is 0, so its first commit grows it.
+/// `None`: no checkout, or the log cannot be read.
 pub fn head_log(checkout: &Path) -> Option<u64> {
-    let meta = fs::metadata(git_dir(checkout)?.join("logs").join("HEAD")).ok()?;
-    meta.is_file().then(|| meta.len())
+    match fs::metadata(git_dir(checkout)?.join("logs").join("HEAD")) {
+        Ok(meta) => meta.is_file().then(|| meta.len()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(0),
+        Err(_) => None,
+    }
 }
 
 /// A checkout's git folder: its `.git`, or where its `.git` file points (a linked worktree's).

@@ -1227,6 +1227,10 @@ const MAKERS: &[Make] = &[
         Action::SessionsSeen { seen: (0..g.rng.below(4)).map(|_| seen(g)).collect() }
     },
     |g| {
+        let found = (0..g.rng.below(3)).map(|_| g.found()).collect();
+        Action::SessionsAtWork { found }
+    },
+    |g| {
         let (runner, id) = g.session();
         Action::SessionAdopt { runner, id }
     },

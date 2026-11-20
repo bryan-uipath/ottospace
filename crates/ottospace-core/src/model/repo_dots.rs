@@ -66,7 +66,7 @@ impl Model {
         if let Some(task) = working {
             return Dot { activity: Activity::Working, task: Some(task.id), pulse };
         }
-        let session = self.found.iter().any(|s| s.active && s.repo == path && !self.tasks.adopted(&s.runner, &s.id));
+        let session = self.at_work.iter().any(|s| s.repo == path && !self.tasks.adopted(&s.runner, &s.id));
         let activity = if session { Activity::Working } else { Activity::Idle };
         Dot { activity, task: None, pulse }
     }
@@ -74,7 +74,8 @@ impl Model {
     /// A task's agent works: its turn runs (the drawer's dial), or the session it follows is active.
     fn task_works(&self, task: &Task) -> bool {
         let turn = self.chat(&Subject::Task(task.id)).is_some_and(|chat| chat.transcript.pulse() == Pulse::Running);
-        turn || self.task_session(task).is_some_and(|session| session.active)
+        let link = task.session.as_ref();
+        turn || link.is_some_and(|l| self.at_work.iter().any(|s| (&s.runner, &s.id) == (&l.runner, &l.id)))
     }
 
     /// The checkouts' `HEAD` logs as read `at` (`SetHeads`): one that grew since the last read
@@ -95,8 +96,12 @@ impl Model {
         }
     }
 
-    /// Only listed checkouts keep a read: one removed mid-pulse stops, one listed again starts over.
+    /// Only listed checkouts keep a read, and only while the Repos section is open: one removed
+    /// mid-pulse stops; on its next opening a commit made while it was closed does not pulse.
     pub(crate) fn heads_listed(&mut self) {
+        if self.sidebar != Some(super::Section::Repos) {
+            return self.heads.clear();
+        }
         let heads = std::mem::take(&mut self.heads);
         self.heads = heads.into_iter().filter(|(path, _)| self.repo_listed(path)).collect::<BTreeMap<_, _>>();
     }
@@ -124,6 +129,7 @@ mod tests {
         let repo =
             Repo { name: "app".into(), path: APP.into(), branch: Some("main".into()), worktrees: vec![worktree] };
         m.update(Action::SetRepos { repos: vec![repo] });
+        m.update(Action::ToggleSection { section: crate::model::Section::Repos });
         m
     }
 
@@ -133,8 +139,9 @@ mod tests {
         (task.repo, task.started_at) = (Some(dir.into()), Some(u64::from(id)));
     }
 
-    fn session(m: &mut Model, id: &str, repo: &str, active: bool) {
-        let found = Found {
+    /// The sessions read with Repos open: (id, at work), each in `repo`.
+    fn sessions(m: &mut Model, repo: &str, read: &[(&str, bool)]) {
+        let found = |&(id, active): &(&str, bool)| Found {
             runner: "claude".into(),
             id: id.into(),
             cwd: repo.into(),
@@ -148,7 +155,7 @@ mod tests {
             model: None,
             held: false,
         };
-        m.found.push(found);
+        m.update(Action::SessionsAtWork { found: read.iter().map(found).collect() });
     }
 
     fn dot(m: &Model, path: &str) -> (Activity, Option<TaskId>) {
@@ -166,10 +173,12 @@ mod tests {
     #[test]
     fn a_session_no_task_has_lights_its_checkout_while_active() {
         let mut m = listed();
-        session(&mut m, "s1", WT, false);
+        sessions(&mut m, WT, &[("s1", false)]);
         assert_eq!(dot(&m, WT), (Activity::Idle, None));
-        m.found[0].active = true;
+        sessions(&mut m, WT, &[("s1", true)]);
         assert_eq!(dot(&m, WT), (Activity::Working, None));
+        // Read with Repos open: never listed in the Elsewhere group.
+        assert_eq!(m.sessions_bar().total, 0);
         assert_eq!(dot(&m, APP), (Activity::Idle, None), "only its own checkout");
     }
 
@@ -178,7 +187,7 @@ mod tests {
         let mut m = listed();
         task(&mut m, 1, WT, State::Running);
         assert_eq!(dot(&m, WT), (Activity::Idle, None), "running, but nothing at work");
-        session(&mut m, "s1", WT, true);
+        sessions(&mut m, WT, &[("s1", true)]);
         m.tasks.list[0].session = Some(Link { runner: "claude".into(), id: "s1".into(), state: None });
         assert_eq!(dot(&m, WT), (Activity::Working, Some(1)));
     }
@@ -188,9 +197,9 @@ mod tests {
         let mut m = listed();
         for (id, s) in [(1, "s1"), (2, "s2")] {
             task(&mut m, id, WT, State::Running);
-            session(&mut m, s, WT, true);
             m.tasks.list[id as usize - 1].session = Some(Link { runner: "claude".into(), id: s.into(), state: None });
         }
+        sessions(&mut m, WT, &[("s1", true), ("s2", true)]);
         assert_eq!(dot(&m, WT), (Activity::Working, Some(2)), "the one started last");
         task(&mut m, 3, WT, State::NeedsYou);
         task(&mut m, 4, WT, State::NeedsYou);
@@ -243,5 +252,16 @@ mod tests {
         m.update(Action::SetRepos { repos: listed().repos });
         m.update(Action::SetHeads { heads: vec![(WT.into(), 400)], at: 2_100, calm: false });
         assert_eq!(m.checkout_dot(WT, 2_100).pulse, None);
+    }
+
+    #[test]
+    fn a_commit_made_while_repos_was_closed_does_not_pulse_when_it_opens() {
+        let mut m = listed();
+        m.update(Action::SetHeads { heads: vec![(WT.into(), 100)], at: 1_000, calm: false });
+        m.update(Action::ToggleSection { section: crate::model::Section::Repos });
+        assert!(m.heads.is_empty(), "closed: no read kept");
+        m.update(Action::ToggleSection { section: crate::model::Section::Repos });
+        m.update(Action::SetHeads { heads: vec![(WT.into(), 180)], at: 9_000, calm: false });
+        assert_eq!((m.checkout_dot(WT, 9_000).pulse, m.head_pulses()), (None, 0));
     }
 }

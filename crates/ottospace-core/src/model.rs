@@ -1071,6 +1071,11 @@ pub enum Action {
     SessionQuiet {
         ms: u64,
     },
+    /// The sessions the shell read while the Repos section, not Tasks, is open: only for the
+    /// checkouts' dots (`repo_dots`) and the tasks that follow them. Nothing is listed.
+    SessionsAtWork {
+        found: Vec<Found>,
+    },
     /// When the files of sessions that tasks were adopted from last changed: read by the shell
     /// while the Tasks section is closed, so those tasks follow their sessions all the same.
     SessionsSeen {
@@ -2416,6 +2421,7 @@ impl Action {
             | Action::SetSessions { .. }
             | Action::SessionQuiet { .. }
             | Action::SessionsSeen { .. }
+            | Action::SessionsAtWork { .. }
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
             | Action::SessionClick { .. }
@@ -2841,6 +2847,7 @@ impl Action {
             | Action::SetSessions { .. }
             | Action::SessionQuiet { .. }
             | Action::SessionsSeen { .. }
+            | Action::SessionsAtWork { .. }
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
             | Action::SessionClick { .. }
@@ -3663,6 +3670,9 @@ pub struct Model {
     /// Sessions the shell found, in the order listed. Shown through `sessions_bar` only.
     #[serde(skip)]
     found: Vec<Found>,
+    /// Of the sessions last read (Tasks or Repos open), those at work: for the checkouts' dots.
+    #[serde(skip)]
+    at_work: Vec<Found>,
     /// How long an adopted session is quiet before its task needs the user. 0: never.
     #[serde(skip)]
     session_quiet_ms: u64,
@@ -3936,6 +3946,7 @@ impl Default for Model {
             finish: finish::Finishing::default(),
             local_day: 0,
             found: Vec::new(),
+            at_work: Vec::new(),
             session_quiet_ms: sessions::QUIET_MS,
             hidden: Vec::new(),
             sessions_range: sessions::Range::default(),
@@ -5806,11 +5817,20 @@ impl Model {
             }
             Action::SetSessions { found, day } => {
                 self.found = sessions::kept(found);
+                self.at_work = self.found.iter().filter(|s| s.active).cloned().collect();
                 self.session_day = day;
                 let seen = self.found.iter().map(|s| (s.runner.clone(), s.id.clone(), s.active, s.last_activity));
                 self.follow_sessions(seen.collect());
             }
             Action::SessionQuiet { ms } => self.session_quiet_ms = ms,
+            Action::SessionsAtWork { found } => {
+                // Not listed: the Elsewhere group and its actions see none of it.
+                self.found.clear();
+                let found = sessions::kept(found);
+                let seen = found.iter().map(|s| (s.runner.clone(), s.id.clone(), s.active, s.last_activity));
+                self.follow_sessions(seen.collect());
+                self.at_work = found.into_iter().filter(|s| s.active).collect();
+            }
             Action::SessionsSeen { seen } => {
                 let seen = seen.into_iter().map(|s| (s.runner, s.id, s.active, Some(s.last_activity)));
                 self.follow_sessions(seen.collect());
@@ -9907,6 +9927,7 @@ mod tests {
         Action::SetSessions { .. },
         Action::SessionQuiet { .. },
         Action::SessionsSeen { .. },
+        Action::SessionsAtWork { .. },
         Action::SessionAdopt { .. },
         Action::SessionHide { .. },
         Action::SessionClick { .. },
@@ -10253,6 +10274,7 @@ mod tests {
             Action::SetSessions { found: Vec::new(), day: 0 },
             Action::SessionQuiet { ms: 0 },
             Action::SessionsSeen { seen: Vec::new() },
+            Action::SessionsAtWork { found: Vec::new() },
             Action::SessionAdopt { runner: text(), id: text() },
             Action::SessionHide { runner: text(), id: text() },
             Action::SessionClick { runner: text(), id: text() },
