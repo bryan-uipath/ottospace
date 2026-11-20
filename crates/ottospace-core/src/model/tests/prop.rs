@@ -8114,6 +8114,28 @@ fn seed_13416_the_apps_filter_goes_with_the_sidebar_overlay() {
     .unwrap();
 }
 
+/// The sidebar overlay opened over a viewer with `g` typed: its list took the keyboard after the
+/// step settled the viewers, so the count stayed. It is dropped.
+#[test]
+fn seed_26930_a_viewers_count_goes_when_the_sidebar_overlay_takes_the_keyboard() {
+    replay(&[
+        set_features(&["marks", "transcripts", "overlay_panels"]).into(),
+        by(
+            Origin::Socket,
+            Action::OpenFile {
+                path: "/w/app/src/main.rs".into(),
+                axis: Axis::Right,
+                beside: None,
+                reuse: false,
+                at: Some(crate::viewer::Lines { first: 351, last: 111 }),
+            },
+        ),
+        by(Origin::Socket, Action::ViewerKey { key: "g".into() }),
+        Action::ToggleSection { section: Section::Marks }.into(),
+    ])
+    .unwrap();
+}
+
 /// A Done's worktree, its git answers late (xreview of #274): Undo while git removes it (the
 /// default falls back, then the worktree is added back), Done while git makes it (removed once
 /// made), and a dirty one kept after an Undo (no notice for an act not the user's).

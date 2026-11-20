@@ -4790,10 +4790,11 @@ impl Model {
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
         self.settle_row_menu();
-        self.settle_viewers(&mut effects);
         self.settle_bug(&mut effects);
         self.settle_listen();
         self.settle_overlays(overlays, &mut effects);
+        // After the overlays: an opened sidebar's list takes the keyboard, a viewer's count goes.
+        self.settle_viewers(&mut effects);
         // Something shows in the drawer's place, or nothing is left to reopen: nothing to keep from a client.
         if !self.drawer_collapsed() || !self.drawer_opens() {
             self.folded = None;

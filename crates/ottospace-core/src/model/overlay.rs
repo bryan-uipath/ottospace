@@ -395,6 +395,20 @@ mod tests {
         }
     }
 
+    /// `g` typed in a viewer, then the sidebar opened: its list has the keyboard, the count goes.
+    #[test]
+    fn a_viewers_count_goes_with_the_keyboard_to_the_sidebar() {
+        let mut m = workspace(true);
+        let at = None;
+        m.update(Action::OpenFile { path: "/w/main.rs".into(), axis: Axis::Right, beside: None, reuse: false, at });
+        m.update(Action::ViewerKey { key: "g".into() });
+        assert_eq!(m.viewer_pending().as_deref(), Some("g"));
+        let pane = m.keyboard_viewer();
+        m.update(Action::ToggleSection { section: Section::Marks });
+        assert!(matches!(m.focus_target(), Target::List(_)));
+        assert_eq!(pane.and_then(|id| m.viewer(id)).and_then(|v| v.pending.pending()), None);
+    }
+
     #[test]
     fn no_client_or_timer_opens_either_or_dismisses_them() {
         let mut m = workspace(true);
