@@ -729,9 +729,9 @@ fn paint(drawn: &Shared, floor: Floor, hints: Bounds<Pixels>, window: &mut Windo
         let (foot, end) = made.scene.beam(i)?;
         Some((to_window(foot)?, to_window(end)?))
     };
-    // Each lit building's beam, steady and thin in its task's colour; the hovered one has its own.
+    // Each lit building's beam, steady and thin in its task's colour (a hovered one's over it).
     let mut lit_beams = Vec::new();
-    for (i, block) in made.scene.blocks.iter().enumerate().filter(|(i, _)| Some(*i) != hovered) {
+    for (i, block) in made.scene.blocks.iter().enumerate() {
         let Kind::Lit(colour) = block.kind else { continue };
         let Some((foot, end)) = beam_of(i) else { continue };
         if let Some((end, _)) = fit_beam(foot, end, None, bounds, clear) {
@@ -824,8 +824,9 @@ fn beacon(
     let block = made.scene.blocks.get(i)?;
     let place = made.plan.places.get(block.place?)?;
     let colour = Hsla::from(rgb(theme::TEXT)).opacity(alpha);
-    // One line, at most half the picture wide: `src/…/views/list.rs`.
-    let most = (bounds.size.width / 2.).max(px(80.));
+    // One line, as wide as the wider side of the dot allows: `src/…/views/list.rs`.
+    let side = (bounds.right() - foot.x.max(end.x)).max(foot.x.min(end.x) - bounds.left());
+    let most = (side - px(BESIDE + 12.)).max(px(40.));
     let mut text: String = place.id.chars().map(|c| if c.is_control() { '?' } else { c }).collect();
     let line = loop {
         let line = shape(&text, colour, theme::TEXT_XS, window);

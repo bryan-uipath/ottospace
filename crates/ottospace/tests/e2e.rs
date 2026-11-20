@@ -16730,6 +16730,7 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
     assert_eq!((&hovered["file"], &hovered["lit"]), (&json!(true), &json!(true)), "{hovered}");
     assert!(rises(&numbers(&hovered["beam"])), "{hovered} from {top:?}");
     assert!(frames() > before, "the beam fades in");
+    assert_eq!(city(&otto)["lit_beams"], beams, "its steady beam stays under the hovered one");
     let hints = otto.control("home:terminal");
     let label = numbers(&hovered["beacon"]);
     let apart =
