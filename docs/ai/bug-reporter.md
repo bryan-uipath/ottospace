@@ -64,7 +64,8 @@ Everything read of ottospace is fenced and labelled untrusted exactly as capture
 The frozen picture is a picture of the window: it can show meeting titles, a transcript, a
 terminal's text, anything ottospace draws at that moment. It is the user's own act and stays on
 this machine, in the materials folder, for the agent they start. App panes (other apps' windows)
-are blanked by default. The structure snapshot and the log hold no text.
+are blanked by default: the pane's content, not its header (the window's title), nor a capture
+draft's or a brief's picture of an app in the right bar. The structure snapshot and the log hold no text.
 
 ## What is in the core, what in the shell
 

@@ -513,6 +513,7 @@ impl AssetSource for Assets {
             "icons/fold-closed.svg" => Some(include_bytes!("../assets/icons/fold-closed.svg")),
             "icons/runner-claude.svg" => Some(include_bytes!("../assets/icons/runner-claude.svg")),
             "icons/runner-codex.svg" => Some(include_bytes!("../assets/icons/runner-codex.svg")),
+            "icons/bug.svg" => Some(include_bytes!("../assets/icons/bug.svg")),
             _ => None,
         };
         Ok(bytes.map(Into::into))
@@ -559,6 +560,9 @@ const MAX_SPACE: f32 = 220.;
 const HOME_ICON: &str = "icons/home.svg";
 /// The top row's Fill the Whole Display button: off (arrows out), on (arrows in).
 const FILL_ICONS: [&str; 2] = ["icons/fill-expand.svg", "icons/fill-collapse.svg"];
+/// The bug button's icon, and its key (in its tooltip only).
+const BUG_ICON: &str = "icons/bug.svg";
+const BUG_KEY: &str = "cmd-ctrl-b";
 /// A space drawn as its badge alone: its icon.
 const BADGE_SPACE: f32 = 36.;
 /// Home's item: its 16-point house, 12 points either side, and its border.
@@ -770,6 +774,8 @@ actions!(ottospace, [AddToRepos]);
 actions!(ottospace, [StartFresh]);
 // What the capture key does, from the menu.
 actions!(ottospace, [CapturePane]);
+// The bug button's key: report a bug in ottospace, while `developer.ottospace_repo` is set.
+actions!(ottospace, [ReportBug]);
 // The right drawer: the keyboard in or out, closed or open, the task's workspace, its dial.
 actions!(ottospace, [TalkFocus, TalkToggle, SidebarToggle, TalkGo, StopAgent, EditMessage, DialToggle]);
 // A tab of no task, and the tab on show taken out of its task or moved to another.
@@ -825,6 +831,8 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-o", FoldTab, None),
         // Debug: outline the focused app pane's accessibility tree.
         KeyBinding::new("cmd-ctrl-a", AxOverlay, None),
+        // The bug button's, while it shows; shown in its tooltip only.
+        KeyBinding::new(BUG_KEY, ReportBug, None),
         // Tabs. ⌘1..⌘9 select one (handled in `key_down`).
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-}", NextTab, None),
@@ -936,6 +944,12 @@ struct Workspace {
     /// Where the pointer last was: ⌥ pressed with it still outlines what is there.
     hover_at: gpui::Point<Pixels>,
     note_field: field::Shared,
+    /// The bug report's comment being typed.
+    bug_field: field::Shared,
+    /// The window as frozen for the bug report.
+    bug_shot: Option<bug::Frozen>,
+    /// A report's picture is being taken: a second press takes none.
+    bug_pending: bool,
     picker_field: field::Shared,
     apps_field: field::Shared,
     mark_field: field::Shared,
@@ -1605,6 +1619,9 @@ impl Workspace {
             pointing: None,
             hover_at: gpui::Point::default(),
             note_field: field::Shared::default(),
+            bug_field: field::Shared::default(),
+            bug_shot: None,
+            bug_pending: false,
             picker_field: field::Shared::default(),
             apps_field: field::Shared::default(),
             mark_field: field::Shared::default(),
@@ -2161,8 +2178,9 @@ impl Workspace {
                 Effect::Snapshot { draft, material, pane } => self.ask_snapshot(draft, *material, *pane),
                 Effect::CaptureDropped { draft, material } => self.drop_capture(draft, *material),
                 Effect::CaptureKept { draft, dir, brief } => self.keep_capture(draft, dir, brief, cx),
-                // Nothing in the shell starts a bug report yet.
-                Effect::BugDropped { .. } | Effect::BugFiled { .. } => {}
+                Effect::BugDropped { word } => self.bug_dropped(word),
+                // Send comes with the brief's files.
+                Effect::BugFiled { .. } => {}
                 Effect::Quit => {
                     // A moment later, so a socket `quit` gets its reply first; one still held for
                     // a frame goes now.
@@ -2956,6 +2974,11 @@ impl Workspace {
                 Request::CaptureStart { pane } => {
                     failure =
                         self.with_origin(Origin::User, |this| this.capture_pane(pane, Origin::User, window, cx)).err();
+                    None
+                }
+                // A test run only (refused above otherwise): the user's bug key, pressed by the test.
+                Request::BugStart => {
+                    failure = self.with_origin(Origin::User, |this| this.bug_start(Origin::User, window, cx)).err();
                     None
                 }
                 Request::InspectorFixture { pane, app, tree } => match pane.or(self.model.focused) {
@@ -4010,6 +4033,9 @@ impl Workspace {
             "overflow": std::env::var_os("OTTOSPACE_E2E").map(|_| self.bars.overflow()),
             // The capture key, and what was drawn of the draft or the brief in the right bar.
             "capture": self.capture_snapshot(),
+            // The bug button (`icon`), the report being made (`report`: its marks with their
+            // comments, what has the keyboard), the rects blanked, and the picture's size in pixels.
+            "bug": self.bug_snapshot(),
             // The right drawer: where its conversation is drawn (`body`), each task's agent
             // (`model`, `ended`, its terminal's `lines`), the workspace ⌘↵ goes to, and why no
             // agent runs for the task on show (`note`).
@@ -4544,6 +4570,10 @@ impl Workspace {
             return;
         }
         self.row_menu_spent = false;
+        // A bug report covers the window: it takes every key but ⌘ shortcuts.
+        if self.model.bug.is_some() {
+            return self.bug_key(event, window, cx);
+        }
         // The key reference takes the keyboard: Esc closes it, and no other key reaches the
         // terminal or the picker behind it. (⌘ shortcuts go to their bindings; the core ignores
         // pane actions while it is open, and ⌘/ closes it.)
@@ -7042,7 +7072,16 @@ impl Workspace {
                 this.dispatch(Action::FillDisplay, this.input, window, cx);
             }),
         );
-        div().flex_none().ml_auto().mr_2().flex().items_center().gap_1().children(splits).child(fill)
+        // Report a bug in ottospace: only while the settings name a checkout of it.
+        let report = self.model.bug_icon().then(|| {
+            button("report-bug".into(), BUG_ICON, "bug".into(), "Report a bug in ottospace  ⌃⌘B").on_click(cx.listener(
+                |this, _, window, cx| {
+                    this.error = this.bug_start(this.input, window, cx).err();
+                    cx.notify();
+                },
+            ))
+        });
+        div().flex_none().ml_auto().mr_2().flex().items_center().gap_1().children(splits).child(fill).children(report)
     }
 
     /// The second row: the selected space's tabs, only while it has more than one. The one on
@@ -7671,6 +7710,7 @@ impl Workspace {
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
                 this.mouse_move(e, cx);
                 this.annotate_move(e, window, cx);
+                this.bug_move(e, window, cx);
             }))
             .on_drag_move(cx.listener(|this, e: &gpui::DragMoveEvent<DraggedPane>, window, cx| {
                 this.pane_drag_move(e.drag(cx).0, e.event.position, window, cx);
@@ -7685,6 +7725,7 @@ impl Workspace {
                 cx.listener(|this, e: &gpui::MouseUpEvent, window, cx| {
                     (this.dragging, this.held) = (None, false);
                     this.annotate_release(e.position, window, cx);
+                    this.bug_release(e.position, window, cx);
                 }),
             )
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no
@@ -7799,6 +7840,16 @@ impl Workspace {
                     false => cx.propagate(),
                 },
             ))
+            // With no bug button its key is no key of ottospace's: it goes on as unbound. Only the
+            // main window, where the report is drawn: not a tab out on another display.
+            .on_action(cx.listener(|this, _: &ReportBug, window, cx| match this.model.bug_icon() {
+                true if Window::window_handle(window) != this.main_window => {}
+                true => {
+                    this.error = this.bug_start(this.input, window, cx).err();
+                    cx.notify();
+                }
+                false => cx.propagate(),
+            }))
             .on_action(cx.listener(|this, _: &CapturePane, window, cx| {
                 this.error = this.capture_pane(None, this.input, window, cx).err();
                 cx.notify();
@@ -8137,6 +8188,8 @@ impl Render for Workspace {
             .children(self.model.palette.as_ref().map(|palette| self.render_palette(palette, cx)))
             .children(self.render_pointing())
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
+            // Over the window's own controls: the bug report's frozen picture.
+            .children(self.render_bug(window, cx))
             .children(self.model.confirm.as_ref().map(|confirm| self.render_confirm(confirm, cx)))
             .when(self.gallery, |d| d.child(ui::gallery::view()))
             .children(seal)
@@ -8462,8 +8515,9 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 20] = [
+        const TESTS_ONLY: [&str; 21] = [
             "capture_start",
+            "bug_start",
             "repo_add",
             "inspector_fixture",
             "sneak_app_tree",
@@ -8509,7 +8563,7 @@ mod tests {
     #[test]
     fn every_rail_icon_is_embedded() {
         let icons = SECTIONS.iter().map(|(_, icon, _)| *icon).chain(SPLITS.iter().map(|(_, icon, ..)| *icon));
-        for path in icons.chain([HOME_ICON]).chain(FILL_ICONS) {
+        for path in icons.chain([HOME_ICON, BUG_ICON]).chain(FILL_ICONS) {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }
     }

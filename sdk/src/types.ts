@@ -392,6 +392,28 @@ export interface Task {
   colour?: number;
 }
 
+/** A bug report's mark: a box (0..1 of the picture, from its top left) or the whole app (`rect` null), and the user's comment. */
+export interface BugMark {
+  n: number;
+  rect: Rect | null;
+  comment: string;
+}
+
+/** The bug report being made. */
+export interface BugReport {
+  /** The window's size in points. */
+  size: [number, number];
+  marks: BugMark[];
+  /** The mark whose comment has the keyboard. */
+  typing: number | null;
+  /** The box being dragged, 0..1 of the picture. */
+  drag: Rect | null;
+  /** App panes show in the picture as they are; else blanked. */
+  apps: boolean;
+  /** There is a picture of the window. */
+  picture: boolean;
+}
+
 /** Something drawn on a capture. Positions are 0..1 of the picture, from its top left. */
 export type Shape =
   | { kind: "ellipse"; rect: Rect }
@@ -791,7 +813,7 @@ export type PickItem =
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
   /** Whose it is: the new-task line, the picker's or the Apps section's filter, a mark's name, a note on a capture, or a native conversation's composer (`talk`). */
-  of: "compose" | "picker" | "palette" | "inspector" | "apps" | "mark" | "workbook" | "worktree" | "note" | "talk" | "btw";
+  of: "compose" | "picker" | "palette" | "inspector" | "apps" | "mark" | "workbook" | "worktree" | "note" | "talk" | "btw" | "bug";
   text: string;
   cursor: number;
   /** Start and end, in text order. Equal: only a cursor. */
@@ -1668,6 +1690,18 @@ export interface Snapshot {
     /** The draft's folder, or null when nothing is kept on disk. */
     dir: string | null;
     brief: { task: TaskId; dir: string | null } | null;
+  };
+  /** The bug button and the report being made over a frozen picture of the window. */
+  bug: {
+    /** The bug button shows: `developer.ottospace_repo` is a git checkout. */
+    icon: boolean;
+    report: BugReport | null;
+    /** The rects blanked in the picture, in window points: app panes, unless shown. */
+    blanked: Rect[] | null;
+    /** The picture's size in pixels, or null when there is none. */
+    pixels: [number, number] | null;
+    /** While a report is open: where its controls are drawn, by id (`bug:whole`, `bug:remove:1`). Null outside a test run. */
+    controls: Record<string, Rect> | null;
   };
   /** The right drawer: where its conversation is drawn, each agent by task id (a session's: `<runner>:<id>`), and why no agent runs for the conversation on show. */
   /** The top row's spaces in order, hidden ones too: Home first, with no tabs. */

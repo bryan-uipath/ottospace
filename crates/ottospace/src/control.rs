@@ -381,6 +381,10 @@ pub enum Request {
         #[serde(default)]
         pane: Option<PaneId>,
     },
+    /// For tests (`OTTOSPACE_E2E`): the user's bug key, pressed by the test. The window is
+    /// frozen as a picture to mark, while `developer.ottospace_repo` is a checkout. Refused
+    /// outside a test run: no client may ask for a picture of the window.
+    BugStart,
     /// For tests (`test_refusal`): opens the accessibility inspector on a pane (default: the
     /// focused one) as the user, with `tree` as if read from its window at `0,0` (`window` its
     /// size). A test run hosts no window to read.
@@ -672,6 +676,7 @@ fn two() -> f32 {
 /// request of its own. `as` and `repeat` on `key`: a client's key would pass for the user's
 /// own, and end sneak mode or answer the quit question in their place. `capture_start`: a
 /// capture hands over a hosted app's picture and text, and outside a test only the user starts one.
+/// `bug_start`: a bug report pictures the window, and outside a test only the user starts one.
 /// `repo_add`: it writes the user's settings, as only the user's own choice in the folder picker does.
 /// `sneak_app_tree`: it would choose what sneak mode labels in another app. `calendar_call`: it
 /// would raise or silence the user's meeting alert. `record_start`: it would film the window.
@@ -695,6 +700,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         ),
         Request::CaptureStart { .. } => {
             Some("capture_start is for tests (OTTOSPACE_E2E): only the user starts a capture, with the capture key")
+        }
+        Request::BugStart => {
+            Some("bug_start is for tests (OTTOSPACE_E2E): only the user reports a bug, with the bug button or its key")
         }
         Request::InspectorFixture { .. } => {
             Some("inspector_fixture is for tests (OTTOSPACE_E2E): only the user opens the inspector, on a hosted app")
@@ -997,6 +1005,10 @@ mod tests {
         let capture = parse(r#"{"cmd":"capture_start","pane":1}"#);
         assert!(test_refusal(&capture, false).expect("refused").contains("only the user"));
         assert_eq!(test_refusal(&capture, true), None);
+        // Nor a bug report: it pictures the window.
+        let bug = parse(r#"{"cmd":"bug_start"}"#);
+        assert!(test_refusal(&bug, false).expect("refused").contains("only the user"));
+        assert_eq!(test_refusal(&bug, true), None);
         // Nor the green button: it fills the display as the user.
         let zoom = parse(r#"{"cmd":"zoom_press"}"#);
         assert!(test_refusal(&zoom, false).expect("refused").contains("only the user"));

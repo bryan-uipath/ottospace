@@ -88,6 +88,33 @@ pub fn sc_window(id: u32) -> Result<SCWindow, String> {
     content.windows().into_iter().find(|w| w.window_id() == id).ok_or_else(|| "window not shareable".into())
 }
 
+/// One picture of window `id`, scaled to `width`×`height` pixels, as RGBA rows: that window
+/// alone, never the screen. Errs without Screen Recording, or for a window that is not shareable.
+pub fn window_rgba(id: u32, width: usize, height: usize) -> Result<Vec<u8>, String> {
+    use screencapturekit::cm::CMSampleBufferExt;
+    use screencapturekit::screenshot_manager::SCScreenshotManager;
+
+    let window = sc_window(id)?;
+    let filter = SCContentFilter::create().with_window(&window).build().map_err(|e| format!("{e:?}"))?;
+    let config = SCStreamConfiguration::new()
+        .with_width(width as u32)
+        .with_height(height as u32)
+        .with_scales_to_fit(true)
+        .with_shows_cursor(false)
+        .with_pixel_format(PixelFormat::BGRA);
+    let sample = SCScreenshotManager::capture_sample_buffer(&filter, &config).map_err(|e| format!("{e:?}"))?;
+    let buffer = sample.pixel_buffer().ok_or("no picture")?;
+    let guard = buffer.lock_read_only().map_err(|e| format!("{e:?}"))?;
+    let (base, stride) = (guard.base_address(), guard.bytes_per_row());
+    if base.is_null() || guard.width() != width || guard.height() != height || stride < width * 4 {
+        return Err("a picture of another size".into());
+    }
+    // Rows without their padding, blue and red swapped.
+    let all = unsafe { std::slice::from_raw_parts(base, stride * height) };
+    let rows = all.chunks_exact(stride).flat_map(|row| row[..width * 4].chunks_exact(4));
+    Ok(rows.flat_map(|bgra| [bgra[2], bgra[1], bgra[0], bgra[3]]).collect())
+}
+
 /// The window's corner radius in points, measured from one alpha screenshot.
 /// Along the top pixel row the corner is transparent for `r - √r` pixels (circle of radius r,
 /// row centre at y≈½), so solving the measured run for r gives the radius.

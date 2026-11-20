@@ -6,6 +6,8 @@ import type {
   AppWindow,
   Display,
   TabOut,
+  BugMark,
+  BugReport,
   AgentChip,
   AgentDial,
   ChatSelection,
@@ -692,6 +694,33 @@ function captureDrawn(value: unknown, at: string): Snapshot["capture"] {
   };
 }
 
+function bugReport(value: unknown, at: string): BugReport {
+  const o = fields(value, at);
+  const mark = (value: unknown, at: string): BugMark => {
+    const m = fields(value, at);
+    return { n: num(m.n, `${at}.n`), rect: orNull(rect)(m.rect, `${at}.rect`), comment: str(m.comment, `${at}.comment`) };
+  };
+  return {
+    size: pair(o.size, `${at}.size`),
+    marks: list(mark)(o.marks, `${at}.marks`),
+    typing: orNull(num)(o.typing, `${at}.typing`),
+    drag: orNull(rect)(o.drag, `${at}.drag`),
+    apps: bool(o.apps, `${at}.apps`),
+    picture: bool(o.picture, `${at}.picture`),
+  };
+}
+
+function bugDrawn(value: unknown, at: string): Snapshot["bug"] {
+  const o = fields(value, at);
+  return {
+    icon: bool(o.icon, `${at}.icon`),
+    report: orNull(bugReport)(o.report, `${at}.report`),
+    blanked: orNull(list(rect))(o.blanked, `${at}.blanked`),
+    pixels: orNull(pair)(o.pixels, `${at}.pixels`),
+    controls: orNull(map(rect))(o.controls, `${at}.controls`),
+  };
+}
+
 /** The label every captured thing carries: without it the content is not handed on. */
 function labelled(o: Fields, at: string): { untrusted: true; warning: string } {
   if (o.untrusted !== true) throw wrong(`${at}.untrusted`, "true", o.untrusted);
@@ -1280,7 +1309,7 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  const owners = ["compose", "picker", "palette", "inspector", "apps", "mark", "workbook", "worktree", "note", "talk", "btw"];
+  const owners = ["compose", "picker", "palette", "inspector", "apps", "mark", "workbook", "worktree", "note", "talk", "btw", "bug"];
   if (typeof o.of !== "string" || !owners.includes(o.of)) {
     throw wrong(`${at}.of`, "compose, picker, apps, mark, workbook, note or talk", o.of);
   }
@@ -2034,6 +2063,7 @@ export function snapshot(value: unknown): Snapshot {
     scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),
     overflow: orNull(map(map(bool)))(o.overflow, "overflow"),
     capture: captureDrawn(o.capture, "capture"),
+    bug: bugDrawn(o.bug, "bug"),
     spaces: list(spaceRow)(o.spaces, "spaces"),
     badges: map(str)(o.badges, "badges"),
     drawer: drawerDrawn(o.drawer, "drawer"),
