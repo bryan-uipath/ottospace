@@ -7948,6 +7948,19 @@ fn seed_4313_an_editor_on_a_sent_box_keeps_no_drawer_open() {
     .unwrap();
 }
 
+/// The sidebar overlay closed on a repository chosen from it, after the Apps filter was settled:
+/// the filter kept the keyboard in a section no longer shown. It goes with the overlay.
+#[test]
+fn seed_13416_the_apps_filter_goes_with_the_sidebar_overlay() {
+    replay(&[
+        set_features(&["apps_section", "slots", "agent_mode", "overlay_panels"]).into(),
+        Action::FocusList.into(),
+        Action::AppsFilter { on: true }.into(),
+        Action::OpenRepo { path: "relative".into(), axis: Axis::Right }.into(),
+    ])
+    .unwrap();
+}
+
 /// A Done's worktree, its git answers late (xreview of #274): Undo while git removes it (the
 /// default falls back, then the worktree is added back), Done while git makes it (removed once
 /// made), and a dirty one kept after an Undo (no notice for an act not the user's).
