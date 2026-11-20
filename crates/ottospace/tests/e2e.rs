@@ -8026,7 +8026,8 @@ fn overlay_panels_the_new_task_box_is_centred_and_grows_into_the_drawer() {
     assert_eq!(otto.drawn()["bounds"], before["bounds"], "a pane moved");
     // Esc: closed at once, and a fade plays. The conversation open is not drawn under the box.
     otto.user_key("cmd-n");
-    assert_eq!(otto.drawn()["overlays"]["drawer"], Value::Null, "the conversation under the box");
+    // The conversation slides back under it, then is not drawn.
+    otto.wait_for("no drawer under the box", |o| o.drawn()["overlays"]["drawer"].is_null().then_some(()));
     assert!(otto.user_key("escape")["compose_host"].is_null());
     assert!(rest(&otto) > grown, "the fade played");
 
