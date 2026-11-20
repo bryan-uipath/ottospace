@@ -1078,9 +1078,9 @@ scrolled across when wide, quotes and `> [!NOTE]` callouts, footnotes at the foo
 as links, `#heading` links that scroll to it, pictures beside the file; raw HTML as the text it
 is, a web picture only a link), code as lines with their numbers coloured by the file's extension or name
 (by its tree-sitter grammar for Rust, TypeScript and TSX, JavaScript, JSON, TOML, Python, shell, Go,
-C, C++, Java, C#, Ruby, HTML (its `<script>` and `<style>` too), CSS, YAML, SQL, Swift, Kotlin,
-PHP, Lua, Makefiles and XML, functions and punctuation too; by a small lexer for diffs and the
-rest, and for a file of over 2 MB or one that takes over half a second to parse; markdown opened at
+C, C++, Java, C#, Ruby, HTML (its `<script>` and `<style>` too), CSS, YAML, SQL, PHP, Lua,
+Makefiles and XML, functions and punctuation too; by a small lexer for Swift, Kotlin (no grammar:
+their size), diffs and the rest, and for a file of over 2 MB or one that takes over half a second to parse; markdown opened at
 a line shows its source, coloured with its fences and front matter), other
 text plain, a PNG, JPEG, GIF or WebP as a picture. Open one with ⌘E's **File…** (the open panel), a ⌘-click
 on a path in a terminal (from the shell's folder, `~` too; `src/main.rs:12` opens `src/main.rs` at line 12)

@@ -15093,8 +15093,6 @@ fn a_code_file_is_coloured_by_its_grammar_or_the_lexer_when_it_has_none_or_is_to
         ("seeds.css", "css"),
         ("seeds.yml", "yaml"),
         ("seeds.sql", "sql"),
-        ("seeds.swift", "swift"),
-        ("seeds.kt", "kotlin"),
         ("seeds.php", "php"),
         ("seeds.lua", "lua"),
         ("Makefile", "make"),

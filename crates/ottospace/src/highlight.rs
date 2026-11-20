@@ -341,6 +341,43 @@ const SQL: Lang = Lang {
     ..BASE
 };
 
+const KOTLIN: Lang = Lang {
+    line: C_COMMENTS.0,
+    block: C_COMMENTS.1,
+    types: true,
+    keywords: &[
+        "as",
+        "break",
+        "class",
+        "continue",
+        "data",
+        "do",
+        "else",
+        "false",
+        "for",
+        "fun",
+        "if",
+        "import",
+        "in",
+        "interface",
+        "is",
+        "null",
+        "object",
+        "override",
+        "package",
+        "private",
+        "return",
+        "sealed",
+        "this",
+        "true",
+        "val",
+        "var",
+        "when",
+        "while",
+    ],
+    ..BASE
+};
+
 /// The language a fence's label names, if this file colours it.
 fn lang(label: &str) -> Option<&'static Lang> {
     Some(match label.to_ascii_lowercase().as_str() {
@@ -353,6 +390,7 @@ fn lang(label: &str) -> Option<&'static Lang> {
         "toml" => &TOML,
         "go" | "golang" => &GO,
         "swift" => &SWIFT,
+        "kt" | "kts" | "kotlin" => &KOTLIN,
         "sql" => &SQL,
         _ => return None,
     })

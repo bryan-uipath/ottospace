@@ -532,7 +532,7 @@ function viewerDrawn(value: unknown, at: string): ViewerDrawn {
     const langs = [
       "rust", "typescript", "tsx", "javascript", "json", "toml", "python", "bash", "go",
       "c", "cpp", "java", "csharp", "ruby", "html", "css", "yaml", "sql",
-      "swift", "kotlin", "php", "lua", "make", "xml", "markdown"
+      "php", "lua", "make", "xml", "markdown"
     ] as const;
     drawn.syntax = orNull(oneOf(langs, "a grammar"))(o.syntax, `${at}.syntax`);
   }

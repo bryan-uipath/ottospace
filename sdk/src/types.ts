@@ -312,8 +312,6 @@ export interface ViewerDrawn {
     | "css"
     | "yaml"
     | "sql"
-    | "swift"
-    | "kotlin"
     | "php"
     | "lua"
     | "make"

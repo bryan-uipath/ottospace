@@ -150,18 +150,6 @@ const HERE: &[Here] = &[
         later: true,
     },
     Here {
-        lang: Lang::Swift,
-        grammar: || tree_sitter_swift::LANGUAGE.into(),
-        queries: &[tree_sitter_swift::HIGHLIGHTS_QUERY],
-        later: true,
-    },
-    Here {
-        lang: Lang::Kotlin,
-        grammar: || tree_sitter_kotlin_sg::LANGUAGE.into(),
-        queries: &[tree_sitter_kotlin_sg::HIGHLIGHTS_QUERY],
-        later: true,
-    },
-    Here {
         lang: Lang::Php,
         grammar: || tree_sitter_php::LANGUAGE_PHP.into(),
         queries: &[tree_sitter_php::HIGHLIGHTS_QUERY],
@@ -259,7 +247,7 @@ fn made(lang: Lang) -> Option<&'static Made> {
     if let Some(made) = cell.get() {
         return made.as_ref();
     }
-    // Never on the main thread (Swift's takes 0.2 s): built aside, plain or the lexer until then.
+    // Never on the main thread (C#'s takes tens of ms): built aside, plain or the lexer until then.
     if !cfg!(test) && std::thread::current().name() == Some("main") {
         static ASKED: [AtomicBool; GRAMMARS.len()] = [const { AtomicBool::new(false) }; GRAMMARS.len()];
         if !ASKED[lang as usize].swap(true, Ordering::SeqCst) {
@@ -629,7 +617,7 @@ mod tests {
 
     /// Each language's made-up file, its extension for the lexer, and a keyword, a string and a
     /// comment in it.
-    const FIXTURES: [(Lang, &str, &str, &str, &str, &str); 17] = [
+    const FIXTURES: [(Lang, &str, &str, &str, &str, &str); 15] = [
         (
             Lang::Go,
             "go",
@@ -709,22 +697,6 @@ mod tests {
             "SELECT",
             "'kale'",
             "-- A made-up seed shelf.",
-        ),
-        (
-            Lang::Swift,
-            "swift",
-            include_str!("../tests/fixtures/code/seeds.swift"),
-            "guard",
-            "\"kale\"",
-            "// A made-up seed shelf.",
-        ),
-        (
-            Lang::Kotlin,
-            "kt",
-            include_str!("../tests/fixtures/code/seeds.kt"),
-            "fun",
-            "\"kale\"",
-            "// A made-up seed shelf.",
         ),
         (
             Lang::Php,
@@ -850,6 +822,24 @@ mod tests {
     fn a_ruby_variable_is_no_method() {
         let got: Vec<(String, Token)> = runs(Lang::Ruby, "rows = 1\nrows + 1\n").into_iter().flatten().collect();
         assert!(!got.iter().any(|(text, _)| text == "rows"), "{got:?}");
+    }
+
+    /// A language whose grammar was left out (Kotlin, Swift: their size) is still code, by the lexer.
+    #[test]
+    fn a_kotlin_or_swift_file_is_code_coloured_by_the_lexer() {
+        for (path, extension, code) in [
+            ("/a/Shelf.kt", "kt", "fun sow(rows: Int) = \"kale\" // made up"),
+            ("/a/shelf.swift", "swift", "func sow() -> String { \"kale\" } // made up"),
+        ] {
+            let lang = ottospace_core::viewer::lang_of(path).expect("named");
+            assert_eq!(ottospace_core::viewer::shows(path), ottospace_core::viewer::Shows::Code, "{path}");
+            assert!(parse(lang, code, BUDGET).is_none(), "{path}: no grammar here");
+            let marks = crate::highlight::marks(extension, code);
+            let tokens: Vec<Token> = marks.iter().map(|(_, token)| *token).collect();
+            for token in [Token::Keyword, Token::String, Token::Comment] {
+                assert!(tokens.contains(&token), "{path}: {token:?} in {marks:?}");
+            }
+        }
     }
 
     #[test]
