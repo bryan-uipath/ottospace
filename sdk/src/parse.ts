@@ -30,6 +30,9 @@ import type {
   ViewerDrawn,
   ViewerRead,
   CalendarReply,
+  Captured,
+  Note,
+  NoteReply,
   Meeting,
   TimeSpan,
   NativeChat,
@@ -817,7 +820,32 @@ function brief(value: unknown, at: string): Brief {
       tabs: list(str)(open.tabs, `${at}.open_windows.tabs`),
       panes: list(captureSource)(open.panes, `${at}.open_windows.panes`),
     },
+    ...(o.note === undefined ? {} : { note: note(o.note, `${at}.note`) }),
   };
+}
+
+function note(value: unknown, at: string): Captured<Note> {
+  const o = fields(value, at);
+  const meeting = (v: unknown, at: string) => {
+    const m = fields(v, at);
+    return { title: str(m.title, `${at}.title`), start: num(m.start, `${at}.start`), end: num(m.end, `${at}.end`) };
+  };
+  const transcript = (v: unknown, at: string) => {
+    const t = fields(v, at);
+    return { file: str(t.file, `${at}.file`), at_ms: num(t.at_ms, `${at}.at_ms`) };
+  };
+  return {
+    ...labelled(o, at),
+    filed: num(o.filed, `${at}.filed`),
+    meeting: orNull(meeting)(o.meeting, `${at}.meeting`),
+    transcript: orNull(transcript)(o.transcript, `${at}.transcript`),
+    front: orNull(str)(o.front, `${at}.front`),
+  };
+}
+
+export function noteReply(value: unknown): NoteReply {
+  const o = fields(value, "reply");
+  return { ok: true, task: num(o.task, "task"), note: note(o.note, "note") };
 }
 
 export function taskBriefReply(value: unknown): TaskBriefReply {
@@ -862,6 +890,11 @@ function composeMenu(value: unknown, at: string): ComposeMenu {
     selected: orNull(num)(o.selected, `${at}.selected`),
     note: orNull(str)(o.note, `${at}.note`),
   };
+}
+
+function pillKind(value: unknown, at: string): "meeting" | "transcript" | "front" {
+  if (value === "meeting" || value === "transcript" || value === "front") return value;
+  throw wrong(at, "meeting, transcript or front", value);
 }
 
 function composeHost(value: unknown, at: string): "drawer" | "bar" {
@@ -2118,6 +2151,7 @@ export function snapshot(value: unknown): Snapshot {
     compose_read: bool(o.compose_read, "compose_read"),
     compose_host: orNull(composeHost)(o.compose_host, "compose_host"),
     compose_centred: bool(o.compose_centred, "compose_centred"),
+    quick_pills: orNull(list(pillKind))(o.quick_pills, "quick_pills"),
     compose_plan: orNull(composePlan)(o.compose_plan, "compose_plan"),
     compose_plan_line: orNull(str)(o.compose_plan_line, "compose_plan_line"),
     compose_hint: orNull(str)(o.compose_hint, "compose_hint"),

@@ -8048,6 +8048,50 @@ fn overlay_panels_the_new_task_box_is_centred_and_grows_into_the_drawer() {
     assert_eq!(frames(&calm), 0, "no frames under Reduce Motion");
 }
 
+/// ⌘⇧N (`overlay_panels`): the quick note box, centred, with a pill for the meeting on now and
+/// the workspace in front. The title is drawn, never in the state; ↵ files a task for later that
+/// starts nothing; `note` and the brief give what it was filed with, the title as untrusted data.
+/// ⌘↵ starts one now, in its own space. A client opens none.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn quick_note_files_for_later_with_its_pills_and_note_gives_them() {
+    let home = calendar_folder("quick-note", &feed(&[("a", "Made-up review", -60, 1_800, "")]), None);
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), OVERLAYS[0], OVERLAYS[1]];
+    let otto = Otto::launch_with("quick-note", &env);
+    calendar_read(&otto);
+    overlay_panes(&otto);
+    assert!(otto.call(json!({"cmd": "key", "keys": "cmd-shift-n"}))["quick_pills"].is_null(), "a client's ⌘⇧N");
+    otto.user_key("cmd-shift-n");
+    let open = otto.drawn();
+    assert_eq!((&open["quick_pills"], &open["compose_centred"]), (&json!(["meeting", "front"]), &json!(true)));
+    assert!(!open.to_string().contains("Made-up review"), "a meeting's title in the state");
+    // ↵: a task for later; nothing starts, the box is gone.
+    let filed = otto.user_key("f o l l o w space u p enter");
+    assert!(filed["quick_pills"].is_null() && filed["compose_host"].is_null(), "{}", filed["quick_pills"]);
+    let tasks = filed["state"]["tasks"]["list"].as_array().cloned().unwrap_or_default();
+    let task = tasks.iter().find(|task| task["title"] == "follow up").cloned().expect("filed");
+    assert_eq!(task["state"], "captured");
+    assert!(filed["state"]["talk"].is_null() || filed["state"]["talk"]["task"] != task["id"], "it started");
+    assert!(!filed.to_string().contains("Made-up review"), "a meeting's title in the state");
+    // `note`: the meeting, labelled untrusted; no transcript was on.
+    let note = otto.call(json!({"cmd": "note", "task": task["id"]}));
+    let said = (&note["note"]["untrusted"], &note["note"]["meeting"]["title"], &note["note"]["transcript"]);
+    assert_eq!(said, (&json!(true), &json!("Made-up review"), &Value::Null), "{note}");
+    assert!(note["note"]["front"].as_str().is_some_and(|front| front.starts_with("Workspace")), "{note}");
+    // In its brief the title is quoted, as data.
+    let brief = otto.call(json!({"cmd": "task_brief", "id": task["id"]}));
+    let text = std::fs::read_to_string(brief["path"].as_str().expect("its brief.md")).unwrap();
+    let line = text.lines().find(|line| line.contains("Made-up review")).expect("the title in the brief");
+    assert!(line.starts_with("| "), "unquoted: {line}");
+    assert!(otto.raw(&json!({"cmd": "note", "task": 999}).to_string())["ok"] == false, "no such note");
+    // ⌘↵: started now, its own space on show.
+    otto.user_key("cmd-shift-n");
+    let now = otto.user_key("n o w cmd-enter");
+    let started =
+        now["state"]["tasks"]["list"].as_array().and_then(|list| list.iter().find(|t| t["title"] == "now").cloned());
+    assert_eq!(now["state"]["talk"]["task"], started.expect("filed")["id"], "its conversation");
+}
+
 /// No client opens an overlay over the user's work, or dismisses the user's.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]

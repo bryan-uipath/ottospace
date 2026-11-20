@@ -942,7 +942,7 @@ impl Workspace {
     }
 
     /// The file the transcript on is written to; none if it could not be made.
-    fn listen_path(&self) -> Option<&std::path::Path> {
+    pub(crate) fn listen_path(&self) -> Option<&std::path::Path> {
         let on = self.model.listen.on.as_ref()?;
         let file = self.listen_file.as_ref().filter(|file| file.id == on.id)?;
         file.writer.as_ref().ok().map(|writer| writer.path.as_path())

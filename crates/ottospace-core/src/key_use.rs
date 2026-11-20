@@ -38,6 +38,8 @@ pub enum Binding {
     FoldTab,
     SaveWorkbook,
     NewTask,
+    /// ⌘⇧N, the quick note box (`overlay_panels`).
+    QuickNote,
     /// ⌘J. `next_task` was ⌘⇧N's: its count is of the old key, so it is not read.
     NextNeedsYou,
     TalkFocus,
@@ -91,6 +93,7 @@ pub const ALL: &[Binding] = &[
     Binding::FoldTab,
     Binding::SaveWorkbook,
     Binding::NewTask,
+    Binding::QuickNote,
     Binding::NextNeedsYou,
     Binding::TalkFocus,
     Binding::DrawerToggle,
@@ -141,6 +144,7 @@ impl Binding {
             Binding::FoldTab => &[C::FoldTab],
             Binding::SaveWorkbook => &[C::SaveWorkbook],
             Binding::NewTask => &[C::NewTask],
+            Binding::QuickNote => &[C::QuickNote],
             Binding::NextNeedsYou => &[C::NextNeedsYou],
             Binding::TalkFocus => &[C::TalkFocus],
             Binding::DrawerToggle => &[C::DrawerToggle],
@@ -209,6 +213,7 @@ impl Binding {
             | B::MarkJump
             | B::MarkNumber => Group::Tabs,
             B::NewTask
+            | B::QuickNote
             | B::NextNeedsYou
             | B::TalkFocus
             | B::DrawerToggle
@@ -249,6 +254,7 @@ impl Binding {
             B::MarkJump => "Go to mark by letter",
             B::MarkNumber => "Go to mark",
             B::NewTask => "New task",
+            B::QuickNote => "Quick note: filed for later, its context as pills",
             B::NextNeedsYou => "What needs you next",
             B::TalkFocus => "Type to the agent",
             B::DrawerToggle => "Collapse / open drawer",

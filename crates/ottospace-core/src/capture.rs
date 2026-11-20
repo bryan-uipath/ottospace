@@ -618,6 +618,39 @@ pub struct Brief {
     pub ask: Ask,
     pub materials: Vec<Kept>,
     pub open_windows: Captured<Open>,
+    /// A quick note's: what it was filed with (`note_brief`). The `note` request gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<Captured<Note>>,
+}
+
+/// What a quick note was filed with: when, and back-pointers to the meeting on the calendar then,
+/// the transcript being written and what was in front. Each only if its pill was left on. A
+/// meeting's title is other people's text: never in the state, and quoted in the brief.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Note {
+    /// Milliseconds since 1970.
+    pub filed: u64,
+    #[serde(default)]
+    pub meeting: Option<NoteMeeting>,
+    #[serde(default)]
+    pub transcript: Option<NoteTranscript>,
+    /// The workspace's or the task's name.
+    #[serde(default)]
+    pub front: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NoteMeeting {
+    pub title: String,
+    pub start: u64,
+    pub end: u64,
+}
+
+/// The transcript's file (its whole path, filled in by the shell) and how far in, in ms.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NoteTranscript {
+    pub file: String,
+    pub at_ms: u64,
 }
 
 /// A character that shows: not a control character, and none of those that draw nothing or
@@ -797,7 +830,17 @@ pub fn brief(task: &Task, materials: &[Material], open: Open, images: bool, fenc
         },
         materials: materials.iter().take(MAX_MATERIALS).map(kept).collect(),
         open_windows: Captured::of(open),
+        note: None,
     }
+}
+
+/// A quick note's brief: the ask, and what it was filed with as untrusted data, its title cut.
+pub fn note_brief(task: &Task, mut note: Note, fence: &str) -> Brief {
+    if let Some(meeting) = &mut note.meeting {
+        meeting.title = plain(&meeting.title, MAX_FIELD);
+    }
+    note.front = note.front.as_deref().map(|front| plain(front, MAX_FIELD));
+    Brief { note: Some(Captured::of(note)), ..brief(task, &[], Open::default(), false, fence) }
 }
 
 /// Every line of a quoted block starts with this.
@@ -954,6 +997,17 @@ pub fn markdown_in(brief: &Brief, dir: Option<&str>) -> String {
         if taken.cut {
             lines.push("(more was there: the capture is cut to its size limits)".into());
         }
+        out.push_str(&quoted(&fence, &lines));
+        out.push('\n');
+    }
+    if let Some(note) = brief.note.as_ref().map(|note| &note.content) {
+        out.push_str("## What the note was filed with\n\nBack-pointers kept as the user filed it. A meeting's title is other people's text.\n\n");
+        let mut lines = vec![format!("filed: {} ms since 1970", note.filed)];
+        lines.extend(
+            note.meeting.as_ref().map(|m| format!("meeting: {} ({} to {} ms since 1970)", m.title, m.start, m.end)),
+        );
+        lines.extend(note.transcript.as_ref().map(|t| format!("transcript: {} at {} ms", t.file, t.at_ms)));
+        lines.extend(note.front.as_ref().map(|front| format!("in front: {front}")));
         out.push_str(&quoted(&fence, &lines));
         out.push('\n');
     }

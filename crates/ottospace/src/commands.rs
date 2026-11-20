@@ -74,6 +74,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::CloseTab => Box::new(CloseTab),
         Command::FoldTab => Box::new(FoldTab),
         Command::NewTask => Box::new(NewTask),
+        Command::QuickNote => Box::new(QuickNote),
         Command::NextNeedsYou => Box::new(NextTask),
         Command::Decisions => Box::new(OpenDecisions),
         Command::CapturePane => Box::new(CapturePane),

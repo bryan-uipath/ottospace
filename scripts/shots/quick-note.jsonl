@@ -1,0 +1,11 @@
+# The quick note box (⌘⇧N, `overlay_panels`): centred over the panes, a pill for the made-up
+# meeting on now and one for the workspace in front; × on the meeting's leaves it out.
+{"until":"state.features","is":["overlay_panels"]}
+{"until":"calendar.updated"}
+{"click":"top:new_workspace"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"type","pane":1,"text":"clear; echo left pane: build log\r"}
+{"cmd":"key","keys":"cmd-shift-n","as":"user"}
+{"cmd":"key","keys":"a s k space a b o u t space t h e space e x p o r t","as":"user"}
+{"settle":500}
+{"shot":"pills"}

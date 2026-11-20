@@ -647,7 +647,8 @@ impl Workspace {
             Ok(id) => id,
             Err(why) => return control::error(why),
         };
-        match self.model.tasks.get(id).map(|task| task.materials.is_empty()) {
+        // A quick note's brief is in its folder too, with nothing captured.
+        match self.model.tasks.get(id).map(|task| task.materials_dir().is_none()) {
             None => return control::error(&format!("no task {id}")),
             Some(true) => return control::error(&format!("task {id} has no materials: nothing was captured for it")),
             Some(false) => {}
@@ -675,6 +676,36 @@ impl Workspace {
                 .to_string()
             }
             None => control::error(&format!("task {id}'s brief is not in its folder any more")),
+        }
+    }
+
+    /// `Effect::NoteKept`: a quick note's brief, the transcript's file named in it, in a new folder
+    /// of its task's. A folder of that name that is there already is never touched.
+    pub(crate) fn keep_note(&mut self, name: &str, brief: &Brief) {
+        let mut brief = brief.clone();
+        if let Some(heard) = brief.note.as_mut().and_then(|note| note.content.transcript.as_mut()) {
+            heard.file = self.listen_path().map(|path| path.to_string_lossy().into_owned()).unwrap_or_default();
+        }
+        let Some(dir) = task_dir(brief.task, name).filter(|dir| std::fs::symlink_metadata(dir).is_err()) else {
+            self.error = Some("note: its folder could not be made: what it was filed with was not kept".into());
+            return;
+        };
+        let text = capture::markdown_in(&brief, dir.to_str());
+        let files = [("brief.md", text), ("brief.json", ottospace_core::pretty_json(&brief))];
+        if let Err(err) = files.iter().try_for_each(|(file, text)| config::write_private(&dir, file, text.as_bytes())) {
+            self.error = Some(format!("note: could not keep what it was filed with: {err}"));
+        }
+    }
+
+    /// The `note` request: what task `id`'s quick note was filed with, read from its brief. Its
+    /// meeting's title is other people's text, labelled so. Read-only.
+    pub(crate) fn serve_note(&mut self, id: TaskId) -> String {
+        if self.model.tasks.get(id).is_none_or(|task| task.note.is_none()) {
+            return control::error(&format!("task {id} is no quick note"));
+        }
+        match self.brief_of(id).and_then(|shown| shown.brief.note.clone()) {
+            Some(note) => serde_json::json!({ "ok": true, "task": id, "note": note }).to_string(),
+            None => control::error(&format!("task {id}'s note is not in its folder any more")),
         }
     }
 

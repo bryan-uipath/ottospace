@@ -28,6 +28,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
     let mark_tab = [MenuItem::separator(), item("Mark Tab", MarkTab), item("Go to Mark…", MarkJump)];
     let displays = features.on(ottospace_core::features::Feature::MultiMonitor);
     let decisions = features.on(ottospace_core::features::Feature::Decisions);
+    let quick = features.on(ottospace_core::features::Feature::OverlayPanels);
     vec![
         Menu {
             name: "ottospace".into(),
@@ -144,6 +145,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
             name: "Tasks".into(),
             items: [item("New Task", NewTask), item("Next Task", NextTask)]
                 .into_iter()
+                .chain(quick.then(|| item("Quick Note", QuickNote)))
                 .chain(decisions.then(|| item("Decisions", OpenDecisions)))
                 .chain([
                     item("Capture the Pane", CapturePane),

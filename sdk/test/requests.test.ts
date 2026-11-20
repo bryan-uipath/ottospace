@@ -157,6 +157,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
     }),
   (c) => c.calendar({ day: "tomorrow", days: 2 }),
   (c) => c.calendar({ day: "yesterday" }),
+  (c) => c.note({ task: 7 }),
   (c) => c.marks(),
   (c) => c.markAdd({ pane: 1, name: "notes", key: "n" }),
   (c) => c.markGo({ name: "notes", axis: "down" }),

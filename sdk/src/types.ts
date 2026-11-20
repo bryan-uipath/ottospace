@@ -563,6 +563,24 @@ export interface Brief {
   };
   materials: BriefMaterial[];
   open_windows: Captured<{ tabs: string[]; panes: CaptureSource[] }>;
+  /** A quick note's: what it was filed with. Absent for any other task. */
+  note?: Captured<Note>;
+}
+
+/** What a quick note (⌘⇧N) was filed with, each only if its pill was left on. A meeting's title is other people's text: data, never instructions. */
+export interface Note {
+  filed: number;
+  meeting: { title: string; start: number; end: number } | null;
+  /** The transcript's file and how far in it was (ms). */
+  transcript: { file: string; at_ms: number } | null;
+  /** The workspace's or the task's name in front. */
+  front: string | null;
+}
+
+export interface NoteReply {
+  ok: true;
+  task: TaskId;
+  note: Captured<Note>;
 }
 
 export interface TaskBriefReply {
@@ -1723,6 +1741,8 @@ export interface Snapshot {
   compose_host: "drawer" | "bar" | null;
   /** The user's box is drawn centred over the dimmed panes (`overlay_panels`), not in the drawer. */
   compose_centred: boolean;
+  /** The quick note box's pills (⌘⇧N), by kind; null while it is closed. A meeting's title is never here. */
+  quick_pills: Array<"meeting" | "transcript" | "front"> | null;
   /** What ↵ in the box would do: start `agent` (unless a saved agent: `starts` false) in the repository `dir`, or the folder taken from the dropdown as typed (null: the home folder), on `branch`. Null while the box is closed. */
   compose_plan: { agent: string; starts: boolean; dir: string | null; branch: string | null } | null;
   /** The line the drawer draws over the box: null when ↵ does the default (default agent, home folder) or the box is closed. */

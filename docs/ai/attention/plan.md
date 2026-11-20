@@ -36,6 +36,7 @@ Checked against the code, 2026-11-19.
 | Next task that needs you: ⌘J (⌘⇧N before), and a click on the status bar's `● 1 needs you` | Built | reference "Status bar", `status_bar.rs` |
 | ⌘J, next thing needing you / "where next"; ⌘⇧N the note-or-quick-task box (§6) | ⌘J built as next task; ⌘⇧N unbound until the box (§6). ⌘⌥N is the new-task box's new-worktree key; no "resume a session" action | `main.rs` keymap |
 | Priority (1–9, `P1` drawn), snooze (`snoozed_until`), hold | Built | `tasks.rs` |
+| Quick note on ⌘⇧N with context pills (§6): ↵ later, ⌘↵ now in its own space; `note` gives what it was filed with | Built behind `overlay_panels` | `model/quick.rs`, `capture::Note`, `collect.rs` `keep_note` |
 | New-task box centred over the dimmed panes; ↵ grows it into the drawer (canvas NewTaskFly) | Built behind `overlay_panels` | `model.rs` `compose_centred`, `ottospace-core/src/fly.rs`, `ottospace/src/fly.rs` |
 | A task's deadline | **None.** Tasks have no due time (they keep when they started and finished, and a snooze's end) | `tasks.rs` |
 | Ask cards (`AskUserQuestion`): options, Other…, number keys 1–9 pick a row, ↵ answers, Esc declines | Built (Claude Code) | `ottospace-core/src/ask.rs` |

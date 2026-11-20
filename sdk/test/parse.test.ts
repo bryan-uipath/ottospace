@@ -109,6 +109,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     compose_read: false,
     compose_host: null,
     compose_centred: false,
+    quick_pills: null,
     compose_plan: null,
     compose_plan_line: null,
     compose_hint: null,
