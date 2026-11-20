@@ -68,6 +68,13 @@ pub fn capture_pixels(shown: (f64, f64), scale: f64) -> (u32, u32) {
     (whole(w * scale).max(1.0) as u32, whole(h * scale).max(1.0) as u32)
 }
 
+/// Whether a frame's content fills it. Just after the stream is set to a new size, a frame of that
+/// size may still be the window at its old size, scaled to fit with a band left empty (a 640×420
+/// window in a 654×575 frame: content 654×429). Only the shapes are compared, so any unit will do.
+pub fn fills(frame: (f64, f64), content: (f64, f64)) -> bool {
+    content.0 > 0.0 && (content.1 * frame.0 / content.0 - frame.1).abs() <= 1.0
+}
+
 /// Where windows are parked: a display's bottom-right corner with no display to its right or
 /// below, so one pixel of the window shows. A window is drawn at its display's scale: one parked
 /// on a 1× display gives a 1× picture however its pane is drawn. So of the free corners, the
@@ -216,6 +223,17 @@ mod tests {
         let (w, h) = capture_pixels((2501.0, 2160.0), 2.0);
         assert!((w as f64) * (h as f64) <= MOST_PIXELS, "{w}×{h}");
         assert_eq!(capture_pixels((0.0, 0.0), 2.0), (2, 2));
+    }
+
+    #[test]
+    fn a_frame_of_the_window_at_its_old_size_does_not_fill_it() {
+        // As ScreenCaptureKit gave them on CI: the canary resized from 640×420 to its pane, then drawn.
+        assert!(!fills((654.0, 575.0), (654.000_015, 429.187_51)));
+        assert!(fills((654.0, 575.0), (654.0, 575.0)));
+        // In points on a 2× display, or a pixel short from rounding: the same shape.
+        assert!(fills((1308.0, 1150.0), (654.0, 575.0)));
+        assert!(fills((1283.0, 800.0), (641.5, 400.0)));
+        assert!(!fills((654.0, 575.0), (0.0, 0.0)));
     }
 
     #[test]

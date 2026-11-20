@@ -186,6 +186,12 @@ impl SCStreamOutputTrait for Output {
         if size != self.0.expected.load(Relaxed) {
             return;
         }
+        // Not the window at its old size, scaled to fit until its app draws it at the new one.
+        let frame = (buffer.get_width() as f64, buffer.get_height() as f64);
+        let content = screencapturekit::cm::CMSampleBufferSCExt::content_rect(&sample);
+        if content.is_some_and(|c| !hosting::fills(frame, (c.size.width, c.size.height))) {
+            return;
+        }
         if let Ok(mut slot) = self.0.frame.lock() {
             *slot = Some(Frame(buffer));
             self.0.old.store(false, Relaxed);
