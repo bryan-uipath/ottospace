@@ -14359,6 +14359,29 @@ fn a_file_opened_at_lines_shows_them_marked_inside_the_pane() {
     assert_eq!(view(&reply, 1)["marked"], Value::Null);
 }
 
+/// A code file is coloured by its grammar; one with none, or past the parse's 2 MB, by the lexer:
+/// its lines show all the same.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_code_file_is_coloured_by_its_grammar_or_the_lexer_when_it_has_none_or_is_too_large() {
+    let dir = support::temp(&format!("ottospace-e2e-viewer-syntax-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = std::fs::canonicalize(&dir).unwrap();
+    let small = "fn made_up() {}\n".repeat(40);
+    let large = "fn made_up() {}\n".repeat(2 * 1024 * 1024 / 16 + 1);
+    let cases =
+        [("small.rs", &small, json!("rust")), ("small.go", &small, Value::Null), ("large.rs", &large, Value::Null)];
+    let otto = Otto::launch("viewer-syntax");
+    for (name, text, syntax) in cases {
+        let file = dir.join(name);
+        std::fs::write(&file, text).unwrap();
+        // Each in a viewer of its own: the newest pane.
+        let id = pane_ids(&otto.call(json!({"cmd": "open_file", "path": file}))).into_iter().max().unwrap();
+        let drawn = view(&viewer_read(&otto, id, line_count(&file)), id);
+        assert_eq!((&drawn["body"], &drawn["syntax"]), (&json!("lines"), &syntax), "{name}");
+    }
+}
+
 /// The fixture's structure as drawn: callouts, footnotes at the foot, task boxes; a code line
 /// and a table wider than the pane scroll across, their right edge fading as the cue.
 #[test]

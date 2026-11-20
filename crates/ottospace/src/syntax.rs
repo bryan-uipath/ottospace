@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use tree_sitter::{Language, ParseOptions, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::highlight::{Mark, Token};
+use crate::viewer::MAX_DRAWN;
 
 /// The most bytes parsed: past it, the lexer.
 pub const MAX_PARSE: usize = 2 * 1024 * 1024;
@@ -149,7 +150,7 @@ pub struct Colours {
     lang: Lang,
     tree: Tree,
     text: String,
-    /// Each line's bytes in `text`, without its newline: as `str::lines` splits it.
+    /// Each line's bytes in `text`, without its newline: as `str::lines` splits it, cut as drawn.
     lines: Vec<Range<usize>>,
     chunks: RefCell<HashMap<usize, Vec<Vec<Mark>>>>,
 }
@@ -160,6 +161,8 @@ impl Colours {
         let mut start = 0;
         for line in text.split_inclusive('\n') {
             let shown = line.trim_end_matches('\n').trim_end_matches('\r');
+            // No more than is drawn of it: a minified file's one long line is not coloured whole.
+            let shown = shown.char_indices().nth(MAX_DRAWN).map_or(shown, |(cut, _)| &shown[..cut]);
             lines.push(start..start + shown.len());
             start += line.len();
         }
@@ -180,14 +183,16 @@ impl Colours {
         self.chunks.borrow().get(&chunk).and_then(|lines| lines.get(at % CHUNK)).cloned().unwrap_or_default()
     }
 
-    /// The runs of lines `range`. A node inside another is drawn as its own; of two captures of
-    /// one node, the query's first.
+    /// The runs of lines `range`, queried together up to a line that was cut: its rest is skipped.
     fn colour(&self, range: Range<usize>) -> Vec<Vec<Mark>> {
-        let (Some(first), Some(last)) =
-            (self.lines.get(range.start), range.end.checked_sub(1).and_then(|at| self.lines.get(at)))
-        else {
-            return Vec::new();
-        };
+        let lines = self.lines.get(range).unwrap_or_default();
+        lines.chunk_by(|line, next| next.start - line.end <= 2).flat_map(|lines| self.span(lines)).collect()
+    }
+
+    /// The runs of `lines`, one after another in the text. A node inside another is drawn as its
+    /// own; of two captures of one node, the query's first.
+    fn span(&self, lines: &[Range<usize>]) -> Vec<Vec<Mark>> {
+        let (Some(first), Some(last)) = (lines.first(), lines.last()) else { return Vec::new() };
         let Some((query, tokens)) = self.lang.query() else { return Vec::new() };
         let bytes = first.start..last.end;
         let mut found: Vec<(usize, usize, usize, Token)> = Vec::new();
@@ -210,7 +215,7 @@ impl Colours {
         for (start, end, _, token) in found {
             paint[start - bytes.start..end - bytes.start].fill(Some(token));
         }
-        self.lines[range]
+        lines
             .iter()
             .map(|line| {
                 let mut runs: Vec<Mark> = Vec::new();
@@ -319,6 +324,16 @@ mod tests {
     }
 
     #[test]
+    fn a_line_longer_than_is_drawn_is_coloured_up_to_the_cut_and_the_next_whole() {
+        let code = format!("[{}]\n[true]\n", "1, ".repeat(MAX_DRAWN));
+        let tree = parse(Lang::Json, &code, BUDGET).expect("parsed");
+        let colours = Colours::new(Lang::Json, tree, code);
+        let end = colours.line(0).last().map(|(range, _)| range.end);
+        assert!(end.is_some_and(|end| end > MAX_DRAWN - 4 && end <= MAX_DRAWN), "{end:?}");
+        assert!(colours.line(1).contains(&(1..5, Token::Number)), "{:?}", colours.line(1));
+    }
+
+    #[test]
     fn a_large_file_or_a_slow_parse_falls_back() {
         let big = "fn a() {}\n".repeat(MAX_PARSE / 10 + 1);
         assert!(parse(Lang::Rust, &big, BUDGET).is_none(), "past MAX_PARSE");
@@ -328,23 +343,77 @@ mod tests {
         assert!(parse(Lang::Rust, &long, BUDGET).is_some(), "60 KB parses within the budget, in a debug build too");
     }
 
-    /// How long the largest file parsed takes, and its first lines' colours: `cargo test --release
-    /// -p ottospace --bin ottospace -- --ignored --nocapture timings`.
+    /// How long the largest file parsed takes in each language, against `BUDGET`: `cargo test
+    /// --release -p ottospace --bin ottospace -- --ignored --nocapture timings`.
     #[test]
     #[ignore = "timings, by hand"]
     fn timings() {
-        let fixture = include_str!("../tests/fixtures/code/seeds.rs");
-        let text = fixture.repeat(MAX_PARSE / fixture.len());
-        let start = Instant::now();
-        let tree = parse(Lang::Rust, &text, Duration::from_secs(60)).expect("parsed");
-        let parsed = start.elapsed();
-        let colours = Colours::new(Lang::Rust, tree, text.clone());
-        let start = Instant::now();
-        let _ = colours.line(0);
-        let chunk = start.elapsed();
-        let start = Instant::now();
-        let marks = crate::highlight::by_line(&text, &crate::highlight::marks("rs", &text));
-        println!("{} KB: parse {parsed:?}, a chunk {chunk:?}; the lexer {:?} ({} lines)", text.len() / 1024, start.elapsed(), marks.len());
+        let cases: [(&str, Lang, &str, &str); 10] = [
+            ("rust", Lang::Rust, "rs", include_str!("../tests/fixtures/code/seeds.rs")),
+            ("typescript", Lang::TypeScript, "ts", include_str!("../tests/fixtures/code/seeds.ts")),
+            (
+                "tsx",
+                Lang::Tsx,
+                "tsx",
+                "export function Row({ name }: { name: string }) {\n  return <li className=\"row\">{name}</li>;\n}\n",
+            ),
+            (
+                "javascript",
+                Lang::JavaScript,
+                "js",
+                "export function sow(seed, rows = 3) {\n  const beds = [1, 2, 3].map((n) => `${seed.name}-${n}`);\n  return { beds, rows }; // made up\n}\n",
+            ),
+            (
+                "json",
+                Lang::Json,
+                "json",
+                "{\"name\": \"kale\", \"rows\": [1, 2, 3], \"sown\": {\"indoors\": true, \"weeks\": 4.5}}\n",
+            ),
+            (
+                "json, one line",
+                Lang::Json,
+                "json",
+                "{\"name\": \"kale\", \"rows\": [1, 2, 3], \"sown\": {\"indoors\": true, \"weeks\": 4.5}} ",
+            ),
+            (
+                "toml",
+                Lang::Toml,
+                "toml",
+                "[[packet]]\nname = \"kale\" # made up\nrows = [1, 2, 3]\nsown = { indoors = true, weeks = 4.5 }\n\n",
+            ),
+            (
+                "python",
+                Lang::Python,
+                "py",
+                "class Packet:\n    \"\"\"Made up.\"\"\"\n\n    def sow(self, rows: int = 3) -> list[str]:\n        return [f\"{self.name}-{n}\" for n in range(rows)]  # beds\n\n",
+            ),
+            (
+                "bash",
+                Lang::Bash,
+                "sh",
+                "sow() {\n  for bed in \"$@\"; do\n    echo \"sown: ${bed:-none}\" | tr a-z A-Z # made up\n  done\n}\n[ -n \"$1\" ] && sow \"$1\"\n",
+            ),
+            ("rust, broken", Lang::Rust, "rs", "fn sow( { let x = [1, 2; \"kale\n"),
+        ];
+        println!("| file | KB | query made | parse | within {BUDGET:?} | a chunk | the lexer |");
+        println!("|---|---|---|---|---|---|---|");
+        for (name, lang, extension, piece) in cases {
+            let text = piece.repeat(MAX_PARSE / piece.len());
+            let start = Instant::now();
+            assert!(lang.query().is_some());
+            let made = start.elapsed();
+            let start = Instant::now();
+            let tree = parse(lang, &text, Duration::from_secs(120)).expect("parsed");
+            let parsed = start.elapsed();
+            let colours = Colours::new(lang, tree, text.clone());
+            let start = Instant::now();
+            let _ = colours.line(colours.lines.len() / 2);
+            let chunk = start.elapsed();
+            let start = Instant::now();
+            let _ = crate::highlight::by_line(&text, &crate::highlight::marks(extension, &text));
+            let (lexer, kb, within) = (start.elapsed(), text.len() / 1024, parsed <= BUDGET);
+            println!("| {name} | {kb} | {made:.1?} | {parsed:.1?} | {within} | {chunk:.1?} | {lexer:.1?} |");
+        }
     }
 
     /// Runs on character boundaries, in order, inside the line, whatever the text.

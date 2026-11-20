@@ -31,7 +31,7 @@ use crate::syntax::{self, Colours};
 /// One line of code or text, and one step of a markdown view (`Viewer::top`), in points.
 pub const LINE: f32 = 18.;
 /// The most characters of a line drawn; the file keeps the rest.
-const MAX_DRAWN: usize = 2000;
+pub const MAX_DRAWN: usize = 2000;
 /// How often a viewer's file is looked at, and how long a change must hold before it is read.
 const LOOK: Duration = Duration::from_millis(500);
 const SETTLE: Duration = Duration::from_millis(200);
