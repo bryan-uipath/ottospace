@@ -9193,9 +9193,14 @@ fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     let otto = Otto::launch("palette");
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     let state = || otto.call(json!({"cmd": "state"}));
-    // A client's ⌘P opens nothing: the palette runs any command as the user's.
-    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-p"}));
-    assert_eq!((&reply["mode"], &reply["palette_rows"]), (&json!("normal"), &Value::Null));
+    // A client's ⌘⇧P or ⌘P opens nothing: the palette runs any command as the user's.
+    for keys in ["cmd-shift-p", "cmd-p"] {
+        let reply = otto.call(json!({"cmd": "key", "keys": keys}));
+        assert_eq!((&reply["mode"], &reply["palette_rows"]), (&json!("normal"), &Value::Null));
+    }
+    // The user's ⌘⇧P opens it, and closes it again.
+    assert_eq!(otto.user_key("cmd-shift-p")["mode"], "palette");
+    assert_eq!(otto.user_key("cmd-shift-p")["mode"], "normal");
     // The user's opens it with every command, its group and its key.
     let reply = otto.user_key("cmd-p");
     assert_eq!(reply["mode"], "palette");
