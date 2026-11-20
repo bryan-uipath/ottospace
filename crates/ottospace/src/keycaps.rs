@@ -44,15 +44,7 @@ impl Workspace {
     /// from those drawn. ⇧ while typing beside an empty tab draws nothing.
     pub(crate) fn modifiers_changed(&mut self, window: &Window, cx: &mut Context<Self>) {
         // Only while an empty place is on show: the main window's tab, or one folded out.
-        let tabs = std::iter::once(self.model.main_at()).chain(
-            self.model.tabs_out().into_iter().filter_map(|(id, _)| self.model.tabs.iter().position(|tab| tab.id == id)),
-        );
-        let empty = |at: usize| {
-            self.model.tree_at(at).is_none_or(|tree| {
-                tree.leaves().iter().any(|id| self.model.pane(*id).is_some_and(|pane| pane.kind == Kind::Empty))
-            })
-        };
-        if !tabs.into_iter().any(empty) {
+        if self.model.empty_places().is_empty() {
             return;
         }
         let keymap = cx.key_bindings();

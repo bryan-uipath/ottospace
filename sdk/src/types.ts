@@ -1590,6 +1590,8 @@ export interface CityDrawn {
   on: CityOn;
   /** Pictures kept: one per folder, lit files and size on show. */
   pictures: number;
+  /** The places too small for a city, drawing their lattice. */
+  small: CityOn[];
   /** Folders and files placed, and how many of them are folders: null until a picture is made. */
   places: number | null;
   groups: number | null;
