@@ -2701,6 +2701,11 @@ fn check(m: &Model) -> Result<(), String> {
                 marks::Target::Pane(PaneRecord { kind: RecordKind::App { bundle, name, .. }, .. }),
                 Kind::App { bundle: b, name: n, .. } | Kind::Slot { bundle: b, name: n },
             ) => marks::same_app((bundle.as_deref(), name), (b.as_deref(), n)),
+            // A pane that waits for its app's remade window keeps its mark's place.
+            (marks::Target::Pane(PaneRecord { kind: RecordKind::App { bundle, name, .. }, .. }), Kind::Empty) => {
+                let offer = m.offer_of(pane.id).filter(|_| m.offer_waits(pane.id));
+                offer.is_some_and(|o| marks::same_app((bundle.as_deref(), name), (o.app.0.as_deref(), &o.app.1)))
+            }
             _ => false,
         };
         match (&mark.target, mark.live) {
@@ -7885,6 +7890,26 @@ fn seed_150464_a_reference_copies_a_panes_title_not_the_look() {
         by(Origin::Socket, Action::OpenCompose { text: "flicker".into() }),
         by(Origin::System, Action::ComposeRef { target: Pointed::Pane(3) }),
         Action::ComposeSubmit { open: true }.into(),
+    ])
+    .unwrap();
+}
+
+/// An app pane with a mark, emptied because its window went while another of its app was offered
+/// there: the mark still stood for the pane, which the rule took for gone. It keeps the place.
+#[test]
+fn seed_373_a_pane_emptied_for_an_offer_keeps_its_mark_while_it_waits() {
+    let seen = r#"{"pid":0,"window":10,"title":"OFFEREDTITLE ","identifier":"slotseen.other","subrole":"AXStandardWindow","frame":{"x":2000.0,"y":0.0,"w":400.0,"h":300.0}}"#;
+    replay(&[
+        split(Axis::Down, Kind::Terminal),
+        Action::Open {
+            kind: Kind::App { window: 9, title: "w9".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: None,
+        }
+        .into(),
+        Action::MarkToggle { of: MarkOf::Pane(None), uid: "u1".into(), cwds: vec![] }.into(),
+        by(Origin::System, window_offered(2, seen, "no slot for this window")),
+        by(Origin::System, Action::WindowGone { pane: 2, app_running: true, at: 201000000 }),
     ])
     .unwrap();
 }

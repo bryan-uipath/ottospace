@@ -720,6 +720,16 @@ impl Marks {
         self.forget(pane, true);
     }
 
+    /// A pane that changed: a mark of it that records something else stands for none.
+    pub(crate) fn forget_unlike(&mut self, pane: &Pane) {
+        let marks = self.list.iter_mut().chain(self.removed.as_mut().map(|(_, mark)| mark));
+        for mark in marks.filter(|mark| mark.live == Some(pane.id)) {
+            if matches!(&mark.target, Target::Pane(record) if !record.kind.is(&pane.kind)) {
+                mark.live = None;
+            }
+        }
+    }
+
     /// No mark of a pane (`is_pane`), or of a tab, stands for `live` any more. Nor does the
     /// removed mark, which `undo_remove` may put back.
     fn forget(&mut self, live: u32, is_pane: bool) {

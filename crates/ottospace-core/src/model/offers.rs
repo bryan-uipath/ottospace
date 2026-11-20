@@ -135,6 +135,7 @@ impl Model {
     /// holds another app now, moves to another pane of its app; with none left, it goes (the
     /// window floats on). A waiting pane is one while it is empty and offers something.
     pub(super) fn settle_offers(&mut self) {
+        let waited = self.offer_panes.clone();
         let panes = &self.panes;
         self.offer_panes.retain(|id| panes.iter().any(|p| p.id == *id && p.kind == Kind::Empty));
         let held = |w: u32| panes.iter().any(|p| matches!(p.kind, Kind::App { window, .. } if window == w));
@@ -161,6 +162,13 @@ impl Model {
         self.offers = offers;
         let offers = &self.offers;
         self.offer_panes.retain(|id| offers.iter().any(|offer| offer.pane == *id));
+        // A mark kept its place while the pane waited: it follows its app's window back in, and
+        // stands for none if the wait ended any other way (dismissed, or filled with something else).
+        for id in waited.difference(&self.offer_panes) {
+            if let Some(pane) = self.panes.iter().find(|p| p.id == *id) {
+                self.marks.forget_unlike(pane);
+            }
+        }
     }
 }
 
@@ -245,6 +253,34 @@ mod tests {
         let state = serde_json::to_string(&m).unwrap_or_default();
         assert!(state.contains(r#""offers":[{"pane":1,"window":9}]"#), "{state}");
         assert!(!state.contains("SECRET"), "{state}");
+    }
+
+    /// A mark of a pane whose window went while it offers another: it keeps the place while the
+    /// pane waits, follows the offered window in, and stands for none once the wait ends without it.
+    #[test]
+    fn a_mark_waits_with_its_pane_and_follows_the_window_brought_in() {
+        let marked = || {
+            let mut m = offered();
+            m.update(Action::MarkToggle { of: crate::marks::MarkOf::Pane(None), uid: "u1".into(), cwds: vec![] });
+            m.update(Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System));
+            assert!(m.offer_waits(1));
+            m
+        };
+        let open = |m: &Model| m.marks.list.first().and_then(|mark| m.mark_pane(mark));
+        let mut m = marked();
+        assert_eq!(open(&m), None, "an empty pane shows no app");
+        let Kind::App { bundle, name, .. } = app(9) else { unreachable!() };
+        let meeting = Kind::App { window: 9, title: "Meeting".into(), bundle, name };
+        m.update(Action::Fill { pane: 1, kind: meeting }.sent_by(Origin::System));
+        assert_eq!(open(&m), Some(1), "its app's window, though of another title");
+        let live = |m: &Model| m.marks.list.first().and_then(|mark| mark.live);
+        let mut m = marked();
+        assert_eq!(live(&m), Some(1));
+        m.update(Action::OfferDismiss { window: 9 });
+        assert_eq!(live(&m), None, "dismissed: the place is no longer kept");
+        let mut m = marked();
+        m.update(Action::Fill { pane: 1, kind: Kind::Terminal }.sent_by(Origin::System));
+        assert_eq!(live(&m), None, "filled with something else");
     }
 
     #[test]
