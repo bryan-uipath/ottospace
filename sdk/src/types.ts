@@ -1422,6 +1422,21 @@ export interface Terminal {
   selection_range: [[number, number], [number, number]] | null;
   /** `[line, column]` in visual mode. */
   visual_cursor: [number, number] | null;
+  /** Test runs only (null otherwise): the spans on show drawn with a style. */
+  styled: StyledSpan[] | null;
+}
+
+/** A run of cells drawn with a style; colours as `0xRRGGBB` numbers, dim already in `fg`. */
+export interface StyledSpan {
+  row: number;
+  text: string;
+  fg: number;
+  bg: number | null;
+  bold: boolean;
+  italic: boolean;
+  strike: boolean;
+  /** `curly`: SGR 4:3; `color`: SGR 58, null for the text's. */
+  underline: { curly: boolean; color: number | null } | null;
 }
 
 /** `[x, y, w, h]` in points. */

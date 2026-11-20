@@ -3921,6 +3921,8 @@ impl Workspace {
                     // negative in history.
                     "selection_range": t.selection_range(),
                     "visual_cursor": t.visual_cursor(),
+                    // Test runs only: the spans drawn with a style, e.g. dim or underlined.
+                    "styled": std::env::var_os("OTTOSPACE_E2E").map(|_| t.styled()),
                 });
                 (*id, terminal)
             })
