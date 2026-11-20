@@ -71,6 +71,10 @@ impl Workspace {
         // terminal. (A client's key is no event of the keyboard's.)
         let held = self.input == Origin::User && ottospace_mac::window::key_repeating();
         if let Some(answer) = self.confirm_answer(key, self.input).filter(|_| !held) {
+            // Where each shell is now: the core keeps a worktree a terminal went into since.
+            if self.model.confirm.as_ref().is_some_and(|c| c.delete.is_some()) {
+                self.tell_terminals();
+            }
             self.dispatch(answer, self.input, window, cx);
         }
         // Answered: the text a paste waited with goes.

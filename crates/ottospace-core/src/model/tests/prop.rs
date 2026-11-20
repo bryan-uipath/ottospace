@@ -4352,7 +4352,7 @@ impl Run {
         }
         let user = origin == Origin::User;
         // git's answer to the user's delete, as the shell says it.
-        let answered = origin == Origin::System
+        let answered = origin != Origin::Socket
             && matches!(&action, Action::WorktreeRemoved { task: None, path, .. } if deleting_before.iter().any(|d| d.path == *path));
         // Only the shell's runner reports what an agent said.
         let reports = matches!(action, Action::AgentEvents { .. }) && origin != Origin::System;
@@ -5042,7 +5042,9 @@ impl Run {
                 Effect::RemoveWorktree { task: None, repo, path } => {
                     let yes = user && matches!(action, Action::QuitConfirm) && delete_asked.as_ref() == Some(path);
                     let linked = m.linked_worktree(path).is_some_and(|(of, _)| of.path == *repo);
-                    let free = m.worktree_busy(path).is_none() && !deleting_before.iter().any(|d| d.path == *path);
+                    let free = m.worktree_busy(path).is_none()
+                        && !deleting_before.iter().any(|d| d.path == *path)
+                        && m.removing(path).is_none();
                     ensure!(yes && linked && free && repo != path, "{origin:?}'s {action:?} deleted {path}");
                 }
                 Effect::RemoveWorktree { task: Some(task), repo, path } => {
@@ -5061,7 +5063,12 @@ impl Run {
                     let late = origin == Origin::System
                         && matches!(&action, Action::WorktreeAdded { asked, fresh: true, .. }
                             if making_before.iter().any(|w| w.task == *task && w.asked == *asked));
-                    ensure!((done || late) && own && listed && repo != path, "{origin:?}'s {action:?} removed {path}");
+                    // Never one the user's delete has at git.
+                    let theirs = deleting_before.iter().any(|d| d.path == *path);
+                    ensure!(
+                        (done || late) && own && listed && repo != path && !theirs,
+                        "{origin:?}'s {action:?} removed {path}"
+                    );
                 }
                 // The seal plays for the user's own Done, of a task now done and put away.
                 Effect::Seal { task } => {

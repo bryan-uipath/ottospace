@@ -94,7 +94,10 @@ fn git_remove(repo: &Path, path: &Path) -> Result<(), String> {
     if ok {
         return Ok(());
     }
-    let changes = git(path, &["status", "--porcelain"]).ok().filter(|(ok, _)| *ok).map(|(_, out)| out.lines().count());
+    // A locked one says so, whatever its changes.
+    let locked = said.contains("locked");
+    let changes =
+        git(path, &["status", "--porcelain"]).ok().filter(|(ok, _)| *ok && !locked).map(|(_, out)| out.lines().count());
     Err(match changes {
         Some(1) => "Kept the worktree: 1 uncommitted change".into(),
         Some(n) if n > 1 => format!("Kept the worktree: {n} uncommitted changes"),
@@ -374,6 +377,7 @@ mod tests {
         let locked = scratch.join("app-locked");
         git_in(&repo, &["worktree", "add", "-q", "-b", "locked", locked.to_str().unwrap()]);
         git_in(&repo, &["worktree", "lock", locked.to_str().unwrap()]);
+        fs::write(locked.join("a.md"), "a").unwrap();
         let err = git_remove(&repo, &locked).unwrap_err();
         assert!(err.starts_with("Kept the worktree: ") && err.contains("locked"), "{err}");
         let dirty = scratch.join("app-dirty");

@@ -6284,6 +6284,8 @@ impl Workspace {
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
                         this.row_menu_at = Some(e.position);
+                        // Where each shell is now: a worktree a terminal is in is not deleted.
+                        this.tell_terminals();
                         this.open_row_menu(row.clone().into(), false, window, cx);
                     })
                 })

@@ -300,6 +300,10 @@ impl Model {
         if self.terminal_in(&made.path) {
             return Some(KEPT_TERMINAL.into());
         }
+        // The user's delete of it is at git already.
+        if self.deleting.iter().any(|d| d.path == made.path) {
+            return None;
+        }
         self.finish.removing.push((id, made.path.clone()));
         effects.push(Effect::RemoveWorktree { task: Some(id), repo: made.repo, path: made.path });
         None
@@ -1049,10 +1053,12 @@ mod tests {
         assert!(m.compose.is_none());
     }
 
-    /// `in_its_worktree`, its agent stopped, the Repos section open, and `row`'s menu opened by a right click.
+    /// `in_its_worktree`, its agent stopped and the task dismissed, the Repos section open, and
+    /// `row`'s menu opened by a right click.
     fn worktree_menu(row: &str) -> Model {
         let mut m = in_its_worktree();
         m.update(Action::AgentExited { task: ONE }.sent_by(Origin::System));
+        m.update(Action::TaskDismiss { id: 1 });
         if m.sidebar != Some(crate::model::Section::Repos) {
             m.update(Action::ToggleSection { section: crate::model::Section::Repos });
         }
@@ -1105,6 +1111,8 @@ mod tests {
         let done = Action::WorktreeRemoved { task: None, path: WORKTREE.into(), kept: None };
         let told = Effect::Told { text: "Deleted the worktree of fix-login · its branch is kept".into() };
         assert_eq!(m.update(done.clone().sent_by(Origin::System)), [told, Effect::ReadRepos]);
+        // The task's own worktree: removed, as its Done would have.
+        assert_eq!(m.tasks.get(1).and_then(|t| t.made.as_ref()).map(|made| made.removed), Some(true));
         // An answer nobody asked for changes nothing.
         assert!(m.update(done.sent_by(Origin::System)).is_empty());
     }
@@ -1129,12 +1137,9 @@ mod tests {
             m.update(Action::ToggleSection { section: crate::model::Section::Repos });
         }
         m.update(Action::RowMenu { row: crate::list::ListRow::Repo(WORKTREE.into()).into(), dots: None, keys: true });
-        assert_eq!(m.row_menu_why(0), Some(crate::repos::AGENT_IN));
+        assert_eq!(m.row_menu_why(0), Some(crate::repos::TASK_IN));
         let effects = m.update(Action::RowMenuChoose { index: None });
-        assert_eq!(
-            (effects, m.confirm.is_none()),
-            (vec![Effect::Notice { text: crate::repos::AGENT_IN.into() }], true)
-        );
+        assert_eq!((effects, m.confirm.is_none()), (vec![Effect::Notice { text: crate::repos::TASK_IN.into() }], true));
         // A terminal is in it.
         let mut m = worktree_menu(WORKTREE);
         m.update(Action::Split { axis: crate::Axis::Right, kind: crate::model::Kind::Terminal });
@@ -1198,5 +1203,27 @@ mod tests {
         assert_eq!(m.confirm.as_ref().and_then(|c| c.delete.as_deref()), Some(BY_HAND));
         let remove = Effect::RemoveWorktree { task: None, repo: "/code/app".into(), path: BY_HAND.into() };
         assert_eq!(m.update(Action::QuitConfirm), [remove]);
+    }
+
+    /// Review: a task not done there, its agent stopped, still works in it (an adopted session's
+    /// agent may run with no pane); and Done and the user's delete never both ask git.
+    #[test]
+    fn an_idle_tasks_worktree_and_one_git_is_removing_are_not_deleted() {
+        let mut m = in_its_worktree();
+        m.update(Action::AgentExited { task: ONE }.sent_by(Origin::System));
+        assert_eq!(m.worktree_busy(WORKTREE), Some(crate::repos::TASK_IN));
+        // Done's removal at git: no delete asked.
+        m.update(Action::TaskDone { id: 1 });
+        assert!(m.worktree_busy(WORKTREE).is_none() && !m.deletable(WORKTREE));
+        assert!(m.update(Action::WorktreeDelete { path: WORKTREE.into() }).is_empty() && m.confirm.is_none());
+        // The user's delete at git: Done asks git for none (without it, Done would).
+        let mut m = worktree_menu(WORKTREE);
+        m.update(Action::TaskUndo);
+        assert!(removes(&m.update(Action::TaskDone { id: 1 })));
+        let mut m = worktree_menu(WORKTREE);
+        m.update(Action::RowMenuChoose { index: Some(0) });
+        m.update(Action::QuitConfirm);
+        m.update(Action::TaskUndo);
+        assert!(!removes(&m.update(Action::TaskDone { id: 1 })));
     }
 }

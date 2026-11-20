@@ -169,7 +169,7 @@ impl Workspace {
         let dots = menu.dots?;
         // A right click's: at the pointer, on the row it opened on.
         let dots = match (&menu.row, self.row_menu_at) {
-            (MenuOf::Row(ListRow::Repo(_)), Some(at)) => Rect { x: f32::from(at.x), y: dots.y, w: 0., h: dots.h },
+            (MenuOf::Row(ListRow::Repo(_)), Some(at)) => Rect { x: f32::from(at.x), y: f32::from(at.y), w: 0., h: 0. },
             _ => dots,
         };
         // An item that does nothing now is dimmed, with why under it.

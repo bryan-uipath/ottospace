@@ -1181,7 +1181,8 @@ fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_o
         item[0] >= 0.0 && item[1] >= 0.0 && item[0] + item[2] <= window[2] && item[1] + item[3] <= window[3],
         "{item:?}"
     );
-    assert!((item[0] - p[0]).abs() < 8.0, "not at the pointer: {item:?} {p:?}");
+    let near = (item[0] - p[0]).abs() < 8.0 && (item[1] - p[1]).abs() < 12.0;
+    assert!(near, "not at the pointer: {item:?} {p:?}");
     // Esc closes it.
     let reply = otto.call(json!({"cmd": "key", "keys": "escape", "as": "user"}));
     assert!(reply["row_menu"].is_null() || otto.drawn()["row_menu"].is_null());

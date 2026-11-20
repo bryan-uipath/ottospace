@@ -408,19 +408,24 @@ impl Model {
         cwds.any(|dir| sessions::below(dir, path))
     }
 
-    /// Why the worktree at `path` is not deleted now: a terminal, or a task's running agent, is in it.
+    /// Why the worktree at `path` is not deleted now: a terminal is in it, or a task works there
+    /// (not done, or its agent runs), as Done keeps one (`KEPT_TASK`): an adopted session's agent
+    /// may run with no pane of ottospace's.
     pub fn worktree_busy(&self, path: &str) -> Option<&'static str> {
         if self.terminal_in(path) {
             return Some(crate::repos::TERMINAL_IN);
         }
-        let runs = |t: &&crate::tasks::Task| self.agent_runs(&crate::talk::Subject::Task(t.id));
+        let works = |t: &&crate::tasks::Task| {
+            !t.dismissed && (t.state != crate::tasks::State::Done || self.agent_runs(&crate::talk::Subject::Task(t.id)))
+        };
         let inside = |t: &crate::tasks::Task| self.task_worktree(t.id).is_some_and(|w| sessions::below(w, path));
-        self.tasks.list.iter().filter(runs).any(inside).then_some(crate::repos::AGENT_IN)
+        self.tasks.list.iter().filter(works).any(inside).then_some(crate::repos::TASK_IN)
     }
 
-    /// The user may be asked to delete it: a listed linked worktree, nothing in it, not being deleted.
+    /// The user may be asked to delete it: a listed linked worktree, nothing in it, not being
+    /// deleted, nor removed by a Done.
     pub(crate) fn deletable(&self, path: &str) -> bool {
-        let asked = self.deleting.iter().any(|d| d.path == path);
+        let asked = self.deleting.iter().any(|d| d.path == path) || self.removing(path).is_some();
         self.linked_worktree(path).is_some() && self.worktree_busy(path).is_none() && !asked
     }
 
@@ -457,6 +462,12 @@ impl Model {
             return effects.push(Effect::Notice { text: why });
         }
         self.workbooks.default_gone(path, &repo);
+        // A done task's own: removed, as its Done would (Undo adds it back).
+        for task in self.tasks.list.iter_mut() {
+            if let Some(made) = task.made.as_mut().filter(|made| made.path == path) {
+                made.removed = true;
+            }
+        }
         effects.push(Effect::Told { text: format!("Deleted the worktree of {branch} · its branch is kept") });
         effects.push(Effect::ReadRepos);
     }

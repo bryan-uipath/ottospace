@@ -152,7 +152,7 @@ pub const USERS_ALONE: &str = "only the user adds a worktree";
 pub const DELETE_USERS: &str = "only the user deletes a worktree";
 /// Why a worktree is not deleted now.
 pub const TERMINAL_IN: &str = "A terminal is in it: close its panes first";
-pub const AGENT_IN: &str = "A task's agent runs in it: stop it first";
+pub const TASK_IN: &str = "A task works in it: mark it done or dismiss it first";
 /// Why the + makes none: no `worktrees_dir`, and no ottospace folder to put one in.
 pub const WORKTREES_NONE: &str = "No folder for worktrees in this run";
 
