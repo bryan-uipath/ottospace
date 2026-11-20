@@ -1,6 +1,6 @@
 # Workspaces reordered by drag, in one order for the list and the top row. Four kept workspaces,
-# by name at first; each opened. Zoom's row carried above Arima (its line), dropped; then a space
-# carried along the top row (the others make room), dropped. Then a task's tab, of no workspace,
+# by name at first; each opened. Zoom's row carried above Arima (not drawn, a bar where it lands),
+# dropped; then a space carried along the top row (the same), dropped. Then a task's tab, of no workspace,
 # carried from the row's end to between two workspaces' and dropped: the list stays as it was.
 {"cmd":"section","section":"workbook"}
 {"until":"workbooks","len":4}

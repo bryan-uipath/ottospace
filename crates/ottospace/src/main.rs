@@ -3927,6 +3927,8 @@ impl Workspace {
             "tabs": tabs,
             // Each space of the top row, by its place there.
             "space_rects": spaces,
+            // Where the item carried by a reorder drag lands: its bar, while one is carried.
+            "reorder_bar": self.controls.bounds("reorder-bar").map(rect),
             // The agent chip, or null: the selected space's conversation while it is closed.
             "agent_chip": self.chip_snapshot(),
             // The left column's title strip, and the open section's header (null: none open).
@@ -7077,14 +7079,8 @@ impl Workspace {
         let badges =
             if !compact || fits(others) { others } else { (0..others).rev().find(|n| fits(n + 1)).unwrap_or(0) };
         let mut room_for = badges;
-        let mut placed: Vec<(usize, &Space)> = shown.into_iter().enumerate().collect();
-        // The space carried is drawn where it would land: the others make room.
-        let carried = self.space_carried(cx);
-        if let Some((from, to)) = carried {
-            let space = placed.remove(from);
-            placed.insert(to.min(placed.len()), space);
-        }
-        let shown: Vec<_> = placed
+        let placed: Vec<(usize, &Space)> = shown.into_iter().enumerate().collect();
+        let mut shown: Vec<_> = placed
             .into_iter()
             .filter(|(_, space)| {
                 let keep = space.of == selected || space.of == Owner::Home || room_for > 0;
@@ -7094,6 +7090,14 @@ impl Workspace {
                 keep
             })
             .collect();
+        // The space carried is not drawn: the others close up, sized as with it, and a bar shows
+        // where it lands: before the one at `to` among them, or after the last (true).
+        let mut bar = None;
+        if let Some((from, to)) = self.space_carried(cx) {
+            shown.retain(|(place, _)| *place != from);
+            let before = shown.get(to).map(|(place, _)| (*place, false));
+            bar = before.or(shown.last().map(|(place, _)| (*place, true)));
+        }
         let more = others - badges;
         let dot = self.model.listen_dot();
         // The heard pane's space left off for room: the count carries its dot.
@@ -7207,20 +7211,17 @@ impl Workspace {
             };
             let to = of.clone();
             let dragged = reorder::DraggedItem { item: ReorderItem::Space { of: of.clone() }, place };
-            let chip = SharedString::from(title.clone());
-            let lifted = carried.is_some_and(|(from, _)| from == place);
+            let bar = bar.filter(|(at, _)| *at == place).map(|(_, after)| reorder::bar(&self.controls, true, after));
             div()
                 .id(("space", place))
                 .group("space")
                 // Home's is not carried: nothing goes before it.
                 .when(of != Owner::Home, |d| {
-                    d.on_drag(dragged, move |_, offset, _, cx| cx.new(|_| DragChip { label: chip.clone(), offset }))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, e: &MouseDownEvent, _, _| this.reorder_from = Some(e.position)),
-                        )
+                    d.on_drag(dragged, |_, _, _, cx| cx.new(|_| gpui::EmptyView)).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, e: &MouseDownEvent, _, _| this.reorder_from = Some(e.position)),
+                    )
                 })
-                .when(lifted, |d| d.opacity(0.4))
                 .relative()
                 .h_full()
                 // The selected space keeps its name; the others give way first.
@@ -7264,6 +7265,7 @@ impl Workspace {
                 .children(dots)
                 .children(hide.filter(|_| !small))
                 .child(self.controls.mark(format!("space:{place}")))
+                .children(bar)
                 // A tab dropped on a space moves there.
                 .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
                 .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {

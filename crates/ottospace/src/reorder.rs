@@ -2,11 +2,11 @@
 //! into a place among them (`Action::ReorderOver`). What moves, and where it may go, is the
 //! core's (`model::reorder`).
 
-use gpui::{Context, Pixels, Point, Window};
-use ottospace_core::Action;
+use gpui::{Context, Div, Pixels, Point, Window, div, prelude::*, px, rgb};
 use ottospace_core::model::reorder::ReorderItem;
+use ottospace_core::{Action, theme};
 
-use crate::Workspace;
+use crate::{Workspace, sneak::Controls};
 
 /// What a reorder drag carries: the item, and a space's place on the row (its click's).
 #[derive(Clone)]
@@ -33,10 +33,10 @@ impl Workspace {
             return;
         }
         let to = match item {
-            ReorderItem::Workbook { id } => self.row_place(*id, f32::from(at.y)),
+            ReorderItem::Workbook { id } => self.row_place(*id, carried.is_some(), f32::from(at.y)),
             ReorderItem::Space { of } => {
                 let Some(from) = self.model.shown_spaces().iter().position(|space| space.of == *of) else { return };
-                self.space_place(from, carried.unwrap_or(from), f32::from(at.x))
+                self.space_place(from, carried.is_some(), f32::from(at.x))
             }
         };
         if carried != Some(to) {
@@ -44,24 +44,32 @@ impl Workspace {
         }
     }
 
-    /// The place among the rows other than `id`'s for the pointer at `y`.
-    fn row_place(&self, id: ottospace_core::workbook::WorkbookId, y: f32) -> usize {
-        let middle = |row: u32| self.controls.bounds(&format!("workbook:{row}")).map(|b| f32::from(b.center().y));
-        let rows = self.model.workbook_rows().into_iter().filter(|row| row.id != id);
-        place_among(&rows.map(|row| middle(row.id)).collect::<Vec<_>>(), y)
+    /// The place among the rows other than `id`'s for the pointer at `y`, as if `id`'s were not
+    /// drawn (`hidden`: it is not, being carried), so the place holds as the others close up.
+    fn row_place(&self, id: ottospace_core::workbook::WorkbookId, hidden: bool, y: f32) -> usize {
+        let bounds = |row: u32| self.controls.bounds(&format!("workbook:{row}"));
+        let rows = self.model.workbook_rows();
+        let from = rows.iter().position(|row| row.id == id).unwrap_or(rows.len());
+        let height = bounds(id).filter(|_| !hidden).map_or(0., |b| f32::from(b.size.height));
+        let middle = |(at, row): (usize, u32)| {
+            let shift = if at > from { height } else { 0. };
+            bounds(row).map(|b| f32::from(b.center().y) - shift)
+        };
+        let others = rows.iter().enumerate().filter(|(_, row)| row.id != id).map(|(at, row)| (at, row.id));
+        place_among(&others.map(middle).collect::<Vec<_>>(), y)
     }
 
-    /// The place on the top row of the space at `from`, drawn now at `drawn`, for the pointer at
-    /// `x`: the others whose middle is left of it, as if it were not drawn, so none flickers as
-    /// they make room.
-    fn space_place(&self, from: usize, drawn: usize, x: f32) -> usize {
-        let width = self.controls.bounds(&format!("space:{from}")).map_or(0., |b| f32::from(b.size.width));
+    /// The place on the top row of the space at `from` for the pointer at `x`: the others whose
+    /// middle is left of it, as if it were not drawn (`hidden`: it is not, being carried).
+    fn space_place(&self, from: usize, hidden: bool, x: f32) -> usize {
+        let width = self.controls.bounds(&format!("space:{from}")).filter(|_| !hidden);
+        let width = width.map_or(0., |b| f32::from(b.size.width));
         let others = (0..self.model.shown_spaces().len()).filter(|place| *place != from);
-        let middle = |(at, place): (usize, usize)| {
-            let shift = if at >= drawn { width } else { 0. };
+        let middle = |place: usize| {
+            let shift = if place > from { width } else { 0. };
             self.controls.bounds(&format!("space:{place}")).map(|b| f32::from(b.center().x) - shift)
         };
-        place_among(&others.enumerate().map(middle).collect::<Vec<_>>(), x)
+        place_among(&others.map(middle).collect::<Vec<_>>(), x)
     }
 
     /// Released over the list or the row: the item carried takes its place; one never carried
@@ -93,6 +101,18 @@ impl Workspace {
         if self.model.reorder().is_some() {
             self.dispatch(Action::ReorderCancel, self.input, window, cx);
         }
+    }
+}
+
+/// Where the item carried lands: a bar in the accent colour on the edge of the one it goes before
+/// (`end`: after). `across`: the top row's, upright; else a Workspaces row's, level.
+pub(crate) fn bar(controls: &Controls, across: bool, end: bool) -> Div {
+    let bar = div().absolute().rounded_full().bg(rgb(theme::PRIMARY)).child(controls.mark("reorder-bar"));
+    match (across, end) {
+        (true, false) => bar.top_0().bottom_0().left_0().w(px(2.)),
+        (true, true) => bar.top_0().bottom_0().right_0().w(px(2.)),
+        (false, false) => bar.left_0().right_0().h(px(2.)).top(px(-3.)),
+        (false, true) => bar.left_0().right_0().h(px(2.)).bottom(px(-3.)),
     }
 }
 

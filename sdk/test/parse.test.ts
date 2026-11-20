@@ -71,6 +71,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     titles: {},
     tabs: [],
     space_rects: [],
+    reorder_bar: null,
     agent_chip: null,
     strip: [0, 0, 316, 28],
     bar_header: null,

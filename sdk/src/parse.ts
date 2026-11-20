@@ -2076,6 +2076,7 @@ export function snapshot(value: unknown): Snapshot {
     titles: map(str)(o.titles, "titles"),
     tabs: list(orNull(rect))(o.tabs, "tabs"),
     space_rects: list(orNull(rect))(o.space_rects, "space_rects"),
+    reorder_bar: orNull(rect)(o.reorder_bar, "reorder_bar"),
     agent_chip: orNull(agentChip)(o.agent_chip, "agent_chip"),
     strip: orNull(rect)(o.strip, "strip"),
     bar_header: orNull(rect)(o.bar_header, "bar_header"),
