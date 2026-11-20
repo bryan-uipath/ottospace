@@ -293,7 +293,33 @@ export interface ViewerDrawn {
   shape?: { blocks: Record<string, number>; links: { web: number; file: number } };
   lines?: number;
   /** The grammar that coloured a code file's lines, or null: its extension's lexer, or plain. */
-  syntax?: "rust" | "typescript" | "tsx" | "javascript" | "json" | "toml" | "python" | "bash" | null;
+  syntax?:
+    | "rust"
+    | "typescript"
+    | "tsx"
+    | "javascript"
+    | "json"
+    | "toml"
+    | "python"
+    | "bash"
+    | "go"
+    | "c"
+    | "cpp"
+    | "java"
+    | "csharp"
+    | "ruby"
+    | "html"
+    | "css"
+    | "yaml"
+    | "sql"
+    | "swift"
+    | "kotlin"
+    | "php"
+    | "lua"
+    | "make"
+    | "xml"
+    | "markdown"
+    | null;
   /** A test run's: where the first marked line is drawn, while it shows. */
   marked_rect?: Rect | null;
 }

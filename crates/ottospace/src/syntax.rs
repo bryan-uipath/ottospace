@@ -5,7 +5,6 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::ops::{ControlFlow, Range};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -48,6 +47,7 @@ fn grammar(lang: Lang) -> Language {
         Lang::Swift => tree_sitter_swift::LANGUAGE.into(),
         Lang::Kotlin => tree_sitter_kotlin_sg::LANGUAGE.into(),
         Lang::Php => tree_sitter_php::LANGUAGE_PHP.into(),
+        Lang::PhpOnly => tree_sitter_php::LANGUAGE_PHP_ONLY.into(),
         Lang::Lua => tree_sitter_lua::LANGUAGE.into(),
         Lang::Make => tree_sitter_make::LANGUAGE.into(),
         Lang::Xml => tree_sitter_xml::LANGUAGE_XML.into(),
@@ -82,7 +82,7 @@ fn highlights(lang: Lang) -> String {
         Lang::Sql => tree_sitter_sequel::HIGHLIGHTS_QUERY.into(),
         Lang::Swift => tree_sitter_swift::HIGHLIGHTS_QUERY.into(),
         Lang::Kotlin => tree_sitter_kotlin_sg::HIGHLIGHTS_QUERY.into(),
-        Lang::Php => tree_sitter_php::HIGHLIGHTS_QUERY.into(),
+        Lang::Php | Lang::PhpOnly => tree_sitter_php::HIGHLIGHTS_QUERY.into(),
         Lang::Lua => tree_sitter_lua::HIGHLIGHTS_QUERY.into(),
         Lang::Make => tree_sitter_make::HIGHLIGHTS_QUERY.into(),
         Lang::Xml => tree_sitter_xml::XML_HIGHLIGHT_QUERY.into(),
@@ -133,15 +133,27 @@ fn made(lang: Lang) -> Option<&'static Made> {
     let made = MADE[lang as usize].get_or_init(|| {
         let language = grammar(lang);
         let mut highlights = Query::new(&language, &highlights(lang)).ok()?;
-        // A predicate tree-sitter does not test (`#lua-match?`) would let its pattern match anything.
+        // A predicate tree-sitter does not test (`#lua-match?`, `#is-not? local`) would let its
+        // pattern match anything: Ruby's every variable a method.
         for pattern in 0..highlights.pattern_count() {
-            if !highlights.general_predicates(pattern).is_empty() {
+            if !highlights.general_predicates(pattern).is_empty() || !highlights.property_predicates(pattern).is_empty()
+            {
                 highlights.disable_pattern(pattern);
             }
         }
         let tokens = highlights.capture_names().iter().map(|name| token(name)).collect();
         let injections = match injections(lang) {
-            Some(query) => Some(Query::new(&language, query).ok()?),
+            Some(source) => {
+                let mut query = Query::new(&language, source).ok()?;
+                // What lies between a document's first two rules is not front matter: `minus_metadata` is.
+                for pattern in 0..query.pattern_count() {
+                    let text = &source[query.start_byte_for_pattern(pattern)..query.end_byte_for_pattern(pattern)];
+                    if text.contains("thematic_break") {
+                        query.disable_pattern(pattern);
+                    }
+                }
+                Some(query)
+            }
             None => None,
         };
         Some(Made { highlights, tokens, injections })
@@ -216,8 +228,12 @@ fn inside(lang: Lang, tree: &Tree, text: &str, bytes: Range<usize>) -> Vec<(Lang
             let set = query.property_settings(matched.pattern_index);
             set.iter().find(|set| &*set.key == "injection.language").and_then(|set| set.value.as_deref())
         });
-        let Some(inner) = name.and_then(lang_named).filter(|inner| made(*inner).is_some()) else { continue };
+        let Some(inner) = name.and_then(lang_named) else { continue };
         for capture in matched.captures().iter().filter(|capture| Some(capture.index) == content) {
+            let inner = untagged(inner, text.get(capture.node.byte_range()).unwrap_or_default());
+            if made(inner).is_none() {
+                continue;
+            }
             let ranges = ranges(capture.node);
             if !unclosed(capture.node) && !ranges.is_empty() {
                 found.push((inner, ranges));
@@ -229,11 +245,15 @@ fn inside(lang: Lang, tree: &Tree, text: &str, bytes: Range<usize>) -> Vec<(Lang
 
 /// A fence never closed runs to its container's end: its language is not painted over the rest.
 fn unclosed(node: Node) -> bool {
-    node.parent().is_some_and(|fence| {
+    node.parent().filter(|fence| fence.kind() == "fenced_code_block").is_some_and(|fence| {
         let mut cursor = fence.walk();
-        let delimiters = fence.children(&mut cursor).filter(|n| n.kind() == "fenced_code_block_delimiter").count();
-        fence.kind() == "fenced_code_block" && delimiters < 2
+        fence.children(&mut cursor).filter(|n| n.kind() == "fenced_code_block_delimiter").count() < 2
     })
+}
+
+/// PHP with no `<?php` (`echo "a";`, a fence's usual): the grammar of PHP alone, else it is text.
+fn untagged(lang: Lang, code: &str) -> Lang {
+    if lang == Lang::Php && !code.trim_start().starts_with("<?") { Lang::PhpOnly } else { lang }
 }
 
 /// `node`'s text less its named children's, as ranges.
@@ -257,7 +277,8 @@ fn ranges(node: Node) -> Vec<tree_sitter::Range> {
 /// A fenced block's runs, by byte in `code`: by the grammar `label` names if it parses within the
 /// budget, else `highlight`'s lexer, as before (plain for a label it does not know).
 pub fn fence(label: &str, code: &str) -> Vec<Mark> {
-    let parsed = lang_named(label).and_then(|lang| Some((lang, parse(lang, code, BUDGET)?)));
+    let lang = lang_named(label).map(|lang| untagged(lang, code));
+    let parsed = lang.and_then(|lang| Some((lang, parse(lang, code, BUDGET)?)));
     match parsed {
         Some((lang, tree)) => Colours::new(lang, tree, code.to_string()).all(),
         None => crate::highlight::marks(label, code),
@@ -274,7 +295,6 @@ pub struct Colours {
     chunks: RefCell<HashMap<usize, Vec<Vec<Mark>>>>,
     /// Each language inside it parsed so far, by its first byte: `None` past the budget (plain).
     inner: RefCell<HashMap<(Lang, usize), Option<Tree>>>,
-    parsers: RefCell<HashMap<Lang, Parser>>,
 }
 
 impl Colours {
@@ -288,8 +308,7 @@ impl Colours {
             lines.push(start..start + shown.len());
             start += line.len();
         }
-        let (chunks, inner, parsers) = (RefCell::default(), RefCell::default(), RefCell::default());
-        Colours { lang, tree, text, lines, chunks, inner, parsers }
+        Colours { lang, tree, text, lines, chunks: RefCell::default(), inner: RefCell::default() }
     }
 
     pub fn lang(&self) -> Lang {
@@ -346,16 +365,10 @@ impl Colours {
         if let Some(tree) = self.inner.borrow().get(&key) {
             return tree.clone();
         }
-        let mut parsers = self.parsers.borrow_mut();
-        let parser = match parsers.entry(lang) {
-            Entry::Occupied(parser) => parser.into_mut(),
-            Entry::Vacant(entry) => {
-                let mut parser = Parser::new();
-                parser.set_language(&grammar(lang)).ok()?;
-                entry.insert(parser)
-            }
-        };
-        let tree = parser.set_included_ranges(ranges).ok().and_then(|_| parse_with(parser, &self.text, BUDGET));
+        // A parser of its own: one stopped by its budget would resume where it stopped.
+        let mut parser = Parser::new();
+        let set = parser.set_language(&grammar(lang)).is_ok() && parser.set_included_ranges(ranges).is_ok();
+        let tree = if set { parse_with(&mut parser, &self.text, BUDGET) } else { None };
         self.inner.borrow_mut().insert(key, tree.clone());
         tree
     }
@@ -389,10 +402,15 @@ impl Colours {
                 (*start, std::cmp::Reverse(*end), if later { usize::MAX - pattern } else { *pattern })
             });
             found.dedup_by_key(|(start, end, _, _)| (*start, *end));
+            // Only within the layer's ranges: a comment over two quoted lines leaves the `>` between.
+            let ranges = tree.included_ranges();
             for (start, end, _, token) in found {
-                let (start, end) = (start.max(bytes.start), end.min(bytes.end));
-                if start < end {
-                    paint[start - bytes.start..end - bytes.start].fill(token);
+                for range in &ranges {
+                    let start = start.max(bytes.start).max(range.start_byte);
+                    let end = end.min(bytes.end).min(range.end_byte);
+                    if start < end {
+                        paint[start - bytes.start..end - bytes.start].fill(token);
+                    }
                 }
             }
         }
@@ -607,6 +625,12 @@ mod tests {
         let lines = runs(Lang::Markdown, "```rust\nlet s = \"open\n\n# Heading\n");
         assert!(!lines[1].iter().any(|(_, token)| *token == Token::Keyword), "{:?}", lines[1]);
         assert!(lines[3].iter().all(|(_, token)| *token != Token::String), "{:?}", lines[3]);
+        // A quoted fence: a comment over two lines leaves the `>` between them a quote's.
+        let lines = runs(Lang::Markdown, "> ```rust\n> /* one\n> two */\n> ```\n");
+        assert_eq!(lines[2][0], ("> ".to_string(), Token::Punctuation), "{:?}", lines[2]);
+        assert!(lines[2].contains(&("two */".to_string(), Token::Comment)), "{:?}", lines[2]);
+        // Between two rules at the top is no front matter: the heading stays a heading.
+        has(Lang::Markdown, "***\n\n# Plan\n\n***\n", "Plan", Token::Keyword);
     }
 
     #[test]
@@ -620,6 +644,11 @@ mod tests {
             }
         }
         assert_eq!(fence("brainfuck", code), Vec::new(), "a language unknown: plain");
+        // PHP with no `<?php`, and with it.
+        for php in ["echo \"kale\";", "<?php echo \"kale\";"] {
+            let at = php.find('"').unwrap_or_default();
+            assert!(fence("php", php).contains(&(at..at + 6, Token::String)), "{php}: {:?}", fence("php", php));
+        }
         // One a grammar does not have: the lexer's, as before.
         assert_eq!(fence("diff", "+ a"), crate::highlight::marks("diff", "+ a"));
     }
@@ -639,6 +668,14 @@ mod tests {
         assert!(colours.line(CHUNK * 10 + 3).contains(&(0..2, Token::Keyword)), "{:?}", colours.line(CHUNK * 10 + 3));
         // 128 lines of 10-line blocks: 13 or 14 blocks, 3 languages inside each.
         assert!((36..=45).contains(&colours.inner.borrow().len()), "{}", colours.inner.borrow().len());
+    }
+
+    /// A pattern whose predicate tree-sitter does not test is left out: Ruby's `#is-not? local`
+    /// would make every variable a method.
+    #[test]
+    fn a_ruby_variable_is_no_method() {
+        let got: Vec<(String, Token)> = runs(Lang::Ruby, "rows = 1\nrows + 1\n").into_iter().flatten().collect();
+        assert!(!got.iter().any(|(text, _)| text == "rows"), "{got:?}");
     }
 
     #[test]

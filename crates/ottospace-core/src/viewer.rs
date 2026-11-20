@@ -63,6 +63,8 @@ pub enum Lang {
     Swift,
     Kotlin,
     Php,
+    /// PHP with no `<?php`, as a fence of it often is: only ever chosen for one.
+    PhpOnly,
     Lua,
     Make,
     Xml,
@@ -92,7 +94,7 @@ const fn grammar(
 }
 
 /// Every `Lang`, in its order: the one table of extensions, file names and fence names.
-pub const GRAMMARS: [Grammar; 26] = [
+pub const GRAMMARS: [Grammar; 27] = [
     grammar(Lang::Rust, "rust", &["rs"], &[], &[]),
     grammar(Lang::TypeScript, "typescript", &["ts", "mts", "cts"], &[], &[]),
     grammar(Lang::Tsx, "tsx", &["tsx"], &[], &[]),
@@ -114,6 +116,7 @@ pub const GRAMMARS: [Grammar; 26] = [
     grammar(Lang::Swift, "swift", &["swift"], &[], &[]),
     grammar(Lang::Kotlin, "kotlin", &["kt", "kts"], &[], &[]),
     grammar(Lang::Php, "php", &["php"], &[], &[]),
+    grammar(Lang::PhpOnly, "php_only", &[], &[], &[]),
     grammar(Lang::Lua, "lua", &["lua"], &[], &[]),
     grammar(Lang::Make, "make", &["mk", "mak"], &["makefile"], &["Makefile", "makefile", "GNUmakefile"]),
     grammar(Lang::Xml, "xml", &["xml", "svg"], &[], &[]),
@@ -169,7 +172,7 @@ pub fn shows(path: &str) -> Shows {
 pub fn opens_on_click(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     let known = |list: &[&str]| extension(path).is_some_and(|ext| list.contains(&ext.as_str()));
-    known(MARKDOWN) || known(CODE) || known(TEXT) || NAMED.contains(&name)
+    known(MARKDOWN) || known(CODE) || known(TEXT) || NAMED.contains(&name) || lang_of(path).is_some()
 }
 
 /// A path the viewer may be asked for: absolute, one line, not too long.
@@ -356,6 +359,8 @@ mod tests {
     fn a_click_opens_text_in_the_viewer_and_anything_else_as_before() {
         assert!(opens_on_click("/a/README.md") && opens_on_click("/a/x.rs") && opens_on_click("/a/Makefile"));
         assert!(opens_on_click("/a/build.log"));
+        // Every name a grammar has: `.kts`, `GNUmakefile`.
+        assert!(opens_on_click("/a/build.gradle.kts") && opens_on_click("/a/GNUmakefile"));
         assert!(!opens_on_click("/a/shot.png") && !opens_on_click("/a/doc.pdf") && !opens_on_click("/a/bin"));
     }
 
