@@ -1460,8 +1460,9 @@ Only you open, answer, skip or close it.
 ### Code city
 
 With `code_city` on, an empty tab of a task draws the task's checkout as a city in 3D, rendered
-on the GPU, where the lattice was: a folder is a terrace stepped up from its parent's, a file a
-building on it, its ground sized by its size class (1 up to 2 KB, doubling to 128 KB) and its
+on the GPU, where the lattice was: a folder is a district, a plate stepped up from its parent's
+and outlined, a street apart from its neighbours and a shade lighter per tier (a folder with one
+child is none of its own: `src/main/java` is one district), a file a building on it, edged, its ground sized by its size class (1 up to 2 KB, doubling to 128 KB) and its
 height by its length. A file is where it was the last time: the same files give
 the same plan, an edit that keeps a file's size class moves nothing, and a new file most times
 moves only its own folder
@@ -1476,8 +1477,12 @@ moves only its own folder
   the tab comes on show and when the lit files change. No timer. Over 20,000 files, 4 MB of
   names or 10 seconds: no city, the lattice stays.
 - It takes no click and no key, and nothing in it moves: a still picture, made again when the
-  files, the lit files or the tab's size change. The root's folders are named on their ground,
-  never behind the tab's hints; no path or name is in the socket's state or the logs.
+  files, the lit files or the tab's size change. The outer two tiers of districts are named on
+  their plates where the name fits, never behind the tab's hints; no path or name is in the
+  socket's state or the logs.
+- Pointing at a building shows a beacon: a line up from it to its file's name over its folder;
+  at a district, its folder. Over the hints, the hints win, and the beacon is never drawn over
+  them. Hovering draws, and renders nothing again.
 - No GPU, or a render that fails: the lattice.
 
 ### Displays

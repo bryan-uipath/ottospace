@@ -1,6 +1,7 @@
 //! The code city's picture: the core's scene (`ottospace_core::scene`) rendered offscreen on
 //! the GPU (wgpu, whichever backend the platform has), with a depth buffer, 4× multisampling, a
-//! light from above and fog into the background, then read back as BGRA for GPUI to paint. Run
+//! light from above, edge lines and fog into the background, then read back as BGRA for GPUI to
+//! paint. Run
 //! on a thread of its own; a still picture, made again only when the scene or its size changes.
 
 use ottospace_core::scene::{Block, Kind, Scene};
@@ -16,8 +17,8 @@ pub struct Picture {
 const SAMPLES: u32 = 4;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-/// Per box: its corners (min, max), its top's colour, and 1 if it glows (lit).
-const STRIDE: u64 = 10 * 4;
+/// Per box: its corners (min, max), its top's colour, 1 if it glows (lit), its edges' colour.
+const STRIDE: u64 = 13 * 4;
 
 const SHADER: &str = r#"
 struct Frame { matrix: mat4x4<f32>, eye: vec4<f32>, fog: vec4<f32>, background: vec4<f32>, light: vec4<f32> };
@@ -28,6 +29,11 @@ struct Out {
     @location(0) colour: vec3<f32>,
     @location(1) world: vec3<f32>,
     @location(2) lit: f32,
+    @location(3) @interpolate(flat) lo: vec3<f32>,
+    @location(4) @interpolate(flat) hi: vec3<f32>,
+    @location(5) @interpolate(flat) edge: vec3<f32>,
+    // The axis the face is across: 0 x, 1 y, 2 z.
+    @location(6) @interpolate(flat) axis: u32,
 };
 
 // A cube's 36 corners (two triangles a face) and each face's normal: -x, +x, -y, +y, -z, +z.
@@ -45,7 +51,7 @@ const NORMALS = array<vec3<f32>, 6>(
 );
 
 @vertex
-fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi: vec3<f32>, @location(2) top: vec4<f32>) -> Out {
+fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi: vec3<f32>, @location(2) top: vec4<f32>, @location(3) edge: vec3<f32>) -> Out {
     let world = lo + (hi - lo) * CORNERS[FACES[i]];
     let normal = NORMALS[i / 6u];
     // Sides darker than the top: ambient, and a light from above to one side.
@@ -56,14 +62,33 @@ fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi
     out.colour = mix(top.rgb * light, top.rgb * (0.75 + 0.25 * normal.y), top.a);
     out.lit = top.a;
     out.world = world;
+    out.lo = lo;
+    out.hi = hi;
+    out.edge = edge;
+    out.axis = i / 12u;
     return out;
 }
 
 @fragment
 fn fs(in: Out) -> @location(0) vec4<f32> {
+    // Edges: on the face's two axes, pixels to its nearest edge and its size in pixels. A face
+    // draws two thirds of a device pixel of line (two meeting: a little over one), at any
+    // distance and scale; none on a face too small to hold one.
+    let step = fwidth(in.world);
+    var to_edge = 1e6;
+    var size = 1e6;
+    for (var k = 0u; k < 3u; k++) {
+        if (k != in.axis) {
+            let px = max(step[k], 1e-7);
+            to_edge = min(to_edge, min(in.world[k] - in.lo[k], in.hi[k] - in.world[k]) / px);
+            size = min(size, (in.hi[k] - in.lo[k]) / px);
+        }
+    }
+    let line = (1. - smoothstep(0.25, 1.1, to_edge)) * smoothstep(4., 10., size);
+    let colour = mix(in.colour, in.edge, line);
     // Fog: from nothing at `fog.x` from the eye to `fog.z` at `fog.y`.
     let far = clamp((distance(in.world, frame.eye.xyz) - frame.fog.x) / (frame.fog.y - frame.fog.x), 0., 1.);
-    return vec4(mix(in.colour, frame.background.rgb, far * frame.fog.z * (1. - in.lit)), 1.);
+    return vec4(mix(colour, frame.background.rgb, far * frame.fog.z * (1. - in.lit)), 1.);
 }
 "#;
 
@@ -72,14 +97,18 @@ fn rgb(hex: u32) -> [f32; 3] {
     [c.r, c.g, c.b]
 }
 
-/// A box's top colour. Quiet behind the hints, and still a skyline: buildings well above the
-/// ground's shade, districts a step lighter per depth.
-fn colour(kind: Kind) -> [f32; 3] {
+/// A box's top colour and its edges'. Four tones, quiet behind the hints: the background, the
+/// ground (streets), districts (a step lighter per tier, edged in a dim primary that fades with
+/// the tier) and buildings (edged lighter).
+fn colour(kind: Kind) -> ([f32; 3], [f32; 3]) {
     match kind {
-        Kind::Ground => rgb(0x101014),
-        Kind::Plate(depth) => rgb(0x17171c + 0x050506 * (depth.min(4) as u32 - 1)),
-        Kind::Building => rgb(0x5a5a68),
-        Kind::Lit(hex) => rgb(hex),
+        Kind::Ground => (rgb(0x111115), rgb(0x111115)),
+        Kind::Plate(tier) => {
+            let tier = tier.clamp(1, 5) as u32 - 1;
+            (rgb(0x1f2632 + 0x06080a * tier), rgb(0x3ab8d4 - 0x0a1a1e * tier))
+        }
+        Kind::Building => (rgb(0x50505e), rgb(0x9a9aac)),
+        Kind::Lit(hex) => (rgb(hex), rgb(0xffffff)),
     }
 }
 
@@ -121,7 +150,7 @@ impl Gpu {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4];
+        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x3];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("city"),
             layout: Some(&pipeline_layout),
@@ -274,11 +303,11 @@ impl Gpu {
     }
 }
 
-fn instance(block: &Block) -> [f32; 10] {
-    let [r, g, b] = colour(block.kind);
+fn instance(block: &Block) -> [f32; 13] {
+    let ([r, g, b], edge) = colour(block.kind);
     let (lo, hi) = (block.min, block.max);
     let glows = if matches!(block.kind, Kind::Lit(_)) { 1. } else { 0. };
-    [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], r, g, b, glows]
+    [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], r, g, b, glows, edge[0], edge[1], edge[2]]
 }
 
 fn bytes(values: &[f32]) -> Vec<u8> {
@@ -295,16 +324,22 @@ mod tests {
     use super::*;
     use ottospace_core::atlas;
 
-    /// Renders a made-up repository and writes it where `CITY_PICTURE` says, as a BMP, with the
-    /// time each step took: `CITY_PICTURE=/tmp/city.bmp cargo test -p ottospace --release --
-    /// --ignored a_city_is_rendered --nocapture`. Needs a GPU; no window.
+    /// Renders made-up repositories and writes each into the folder `CITY_PICTURE` names, as a
+    /// BMP, with the time each step took: `CITY_PICTURE=/tmp cargo test -p ottospace --release
+    /// -- --ignored a_city_is_rendered --nocapture`. Needs a GPU; no window.
     #[test]
     #[ignore = "needs a GPU; writes a picture and prints timings"]
     fn a_city_is_rendered() {
         let gpu = Gpu::new().expect("a GPU");
-        for count in [28, 5_000, 50_000] {
+        for count in [28, 2_000, 5_000, 20_000] {
+            // Nested folders, unevenly: d0 to d6, then up to three deeper by the file's number.
             let files: Vec<(String, u64)> = (0..count)
-                .map(|i| (format!("d{}/d{}/f{i}.rs", i % 7, i % 5), 300 + (i as u64 * 7919) % 40_000))
+                .map(|i| {
+                    let deep = ["", "e1/", "e1/f2/", "e2/"][(i / 7) % 4];
+                    // Sizes as a repository's: most files small, a few large (200 B to about 50 KB).
+                    let r = (i as u64 * 7919) % 1000;
+                    (format!("d{}/{deep}g{}/f{i}.rs", i % 7, i % 5), 200 + r * r * r / 20_000)
+                })
                 .collect();
             let started = std::time::Instant::now();
             let plan = atlas::atlas(&atlas::repo(&files));
@@ -321,8 +356,38 @@ mod tests {
                 "{count} files: layout {laid:.1?}, scene {built:.1?} ({} boxes), render and read back {w}×{h} {rendered:.1?}",
                 scene.blocks.len()
             );
-            if let Some(path) = std::env::var_os("CITY_PICTURE").filter(|_| count == 5_000) {
-                std::fs::write(path, bmp(&picture)).unwrap();
+            if let Some(dir) = std::env::var_os("CITY_PICTURE") {
+                std::fs::write(std::path::Path::new(&dir).join(format!("city-{count}.bmp")), bmp(&picture)).unwrap();
+            }
+        }
+    }
+
+    /// An edge line is about one device pixel wide at 1× and at 2×: one box, the same view at
+    /// both sizes, the rows brighter than its top face counted down the face's middle column at
+    /// its back and front edges. No GPU (a CI runner without one): nothing to check.
+    #[test]
+    fn an_edge_is_one_device_pixel_at_any_scale() {
+        let Ok(gpu) = Gpu::new() else { return eprintln!("no GPU: skipped") };
+        let plan = atlas::atlas(&atlas::repo(&[("a.rs".into(), 40_000), ("b.rs".into(), 40_000)]));
+        let scene = ottospace_core::scene::scene(&plan, &[], 1.6);
+        let camera = scene.camera.unwrap();
+        let building = scene.blocks.iter().find(|b| b.kind == Kind::Building).unwrap();
+        let mid = (building.min[0] + building.max[0]) / 2.;
+        let at = |z: f32| camera.project([mid, building.max[1], z]).unwrap();
+        let (back, front) = (at(building.max[2]), at(building.min[2]));
+        let face = at((building.min[2] + building.max[2]) / 2.);
+        for scale in [1, 2] {
+            let (w, h) = (320 * scale, 200 * scale);
+            let p = gpu.render(&scene, w, h).unwrap();
+            let px = |v: f32, n: u32| (v * n as f32) as u32;
+            let light = |(x, y): (f32, f32)| {
+                let at = ((px(y, h) * w + px(x, w)) * 4) as usize;
+                p.bgra[at..at + 3].iter().map(|c| *c as f32 / 255.).sum::<f32>()
+            };
+            let plain = light(face);
+            for (edge, (x, y)) in [("back", back), ("front", front)] {
+                let rows = (-4..=4).filter(|d| light((x, y + *d as f32 / h as f32)) > plain + 0.15).count();
+                assert!((1..=2).contains(&rows), "{scale}×: the {edge} edge is {rows} rows");
             }
         }
     }

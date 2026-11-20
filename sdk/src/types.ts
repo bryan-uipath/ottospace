@@ -1528,9 +1528,10 @@ export interface CityDrawn {
   /** Where the floor was painted last, in window points, and the window's scale. */
   bounds: Rect;
   scale: number;
-  /** Each lit building, in window points. */
+  /** Each lit building, in window points, and the middle of its top. */
   lit: Rect[];
-  /** Root folders named on the last paint. */
+  lit_tops: [number, number][];
+  /** Districts named on the last paint. */
   labels: number;
   /** Why there is no picture (no GPU, a failed render): the lattice is drawn instead. */
   failed: string | null;
@@ -1540,6 +1541,14 @@ export interface CityDrawn {
   paints: number;
   /** How long the last picture took: scene, render and read back, in microseconds. */
   render_us: number | null;
+  /** The beacon of the box under the user's pointer: a file's or a district's, lit, its label. */
+  hovered: CityHovered | null;
+}
+
+export interface CityHovered {
+  file: boolean;
+  lit: boolean;
+  beacon: Rect;
 }
 
 /** What the home screen drew, in window points. */
