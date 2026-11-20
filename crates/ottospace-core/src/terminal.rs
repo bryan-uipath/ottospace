@@ -59,15 +59,12 @@ pub struct MouseMode {
     pub alt_screen: bool,
     /// 1007: on the alternate screen, the wheel as arrow keys (on unless the program turns it off).
     pub alternate_scroll: bool,
-    /// A program runs in front of the shell. At a prompt the modes are a program's that exited
-    /// without turning them off: they ask for nothing.
-    pub program: bool,
 }
 
 impl MouseMode {
     /// The program reads the mouse.
     pub fn reads(&self) -> bool {
-        self.program && (self.clicks || self.drags || self.motion)
+        self.clicks || self.drags || self.motion
     }
 }
 
@@ -80,12 +77,11 @@ pub enum WheelGoes {
 }
 
 /// Where the wheel goes. ⇧ held: ottospace's history, whatever the program asked (the way out
-/// other terminals give). Else the program's while it reads the mouse (Claude Code's and Codex's
-/// full-screen views scroll themselves); on the alternate screen (less, man) ↑ and ↓ unless the
-/// program turned that off, then nothing; else the history. At a prompt, modes left on by a
-/// program that exited ask for nothing.
+/// other terminals give, also from modes a program left on). Else the program's while it reads
+/// the mouse (Claude Code's and Codex's full-screen views scroll themselves); on the alternate
+/// screen (less, man) ↑ and ↓ unless the program turned that off, then nothing; else the history.
 pub fn wheel_goes(mode: MouseMode, shift: bool) -> Option<WheelGoes> {
-    match (mode.reads(), mode.alt_screen && mode.program) {
+    match (mode.reads(), mode.alt_screen) {
         _ if shift => Some(WheelGoes::History),
         (true, _) => Some(WheelGoes::Reports),
         (false, true) => mode.alternate_scroll.then_some(WheelGoes::Arrows),
@@ -493,15 +489,8 @@ mod tests {
         assert_eq!(scroll_key("a", SHIFT, false), None);
     }
 
-    const CLICKS: MouseMode = MouseMode {
-        clicks: true,
-        drags: false,
-        motion: false,
-        sgr: true,
-        alt_screen: false,
-        alternate_scroll: true,
-        program: true,
-    };
+    const CLICKS: MouseMode =
+        MouseMode { clicks: true, drags: false, motion: false, sgr: true, alt_screen: false, alternate_scroll: true };
 
     #[test]
     fn a_terminal_gets_a_utf8_locale_only_when_none_is_set() {
@@ -517,7 +506,7 @@ mod tests {
 
     #[test]
     fn the_wheel_belongs_to_programs_that_read_the_mouse_or_use_the_alternate_screen() {
-        let plain = MouseMode { alternate_scroll: true, program: true, ..MouseMode::default() };
+        let plain = MouseMode { alternate_scroll: true, ..MouseMode::default() };
         assert_eq!(wheel_goes(plain, false), Some(WheelGoes::History), "a shell's prompt: the history");
         assert_eq!(wheel_goes(CLICKS, false), Some(WheelGoes::Reports), "Claude Code's full-screen view");
         assert_eq!(wheel_goes(MouseMode { alt_screen: true, ..CLICKS }, false), Some(WheelGoes::Reports));
@@ -534,16 +523,6 @@ mod tests {
         for mode in [CLICKS, alt, MouseMode { clicks: false, ..alt }, MouseMode::default()] {
             assert_eq!(wheel_goes(mode, true), Some(WheelGoes::History), "{mode:?}");
         }
-    }
-
-    /// A program that exited with the mouse or the alternate screen on leaves the modes at the
-    /// prompt: there they ask for nothing, so the wheel scrolls the history and a click selects.
-    #[test]
-    fn modes_left_on_at_a_prompt_ask_for_nothing() {
-        let left = MouseMode { alt_screen: true, program: false, ..CLICKS };
-        assert_eq!(wheel_goes(left, false), Some(WheelGoes::History));
-        assert!(!press_is_the_programs(left, Mods::default()));
-        assert_eq!(mouse_report(Pointer::Wheel { up: true }, 0, 0, Mods::default(), left), None);
     }
 
     #[test]

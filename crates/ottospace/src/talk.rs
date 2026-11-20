@@ -765,8 +765,9 @@ impl Workspace {
                     let height = this.cell.height;
                     if let Some(agent) = this.drawer.agents.get_mut(&subject) {
                         // No cell here: a program that reads the mouse hears the wheel at the top left.
-                        let (at, mods) = (Default::default(), crate::mods(e.modifiers));
-                        agent.terminal.wheel(e.delta.pixel_delta(height).y.into(), height.into(), at, mods);
+                        let mods = crate::mods(e.modifiers);
+                        let dy = crate::terminal::wheel_dy(e.delta.pixel_delta(height), mods.shift);
+                        agent.terminal.wheel(dy, height.into(), Default::default(), mods);
                         cx.notify();
                     }
                 }

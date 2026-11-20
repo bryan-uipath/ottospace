@@ -165,6 +165,8 @@ pub struct Terminal {
     input: EventLoopSender,
     grid: Grid,
     wheel: Wheel,
+    /// Where the wheel's part line was kept for.
+    wheel_to: Option<WheelGoes>,
     /// The process started in the PTY (the shell, or `login` wrapping it), and the PTY's master
     /// side: to ask what runs besides the shell.
     child: u32,
@@ -179,10 +181,6 @@ pub struct Terminal {
     touched: std::cell::Cell<bool>,
     /// The selection's text as last made: output that changes it clears the selection.
     kept: std::cell::RefCell<Option<String>>,
-    /// The pane had the keyboard when last drawn: a focus report goes once a change.
-    focused: std::cell::Cell<bool>,
-    /// Its child is the program itself (`run`, `edit`), not a shell that runs programs.
-    direct: bool,
 }
 
 /// A command waiting for the shell's prompt, and when the terminal's output last came.
@@ -204,7 +202,7 @@ impl Terminal {
         // `$OTTOSPACE_SHELL` replaces the login shell. Tests use it: a login shell with a heavy
         // profile can take a minute to reach a prompt on a busy machine.
         let shell = std::env::var("OTTOSPACE_SHELL").ok().map(|program| tty::Shell::new(program, Vec::new()));
-        Self::start(shell, vars, cwd, history, false)
+        Self::start(shell, vars, cwd, history)
     }
 
     /// Runs `program` with `args` through the user's login shell, for its `PATH`:
@@ -242,7 +240,7 @@ impl Terminal {
         };
         let mut argv = vec![flags.to_string(), script.to_string(), name.to_string()];
         argv.extend(args);
-        Self::start(Some(tty::Shell::new(shell, argv)), vars, cwd, None, true)
+        Self::start(Some(tty::Shell::new(shell, argv)), vars, cwd, None)
     }
 
     fn start(
@@ -250,7 +248,6 @@ impl Terminal {
         vars: &[(&str, String)],
         cwd: Option<&str>,
         history: Option<&History>,
-        direct: bool,
     ) -> io::Result<Self> {
         let grid = Grid { cols: 80, rows: 24 };
         let shared = Arc::new(Shared::default());
@@ -279,13 +276,14 @@ impl Terminal {
         let _ = shared.input.set(input.clone());
         event_loop.spawn();
         let (typed, offered) = (typed.into(), offered.into());
-        let (touched, kept, focused) = (Default::default(), Default::default(), Default::default());
+        let (touched, kept) = (Default::default(), Default::default());
         Ok(Self {
             term,
             shared,
             input,
             grid,
             wheel: Wheel::default(),
+            wheel_to: None,
             child,
             pty: master,
             typed,
@@ -293,8 +291,6 @@ impl Terminal {
             opened,
             touched,
             kept,
-            focused,
-            direct,
         })
     }
 
@@ -415,6 +411,10 @@ impl Terminal {
     pub fn wheel(&mut self, dy: f32, line_height: f32, at: CellPoint, mods: Mods) {
         let mode = self.mouse_mode();
         let Some(goes) = wheel_goes(mode, mods.shift) else { return };
+        // A part line kept for one place is not spent in another (⇧ pressed mid-scroll).
+        if self.wheel_to.replace(goes) != Some(goes) {
+            self.wheel = Wheel::default();
+        }
         let lines = self.wheel.lines(dy, line_height);
         let up = lines > 0;
         let each = match goes {
@@ -431,8 +431,6 @@ impl Terminal {
     /// What the program asked of the mouse and the wheel.
     pub fn mouse_mode(&self) -> MouseMode {
         let mode = *self.term.lock().mode();
-        // Asked of the processes only when a mode is on: a mouse move comes here too.
-        let asks = mode.intersects(TermMode::MOUSE_MODE | TermMode::ALT_SCREEN);
         MouseMode {
             clicks: mode.contains(TermMode::MOUSE_REPORT_CLICK),
             drags: mode.contains(TermMode::MOUSE_DRAG),
@@ -440,28 +438,13 @@ impl Terminal {
             sgr: mode.contains(TermMode::SGR_MOUSE),
             alt_screen: mode.contains(TermMode::ALT_SCREEN),
             alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
-            program: asks && self.program_in_front(),
         }
     }
 
-    /// A program runs in front of the shell: one this terminal started itself (`run`, `edit`), or
-    /// one the shell runs now. At a prompt, none.
-    fn program_in_front(&self) -> bool {
-        (self.direct && !self.exited()) || self.running().is_some_and(|work| !work.background)
-    }
-
-    /// Tells a program that reads the mouse what the pointer did at `at`; false if it took nothing.
-    pub fn report(&self, pointer: Pointer, at: CellPoint, mods: Mods) -> bool {
-        let report = mouse_report(pointer, at.col, at.row, mods, self.mouse_mode());
-        report.map(|bytes| self.send(bytes)).is_some()
-    }
-
-    /// The pane got or lost the keyboard: a program that asked (DECSET 1004) hears `CSI I` or
-    /// `CSI O`, once a change.
-    pub fn set_focus(&self, on: bool) {
-        if self.focused.replace(on) != on && self.term.lock().mode().contains(TermMode::FOCUS_IN_OUT) {
-            self.send(if on { b"\x1b[I".to_vec() } else { b"\x1b[O".to_vec() });
-        }
+    /// Tells a program that reads the mouse what the pointer did at `at`, by the modes it had
+    /// (`mode`, read once for the event); false if it took nothing.
+    pub fn report(&self, pointer: Pointer, at: CellPoint, mods: Mods, mode: MouseMode) -> bool {
+        mouse_report(pointer, at.col, at.row, mods, mode).map(|bytes| self.send(bytes)).is_some()
     }
 
     /// Bytes for the program that are not typing: a report, the wheel's arrows.
@@ -964,6 +947,12 @@ fn colour(color: Color) -> u32 {
             u8::try_from(name as usize).ok().filter(|i| *i < 16).map_or(palette::FOREGROUND, palette::xterm)
         }
     }
+}
+
+/// A wheel's move in points: up and down, or with ⇧ the sideways move macOS makes of a mouse
+/// wheel's turn then.
+pub(crate) fn wheel_dy(moved: gpui::Point<Pixels>, shift: bool) -> f32 {
+    f32::from(if shift && moved.y == px(0.) { moved.x } else { moved.y })
 }
 
 /// A key for a terminal's program, as a pane's, the drawer agent's and the editor's go: a scroll

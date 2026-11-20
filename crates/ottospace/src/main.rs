@@ -4941,13 +4941,14 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let height = self.cell.height;
-        // Over a cell, for a program that reads the mouse; the socket's wheel names none: the top left.
-        let (cell, mods) = at.and_then(|(at, m)| Some((self.cell_under(id, at)?, crate::mods(m)))).unwrap_or_default();
-        // macOS turns ⇧ and a mouse wheel into a sideways scroll: that is the wheel here too.
-        let moved = delta.pixel_delta(height);
-        let dy = if mods.shift && moved.y == px(0.) { moved.x } else { moved.y };
+        // Over a cell, for a program that reads the mouse. The socket's `scroll` names none: it
+        // moves the history, as ⇧ and the wheel do.
+        let history = Mods { shift: true, ..Mods::default() };
+        let under = |(at, m)| Some((self.cell_under(id, at)?, crate::mods(m)));
+        let (cell, mods) = at.and_then(under).unwrap_or((CellPoint::default(), history));
+        let dy = terminal::wheel_dy(delta.pixel_delta(height), mods.shift);
         if let Some(terminal) = self.terminals.get_mut(&id) {
-            terminal.wheel(dy.into(), height.into(), cell, mods);
+            terminal.wheel(dy, height.into(), cell, mods);
             cx.notify();
         }
     }
@@ -4966,10 +4967,7 @@ impl Workspace {
             return;
         }
         // A program that reads the mouse gets the press, unless ⇧ or ⌥ is held: those select.
-        let mods = crate::mods(event.modifiers);
-        if let Some(terminal) = self.terminals.get(&id).filter(|t| press_is_the_programs(t.mouse_mode(), mods)) {
-            terminal.report(Pointer::Press(Button::Left), at, mods);
-            self.reporting = Some((id, Button::Left, at));
+        if self.terminal_press(id, at, Button::Left, event.modifiers) {
             return cx.notify();
         }
         if let Some(terminal) = self.terminals.get(&id) {
@@ -4979,22 +4977,36 @@ impl Workspace {
         }
     }
 
+    /// A press for a program that reads the mouse, by the modes it has now: reported, and its
+    /// button followed until it comes up. One button at a time; false if the program took none.
+    fn terminal_press(&mut self, id: PaneId, at: CellPoint, button: Button, modifiers: Modifiers) -> bool {
+        let mods = crate::mods(modifiers);
+        let Some(terminal) = self.terminals.get(&id).filter(|_| self.reporting.is_none()) else { return false };
+        let mode = terminal.mouse_mode();
+        let taken = press_is_the_programs(mode, mods) && terminal.report(Pointer::Press(button), at, mods, mode);
+        if taken {
+            self.reporting = Some((id, button, at));
+        }
+        taken
+    }
+
     /// The right or middle button on a terminal: a program that reads the mouse gets it.
     fn terminal_button(&mut self, id: PaneId, event: &MouseDownEvent, button: Button, cx: &mut Context<Self>) {
-        let (Some(at), mods) = (self.cell_under(id, event.position), crate::mods(event.modifiers)) else { return };
-        if let Some(terminal) = self.terminals.get(&id).filter(|t| press_is_the_programs(t.mouse_mode(), mods)) {
-            terminal.report(Pointer::Press(button), at, mods);
-            self.reporting = Some((id, button, at));
+        if let Some(at) = self.cell_under(id, event.position)
+            && self.terminal_press(id, at, button, event.modifiers)
+        {
             cx.notify();
         }
     }
 
-    /// The button a program got the press of comes up, anywhere: it hears the release.
-    fn terminal_release(&mut self, event: &gpui::MouseUpEvent) {
-        let Some((id, button, at)) = self.reporting.take() else { return };
-        let at = self.cell_under(id, event.position).unwrap_or(at);
+    /// The button a program got the press of comes up, anywhere (outside the window too): it hears
+    /// the release. Another button's release is not it.
+    fn terminal_release(&mut self, up: Button, position: Option<gpui::Point<Pixels>>, modifiers: Modifiers) {
+        let Some((id, button, at)) = self.reporting.filter(|(_, button, _)| *button == up) else { return };
+        self.reporting = None;
+        let at = position.and_then(|p| self.cell_under(id, p)).unwrap_or(at);
         if let Some(terminal) = self.terminals.get(&id) {
-            terminal.report(Pointer::Release(button), at, crate::mods(event.modifiers));
+            terminal.report(Pointer::Release(button), at, crate::mods(modifiers), terminal.mouse_mode());
         }
     }
 
@@ -5008,7 +5020,7 @@ impl Workspace {
                 return;
             };
             if let Some(terminal) = self.terminals.get(&id) {
-                terminal.report(Pointer::Move(Some(button)), at, mods);
+                terminal.report(Pointer::Move(Some(button)), at, mods, terminal.mouse_mode());
             }
             self.reporting = Some((id, button, at));
             return;
@@ -5016,13 +5028,16 @@ impl Workspace {
         if event.pressed_button.is_some() {
             return;
         }
-        let over = self.cells.iter().find(|(_, c)| c.get().contains(&event.position)).map(|(id, _)| *id);
+        // Only a pane on show: a hidden tab's keeps the bounds it was last drawn at.
+        let shown = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
+        let under = |id: &&PaneId| self.cells.get(id).is_some_and(|c| c.get().contains(&event.position));
+        let over = shown.iter().find(under).copied();
         let Some((id, at)) = over.and_then(|id| Some((id, self.cell_under(id, event.position)?))) else { return };
         if self.hovered.replace((id, at.row, at.col)) == Some((id, at.row, at.col)) {
             return;
         }
-        if let Some(terminal) = self.terminals.get(&id).filter(|t| t.mouse_mode().motion) {
-            terminal.report(Pointer::Move(None), at, mods);
+        if let Some(terminal) = self.terminals.get(&id) {
+            terminal.report(Pointer::Move(None), at, mods, terminal.mouse_mode());
         }
     }
 
@@ -6949,7 +6964,6 @@ impl Workspace {
             let mode = self.model.mode();
             let has_keys =
                 self.model.focused == Some(id) && matches!(mode, Mode::Normal | Mode::Visual) && !self.model.keys;
-            terminal.set_focus(has_keys);
             let grid = canvas(
                 |_, _, _| {},
                 move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, has_keys, window, cx),
@@ -8251,7 +8265,7 @@ impl Workspace {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, e: &gpui::MouseUpEvent, window, cx| {
-                    this.terminal_release(e);
+                    this.terminal_release(Button::Left, Some(e.position), e.modifiers);
                     (this.dragging, this.held) = (None, false);
                     // A reorder released anywhere but its list or row: put back.
                     this.reorder_cancel(window, cx);
@@ -8259,13 +8273,26 @@ impl Workspace {
                     this.bug_release(e.position, window, cx);
                 }),
             )
-            .on_mouse_up(MouseButton::Right, cx.listener(|this, e: &gpui::MouseUpEvent, _, _| this.terminal_release(e)))
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|this, e: &gpui::MouseUpEvent, _, _| {
+                    this.terminal_release(Button::Right, Some(e.position), e.modifiers)
+                }),
+            )
             .on_mouse_up(
                 MouseButton::Middle,
-                cx.listener(|this, e: &gpui::MouseUpEvent, _, _| this.terminal_release(e)),
+                cx.listener(|this, e: &gpui::MouseUpEvent, _, _| {
+                    this.terminal_release(Button::Middle, Some(e.position), e.modifiers)
+                }),
             )
-            // Released outside the window: a reorder is put back too.
-            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, window, cx| this.reorder_cancel(window, cx)))
+            // Released outside the window: a reorder is put back too, and a program hears its release.
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, e: &gpui::MouseUpEvent, window, cx| {
+                    this.terminal_release(Button::Left, None, e.modifiers);
+                    this.reorder_cancel(window, cx)
+                }),
+            )
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {

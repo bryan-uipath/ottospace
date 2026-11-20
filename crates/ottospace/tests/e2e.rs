@@ -3104,11 +3104,11 @@ fn a_terminal_wheel_goes_to_the_program_that_asks_and_shift_keeps_the_history() 
     wheel(-1.0, &[]);
     assert_eq!(otto.wait_for("the arrow", |o| line(o, "got3:^[")), "got3:^[[B");
 
-    // Modes a program left on ask for nothing at the prompt: the wheel scrolls the history.
+    // Modes a program left on at the prompt: ⇧ and the wheel still scroll the history.
     otto.call(json!({"cmd": "type", "text": "printf '\\033[?1000h\\033[?1006h'; echo left-$((1+1))\r"}));
     otto.wait_for("the modes left on", |o| line(o, "left-2"));
     let before = offset(&otto);
-    wheel(2.0, &[]);
+    wheel(2.0, &["shift"]);
     otto.wait_for("the history", |o| (offset(o) == before + 2).then_some(()));
 }
 
@@ -3167,11 +3167,6 @@ fn a_terminal_program_that_asks_for_the_mouse_gets_it_and_shift_or_option_select
     }
     otto.call(json!({"cmd": "key", "keys": "escape"}));
     otto.call(json!({"cmd": "type", "text": "printf '\\033[?1000l\\033[?1006l'\r"}));
-
-    // Focus reports (1004): another pane takes the keyboard, the program hears it go.
-    read("\\033[?1004h", "\\033[?1004l", 3);
-    otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
-    assert_eq!(otto.wait_for("focus out", got), "got:[O");
 }
 
 #[test]
