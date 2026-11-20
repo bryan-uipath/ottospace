@@ -7,6 +7,7 @@ use gpui::{
 };
 use ottospace_core::calendar::DayStep;
 use ottospace_core::commands::{Command, FeatureChoice, Palette, TaskChoice};
+use ottospace_core::features::Stage;
 use ottospace_core::keys::FilterKey;
 use ottospace_core::{Action, theme};
 
@@ -240,19 +241,30 @@ impl Workspace {
     }
 
     /// The rows as drawn, for the state snapshot: each command's id, name, group and key. While
-    /// it lists spaces: Move Tab to…'s id, the space's title, "Move to" and no key.
+    /// it lists spaces: Move Tab to…'s id, the space's title, "Move to" and no key. A flag's row
+    /// adds its description, stage and whether it is on. `rect`, `group_rect` (null: no group
+    /// column) and `stage_rect` (null: no stage icon): where they were drawn.
     pub fn palette_rows(&self, cx: &App) -> Option<serde_json::Value> {
         let palette = self.model.palette.as_ref()?;
         let keymap = cx.key_bindings();
-        let row = |(command, group, name, key)| {
+        let drawn =
+            |part: &str, at: usize| DRAWN.with_borrow(|drawn| drawn.get(&format!("{part}:{at}")).map(|b| rect(*b)));
+        let row = |(at, item): (usize, Item)| {
+            let flag = item.flag.as_ref();
             serde_json::json!({
-                "command": command,
-                "name": name,
-                "group": group,
-                "key": key,
+                "command": item.command,
+                "name": item.name,
+                "group": item.group,
+                "key": item.key,
+                "description": flag.map(|choice| choice.feature.description()),
+                "stage": flag.map(|choice| choice.feature.stage().label()),
+                "on": flag.map(|choice| choice.on),
+                "rect": drawn("row", at),
+                "group_rect": drawn("group", at),
+                "stage_rect": drawn("stage", at),
             })
         };
-        Some(palette_items(palette, &keymap.borrow()).into_iter().map(row).collect())
+        Some(palette_items(palette, &keymap.borrow()).into_iter().enumerate().map(row).collect())
     }
 
     /// The palette: a box near the top, over the dimmed workspace. A click outside closes it.
@@ -262,16 +274,26 @@ impl Workspace {
         if SHOWN.replace(Some(now.clone())) != Some(now) {
             self.bars.scroll_to_item("palette", palette.selected);
         }
+        DRAWN.with_borrow_mut(|drawn| drawn.clear());
+        // The group column only where rows may differ in it: the commands, not tasks or flags.
+        let groups = palette.tasks.is_none() && palette.features.is_none();
         let items = palette_items(palette, &cx.key_bindings().borrow());
-        let rows = items.into_iter().enumerate().map(|(i, (_, group, name, key))| {
-            dialog::filter_row(("command", i), i == palette.selected)
-                .child(div().w(px(72.)).flex_none().text_xs().text_color(rgb(theme::MUTED)).child(group))
-                .child(crate::cut_text(name).flex_1())
-                .children(key.map(|key| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(key)))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.dispatch(Action::PaletteChoose { index: Some(i) }, this.input, window, cx);
-                }))
-                .into_any_element()
+        let rows = items.into_iter().enumerate().map(|(i, item)| {
+            let row = dialog::filter_row(("command", i), i == palette.selected).relative().child(note("row", i));
+            let row = row.when(groups, |row| {
+                let group = div().relative().w(px(72.)).flex_none().text_xs().text_color(rgb(theme::MUTED));
+                row.child(group.child(item.group).child(note("group", i)))
+            });
+            let row = match &item.flag {
+                Some(choice) => flag_row(row, i, choice),
+                None => row
+                    .child(crate::cut_text(item.name).flex_1())
+                    .children(item.key.map(|key| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(key))),
+            };
+            row.on_click(cx.listener(move |this, _, window, cx| {
+                this.dispatch(Action::PaletteChoose { index: Some(i) }, this.input, window, cx);
+            }))
+            .into_any_element()
         });
         let rows = rows.collect();
         let tasks = palette.tasks.is_some();
@@ -301,23 +323,72 @@ impl Workspace {
     }
 }
 
-/// The palette's rows: (command, group, name, key). While it lists tasks, each task is a row of
-/// Move Tab to…, under "Move to".
-fn palette_items(palette: &Palette, keymap: &Keymap) -> Vec<(Command, &'static str, String, Option<String>)> {
+thread_local! {
+    /// Where each part of a palette row was last drawn, by `<part>:<row>`: for the state.
+    static DRAWN: std::cell::RefCell<std::collections::BTreeMap<String, gpui::Bounds<gpui::Pixels>>> =
+        std::cell::RefCell::default();
+}
+
+/// An invisible layer over its parent that notes where it was drawn, as `<part>:<row>`.
+fn note(part: &str, row: usize) -> gpui::AnyElement {
+    let key = format!("{part}:{row}");
+    let note = move |bounds, _: &mut Window, _: &mut App| DRAWN.with_borrow_mut(|drawn| drawn.insert(key, bounds));
+    gpui::canvas(note, |_, _, _, _| {}).absolute().top_0().left_0().size_full().into_any_element()
+}
+
+/// A flag's row: the stage's icon, its title, id and key over its description, then On or Off.
+fn flag_row(row: gpui::Stateful<gpui::Div>, i: usize, choice: &FeatureChoice) -> gpui::Stateful<gpui::Div> {
+    let feature = choice.feature;
+    let title = div()
+        .flex()
+        .items_center()
+        .gap(px(theme::SPACE_1_5))
+        .child(div().flex_none().child(feature.title()))
+        .child(div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(feature.name()))
+        .children(feature.key().map(|key| ui::pill(key, ui::Pill::Key { lit: false, small: true }).flex_none()));
+    let (state, colour) = if choice.on { ("On", theme::PRIMARY) } else { ("Off", theme::MUTED) };
+    // The title's line: the icon and On or Off sit level with it.
+    let line = || div().h(px(ui::TITLE_LINE)).flex_none().flex().items_center();
+    row.h(px(ui::TWO_LINE_ROW))
+        .py(px(theme::SPACE_1_5))
+        .items_start()
+        .child(line().w(px(theme::ICON_SM)).children(stage_icon(i, feature.stage())))
+        .child(ui::two_lines(title, feature.description()).flex_1())
+        .child(line().w(px(24.)).justify_end().text_xs().text_color(rgb(colour)).child(state))
+}
+
+/// A flask for an Experimental flag, its stage on hover; a Preview one has none.
+fn stage_icon(i: usize, stage: Stage) -> Option<gpui::Stateful<gpui::Div>> {
+    let icon = ui::stage_icon(stage)?;
+    let tip = move |_: &mut Window, cx: &mut App| gpui::AnyView::from(cx.new(|_| Tooltip(stage.label().into())));
+    Some(div().id(("stage", i)).relative().child(icon).child(note("stage", i)).tooltip(tip))
+}
+
+/// A palette row: its command, group and name, its key, and the flag it turns while it lists flags.
+struct Item {
+    command: Command,
+    group: &'static str,
+    name: String,
+    key: Option<String>,
+    flag: Option<FeatureChoice>,
+}
+
+/// The palette's rows. While it lists tasks, each task is a row of Move Tab to…, under "Move to";
+/// while it lists flags, each a row of Features….
+fn palette_items(palette: &Palette, keymap: &Keymap) -> Vec<Item> {
+    let item = |command, group, name, key, flag| Item { command, group, name, key, flag };
     if palette.tasks.is_some() {
-        let task = |choice: &TaskChoice| (Command::MoveTabToTask, "Move to", choice.title.clone(), None);
+        let task = |choice: &TaskChoice| item(Command::MoveTabToTask, "Move to", choice.title.clone(), None, None);
         return palette.task_matches().into_iter().map(task).collect();
     }
-    // Listing flags: each a row of Features…, its name, stage and description, and on or off.
     if palette.features.is_some() {
         let flag = |choice: &FeatureChoice| {
-            let (feature, state) = (choice.feature, if choice.on { "on" } else { "off" });
-            let name = format!("{} · {} — {}", feature.name(), feature.stage().label(), feature.description());
-            (Command::Features, "Features", name, Some(state.to_string()))
+            let (title, key) = (choice.feature.title().to_string(), choice.feature.key().map(String::from));
+            item(Command::Features, "Features", title, key, Some(choice.clone()))
         };
         return palette.feature_matches().into_iter().map(flag).collect();
     }
-    let command = |c: Command| (c, c.group().label(), c.name().to_string(), key_of(keymap, c));
+    let command = |c: Command| item(c, c.group().label(), c.name().to_string(), key_of(keymap, c), None);
     palette.matches().into_iter().map(command).collect()
 }
 

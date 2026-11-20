@@ -1009,8 +1009,16 @@ export interface PaletteRow {
   name: string;
   /** e.g. `Panes`, `Developer`. */
   group: string;
-  /** Its first key, as the menu shows it (`⌘D`), or null. */
+  /** Its first key, as the menu shows it (`⌘D`), or null. A flag's own key, e.g. `⌘J`. */
   key: string | null;
+  /** While it lists flags: what the flag does, its stage (`Experimental`) and whether it is on; else null. */
+  description: string | null;
+  stage: string | null;
+  on: boolean | null;
+  /** Where the row, its group column and its stage icon were drawn; null: not drawn. */
+  rect: Rect | null;
+  group_rect: Rect | null;
+  stage_rect: Rect | null;
 }
 
 /** A terminal a quit would end something in. */

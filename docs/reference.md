@@ -467,8 +467,10 @@ Developer group). ↑/↓ or ⌃N/⌃P move, a click or ↵ runs the command as 
 or a click outside closes it. A command that nothing matches keeps the box open.
 
 Features… (App, also ottospace ▸ Features…) turns the box into a list of the [feature
-flags](#features), each with its stage, description and whether it is on; ↵ or a click turns
-the flag the other way, writes it to `settings.json` and applies at once. A command of a feature
+flags](#features): each row its name, its id (`code_city`) and key, a flask for an Experimental
+one (its stage on hover), its description below, and On or Off at the right. Typing the name or
+the id filters it. ↵ or a click turns the flag the other way, writes it to `settings.json` and
+applies at once. This list and Move Tab to…'s show no group column: all their rows are of one. A command of a feature
 that is off is not listed.
 
 Open Settings (App, also ottospace ▸ Open Settings, ⌘,) opens `settings.json` in your editor in a
@@ -1412,7 +1414,7 @@ Parts that are not ready to be on for everyone are behind a flag, in `features` 
 `{ "features": { "marks": true } }`. Off, a feature is absent, not greyed out: no rail cell, no
 section, its keys do nothing, its commands and menu items are not listed, and its socket requests
 answer `feature off: <name>`. What it keeps on disk stays: turned on again, it is all there.
-Palette ▸ Features… lists each flag with its stage and whether it is on; choosing one turns it the
+Palette ▸ Features… lists each flag with its name, id, stage, description and whether it is on; choosing one turns it the
 other way, writes it to `settings.json` and applies at once.
 
 A flag is temporary and about readiness: it goes when its feature is stable, and a setting of it
@@ -1420,15 +1422,15 @@ then does nothing (a toast says so). A preference is a normal setting.
 
 | Feature | Stage | Default | What it is |
 | --- | --- | --- | --- |
-| `marks` | Experimental | off | Marks: name a pane or a tab, and go back to it with a letter |
-| `apps_section` | Experimental | off | The Apps section: the Dock's apps, pins, Not running and All apps |
-| `transcripts` | Experimental | off | Transcripts (⌘⌃T): an app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file |
-| `slots` | Experimental | off | Slots: a pane that keeps its place and waits for a window you name (⋯ on an app pane's header) |
-| `agent_mode` | Experimental | off | Agent mode (⌘⌃V): let a workspace's task see an app pane, from the robot in its header |
-| `multi_monitor` | Experimental | off | Multi-monitor (⌘⇧O): fold a tab out to its own window on another display |
-| `overlay_panels` | Experimental | off | Overlay panels (an experiment): the sidebar and the drawer float over the panes, moving nothing, and close after use |
-| `decisions` | Experimental | off | Decisions (⌘J): a workspace that shows what waits on you, one question at a time |
-| `code_city` | Experimental | off | Code city: an empty tab of a task draws the task's folder as a 3D city, its files where they were last time |
+| `marks` | Experimental | off | Marks: Name a pane or a tab, and go back to it with a letter |
+| `apps_section` | Experimental | off | Apps section: The Dock's apps, pins, Not running and All apps |
+| `transcripts` | Experimental | off | Transcripts (⌘⌃T): An app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file |
+| `slots` | Experimental | off | Slots: A pane that keeps its place and waits for a window you name (⋯ on an app pane's header) |
+| `agent_mode` | Experimental | off | Agent mode (⌘⌃V): Let a workspace's task see an app pane, from the robot in its header |
+| `multi_monitor` | Experimental | off | Multi-monitor (⌘⇧O): Fold a tab out to its own window on another display |
+| `overlay_panels` | Experimental | off | Overlay panels: The sidebar and the drawer float over the panes, moving nothing, and close after use |
+| `decisions` | Experimental | off | Decisions (⌘J): A workspace that shows what waits on you, one question at a time |
+| `code_city` | Experimental | off | Code city: An empty tab of a task draws the task's folder as a 3D city, its files where they were last time |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,

@@ -205,11 +205,17 @@ impl Palette {
         rank(self.query.text()).into_iter().filter(|command| !self.hidden.contains(command)).collect()
     }
 
-    /// The flags the query matches, by name or description, in their order.
+    /// The flags the query matches, by id, title or description, best first, ties in their order.
     pub fn feature_matches(&self) -> Vec<&FeatureChoice> {
         let query = letters(self.query.text());
-        let named = |c: &&FeatureChoice| score(&query, &format!("{} {}", c.feature.name(), c.feature.description()));
-        self.features.iter().flatten().filter(|choice| named(choice).is_some()).collect()
+        let named = |c: &FeatureChoice| {
+            let f = c.feature;
+            score(&query, &format!("{} {} {}", f.name(), f.title(), f.description()))
+        };
+        let mut scored: Vec<(i64, &FeatureChoice)> =
+            self.features.iter().flatten().filter_map(|choice| Some((named(choice)?, choice))).collect();
+        scored.sort_by_key(|(score, _)| -score);
+        scored.into_iter().map(|(_, choice)| choice).collect()
     }
 
     /// The tasks the query matches, best first, ties in their order; none while it lists commands.
