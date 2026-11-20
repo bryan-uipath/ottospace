@@ -84,7 +84,8 @@ impl Reader {
 /// stand-in: never the user's gh.
 pub fn gh() -> Result<PathBuf, &'static str> {
     let found = match std::env::var_os("OTTOSPACE_E2E") {
-        Some(_) => std::env::var_os("OTTOSPACE_GH").map(PathBuf::from).filter(|p| p.is_file()),
+        // Absolute: a bare name would be looked up in `PATH`, and could be the user's gh.
+        Some(_) => std::env::var_os("OTTOSPACE_GH").map(PathBuf::from).filter(|p| p.is_absolute() && p.is_file()),
         // An app started from the Dock has a short PATH: Homebrew's folders too.
         None => {
             let path: Vec<PathBuf> =

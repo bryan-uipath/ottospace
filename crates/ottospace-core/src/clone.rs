@@ -69,21 +69,21 @@ pub fn valid_name(name: &str) -> bool {
         && !name.ends_with(".git")
 }
 
-/// What the user typed or pasted, as a repository: `owner/name`, `https://github.com/owner/name`
-/// (`.git`, a `/` after it), or `git@github.com:owner/name.git`. Anything else: none.
+/// What the user typed or pasted, as a repository: `owner/name(.git)`, or a github.com URL as a
+/// remote's (`prs::github_path`: `https://`, `git@`, `ssh://`). Anything else: none.
 pub fn parse(text: &str) -> Option<Remote> {
     let text = text.trim();
     if text.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return None;
     }
-    let path = match (text.strip_prefix("https://github.com/"), text.strip_prefix("git@github.com:")) {
-        (Some(path), _) => path.strip_suffix('/').unwrap_or(path),
-        (_, Some(path)) => path,
-        _ if text.contains(':') => return None,
-        _ => text,
+    let (owner, name) = match crate::prs::github_path(text) {
+        Some(path) => path,
+        None if text.contains(':') => return None,
+        None => {
+            let path = text.strip_suffix(".git").unwrap_or(text);
+            path.split_once('/')?
+        }
     };
-    let path = path.strip_suffix(".git").unwrap_or(path);
-    let (owner, name) = path.split_once('/')?;
     Remote::new(owner, name)
 }
 
@@ -109,8 +109,30 @@ pub enum Failure {
     Said(String),
 }
 
+/// What a toast says of a clone that ended, in the state every reply carries: no name, no path.
+pub const CLONED: &str = "Cloned: listed in Repos, its row selected";
+
 impl Failure {
-    /// The failure in plain words, for the dialog or a toast.
+    /// The failure for a toast: no repository's name or path, which are the user's data (the
+    /// dialog, drawn only, says them).
+    pub fn public(&self) -> String {
+        match self {
+            Failure::DirMissing => "clone_dir does not exist: From GitHub… makes it on your next ↵".into(),
+            Failure::Exists => "Already there: nothing was cloned".into(),
+            Failure::Cancelled => "Cancelled the clone: its folder was removed".into(),
+            Failure::Said(_) => {
+                let plain = self.explain(&Remote { owner: String::new(), name: String::new() }, "");
+                match plain.starts_with("Not found") {
+                    true => "Not found on GitHub, or not yours to read".into(),
+                    false if plain.starts_with("gh: ") => "The clone failed: From GitHub… says why".into(),
+                    false => plain,
+                }
+            }
+            Failure::NoGh => self.explain(&Remote { owner: String::new(), name: String::new() }, ""),
+        }
+    }
+
+    /// The failure in plain words, for the dialog.
     pub fn explain(&self, remote: &Remote, dest: &str) -> String {
         match self {
             Failure::NoGh => "gh is not installed: install it (brew install gh), then gh auth login".into(),
@@ -204,6 +226,7 @@ mod tests {
             "https://github.com/octo/hello.git",
             "git@github.com:octo/hello.git",
             "git@github.com:octo/hello",
+            "ssh://git@github.com/octo/hello",
         ] {
             assert_eq!(slug(text).as_deref(), Some("octo/hello"), "{text}");
         }
@@ -246,7 +269,6 @@ mod tests {
             "https://github.com/o/x/tree/main",
             "https://github.com/o",
             "git@evil.com:o/x.git",
-            "ssh://git@github.com/o/x",
             "file:///tmp/x",
             "ext::sh -c id",
             "o:x/y",

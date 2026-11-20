@@ -3892,6 +3892,9 @@ pub struct Model {
     pub cloning: Option<crate::clone::Job>,
     #[serde(skip)]
     clone_asks: u64,
+    /// Why the last clone failed while the dialog was hidden: said when it opens again.
+    #[serde(skip)]
+    clone_last: Option<String>,
     /// What a mark waits for, while one has the keyboard. Also a workbook's name being typed.
     pub mark_input: Option<MarkInput>,
     /// The draft in the right bar, while there is one: `compose` is its title.
@@ -4133,6 +4136,7 @@ impl Default for Model {
             clone: None,
             cloning: None,
             clone_asks: 0,
+            clone_last: None,
             mark_input: None,
             capture: None,
             bug: None,
@@ -4860,7 +4864,8 @@ impl Model {
         let quick = matches!(action, Action::QuickOpen { .. });
         let opens = opens || (quick && self.compose.is_none());
         let under = quick && (self.picker.is_some() || self.palette.is_some());
-        let over_other = ((modal || self.palette.is_some()) && picker) || (boxed && opens) || under;
+        let over_other =
+            ((modal || self.palette.is_some() || self.clone.is_some()) && picker) || (boxed && opens) || under;
         // A conversation the user opens takes the drawer from the new task being written.
         let talks = matches!(action, Action::TaskTalk { .. } | Action::TaskCard { .. } | Action::SessionOpen { .. })
             && self.picker.is_none();
@@ -9436,20 +9441,8 @@ impl Model {
     /// repository at `dir` joins the end of the list unless it is listed already, and list mode
     /// selects its first row. Not a repository's own folder: a notice.
     fn repo_add(&mut self, dir: String, found: Vec<Repo>, effects: &mut Vec<Effect>) {
-        let worktree = self.repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == dir));
-        // `OTTOSPACE_REPOS`'s folders list their repositories flat, with no entry of their own.
-        let fixed = self.repo_dirs.fixed && self.repos.iter().any(|r| r.path == dir);
-        let repo = found.iter().any(|r| r.path == dir);
-        match self.repo_dirs.may_add(&dir, repo, worktree || fixed) {
-            Err(text) => return effects.push(Effect::Notice { text }),
-            Ok(false) => {}
-            Ok(true) => {
-                self.repo_dirs.dirs.push(repos::RepoDir::new(&dir, &dir));
-                effects.push(Effect::SaveRepos { dirs: self.repo_dirs.dirs.clone() });
-                let found = found.into_iter().filter(|r| r.path == dir);
-                let kept = self.repos.drain(..).filter(|r| r.path != dir);
-                self.repos = repos::arrange(kept.chain(found).collect(), &self.repo_dirs);
-            }
+        if !self.repo_list(dir.clone(), found, effects) {
+            return;
         }
         self.leave(effects);
         self.sidebar = Some(Section::Repos);
@@ -9460,6 +9453,30 @@ impl Model {
         }
         let row = |row: &ListRow| matches!(row, ListRow::Repo(path) | ListRow::RepoGroup(path) if *path == dir);
         self.list = self.list_rows().iter().position(row);
+    }
+
+    /// `repo_add`'s list: the repository at `dir` joins the end unless it is listed already. False:
+    /// it may not (a notice says why).
+    pub(super) fn repo_list(&mut self, dir: String, found: Vec<Repo>, effects: &mut Vec<Effect>) -> bool {
+        let worktree = self.repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == dir));
+        // `OTTOSPACE_REPOS`'s folders list their repositories flat, with no entry of their own.
+        let fixed = self.repo_dirs.fixed && self.repos.iter().any(|r| r.path == dir);
+        let repo = found.iter().any(|r| r.path == dir);
+        match self.repo_dirs.may_add(&dir, repo, worktree || fixed) {
+            Err(text) => {
+                effects.push(Effect::Notice { text });
+                return false;
+            }
+            Ok(false) => {}
+            Ok(true) => {
+                self.repo_dirs.dirs.push(repos::RepoDir::new(&dir, &dir));
+                effects.push(Effect::SaveRepos { dirs: self.repo_dirs.dirs.clone() });
+                let found = found.into_iter().filter(|r| r.path == dir);
+                let kept = self.repos.drain(..).filter(|r| r.path != dir);
+                self.repos = repos::arrange(kept.chain(found).collect(), &self.repo_dirs);
+            }
+        }
+        true
     }
 
     /// The Repos section's rows: each repository's (`repo_rows`), in the list's order; a group's
