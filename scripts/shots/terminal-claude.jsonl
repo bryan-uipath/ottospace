@@ -2,6 +2,6 @@
 # input, a braille spinner, CJK and emoji, each against a column ruler. Glyphs sit on their cells.
 {"cmd":"split"}
 {"cmd":"wait","pattern":"^\\$"}
-{"cmd":"type","text":"clear; {ROOT}/claude-like.sh\r"}
+{"cmd":"type","text":"clear; '{ROOT}/claude-like.sh'\r"}
 {"cmd":"wait","pattern":"^claude-like done$"}
 {"shot":"claude-like"}
