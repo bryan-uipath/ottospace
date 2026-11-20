@@ -17,7 +17,7 @@
 {"cmd":"split","kind":"empty","axis":"down"}
 {"shot":"small-panes"}
 {"tree":"repos/app","files":40}
-{"write":"home/settings.json","text":"{\"repos\": [\"{ROOT}/repos/app\"], \"restore_layout\": false}\n"}
+{"cmd":"repo_add","path":"{ROOT}/repos/app"}
 {"until":"repos_bar.0"}
 {"cmd":"new_tab"}
 {"cmd":"open_repo","path":"{ROOT}/repos/app"}

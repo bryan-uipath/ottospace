@@ -2231,7 +2231,11 @@ fn every_empty_place_shows_the_one_empty_state() {
         let rows = rows(o, prefix);
         for pair in rows.windows(2) {
             let ((_, a), (_, b)) = (pair[0], pair[1]);
-            assert!(a[0] == b[0] && a[1] + a[3] <= b[1] && a[3] == b[3], "one list, in order: {rows:?}");
+            // Lined up, top to bottom, as tall (to a point: rows land on whole points).
+            assert!(
+                a[0] == b[0] && a[1] + a[3] <= b[1] + 1. && (a[3] - b[3]).abs() <= 1.,
+                "one list, in order: {rows:?}"
+            );
         }
         rows
     };
@@ -2247,7 +2251,7 @@ fn every_empty_place_shows_the_one_empty_state() {
     otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
     let tab = list(&otto, "home");
     assert_eq!(names(&tab), ids);
-    assert_eq!(tab[0].1[3], home[0].1[3]);
+    assert!((tab[0].1[3] - home[0].1[3]).abs() <= 1.);
     let floor = area(&otto);
     assert!(tab[0].1[1] + tab[0].1[3] < floor[1] + floor[3] / 2., "{tab:?} over the middle of {floor:?}");
     otto.call(json!({"cmd": "task_new", "line": "Fix the login loop #auth"}));
@@ -2262,7 +2266,7 @@ fn every_empty_place_shows_the_one_empty_state() {
     let own = list(&otto, &format!("empty:{empty}"));
     assert_eq!(names(&own), ["open_app"], "a pane: only what fills it");
     let row = own[0].1;
-    assert_eq!(row[3], home[0].1[3]);
+    assert!((row[3] - home[0].1[3]).abs() <= 1.);
     let (middle, centre) = (pane[1] + pane[3] / 2., row[0] + row[2] / 2.);
     assert!(row[1] + row[3] < middle && row[1] > pane[1], "{row:?} in {pane:?}");
     assert!((centre - (pane[0] + pane[2] / 2.)).abs() < 2., "{row:?} centred in {pane:?}");
