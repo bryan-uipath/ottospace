@@ -1439,7 +1439,7 @@ then does nothing (a toast says so). A preference is a normal setting.
 | `multi_monitor` | Experimental | off | Multi-monitor (⌘⇧O): Fold a tab out to its own window on another display |
 | `overlay_panels` | Experimental | off | Overlay panels: The sidebar and the drawer float over the panes, moving nothing, and close after use |
 | `decisions` | Experimental | off | Decisions (⌘J): A workspace that shows what waits on you, one question at a time |
-| `code_city` | Experimental | off | Code city: An empty tab of a task draws the task's folder as a 3D city, its files where they were last time |
+| `code_city` | Experimental | off | Code city: An empty tab or pane draws its folder (a task's checkout, a workspace's default, a repository's tab) as a 3D city, its files where they were last time |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1488,7 +1488,7 @@ then does nothing (a toast says so). A preference is a normal setting.
     null once closed.
 - `decisions` off: ⌘J is the next task only, no Decisions command or menu item, and one open
   closes. On, see [Decisions](#decisions) (design: [attention/decisions.md](ai/attention/decisions.md)).
-- `code_city` off: an empty tab of a task draws the lattice, and no file list is read. On, see
+- `code_city` off: every empty place draws the lattice, and no file list is read. On, see
   [Code city](#code-city) (design: [code-city/plan.md](ai/code-city/plan.md)).
 
 ### Decisions
@@ -1505,8 +1505,13 @@ Only you open, answer, skip or close it.
 
 ### Code city
 
-With `code_city` on, an empty tab of a task draws the task's checkout as a city in 3D, rendered
-on the GPU, where the lattice was: a folder is a district, a plate stepped up from its parent's
+With `code_city` on, an empty place (see [Empty places](#empty-places)) draws the city of its
+folder, rendered on the GPU, where the lattice was. Its folder is the nearest of: the tab's own (a
+repository's tab, opened from Repos or `open_repo`, keeps its checkout after its last pane
+closes), its space's (a task's checkout, a workspace's default worktree). Only a checkout listed
+in Repos; Home has none and keeps its lattice, and so does a pane under 320 × 220 points. Places
+of one folder and size share one picture, and a folder's files are read once for all of them.
+In the city a folder is a district, a plate stepped up from its parent's
 and outlined, a street apart from its neighbours and a shade lighter per tier (a folder with one
 child is none of its own: `src/main/java` is one district), a file a building on it, edged, its ground sized by its size class (1 up to 2 KB, doubling to 128 KB) and its
 height by its length. A file is where it was the last time: the same files give
@@ -1514,7 +1519,8 @@ the same plan, an edit that keeps a file's size class moves nothing, and a new f
 moves only its own folder
 (design and numbers: [code-city/plan.md](ai/code-city/plan.md)).
 
-- The file an agent of that checkout reads or edits now is tinted in its task's colour: while
+- The file an agent reads or edits now is tinted in its task's colour (in a task's space, that
+  task's agent; elsewhere every task working in that checkout, as the Repos dots count them): while
   the call runs, and after it while the agent still works and has run no other call. A shell
   command lights none. The call names only the last two parts of a path, so two files that share
   them are both lit.

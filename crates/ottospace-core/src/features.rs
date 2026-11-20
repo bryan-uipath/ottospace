@@ -133,7 +133,7 @@ impl Feature {
             }
             Feature::Decisions => "A workspace that shows what waits on you, one question at a time",
             Feature::CodeCity => {
-                "An empty tab of a task draws the task's folder as a 3D city, its files where they were last time"
+                "An empty tab or pane draws its folder (a task's checkout, a workspace's default, a repository's tab) as a 3D city, its files where they were last time"
             }
         }
     }
