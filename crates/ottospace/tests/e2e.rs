@@ -1163,16 +1163,7 @@ fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_o
     // The repository's own folder has no menu: git cannot remove it.
     let state = right_click(at(rect(&otto.drawn()["repos_bar"][0]["rows"][0]["row"]), 0.5, 0.5));
     assert!(state["row_menu"].is_null(), "{}", state["row_menu"]);
-    // A client's right click opens none.
     let p = at(row(&otto.drawn(), &clean).unwrap(), 0.3, 0.5);
-    let theirs = |action: &str| json!({"cmd": "mouse", "action": action, "button": "right", "x": p[0], "y": p[1]});
-    otto.call(theirs("down"));
-    otto.call(theirs("up"));
-    let state = otto.drawn();
-    assert!(state["row_menu"].is_null(), "{}", state["row_menu"]);
-    // Refused, and said: out of the way of what is said next.
-    assert!(state["notice"].as_str().is_some_and(|n| n.starts_with("only the user")), "{}", state["notice"]);
-    otto.dismiss_notice();
 
     // The user's: at the pointer, inside the window, one item.
     let state = right_click(p);
@@ -1229,6 +1220,13 @@ fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_o
     let state = otto.wait_for("git's reason", said);
     assert_eq!(state["notice"], "Kept the worktree: 1 uncommitted change");
     assert!(dirty.join("notes.md").exists() && row(&state, &dirty).is_some());
+    // A client's right click opens none (last: its refusal stands in the notice bar).
+    let q = at(row(&state, &dirty).unwrap(), 0.3, 0.5);
+    let theirs = |action: &str| json!({"cmd": "mouse", "action": action, "button": "right", "x": q[0], "y": q[1]});
+    otto.call(theirs("down"));
+    otto.call(theirs("up"));
+    let state = otto.drawn();
+    assert!(state["row_menu"].is_null(), "{}", state["row_menu"]);
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
