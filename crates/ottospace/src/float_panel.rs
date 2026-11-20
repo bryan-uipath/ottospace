@@ -78,14 +78,12 @@ impl Panel {
         let moved = self.frame != Some(frame);
         self.frame = Some(frame);
         match self.handle {
-            Some(handle) if moved || redraw => cx.defer(move |cx| {
-                drop(handle.update(cx, |_, window, _| {
-                    if moved {
-                        place(window, frame);
-                    }
-                    window.refresh();
-                }))
-            }),
+            Some(handle) if moved || redraw => {
+                if moved {
+                    place(handle, frame, cx);
+                }
+                cx.defer(move |cx| drop(handle.update(cx, |_, window, _| window.refresh())));
+            }
             Some(_) => {}
             None if !self.opening => {
                 self.opening = true;
@@ -97,12 +95,17 @@ impl Panel {
     }
 }
 
-/// Moves the panel's window to `frame`.
-fn place(window: &Window, frame: Frame) {
-    if let Some(view) = ns_view(window) {
-        // SAFETY: GPUI's own view, on the main thread.
-        unsafe { ottospace_mac::window::set_frame(view, frame) };
-    }
+/// Moves the panel's window to `frame`, from a task: outside any update, so AppKit's resize
+/// reaches GPUI and it lays the panel out at its new size. From inside one GPUI misses it.
+fn place(handle: AnyWindowHandle, frame: Frame, cx: &mut gpui::App) {
+    cx.spawn(async move |cx| {
+        let view = handle.update(cx, |_, window, _| ns_view(window)).ok().flatten();
+        if let Some(view) = view {
+            // SAFETY: GPUI's own view of a live window, on the main thread.
+            unsafe { ottospace_mac::window::set_frame(view, frame) };
+        }
+    })
+    .detach();
 }
 
 fn open(ws: WeakEntity<Workspace>, frame: Frame, at: usize, draw: Draw, slot: Slot, cx: &mut gpui::App) {
@@ -132,8 +135,8 @@ fn open(ws: WeakEntity<Workspace>, frame: Frame, at: usize, draw: Draw, slot: Sl
                 // SAFETY: GPUI's own view, on the main thread. Over other apps' windows, then placed.
                 unsafe { ottospace_mac::window::float_panel(view) };
             }
-            place(window, frame);
         });
+        place(handle, frame, cx);
     }
     let _ = ws.update(cx, |ws, cx| {
         let panel = slot(ws, at);
@@ -143,7 +146,7 @@ fn open(ws: WeakEntity<Workspace>, frame: Frame, at: usize, draw: Draw, slot: Sl
                 panel.handle = Some(handle);
                 // Moved while it opened.
                 if now != frame {
-                    cx.defer(move |cx| drop(handle.update(cx, |_, window, _| place(window, now))));
+                    place(handle, now, cx);
                 }
             }
             // Not wanted any more, or no window: none is kept.
