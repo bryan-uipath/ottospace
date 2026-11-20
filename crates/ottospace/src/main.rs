@@ -596,6 +596,10 @@ const TOP_BAR: f32 = 40.;
 const SPACE_TABS: f32 = 30.;
 /// Height of the status bar, at the window's foot.
 const STATUS_BAR: f32 = 24.;
+/// The widest words the status bar's mode says (`render_status`, at most 7 letters): its slot's width.
+const WIDEST_MODES: [&str; 4] = ["COMMAND", "INSPECT", "DELETE?", "UNLIST?"];
+/// What the mode's slot says, dimmed, in normal mode.
+const RESTING_MODE: &str = "NORMAL";
 /// How narrow a space of the top row gets before the row clips, and how wide.
 const MIN_SPACE: f32 = 72.;
 /// What a space wants with its title: past the row's room for that many, the others are badges.
@@ -718,8 +722,10 @@ enum Mark {
     DayGap(usize),
     DayNow,
     DayNowLabel,
-    /// The status bar, and its place, meeting and agents segments.
+    /// The status bar, its mode's block or resting NORMAL, and its place, meeting and agents segments.
     Status,
+    StatusMode,
+    StatusResting,
     StatusPlace,
     StatusMeeting,
     StatusAgents,
@@ -7620,7 +7626,7 @@ impl Workspace {
         };
         let (mode, hint) = match self.model.mode() {
             // A key, not the key list: ⌘/ shows the keys of every mode. A mode you can be in by
-            // accident names its way out. Normal is the focus line's colour alone: no chip.
+            // accident names its way out. Normal: `RESTING_MODE`, dimmed, no chip.
             Mode::Normal => ("", ""),
             Mode::Pick => ("PICK", ""),
             Mode::Palette => ("COMMAND", ""),
@@ -7634,7 +7640,7 @@ impl Workspace {
                 ("SNEAK", "esc · ⌘⌃A overlay")
             }
             Mode::Sneak => ("SNEAK", "esc"),
-            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.dismiss.is_some()) => ("DISMISS?", ""),
+            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.dismiss.is_some()) => ("STOP?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.unlist.is_some()) => ("UNLIST?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.paste.is_some()) => ("PASTE?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.close.is_some()) => ("CLOSE?", ""),
@@ -7642,13 +7648,13 @@ impl Workspace {
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.delete.is_some()) => ("DELETE?", ""),
             Mode::Confirm => ("QUIT?", ""),
             // The capture bar lists the annotate keys.
-            Mode::Annotate => ("ANNOTATE", ""),
+            Mode::Annotate => ("DRAW", ""),
             Mode::Talk => ("TALK", ""),
             Mode::Mark => match self.model.mark_input {
                 Some(MarkInput::Rename { .. }) => ("MARK", ""),
                 Some(MarkInput::SetKey { .. }) => ("MARK", "a letter for the mark · ⌫ for none · esc cancels"),
-                Some(MarkInput::Workbook { .. }) => ("WORKSPACE", ""),
-                Some(MarkInput::Worktree { .. }) => ("WORKTREE", "↵ add · esc cancels"),
+                Some(MarkInput::Workbook { .. }) => ("NAME", ""),
+                Some(MarkInput::Worktree { .. }) => ("BRANCH", "↵ add · esc cancels"),
                 _ => ("MARK?", "a mark's letter · esc cancels"),
             },
         };
@@ -7666,8 +7672,10 @@ impl Workspace {
         let pending = self.model.viewer_pending();
         // What the middle keeps whole (the hint is cut): the room left is the segments'.
         let kept = [back.as_deref(), clip.as_deref(), pending.as_deref()];
-        let middle = kept.iter().flatten().map(|text| status_bar::width(window, text) + 12.).sum::<f32>()
-            + if mode.is_empty() { 0. } else { status_bar::width(window, mode) + 16. + 12. };
+        // The mode's slot, at the far left: as wide as the longest word, so nothing moves when a mode comes or goes.
+        let widest = WIDEST_MODES.iter().chain([&mode, &RESTING_MODE]).map(|word| status_bar::width(window, word));
+        let slot = widest.fold(0., f32::max) + 2. * theme::SPACE_2;
+        let middle = kept.iter().flatten().map(|text| status_bar::width(window, text) + 12.).sum::<f32>() + slot + 12.;
         let segments = self.status_segments(middle, window, cx);
         self.status_fit.set(segments.fit);
         div()
@@ -7682,14 +7690,29 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(theme::MUTED))
             .child(mark(&self.marks, Mark::Status))
+            // Who has the keyboard: the mode's block, or NORMAL dimmed. It takes no click.
+            .child(
+                div().flex_none().w(px(slot)).flex().child(match mode.is_empty() {
+                    true => div()
+                        .px(px(theme::SPACE_2))
+                        .child(RESTING_MODE)
+                        .relative()
+                        .child(mark(&self.marks, Mark::StatusResting)),
+                    false => {
+                        ui::pill(mode, ui::Pill::Mode(color)).relative().child(mark(&self.marks, Mark::StatusMode))
+                    }
+                }),
+            )
             // Where you are: the focused pane's folder and branch, or its app.
             .children(segments.place)
-            // The middle: the mode and what it says. Its hover names the build.
+            // The middle: what the mode says, and short messages. Its hover names the build.
             .child(
                 div()
                     .id("status-space")
                     .flex_1()
                     .min_w_0()
+                    // A long `↩ back to …` is clipped: it never spills over, or takes clicks of, the mode's slot.
+                    .overflow_hidden()
                     .h_full()
                     .flex()
                     .items_center()
@@ -7699,7 +7722,6 @@ impl Workspace {
                         let (commit, date) = (option_env!("OTTOSPACE_COMMIT"), option_env!("OTTOSPACE_BUILD_DATE"));
                         AnyView::from(cx.new(|_| Tooltip(version_line(env!("CARGO_PKG_VERSION"), commit, date).into())))
                     })
-                    .when(!mode.is_empty(), |d| d.child(ui::pill(mode, ui::Pill::Mode(color))))
                     .child(cut_text(hint))
                     // A count or `g` typed in the viewer, waiting for its move (`10j`).
                     .children(pending.map(|typed| div().flex_none().text_color(rgb(theme::TEXT)).child(typed)))
@@ -8533,6 +8555,8 @@ impl Render for Workspace {
                     | Mark::KeysKnown
                     | Mark::ComposeSwitch
                     | Mark::Heading(..)
+                    | Mark::StatusMode
+                    | Mark::StatusResting
                     | Mark::StatusPlace
                     | Mark::StatusMeeting
                     | Mark::StatusAgents

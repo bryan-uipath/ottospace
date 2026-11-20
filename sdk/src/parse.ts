@@ -944,6 +944,8 @@ function statusBar(value: unknown, at: string): Snapshot["status_bar"] {
     return { rect: orNull(rect)(m.rect, `${p}.rect`), join: orNull(rect)(m.join, `${p}.join`) };
   };
   return {
+    mode: orNull(rect)(o.mode, `${at}.mode`),
+    resting: orNull(rect)(o.resting, `${at}.resting`),
     place: orNull(noticeUndo)(o.place, `${at}.place`),
     meeting: orNull(meeting)(o.meeting, `${at}.meeting`),
     agents: noticeUndo(o.agents, `${at}.agents`),
