@@ -114,3 +114,18 @@ Runs had left about 12,000 files there: a lock per launch, settings folders, uni
   `$TMPDIR`, never through a link. `ottospace.sock`, the user's, never matches.
 - `a_test_leaves_nothing_in_the_temp_dir` runs two tests again with a `$TMPDIR` of their own (an
   app killed, one that quits, settings folders, a file that is no socket) and asserts it is empty.
+
+## Compare with the window as it is, not as it will be
+
+`a_parked_panes_picture_is_its_window_pixel_for_pixel` compared the parked picture with the window
+live after `enter`, and failed about 1 run in 20–40 after #350 and #351. The cause was the canary,
+not ottospace: parking resizes it (640×452 → 654×607 pt) and moves it from a 2× display to the
+1× parking one at once, and sometimes it keeps drawing its old content stretched for as long as it
+stays parked (30+ complete frames with the new geometry: stripes from row 170, 65 rows tall,
+instead of 124 and 48). ScreenCaptureKit and the pane show that faithfully; `enter` brings it back
+to 2× and it redraws. Likely GPUI 0.2.2 missing a resize when size and display change together
+(inferred, not proven). The test now compares with the parked window's own pixels
+(`screencapture -l`, before `enter`), and when the parked window differs from the live one it
+reports `soft signal, parked window not redrawn` and writes
+`failures/parked-window-not-redrawn-<pid>.txt`, failing nothing. A test that compares with a
+reference should take it at the same moment, from the thing it claims to mirror.
