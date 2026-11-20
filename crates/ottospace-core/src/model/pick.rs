@@ -108,7 +108,9 @@ impl Model {
                 self.open(kind, wait.axis, beside, effects)
             }
         };
-        if let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == id) {
+        // A slot owns no window: one given back, and the next it holds, stay open when it closes.
+        let slot = self.slots.contains_key(&id);
+        if let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == id && !slot) {
             pane.owned = true;
         }
     }
