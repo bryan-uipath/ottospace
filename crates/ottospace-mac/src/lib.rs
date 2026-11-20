@@ -11,6 +11,7 @@ pub mod hotkey;
 pub mod icon;
 pub mod image;
 pub mod input;
+pub mod locale;
 pub mod meeting;
 pub mod oslog;
 pub mod pasteboard;

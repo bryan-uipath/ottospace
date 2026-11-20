@@ -27,7 +27,7 @@ use gpui::{
 };
 use ottospace_core::terminal::{
     CellPoint, Motion, Press, Proc, Processes, Scroll, SelectKind, Wheel, Work, running, saved_command,
-    selection_holds, wheel_scrolls,
+    selection_holds, utf8_locale, wheel_scrolls,
 };
 use ottospace_core::workbook::{self, History};
 use ottospace_core::{clip, palette, settings, theme};
@@ -868,6 +868,7 @@ pub(crate) fn login_shell() -> String {
 
 /// What a program reads to pick its features: 24-bit colour (`COLORTERM`), and who we are. Set
 /// over what ottospace inherited, e.g. another terminal's `TERM_PROGRAM` when started from one.
+/// And a UTF-8 `LANG` when ottospace has no locale of its own (started from the Dock).
 fn program_env() -> HashMap<String, String> {
     let vars = [
         ("TERM", "xterm-256color"),
@@ -875,7 +876,14 @@ fn program_env() -> HashMap<String, String> {
         ("TERM_PROGRAM", "ottospace"),
         ("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION")),
     ];
-    vars.into_iter().map(|(name, value)| (name.to_string(), value.to_string())).collect()
+    let mut env: HashMap<String, String> =
+        vars.into_iter().map(|(name, value)| (name.to_string(), value.to_string())).collect();
+    let set = ["LANG", "LC_ALL"].iter().any(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()));
+    let exists = |locale: &str| std::path::Path::new("/usr/share/locale").join(locale).is_dir();
+    if let Some(lang) = utf8_locale(set, ottospace_mac::locale::identifier().as_deref(), exists) {
+        env.insert("LANG".into(), lang);
+    }
+    env
 }
 
 fn window_size(grid: Grid, cell: Size<Pixels>) -> WindowSize {

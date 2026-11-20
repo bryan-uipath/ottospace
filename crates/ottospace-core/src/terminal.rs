@@ -29,6 +29,20 @@ pub fn scroll_key(key: &str, mods: Mods, alt_screen: bool) -> Option<Scroll> {
     }
 }
 
+/// `LANG` for a terminal's programs when ottospace has neither `LANG` nor `LC_ALL` (started from
+/// the Dock): the system's locale as UTF-8 if `exists` knows it, e.g. `de_CH@rg=chzzzz` →
+/// `de_CH.UTF-8`, `zh-Hans_CN` → `zh_CN.UTF-8`, else `en_US.UTF-8`. `None`: one is set, keep it.
+pub fn utf8_locale(set: bool, system: Option<&str>, exists: impl Fn(&str) -> bool) -> Option<String> {
+    if set {
+        return None;
+    }
+    let id = system.unwrap_or_default().split('@').next().unwrap_or_default();
+    let language = id.split(['-', '_']).next().unwrap_or_default();
+    let region = id.rsplit_once('_').map(|(_, region)| region);
+    let wanted = region.map(|region| format!("{language}_{region}.UTF-8"));
+    Some(wanted.filter(|locale| !language.is_empty() && exists(locale)).unwrap_or_else(|| "en_US.UTF-8".into()))
+}
+
 /// Whether the wheel scrolls our history. Not while the program reads the mouse or uses the
 /// alternate screen: the wheel is the program's there.
 pub fn wheel_scrolls(mouse_mode: bool, alt_screen: bool) -> bool {
@@ -375,6 +389,17 @@ mod tests {
         assert_eq!(scroll_key("pageup", Mods { ctrl: true, ..SHIFT }, false), None);
         assert_eq!(scroll_key("pageup", SHIFT, true), None, "less and vim get it");
         assert_eq!(scroll_key("a", SHIFT, false), None);
+    }
+
+    #[test]
+    fn a_terminal_gets_a_utf8_locale_only_when_none_is_set() {
+        let known = |locale: &str| ["en_US.UTF-8", "de_CH.UTF-8", "zh_CN.UTF-8"].contains(&locale);
+        assert_eq!(utf8_locale(true, Some("de_CH"), known), None, "the user's own LANG or LC_ALL stays");
+        assert_eq!(utf8_locale(false, Some("de_CH@rg=chzzzz"), known).as_deref(), Some("de_CH.UTF-8"));
+        assert_eq!(utf8_locale(false, Some("zh-Hans_CN"), known).as_deref(), Some("zh_CN.UTF-8"));
+        for unknown in [Some("fr_BE"), Some("en"), Some(""), None] {
+            assert_eq!(utf8_locale(false, unknown, known).as_deref(), Some("en_US.UTF-8"), "{unknown:?}");
+        }
     }
 
     #[test]
