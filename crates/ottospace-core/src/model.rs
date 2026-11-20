@@ -4795,6 +4795,10 @@ impl Model {
         self.settle_overlays(overlays, &mut effects);
         // After the overlays: an opened sidebar's list takes the keyboard, a viewer's count goes.
         self.settle_viewers(&mut effects);
+        // A client's step left a fresh start in a collapsed drawer with nothing to reopen: its box waits for ⌘⇧R.
+        if origin != Origin::User && self.drawer_collapsed() && !self.drawer_opens() && self.welcome() {
+            self.folded = Some(rail::Folded::Box);
+        }
         // Something shows in the drawer's place, or nothing is left to reopen: nothing to keep from a client.
         if !self.drawer_collapsed() || !self.drawer_opens() {
             self.folded = None;

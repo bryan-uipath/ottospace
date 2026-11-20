@@ -363,6 +363,26 @@ mod tests {
         assert_eq!(m.rail_shown(), Some(task(2)));
     }
 
+    #[test]
+    fn a_clients_step_leaves_the_fresh_start_box_folded() {
+        // The user collapsed a conversation; a client's restore leaves no task: the box waits for ⌘⇧R.
+        let mut m = Model::default();
+        m.update(Action::OpenCompose { text: "one".into() });
+        m.update(Action::ComposeSubmit { open: true });
+        m.update(Action::TalkToggle);
+        m.update(Action::RestoreTasks { tasks: Vec::new(), floor: 0 }.sent_by(Origin::Socket));
+        assert!(m.welcome() && m.drawer_collapsed() && m.drawer_opens());
+        m.update(Action::TalkToggle);
+        assert!(m.welcome_shown() && !m.drawer_collapsed());
+        // A transcript folded in an empty workspace: a timer's step leaves it what ⌘⇧R opens.
+        let mut m = Model::default();
+        m.update(Action::ListenAvailable { on: true }.sent_by(Origin::System));
+        m.update(Action::RailSelect { item: RailItem::Transcript });
+        m.update(Action::TalkToggle);
+        m.update(Action::Tick { now: 1_000 }.sent_by(Origin::System));
+        assert_eq!((m.welcome(), m.drawer_collapsed(), m.folded), (true, true, Some(Folded::Transcript)));
+    }
+
     /// The owner: ⌘⇧R collapses the fresh start's box too, and opens it again. While the user
     /// collapsed the drawer, a client's ⌘N (the bar's +, the rail's +) is refused: only the user
     /// opens it. The user's own ⌘N opens the box.
