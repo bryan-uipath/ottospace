@@ -538,6 +538,29 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     wait_for("the window to return to its frame", || frame(0).filter(|f| (0..4).all(|i| close(f[i], original[i]))));
 }
 
+/// A leave right after going live stays: the app's own activation from going live, first seen by
+/// the front-app check (every 500 ms) after the leave, is not the user bringing it forward.
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_quick_leave_is_not_undone_by_the_apps_own_activation() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-quick", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || global_frame(&canary, 0));
+    let otto = otto_for(&canary, "otto-quick", &[]);
+    host_and_park(&otto);
+    // Three times: each leave lands before that check only by chance.
+    for _ in 0..3 {
+        assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
+        wait_or("the canary to be the front app", in_front, || {
+            ask_forward(canary.child.id());
+            (front_app().0 == canary.child.id()).then_some(())
+        });
+        assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
+        // Past two front-app checks.
+        std::thread::sleep(Duration::from_millis(1200));
+        assert_eq!(otto.call(json!({"cmd": "state"}))["mode"], "normal", "the leave stays");
+    }
+}
+
 /// The middle of a rect.
 fn middle(r: [f64; 4]) -> [f64; 2] {
     [r[0] + r[2] / 2.0, r[1] + r[3] / 2.0]
