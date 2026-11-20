@@ -329,15 +329,21 @@ thread_local! {
         std::cell::RefCell::default();
 }
 
-/// An invisible layer over its parent that notes where it was drawn, as `<part>:<row>`.
+/// An invisible layer over its parent that notes where it shows, as `<part>:<row>`: none for a
+/// part scrolled out of the list.
 fn note(part: &str, row: usize) -> gpui::AnyElement {
     let key = format!("{part}:{row}");
-    let note = move |bounds, _: &mut Window, _: &mut App| DRAWN.with_borrow_mut(|drawn| drawn.insert(key, bounds));
+    let note = move |bounds: gpui::Bounds<gpui::Pixels>, window: &mut Window, _: &mut App| {
+        let shown = bounds.intersect(&window.content_mask().bounds);
+        if shown.size.width > px(1.) && shown.size.height > px(1.) {
+            DRAWN.with_borrow_mut(|drawn| drawn.insert(key, shown));
+        }
+    };
     gpui::canvas(note, |_, _, _, _| {}).absolute().top_0().left_0().size_full().into_any_element()
 }
 
 /// A flag's row: the stage's icon, its title, id and key over its description, then On or Off.
-fn flag_row(row: gpui::Stateful<gpui::Div>, i: usize, choice: &FeatureChoice) -> gpui::Stateful<gpui::Div> {
+pub(crate) fn flag_row(row: gpui::Stateful<gpui::Div>, i: usize, choice: &FeatureChoice) -> gpui::Stateful<gpui::Div> {
     let feature = choice.feature;
     let title = div()
         .flex()

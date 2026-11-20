@@ -68,23 +68,22 @@ fn rows() -> Div {
     div().flex().flex_col().gap(px(theme::SPACE_2)).children(rows).child(group("section heading", headings))
 }
 
-/// A filter list's rows (the palette's): one line, and a title over a two-line description with
-/// the stage's icon; at rest and highlighted. Then the icon with its tooltip.
+/// A filter list's rows (the palette's): one line, and a flag's two (on, with a key; off), at rest
+/// and highlighted. Then the stage's icon with its tooltip.
 fn filter_rows() -> Div {
-    let width = |d: gpui::Stateful<Div>| div().w(px(260.)).bg(rgb(theme::RAISED)).child(d);
+    use ottospace_core::commands::FeatureChoice;
+    use ottospace_core::features::Feature;
+    let width = |d: gpui::Stateful<Div>| div().w(px(300.)).bg(rgb(theme::RAISED)).child(d);
     let looks = [(false, "rest"), (true, "selected")];
     let one = looks.map(|(selected, name)| {
         let row = crate::dialog::filter_row(id(format!("filter-one-{name}")), selected);
         case(format!("one line {name}"), width(row.child(crate::cut_text("Terminal Right").flex_1()).child("⌘D")))
     });
-    let two = looks.map(|(selected, name)| {
+    let flags = [(Feature::Decisions, true), (Feature::Marks, false)];
+    let two = looks.into_iter().zip(flags).enumerate().map(|(at, ((selected, name), (feature, on)))| {
         let row = crate::dialog::filter_row(id(format!("filter-two-{name}")), selected);
-        let icon =
-            div().h(px(super::TITLE_LINE)).flex().items_center().children(super::stage_icon(Stage::Experimental));
-        let title = div().flex().gap(px(theme::SPACE_1_5)).child("Marks").child(div().text_xs().child("marks"));
-        let lines = super::two_lines(title, "Name a pane or a tab, and go back to it with a letter, or to a tab");
-        let row = row.h(px(super::TWO_LINE_ROW)).py(px(theme::SPACE_1_5)).items_start().child(icon);
-        case(format!("two lines {name}"), width(row.child(lines.flex_1())))
+        let row = crate::commands::flag_row(row, 1000 + at, &FeatureChoice { feature, on });
+        case(format!("flag {name}"), width(row))
     });
     let tip = div()
         .flex()
