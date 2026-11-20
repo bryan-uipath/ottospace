@@ -6346,7 +6346,7 @@ impl Workspace {
             .group("repo-name")
             .when(at > 0, |d| d.mt_1())
             .mb_1()
-            .child(words::words("repo-name", selected).top(px(HEADING_WORDS)).child(remove))
+            .child(words::words("repo-name", selected).top_0().bottom_0().items_center().child(remove))
             .child(self.controls.mark(format!("repo-fold:{path}")))
             .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -6384,9 +6384,9 @@ impl Workspace {
         });
         ui::section_heading(("repo-head", n), !folded, repo.name.clone(), count, ui::State::focus(selected))
             .group("repo-name")
-            .when(n > 0, |d| d.mt_1())
+            .when(at > 0, |d| d.mt_1())
             .mb_1()
-            .child(words::words("repo-name", selected).top(px(HEADING_WORDS)).child(add).children(remove))
+            .child(words::words("repo-name", selected).top_0().bottom_0().items_center().child(add).children(remove))
             .child(mark(&self.marks, Mark::Repo(n)))
             .child(self.controls.mark(format!("repo-fold:{path}")))
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -7468,9 +7468,6 @@ pub(crate) fn well(rows: Vec<AnyElement>, gap: f32) -> impl Iterator<Item = AnyE
 
 /// A row's height in a sidebar section (`sidebar_row`).
 pub(crate) const ROW: f32 = 28.;
-
-/// A heading's words (+, trash), 18 points tall, on its middle: inside its 1-point border.
-const HEADING_WORDS: f32 = (ROW - 2. - 18.) / 2.;
 
 /// A row of a sidebar section, one grammar in each: `ROW` points, a leading mark that carries the
 /// state's colour, the title cut with "…", one muted detail at the right, its actions on hover.
