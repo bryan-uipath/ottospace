@@ -9447,7 +9447,9 @@ fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     let rows = reply["palette_rows"].as_array().expect("rows").clone();
     assert!(rows.len() > 30, "{rows:?}");
     let first = json!({"command": "split_right", "name": "Terminal Right", "group": "Panes", "key": "⌘D"});
-    assert_eq!(rows[0], first);
+    let fields =
+        |row: &Value| json!({"command": row["command"], "name": row["name"], "group": row["group"], "key": row["key"]});
+    assert_eq!(fields(&rows[0]), first);
     // The version left the status bar for About.
     assert!(rows.iter().any(|row| row["name"] == "About ottospace" && row["group"] == "App"), "{rows:?}");
     // Typing narrows the rows, best first. A client's key is refused, and its split waits.

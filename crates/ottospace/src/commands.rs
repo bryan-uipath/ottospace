@@ -14,8 +14,8 @@ use ottospace_core::{Action, theme};
 use crate::*;
 
 thread_local! {
-    /// The query and highlighted row last drawn.
-    static SHOWN: std::cell::RefCell<Option<(String, usize)>> = const { std::cell::RefCell::new(None) };
+    /// The list (commands, tasks or flags), query and highlighted row last drawn.
+    static SHOWN: std::cell::RefCell<Option<(u8, String, usize)>> = const { std::cell::RefCell::new(None) };
 }
 
 // ⌘⇧P (and ⌘P for now), and the Developer menu's own.
@@ -270,8 +270,14 @@ impl Workspace {
     /// The palette: a box near the top, over the dimmed workspace. A click outside closes it.
     pub fn render_palette(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         // The highlighted row comes into view when it or the query changes (↑↓, typing, a paste).
-        let now = (palette.query.text().to_string(), palette.selected);
-        if SHOWN.replace(Some(now.clone())) != Some(now) {
+        let list = u8::from(palette.tasks.is_some()) + 2 * u8::from(palette.features.is_some());
+        let now = (list, palette.query.text().to_string(), palette.selected);
+        let shown = SHOWN.replace(Some(now.clone()));
+        // Another list starts at its top: the commands' offset would cut its first row (Features…).
+        if shown.as_ref().is_some_and(|(was, ..)| *was != list) {
+            self.bars.step("palette", ottospace_core::scrollbar::Step::Top);
+        }
+        if shown != Some(now) {
             self.bars.scroll_to_item("palette", palette.selected);
         }
         DRAWN.with_borrow_mut(|drawn| drawn.clear());
