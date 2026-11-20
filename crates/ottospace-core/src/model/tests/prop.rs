@@ -4150,12 +4150,17 @@ impl Run {
         // the tab made for it is on show.
         let tab_now = m.tabs[m.main_at()].id;
         let left_home = tab_before == HOME_TAB && !tabs_before.contains(&tab_now);
+        // "New window" for a new tab, asked from the tab on show: its window came, in the tab made for it.
+        let asked_here = waited.as_ref().is_some_and(|wait| wait.tab_of.is_some() && wait.tab == tab_before);
+        let new_window_tab =
+            matches!(action, Action::NewWindowCame { .. }) && asked_here && !tabs_before.contains(&tab_now);
         ensure!(
             tab_now == tab_before
                 || !m.tabs.iter().any(|tab| tab.id == tab_before)
                 || selects_tab(&action)
                 || closes
-                || left_home,
+                || left_home
+                || new_window_tab,
             "{origin:?}'s {action:?} changed the tab on show from {tab_before} to {tab_now}"
         );
         // Starting, going on with, adopting or clicking a conversation closes no tab, and makes at
@@ -8203,6 +8208,40 @@ fn seed_9509_a_workspace_taken_back_leaves_its_task_to_the_one_bound_since() {
         Action::RowDismiss { id: 1 }.into(),
         Action::TaskUndo.into(),
         Action::ListUndo.into(),
+    ])
+    .unwrap();
+}
+
+/// The user's "New window" for a new tab, from a tab not Home's: the window came and its new tab
+/// was on show, as the pick asked. The check let only a new tab made from Home do so.
+#[test]
+fn seed_33152_a_new_window_for_a_new_tab_shows_its_tab() {
+    let sketch = || "Sketch".to_string();
+    replay(&[
+        Action::OpenPicker {
+            axis: Axis::Right,
+            new_tab: true,
+            items: vec![PickItem::Terminal, PickItem::App { name: sketch() }, PickItem::Terminal],
+        }
+        .into(),
+        Action::Adopt { kind: Kind::Terminal, beside: Some(0), seen: None }.sent_by(Origin::Socket),
+        Action::PickerWindows {
+            app: sketch(),
+            bundle: Some("com.slack".into()),
+            menu_item: true,
+            windows: vec![PickWindow { window: 3, title: "general".into() }],
+        }
+        .sent_by(Origin::System),
+        Action::PickerChoose { index: None }.into(),
+        Action::NewWindowCame {
+            kind: Kind::App {
+                window: 41,
+                title: "w1".into(),
+                bundle: Some("com.safari".into()),
+                name: "Safari".into(),
+            },
+        }
+        .into(),
     ])
     .unwrap();
 }

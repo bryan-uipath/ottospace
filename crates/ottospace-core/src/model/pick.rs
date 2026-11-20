@@ -83,6 +83,16 @@ impl Model {
             return;
         }
         let id = match (wait.tab_of, self.tabs.iter().position(|tab| tab.id == wait.tab)) {
+            // The user moved on: its new tab is made behind the one on show, and the user stays.
+            (Some(of), at) if at != Some(self.active) => {
+                let shown = self.tabs[self.active].id;
+                self.park_active();
+                self.push_tab_of(of);
+                let made = self.active;
+                self.active = self.tabs.iter().position(|tab| tab.id == shown).unwrap_or(made);
+                self.unpark_active();
+                self.open_in_background(made, kind, wait.axis, None, effects)
+            }
             (Some(of), _) => {
                 self.leave(effects);
                 self.park_active();
@@ -506,6 +516,29 @@ mod tests {
         let tab = m.tabs.iter().find(|tab| tab.id == asked_tab).and_then(|tab| tab.layout.clone());
         assert_eq!(tab.map(|layout| layout.leaves()), asked_pane.map(|pane| vec![pane, id]));
         assert!(m.pane(id).is_some_and(|pane| pane.owned));
+    }
+
+    #[test]
+    fn a_new_window_for_a_new_tab_after_the_user_moved_on_opens_its_tab_behind() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::OpenPicker {
+            axis: Right,
+            new_tab: true,
+            items: vec![PickItem::App { name: "Chrome".into() }],
+        });
+        m.update(Action::PickerChoose { index: None });
+        m.update(Action::PickerWindows { app: "Chrome".into(), bundle: None, menu_item: true, windows: vec![] });
+        m.update(Action::PickerChoose { index: None });
+        // The user opens another tab before the window comes.
+        m.update(Action::NewTab);
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        let (tabs, shown, layout) = (m.tabs.len(), m.tabs[m.active].id, m.layout.clone());
+        m.update(Action::NewWindowCame { kind: owned(40) }.sent_by(Origin::System));
+        let id = m.pane_holding(40).expect("a pane");
+        assert_eq!((m.tabs.len(), m.tabs[m.active].id, m.layout.clone()), (tabs + 1, shown, layout));
+        let made = m.tab_of(id).and_then(|tab| m.tabs.iter().find(|t| t.id == tab));
+        assert!(made.is_some_and(|tab| tab.id != shown && tab.focused == Some(id)));
     }
 
     #[test]
