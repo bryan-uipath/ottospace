@@ -103,9 +103,8 @@ impl Model {
     /// The drawer folds into its rail, whatever it shows (a brief, the inspector, the box's line put
     /// aside), but a capture's draft: the user's work in progress. What the toggle opens again is kept.
     pub(super) fn fold_drawer(&mut self, effects: &mut Vec<Effect>) {
-        // Nor while the user's editor writes the box's line (⌃G): its save would find no box.
-        let editing = self.editing.as_ref().is_some_and(|e| e.target == super::editor::Target::Compose);
-        if self.drawer_collapsed() || self.capture.is_some() || (self.overlays() && editing) {
+        // Nor while the user's editor writes the open box's line (⌃G): its save would find no box.
+        if self.drawer_collapsed() || self.capture.is_some() || (self.overlays() && self.edits_compose()) {
             return;
         }
         // Folded: no Esc in the sidebar hands the keyboard back to it.
@@ -361,6 +360,24 @@ mod tests {
         assert!(m.sidebar.is_some() && m.drawer_collapsed());
         m.update(Action::LeaveList);
         assert!(m.sidebar.is_none() && m.drawer_collapsed());
+    }
+
+    /// The box sent while its editor (⌃G) still runs: the editor writes no box, and keeps no drawer open.
+    #[test]
+    fn an_editor_on_a_sent_box_lets_the_drawer_fold() {
+        let mut m = workspace(true);
+        m.update(Action::OpenCompose { text: "two".into() });
+        m.update(Action::EditorOpen);
+        // On the open box: a click outside leaves it under the editor.
+        m.update(Action::OverlayDismiss);
+        assert!(m.compose.is_some() && m.editing.is_some());
+        m.update(Action::ComposeSubmit { open: true });
+        assert!(m.compose.is_none() && m.editing.is_some() && !m.drawer_collapsed());
+        m.update(Action::OverlayDismiss);
+        assert!(m.drawer_collapsed());
+        // Nor does a client's step open it again.
+        m.update(Action::TaskTalk { id: 2 }.sent_by(Origin::Socket));
+        assert!(m.drawer_collapsed());
     }
 
     #[test]
