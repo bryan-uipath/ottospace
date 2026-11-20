@@ -1862,6 +1862,7 @@ impl Workspace {
             ottospace_core::capture::DRAFT_USERS,
             ottospace_core::model::rail::DRAWER_USERS,
             ottospace_core::model::finish::USERS_ALONE,
+            ottospace_core::model::finish::NEW_TASK_USERS,
             ottospace_core::tasks::CLEAR_USERS,
         ];
         if let Some(why) =
@@ -5175,6 +5176,13 @@ impl Workspace {
         self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         self.tell_compose_context(cx);
         self.dispatch(Action::OpenCompose { text: String::new() }, self.input, window, cx);
+    }
+
+    /// "Done · <task>"'s New task here: as ⌘N, but the user's alone (the core refuses a client's).
+    fn new_task_here(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
+        self.tell_compose_context(cx);
+        self.dispatch(Action::DoneNewTask, self.input, window, cx);
     }
 
     /// The picker dropdown, under the split buttons. A click outside it closes it.

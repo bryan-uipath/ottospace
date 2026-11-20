@@ -256,7 +256,7 @@ impl Workspace {
                 .underline()
                 .child("New task here ⌘N")
                 .child(self.controls.mark("notice:new-task"))
-                .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)))
+                .on_click(cx.listener(|this, _, window, cx| this.new_task_here(window, cx)))
         });
         let close = button("notice-close")
             .child("×")

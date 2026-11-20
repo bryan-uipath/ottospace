@@ -1721,6 +1721,9 @@ pub enum Action {
     },
     /// Undo on the notice bar's "Done · <task>": the task as it was. Only the user's.
     DoneUndo,
+    /// New task here on the notice bar's "Done · <task>": the new-task box, in the task's
+    /// workspace. Only the user's. Never acted on: `done_new_task` turns the user's into `OpenCompose`.
+    DoneNewTask,
     /// The local day began at `day` (ms since 1970): what Done today counts from. The shell's.
     LocalDay {
         day: u64,
@@ -2454,6 +2457,7 @@ impl Action {
             | Action::TaskDone { .. }
             | Action::TaskLater { .. }
             | Action::DoneUndo
+            | Action::DoneNewTask
             | Action::WorktreeRemoved { .. }
             | Action::LocalDay { .. }
             | Action::TalkToggle
@@ -2857,6 +2861,7 @@ impl Action {
             | Action::TaskDone { .. }
             | Action::TaskLater { .. }
             | Action::DoneUndo
+            | Action::DoneNewTask
             | Action::WorktreeRemoved { .. }
             | Action::LocalDay { .. }
             | Action::TalkToggle
@@ -4291,6 +4296,7 @@ impl Model {
             }
             // Done, Later and its Undo are the user's; so is the answer to "Stop it and put it away?".
             Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
+            Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
             Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
             Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
             Action::QuitConfirm | Action::QuitCancel
@@ -4617,7 +4623,7 @@ impl Model {
     }
 
     pub fn update(&mut self, sent: impl Into<Envelope>) -> Vec<Effect> {
-        let sent = self.close_tab_asked(self.space_click(self.app_wheel(sent.into())));
+        let sent = self.done_new_task(self.close_tab_asked(self.space_click(self.app_wheel(sent.into()))));
         if let Some(go) = self.quit_go(&sent) {
             return go.into_iter().flat_map(|action| self.update(action.sent_by(Origin::User))).collect();
         }
@@ -5346,6 +5352,8 @@ impl Model {
             }
             // Turned into `CloseTab` or `SpaceHideAsked` before any step (`close_tab_asked`).
             Action::CloseTabAsked { .. } => {}
+            // The user's, offered, is `OpenCompose` by now (`done_new_task`).
+            Action::DoneNewTask => {}
             Action::CloseTab { index } => {
                 let index = index.unwrap_or(self.active);
                 // Home's own tab stays.
@@ -9878,6 +9886,7 @@ mod tests {
         Action::TaskDone { .. },
         Action::TaskLater { .. },
         Action::DoneUndo,
+        Action::DoneNewTask,
         Action::WorktreeRemoved { .. },
         Action::LocalDay { .. },
         Action::TalkToggle,
@@ -10236,6 +10245,7 @@ mod tests {
             Action::TaskDone { id: 1 },
             Action::TaskLater { id: 1 },
             Action::DoneUndo,
+            Action::DoneNewTask,
             Action::WorktreeRemoved { task: 1, path: String::new(), kept: None },
             Action::LocalDay { day: 0 },
             Action::TalkToggle,
@@ -10674,6 +10684,7 @@ mod tests {
                     }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
+                    Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
                     Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
                     Action::TalkKeys { on: true } if m.talk.as_ref().is_some_and(|t| !t.open) => {
@@ -17015,6 +17026,7 @@ mod tests {
                     }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
+                    Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
                     Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
                     Action::TalkKeys { on: true } if m.talk.as_ref().is_some_and(|t| !t.open) => {
