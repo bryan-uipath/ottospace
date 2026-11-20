@@ -79,7 +79,7 @@ impl Model {
 
     /// True if `pane`'s chip groups offers: several, and not a pane that waits (it has no chip).
     pub fn offer_groups(&self, pane: PaneId) -> bool {
-        self.offers_at(pane).len() > 1 && !self.offer_panes.contains(&pane)
+        self.offers.iter().filter(|offer| offer.pane == pane).nth(1).is_some() && !self.offer_panes.contains(&pane)
     }
 
     /// True if `pane` is an empty pane that waits for a window its app remade: it offers it.
@@ -124,9 +124,13 @@ impl Model {
                 }
             }
             Action::OfferDismiss { window } => self.offers.retain(|offer| offer.window != window),
-            // Only a chip that groups offers has a list; ▾ again closes it.
+            // Only a chip that groups offers has a list; ▾ again closes it. The pane's live
+            // window would cover it: it leaves live mode.
             Action::OfferList { pane } => {
-                self.offer_list = pane.filter(|id| self.offer_list != Some(*id) && self.offer_groups(*id));
+                self.offer_list = Some(pane).filter(|id| self.offer_list != Some(*id) && self.offer_groups(*id));
+                if self.offer_list.is_some() && self.live == Some(pane) {
+                    self.leave(effects);
+                }
             }
             // The shell's alone from here: a key or click of the user's reports no window.
             _ if self.by_user => {}
@@ -190,8 +194,8 @@ impl Model {
                 self.marks.forget_unlike(pane);
             }
         }
-        // A list lasts while its chip groups offers.
-        self.offer_list = self.offer_list.filter(|id| self.offer_groups(*id));
+        // A list lasts while its chip groups offers, and its pane's window is not over it.
+        self.offer_list = self.offer_list.filter(|id| self.offer_groups(*id) && self.live != Some(*id));
     }
 }
 
@@ -380,12 +384,12 @@ mod tests {
     #[test]
     fn several_offers_group_and_their_list_opens_only_for_the_user() {
         let mut m = offered();
-        m.update(Action::OfferList { pane: Some(1) });
+        m.update(Action::OfferList { pane: 1 });
         assert_eq!(m.offer_list, None, "one offer: no list");
         m.update(new_window(1, 10, "b").sent_by(Origin::System));
         m.update(new_window(1, 11, "c").sent_by(Origin::System));
         assert_eq!(m.offers_at(1).iter().map(|o| o.window).collect::<Vec<_>>(), [11, 10, 9], "newest first");
-        let list = Action::OfferList { pane: Some(1) };
+        let list = Action::OfferList { pane: 1 };
         assert_eq!(m.refusal(&list, Origin::Socket), Some(USERS_ALONE));
         m.update(list.clone().sent_by(Origin::Socket));
         assert_eq!(m.offer_list, None);
@@ -403,6 +407,13 @@ mod tests {
         m.update(list.clone());
         m.update(list.clone());
         assert_eq!(m.offer_list, None);
+        // The pane's live window would cover the list: opening it leaves live mode, entering closes it.
+        m.update(Action::Enter { pane: 1 });
+        assert!(m.update(list.clone()).contains(&Effect::Parked(1)));
+        assert_eq!((m.offer_list, m.live), (Some(1), None));
+        m.update(Action::Enter { pane: 1 });
+        assert_eq!((m.offer_list, m.live), (None, Some(1)));
+        m.update(Action::Leave);
         // Its pane's window went: the pane waits, with no chip, so no list.
         m.update(list.clone());
         m.update(Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System));

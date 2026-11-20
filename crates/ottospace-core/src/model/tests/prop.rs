@@ -1830,7 +1830,7 @@ const MAKERS: &[Make] = &[
         Action::WindowOffered { pane: g.app_pane(), seen, why: "no slot for this window".into() }
     },
     |g| Action::OfferAccept { window: g.offered(), axis: if g.rng.coin() { Axis::Right } else { Axis::Down } },
-    |g| Action::OfferList { pane: g.rng.coin().then(|| g.app_pane()) },
+    |g| Action::OfferList { pane: g.app_pane() },
     |g| Action::OfferDismiss { window: g.offered() },
     |g| Action::OfferGone { window: g.offered() },
     // A click outside the side overlays: the user's alone, and only with `overlay_panels` on.
@@ -3143,6 +3143,7 @@ fn check_offers(m: &Model) -> Result<(), String> {
     // A list is open only under a chip that groups offers.
     if let Some(pane) = m.offer_list {
         ensure!(m.offer_groups(pane), "pane {pane}'s offer list is open under no chip that groups offers");
+        ensure!(m.live != Some(pane), "pane {pane}'s offer list is open under its live window");
     }
     let state = serde_json::to_string(m).unwrap_or_default();
     ensure!(!state.contains(OFFERED), "an offered window's title reached the state");

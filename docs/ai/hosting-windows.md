@@ -108,7 +108,7 @@ a slot they made. `rules::decide` judges it once, on facts the shell reads (`AXS
   `Adopt`, which splits the way the offer was taken); × (`OfferDismiss`, the user's) leaves it
   floating. Several offers of one pane group: `Zoom opened 3 windows ▾`; ▾ (`OfferList`, the
   user's) opens their list over the pane's top right, each with the three choices, while two or
-  more are left (`Model::offer_list`). The offer goes when the window closes (`OfferGone`: the shell checks
+  more are left (`Model::offer_list`); it and the pane's live mode end each other. The offer goes when the window closes (`OfferGone`: the shell checks
   `recovery::window_exists` each tick), when it is in a pane any other way, or when its pane is no
   app pane. Its title is drawn in the chip and never in the state (`offers` holds pane and window
   id).

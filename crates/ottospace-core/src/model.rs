@@ -2133,10 +2133,10 @@ pub enum Action {
         window: u32,
         axis: Axis,
     },
-    /// The user's ▾ on a chip that groups several offers: their list opens under it (`pane`), or
-    /// closes (`None`).
+    /// The user's ▾ on app pane `pane`'s chip that groups several offers: their list opens under
+    /// it, or closes if open.
     OfferList {
-        pane: Option<PaneId>,
+        pane: PaneId,
     },
     /// The user waved the offer away: the window stays floating.
     OfferDismiss {
@@ -10633,7 +10633,7 @@ mod tests {
             Action::WindowOffered { pane: 1, seen: crate::slot::Seen::default(), why: text() },
             Action::OfferAccept { window: 9, axis: Right },
             Action::OfferDismiss { window: 9 },
-            Action::OfferList { pane: Some(1) },
+            Action::OfferList { pane: 1 },
             Action::OfferGone { window: 9 },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();

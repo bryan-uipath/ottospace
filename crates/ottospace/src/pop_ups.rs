@@ -57,11 +57,11 @@ pub(crate) fn log(seen: &Seen, shape: &rules::Shape, decided: &rules::Decision, 
     );
 }
 
-/// One offer in its chip's words: `Zoom opened “Chat” · no slot for this window`.
-fn offer_words(app: &str, offer: &Offer) -> String {
+/// One offer in words: `“Chat” · no slot for this window`.
+fn offer_words(offer: &Offer) -> String {
     match offer.title.is_empty() {
-        true => format!("{app} opened a window · {}", offer.why),
-        false => format!("{app} opened “{}” · {}", offer.title, offer.why),
+        true => format!("a window · {}", offer.why),
+        false => format!("“{}” · {}", offer.title, offer.why),
     }
 }
 
@@ -150,14 +150,12 @@ impl Workspace {
         if offers.len() > 1 {
             let open = self.model.offer_list == Some(pane);
             let what = format!("{app} opened {} windows {}", offers.len(), if open { "▴" } else { "▾" });
-            let toggle = Action::OfferList { pane: (!open).then_some(pane) };
-            let button = self
-                .offer_button(list_control(pane), "", theme::TEXT)
-                .child(what)
-                .on_click(cx.listener(move |this, _, window_, cx| this.offer_send(toggle.clone(), window_, cx)));
+            let button = self.offer_button(list_control(pane), "", theme::TEXT).child(what).on_click(
+                cx.listener(move |this, _, window_, cx| this.offer_send(Action::OfferList { pane }, window_, cx)),
+            );
             return Some(chip.child(button).into_any_element());
         }
-        let what = offer_words(&app, offer);
+        let what = format!("{app} opened {}", offer_words(offer));
         let chip = chip.child(cut_text(what).text_color(rgb(theme::MUTED)));
         Some(chip.children(self.offer_choices(offer.window, cx)).into_any_element())
     }
@@ -168,15 +166,11 @@ impl Workspace {
         (self.model.offer_list == Some(pane)).then_some(())?;
         let offers = self.model.offers_at(pane);
         let rows = offers.iter().map(|offer| {
-            let what = match offer.title.is_empty() {
-                true => format!("a window · {}", offer.why),
-                false => format!("“{}” · {}", offer.title, offer.why),
-            };
             div()
                 .flex()
                 .items_center()
                 .gap_1()
-                .child(cut_text(what).flex_1().text_color(rgb(theme::TEXT)))
+                .child(cut_text(offer_words(offer)).flex_1().text_color(rgb(theme::TEXT)))
                 .children(self.offer_choices(offer.window, cx))
         });
         let list = div()
@@ -253,10 +247,7 @@ impl Workspace {
             "offer" => self.offer_send(Action::OfferAccept { window: id, axis: Axis::Right }, window, cx),
             "offer-down" => self.offer_send(Action::OfferAccept { window: id, axis: Axis::Down }, window, cx),
             "offer-dismiss" => self.offer_send(Action::OfferDismiss { window: id }, window, cx),
-            "offer-list" => {
-                let pane = (self.model.offer_list != Some(id)).then_some(id);
-                self.offer_send(Action::OfferList { pane }, window, cx)
-            }
+            "offer-list" => self.offer_send(Action::OfferList { pane: id }, window, cx),
             _ => return false,
         }
         true
