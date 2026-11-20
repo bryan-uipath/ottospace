@@ -238,6 +238,11 @@ function appWindow(value: unknown, at: string): AppWindow {
   return out;
 }
 
+function cutText(value: unknown, at: string): { room: Rect; drawn: number } {
+  const o = fields(value, at);
+  return { room: rect(o.room, `${at}.room`), drawn: num(o.drawn, `${at}.drawn`) };
+}
+
 function tabOut(value: unknown, at: string): TabOut {
   const o = fields(value, at);
   return { tab: num(o.tab, `${at}.tab`), display: num(o.display, `${at}.display`) };
@@ -2088,6 +2093,7 @@ export function snapshot(value: unknown): Snapshot {
     row_menu: orNull(rowMenu)(o.row_menu, "row_menu"),
     scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),
     overflow: orNull(map(map(bool)))(o.overflow, "overflow"),
+    cut_texts: orNull(map(cutText))(o.cut_texts, "cut_texts"),
     capture: captureDrawn(o.capture, "capture"),
     bug: bugDrawn(o.bug, "bug"),
     spaces: list(spaceRow)(o.spaces, "spaces"),

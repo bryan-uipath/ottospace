@@ -151,6 +151,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     row_menu: null,
     scrollbars: {},
     overflow: null,
+    cut_texts: null,
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
     bug: { icon: false, report: null, blanked: null, pixels: null, controls: null },
     spaces: [

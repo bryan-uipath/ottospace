@@ -4074,6 +4074,9 @@ impl Workspace {
             // Test runs only: each scroll area laid out (not a terminal), also one that fits, and which of its edges
             // fade (`top`, `bottom`; the tab row's `left`, `right`). Null outside a test run.
             "overflow": std::env::var_os("OTTOSPACE_E2E").map(|_| self.bars.overflow()),
+            // Test runs only: each text a row cut with "…" laid out (`room`: its box; `drawn`: the
+            // whole text's shaped width). Null outside a test run.
+            "cut_texts": std::env::var_os("OTTOSPACE_E2E").map(|_| cut_texts_json()),
             // The capture key, and what was drawn of the draft or the brief in the right bar.
             "capture": self.capture_snapshot(),
             // The bug button (`icon`), the report being made (`report`: its marks with their
@@ -7645,16 +7648,103 @@ pub(crate) fn cut_text(text: impl Into<SharedString>) -> Div {
     // One line, as the cut shows: a line break would make the box taller and hide what follows it.
     let text: SharedString = text.into();
     let text: SharedString = if text.contains('\n') { text.replace('\n', " ").into() } else { text };
-    // The clear copy a letter at a time, as the cut adds them up (unkerned): a text that fits is
-    // never cut (`ToTo`, emoji, accents). Past `EACH` letters, the rest in one piece: it is cut anyway.
-    const EACH: usize = 128;
-    let split = text.char_indices().nth(EACH).map_or(text.len(), |(at, _)| at);
-    let letters = text[..split].chars().map(|c| SharedString::from(c.to_string()));
-    let rest = (split < text.len()).then(|| SharedString::from(text[split..].to_string()));
-    // Opacity, not a clear colour: emoji are painted in theirs.
-    let room = div().flex().pr(px(1.)).whitespace_nowrap().opacity(0.).child("\u{200b}").children(letters);
+    let room = div().flex().pr(px(1.)).child(Room(text.clone()));
     let over = div().absolute().inset_0().truncate().child(text);
-    div().relative().min_w_0().overflow_hidden().child(room.children(rest)).child(over)
+    div().relative().min_w_0().overflow_hidden().child(room).child(over)
+}
+
+/// `cut_text`'s room: its letters' widths added up unkerned, as GPUI's cut adds them, so a text
+/// that fits is never cut (`ToTo`, emoji, accents). Rounded up once: a text per letter rounded
+/// each, a point more a letter at most (`notes · 2` vs `flow-workbench   · 2`).
+struct Room(SharedString);
+
+impl IntoElement for Room {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for Room {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, ()) {
+        let style = window.text_style();
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let width =
+            |piece: &str| window.text_system().layout_line(piece, font_size, &[style.to_run(piece.len())], None).width;
+        // Past `EACH` letters, the rest in one piece: it is cut anyway.
+        const EACH: usize = 128;
+        let text = &self.0;
+        let split = text.char_indices().nth(EACH).map_or(text.len(), |(at, _)| at);
+        let letters = text[..split].chars().fold(px(0.), |sum, c| sum + width(c.encode_utf8(&mut [0; 4])));
+        let rest = if split < text.len() { width(&text[split..]) } else { px(0.) };
+        let mut layout = gpui::Style::default();
+        layout.size = size((letters + rest).ceil(), window.line_height()).map(Into::into);
+        (window.request_layout(layout, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        _: &mut App,
+    ) {
+        // A test run's `cut_texts`: the room and the whole text's shaped width.
+        if std::env::var_os("OTTOSPACE_E2E").is_some() {
+            let style = window.text_style();
+            let font_size = style.font_size.to_pixels(window.rem_size());
+            let run = [style.to_run(self.0.len())];
+            let drawn = window.text_system().layout_line(&self.0, font_size, &run, None).width;
+            CUT_TEXTS.with_borrow_mut(|cuts| cuts.insert(self.0.clone(), (bounds, drawn)));
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        _: &mut Window,
+        _: &mut App,
+    ) {
+    }
+}
+
+thread_local! {
+    /// Test runs only: each text `cut_text` laid out, its room's bounds and its shaped width.
+    static CUT_TEXTS: RefCell<HashMap<SharedString, (Bounds<Pixels>, Pixels)>> = RefCell::default();
+}
+
+/// The state's `cut_texts`: by text, its `room` (rect) and its `drawn` width, unrounded.
+fn cut_texts_json() -> serde_json::Value {
+    CUT_TEXTS.with_borrow(|cuts| {
+        let one = |(text, (room, drawn)): (&SharedString, &(Bounds<Pixels>, Pixels))| {
+            (text.to_string(), serde_json::json!({"room": rect(*room), "drawn": f32::from(*drawn)}))
+        };
+        serde_json::Value::Object(cuts.iter().map(one).collect())
+    })
 }
 
 /// A row of a secondary-bar list. A button at rest: its outline shows. Hover lifts it.

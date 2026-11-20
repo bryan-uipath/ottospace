@@ -1037,6 +1037,31 @@ fn a_repository_is_added_by_the_user_kept_in_their_order_and_an_old_folder_is_on
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_names_box_ends_where_its_text_does_however_long() {
+    // Each letter rounded up made `flow-workbench    · 2` of `notes · 2`: the box grew with the name.
+    let root = support::temp(&format!("ottospace-e2e-cut-gap-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    for name in ["notes", "flow-workbench-and-a-longer-name"] {
+        fake_repo(&root.join(name));
+    }
+    let otto = Otto::launch_with("cut-gap", &[("OTTOSPACE_REPOS", &root.to_string_lossy())]);
+    otto.call(json!({"cmd": "repos"}));
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    let drawn = |o: &Otto| {
+        let reply = o.call(json!({"cmd": "state"}));
+        let cuts = &reply["cut_texts"];
+        (!cuts["notes"].is_null() && !cuts["flow-workbench-and-a-longer-name"].is_null()).then(|| cuts.clone())
+    };
+    let cuts = otto.wait_for("both names to be drawn", drawn);
+    // Past its text, a box has less than the one rounding up: the same for both, within a point.
+    let gap = |name: &str| rect(&cuts[name]["room"])[2] - cuts[name]["drawn"].as_f64().unwrap();
+    let (short, long) = (gap("notes"), gap("flow-workbench-and-a-longer-name"));
+    assert!((0.0..2.0).contains(&short) && (0.0..2.0).contains(&long), "gaps {short} and {long}: {cuts}");
+    assert!((long - short).abs() <= 1.0, "gaps {short} and {long}: {cuts}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_long_repos_list_keeps_each_name_over_its_checkouts() {
     // More repositories than the bar is tall; the third has a linked worktree.
     let root = support::temp(&format!("ottospace-e2e-repos-list-{}", std::process::id()));

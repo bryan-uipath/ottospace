@@ -1701,6 +1701,9 @@ export interface Snapshot {
   /** Test runs only: each scroll area laid out (not a terminal), also one that fits, and which edges fade:
    * `top`, `bottom` down a list, `left`, `right` across the tab row. Else null. */
   overflow: Record<string, Record<string, boolean>> | null;
+  /** Test runs only: each text a row cut with "…" laid out, by text: its box (`room`) and the
+   * whole text's shaped width (`drawn`). Else null. */
+  cut_texts: Record<string, { room: Rect; drawn: number }> | null;
   /** The capture key, and what was drawn of the draft or the brief in the right bar. */
   capture: {
     /** The registered capture key, or null. */
