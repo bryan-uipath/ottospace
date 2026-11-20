@@ -57,7 +57,7 @@ Out of slice 1, by kind, each joining the same queue later:
 
 | Kind | Joins | Why not yet |
 |---|---|---|
-| Permission requests (Allow / Deny) | slice 2 | Their `s` (Show all) is the card's skip key, and Deny with a message types in the drawer's composer. Needs the owner's pick of keys |
+| Permission requests (Allow / Deny) | slice 2 | Their usual keys (owner, 2026-11-20); their `s` (Show all) is also the card's skip key, and Deny with a message types in the drawer's composer |
 | A task in a terminal view (TUI) asking | later | ottospace cannot read its question: only its Needs you state |
 | A session that stopped without asking (Needs you after `session_quiet_minutes`) | slice 6 | Needs a recap and a question written for it (a model call ottospace does not make today) |
 | Pull requests waiting on review (`prs.rs`) | later | Other people's text; their answer is outward-facing (a review), the person's on GitHub |
@@ -122,8 +122,8 @@ Nothing on screen. `ottospace-core/src/model/decisions.rs`.
   workbook, never on the row once it ends; `Kind::Decision`, a pane only `DecisionsOpen` makes.
 - `Model::decision_queue`: the order above. `DecisionsOpen` (with a non-empty queue: a tab of
   `Owner::Decisions` holding one `Kind::Decision` pane, on show; open already: shown),
-  `DecisionsAsk { task, ticket, act }` (the card's `ask::Act`; a number on a card of one
-  single-select question picks and sends), `DecisionsSkip { task, ticket }`, `DecisionsLater
+  `DecisionsAsk { task, ticket, act }` (the card's `ask::Act`; a number picks; ↵
+  sends), `DecisionsSkip { task, ticket }`, `DecisionsLater
   { task, ticket, until }` (the task snoozed until then: one hour, the shell's `SNOOZE_MS`),
   `DecisionsClose`. Each names the card it is for: one that moved on meanwhile does nothing.
 - After every step (`settle_decisions`): the card shown is the first of the queue; one answered
@@ -161,8 +161,8 @@ Nothing on screen. `ottospace-core/src/model/decisions.rs`.
 
 ### 2. Permission requests join
 
-Allow / Deny cards in the queue, drawn by the permission card's view. Needs the owner's keys
-(below). Core test: a permission card's place in the order; its Allow is never a number key's
+Allow / Deny cards in the queue, drawn by the permission card's view, with their usual keys
+(owner, 2026-11-20). Core test: a permission card's place in the order; its Allow is never a number key's
 reflex (a cut request still needs Show all first).
 
 ### 3. The recap and the recommendation

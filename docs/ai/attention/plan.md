@@ -84,8 +84,8 @@ at a time. Made for a block: "15 minutes of decisions".
     listed repositories and worktrees, folders the agent was given). Today the viewer opens any
     readable absolute path; evidence would be narrower.
 - **A card**: the question; a three-line recap of where the task stands; the options; the
-  agent's recommendation, marked. Keys 1–4 answer (ask cards have number keys today); the agent
-  resumes at once.
+  agent's recommendation, marked. Keys 1–4 pick and ↵ sends (owner, 2026-11-20); the
+  agent then resumes.
 - **Order**: an agent blocked now, then deadline, then age. Each card says why it is where it is.
 - **Flow that never slows**: "3 of 7"; on an answer the seal plays while the next card is already
   usable; the options' details animate in.
