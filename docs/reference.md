@@ -1072,6 +1072,8 @@ and `TERM_PROGRAM_VERSION`, whatever terminal started ottospace. When ottospace 
 nor `LC_ALL` (started from the Dock), they get `LANG` from the system's region as UTF-8 (`de_CH.UTF-8`),
 or `en_US.UTF-8` when macOS has no such locale. `scripts/term-probe` prints a test
 card of colours, styles, glyphs and replies, to compare terminals side by side.
+A program asking for the terminal's colours (OSC 10, 11, 12 and 4, e.g. to pick a light or dark
+theme) or its size in points (CSI 14 t) gets the answer. It never reads the clipboard (OSC 52).
 Its header names its directory, and the program in front of the shell while one runs:
 `app-api · cargo test`. An app pane's header shows the app's icon and the window's title; an
 empty pane's, nothing.
