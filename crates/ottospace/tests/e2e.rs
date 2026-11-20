@@ -6875,7 +6875,8 @@ fn row_of(reply: &Value) -> Vec<String> {
 
 /// The owner: "drag-to-reorder workspaces … the workspace tab strip is the titlebar so it drags
 /// the whole window". A space pressed and moved along the top row is carried there; the window
-/// stays where it is. A client's drag, and a press on the row's empty part, move no space.
+/// stays where it is. A client's drag, and a press on the row's empty part, move no space. A
+/// task's tab of no workspace moves too; the Workspaces list stays as it was.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_space_dragged_along_the_top_row_lands_there_and_the_window_stays() {
@@ -6897,7 +6898,7 @@ fn a_space_dragged_along_the_top_row_lands_there_and_the_window_stays() {
     let refused = otto.drag(from, to);
     assert_eq!((row_of(&refused), &refused["state"]["reorder"]), (row.clone(), &Value::Null));
 
-    // Mid-drag the space is carried; Esc puts it back.
+    // Mid-drag the space is carried: not drawn, a bar where it lands (after the last); Esc puts it back.
     let mouse = |action: &str, p: [f64; 2]| {
         otto.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "as": "user"}))
     };
@@ -6905,8 +6906,11 @@ fn a_space_dragged_along_the_top_row_lands_there_and_the_window_stays() {
     mouse("move", [from[0] + 20.0, from[1]]);
     let carried = mouse("move", to);
     assert_eq!(carried["state"]["reorder"]["to"], 3, "{}", carried["state"]["reorder"]);
+    assert_eq!(carried["space_rects"][1], Value::Null, "the carried tab is drawn");
+    let (bar, last) = (rect(&carried["reorder_bar"]), space(&carried, 3));
+    assert!((bar[0] + bar[2] - last[0] - last[2]).abs() < 1.0, "bar {bar:?}, last tab {last:?}");
     let escaped = otto.user_key("escape");
-    assert_eq!(escaped["state"]["reorder"], Value::Null);
+    assert_eq!((&escaped["state"]["reorder"], &escaped["reorder_bar"]), (&Value::Null, &Value::Null));
     mouse("up", to);
     assert_eq!(row_of(&otto.drawn()), row);
 
@@ -6924,6 +6928,17 @@ fn a_space_dragged_along_the_top_row_lands_there_and_the_window_stays() {
     assert_eq!(over["state"]["reorder"], Value::Null);
     let up = mouse("up", at(space(&before, 1), 0.5, 0.5));
     assert_eq!(row_of(&up), moved);
+
+    // A task's tab, of no workspace, dragged between two workspaces' lands there; the list stays.
+    otto.call(json!({"cmd": "task_add", "title": "fix", "state": "running"}));
+    let opened = otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+    assert_eq!(row_of(&opened).last().map(String::as_str), Some("task:1"), "{:?}", row_of(&opened));
+    let shown = otto.drawn();
+    let names = workspace_names(&shown);
+    let dropped = otto.user_drag(at(space(&shown, 4), 0.5, 0.5), at(space(&shown, 2), 0.1, 0.5));
+    let between = vec![moved[0].clone(), moved[1].clone(), "task:1".into(), moved[2].clone(), moved[3].clone()];
+    assert_eq!((row_of(&dropped), workspace_names(&dropped)), (between, names));
+    assert_eq!(otto.drawn()["window"], before["window"]);
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -6942,6 +6957,20 @@ fn a_workspaces_row_dragged_above_another_moves_there_and_stays_after_a_restart(
     assert_eq!(workspace_names(&before), ["Arima", "Slack", "Zoom"]);
     let rows = |reply: &Value, n: usize| rect(&reply["workbooks"][n]["row"]);
     let (zoom, arima) = (rows(&before, 2), rows(&before, 0));
+    // Mid-drag: the row carried is not drawn; a bar above Arima's says where it lands.
+    let mouse = |action: &str, p: [f64; 2]| {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "as": "user"}))
+    };
+    mouse("down", at(zoom, 0.5, 0.5));
+    mouse("move", at(zoom, 0.5, 0.0));
+    let carried = mouse("move", at(arima, 0.5, 0.1));
+    assert_eq!(carried["state"]["reorder"]["to"], 0, "{}", carried["state"]["reorder"]);
+    assert_eq!(carried["workbooks"][2]["row"], Value::Null, "the carried row is drawn");
+    let bar = rect(&carried["reorder_bar"]);
+    assert!(bar[1] < arima[1] && bar[1] + bar[3] > arima[1] - 6.0, "bar {bar:?}, Arima {arima:?}");
+    otto.user_key("escape");
+    mouse("up", at(arima, 0.5, 0.1));
+    assert_eq!(workspace_names(&otto.drawn()), ["Arima", "Slack", "Zoom"]);
     let dropped = otto.user_drag(at(zoom, 0.5, 0.5), at(arima, 0.5, 0.1));
     assert_eq!(workspace_names(&dropped), ["Zoom", "Arima", "Slack"]);
     assert_eq!(dropped["state"]["reorder"], Value::Null);

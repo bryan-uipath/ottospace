@@ -1682,6 +1682,8 @@ export interface Snapshot {
   tabs: (Rect | null)[];
   /** Each space of the top row, by its place there. */
   space_rects: (Rect | null)[];
+  /** Where the item a reorder drag carries lands: its bar, while one is carried. */
+  reorder_bar: Rect | null;
   /** The agent chip, or null: the selected space's conversation while it is closed and nothing else is in the drawer's place. */
   agent_chip: AgentChip | null;
   /** The left column's title strip, and the open section's header (null: none open). */

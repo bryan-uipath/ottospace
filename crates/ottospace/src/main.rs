@@ -980,6 +980,9 @@ struct Workspace {
     divider: Option<divider::Hold>,
     /// Where the button went down on a Workspaces row or a top-row space: a drag starts past a few points.
     reorder_from: Option<gpui::Point<Pixels>>,
+    /// The room the item a reorder drag carries took, as last drawn (a space's width, a row's
+    /// height and gap): its row or list keeps it while it is not drawn.
+    reorder_room: f32,
     /// A `mouse` request holds the button down: a move before its release is a drag.
     held: bool,
     /// Releases a button no request came back for. Replaced, so stopped, by each `mouse` request.
@@ -1699,6 +1702,7 @@ impl Workspace {
             drop_at: None,
             divider: None,
             reorder_from: None,
+            reorder_room: 0.,
             held: false,
             abandoned: None,
             injected: false,
@@ -3949,6 +3953,8 @@ impl Workspace {
             "tabs": tabs,
             // Each space of the top row, by its place there.
             "space_rects": spaces,
+            // Where the item carried by a reorder drag lands: its bar, while one is carried.
+            "reorder_bar": self.controls.bounds("reorder-bar").map(rect),
             // The agent chip, or null: the selected space's conversation while it is closed.
             "agent_chip": self.chip_snapshot(),
             // The left column's title strip, and the open section's header (null: none open).
@@ -7125,15 +7131,9 @@ impl Workspace {
         let badges =
             if !compact || fits(others) { others } else { (0..others).rev().find(|n| fits(n + 1)).unwrap_or(0) };
         let mut room_for = badges;
-        let mut placed: Vec<(usize, &Space)> = shown.into_iter().enumerate().collect();
-        // The space carried is drawn where it would land: the others make room.
-        let carried = self.space_carried(cx);
-        if let Some((from, to)) = carried {
-            let space = placed.remove(from);
-            placed.insert(to.min(placed.len()), space);
-        }
-        let shown: Vec<_> = placed
+        let mut shown: Vec<(usize, &Space)> = shown
             .into_iter()
+            .enumerate()
             .filter(|(_, space)| {
                 let keep = space.of == selected || space.of == Owner::Home || room_for > 0;
                 if keep && space.of != selected && space.of != Owner::Home {
@@ -7142,6 +7142,18 @@ impl Workspace {
                 keep
             })
             .collect();
+        // The space carried is not drawn: the others close up, sized as with it, and a bar shows
+        // where it lands: before the one at `to` among them, else after the last drawn before (true).
+        let (mut bar, carried) = (None, self.space_carried(cx));
+        if let Some((from, to)) = carried {
+            shown.retain(|(place, _)| *place != from);
+            let target = (0..self.model.shown_spaces().len()).filter(|place| *place != from).nth(to);
+            let drawn = shown.iter().map(|(place, _)| *place);
+            bar = match target {
+                Some(at) if drawn.clone().any(|place| place == at) => Some((at, false)),
+                _ => drawn.filter(|place| target.is_none_or(|at| *place < at)).last().map(|place| (place, true)),
+            };
+        }
         let more = others - badges;
         let dots = self.model.listen_dots();
         // The heard pane's space left off for room: the count carries its dot.
@@ -7258,20 +7270,17 @@ impl Workspace {
             };
             let to = of.clone();
             let dragged = reorder::DraggedItem { item: ReorderItem::Space { of: of.clone() }, place };
-            let chip = SharedString::from(title.clone());
-            let lifted = carried.is_some_and(|(from, _)| from == place);
+            let bar = bar.filter(|(at, _)| *at == place).map(|(_, after)| reorder::bar(&self.controls, true, after));
             div()
                 .id(("space", place))
                 .group("space")
                 // Home's is not carried: nothing goes before it.
                 .when(of != Owner::Home, |d| {
-                    d.on_drag(dragged, move |_, offset, _, cx| cx.new(|_| DragChip { label: chip.clone(), offset }))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, e: &MouseDownEvent, _, _| this.reorder_from = Some(e.position)),
-                        )
+                    d.on_drag(dragged, |_, _, _, cx| cx.new(|_| gpui::EmptyView)).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, e: &MouseDownEvent, _, _| this.reorder_from = Some(e.position)),
+                    )
                 })
-                .when(lifted, |d| d.opacity(0.4))
                 .relative()
                 .h_full()
                 // The selected space keeps its name; the others give way first.
@@ -7315,6 +7324,7 @@ impl Workspace {
                 .children(dots)
                 .children(hide.filter(|_| !small))
                 .child(self.controls.mark(format!("space:{place}")))
+                .children(bar)
                 // A tab dropped on a space moves there.
                 .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
                 .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
@@ -7406,6 +7416,8 @@ impl Workspace {
                     .flex()
                     .overflow_hidden()
                     .children(spaces)
+                    // The carried space's room, at the end: a release where the row was still drops.
+                    .when(carried.is_some(), |d| d.child(div().flex_none().w(px(self.reorder_room))))
                     // The window is not moved from here: a press on a space is the space's.
                     .child(
                         canvas(

@@ -100,7 +100,7 @@ workspace; tabs of nothing (a dismissed task's, a client's) go to the workspace 
 | I want to | Do |
 |---|---|
 | Make a new, empty one | + on the top row, or in the Workspaces section's header: "Workspace 2", one empty tab, selected. It never takes the tab on show |
-| Reorder | Drag its row in the Workspaces section, or its space on the top row: one order for both, kept. Esc puts it back |
+| Reorder | Drag its row in the Workspaces section, or its space on the top row: one order for both, kept. A task's tab of no workspace drags anywhere after Home and keeps its place. Esc puts it back |
 | Take it off the top row | Its ×, or ⌘⌃W. Nothing in it stops; it stays listed, and its row opens it again |
 | Close a temporary one for good | Its ×, ⌘⌃W, or close its last tab: off the list; Undo on a toast, and on its row in the Workspaces section, for six seconds. A terminal in it runs a program: asked first |
 | Keep a temporary one | Its row's … ▸ Keep, the … on its item on the top row, File ▸ Keep Workspace, or rename it. A task or a Repos click keeps it too |

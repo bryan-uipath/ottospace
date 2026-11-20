@@ -343,22 +343,24 @@ impl Workspace {
                 gpui::AnyView::from(cx.new(|_| crate::Tooltip(summary.clone().into())))
             }
         };
-        // The row carried, while the drag lasts, and the row whose edge its line is drawn on:
-        // above it moving up, below it moving down.
+        // The row carried, while the drag lasts, is not drawn: the others close up, and a bar on
+        // the edge of the one it goes before (after the last: below it) shows where it lands.
         let carried = self.model.reorder().filter(|_| cx.has_active_drag()).and_then(|reorder| match reorder.item {
             ReorderItem::Workbook { id } => Some((id, reorder.to)),
             ReorderItem::Space { .. } => None,
         });
-        let from = carried.and_then(|(id, _)| rows.iter().position(|row| row.id == id));
+        let others: Vec<u32> =
+            rows.iter().map(|row| row.id).filter(|id| carried.is_none_or(|(c, _)| c != *id)).collect();
+        let before = carried.and_then(|(_, to)| others.get(to).copied());
         let mut children = Vec::new();
         let mut index = 0;
-        for (place, row) in rows.into_iter().enumerate() {
+        for row in rows.into_iter() {
             let (id, selected) = (row.id, self.model.list == Some(index));
             index += 1;
-            let line = match (from, carried) {
-                (Some(from), Some((_, to))) if to == place && to != from => Some(to > from),
-                _ => None,
-            };
+            if carried.is_some_and(|(c, _)| c == id) {
+                index += if row.unfolded { row.tabs.len() } else { 0 };
+                continue;
+            }
             let renaming = typing(id, None);
             // ▸ or ▾ before a workbook of more than one tab: lists its tabs under it.
             let fold = (row.tabs.len() > 1).then(|| {
@@ -390,16 +392,11 @@ impl Workspace {
             };
             let shown = self.dots_shown(&ListRow::Workbook(id));
             let dots = self.row_dots(ListRow::Workbook(id), shown, cx);
-            // Where it lands: a line in the gap, drawn over it, so no row moves.
-            let line = line.map(|below| {
-                let line = div().absolute().left_0().right_0().h(px(2.)).rounded_full().bg(rgb(theme::PRIMARY));
-                if below { line.bottom(px(-3.)) } else { line.top(px(-3.)) }
-            });
+            // Where it lands: a bar in the gap, drawn over it, so no row moves.
+            let line = (before == Some(id)).then(|| crate::reorder::bar(&self.controls, false, false));
             let dragged = DraggedItem { item: ReorderItem::Workbook { id }, place: 0 };
-            let chip = gpui::SharedString::from(row.name.clone());
             let book = crate::sidebar_row(ElementId::Name(format!("workbook:{id}").into()), selected)
                 .relative()
-                .when(from.is_some_and(|from| from == place), |d| d.opacity(0.4))
                 .children(line)
                 // Not while its name is typed: a drag there selects text.
                 .when(!renaming, |d| {
@@ -407,9 +404,7 @@ impl Workspace {
                         gpui::MouseButton::Left,
                         cx.listener(|this, e: &gpui::MouseDownEvent, _, _| this.reorder_from = Some(e.position)),
                     )
-                    .on_drag(dragged, move |_, offset, _, cx| {
-                        cx.new(|_| crate::DragChip { label: chip.clone(), offset })
-                    })
+                    .on_drag(dragged, |_, _, _, cx| cx.new(|_| gpui::EmptyView))
                 })
                 .tooltip(tip(summary))
                 .on_hover(cx.listener(move |this, over: &bool, _, cx| this.row_hover(ListRow::Workbook(id), *over, cx)))
@@ -453,6 +448,12 @@ impl Workspace {
                 tabs.push(tab_row.into_any_element());
             }
             children.extend(crate::well(tabs, 4.));
+        }
+        // The carried row's room, at the list's end (its height holds); after the last row, the bar on it.
+        if carried.is_some() {
+            let end = div().relative().flex_none().h(px((self.reorder_room - crate::reorder::GAP).max(0.)));
+            let end = end.children(before.is_none().then(|| crate::reorder::bar(&self.controls, false, false)));
+            children.push(end.into_any_element());
         }
         // Each closing temporary workspace under the others, with its own Undo until its time is up,
         // whatever the toast offers since. Not a list row: Undo is its one act.

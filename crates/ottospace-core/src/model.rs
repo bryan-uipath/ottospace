@@ -4094,7 +4094,7 @@ impl Default for Model {
             reorder: None,
             next_id: 0,
             // Born settled: Home's tab is its last, as `settle_spaces` leaves it after any step.
-            spaces: vec![Space { last: Some(HOME_TAB), ..Space::new(Owner::Home) }],
+            spaces: vec![Space { last: Some(HOME_TAB), placed: true, ..Space::new(Owner::Home) }],
             drawer_open: false,
             folded: None,
             unlinked: Vec::new(),
