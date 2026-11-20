@@ -61,6 +61,7 @@ use ottospace_core::{
 use ottospace_mac::window::{Mouse, MouseKind};
 use ottospace_mac::{ax, capture, display, hotkey, icon, input, recovery};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use screencapturekit::cm::CMSampleBufferSCExt;
 use screencapturekit::prelude::*;
 
 mod agent_mode;
@@ -165,11 +166,16 @@ struct Latest {
     samples: AtomicU64,
     /// The frame held is from before the stream last started: a capture waits for a new one.
     old: AtomicBool,
+    /// The shape (width / height, as `f64` bits) of the part of the window the stream shows.
+    shape: AtomicU64,
 }
 
 impl Latest {
     fn expect(&self, config: &SCStreamConfiguration) {
         self.expected.store((config.width() as u64) << 32 | config.height() as u64, Relaxed);
+        let source = config.source_rect().size;
+        let shape = if source.height > 0.0 { source.width / source.height } else { 0.0 };
+        self.shape.store(shape.to_bits(), Relaxed);
     }
 }
 
@@ -186,6 +192,11 @@ impl SCStreamOutputTrait for Output {
         let buffer = unsafe { CVPixelBuffer::wrap_under_get_rule(ptr as CVPixelBufferRef) };
         let size = (buffer.get_width() as u64) << 32 | buffer.get_height() as u64;
         if size != self.0.expected.load(Relaxed) {
+            return;
+        }
+        // Not the window at its old size, scaled to fit until its app draws it at the new one.
+        let shape = f64::from_bits(self.0.shape.load(Relaxed));
+        if sample.content_rect().is_some_and(|c| !hosting::of_shape(shape, (c.size.width, c.size.height))) {
             return;
         }
         if let Ok(mut slot) = self.0.frame.lock() {
