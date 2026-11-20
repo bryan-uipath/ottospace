@@ -2106,6 +2106,7 @@ function cityDrawn(value: unknown, at: string): CityDrawn {
   return {
     on: cityOn(o.on, `${at}.on`),
     pictures: num(o.pictures, `${at}.pictures`),
+    small: list(cityOn)(o.small, `${at}.small`),
     places: orNull(num)(o.places, `${at}.places`),
     groups: orNull(num)(o.groups, `${at}.groups`),
     picture: orNull(pair)(o.picture, `${at}.picture`),

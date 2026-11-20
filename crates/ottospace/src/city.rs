@@ -17,7 +17,7 @@ use gpui::{
     fill, point, prelude::*, px, rgb,
 };
 use ottospace_core::atlas::{self, Atlas};
-use ottospace_core::empty::{self, Backdrop, Surface};
+use ottospace_core::empty::{self, Backdrop};
 use ottospace_core::model::Origin;
 use ottospace_core::model::city::At;
 use ottospace_core::scene::{self, Kind, Scene};
@@ -50,14 +50,46 @@ const LAYERS: usize = 8;
 /// each with whether its call ran (a file an agent wrote may be new, once the call ends).
 type Asked = (Vec<String>, Vec<(String, bool)>);
 
+/// A thread of its own that answers each job with `work`, in order: of the jobs waiting, only
+/// the last of each `key` (a newer ask for the same thing replaces the older), the others answered
+/// `None`. Each job comes back with its answer. Wakes the app for each.
+fn latest_each<J, K, R>(
+    key: fn(&J) -> K,
+    mut work: impl FnMut(&J) -> R + Send + 'static,
+) -> (Sender<J>, Receiver<(J, Option<R>)>)
+where
+    J: Send + 'static,
+    K: PartialEq + 'static,
+    R: Send + 'static,
+{
+    let (jobs, inbox) = std::sync::mpsc::channel::<J>();
+    let (done, answers) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok(job) = inbox.recv() {
+            let waiting: Vec<J> = std::iter::once(job).chain(inbox.try_iter()).collect();
+            let keys: Vec<K> = waiting.iter().map(key).collect();
+            for (i, job) in waiting.into_iter().enumerate() {
+                let newer = keys[i + 1..].contains(&keys[i]);
+                let answer = (!newer).then(|| work(&job));
+                if done.send((job, answer)).is_err() {
+                    return;
+                }
+            }
+            ottospace_mac::wake::post();
+        }
+    });
+    (jobs, answers)
+}
+
+/// A folder's read: the folder, and the folders git may run in.
+type ReadJob = (String, Vec<String>);
+
 /// Reads checkouts' files on a thread of its own: a folder when it comes on show, or the files
-/// its agents are at change. Every folder asked and not read yet goes in each job, so the
-/// newest job (the thread takes only it) leaves none out. No timer of its own.
+/// its agents are at change, once each (`latest_each`). No timer of its own.
 pub struct Reader {
-    jobs: Sender<Vec<(String, Vec<String>)>>,
-    reads: Receiver<Vec<(String, Option<Atlas>)>>,
+    jobs: Sender<ReadJob>,
+    reads: Receiver<(ReadJob, Option<Option<Atlas>>)>,
     asked: HashMap<String, Asked>,
-    pending: HashMap<String, Vec<String>>,
     held: HashMap<String, Arc<Atlas>>,
     /// How many reads came: for the state of a test run.
     came: usize,
@@ -65,40 +97,33 @@ pub struct Reader {
 
 impl Reader {
     pub fn new() -> Self {
-        let (jobs, reads) = crate::child::newest(|dirs: Vec<(String, Vec<String>)>| {
-            dirs.into_iter().map(|(dir, roots)| (dir.clone(), read(Path::new(&dir), &roots))).collect()
-        });
-        let (asked, pending, held) = (HashMap::new(), HashMap::new(), HashMap::new());
-        Self { jobs, reads, asked, pending, held, came: 0 }
+        let (jobs, reads) =
+            latest_each(|job: &ReadJob| job.0.clone(), |(dir, roots): &ReadJob| read(Path::new(dir), roots));
+        Self { jobs, reads, asked: HashMap::new(), held: HashMap::new(), came: 0 }
     }
 
-    /// The folders on show, each with what it is asked with: one whose roots or lit files
-    /// changed is read again. A folder no longer on show is forgotten, and read again when it
-    /// comes back.
+    /// The folders on show, each with what it is asked with: one new, or whose roots or lit
+    /// files changed, is read (again). A folder no longer on show is forgotten, and read again
+    /// when it comes back.
     fn ask(&mut self, on_show: HashMap<String, Asked>) {
-        let mut changed = false;
         for (dir, asked) in &on_show {
             if self.asked.get(dir) != Some(asked) {
-                self.pending.insert(dir.clone(), asked.0.clone());
-                changed = true;
+                let _ = self.jobs.send((dir.clone(), asked.0.clone()));
             }
         }
-        self.pending.retain(|dir, _| on_show.contains_key(dir));
         self.asked = on_show;
-        if changed {
-            let _ = self.jobs.send(self.pending.iter().map(|(dir, roots)| (dir.clone(), roots.clone())).collect());
-        }
     }
 
     /// Takes the reads that came. True if one did.
     fn take(&mut self) -> bool {
-        let came: Vec<(String, Option<Atlas>)> = self.reads.try_iter().flatten().collect();
+        let came: Vec<(String, Option<Atlas>)> =
+            self.reads.try_iter().filter_map(|((dir, _), read)| Some((dir, read?))).collect();
         let any = !came.is_empty();
         for (dir, read) in came {
             self.came += 1;
-            self.pending.remove(&dir);
+            // Too many kept: those of folders not on show go, never one on show.
             if self.held.len() >= KEPT && !self.held.contains_key(&dir) {
-                self.held.clear();
+                self.held.retain(|kept, _| self.asked.contains_key(kept));
             }
             match read {
                 // The same plan read again keeps its `Arc`: its picture is not made again.
@@ -210,8 +235,12 @@ struct Place {
     /// one is made).
     asked: Option<Key>,
     shown: Option<Key>,
-    /// Too small for a city (`empty::CITY_LEAST`): its lattice instead.
+    /// Too small for a city (`empty::CITY_LEAST`): its lattice instead. Measured: a frame laid
+    /// it out (a folder is read only for a place measured and not too small).
     small: bool,
+    measured: bool,
+    /// The scale of the window it is in.
+    scale: f32,
     /// Of the last paint: where, in window points, in which window, and how many names.
     bounds: Bounds<Pixels>,
     window: Option<WindowId>,
@@ -229,11 +258,12 @@ struct Place {
 #[derive(Default)]
 pub struct Drawn {
     pictures: HashMap<Key, Made>,
-    /// Sent to the picture's thread and not made yet, each with its plan.
-    pending: HashMap<Key, Arc<Atlas>>,
+    /// Sent to the picture's thread and not answered yet: never sent twice.
+    sent: HashSet<Key>,
+    /// Why a picture could not be made (no GPU, a failed render): never asked for again. Its
+    /// places draw the lattice.
+    failed: HashMap<Key, String>,
     places: HashMap<Floor, Place>,
-    /// Why there is no picture: no GPU, or the render failed. The lattice is drawn instead.
-    failed: Option<String>,
     renders: usize,
     paints: usize,
     /// Pictures no place shows: GPUI keeps each in the window's atlas until it is dropped.
@@ -242,37 +272,37 @@ pub struct Drawn {
 
 pub type Shared = Rc<RefCell<Drawn>>;
 
-/// Renders pictures on a thread of its own: each job is every picture asked and not made, and
-/// the thread takes only the newest. The GPU is opened at the first and kept; none (or
-/// `OTTOSPACE_CITY_NO_GPU` in a test run) and every picture fails.
+/// A picture asked for by a place.
+type PaintJob = (Floor, Key, Arc<Atlas>);
+
+/// Renders pictures on a thread of its own, the newest each place asked for only (a camera or a
+/// size that moved on is skipped: `latest_each`). The GPU is opened at the first and kept; none
+/// (or `OTTOSPACE_CITY_NO_GPU` in a test run) and every picture fails.
 pub struct Painter {
-    jobs: Sender<Vec<(Key, Arc<Atlas>)>>,
-    made: Receiver<Vec<(Key, Result<Made, String>)>>,
+    jobs: Sender<PaintJob>,
+    made: Receiver<(PaintJob, Option<Result<Made, String>>)>,
 }
 
 impl Painter {
     pub fn new() -> Self {
-        let gpu: RefCell<Option<Result<Gpu, String>>> = RefCell::new(None);
-        let (jobs, made) = crate::child::newest(move |wanted: Vec<(Key, Arc<Atlas>)>| {
-            let mut made = Vec::new();
-            for (key, plan) in wanted {
-                let mut held = gpu.borrow_mut();
-                let opened = held.get_or_insert_with(|| {
+        let mut gpu: Option<Result<Gpu, String>> = None;
+        let (jobs, made) = latest_each(
+            |job: &PaintJob| job.0,
+            move |(_, key, plan): &PaintJob| {
+                let opened = gpu.get_or_insert_with(|| {
                     let refused = std::env::var_os("OTTOSPACE_E2E").and(std::env::var_os("OTTOSPACE_CITY_NO_GPU"));
                     if refused.is_some() { Err("no GPU (test)".into()) } else { Gpu::new() }
                 });
                 // A panic in the GPU's code fails this picture, and the GPU is opened again next time.
                 let picture = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    opened.as_ref().map_err(Clone::clone).and_then(|gpu| make(gpu, &key, &plan))
+                    opened.as_ref().map_err(Clone::clone).and_then(|gpu| make(gpu, key, plan))
                 }));
-                let picture = picture.unwrap_or_else(|_| {
-                    *held = None;
+                picture.unwrap_or_else(|_| {
+                    gpu = None;
                     Err("the render panicked".into())
-                });
-                made.push((key, picture));
-            }
-            made
-        });
+                })
+            },
+        );
         Self { jobs, made }
     }
 }
@@ -330,7 +360,12 @@ impl Drawn {
     fn picture(&self, place: &Place) -> Option<&Made> {
         let dir = &place.asked.as_ref()?.dir;
         let made = [&place.asked, &place.shown].into_iter().flatten().find_map(|key| self.pictures.get(key));
-        made.filter(|made| self.failed.is_none() && !place.small && made.key.dir == *dir)
+        made.filter(|made| !place.small && made.key.dir == *dir && self.failure(place).is_none())
+    }
+
+    /// Why `place`'s picture could not be made, if it could not.
+    fn failure(&self, place: &Place) -> Option<&String> {
+        self.failed.get(place.asked.as_ref()?)
     }
 
     /// The box under `at` (window points) in `floor`'s picture, by its index; none over the
@@ -348,9 +383,10 @@ impl Drawn {
 
     /// For the state of a test run: `floor`'s counts, its picture's size, where it and the lit
     /// buildings are, in window points.
-    fn snapshot(&self, floor: Floor, reads: usize, scale: f32) -> serde_json::Value {
+    fn snapshot(&self, floor: Floor, reads: usize) -> serde_json::Value {
         let place = self.places.get(&floor);
         let made = place.and_then(|place| self.picture(place));
+        let (scale, failed) = (place.map(|place| place.scale), place.and_then(|place| self.failure(place)));
         let [x, y, w, h] = rect(place.map(|place| place.bounds).unwrap_or_default());
         let lit: Vec<[f32; 4]> = (made.iter().flat_map(|made| &made.lit))
             .map(|(r, _)| [x + r[0] * w, y + r[1] * h, r[2] * w, r[3] * h])
@@ -359,15 +395,10 @@ impl Drawn {
             (made.iter().flat_map(|made| &made.lit)).map(|(_, (tx, ty))| [x + tx * w, y + ty * h]).collect();
         let beacon = place.and_then(|place| place.beacon);
         let hovered = beacon.map(|(file, lit, at)| serde_json::json!({ "file": file, "lit": lit, "beacon": rect(at) }));
-        let on = match floor {
-            Floor::Pane(id) => serde_json::json!({ "pane": id }),
-            Floor::Out(tab) => serde_json::json!({ "out": tab }),
-            Floor::Main => serde_json::json!("tab"),
-        };
         serde_json::json!({
-            "on": on, "places": made.map(|made| made.places), "groups": made.map(|made| made.groups),
+            "on": on(floor), "places": made.map(|made| made.places), "groups": made.map(|made| made.groups),
             "picture": made.map(|made| made.key.size), "bounds": [x, y, w, h], "scale": scale,
-            "lit": lit, "labels": place.map_or(0, |place| place.labels), "failed": self.failed, "reads": reads,
+            "lit": lit, "labels": place.map_or(0, |place| place.labels), "failed": failed, "reads": reads,
             "renders": self.renders, "paints": self.paints, "render_us": made.map(|made| made.render_us),
             "hovered": hovered, "lit_tops": tops, "pictures": self.pictures.len(),
         })
@@ -388,13 +419,19 @@ impl Workspace {
     /// pictures made; forgets the places gone and drops the pictures none shows. Redraws when
     /// a read or a picture came.
     pub(crate) fn read_city(&mut self, cx: &mut Context<Self>) {
-        let roots = self.model.checkout_roots();
+        let mut roots = None;
         let mut on_show: HashMap<String, (Vec<String>, Vec<(String, bool)>)> = HashMap::new();
         let mut floors = HashSet::new();
         for at in self.model.empty_places() {
             let Some(city) = self.model.city_at(at) else { continue };
-            floors.insert(self.floor_of(at));
-            let lit = &mut on_show.entry(city.dir.to_string()).or_insert_with(|| (roots.clone(), Vec::new())).1;
+            let floor = self.floor_of(at);
+            floors.insert(floor);
+            // Read only for a place a frame laid out large enough for a city.
+            if !self.city_drawn.borrow().places.get(&floor).is_some_and(|place| place.measured && !place.small) {
+                continue;
+            }
+            let roots = roots.get_or_insert_with(|| self.model.checkout_roots()).clone();
+            let lit = &mut on_show.entry(city.dir.to_string()).or_insert_with(|| (roots, Vec::new())).1;
             for one in &city.lit {
                 let one = (one.label.to_string(), one.running);
                 if !lit.contains(&one) {
@@ -406,15 +443,15 @@ impl Workspace {
         let mut redraw = self.city.take();
         let hints = self.home.clone();
         let mut drawn = self.city_drawn.borrow_mut();
-        let made: Vec<(Key, Result<Made, String>)> = self.city_painter.made.try_iter().flatten().collect();
-        for (key, picture) in made {
-            drawn.renders += 1;
-            drawn.pending.remove(&key);
+        let made: Vec<(PaintJob, Option<Result<Made, String>>)> = self.city_painter.made.try_iter().collect();
+        for ((_, key, _), picture) in made {
+            drawn.sent.remove(&key);
             redraw = true;
-            let asked = drawn.places.values().any(|place| place.asked.as_ref() == Some(&key));
+            // Skipped: a newer picture of that place was asked for.
+            let Some(picture) = picture else { continue };
+            drawn.renders += 1;
             match picture {
                 Ok(made) => {
-                    drawn.failed = None;
                     if let Some(old) = drawn.pictures.insert(key, made) {
                         drawn.retired.push(old.image);
                     }
@@ -433,12 +470,10 @@ impl Workspace {
                         }
                     }
                 }
-                // A failure of a picture no longer asked for says nothing.
-                Err(why) if asked => drawn.failed = Some(why),
-                Err(_) => {}
+                Err(why) => drop(drawn.failed.insert(key, why)),
             }
         }
-        // Places gone are forgotten; a picture no place asks for or shows is dropped.
+        // Places gone are forgotten; a picture or failure no place asks for or shows is dropped.
         drawn.places.retain(|floor, _| floors.contains(floor));
         let used: HashSet<Key> =
             drawn.places.values().flat_map(|place| [place.asked.clone(), place.shown.clone()]).flatten().collect();
@@ -448,7 +483,7 @@ impl Workspace {
                 drawn.retired.push(old.image);
             }
         }
-        drawn.pending.retain(|key, _| used.contains(key));
+        drawn.failed.retain(|key, _| used.contains(key));
         let retired = std::mem::take(&mut drawn.retired);
         drop(drawn);
         for image in retired {
@@ -466,21 +501,19 @@ impl Workspace {
     /// place, is painted at once.
     pub(crate) fn render_city(&self, floor: Floor, at: At, lattice: AnyElement) -> AnyElement {
         let Some(city) = self.model.city_at(at) else { return lattice };
-        let Some(plan) = self.city.held.get(city.dir).cloned() else { return lattice };
+        // Not read yet (or too large): the place is still laid out, so its size is known.
+        let plan = self.city.held.get(city.dir).cloned();
         // The checkout's own name: a file in its root is labelled with it.
         let folder =
             Path::new(city.dir).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
         let lit: Vec<(String, u32)> = (city.lit.iter())
             .flat_map(|lit| {
                 let colour = theme::identity(lit.colour);
-                plan.labelled(lit.label, &folder).map(move |place| (place.id.clone(), colour)).collect::<Vec<_>>()
+                let places = plan.iter().flat_map(|plan| plan.labelled(lit.label, &folder));
+                places.map(move |place| (place.id.clone(), colour)).collect::<Vec<_>>()
             })
             .collect();
-        let surface = match floor {
-            Floor::Pane(_) => Surface::Pane,
-            Floor::Out(_) => Surface::OutTab,
-            Floor::Main => Surface::Tab,
-        };
+        let surface = floor.surface();
         let (dir, drawn, jobs) = (city.dir.to_string(), self.city_drawn.clone(), self.city_painter.jobs.clone());
         let (home, hints) = (self.home.clone(), self.home.clone());
         let shows = {
@@ -498,16 +531,25 @@ impl Workspace {
                 // Pixels, as the window draws them: the picture is never scaled.
                 let scale = window.scale_factor();
                 let size = |v: f32| (v * scale).round() as u32;
-                let key = Key { dir, plan: Arc::as_ptr(&plan) as usize, lit, size: (size(w), size(h)) };
                 let place = held.places.entry(floor).or_default();
-                (place.bounds, place.small) = (bounds, small);
-                let wanted = !small && key.size.0 > 0 && key.size.1 > 0;
-                place.asked = wanted.then(|| key.clone());
-                if wanted && !held.pictures.contains_key(&key) && held.pending.insert(key, plan).is_none() {
-                    let plans: Vec<(Key, Arc<Atlas>)> =
-                        held.pending.iter().map(|(key, plan)| (key.clone(), plan.clone())).collect();
-                    if jobs.send(plans).is_err() {
-                        held.failed = Some("the picture's thread ended".into());
+                // A city that became too small, or large enough: the frame after shows its lattice.
+                if place.measured && place.small != small {
+                    window.refresh();
+                }
+                (place.bounds, place.small, place.measured, place.scale) = (bounds, small, true, scale);
+                let key = plan.as_ref().map(|plan| Key {
+                    dir,
+                    plan: Arc::as_ptr(plan) as usize,
+                    lit,
+                    size: (size(w), size(h)),
+                });
+                let key = key.filter(|key| !small && key.size.0 > 0 && key.size.1 > 0);
+                place.asked = key.clone();
+                // Each picture asked for once: not made, not on its way, not failed.
+                if let (Some(key), Some(plan)) = (key, plan) {
+                    let new = !held.pictures.contains_key(&key) && !held.failed.contains_key(&key);
+                    if new && held.sent.insert(key.clone()) && jobs.send((floor, key, plan)).is_err() {
+                        held.sent.clear();
                     }
                 }
                 drop(held);
@@ -550,7 +592,7 @@ impl Workspace {
 
     /// For the state of a test run: the city of the first empty place on show that draws one
     /// (the main window's tab, else its empty panes by id, else a folded-out tab); null with none.
-    pub(crate) fn city_snapshot(&self, scale: f32) -> serde_json::Value {
+    pub(crate) fn city_snapshot(&self) -> serde_json::Value {
         let mut floors: Vec<Floor> = (self.model.empty_places().into_iter())
             .filter(|at| self.model.city_at(*at).is_some_and(|city| self.city.held.contains_key(city.dir)))
             .map(|at| self.floor_of(at))
@@ -560,13 +602,31 @@ impl Workspace {
             Floor::Pane(id) => (1, *id),
             Floor::Out(tab) => (2, *tab),
         });
-        let first = floors.first().filter(|floor| self.city_drawn.borrow().places.contains_key(floor));
-        first.map_or(serde_json::Value::Null, |floor| self.city_drawn.borrow().snapshot(*floor, self.city.came, scale))
+        // The first that drew a picture, else the first laid out.
+        let drawn = self.city_drawn.borrow();
+        let painted = |floor: &&Floor| drawn.places.get(*floor).is_some_and(|place| drawn.picture(place).is_some());
+        let first =
+            floors.iter().find(painted).or_else(|| floors.iter().find(|floor| drawn.places.contains_key(*floor)));
+        let Some(first) = first else { return serde_json::Value::Null };
+        let mut snapshot = drawn.snapshot(*first, self.city.came);
+        // The places too small for a city, drawing their lattice.
+        let small = floors.iter().filter(|floor| drawn.places.get(*floor).is_some_and(|place| place.small));
+        snapshot["small"] = small.map(|floor| on(*floor)).collect::<Vec<_>>().into();
+        snapshot
     }
 
     /// File lists read so far, a city on show or not: for the counts of a test run.
     pub(crate) fn city_reads(&self) -> usize {
         self.city.came
+    }
+}
+
+/// Where a place is, for the state of a test run: `"tab"`, `{"pane": id}` or `{"out": tab}`.
+fn on(floor: Floor) -> serde_json::Value {
+    match floor {
+        Floor::Pane(id) => serde_json::json!({ "pane": id }),
+        Floor::Out(tab) => serde_json::json!({ "out": tab }),
+        Floor::Main => serde_json::json!("tab"),
     }
 }
 

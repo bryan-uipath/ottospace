@@ -4157,7 +4157,7 @@ impl Workspace {
             // A test run only: the code city drawn in a task's empty tab (`code_city`): counts, the
             // picture's size in pixels, where it and the lit buildings are, why there is none
             // (`failed`). Never a file's name.
-            "city": std::env::var_os("OTTOSPACE_E2E").map(|_| self.city_snapshot(window.scale_factor())),
+            "city": std::env::var_os("OTTOSPACE_E2E").map(|_| self.city_snapshot()),
             // The pinned apps that are not running: `open_app` starts one. The Dock's and the
             // rest are in `apps_bar`: those are the user's to start.
             "closed_apps": self.pinned_closed().map(|app| app.name).collect::<Vec<_>>(),

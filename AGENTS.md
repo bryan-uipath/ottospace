@@ -181,7 +181,7 @@ Design note: `docs/ai/attention/plan.md`.
     its pane shows. Null outside a test run.
   - State field `city`: the code city of the first empty place on show that draws one (`code_city`):
     `on` (`"tab"`, `{"pane": id}` or `{"out": tab}`), `pictures` (kept, one per folder, lit files and
-    size), `places`, `groups`,
+    size), `small` (the places too small for a city, drawing their lattice), `places`, `groups`,
     `picture` (its size in pixels), `bounds` and `scale` (where it was painted), `lit` (each lit
     building's rect), `lit_tops` (the middle of each one's top), `labels`, `failed` (why there is
     no picture), `reads`, `renders`, `paints`, `render_us`, `hovered` (the beacon of the box under
