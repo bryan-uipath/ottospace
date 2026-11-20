@@ -1270,6 +1270,11 @@ impl Model {
                         self.workbooks.list.remove(at);
                     }
                 }
+                // One workspace a task: one bound to it since keeps it.
+                let task = self.workbooks.get(id).and_then(|book| book.task);
+                if task.is_some_and(|task| self.workbooks.list.iter().any(|b| b.id != id && b.task == Some(task))) {
+                    self.workbooks.bind(id, None);
+                }
             }
             Change::Updated => {
                 if let Some(book) = self.workbooks.get_mut(id) {
@@ -1868,6 +1873,26 @@ mod tests {
         m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: Some("/Users/me".into()) });
         let terminal = m.panes.iter().find(|pane| pane.kind == Kind::Terminal).and_then(|pane| pane.cwd.as_deref());
         assert_eq!((terminal, m.workbook_gone(1, None)), (Some("/Users/me"), vec![]));
+    }
+
+    #[test]
+    fn a_deleted_workbook_taken_back_leaves_its_task_to_the_workspace_bound_to_it_since() {
+        let bound = |m: &Model| m.workbooks.list.iter().map(|book| (book.id, book.task)).collect::<Vec<_>>();
+        let mut m = Model::default();
+        m.update(Action::Open { kind: slack(3), axis: Right, beside: None });
+        let known = crate::compose::Known::default();
+        m.update(Action::TaskFromLine { line: "fix it".into(), known, open: true });
+        m.update(Action::AgentExited { task: crate::talk::Subject::Task(1) });
+        m.update(Action::WorkbookSaveAll { uid: UID.into(), cwds: Vec::new(), histories: Vec::new() });
+        assert_eq!(bound(&m), vec![(1, Some(1)), (2, None)]);
+        // Its workspace deleted, the task dismissed and taken back: workspace 2 is its now.
+        m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        m.update(Action::RowDismiss { id: 1 });
+        m.update(Action::TaskUndo);
+        assert_eq!(bound(&m), vec![(2, Some(1))]);
+        // The deleted one taken back too: it comes back bound to none.
+        m.update(Action::WorkbookUndo);
+        assert_eq!(bound(&m), vec![(1, None), (2, Some(1))]);
     }
 
     #[test]
