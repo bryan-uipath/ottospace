@@ -165,7 +165,8 @@ Design note: `docs/ai/attention/plan.md`.
   - State field `clone`: the clone dialog (From GitHub… of the Repos section's +) while open, its `rows`
     (`owner/name`), `selected`, `destination` (in full) and `said`; and the clone on its way (`repo`,
     `dest`, gh's last `line`, `cancelled`). `counts.folder_picks` counts Local folder…'s folder pickers
-    (a test run shows none). Null outside a test run: a repository's name is the user's data. Tests
+    (a test run shows none). Null outside a test run: a repository's name is the user's data (the
+    dialog's line is a hidden field, `field_hidden`; a clone's toasts name no repository). Tests
     drive the dialog with the user's keys and clicks, `clone_dir` from their own `OTTOSPACE_HOME`,
     `OTTOSPACE_GH` a stand-in that makes a local repository; no request clones.
   - State field `repos_bar[n].name_cut`: a repository's name as drawn in its heading (`cut_text`), its box

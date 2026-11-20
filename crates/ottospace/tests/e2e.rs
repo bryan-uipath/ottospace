@@ -1578,7 +1578,7 @@ fn the_repos_plus_offers_a_local_folder_and_a_pasted_github_repository_is_cloned
     };
     let listed = |o: &Otto| Some(o.drawn()).filter(|s| names(s) == ["hello"]);
     let state = otto.wait_for("the clone to be listed", listed);
-    assert_eq!(state["notice"], format!("Cloned octo/hello into {dest}"));
+    assert_eq!(state["notice"], "Cloned: listed in Repos, its row selected");
     assert_eq!((state["mode"].as_str(), state["clone"]["dialog"].is_null()), (Some("list"), true));
     let settings: Value = serde_json::from_str(&std::fs::read_to_string(home.join("settings.json")).unwrap()).unwrap();
     assert_eq!(settings["repos"], json!([dest]));
@@ -1611,16 +1611,24 @@ fn esc_while_cloning_stops_it_and_removes_only_the_folder_it_made() {
     let (otto, root, home) = clone_run("clone-cancel");
     let code = root.join("code");
     std::fs::create_dir_all(code.join("kept")).unwrap();
+    // The name is the user's data: in no reply but the test run's own `clone` field.
+    let private = |s: &Value| {
+        let mut s = s.clone();
+        s.as_object_mut().unwrap().remove("clone");
+        assert!(!s.to_string().contains("s3cr3t"), "a repository's name in the state: {s}");
+    };
     otto.user_click(at(otto.control("repos-empty:clone"), 0.5, 0.5));
-    otto.user_key("s l o w / r e p o enter");
+    private(&otto.user_key("s l o w / s 3 c r 3 t - a p p"));
+    private(&otto.user_key("enter"));
     let line = |o: &Otto| Some(o.drawn()).filter(|s| s["clone"]["job"]["line"] == "Receiving objects:  10%");
-    otto.wait_for("gh's line", line);
-    assert!(code.join("repo").is_dir());
+    private(&otto.wait_for("gh's line", line));
+    assert!(code.join("s3cr3t-app").is_dir());
     otto.user_key("escape");
     let said = |o: &Otto| Some(o.drawn()).filter(|s| s["clone"]["job"].is_null());
     let state = otto.wait_for("the clone to stop", said);
-    assert_eq!(state["notice"], "Cancelled the clone of slow/repo: its folder was removed");
-    assert!(!code.join("repo").exists() && code.join("kept").is_dir());
+    private(&state);
+    assert_eq!(state["notice"], "Cancelled the clone: its folder was removed");
+    assert!(!code.join("s3cr3t-app").exists() && code.join("kept").is_dir());
     assert_eq!(state["state"]["repos"], json!([]));
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);

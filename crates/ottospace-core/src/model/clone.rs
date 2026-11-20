@@ -9,7 +9,10 @@ impl Model {
     pub(crate) fn clone_open(&mut self, effects: &mut Vec<Effect>) {
         self.leave(effects);
         self.list = None;
-        self.clone = Some(Dialog::new(Provider::GitHub));
+        let mut dialog = Dialog::new(Provider::GitHub);
+        // Why the last clone failed while hidden: its toast named nothing.
+        dialog.said = self.clone_last.take();
+        self.clone = Some(dialog);
     }
 
     /// ↑ or ↓: the row the keys are on. It wraps.
@@ -77,16 +80,26 @@ impl Model {
         }
     }
 
-    /// The clone's end. Made: listed as the user's own add would list it, its row selected, and
-    /// said. Not: said in the dialog if it is open, else on a toast.
+    /// The clone's end. Made: listed as the user's own add would list it, and said; its row is
+    /// selected only if the dialog is still open (a hidden clone takes no keyboard when it ends).
+    /// Not: said in the dialog if it is open, else on a toast. A cancel the runner was too late
+    /// for ends made: it is there, so it is listed.
     pub(super) fn clone_done(&mut self, id: u64, result: Result<Vec<Repo>, Failure>, effects: &mut Vec<Effect>) {
         let Some(job) = self.cloning.take_if(|job| job.id == id) else { return };
-        let result = if job.cancelled { Err(Failure::Cancelled) } else { result };
+        let result = match result {
+            // Nothing read there: said without the path (`repo_add` would name it).
+            Ok(found) if !found.iter().any(|repo| repo.path == job.dest) => {
+                Err(Failure::Said("gh ended with no repository there".into()))
+            }
+            result => result,
+        };
         match result {
             Ok(found) => {
-                self.clone = None;
-                effects.push(Effect::Told { text: format!("Cloned {} into {}", job.remote.slug(), job.dest) });
-                self.repo_add(job.dest, found, effects);
+                effects.push(Effect::Told { text: clone::CLONED.into() });
+                match self.clone.take() {
+                    Some(_) => self.repo_add(job.dest, found, effects),
+                    None => drop(self.repo_list(job.dest, found, effects)),
+                }
             }
             Err(failure) => {
                 let text = failure.explain(&job.remote, &job.dest);
@@ -96,8 +109,11 @@ impl Model {
                         dialog.make_dir = dir.filter(|_| failure == Failure::DirMissing);
                         dialog.said = Some(text);
                     }
-                    None if failure == Failure::Cancelled => effects.push(Effect::Told { text }),
-                    None => effects.push(Effect::Failed { text }),
+                    None if failure == Failure::Cancelled => effects.push(Effect::Told { text: failure.public() }),
+                    None => {
+                        self.clone_last = Some(text);
+                        effects.push(Effect::Failed { text: failure.public() })
+                    }
                 }
             }
         }
@@ -193,7 +209,7 @@ mod tests {
         );
         assert_eq!(m.cloning.as_ref().unwrap().line, "Cloning into 'hello'...");
         let effects = m.update(Action::CloneDone { id: 1, result: Ok(made()) }.sent_by(Origin::System));
-        assert!(effects.contains(&Effect::Told { text: "Cloned octo/hello into /Users/me/code/hello".into() }));
+        assert!(effects.contains(&Effect::Told { text: clone::CLONED.into() }));
         assert!(
             effects.iter().any(|e| matches!(e, Effect::SaveRepos { dirs } if dirs[0].path == "/Users/me/code/hello"))
         );
@@ -240,11 +256,21 @@ mod tests {
         m.update(Action::CloneChoose { index: None });
         assert_eq!(m.update(Action::CloneClose { cancel: true }), [Effect::CloneCancel { id: 1 }]);
         assert!(m.clone.is_none());
-        // Whatever it ended with, it was cancelled: said as information.
-        let effects = m.update(Action::CloneDone { id: 1, result: Ok(made()) }.sent_by(Origin::System));
-        let text = "Cancelled the clone of octo/hello: its folder was removed".to_string();
+        // Stopped: said as information, nothing listed.
+        let effects = m.update(Action::CloneDone { id: 1, result: Err(Failure::Cancelled) }.sent_by(Origin::System));
+        let text = "Cancelled the clone: its folder was removed".to_string();
         assert_eq!(effects, [Effect::Told { text }]);
         assert!(m.repos.is_empty());
+        // Too late to stop, or hidden: listed, said, and the keyboard stays where it is.
+        for cancel in [true, false] {
+            let mut m = dialog("octo/hello");
+            m.update(Action::CloneChoose { index: None });
+            m.update(Action::CloneClose { cancel });
+            m.update(Action::ToggleSection { section: Section::Repos });
+            let effects = m.update(Action::CloneDone { id: 1, result: Ok(made()) }.sent_by(Origin::System));
+            assert!(effects.contains(&Effect::Told { text: clone::CLONED.into() }), "{effects:?}");
+            assert_eq!((m.repos.len(), m.sidebar, m.list), (1, None, None), "{cancel}");
+        }
         // Hidden: it goes on, and its end is a toast.
         let mut m = dialog("octo/hello");
         m.update(Action::CloneChoose { index: None });
@@ -252,8 +278,11 @@ mod tests {
         let effects = m.update(
             Action::CloneDone { id: 1, result: Err(Failure::Said("x not found".into())) }.sent_by(Origin::System),
         );
-        let text = "Not found on GitHub, or not yours to read: octo/hello".to_string();
+        let text = "Not found on GitHub, or not yours to read".to_string();
         assert_eq!(effects, [Effect::Failed { text }]);
+        // The dialog opened again says it in full.
+        m.update(Action::CloneOpen);
+        assert_eq!(said(&m), Some("Not found on GitHub, or not yours to read: octo/hello"));
     }
 
     #[test]
@@ -280,10 +309,55 @@ mod tests {
         for action in &news {
             assert_eq!(m.refusal(action, Origin::Socket), Some(clone::SHELLS_ALONE), "{action:?}");
         }
+        // Nor opens the picker over it, whose keys would take its Esc.
+        let picker = Action::OpenPicker { axis: crate::Axis::Right, new_tab: false, items: Vec::new() };
+        assert_eq!(m.waits(&picker), Some(clone::OPEN));
         // A client's ↵ clones nothing, and its keys type nothing.
         let mut m = dialog("octo/hello");
         assert!(m.update(Action::CloneChoose { index: None }.sent_by(Origin::Socket)).is_empty());
         m.update(Action::FieldEdit { edit: Edit::Insert("x".into()) }.sent_by(Origin::Socket));
         assert_eq!((m.cloning.is_none(), m.clone.as_ref().unwrap().query.text()), (true, "octo/hello"));
+    }
+
+    /// A repository's name is the user's data (a private one's too): what is typed, the row, the
+    /// destination and gh's line are drawn, never in the state every reply carries, nor in a toast.
+    #[test]
+    fn no_part_of_the_typed_name_reaches_the_state_or_a_toast() {
+        let secret = "s3cr3t-app";
+        let leaks = |m: &Model, effects: &[Effect]| {
+            let state = serde_json::to_string(m).unwrap();
+            let told = effects.iter().any(|e| matches!(e, Effect::Told { text } | Effect::Failed { text } | Effect::Notice { text } if text.contains(secret) || text.contains("octo")));
+            state.contains(secret) || state.contains("octo/") || told
+        };
+        let mut m = dialog(&format!("https://github.com/octo/{secret}"));
+        assert!(m.field_hidden() && !leaks(&m, &[]));
+        let effects = m.update(Action::CloneChoose { index: None });
+        assert!(!leaks(&m, &effects));
+        let line = format!("Cloning into '{DIR}/{secret}'...");
+        let effects = m.update(Action::CloneProgress { id: 1, line }.sent_by(Origin::System));
+        assert!(!leaks(&m, &effects));
+        // Hidden, then failed or cancelled: the toast names nothing.
+        for (cancel, failure) in
+            [(false, Failure::Exists), (false, Failure::Said(format!("x {secret} y"))), (true, Failure::Cancelled)]
+        {
+            let mut m = dialog(&format!("octo/{secret}"));
+            m.update(Action::CloneChoose { index: None });
+            let closed = m.update(Action::CloneClose { cancel });
+            let effects = m.update(Action::CloneDone { id: 1, result: Err(failure.clone()) }.sent_by(Origin::System));
+            assert!(!leaks(&m, &closed) && !leaks(&m, &effects), "{failure:?}");
+        }
+        // Made: the toast names nothing; the repository is then listed, as any the user adds. Made
+        // with no repository read there: said without its path.
+        let repo = Repo { path: format!("{DIR}/{secret}"), name: secret.into(), branch: None, worktrees: Vec::new() };
+        let mut empty = dialog(&format!("octo/{secret}"));
+        empty.update(Action::CloneChoose { index: None });
+        let effects = empty.update(Action::CloneDone { id: 1, result: Ok(Vec::new()) }.sent_by(Origin::System));
+        assert!(!leaks(&empty, &effects), "{effects:?}");
+        let effects = m.update(Action::CloneDone { id: 1, result: Ok(vec![repo]) }.sent_by(Origin::System));
+        let toasts = effects.iter().filter_map(|e| match e {
+            Effect::Told { text } | Effect::Failed { text } | Effect::Notice { text } => Some(text),
+            _ => None,
+        });
+        assert!(toasts.clone().all(|text| !text.contains(secret)), "{effects:?}");
     }
 }

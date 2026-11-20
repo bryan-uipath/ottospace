@@ -62,8 +62,11 @@ workspace of that checkout, else makes one with it as its default worktree: `doc
   selected) and said. Not: the dialog says why in plain words (`Failure::explain`: not logged in →
   `gh auth login`, not found, there already, the network, else gh's last line), or a toast if it
   is hidden; the folder this clone made goes.
-- **Names are the user's data**: the dialog and the clone are never in the ordinary state; a test
-  run's `clone` field shows them.
+- **Names are the user's data**: the dialog and the clone are never in the ordinary state (its line
+  is a hidden field, `field_hidden`: the cursor, never the words); a clone's toasts name no
+  repository or path (`Failure::public`, `clone::CLONED`), the dialog says them in full when it
+  opens again; a test run's `clone` field shows them. Once listed, a repository is in `repos` as
+  any the user adds.
 - **A second provider** (GitLab, a plain URL) would be a `Provider` variant in the core, with its
   own `parse` rules and destination name, and a `Source` in the shell giving the argv that clones
   into an empty folder (`clone_argv`), and, with the list (next pull request), how it lists the

@@ -239,6 +239,8 @@ impl Model {
     pub fn field_hidden(&self) -> bool {
         match self.field() {
             Some(("btw", _)) => true,
+            // A repository's name may be a private one's: drawn, never in the state.
+            Some(("clone", _)) => true,
             // Its draft's chat: also an ended one the composer goes on with.
             Some(("talk", _)) => self.shown_draft_chat().is_some_and(|chat| chat.answers_other() || chat.untrusted),
             _ => false,
