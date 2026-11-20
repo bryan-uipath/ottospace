@@ -8004,7 +8004,10 @@ fn overlay_panels_slide_back_into_their_rails_taking_no_click() {
     assert!(closed["state"]["sidebar"].is_null());
     assert!(drawn_x(&closed, "sidebar").is_some(), "drawn as it slides back: {}", closed["overlays"]);
     let under = [first[0].max(56.) + 10., first[1] + first[3] / 2.];
-    let clicked = otto.user_click(under);
+    // The press's own reply: drawn as it lands, not after the release.
+    let press = |action: &str| json!({"cmd": "mouse", "action": action, "x": under[0], "y": under[1], "as": "user"});
+    let clicked = otto.call(press("down"));
+    otto.call(press("up"));
     assert_eq!((&clicked["state"]["focused"], &clicked["state"]["sidebar"]), (&json!(panes[0]), &Value::Null));
     assert!(
         drawn_x(&clicked, "sidebar").is_some_and(|x| x + 260. > under[0]),

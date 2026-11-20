@@ -62,6 +62,8 @@ pub(crate) struct Slides {
     pub(crate) kept: Cell<Option<Kept>>,
     /// While the folded drawer slides back: what to draw in it although the model closed it.
     pub(crate) ghost: Option<Kept>,
+    /// The open drawer's width, kept while it slides back: a fold closes the btw column that widened it.
+    inner: f32,
 }
 
 impl Slides {
@@ -83,7 +85,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (Option<AnyElement>, Option<AnyElement>, f32, f32) {
-        let calm = crate::dial::calm();
+        // The flag turned off: the panels are in the layout again, nothing slides back over them.
+        let calm = crate::dial::calm() || !self.model.overlays();
         let section = self.model.sidebar.filter(|_| self.model.overlays());
         let (left, right) = (section.is_some(), drawer.is_some());
         let ((l, left_moves), (r, right_moves)) = (
@@ -93,6 +96,9 @@ impl Workspace {
         if left_moves || right_moves {
             self.slides.frames += 1;
             window.request_animation_frame();
+        }
+        if right {
+            self.slides.inner = inner;
         }
         if left {
             self.slides.section = section;
@@ -107,10 +113,11 @@ impl Workspace {
         let drawer = drawer.or_else(|| {
             let kept = last.filter(|_| right_moves)?;
             self.slides.ghost = Some(kept);
-            let body = self.drawer_body(inner, cx);
+            let body = self.drawer_body(self.slides.inner, cx);
             self.slides.ghost = None;
             body
         });
+        let inner = self.slides.inner;
         let drawer =
             drawer.map(|body| self.overlay(body, false, inner, (crate::TOP_BAR, crate::drawer_rail::WIDTH, r)));
         (bar, drawer, l, r)

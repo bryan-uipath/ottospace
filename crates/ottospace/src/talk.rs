@@ -780,10 +780,13 @@ impl Workspace {
         let ghost = self.slides.ghost == Some(Kept::Talk);
         let talk = self.model.talk.as_ref().filter(|talk| talk.open || ghost)?;
         let header = self.talk_header(&talk.task, cx)?;
-        self.slides.kept.set(Some(Kept::Talk));
         let brief = self.model.brief.is_some() && self.model.brief == talk.task.task();
         // The dial is the conversation's: not over the brief, nor over the editor.
         let editor = self.model.editor_shown();
+        // Not the brief or the editor: a fold drops them, the conversation would show in their place.
+        if !brief && !editor {
+            self.slides.kept.set(Some(Kept::Talk));
+        }
         // The btw column, left of the conversation: the drawer widened for it (`btw::WIDTH`).
         let btw = self.btw_column(cx);
         let whole = width;
