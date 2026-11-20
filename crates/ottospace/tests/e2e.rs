@@ -7498,7 +7498,19 @@ fn overlay_panels_a_click_outside_esc_or_a_row_chosen_dismisses_them() {
     otto.user_click(tasks);
     let both = otto.drawn();
     assert!(!both["overlays"]["sidebar"].is_null() && !both["overlays"]["drawer"].is_null(), "{}", both["overlays"]);
-    let closed = otto.user_click(at(rect(&both["bounds"][panes[0].to_string()]), 0.5, 0.5));
+    // The part of a pane neither covers: at CI's window size the sidebar lies over the first pane's middle.
+    let (side, drawer) = (rect(&both["overlays"]["sidebar"]), rect(&both["overlays"]["drawer"]));
+    let bare = panes
+        .iter()
+        .map(|pane| rect(&both["bounds"][pane.to_string()]))
+        .map(|p| {
+            let (left, right) = (p[0].max(side[0] + side[2]), (p[0] + p[2]).min(drawer[0]));
+            [left, p[1], right - left, p[3]]
+        })
+        .max_by(|a, b| a[2].total_cmp(&b[2]))
+        .expect("two panes");
+    assert!(bare[2] > 8.0, "no pane shows between the overlays: {}", both["overlays"]);
+    let closed = otto.user_click(at(bare, 0.5, 0.5));
     assert_eq!((&closed["state"]["sidebar"], &closed["drawer"]["collapsed"]), (&Value::Null, &json!(true)));
     // A task's row: the sidebar goes, its conversation shows.
     otto.call(json!({"cmd": "task_add", "title": "a row to go to"}));
