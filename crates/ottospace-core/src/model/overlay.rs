@@ -131,6 +131,8 @@ impl Model {
         if left {
             (self.list, self.rail_focus) = (None, None);
         }
+        // The Apps filter's keyboard goes with its section: this may run after the step settled it.
+        self.settle_app_filter();
     }
 
     /// After a step, with the flag on: what opened or closed an overlay by the rules above.
@@ -378,6 +380,19 @@ mod tests {
         // Nor does a client's step open it again.
         m.update(Action::TaskTalk { id: 2 }.sent_by(Origin::Socket));
         assert!(m.drawer_collapsed());
+    }
+
+    /// The Apps filter has the keyboard in the sidebar: closed by a click outside or a row chosen, it gives it up.
+    #[test]
+    fn the_apps_filter_goes_with_the_sidebar() {
+        for close in [Action::OverlayDismiss, Action::OpenRepo { path: "/code/app".into(), axis: Axis::Right }] {
+            let mut m = workspace(true);
+            m.update(Action::ToggleSection { section: Section::Apps });
+            m.update(Action::AppsFilter { on: true });
+            assert!(m.app_lists.filtering, "{close:?}");
+            m.update(close.clone());
+            assert_eq!((m.sidebar, m.app_lists.filtering, m.field()), (None, false, None), "{close:?}");
+        }
     }
 
     #[test]
