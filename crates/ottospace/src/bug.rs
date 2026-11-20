@@ -12,7 +12,8 @@ use gpui::{
     AnyElement, Context, CursorStyle, Div, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit,
     SharedString, Stateful, Window, div, img, prelude::*, px, relative, rgb, rgba,
 };
-use ottospace_core::bug::{Mark, RepoFacts, Report};
+use ottospace_core::bug::{self as core_bug, Brief, Mark, RepoFacts, Report};
+use ottospace_core::capture::Shape;
 use ottospace_core::settings::{Settings, expand_home};
 use ottospace_core::{Action, Kind, Origin, PaneId, theme};
 
@@ -31,11 +32,51 @@ pub(crate) fn repo_facts(settings: &Settings) -> Option<RepoFacts> {
     Some(RepoFacts { path, exists, git })
 }
 
-/// The window as frozen for report `word`: its size in pixels, and the PNG drawn.
+/// The window as frozen for report `word`: its pixels (RGBA), kept to write at Send, and the PNG drawn.
 pub(crate) struct Frozen {
     word: String,
     size: (usize, usize),
+    rgba: Vec<u8>,
     image: Arc<gpui::Image>,
+}
+
+/// The OS version, `macOS 26.1`, from `kern.osproductversion`. Empty: it could not be read.
+fn os_version() -> String {
+    let mut buffer = [0u8; 64];
+    let mut len = buffer.len();
+    let name = c"kern.osproductversion";
+    let read =
+        unsafe { libc::sysctlbyname(name.as_ptr(), buffer.as_mut_ptr().cast(), &mut len, std::ptr::null_mut(), 0) };
+    let bytes = &buffer[..len.min(buffer.len())];
+    let text = String::from_utf8_lossy(bytes.split(|b| *b == 0).next().unwrap_or_default()).into_owned();
+    if read == 0 { format!("macOS {text}") } else { String::new() }
+}
+
+/// `rgba`, `w` pixels wide, with each of `blank` (window points, `scale` pixels a point) filled.
+fn blanked(mut rgba: Vec<u8>, w: usize, scale: f64, blank: &[[f64; 4]]) -> Vec<u8> {
+    let h = rgba.len() / (w * 4).max(1);
+    let fill = theme::WELL.to_be_bytes();
+    for [x, y, bw, bh] in blank {
+        let px = |v: f64, most: usize| ((v * scale).round().max(0.0) as usize).min(most);
+        let (x0, x1, y0, y1) = (px(*x, w), px(x + bw, w), px(*y, h), px(y + bh, h));
+        for row in y0..y1 {
+            for at in (row * w + x0)..(row * w + x1) {
+                rgba[at * 4..at * 4 + 4].copy_from_slice(&[fill[1], fill[2], fill[3], 255]);
+            }
+        }
+    }
+    rgba
+}
+
+/// The marks as the annotated copy draws them: each box with its number; the whole app as the
+/// picture's edge.
+fn shapes(brief: &Brief) -> Vec<Shape> {
+    let mark = |kept: &core_bug::Kept| {
+        let rect = kept.rect.unwrap_or([0.004, 0.004, 0.992, 0.992]);
+        let note = Shape::Note { at: [rect[0], (rect[1] - 0.03).max(0.0)], text: kept.n.to_string() };
+        [Shape::Box { rect }, note]
+    };
+    brief.marks.iter().flat_map(mark).collect()
 }
 
 impl Workspace {
@@ -74,7 +115,8 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let shot = cx.background_executor().spawn(async move {
                 let rgba = ottospace_mac::capture::window_rgba(u32::try_from(id?).ok()?, w, h).ok()?;
-                ottospace_mac::image::png_from_rgba(w, h, &rgba)
+                let png = ottospace_mac::image::png_from_rgba(w, h, &rgba)?;
+                Some((rgba, png))
             });
             let shot = shot.await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -86,9 +128,9 @@ impl Workspace {
                 this.dispatch(start(shot.is_some()), origin, window, cx);
                 // Kept only for the report that started: one was open already, or it was refused.
                 let started = this.model.bug.as_ref().is_some_and(|report| report.word == word_kept);
-                if let Some(png) = shot.filter(|_| started) {
+                if let Some((rgba, png)) = shot.filter(|_| started) {
                     let image = Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png));
-                    this.bug_shot = Some(Frozen { word: word_kept.clone(), size: (w, h), image });
+                    this.bug_shot = Some(Frozen { word: word_kept.clone(), size: (w, h), rgba, image });
                 }
             });
         })
@@ -115,13 +157,90 @@ impl Workspace {
         }
     }
 
+    /// Send, with what the shell says of itself: the build, the OS, the event log's last lines.
+    pub(crate) fn bug_send(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let (commit, date) = (option_env!("OTTOSPACE_COMMIT"), option_env!("OTTOSPACE_BUILD_DATE"));
+        let build = crate::version_line(env!("CARGO_PKG_VERSION"), commit, date);
+        let log = crate::event_log::last_lines(core_bug::MAX_EVENTS);
+        self.dispatch(Action::BugSend { build, os: os_version(), log }, self.input, window, cx);
+        cx.notify();
+    }
+
+    /// `Effect::BugFiled`: the task's folder (new, inside the materials folder) gets the brief at
+    /// once, for the agent that starts once its worktree is made; then, off the main thread, the
+    /// picture with `blank` filled and a copy with the marks, and the brief again without them if
+    /// they could not be written. A folder that is there already is never written into.
+    pub(crate) fn bug_file(
+        &mut self,
+        word: &str,
+        name: &str,
+        blank: &[[f64; 4]],
+        brief: &Brief,
+        cx: &mut Context<Self>,
+    ) {
+        let shot = self.bug_shot.take().filter(|shot| shot.word == word);
+        let Some(dir) = collect::task_dir(brief.task, name) else { return };
+        if std::fs::symlink_metadata(&dir).is_ok() {
+            self.error = Some(format!("bug report: {} is there already: nothing was kept", dir.display()));
+            return;
+        }
+        let at = dir.to_string_lossy().into_owned();
+        let pictured = brief.clone();
+        let written = |brief: &Brief| {
+            let text = core_bug::markdown(brief, Some(&at));
+            let marks = ottospace_core::pretty_json(&brief.marks);
+            [("brief.md", text), ("brief.json", ottospace_core::pretty_json(brief)), ("1.json", marks)]
+                .iter()
+                .try_for_each(|(name, text)| config::write_private(&dir, name, text.as_bytes()))
+        };
+        let shown = shot.is_some();
+        let first = if shown { pictured.clone() } else { pictured.clone().without_picture() };
+        if let Err(err) = written(&first) {
+            self.error = Some(format!("bug report: could not keep the brief: {err}"));
+            return;
+        }
+        let Some(shot) = shot.filter(|_| brief.picture.is_some()) else { return };
+        let (dir, blank) = (dir.clone(), blank.to_vec());
+        let work = cx.background_executor().spawn(async move {
+            let (w, h) = shot.size;
+            // Pixels a point: the picture's width over the window's.
+            let scale = w as f64 / pictured.captured.content.window[0].max(1.0);
+            let rgba = blanked(shot.rgba, w, scale, &blank);
+            let png = ottospace_mac::image::png_from_rgba(w, h, &rgba)?;
+            let drawn = ottospace_mac::image::annotate(&png, &shapes(&pictured), theme::SNEAK, scale)?;
+            let taken = config::write_private(&dir, "report.png", &png);
+            taken.and_then(|()| config::write_private(&dir, "report.annotated.png", &drawn)).ok()
+        });
+        let at = at.clone();
+        let brief = brief.clone();
+        cx.spawn(async move |this, cx| {
+            if work.await.is_none() {
+                // Named in the brief only if both are there.
+                let text = core_bug::markdown(&brief.clone().without_picture(), Some(&at));
+                let dir = std::path::Path::new(&at);
+                let _ = config::write_private(dir, "brief.md", text.as_bytes());
+                let _ = config::write_private(
+                    dir,
+                    "brief.json",
+                    ottospace_core::pretty_json(&brief.without_picture()).as_bytes(),
+                );
+                let _ = this.update(cx, |this, cx| {
+                    this.error = Some("bug report: the picture could not be kept".into());
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
     /// The overlay takes every key but ⌘ shortcuts. While a comment is typed its field has them:
-    /// ↵ or Esc ends it. Else Esc cancels the report.
+    /// ↵ or Esc ends it. Else Esc cancels the report. ⌘↵ sends it.
     pub(crate) fn bug_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let (key, m) = (event.keystroke.key.as_str(), event.keystroke.modifiers);
         let typing = self.model.field().is_some();
         let action = match key {
             _ if event.is_held && matches!(key, "enter" | "escape") => return cx.stop_propagation(),
+            "enter" if m.platform => return self.bug_send(window, cx),
             "enter" | "escape" if typing => Action::BugEdit { mark: None },
             "escape" => Action::BugCancel,
             _ if typing => {
@@ -172,6 +291,7 @@ impl Workspace {
             ("whole", _) => Action::BugWhole,
             ("apps", _) => Action::BugApps { on: None },
             ("cancel", _) => Action::BugCancel,
+            ("send", _) => return self.bug_send(window, cx),
             ("comment", Some(n)) => Action::BugEdit { mark: Some(n) },
             ("remove", Some(n)) => Action::BugRemove { mark: n },
             _ => return,
@@ -193,6 +313,11 @@ impl Workspace {
     fn bug_bar(&self, report: &Report, cx: &mut Context<Self>) -> Div {
         let apps = if report.apps { "☑ Include app panes" } else { "☐ Include app panes" };
         let secondary = |label: &'static str| ui::Button::Secondary(label.into());
+        // Primary once there is a mark to send.
+        let send = match report.marks.is_empty() {
+            true => secondary("Send to an agent  ⌘↵"),
+            false => ui::Button::Primary("Send to an agent  ⌘↵".into()),
+        };
         let bar = dialog::panel(theme::BORDER_STRONG)
             .flex()
             .flex_col()
@@ -209,7 +334,8 @@ impl Workspace {
                     .child(div().text_xs().text_color(rgb(theme::MUTED)).child("drag a box round what is wrong"))
                     .child(self.bug_button("bug:whole".into(), secondary("Whole app"), ui::State::Rest, cx))
                     .child(self.bug_button("bug:apps".into(), secondary(apps), ui::State::Rest, cx))
-                    .child(self.bug_button("bug:cancel".into(), secondary("Cancel  esc"), ui::State::Rest, cx)),
+                    .child(self.bug_button("bug:cancel".into(), secondary("Cancel  esc"), ui::State::Rest, cx))
+                    .child(self.bug_button("bug:send".into(), send, ui::State::Rest, cx)),
             )
             .child(div().text_xs().text_color(rgb(theme::MUTED)).child(
                 "Only ottospace's window is pictured, and it stays on this Mac for the agent you start. \
@@ -374,5 +500,24 @@ impl Workspace {
                 drawn.collect::<std::collections::BTreeMap<String, [f32; 4]>>()
             }),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An app pane's rect in points is filled at the picture's scale, and only what is in the picture.
+    #[test]
+    fn a_blanked_rect_is_filled_at_the_pictures_scale_and_cut_at_its_edge() {
+        let filled = |rgba: &[u8]| rgba.chunks_exact(4).map(|p| p[3] == 255).collect::<Vec<bool>>();
+        // 4×4 pixels of a 2×2 point window: the point at (1, 0) is the top right four pixels.
+        let top_right = blanked(vec![0; 64], 4, 2.0, &[[1.0, 0.0, 1.0, 1.0]]);
+        let want = [0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0].map(|v| v == 1);
+        assert_eq!(filled(&top_right), want);
+        // Past the edges, or before them: no panic, the part inside.
+        let past = blanked(vec![0; 64], 4, 2.0, &[[-1.0, 1.0, 9.0, 9.0]]);
+        assert_eq!(filled(&past), [[false; 8], [true; 8]].concat());
+        assert_eq!(blanked(vec![0; 64], 4, 2.0, &[]), vec![0; 64]);
     }
 }
