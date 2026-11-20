@@ -984,6 +984,8 @@ struct Workspace {
     reporting: Option<(PaneId, Button, CellPoint)>,
     /// The terminal cell the pointer was last over: a move without a button is reported once a cell.
     hovered: Option<(PaneId, usize, usize)>,
+    /// The terminal whose program was last told it has the focus (`Model::focus_terminal`).
+    focus_told: Option<PaneId>,
     /// During a pane drag: the pane under the pointer and the zone of it a drop would land on.
     drop_at: Option<(PaneId, Zone)>,
     /// The divider the button went down on, until it comes up.
@@ -1399,6 +1401,7 @@ impl Workspace {
             // so hand that pane back to its stream. Ignore the activation that the swap click
             // itself delivers late (the race that used to bounce windows straight back).
             cx.observe_window_activation(window, |this, window, cx| {
+                this.tell_focus(window);
                 if !window.is_window_active() {
                     this.left_on_activation = None;
                     return;
@@ -1720,6 +1723,7 @@ impl Workspace {
             dragging: None,
             reporting: None,
             hovered: None,
+            focus_told: None,
             drop_at: None,
             divider: None,
             reorder_from: None,
@@ -4785,6 +4789,23 @@ impl Workspace {
     }
 
     /// Fits each terminal's grid to its pane, redraws on new output, closes panes whose shell exited.
+    /// A program that asked (DECSET 1004) hears when its terminal gets or loses the focus: the
+    /// pane's keyboard, its tab, ottospace's window (`Model::focus_terminal`). A test run's window
+    /// is never the active one: it counts as active.
+    fn tell_focus(&mut self, window: &Window) {
+        let active = window.is_window_active() || std::env::var_os("OTTOSPACE_E2E").is_some();
+        let now = self.model.focus_terminal(active);
+        let was = std::mem::replace(&mut self.focus_told, now);
+        if was != now {
+            if let Some(terminal) = was.and_then(|id| self.terminals.get(&id)) {
+                terminal.focus(false);
+            }
+            if let Some(terminal) = now.and_then(|id| self.terminals.get(&id)) {
+                terminal.focus(true);
+            }
+        }
+    }
+
     fn sync_terminals(&mut self, window: &Window, cx: &mut Context<Self>) {
         let mut redraw = false;
         let mut exited = Vec::new();
@@ -8711,6 +8732,8 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        // Each state drawn: the program whose terminal got or lost the focus hears it.
+        self.tell_focus(window);
         // A frame: the tick runs each frame for a while, to take what follows it.
         ottospace_mac::wake::post();
         // Every task's letters, worked out once a frame for each badge drawn (`task_badge`).

@@ -1098,6 +1098,8 @@ unfocused pane. While the program has the mouse, hold ⇧ or ⌥ to select (⌘-
 path). A program's cursor is the shape it asks for (block, underline or bar). Paste is bracketed when the program asks for it.
 Text is drawn bold, dim, italic, struck through or underlined (curly and coloured underlines too)
 as the program asks.
+A program that asks for focus events (1004) hears when its terminal gets or loses the keyboard:
+another pane, another tab, a box over the panes or another app in front.
 Programs see `TERM=xterm-256color`, `COLORTERM=truecolor` (24-bit colour), `TERM_PROGRAM=ottospace`
 and `TERM_PROGRAM_VERSION`, whatever terminal started ottospace. When ottospace has neither `LANG`
 nor `LC_ALL` (started from the Dock), they get `LANG` from the system's region as UTF-8 (`de_CH.UTF-8`),
