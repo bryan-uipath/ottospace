@@ -1011,6 +1011,7 @@ function spaceRow(value: unknown, at: string): SpaceRow {
     front: orNull(num)(o.front, `${at}.front`),
     worktree: orNull(str)(o.worktree, `${at}.worktree`),
     glyph: glyph(o.glyph, `${at}.glyph`),
+    indicator: oneOf(["idle", "working", "needs_you"] as const, "a space's indicator")(o.indicator, `${at}.indicator`),
     kept: bool(o.kept, `${at}.kept`),
   };
 }

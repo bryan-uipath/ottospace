@@ -1,6 +1,7 @@
 //! The dot at the left of a Repos checkout row: what happens in that checkout. Grey while idle,
 //! lit while an agent or a session works there, amber while a task there needs the user, and
-//! one pulse when a commit lands. See `docs/ai/repos.md`, "The dot".
+//! one pulse when a commit lands. See `docs/ai/repos.md`, "The dot". The same rule lights a
+//! space's item on the top row (`space_activity`).
 
 use std::collections::BTreeMap;
 
@@ -15,8 +16,8 @@ use crate::tasks::{Group, Task, TaskId};
 /// How long a commit's pulse plays (ms): one ease out.
 pub const PULSE_MS: u64 = 500;
 
-/// What a checkout's dot says.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+/// What a checkout's dot, or a space's item, says. Ordered: needs you wins over working.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Activity {
     Idle,
@@ -77,16 +78,39 @@ impl Model {
         let in_paths = |dir: Option<&str>| dir.is_some_and(|dir| paths.contains(&dir));
         let there: Vec<&Task> =
             self.tasks.list.iter().filter(|t| t.undone() && in_paths(self.task_worktree(t.id))).collect();
-        let needs = there.iter().filter(|t| t.group() == Some(Group::NeedsYou)).min_by_key(|t| (t.priority, t.id));
-        if let Some(task) = needs {
+        let of = |activity| there.iter().filter(move |t| self.task_activity(t) == activity);
+        if let Some(task) = of(Activity::NeedsYou).min_by_key(|t| (t.priority, t.id)) {
             return (Activity::NeedsYou, Some(task.id));
         }
-        let working = there.iter().filter(|t| self.task_works(t)).max_by_key(|t| (t.started_at, t.created, t.id));
-        if let Some(task) = working {
+        if let Some(task) = of(Activity::Working).max_by_key(|t| (t.started_at, t.created, t.id)) {
             return (Activity::Working, Some(task.id));
         }
-        let session = self.at_work.iter().any(|s| in_paths(Some(&s.repo)) && !self.tasks.adopted(&s.runner, &s.id));
-        (if session { Activity::Working } else { Activity::Idle }, None)
+        (if self.session_works(paths) { Activity::Working } else { Activity::Idle }, None)
+    }
+
+    /// What one task says: it needs the user, else its agent works, else idle.
+    pub fn task_activity(&self, task: &Task) -> Activity {
+        if task.group() == Some(Group::NeedsYou) {
+            Activity::NeedsYou
+        } else if self.task_works(task) {
+            Activity::Working
+        } else {
+            Activity::Idle
+        }
+    }
+
+    /// What a space's item on the top row says, by the checkout dot's rule: the most of its
+    /// tasks not done, else a session no task has at work in its default worktree.
+    pub fn space_activity(&self, of: &super::Owner) -> Activity {
+        let tasks = self.space_badges(of).into_iter().filter_map(|id| self.tasks.get(id));
+        let most = tasks.map(|task| self.task_activity(task)).max().unwrap_or(Activity::Idle);
+        let session = most == Activity::Idle && self.space_worktree(of).is_some_and(|path| self.session_works(&[path]));
+        if session { Activity::Working } else { most }
+    }
+
+    /// A session no task has is at work in one of `paths`.
+    fn session_works(&self, paths: &[&str]) -> bool {
+        self.at_work.iter().any(|s| paths.contains(&s.repo.as_str()) && !self.tasks.adopted(&s.runner, &s.id))
     }
 
     /// A task's agent works: its turn runs (the drawer's dial), or the session it follows is active.
@@ -271,6 +295,37 @@ mod tests {
         assert_eq!(dot(&m, APP), (Activity::NeedsYou, Some(3)), "each row keeps its own");
         fold(&mut m, false);
         assert_eq!(head(&m), None);
+    }
+
+    /// The owner: "the icons don't really make sense". A space's item says what its checkout's dot
+    /// would: its tasks' (needs you over working), else a session no task has in its worktree.
+    #[test]
+    fn a_spaces_item_lights_by_the_checkout_dots_rule() {
+        use crate::model::Owner;
+        let mut m = listed();
+        m.update(Action::RepoClick { path: WT.into(), axis: crate::model::Axis::Right });
+        let book = m.space().clone();
+        assert!(matches!(book, Owner::Workbook { .. }));
+        assert_eq!(m.space_activity(&book), Activity::Idle);
+        sessions(&mut m, WT, &[("s1", true)]);
+        assert_eq!(m.space_activity(&book), Activity::Working, "a session no task has, in its worktree");
+        assert_eq!(m.space_rows().iter().find(|row| row.of == book).map(|row| row.indicator), Some(Activity::Working));
+        sessions(&mut m, APP, &[("s1", true)]);
+        assert_eq!(m.space_activity(&book), Activity::Idle, "elsewhere");
+        // A task's space: its agent at work lights it; a task that needs you turns it amber.
+        task(&mut m, 1, APP, State::Running);
+        task(&mut m, 2, APP, State::Running);
+        let of = Owner::Task { id: 1 };
+        m.update(Action::SpaceOpen { space: of.clone() });
+        assert_eq!(m.space_activity(&of), Activity::Idle, "running, but nothing at work");
+        m.tasks.list[0].session = Some(Link { runner: "claude".into(), id: "s1".into(), state: None });
+        assert_eq!(m.space_activity(&of), Activity::Working);
+        assert_eq!(m.task_activity(&m.tasks.list[0]), Activity::Working);
+        m.tasks.list[0].state = State::NeedsYou;
+        assert_eq!(m.space_activity(&of), Activity::NeedsYou);
+        // Done: no badge, nothing lit.
+        m.tasks.list[0].state = State::Done;
+        assert_eq!(m.space_activity(&of), Activity::Idle);
     }
 
     #[test]
