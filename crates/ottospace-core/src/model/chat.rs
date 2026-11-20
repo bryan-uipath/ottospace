@@ -514,6 +514,15 @@ impl Model {
         Some(Chip { task: subject.clone(), space, state, line: talk::chip_line(state, label) })
     }
 
+    /// The conversation's working line sweeps (`TaskRow::shimmer` for the drawer): a turn runs and
+    /// nothing waits on the user, neither a card nor its task under Needs you.
+    pub fn working_sweeps(&self, subject: &Subject) -> bool {
+        let Some(chat) = self.chat(subject) else { return false };
+        let task = subject.task().and_then(|id| self.tasks.get(id));
+        let needs = task.is_some_and(|task| task.group() == Some(Group::NeedsYou));
+        chat.transcript.turn.is_some() && chat.transcript.pulse() != Pulse::NeedsYou && !needs
+    }
+
     /// True if the conversation's dial shows as its marker in the header: as the user left it,
     /// else open while its agent runs (or is watched) and collapsed once it has ended.
     pub fn dial_collapsed(&self, subject: &Subject) -> bool {
@@ -952,27 +961,38 @@ mod tests {
         let (one, id) = (first(&m), m.tasks.list[0].id);
         let row = |m: &Model| {
             let rows = m.task_sections(9).into_iter().flat_map(|section| section.rows);
-            rows.into_iter().find(|row| row.id == id).map(|row| (row.thinking, row.shimmer)).unwrap_or_default()
+            let row = rows.into_iter().find(|row| row.id == id);
+            row.map(|row| (row.thinking, row.live, row.shimmer, m.working_sweeps(&one))).unwrap_or_default()
         };
         events(&mut m, &one, vec![Event::TurnStarted]);
         m.update(Action::TaskSetState { id, state: State::Running }.sent_by(Origin::System));
-        assert_eq!(row(&m), (Some(5), true), "the turn's start");
-        let call = Event::ToolStart {
-            id: "a".into(),
+        assert_eq!(row(&m), (Some(5), None, true, true), "the turn's start");
+        let call = |id: &str, label: &str| Event::ToolStart {
+            id: id.into(),
             sub: false,
             tool: "Bash".into(),
             station: Station::Shell,
-            label: "cargo test".into(),
+            label: label.into(),
             detail: Text::default(),
             diff: None,
             gist: None,
         };
-        events(&mut m, &one, vec![call]);
-        assert_eq!(row(&m).0, None, "a call runs: not thinking");
+        // Two calls; the newer ends first: the turn waits on the other, not on the model.
+        events(&mut m, &one, vec![call("a", "cargo test"), call("b", "git status")]);
+        assert_eq!(row(&m), (None, Some("git status".into()), true, true), "a call runs: not thinking");
+        events(&mut m, &one, vec![Event::ToolEnd { id: "b".into(), failed: false, output: None }]);
+        assert_eq!(row(&m), (None, Some("cargo test".into()), true, true));
         events(&mut m, &one, vec![Event::ToolEnd { id: "a".into(), failed: false, output: None }]);
-        assert_eq!(row(&m), (Some(5), true));
+        assert_eq!(row(&m), (Some(5), None, true, true));
+        // A call with a blank label says nothing: thinking.
+        events(&mut m, &one, vec![call("c", " \n ")]);
+        assert_eq!(row(&m).0, Some(5));
+        // A card waits while its task is still Running: neither sweeps.
+        events(&mut m, &one, vec![card(1, false)]);
+        m.update(Action::TaskSetState { id, state: State::Running }.sent_by(Origin::System));
+        assert_eq!((row(&m).2, row(&m).3), (false, false));
         m.update(Action::TaskSetState { id, state: State::NeedsYou }.sent_by(Origin::System));
-        assert_eq!(row(&m), (None, false), "needs you: it says what it needs");
+        assert_eq!(row(&m), (None, None, false, false), "needs you: it says what it needs");
     }
 
     /// With no transcript of its own (in a terminal), the chip goes by the task and its process.

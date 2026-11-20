@@ -771,8 +771,10 @@ impl Transcript {
                     self.bytes += grew;
                     self.trim();
                 }
+                // Another call that still runs is what the turn waits on now.
+                let still = self.activity.running_label().map(str::to_string);
                 if let Some(turn) = &mut self.turn {
-                    turn.tool = None;
+                    turn.tool = still;
                 }
             }
             // The call that started it says so (its gist); else a row of its own.

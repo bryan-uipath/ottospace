@@ -447,9 +447,10 @@ impl Sweep {
         let (asked, frames) = (self.asked.clone(), self.frames.clone());
         let next = canvas(
             |_, _, _| {},
-            move |_, _, window, cx| {
-                // One wait at a time, however many lines sweep.
-                if asked.replace(true) {
+            move |bounds, _, window, cx| {
+                // Only a line on show asks; one wait at a time, however many lines sweep.
+                let shown = bounds.intersect(&window.content_mask().bounds);
+                if shown.size.width <= px(0.) || shown.size.height <= px(0.) || asked.replace(true) {
                     return;
                 }
                 frames.set(frames.get() + 1);
@@ -463,6 +464,6 @@ impl Sweep {
                     .detach();
             },
         );
-        Some((phase, next.absolute().size_0().into_any_element()))
+        Some((phase, next.absolute().inset_0().into_any_element()))
     }
 }

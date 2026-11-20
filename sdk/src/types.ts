@@ -751,7 +751,7 @@ export interface TaskRow {
   live: string | null;
   /** Running, with no call running: its turn's start (ms since 1970), from which the verb drawn in place of `live` is picked. */
   thinking: number | null;
-  /** Its working line sweeps: running only, never while it needs you. */
+  /** Its working line sweeps: running only, never while it needs you; still under Reduce Motion, which this does not say. */
   shimmer: boolean;
   /** The worktree it works in (`app-2`), while its workspace's tasks work in more than one; else null. */
   worktree: string | null;

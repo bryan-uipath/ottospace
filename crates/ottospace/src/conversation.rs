@@ -20,7 +20,7 @@ use gpui::{
 };
 use ottospace_agents::driver::Driver;
 use ottospace_agents::{Answer, Event as Said, Input, Process, Ticket};
-use ottospace_core::activity::{Pulse, Station};
+use ottospace_core::activity::Station;
 use ottospace_core::agents::{self, Start};
 use ottospace_core::ask::{Act, Form};
 use ottospace_core::diff::{self, Change, Diff, Sign};
@@ -742,7 +742,7 @@ impl Workspace {
             .children(watching)
             .child(list)
             .children(latest.map(|button| div().flex().justify_center().py_0p5().child(button)))
-            .children(self.chat_working(chat))
+            .children(self.chat_working(subject, chat))
             .children(self.chat_card(subject, chat, cx))
             .children(self.chat_ended(subject, chat, cx))
             .child(self.chat_composer(subject, chat, cx))
@@ -1521,9 +1521,9 @@ impl Workspace {
 
     /// While a turn runs: what it waits on, else a verb, swept while it works (`ui::shimmer`); and
     /// for how long. Stop is at the composer. Waiting on the user: still, as the card says why.
-    fn chat_working(&self, chat: &chat::Chat) -> Option<Div> {
+    fn chat_working(&self, subject: &Subject, chat: &chat::Chat) -> Option<Div> {
         let turn = chat.transcript.turn.as_ref()?;
-        let (now, still) = (crate::now_ms(), working_still(chat));
+        let (now, still) = (crate::now_ms(), self.working_still(subject));
         let secs = now.saturating_sub(turn.since) / 1000;
         let said: gpui::SharedString = working::line(turn.tool.as_deref(), turn.since, now, crate::dial::calm()).into();
         let (phase, next) = self.sweep.now(still).unzip();
@@ -1547,10 +1547,17 @@ impl Workspace {
 
     /// What the state says of the working line: the verb it shows (null: what it waits on, the
     /// turn's), and whether it sweeps. Null with no turn.
-    fn working_snapshot(chat: &chat::Chat) -> serde_json::Value {
+    fn working_snapshot(&self, subject: &Subject, chat: &chat::Chat) -> serde_json::Value {
         let Some(turn) = chat.transcript.turn.as_ref() else { return serde_json::Value::Null };
-        let verb = turn.tool.is_none().then(|| working::verb(turn.since, crate::now_ms(), crate::dial::calm()));
-        serde_json::json!({ "verb": verb, "shimmer": !working_still(chat) })
+        let verb = working::waits_on(turn.tool.as_deref())
+            .is_none()
+            .then(|| working::verb(turn.since, crate::now_ms(), crate::dial::calm()));
+        serde_json::json!({ "verb": verb, "shimmer": !self.working_still(subject) })
+    }
+
+    /// A working line drawn still: Reduce Motion, or something waits on the user (`working_sweeps`).
+    fn working_still(&self, subject: &Subject) -> bool {
+        crate::dial::calm() || !self.model.working_sweeps(subject)
     }
 
     /// The first permission request: what it would do, as the CLI asked it, one labelled line
@@ -2198,7 +2205,7 @@ impl Workspace {
                     "details_open": look.is_some_and(|look| look.details),
                     "unread_open": look.is_some_and(|look| look.unread),
                     "dial": self.dial_snapshot(&subject),
-                    "working": Self::working_snapshot(chat),
+                    "working": self.working_snapshot(&subject, chat),
                     // How much of the transcript is selected, never its text; whether it has the keys.
                     "selection": self.selection_snapshot(&subject),
                     "btw": crate::btw::snapshot(&self.model, &subject),
@@ -2207,11 +2214,6 @@ impl Workspace {
         }
         serde_json::json!({ "chats": out, "opened": self.drawer.opened })
     }
-}
-
-/// A working line drawn still: Reduce Motion, or the agent waits on the user (its card says why).
-fn working_still(chat: &chat::Chat) -> bool {
-    crate::dial::calm() || chat.transcript.pulse() == Pulse::NeedsYou
 }
 
 /// What the core asked to reach an agent.

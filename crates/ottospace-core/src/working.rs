@@ -35,12 +35,17 @@ pub fn verb(since: u64, now: u64, calm: bool) -> &'static str {
     VERBS[((since / 1000 + turns) % VERBS.len() as u64) as usize]
 }
 
-/// The working line for a turn begun at `since`: what it waits on (`tool`, the agent's label,
-/// cleaned), else the verb. Information beats whimsy.
+/// The call a turn waits on, as said: the agent's label, cleaned, on one line; None if blank.
+pub fn waits_on(tool: Option<&str>) -> Option<String> {
+    let tool = crate::transcript::clean(tool?).replace('\n', " ");
+    Some(tool.trim().to_string()).filter(|tool| !tool.is_empty())
+}
+
+/// The working line for a turn begun at `since`: what it waits on (`waits_on`), else the verb.
+/// Information beats whimsy.
 pub fn line(tool: Option<&str>, since: u64, now: u64, calm: bool) -> String {
-    let tool = tool.map(|tool| crate::transcript::clean(tool).replace('\n', " "));
-    match tool.filter(|tool| !tool.trim().is_empty()) {
-        Some(tool) => format!("Working · {}", tool.trim()),
+    match waits_on(tool) {
+        Some(tool) => format!("Working · {tool}"),
         None => verb(since, now, calm).to_string(),
     }
 }
@@ -80,6 +85,7 @@ mod tests {
         assert_eq!(line(Some("a\nb"), 0, 0, false), "Working · a b");
         assert!(VERBS.contains(&line(None, 0, 9_000, false).as_str()));
         assert!(VERBS.contains(&line(Some("  "), 0, 0, false).as_str()), "a blank label says nothing");
+        assert_eq!((waits_on(Some(" \n ")), waits_on(None)), (None, None));
     }
 
     #[test]
