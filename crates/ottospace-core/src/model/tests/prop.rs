@@ -8266,6 +8266,42 @@ fn seed_37143_the_main_windows_space_keeps_the_tab_it_shows_after_a_tab_out_sett
     .unwrap();
 }
 
+/// The box opened in one workspace, its line taken by a capture's draft, then ↵ in a workspace
+/// of a default: the draft is filed, the bar goes, and the task joined the box's first workspace.
+#[test]
+fn seed_42535_a_drafts_task_starts_where_the_user_is() {
+    let notes = || "/Users/me/My Notes".to_string();
+    replay(&[
+        Action::Open {
+            kind: Kind::App { window: 3, title: "w3".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: None,
+        }
+        .into(),
+        Action::SetRepos {
+            repos: vec![Repo {
+                name: "canvas".into(),
+                path: notes(),
+                branch: None,
+                worktrees: vec![Worktree { name: "Ottospace".into(), path: "/pp1/p".into(), branch: None }],
+            }],
+        }
+        .sent_by(Origin::System),
+        Action::OpenCompose { text: "e\u{301}שלום\\مرحبا >app \\  @\0".into() }.into(),
+        Action::CaptureStart {
+            pane: Some(4),
+            draft: "ß\"/src/export,p1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![],
+            images: true,
+        }
+        .into(),
+        Action::OpenRepo { path: notes(), axis: Axis::Down }.into(),
+        Action::ComposeSubmit { open: true }.into(),
+    ])
+    .unwrap();
+}
+
 /// A Done's worktree, its git answers late (xreview of #274): Undo while git removes it (the
 /// default falls back, then the worktree is added back), Done while git makes it (removed once
 /// made), and a dirty one kept after an Undo (no notice for an act not the user's).

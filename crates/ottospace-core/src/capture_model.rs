@@ -158,6 +158,8 @@ impl Model {
             self.compose = Some(Field::new("", MAX_TITLE));
             self.compose_reset();
         }
+        // A draft is no box of the drawer: its task goes where the user is, also once filed.
+        self.compose_to = None;
         let at = self.now;
         let bar = self.capture.get_or_insert_with(|| Collection {
             draft,
@@ -725,6 +727,27 @@ mod tests {
             }),
             _ => {}
         }
+    }
+
+    #[test]
+    fn a_draft_from_the_boxs_line_starts_its_task_where_the_user_is() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(3), axis: Right, beside: None });
+        let repo = crate::repos::Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![] };
+        m.update(Action::SetRepos { repos: vec![repo] }.sent_by(Origin::System));
+        // The box opened in the first workspace; its line becomes the draft's title.
+        m.update(Action::OpenCompose { text: "fix it".into() });
+        start(&mut m, None);
+        // The user goes to a workspace of /code/app, and starts the task there.
+        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right });
+        let there = match m.space() {
+            crate::model::Owner::Workbook { id } => Some(*id),
+            _ => None,
+        };
+        m.update(Action::ComposeSubmit { open: true });
+        let task = m.tasks.get(1).map(|task| (task.title.clone(), task.repo.clone()));
+        assert_eq!(task, Some(("fix it".into(), Some("/code/app".into()))));
+        assert_eq!((m.workbooks.bound_to(1), there.is_some()), (there, true));
     }
 
     #[test]
