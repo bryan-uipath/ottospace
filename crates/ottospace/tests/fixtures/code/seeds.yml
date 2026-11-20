@@ -1,0 +1,9 @@
+# A made-up seed shelf.
+shelf:
+  - name: kale
+    count: 120
+    indoors: true
+  - name: "basil"
+    count: 4.5
+sown: &sown
+  weeks: 6

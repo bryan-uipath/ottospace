@@ -39,6 +39,113 @@ const TEXT: &[&str] = &["txt", "text", "log", "csv", "tsv", "ini", "cfg", "conf"
 /// Files known by their whole name.
 const NAMED: &[&str] = &["Makefile", "Dockerfile", "LICENSE", "README", "CHANGELOG", "Gemfile", "Rakefile", "Procfile"];
 
+/// A language with a grammar in the shell (`syntax.rs`): its index is its row in `GRAMMARS`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Lang {
+    Rust,
+    TypeScript,
+    Tsx,
+    JavaScript,
+    Json,
+    Toml,
+    Python,
+    Bash,
+    Go,
+    C,
+    Cpp,
+    Java,
+    CSharp,
+    Ruby,
+    Html,
+    Css,
+    Yaml,
+    Sql,
+    Swift,
+    Kotlin,
+    Php,
+    Lua,
+    Make,
+    Xml,
+    Markdown,
+    /// Markdown's paragraphs and headings, inside its blocks: only ever injected.
+    MarkdownInline,
+}
+
+/// A language's names: `name` (in the state) and `aliases` are what a fence's info string or an
+/// injection calls it; `extensions` also name it; `files`, whole file names.
+pub struct Grammar {
+    pub lang: Lang,
+    pub name: &'static str,
+    extensions: &'static [&'static str],
+    aliases: &'static [&'static str],
+    files: &'static [&'static str],
+}
+
+const fn grammar(
+    lang: Lang,
+    name: &'static str,
+    extensions: &'static [&'static str],
+    aliases: &'static [&'static str],
+    files: &'static [&'static str],
+) -> Grammar {
+    Grammar { lang, name, extensions, aliases, files }
+}
+
+/// Every `Lang`, in its order: the one table of extensions, file names and fence names.
+pub const GRAMMARS: [Grammar; 26] = [
+    grammar(Lang::Rust, "rust", &["rs"], &[], &[]),
+    grammar(Lang::TypeScript, "typescript", &["ts", "mts", "cts"], &[], &[]),
+    grammar(Lang::Tsx, "tsx", &["tsx"], &[], &[]),
+    grammar(Lang::JavaScript, "javascript", &["js", "jsx", "mjs", "cjs"], &[], &[]),
+    grammar(Lang::Json, "json", &["json"], &[], &[]),
+    grammar(Lang::Toml, "toml", &["toml"], &[], &[]),
+    grammar(Lang::Python, "python", &["py", "pyi"], &[], &[]),
+    grammar(Lang::Bash, "bash", &["sh", "bash", "zsh"], &["shell"], &[]),
+    grammar(Lang::Go, "go", &["go"], &["golang"], &[]),
+    grammar(Lang::C, "c", &["c", "h"], &[], &[]),
+    grammar(Lang::Cpp, "cpp", &["cpp", "cc", "cxx", "hpp", "hh", "hxx"], &["c++"], &[]),
+    grammar(Lang::Java, "java", &["java"], &[], &[]),
+    grammar(Lang::CSharp, "csharp", &["cs"], &["c#"], &[]),
+    grammar(Lang::Ruby, "ruby", &["rb", "rake", "gemspec"], &[], &["Gemfile", "Rakefile"]),
+    grammar(Lang::Html, "html", &["html", "htm"], &[], &[]),
+    grammar(Lang::Css, "css", &["css"], &[], &[]),
+    grammar(Lang::Yaml, "yaml", &["yaml", "yml"], &[], &[]),
+    grammar(Lang::Sql, "sql", &["sql"], &[], &[]),
+    grammar(Lang::Swift, "swift", &["swift"], &[], &[]),
+    grammar(Lang::Kotlin, "kotlin", &["kt", "kts"], &[], &[]),
+    grammar(Lang::Php, "php", &["php"], &[], &[]),
+    grammar(Lang::Lua, "lua", &["lua"], &[], &[]),
+    grammar(Lang::Make, "make", &["mk", "mak"], &["makefile"], &["Makefile", "makefile", "GNUmakefile"]),
+    grammar(Lang::Xml, "xml", &["xml", "svg"], &[], &[]),
+    grammar(Lang::Markdown, "markdown", &["md", "markdown", "mdown"], &[], &[]),
+    grammar(Lang::MarkdownInline, "markdown_inline", &[], &[], &[]),
+];
+
+impl Lang {
+    pub fn grammar(self) -> &'static Grammar {
+        &GRAMMARS[self as usize]
+    }
+}
+
+/// The language of the file at `path`, by its whole name (`Makefile`) or its extension, any case.
+pub fn lang_of(path: &str) -> Option<Lang> {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let ext = extension(path);
+    let found = GRAMMARS
+        .iter()
+        .find(|g| g.files.contains(&name) || ext.as_deref().is_some_and(|ext| g.extensions.contains(&ext)));
+    found.map(|g| g.lang)
+}
+
+/// The language a fence's info string (```` ```ts ````) or an injection names, any case: its
+/// name, an alias or an extension. `None`: plain.
+pub fn lang_named(name: &str) -> Option<Lang> {
+    let name = name.to_ascii_lowercase();
+    let name = name.as_str();
+    let found = GRAMMARS.iter().find(|g| g.name == name || g.aliases.contains(&name) || g.extensions.contains(&name));
+    found.map(|g| g.lang)
+}
+
 fn extension(path: &str) -> Option<String> {
     let name = path.rsplit('/').next().unwrap_or(path);
     let (stem, ext) = name.rsplit_once('.')?;
@@ -51,6 +158,8 @@ pub fn shows(path: &str) -> Shows {
         Some(ext) if MARKDOWN.contains(&ext.as_str()) => Shows::Markdown,
         Some(ext) if IMAGES.contains(&ext.as_str()) => Shows::Image,
         Some(ext) if CODE.contains(&ext.as_str()) => Shows::Code,
+        // Every name a grammar has is code, or the viewer would not ask for it.
+        _ if lang_of(path).is_some() => Shows::Code,
         _ => Shows::Text,
     }
 }
@@ -248,6 +357,49 @@ mod tests {
         assert!(opens_on_click("/a/README.md") && opens_on_click("/a/x.rs") && opens_on_click("/a/Makefile"));
         assert!(opens_on_click("/a/build.log"));
         assert!(!opens_on_click("/a/shot.png") && !opens_on_click("/a/doc.pdf") && !opens_on_click("/a/bin"));
+    }
+
+    #[test]
+    fn a_language_by_its_file_name_or_a_fence() {
+        for (at, grammar) in GRAMMARS.iter().enumerate() {
+            assert_eq!(grammar.lang as usize, at, "{} out of order", grammar.name);
+        }
+        let of = |paths: [&str; 6]| paths.map(lang_of);
+        assert_eq!(
+            of(["/a/main.RS", "/a/x.mts", "/a/Makefile", "/a/Gemfile", "/a/x.hpp", "/a/.github/ci.yml"]),
+            [Lang::Rust, Lang::TypeScript, Lang::Make, Lang::Ruby, Lang::Cpp, Lang::Yaml].map(Some)
+        );
+        assert_eq!((lang_of("/a/Dockerfile"), lang_of("/a/notes.txt"), lang_of("/a/x")), (None, None, None));
+        let named = |names: [&str; 12]| names.map(lang_named);
+        assert_eq!(
+            named(["js", "JavaScript", "ts", "typescript", "sh", "zsh", "shell", "py", "yml", "c++", "cs", "golang"]),
+            [
+                Lang::JavaScript,
+                Lang::JavaScript,
+                Lang::TypeScript,
+                Lang::TypeScript,
+                Lang::Bash,
+                Lang::Bash,
+                Lang::Bash,
+                Lang::Python,
+                Lang::Yaml,
+                Lang::Cpp,
+                Lang::CSharp,
+                Lang::Go
+            ]
+            .map(Some)
+        );
+        assert_eq!(
+            [lang_named("cpp"), lang_named("csharp"), lang_named("rb"), lang_named("bash"), lang_named("rust")],
+            [Lang::Cpp, Lang::CSharp, Lang::Ruby, Lang::Bash, Lang::Rust].map(Some)
+        );
+        assert_eq!((lang_named("brainfuck"), lang_named("")), (None, None));
+        // Every file a grammar names is code, never text: else its grammar is never asked for.
+        assert_eq!(
+            (shows("/a/Makefile"), shows("/a/x.pyi"), shows("/a/x.kts")),
+            (Shows::Code, Shows::Code, Shows::Code)
+        );
+        assert_eq!(shows("/a/README.md"), Shows::Markdown, "a markdown file is drawn");
     }
 
     #[test]

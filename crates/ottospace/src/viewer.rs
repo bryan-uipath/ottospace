@@ -107,11 +107,11 @@ impl FileView {
                     let dir = name_and_dir(&path).1;
                     (read, Some(Loaded::Markdown(markdown::parse_with(&text, Some(&dir), markdown::FILE))))
                 }
-                // A code file coloured by its grammar (`rs`, `ts`), else as a fence of its
-                // extension would be (`go`, `yaml`): the lexer, also for a parse too large or slow.
+                // A code file coloured by its grammar (`rs`, `Makefile`), else as a fence of its
+                // extension would be (`jsonl`): the lexer, also for a parse too large or slow.
                 (read, Some(Loaded::Text(text))) => {
                     let lines = text.lines().map(str::to_string).collect();
-                    let lang = syntax::lang(extension(&path)).filter(|_| shows == Shows::Code);
+                    let lang = ottospace_core::viewer::lang_of(&path).filter(|_| shows == Shows::Code);
                     let tree = lang.and_then(|lang| Some((lang, syntax::parse(lang, &text, syntax::BUDGET)?)));
                     match tree {
                         Some((lang, tree)) => {
@@ -598,7 +598,7 @@ impl Workspace {
             Body::Lines(lines, _, colours) => serde_json::json!({
                 "body": "lines",
                 "lines": lines.len(),
-                "syntax": colours.as_ref().map(|colours| colours.lang().name()),
+                "syntax": colours.as_ref().map(|colours| colours.lang().grammar().name),
                 "marked_rect": marked(id),
             }),
             Body::Image(_) => serde_json::json!({ "body": "image" }),

@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use pulldown_cmark::{Alignment, BlockQuoteKind, CodeBlockKind, Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
-use crate::highlight::{self, Mark};
+use crate::highlight::Mark;
 
 /// The most blocks one reply is drawn as; the rest is counted.
 pub const MAX_BLOCKS: usize = 300;
@@ -493,7 +493,7 @@ impl Builder<'_> {
                 let shown: Vec<String> = lines.iter().take(most).map(|line| cap(line, MAX_LINE)).collect();
                 let more = lines.len().saturating_sub(most);
                 let shown = shown.join("\n");
-                let marks = label.as_deref().map(|label| highlight::marks(label, &shown)).unwrap_or_default();
+                let marks = label.as_deref().map(|label| crate::syntax::fence(label, &shown)).unwrap_or_default();
                 self.block(Block::Code { label, shown, copy, more, marks });
             }
             Frame::Table { align, mut rows, row, cell } => {
@@ -931,6 +931,7 @@ mod tests {
 
     #[test]
     fn a_reply_becomes_blocks() {
+        use crate::highlight::Token::{Function, Keyword, Punctuation};
         let text = "# Title\n\nSome **bold** and `code`, a [link](https://example.com/a) and [a file](src/main.rs:3).\n\n\
                     ```rust\nfn main() {}\n```\n\n> quoted\n\n- one\n- two\n\n1. first\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n---\n";
         let blocks = parse(text, REPO);
@@ -949,7 +950,8 @@ mod tests {
                 shown: "fn main() {}".into(),
                 copy: "fn main() {}".into(),
                 more: 0,
-                marks: vec![(0..2, highlight::Token::Keyword)],
+                // By its grammar: `fn`, `main`, the brackets.
+                marks: vec![(0..2, Keyword), (3..7, Function), (7..9, Punctuation), (10..12, Punctuation)],
             }
         );
         assert!(matches!(&blocks[3], Block::Quote { callout: None, blocks } if plain(blocks) == "quoted"));

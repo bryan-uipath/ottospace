@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A made-up seed shelf. -->
+<shelf rows="3">
+  <packet name="kale" count="120"/>
+  <packet name="basil">Sow indoors &amp; late.</packet>
+</shelf>
