@@ -61,17 +61,14 @@ impl Workspace {
                 drop(this.dispatch(Action::DecisionsLater { task, ticket, until }, this.input, window, cx))
             }));
         // Skip and Later first: in a narrow pane the hint wraps under them, never pushes them out.
-        let foot = div()
-            .flex_none()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_1()
-            .px_3()
-            .pb_3()
-            .child(skip)
-            .child(later)
-            .child(div().text_xs().text_color(rgb(theme::MUTED)).child("1–9 answer · ⌘L talk it over · Esc close"));
+        let foot =
+            div().flex_none().flex().flex_wrap().items_center().gap_1().px_3().pb_3().child(skip).child(later).child(
+                div()
+                    .w_full()
+                    .text_xs()
+                    .text_color(rgb(theme::MUTED))
+                    .child("1–9 answer · ⌘L talk it over · Esc close"),
+            );
         div()
             .size_full()
             .flex()

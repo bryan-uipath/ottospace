@@ -10729,12 +10729,15 @@ fn decisions_answers_card_by_card_and_closes_after_the_last() {
     let state = otto.call(json!({"cmd": "state"}));
     let tab = &state["state"]["tabs"][state["state"]["active"].as_u64().unwrap() as usize];
     assert_eq!(tab["title"], "Decisions · 1 of 2", "{tab}");
-    // 2: Blue, sent at once; the other card is on show.
+    // 2: Blue, sent at once; the other card is on show, under Done's seal.
+    let seals = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["seal_frames"].as_u64().unwrap_or(0);
+    let sealed = seals(&otto);
     otto.user_key("2");
     let reply = otto.wait_for("the answer", |_| ask_reply(&record));
     assert_eq!(reply["updatedInput"]["answers"], json!({"Which colour?": "Blue"}));
     let next = otto.wait_for("the next card", |o| Some(decisions(o)).filter(|d| d["task"] != first));
     assert_eq!((&next["at"], &next["of"]), (&json!(2), &json!(2)), "{next}");
+    otto.wait_for("the seal's frames", |o| (seals(o) > sealed).then_some(()));
     otto.user_key("1");
     otto.wait_for("Decisions closed", |o| decisions(o).is_null().then_some(()));
     assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["active"], from);
