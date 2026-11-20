@@ -218,7 +218,7 @@ pub(crate) fn fold_mark(open: bool) -> Svg {
 }
 
 /// A group's heading in a list: a chevron (`open`: ▾), its name and how many it holds, then room
-/// for its actions. A dim row's hover and selection; a click anywhere folds it.
+/// for its actions. A dim row's hover and selection, a row's height; a click anywhere folds it.
 pub(crate) fn section_heading(
     id: impl Into<ElementId>,
     open: bool,
@@ -228,7 +228,7 @@ pub(crate) fn section_heading(
 ) -> Stateful<Div> {
     let muted = |d: Div| d.flex_none().text_size(px(theme::TEXT_XS)).text_color(rgb(theme::MUTED));
     list_row(id, Row::Dim, state)
-        .h(px(26.))
+        .h(px(ROW))
         .px(px(theme::SPACE_2))
         .py_0()
         .flex()
