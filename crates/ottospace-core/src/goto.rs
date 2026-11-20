@@ -6,6 +6,9 @@ use crate::commands::{letters, score};
 use crate::tasks::TaskId;
 use crate::workbook::WorkbookId;
 
+/// What a match by detail alone is behind: every match by name, however long the query.
+const DETAIL: i64 = 1 << 40;
+
 /// The files listed at most: the best this many of a query's matches.
 pub const MOST_ROWS: usize = 200;
 
@@ -63,7 +66,7 @@ impl GoTo {
         let query = letters(query);
         let scored = |row: &PlaceRow| {
             let named = score(&query, &row.name);
-            named.or_else(|| score(&query, &format!("{} {}", row.name, row.detail)).map(|s| s - 1000))
+            named.or_else(|| score(&query, &format!("{} {}", row.name, row.detail)).map(|s| s - DETAIL))
         };
         let mut found: Vec<(i64, &PlaceRow)> = self.places.iter().filter_map(|row| Some((scored(row)?, row))).collect();
         found.sort_by_key(|(score, _)| -score);

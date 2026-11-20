@@ -787,10 +787,11 @@ pub enum Action {
     GoToDrill,
     /// Out of a place's files, to the places again.
     GoToBack,
-    /// The files the shell read in `folder` (relative paths; `cut`: there were more). The shell's alone.
+    /// The files the shell read in `folder` (relative paths; `None`: git could not list them;
+    /// `cut`: there were more). The shell's alone.
     GoToFiles {
         folder: String,
-        paths: Vec<String>,
+        paths: Option<Vec<String>>,
         cut: bool,
     },
     /// Move the palette's highlight down (positive) or up; it wraps.
@@ -4709,7 +4710,7 @@ impl Model {
             Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
                 Some(inspect::USERS_ALONE)
             }
-            Action::GoToFiles { .. } if origin != Origin::System => Some(goto::SHELLS_READ),
+            Action::GoToFiles { .. } if origin == Origin::Socket => Some(goto::SHELLS_READ),
             Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "inspector") => {
                 Some(inspect::USERS_ALONE)
             }
@@ -10455,6 +10456,9 @@ mod tests {
             Action::PaletteTasks,
             Action::PaletteGoTo,
             Action::PaletteFeatures,
+            Action::GoToDrill,
+            Action::GoToBack,
+            Action::GoToFiles { folder: text(), paths: Some(vec![text()]), cut: false },
             Action::PaletteMove { delta: 1 },
             Action::PaletteChoose { index: None },
             Action::ClosePalette,
@@ -10924,16 +10928,22 @@ mod tests {
     /// A move in the palette: the user's alone. Opening it takes the keyboard, so a mode in its
     /// way says its own reason first.
     fn in_palette(action: &Action) -> bool {
-        matches!(action, Action::PaletteMove { .. } | Action::PaletteChoose { .. } | Action::ClosePalette)
-            || matches!(
-                action,
-                Action::InspectorOpen { .. }
-                    | Action::InspectorClose
-                    | Action::InspectorFold { .. }
-                    | Action::InspectorSelect { .. }
-                    | Action::InspectorMove { .. }
-                    | Action::InspectorFilter { on: false }
-            )
+        matches!(
+            action,
+            Action::PaletteMove { .. }
+                | Action::PaletteChoose { .. }
+                | Action::ClosePalette
+                | Action::GoToDrill
+                | Action::GoToBack
+        ) || matches!(
+            action,
+            Action::InspectorOpen { .. }
+                | Action::InspectorClose
+                | Action::InspectorFold { .. }
+                | Action::InspectorSelect { .. }
+                | Action::InspectorMove { .. }
+                | Action::InspectorFilter { on: false }
+        )
     }
 
     #[test]
@@ -11028,7 +11038,7 @@ mod tests {
         // Until the files come the list is empty; a client's list is refused.
         let files = |paths: &[&str]| Action::GoToFiles {
             folder: "/code/app-2".into(),
-            paths: paths.iter().map(|path| path.to_string()).collect(),
+            paths: Some(paths.iter().map(|path| path.to_string()).collect()),
             cut: false,
         };
         m.update(files(&["evil.rs"]).sent_by(Origin::Socket));
@@ -11067,6 +11077,18 @@ mod tests {
         let asked = go_type(&mut m, "app-2/ma");
         assert_eq!(asked, [Effect::ListFiles { folder: "/code/app-2".into() }]);
         assert_eq!(m.palette.as_ref().map(|p| p.query.text().to_string()), Some("ma".into()));
+    }
+
+    #[test]
+    fn a_failed_read_says_so_and_a_task_drills_into_its_checkout_as_it_is_now() {
+        let mut m = goto_places();
+        m.update(Action::PaletteGoTo);
+        go_type(&mut m, "app-2");
+        m.update(Action::GoToDrill);
+        let failed = Action::GoToFiles { folder: "/code/app-2".into(), paths: None, cut: false };
+        m.update(failed.sent_by(Origin::System));
+        let goto = m.palette.as_ref().and_then(|p| p.goto.as_ref()).expect("go to");
+        assert_eq!(goto.files_of("/code/app-2"), Some(&crate::goto::Files::Unread(goto::NOT_READ)));
     }
 
     #[test]
@@ -11156,7 +11178,14 @@ mod tests {
     }
 
     fn action_is_palettes(action: &Action) -> bool {
-        matches!(action, Action::PaletteMove { .. } | Action::PaletteChoose { .. } | Action::ClosePalette)
+        matches!(
+            action,
+            Action::PaletteMove { .. }
+                | Action::PaletteChoose { .. }
+                | Action::ClosePalette
+                | Action::GoToDrill
+                | Action::GoToBack
+        )
     }
 
     /// Every action from every origin. The origin decides, not the action: only the user's own
@@ -11248,6 +11277,7 @@ mod tests {
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
                         Some(inspect::USERS_ALONE)
                     }
+                    Action::GoToFiles { .. } if origin == Origin::Socket => Some(goto::SHELLS_READ),
                     Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
                     Action::KeyUsed { .. } | Action::ResetKeyUse => Some(key_use::USERS_ALONE),
                     Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),
@@ -17639,6 +17669,7 @@ mod tests {
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
                         Some(inspect::USERS_ALONE)
                     }
+                    Action::GoToFiles { .. } if origin == Origin::Socket => Some(goto::SHELLS_READ),
                     Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
                     Action::KeyUsed { .. } | Action::ResetKeyUse => Some(key_use::USERS_ALONE),
                     Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),

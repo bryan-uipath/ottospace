@@ -9595,7 +9595,10 @@ fn go_to_finds_a_worktree_then_a_file_in_it_and_a_gt_runs_a_command() {
     // The user's: the worktree by name, then ↵ goes there as its Repos row does: a terminal in it.
     let reply = otto.user_key("cmd-p a p p f i x");
     assert_eq!(reply["mode"], "palette");
-    assert_eq!(reply["goto_rows"][0], json!({"place": "checkout", "name": "app-fix", "detail": "app · fix"}));
+    assert_eq!(
+        reply["goto_rows"][0],
+        json!({"place": "checkout", "name": "app-fix", "detail": "app · fix", "file": null})
+    );
     otto.user_key("enter");
     let landed = |o: &Otto| {
         let s = o.call(json!({"cmd": "state"}));
@@ -9612,7 +9615,10 @@ fn go_to_finds_a_worktree_then_a_file_in_it_and_a_gt_runs_a_command() {
     };
     otto.wait_for("the worktree's files", file);
     let reply = otto.user_key("l o g i n");
-    assert_eq!(reply["goto_rows"], json!([{"file": "src/login.rs"}]));
+    assert_eq!(
+        reply["goto_rows"].as_array().map(|rows| rows.iter().map(|row| row["file"].clone()).collect()),
+        Some(vec![json!("src/login.rs")])
+    );
     otto.user_key("enter");
     let path = fix.join("src/login.rs").to_string_lossy().into_owned();
     let viewer = |o: &Otto| {

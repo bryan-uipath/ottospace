@@ -13,8 +13,8 @@ use crate::Workspace;
 pub const MOST_FILES: usize = 50_000;
 const MOST_BYTES: u64 = 16 << 20;
 
-/// A folder's files: its paths, and whether there were more.
-type Read = (String, Vec<String>, bool);
+/// A folder's files: its paths (`None`: git could not list them), and whether there were more.
+type Read = (String, Option<Vec<String>>, bool);
 
 /// Reads each folder asked, in turn, on a thread of its own.
 pub struct Reader {
@@ -29,8 +29,8 @@ impl Reader {
         std::thread::spawn(move || {
             for (folder, roots) in inbox {
                 let read = crate::city::checkout_files(Path::new(&folder), &roots, MOST_FILES, MOST_BYTES, false);
-                let (files, cut) = read.unwrap_or_default();
-                let paths = files.into_iter().map(|(path, _)| path).collect();
+                let cut = read.as_ref().is_some_and(|(_, cut)| *cut);
+                let paths = read.map(|(files, _)| files.into_iter().map(|(path, _)| path).collect());
                 if done.send((folder, paths, cut)).is_err() {
                     return;
                 }

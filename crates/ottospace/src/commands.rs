@@ -296,9 +296,13 @@ impl Workspace {
         let palette = self.model.palette.as_ref()?;
         let goto = palette.goto.as_ref().filter(|_| matches!(palette.view(), View::Places | View::Files))?;
         let rows: Vec<serde_json::Value> = match &goto.drill {
-            Some(_) => goto.rows.iter().map(|file| serde_json::json!({ "file": file })).collect(),
+            Some(_) => goto
+                .rows
+                .iter()
+                .map(|file| serde_json::json!({ "place": null, "name": null, "detail": null, "file": file }))
+                .collect(),
             None => {
-                let row = |row: &PlaceRow| serde_json::json!({ "place": kind(&row.place).0, "name": row.name, "detail": row.detail });
+                let row = |row: &PlaceRow| serde_json::json!({ "place": kind(&row.place).0, "name": row.name, "detail": row.detail, "file": null });
                 goto.place_matches(palette.query.text()).into_iter().map(|(_, r)| row(r)).collect()
             }
         };

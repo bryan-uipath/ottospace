@@ -12,6 +12,8 @@ use crate::tasks::Heading;
 pub const NOT_LISTED: &str = "not a checkout listed in Repos";
 /// Why a client's `GoToFiles` is refused: only the shell's own read fills the list.
 pub const SHELLS_READ: &str = "only the shell lists a folder's files";
+/// Why a listed checkout has no files listed: git failed or took too long.
+pub const NOT_READ: &str = "git could not list its files";
 
 impl Model {
     /// The places, most recently selected first (`last_spaces`), the one on show last. Then, of
@@ -50,6 +52,15 @@ impl Model {
         }
         rows.sort_by_key(|(row, of)| (row.current, std::cmp::Reverse(of.as_ref().map_or(0, |of| self.picked(of)))));
         GoTo { places: rows.into_iter().map(|(row, _)| row).collect(), ..GoTo::default() }
+    }
+
+    /// The folder a place's files come from now: a workspace's default, a checkout, a task's checkout.
+    fn place_folder(&self, place: &Place) -> Option<String> {
+        match place {
+            Place::Workspace(id) => self.workbooks.get(*id).and_then(|book| book.worktree.clone()),
+            Place::Checkout(path) => Some(path.clone()),
+            Place::Task(id) => self.task_worktree(*id).map(String::from),
+        }
     }
 
     /// Whether a place is still there to go to.
@@ -127,7 +138,9 @@ impl Model {
     }
 
     /// The place's files listed, `query` typed over them; asked of the shell once a palette.
-    fn drill_into(&mut self, row: PlaceRow, back: String, query: &str, effects: &mut Vec<Effect>) {
+    fn drill_into(&mut self, mut row: PlaceRow, back: String, query: &str, effects: &mut Vec<Effect>) {
+        // As it is now: a task's agent may have moved since the list was made.
+        row.folder = self.place_folder(&row.place);
         let Some(folder) = row.folder.clone() else { return };
         let listed = self.repo_listed(&folder);
         let Some(palette) = &mut self.palette else { return };
@@ -155,32 +168,43 @@ impl Model {
         }
     }
 
-    /// The shell read a folder's files: kept while the palette is open.
-    pub(crate) fn goto_files(&mut self, folder: String, paths: Vec<String>, cut: bool) {
+    /// The shell read a folder's files: kept while the palette is open. Only an answer to the
+    /// read it waits for: a later one (a read of an earlier palette) changes nothing.
+    pub(crate) fn goto_files(&mut self, folder: String, paths: Option<Vec<String>>, cut: bool) {
         let Some(palette) = &mut self.palette else { return };
         let Some(goto) = &mut palette.goto else { return };
-        if let Some((_, files)) = goto.files.iter_mut().find(|(of, _)| *of == folder) {
-            *files = Files::Read { paths, cut };
+        if let Some((_, files)) = goto.files.iter_mut().find(|(of, files)| *of == folder && *files == Files::Reading) {
+            *files = paths.map_or(Files::Unread(NOT_READ), |paths| Files::Read { paths, cut });
             goto.refresh(palette.query.text());
         }
     }
 
-    /// After every step: a place that went is no longer listed, and a drill into one ends.
+    /// After every step: a place that went is no longer listed, and a drill into one ends, as
+    /// does one whose place's folder changed. A folder that left the Repos list lists no files.
     pub(crate) fn settle_goto(&mut self) {
         let Some(goto) = self.palette.as_ref().and_then(|palette| palette.goto.as_ref()) else { return };
         let gone: Vec<Place> =
             goto.places.iter().map(|row| row.place.clone()).filter(|place| !self.place_exists(place)).collect();
-        if gone.is_empty() {
-            return;
-        }
-        if goto.drill.as_ref().is_some_and(|drill| gone.contains(&drill.row.place)) {
+        let unlisted: Vec<String> = goto
+            .files
+            .iter()
+            .filter(|(folder, files)| *files != Files::Unread(NOT_LISTED) && !self.repo_listed(folder))
+            .map(|(folder, _)| folder.clone())
+            .collect();
+        let moved = |drill: &Drill| drill.row.folder != self.place_folder(&drill.row.place);
+        if goto.drill.as_ref().is_some_and(|drill| gone.contains(&drill.row.place) || moved(drill)) {
             self.goto_back();
         }
-        if let Some(goto) = self.palette.as_mut().and_then(|palette| palette.goto.as_mut()) {
+        let Some(palette) = &mut self.palette else { return };
+        if let Some(goto) = &mut palette.goto {
             goto.places.retain(|row| !gone.contains(&row.place));
+            for (_, files) in goto.files.iter_mut().filter(|(folder, _)| unlisted.contains(folder)) {
+                *files = Files::Unread(NOT_LISTED);
+            }
+            if !unlisted.is_empty() {
+                goto.refresh(palette.query.text());
+            }
         }
-        if let Some(palette) = &mut self.palette {
-            palette.selected = palette.selected.min(palette.count().saturating_sub(1));
-        }
+        palette.selected = palette.selected.min(palette.count().saturating_sub(1));
     }
 }

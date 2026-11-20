@@ -1086,7 +1086,7 @@ const MAKERS: &[Make] = &[
     |_| Action::GoToBack,
     |g| Action::GoToFiles {
         folder: g.repo_path(),
-        paths: g.names(&["a.rs", "src/b.rs", "\u{202e}c", ""], 4),
+        paths: g.rng.coin().then(|| g.names(&["a.rs", "src/b.rs", "\u{202e}c", ""], 4)),
         cut: g.rng.coin(),
     },
     |g| Action::PaletteMove { delta: g.delta() },
@@ -2033,6 +2033,8 @@ fn selects_tab(action: &Action) -> bool {
             | Action::WorkbookReopen { .. }
             | Action::ListUndo
             | Action::ListChoose { .. }
+            // Go to's ↵: a place's own row's step.
+            | Action::PaletteChoose { .. }
             | Action::MarkType { .. }
             | Action::MarkSubmit
             | Action::CaptureBack
@@ -8611,6 +8613,21 @@ fn seed_42535_a_drafts_task_starts_where_the_user_is() {
         .into(),
         Action::OpenRepo { path: notes(), axis: Axis::Down }.into(),
         Action::ComposeSubmit { open: true }.into(),
+    ])
+    .unwrap();
+}
+
+/// Go to's ↵ on a checkout: its Repos row's click selects the space made for it.
+#[test]
+fn seed_240_go_tos_choice_selects_the_places_tab() {
+    let worktree = Worktree { name: "My Project".into(), path: "/code/app-2".into(), branch: None };
+    let repos =
+        vec![Repo { name: "canvas".into(), path: "/code/app-2".into(), branch: None, worktrees: vec![worktree] }];
+    replay(&[
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::SetRepos { repos }.sent_by(Origin::System),
+        Action::PaletteGoTo.sent_by(Origin::User),
+        Action::PaletteChoose { index: None }.sent_by(Origin::User),
     ])
     .unwrap();
 }
