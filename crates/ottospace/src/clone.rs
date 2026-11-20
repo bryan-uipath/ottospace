@@ -136,6 +136,8 @@ fn run(
     let made = make(dest)?;
     let result = clone(source, &gh, remote, dest, stop, line);
     let result = match result {
+        // Esc as gh ended: stopped all the same.
+        Ok(()) if stop.load(Ordering::Relaxed) => Err(Failure::Cancelled),
         Ok(()) if dest.join(".git").is_dir() => return Ok(()),
         Ok(()) => Err(Failure::Said("gh ended with no repository there".into())),
         Err(failure) => Err(failure),
@@ -338,20 +340,11 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
-    /// A folder of the test's own, removed when the test ends.
-    struct Temp(PathBuf);
-
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn temp(name: &str) -> Temp {
-        let dir = std::env::temp_dir().join(format!("ottospace-clone-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        Temp(dir.canonicalize().unwrap())
+    /// A folder of the test's own, removed when the test ends, and its path with links resolved.
+    fn temp(name: &str) -> (crate::scratch::Scratch, PathBuf) {
+        let scratch = crate::scratch::Scratch::dir(&format!("ottospace-clone-{name}-{}", std::process::id()));
+        let path = scratch.canonicalize().unwrap();
+        (scratch, path)
     }
 
     /// A stand-in that runs `body`, as if gh.
@@ -376,21 +369,21 @@ mod tests {
 
     #[test]
     fn a_failed_or_stopped_clone_removes_only_the_folder_it_made() {
-        let root = temp("remove");
-        let code = root.0.join("code");
+        let (_scratch, root) = temp("remove");
+        let code = root.join("code");
         std::fs::create_dir(&code).unwrap();
         let dest = code.join("hello");
         let gh = Path::new("/usr/bin/true");
         // It wrote into its folder, then failed: the folder goes, and what is beside it stays.
         std::fs::write(code.join("beside"), "x").unwrap();
-        let failing = script(&root.0, "mkdir .git; echo 'fatal: oops' >&2; exit 1");
+        let failing = script(&root, "mkdir .git; echo 'fatal: oops' >&2; exit 1");
         let made = make(&dest).unwrap();
         let ended = clone(&failing, gh, &hello(), &dest, &AtomicBool::new(false), |_| {});
         assert_eq!(ended, Err(Failure::Said("fatal: oops\n".into())));
         remove_made(&dest, made);
         assert!(!dest.exists() && code.join("beside").exists());
         // Stopped: the program is killed, and says Cancelled.
-        let slow = script(&root.0, "sleep 30");
+        let slow = script(&root, "sleep 30");
         std::fs::create_dir(&dest).unwrap();
         let stop = AtomicBool::new(true);
         let started = Instant::now();
@@ -418,10 +411,10 @@ mod tests {
 
     #[test]
     fn nothing_runs_where_something_is_already_or_the_folder_is_missing() {
-        let root = temp("exists");
-        let code = root.0.join("code");
+        let (_scratch, root) = temp("exists");
+        let code = root.join("code");
         let dest = code.join("hello");
-        let never = script(&root.0, &format!("touch '{}'", root.0.join("ran").display()));
+        let never = script(&root, &format!("touch '{}'", root.join("ran").display()));
         let stop = AtomicBool::new(false);
         assert_eq!(run(&never, &hello(), &dest, false, &stop, |_| {}), Err(Failure::DirMissing));
         std::fs::create_dir(&code).unwrap();
@@ -430,7 +423,7 @@ mod tests {
         // A destination that is not the remote's name is refused at the door.
         let elsewhere = code.join("other");
         assert!(matches!(run(&never, &hello(), &elsewhere, false, &stop, |_| {}), Err(Failure::Said(_))));
-        assert!(!root.0.join("ran").exists());
+        assert!(!root.join("ran").exists());
         assert_eq!(make(&dest), Err(Failure::Exists));
     }
 
