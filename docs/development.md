@@ -236,7 +236,8 @@ whether the regression is real and accepted.
   run's summary in its body.
 - `.github/workflows/app-windows.yml`, by hand: `cargo e2e-apps`, or one test repeated.
 - `.github/workflows/reliability.yml`, nightly and by hand (`repeat`, `test`): `cargo e2e` and
-  `cargo e2e-apps` five times each, tallied. The nightly run keeps the issue "Flaky tests".
+  `cargo e2e-apps` five times each, tallied. The nightly run keeps the issue "Flaky tests", one it opened (never one a
+  person opened).
 - `.github/workflows/build.yml`, on pushes to `main` and on pull requests with the label
   `pr-build`: tests the installer and packages a build. On `main` it publishes the `main-latest`
   prerelease. `osi install pr <n>` adds the label.

@@ -128,6 +128,7 @@ jobs:
           # Only an issue this job wrote: anyone can open one with the title, or thirty (the
           # search asks for the author too, so theirs cannot fill the page). gh names the
           # token's author `app/github-actions` (older ones `github-actions[bot]`): no user's login.
+          # reliability.yml's "Flaky tests" lookup is the same: keep the two alike.
           mine='[.[] | select(.title == "main is red" and (.author.login == "app/github-actions" or .author.login == "github-actions[bot]"))][0].number // empty'
           number="$(gh issue list --state open --search 'in:title "main is red" author:app/github-actions' --json number,title,author --jq "$mine")"
           if [ "$RESULT" = success ] && [ "$CHECK" = success ]; then
