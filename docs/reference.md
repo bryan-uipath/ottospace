@@ -1108,6 +1108,8 @@ theme) or its size in points (CSI 14 t) gets the answer. It never reads the clip
 Each character sits on its own columns, whatever font draws it, and box-drawing and block
 characters (`│ ╭ █ ▛ ░`) are drawn as shapes that fill their cell, so boxes and block art have no
 gaps between rows. Double lines (`═ ║`) are the font's.
+A program that asks for the kitty keyboard protocol (Claude Code does) gets it: ⇧↵, ⌃↵ and Esc
+reach it as their own keys (flags 1 and 4), so ⇧↵ makes a new line there instead of sending.
 Its header names its directory, and the program in front of the shell while one runs:
 `app-api · cargo test`. An app pane's header shows the app's icon and the window's title; an
 empty pane's, nothing.

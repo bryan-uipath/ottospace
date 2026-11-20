@@ -25,7 +25,7 @@ use gpui::{
     App, Bounds, ContentMask, FontFeatures, FontStyle, FontWeight, Hsla, Pixels, Size, StrikethroughStyle, TextRun,
     UnderlineStyle, Window, fill, font, point, px, rgb, size,
 };
-use ottospace_core::keys::{self, Mods};
+use ottospace_core::keys::{self, Kitty, Mods};
 use ottospace_core::terminal::{
     CellPoint, Motion, MouseMode, Pointer, Press, Proc, Processes, Scroll, SelectKind, Wheel, WheelGoes, Work,
     mouse_report, running, saved_command, selection_holds, utf8_locale, wheel_goes,
@@ -321,7 +321,9 @@ impl Terminal {
         *shared.area.lock().unwrap_or_else(|e| e.into_inner()) = Some(area);
         let pty = tty::new(&options, first, 0)?;
         let (child, master) = (pty.child().id(), pty.file().try_clone().ok());
-        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &grid, listener.clone())));
+        // The kitty keyboard protocol for a program that asks (Claude Code does): ⇧↵ is not ↵.
+        let config = Config { kitty_keyboard: true, ..Config::default() };
+        let term = Arc::new(FairMutex::new(Term::new(config, &grid, listener.clone())));
         // Before the shell can print: the history comes first, its prompt below it.
         let opened = history.map(|history| (history.clone(), utc_offset(history.saved as i64 / 1000)));
         if let Some((history, offset)) = &opened {
@@ -480,7 +482,11 @@ impl Terminal {
             _ if lines == 0 => return,
             WheelGoes::History => return self.scroll(Scroll::Lines(lines)),
             WheelGoes::Reports => mouse_report(Pointer::Wheel { up }, at.col, at.row, mods, mode),
-            WheelGoes::Arrows => keys::encode(if up { "up" } else { "down" }, None, Mods::default(), self.app_cursor()),
+            // Plain arrows: the kitty protocol keeps them as they were.
+            WheelGoes::Arrows => {
+                let key = if up { "up" } else { "down" };
+                keys::encode(key, None, Mods::default(), self.app_cursor(), Kitty::default())
+            }
         };
         if let Some(each) = each {
             (0..lines.unsigned_abs()).for_each(|_| self.send(each.clone()));
@@ -701,6 +707,15 @@ impl Terminal {
     /// True while the program asked for application-cursor arrow keys.
     pub fn app_cursor(&self) -> bool {
         self.term.lock().mode().contains(TermMode::APP_CURSOR)
+    }
+
+    /// What the program asked of the kitty keyboard protocol.
+    pub fn kitty(&self) -> Kitty {
+        let mode = *self.term.lock().mode();
+        Kitty {
+            disambiguate: mode.contains(TermMode::DISAMBIGUATE_ESC_CODES),
+            alternates: mode.contains(TermMode::REPORT_ALTERNATE_KEYS),
+        }
     }
 
     pub fn grid_size(&self) -> (usize, usize) {
@@ -1094,7 +1109,8 @@ pub fn send_key<T: 'static>(terminal: &Terminal, event: &gpui::KeyDownEvent, cx:
         cx.notify();
         return cx.stop_propagation();
     }
-    if let Some(bytes) = ottospace_core::keys::encode(&key.key, key.key_char.as_deref(), mods, terminal.app_cursor()) {
+    let (typed, kitty) = (key.key_char.as_deref(), terminal.kitty());
+    if let Some(bytes) = ottospace_core::keys::encode(&key.key, typed, mods, terminal.app_cursor(), kitty) {
         terminal.write(bytes);
         cx.stop_propagation();
     }
@@ -1453,6 +1469,17 @@ mod tests {
         let row = &screen_of(&erased, 1).rows[0];
         let b = row.iter().find(|s| s.text.starts_with('b')).map(|s| s.col);
         assert_eq!(b, Some(3), "{:?}", row.iter().map(|s| (&s.text, s.col)).collect::<Vec<_>>());
+    }
+
+    /// A program that pushes the kitty keyboard protocol is told it is on, and its flags kept.
+    #[test]
+    fn the_kitty_keyboard_protocol_is_on_for_a_program_that_asks() {
+        let mut t =
+            Term::new(Config { kitty_keyboard: true, ..Config::default() }, &Grid { cols: 10, rows: 2 }, VoidListener);
+        print(&mut t, "\x1b[>5u");
+        assert!(t.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS));
+        print(&mut t, "\x1b[<u");
+        assert!(!t.mode().intersects(TermMode::KITTY_KEYBOARD_PROTOCOL));
     }
 
     /// What clients read keeps a cell's zero-width characters: a combining accent, a joiner.
