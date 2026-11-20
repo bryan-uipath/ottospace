@@ -354,6 +354,10 @@ impl Workspace {
         let line = div()
             .id("home-workspace")
             .occlude()
+            // It hides the floor from the root's pointer: moving onto it ends the city's beacon.
+            .on_mouse_move(
+                cx.listener(|this, e: &gpui::MouseMoveEvent, window, cx| this.city_hover(e.position, window, cx)),
+            )
             .flex()
             .flex_col()
             .items_center()

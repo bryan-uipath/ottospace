@@ -170,8 +170,9 @@ Design note: `docs/ai/attention/plan.md`.
     its pane shows. Null outside a test run.
   - State field `city`: the code city in a task's empty tab (`code_city`): `places`, `groups`,
     `picture` (its size in pixels), `bounds` and `scale` (where it was painted), `lit` (each lit
-    building's rect), `labels`, `failed` (why there is no picture), `reads`, `renders`, `paints`,
-    `render_us`. `counts.city_reads`: the reads, a city on show or not. Never a path or a name.
+    building's rect), `lit_tops` (the middle of each one's top), `labels`, `failed` (why there is
+    no picture), `reads`, `renders`, `paints`, `render_us`, `hovered` (the beacon of the box under
+    the user's pointer: `file`, `lit`, `beacon` its label's rect; null with none). `counts.city_reads`: the reads, a city on show or not. Never a path or a name.
     Null outside a test run and while none is on show. `OTTOSPACE_CITY_NO_GPU` (read only under
     `OTTOSPACE_E2E`) stands for a machine with no GPU: every picture fails, the lattice stays.
   - State fields `keys_known` (the ids of the key bindings the user knows) and `key_reference`
