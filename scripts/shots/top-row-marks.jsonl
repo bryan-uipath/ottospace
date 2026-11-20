@@ -1,34 +1,37 @@
 # The top row's marks: a workspace being transcribed (its dot, recording), a workspace of one app
-# (Zoom's icon), a task whose agent works (its badge's border breathes), a task that needs you
-# (amber), an empty workspace (a quiet dot); Home on show. Then more tasks, till the items not
-# selected are their marks alone (icon-only, as at CI's width). Made-up lines and turns.
+# pane (a test run has no app's icon: its fallback dot), a task that needs you (amber), a task whose
+# agent works (its badge's border, breathing; held still in a test run), an empty workspace (a quiet
+# dot); Home on show, the sidebar collapsed. Then four more tasks opened, till the items not
+# selected are their marks alone (icon-only). Made-up lines and turns.
 {"env":{"OTTOSPACE_FEATURES":"transcripts","OTTOSPACE_LISTEN_FIXTURE":"{REPO}/scripts/shots/transcript-dots/fixture.jsonl","FAKE_FIXTURES":"{REPO}/scripts/shots/repo-dots/fixtures"}}
 {"click":"top:new_workspace"}
 {"cmd":"key","keys":"cmd-d","as":"user"}
 {"click":"listen-start:1"}
-{"until":"listen_lines","len":2}
+{"until":"listen_lines.1"}
 {"click":"top:new_workspace"}
 {"cmd":"app_fixture","name":"Zoom Workplace","user":true}
 {"cmd":"task_new","line":"fix the zoom flicker"}
 {"cmd":"task_new","line":"review the map"}
-{"cmd":"section","section":"tasks"}
-{"click":"task:1","at":[0.3,0.3]}
-{"click":"talk:talk-start"}
-{"until":"drawer.native.chats.1.transcript.turn"}
-{"cmd":"task_set_state","id":2,"state":"needs_you"}
-{"cmd":"open_space","space":{"kind":"task","id":2}}
-{"click":"top:new_workspace"}
-{"click":"space:0"}
-{"settle":800}
-{"shot":"titled"}
 {"cmd":"task_new","line":"Review the export PR"}
 {"cmd":"task_new","line":"Answer Ana about the retry bug"}
 {"cmd":"task_new","line":"Minimap spike"}
 {"cmd":"task_new","line":"Ship the release notes"}
-{"cmd":"open_space","space":{"kind":"task","id":3}}
-{"cmd":"open_space","space":{"kind":"task","id":4}}
-{"cmd":"open_space","space":{"kind":"task","id":5}}
-{"cmd":"open_space","space":{"kind":"task","id":6}}
+{"cmd":"task_set_state","id":2,"state":"needs_you"}
+{"cmd":"open_space","space":{"kind":"task","id":2}}
+{"click":"top:new_workspace"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.transcript.turn"}
+{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"click":"space:0"}
+{"settle":800}
+{"shot":"titled"}
+{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"click":"task:3","at":[0.3,0.3]}
+{"click":"task:4","at":[0.3,0.3]}
+{"click":"task:5","at":[0.3,0.3]}
+{"click":"task:6","at":[0.3,0.3]}
 {"click":"space:0"}
 {"settle":800}
 {"shot":"icon-only"}

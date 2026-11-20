@@ -12,6 +12,7 @@ use gpui::{
     Pixels, ScrollWheelEvent, Stateful, Window, canvas, div, prelude::*, px, rgb,
 };
 use ottospace_core::agents::{self, Command, Start};
+use ottospace_core::model::repo_dots::Activity;
 use ottospace_core::runner::RunnerId;
 use ottospace_core::talk::{self, Subject};
 use ottospace_core::tasks::{Group, TaskId};
@@ -467,23 +468,21 @@ impl Workspace {
         self.task_badge_of(id, size, false)
     }
 
-    /// A task's badge on the top row, its state in its border (`Model::task_activity`): amber
-    /// while it needs you; at work, the border breathes at `breath` (setting `breathing`), or with
-    /// none (Reduce Motion) the badge has the working dot.
+    /// A task's badge on the top row, its state in its border (`Model::task_activity`, at least
+    /// `least`): amber while it needs you; at work, the border breathes at `breath` (setting
+    /// `breathing`), or with none (Reduce Motion) the badge has the working dot.
     pub(crate) fn activity_badge(
         &self,
         id: TaskId,
         size: f32,
+        least: Activity,
         breath: Option<f32>,
         breathing: &Cell<bool>,
     ) -> Option<Div> {
-        use ottospace_core::model::repo_dots::Activity;
         let task = self.model.tasks.live(id)?;
-        let badges = self.badges.borrow();
-        let mono = badges.iter().find(|(of, _)| *of == Subject::Task(id)).map(|(_, mono)| mono.clone())?;
         let mut border = rgb(theme::identity(task.colour));
         let mut dot = None;
-        match (self.model.task_activity(task), breath) {
+        match (self.model.task_activity(task).max(least), breath) {
             (Activity::NeedsYou, _) => border = rgb(theme::task(Group::NeedsYou)),
             (Activity::Working, Some(breath)) => {
                 border.a = breath;
@@ -492,13 +491,18 @@ impl Workspace {
             (Activity::Working, None) => dot = Some(theme::task(Group::Running)),
             (Activity::Idle, _) => {}
         }
-        Some(badge_in(&mono, border, dot, size))
+        Some(badge_in(&self.mono(id)?, border, dot, size))
+    }
+
+    /// A task's letters (`Model::badges`).
+    fn mono(&self, id: TaskId) -> Option<String> {
+        let badges = self.badges.borrow();
+        badges.iter().find(|(of, _)| *of == Subject::Task(id)).map(|(_, mono)| mono.clone())
     }
 
     fn task_badge_of(&self, id: TaskId, size: f32, state: bool) -> Option<Div> {
         let task = self.model.tasks.live(id)?;
-        let badges = self.badges.borrow();
-        let mono = badges.iter().find(|(of, _)| *of == Subject::Task(id)).map(|(_, mono)| mono.clone())?;
+        let mono = self.mono(id)?;
         Some(badge(&mono, theme::identity(task.colour), task.group().filter(|_| state).map(theme::task), size))
     }
 }
