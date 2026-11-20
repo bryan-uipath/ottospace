@@ -1326,6 +1326,18 @@ const MAKERS: &[Make] = &[
         Action::Copied { pane: g.rng.coin().then(|| g.pane()), verb, amount: g.amount() }
     },
     |g| Action::Paste { pane: g.pane(), amount: g.amount() },
+    // A program's ask to copy, small or past the cap, and the user's answer.
+    |g| {
+        let text = if g.rng.coin() { g.text() } else { "x".repeat(crate::copy_ask::MOST + 1) };
+        Action::CopyAsked { pane: g.pane(), text, now: g.time() }
+    },
+    |g| {
+        let answer = g.rng.pick(&[copy_ask::Answer::Copy, copy_ask::Answer::Always, copy_ask::Answer::Dismiss]);
+        // The ask on show, or another id: a stale answer does nothing.
+        let pane = g.pane();
+        let ask = g.m.copy_asks.get(&pane).map_or(0, |ask| ask.id) + g.rng.below(2) as u64;
+        Action::CopyAnswer { pane, ask, answer, now: g.time() }
+    },
     // The Apps section: what the settings, the Dock and the scan say, and the user's pins.
     |g| {
         let entry = |g: &mut Gen| {
@@ -2156,6 +2168,12 @@ fn check_reorder(m: &Model) -> Result<(), String> {
 
 fn check(m: &Model) -> Result<(), String> {
     check_decisions(m)?;
+    // A program's ask, and the "always" the user gave, last only while their pane does; an ask
+    // past the cap holds no text.
+    for pane in m.copy_asks.keys().chain(&m.copy_always) {
+        ensure!(m.pane(*pane).is_some(), "a copy ask or always for pane {pane}, gone");
+    }
+    ensure!(m.copy_asks.values().all(|ask| !ask.too_large || ask.text.is_empty()), "a refused ask holds its text");
     check_slots(m)?;
     // With the overlays on, the panes' room never depends on the sidebar or the drawer being open.
     ensure!(!m.overlays() || !(m.sidebar_takes_room() || m.drawer_takes_room()), "an overlay takes the panes' room");
@@ -5156,6 +5174,14 @@ impl Run {
                     let listed = listed_flags.iter().any(|(f, was)| f == feature && was != on);
                     ensure!(user && listed, "{origin:?}'s {action:?} wrote the flag {feature:?} {on}")
                 }
+                // A program's text reaches the clipboard only by the user's answer, or a pane they
+                // let copy always; never one past the cap.
+                Effect::CopyText { text } => {
+                    let answered = user && matches!(action, Action::CopyAnswer { .. });
+                    let always = matches!(action, Action::CopyAsked { pane, .. } if m.copy_always.contains(&pane));
+                    ensure!(answered || always, "{origin:?}'s {action:?} copied");
+                    ensure!(text.len() <= copy_ask::MOST, "{action:?} copied {} bytes", text.len());
+                }
                 // The user's clipboard goes only into a terminal, by their own ⌘V or ↵, and says so.
                 Effect::Paste { pane } => {
                     let asked = matches!(action, Action::Paste { .. } | Action::QuitConfirm);
@@ -5700,6 +5726,7 @@ fn code(sent: &Envelope) -> String {
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("verb", "Verb"),
+        ("answer", "copy_ask::Answer"),
         ("level", "Level"),
         ("what", "AppUse"),
         ("axis", "Axis"),

@@ -16,6 +16,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     focus: "nothing",
     state: {
       panes: [],
+      copy_asks: {},
+      copy_always: [],
       tabs: [{ id: 1, title: "Tab 1", space: { kind: "workbook", id: 1 } }],
       active: 0,
       layout: null,

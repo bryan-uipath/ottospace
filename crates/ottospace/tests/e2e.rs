@@ -844,6 +844,36 @@ fn terminal_runs_a_typed_command() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_terminal_programs_copy_waits_in_its_header_and_only_the_users_click_copies() {
+    let otto = Otto::launch("osc52");
+    otto.call(json!({"cmd": "split"}));
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    // OSC 52, set the clipboard to "hello-clip" (base64).
+    otto.call(json!({"cmd": "type", "text": "printf '\\033]52;c;aGVsbG8tY2xpcA==\\a'\r"}));
+    let asked = otto.wait_for("the ask", |o| Some(state(o)).filter(|s| s["state"]["copy_asks"]["1"].is_object()));
+    let ask = &asked["state"]["copy_asks"]["1"];
+    assert_eq!((ask["chars"].as_u64(), ask["too_large"].as_bool()), (Some(10), Some(false)), "{ask}");
+    assert_eq!(asked["copied"], Value::Null, "nothing is copied by itself");
+    // A client's click on Copy is refused: the ask waits, the clipboard stays.
+    let copy = at(otto.control(&format!("copy:1.{}", ask["id"])), 0.5, 0.5);
+    let clicked = otto.click(copy, 1);
+    assert!(clicked["state"]["copy_asks"]["1"].is_object() && clicked["copied"].is_null(), "{clicked}");
+    // The user's click, once the ask has been on show a moment (`copy_ask::GUARD_MS`), copies.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    otto.user_click(copy);
+    let copied = otto.wait_for("the copy", |o| Some(state(o)).filter(|s| s["copied"] == "hello-clip"));
+    assert_eq!(copied["state"]["copy_asks"], json!({}));
+    // A program asking to read the clipboard gets no answer, and no pill.
+    let read = "stty -echo -icanon min 0 time 10; printf '\\033]52;c;?\\a'; r=$(dd bs=64 count=1 2>/dev/null); \
+                stty sane; echo \"read:[$r]\"\r";
+    otto.call(json!({"cmd": "type", "text": read}));
+    let lines = |o: &Otto| state(o)["terminals"]["1"]["lines"].clone();
+    otto.wait_for("no answer", |o| lines(o).as_array()?.iter().any(|l| l == "read:[]").then_some(()));
+    assert_eq!(state(&otto)["state"]["copy_asks"], json!({}));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_pane_header_names_the_directory_and_the_program_not_the_kind() {
     let root = support::temp(&format!("ottospace-e2e-header-{}", std::process::id()));
     std::fs::create_dir_all(root.join("app-api")).unwrap();

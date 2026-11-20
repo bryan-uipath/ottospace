@@ -1072,6 +1072,13 @@ and `TERM_PROGRAM_VERSION`, whatever terminal started ottospace. When ottospace 
 nor `LC_ALL` (started from the Dock), they get `LANG` from the system's region as UTF-8 (`de_CH.UTF-8`),
 or `en_US.UTF-8` when macOS has no such locale. `scripts/term-probe` prints a test
 card of colours, styles, glyphs and replies, to compare terminals side by side.
+A program that asks to set the clipboard (OSC 52) copies nothing by itself: its pane's header shows
+`<program> wants to copy 1,240 characters “…” · Copy · Always for this pane · ×`, and only your
+click copies, on the ask you saw: a newer ask has its own pill, and its Copy is dim and does nothing
+for half a second. The preview is the first line, cut short with `…` when it is not the whole text,
+with invisible or reordering characters as `�`; the pill also says how many lines and whether the text
+ends with a newline. Always lasts while that pane does. Over 100 KB is refused (the pill says so). A
+program asking to read the clipboard gets no answer.
 Its header names its directory, and the program in front of the shell while one runs:
 `app-api · cargo test`. An app pane's header shows the app's icon and the window's title; an
 empty pane's, nothing.
