@@ -2348,16 +2348,21 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(playing.windows(2).all(|two| two[0] >= two[1]), "a quiet app above one playing: {playing:?}");
         ensure!(picker.items.iter().all(|item| matches!(item, PickItem::Sound { .. })), "{:?}", picker.items);
     }
-    // The dots: on the space of the pane heard, on the row; and on its tab while that space is selected.
-    let holder = m.listen.pane().and_then(|pane| m.tab_panes().iter().position(|panes| panes.contains(&pane)));
-    let want: Vec<_> = holder.map(|at| &m.tabs[at]).map_or_else(Vec::new, |tab| {
-        let hidden = m.spaces().iter().any(|space| space.of == tab.space && space.hidden);
-        match (hidden, tab.space == *m.shown_space()) {
-            (true, _) => vec![],
-            (false, true) => vec![crate::listen::Dot::Space(tab.space.clone()), crate::listen::Dot::Tab(tab.id)],
-            (false, false) => vec![crate::listen::Dot::Space(tab.space.clone())],
+    // The dots: on the space of each pane heard, on the row; and on its tab while that space is selected.
+    let mut want = Vec::new();
+    for pane in m.listen_marked() {
+        let Some(tab) = m.tab_panes().iter().position(|panes| panes.contains(&pane)).map(|at| &m.tabs[at]) else {
+            continue;
+        };
+        if m.spaces().iter().any(|space| space.of == tab.space && space.hidden) {
+            continue;
         }
-    });
+        let mut of = vec![crate::listen::Dot::Space(tab.space.clone())];
+        if tab.space == *m.shown_space() {
+            of.push(crate::listen::Dot::Tab(tab.id));
+        }
+        want.extend(of.into_iter().filter(|dot| !want.contains(dot)).collect::<Vec<_>>());
+    }
     ensure!(m.listen_dots() == want, "the dots {:?}, not {want:?}", m.listen_dots());
     // The headers' red dots: none with none on; else the source pane, or panes of the app heard.
     let marked = m.listen_marked();

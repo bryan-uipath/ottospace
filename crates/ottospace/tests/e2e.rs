@@ -14103,10 +14103,12 @@ fn a_transcript_starts_pauses_and_stops_by_the_users_hand_alone() {
     state["listen_lines"] = Value::Null;
     assert!(!state.to_string().contains("made-up words"), "the text reached the state");
 
-    // The controls: the drawer's Stop and ⋯, and the pane header's Stop beside its dot.
+    // The controls: the drawer's Stop and ⋯, and the pane header's Stop beside its dot (the
+    // workspace's dot aside).
     let drawn = otto.drawn()["listen_rects"].clone();
     let ids: Vec<&str> = drawn.as_object().unwrap().keys().map(String::as_str).collect();
-    let button = |id: &&&str| id.contains(':') && !id.starts_with("listen-hearing") && !id.starts_with("listen-header");
+    let marks = ["listen-hearing", "listen-header", "listen-dot"];
+    let button = |id: &&&str| id.contains(':') && !marks.iter().any(|mark| id.starts_with(mark));
     let controls: Vec<&&str> = ids.iter().filter(button).collect();
     let want = vec![&"listen-stop:header-1", &"listen-stop:view"];
     assert_eq!((controls, ids.contains(&"listen-menu")), (want, true), "{drawn}");
@@ -14340,9 +14342,8 @@ fn the_dot_of_the_pane_heard_is_on_its_tab_and_space_selected_or_not() {
     };
     let reply = otto.call(json!({"cmd": "state"}));
     let first = reply["state"]["tabs"][0]["id"].as_u64().unwrap();
-    let shown: Vec<&Value> =
-        reply["spaces"].as_array().unwrap().iter().filter(|space| space["hidden"] != true).collect();
-    let place = shown.iter().position(|space| space["selected"] == true).unwrap();
+    let mut shown = reply["spaces"].as_array().unwrap().iter().filter(|space| space["hidden"] != true);
+    let place = shown.position(|space| space["selected"] == true).unwrap();
     let (space, tab) = (format!("listen-dot:space:{place}"), format!("listen-dot:tab:{first}"));
     // Its space selected, one tab: the header's dot and the space's.
     otto.listen_rect("listen-header:1");
@@ -14439,6 +14440,9 @@ fn the_pane_heard_shows_a_red_dot_and_stop_until_it_ends() {
     otto.user_key("cmd-shift-r");
     assert!(otto.drawn()["listen_rects"].get("listen-view").is_none(), "collapsed");
     assert_eq!(marks(&otto), [format!("listen-header:{pane}"), format!("listen-stop:header-{pane}")]);
+    // Its workspace's item on the top row has the dot too, selected.
+    let ids = otto.drawn()["listen_rects"].clone();
+    assert!(ids.as_object().unwrap().keys().any(|id| id.starts_with("listen-dot:space:")), "{ids}");
     otto.call(json!({"cmd": "listen_end", "why": "stream_failed"}));
     assert!(marks(&otto).iter().all(|id| !id.starts_with("listen-header")), "{:?}", marks(&otto));
     drop(otto);
