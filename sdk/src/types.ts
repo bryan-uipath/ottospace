@@ -57,9 +57,17 @@ export interface NativeChat {
   /** The kinds of the lines not understood are shown. */
   unread_open: boolean;
   dial: AgentDial;
+  /** The working line while a turn runs, else null. */
+  working: ChatWorking | null;
   /** The user's selection in the transcript, never its text. */
   selection: ChatSelection;
   btw: Btw;
+}
+
+/** The working line: the verb it shows (null: it shows the call the turn waits on), and whether it sweeps (not under Reduce Motion, nor while the agent waits on the user). */
+export interface ChatWorking {
+  verb: string | null;
+  shimmer: boolean;
 }
 
 /** How much of a transcript is selected, whether it has ⌘A and ⌘C, and each selectable text's key and rect. */
@@ -741,6 +749,10 @@ export interface TaskRow {
   fact: string | null;
   /** What its session does now (`shell · cargo test`), while it works. */
   live: string | null;
+  /** Running, with no call running: its turn's start (ms since 1970), from which the verb drawn in place of `live` is picked. */
+  thinking: number | null;
+  /** Its working line sweeps: running only, never while it needs you. */
+  shimmer: boolean;
   /** The worktree it works in (`app-2`), while its workspace's tasks work in more than one; else null. */
   worktree: string | null;
   /** The cards its conversation waits on, a line each under it (the first two): a question (`shown` of `of`) or a permission. Kinds and counts only. */

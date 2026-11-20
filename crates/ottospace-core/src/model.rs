@@ -8497,7 +8497,17 @@ impl Model {
     /// A task's row as drawn, at `now`.
     fn task_row(&self, task: &Task, group: tasks::Group, now: u64) -> TaskRow {
         let current = self.tab_task() == Some(task.id);
-        let live = self.task_session(task).and_then(Found::doing);
+        let found = self.task_session(task);
+        let turn = self.chat(&Subject::Task(task.id)).and_then(|chat| chat.transcript.turn.as_ref());
+        // No call runs: its native turn says so, else its session read is at the model.
+        let thinking = match turn {
+            Some(turn) => turn.tool.is_none().then_some(turn.since),
+            None => found.filter(|f| f.active && f.station.as_deref() == Some("model")).map(|f| f.started.unwrap_or(0)),
+        };
+        let running = group == tasks::Group::Running;
+        let thinking = thinking.filter(|_| running);
+        let live = found.and_then(Found::doing).filter(|_| thinking.is_none());
+        let shimmer = running && (live.is_some() || thinking.is_some());
         let (fact, worktree) = (tasks::fact(task, group, now), self.worktree_label(task.id));
         let cards = self.chat(&Subject::Task(task.id)).map(|chat| &chat.transcript.cards);
         let more = cards.map_or(0, |cards| cards.len().saturating_sub(tasks::PENDING_LINES));
@@ -8509,7 +8519,7 @@ impl Model {
             None => tasks::Pending::Permission,
         });
         let pending = pending.collect();
-        TaskRow { live, id: task.id, group, current, fact, worktree, pending, more }
+        TaskRow { live, thinking, shimmer, id: task.id, group, current, fact, worktree, pending, more }
     }
 
     /// The Tasks section's State view as drawn: Needs you, Running, Later (captured and on hold),

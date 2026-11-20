@@ -140,6 +140,15 @@ fn notices() -> Div {
     group("notice line", lines)
 }
 
+fn shimmers() -> Div {
+    let phases = [("still", None), ("a third in", Some(0.33)), ("two thirds in", Some(0.66))];
+    let lines = phases.map(|(name, phase)| {
+        let line = div().w(px(200.)).text_size(px(theme::TEXT_XS)).text_color(rgb(theme::MUTED));
+        case(name, line.child(super::shimmer("Reticulating… · 0:06", phase)))
+    });
+    group("shimmer", lines)
+}
+
 /// The gallery, over the whole window.
 pub(crate) fn view() -> Div {
     let left = div().flex().flex_col().gap(px(theme::SPACE_3)).child(buttons()).child(pills()).child(tips());
@@ -151,7 +160,8 @@ pub(crate) fn view() -> Div {
         .child(header())
         .child(rails())
         .child(dividers())
-        .child(notices());
+        .child(notices())
+        .child(shimmers());
     div()
         .absolute()
         // Takes the pointer: nothing under it is hovered or clicked.

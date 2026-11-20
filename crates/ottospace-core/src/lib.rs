@@ -70,6 +70,7 @@ pub mod transcript;
 pub mod viewer;
 pub mod vim;
 pub mod workbook;
+pub mod working;
 
 pub use layout::{Axis, Dir, Node, Rect, Zone};
 

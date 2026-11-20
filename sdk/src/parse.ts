@@ -11,6 +11,7 @@ import type {
   AgentChip,
   AgentDial,
   ChatSelection,
+  ChatWorking,
   AgentLine,
   Btw,
   CalendarFetch,
@@ -432,6 +433,8 @@ function taskRow(value: unknown, at: string): TaskRow {
     current: bool(o.current, `${at}.current`),
     fact: orNull(str)(o.fact, `${at}.fact`),
     live: orNull(str)(o.live, `${at}.live`),
+    thinking: orNull(num)(o.thinking, `${at}.thinking`),
+    shimmer: bool(o.shimmer, `${at}.shimmer`),
     worktree: orNull(str)(o.worktree, `${at}.worktree`),
     pending: list(pending)(o.pending, `${at}.pending`),
     more: num(o.more, `${at}.more`),
@@ -1066,9 +1069,15 @@ function nativeChat(value: unknown, at: string): NativeChat {
     details_open: bool(o.details_open, `${at}.details_open`),
     unread_open: bool(o.unread_open, `${at}.unread_open`),
     dial: agentDial(o.dial, `${at}.dial`),
+    working: orNull(chatWorking)(o.working, `${at}.working`),
     selection: chatSelection(o.selection, `${at}.selection`),
     btw: btw(o.btw, `${at}.btw`),
   };
+}
+
+function chatWorking(value: unknown, at: string): ChatWorking {
+  const o = fields(value, at);
+  return { verb: orNull(str)(o.verb, `${at}.verb`), shimmer: bool(o.shimmer, `${at}.shimmer`) };
 }
 
 function btw(value: unknown, at: string): Btw {

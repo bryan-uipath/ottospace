@@ -32,6 +32,7 @@ sneak label and its rect in the state), the tooltip and the click.
 | `tooltip` | text under the pointer | `Hint`: a tooltip. `Drag`: what a dragged pane or tab carries |
 | `notice_line` | a toast card's line | by `notice::Level`: its colours and glyph |
 | `divider` | the grab of the line between two panes | by `Axis`: `Right` a vertical line, `Down` a horizontal one. `DIVIDER_GRAB` across (a pane's border and padding each side), the resize pointer; hover lights a line down its middle, `Pressed` (dragging) brighter |
+| `shimmer` | an agent's working words (the drawer's working line, a running task's row) | by `phase`: a brighter band sweeping across, or none (still: Reduce Motion, waiting on the user). Colours only, `MUTED` to `TEXT`, never amber; `Sweep` asks for its frames while one is drawn |
 
 ## Rules
 

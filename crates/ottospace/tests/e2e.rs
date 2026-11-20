@@ -11923,6 +11923,47 @@ fn the_dial_holds_still_with_reduce_motion() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// While its agent works with no call running, the drawer's working line is a verb of the list,
+/// swept: frames while it shows, none at rest. Under Reduce Motion the same verb, still, no frame.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_working_line_sweeps_a_verb_while_the_agent_thinks() {
+    for calm in [false, true] {
+        let extra: &[(&str, &str)] = if calm { &[("OTTOSPACE_REDUCE_MOTION", "1")] } else { &[] };
+        let (root, _record, otto) = finish_launch_with(if calm { "shimmer-calm" } else { "shimmer" }, extra);
+        let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+        let frames = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["shimmer_frames"].as_u64().unwrap();
+        // Idle after its first reply: no working line, no frame.
+        assert_eq!(chat(&otto)["working"], Value::Null);
+        let rest = frames(&otto);
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(frames(&otto), rest, "none at rest");
+        // The next turn streams and calls nothing: a verb.
+        otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+        otto.user_key("g o enter");
+        let working = otto.wait_for("a working line", |o| Some(chat(o)["working"].clone()).filter(Value::is_object));
+        let verb = working["verb"].as_str().unwrap_or_default().to_string();
+        assert!(ottospace_core::working::VERBS.contains(&verb.as_str()), "{working}");
+        assert_eq!(working["shimmer"], !calm, "{working}");
+        if calm {
+            std::thread::sleep(Duration::from_millis(500));
+            assert_eq!((frames(&otto), chat(&otto)["working"]["verb"].clone()), (rest, json!(verb)), "still");
+        } else {
+            otto.wait_for("frames while it sweeps", |o| (frames(o) > rest + 5).then_some(()));
+        }
+        // Stopped: the line goes, and so do the frames.
+        otto.user_key("escape");
+        otto.user_key("escape");
+        otto.wait_for("the interrupt", |o| chat(o)["working"].is_null().then_some(()));
+        std::thread::sleep(Duration::from_millis(200));
+        let after = frames(&otto);
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(frames(&otto), after, "none once it stopped");
+        drop(otto);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
 /// Made-up stream-json for Done and Later: a first turn that replies and ends; a second
 /// that works until it is interrupted.
 fn finish_fixtures() -> Vec<(&'static str, String)> {

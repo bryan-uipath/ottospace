@@ -943,6 +943,38 @@ mod tests {
         assert_eq!((chip(&m), m.talk.as_ref()), (None, None));
     }
 
+    /// A running task's row: while no call runs it thinks (its turn's start, for the verb), and
+    /// its line sweeps; a call is not thinking; a task that needs you neither thinks nor sweeps.
+    #[test]
+    fn a_running_rows_line_thinks_and_sweeps_and_one_that_needs_you_does_not() {
+        use crate::activity::Station;
+        let mut m = two_live();
+        let (one, id) = (first(&m), m.tasks.list[0].id);
+        let row = |m: &Model| {
+            let rows = m.task_sections(9).into_iter().flat_map(|section| section.rows);
+            rows.into_iter().find(|row| row.id == id).map(|row| (row.thinking, row.shimmer)).unwrap_or_default()
+        };
+        events(&mut m, &one, vec![Event::TurnStarted]);
+        m.update(Action::TaskSetState { id, state: State::Running }.sent_by(Origin::System));
+        assert_eq!(row(&m), (Some(5), true), "the turn's start");
+        let call = Event::ToolStart {
+            id: "a".into(),
+            sub: false,
+            tool: "Bash".into(),
+            station: Station::Shell,
+            label: "cargo test".into(),
+            detail: Text::default(),
+            diff: None,
+            gist: None,
+        };
+        events(&mut m, &one, vec![call]);
+        assert_eq!(row(&m).0, None, "a call runs: not thinking");
+        events(&mut m, &one, vec![Event::ToolEnd { id: "a".into(), failed: false, output: None }]);
+        assert_eq!(row(&m), (Some(5), true));
+        m.update(Action::TaskSetState { id, state: State::NeedsYou }.sent_by(Origin::System));
+        assert_eq!(row(&m), (None, false), "needs you: it says what it needs");
+    }
+
     /// With no transcript of its own (in a terminal), the chip goes by the task and its process.
     #[test]
     fn the_agent_chip_of_a_conversation_in_a_terminal_goes_by_its_task() {

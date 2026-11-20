@@ -125,6 +125,11 @@ impl From<Group> for Heading {
 pub struct TaskRow {
     /// What its session does now (`shell · cargo test`), while it is at work: a muted line under.
     pub live: Option<String>,
+    /// Its agent works with nothing more to say: the turn's start, from which `working::verb`
+    /// picks the word drawn in place of `live`. Running only.
+    pub thinking: Option<u64>,
+    /// Its working line sweeps (`ui::shimmer`): Running only, never while it needs you.
+    pub shimmer: bool,
     pub id: TaskId,
     /// The inbox group, whatever heading the row is under: its dot's colour.
     pub group: Group,

@@ -12,6 +12,8 @@
 {"until":"drawer.native.chats.1.transcript.turn"}
 {"settle":800}
 {"shot":"turn"}
+{"settle":700}
+{"shot":"turn-sweep"}
 {"cmd":"key","keys":"cmd-p","as":"user"}
 {"cmd":"key","keys":"s t o p space t h e space a g e n t","as":"user"}
 {"cmd":"key","keys":"enter","as":"user"}
