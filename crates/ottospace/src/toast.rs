@@ -6,8 +6,10 @@
 //! A card's line is `ui::notice_line`. Over a live app's window each card is drawn in a floating
 //! panel of its own instead (`float_panel`), so a click between two goes to the app.
 
-use gpui::{AnyElement, App, BoxShadow, Div, ElementId, MouseButton, SharedString, Stateful, Window};
-use gpui::{black, div, point, prelude::*, px, rgb};
+use std::rc::Rc;
+
+use gpui::{AnyElement, App, BoxShadow, DispatchPhase, Div, ElementId, MouseButton, MouseExitEvent, MouseMoveEvent};
+use gpui::{SharedString, Stateful, Window, black, canvas, div, point, prelude::*, px, rgb};
 
 use ottospace_core::notice;
 
@@ -39,8 +41,8 @@ pub(crate) struct Card {
     pub(crate) text: SharedString,
     /// The pointer is over it.
     pub(crate) open: bool,
-    /// The pointer came over it (true) or left.
-    pub(crate) on_hover: Box<dyn Fn(&bool, &mut Window, &mut App)>,
+    /// Whether the pointer is over it, told at each move and when it leaves the window.
+    pub(crate) on_hover: Rc<dyn Fn(&bool, &mut Window, &mut App)>,
     /// Up to `ACTIONS` buttons, made with `button`.
     pub(crate) actions: Vec<Stateful<Div>>,
     /// Its ×, made with `button`.
@@ -59,7 +61,7 @@ pub(crate) fn button(id: impl Into<ElementId>) -> Stateful<Div> {
 }
 
 /// A card: glyph, title over text, actions, ×; the level's colours and a soft shadow, so it floats.
-fn card(at: usize, card: Card) -> Stateful<Div> {
+fn card(card: Card) -> Div {
     let (_, text) = ottospace_core::theme::notice(card.level);
     let height = px(rest(card.title.is_some()));
     let line = if card.open { div().line_clamp(LINES).child(card.text) } else { crate::cut_text(card.text) };
@@ -73,13 +75,12 @@ fn card(at: usize, card: Card) -> Stateful<Div> {
     actions.truncate(ACTIONS);
     // Occluded: a click on its body does not reach the pane under it.
     crate::ui::notice_line(card.level, card.glyph, words.child(line))
-        .id(("toast-card", at))
         .relative()
         .occlude()
         .w_full()
         // Open, its glyph and buttons stay at the top, where they are at rest.
         .map(|this| if card.open { this.min_h(height).items_start().py(px(OPEN_PAD)) } else { this.h(height) })
-        .on_hover(card.on_hover)
+        .child(pointed(card.on_hover))
         .rounded_md()
         .border_1()
         .border_color(gpui::Hsla::from(rgb(text)).opacity(0.25))
@@ -92,6 +93,25 @@ fn card(at: usize, card: Card) -> Stateful<Div> {
         .children(actions.into_iter().map(|action| action.underline()))
         .child(card.close)
         .children(card.marks)
+}
+
+/// An invisible child that tells `over` whether the pointer is over its parent. Not `on_hover`:
+/// that hears no leave when the pointer goes out of the window, as it does from a panel.
+fn pointed(over: Rc<dyn Fn(&bool, &mut Window, &mut App)>) -> impl IntoElement {
+    let listen = move |bounds: gpui::Bounds<gpui::Pixels>, _: (), window: &mut Window, _: &mut App| {
+        let moved = over.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase == DispatchPhase::Bubble {
+                moved(&bounds.contains(&event.position), window, cx);
+            }
+        });
+        window.on_mouse_event(move |_: &MouseExitEvent, phase, window, cx| {
+            if phase == DispatchPhase::Bubble {
+                over(&false, window, cx);
+            }
+        });
+    };
+    canvas(|_, _, _| {}, listen).absolute().top_0().left_0().size_full()
 }
 
 /// How wide the cards are in `room` (the panes' width), less a gap each side.
@@ -133,7 +153,7 @@ fn column(cards: Vec<Card>, more: usize, mark: impl IntoElement) -> Div {
         .flex_col()
         .items_end()
         .gap(px(GAP))
-        .children(cards.into_iter().enumerate().map(|(at, c)| card(at, c)))
+        .children(cards.into_iter().map(card))
         .children((more > 0).then(|| more_label(more)))
         .child(mark)
 }
@@ -157,9 +177,9 @@ pub(crate) fn stack(
 }
 
 /// One card in a floating panel of its own, as wide as the panel and as tall as the card takes.
-pub(crate) fn piece(at: usize, of: Card) -> Div {
+pub(crate) fn piece(of: Card) -> Div {
     // A column, its card not shrunk: taller than the panel until the panel follows.
-    div().size_full().flex().flex_col().child(card(at, of).flex_none())
+    div().size_full().flex().flex_col().child(card(of).flex_none())
 }
 
 /// "+N more" in a floating panel of its own, `mark` noting where.

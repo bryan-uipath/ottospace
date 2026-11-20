@@ -13492,6 +13492,8 @@ fn long_path() -> String {
 fn a_click_between_two_cards_reaches_the_pane_under_the_toast() {
     let home = user_folder("toast-gap", r#"{"repos": []}"#);
     let otto = Otto::launch_with("toast-gap", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    // Pane 1, and pane 2 at its right, under the toast.
+    otto.call(json!({"cmd": "split"}));
     otto.call(json!({"cmd": "split", "axis": "right"}));
     // Two cards: a folder that is not there, and a settings file that does not read.
     otto.call(json!({"cmd": "repo_add", "path": long_path()}));

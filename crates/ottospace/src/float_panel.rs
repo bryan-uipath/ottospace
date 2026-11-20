@@ -68,6 +68,8 @@ impl Panel {
     ) {
         let Some(frame) = want else {
             self.frame = None;
+            // Opened again, it has drawn nothing yet.
+            self.marks.borrow_mut().clear();
             if let Some(handle) = self.handle.take() {
                 cx.defer(move |cx| drop(handle.update(cx, |_, window, _| window.remove_window())));
             }

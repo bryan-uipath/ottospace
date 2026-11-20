@@ -289,14 +289,14 @@ impl Workspace {
                 .on_click(self.card_click(panel, dismiss, cx));
             let over = notice.clone();
             let on_hover = cx.listener(move |this, hovered: &bool, window, cx| {
-                if *hovered {
-                    this.toast.hover = Some(over.clone());
-                } else {
-                    this.toast.hover.take_if(|hover| same(hover, &over));
-                }
+                let was = this.toast.hover.take();
+                let now = if *hovered { Some(over.clone()) } else { was.clone().filter(|hover| !same(hover, &over)) };
+                this.toast.hover = now;
                 // Its own window draws it again: the panel's, or the main one.
-                window.refresh();
-                cx.notify();
+                if this.toast.hover != was {
+                    window.refresh();
+                    cx.notify();
+                }
             });
             toast::Card {
                 level: notice.level(),
@@ -304,7 +304,7 @@ impl Workspace {
                 title: None,
                 text: SharedString::from(notice.text.clone()),
                 open: self.toast.hover.as_ref().is_some_and(|hover| same(hover, &notice)),
-                on_hover: Box::new(on_hover),
+                on_hover: Rc::new(on_hover),
                 actions: offer.into_iter().chain(new_task).collect(),
                 close,
                 marks: vec![mark(marks, Mark::ToastCard(at)).into_any_element()],
@@ -350,7 +350,7 @@ impl Workspace {
         let Some((cards, more)) = self.toast_cards(true, cx) else { return div().into_any_element() };
         let count = cards.len();
         match cards.into_iter().nth(at) {
-            Some(card) => toast::piece(at, card).into_any_element(),
+            Some(card) => toast::piece(card).into_any_element(),
             None if at == count && more > 0 => toast::more_piece(more, mark(&marks, Mark::Toast)).into_any_element(),
             None => div().into_any_element(),
         }
@@ -413,8 +413,9 @@ impl Workspace {
             let slot: float_panel::Slot = |ws, at| &mut ws.toast_panels[at];
             self.toast_panels[at].sync(want, redraw, at, Self::draw_toast_panel, slot, cx);
         }
-        // The window draws it again, or stops.
+        // The window draws it again, or stops. A panel that goes tells of no pointer leaving it.
         if was != floats {
+            self.toast.hover = None;
             cx.notify();
         }
     }
