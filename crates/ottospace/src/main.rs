@@ -1200,6 +1200,8 @@ struct Workspace {
     repo_pulse_frames: Cell<u64>,
     /// Frames a working space's mark on the top row asked for (`counts.space_pulse_frames`, test runs).
     space_pulse_frames: Cell<u64>,
+    /// A redraw for the breath is asked for and not yet done.
+    breath_due: Cell<bool>,
     /// The status bar: the focused folder's checkout, read off the main thread; how its segments
     /// were last shortened; the meeting it last said (`id`, minutes to go, Join), to draw again on a change.
     status_git: status_bar::Reader,
@@ -1815,6 +1817,7 @@ impl Workspace {
             pr_note: None,
             repo_pulse_frames: Cell::default(),
             space_pulse_frames: Cell::default(),
+            breath_due: Cell::default(),
             status_git: status_bar::Reader::new(),
             city: city::Reader::new(),
             goto_files: goto::Reader::new(),
@@ -7313,10 +7316,16 @@ impl Workspace {
                 // Its tasks' badges, the most urgent first and on top of the next.
                 (Glyph::Tasks, _) => {
                     let tasks = self.model.space_badges(&of);
+                    // The first (most urgent) carries the space's activity when no badge drawn says it.
+                    let space = self.model.space_activity(&of);
                     let badges: Vec<Div> = tasks
                         .iter()
                         .take(5)
-                        .filter_map(|id| self.activity_badge(*id, 18., breath, &breathing))
+                        .enumerate()
+                        .filter_map(|(at, id)| {
+                            let least = if at == 0 { space } else { repo_dots::Activity::Idle };
+                            self.activity_badge(*id, 18., least, breath, &breathing)
+                        })
                         .collect();
                     // Each 11 points right of the one before; drawn last to first, so the first is on top.
                     let width = 18. + 11. * badges.len().saturating_sub(1) as f32;
@@ -7514,7 +7523,7 @@ impl Workspace {
         let lights = (TRAFFIC_LIGHTS - left).max(0.);
         // The row sits below the selected space: a shadow at its foot, which only that space covers.
         let below = inner_shade(false, 7.).left(px(lights));
-        div()
+        let row = div()
             .h(px(TOP_BAR))
             .flex_none()
             .relative()
@@ -7568,14 +7577,23 @@ impl Workspace {
                     })),
             )
             .children(more)
-            // A mark breathes: the next frame, and none once none does.
-            .children(breathing.get().then(|| {
-                self.space_pulse_frames.set(self.space_pulse_frames.get() + 1);
-                canvas(|_, _, _| {}, |_, _, window, _| window.request_animation_frame()).absolute().size_0()
-            }))
             .child(new_space)
             .children(chip)
-            .child(self.render_top_buttons(cx))
+            .child(self.render_top_buttons(cx));
+        // A mark breathes: a redraw in 66 ms (15 a second is smooth for a 2.4 s breath, and not a
+        // frame of the whole window at the display's rate), none once none does.
+        if breathing.get() && !self.breath_due.replace(true) {
+            self.space_pulse_frames.set(self.space_pulse_frames.get() + 1);
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_millis(66)).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.breath_due.set(false);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        row
     }
 
     /// New tab and split buttons: a new empty tab, or the picker for that split. Then Fill the
@@ -8026,11 +8044,12 @@ fn midnight_of(now: u64, offset_at: impl Fn(i64) -> i64) -> u64 {
 }
 
 /// The opacity of a working space's mark now: 1 to 0.4 and back every 2.4 s. None under Reduce
-/// Motion: it stays lit.
+/// Motion: it stays lit. A test run's stays at 0.7, so its pictures repeat.
 fn space_breath(calm: bool) -> Option<f32> {
     const PERIOD: u64 = 2_400;
     let turn = (now_ms() % PERIOD) as f32 / PERIOD as f32;
-    (!calm).then(|| 0.7 + 0.3 * (turn * std::f32::consts::TAU).cos())
+    let still = std::env::var_os("OTTOSPACE_E2E").is_some();
+    (!calm).then(|| if still { 0.7 } else { 0.7 + 0.3 * (turn * std::f32::consts::TAU).cos() })
 }
 
 fn now_ms() -> u64 {
