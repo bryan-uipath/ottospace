@@ -23,6 +23,7 @@ below; a folder scripts/shots/<name>/ beside it is copied into the instance's ow
   {"until":"drawer.native.chats.1.transcript.cards","len":1}   wait on the state ("is", "exists")
   {"sleep_ms":700}            wait (motion while recording)
   {"write":"home/settings.json","text":"{}"}   a file in the instance's own folder, as an editor saves it
+  {"tree":"repos/big","files":2000}   a made-up git repository there: nested folders, most files small
   {"record":"start"}          with --record: what the recording covers (default: all of it)
   {"controls":true}           print the named controls on screen (for writing scenarios)
   {"print":"repos_bar"}       print a part of the state (for writing scenarios)
@@ -104,6 +105,20 @@ def read_steps(name, root):
             except json.JSONDecodeError as err:
                 raise Failed(f"{path}:{number}: {err}")
     return steps
+
+
+def made_up_tree(at, count):
+    """A git repository at `at` with `count` made-up files, the same every run: up to four folders
+    deep, unevenly; sizes as a repository's, most small (200 B) and a few large (about 50 KB)."""
+    os.makedirs(at, exist_ok=True)
+    subprocess.run(["git", "init", "-q", at], check=True)
+    for i in range(count):
+        deep = ["", "core/", "core/model/", "ui/", "ui/views/panes/"][(i // 7) % 5]
+        r = (i * 7919) % 1000
+        path = os.path.join(at, f"m{i % 6}", deep, f"part{i % 4}", f"f{i}.rs")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("x" * (200 + r * r * r // 20000))
 
 
 def copy_fixtures(name, root):
@@ -472,6 +487,8 @@ def run_scenario(binary, scenario, out, record=False):
                 with open(path + ".new", "w") as f:
                     f.write(step["text"])
                 os.replace(path + ".new", path)
+            elif "tree" in step:
+                made_up_tree(os.path.join(inst.root, step["tree"]), step["files"])
             elif "record" in step:
                 if record and step["record"] == "start" and not recording:
                     recording = start_recording()

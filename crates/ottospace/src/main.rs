@@ -8122,6 +8122,7 @@ impl Workspace {
             // On the root, so a selection drag keeps going over other panes.
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
                 this.mouse_move(e, cx);
+                this.city_hover(e.position, cx);
                 this.annotate_move(e, window, cx);
                 this.bug_move(e, window, cx);
             }))

@@ -1,9 +1,10 @@
 # The code city (flag `code_city`): a task's empty tab draws its checkout as a 3D city, rendered
 # on the GPU, where the lattice was. First the tab as it is without the flag (`before`), then the
 # flag on (as the user's settings turn it on): the file the agent reads is lit in the task's
-# colour, then the two it is at next; a shell command lights none; the turn over, none. The
-# stand-in `claude` replays code-city/fixtures; code-city/repos/app is a made-up repository
-# (`_git`: an empty one).
+# colour (`hovered`: the user's pointer on it, its beacon), then the two it is at next; a shell
+# command lights none; the turn over, none. Last, a second task in a made-up tree of 2,000 files,
+# its folders as districts (`deep-tree`). The stand-in `claude` replays code-city/fixtures;
+# code-city/repos/app is a made-up repository (`_git`: an empty one).
 {"cmd":"task_new","line":"fix the login loop >app"}
 {"cmd":"section","section":"tasks"}
 {"click":"task:1","at":[0.3,0.3]}
@@ -14,6 +15,8 @@
 {"until":"state.features","is":["code_city"]}
 {"until":"city.lit","len":1}
 {"shot":"one-file"}
+{"hover":{"rect":"city.lit.0"},"at":[0.5,0.08]}
+{"shot":"hovered"}
 {"until":"city.lit","len":2,"timeout_ms":60000}
 {"shot":"two-files"}
 {"until":"city.lit","len":0,"timeout_ms":60000}
@@ -22,3 +25,11 @@
 {"cmd":"key","keys":"cmd-shift-r","as":"user"}
 {"settle":300}
 {"shot":"at-rest"}
+{"tree":"repos/big","files":2000}
+{"write":"home/settings.json","text":"{\"repos\": [\"{ROOT}/repos/app\", \"{ROOT}/repos/big\"], \"conversation_view\": \"native\", \"session_dirs\": {\"claude\": [\"{ROOT}/sessions/claude\"]}, \"restore_layout\": false, \"features\": {\"code_city\": true}}\n"}
+{"until":"repos_bar.1"}
+{"cmd":"task_new","line":"tidy the model >big"}
+{"cmd":"open_space","space":{"kind":"task","id":2}}
+{"until":"city.places","is":2096,"timeout_ms":60000}
+{"settle":500}
+{"shot":"deep-tree"}

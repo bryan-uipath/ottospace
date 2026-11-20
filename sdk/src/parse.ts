@@ -82,6 +82,7 @@ import type {
   Glyph,
   HomeDrawn,
   CityDrawn,
+  CityHovered,
   HomeNode,
   InboxReply,
   InboxRow,
@@ -2002,13 +2003,20 @@ function cityDrawn(value: unknown, at: string): CityDrawn {
     bounds: rect(o.bounds, `${at}.bounds`),
     scale: num(o.scale, `${at}.scale`),
     lit: list(rect)(o.lit, `${at}.lit`),
+    lit_tops: list(point)(o.lit_tops, `${at}.lit_tops`),
     labels: num(o.labels, `${at}.labels`),
     failed: orNull(str)(o.failed, `${at}.failed`),
     reads: num(o.reads, `${at}.reads`),
     renders: num(o.renders, `${at}.renders`),
     paints: num(o.paints, `${at}.paints`),
     render_us: orNull(num)(o.render_us, `${at}.render_us`),
+    hovered: orNull(cityHovered)(o.hovered, `${at}.hovered`),
   };
+}
+
+function cityHovered(value: unknown, at: string): CityHovered {
+  const o = fields(value, at);
+  return { file: bool(o.file, `${at}.file`), lit: bool(o.lit, `${at}.lit`), beacon: rect(o.beacon, `${at}.beacon`) };
 }
 
 function homeDrawn(value: unknown, at: string): HomeDrawn {

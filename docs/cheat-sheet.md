@@ -47,6 +47,7 @@ ottospace            # opens on the Repos list
 | Close the tab and its panes | ⌘⇧W |
 | Tab out to its own window on another display, and back in (`multi_monitor` flag) | ⌘⇧O; or Fold back in on its tab or in its window's strip |
 | See a task's checkout as a 3D city, the file its agent is at lit (`code_city` flag) | An empty tab of the task |
+| Name a building or district of the city | Point at it |
 | Save the tab into its workspace, else as a new one | ⌘⇧S |
 | Fill the whole display, over the menu bar and Dock | ⌃⌘F, the green button, or the expand button at the top right (again to restore) |
 

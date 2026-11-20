@@ -15739,6 +15739,27 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
         let now = city(&otto);
         assert_eq!((now["reads"].as_u64(), now["renders"].as_u64(), &now["lit"]), (reads, renders, &lit["lit"]));
     }
+    // The user's pointer on the lit building's top: its beacon, a file's, lit, clear of the hints;
+    // nothing rendered again. A client's pointer, and the user's over the hints: no beacon.
+    let top = numbers(&city(&otto)["lit_tops"][0]);
+    let point = |x: f64, y: f64, user: bool| {
+        let mut move_to = json!({"cmd": "mouse", "action": "move", "x": x, "y": y});
+        if user {
+            move_to["as"] = json!("user");
+        }
+        otto.call(move_to);
+        city(&otto)["hovered"].clone()
+    };
+    let hovered = point(top[0], top[1] + 1., true);
+    assert_eq!((&hovered["file"], &hovered["lit"]), (&json!(true), &json!(true)), "{hovered}");
+    let hints = otto.control("home:terminal");
+    let label = numbers(&hovered["beacon"]);
+    let apart =
+        |a: &[f64], b: &[f64]| a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1];
+    assert!(apart(&label, &hints), "{label:?} over {hints:?}");
+    assert_eq!(city(&otto)["renders"].as_u64(), renders, "hover renders nothing");
+    assert_eq!(point(hints[0] + 4., hints[1] + 4., true), Value::Null, "over a hint, the hint wins");
+    assert_eq!(point(top[0], top[1] + 1., false), Value::Null, "a client's pointer shows none");
     // A pane in the tab covers the floor: no city. Closed: the same city, the same place.
     otto.call(json!({"cmd": "split"}));
     assert_eq!(city(&otto), Value::Null);

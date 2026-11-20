@@ -8,16 +8,21 @@ use crate::atlas::Atlas;
 /// The plan is this much wider than deep, as the atlas cuts it.
 const WIDE: f32 = 1.6;
 /// The tallest building, in plan units (the plan is `WIDE` by 1).
-const TALLEST: f32 = 0.16;
+const TALLEST: f32 = 0.12;
 /// The rise from a district to the one inside it, by depth, then `LIFT_MIN`: the owner's city's
 /// terraces (`TIER_LIFT`, in its units where a tower is at most 60), in ours.
 const LIFTS: [f32; 5] = [13., 8., 4.6, 2.6, 1.7];
 const LIFT_MIN: f32 = 1.1;
-/// Plan units per unit of the owner's city: its tallest tower (60) is our `TALLEST`, halved for
-/// terraces, so a backdrop's districts step without towering.
-const UNIT: f32 = TALLEST / 60. * 0.5;
+/// Plan units per unit of the owner's city: its tallest tower (60) is our `TALLEST`, at three
+/// quarters for terraces, so a backdrop's districts step without towering.
+const UNIT: f32 = TALLEST / 60. * 0.75;
 /// The gap round a district and round a building, at most, in plan units.
 const STREET: f32 = 0.0035;
+/// Districts are this many streets apart, so a folder reads as a block of its own.
+const DISTRICT_STREET: f32 = 1.5;
+/// The ground a district keeps free inside its own edge, a share of its shorter side at most
+/// (and at most a street): a district inside it never reaches it.
+const KERB: f32 = 0.125;
 /// A building's footprint is its lot less this share on each side (at most `STREET`).
 const SETBACK: f32 = 0.12;
 /// In a city of few files (large lots), the tallest building is at least this many typical lot
@@ -29,7 +34,7 @@ const LOT_STREET: f32 = 0.12;
 const LIT_ABOVE: f32 = 0.02;
 /// The camera looks down this much (degrees) and from this side of the plan (degrees from its
 /// front, toward its left), with this vertical field of view.
-const PITCH: f32 = 38.;
+const PITCH: f32 = 52.;
 const YAW: f32 = 34.;
 const FOV: f32 = 30.;
 /// Room kept round the city in the picture, a share of each side.
@@ -39,7 +44,8 @@ const MARGIN: f32 = 0.04;
 pub enum Kind {
     /// The ground under everything.
     Ground,
-    /// A district: a folder, its depth from the root (1 for a folder of the root).
+    /// A district: a folder, its tier (1 for the outermost). A folder with one child is no
+    /// district of its own: its child stands where it would, at its tier.
     Plate(usize),
     Building,
     /// A building an agent is at, in its task's colour.
@@ -52,6 +58,8 @@ pub struct Block {
     pub min: [f32; 3],
     pub max: [f32; 3],
     pub kind: Kind,
+    /// The atlas place it stands for (an index into `Atlas::places`); none for the ground.
+    pub place: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -179,7 +187,7 @@ fn frame(blocks: &[Block], aspect: f32) -> Option<Camera> {
     if blocks.is_empty() || aspect.is_nan() || aspect <= 0. {
         return None;
     }
-    let all = Block { min: lo, max: hi, kind: Kind::Ground };
+    let all = Block { min: lo, max: hi, kind: Kind::Ground, place: None };
     let target = [(lo[0] + hi[0]) / 2., 0., (lo[2] + hi[2]) / 2.];
     let (pitch, yaw) = (PITCH.to_radians(), YAW.to_radians());
     // From the camera to the target: down by the pitch, into the plan turned by the yaw.
@@ -212,40 +220,134 @@ fn frame(blocks: &[Block], aspect: f32) -> Option<Camera> {
     Some(at(far))
 }
 
+/// An area of the ground: x from `x0` to `x1`, z from `z0` to `z1`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Area {
+    x0: f32,
+    z0: f32,
+    x1: f32,
+    z1: f32,
+}
+
+impl Area {
+    fn shrunk(self, by: f32) -> Area {
+        Area { x0: self.x0 + by, z0: self.z0 + by, x1: self.x1 - by, z1: self.z1 - by }
+    }
+
+    fn short(self) -> f32 {
+        (self.x1 - self.x0).min(self.z1 - self.z0)
+    }
+
+    /// `a`, a part of `self`, as the same part of `to`.
+    fn map(self, a: Area, to: Area) -> Area {
+        let x = |v: f32| to.x0 + (v - self.x0) / (self.x1 - self.x0) * (to.x1 - to.x0);
+        let z = |v: f32| to.z0 + (v - self.z0) / (self.z1 - self.z0) * (to.z1 - to.z0);
+        Area { x0: x(a.x0), z0: z(a.z0), x1: x(a.x1), z1: z(a.z1) }
+    }
+}
+
+/// What a group of the plan leaves for what stands in it: its lot on the plan (`from`), drawn
+/// in `to` (its district less a kerb), on which tier.
+#[derive(Clone, Copy)]
+struct Room {
+    depth: usize,
+    from: Area,
+    to: Area,
+    tier: usize,
+}
+
 /// The city of `atlas` for a picture `aspect` wide to 1 tall. `lit`: places (by id) an agent is
-/// at, each with its task's colour. A lit building stands above every terrace, and any building
-/// between the camera and a lit one's top is cut down to below the sight line: a lit building is
-/// never hidden.
+/// at, each with its task's colour.
+///
+/// Districts: a folder of more than one child is a plate on its parent's, a tier higher, a
+/// street in from its lot (siblings never touch). What stands in it is drawn a kerb in from its
+/// edge, the plan's shares kept (scaled, never cut). A
+/// building stands on its district, set back in its lot. A lit building stands above every
+/// terrace, and any building between the camera and a lit one's top is cut down to below the
+/// sight line: a lit building is never hidden.
 pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
-    let ground = Block { min: [0., -0.01, 0.], max: [WIDE, 0., 1.], kind: Kind::Ground };
+    let ground = Block { min: [0., -0.01, 0.], max: [WIDE, 0., 1.], kind: Kind::Ground, place: None };
     let mut blocks = vec![ground];
-    let highest = atlas.places.iter().filter(|p| p.group).map(|p| terrace(p.depth)).fold(0f32, f32::max);
     // A typical lot's side: e.g. 0.24 for 28 files, 0.018 for 5,000 (where the constants rule).
     let lot = (WIDE / atlas.places.iter().filter(|p| !p.group).count().max(1) as f32).sqrt();
     let (tallest, street) = (TALLEST.max(lot * TOWER), STREET.max(lot * LOT_STREET));
-    for place in &atlas.places {
-        let r = place.rect;
-        let (x0, z0, x1, z1) = (r.x * WIDE, r.y, (r.x + r.w) * WIDE, r.y + r.h);
-        let floor = terrace(place.depth - 1);
+    // How many children each group has: a group's are the places after it one deeper, up to
+    // the next place no deeper than it.
+    let mut children = vec![0usize; atlas.places.len()];
+    let mut open: Vec<usize> = Vec::new();
+    for (i, place) in atlas.places.iter().enumerate() {
+        while open.last().is_some_and(|&g| atlas.places[g].depth >= place.depth) {
+            open.pop();
+        }
+        if let Some(&g) = open.last() {
+            children[g] += 1;
+        }
         if place.group {
-            let street = street.min((x1 - x0) / 4.).min((z1 - z0) / 4.);
-            let (min, max) = ([x0 + street, floor, z0 + street], [x1 - street, terrace(place.depth), z1 - street]);
-            blocks.push(Block { min, max, kind: Kind::Plate(place.depth) });
+            open.push(i);
+        }
+    }
+    let whole = Area { x0: 0., z0: 0., x1: WIDE, z1: 1. };
+    let root = Room { depth: 0, from: whole, to: whole.shrunk(street), tier: 0 };
+    let mut rooms = vec![root];
+    let mut highest = 0f32;
+    let mut buildings = Vec::new();
+    for (i, place) in atlas.places.iter().enumerate() {
+        while rooms.len() > 1 && rooms.last().is_some_and(|room| room.depth >= place.depth) {
+            rooms.pop();
+        }
+        let Some(&parent) = rooms.last() else { continue };
+        let r = place.rect;
+        let from = Area { x0: r.x * WIDE, z0: r.y, x1: (r.x + r.w) * WIDE, z1: r.y + r.h };
+        let lot = parent.from.map(from, parent.to);
+        let floor = terrace(parent.tier);
+        if place.group {
+            let mut room = Room { depth: place.depth, from, to: lot, tier: parent.tier };
+            if children[i] != 1 {
+                let plate = lot.shrunk((street * DISTRICT_STREET).min(lot.short() / 4.));
+                let to = plate.shrunk(street.min(plate.short() * KERB));
+                room = Room { depth: place.depth, from, to, tier: parent.tier + 1 };
+                let top = terrace(room.tier);
+                highest = highest.max(top);
+                let (min, max) = ([plate.x0, floor, plate.z0], [plate.x1, top, plate.z1]);
+                blocks.push(Block { min, max, kind: Kind::Plate(room.tier), place: Some(i) });
+            }
+            rooms.push(room);
             continue;
         }
         let set = |side: f32| (side * SETBACK).min(street);
-        let (sx, sz) = (set(x1 - x0), set(z1 - z0));
+        let (sx, sz) = (set(lot.x1 - lot.x0), set(lot.z1 - lot.z0));
         let colour = lit.iter().find(|(id, _)| *id == place.id).map(|(_, colour)| *colour);
-        let mut top = floor + place.height.unwrap_or(0.).clamp(0., 1.).max(1. / 30.) * tallest;
-        if colour.is_some() {
-            top = top.max(highest + LIT_ABOVE);
-        }
+        let top = floor + place.height.unwrap_or(0.).clamp(0., 1.).max(1. / 30.) * tallest;
         let kind = colour.map_or(Kind::Building, Kind::Lit);
-        blocks.push(Block { min: [x0 + sx, floor, z0 + sz], max: [x1 - sx, top, z1 - sz], kind });
+        buildings.push(Block {
+            min: [lot.x0 + sx, floor, lot.z0 + sz],
+            max: [lot.x1 - sx, top, lot.z1 - sz],
+            kind,
+            place: Some(i),
+        });
     }
+    for block in buildings.iter_mut().filter(|b| matches!(b.kind, Kind::Lit(_))) {
+        block.max[1] = block.max[1].max(highest + LIT_ABOVE);
+    }
+    blocks.extend(buildings);
     let Some(camera) = frame(&blocks, aspect) else { return Scene { blocks, camera: None } };
     clear_sight(&mut blocks, camera.eye, highest + LIT_ABOVE);
     Scene { blocks, camera: Some(camera) }
+}
+
+impl Scene {
+    /// The box under a point of the picture (shares of it, 0,0 top left): the nearest building
+    /// or district the camera's ray through it meets. Never the ground.
+    pub fn hit(&self, x: f32, y: f32) -> Option<&Block> {
+        let camera = self.camera?;
+        let (r, u, f) = camera.axes();
+        let tan = (camera.fov / 2.).tan();
+        let (dx, dy) = ((2. * x - 1.) * tan * camera.aspect, (1. - 2. * y) * tan);
+        let to: [f32; 3] = std::array::from_fn(|i| camera.eye[i] + (f[i] + r[i] * dx + u[i] * dy) * camera.far);
+        let near = |b: &&Block| b.crossed(camera.eye, to).map(|(t, _)| t);
+        let hits = self.blocks.iter().filter(|b| b.kind != Kind::Ground);
+        hits.filter_map(|b| Some((near(&b)?, b))).min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, b)| b)
+    }
 }
 
 /// The top centre of a box: what of a lit building must be seen.
@@ -330,15 +432,124 @@ mod tests {
 
     #[test]
     fn districts_step_up_and_buildings_stand_on_their_district() {
-        let s = scene(&city(&[("src/ui/a.rs", 900), ("src/b.rs", 900), ("c.rs", 900)]), &[], 1.6);
+        let s = scene(&city(&[("src/ui/a.rs", 900), ("src/ui/d.rs", 900), ("src/b.rs", 900), ("c.rs", 900)]), &[], 1.6);
         let plate = |depth| s.blocks.iter().find(|b| b.kind == Kind::Plate(depth)).unwrap();
         assert_eq!(plate(1).min[1], 0.);
         assert_eq!(plate(2).min[1], plate(1).max[1]);
         assert!(plate(2).max[1] > plate(1).max[1]);
         let floors: Vec<f32> = s.blocks.iter().filter(|b| b.kind == Kind::Building).map(|b| b.min[1]).collect();
-        // c.rs on the ground, b.rs on src, a.rs on src/ui.
-        assert_eq!(floors.len(), 3);
+        // c.rs on the ground, b.rs on src, a.rs and d.rs on src/ui.
+        assert_eq!(floors.len(), 4);
         assert!(floors.contains(&0.) && floors.contains(&plate(1).max[1]) && floors.contains(&plate(2).max[1]));
+    }
+
+    /// The plate of a place, by its id.
+    fn plate<'a>(s: &'a Scene, atlas: &Atlas, id: &str) -> Option<&'a Block> {
+        s.blocks.iter().find(|b| matches!(b.kind, Kind::Plate(_)) && b.place.is_some_and(|p| atlas.places[p].id == id))
+    }
+
+    /// Every district lies inside the one it stands on, a kerb in from its edge; no two
+    /// districts on one, and no two buildings, touch; a building stands inside its district.
+    #[test]
+    fn districts_nest_with_a_kerb_and_siblings_never_touch() {
+        let mut trees = vec![many(), city(&[("a.rs", 9_000), ("b/c.rs", 10), ("b/d.rs", 10)])];
+        for seed in 0..40u64 {
+            let files: Vec<(String, u64)> = (0..(5 + seed * 7))
+                .map(|i| {
+                    let h = (i * 2_654_435_761 + seed * 40_503) % 1_000_003;
+                    (format!("d{}/e{}/f{}/g{i}.rs", h % 3, h % 5, h % 2), 100 + h % 60_000)
+                })
+                .collect();
+            trees.push(atlas(&repo(&files)));
+        }
+        for atlas in &trees {
+            let s = scene(atlas, &[], 1.6);
+            // The district each place stands in: its nearest group ancestor with a plate.
+            let parent_plate = |i: usize| {
+                let depth = atlas.places[i].depth;
+                let mut want = depth;
+                atlas.places[..i].iter().rev().find_map(|p| {
+                    if p.depth < want {
+                        want = p.depth;
+                        return plate(&s, atlas, &p.id).filter(|_| p.group);
+                    }
+                    None
+                })
+            };
+            let inside = |a: &Block, b: &Block, by: f32| {
+                a.min[0] >= b.min[0] + by
+                    && a.min[2] >= b.min[2] + by
+                    && a.max[0] <= b.max[0] - by
+                    && a.max[2] <= b.max[2] - by
+            };
+            let shown: Vec<&Block> = s.blocks.iter().filter(|b| b.kind != Kind::Ground).collect();
+            for b in &shown {
+                let Some(i) = b.place else { continue };
+                if let Some(parent) = parent_plate(i) {
+                    assert!(inside(b, parent, 1e-5), "{} in {:?}", atlas.places[i].id, parent);
+                    // On it: a district a tier up, a building on its top.
+                    assert_eq!(b.min[1], parent.max[1], "{}", atlas.places[i].id);
+                    if let (Kind::Plate(t), Kind::Plate(p)) = (b.kind, parent.kind) {
+                        assert_eq!(t, p + 1);
+                    }
+                }
+            }
+            let is_plate = |b: &&&Block| matches!(b.kind, Kind::Plate(_));
+            for kind in [true, false] {
+                let some: Vec<&&Block> = shown.iter().filter(|b| is_plate(b) == kind).collect();
+                for (n, a) in some.iter().enumerate() {
+                    for b in &some[n + 1..] {
+                        let apart = |k: usize| (b.min[k] - a.max[k]).max(a.min[k] - b.max[k]);
+                        let nested = inside(a, b, 0.) || inside(b, a, 0.);
+                        assert!(nested || apart(0).max(apart(2)) > 1e-6, "{a:?} touches {b:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A folder with one child is no district: `a` and `a/b` hold only `a/b/c`, which is the
+    /// first tier. Its districts are a tier apart by the owner's lifts.
+    #[test]
+    fn a_folder_of_one_child_is_no_district() {
+        let atlas = city(&[("a/b/c/x.rs", 900), ("a/b/c/y.rs", 900), ("a/b/c/z/w.rs", 900), ("a/b/c/z/v.rs", 900)]);
+        let s = scene(&atlas, &[], 1.6);
+        assert!(plate(&s, &atlas, "a").is_none() && plate(&s, &atlas, "a/b").is_none());
+        let (c, z) = (plate(&s, &atlas, "a/b/c").unwrap(), plate(&s, &atlas, "a/b/c/z").unwrap());
+        assert_eq!((c.kind, z.kind), (Kind::Plate(1), Kind::Plate(2)));
+        assert_eq!((c.min[1], c.max[1], z.max[1]), (0., terrace(1), terrace(2)));
+    }
+
+    /// The ray through a point of the picture meets what is drawn there: a building's top, a
+    /// district's kerb, nothing off the city.
+    #[test]
+    fn a_point_of_the_picture_hits_what_is_drawn_there() {
+        let atlas = many();
+        for aspect in [0.7, 1.6, 3.] {
+            let s = scene(&atlas, &[], aspect);
+            let camera = s.camera.unwrap();
+            let mut hit = 0;
+            for b in s.blocks.iter().filter(|b| b.kind == Kind::Building) {
+                let (x, y) = camera.project(top(b)).unwrap();
+                // Another building in front may hide it: then the hit is that one, nearer.
+                let got = s.hit(x, y).unwrap();
+                if got == b {
+                    hit += 1;
+                } else {
+                    let d = |b: &Block| (0..3).map(|i| (top(b)[i] - camera.eye[i]).powi(2)).sum::<f32>();
+                    assert!(got.crossed(camera.eye, top(b)).is_some() || d(got) <= d(b), "{got:?} for {b:?}");
+                }
+            }
+            assert!(hit > s.blocks.len() / 2, "{hit}");
+            assert_eq!(s.hit(0.001, 0.001), None, "off the city");
+        }
+        // A district's front kerb, where nothing stands.
+        let atlas = city(&[("a/x.rs", 900), ("a/y.rs", 900), ("b.rs", 900)]);
+        let s = scene(&atlas, &[], 1.6);
+        let a = plate(&s, &atlas, "a").unwrap();
+        let kerb = [(a.min[0] + a.max[0]) / 2., a.max[1], a.min[2] + 1e-4];
+        let (x, y) = s.camera.unwrap().project(kerb).unwrap();
+        assert_eq!(s.hit(x, y), Some(a));
     }
 
     #[test]

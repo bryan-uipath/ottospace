@@ -13,11 +13,12 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, Bounds, Context, Corners, Hsla, Pixels, RenderImage, TextRun, Window, canvas, div, fill, point,
+    AnyElement, Bounds, Context, Corners, Hsla, Pixels, Point, RenderImage, TextRun, Window, canvas, div, fill, point,
     prelude::*, px, rgb,
 };
 use ottospace_core::atlas::{self, Atlas};
-use ottospace_core::scene::{self, Kind};
+use ottospace_core::model::Origin;
+use ottospace_core::scene::{self, Kind, Scene};
 use ottospace_core::{status_bar, theme};
 
 use crate::city_gpu::{Gpu, Picture};
@@ -30,8 +31,12 @@ const MOST_BYTES: u64 = 4 << 20;
 const MOST_FILES: usize = 20_000;
 /// Cities kept, by folder: a task's tab shown again draws at once.
 const KEPT: usize = 8;
-/// Names of the root's folders on their ground, at most.
+/// Names of districts on their plates, at most, and their tier at most (2: a folder of the root
+/// and the districts on it).
 const MOST_NAMES: usize = 24;
+const NAMED_TIERS: usize = 2;
+/// A hovered building's beacon: its line rises this many points above the building's top.
+const BEACON: f32 = 36.;
 /// Room kept between a name and the empty tab's hints, in points.
 const CLEAR: f32 = 12.;
 /// The hints' backing fades out over this many points, in this many layers: no edge to see.
@@ -139,12 +144,23 @@ struct Key {
     size: (u32, u32),
 }
 
-/// A picture made: where, in shares of it, the lit buildings and the root's folders' names are.
+/// A district's name on its plate: where it starts and how wide the plate's edge is there, in
+/// shares of the picture.
+struct Name {
+    text: String,
+    at: (f32, f32),
+    room: f32,
+}
+
+/// A picture made: where, in shares of it, the lit buildings and the districts' names are; the
+/// scene and plan it shows, for what the pointer is over.
 struct Made {
     key: Key,
     image: Arc<RenderImage>,
-    lit: Vec<[f32; 4]>,
-    names: Vec<(String, (f32, f32))>,
+    lit: Vec<([f32; 4], (f32, f32))>,
+    names: Vec<Name>,
+    scene: Scene,
+    plan: Arc<Atlas>,
     places: usize,
     groups: usize,
     render_us: u64,
@@ -163,6 +179,10 @@ pub struct Drawn {
     /// Of the last paint: where, in window points, and how many names.
     bounds: Bounds<Pixels>,
     labels: usize,
+    /// The box the user's pointer is over (an index into the scene's blocks), and the beacon's
+    /// label as the last paint drew it: whether a file's, whether lit, where.
+    hovered: Option<usize>,
+    beacon: Option<(bool, bool, Bounds<Pixels>)>,
     /// Pictures replaced: GPUI keeps each in the window's atlas until it is dropped.
     retired: Vec<Arc<RenderImage>>,
 }
@@ -200,7 +220,7 @@ impl Painter {
 }
 
 /// The scene of `plan` and its picture, on the picture's thread.
-fn make(gpu: &Gpu, key: &Key, plan: &Atlas) -> Result<Made, String> {
+fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>) -> Result<Made, String> {
     let started = std::time::Instant::now();
     let lit: Vec<(&str, u32)> = key.lit.iter().map(|(id, colour)| (id.as_str(), *colour)).collect();
     let (w, h) = key.size;
@@ -209,18 +229,40 @@ fn make(gpu: &Gpu, key: &Key, plan: &Atlas) -> Result<Made, String> {
     let camera = scene.camera.ok_or("no camera")?;
     let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
     let image = Arc::new(RenderImage::new([image::Frame::new(image)]));
-    let lit = scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))).filter_map(|b| camera.bounds(b)).collect();
-    // A folder of the root is named at the front edge of its ground.
-    let plates = scene.blocks.iter().filter(|b| b.kind == Kind::Plate(1));
-    let named = plan.places.iter().filter(|p| p.group && p.depth == 1);
-    let names = named
-        .zip(plates)
-        .filter_map(|(place, b)| Some((place.label.clone(), camera.project([b.min[0], b.max[1], b.max[2]])?)))
+    // Each lit building's bounds, and the middle of its top (never hidden).
+    let lit = (scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))))
+        .filter_map(|b| {
+            let [x, y, w, h] = camera.bounds(b)?;
+            let (tx, ty) = camera.project([(b.min[0] + b.max[0]) / 2., b.max[1], (b.min[2] + b.max[2]) / 2.])?;
+            Some(([x, y, w, h], (tx, ty)))
+        })
+        .collect();
+    // A district is named at the back left edge of its plate, outer tiers first; a district on
+    // another is named from it (`ui` on `src`, not `src/ui`).
+    let mut plates: Vec<(usize, usize, &scene::Block)> = (scene.blocks.iter())
+        .filter_map(|b| match (b.kind, b.place) {
+            (Kind::Plate(tier), Some(place)) if tier <= NAMED_TIERS => Some((tier, place, b)),
+            _ => None,
+        })
+        .collect();
+    plates.sort_by_key(|(tier, ..)| *tier);
+    let ids: Vec<&str> =
+        plates.iter().filter(|(tier, ..)| *tier < NAMED_TIERS).map(|(_, p, _)| plan.places[*p].id.as_str()).collect();
+    let names = (plates.iter())
+        .filter_map(|(_, place, b)| {
+            let id = plan.places[*place].id.as_str();
+            let outer =
+                ids.iter().filter_map(|outer| id.strip_prefix(outer)?.strip_prefix('/')).min_by_key(|rest| rest.len());
+            let at = camera.project([b.min[0], b.max[1], b.max[2]])?;
+            let end = camera.project([b.max[0], b.max[1], b.max[2]])?;
+            Some(Name { text: outer.unwrap_or(id).to_string(), at, room: (end.0 - at.0).abs() })
+        })
         .take(MOST_NAMES)
         .collect();
     let groups = plan.places.iter().filter(|p| p.group).count();
     let render_us = started.elapsed().as_micros() as u64;
-    Ok(Made { key: key.clone(), image, lit, names, places: plan.places.len(), groups, render_us })
+    let (places, plan) = (plan.places.len(), plan.clone());
+    Ok(Made { key: key.clone(), image, lit, names, scene, plan, places, groups, render_us })
 }
 
 impl Drawn {
@@ -229,14 +271,19 @@ impl Drawn {
     pub fn snapshot(&self, reads: usize, scale: f32) -> serde_json::Value {
         let [x, y, w, h] = rect(self.bounds);
         let lit: Vec<[f32; 4]> = (self.made.iter().flat_map(|made| &made.lit))
-            .map(|r| [x + r[0] * w, y + r[1] * h, r[2] * w, r[3] * h])
+            .map(|(r, _)| [x + r[0] * w, y + r[1] * h, r[2] * w, r[3] * h])
             .collect();
+        let tops: Vec<[f32; 2]> =
+            (self.made.iter().flat_map(|made| &made.lit)).map(|(_, (tx, ty))| [x + tx * w, y + ty * h]).collect();
         let made = self.made.as_ref();
+        let hovered =
+            self.beacon.map(|(file, lit, at)| serde_json::json!({ "file": file, "lit": lit, "beacon": rect(at) }));
         serde_json::json!({
             "places": made.map(|made| made.places), "groups": made.map(|made| made.groups),
             "picture": made.map(|made| made.key.size), "bounds": [x, y, w, h], "scale": scale,
             "lit": lit, "labels": self.labels, "failed": self.failed, "reads": reads,
             "renders": self.renders, "paints": self.paints, "render_us": made.map(|made| made.render_us),
+            "hovered": hovered, "lit_tops": tops,
         })
     }
 }
@@ -257,6 +304,8 @@ impl Workspace {
             redraw = true;
             match made {
                 Ok(made) => {
+                    // Another scene: the box hovered is found again at the next move.
+                    drawn.hovered = None;
                     let old = drawn.made.replace(made);
                     drawn.retired.extend(old.map(|old| old.image));
                     drawn.failed = None;
@@ -331,6 +380,28 @@ impl Workspace {
         }
     }
 
+    /// The pointer moved: the box under it, if it is the user's, over the city's picture and not
+    /// over the hints (they win). Redraws when that changed; nothing is rendered again.
+    pub(crate) fn city_hover(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let hints = self.home.borrow().hints().dilate(px(CLEAR));
+        let mut drawn = self.city_drawn.borrow_mut();
+        let bounds = drawn.bounds;
+        let over = (self.input == Origin::User && self.model.city().is_some() && drawn.failed.is_none())
+            .then_some(())
+            .filter(|_| bounds.contains(&at) && !(hints.size.width > px(0.) && hints.contains(&at)))
+            .and(drawn.made.as_ref())
+            .and_then(|made| {
+                let share = |v: Pixels, from: Pixels, size: Pixels| f32::from(v - from) / f32::from(size);
+                let (x, y) =
+                    (share(at.x, bounds.left(), bounds.size.width), share(at.y, bounds.top(), bounds.size.height));
+                let hit = made.scene.hit(x, y)?;
+                made.scene.blocks.iter().position(|b| std::ptr::eq(b, hit))
+            });
+        if std::mem::replace(&mut drawn.hovered, over) != over {
+            cx.notify();
+        }
+    }
+
     /// For the state of a test run: what was drawn of the city on show; null with none.
     pub(crate) fn city_snapshot(&self, scale: f32) -> serde_json::Value {
         let on = self.model.city().is_some_and(|city| self.city.held.contains_key(city.dir));
@@ -378,31 +449,87 @@ fn paint(drawn: &Shared, hints: Bounds<Pixels>, window: &mut Window, cx: &mut gp
         }
     }
     let style = window.text_style();
-    let mut labels = 0;
-    let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-    // A name with a line break in it is not drawn: `shape_line` takes one line.
-    for (name, (x, y)) in made.names.iter().filter(|(name, _)| !name.contains(char::is_control)) {
-        let color = Hsla::from(rgb(theme::MUTED));
+    let shape = |text: &str, color: u32, size: f32, window: &mut Window| {
         let run = TextRun {
-            len: name.len(),
+            len: text.len(),
             font: style.font(),
-            color,
+            color: Hsla::from(rgb(color)),
             background_color: None,
             underline: None,
             strikethrough: None,
         };
-        let line = window.text_system().shape_line(name.clone().into(), px(theme::TEXT_2XS), &[run], None);
-        let at = bounds.origin + point(px(x * w + 4.), px(y * h + 2.));
+        window.text_system().shape_line(text.to_string().into(), px(size), &[run], None)
+    };
+    let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+    let mut drawn_names: Vec<Bounds<Pixels>> = Vec::new();
+    // A name with a line break in it is not drawn: `shape_line` takes one line. Nor one wider
+    // than its plate's edge, or over the hints or another name.
+    for name in made.names.iter().filter(|name| !name.text.contains(char::is_control)) {
+        let line = shape(&name.text, theme::MUTED, theme::TEXT_2XS, window);
+        let at = bounds.origin + point(px(name.at.0 * w + 4.), px(name.at.1 * h + 2.));
         let room = Bounds { origin: at, size: gpui::size(line.width, px(14.)) };
-        if !room.intersects(&clear)
+        if f32::from(line.width) + 8. <= name.room * w
+            && !room.intersects(&clear)
             && bounds.contains(&room.bottom_right())
+            && !drawn_names.iter().any(|other| other.intersects(&room))
             && line.paint(at, px(14.), window, cx).is_ok()
         {
-            labels += 1;
+            drawn_names.push(room);
         }
     }
+    let labels = drawn_names.len();
+    let beacon = drawn.hovered.and_then(|i| beacon(made, i, bounds, clear, window, cx, &shape));
     drawn.paints += 1;
     drawn.labels = labels;
+    drawn.beacon = beacon;
+}
+
+/// The hovered box's beacon: a line rising from its top and a label at the line's end, the
+/// file's name over its folder, or a district's folder. Drawn over the picture, never over the
+/// hints: placed below the box if above would cover them, else not drawn. Returns whether it is
+/// a file's, whether lit, and where the label is.
+fn beacon(
+    made: &Made,
+    i: usize,
+    bounds: Bounds<Pixels>,
+    clear: Bounds<Pixels>,
+    window: &mut Window,
+    cx: &mut gpui::App,
+    shape: &dyn Fn(&str, u32, f32, &mut Window) -> gpui::ShapedLine,
+) -> Option<(bool, bool, Bounds<Pixels>)> {
+    let block = made.scene.blocks.get(i)?;
+    let place = made.plan.places.get(block.place?)?;
+    let camera = made.scene.camera?;
+    let mid = |a: usize| (block.min[a] + block.max[a]) / 2.;
+    let (x, y) = camera.project([mid(0), block.max[1], mid(2)])?;
+    let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+    let foot = bounds.origin + point(px(x * w), px(y * h));
+    let file = !place.group;
+    let (name, folder) = match place.id.rsplit_once('/') {
+        Some((folder, name)) if file => (name, folder),
+        _ => (place.id.as_str(), ""),
+    };
+    let name = shape(name, theme::TEXT, theme::TEXT_XS, window);
+    let under = (!folder.is_empty()).then(|| shape(folder, theme::MUTED, theme::TEXT_2XS, window));
+    let width = name.width.max(under.as_ref().map_or(px(0.), |line| line.width)) + px(16.);
+    let tall = px(if under.is_some() { 34. } else { 20. });
+    let label = |top: Pixels| Bounds { origin: point(foot.x - width / 2., top), size: gpui::size(width, tall) };
+    let up = label(foot.y - px(BEACON) - tall);
+    let down = label(foot.y + px(BEACON));
+    let fits =
+        |b: &Bounds<Pixels>| !b.intersects(&clear) && bounds.contains(&b.origin) && bounds.contains(&b.bottom_right());
+    let at = [up, down].into_iter().find(fits)?;
+    let (from, to) = if at == up { (at.bottom(), foot.y) } else { (foot.y, at.top()) };
+    let colour = Hsla::from(rgb(theme::PRIMARY));
+    window.paint_quad(fill(Bounds::from_corners(point(foot.x - px(0.5), from), point(foot.x + px(0.5), to)), colour));
+    window.paint_quad(fill(Bounds::centered_at(foot, gpui::size(px(5.), px(5.))), colour).corner_radii(px(2.5)));
+    let pill = fill(at, Hsla::from(rgb(theme::BACKGROUND)).opacity(0.88)).corner_radii(px(theme::RADIUS_MD));
+    window.paint_quad(pill.border_widths(px(1.)).border_color(colour.opacity(0.6)));
+    let _ = name.paint(at.origin + point(px(8.), px(3.)), px(14.), window, cx);
+    if let Some(under) = under {
+        let _ = under.paint(at.origin + point(px(8.), px(18.)), px(14.), window, cx);
+    }
+    Some((file, matches!(block.kind, Kind::Lit(_)), at))
 }
 
 #[cfg(test)]

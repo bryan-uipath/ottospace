@@ -102,28 +102,50 @@ Costs, known:
 Windows). It replaces the 2D plan this note first recommended.
 
 - **The scene is the core's** (`ottospace-core::scene`, pure, unit-tested): the ground; each
-  district a terrace standing on its parent's, stepped as the owner's city steps its own
-  (`TIER_LIFT` 13, 8, 4.6, 2.6, 1.7, then 1.1, in a tower's sixtieths, halved); each file a box
-  on its district, its height the owner's `buildingHeight` (`2 + 6·log2(1 + lines/10)`, 2 to 60),
-  lines guessed as bytes / 32 (lines would mean reading every file). Footprint stays the size
-  class: the owner's city sizes a file by its lines too, and churn-based height is slice 6.
-  In a city of few files (under about 400) the lots are large, so the tallest building is at
-  least 2.5 lot sides and streets a tenth of one: towers on streets, not slabs.
-- **The camera is the core's**: perspective, 30° field of view, looking down 38° from 34° off
-  the plan's front, as near as keeps every box inside the picture with 4% to spare, at any
-  shape of tab (tested). A point's projection is a pure function, for tests and later hit tests.
+  district a plate standing on its parent's, stepped as the owner's city steps its own
+  (`TIER_LIFT` 13, 8, 4.6, 2.6, 1.7, then 1.1, in a tower's sixtieths, at three quarters); each
+  file a box on its district, its height the owner's `buildingHeight` (`2 + 6·log2(1 + lines/10)`,
+  2 to 60), lines guessed as bytes / 32 (lines would mean reading every file). Footprint stays
+  the size class: the owner's city sizes a file by its lines too, and churn-based height is
+  slice 6. In a city of few files (under about 400) the lots are large, so the tallest building
+  is at least 2.5 lot sides and streets a tenth of one: towers on streets, not slabs.
+- **Districts read as blocks** (the owner's word, 2026-11-20: "see folders as 'blocks' /
+  elevated districts"). Rules, each tested: a folder of more than one child is a district (one
+  child: none of its own, as the owner's city; `src/main/java` is one plate), a tier above the
+  district it stands on; its plate is a street and a half in from its lot, so two siblings
+  never touch; what stands on it is drawn a kerb in from its edge, the plan's shares scaled into
+  it, never cut, so a district lies wholly inside its parent's with a margin. The plan is
+  unchanged: districts are a drawing of it.
+- **The camera is the core's**: perspective, 30° field of view, looking down 52° (38° before the
+  districts: buildings hid the streets) from 34° off the plan's front, as near as keeps every
+  box inside the picture with 4% to spare, at any shape of tab (tested). A point's projection
+  and the ray through a point of the picture (`Scene::hit`: the nearest building or district)
+  are pure functions.
 - **A lit building is never hidden**: it stands above every terrace, and any building in the
   line from the camera to its top is cut down below that line (tested over many lit buildings,
   one and two at a time). Two lit buildings in line with each other may still overlap.
 - **The shell renders it offscreen** (`city_gpu.rs`, wgpu, the platform's own backends): boxes
   instanced, a depth buffer, 4× multisampling, ambient light and one from above (sides darker
   than tops), fog into the background colour, a lit building in its task's colour, unlit by the
-  light and the fog. The picture is read back once and painted by GPUI as an image, under the
+  light and the fog. **Edges** (the owner's city outlines its plates and buildings): drawn by the
+  box shader itself, no second pass: each face finds its distance to its own edges in device
+  pixels (`fwidth`) and draws about two thirds of a pixel of line, so two faces meeting make one or a
+  little more, at any zoom
+  and scale (tested at 1× and 2× offscreen); a face under about 4 pixels draws none, so a far
+  city is not all lines. Four tones: the background, the ground (streets), districts (slate, a
+  step lighter per tier, edged in a dim primary that fades with the tier) and buildings (grey,
+  edged lighter). The picture is read back once and painted by GPUI as an image, under the
   hints, which get a dark backing that fades out at its edges (in a tab taller than the plan's
-  shape, the picture takes only the part below them: the city is as large there); the root's
-  folders are named on their ground, never behind the hints. On a thread of its own, made again only when the plan, the lit
-  files or the tab's size in pixels change: a frame paints the kept image. No GPU, or a failed render: the lattice,
-  and the state says why. No animation in this slice.
+  shape, the picture takes only the part below them: the city is as large there); the outer two
+  tiers of districts are named on their plates where the name fits, never behind the hints. On
+  a thread of its own, made again only when the plan, the lit files or the tab's size in pixels
+  change: a frame paints the kept image. No GPU, or a failed render: the lattice, and the state
+  says why.
+- **Hover** (the owner's city's callout): the user's pointer over a building shows a beacon, a
+  line rising from its top to a label with its name over its folder; over a district, its
+  folder. The hit is the core's ray; the beacon is drawn by GPUI over the picture, so hovering
+  renders nothing again. Over the hints, the hints win and no beacon is drawn over them. A
+  client's pointer shows none. Primary, never amber: amber is the beacon of "needs you" (below).
 
 Why not paths (the "Oblique" alternative this note first named): GPUI has no depth buffer, so
 every building would be three paths painted back to front each frame, 15,000 paths at 5,000
@@ -292,9 +314,10 @@ issue waiting on them; for code, the task working in that folder asks a question
 |---|---|---|
 | 1 | The layout and the repository source, in the core, with the property test | built (this pull request) |
 | 2 | The backdrop behind `code_city`: the file list, the city in 3D rendered on the GPU (by the owner's word, 2026-11-19), lit buildings, a shot scenario, an e2e test | built (stacked) |
+| 2b | The look (the owner's word, 2026-11-20): edges, districts as plates, four tones; hover: a building's name on a beacon | built |
 | 3 | The exact file of a call, shell-side, so a lit building is never a guess (question 3) | |
 | 4 | Agent markers and trails; the task's "needs you" as a beacon on its district | |
-| 5 | Hover: a building's path; coupling for the hovered building (one `git log`) | |
+| 5 | Coupling for the hovered building (one `git log`); hover itself is 2b | |
 | 6 | Height from churn | |
 | 7 | The camera in the core (a view from an `Action`), eased in the shell, Reduce Motion | |
 | 8 | The explorer pane (file-viewer.md, D), then the map beside it and the camera following it | needs D |
