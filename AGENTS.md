@@ -164,6 +164,8 @@ Design note: `docs/ai/attention/plan.md`.
     fade (`top`/`bottom`, the tab row's `left`/`right`). Null outside a test run.
   - State field `repos_bar[n].name_cut`: a repository's name as drawn in its heading (`cut_text`), its box
     (`room`) and its shaped width (`drawn`). Null outside a test run.
+  - State field `offer_rects`: where an offer chip's words (`words:<pane>`) and their tooltip (`tip`,
+    while it shows) were drawn; never the words. Null outside a test run.
   - State field `viewers[n].marked_rect` (drawn): where a viewer's first marked line is drawn, while
     its pane shows. Null outside a test run.
   - State field `city`: the code city in a task's empty tab (`code_city`): `places`, `groups`,

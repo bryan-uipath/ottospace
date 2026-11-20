@@ -1744,6 +1744,8 @@ export interface Snapshot {
    * `listen-menu`, `listen-view`,
    * `listen-idle`, the off-show dot `listen-dot:space:<place>` or `listen-dot:tab:<id>`). Else null. */
   listen_rects: Record<string, Rect> | null;
+  /** Test runs only: where an offer chip's words (`words:<pane>`) and their tooltip (`tip`, while it shows) were drawn. Else null. */
+  offer_rects: Record<string, Rect> | null;
   /** Test runs only: where each Tasks heading's fold mark, name and count were drawn
    * (`done:fold`, `done:label`, `done:count`). Else null. */
   heading_rects: Record<string, Rect> | null;

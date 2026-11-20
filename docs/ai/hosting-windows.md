@@ -103,6 +103,9 @@ a slot they made. `rules::decide` judges it once, on facts the shell reads (`AXS
   dialog, a panel or a modal window too (`Why::Dialog`, `Why::Modal`: the owner's Zoom meeting
   window was floated as a panel and could not be brought in). The app pane's header shows a chip, `Zoom opened “Zoom Meeting” · no slot
   for this window · ◫ split right ⊟ split down ×` (`Action::WindowOffered`, the shell's alone).
+  In a narrow pane its words are cut short; hovering them shows the whole line in a tooltip
+  (draw-only: the title is never in the state). None while a window is live: GPUI draws the
+  tooltip in ottospace's window, under the live app's.
   ◫ or ⊟ (`OfferAccept { axis }`, the user's alone: a client's click is refused with
   `offers::USERS_ALONE`) asks the shell to host it beside that pane (`Effect::HostOffer`, then
   `Adopt`, which splits the way the offer was taken); × (`OfferDismiss`, the user's) leaves it
