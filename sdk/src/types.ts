@@ -1712,6 +1712,8 @@ export interface Snapshot {
   compose_read: boolean;
   /** Where the new-task box is: the drawer's new-task state, the draft's title, or closed. */
   compose_host: "drawer" | "bar" | null;
+  /** The user's box is drawn centred over the dimmed panes (`overlay_panels`), not in the drawer. */
+  compose_centred: boolean;
   /** What ↵ in the box would do: start `agent` (unless a saved agent: `starts` false) in the repository `dir`, or the folder taken from the dropdown as typed (null: the home folder), on `branch`. Null while the box is closed. */
   compose_plan: { agent: string; starts: boolean; dir: string | null; branch: string | null } | null;
   /** The line the drawer draws over the box: null when ↵ does the default (default agent, home folder) or the box is closed. */

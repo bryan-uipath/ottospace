@@ -156,7 +156,10 @@ impl Workspace {
             self.slides.open(left) && marks.get(&Mark::Overlay(left)).is_some_and(|b| b.contains(&event.position))
         });
         drop(marks);
-        if !over {
+        // The centred new-task box is the drawer's: a click in it is no click outside.
+        let boxed = self.model.compose_centred()
+            && self.controls.bounds("new-task-centred").is_some_and(|b| b.contains(&event.position));
+        if !over && !boxed {
             self.dispatch(Action::OverlayDismiss, self.input, window, cx);
         }
     }

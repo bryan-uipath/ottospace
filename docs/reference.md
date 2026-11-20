@@ -1438,6 +1438,12 @@ then does nothing (a toast says so). A preference is a normal setting.
   - The drawer folds into its rail on ⌘⇧R, →| or its rail item, a click outside it, or the keyboard
     leaving it for a pane. Esc in a conversation is still the agent's. A capture's draft keeps it open.
   - Both may be open at once, each over its own side; one click outside both closes both.
+  - ⌘N's box (and +'s) floats centred over the dimmed panes, not in the drawer (the canvas
+    "NewTaskFly"). ↵ starts the task and the box grows into the drawer as its conversation, which
+    takes keys at once; ⇧↵, ⌘↵ and Esc fade it; a click outside folds it into the drawer's rail,
+    and ⌘⇧R brings it back in the drawer. Under Reduce Motion it goes at once. With nothing open
+    at all, the box stays the drawer's; a client's box is the drawer's too. The state's
+    `compose_centred` says it.
   - Only you open or dismiss one: a client's `section`, ⌘⇧L, ⌘⌃E, ⌘N, a new task or a needs-you
     change opens neither (what it puts in the drawer waits behind the rail), and its dismissal is
     refused ("only the user opens or dismisses a side overlay").

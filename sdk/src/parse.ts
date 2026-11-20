@@ -2105,6 +2105,7 @@ export function snapshot(value: unknown): Snapshot {
     needs_you: num(o.needs_you, "needs_you"),
     compose_read: bool(o.compose_read, "compose_read"),
     compose_host: orNull(composeHost)(o.compose_host, "compose_host"),
+    compose_centred: bool(o.compose_centred, "compose_centred"),
     compose_plan: orNull(composePlan)(o.compose_plan, "compose_plan"),
     compose_plan_line: orNull(str)(o.compose_plan_line, "compose_plan_line"),
     compose_hint: orNull(str)(o.compose_hint, "compose_hint"),
