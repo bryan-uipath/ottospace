@@ -95,7 +95,7 @@ fn list_control(pane: PaneId) -> String {
 
 impl Workspace {
     /// One of the chip's small buttons.
-    fn offer_button(&self, id: String, label: &'static str, colour: u32) -> gpui::Stateful<gpui::Div> {
+    fn offer_button(&self, id: String, label: impl Into<gpui::SharedString>, colour: u32) -> gpui::Stateful<gpui::Div> {
         div()
             .id(gpui::SharedString::from(id.clone()))
             .flex_none()
@@ -104,7 +104,7 @@ impl Workspace {
             .cursor_pointer()
             .text_color(rgb(colour))
             .hover(|s| s.bg(rgb(theme::SELECTED)))
-            .child(label)
+            .child(label.into())
             .child(self.controls.mark(id))
             // The press must not reach the header or the pane: an unsteady click would start a drag.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -150,7 +150,7 @@ impl Workspace {
         if offers.len() > 1 {
             let open = self.model.offer_list == Some(pane);
             let what = format!("{app} opened {} windows {}", offers.len(), if open { "▴" } else { "▾" });
-            let button = self.offer_button(list_control(pane), "", theme::TEXT).child(what).on_click(
+            let button = self.offer_button(list_control(pane), what, theme::TEXT).on_click(
                 cx.listener(move |this, _, window_, cx| this.offer_send(Action::OfferList { pane }, window_, cx)),
             );
             return Some(chip.child(button).into_any_element());
