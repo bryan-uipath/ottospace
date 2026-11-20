@@ -26,7 +26,7 @@
 {"settle":300}
 {"shot":"at-rest"}
 {"tree":"repos/big","files":2000}
-{"write":"home/settings.json","text":"{\"repos\": [\"{ROOT}/repos/app\", \"{ROOT}/repos/big\"], \"conversation_view\": \"native\", \"session_dirs\": {\"claude\": [\"{ROOT}/sessions/claude\"]}, \"restore_layout\": false, \"features\": {\"code_city\": true}}\n"}
+{"cmd":"repo_add","path":"{ROOT}/repos/big"}
 {"until":"repos_bar.1"}
 {"cmd":"task_new","line":"tidy the model >big"}
 {"cmd":"open_space","space":{"kind":"task","id":2}}
