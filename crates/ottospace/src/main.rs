@@ -840,6 +840,8 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-e", PickPane, None),
         KeyBinding::new("cmd-shift-e", PickPaneDown, None),
         KeyBinding::new("cmd-/", ShowKeys, None),
+        // ⌘⇧P first: the menus and key reference show it. ⌘P goes to go-to later.
+        KeyBinding::new("cmd-shift-p", commands::CommandPalette, None),
         KeyBinding::new("cmd-p", commands::CommandPalette, None),
         KeyBinding::new("cmd-,", commands::EditSettings, None),
         KeyBinding::new("cmd-w", ClosePane, None),

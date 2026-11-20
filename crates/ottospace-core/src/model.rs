@@ -10814,7 +10814,7 @@ mod tests {
     fn the_palette_runs_the_chosen_command_for_the_user_alone() {
         let mut m = Model::default();
         m.update(Action::Split { axis: Right, kind: Kind::Terminal });
-        // A client opens nothing, and the user's ⌘P opens it.
+        // A client opens nothing, and the user's ⌘⇧P opens it.
         assert!(m.update(Action::PaletteOpen.sent_by(Origin::Socket)).is_empty());
         assert_eq!(m.mode(), Mode::Normal);
         m.update(Action::PaletteOpen);

@@ -17,7 +17,7 @@ thread_local! {
     static SHOWN: std::cell::RefCell<Option<(String, usize)>> = const { std::cell::RefCell::new(None) };
 }
 
-// ⌘P, and the Developer menu's own.
+// ⌘⇧P (and ⌘P for now), and the Developer menu's own.
 actions!(
     ottospace,
     [
@@ -216,7 +216,7 @@ impl Workspace {
         }
     }
 
-    /// ⌘P: open the palette, or close it.
+    /// ⌘⇧P: open the palette, or close it.
     fn toggle_palette(&mut self, window: &Window, cx: &mut Context<Self>) {
         let action = if self.model.palette.is_some() { Action::ClosePalette } else { Action::PaletteOpen };
         self.dispatch(action, self.input, window, cx);

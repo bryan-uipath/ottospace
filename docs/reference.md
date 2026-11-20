@@ -47,7 +47,7 @@ running, and the rest of the design is not built: see the
 | List mode (⌘⌃E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls, and on the buttons and text fields of the focused app pane; typing it clicks the control, presses the app's button, or focuses its text field | Works today |
 | Scrolling over an app pane you are not in enters it (`APP`), as a click does, and that first scroll reaches the app | Verified on CI (`e2e-apps`): the wheel enters, the window comes up under the pointer and the canary receives the first scroll |
-| [Command palette](#command-palette) (⌘P): every command of the menu bar by name, with its key; a Developer group | Works today |
+| [Command palette](#command-palette) (⌘⇧P): every command of the menu bar by name, with its key; a Developer group | Works today |
 | [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today, behind the `marks` [flag](#features), off by default |
 | Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the drawer; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`), and its agent is told the brief's path. Kept in `~/.ottospace/materials` | Works today |
@@ -107,7 +107,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌃⌘F | Fill the whole display, over the menu bar and the Dock; again to restore. The window's green button (Window ▸ Zoom, a title bar double-click when the system's setting is Zoom) and the expand button at the top row's right do the same: there is no zoom to the visible frame, and no native full screen, which would put ottospace on a Space of its own where apps' windows cannot follow. While ottospace is in front the bars stay away until the pointer reaches their edge. In an app pane the app's menu bar and the Dock come back, over ottospace's top row and bottom edge: nothing moves, and the app's window stops at the Dock's top. Dragging the window ends it. On at quit, on at the next start (`layout.json`); only your own key, click, menu or palette turns it on. [Measured](ai/fill-display.md) |
 | ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
 | ⌘/ | The keys, by what you are doing, the ones you have not learned first; in list or visual mode that mode's own keys come first. A bar under a key shows how much you use it. Keys you use often fold into `Known · n` at the bottom: a click or ↵ opens it. A key unused for about eight days comes back up. In a small window the list scrolls: J / K or the arrows, space or Page Down / Page Up, Home / End |
-| ⌘P | [Command palette](#command-palette): run any command of the menu bar by name. Type to filter, ↑/↓ or ⌃N/⌃P move, ↵ runs, Esc or ⌘P closes |
+| ⌘⇧P | [Command palette](#command-palette): run any command of the menu bar by name. Type to filter, ↑/↓ or ⌃N/⌃P move, ↵ runs, Esc or ⌘⇧P closes. ⌘P opens it too, for now |
 | ⌘, | Open Settings: `settings.json` in your editor, in a tab of its own (see [Settings](#settings)) |
 | F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab, with an empty pane: ⌘E picks what goes in it |
@@ -458,11 +458,11 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 
 ## Command palette
 
-⌘P, or View ▸ Command Palette…, opens a box with every command of the menu bar that needs no
+⌘⇧P (⌘P too, for now), or View ▸ Command Palette…, opens a box with every command of the menu bar that needs no
 argument: its group (Panes, Tabs, Tasks, Workspace, Marks, View, Developer, App), its name and its
 key. Type to filter: the letters in order, ignoring case and spaces (`tr` finds Terminal Right);
 a word's first letter and letters side by side rank first, then a group's name (`dev` lists the
-Developer group). ↑/↓ or ⌃N/⌃P move, a click or ↵ runs the command as its menu item does, Esc, ⌘P
+Developer group). ↑/↓ or ⌃N/⌃P move, a click or ↵ runs the command as its menu item does, Esc, ⌘⇧P
 or a click outside closes it. A command that nothing matches keeps the box open.
 
 Features… (App, also ottospace ▸ Features…) turns the box into a list of the [feature
@@ -487,7 +487,7 @@ Folder (in the Finder; a test run that named no folder has none), and Bring All 
 (see [Getting a window back](#getting-a-window-back)).
 
 The palette is the user's: a socket client cannot open it, type in it or choose (its keys are
-refused while it is open), and pane requests wait behind it as they do behind the picker. ⌘P is a
+refused while it is open), and pane requests wait behind it as they do behind the picker. ⌘⇧P is a
 key of ottospace's, so it does nothing while a hosted app has the keyboard (`APP` mode). Not ⌘K:
 in a terminal it clears the screen, and is kept for that.
 
@@ -503,7 +503,7 @@ the socket. A test run keeps none unless it names `OTTOSPACE_HOME`.
 The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Edit Message in
 Editor (⌃G), Open or Collapse the Drawer (⌘⇧R), Stop the Agent (the drawer's Stop) and Toggle
 Agent Dial (⌘⇧A), each for
-the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
+the conversation the drawer shows. ⌘⇧P while you type in the conversation opens the palette over
 it: the agent gets no key while it is open, and when it closes the keyboard goes back to it.
 
 ## The agent chip
@@ -1350,7 +1350,7 @@ A change is read when the file is saved: what is wrong in it is said in a toast 
 |---|---|---|
 | `terminal.font` | The terminal's font, by family name. Use a monospaced one | `Menlo` |
 | `terminal.font_size` | In points, 6 to 72 | `13` |
-| `repos` | The repositories the Repos section lists, in its order: each a path, or `{"path": …, "pinned": true}`. Opt-in: the section's + (the folder you pick, or one inside a repository), a folder dropped on the section, and Add Folder to Repos (⌘P: the focused terminal's folder, else the tab's task's) add one at the end, by its full path; a folder that is no repository is refused. The trash on a name takes it off; nothing on disk is touched. An entry that is a folder of repositories (older settings named folders to look in) lists them as one group, folded until you unfold it, removed whole; one of them added by itself leaves the group. `OTTOSPACE_REPOS` (`:` between directories) wins over it, and lists what they hold flat. At most 64 | none (before: `~/code`, `~/notes`) |
+| `repos` | The repositories the Repos section lists, in its order: each a path, or `{"path": …, "pinned": true}`. Opt-in: the section's + (the folder you pick, or one inside a repository), a folder dropped on the section, and Add Folder to Repos (⌘⇧P: the focused terminal's folder, else the tab's task's) add one at the end, by its full path; a folder that is no repository is refused. The trash on a name takes it off; nothing on disk is touched. An entry that is a folder of repositories (older settings named folders to look in) lists them as one group, folded until you unfold it, removed whole; one of them added by itself leaves the group. `OTTOSPACE_REPOS` (`:` between directories) wins over it, and lists what they hold flat. At most 64 | none (before: `~/code`, `~/notes`) |
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
 | `worktrees_dir` | Where + on a repository's name makes worktrees: `<dir>/<repo>/<branch>`, slashes in the branch as `-`; a repository whose folder name another listed one shares gets a short hash of its path after it (`app-1f2e3d`). A relative path is inside `~/.ottospace`. Read each time | `worktrees` in `~/.ottospace` |
 | `transcripts_dir` | Where transcripts are kept (the `transcripts` flag): one Markdown file each, `YYYY-MM-DD-HHMM-<app>.md`, written as lines come. With a calendar feed, its header lists the meetings it was possibly of (on at the start, or starting within 5 minutes; else one that ended within 5): `- Possibly, by your calendar:` and each title with its times; never a place, link or attendees. One that starts later while it records is a `*calendar*` line at its start. A transcript of an app keeps one file a meeting: when the meeting's windows (the one picked and those the app opened since) are gone for 10 s, the file ends; the next words heard begin a new one with its own header; 30 minutes with nothing heard after, it stops. A folder ottospace makes is private to you (0700), each file too (0600). A relative path is inside `~/.ottospace`. Read at each start | `transcripts` in `~/.ottospace` |
@@ -1647,7 +1647,7 @@ left in the parking spot come back instead. ottospace only moves and sizes windo
 minimises or hides them, nor moves them to another Space.
 
 To bring back any window stranded off screen, whatever left it there: `ottospace rescue` in a
-terminal (no app need run), or Developer ▸ Bring All Windows Back (also in the ⌘P palette). Each
+terminal (no app need run), or Developer ▸ Bring All Windows Back (also in the ⌘⇧P palette). Each
 standard window of a running app that lies wholly off every display, or in ottospace's parking
 spot, moves to the middle of the main screen. Visible windows, and windows a running ottospace
 hosts, are left alone. A socket client cannot run it.
