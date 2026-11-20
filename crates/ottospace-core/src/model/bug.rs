@@ -36,6 +36,7 @@ impl Model {
                 Kind::File { .. } => "file",
                 Kind::Empty => "empty",
                 Kind::Slot { .. } => "slot",
+                Kind::Decision => "decision",
             };
             Some(word.to_string())
         };

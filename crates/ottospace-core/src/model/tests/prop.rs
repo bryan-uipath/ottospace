@@ -332,6 +332,29 @@ impl Gen<'_> {
         }
     }
 
+    /// A key or click on a question card.
+    fn ask_act(&mut self) -> crate::ask::Act {
+        use crate::ask::Act;
+        match self.rng.below(9) {
+            0 => Act::Move { down: self.rng.coin() },
+            1 => Act::Toggle,
+            2 => Act::Number { n: self.rng.below(6) },
+            3 => Act::Row { question: self.rng.below(4), row: self.rng.below(5) },
+            4 => Act::Tab { forward: self.rng.coin() },
+            5 => Act::Show { tab: self.rng.below(4) },
+            6 | 7 => Act::Submit,
+            _ => Act::Decline,
+        }
+    }
+
+    /// The Decisions card on show, most of the time there is one; else a task and a ticket.
+    fn decision(&mut self) -> (TaskId, u64) {
+        match self.m.decision_card().filter(|_| !self.rng.one_in(4)) {
+            Some(card) => card,
+            None => (self.task(), self.rng.below(3) as u64),
+        }
+    }
+
     /// Whose a space is: Workspace, a task's, a session's, a workbook's.
     fn owner(&mut self) -> Owner {
         match self.rng.below(4) {
@@ -1516,20 +1539,22 @@ const MAKERS: &[Make] = &[
     |_| Action::TalkSend,
     |g| Action::TalkAnswer { allow: g.rng.coin(), ticket: g.card() },
     |g| Action::TalkExpand { ticket: g.card() },
+    |g| Action::TalkAsk { ticket: g.card(), act: g.ask_act() },
+    // Decisions: open, and keys on the card it shows (else a stray one).
+    |_| Action::DecisionsOpen,
     |g| {
-        use crate::ask::Act;
-        let act = match g.rng.below(9) {
-            0 => Act::Move { down: g.rng.coin() },
-            1 => Act::Toggle,
-            2 => Act::Number { n: g.rng.below(6) },
-            3 => Act::Row { question: g.rng.below(4), row: g.rng.below(5) },
-            4 => Act::Tab { forward: g.rng.coin() },
-            5 => Act::Show { tab: g.rng.below(4) },
-            6 | 7 => Act::Submit,
-            _ => Act::Decline,
-        };
-        Action::TalkAsk { ticket: g.card(), act }
+        let (task, ticket) = g.decision();
+        Action::DecisionsAsk { task, ticket, act: g.ask_act() }
     },
+    |g| {
+        let (task, ticket) = g.decision();
+        Action::DecisionsSkip { task, ticket }
+    },
+    |g| {
+        let (task, ticket) = g.decision();
+        Action::DecisionsLater { task, ticket, until: g.time() }
+    },
+    |_| Action::DecisionsClose,
     |_| Action::TalkDenyNote,
     |_| Action::TalkEscape,
     |_| Action::TalkInterrupt,
@@ -1926,6 +1951,8 @@ fn selects_tab(action: &Action) -> bool {
             | Action::KeyWindow { .. }
             | Action::SetDisplays { .. }
             | Action::SetFeatures { .. }
+            // Decisions opened: its tab is on show.
+            | Action::DecisionsOpen
     )
 }
 
@@ -1965,6 +1992,29 @@ fn check_out(m: &Model) -> Result<(), String> {
     Ok(())
 }
 
+/// Task `id`'s agent asks one single-select question of two options.
+fn asks(id: TaskId) -> Action {
+    let ask = Said::Permission {
+        ticket: 1,
+        tool: "AskUserQuestion".into(),
+        label: "AskUserQuestion".into(),
+        detail: Text::default(),
+        len: 0,
+        cut: false,
+        claim: Text::default(),
+        questions: vec![crate::ask::tests::question(2, false)],
+    };
+    Action::AgentEvents { task: Subject::Task(id), events: vec![Said::TurnStarted, ask], at: 5 }
+}
+
+/// The place on the row a hide names: `None`, the selected space.
+fn hidden_at(action: &Action) -> Option<usize> {
+    match action {
+        Action::SpaceHide { index } | Action::SpaceHideAsked { index, .. } => *index,
+        _ => None,
+    }
+}
+
 fn unique<T: PartialEq>(list: &[T]) -> bool {
     list.iter().enumerate().all(|(i, item)| !list[..i].contains(item))
 }
@@ -1979,7 +2029,45 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
     marks.shapes.iter().cloned().chain(typed).collect()
 }
 
+/// Decisions: none with the flag off; while open, its card is the queue's first, the queue not
+/// empty, its one card pane in its one tab, "at of of" its title; closed, nothing of it is left.
+fn check_decisions(m: &Model) -> Result<(), String> {
+    let cards: Vec<PaneId> = m.panes.iter().filter(|p| p.kind == Kind::Decision).map(|p| p.id).collect();
+    let tabs: Vec<&crate::model::Tab> = m.tabs.iter().filter(|tab| tab.space == Owner::Decisions).collect();
+    let Some(run) = &m.decisions else {
+        ensure!(cards.is_empty() && tabs.is_empty(), "no Decisions, but cards {cards:?} and {} tabs", tabs.len());
+        ensure!(!m.spaces.iter().any(|s| s.of == Owner::Decisions), "a Decisions space with no run");
+        return Ok(());
+    };
+    ensure!(m.features.on(Feature::Decisions), "Decisions open with its flag off");
+    let queue = m.decision_queue();
+    ensure!(run.queue == queue, "the run's queue {:?} is not the queue {queue:?}", run.queue);
+    // Held while the person types to its task in the drawer: it moves on at their next step.
+    if m.decision_held() {
+        ensure!(m.tab_of(run.pane) == Some(run.tab), "its card is in tab {:?}", m.tab_of(run.pane));
+        return Ok(());
+    }
+    ensure!(!queue.is_empty(), "Decisions open with nothing waiting");
+    ensure!(
+        (queue[0].task, queue[0].ticket) == (run.task, run.ticket),
+        "card {:?} on show, not the queue's first",
+        (run.task, run.ticket)
+    );
+    ensure!(cards == [run.pane], "card panes {cards:?}, the run's {}", run.pane);
+    ensure!(
+        tabs.len() == 1 && tabs[0].id == run.tab,
+        "Decisions tabs {:?}, its {}",
+        tabs.iter().map(|t| t.id).collect::<Vec<_>>(),
+        run.tab
+    );
+    ensure!(m.tab_of(run.pane) == Some(run.tab), "its card is in tab {:?}", m.tab_of(run.pane));
+    ensure!(run.at == run.done.len() + 1 && run.of == run.done.len() + queue.len(), "{} of {}", run.at, run.of);
+    ensure!(tabs[0].title == format!("Decisions · {} of {}", run.at, run.of), "its tab reads {:?}", tabs[0].title);
+    Ok(())
+}
+
 fn check(m: &Model) -> Result<(), String> {
+    check_decisions(m)?;
     check_slots(m)?;
     // With the overlays on, the panes' room never depends on the sidebar or the drawer being open.
     ensure!(!m.overlays() || !(m.sidebar_takes_room() || m.drawer_takes_room()), "an overlay takes the panes' room");
@@ -2776,7 +2864,11 @@ fn check(m: &Model) -> Result<(), String> {
             ensure!(!tabs, "task {id} is in {:?} and has a space of its own", space.of);
             ensure!(m.task_space(*id) == space.of, "task {id} is in {:?}, not where it is said", space.of);
         }
-        let members = m.members(&space.of);
+        // Decisions holds no task: its card's is in front.
+        let members = match space.of {
+            Owner::Decisions => m.front(&space.of).into_iter().collect(),
+            _ => m.members(&space.of),
+        };
         ensure!(space.front.is_none_or(|id| members.contains(&id)), "{:?}: front {:?}", space.of, space.front);
         ensure!(m.front(&space.of).is_none_or(|id| members.contains(&id)), "{:?}: its front is not its", space.of);
         // A task the user put away (Done, Later) is never in front: with only those, none is.
@@ -3384,7 +3476,9 @@ impl Run {
                 | Action::SpaceHideAsked { .. }
                 | Action::SpaceOpen { .. }
         );
-        let hides = matches!(action, Action::SpaceHide { .. } | Action::SpaceHideAsked { .. });
+        // Hiding Decisions closes it (`settle_decisions`): it is never kept off the row.
+        let hides = matches!(action, Action::SpaceHide { .. } | Action::SpaceHideAsked { .. })
+            && !m.touches_decisions(&Action::SpaceHide { index: hidden_at(&action) });
         let owners_before: Vec<(u32, Owner)> = m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect();
         let books_before: Vec<String> = m.workbooks.list.iter().map(workbook::write).collect();
         let uids_before: Vec<String> = m.workbooks.list.iter().map(|book| book.uid.clone()).collect();
@@ -3423,8 +3517,11 @@ impl Run {
         let task_worktrees_before = task_worktrees(m);
         let menu_before = m.row_menu.clone();
         let rail_before = (m.shown_space().clone(), m.rail_selected());
-        let fronts_before: Vec<(Owner, TaskId)> =
-            m.spaces().iter().filter_map(|space| Some((space.of.clone(), m.front(&space.of)?))).collect();
+        // Not Decisions': its front is its card's task, which moves on as cards are dealt with.
+        let fronts_before: Vec<(Owner, TaskId)> = (m.spaces().iter())
+            .filter(|space| space.of != Owner::Decisions)
+            .filter_map(|space| Some((space.of.clone(), m.front(&space.of)?)))
+            .collect();
         let joined_before: Vec<(Owner, TaskId)> =
             m.spaces().iter().flat_map(|space| space.joined.iter().map(|id| (space.of.clone(), *id))).collect();
         let typing_to = m.talk.clone().filter(|talk| talk.keys && origin != Origin::User);
@@ -3476,6 +3573,8 @@ impl Run {
         let rail_shown = m.rail_shown().filter(|_| m.waits_for(&action, origin).is_none() && !over);
         let brief_before = m.brief;
         let (sidebar_was, collapsed_was) = (m.sidebar.is_some(), m.drawer_collapsed());
+        let decisions_before = m.decisions.is_some();
+        let talk_before = m.talk.clone();
         let effects = m.update(sent);
         check(m)?;
         // With the overlays on, no client or timer opens one over the user's work.
@@ -3483,6 +3582,12 @@ impl Run {
             ensure!(sidebar_was || m.sidebar.is_none(), "{action:?} from {origin:?} opened the sidebar overlay");
             ensure!(!collapsed_was || m.drawer_collapsed(), "{action:?} from {origin:?} opened the drawer overlay");
         }
+        // Only the user's own act opens Decisions.
+        let opened = !decisions_before && m.decisions.is_some();
+        ensure!(
+            !opened || (origin == Origin::User && action == Action::DecisionsOpen),
+            "{action:?} from {origin:?} opened Decisions"
+        );
         // The user's click on the item the drawer shows collapses it, as ⌘⇧R.
         if let (Action::RailSelect { item }, None) = (&action, &refused) {
             // But over that task's brief: the click leaves the drawer open, the brief kept (#282).
@@ -4729,9 +4834,14 @@ impl Run {
                 | Effect::AgentAnswer { task, .. }
                 | Effect::AgentAnswers { task, .. }
                 | Effect::AgentInterrupt { task } => {
-                    let shown = m.talk.as_ref().is_some_and(|talk| talk.open && talk.task == *task);
+                    // Shown when it was sent: in Decisions the drawer moves on with the next card.
+                    let open_on =
+                        |talk: &Option<crate::talk::Talk>| talk.as_ref().is_some_and(|t| t.open && t.task == *task);
+                    let shown = open_on(&m.talk) || (decisions_before && open_on(&talk_before));
+                    // Or the Decisions card's, answered there.
+                    let decided = matches!(&action, Action::DecisionsAsk { task: t, .. } if Subject::Task(*t) == *task);
                     ensure!(
-                        user && shown && m.agent_runs(task),
+                        user && (shown || decided) && m.agent_runs(task),
                         "{origin:?} reached {task:?}: not the user, or not shown"
                     );
                 }
@@ -5215,6 +5325,37 @@ const BASES: &[(&str, Setup)] = &[
     ),
 ];
 
+/// Decisions' own start, apart from `BASES`, so the main run's seeds stay as they were: two tasks
+/// whose native agents each wait on a question, the P1 one's card on show.
+const DECISIONS: &[(&str, Setup)] = &[(
+    "decisions",
+    &[
+        |_| Action::TaskAdd {
+            title: "a".into(),
+            priority: 2,
+            state: State::Triaged,
+            tab: None,
+            assign: Assign::default(),
+        },
+        |_| Action::TaskAdd {
+            title: "b".into(),
+            priority: 1,
+            state: State::Triaged,
+            tab: None,
+            assign: Assign::default(),
+        },
+        |_| Action::TaskTalk { id: 1 },
+        |_| Action::TalkStart,
+        |_| Action::AgentStarted { task: Subject::Task(1), session: None, at: 1 },
+        |_| asks(1),
+        |_| Action::TaskTalk { id: 2 },
+        |_| Action::TalkStart,
+        |_| Action::AgentStarted { task: Subject::Task(2), session: None, at: 1 },
+        |_| asks(2),
+        |_| Action::DecisionsOpen,
+    ],
+)];
+
 const MODES: &[(Mode, Setup)] = &[
     (Mode::Normal, &[|_| Action::Leave]),
     (
@@ -5295,19 +5436,25 @@ const MODES: &[(Mode, Setup)] = &[
 ];
 
 /// The base and the mode sequence `seed` starts from.
-fn start(seed: u64) -> (&'static str, Mode, impl Iterator<Item = fn(&Model) -> Action>) {
-    let (name, base) = BASES[seed as usize % BASES.len()];
-    let (mode, setup) = MODES[seed as usize / BASES.len() % MODES.len()];
+fn start(
+    bases: &'static [(&'static str, Setup)],
+    seed: u64,
+) -> (&'static str, Mode, impl Iterator<Item = fn(&Model) -> Action>) {
+    let (name, base) = bases[seed as usize % bases.len()];
+    let (mode, setup) = MODES[seed as usize / bases.len() % MODES.len()];
     (name, mode, base.iter().chain(setup).copied())
 }
 
 /// One sequence: `actions` random steps from the start `seed` names. `Err`: the report.
-fn sequence(seed: u64, actions: usize, sparse: bool) -> Result<(), String> {
+fn sequence(bases: &'static [(&'static str, Setup)], seed: u64, actions: usize, sparse: bool) -> Result<(), String> {
     let (mut rng, mut run) = (Rng::new(seed), Run { sparse, ..Run::default() });
-    let (base, mode, setup) = start(seed);
+    let (base, mode, setup) = start(bases, seed);
     let outcome = fuzz::caught(|| {
         for make in setup {
-            run.step(make(&run.m).sent_by(Origin::User))?;
+            // An agent's report is its runner's: the user's is dropped.
+            let action = make(&run.m);
+            let runners = matches!(action, Action::AgentStarted { .. } | Action::AgentEvents { .. });
+            run.step(action.sent_by(if runners { Origin::System } else { Origin::User }))?;
         }
         (0..actions).try_for_each(|_| run.step(random(&mut rng, &run.m)))?;
         check_state(&run.m)?;
@@ -5342,12 +5489,12 @@ fn sequence(seed: u64, actions: usize, sparse: bool) -> Result<(), String> {
     ))
 }
 
-fn explore(sequences: u64, actions: usize, sparse: bool) {
+fn explore(bases: &'static [(&'static str, Setup)], sequences: u64, actions: usize, sparse: bool) {
     let (first, count) = match std::env::var("OTTOSPACE_PROP_SEED").ok().and_then(|seed| seed.parse().ok()) {
         Some(seed) => (seed, 1),
         None => (0, sequences),
     };
-    if let Some(report) = fuzz::each_seed(first, count, |seed| sequence(seed, actions, sparse).err()) {
+    if let Some(report) = fuzz::each_seed(first, count, |seed| sequence(bases, seed, actions, sparse).err()) {
         panic!("{report}");
     }
 }
@@ -5785,7 +5932,7 @@ fn the_makers_make_every_action() {
 #[test]
 fn every_start_is_in_its_mode() {
     for seed in 0..(BASES.len() * MODES.len()) as u64 {
-        let (base, mode, setup) = start(seed);
+        let (base, mode, setup) = start(BASES, seed);
         let mut run = Run::default();
         for make in setup {
             run.step(make(&run.m).sent_by(Origin::User)).unwrap_or_else(|why| panic!("{base}, {mode:?}: {why}"));
@@ -5795,7 +5942,7 @@ fn every_start_is_in_its_mode() {
     // The bases are what they say.
     let model = |seed: u64| {
         let mut run = Run::default();
-        start(seed).2.for_each(|make| run.step(make(&run.m).sent_by(Origin::User)).unwrap());
+        start(BASES, seed).2.for_each(|make| run.step(make(&run.m).sent_by(Origin::User)).unwrap());
         run.m
     };
     let (splits, tasks, hosted, marks) = (model(1), model(2), model(3), model(4));
@@ -5809,7 +5956,7 @@ fn every_start_is_in_its_mode() {
 #[test]
 fn a_slots_actions_are_written_as_code_that_builds_them() {
     let (mut rng, mut run) = (Rng::new(3), Run::default());
-    start(BASES.len() as u64 - 1).2.for_each(|make| drop(run.m.update(make(&run.m))));
+    start(BASES, BASES.len() as u64 - 1).2.for_each(|make| drop(run.m.update(make(&run.m))));
     // And a new window's offer, which carries a look's window.
     let offered: Make = |g| Action::WindowOffered { pane: g.pane(), seen: g.seen(), why: "no slot".into() };
     for make in SLOT_MAKERS.into_iter().chain([offered]) {
@@ -5857,7 +6004,7 @@ fn a_slots_actions_are_written_as_code_that_builds_them() {
 #[test]
 fn every_action_can_be_written_as_code() {
     let (mut rng, mut run) = (Rng::new(7), Run::default());
-    start(4).2.for_each(|make| drop(run.m.update(make(&run.m))));
+    start(BASES, 4).2.for_each(|make| drop(run.m.update(make(&run.m))));
     for _ in 0..40 {
         for make in MAKERS {
             let written = code(&make(&mut Gen { rng: &mut rng, m: &run.m }).sent_by(Origin::Socket));
@@ -5913,14 +6060,20 @@ fn a_failure_is_shrunk_to_the_steps_it_needs() {
 /// 2,000 sequences of 200 actions, from every start.
 #[test]
 fn random_actions_keep_the_model_sound() {
-    explore(2_000, 200, true);
+    explore(BASES, 2_000, 200, true);
+}
+
+/// The same from Decisions open, in every mode: random runs rarely open it themselves.
+#[test]
+fn random_actions_keep_decisions_sound() {
+    explore(DECISIONS, 300, 200, true);
 }
 
 /// `cargo test -p ottospace-core --release -- --ignored random_actions`: minutes.
 #[test]
 #[ignore = "long: 100,000 sequences of 400 actions"]
 fn random_actions_keep_the_model_sound_for_long() {
-    explore(100_000, 400, false);
+    explore(BASES, 100_000, 400, false);
 }
 
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by

@@ -268,7 +268,7 @@ impl Model {
         let id = match of {
             Owner::Workbook { id } => Some(*id),
             Owner::Task { id } => self.workbooks.bound_to(*id),
-            Owner::Home | Owner::Session { .. } => None,
+            Owner::Home | Owner::Session { .. } | Owner::Decisions => None,
         };
         self.workbooks.get(id?)
     }

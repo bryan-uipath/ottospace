@@ -1396,6 +1396,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 | `agent_mode` | Experimental | off | Agent mode (⌘⌃V): let a workspace's task see an app pane, from the robot in its header |
 | `multi_monitor` | Experimental | off | Multi-monitor (⌘⇧O): fold a tab out to its own window on another display |
 | `overlay_panels` | Experimental | off | Overlay panels (an experiment): the sidebar and the drawer float over the panes, moving nothing, and close after use |
+| `decisions` | Experimental | off | Decisions: a workspace that shows what waits on you, one question at a time |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1431,6 +1432,8 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   - An app you are in: its window is above ottospace and may cover part of an open overlay. The
     part that shows takes clicks; opening the sidebar takes the keyboard back and parks the app.
   - The state's `overlays` gives each one's rect (`sidebar`, `drawer`), null while closed.
+- `decisions` off: no Decisions workspace; one open closes. On: the model only so far (nothing on
+  screen opens it yet; design: [attention/decisions.md](ai/attention/decisions.md)).
 
 ### Displays
 

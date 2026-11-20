@@ -36,10 +36,11 @@ pub enum Feature {
     AgentMode,
     MultiMonitor,
     OverlayPanels,
+    Decisions,
 }
 
 /// Every flag, in the order the docs and the palette list them.
-pub const ALL: [Feature; 7] = [
+pub const ALL: [Feature; 8] = [
     Feature::Marks,
     Feature::AppsSection,
     Feature::Transcripts,
@@ -47,6 +48,7 @@ pub const ALL: [Feature; 7] = [
     Feature::AgentMode,
     Feature::MultiMonitor,
     Feature::OverlayPanels,
+    Feature::Decisions,
 ];
 
 /// Flags whose feature is stable now: a setting of one is ignored, with a warning.
@@ -63,6 +65,7 @@ impl Feature {
             Feature::AgentMode => "agent_mode",
             Feature::MultiMonitor => "multi_monitor",
             Feature::OverlayPanels => "overlay_panels",
+            Feature::Decisions => "decisions",
         }
     }
 
@@ -74,7 +77,8 @@ impl Feature {
             | Feature::Slots
             | Feature::AgentMode
             | Feature::MultiMonitor
-            | Feature::OverlayPanels => Stage::Experimental,
+            | Feature::OverlayPanels
+            | Feature::Decisions => Stage::Experimental,
         }
     }
 
@@ -100,6 +104,7 @@ impl Feature {
             Feature::OverlayPanels => {
                 "Overlay panels (an experiment): the sidebar and the drawer float over the panes, moving nothing, and close after use"
             }
+            Feature::Decisions => "Decisions: a workspace that shows what waits on you, one question at a time",
         }
     }
 
@@ -117,6 +122,7 @@ impl Feature {
             Feature::AgentMode => "feature off: agent_mode",
             Feature::MultiMonitor => "feature off: multi_monitor",
             Feature::OverlayPanels => "feature off: overlay_panels",
+            Feature::Decisions => "feature off: decisions",
         }
     }
 }
@@ -229,7 +235,8 @@ mod tests {
                 Feature::Slots,
                 Feature::AgentMode,
                 Feature::MultiMonitor,
-                Feature::OverlayPanels
+                Feature::OverlayPanels,
+                Feature::Decisions
             ])
         );
         let three = Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true);
@@ -239,10 +246,11 @@ mod tests {
                 .with(Feature::Slots, true)
                 .with(Feature::AgentMode, true)
                 .with(Feature::MultiMonitor, true)
-                .with(Feature::OverlayPanels, true),
+                .with(Feature::OverlayPanels, true)
+                .with(Feature::Decisions, true),
             Features::all()
         );
-        let list = " overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
+        let list = " decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
         assert_eq!(Features::parse_list(list).unwrap(), Features::all());
         assert_eq!(Features::parse_list("").unwrap(), Features(Vec::new()));
         assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts, slots"));
@@ -349,7 +357,8 @@ mod tests {
                     ("slots", false),
                     ("agent_mode", false),
                     ("multi_monitor", false),
-                    ("overlay_panels", false)
+                    ("overlay_panels", false),
+                    ("decisions", false)
                 ]
             );
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
@@ -366,7 +375,7 @@ mod tests {
         assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
             wrong("bookmarks", &yes).unwrap(),
-            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels"
+            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions"
         );
         assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
         assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());

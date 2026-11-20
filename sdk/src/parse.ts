@@ -23,6 +23,7 @@ import type {
   ListenLine,
   Slot,
   Offer,
+  Decisions,
   SlotDialog,
   Viewer,
   ViewerDrawn,
@@ -475,6 +476,7 @@ function paneKind(value: unknown, at: string): PaneKind {
     return slot;
   }
   if (o.type === "file") return { type: "file", path: str(o.path, `${at}.path`) };
+  if (o.type === "decision") return { type: "decision" };
   throw wrong(`${at}.type`, "a pane kind", o.type);
 }
 
@@ -561,6 +563,8 @@ function owner(value: unknown, at: string): Owner {
       return { kind: "session", runner: str(o.runner, `${at}.runner`), id: str(o.id, `${at}.id`) };
     case "workbook":
       return { kind: "workbook", id: num(o.id, `${at}.id`) };
+    case "decisions":
+      return { kind: "decisions" };
     default:
       throw new Error(`${at}.kind: not a space: ${JSON.stringify(o.kind)}`);
   }
@@ -1361,7 +1365,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
   if (value === "multi_monitor") return value;
-  if (value === "overlay_panels") return value;
+  if (value === "overlay_panels" || value === "decisions") return value;
   throw wrong(at, "a feature", value);
 }
 
@@ -1694,6 +1698,26 @@ function model(value: unknown, at: string): Model {
     offers: list(offer)(o.offers, `${at}.offers`),
     slot_dialog: orNull(slotDialog)(o.slot_dialog, `${at}.slot_dialog`),
     viewers: map(viewer)(o.viewers, `${at}.viewers`),
+    // Absent from an older build's reply: none open.
+    decisions: o.decisions === undefined ? null : orNull(decisions)(o.decisions, `${at}.decisions`),
+  };
+}
+
+function decisions(value: unknown, at: string): Decisions {
+  const o = fields(value, at);
+  const card = (value: unknown, at: string) => {
+    const c = fields(value, at);
+    const n = (key: string) => num(c[key], `${at}.${key}`);
+    return { task: n("task"), ticket: n("ticket"), priority: n("priority"), since: n("since") };
+  };
+  return {
+    tab: num(o.tab, `${at}.tab`),
+    pane: num(o.pane, `${at}.pane`),
+    task: num(o.task, `${at}.task`),
+    ticket: num(o.ticket, `${at}.ticket`),
+    at: num(o.at, `${at}.at`),
+    of: num(o.of, `${at}.of`),
+    queue: list(card)(o.queue, `${at}.queue`),
   };
 }
 
