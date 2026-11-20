@@ -216,15 +216,25 @@ whether the regression is real and accepted.
 
 ## CI
 
-- `.github/workflows/ci.yml`, on pull requests and pushes to `main`: `cargo fmt --check` on the
-  formatted crates, `cargo clippy -- -D unused` (unused code fails; locally it only warns), the
-  libraries with `-D unreachable_pub`, `cargo machete` (an unused dependency fails),
-  `cargo test --workspace`, and the SDK's type check and the tests that need no app. A library's
-  `pub` item that no crate uses is not caught. `cargo e2e` runs in a separate job that may fail without blocking, under
-  cargo-nextest: a failed test is tried twice more, and one that then passes is listed as flaky in
-  the job's summary, with the slowest tests and waits. Failure folders are an artifact. The same
-  job then runs the SDK's tests against a private instance. It also runs on `merge_group` (the
-  merge queue), every pull request, docs-only ones too.
+- `.github/workflows/ci.yml`'s `check`, on pull requests, the merge queue and pushes to `main`, on
+  Linux: `cargo fmt --check` on the formatted crates; on the three pure crates `cargo clippy -- -D
+  unused -D unreachable_pub`, for Linux and for `aarch64-apple-darwin` (checked, not linked),
+  and `cargo test`; `cargo machete`; the SDK's type check and the tests that need no app. A pull
+  request takes no macOS runner unless labelled (an installer change still runs `scripts.yml` on one). `check` does not compile `ottospace-mac` or the
+  app: their build scripts need Apple's SDK (Swift bridges, `cc`, `bindgen`), which is not put on
+  a Linux runner.
+- `.github/workflows/macos.yml`, the one macOS job: clippy over the workspace, `cargo test
+  --workspace`, `cargo e2e` under cargo-nextest (a failed test is tried twice more, and one that
+  then passes is listed as flaky in the summary, with the slowest tests and waits; failure folders
+  are an artifact), the SDK's tests against a private instance, then `cargo e2e-apps`. One build;
+  each suite runs though an earlier one failed, and the summary names the failed tests. On every
+  push to `main` (`ci.yml` calls it; a newer push cancels the run). While main's or `check` fails, the issue
+  "main is red" lists the failed tests and the commits since the last green run; it closes itself.
+- `.github/workflows/e2e.yml`, on pull requests with the label `pr-e2e`: `macos.yml` with the e2e
+  tests `scripts/e2e-for` selects from the diff (all of them when the diff reaches every test), no app-window
+  suite; `pr-e2e-apps` adds it. Otherwise a pull request's e2e evidence is a local `scripts/e2e-for`
+  run's summary in its body.
+- `.github/workflows/app-windows.yml`, by hand: `cargo e2e-apps`, or one test repeated.
 - `.github/workflows/reliability.yml`, nightly and by hand (`repeat`, `test`): `cargo e2e` and
   `cargo e2e-apps` five times each, tallied. The nightly run keeps the issue "Flaky tests".
 - `.github/workflows/build.yml`, on pushes to `main` and on pull requests with the label
@@ -238,9 +248,9 @@ whether the regression is real and accepted.
   `duped.json`, with a `reason` saying why the two stay separate. The
   release binary is pinned by version and checksum. Run it locally with
   `duped check --base origin/main`.
-- The Rust build cache: the `e2e` job of `ci.yml` saves one, on `main` only; `app-windows.yml`,
-  `shots.yml`, `bench.yml` and `reliability.yml` read it (`shared-key: e2e`) and save none. `check` and
-  `build` keep their own.
+- The Rust build cache: `macos.yml` saves one, on `main` only; its `pr-e2e` runs, `app-windows.yml`,
+  `shots.yml`, `bench.yml` and `reliability.yml` read it (`shared-key: e2e`) and save none. `check`
+  (Linux) and `build` keep their own.
 - `.github/workflows/shots.yml`, on pull requests with the label `pr-shots` that change the app's,
   core's or mac crate's sources or the scenarios: before and after pictures, an artifact (see "Screenshots and recordings").
 - `.github/workflows/bench.yml`, on pull requests with the label `pr-bench` that change a crate, `Cargo.lock`,
