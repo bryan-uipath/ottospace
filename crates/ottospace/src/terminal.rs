@@ -811,7 +811,9 @@ impl Screen {
     /// Plain data in and out: for a thread of its own.
     pub fn picture(&self, size: [f64; 2], cell: [f64; 2], scale: f64) -> Option<Vec<u8>> {
         use ottospace_mac::image::{Grid, Run, grid_png};
-        let run = |span: &Span| Run { text: span.text.clone(), fg: span.fg, bg: span.bg, bold: span.bold };
+        // A character alone without its zero-width ones: the picture counts a cell a character.
+        let text = |span: &Span| if span.alone { span.text.chars().take(1).collect() } else { span.text.clone() };
+        let run = |span: &Span| Run { text: text(span), fg: span.fg, bg: span.bg, bold: span.bold };
         let rows: Vec<Vec<Run>> = self.rows.iter().map(|row| row.iter().map(run).collect()).collect();
         let font = terminal_font();
         let (font_size, background) = (f64::from(font.font_size), palette::BACKGROUND);
