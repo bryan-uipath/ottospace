@@ -5747,6 +5747,8 @@ fn code(sent: &Envelope) -> String {
             }
             _ if token == "NaN" => out += "f32::NAN as _",
             _ if token == "inf" => out += "f32::INFINITY as _",
+            // `OpenFile`'s lines: a struct in `at`, a field `TabAt` names otherwise.
+            _ if token == "Lines" && text.get(end + 1) == Some(&'{') => out += "crate::viewer::Lines",
             _ if c.is_uppercase()
                 && !(STRUCTS.contains(&token.as_str()) && text.get(end + 1) == Some(&'{'))
                 && !matches!(token.as_str(), "Some" | "None") =>
@@ -6027,6 +6029,14 @@ fn every_action_can_be_written_as_code() {
         code(&open.sent_by(Origin::User)),
         "Action::OpenPicker { axis: Axis::Down, new_tab: true, items: vec![PickItem::App { name: \"a\\\"b\".into() }, \
          PickItem::Terminal] }.sent_by(Origin::User)"
+    );
+    // A viewer's lines are no `TabAt`, though their field is `at`.
+    let lines = crate::viewer::Lines { first: 3, last: 9 };
+    let file = Action::OpenFile { path: "/a".into(), axis: Axis::Right, beside: None, reuse: false, at: Some(lines) };
+    assert_eq!(
+        code(&file.sent_by(Origin::User)),
+        "Action::OpenFile { path: \"/a\".into(), axis: Axis::Right, beside: None, reuse: false, \
+         at: Some(crate::viewer::Lines { first: 3, last: 9 }) }.sent_by(Origin::User)"
     );
     // The helpers its output calls for actions read from files build them again.
     let work = serde_json::to_string(&progress::Work::default()).expect("work is JSON");
