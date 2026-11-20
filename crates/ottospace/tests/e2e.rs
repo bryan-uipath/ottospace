@@ -10594,6 +10594,9 @@ fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in
     assert!(shown["shrink"].as_u64() <= Some(1), "{shown}");
     // The mode: a block at the far left, in a slot kept empty in normal mode, so the folder stays put.
     assert_eq!(shown["mode"], Value::Null, "{shown}");
+    // Normal mode: NORMAL, dimmed, in the slot.
+    let resting = rect(&shown["resting"]);
+    assert!(resting[0] >= status[0] && resting[0] + resting[2] <= place[0], "{shown}");
     let with_mode = |o: &Otto| {
         o.user_key("cmd-p");
         let b = o.wait_for("the mode's block", |o| Some(bar(o)).filter(|b| b["mode"].is_array()));
@@ -10604,6 +10607,7 @@ fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in
     let moded = with_mode(&otto);
     let mode = rect(&moded["mode"]);
     assert!(mode[0] + mode[2] <= place[0] && mode[0] >= status[0], "{moded}");
+    assert_eq!((&moded["resting"], mode[0]), (&Value::Null, resting[0]), "the block takes NORMAL's place: {moded}");
     assert_eq!(rect(&moded["place"]["rect"])[0], place[0], "the folder moved for the mode: {moded}");
     // The meeting's title is drawn, never in the state.
     assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Team sync"));
@@ -10628,6 +10632,7 @@ fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in
     );
     let right = rect(&narrow["agents"]["rect"]);
     assert!(right[0] + right[2] <= 340.5, "{narrow}");
+    assert_eq!(rect(&narrow["resting"])[2], resting[2], "NORMAL is whole: {narrow}");
     // The mode never shortens: its block whole, still first.
     let moded = with_mode(&otto);
     let (small, folder) = (rect(&moded["mode"]), rect(&moded["place"]["rect"]));
