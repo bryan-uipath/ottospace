@@ -215,8 +215,25 @@ fn what_the_cli_started_ends_with_it() {
         let events = until(&driver, |event| matches!(event, Event::Exited { .. }));
         let Some(Event::Exited { code, signal, .. }) = events.last() else { unreachable!() };
         assert_eq!((*code, *signal), if killed { (None, Some(libc::SIGKILL)) } else { (Some(5), None) });
-        let probe = Command::new("/bin/kill").args(["-0", &pid]).stderr(std::process::Stdio::null()).status();
-        assert!(!probe.unwrap().success(), "{name}: the background command {pid} still runs");
+        // Killed, it is a zombie until its new parent reaps it, which `kill -0` still finds (CI's Linux).
+        // Nothing listed: gone, unless `ps` failed to read it and `kill -0` still finds it.
+        let running = || {
+            let stat = Command::new("ps").args(["-o", "stat=", "-p", &pid]).output().unwrap().stdout;
+            match String::from_utf8_lossy(&stat).trim_start().chars().next() {
+                Some(state) => state != 'Z',
+                None => Command::new("/bin/kill")
+                    .args(["-0", &pid])
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .unwrap()
+                    .success(),
+            }
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while running() {
+            assert!(std::time::Instant::now() < deadline, "{name}: the background command {pid} still runs");
+            std::thread::sleep(Duration::from_millis(10));
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

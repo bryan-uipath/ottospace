@@ -226,8 +226,9 @@ mod tests {
         assert!(ours <= began && began <= now && now - began < 10_000, "{ours} {began} {now}");
         assert_eq!(started(i32::MAX), None);
         // An empty first argument (`exec -a ""`): nothing, not the environment.
-        let mut empty = std::process::Command::new("/bin/sh").args(["-c", "exec -a '' /bin/sleep 30"]).spawn().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        // Spawned directly: `spawn` returns after the exec, where `sh -c 'exec -a ""'` raced it.
+        let mut empty = std::process::Command::new("/bin/sleep");
+        let mut empty = std::os::unix::process::CommandExt::arg0(&mut empty, "").arg("30").spawn().unwrap();
         assert_eq!(args(empty.id() as i32), None);
         empty.kill().expect("kill");
         empty.wait().expect("wait");
