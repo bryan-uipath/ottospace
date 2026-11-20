@@ -498,6 +498,7 @@ impl Workspace {
             .occlude()
             .child(self.new_task_body(cx))
             .child(self.controls.mark("new-task-centred"))
+            .child(crate::mark(&self.marks, crate::Mark::CentredBox))
     }
 
     /// The new-task state's picks, lines and box (or, closed, the line to open it).

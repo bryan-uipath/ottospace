@@ -739,6 +739,8 @@ enum Mark {
     QuitRow(usize),
     /// A side overlay (`overlay_panels`): the sidebar's (true) or the drawer's.
     Overlay(bool),
+    /// The new-task box centred over the panes (`overlay_panels`).
+    CentredBox,
     /// A viewer's first marked line: a test run's `marked_rect`.
     ViewerMarked(PaneId),
     /// An offer chip's words, by pane, and their tooltip: a test run's `offer_rects`.
@@ -3944,6 +3946,8 @@ impl Workspace {
             "overlays": {
                 "sidebar": marks.get(&Mark::Overlay(true)).copied().map(rect),
                 "drawer": marks.get(&Mark::Overlay(false)).copied().map(rect),
+                // The new-task box centred over them (`compose_centred`).
+                "box": marks.get(&Mark::CentredBox).copied().map(rect),
             },
             // The Tasks rail cell's needs-you dot (null: not drawn).
             "tasks_dot": marks.get(&Mark::TasksDot).copied().map(rect),
@@ -8504,6 +8508,7 @@ impl Render for Workspace {
                     | Mark::Overlay(_)
                     | Mark::OfferWords(_)
                     | Mark::OfferTip
+                    | Mark::CentredBox
             )
         };
         self.marks.borrow_mut().retain(|mark, _| !drawn_anew(mark));

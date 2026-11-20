@@ -74,7 +74,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     agent_chip: null,
     strip: [0, 0, 316, 28],
     bar_header: null,
-    overlays: { sidebar: null, drawer: null },
+    overlays: { sidebar: null, drawer: null, box: null },
     tasks_dot: null,
     drag: null,
     shown: {},

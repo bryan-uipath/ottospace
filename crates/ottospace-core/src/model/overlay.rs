@@ -436,6 +436,13 @@ mod tests {
         let two = m.tasks.list.last().map(|task| task.id);
         assert!(!m.compose_centred() && m.compose.is_none() && !m.drawer_collapsed());
         assert_eq!(m.talk.as_ref().and_then(|talk| talk.task.task()), two);
+        // ⌃G: the editor has its line in the drawer; back from it, centred again.
+        m.update(Action::OpenCompose { text: "edit".into() });
+        m.update(Action::EditorOpen);
+        assert!(m.compose.is_some() && !m.compose_centred());
+        m.update(Action::EditorDone { saved: None, more: false }.sent_by(Origin::System));
+        assert!(m.compose_centred());
+        m.update(Action::ComposeEscape);
         // ⇧↵ and Esc close it too: nothing centred stays.
         for close in [Action::ComposeSubmit { open: false }, Action::ComposeEscape] {
             m.update(Action::OpenCompose { text: "three".into() });

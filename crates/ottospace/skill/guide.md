@@ -747,7 +747,8 @@ that presses in another app. `section` is `apps`,
 `workbook`, `tasks`, `repos` or `marks`; the open section's name closes the bar. With the
 `overlay_panels` flag on, the sidebar and the drawer float over the panes and only the user opens
 them: `section` that would open one fails ("only the user opens or dismisses a side overlay"), and
-what you put in the drawer's place waits behind its rail. `overlays` gives their rects.
+what you put in the drawer's place waits behind its rail. `overlays` gives their rects, and `box` the
+user's new-task box centred over them (`compose_centred`).
 `keys` shows or hides the key reference; it fails while the picker or the new-task box is open,
 which it would close. `picker_choose` fails if the picker is not open.
 

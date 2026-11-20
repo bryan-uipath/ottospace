@@ -1973,9 +1973,13 @@ function homeNode(value: unknown, at: string): HomeNode {
   };
 }
 
-function overlays(value: unknown, at: string): { sidebar: Rect | null; drawer: Rect | null } {
+function overlays(value: unknown, at: string): { sidebar: Rect | null; drawer: Rect | null; box: Rect | null } {
   const o = fields(value, at);
-  return { sidebar: orNull(rect)(o.sidebar, `${at}.sidebar`), drawer: orNull(rect)(o.drawer, `${at}.drawer`) };
+  return {
+    sidebar: orNull(rect)(o.sidebar, `${at}.sidebar`),
+    drawer: orNull(rect)(o.drawer, `${at}.drawer`),
+    box: orNull(rect)(o.box, `${at}.box`),
+  };
 }
 
 function home(value: unknown, at: string): Home {

@@ -7906,7 +7906,7 @@ fn overlay_panes(otto: &Otto) -> Value {
 fn overlay_panels_opening_the_sidebar_or_the_drawer_moves_no_pane() {
     let otto = Otto::launch_with("overlay-bounds", &OVERLAYS);
     let before = overlay_panes(&otto);
-    assert_eq!(before["overlays"], json!({"sidebar": null, "drawer": null}));
+    assert_eq!(before["overlays"], json!({"sidebar": null, "drawer": null, "box": null}));
     let window = rect(&before["window"]);
     otto.user_key("cmd-shift-l");
     let open = otto.drawn();
@@ -7937,7 +7937,7 @@ fn overlay_panels_opening_the_sidebar_or_the_drawer_moves_no_pane() {
     let open = off.drawn();
     assert_eq!(open["state"]["sidebar"], "repos");
     assert_ne!(open["bounds"], before["bounds"], "the flag off, the panes make room");
-    assert_eq!(open["overlays"], json!({"sidebar": null, "drawer": null}));
+    assert_eq!(open["overlays"], json!({"sidebar": null, "drawer": null, "box": null}));
     assert_ne!(open["mode"], "list", "the flag off, the keyboard stays where it was");
 }
 
@@ -8012,9 +8012,10 @@ fn overlay_panels_the_new_task_box_is_centred_and_grows_into_the_drawer() {
     assert_eq!((&open["compose_centred"], &open["compose_host"]), (&json!(true), &json!("drawer")));
     assert_eq!(open["overlays"]["drawer"], Value::Null, "the drawer is not drawn under it");
     assert_eq!(open["bounds"], before["bounds"], "the box moved a pane");
-    let (boxed, window) = (otto.control("new-task-centred"), rect(&open["window"]));
+    let (boxed, window) = (rect(&open["overlays"]["box"]), rect(&open["window"]));
     let middle = (56. + window[2] - 48.) / 2.;
     assert!((boxed[0] + boxed[2] / 2. - middle).abs() <= 2., "centred over the panes: {boxed:?} in {window:?}");
+    assert!(boxed[1] + boxed[3] < window[3] - 100., "as tall as its content, not the window: {boxed:?}");
     assert_eq!(frames(&otto), 0, "nothing plays while it waits");
     // ↵: the task's conversation is in the drawer at once; the ghost plays over it, then rests.
     let entered = otto.user_key("f i x enter");
@@ -8023,8 +8024,9 @@ fn overlay_panels_the_new_task_box_is_centred_and_grows_into_the_drawer() {
     let grown = rest(&otto);
     assert!(grown > 2, "the grow played: {grown}");
     assert_eq!(otto.drawn()["bounds"], before["bounds"], "a pane moved");
-    // Esc: closed at once, and a fade plays.
+    // Esc: closed at once, and a fade plays. The conversation open is not drawn under the box.
     otto.user_key("cmd-n");
+    assert_eq!(otto.drawn()["overlays"]["drawer"], Value::Null, "the conversation under the box");
     assert!(otto.user_key("escape")["compose_host"].is_null());
     assert!(rest(&otto) > grown, "the fade played");
 

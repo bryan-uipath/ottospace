@@ -33,13 +33,14 @@ pub(crate) struct Fly {
 impl Workspace {
     /// Before a step: the centred box's bounds and line, if it is open.
     pub(crate) fn fly_before(&self) -> Option<(Bounds<Pixels>, String)> {
-        let line = self.model.compose_line()?.clone();
-        self.model.compose_centred().then(|| self.controls.bounds("new-task-centred")).flatten().map(|at| (at, line))
+        let at = self.model.compose_centred().then(|| self.controls.bounds("new-task-centred")).flatten()?;
+        Some((at, self.model.compose_line()?.clone()))
     }
 
-    /// After it: the box left. ↵ that filed its task grows; Esc, ⇧↵, ⌘↵ or a click outside fade.
+    /// After it: the box closed or was put aside. ↵ that filed its task grows; Esc, ⇧↵, ⌘↵ or a
+    /// click outside fade. Handed to the drawer still open (⌃G's editor, the flag off): none.
     pub(crate) fn fly_after(&mut self, before: Option<(Bounds<Pixels>, String)>, entered: bool) {
-        let Some((from, line)) = before.filter(|_| !self.model.compose_centred()) else { return };
+        let Some((from, line)) = before.filter(|_| self.model.compose.is_none()) else { return };
         let grow = entered && self.model.compose.is_none() && !self.model.drawer_collapsed();
         self.fly.now = Some(Flying { since: Instant::now(), from, line, grow });
     }
@@ -53,7 +54,7 @@ impl Workspace {
             let width = WIDTH.min(w - crate::RAIL - crate::drawer_rail::WIDTH - 2. * MARGIN).max(200.);
             let dim = div().absolute().size_full().bg(hsla(0., 0., 0., DIM));
             // Centred over the panes, a little above the middle.
-            let place = div().absolute().top(px(crate::TOP_BAR)).bottom_0().flex().justify_center();
+            let place = div().absolute().top(px(crate::TOP_BAR)).bottom_0().flex().justify_center().items_start();
             let place = place.left(px(crate::RAIL)).right(px(crate::drawer_rail::WIDTH));
             let place = place.pt(px((h * 0.2).max(MARGIN))).child(self.render_new_task_centred(width, cx));
             return Some(div().absolute().size_full().child(dim).child(place).into_any_element());
@@ -66,13 +67,12 @@ impl Workspace {
         };
         self.fly.frames += 1;
         window.request_animation_frame();
-        // The drawer as drawn now (it slides in under the ghost), else where it will be.
+        // Where the drawer lies at rest: against its rail, under the top row.
         let inner = (self.drawer.width - crate::drawer_rail::WIDTH).max(0.);
-        let fallback = Bounds::new(
+        let to = Bounds::new(
             gpui::point(px(w - self.drawer.width), px(crate::TOP_BAR)),
             gpui::size(px(inner), px(h - crate::TOP_BAR - crate::STATUS_BAR)),
         );
-        let to = self.controls.bounds("talk").unwrap_or(fallback);
         let from = flying.from;
         let mix = |a: Pixels, b: Pixels| a + (b - a) * frame.at;
         let ghost = div()

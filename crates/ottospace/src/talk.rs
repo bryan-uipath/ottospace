@@ -839,9 +839,13 @@ impl Workspace {
     /// to write), else the conversation, else a task's brief beside its tabs. Its left edge
     /// drags to set its width.
     pub(crate) fn render_drawer(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        // The box centred over the panes: the drawer is drawn again once it leaves.
+        if self.model.compose_centred() {
+            return None;
+        }
         let drawer = if self.model.editor_shown() && self.model.compose.is_some() {
             self.render_compose_editor(width, cx)
-        } else if (self.model.compose.is_some() && !self.model.compose_centred()) || self.model.welcome_shown() {
+        } else if self.model.compose.is_some() || self.model.welcome_shown() {
             self.render_new_task(width, cx).into_any_element()
         } else {
             self.render_talk(width, cx).or_else(|| self.render_brief(cx))?

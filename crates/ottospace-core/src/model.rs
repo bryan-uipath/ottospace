@@ -7547,8 +7547,10 @@ impl Model {
 
     /// The box is drawn centred over the dimmed panes, not in the drawer: the user's ⌘N with
     /// `overlay_panels` on. Still the drawer's box to every rule (`compose_host`); ↵ grows it into the drawer.
+    /// Not while the user's editor has its line (⌃G), nor once nothing is open: the drawer has it then.
     pub fn compose_centred(&self) -> bool {
-        self.compose_centred && self.overlays() && self.compose_host() == Some(Host::Drawer)
+        let drawers = self.edits_compose() || self.welcome();
+        self.compose_centred && self.overlays() && self.compose_host() == Some(Host::Drawer) && !drawers
     }
 
     /// The new-task box's line has the keyboard: it is open, and nothing is over it.

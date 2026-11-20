@@ -23,14 +23,10 @@ pub struct Frame {
     pub radius: f32,
 }
 
-/// How far `t` is from `from` to `to`, 0 to 1.
-fn part(t: f32, from: f32, to: f32) -> f32 {
-    ((t - from) / (to - from)).clamp(0., 1.)
-}
-
 /// The ghost `t` ms after the box left; `grow`: into the drawer, else a fade where it was. None once
 /// it is over, and always under Reduce Motion.
 pub fn frame(t: f32, grow: bool, calm: bool) -> Option<Frame> {
+    use crate::seal::part;
     let end = if grow { GROW_MS } else { FADE_MS };
     if calm || !(0. ..end).contains(&t) {
         return None;
