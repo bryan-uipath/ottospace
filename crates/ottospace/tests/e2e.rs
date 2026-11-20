@@ -16258,7 +16258,9 @@ fn every_empty_place_with_a_folder_draws_its_city() {
         json!([(b[2].as_f64().unwrap_or(0.) * scale).round(), (b[3].as_f64().unwrap_or(0.) * scale).round()])
     };
     let shared = otto.wait_for("one picture for both", |o| {
-        Some(city(o)).filter(|c| c["on"] == json!({"pane": one}) && c["pictures"] == json!(1) && c["picture"] == size(c))
+        // The shared picture reports either pane as its place.
+        let on_either = |c: &Value| c["on"] == json!({"pane": one}) || c["on"] == json!({"pane": two});
+        Some(city(o)).filter(|c| on_either(c) && c["pictures"] == json!(1) && c["picture"] == size(c))
     });
     assert_eq!(shared["reads"].as_u64(), reads, "the files are read once per folder");
     assert!(shared["renders"].as_u64() > Some(renders), "drawn again at their size");
