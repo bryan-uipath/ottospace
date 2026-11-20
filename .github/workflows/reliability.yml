@@ -123,8 +123,10 @@ jobs:
             echo "### cargo e2e-apps"
             echo "${FLAKY_APPS:-none}"
           } > "$body"
-          number="$(gh issue list --state open --search 'in:title "Flaky tests"' --json number,title \
-            --jq '[.[] | select(.title == "Flaky tests")][0].number // empty')"
+          # Only an issue this job wrote, as ci.yml's `main-red` (keep the two alike): anyone can
+          # open one with the title. gh names the token's author `app/github-actions`.
+          mine='[.[] | select(.title == "Flaky tests" and (.author.login == "app/github-actions" or .author.login == "github-actions[bot]"))][0].number // empty'
+          number="$(gh issue list --state open --search 'in:title "Flaky tests" author:app/github-actions' --json number,title,author --jq "$mine")"
           if [ -n "$number" ]; then
             gh issue edit "$number" --body-file "$body"
           elif [ -n "$FLAKY_E2E$FLAKY_APPS" ]; then

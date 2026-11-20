@@ -258,8 +258,8 @@ Design note: `docs/ai/attention/plan.md`.
   is not caught: make `pub(crate)` what only its own crate uses. `#[allow(dead_code)]` only with a one-line
   reason; a machete false positive goes in `[package.metadata.cargo-machete] ignored`, with one.
 - `.github/workflows/reliability.yml`, nightly and by hand: `cargo e2e` and `cargo e2e-apps` five
-  times each, tallied; the nightly run keeps the issue "Flaky tests" (`issues: write` on that job
-  only). Never on pull requests.
+  times each, tallied; the nightly run keeps the issue "Flaky tests", one of its own (never one a
+  person opened; `issues: write` on that job only). Never on pull requests.
 - A change that touches only `docs/`, `site/`, `README.md`, `AGENTS.md` or `LICENSE` runs no
   workflow on the pull request. Such a pull request has no checks to wait
   for (the merge queue still runs `ci.yml` and `duped.yml`), and after such a push `main-latest`
