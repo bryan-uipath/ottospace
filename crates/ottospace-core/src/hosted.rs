@@ -76,6 +76,15 @@ pub fn of_shape(shape: f64, content: (f64, f64)) -> bool {
     shape <= 0.0 || (content.1 > 0.0 && (content.0 / content.1 / shape - 1.0).abs() <= 0.001)
 }
 
+/// Where a held frame that shows another part of the window than the stream is now set to (a
+/// size in points below a crop) is drawn, in points from the top left of the picture's box: at its
+/// own size, its content where the window's content is (a frame with less title bar cut off sits
+/// that much higher), as the window was before it was resized, never stretched into the box.
+/// `None`: it shows what is asked, and fills the box.
+pub fn stale_at(held: (f64, f64), held_crop: f64, asked: (f64, f64), asked_crop: f64) -> Option<[f64; 4]> {
+    (held != asked || held_crop != asked_crop).then_some([0.0, held_crop - asked_crop, held.0, held.1])
+}
+
 /// Where windows are parked: a display's bottom-right corner with no display to its right or
 /// below, so one pixel of the window shows. A window is drawn at its display's scale: one parked
 /// on a 1× display gives a 1× picture however its pane is drawn. So of the free corners, the
@@ -240,6 +249,18 @@ mod tests {
         assert_eq!(capture_pixels((1504.0, 3000.0), 2.0), (2718, 5423));
         assert!(of_shape(1504.0 / 3000.0, (2718.0, 5421.54)));
         assert!(of_shape(0.0, (654.0, 429.0)) && !of_shape(shown, (654.0, 0.0)));
+    }
+
+    #[test]
+    fn a_frame_of_the_old_size_is_drawn_at_it_until_one_of_the_new_comes() {
+        // As on CI: the canary's whole 640×452 window, then its pane asks 654×575 below a 32pt bar.
+        assert_eq!(stale_at((640.0, 452.0), 0.0, (654.0, 575.0), 32.0), Some([0.0, -32.0, 640.0, 452.0]));
+        assert_eq!(stale_at((654.0, 575.0), 32.0, (654.0, 575.0), 32.0), None);
+        // A pane made smaller: the old picture is cut off by the box, not squeezed.
+        assert_eq!(stale_at((800.0, 600.0), 32.0, (654.0, 575.0), 32.0), Some([0.0, 0.0, 800.0, 600.0]));
+        // Under `MOST_PIXELS` two sizes share a frame's pixels: the points tell them apart.
+        assert_eq!(capture_pixels((3200.0, 1800.0), 2.0), capture_pixels((3840.0, 2160.0), 2.0));
+        assert!(stale_at((3200.0, 1800.0), 0.0, (3840.0, 2160.0), 0.0).is_some());
     }
 
     #[test]
