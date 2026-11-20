@@ -41,6 +41,17 @@ pub enum Floor {
     Out(u32),
 }
 
+impl Floor {
+    /// The empty place it draws (`empty::empty`).
+    pub(crate) fn surface(self) -> Surface {
+        match self {
+            Floor::Pane(_) => Surface::Pane,
+            Floor::Out(_) => Surface::OutTab,
+            Floor::Main => Surface::Tab,
+        }
+    }
+}
+
 /// What a lattice's lines were built for: its bounds, and the text the lines fade behind.
 type Key = (Bounds<Pixels>, [Bounds<Pixels>; 2]);
 /// A lattice's lines, built: each path with its colour.
@@ -319,10 +330,11 @@ impl Workspace {
         held: Modifiers,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (surface, prefix, pane) = match floor {
-            Floor::Out(tab) => (Surface::OutTab, format!("empty-out:{tab}"), None),
-            Floor::Pane(id) => (Surface::Pane, format!("empty:{id}"), Some(id)),
-            Floor::Main => (Surface::Tab, "home".to_string(), None),
+        let surface = floor.surface();
+        let (prefix, pane) = match floor {
+            Floor::Out(tab) => (format!("empty-out:{tab}"), None),
+            Floor::Pane(id) => (format!("empty:{id}"), Some(id)),
+            Floor::Main => ("home".to_string(), None),
         };
         let (view, drawn) = (cx.entity_id(), &self.home);
         let hints = empty::empty(surface, (f32::MAX, f32::MAX), false).hints;

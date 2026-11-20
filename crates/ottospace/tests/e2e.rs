@@ -15646,7 +15646,7 @@ fn every_empty_place_with_a_folder_draws_its_city() {
     // An empty pane filling the tab, then two side by side: one picture for both, no read again.
     let reads = city(&otto)["reads"].as_u64();
     let one = pane_ids(&otto.call(json!({"cmd": "split", "kind": "empty"})))[0];
-    drawn(&otto, json!({"pane": one}));
+    let renders = drawn(&otto, json!({"pane": one}))["renders"].as_u64().unwrap();
     let reply = otto.call(json!({"cmd": "split", "kind": "empty"}));
     let two = *pane_ids(&reply).last().unwrap();
     let both = otto.bounds(&[one, two]);
@@ -15656,13 +15656,14 @@ fn every_empty_place_with_a_folder_draws_its_city() {
             .filter(|c| c["on"] == json!({"pane": one}) && c["pictures"] == json!(1) && !c["picture"].is_null())
     });
     assert_eq!(shared["reads"].as_u64(), reads, "the files are read once per folder");
+    assert_eq!(shared["renders"].as_u64(), Some(renders + 1), "one render for both");
     // The first pane split down twice: too small for a city, its lattice.
     otto.call(json!({"cmd": "focus", "pane": one}));
     otto.call(json!({"cmd": "split", "kind": "empty", "axis": "down"}));
     otto.call(json!({"cmd": "focus", "pane": one}));
     otto.call(json!({"cmd": "split", "kind": "empty", "axis": "down"}));
     let small = otto.wait_for("a small pane", |o| {
-        Some(city(o)).filter(|c| c["on"] == json!({"pane": one}) && c["picture"].is_null())
+        Some(city(o)).filter(|c| c["small"].as_array().is_some_and(|small| small.contains(&json!({"pane": one}))))
     });
     assert!(otto.bounds(&[one])[0][3] < 220., "{small}");
     drop(otto);
