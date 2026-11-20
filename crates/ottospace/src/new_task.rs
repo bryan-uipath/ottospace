@@ -448,6 +448,62 @@ impl Workspace {
     /// open yet, `Model::welcome`) a click on its line opens it.
     pub fn render_new_task(&self, width: f32, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
         let open = self.model.compose.is_some();
+        let close = div()
+            .id("new-task-close")
+            .relative()
+            .px_1p5()
+            .rounded_sm()
+            .cursor_pointer()
+            .text_color(rgb(theme::MUTED))
+            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+            .child("×")
+            .child(self.controls.mark("drawer:close"))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(
+                cx.listener(|this, _, window, cx| drop(this.dispatch(Action::CloseCompose, this.input, window, cx))),
+            );
+        // Its header is as high as the top row above it.
+        let header = div()
+            .h(px(crate::TOP_BAR))
+            .flex_none()
+            .px_3()
+            .flex()
+            .items_center()
+            .justify_between()
+            .border_b_1()
+            .border_color(rgb(theme::BORDER))
+            .child(div().text_xs().text_color(rgb(theme::COMPOSE)).child("NEW TASK"))
+            .children(open.then_some(close));
+        div()
+            .id("new-task-drawer")
+            .flex_none()
+            .w(px(width))
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(theme::RAISED))
+            .border_l_1()
+            .border_color(rgb(theme::BORDER))
+            .child(header)
+            .child(self.new_task_body(cx).flex_1().min_h_0())
+    }
+
+    /// The box centred over the dimmed panes (`Model::compose_centred`), `width` points wide: the
+    /// drawer's picks and lines, then the line. Its bounds are where ↵'s grow starts (`fly.rs`).
+    pub(crate) fn render_new_task_centred(&self, width: f32, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+        dialog::panel(theme::COMPOSE)
+            .id("new-task-centred")
+            .relative()
+            .w(px(width))
+            .occlude()
+            .child(self.new_task_body(cx))
+            .child(self.controls.mark("new-task-centred"))
+            .child(crate::mark(&self.marks, crate::Mark::CentredBox))
+    }
+
+    /// The new-task state's picks, lines and box (or, closed, the line to open it).
+    fn new_task_body(&self, cx: &mut Context<Self>) -> Div {
+        let open = self.model.compose.is_some();
         let picks = self.model.compose_picks();
         let draft = self.model.compose_line().map(|line| self.model.draft(line));
         let repo = draft.as_ref().and_then(|draft| draft.repo.clone());
@@ -554,23 +610,7 @@ impl Workspace {
                 .child(self.controls.mark("drawer:new_task"))
                 .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)))
         });
-        let close = div()
-            .id("new-task-close")
-            .relative()
-            .px_1p5()
-            .rounded_sm()
-            .cursor_pointer()
-            .text_color(rgb(theme::MUTED))
-            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
-            .child("×")
-            .child(self.controls.mark("drawer:close"))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(
-                cx.listener(|this, _, window, cx| drop(this.dispatch(Action::CloseCompose, this.input, window, cx))),
-            );
-        let body = div()
-            .flex_1()
-            .min_h_0()
+        div()
             .flex()
             .flex_col()
             .gap_2()
@@ -582,30 +622,6 @@ impl Workspace {
             .children(pinned)
             .children(plan)
             .children(open.then(|| self.new_task_content(cx)))
-            .children(idle);
-        // Its header is as high as the top row above it.
-        let header = div()
-            .h(px(crate::TOP_BAR))
-            .flex_none()
-            .px_3()
-            .flex()
-            .items_center()
-            .justify_between()
-            .border_b_1()
-            .border_color(rgb(theme::BORDER))
-            .child(div().text_xs().text_color(rgb(theme::COMPOSE)).child("NEW TASK"))
-            .children(open.then_some(close));
-        div()
-            .id("new-task-drawer")
-            .flex_none()
-            .w(px(width))
-            .h_full()
-            .flex()
-            .flex_col()
-            .bg(rgb(theme::RAISED))
-            .border_l_1()
-            .border_color(rgb(theme::BORDER))
-            .child(header)
-            .child(body)
+            .children(idle)
     }
 }

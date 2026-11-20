@@ -3696,6 +3696,9 @@ pub struct Model {
     /// The box was opened while the keyboard was in the drawer's conversation.
     #[serde(skip)]
     pub(crate) compose_talked: bool,
+    /// The user's ⌘N opened the box over the panes, centred (`overlay_panels`): see `compose_centred`.
+    #[serde(skip)]
+    compose_centred: bool,
     #[serde(skip)]
     terminals: Vec<TerminalInfo>,
     #[serde(skip)]
@@ -3992,6 +3995,7 @@ impl Default for Model {
             compose_kept: None,
             compose_to: None,
             compose_talked: false,
+            compose_centred: false,
             terminals: Vec::new(),
             home: None,
             // Done is at the bottom, folded: what is finished is counted, not listed.
@@ -5732,6 +5736,8 @@ impl Model {
                     (self.compose, self.compose_refs, self.compose_folder) = (Some(kept.line), kept.refs, kept.folder);
                     self.compose_theirs = kept.theirs;
                 }
+                // The user's box floats centred over the panes; with nothing open it stays the drawer's.
+                self.compose_centred = self.by_user && self.overlays() && !self.welcome();
             }
             // Not under the key reference or the quit question: the field is hidden there.
             Action::FieldEdit { .. } if self.field().is_none() => {}
@@ -6950,6 +6956,8 @@ impl Model {
                 if self.waits(&Action::OpenCompose { text: String::new() }).is_none() {
                     self.act(Action::OpenCompose { text: String::new() }, effects);
                 }
+                // Reopened where it was folded: in the drawer.
+                self.compose_centred = false;
             }
             // No conversation here: ⌘⇧R opens this drawer on the transcript, as a rail click (no jump to its pane).
             Action::TalkToggle if self.talk.is_none() && self.by_user => {
@@ -7537,6 +7545,14 @@ impl Model {
         self.compose.as_ref().map(|_| host)
     }
 
+    /// The box is drawn centred over the dimmed panes, not in the drawer: the user's ⌘N with
+    /// `overlay_panels` on. Still the drawer's box to every rule (`compose_host`); ↵ grows it into the drawer.
+    /// Not while the user's editor has its line (⌃G), nor once nothing is open: the drawer has it then.
+    pub fn compose_centred(&self) -> bool {
+        let drawers = self.edits_compose() || self.welcome();
+        self.compose_centred && self.overlays() && self.compose_host() == Some(Host::Drawer) && !drawers
+    }
+
     /// The new-task box's line has the keyboard: it is open, and nothing is over it.
     fn composing(&self) -> bool {
         self.field().is_some_and(|(of, _)| of == "compose")
@@ -7551,6 +7567,7 @@ impl Model {
     pub(crate) fn compose_reset(&mut self) {
         (self.menu, self.compose_refs, self.compose_note) = (Menu::default(), Vec::new(), None);
         (self.path_shown, self.compose_folder, self.compose_worktree) = (None, None, false);
+        self.compose_centred = false;
     }
 
     /// The folder the user took from the dropdown, as the line has it (`~/notes/`), while a word

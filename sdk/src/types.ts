@@ -1657,8 +1657,8 @@ export interface Snapshot {
   /** The left column's title strip, and the open section's header (null: none open). */
   strip: Rect | null;
   bar_header: Rect | null;
-  /** The side overlays as drawn (`overlay_panels`): the sidebar's and the drawer's place over the panes, also while a closed one slides back; null once in, or with the flag off. */
-  overlays: { sidebar: Rect | null; drawer: Rect | null };
+  /** The side overlays as drawn (`overlay_panels`): the sidebar's and the drawer's place over the panes, also while a closed one slides back, and the new-task box centred over them; null once in, or with the flag off. */
+  overlays: { sidebar: Rect | null; drawer: Rect | null; box: Rect | null };
   /** The Tasks rail cell's needs-you dot, whichever section is open (null: no task needs you). */
   tasks_dot: Rect | null;
   /** While a pane is dragged: where a drop would land, both null over anything else. */
@@ -1721,6 +1721,8 @@ export interface Snapshot {
   compose_read: boolean;
   /** Where the new-task box is: the drawer's new-task state, the draft's title, or closed. */
   compose_host: "drawer" | "bar" | null;
+  /** The user's box is drawn centred over the dimmed panes (`overlay_panels`), not in the drawer. */
+  compose_centred: boolean;
   /** What ↵ in the box would do: start `agent` (unless a saved agent: `starts` false) in the repository `dir`, or the folder taken from the dropdown as typed (null: the home folder), on `branch`. Null while the box is closed. */
   compose_plan: { agent: string; starts: boolean; dir: string | null; branch: string | null } | null;
   /** The line the drawer draws over the box: null when ↵ does the default (default agent, home folder) or the box is closed. */

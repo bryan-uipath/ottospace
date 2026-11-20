@@ -7912,7 +7912,7 @@ fn overlay_panes(otto: &Otto) -> Value {
 fn overlay_panels_opening_the_sidebar_or_the_drawer_moves_no_pane() {
     let otto = Otto::launch_with("overlay-bounds", &OVERLAYS);
     let before = overlay_panes(&otto);
-    assert_eq!(before["overlays"], json!({"sidebar": null, "drawer": null}));
+    assert_eq!(before["overlays"], json!({"sidebar": null, "drawer": null, "box": null}));
     let window = rect(&before["window"]);
     otto.user_key("cmd-shift-l");
     let open = otto.drawn();
@@ -7920,10 +7920,15 @@ fn overlay_panels_opening_the_sidebar_or_the_drawer_moves_no_pane() {
     assert_eq!(open["bounds"], before["bounds"], "the sidebar moved a pane");
     let bar = rect(&open["overlays"]["sidebar"]);
     assert!((bar[0] - 56.).abs() <= 1. && (bar[2] - 260.).abs() <= 1., "against the left rail: {bar:?}");
-    // Its own Esc closes it; ⌘N's box opens the drawer over the panes, against its rail.
+    // Its own Esc closes it; ⌘N's box floats centred; ⌘⇧R twice puts it in the drawer, against its rail.
     otto.user_key("escape");
     otto.user_key("cmd-n");
+    let centred = otto.drawn();
+    assert_eq!((&centred["compose_centred"], &centred["overlays"]["drawer"]), (&json!(true), &Value::Null));
+    assert_eq!(centred["bounds"], before["bounds"], "the centred box moved a pane");
+    otto.user_key("cmd-shift-r cmd-shift-r");
     let boxed = otto.drawn();
+    assert_eq!(boxed["compose_centred"], false);
     assert_eq!((&boxed["state"]["sidebar"], &boxed["drawer"]["collapsed"]), (&Value::Null, &json!(false)));
     assert_eq!(boxed["bounds"], before["bounds"], "the drawer moved a pane");
     let drawer = rect(&boxed["overlays"]["drawer"]);
@@ -7938,7 +7943,7 @@ fn overlay_panels_opening_the_sidebar_or_the_drawer_moves_no_pane() {
     let open = off.drawn();
     assert_eq!(open["state"]["sidebar"], "repos");
     assert_ne!(open["bounds"], before["bounds"], "the flag off, the panes make room");
-    assert_eq!(open["overlays"], json!({"sidebar": null, "drawer": null}));
+    assert_eq!(open["overlays"], json!({"sidebar": null, "drawer": null, "box": null}));
     assert_ne!(open["mode"], "list", "the flag off, the keyboard stays where it was");
 }
 
@@ -7965,8 +7970,8 @@ fn overlay_panels_a_click_outside_esc_or_a_row_chosen_dismisses_them() {
     let clicked = otto.user_click(at(far, 0.5, 0.5));
     assert!(clicked["state"]["sidebar"].is_null(), "a click on a pane");
     assert_eq!(clicked["state"]["focused"], panes[1]);
-    // Both open; one click on a pane closes both.
-    otto.user_key("cmd-n");
+    // Both open; one click on a pane closes both. ⌘⇧R twice: the box in the drawer, not centred.
+    otto.user_key("cmd-n cmd-shift-r cmd-shift-r");
     otto.user_click(tasks);
     let both = otto.drawn();
     assert!(!both["overlays"]["sidebar"].is_null() && !both["overlays"]["drawer"].is_null(), "{}", both["overlays"]);
@@ -7989,6 +7994,58 @@ fn overlay_panels_a_click_outside_esc_or_a_row_chosen_dismisses_them() {
     otto.user_click(tasks);
     let went = otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
     assert!(went["state"]["sidebar"].is_null(), "a row that goes somewhere");
+}
+
+/// The board's NewTaskFly, with `overlay_panels`: ⌘N's box floats centred over the dimmed panes,
+/// moving none. ↵ makes the task the drawer's at once and the box grows into it over that; Esc
+/// fades it. Frames only while either plays, none under Reduce Motion. A client's ⌘N opens none.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn overlay_panels_the_new_task_box_is_centred_and_grows_into_the_drawer() {
+    let otto = Otto::launch_with("box-centred", &[OVERLAYS[0]]);
+    let before = overlay_panes(&otto);
+    let frames = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["fly_frames"].as_u64().unwrap_or(0);
+    let rest = |o: &Otto| {
+        o.wait_for("the box's ghost at rest", |o| {
+            let was = frames(o);
+            std::thread::sleep(Duration::from_millis(300));
+            (frames(o) == was).then_some(was)
+        })
+    };
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-n"}))["compose_centred"], false, "a client's ⌘N");
+    otto.user_key("cmd-n");
+    let open = otto.drawn();
+    assert_eq!((&open["compose_centred"], &open["compose_host"]), (&json!(true), &json!("drawer")));
+    assert_eq!(open["overlays"]["drawer"], Value::Null, "the drawer is not drawn under it");
+    assert_eq!(open["bounds"], before["bounds"], "the box moved a pane");
+    let (boxed, window) = (rect(&open["overlays"]["box"]), rect(&open["window"]));
+    let middle = (56. + window[2] - 48.) / 2.;
+    assert!((boxed[0] + boxed[2] / 2. - middle).abs() <= 2., "centred over the panes: {boxed:?} in {window:?}");
+    assert!(boxed[1] + boxed[3] < window[3] - 100., "as tall as its content, not the window: {boxed:?}");
+    assert_eq!(frames(&otto), 0, "nothing plays while it waits");
+    // ↵: the task's conversation is in the drawer at once; the ghost plays over it, then rests.
+    let entered = otto.user_key("f i x enter");
+    assert_eq!((&entered["compose_centred"], &entered["compose_host"]), (&json!(false), &Value::Null));
+    assert_eq!((&entered["state"]["talk"]["task"], &entered["drawer"]["collapsed"]), (&json!(1), &json!(false)));
+    let grown = rest(&otto);
+    assert!(grown > 2, "the grow played: {grown}");
+    assert_eq!(otto.drawn()["bounds"], before["bounds"], "a pane moved");
+    // Esc: closed at once, and a fade plays. The conversation open is not drawn under the box.
+    otto.user_key("cmd-n");
+    // The conversation slides back under it, then is not drawn.
+    otto.wait_for("no drawer under the box", |o| o.drawn()["overlays"]["drawer"].is_null().then_some(()));
+    assert!(otto.user_key("escape")["compose_host"].is_null());
+    assert!(rest(&otto) > grown, "the fade played");
+
+    // Reduce Motion: closed at once, no frame.
+    let calm = Otto::launch_with("box-centred-calm", &OVERLAYS);
+    overlay_panes(&calm);
+    calm.user_key("cmd-n");
+    assert_eq!(calm.drawn()["compose_centred"], true);
+    calm.user_key("f i x enter");
+    calm.user_key("cmd-n escape");
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(frames(&calm), 0, "no frames under Reduce Motion");
 }
 
 /// No client opens an overlay over the user's work, or dismisses the user's.
@@ -13700,8 +13757,8 @@ fn the_toast_keeps_clear_of_the_sidebar_and_the_drawer() {
     assert!(card(&open)[0] >= bar[0] + bar[2], "the card {:?} over the sidebar {bar:?}", card(&open));
     assert!(card(&open)[2] < card(&alone)[2], "the sidebar narrowed no card: {:?}", card(&open));
     otto.user_key("escape");
-    // The drawer over the panes: the card at its left.
-    otto.user_key("cmd-n");
+    // The drawer over the panes: the card at its left. ⌘⇧R twice: the box in the drawer, not centred.
+    otto.user_key("cmd-n cmd-shift-r cmd-shift-r");
     let boxed = toast(&otto);
     let drawer = rect(&boxed["overlays"]["drawer"]);
     let right = card(&boxed)[0] + card(&boxed)[2];

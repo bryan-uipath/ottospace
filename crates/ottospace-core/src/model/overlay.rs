@@ -424,6 +424,62 @@ mod tests {
         assert_eq!(pane.and_then(|id| m.viewer(id)).and_then(|v| v.pending.pending()), None);
     }
 
+    /// The user's ⌘N floats the box centred over the panes; ↵ makes the task the drawer's. A client's
+    /// box, one reopened with ⌘⇧R, one with nothing open, and the flag off: in the drawer, as before.
+    #[test]
+    fn the_users_box_is_centred_and_its_enter_leaves_the_drawer_on_the_task() {
+        let mut m = workspace(true);
+        m.update(Action::TalkToggle);
+        m.update(Action::OpenCompose { text: "two".into() });
+        assert!(m.compose_centred() && m.compose_host() == Some(super::super::Host::Drawer));
+        m.update(Action::ComposeEnter);
+        let two = m.tasks.list.last().map(|task| task.id);
+        assert!(!m.compose_centred() && m.compose.is_none() && !m.drawer_collapsed());
+        assert_eq!(m.talk.as_ref().and_then(|talk| talk.task.task()), two);
+        // ⌃G: the editor has its line in the drawer; back from it, centred again.
+        m.update(Action::OpenCompose { text: "edit".into() });
+        m.update(Action::EditorOpen);
+        assert!(m.compose.is_some() && !m.compose_centred());
+        m.update(Action::EditorDone { saved: None, more: false }.sent_by(Origin::System));
+        assert!(m.compose_centred());
+        m.update(Action::ComposeEscape);
+        // ⇧↵ and Esc close it too: nothing centred stays.
+        for close in [Action::ComposeSubmit { open: false }, Action::ComposeEscape] {
+            m.update(Action::OpenCompose { text: "three".into() });
+            assert!(m.compose_centred(), "{close:?}");
+            m.update(close.clone());
+            assert!(!m.compose_centred() && m.compose.is_none(), "{close:?}");
+        }
+        // Folded by a click outside, ⌘⇧R reopens it in the drawer.
+        m.update(Action::OpenCompose { text: "four".into() });
+        m.update(Action::OverlayDismiss);
+        assert!(m.compose.is_none() && m.drawer_collapsed());
+        m.update(Action::TalkToggle);
+        assert!(m.compose.is_some() && !m.compose_centred());
+        m.update(Action::ComposeEscape);
+        // ⌘⇧R twice: folded, then back in the drawer.
+        m.update(Action::OpenCompose { text: "five".into() });
+        m.update(Action::TalkToggle);
+        assert!(m.compose.is_none() && m.drawer_collapsed());
+        m.update(Action::TalkToggle);
+        assert!(m.compose.is_some() && !m.compose_centred() && !m.drawer_collapsed());
+        m.update(Action::ComposeEscape);
+        // A client's box, where the drawer is open: in the drawer.
+        let mut m = workspace(true);
+        m.update(Action::OpenCompose { text: "theirs".into() }.sent_by(Origin::Socket));
+        assert!(m.compose.is_some() && !m.compose_centred());
+        m.update(Action::ComposeEscape);
+        // The flag off: in the drawer.
+        let mut m = workspace(false);
+        m.update(Action::OpenCompose { text: "two".into() });
+        assert!(m.compose.is_some() && !m.compose_centred());
+        // Nothing open at all: the box is the drawer's own.
+        let mut m = Model::default();
+        m.update(Action::SetFeatures { features: Features::all() }.sent_by(Origin::System));
+        m.update(Action::OpenCompose { text: String::new() });
+        assert!(m.welcome() && m.compose.is_some() && !m.compose_centred());
+    }
+
     #[test]
     fn no_client_or_timer_opens_either_or_dismisses_them() {
         let mut m = workspace(true);

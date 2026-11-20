@@ -36,6 +36,7 @@ Checked against the code, 2026-11-19.
 | Next task that needs you: ⌘J (⌘⇧N before), and a click on the status bar's `● 1 needs you` | Built | reference "Status bar", `status_bar.rs` |
 | ⌘J, next thing needing you / "where next"; ⌘⇧N the note-or-quick-task box (§6) | ⌘J built as next task; ⌘⇧N unbound until the box (§6). ⌘⌥N is the new-task box's new-worktree key; no "resume a session" action | `main.rs` keymap |
 | Priority (1–9, `P1` drawn), snooze (`snoozed_until`), hold | Built | `tasks.rs` |
+| New-task box centred over the dimmed panes; ↵ grows it into the drawer (canvas NewTaskFly) | Built behind `overlay_panels` | `model.rs` `compose_centred`, `ottospace-core/src/fly.rs`, `ottospace/src/fly.rs` |
 | A task's deadline | **None.** Tasks have no due time (they keep when they started and finished, and a snooze's end) | `tasks.rs` |
 | Ask cards (`AskUserQuestion`): options, Other…, number keys 1–9 pick a row, ↵ answers, Esc declines | Built (Claude Code) | `ottospace-core/src/ask.rs` |
 | btw: a side question to the running agent in a column beside the conversation; "Use as my answer" fills the card's Other… | Built (Claude Code, not Codex) | `model/btw.rs`; agent-runners.md "Side questions" |

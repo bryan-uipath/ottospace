@@ -22,6 +22,7 @@ pub mod diff;
 pub mod edit;
 pub mod features;
 pub mod fill;
+pub mod fly;
 #[cfg(test)]
 mod fuzz;
 pub mod gist;

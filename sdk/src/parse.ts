@@ -1974,9 +1974,13 @@ function homeNode(value: unknown, at: string): HomeNode {
   };
 }
 
-function overlays(value: unknown, at: string): { sidebar: Rect | null; drawer: Rect | null } {
+function overlays(value: unknown, at: string): { sidebar: Rect | null; drawer: Rect | null; box: Rect | null } {
   const o = fields(value, at);
-  return { sidebar: orNull(rect)(o.sidebar, `${at}.sidebar`), drawer: orNull(rect)(o.drawer, `${at}.drawer`) };
+  return {
+    sidebar: orNull(rect)(o.sidebar, `${at}.sidebar`),
+    drawer: orNull(rect)(o.drawer, `${at}.drawer`),
+    box: orNull(rect)(o.box, `${at}.box`),
+  };
 }
 
 function home(value: unknown, at: string): Home {
@@ -2113,6 +2117,7 @@ export function snapshot(value: unknown): Snapshot {
     needs_you: num(o.needs_you, "needs_you"),
     compose_read: bool(o.compose_read, "compose_read"),
     compose_host: orNull(composeHost)(o.compose_host, "compose_host"),
+    compose_centred: bool(o.compose_centred, "compose_centred"),
     compose_plan: orNull(composePlan)(o.compose_plan, "compose_plan"),
     compose_plan_line: orNull(str)(o.compose_plan_line, "compose_plan_line"),
     compose_hint: orNull(str)(o.compose_hint, "compose_hint"),

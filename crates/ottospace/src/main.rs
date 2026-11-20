@@ -93,6 +93,7 @@ mod features;
 mod field;
 mod finish;
 mod float_panel;
+mod fly;
 mod give_back;
 mod highlight;
 mod home;
@@ -738,6 +739,8 @@ enum Mark {
     QuitRow(usize),
     /// A side overlay (`overlay_panels`): the sidebar's (true) or the drawer's.
     Overlay(bool),
+    /// The new-task box centred over the panes (`overlay_panels`).
+    CentredBox,
     /// A viewer's first marked line: a test run's `marked_rect`.
     ViewerMarked(PaneId),
     /// An offer chip's words, by pane, and their tooltip: a test run's `offer_rects`.
@@ -1082,6 +1085,8 @@ struct Workspace {
     dial_motion: RefCell<dial::DialMotion>,
     /// The seal, fold and land of the user's Done, while it plays.
     seals: seal::Seals,
+    /// The centred new-task box leaving (`overlay_panels`): its ghost while it plays.
+    fly: fly::Fly,
     /// The side overlays' slides in (`overlay_panels`).
     slides: overlays::Slides,
     /// The key that ended sneak mode is still down: its repeats are typed nowhere.
@@ -1748,6 +1753,7 @@ impl Workspace {
             chip_line: Rc::default(),
             dial_motion: RefCell::default(),
             seals: seal::Seals::default(),
+            fly: fly::Fly::default(),
             slides: overlays::Slides::default(),
             sneak_spent: false,
             sneak_reads: sneak_apps::Reads::default(),
@@ -1991,7 +1997,10 @@ impl Workspace {
         let name = trace::name(&action);
         // An answer on the Decisions card: its seal plays over the pane while the next card takes keys.
         let answering = matches!(action, Action::DecisionsAsk { .. }).then(|| self.model.decision_card()).flatten();
+        // The centred box: where it was, for its ghost once it leaves.
+        let (boxed, entered) = (self.fly_before(), matches!(action, Action::ComposeEnter));
         let effects = self.model.update(action.sent_by(origin));
+        self.fly_after(boxed, entered);
         if answering.is_some() && self.model.decision_card().is_some_and(|card| Some(card) != answering) {
             if let Some(pane) = self.model.decisions.as_ref().map(|run| run.pane) {
                 self.card_seal_start(pane);
@@ -3939,6 +3948,8 @@ impl Workspace {
             "overlays": {
                 "sidebar": marks.get(&Mark::Overlay(true)).copied().map(rect),
                 "drawer": marks.get(&Mark::Overlay(false)).copied().map(rect),
+                // The new-task box centred over them (`compose_centred`).
+                "box": marks.get(&Mark::CentredBox).copied().map(rect),
             },
             // The Tasks rail cell's needs-you dot (null: not drawn).
             "tasks_dot": marks.get(&Mark::TasksDot).copied().map(rect),
@@ -4016,6 +4027,8 @@ impl Workspace {
             // Where the new-task box is: `drawer` (its new-task state), `bar` (the title of the
             // draft being collected), or null while it is closed.
             "compose_host": self.model.compose_host(),
+            // The user's box is drawn centred over the dimmed panes (`overlay_panels`), not in the drawer.
+            "compose_centred": self.model.compose_centred(),
             // What ↵ in the box would do (`agent`, `starts`, `dir`, `branch`), or null; and the
             // drawer's picks: repository names (`wheres`) and agent names (`whos`).
             "compose_plan": self.model.compose_plan(),
@@ -4122,6 +4135,8 @@ impl Workspace {
                 "calendar_frames": self.timeline.day_frames.get(),
                 // The frames the seal of a Done asked for, and those with its sparks: none under Reduce Motion.
                 "seal_frames": self.seals.frames,
+                // Frames the centred new-task box's grow or fade asked for: none at rest or under Reduce Motion.
+                "fly_frames": self.fly.frames,
                 // Frames a side overlay's slide in or back asked for (`overlay_panels`): none under Reduce Motion.
                 "overlay_frames": self.slides.frames,
                 "seal_spark_frames": self.seals.spark_frames,
@@ -8473,6 +8488,7 @@ impl Render for Workspace {
         // Before anything is drawn this frame: where the drawer and the rail were is last frame's.
         let seal = self.render_seal(window, cx);
         let card_seal = self.render_card_seal(window);
+        let fly = self.render_fly(window, cx);
         self.bars.begin();
         self.move_toast(window);
         // The Repos list, the tabs and spaces, and ⌘/'s Known are noted again only while drawn.
@@ -8498,6 +8514,7 @@ impl Render for Workspace {
                     | Mark::Overlay(_)
                     | Mark::OfferWords(_)
                     | Mark::OfferTip
+                    | Mark::CentredBox
             )
         };
         self.marks.borrow_mut().retain(|mark, _| !drawn_anew(mark));
@@ -8624,6 +8641,8 @@ impl Render for Workspace {
                     // The overlays, over the panes and their shadows (`overlay_panels`).
                     .children(bar_over)
                     .children(drawer_over)
+                    // The centred new-task box over the dimmed panes, or its ghost leaving.
+                    .children(fly)
                     // Highest, the title strip: its shadow falls on all three zones.
                     .child(title_shadow()),
             )

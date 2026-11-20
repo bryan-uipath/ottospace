@@ -50,7 +50,7 @@ fn mix(a: f32, b: f32, at: f32) -> f32 {
 }
 
 /// How far `t` is from `from` to `to`, 0 to 1.
-fn part(t: f32, from: f32, to: f32) -> f32 {
+pub(crate) fn part(t: f32, from: f32, to: f32) -> f32 {
     ((t - from) / (to - from)).clamp(0., 1.)
 }
 
