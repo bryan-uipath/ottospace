@@ -26,11 +26,12 @@ use crate::Workspace;
 use crate::conversation::Links;
 use crate::highlight::{self, Mark};
 use crate::markdown::{self, Block};
+use crate::syntax::{self, Colours};
 
 /// One line of code or text, and one step of a markdown view (`Viewer::top`), in points.
 pub const LINE: f32 = 18.;
 /// The most characters of a line drawn; the file keeps the rest.
-const MAX_DRAWN: usize = 2000;
+pub const MAX_DRAWN: usize = 2000;
 /// How often a viewer's file is looked at, and how long a change must hold before it is read.
 const LOOK: Duration = Duration::from_millis(500);
 const SETTLE: Duration = Duration::from_millis(200);
@@ -42,8 +43,8 @@ type Stamp = Option<(SystemTime, u64, u64)>;
 enum Body {
     None,
     Markdown(Rc<Vec<Block>>),
-    /// Each line, and its coloured runs (`highlight`), by byte within it.
-    Lines(Rc<Vec<String>>, Rc<Vec<Vec<Mark>>>),
+    /// Each line, and its coloured runs (`highlight`), by byte within it; or by its grammar.
+    Lines(Rc<Vec<String>>, Rc<Vec<Vec<Mark>>>, Option<Rc<Colours>>),
     Image(Arc<gpui::Image>),
 }
 
@@ -53,7 +54,7 @@ enum Loaded {
     /// Markdown parsed, or text split into lines, off the main thread: a large file does not
     /// stall the window.
     Markdown(Vec<Block>),
-    Lines(Vec<String>, Vec<Vec<Mark>>),
+    Lines(Vec<String>, Vec<Vec<Mark>>, Option<Colours>),
     Image(gpui::ImageFormat, Vec<u8>),
 }
 
@@ -106,10 +107,21 @@ impl FileView {
                     let dir = name_and_dir(&path).1;
                     (read, Some(Loaded::Markdown(markdown::parse_with(&text, Some(&dir), markdown::FILE))))
                 }
-                // A code file coloured as a fence of its extension would be (`rs`, `py`).
+                // A code file coloured by its grammar (`rs`, `ts`), else as a fence of its
+                // extension would be (`go`, `yaml`): the lexer, also for a parse too large or slow.
                 (read, Some(Loaded::Text(text))) => {
-                    let marks = highlight::by_line(&text, &highlight::marks(extension(&path), &text));
-                    (read, Some(Loaded::Lines(text.lines().map(str::to_string).collect(), marks)))
+                    let lines = text.lines().map(str::to_string).collect();
+                    let lang = syntax::lang(extension(&path)).filter(|_| shows == Shows::Code);
+                    let tree = lang.and_then(|lang| Some((lang, syntax::parse(lang, &text, syntax::BUDGET)?)));
+                    match tree {
+                        Some((lang, tree)) => {
+                            (read, Some(Loaded::Lines(lines, Vec::new(), Some(Colours::new(lang, tree, text)))))
+                        }
+                        None => {
+                            let marks = highlight::by_line(&text, &highlight::marks(extension(&path), &text));
+                            (read, Some(Loaded::Lines(lines, marks, None)))
+                        }
+                    }
                 }
                 read => read,
             };
@@ -258,7 +270,9 @@ impl Workspace {
                 let (_, dir) = name_and_dir(path);
                 view.body = match loaded {
                     Some(Loaded::Markdown(blocks)) => Body::Markdown(Rc::new(blocks)),
-                    Some(Loaded::Lines(lines, marks)) => Body::Lines(Rc::new(lines), Rc::new(marks)),
+                    Some(Loaded::Lines(lines, marks, colours)) => {
+                        Body::Lines(Rc::new(lines), Rc::new(marks), colours.map(Rc::new))
+                    }
                     Some(Loaded::Image(format, bytes)) => Body::Image(Arc::new(gpui::Image::from_bytes(format, bytes))),
                     // The read thread made any text lines or markdown.
                     Some(Loaded::Text(_)) | None => Body::None,
@@ -479,8 +493,8 @@ impl Workspace {
                     .children(drawn)
                     .into_any_element()
             }
-            Some(Body::Lines(lines, marks)) => {
-                let (lines, marks) = (lines.clone(), marks.clone());
+            Some(Body::Lines(lines, marks, colours)) => {
+                let (lines, marks, colours) = (lines.clone(), marks.clone(), colours.clone());
                 let digits = lines.len().max(1).to_string().len();
                 // The marked lines, by place in `lines`; a test run notes where the first is drawn.
                 let marked = self.model.viewer(id).and_then(|view| view.marked);
@@ -498,7 +512,10 @@ impl Workspace {
                                 let line = &lines[at];
                                 let line: String = line.chars().take(MAX_DRAWN).collect();
                                 // Runs past what is drawn of a long line are cut with it.
-                                let runs = marks.get(at).map_or(Vec::new(), |marks| highlight::within(marks, &line));
+                                let runs = match &colours {
+                                    Some(colours) => colours.line(at),
+                                    None => marks.get(at).map_or(Vec::new(), |marks| highlight::within(marks, &line)),
+                                };
                                 let styles: Vec<_> = runs
                                     .into_iter()
                                     .map(|(range, token)| {
@@ -576,10 +593,14 @@ impl Workspace {
             Body::Markdown(blocks) => {
                 serde_json::json!({ "body": "markdown", "shape": crate::conversation::shape(blocks) })
             }
-            // A test run's: where the first marked line is drawn, if it shows.
-            Body::Lines(lines, _) => {
-                serde_json::json!({ "body": "lines", "lines": lines.len(), "marked_rect": marked(id) })
-            }
+            // `syntax`: the grammar that coloured it, or null (the lexer, or plain). `marked_rect`, a
+            // test run's: where the first marked line is drawn, if it shows.
+            Body::Lines(lines, _, colours) => serde_json::json!({
+                "body": "lines",
+                "lines": lines.len(),
+                "syntax": colours.as_ref().map(|colours| colours.lang().name()),
+                "marked_rect": marked(id),
+            }),
             Body::Image(_) => serde_json::json!({ "body": "image" }),
         };
         let all: serde_json::Map<String, serde_json::Value> =

@@ -281,6 +281,8 @@ export interface ViewerDrawn {
   /** A markdown file's blocks by kind, and its links that open. */
   shape?: { blocks: Record<string, number>; links: { web: number; file: number } };
   lines?: number;
+  /** The grammar that coloured a code file's lines, or null: its extension's lexer, or plain. */
+  syntax?: "rust" | "typescript" | "tsx" | "javascript" | "json" | "toml" | "python" | "bash" | null;
   /** A test run's: where the first marked line is drawn, while it shows. */
   marked_rect?: Rect | null;
 }

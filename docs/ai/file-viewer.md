@@ -41,6 +41,19 @@ A pane that shows a file, read only. Owner-approved plan: A the viewer, B a mark
   (`a.rs:12`, `:12:3`, `:12-14`), for a terminal's ⌘-click; a chat link drops it (left). The
   shell tints the rows and draws a bar in `theme::MARK`; a test run's `marked_rect` says where
   the first is drawn. Not kept in `layout.json`.
+- **Syntax** (`syntax.rs`): a code file whose extension has a grammar (`syntax::lang`: Rust,
+  TypeScript, TSX, JavaScript, JSON, TOML, Python, shell) is parsed by tree-sitter on the read
+  thread, at most 2 MB (`MAX_PARSE`) and 0.5 s (`BUDGET`, a progress callback that stops it);
+  else `highlight`'s lexer, as before. The tree is kept with the view; the lines drawn are
+  coloured 128 at a time (`CHUNK`, a query cursor over their bytes), each chunk once. A capture's
+  name gives its token (`syntax::token`: keyword, string, comment, number, type, function,
+  punctuation, key), its colour `highlight::colour`. Of two captures of one node the query's
+  first wins, an inner node over an outer; code inside a string (`${name}`) is plain. A line is
+  coloured as far as it is drawn (2000 characters): a minified file's one line costs no more.
+  The state's drawn `syntax` names the grammar. A 2 MB file of any of them parses in 0.12 to
+  0.22 s (release, M-series; `syntax::tests::timings`); one that does not parse as its language
+  can take over a second, and gets the lexer at 0.5 s.
+  Markdown stays the renderer's.
 - **Kept** in `layout.json` (and marks, workspaces) as `RecordKind::File { path, top }`.
 - **B, the fixture**: `crates/ottospace/tests/fixtures/markdown/fixture.md` and `checker.png`.
   Beside the tests, not in `docs/`: the renderer's unit test includes it, the e2e tests copy it,
