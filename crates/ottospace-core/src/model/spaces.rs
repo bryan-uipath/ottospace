@@ -568,6 +568,8 @@ impl Model {
         let mut first = workspace.map_or(Space::new(Owner::Home), |at| self.spaces.remove(at));
         first.hidden = false;
         self.spaces.insert(0, first);
+        // The workspaces' spaces in the one order (`reorder`); the tabs follow.
+        self.settle_space_order();
         self.regroup();
     }
 

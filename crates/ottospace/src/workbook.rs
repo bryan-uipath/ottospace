@@ -5,10 +5,12 @@
 use gpui::{Context, Div, ElementId, Window, div, prelude::*, px, rgb};
 use ottospace_core::list::ListRow;
 use ottospace_core::marks::MarkInput;
+use ottospace_core::model::reorder::ReorderItem;
 use ottospace_core::model::{Owner, Section};
 use ottospace_core::workbook::{self, History, WorkbookId, WorkbookRow};
 use ottospace_core::{Action, Origin, PaneId, theme};
 
+use crate::reorder::DraggedItem;
 use crate::{Workspace, config, marks, now_ms, rect};
 
 /// What the workbooks folder and this run last said, kept between frames.
@@ -341,11 +343,22 @@ impl Workspace {
                 gpui::AnyView::from(cx.new(|_| crate::Tooltip(summary.clone().into())))
             }
         };
+        // The row carried, while the drag lasts, and the row whose edge its line is drawn on:
+        // above it moving up, below it moving down.
+        let carried = self.model.reorder().filter(|_| cx.has_active_drag()).and_then(|reorder| match reorder.item {
+            ReorderItem::Workbook { id } => Some((id, reorder.to)),
+            ReorderItem::Space { .. } => None,
+        });
+        let from = carried.and_then(|(id, _)| rows.iter().position(|row| row.id == id));
         let mut children = Vec::new();
         let mut index = 0;
-        for row in rows {
+        for (place, row) in rows.into_iter().enumerate() {
             let (id, selected) = (row.id, self.model.list == Some(index));
             index += 1;
+            let line = match (from, carried) {
+                (Some(from), Some((_, to))) if to == place && to != from => Some(to > from),
+                _ => None,
+            };
             let renaming = typing(id, None);
             // ▸ or ▾ before a workbook of more than one tab: lists its tabs under it.
             let fold = (row.tabs.len() > 1).then(|| {
@@ -377,7 +390,27 @@ impl Workspace {
             };
             let shown = self.dots_shown(&ListRow::Workbook(id));
             let dots = self.row_dots(ListRow::Workbook(id), shown, cx);
+            // Where it lands: a line in the gap, drawn over it, so no row moves.
+            let line = line.map(|below| {
+                let line = div().absolute().left_0().right_0().h(px(2.)).rounded_full().bg(rgb(theme::PRIMARY));
+                if below { line.bottom(px(-3.)) } else { line.top(px(-3.)) }
+            });
+            let dragged = DraggedItem { item: ReorderItem::Workbook { id }, place: 0 };
+            let chip = gpui::SharedString::from(row.name.clone());
             let book = crate::sidebar_row(ElementId::Name(format!("workbook:{id}").into()), selected)
+                .relative()
+                .when(from.is_some_and(|from| from == place), |d| d.opacity(0.4))
+                .children(line)
+                // Not while its name is typed: a drag there selects text.
+                .when(!renaming, |d| {
+                    d.on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, e: &gpui::MouseDownEvent, _, _| this.reorder_from = Some(e.position)),
+                    )
+                    .on_drag(dragged, move |_, offset, _, cx| {
+                        cx.new(|_| crate::DragChip { label: chip.clone(), offset })
+                    })
+                })
                 .tooltip(tip(summary))
                 .on_hover(cx.listener(move |this, over: &bool, _, cx| this.row_hover(ListRow::Workbook(id), *over, cx)))
                 .children(fold)
@@ -449,6 +482,11 @@ impl Workspace {
         }
         // A delete or an update is offered back on the notice bar: nothing here moves.
         let list = div().id("workbooks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
+        // Released over the list: the row carried lands; anything else is put back.
+        let list = list.on_drop(cx.listener(|this, dragged: &DraggedItem, window, cx| match dragged.item {
+            ReorderItem::Workbook { .. } => this.reorder_released(dragged, window, cx),
+            ReorderItem::Space { .. } => this.reorder_cancel(window, cx),
+        }));
         let list = list.track_scroll(&self.list_scroll).children(empty).children(children);
         self.bars.tracked("workbooks", list, &self.list_scroll, theme::RAISED)
     }

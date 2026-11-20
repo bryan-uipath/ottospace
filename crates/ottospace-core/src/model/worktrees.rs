@@ -264,7 +264,7 @@ impl Model {
     }
 
     /// The kept workspace of a space: its own, or the one bound to its task.
-    fn space_book(&self, of: &Owner) -> Option<&Workbook> {
+    pub(crate) fn space_book(&self, of: &Owner) -> Option<&Workbook> {
         let id = match of {
             Owner::Workbook { id } => Some(*id),
             Owner::Task { id } => self.workbooks.bound_to(*id),

@@ -39,8 +39,9 @@ use ottospace_core::key_use::{Binding, Line};
 use ottospace_core::keys::{self, FilterKey, Mods};
 use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
+use ottospace_core::model::reorder::ReorderItem;
 use ottospace_core::model::zones::RailFocus;
-use ottospace_core::model::{CONFIRM_UP, Glyph, Owner, TabAt};
+use ottospace_core::model::{CONFIRM_UP, Glyph, Owner, Space, TabAt};
 use ottospace_core::notice::{self, Notice};
 use ottospace_core::repos::{Checkout, Repo};
 use ottospace_core::row_menu::MenuOf;
@@ -112,6 +113,7 @@ mod pop_ups;
 mod progress;
 mod prs;
 mod record;
+mod reorder;
 mod repos;
 mod row_menu;
 mod running;
@@ -922,6 +924,8 @@ struct Workspace {
     drop_at: Option<(PaneId, Zone)>,
     /// The divider the button went down on, until it comes up.
     divider: Option<divider::Hold>,
+    /// Where the button went down on a Workspaces row or a top-row space: a drag starts past a few points.
+    reorder_from: Option<gpui::Point<Pixels>>,
     /// A `mouse` request holds the button down: a move before its release is a drag.
     held: bool,
     /// Releases a button no request came back for. Replaced, so stopped, by each `mouse` request.
@@ -1550,6 +1554,8 @@ impl Workspace {
             unsafe { ottospace_mac::window::zoom_instead_of_fullscreen(appkit.ns_view.as_ptr()) };
             // SAFETY: GPUI's own view, on the main thread.
             zoom_asks = unsafe { ottospace_mac::window::zoom_asks(appkit.ns_view.as_ptr()) };
+            // A press on the top row's spaces is theirs (a click, a drag along the row), never the window's move.
+            unsafe { ottospace_mac::window::titlebar_holds(appkit.ns_view.as_ptr()) };
         }
         // A run with hosting off never activates the app, so keep its window visible another
         // way. Not with hosting on: a floating ottospace would cover the live app window.
@@ -1617,6 +1623,7 @@ impl Workspace {
             dragging: None,
             drop_at: None,
             divider: None,
+            reorder_from: None,
             held: false,
             abandoned: None,
             injected: false,
@@ -4660,7 +4667,10 @@ impl Workspace {
             return;
         }
         // Esc during a pane drag cancels it, and a `mouse` request's button is up again.
-        if key.key == "escape" && cx.has_active_drag() {
+        // Not a client's Esc over the user's reorder: only the user puts it back.
+        let users_reorder = self.model.reorder().is_some() && self.input != Origin::User;
+        if key.key == "escape" && cx.has_active_drag() && !users_reorder {
+            self.reorder_cancel(window, cx);
             self.held = false;
             cx.stop_active_drag(window);
             cx.notify();
@@ -6889,6 +6899,14 @@ impl Workspace {
         task.map_or(theme::PRIMARY, |task| theme::identity(task.colour))
     }
 
+    /// The space carried along the top row, while the drag lasts: its place, and the one it would take.
+    fn space_carried(&self, cx: &App) -> Option<(usize, usize)> {
+        let reorder = self.model.reorder().filter(|_| cx.has_active_drag())?;
+        let ReorderItem::Space { of } = &reorder.item else { return None };
+        let from = self.model.shown_spaces().iter().position(|space| space.of == *of)?;
+        Some((from, reorder.to))
+    }
+
     /// What a space is called on the top row.
     /// The top row, in the window bar beside the traffic lights: a tab a space, the selected one
     /// raised with a line in its colour along its top; a quiet × hides one. They shrink, then
@@ -6907,9 +6925,15 @@ impl Workspace {
         let badges =
             if !compact || fits(others) { others } else { (0..others).rev().find(|n| fits(n + 1)).unwrap_or(0) };
         let mut room_for = badges;
-        let shown: Vec<_> = shown
+        let mut placed: Vec<(usize, &Space)> = shown.into_iter().enumerate().collect();
+        // The space carried is drawn where it would land: the others make room.
+        let carried = self.space_carried(cx);
+        if let Some((from, to)) = carried {
+            let space = placed.remove(from);
+            placed.insert(to.min(placed.len()), space);
+        }
+        let shown: Vec<_> = placed
             .into_iter()
-            .enumerate()
             .filter(|(_, space)| {
                 let keep = space.of == selected || space.of == Owner::Home || room_for > 0;
                 if keep && space.of != selected && space.of != Owner::Home {
@@ -7028,9 +7052,21 @@ impl Workspace {
                 _ => None,
             };
             let to = of.clone();
+            let dragged = reorder::DraggedItem { item: ReorderItem::Space { of: of.clone() }, place };
+            let chip = SharedString::from(title.clone());
+            let lifted = carried.is_some_and(|(from, _)| from == place);
             div()
                 .id(("space", place))
                 .group("space")
+                // Home's is not carried: nothing goes before it.
+                .when(of != Owner::Home, |d| {
+                    d.on_drag(dragged, move |_, offset, _, cx| cx.new(|_| DragChip { label: chip.clone(), offset }))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, e: &MouseDownEvent, _, _| this.reorder_from = Some(e.position)),
+                        )
+                })
+                .when(lifted, |d| d.opacity(0.4))
                 .relative()
                 .h_full()
                 // The selected space keeps its name; the others give way first.
@@ -7154,7 +7190,35 @@ impl Workspace {
                     }
                 }),
             )
-            .child(div().flex_shrink().min_w_0().h_full().flex().overflow_hidden().children(spaces))
+            .child(
+                div()
+                    .relative()
+                    .flex_shrink()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .overflow_hidden()
+                    .children(spaces)
+                    // The window is not moved from here: a press on a space is the space's.
+                    .child(
+                        canvas(
+                            |b, _, _| {
+                                let (o, s) = (b.origin, b.size);
+                                let rect = [o.x, o.y, s.width, s.height].map(|v| f64::from(f32::from(v)));
+                                ottospace_mac::window::set_held_titlebar(rect);
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
+                    )
+                    .on_drop(cx.listener(|this, dragged: &reorder::DraggedItem, window, cx| match dragged.item {
+                        ReorderItem::Space { .. } => this.reorder_released(dragged, window, cx),
+                        ReorderItem::Workbook { .. } => this.reorder_cancel(window, cx),
+                    })),
+            )
             .children(more)
             .child(new_space)
             .children(chip)
@@ -7932,6 +7996,10 @@ impl Workspace {
             .on_drag_move(cx.listener(|this, e: &gpui::DragMoveEvent<DraggedPane>, window, cx| {
                 this.pane_drag_move(e.drag(cx).0, e.event.position, window, cx);
             }))
+            .on_drag_move(cx.listener(|this, e: &gpui::DragMoveEvent<reorder::DraggedItem>, window, cx| {
+                let item = e.drag(cx).item.clone();
+                this.reorder_moved(&item, e.event.position, window, cx);
+            }))
             .on_drag_move(cx.listener(|this, e: &gpui::DragMoveEvent<talk::DraggedEdge>, window, cx| {
                 this.drawer_edge_moved(f32::from(e.event.position.x), window, cx);
             }))
@@ -7941,10 +8009,14 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(|this, e: &gpui::MouseUpEvent, window, cx| {
                     (this.dragging, this.held) = (None, false);
+                    // A reorder released anywhere but its list or row: put back.
+                    this.reorder_cancel(window, cx);
                     this.annotate_release(e.position, window, cx);
                     this.bug_release(e.position, window, cx);
                 }),
             )
+            // Released outside the window: a reorder is put back too.
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, window, cx| this.reorder_cancel(window, cx)))
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {

@@ -48,6 +48,8 @@ const MAX_HISTORY_BYTES: usize = 64 * 1024;
 pub const MAX_BOOK_HISTORY: usize = 1024 * 1024;
 /// The longest command kept, in characters. A longer one is not kept: cut, it would run something else.
 pub const MAX_COMMAND: usize = 1024;
+/// Above any place a drag gives (`Workbook::order`).
+const MAX_ORDER: u32 = 1 << 20;
 
 /// What a terminal showed when its workbook was saved, and the program it ran then: kept in its
 /// pane's record as `history`. Untrusted when read (another program may have written the
@@ -256,6 +258,10 @@ pub struct Workbook {
     /// terminals and tasks start. Set by the user's Repos click; `None`: none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+    /// Its place in the Workspaces section once the user dragged one there (`Workbooks::renumber`).
+    /// None in every file before that: the section is by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<u32>,
     /// The id of each tab's open tab, this run, by place in `tabs`. Shorter than `tabs`: the rest are closed.
     #[serde(skip)]
     pub live: Vec<Option<u32>>,
@@ -296,6 +302,8 @@ pub fn parse(text: &str, stem: &str) -> Result<Workbook, String> {
     book.name = marks::clean(&book.name);
     // A default that could be no folder reads as none.
     book.worktree = book.worktree.take().filter(|path| crate::tasks::folder_fits(path));
+    // A place no drag gives reads as none, so one more never overflows.
+    book.order = book.order.filter(|order| *order < MAX_ORDER);
     // Written before temporary workspaces were: kept, as every file is.
     book.kept = true;
     match book.unsound() {
@@ -319,7 +327,8 @@ impl Workbook {
     fn new(uid: String, name: String, tabs: Vec<TabRecord>) -> Self {
         let (live, extra) = (Vec::new(), Extra::new());
         let (kept, closing) = (false, None);
-        Workbook { id: 0, version: VERSION, uid, name, tabs, task: None, worktree: None, live, kept, closing, extra }
+        let (task, worktree, order) = (None, None, None);
+        Workbook { id: 0, version: VERSION, uid, name, tabs, task, worktree, order, live, kept, closing, extra }
     }
 
     /// What is wrong with it as read from disk, if anything.
@@ -464,7 +473,8 @@ pub struct ClosingRow {
     pub name: String,
 }
 
-/// The workbooks, by name: a folder of files has no order of its own.
+/// The workbooks, by name (a folder of files has no order of its own) until the user drags one:
+/// then in the user's order (`Workbook::order`), a new one last.
 #[derive(Debug, Default)]
 pub struct Workbooks {
     pub list: Vec<Workbook>,
@@ -498,6 +508,10 @@ impl Workbooks {
             book.id = self.next;
         }
         book.name = self.unique_name(&book.name, None);
+        // A place another has since (an undo's, after a drag): it goes last.
+        if self.list.iter().any(|other| other.order.is_some() && other.order == book.order) {
+            book.order = None;
+        }
         let id = book.id;
         self.list.push(book);
         self.sort();
@@ -505,7 +519,22 @@ impl Workbooks {
     }
 
     fn sort(&mut self) {
-        self.list.sort_by_key(|book| book.name.to_lowercase());
+        if self.list.iter().all(|book| book.order.is_none()) {
+            return self.list.sort_by_key(|book| book.name.to_lowercase());
+        }
+        self.list.sort_by_key(|book| book.order.unwrap_or(u32::MAX));
+        // One with no place (new, or from an older build's file) takes the next, after the others.
+        for at in 0..self.list.len() {
+            if self.list[at].order.is_none() {
+                let next = self.list.iter().filter_map(|book| book.order).max().map_or(0, |last| last + 1);
+                self.list[at].order = Some(next);
+            }
+        }
+    }
+
+    /// The order as it is now becomes the user's: each place numbered, kept in its file.
+    pub(crate) fn renumber(&mut self) {
+        (0..).zip(&mut self.list).for_each(|(at, book)| book.order = Some(at));
     }
 
     /// The workspace `made` took tabs `ids` of no space: if they are the deleted one's, its undo
@@ -1472,6 +1501,9 @@ impl Model {
     pub(crate) fn restore_workbooks(&mut self, books: Vec<Workbook>) {
         let before = std::mem::take(&mut self.workbooks.list);
         self.workbooks.offer = None;
+        // Those with a place first: one with none (an older build's) is placed after them all.
+        let mut books = books;
+        books.sort_by_key(|book| book.order.is_none());
         for mut book in books {
             let known = self.workbooks.list.iter().any(|other| other.uid == book.uid);
             // A closing one stays as it is: only the user's Undo brings it back.
