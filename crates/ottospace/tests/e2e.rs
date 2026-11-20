@@ -1718,9 +1718,9 @@ fn the_new_task_box_files_a_line() {
     // A tab that is gone is refused; one named is ignored: only the user moves a tab to a task.
     assert_eq!(otto.raw(r#"{"cmd":"task_add","title":"x","tab":99}"#)["ok"], false);
 
-    // ⌘⇧N opens the space of the task that needs the user, its chat in the drawer.
+    // ⌘J opens the space of the task that needs the user, its chat in the drawer.
     otto.call(json!({"cmd": "task_add", "title": "waits", "state": "needs_you"}));
-    let reply = otto.user_key("cmd-shift-n");
+    let reply = otto.user_key("cmd-j");
     assert_eq!(
         (&reply["state"]["talk"]["task"], &reply["state"]["active"]),
         (&json!(3), &json!(5)),
@@ -9422,7 +9422,7 @@ fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in
     otto.wait_for("the app's name", |o| (bar(o)["place"]["text"] == "Zoom Workplace").then_some(()));
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     otto.wait_for("nowhere", |o| bar(o)["place"].is_null().then_some(()));
-    // The agents go to the next that needs you, as ⌘⇧N does.
+    // The agents go to the next that needs you, as ⌘J does.
     let went = otto.user_click(centre(&bar(&otto)["agents"]["rect"]));
     assert_eq!(went["state"]["talk"]["task"], 3, "{}", went["state"]["talk"]);
     drop(otto);

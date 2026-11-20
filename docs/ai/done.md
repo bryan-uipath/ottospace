@@ -48,7 +48,7 @@ asking"; the workspace stays, "we might want to start a new task in that workspa
 
 - `Finishing::away`: the tasks the user put away. Never in front (`Model::front` skips them: with
   only those, a workspace has none, so the drawer has no conversation), never on the rail. Kept
-  in `layout.json` (`drawer.away`) until the user opens the task again (a click, ↵ or ⌘⇧N on
+  in `layout.json` (`drawer.away`) until the user opens the task again (a click, ↵ or ⌘J on
   it: `talk_to` revives it), Undo, a state reported since, or the task goes.
 - What its stopping agent reports last moves a task put away nowhere (`chat_state`).
 - `Model::finish(subject)`: the header's buttons. `done_offered`, `close_key` (⌘W), `done_key` (⌘↵).

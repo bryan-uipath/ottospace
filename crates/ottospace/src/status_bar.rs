@@ -295,7 +295,7 @@ impl Workspace {
             let dot = (n > 0 && !short).then(|| div().flex_none().text_color(rgb(theme::BORDER_STRONG)).child("·"));
             dot.into_iter().chain([part])
         });
-        let tip = format!("{} · ⌘⇧N goes to the next that needs you", agents.text(false));
+        let tip = format!("{} · ⌘J goes to the next that needs you", agents.text(false));
         let segment = div()
             .id("status-agents")
             .relative()
@@ -316,7 +316,7 @@ impl Workspace {
     }
 
     /// A click on a segment, or its sneak label: the folder's path is copied (the user's alone),
-    /// the meeting joined (the user's alone), the next task that needs you shown (as ⌘⇧N).
+    /// the meeting joined (the user's alone), the next task that needs you shown (as ⌘J).
     pub(crate) fn click_status(&mut self, name: &str, window: &Window, cx: &mut Context<Self>) {
         match name {
             "place" => {

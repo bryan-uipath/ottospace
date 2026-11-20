@@ -3438,7 +3438,7 @@ impl Run {
         let palette_typing = m.field().is_some_and(|(of, _)| of == "palette");
         // ↵ in list mode on a meeting row of the Calendar section: that row's Join.
         let on_meeting = matches!(m.list.and_then(|at| m.list_rows().into_iter().nth(at)), Some(ListRow::Meeting(_)));
-        // The user's opening of a done task (a click, ↵, ⌘⇧N) makes it a task again, its session gone on with (`revive`).
+        // The user's opening of a done task (a click, ↵, ⌘J) makes it a task again, its session gone on with (`revive`).
         let resume_before: Vec<TaskId> = m.finish.resume.clone();
         let done_before: Vec<TaskId> = m.tasks.list.iter().filter(|t| t.state == State::Done).map(|t| t.id).collect();
         let tab_before = m.tabs[m.main_at()].id;

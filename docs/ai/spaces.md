@@ -385,7 +385,7 @@ right now"; "i'd expect < 5 so the ui should be suitable for that".
   dial's, the agent chip's, `tab_task`. Everything that spoke of "the selected space's
   conversation" asks `Model::space_subject`; where a task lives is `Model::task_space`.
 - **Who changes the front**: the user alone. A new task they start (it), an item of the drawer's rail
-  (`RailSelect`), ⌘⌥] / ⌘⌥[ (`TalkCycle`, around the rail), a task's row and ⌘⇧N (which
+  (`RailSelect`), ⌘⌥] / ⌘⌥[ (`TalkCycle`, around the rail), a task's row and ⌘J (which
   switches within and across workspaces). A client's `TalkFront`/`TalkCycle` is refused
   (`FRONT_USERS`), and its `task_open` selects the workspace and leaves the front one.
 - **The front one gone**: dismissed or deleted by anyone, the most urgent remaining task is

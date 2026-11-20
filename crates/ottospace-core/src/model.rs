@@ -951,7 +951,7 @@ pub enum Action {
     RowDismiss {
         id: TaskId,
     },
-    /// Open a task's space (default task: the first that needs the user). The user's ⌘⇧N (no
+    /// Open a task's space (default task: the first that needs the user). The user's ⌘J (no
     /// task named) opens the drawer on its chat too.
     TaskGo {
         id: Option<TaskId>,
@@ -5329,7 +5329,7 @@ impl Model {
                 let alerts = self.calendar.tick(now);
                 effects.extend(alerts.into_iter().map(|n| Effect::MeetingAlert { title: n.title, started: n.started }));
             }
-            // ⌘⇧N: the next task's conversation; the tab stays.
+            // ⌘J: the next task's conversation; the tab stays.
             Action::TaskGo { id: None } if self.by_user => {
                 if let Some(id) = self.tasks.next().map(|task| task.id) {
                     self.talk_to(Subject::Task(id), false, effects);
@@ -7210,7 +7210,7 @@ impl Model {
     /// `start`: and starts its agent (or goes on with its session) if it does not run; selecting
     /// a conversation never does. A session's opens while it is listed or its agent runs.
     fn talk_to(&mut self, subject: Subject, start: bool, effects: &mut Vec<Effect>) {
-        // The user's own opening (a click, ↵, ⌘⇧N) of a task put away or done: a task like any
+        // The user's own opening (a click, ↵, ⌘J) of a task put away or done: a task like any
         // other again; a done one's session gone on with.
         let start = match &subject {
             Subject::Task(id) if self.by_user => {

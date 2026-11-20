@@ -38,7 +38,8 @@ pub enum Binding {
     FoldTab,
     SaveWorkbook,
     NewTask,
-    NextTask,
+    /// ⌘J. `next_task` was ⌘⇧N's: its count is of the old key, so it is not read.
+    NextNeedsYou,
     TalkFocus,
     /// ⌘⇧R. `talk_toggle` was ⌘⇧L's: its count is of the old key, so it is not read.
     DrawerToggle,
@@ -90,7 +91,7 @@ pub const ALL: &[Binding] = &[
     Binding::FoldTab,
     Binding::SaveWorkbook,
     Binding::NewTask,
-    Binding::NextTask,
+    Binding::NextNeedsYou,
     Binding::TalkFocus,
     Binding::DrawerToggle,
     Binding::SidebarToggle,
@@ -140,7 +141,7 @@ impl Binding {
             Binding::FoldTab => &[C::FoldTab],
             Binding::SaveWorkbook => &[C::SaveWorkbook],
             Binding::NewTask => &[C::NewTask],
-            Binding::NextTask => &[C::NextTask],
+            Binding::NextNeedsYou => &[C::NextNeedsYou],
             Binding::TalkFocus => &[C::TalkFocus],
             Binding::DrawerToggle => &[C::DrawerToggle],
             Binding::SidebarToggle => &[C::SidebarToggle],
@@ -208,7 +209,7 @@ impl Binding {
             | B::MarkJump
             | B::MarkNumber => Group::Tabs,
             B::NewTask
-            | B::NextTask
+            | B::NextNeedsYou
             | B::TalkFocus
             | B::DrawerToggle
             | B::DialToggle
@@ -248,7 +249,7 @@ impl Binding {
             B::MarkJump => "Go to mark by letter",
             B::MarkNumber => "Go to mark",
             B::NewTask => "New task",
-            B::NextTask => "Next that needs you",
+            B::NextNeedsYou => "Next that needs you",
             B::TalkFocus => "Type to the agent",
             B::DrawerToggle => "Collapse / open drawer",
             B::SidebarToggle => "Collapse / open sidebar",
@@ -652,6 +653,14 @@ mod tests {
         let old = r#"{"version":1,"keys":{"focus_dir":{"score":3,"at":5,"known":true},
             "resize":{"score":3,"at":5,"known":true},"swap":{"score":3,"at":5,"known":true}}}"#;
         assert!(KeyUse::parse(old).expect("reads").is_empty());
+    }
+
+    /// Next that needs you moved from ⌘⇧N to ⌘J: the old key's count is not read.
+    #[test]
+    fn an_older_files_next_task_is_learned_anew() {
+        let old = r#"{"version":1,"keys":{"next_task":{"score":3,"at":5,"known":true}}}"#;
+        assert!(KeyUse::parse(old).expect("reads").is_empty());
+        assert_eq!(Binding::of(Command::NextNeedsYou).map(Binding::id).as_deref(), Some("next_needs_you"));
     }
 
     /// The user's own keys count, and a count ends no mode; nobody else counts or resets.

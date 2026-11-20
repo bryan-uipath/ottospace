@@ -123,7 +123,7 @@ on the bar, `Go to <workspace>`/`Leave`):
   underlined in its colour, brighter while the drawer shows it; a done task's group is dimmed.
 - **Drawer and tabs.** Selecting a tab of a task shows that task's conversation in an open
   drawer (`follow_tab`): no agent starts, the keyboard stays where it was; while the keyboard is
-  in the drawer, only the user's own change of tab does it. A closed drawer stays closed. ⌘⇧N
+  in the drawer, only the user's own change of tab does it. A closed drawer stays closed. ⌘J
   shows the next task's conversation; a client's `task_pop`/`task_open` go to tabs it has.
 - **Dismissed and done.** The rail lists a task's conversation while the task is not dismissed,
   and once done only while it is shown or its agent runs. A dismissed task's conversation leaves
