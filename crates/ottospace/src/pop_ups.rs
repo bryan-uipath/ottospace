@@ -200,16 +200,15 @@ impl Workspace {
         let rows = offers.iter().zip(details).map(|(offer, detail)| {
             // One of several of its title: its detail, and a picture of it to tell it at a glance.
             let thumb = detail.as_ref().and_then(|_| self.offer_thumb(offer));
-            let words = match detail {
-                Some(detail) => format!("{} · {detail}", offer_words(offer)),
-                None => offer_words(offer),
-            };
+            // The detail never cut: a long shared title gives way first.
+            let detail = detail.map(|detail| div().flex_none().text_color(rgb(theme::MUTED)).child(detail));
             div()
                 .flex()
                 .items_center()
                 .gap_1()
                 .children(thumb)
-                .child(cut_text(words).flex_1().text_color(rgb(theme::TEXT)))
+                .child(cut_text(offer_words(offer)).flex_1().text_color(rgb(theme::TEXT)))
+                .children(detail)
                 .children(self.offer_choices(offer.window, cx))
         });
         let list = div()
