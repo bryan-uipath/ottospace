@@ -150,6 +150,12 @@ jobs:
             echo '```'
           } > "$body"
           { echo "## main is red"; echo; cat "$body"; } >> "$GITHUB_STEP_SUMMARY"
+          # Red again: the closed issue is opened again, so there is one issue, not one per flip.
+          if [ -z "$number" ]; then
+            number="$(gh issue list --state closed --search 'in:title "main is red" sort:updated-desc' --json number,title \
+              --jq '[.[] | select(.title == "main is red")][0].number // empty')"
+            [ -z "$number" ] || gh issue reopen "$number"
+          fi
           if [ -n "$number" ]; then
             gh issue edit "$number" --body-file "$body"
           else
