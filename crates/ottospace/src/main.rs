@@ -2319,6 +2319,11 @@ impl Workspace {
                     config::set_live(settings.as_ref().clone())
                 }
                 // The text read at ⌘V, into the pane it was read for.
+                Effect::TypeDrop { pane, text } => {
+                    if let Some(terminal) = self.terminals.get(pane) {
+                        terminal.paste(text);
+                    }
+                }
                 Effect::Paste { pane } => {
                     let text = self.pasting.take().filter(|(at, _)| at == pane).map(|(_, text)| text);
                     if let (Some(terminal), Some(text)) = (self.terminals.get(pane), text) {
@@ -2974,11 +2979,17 @@ impl Workspace {
                     }
                     None
                 }
+                // A test's drop on a pane: the user's, as a drag from Finder is.
+                Request::ComposeDrop { paths, pane: Some(pane) } => {
+                    let action = Action::PaneDrop { pane, paths, unreadable: 0 };
+                    self.dispatch(action, Origin::User, window, cx);
+                    None
+                }
                 Request::ComposeDrop { .. } if self.model.compose.is_none() => {
                     failure = Some("the new-task box is not open".into());
                     None
                 }
-                Request::ComposeDrop { paths } => {
+                Request::ComposeDrop { paths, pane: None } => {
                     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
                     self.compose_attach(&paths, Origin::Socket, window, cx);
                     None
@@ -7119,6 +7130,12 @@ impl Workspace {
                 .on_scroll_wheel(cx.listener(move |this, e: &ScrollWheelEvent, _, cx| {
                     this.wheel(id, e.delta, Some((e.position, e.modifiers)), cx)
                 }))
+                // Files from Finder: their paths are typed in, quoted (`Action::PaneDrop`).
+                .drag_over::<gpui::ExternalPaths>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                .on_drop(cx.listener(move |this, dropped: &gpui::ExternalPaths, window, cx| {
+                    let (paths, unreadable) = dropped_names(dropped.paths());
+                    drop(this.dispatch(Action::PaneDrop { pane: id, paths, unreadable }, this.input, window, cx));
+                }))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -8099,6 +8116,13 @@ fn space_breath(calm: bool) -> Option<f32> {
     let turn = (now_ms() % PERIOD) as f32 / PERIOD as f32;
     let still = std::env::var_os("OTTOSPACE_E2E").is_some();
     (!calm).then(|| if still { 0.7 } else { 0.7 + 0.3 * (turn * std::f32::consts::TAU).cos() })
+}
+
+/// Dropped files' names as text, and how many were not text (not UTF-8).
+fn dropped_names(paths: &[PathBuf]) -> (Vec<String>, usize) {
+    let named: Vec<String> = paths.iter().filter_map(|path| path.to_str().map(str::to_string)).collect();
+    let unreadable = paths.len() - named.len();
+    (named, unreadable)
 }
 
 fn now_ms() -> u64 {
