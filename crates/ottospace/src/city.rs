@@ -38,9 +38,9 @@ const MOST_NAMES: usize = 300;
 /// A building's name: quieter than a district's.
 const NAME: u32 = 0x52525c;
 
-/// What was asked last: the folder, the folders git may run in, and the files lit then (a
-/// file an agent wrote may be new).
-type Asked = (String, Vec<String>, Vec<String>);
+/// What was asked last: the folder, the folders git may run in, and the files lit then, each
+/// with whether its call ran (a file an agent wrote may be new, once the call ends).
+type Asked = (String, Vec<String>, Vec<(String, bool)>);
 
 /// Reads a checkout's files on a thread of its own: when the folder on show changes, or the
 /// files its agents are at do. No timer of its own.
@@ -116,6 +116,7 @@ fn read(dir: &Path, roots: &[String]) -> Option<Atlas> {
         dir.canonicalize().ok().filter(|top| top.to_str().is_some_and(|top| status_bar::reads_changes(top, roots)))?;
     let mut list = crate::child::git_read(&top);
     list.args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+    let late = std::time::Instant::now() + TIMEOUT;
     let said = crate::child::run(list, TIMEOUT, MOST_BYTES).ok().filter(|said| said.ok)?;
     let names: Vec<&str> = said.out.split('\0').filter(|name| !name.is_empty()).collect();
     if said.out.len() as u64 >= MOST_BYTES || names.len() > MOST_FILES {
@@ -126,6 +127,10 @@ fn read(dir: &Path, roots: &[String]) -> Option<Atlas> {
     let real = |folder: &Path| std::fs::symlink_metadata(top.join(folder)).is_ok_and(|at| at.is_dir());
     let mut files: Vec<(String, u64)> = Vec::new();
     for name in names {
+        // A slow disk: the limit is the whole read's, not git's alone.
+        if std::time::Instant::now() > late {
+            return None;
+        }
         let mut over = Path::new(name).ancestors().skip(1).filter(|folder| !folder.as_os_str().is_empty());
         if !over.all(|folder| *folders.entry(folder).or_insert_with(|| real(folder))) {
             continue;
@@ -223,7 +228,8 @@ fn paint(
     }
     let style = window.text_style();
     let mut labels = 0;
-    for (name, origin, room, colour) in names {
+    // A name with a line break in it is not drawn: `shape_line` takes one line.
+    for (name, origin, room, colour) in names.into_iter().filter(|name| !name.0.contains(char::is_control)) {
         let color = Hsla::from(rgb(colour));
         let run = TextRun {
             len: name.len(),
@@ -255,7 +261,7 @@ impl Workspace {
     /// Asks for the city of the tab on show, on the titles' cadence; redraws when one came.
     pub(crate) fn read_city(&mut self, cx: &mut Context<Self>) {
         let key = self.model.city().map(|city| {
-            let lit = city.lit.iter().map(|lit| lit.label.to_string()).collect();
+            let lit = city.lit.iter().map(|lit| (lit.label.to_string(), lit.running)).collect();
             (city.dir.to_string(), self.model.checkout_roots(), lit)
         });
         self.city.ask(key);

@@ -11,6 +11,8 @@ use crate::model::spaces::Owner;
 pub struct Lit<'a> {
     pub label: &'a str,
     pub colour: Option<u8>,
+    /// Its call runs still. Ended, the file may be new: the shell reads the files again.
+    pub running: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -34,7 +36,8 @@ impl Model {
             let task = chat.subject.task().filter(|task| self.task_worktree(*task) == Some(dir))?;
             Some((self.tasks.get(task)?.colour, chat.transcript.files()))
         });
-        let lit = agents.flat_map(|(colour, files)| files.into_iter().map(move |label| Lit { label, colour }));
+        let lit = agents
+            .flat_map(|(colour, files)| files.into_iter().map(move |(label, running)| Lit { label, colour, running }));
         Some(City { dir, lit: lit.collect() })
     }
 }
@@ -105,9 +108,11 @@ mod tests {
         let mut m = task_in_app();
         let colour = m.tasks.get(1).and_then(|task| task.colour);
         events(&mut m, vec![Event::TurnStarted, call("a", Station::Files, "src/main.rs")]);
-        assert_eq!(m.city().map(|city| city.lit), Some(vec![Lit { label: "src/main.rs", colour }]));
+        assert_eq!(m.city().map(|city| city.lit), Some(vec![Lit { label: "src/main.rs", colour, running: true }]));
         // Ended: still where the agent was last, while its turn runs. A second call beside it.
-        events(&mut m, vec![end("a"), call("b", Station::Files, "src/lib.rs")]);
+        events(&mut m, vec![end("a")]);
+        assert_eq!(m.city().map(|city| city.lit), Some(vec![Lit { label: "src/main.rs", colour, running: false }]));
+        events(&mut m, vec![call("b", Station::Files, "src/lib.rs")]);
         assert_eq!(labels(&m), Some(vec!["src/lib.rs"]));
         events(&mut m, vec![call("c", Station::Files, "docs/a.md")]);
         assert_eq!(labels(&m), Some(vec!["docs/a.md", "src/lib.rs"]));

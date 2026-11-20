@@ -606,7 +606,7 @@ impl Transcript {
     }
 
     /// The labels of the files its agent is at now (`Activity::files`).
-    pub fn files(&self) -> Vec<&str> {
+    pub fn files(&self) -> Vec<(&str, bool)> {
         self.activity.files(&self.is())
     }
 
