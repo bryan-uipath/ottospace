@@ -19,8 +19,15 @@ use crate::viewer::MAX_DRAWN;
 
 /// The most bytes parsed: past it, the lexer.
 pub const MAX_PARSE: usize = 2 * 1024 * 1024;
-/// How long a parse may take before it is dropped: for the lexer, or a language inside, plain.
+/// How long a parse off the main thread may take (a file's, a viewed markdown file's fences all
+/// together) before it is dropped: for the lexer, or a language inside, plain.
 pub const BUDGET: Duration = Duration::from_millis(500);
+/// How long colouring may take on the main thread, all parses together: one reply drawn, one chunk
+/// of a file. A 200-line fence parses in about 1.3 ms. What is left is the lexer's (or plain) and
+/// is coloured on a later draw.
+pub const MAIN_TOTAL: Duration = Duration::from_millis(15);
+/// The most languages inside parsed for one chunk: the rest on a later draw.
+const MAX_INNER: usize = 32;
 /// Lines coloured together: the lines drawn and those near them.
 const CHUNK: usize = 128;
 /// How deep languages nest: markdown, its paragraph, an HTML tag in it, that tag's script.
@@ -232,9 +239,37 @@ pub fn built() -> usize {
     BUILT.load(Ordering::SeqCst)
 }
 
-/// True once, after a query built aside is ready.
+/// Set when colouring stopped at its deadline with something left: drawn again, it goes on.
+static DEFERRED: AtomicBool = AtomicBool::new(false);
+
+/// True once, after a query built aside is ready or colouring was left for later: draw again (a
+/// reply's blocks are made again).
 pub fn take_built() -> bool {
-    FRESH.swap(false, Ordering::SeqCst)
+    let fresh = FRESH.swap(false, Ordering::SeqCst);
+    let deferred = DEFERRED.swap(false, Ordering::SeqCst);
+    if deferred {
+        BUILT.fetch_add(1, Ordering::SeqCst);
+    }
+    fresh || deferred
+}
+
+/// Now: in tests, moved on by the slow-parse hook.
+fn now() -> Instant {
+    #[cfg(test)]
+    return Instant::now() + tests::SKEW.with(Cell::get);
+    #[cfg(not(test))]
+    Instant::now()
+}
+
+/// The deadline of colouring that may take `total`, starting now.
+pub fn deadline(total: Duration) -> Instant {
+    now() + total
+}
+
+/// True if a parse that started with `left` and found the deadline passed may try again later:
+/// it started late. One that had at least half the main thread's time is too slow: kept as is.
+fn try_later(left: Duration, deadline: Instant) -> bool {
+    now() >= deadline && left < MAIN_TOTAL / 2
 }
 
 /// True while `lang` has a grammar whose query is not built yet.
@@ -319,25 +354,35 @@ pub fn token(capture: &str) -> Option<Token> {
     })
 }
 
-/// `text` parsed as `lang`, if within `MAX_PARSE` and `budget`. The languages inside it are parsed
-/// as their lines are first drawn (`Colours::span`).
-pub fn parse(lang: Lang, text: &str, budget: Duration) -> Option<Tree> {
-    if text.len() > MAX_PARSE {
+/// `text` parsed as `lang`, if within `MAX_PARSE` and before `deadline` (one passed: nothing is
+/// parsed). The languages inside it are parsed as their lines are first drawn (`Colours::span`).
+pub fn parse(lang: Lang, text: &str, deadline: Instant) -> Option<Tree> {
+    if text.len() > MAX_PARSE || now() >= deadline {
         return None;
     }
-    #[cfg(test)]
-    tests::PARSES.with(|parses| parses.set(parses.get() + 1));
+    // A query built here (a read thread's first file of its language) is not parsing: not counted.
+    let start = now();
     made(lang)?;
+    let deadline = deadline + (now() - start);
     let mut parser = Parser::new();
     parser.set_language(&grammar(lang)?).ok()?;
-    parse_with(&mut parser, text, budget)
+    parse_with(&mut parser, text, deadline)
 }
 
-/// `text` parsed by `parser` over its included ranges, if within `budget`.
-fn parse_with(parser: &mut Parser, text: &str, budget: Duration) -> Option<Tree> {
-    let start = Instant::now();
+/// `text` parsed by `parser` over its included ranges, if before `deadline`.
+fn parse_with(parser: &mut Parser, text: &str, deadline: Instant) -> Option<Tree> {
+    #[cfg(test)]
+    {
+        tests::PARSES.with(|parses| parses.set(parses.get() + 1));
+        // A parse as slow as the time it has: it takes all of it and gives up.
+        if tests::SLOW.with(Cell::get) {
+            let left = deadline.saturating_duration_since(now());
+            tests::SKEW.with(|skew| skew.set(skew.get() + left));
+            return None;
+        }
+    }
     let mut past = |_: &tree_sitter::ParseState| {
-        if start.elapsed() > budget { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
+        if now() > deadline { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
     };
     let bytes = text.as_bytes();
     let mut read = |at: usize, _| &bytes[at.min(bytes.len())..];
@@ -403,10 +448,11 @@ fn ranges(node: Node) -> Vec<tree_sitter::Range> {
     found
 }
 
-/// A fenced block's runs, by byte in `code`: by the grammar `label` names if it parses within the
-/// budget, else `highlight`'s lexer, as before (plain for a label it does not know). Kept by
-/// language and text: a reply drawn again, or streamed past a fence, parses it no more.
-pub fn fence(label: &str, code: &str) -> Vec<Mark> {
+/// A fenced block's runs, by byte in `code`: by the grammar `label` names if it parses before
+/// `deadline` (its whole reply's), else `highlight`'s lexer, as before (plain for a label it does
+/// not know). Kept by language and text: a reply drawn again, or streamed past a fence, parses it
+/// no more. One left for lack of time is not kept: a later draw colours it.
+pub fn fence(label: &str, code: &str, deadline: Instant) -> Vec<Mark> {
     type Kept = HashMap<(Lang, u64, usize), Vec<Mark>>;
     static KEPT: LazyLock<Mutex<Kept>> = LazyLock::new(Mutex::default);
     let Some(lang) = lang_named(label).map(|lang| untagged(lang, code)) else {
@@ -418,14 +464,20 @@ pub fn fence(label: &str, code: &str) -> Vec<Mark> {
     if let Some(marks) = KEPT.lock().ok().and_then(|kept| kept.get(&key).cloned()) {
         return marks;
     }
-    let (marks, waiting) = match parse(lang, code, BUDGET) {
+    let left = deadline.saturating_duration_since(now());
+    let (marks, waiting) = match parse(lang, code, deadline) {
         Some(tree) => {
             let colours = Colours::new(lang, tree, code.to_string());
+            colours.outer.set(Some(deadline));
             (colours.all(), colours.waiting.get())
+        }
+        None if try_later(left, deadline) => {
+            DEFERRED.store(true, Ordering::SeqCst);
+            (crate::highlight::marks(label, code), true)
         }
         None => (crate::highlight::marks(label, code), pending(lang)),
     };
-    // Its query not built yet: the lexer's for now, the grammar's when drawn again.
+    // Its query not built yet, or no time left: the lexer's for now, the grammar's when drawn again.
     if !waiting && let Ok(mut kept) = KEPT.lock() {
         // About a thousand fences: a long session's replies; forgotten all at once past it.
         if kept.len() >= 1024 {
@@ -446,8 +498,15 @@ pub struct Colours {
     chunks: RefCell<HashMap<usize, Vec<Vec<Mark>>>>,
     /// Each language inside it parsed so far, by its first byte: `None` past the budget (plain).
     inner: RefCell<HashMap<(Lang, usize), Option<Tree>>>,
-    /// Set when a layer was drawn plain for its query not built yet: not kept, drawn again.
+    /// Set when a layer was drawn plain for its query not built yet, or for lack of time: not
+    /// kept, drawn again.
     waiting: Cell<bool>,
+    /// The deadline of all the colouring it is part of (a reply's), if any; else each chunk has
+    /// `MAIN_TOTAL` of its own.
+    outer: Cell<Option<Instant>>,
+    /// The chunk being coloured: its deadline and the languages inside parsed for it.
+    until: Cell<Instant>,
+    parsed: Cell<usize>,
 }
 
 impl Colours {
@@ -462,7 +521,8 @@ impl Colours {
             start += line.len();
         }
         let (chunks, inner, waiting) = (RefCell::default(), RefCell::default(), Cell::new(false));
-        Colours { lang, tree, text, lines, chunks, inner, waiting }
+        let (outer, until, parsed) = (Cell::new(None), Cell::new(now()), Cell::new(0));
+        Colours { lang, tree, text, lines, chunks, inner, waiting, outer, until, parsed }
     }
 
     pub fn lang(&self) -> Lang {
@@ -474,6 +534,8 @@ impl Colours {
         let chunk = at / CHUNK;
         if !self.chunks.borrow().contains_key(&chunk) {
             self.waiting.set(false);
+            self.until.set(self.outer.get().unwrap_or_else(|| deadline(MAIN_TOTAL)));
+            self.parsed.set(0);
             let made = self.colour(chunk * CHUNK..((chunk + 1) * CHUNK).min(self.lines.len()));
             if self.waiting.get() {
                 return made.get(at % CHUNK).cloned().unwrap_or_default();
@@ -523,13 +585,31 @@ impl Colours {
         if let Some(tree) = self.inner.borrow().get(&key) {
             return tree.clone();
         }
-        // A parser of its own: one stopped by its budget would resume where it stopped.
+        // No time or no more parses left for this chunk: plain now, a later draw goes on.
+        let until = self.until.get();
+        let left = until.saturating_duration_since(now());
+        if left.is_zero() || self.parsed.get() >= MAX_INNER {
+            self.defer();
+            return None;
+        }
+        self.parsed.set(self.parsed.get() + 1);
+        // A parser of its own: one stopped by its deadline would resume where it stopped.
         let mut parser = Parser::new();
         let set = grammar(lang).is_some_and(|grammar| parser.set_language(&grammar).is_ok())
             && parser.set_included_ranges(ranges).is_ok();
-        let tree = if set { parse_with(&mut parser, &self.text, BUDGET) } else { None };
+        let tree = if set { parse_with(&mut parser, &self.text, until) } else { None };
+        if tree.is_none() && set && try_later(left, until) {
+            self.defer();
+            return None;
+        }
         self.inner.borrow_mut().insert(key, tree.clone());
         tree
+    }
+
+    /// Something left uncoloured for lack of time: this chunk is not kept, and the window draws again.
+    fn defer(&self) {
+        self.waiting.set(true);
+        DEFERRED.store(true, Ordering::SeqCst);
     }
 
     /// The runs of `lines`, one after another in the text. A node inside another is drawn as its
@@ -600,8 +680,10 @@ mod tests {
     use super::*;
 
     fn runs(lang: Lang, code: &str) -> Vec<Vec<(String, Token)>> {
-        let tree = parse(lang, code, BUDGET).expect("parsed");
+        let tree = parse(lang, code, deadline(BUDGET)).expect("parsed");
         let colours = Colours::new(lang, tree, code.to_string());
+        // A debug build's time, not the main thread's: what is coloured, not how fast.
+        colours.outer.set(Some(deadline(BUDGET)));
         let lines: Vec<&str> = code.lines().collect();
         (0..lines.len())
             .map(|at| {
@@ -736,8 +818,9 @@ mod tests {
     #[test]
     fn every_fixture_parses_whole_and_has_its_colours() {
         for (lang, _, code, keyword, string, comment) in FIXTURES {
-            let tree = parse(lang, code, BUDGET).expect("parsed");
+            let tree = parse(lang, code, deadline(BUDGET)).expect("parsed");
             let colours = Colours::new(lang, tree.clone(), code.to_string());
+            colours.outer.set(Some(deadline(BUDGET)));
             colours.all();
             let inner =
                 colours.inner.borrow().iter().map(|((lang, _), tree)| (*lang, tree.clone())).collect::<Vec<_>>();
@@ -783,20 +866,24 @@ mod tests {
     fn a_fence_is_coloured_by_the_grammar_its_label_names() {
         let code = "// Sow.\nfn sow() -> &'static str { \"kale\" }";
         for label in ["rust", "rs", "RUST"] {
-            let marks = fence(label, code);
+            let marks = fence(label, code, deadline(BUDGET));
             let got: Vec<(&str, Token)> = marks.iter().map(|(range, token)| (&code[range.clone()], *token)).collect();
             for want in [("// Sow.", Token::Comment), ("fn", Token::Keyword), ("\"kale\"", Token::String)] {
                 assert!(got.contains(&want), "{label}: {want:?} in {got:?}");
             }
         }
-        assert_eq!(fence("brainfuck", code), Vec::new(), "a language unknown: plain");
+        assert_eq!(fence("brainfuck", code, deadline(BUDGET)), Vec::new(), "a language unknown: plain");
         // PHP with no `<?php`, and with it.
         for php in ["echo \"kale\";", "<?php echo \"kale\";"] {
             let at = php.find('"').unwrap_or_default();
-            assert!(fence("php", php).contains(&(at..at + 6, Token::String)), "{php}: {:?}", fence("php", php));
+            assert!(
+                fence("php", php, deadline(BUDGET)).contains(&(at..at + 6, Token::String)),
+                "{php}: {:?}",
+                fence("php", php, deadline(BUDGET))
+            );
         }
         // One a grammar does not have: the lexer's, as before.
-        assert_eq!(fence("diff", "+ a"), crate::highlight::marks("diff", "+ a"));
+        assert_eq!(fence("diff", "+ a", deadline(BUDGET)), crate::highlight::marks("diff", "+ a"));
     }
 
     /// A markdown file of many fences parses within the budget: the languages inside are parsed as
@@ -807,13 +894,17 @@ mod tests {
             "Some *made-up* text.\n\n```rust\nfn sow() -> u32 { 3 }\n```\n\n```ts\nconst a = \"kale\";\n```\n\n";
         let md = block.repeat(500);
         let start = Instant::now();
-        let tree = parse(Lang::Markdown, &md, BUDGET).expect("within the budget");
+        let tree = parse(Lang::Markdown, &md, deadline(BUDGET)).expect("within the budget");
         assert!(start.elapsed() <= BUDGET, "{:?}", start.elapsed());
         let colours = Colours::new(Lang::Markdown, tree, md);
-        // `fn sow`, in the 11th chunk: its Rust coloured.
-        assert!(colours.line(CHUNK * 10 + 3).contains(&(0..2, Token::Keyword)), "{:?}", colours.line(CHUNK * 10 + 3));
-        // 128 lines of 10-line blocks: 13 or 14 blocks, 3 languages inside each.
+        colours.outer.set(Some(deadline(BUDGET)));
+        // `fn sow`, in the 11th chunk: its Rust coloured. 128 lines of 10-line blocks: 13 or 14
+        // blocks, 3 languages inside each, `MAX_INNER` a draw: the chunk is not kept yet.
+        assert!(colours.line(CHUNK * 10 + 3).contains(&(0..2, Token::Keyword)));
+        assert_eq!((colours.inner.borrow().len(), colours.chunks.borrow().len()), (MAX_INNER, 0));
+        colours.line(CHUNK * 10 + 3);
         assert!((36..=45).contains(&colours.inner.borrow().len()), "{}", colours.inner.borrow().len());
+        assert_eq!(colours.chunks.borrow().len(), 1, "all parsed: kept");
     }
 
     /// A pattern whose predicate tree-sitter does not test is left out: Ruby's `#is-not? local`
@@ -833,7 +924,7 @@ mod tests {
         ] {
             let lang = ottospace_core::viewer::lang_of(path).expect("named");
             assert_eq!(ottospace_core::viewer::shows(path), ottospace_core::viewer::Shows::Code, "{path}");
-            assert!(parse(lang, code, BUDGET).is_none(), "{path}: no grammar here");
+            assert!(parse(lang, code, deadline(BUDGET)).is_none(), "{path}: no grammar here");
             let marks = crate::highlight::marks(extension, code);
             let tokens: Vec<Token> = marks.iter().map(|(_, token)| *token).collect();
             for token in [Token::Keyword, Token::String, Token::Comment] {
@@ -878,6 +969,63 @@ mod tests {
     thread_local! {
         /// Parses on this thread: a test's own.
         pub(super) static PARSES: Cell<usize> = const { Cell::new(0) };
+        /// Each parse takes all the time it has (`parse_with`), moving this thread's clock on.
+        pub(super) static SLOW: Cell<bool> = const { Cell::new(false) };
+        pub(super) static SKEW: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    }
+
+    /// `draw` with every parse as slow as its deadline allows; how long it took by the clock.
+    fn slowly(draw: impl FnOnce()) -> Duration {
+        let before = SKEW.with(Cell::get);
+        SLOW.with(|slow| slow.set(true));
+        draw();
+        SLOW.with(|slow| slow.set(false));
+        SKEW.with(Cell::get) - before
+    }
+
+    /// 200 fences that would each take the whole time: one reply's draw takes `MAIN_TOTAL` in
+    /// all, the rest are the lexer's and are coloured on later draws, not kept as they are.
+    #[test]
+    fn two_hundred_slow_fences_take_one_total_and_are_left_for_later() {
+        let reply: String = (0..200).map(|n| format!("```rust\nfn slow_{n}() {{}}\n```\n\n")).collect();
+        let mut drawn = Vec::new();
+        let mut count = 0;
+        let took = slowly(|| count = parses(|| drawn = crate::markdown::parse(&reply, None)));
+        assert!(took <= MAIN_TOTAL, "{took:?}");
+        assert_eq!(count, 1, "the first took all the time; the rest parsed nothing");
+        let lexer = crate::highlight::marks("rust", "fn slow_7() {}");
+        assert!(
+            drawn.iter().any(|block| matches!(block, crate::markdown::Block::Code { marks, .. } if *marks == lexer))
+        );
+        // Drawn again at speed: all but the first (it had the whole time: too slow, kept as is).
+        assert_eq!(parses(|| drop(crate::markdown::parse(&reply, None))), 199);
+    }
+
+    #[test]
+    fn a_spent_deadline_parses_nothing_and_its_chunk_is_not_kept() {
+        assert_eq!(parses(|| assert!(parse(Lang::Rust, "fn a() {}", deadline(Duration::ZERO)).is_none())), 0);
+        let md = "```rust\nfn spent_a() {}\n```\n\n```rust\nfn spent_b() {}\n```\n";
+        let tree = parse(Lang::Markdown, md, deadline(BUDGET)).expect("parsed");
+        let colours = Colours::new(Lang::Markdown, tree, md.to_string());
+        colours.outer.set(Some(deadline(Duration::ZERO)));
+        assert_eq!(parses(|| drop(colours.line(1))), 0);
+        assert!(colours.chunks.borrow().is_empty() && colours.inner.borrow().is_empty());
+    }
+
+    /// A chunk of a viewed file has `MAIN_TOTAL` of its own: the first slow language inside takes
+    /// it (too slow: plain, kept), the rest wait for a later draw, when they are parsed.
+    #[test]
+    fn a_chunks_slow_languages_inside_wait_for_a_later_draw() {
+        let md = "```rust\nfn wait_a() {}\n```\n\n```rust\nfn wait_b() {}\n```\n\n```rust\nfn wait_c() {}\n```\n";
+        let tree = parse(Lang::Markdown, md, deadline(BUDGET)).expect("parsed");
+        let colours = Colours::new(Lang::Markdown, tree, md.to_string());
+        let took = slowly(|| drop(colours.line(1)));
+        assert!(took <= MAIN_TOTAL, "{took:?}");
+        assert_eq!((colours.inner.borrow().len(), colours.chunks.borrow().len()), (1, 0));
+        colours.outer.set(Some(deadline(BUDGET)));
+        colours.line(1);
+        assert_eq!(colours.chunks.borrow().len(), 1, "all parsed: kept");
+        assert!(colours.line(5).contains(&(0..2, Token::Keyword)), "{:?}", colours.line(5));
     }
 
     fn parses(draw: impl FnOnce()) -> usize {
@@ -886,12 +1034,18 @@ mod tests {
         PARSES.with(Cell::get) - before
     }
 
+    /// A reply drawn with a file's time: what is parsed and kept, not how fast (a debug build).
+    fn reply_at_leisure(text: &str) -> Vec<crate::markdown::Block> {
+        let caps = crate::markdown::Caps { colour: BUDGET, ..crate::markdown::CHAT };
+        crate::markdown::parse_with(text, None, caps)
+    }
+
     #[test]
     fn drawing_the_same_fences_twice_parses_nothing_the_second_time() {
         let reply =
             "Two made-up fences.\n\n```rust\nfn twice_a() -> u32 { 1 }\n```\n\n```py\ntwice_b = \"kale\"\n```\n";
-        assert_eq!(parses(|| drop(crate::markdown::parse(reply, None))), 2);
-        assert_eq!(parses(|| drop(crate::markdown::parse(reply, None))), 0, "drawn again: kept");
+        assert_eq!(parses(|| drop(reply_at_leisure(reply))), 2);
+        assert_eq!(parses(|| drop(reply_at_leisure(reply))), 0, "drawn again: kept");
     }
 
     #[test]
@@ -901,10 +1055,10 @@ mod tests {
             let body: String = (0..lines).map(|n| format!("let streamed_{n} = {n};\n")).collect();
             format!("{done}```rust\n{body}")
         };
-        parses(|| drop(crate::markdown::parse(&streaming(3), None)));
+        parses(|| drop(reply_at_leisure(&streaming(3))));
         // One line more: the growing fence only, once; the closed one is kept.
-        assert_eq!(parses(|| drop(crate::markdown::parse(&streaming(4), None))), 1);
-        assert_eq!(parses(|| drop(crate::markdown::parse(&streaming(4), None))), 0);
+        assert_eq!(parses(|| drop(reply_at_leisure(&streaming(4)))), 1);
+        assert_eq!(parses(|| drop(reply_at_leisure(&streaming(4)))), 0);
     }
 
     #[test]
@@ -944,7 +1098,7 @@ mod tests {
     #[test]
     fn a_line_longer_than_is_drawn_is_coloured_up_to_the_cut_and_the_next_whole() {
         let code = format!("[{}]\n[true]\n", "1, ".repeat(MAX_DRAWN));
-        let tree = parse(Lang::Json, &code, BUDGET).expect("parsed");
+        let tree = parse(Lang::Json, &code, deadline(BUDGET)).expect("parsed");
         let colours = Colours::new(Lang::Json, tree, code);
         let end = colours.line(0).last().map(|(range, _)| range.end);
         assert!(end.is_some_and(|end| end > MAX_DRAWN - 4 && end <= MAX_DRAWN), "{end:?}");
@@ -966,11 +1120,14 @@ mod tests {
     #[test]
     fn a_large_file_or_a_slow_parse_falls_back() {
         let big = "fn a() {}\n".repeat(MAX_PARSE / 10 + 1);
-        assert!(parse(Lang::Rust, &big, BUDGET).is_none(), "past MAX_PARSE");
+        assert!(parse(Lang::Rust, &big, deadline(BUDGET)).is_none(), "past MAX_PARSE");
         // A budget already spent: the parse stops at its first check.
         let long = "fn a() { let x = [1, 2, 3]; }\n".repeat(2_000);
-        assert!(parse(Lang::Rust, &long, Duration::ZERO).is_none());
-        assert!(parse(Lang::Rust, &long, BUDGET).is_some(), "60 KB parses within the budget, in a debug build too");
+        assert!(parse(Lang::Rust, &long, deadline(Duration::ZERO)).is_none());
+        assert!(
+            parse(Lang::Rust, &long, deadline(BUDGET)).is_some(),
+            "60 KB parses within the budget, in a debug build too"
+        );
     }
 
     /// How long the largest file parsed takes in each language, against `BUDGET`: `cargo test
@@ -1042,7 +1199,7 @@ mod tests {
             assert!(made(lang).is_some() && (lang != Lang::Markdown || made(Lang::MarkdownInline).is_some()));
             let made = start.elapsed();
             let start = Instant::now();
-            let tree = parse(lang, &text, Duration::from_secs(120)).expect("parsed");
+            let tree = parse(lang, &text, deadline(Duration::from_secs(120))).expect("parsed");
             let parsed = start.elapsed();
             let colours = Colours::new(lang, tree.clone(), text.clone());
             let start = Instant::now();
@@ -1081,12 +1238,39 @@ mod tests {
         let lexer = time(&|| drop(crate::highlight::marks("rust", shown)));
         let first = time(&|| drop(crate::markdown::parse(&reply, None)));
         let again = time(&|| drop(crate::markdown::parse(&reply, None)));
-        let fence_again = time(&|| drop(fence("rust", shown)));
+        let fence_again = time(&|| drop(fence("rust", shown, deadline(MAIN_TOTAL))));
         println!("| 200-line Rust fence, calling thread | main | this branch |");
         println!("|---|---|---|");
         println!("| the reply, first draw | {:.1?} | {first:.1?} |", plain + lexer);
         println!("| the reply, drawn again | {:.1?} | {again:.1?} |", plain + lexer);
         println!("| the fence's colours, drawn again | {lexer:.1?} | {fence_again:.1?} |");
+    }
+
+    /// A 200-fence reply drawn on the calling thread, and a reply of 20 fences that do not parse:
+    /// the first draw, the longest, how many draws until all is coloured, all of them.
+    /// `cargo test --release -p ottospace --bin ottospace -- --ignored --nocapture fences_200_timings`.
+    #[test]
+    #[ignore = "timings, by hand"]
+    fn fences_200_timings() {
+        assert!(made(Lang::Rust).is_some());
+        let body: String = (0..10).map(|n| format!("    let row_{n} = sow(\"kale\", {n}); // made up\n")).collect();
+        let reply: String = (0..200).map(|n| format!("```rust\nfn f_{n}() {{\n{body}}}\n```\n\n")).collect();
+        let bad: String = "fn sow( { let x = [1, 2; \"kale\n".repeat(400);
+        let broken: String = (0..20).map(|n| format!("```rust\n// {n}\n{bad}```\n\n")).collect();
+        for (name, text) in [("200 fences of 12 lines", &reply), ("20 broken fences of 400 lines", &broken)] {
+            let mut draws = Vec::new();
+            loop {
+                let start = Instant::now();
+                drop(crate::markdown::parse(text, None));
+                draws.push(start.elapsed());
+                if !take_built() || draws.len() >= 400 {
+                    break;
+                }
+            }
+            let total: Duration = draws.iter().sum();
+            let most = draws.iter().max().copied().unwrap_or_default();
+            println!("| {name} | {:.1?} | {most:.1?} | {} | {total:.1?} |", draws[0], draws.len());
+        }
     }
 
     /// Runs on character boundaries, in order, inside the line, whatever the text.
@@ -1102,7 +1286,7 @@ mod tests {
         for lang in GRAMMARS.iter().map(|grammar| grammar.lang) {
             for _ in 0..100 {
                 let code: String = (0..next(40)).map(|_| pieces[next(pieces.len())]).collect();
-                let Some(tree) = parse(lang, &code, BUDGET) else { continue };
+                let Some(tree) = parse(lang, &code, deadline(BUDGET)) else { continue };
                 let colours = Colours::new(lang, tree, code.clone());
                 for (at, line) in code.lines().enumerate() {
                     let mut end = 0;

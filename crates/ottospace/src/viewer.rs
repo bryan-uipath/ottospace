@@ -112,7 +112,8 @@ impl FileView {
                 (read, Some(Loaded::Text(text))) => {
                     let lines = text.lines().map(str::to_string).collect();
                     let lang = ottospace_core::viewer::lang_of(&path).filter(|_| shows == Shows::Code);
-                    let tree = lang.and_then(|lang| Some((lang, syntax::parse(lang, &text, syntax::BUDGET)?)));
+                    let tree = lang
+                        .and_then(|lang| Some((lang, syntax::parse(lang, &text, syntax::deadline(syntax::BUDGET))?)));
                     match tree {
                         Some((lang, tree)) => {
                             (read, Some(Loaded::Lines(lines, Vec::new(), Some(Colours::new(lang, tree, text)))))
