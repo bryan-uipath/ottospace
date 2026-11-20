@@ -390,11 +390,12 @@ impl Model {
         if self.panes.iter().any(|p| matches!(p.kind, Kind::App { window: w, .. } if w == window)) {
             return;
         }
-        // Its process, as `slot_hosted` finds it: a window of it may come back while Away.
+        // Its process, for a return while Away; a window no look listed yet keeps the last, as `slot_fill` does.
         let pid = self.slot_looks.iter().flat_map(|look| &look.windows).find(|seen| seen.window == window);
         let pid = pid.map(|seen| seen.pid);
         let Some(run) = self.slots.get_mut(&id) else { return };
-        (run.away, run.offered, run.known, run.pending, run.pid) = (None, None, None, None, pid);
+        (run.away, run.offered, run.known, run.pending) = (None, None, None, None);
+        run.pid = pid.or(run.pid);
         // The user's own choice: passed over no more.
         run.declined.remove(&window);
         // Empty for `open` to fill; the slot stays.
@@ -1496,6 +1497,8 @@ mod tests {
         m.update(Action::PickerChoose { index: Some(0) });
         m.update(Action::NewWindowCame { kind: meetings(40, "Incident new") });
         assert_eq!((status(&m, 2), m.pane(2).map(|p| p.owned)), (Some(Status::Filled), Some(false)));
+        // No look listed it yet: the slot keeps the process it had.
+        assert_eq!(m.slots[&2].pid, Some(7));
         m.update(Action::SlotGiveBack { pane: 2 });
         m.update(system(look(vec![seen(7, 41, "Incident other")])));
         m.update(Action::SlotAccept { pane: 2 });
