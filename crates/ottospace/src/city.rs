@@ -154,6 +154,18 @@ fn within(place: &Place, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds { origin, size: size(px(place.rect.w * w), px(place.rect.h * h)) }
 }
 
+/// A building's quad inside `at`, its lot (the gap is the street). `None`: too small to draw;
+/// a lit one is drawn however small.
+fn building(at: Bounds<Pixels>, lit: bool) -> Option<Bounds<Pixels>> {
+    let (w, h) = (f32::from(at.size.width), f32::from(at.size.height));
+    if !lit && (w < SMALLEST || h < SMALLEST) {
+        return None;
+    }
+    let inset = STREET.min(w / 4.).min(h / 4.);
+    let origin = at.origin + point(px(inset), px(inset));
+    Some(Bounds { origin, size: size(px((w - 2. * inset).max(1.)), px((h - 2. * inset).max(1.))) })
+}
+
 /// Paints the plan: a district's ground a little lighter than what it lies in, with a line
 /// (stronger for a folder of the root); a building inside its lot, the gap the street; a lit
 /// building tinted and outlined in its agent's colour. Then the names that fit: a large
@@ -187,15 +199,7 @@ fn paint(
             continue;
         }
         let colour = lit.get(place.id.as_str());
-        // A lit building is drawn however small.
-        if colour.is_none() && (w < SMALLEST || h < SMALLEST) {
-            continue;
-        }
-        let inset = STREET.min(w / 4.).min(h / 4.);
-        let lot = Bounds {
-            origin: at.origin + point(px(inset), px(inset)),
-            size: size(px((w - 2. * inset).max(1.)), px((h - 2. * inset).max(1.))),
-        };
+        let Some(lot) = building(at, colour.is_some()) else { continue };
         match colour {
             // A tint and a line, not a slab: a large file lit must not shout.
             Some(colour) => {
@@ -213,7 +217,8 @@ fn paint(
         // Under a district's own name there is no room for the first building's.
         if w >= BUILDING_NAMED.0 && h >= BUILDING_NAMED.1 && names.len() < MOST_NAMES {
             let colour = if colour.is_some() { theme::TEXT } else { NAME };
-            names.push((&place.label, lot.origin + point(px(6.), px(h - 2. * inset - 18.)), w - 2. * inset, colour));
+            let (w, h) = (f32::from(lot.size.width), f32::from(lot.size.height));
+            names.push((&place.label, lot.origin + point(px(6.), px(h - 18.)), w, colour));
         }
     }
     let style = window.text_style();
@@ -311,6 +316,33 @@ mod tests {
             let started = std::time::Instant::now();
             let places = read(&top, &roots).map(|atlas| atlas.places.len());
             println!("{dir}: {places:?} places in {:.1} ms", started.elapsed().as_secs_f64() * 1000.);
+        }
+    }
+
+    /// What a frame costs before GPUI is handed a quad: the lit files found, each place put in
+    /// the window and each building's quad. `cargo test -p ottospace --release -- --ignored
+    /// a_frames_places_are_timed --nocapture`.
+    #[test]
+    #[ignore = "prints timings; run it by name, in release"]
+    fn a_frames_places_are_timed() {
+        for count in [500, 5_000, 20_000] {
+            let files: Vec<(String, u64)> = (0..count)
+                .map(|i| (format!("d{}/d{}/d{}/f{i}.rs", i % 12, i % 7, i % 5), 900 + i as u64 * 37))
+                .collect();
+            let atlas = atlas::atlas(&atlas::repo(&files));
+            let bounds = Bounds { origin: point(px(0.), px(0.)), size: size(px(1600.), px(1000.)) };
+            let (frames, mut quads) = (200, 0);
+            let started = std::time::Instant::now();
+            for _ in 0..frames {
+                let lit: HashMap<&str, u32> = (["d3/f3.rs", "d4/f404.rs"].iter())
+                    .flat_map(|label| atlas.labelled(label, "app").map(|place| (place.id.as_str(), 1)))
+                    .collect();
+                let buildings = atlas.places.iter().filter(|place| !place.group);
+                quads =
+                    buildings.filter_map(|place| building(within(place, bounds), lit.contains_key(&*place.id))).count();
+            }
+            let each = started.elapsed().as_secs_f64() * 1e6 / frames as f64;
+            println!("{count} files: {} places, {quads} buildings drawn, {each:.0} us a frame", atlas.places.len());
         }
     }
 }
