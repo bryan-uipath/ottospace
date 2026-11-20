@@ -12,7 +12,8 @@ use ottospace_core::model::rail::{RailItem, RailSection};
 use ottospace_core::model::{HOME_TAB, Owner};
 use ottospace_core::{Action, Origin, theme};
 
-use crate::{TOP_BAR, Tooltip, Workspace, cut_text, display, drawer_rail};
+use crate::home::Floor;
+use crate::{TOP_BAR, Tooltip, Workspace, cut_text, display, drawer_rail, keycaps};
 
 /// The root of a tab out's window.
 pub(crate) struct OutWindow {
@@ -120,10 +121,7 @@ impl Workspace {
         std::mem::swap(&mut self.controls, &mut self.out_controls);
         self.controls.begin();
         let tree = self.model.tree_at(at).map(|root| self.render_node(root, cx));
-        let empty = tree.is_none().then(|| {
-            let hint = "An empty tab · ⌘E picks what goes in it";
-            div().size_full().flex().items_center().justify_center().text_sm().text_color(rgb(theme::MUTED)).child(hint)
-        });
+        let empty = tree.is_none().then(|| self.render_empty(Floor::Out(tab), None, keycaps::held(window), cx));
         let of = self.model.tabs[at].space.clone();
         let panes = div().flex_1().min_w_0().h_full().flex().overflow_hidden().children(empty).children(tree);
         // Left of the main window, its outer edge is its left.

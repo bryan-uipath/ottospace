@@ -6922,19 +6922,20 @@ impl Workspace {
                 Kind::Decision => self.decision_body(cx),
                 _ => {
                     // A pane a mark's tab could not fill says why.
-                    let hint = self.unfilled_why(id).unwrap_or_else(|| "⌘E to pick what goes here".into());
+                    let why = self.unfilled_why(id).map(|why| div().text_sm().text_color(rgb(theme::MUTED)).child(why));
                     // A restored app pane that waits: the user's click hosts its app's window, started if need be.
                     let open = self.unfilled_app(id).map(|name| {
                         list_button(("unfilled-open", id as usize), false)
-                            .mt_2()
                             .child(self.controls.mark(format!("unfilled-open:{id}")))
                             .child(format!("Open {name}"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 drop(this.dispatch(Action::UnfilledOpen { pane: id }, this.input, window, cx))
                             }))
                     });
-                    let empty = home::empty_pane(hint.into(), id, &self.home);
-                    div().flex().flex_col().items_center().child(empty).children(open).into_any_element()
+                    let above = (why.is_some() || open.is_some()).then(|| {
+                        div().flex().flex_col().items_center().gap_2().children(why).children(open).into_any_element()
+                    });
+                    self.render_empty(home::Floor::Pane(id), above, self.caps_drawn.get(), cx)
                 }
             }
         };
@@ -8501,13 +8502,14 @@ impl Render for Workspace {
         if !cx.has_active_drag() {
             self.drop_at = None;
         }
+        // The modifiers down now light their caps in the list of an empty tab or pane.
+        let held = keycaps::held(window);
+        self.caps_drawn.set(held);
         // The main window's tab: the live tree, unless the keyboard is in a tab out's window.
         let tree = self.model.tree_at(self.model.main_at()).map(|root| self.render_node(root, cx));
         // Only while the tab on show has no panes. Its lines are built once and kept: a frame
         // that moves nothing (a terminal printing in another tab) only paints them again.
         let keep_out = self.home.borrow().keep_out();
-        // The modifiers down now light their caps in the list of an empty tab.
-        let held = keycaps::held(window);
         // Home's screen, or an empty tab of a task, a session or a workbook: the floor and what goes in it.
         let home = tree.is_none().then(|| self.render_home(self.model.home(&keep_out), held, cx));
         // The left column's width, and the drawer's: as dragged, or half the window when widened.
