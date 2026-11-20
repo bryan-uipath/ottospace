@@ -2123,9 +2123,9 @@ fn check_reorder(m: &Model) -> Result<(), String> {
         && row[1..].iter().all(|of| m.tabs.iter().any(|tab| tab.space == **of));
     ensure!(once && open, "the row is not the open spaces: {row:?}");
     ensure!(m.spaces.iter().all(|space| space.placed), "a space with no place on the row");
-    // One order: the workspaces' spaces, wherever the others are, as the list has them.
+    // One order: the workspaces' spaces shown, wherever the others are, as the list has them.
     let book = |of: &Owner| m.space_book(of).and_then(|book| m.workbooks.list.iter().position(|b| b.id == book.id));
-    let books: Vec<usize> = row.iter().filter_map(|of| book(of)).collect();
+    let books: Vec<usize> = m.shown_spaces().iter().filter_map(|space| book(&space.of)).collect();
     ensure!(books.is_sorted(), "the row's workspaces are not in the list's order: {books:?}");
     let Some(Reorder { item, to }) = m.reorder() else { return Ok(()) };
     let len = match item {
