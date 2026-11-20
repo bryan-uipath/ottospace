@@ -823,6 +823,12 @@ fn terminal_runs_a_typed_command() {
     otto.wait_for("the command's output", |o| {
         lines(o).as_array()?.iter().any(|l| l.as_str().is_some_and(|l| l.contains("otto-42"))).then_some(())
     });
+    // Programs are told of 24-bit colour and who we are, whatever the test's own environment says.
+    otto.call(json!({"cmd": "type", "text": "echo \"env-$COLORTERM-$TERM_PROGRAM\"\r"}));
+    otto.wait_for("the environment", |o| {
+        let ok = |l: &str| l == "env-truecolor-ottospace";
+        lines(o).as_array()?.iter().any(|l| l.as_str().is_some_and(ok)).then_some(())
+    });
 
     // A split halves the pane, so the grid loses columns.
     let cols = |o: &Otto| o.call(json!({"cmd": "state"}))["terminals"]["1"]["cols"].as_u64();

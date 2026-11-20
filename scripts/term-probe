@@ -1,0 +1,108 @@
+#!/bin/sh
+# A terminal test card: run it in ottospace and in another terminal side by side and compare.
+# Each row names what it tests and what a capable terminal shows.
+# Usage: scripts/term-probe [part...]   parts: env colour style glyphs box links replies (default: all)
+e=$(printf '\033')
+row() { printf '%-22s ' "$1"; shift; printf "$@"; printf '\033[0m\n'; }
+section() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+
+env() {
+section "Environment (what programs read to pick features)"
+for v in TERM COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION LANG LC_ALL LC_CTYPE; do
+  eval "val=\${$v-}"
+  row "$v" '%s' "${val:-(unset)}"
+done
+}
+
+colour() {
+section "Colour (each bar a smooth ramp; banding = no 24-bit)"
+bar() { i=0; while [ $i -lt 64 ]; do v=$((i * 4)); printf '\033[48;2;%d;%d;%dm ' $((v * $1)) $((v * $2)) $((v * $3)); i=$((i + 1)); done; }
+row "24-bit red"   '%s' "$(bar 1 0 0)"
+row "24-bit grey"  '%s' "$(bar 1 1 1)"
+row "Claude orange" '\033[38;2;215;119;87m██ rgb(215,119,87)\033[0m  \033[38;5;173m██ nearest 256-colour (173)'
+row "diff bgs"     '\033[48;2;34;92;43m + added (rgb)  \033[0m \033[48;5;22m + added (256) \033[0m \033[48;2;122;41;54m - removed (rgb) \033[0m \033[48;5;52m - removed (256) '
+row "16 colours"   '%s' "$(i=0; while [ $i -lt 8 ]; do printf '\033[4%dm  ' $i; i=$((i+1)); done; printf '\033[0m '; i=0; while [ $i -lt 8 ]; do printf '\033[10%dm  ' $i; i=$((i+1)); done)"
+row "16 as text"   '%s' "$(i=0; while [ $i -lt 8 ]; do printf '\033[3%dmAa ' $i; i=$((i+1)); done; i=0; while [ $i -lt 8 ]; do printf '\033[9%dmAa ' $i; i=$((i+1)); done)"
+}
+
+style() {
+section "Style (SGR)"
+row "bold (1)"        '\033[1mbold text\033[0m vs normal; \033[1;31mbold red\033[0m vs \033[31mred\033[0m (same hue = bold is weight)'
+row "dim (2)"         '\033[2mdim text\033[0m vs normal text   \033[2;32mdim green\033[0m vs \033[32mgreen'
+row "italic (3)"      '\033[3mitalic text'
+row "underline (4)"   '\033[4msingle\033[0m \033[4:2mdouble\033[0m \033[4:3mcurly\033[0m \033[4:4mdotted\033[0m \033[4:5mdashed'
+row "underline colour" '\033[4;58:2::255:80:80mred line, white text\033[0m  \033[4:3;58;5;33mcurly blue line'
+row "blink (5)"       '\033[5mblinks (or stays still)'
+row "reverse (7)"     '\033[7mreversed\033[0m  \033[7;32mreversed green'
+row "hidden (8)"      'between bars: |\033[8mSECRET\033[0m| (blank)'
+row "strike (9)"      '\033[9mstruck through'
+row "overline (53)"   '\033[53moverlined'
+}
+
+glyphs() {
+section "Glyphs (the ruler's bars must line up with each row's bars)"
+row "ruler"          '|123456789|123456789|'
+row "ascii"          '|abcdefghi|abcdefghi|'
+row "claude glyphs"  '|⏺ ⎿ ✻ ✳ ·|⧉ ↯ ● → ✓|'
+row "braille"        '|⠁⠃⠇⡇⣇⣧⣷⣿⠿|⠋⠙⠹⠸⠼⠴⠦⠧⠇|'
+row "cjk (2 each)"   '|日本語漢 |中文字符 |'
+row "emoji (2 each)" '|👍🚀✅🎉 |🔥💡📦🧪 |'
+row "zwj, vs16"      '|👨‍👩‍👧   ❤️ ✌️ |'
+row "combining"      '|cafe\314\201 n\314\203o  |e\314\201e\314\201e\314\201e\314\201     |'
+row "powerline/nerd" '|\356\202\260\356\202\262\356\202\240\357\204\241\357\220\230    |'
+}
+
+box() {
+section "Box drawing and blocks (no gaps between rows or cells)"
+printf '  ╭────────╮ ┌──┬──┐ ▐▛███▜▌ ░▒▓█▀▄\n'
+printf '  │ inside │ │  │  │ ▝▜█████▛▘ ▌▐▖▗▘▝\n'
+printf '  ╰────────╯ └──┴──┘  ▘▘ ▝▝  ━┃┏┓┗┛\n'
+printf '  ████████████████ ═══════ ║║║ ╱╲╳\n'
+printf '  ████████████████ ┄┄┄┈┈┈ ⎡⎢⎣ ⎤⎥⎦\n'
+}
+
+links() {
+section "Links and protocols"
+row "OSC 8 link"     '\033]8;;https://example.com\033\\example.com\033]8;;\033\\ (drawn as a link? ⌘-click opens?)'
+row "cursor"         'beam now \033[6 q(type to see)\033[0 q — reset to default'
+printf '\033]0;term-probe title\007'
+row "title (OSC 0)"  'set to "term-probe title"'
+}
+
+replies() {
+[ -t 0 ] && [ -t 1 ] || { section "Replies: skipped, not a terminal"; return; }
+section "Replies (what the terminal answers when a program asks)"
+old=$(stty -g)
+trap 'stty "$old"' EXIT
+trap 'exit 130' INT TERM HUP
+stty -echo -icanon min 0 time 4
+ask() {
+  printf '%s' "$2"
+  reply=$(dd bs=256 count=1 2>/dev/null | od -An -c | tr -d '\n' | tr -s ' ' | sed 's/^ //; s/033/ESC/g')
+  row "$1" '%s' "${reply:-(no reply)}"
+}
+ask "DA1"                  "$e[c"
+ask "DA2"                  "$e[>c"
+ask "XTVERSION"            "$e[>q"
+ask "fg colour OSC 10"     "$e]10;?$e\\"
+ask "bg colour OSC 11"     "$e]11;?$e\\"
+ask "cursor colour OSC 12" "$e]12;?$e\\"
+ask "palette 1 OSC 4"      "$e]4;1;?$e\\"
+ask "kitty keys CSI ? u"   "$e[?u"
+ask "sync output ?2026"    "$e[?2026\$p"
+ask "graphemes ?2027"      "$e[?2027\$p"
+ask "theme notify ?2031"   "$e[?2031\$p"
+ask "focus events ?1004"   "$e[?1004\$p"
+ask "cell px CSI 16t"      "$e[16t"
+ask "text px CSI 14t"      "$e[14t"
+stty "$old"
+}
+
+[ $# -eq 0 ] && set -- env colour style glyphs box links replies
+for part in "$@"; do
+  case $part in
+    env|colour|style|glyphs|box|links|replies) "$part" ;;
+    *) echo "term-probe: no part '$part' (env colour style glyphs box links replies)" >&2; exit 2 ;;
+  esac
+done
+printf '\nterm-probe done: %s\n' "$*"
