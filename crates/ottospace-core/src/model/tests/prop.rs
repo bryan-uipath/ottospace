@@ -3142,7 +3142,7 @@ fn check_offers(m: &Model) -> Result<(), String> {
     }
     // A list is open only under a chip that groups offers.
     if let Some(pane) = m.offer_list {
-        ensure!(m.offers_at(pane).len() > 1, "pane {pane}'s offer list is open with fewer than two offers");
+        ensure!(m.offer_groups(pane), "pane {pane}'s offer list is open under no chip that groups offers");
     }
     let state = serde_json::to_string(m).unwrap_or_default();
     ensure!(!state.contains(OFFERED), "an offered window's title reached the state");

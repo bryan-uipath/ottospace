@@ -77,6 +77,11 @@ impl Model {
         self.offers.iter().rev().filter(|offer| offer.pane == pane).collect()
     }
 
+    /// True if `pane`'s chip groups offers: several, and not a pane that waits (it has no chip).
+    pub fn offer_groups(&self, pane: PaneId) -> bool {
+        self.offers_at(pane).len() > 1 && !self.offer_panes.contains(&pane)
+    }
+
     /// True if `pane` is an empty pane that waits for a window its app remade: it offers it.
     pub fn offer_waits(&self, pane: PaneId) -> bool {
         self.offer_panes.contains(&pane) && self.offer_of(pane).is_some()
@@ -121,8 +126,7 @@ impl Model {
             Action::OfferDismiss { window } => self.offers.retain(|offer| offer.window != window),
             // Only a chip that groups offers has a list; ▾ again closes it.
             Action::OfferList { pane } => {
-                let open = pane.filter(|id| self.offer_list != Some(*id) && self.offers_at(*id).len() > 1);
-                self.offer_list = open;
+                self.offer_list = pane.filter(|id| self.offer_list != Some(*id) && self.offer_groups(*id));
             }
             // The shell's alone from here: a key or click of the user's reports no window.
             _ if self.by_user => {}
@@ -187,7 +191,7 @@ impl Model {
             }
         }
         // A list lasts while its chip groups offers.
-        self.offer_list = self.offer_list.filter(|id| self.offers_at(*id).len() > 1);
+        self.offer_list = self.offer_list.filter(|id| self.offer_groups(*id));
     }
 }
 
@@ -397,7 +401,14 @@ mod tests {
         // ▾ again closes it.
         m.update(new_window(1, 12, "d").sent_by(Origin::System));
         m.update(list.clone());
-        m.update(list);
+        m.update(list.clone());
         assert_eq!(m.offer_list, None);
+        // Its pane's window went: the pane waits, with no chip, so no list.
+        m.update(list.clone());
+        m.update(Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System));
+        assert!(m.offer_waits(1));
+        assert_eq!(m.offer_list, None);
+        m.update(list);
+        assert_eq!(m.offer_list, None, "a waiting pane has no list");
     }
 }
