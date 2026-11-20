@@ -101,9 +101,13 @@ fn card(card: Card) -> Div {
 fn pointed(over: Rc<dyn Fn(&bool, &mut Window, &mut App)>) -> impl IntoElement {
     let listen = move |bounds: gpui::Bounds<gpui::Pixels>, _: (), window: &mut Window, _: &mut App| {
         let moved = over.clone();
+        // Measured from the window's foot, where the card sits: a panel grown since this paint (to
+        // fit its card, opened upward) moved the card down by as much. Else it reads as left, and closes.
+        let painted = window.bounds().size.height;
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble {
-                moved(&bounds.contains(&event.position), window, cx);
+                let at = event.position - point(px(0.), window.bounds().size.height - painted);
+                moved(&bounds.contains(&at), window, cx);
             }
         });
         window.on_mouse_event(move |_: &MouseExitEvent, phase, window, cx| {
