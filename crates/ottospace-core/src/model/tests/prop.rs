@@ -556,6 +556,19 @@ impl Gen<'_> {
         (0..self.rng.below(4)).map(|_| repo(self)).collect()
     }
 
+    /// Repositories gh might list: some valid, the dialog's own name half the time.
+    fn listed(&mut self) -> Vec<crate::clone::Listed> {
+        let names = ["hello", "app", "x.y_z"];
+        let make = |g: &mut Self| crate::clone::Listed {
+            remote: crate::clone::Remote { owner: "octo".into(), name: g.rng.pick(&names).into() },
+            description: g.text(),
+            private: g.rng.coin(),
+            fork: g.rng.coin(),
+            archived: g.rng.coin(),
+        };
+        (0..self.rng.below(4)).map(|_| make(self)).collect()
+    }
+
     fn repo_dirs(&mut self) -> RepoDirs {
         // `/code`: a folder of repositories, from the old settings: a group.
         let dir = |g: &mut Self| if g.rng.one_in(4) { "/code".to_string() } else { g.name(DIRS) };
@@ -1113,6 +1126,18 @@ const MAKERS: &[Make] = &[
         let failure = g.rng.pick(&[Failure::NoGh, Failure::DirMissing, Failure::Exists, Failure::Cancelled]);
         let result = if g.rng.coin() { Ok(g.repos()) } else { Err(failure) };
         Action::CloneDone { id: g.rng.below(3) as u64, result }
+    },
+    |g| {
+        let result = match g.rng.coin() {
+            true => Ok((g.listed(), vec!["octo".to_string()])),
+            false => Err(g.text()),
+        };
+        let here = vec![("octo/hello".to_string(), g.name(DIRS))];
+        Action::CloneListed { result, here }
+    },
+    |g| {
+        let q = g.m.clone.as_ref().and_then(|dialog| dialog.search()).unwrap_or_else(|| g.text());
+        Action::CloneFound { q, result: Ok(g.listed()) }
     },
     |g| Action::OpenRepo { path: g.repo_path(), axis: g.axis() },
     |g| Action::RepoClick { path: g.repo_path(), axis: g.axis() },
@@ -5026,6 +5051,10 @@ impl Run {
                     ensure!(inside, "cloned {remote:?} into {dest}, not one name inside {dir}");
                     ensure!(m.cloning.as_ref().is_some_and(|job| job.dest == *dest), "a clone with no job");
                 }
+                Effect::CloneList => {
+                    let opens = matches!(action, Action::CloneOpen | Action::RowMenuChoose { .. });
+                    ensure!(user && opens && m.clone.is_some(), "{origin:?}'s {action:?} listed repositories");
+                }
                 Effect::CloneCancel { id } => {
                     ensure!(user && matches!(action, Action::CloneClose { cancel: true }), "{origin:?} cancelled {id}");
                 }
@@ -5710,6 +5739,8 @@ fn code(sent: &Envelope) -> String {
         "Event",
         "ColorRule",
         "PickWindow",
+        "Listed",
+        "Remote",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("verb", "Verb"),

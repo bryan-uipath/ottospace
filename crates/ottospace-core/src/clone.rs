@@ -174,8 +174,94 @@ pub fn one_line(text: &str) -> String {
     out
 }
 
+/// The user's repositories and their organisations', most recently pushed first: one GraphQL
+/// read, a fixed text (`gh api graphql -f query=…`).
+pub const LIST_QUERY: &str = "query{viewer{login organizations(first:20){nodes{login}} \
+repositories(first:100,orderBy:{field:PUSHED_AT,direction:DESC},\
+ownerAffiliations:[OWNER,ORGANIZATION_MEMBER,COLLABORATOR]){nodes{nameWithOwner description isPrivate isFork isArchived}}}}";
+/// A search by name among those owners' repositories: the fixed text, and `q` its one variable
+/// (`-f q=…`: a string, never read as a file or a number).
+pub const SEARCH_QUERY: &str = "query($q:String!){search(query:$q,type:REPOSITORY,first:30)\
+{nodes{...on Repository{nameWithOwner description isPrivate isFork isArchived}}}}";
+
+/// The most rows the dialog lists, and of a description's characters shown.
+pub const MAX_ROWS: usize = 50;
+const MAX_DESCRIPTION: usize = 120;
+/// The longest answer of gh's that is read.
+pub const MAX_BYTES: usize = 1 << 20;
+
+/// A repository gh listed: its checked name, and what is drawn of it. Its description is other
+/// people's text: cleaned, one line, cut short, drawn only.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listed {
+    pub remote: Remote,
+    pub description: String,
+    pub private: bool,
+    pub fork: bool,
+    pub archived: bool,
+}
+
+/// gh's answer to `LIST_QUERY` (the repositories, and the owners: the user's login and their
+/// organisations') or `SEARCH_QUERY` (the repositories). A name that is not a checked one is
+/// left out, never shown.
+pub fn parse_listed(text: &str) -> Result<(Vec<Listed>, Vec<String>), &'static str> {
+    if text.len() > MAX_BYTES {
+        return Err("gh's answer is too long");
+    }
+    let json: serde_json::Value = serde_json::from_str(text).map_err(|_| "gh's answer does not read")?;
+    let data = &json["data"];
+    let viewer = &data["viewer"];
+    let nodes = viewer["repositories"]["nodes"].as_array().or(data["search"]["nodes"].as_array());
+    let Some(nodes) = nodes else { return Err("gh's answer does not read") };
+    let listed = nodes.iter().filter_map(|node| {
+        let (owner, name) = node["nameWithOwner"].as_str()?.split_once('/')?;
+        let flag = |key: &str| node[key].as_bool().unwrap_or(false);
+        let description = one_line(node["description"].as_str().unwrap_or(""));
+        let description = match description.chars().count() > MAX_DESCRIPTION {
+            true => description.chars().take(MAX_DESCRIPTION).chain(['…']).collect(),
+            false => description,
+        };
+        let (private, fork, archived) = (flag("isPrivate"), flag("isFork"), flag("isArchived"));
+        Some(Listed { remote: Remote::new(owner, name)?, description, private, fork, archived })
+    });
+    let orgs = viewer["organizations"]["nodes"].as_array().into_iter().flatten().map(|org| &org["login"]);
+    let owners = std::iter::once(&viewer["login"]).chain(orgs).filter_map(|login| login.as_str());
+    let owners = owners.filter(|login| valid_owner(login)).map(str::to_string).take(21).collect();
+    Ok((listed.take(100).collect(), owners))
+}
+
+/// The search for what is typed, among `owners`' repositories: `<words> in:name user:<owner>…`.
+/// None for a line that is a repository already, too short, or has anything but a name's
+/// characters: nothing of it but those reaches GitHub's search.
+pub fn search_q(typed: &str, owners: &[String]) -> Option<String> {
+    let typed = typed.trim();
+    let ok = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
+    let plain = (2..=MAX_NAME).contains(&typed.len()) && typed.chars().all(ok) && !typed.starts_with('-');
+    if !plain || owners.is_empty() {
+        return None;
+    }
+    let owners: Vec<String> = owners.iter().filter(|o| valid_owner(o)).map(|o| format!("user:{o}")).collect();
+    Some(format!("{typed} in:name {}", owners.join(" ")))
+}
+
+/// How the list came: not yet, read, or why not.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Load {
+    #[default]
+    Loading,
+    Read,
+    Failed(String),
+}
+
+/// A row of the dialog: a repository, and the listed checkout whose remote it is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Row {
+    pub listed: Listed,
+    pub here: Option<String>,
+}
+
 /// The dialog: what is typed, the row the keys are on, what it says (a refusal or a failure),
-/// and the folder the user said may be made (after `Failure::DirMissing`).
+/// the folder the user said may be made (after `Failure::DirMissing`), and what gh listed and found.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Dialog {
     pub provider: Provider,
@@ -183,16 +269,68 @@ pub struct Dialog {
     pub selected: usize,
     pub said: Option<String>,
     pub make_dir: Option<String>,
+    pub load: Load,
+    pub listed: Vec<Listed>,
+    pub owners: Vec<String>,
+    /// What a search found, and for which `q`.
+    pub found: Option<(String, Vec<Listed>)>,
+    /// Each listed checkout's GitHub remote (`owner/name`, lower case) and its path.
+    pub here: Vec<(String, String)>,
 }
 
 impl Dialog {
     pub fn new(provider: Provider) -> Dialog {
-        Dialog { provider, query: Field::new("", crate::model::MAX_FILTER), selected: 0, said: None, make_dir: None }
+        let query = Field::new("", crate::model::MAX_FILTER);
+        Dialog {
+            provider,
+            query,
+            selected: 0,
+            said: None,
+            make_dir: None,
+            load: Load::Loading,
+            listed: Vec::new(),
+            owners: Vec::new(),
+            found: None,
+            here: Vec::new(),
+        }
     }
 
-    /// Its rows: the repository the line names, if it names one.
-    pub fn rows(&self) -> Vec<Remote> {
-        parse(self.query.text()).into_iter().collect()
+    /// The search to run for what is typed now, if any.
+    pub fn search(&self) -> Option<String> {
+        search_q(self.query.text(), &self.owners)
+    }
+
+    /// Its rows: the repository the line names (if not among them), then those listed whose
+    /// `owner/name` has what is typed in it (all, most recently pushed first, with nothing
+    /// typed), then what the search for it found. At most `MAX_ROWS`.
+    pub fn rows(&self) -> Vec<Row> {
+        let typed = self.query.text().trim().to_lowercase();
+        let found = self.found.as_ref().filter(|(q, _)| Some(q) == self.search().as_ref()).map(|(_, found)| found);
+        let pasted = parse(self.query.text()).map(|remote| Listed {
+            remote,
+            description: String::new(),
+            private: false,
+            fork: false,
+            archived: false,
+        });
+        let matching = self.listed.iter().filter(|listed| listed.remote.slug().to_lowercase().contains(&typed));
+        let mut rows: Vec<Listed> = Vec::new();
+        for listed in matching.chain(found.into_iter().flatten()).cloned() {
+            if !rows.iter().any(|row| row.remote == listed.remote) {
+                rows.push(listed);
+            }
+        }
+        if let Some(pasted) =
+            pasted.filter(|p| !rows.iter().any(|row| row.remote.slug().eq_ignore_ascii_case(&p.remote.slug())))
+        {
+            rows.insert(0, pasted);
+        }
+        rows.truncate(MAX_ROWS);
+        let here = |listed: &Listed| {
+            let slug = listed.remote.slug().to_lowercase();
+            self.here.iter().find(|(remote, _)| *remote == slug).map(|(_, path)| path.clone())
+        };
+        rows.into_iter().map(|listed| Row { here: here(&listed), listed }).collect()
     }
 }
 
@@ -323,5 +461,72 @@ mod tests {
         assert_eq!(Failure::DirMissing.explain(&remote, dest), "/Users/me/code does not exist: ↵ makes it and clones");
         let long = one_line(&"x".repeat(500));
         assert_eq!(long.chars().count(), MAX_SAID + 1);
+    }
+
+    #[test]
+    fn ghs_list_is_data_checked_names_and_clean_descriptions() {
+        let answer = r#"{"data":{"viewer":{"login":"me","organizations":{"nodes":[{"login":"acme"},{"login":"-bad"}]},
+            "repositories":{"nodes":[
+              {"nameWithOwner":"me/app","description":"An app\u001b[31m\nrm -rf / \u0007","isPrivate":true,"isFork":false,"isArchived":false},
+              {"nameWithOwner":"acme/../etc","description":null},
+              {"nameWithOwner":"acme/.hidden"},
+              {"nameWithOwner":"acme/tool","description":"x","isFork":true,"isArchived":true}]}}}}"#;
+        let (listed, owners) = parse_listed(answer).unwrap();
+        let slugs: Vec<String> = listed.iter().map(|l| l.remote.slug()).collect();
+        assert_eq!(
+            (slugs, owners),
+            (vec!["me/app".to_string(), "acme/tool".into()], vec!["me".to_string(), "acme".into()])
+        );
+        assert_eq!(listed[0].description, "An app rm -rf /");
+        assert!(listed[0].private && listed[1].fork && listed[1].archived);
+        let long = format!(
+            r#"{{"data":{{"search":{{"nodes":[{{"nameWithOwner":"o/x","description":"{}"}}]}}}}}}"#,
+            "d".repeat(500)
+        );
+        assert_eq!(parse_listed(&long).unwrap().0[0].description.chars().count(), MAX_DESCRIPTION + 1);
+        assert!(parse_listed("not json").is_err() && parse_listed(&" ".repeat(MAX_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn a_search_is_a_name_among_the_owners_and_nothing_else_of_the_line() {
+        let owners = vec!["me".to_string(), "acme".into()];
+        assert_eq!(search_q("app", &owners).as_deref(), Some("app in:name user:me user:acme"));
+        for typed in ["a", "app repo:evil/x", "app user:evil", "-app", "octo/app", "a\"b", "", "é"] {
+            assert_eq!(search_q(typed, &owners), None, "{typed:?}");
+        }
+        assert_eq!(search_q("app", &[]), None);
+    }
+
+    #[test]
+    fn the_rows_are_the_paste_then_the_listed_that_match_then_what_the_search_found() {
+        let listed = |slug: &str| {
+            let (owner, name) = slug.split_once('/').unwrap();
+            Listed {
+                remote: Remote::new(owner, name).unwrap(),
+                description: String::new(),
+                private: false,
+                fork: false,
+                archived: false,
+            }
+        };
+        let mut dialog = Dialog::new(Provider::GitHub);
+        (dialog.listed, dialog.owners) =
+            (vec![listed("me/app"), listed("acme/api"), listed("me/notes")], vec!["me".into()]);
+        dialog.here = vec![("me/notes".into(), "/code/notes".into())];
+        let slugs = |d: &Dialog| d.rows().iter().map(|r| r.listed.remote.slug()).collect::<Vec<_>>();
+        assert_eq!(slugs(&dialog), ["me/app", "acme/api", "me/notes"]);
+        assert_eq!(dialog.rows()[2].here.as_deref(), Some("/code/notes"));
+        dialog.query = Field::new("ap", 200);
+        assert_eq!(slugs(&dialog), ["me/app", "acme/api"]);
+        // Found for this line: after the listed, once each; for another line: not shown.
+        dialog.found = Some((dialog.search().unwrap(), vec![listed("me/apple"), listed("me/app")]));
+        assert_eq!(slugs(&dialog), ["me/app", "acme/api", "me/apple"]);
+        dialog.query = Field::new("api", 200);
+        assert_eq!(slugs(&dialog), ["acme/api"]);
+        // A paste not listed comes first; one listed is its row.
+        dialog.query = Field::new("other/thing", 200);
+        assert_eq!(slugs(&dialog), ["other/thing"]);
+        dialog.query = Field::new("https://github.com/ME/App", 200);
+        assert_eq!(slugs(&dialog), ["ME/App"]);
     }
 }

@@ -886,6 +886,17 @@ pub enum Action {
         id: u64,
         result: Result<Vec<Repo>, crate::clone::Failure>,
     },
+    /// What gh listed for the open dialog (its repositories, and the owners: the user's login and
+    /// organisations), or why not; and each listed checkout's GitHub remote and path. The shell's alone.
+    CloneListed {
+        result: Result<(Vec<crate::clone::Listed>, Vec<String>), String>,
+        here: Vec<(String, String)>,
+    },
+    /// What the search `q` (`Dialog::search`) found, or why not. The shell's alone.
+    CloneFound {
+        q: String,
+        result: Result<Vec<crate::clone::Listed>, String>,
+    },
     /// Stop listing the repository or group at `path`: its entry comes off the settings' `repos`,
     /// if it is named there as itself. Nothing on disk changes.
     RepoRemove {
@@ -2448,6 +2459,8 @@ impl Action {
             | Action::RepoPickFolder
             | Action::CloneProgress { .. }
             | Action::CloneDone { .. }
+            | Action::CloneListed { .. }
+            | Action::CloneFound { .. }
             | Action::RepoRemove { .. }
             | Action::WorktreeDelete { .. }
             | Action::OpenRepo { .. }
@@ -2889,6 +2902,8 @@ impl Action {
             | Action::CloneClose { .. }
             | Action::CloneProgress { .. }
             | Action::CloneDone { .. }
+            | Action::CloneListed { .. }
+            | Action::CloneFound { .. }
             | Action::RepoRemove { .. }
             | Action::WorktreeDelete { .. }
             | Action::OpenRepo { .. }
@@ -3243,6 +3258,8 @@ pub enum Effect {
     CloneCancel {
         id: u64,
     },
+    /// List the user's repositories for the clone dialog (`clone::LIST_QUERY`), then `CloneListed`.
+    CloneList,
     /// Say `text` in the toast as information: what the user's own step did.
     Told {
         text: String,
@@ -4427,7 +4444,12 @@ impl Model {
             Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "clone") => {
                 Some(crate::clone::USERS_ALONE)
             }
-            Action::CloneProgress { .. } | Action::CloneDone { .. } if origin == Origin::Socket => {
+            Action::CloneProgress { .. }
+            | Action::CloneDone { .. }
+            | Action::CloneListed { .. }
+            | Action::CloneFound { .. }
+                if origin == Origin::Socket =>
+            {
                 Some(crate::clone::SHELLS_ALONE)
             }
             // ↵ on a meeting joins it, as its Join does.
@@ -5259,6 +5281,8 @@ impl Model {
                 | Action::FocusList
                 | Action::RepoAdd { .. }
                 | Action::CloneDone { .. }
+                | Action::CloneListed { .. }
+                | Action::CloneFound { .. }
                 | Action::SessionClick { .. }
                 | Action::CalendarDay { .. }
         );
@@ -5433,6 +5457,8 @@ impl Model {
             Action::CloneClose { cancel } => self.clone_close(cancel, effects),
             Action::CloneProgress { id, line } => self.clone_progress(id, &line),
             Action::CloneDone { id, result } => self.clone_done(id, result, effects),
+            Action::CloneListed { result, here } => self.clone_listed(result, here),
+            Action::CloneFound { q, result } => self.clone_found(q, result),
             // A repository a live task works in: asked first (the trash is one hover away).
             Action::RepoRemove { path } if self.repo_worked_in(&path) && self.repo_dirs.to_remove(&path).is_ok() => {
                 self.leave(effects);
@@ -9363,9 +9389,13 @@ impl Model {
     /// repository at `dir` joins the end of the list unless it is listed already, and list mode
     /// selects its first row. Not a repository's own folder: a notice.
     fn repo_add(&mut self, dir: String, found: Vec<Repo>, effects: &mut Vec<Effect>) {
-        if !self.repo_list(dir.clone(), found, effects) {
-            return;
+        if self.repo_list(dir.clone(), found, effects) {
+            self.repo_select(dir, effects);
         }
+    }
+
+    /// The Repos section open, list mode on the row of the listed repository at `dir`.
+    pub(super) fn repo_select(&mut self, dir: String, effects: &mut Vec<Effect>) {
         self.leave(effects);
         self.sidebar = Some(Section::Repos);
         self.repos_folded.retain(|folded| *folded != dir);
@@ -10116,6 +10146,8 @@ mod tests {
         Action::CloneClose { .. },
         Action::CloneProgress { .. },
         Action::CloneDone { .. },
+        Action::CloneListed { .. },
+        Action::CloneFound { .. },
         Action::RepoRemove { .. },
         Action::OpenRepo { .. },
         Action::RepoClick { .. },
@@ -10485,6 +10517,8 @@ mod tests {
             Action::CloneClose { cancel: true },
             Action::CloneProgress { id: 1, line: text() },
             Action::CloneDone { id: 1, result: Err(crate::clone::Failure::NoGh) },
+            Action::CloneListed { result: Err(text()), here: Vec::new() },
+            Action::CloneFound { q: text(), result: Ok(Vec::new()) },
             Action::RepoRemove { path: text() },
             Action::OpenRepo { path: text(), axis: Right },
             Action::RepoClick { path: text(), axis: Right },
@@ -10899,7 +10933,12 @@ mod tests {
             | Action::CloneMove { .. }
             | Action::CloneChoose { .. }
             | Action::CloneClose { .. } => Some(crate::clone::USERS_ALONE),
-            Action::CloneProgress { .. } | Action::CloneDone { .. } if origin == Origin::Socket => {
+            Action::CloneProgress { .. }
+            | Action::CloneDone { .. }
+            | Action::CloneListed { .. }
+            | Action::CloneFound { .. }
+                if origin == Origin::Socket =>
+            {
                 Some(crate::clone::SHELLS_ALONE)
             }
             _ => None,

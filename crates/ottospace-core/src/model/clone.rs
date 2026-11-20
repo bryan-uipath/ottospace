@@ -2,11 +2,13 @@
 //! into `<clone_dir>/<name>` by the shell, and listed as the user's own add (`repo_add`).
 
 use super::{Effect, Model, Repo};
-use crate::clone::{self, Dialog, Failure, Job, Provider};
+use crate::clone::{self, Dialog, Failure, Job, Listed, Load, Provider};
 
 impl Model {
-    /// From GitHub…: the dialog, empty, or showing the clone on its way.
+    /// From GitHub…: the dialog, empty, or showing the clone on its way; the shell lists the
+    /// user's repositories for it.
     pub(crate) fn clone_open(&mut self, effects: &mut Vec<Effect>) {
+        effects.push(Effect::CloneList);
         self.leave(effects);
         self.list = None;
         let mut dialog = Dialog::new(Provider::GitHub);
@@ -27,8 +29,8 @@ impl Model {
     /// Where the row the keys are on would be cloned, in full: shown before ↵.
     pub fn clone_destination(&self) -> Option<String> {
         let dialog = self.clone.as_ref()?;
-        let remote = dialog.rows().into_iter().nth(dialog.selected)?;
-        clone::destination(self.repo_dirs.clone.as_deref()?, &remote.name)
+        let row = dialog.rows().into_iter().nth(dialog.selected)?;
+        clone::destination(self.repo_dirs.clone.as_deref()?, &row.listed.remote.name)
     }
 
     /// ↵: the row cloned into `<clone_dir>/<name>`. One clone at a time; none with no folder
@@ -36,10 +38,16 @@ impl Model {
     pub(super) fn clone_choose(&mut self, index: Option<usize>, effects: &mut Vec<Effect>) {
         let Some(dialog) = &mut self.clone else { return };
         let rows = dialog.rows();
-        let Some(remote) = rows.get(index.unwrap_or(dialog.selected)).cloned() else {
+        let Some(row) = rows.get(index.unwrap_or(dialog.selected)).cloned() else {
             dialog.said = Some(clone::NOT_A_REPO.into());
             return;
         };
+        // Already here: ↵ goes to it.
+        if let Some(path) = row.here {
+            self.clone = None;
+            return self.repo_select(path, effects);
+        }
+        let remote = row.listed.remote;
         if self.cloning.is_some() {
             dialog.said = Some(clone::ONE_AT_A_TIME.into());
             return;
@@ -71,6 +79,32 @@ impl Model {
             job.cancelled = true;
             effects.push(Effect::CloneCancel { id: job.id });
         }
+    }
+
+    /// What gh listed, or why not, and each listed checkout's GitHub remote. Kept only while
+    /// the dialog is open.
+    pub(super) fn clone_listed(
+        &mut self,
+        result: Result<(Vec<Listed>, Vec<String>), String>,
+        here: Vec<(String, String)>,
+    ) {
+        let Some(dialog) = &mut self.clone else { return };
+        match result {
+            Ok((listed, owners)) => (dialog.load, dialog.listed, dialog.owners) = (Load::Read, listed, owners),
+            Err(why) => dialog.load = Load::Failed(clone::one_line(&why)),
+        }
+        dialog.here = here;
+        dialog.selected = 0;
+    }
+
+    /// What the search `q` found: kept while it is still the one for what is typed.
+    pub(super) fn clone_found(&mut self, q: String, result: Result<Vec<Listed>, String>) {
+        let Some(dialog) = self.clone.as_mut().filter(|dialog| dialog.search().as_ref() == Some(&q)) else { return };
+        let before = dialog.rows().get(dialog.selected).map(|row| row.listed.remote.clone());
+        dialog.found = Some((q, result.unwrap_or_default()));
+        // The keys stay on the row they were on.
+        let rows = dialog.rows();
+        dialog.selected = before.and_then(|r| rows.iter().position(|row| row.listed.remote == r)).unwrap_or(0);
     }
 
     /// gh's last line, for the dialog: cleaned, one line.
@@ -188,7 +222,8 @@ mod tests {
     #[test]
     fn a_pasted_repository_is_one_row_and_its_destination_shows_before_enter() {
         let mut m = dialog("https://github.com/octo/hello.git");
-        assert_eq!(m.clone.as_ref().unwrap().rows(), [hello()]);
+        let rows: Vec<Remote> = m.clone.as_ref().unwrap().rows().into_iter().map(|row| row.listed.remote).collect();
+        assert_eq!(rows, [hello()]);
         assert_eq!(m.clone_destination().as_deref(), Some("/Users/me/code/hello"));
         let effects = m.update(Action::CloneChoose { index: None });
         let clone = Effect::Clone {
@@ -359,5 +394,48 @@ mod tests {
             _ => None,
         });
         assert!(toasts.clone().all(|text| !text.contains(secret)), "{effects:?}");
+    }
+
+    #[test]
+    fn the_dialog_lists_the_users_repositories_and_enter_on_one_already_here_goes_to_it() {
+        let mut m = repos();
+        let notes = "/code/notes".to_string();
+        m.update(
+            Action::SetRepos {
+                repos: vec![Repo { path: notes.clone(), name: "notes".into(), branch: None, worktrees: Vec::new() }],
+            }
+            .sent_by(Origin::System),
+        );
+        assert_eq!(m.update(Action::CloneOpen), [Effect::CloneList]);
+        let listed = |name: &str| clone::Listed {
+            remote: Remote::new("me", name).unwrap(),
+            description: "d".into(),
+            private: true,
+            fork: false,
+            archived: false,
+        };
+        let result = Ok((vec![listed("app"), listed("notes")], vec!["me".into()]));
+        m.update(
+            Action::CloneListed { result, here: vec![("me/notes".into(), notes.clone())] }.sent_by(Origin::System),
+        );
+        assert_eq!(m.clone.as_ref().unwrap().load, clone::Load::Read);
+        // A search for another line, or for none open, is not kept.
+        typed(&mut m, "ap");
+        m.update(
+            Action::CloneFound { q: "zz in:name user:me".into(), result: Ok(vec![listed("zz")]) }
+                .sent_by(Origin::System),
+        );
+        assert!(m.clone.as_ref().unwrap().found.is_none());
+        m.update(
+            Action::CloneFound { q: "ap in:name user:me".into(), result: Ok(vec![listed("apex")]) }
+                .sent_by(Origin::System),
+        );
+        let rows: Vec<String> = m.clone.as_ref().unwrap().rows().iter().map(|r| r.listed.remote.slug()).collect();
+        assert_eq!(rows, ["me/app", "me/apex"]);
+        // ↵ on one already here: no clone, its row selected.
+        m.update(Action::FieldEdit { edit: Edit::SelectAll });
+        typed(&mut m, "notes");
+        assert!(m.update(Action::CloneChoose { index: None }).iter().all(|e| !matches!(e, Effect::Clone { .. })));
+        assert_eq!((m.clone.is_none(), m.list_rows().get(m.list.unwrap_or(99))), (true, Some(&ListRow::Repo(notes))));
     }
 }
