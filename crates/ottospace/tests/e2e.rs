@@ -1144,7 +1144,7 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 /// The user's right click on a linked worktree's row: its menu, Delete worktree…, the question
-/// (No its default), then git removes a clean one and keeps its branch; a dirty one stays, git's reason said.
+/// (↵ deletes, Esc keeps), then git removes a clean one and keeps its branch; a dirty one stays, git's reason said.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_one() {

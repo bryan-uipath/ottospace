@@ -3602,10 +3602,12 @@ impl Workspace {
             }
         }
         if let Some(confirm) = &self.model.confirm {
-            let why = match confirm {
-                _ if confirm.paste.is_some() => clip::USERS_ALONE,
-                _ if confirm.delete.is_some() => ottospace_core::repos::DELETE_USERS,
-                _ => CONFIRM_UP,
+            let why = if confirm.paste.is_some() {
+                clip::USERS_ALONE
+            } else if confirm.delete.is_some() {
+                ottospace_core::repos::DELETE_USERS
+            } else {
+                CONFIRM_UP
             };
             return self.confirm_answer(key, Origin::Socket).is_none().then_some(why);
         }
