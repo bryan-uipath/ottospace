@@ -14,7 +14,7 @@ use gpui::{
 };
 use ottospace_core::bug::{Mark, RepoFacts, Report};
 use ottospace_core::settings::{Settings, expand_home};
-use ottospace_core::{Action, Origin, PaneId, theme};
+use ottospace_core::{Action, Kind, Origin, PaneId, theme};
 
 use crate::{Workspace, collect, config, dialog, ns_view, rect, sneak, ui};
 
@@ -44,7 +44,7 @@ impl Workspace {
     /// starts. Only the user's: `origin` is theirs, or the core refuses.
     pub(crate) fn bug_start(&mut self, origin: Origin, window: &Window, cx: &mut Context<Self>) -> Result<(), String> {
         // One at a time: a second press while one is open takes no second picture.
-        if self.model.bug.is_some() {
+        if self.model.bug.is_some() || self.bug_pending {
             return Ok(());
         }
         let size = window.viewport_size();
@@ -52,7 +52,7 @@ impl Workspace {
         let controls: Vec<(String, [f64; 4])> =
             self.controls.drawn_with("").into_iter().map(|(id, b)| (id, rect(b).map(f64::from))).collect();
         let panes = self.bug_panes();
-        let drawn = (panes.clone(), size);
+        let drawn = (panes.clone(), self.bug_apps(), size);
         let word = collect::new_word().ok_or("bug report: the system's random source could not be read")?;
         let word_kept = word.clone();
         let start = move |picture| Action::BugStart {
@@ -70,6 +70,7 @@ impl Workspace {
         let scale = window.scale_factor();
         let pixels = |v: gpui::Pixels| (f32::from(v) * scale).round().max(1.0) as usize;
         let (w, h) = (pixels(size.width), pixels(size.height));
+        self.bug_pending = true;
         cx.spawn_in(window, async move |this, cx| {
             let shot = cx.background_executor().spawn(async move {
                 let rgba = ottospace_mac::capture::window_rgba(u32::try_from(id?).ok()?, w, h).ok()?;
@@ -77,9 +78,11 @@ impl Workspace {
             });
             let shot = shot.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                // The panes moved or the window changed while it was taken: what it blanks would
-                // miss them, so no picture is kept.
-                let shot = shot.filter(|_| (this.bug_panes(), window.viewport_size()) == drawn);
+                this.bug_pending = false;
+                // The panes moved, an app pane came or went, or the window changed while it was
+                // taken: what it blanks would miss them, so no picture is kept.
+                let now = (this.bug_panes(), this.bug_apps(), window.viewport_size());
+                let shot = shot.filter(|_| now == drawn);
                 this.dispatch(start(shot.is_some()), origin, window, cx);
                 // Kept only for the report that started: one was open already, or it was refused.
                 let started = this.model.bug.as_ref().is_some_and(|report| report.word == word_kept);
@@ -93,10 +96,16 @@ impl Workspace {
         Ok(())
     }
 
-    /// The panes shown and where, in window points.
+    /// The main window's panes and where, in window points: the picture is of that window.
     fn bug_panes(&self) -> Vec<(PaneId, [f64; 4])> {
-        let shown = self.model.layout.as_ref().map(ottospace_core::layout::Node::leaves).unwrap_or_default();
+        let shown = self.model.main_panes();
         shown.into_iter().filter_map(|id| Some((id, rect(self.cells.get(&id)?.get()).map(f64::from)))).collect()
+    }
+
+    /// Which of them are app panes: the ones blanked.
+    fn bug_apps(&self) -> Vec<PaneId> {
+        let app = |id: &PaneId| matches!(self.model.pane(*id).map(|pane| &pane.kind), Some(Kind::App { .. }));
+        self.model.main_panes().into_iter().filter(app).collect()
     }
 
     /// `Effect::BugDropped`: the picture goes.
@@ -156,7 +165,7 @@ impl Workspace {
         }
     }
 
-    /// What a control of the overlay does, by its name: its click, and its sneak label.
+    /// What a control of the overlay does, by its name: its click.
     pub(crate) fn click_bug(&mut self, control: &str, window: &Window, cx: &mut Context<Self>) {
         let number = control.rsplit_once(':').and_then(|(_, n)| n.parse::<u32>().ok());
         let action = match (control.split(':').nth(1).unwrap_or_default(), number) {
@@ -209,9 +218,9 @@ impl Workspace {
         div().absolute().top(px(10.)).left_0().right_0().flex().justify_center().child(bar)
     }
 
-    /// A mark's comment card, below its box (above it near the foot), within the window.
-    fn bug_card(&self, report: &Report, mark: &Mark, cx: &mut Context<Self>) -> AnyElement {
-        let [ww, wh] = report.size.map(|v| v as f32);
+    /// A mark's comment card, below its box (above it near the foot), within the window as it is
+    /// now (`ww`×`wh` points): the picture stretches with a resize.
+    fn bug_card(&self, [ww, wh]: [f32; 2], report: &Report, mark: &Mark, cx: &mut Context<Self>) -> AnyElement {
         let (x, y) = match mark.rect {
             Some([x, y, _, h]) => {
                 let (left, top, bottom) = (x as f32 * ww, y as f32 * wh, (y + h) as f32 * wh);
@@ -266,7 +275,7 @@ impl Workspace {
 
     /// Over everything while a report is made: the frozen window, app panes blanked, the marks,
     /// their cards and the bar.
-    pub(crate) fn render_bug(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn render_bug(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let report = self.model.bug.as_ref()?;
         let layer = div().id("bug-report").absolute().top_0().left_0().size_full().occlude();
         let shot = self.bug_shot.as_ref().filter(|shot| shot.word == report.word);
@@ -319,7 +328,9 @@ impl Workspace {
             }
         });
         let drag = report.drag.map(|r| outline(r, true));
-        let cards: Vec<AnyElement> = report.marks.iter().map(|mark| self.bug_card(report, mark, cx)).collect();
+        let size = window.viewport_size();
+        let now = [f32::from(size.width), f32::from(size.height)];
+        let cards: Vec<AnyElement> = report.marks.iter().map(|mark| self.bug_card(now, report, mark, cx)).collect();
         let layer = layer
             .cursor(CursorStyle::Crosshair)
             .child(picture)
@@ -357,7 +368,8 @@ impl Workspace {
             "report": self.model.bug,
             "blanked": self.model.bug.as_ref().map(Report::blanked),
             "pixels": shot,
-            "controls": self.model.bug.as_ref().map(|_| {
+            // A test run only, as `overflow`.
+            "controls": self.model.bug.as_ref().filter(|_| std::env::var_os("OTTOSPACE_E2E").is_some()).map(|_| {
                 let drawn = self.controls.drawn_with("bug:").into_iter().map(|(id, b)| (id, rect(b)));
                 drawn.collect::<std::collections::BTreeMap<String, [f32; 4]>>()
             }),

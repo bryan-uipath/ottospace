@@ -1700,7 +1700,7 @@ export interface Snapshot {
     blanked: Rect[] | null;
     /** The picture's size in pixels, or null when there is none. */
     pixels: [number, number] | null;
-    /** While a report is open: where its controls are drawn, by id (`bug:whole`, `bug:remove:1`). */
+    /** While a report is open: where its controls are drawn, by id (`bug:whole`, `bug:remove:1`). Null outside a test run. */
     controls: Record<string, Rect> | null;
   };
   /** The right drawer: where its conversation is drawn, each agent by task id (a session's: `<runner>:<id>`), and why no agent runs for the conversation on show. */

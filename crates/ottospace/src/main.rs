@@ -948,6 +948,8 @@ struct Workspace {
     bug_field: field::Shared,
     /// The window as frozen for the bug report.
     bug_shot: Option<bug::Frozen>,
+    /// A report's picture is being taken: a second press takes none.
+    bug_pending: bool,
     picker_field: field::Shared,
     apps_field: field::Shared,
     mark_field: field::Shared,
@@ -1619,6 +1621,7 @@ impl Workspace {
             note_field: field::Shared::default(),
             bug_field: field::Shared::default(),
             bug_shot: None,
+            bug_pending: false,
             picker_field: field::Shared::default(),
             apps_field: field::Shared::default(),
             mark_field: field::Shared::default(),
@@ -8186,7 +8189,7 @@ impl Render for Workspace {
             .children(self.render_pointing())
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
             // Over the window's own controls: the bug report's frozen picture.
-            .children(self.render_bug(cx))
+            .children(self.render_bug(window, cx))
             .children(self.model.confirm.as_ref().map(|confirm| self.render_confirm(confirm, cx)))
             .when(self.gallery, |d| d.child(ui::gallery::view()))
             .children(seal)
