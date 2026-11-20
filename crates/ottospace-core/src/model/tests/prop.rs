@@ -7914,6 +7914,29 @@ fn seed_373_a_pane_emptied_for_an_offer_keeps_its_mark_while_it_waits() {
     .unwrap();
 }
 
+/// The box sent while its editor (⌃G) still runs: the editor, on no box, kept the drawer from
+/// folding, so a system's pane that brought a conversation's space up left its drawer open.
+#[test]
+fn seed_4313_an_editor_on_a_sent_box_keeps_no_drawer_open() {
+    replay(&[
+        Action::OpenCompose { text: "fix zoom >ap".into() }.into(),
+        Action::EditorOpen.into(),
+        Action::ComposeEnter.into(),
+        Action::NewTab.into(),
+        Action::SelectTab { index: 2 }.into(),
+        set_features(&["apps_section", "transcripts", "slots", "agent_mode", "overlay_panels"]).into(),
+        by(
+            Origin::System,
+            Action::Open {
+                kind: Kind::App { window: 1, title: "general".into(), bundle: None, name: "Slack".into() },
+                axis: Axis::Right,
+                beside: Some(4294967295),
+            },
+        ),
+    ])
+    .unwrap();
+}
+
 /// A Done's worktree, its git answers late (xreview of #274): Undo while git removes it (the
 /// default falls back, then the worktree is added back), Done while git makes it (removed once
 /// made), and a dirty one kept after an Undo (no notice for an act not the user's).
