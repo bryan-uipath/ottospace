@@ -2023,15 +2023,25 @@ fn a_notice_moves_no_hosted_window_and_floats_over_a_live_one() {
         (panel[0] + r[0] - stack[0] + r[2] / 2., panel[1] + r[1] - stack[1] + r[3] / 2.)
     };
     let card = &shown["toast"]["cards"][0];
-    // A click on the card's words does nothing, and the keys still go to the app.
+    // A click on the card's words does nothing, and the keys still go to the app. The pointer glides
+    // there first: a jump into a panel is heard as an entry, not a move, and points at nothing.
     let (x, y) = global(&shown, rect(&card["rect"]).expect("the card"));
+    glide(x - 60., y);
     click_at(x - 60., y, false);
     let keys = || canary.call(json!({"cmd": "state"}))["windows"][0]["keys"].clone();
     press("keystroke \"q\"");
     wait_or("the key in the app", || keys().to_string(), || keys().as_array()?.iter().any(|k| k == "q").then_some(()));
     // Its ×, where it is with the pointer over the card: the card goes, the app gets no click and stays in front.
-    let shown = state();
-    let (x, y) = global(&shown, rect(&shown["toast"]["cards"][0]["close"]).expect("its ×"));
+    // Read once the card pointed at has grown and its panel followed: two reads the same.
+    let cross = || {
+        let s = state();
+        Some(global(&s, rect(&s["toast"]["cards"][0]["close"])?))
+    };
+    let (x, y) = wait_for("its × settled", || {
+        let a = cross()?;
+        std::thread::sleep(Duration::from_millis(200));
+        (cross()? == a).then_some(a)
+    });
     click_at(x, y, false);
     wait_for("the toast to go", || Some(state()).filter(|s| s["toast"].is_null()));
     assert_eq!((clicks(), state()["mode"].clone()), (clicked, json!("app")), "the app got no click, kept the keys");
