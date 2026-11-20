@@ -1,5 +1,5 @@
 //! Transcripts in the shell (`ottospace_core::listen`): ⌘⌃T, the pane header's `Transcribe` and
-//! its dot, the dot on its tab or space while off show, the drawer's lines, the sound and the file
+//! its dot, the dot on its tab and space, the drawer's lines, the sound and the file
 //! (`listen_file`). The decisions are the core's. The sound is the source pane's app's
 //! (`listen_live`), or in a test run its fixture (`OTTOSPACE_LISTEN_FIXTURE`, read only under
 //! `OTTOSPACE_E2E`), replayed as what was heard.
@@ -686,7 +686,7 @@ impl Workspace {
         Some(div().flex().items_center().gap_1().child(row).when(wide, |el| el.child(stop)).into_any_element())
     }
 
-    /// The red dot on the tab or space of the pane being heard, while off show (`Model::listen_dot`),
+    /// The red dot on the tab or space of the pane being heard (`Model::listen_dots`),
     /// at its corner (the caller places it). A click shows the pane and the drawer on it. Paused:
     /// hollow, as the header's.
     pub(crate) fn off_show_dot(&self, id: String, cx: &Context<Self>) -> Stateful<Div> {
@@ -1229,7 +1229,7 @@ impl Workspace {
     /// Test runs only: where each of a transcript's controls was drawn, by id (`listen-start:3`,
     /// `listen-header:<pane>`, `listen-stop:header-<pane>`, `listen-stop:view`, `listen-resume:view`,
     /// `listen-menu`, `listen-file`, `listen-view`,
-    /// `listen-idle`, the off-show dot `listen-dot:space:<place>` or `listen-dot:tab:<id>`).
+    /// `listen-idle`, the tab and space dots `listen-dot:space:<place>` or `listen-dot:tab:<id>`).
     /// Null outside a test run.
     pub(crate) fn listen_rects(&self) -> Option<BTreeMap<String, [f32; 4]>> {
         std::env::var_os("OTTOSPACE_E2E")?;

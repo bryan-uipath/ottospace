@@ -1,6 +1,6 @@
-# Where a transcript shows: the source pane's header has a red dot and Stop (no time, no top row
-# mark) while its tab is on show, the drawer open or collapsed (the usual case); off show, a dot on its tab, then on its workspace in the top
-# row. With no task, ⌘⇧R opens the drawer on the transcript idle. Made-up lines from the fixture.
+# Where a transcript shows: the source pane's header has a red dot and Stop (no time) while its tab
+# is on show, the drawer open or collapsed (the usual case); its workspace in the top row and its tab
+# have a dot too, selected or not. With no task, ⌘⇧R opens the drawer on the transcript idle. Made-up lines from the fixture.
 {"env":{"OTTOSPACE_FEATURES":"transcripts","OTTOSPACE_LISTEN_FIXTURE":"{ROOT}/fixture.jsonl"}}
 {"click":"top:new_workspace"}
 {"cmd":"key","keys":"cmd-d","as":"user"}
@@ -17,6 +17,9 @@
 {"cmd":"key","keys":"cmd-t","as":"user"}
 {"settle":500}
 {"shot":"tab-dot"}
+{"cmd":"key","keys":"cmd-1","as":"user"}
+{"settle":500}
+{"shot":"tab-dot-selected"}
 {"click":"top:new_workspace"}
 {"settle":500}
 {"shot":"space-dot"}

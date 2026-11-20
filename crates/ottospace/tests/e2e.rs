@@ -14324,12 +14324,12 @@ fn transcripts_are_absent_with_the_flag_off_and_silent_with_no_source() {
     assert_eq!((&key["state"]["listen"], &key["notice"]), (&Value::Null, &json!("focus an app pane to transcribe it")));
 }
 
-/// The owner: "we show the record + time in 3 spots". No top row mark; the pane's header has the
-/// dot while its tab is on show; off show, a dot on its tab, or on its space in the top row; the
-/// user's click on that dot (not a client's) brings the pane back.
+/// The owner: "The Zoom workspace tab doesn't show 'recording' when selected". The pane heard
+/// has a dot in its header, on its space in the top row and on its tab, selected or not; the
+/// user's click on a dot (not a client's) brings the pane back.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn the_dot_of_the_pane_heard_is_on_its_tab_or_space_only_while_off_show() {
+fn the_dot_of_the_pane_heard_is_on_its_tab_and_space_selected_or_not() {
     let otto = listen_otto("dot");
     otto.call(json!({"cmd": "split"}));
     otto.user_key("cmd-ctrl-t");
@@ -14338,27 +14338,42 @@ fn the_dot_of_the_pane_heard_is_on_its_tab_or_space_only_while_off_show() {
         let ids = drawn.as_object().map(|ids| ids.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
         ids.into_iter().filter(|id| id.starts_with("listen-dot") || id.starts_with("listen-top")).collect()
     };
-    // On show: the header's dot alone.
+    let reply = otto.call(json!({"cmd": "state"}));
+    let first = reply["state"]["tabs"][0]["id"].as_u64().unwrap();
+    let shown: Vec<&Value> =
+        reply["spaces"].as_array().unwrap().iter().filter(|space| space["hidden"] != true).collect();
+    let place = shown.iter().position(|space| space["selected"] == true).unwrap();
+    let (space, tab) = (format!("listen-dot:space:{place}"), format!("listen-dot:tab:{first}"));
+    // Its space selected, one tab: the header's dot and the space's.
     otto.listen_rect("listen-header:1");
-    assert_eq!(dots(&otto), Vec::<String>::new());
-    // Another tab on show: the first tab has the dot, inside it.
-    let first = otto.call(json!({"cmd": "state"}))["state"]["tabs"][0]["id"].as_u64().unwrap();
+    assert_eq!(dots(&otto), [space.clone()]);
+    let (dot, item) = (otto.listen_rect(&space), otto.control(&format!("space:{place}")));
+    assert!(
+        dot[0] >= item[0] && dot[0] + dot[2] <= item[0] + item[2] + 0.5 && dot[1] >= item[1],
+        "{dot:?} in {item:?}"
+    );
+    // Another tab on show: the first tab has the dot, inside it, and the space keeps its own.
     otto.user_key("cmd-t");
-    let id = format!("listen-dot:tab:{first}");
-    assert_eq!(dots(&otto), [id.clone()]);
-    let (dot, tab) = (otto.listen_rect(&id), otto.control(&format!("tab:{first}")));
-    assert!(dot[0] >= tab[0] && dot[0] + dot[2] <= tab[0] + tab[2] + 0.5 && dot[1] >= tab[1], "{dot:?} in {tab:?}");
-    // Another workspace: the dot on the first one's item in the top row.
-    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
-    let on = dots(&otto);
-    assert!(on.len() == 1 && on[0].starts_with("listen-dot:space:"), "{on:?}");
-    // A client's click on it does nothing; the user's shows the pane, and the dot goes.
-    let dot = otto.listen_rect(&on[0]);
-    let theirs = otto.click(at(dot, 0.5, 0.5), 1);
-    assert_eq!(dots(&otto), on, "{} {} {}", theirs["notice"], theirs["spaces"], theirs["state"]["active"]);
-    otto.user_click(at(dot, 0.5, 0.5));
-    assert_eq!(dots(&otto), Vec::<String>::new());
+    assert_eq!(dots(&otto), [space.clone(), tab.clone()]);
+    let (dot, item) = (otto.listen_rect(&tab), otto.control(&format!("tab:{first}")));
+    assert!(
+        dot[0] >= item[0] && dot[0] + dot[2] <= item[0] + item[2] + 0.5 && dot[1] >= item[1],
+        "{dot:?} in {item:?}"
+    );
+    // Back on it, selected: both stay.
+    otto.user_key("cmd-1");
     otto.listen_rect("listen-header:1");
+    assert_eq!(dots(&otto), [space.clone(), tab.clone()]);
+    // Another workspace: the dot on the first one's item in the top row alone.
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    assert_eq!(dots(&otto), [space.clone()]);
+    // A client's click on it does nothing; the user's shows the pane, and the dots stay.
+    let dot = otto.listen_rect(&space);
+    let theirs = otto.click(at(dot, 0.5, 0.5), 1);
+    assert_eq!(dots(&otto), [space.clone()], "{} {} {}", theirs["notice"], theirs["spaces"], theirs["state"]["active"]);
+    otto.user_click(at(dot, 0.5, 0.5));
+    otto.listen_rect("listen-header:1");
+    assert_eq!(dots(&otto), [space, tab]);
 }
 
 /// The owner: "a red dot in the zoom pane that is being recorded", the drawer collapsed. The pane

@@ -2348,18 +2348,17 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(playing.windows(2).all(|two| two[0] >= two[1]), "a quiet app above one playing: {playing:?}");
         ensure!(picker.items.iter().all(|item| matches!(item, PickItem::Sound { .. })), "{:?}", picker.items);
     }
-    // The off-show dot: exactly while the pane heard is in a tab not on show, of a space on the
-    // row; on that tab if its space is selected, else on its space.
+    // The dots: on the space of the pane heard, on the row; and on its tab while that space is selected.
     let holder = m.listen.pane().and_then(|pane| m.tab_panes().iter().position(|panes| panes.contains(&pane)));
-    let want = holder.filter(|at| *at != m.active).map(|at| &m.tabs[at]).and_then(|tab| {
+    let want: Vec<_> = holder.map(|at| &m.tabs[at]).map_or_else(Vec::new, |tab| {
         let hidden = m.spaces().iter().any(|space| space.of == tab.space && space.hidden);
         match (hidden, tab.space == *m.shown_space()) {
-            (true, _) => None,
-            (false, true) => Some(crate::listen::Dot::Tab(tab.id)),
-            (false, false) => Some(crate::listen::Dot::Space(tab.space.clone())),
+            (true, _) => vec![],
+            (false, true) => vec![crate::listen::Dot::Space(tab.space.clone()), crate::listen::Dot::Tab(tab.id)],
+            (false, false) => vec![crate::listen::Dot::Space(tab.space.clone())],
         }
     });
-    ensure!(m.listen_dot() == want, "the dot {:?}, not {want:?}", m.listen_dot());
+    ensure!(m.listen_dots() == want, "the dots {:?}, not {want:?}", m.listen_dots());
     // The headers' red dots: none with none on; else the source pane, or panes of the app heard.
     let marked = m.listen_marked();
     ensure!(m.listen.on.is_some() || marked.is_empty(), "marked {marked:?} with none on");
