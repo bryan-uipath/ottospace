@@ -148,6 +148,14 @@ fn click_at(x: f64, y: f64, double: bool) {
     released(x, y);
 }
 
+/// Moves the pointer to `x, y` in many small steps, as a hand does: a panel of a background app
+/// hears its moves by a tracking area, which one jump may cross unheard.
+fn glide(x: f64, y: f64) {
+    let status =
+        Command::new("cliclick").args(["-e", "100", &format!("m:{x:.0},{y:.0}")]).status().expect("run cliclick");
+    assert!(status.success(), "cliclick failed");
+}
+
 /// Waits for the system to read the left button as up, releasing again at `x, y` until it does.
 /// About one `cliclick` release in six is not taken on a hosted runner; the button then reads as
 /// down for the tests after, and a wheel over a parked pane (a drag, to ottospace) enters nothing.
@@ -2059,14 +2067,13 @@ fn a_notice_moves_no_hosted_window_and_floats_over_a_live_one() {
     };
     let (card, stack, panel) = long_card(&state()).expect("the long card");
     let (x, y) = global(&s, card);
-    let moved = Command::new("cliclick").arg(format!("m:{:.0},{y:.0}", x - 60.)).status().expect("run cliclick");
-    assert!(moved.success(), "cliclick failed");
+    glide(x - 60., y);
     // Taller, and its panel moved to fit by the next tick.
     let grown = |s: &Value| {
         long_card(s).filter(|(tall, now, _)| tall[3] > card[3] + 10. && close(now[3], stack[3] + tall[3] - card[3]))
     };
     let (tall, stack_now, panel_now) =
-        wait_or("the long card taller", || state()["toast"].to_string(), || grown(&state()));
+        wait_or("the long card taller", || format!("{:?}", long_card(&state())), || grown(&state()));
     let more = tall[3] - card[3];
     let whole = tall[1] >= stack_now[1] && tall[1] + tall[3] <= stack_now[1] + stack_now[3] + 0.5;
     assert!(whole, "the card {tall:?} is cut by its stack {stack_now:?}");
@@ -2074,8 +2081,7 @@ fn a_notice_moves_no_hosted_window_and_floats_over_a_live_one() {
     assert_eq!((pane(), state()["mode"].clone()), (Some(body), json!("app")), "nothing moved, the app has the keys");
     report(&format!("toast: a long card pointed at grew by {more} pt in its panel"));
     // The pointer away: one line again.
-    let away = Command::new("cliclick").arg(format!("m:{:.0},{y:.0}", panel[0] - 100.)).status().expect("run cliclick");
-    assert!(away.success(), "cliclick failed");
+    glide(panel[0] - 100., y);
     wait_or(
         "the long card at one line",
         || state()["toast"].to_string(),
