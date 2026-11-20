@@ -1066,6 +1066,8 @@ screen (vim, less, htop) the wheel does nothing, and ⇧PageUp and friends go to
 A click on a terminal focuses it and clears its selection; a drag there selects, even in an
 unfocused pane. ottospace sends programs no mouse reports: in vim, tmux or htop a drag selects as
 it does at a prompt. Paste is bracketed when the program asks for it.
+Text is drawn bold, dim, italic, struck through or underlined (curly and coloured underlines too)
+as the program asks.
 Programs see `TERM=xterm-256color`, `COLORTERM=truecolor` (24-bit colour), `TERM_PROGRAM=ottospace`
 and `TERM_PROGRAM_VERSION`, whatever terminal started ottospace. When ottospace has neither `LANG`
 nor `LC_ALL` (started from the Dock), they get `LANG` from the system's region as UTF-8 (`de_CH.UTF-8`),

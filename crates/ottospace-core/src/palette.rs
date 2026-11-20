@@ -25,9 +25,23 @@ pub fn xterm(index: u8) -> u32 {
     }
 }
 
+/// Faint text (SGR 2): its colour two thirds of the way from `bg` to `fg`, e.g. white on black
+/// `0xaaaaaa`. Toward the cell's own background, so dim text on a coloured one stays readable.
+pub fn dim(fg: u32, bg: u32) -> u32 {
+    let mix = |shift: u32| ((fg >> shift & 0xff) * 2 + (bg >> shift & 0xff)) / 3 << shift;
+    mix(16) | mix(8) | mix(0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::xterm;
+    use super::{dim, xterm};
+
+    #[test]
+    fn dim_text_is_two_thirds_of_the_way_to_its_background() {
+        assert_eq!(dim(0xffffff, 0x000000), 0xaaaaaa);
+        assert_eq!(dim(0x00ff00, 0x0000ff), 0x00aa55);
+        assert_eq!(dim(0x123456, 0x123456), 0x123456);
+    }
 
     #[test]
     fn cube_and_grey_ramp_match_xterm() {

@@ -844,6 +844,25 @@ fn terminal_runs_a_typed_command() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_terminal_draws_dim_struck_and_curly_underlined_text() {
+    let otto = Otto::launch("styles");
+    otto.call(json!({"cmd": "split"}));
+    // The typed line holds the escapes as text; only the output is styled.
+    let print = "printf 'p \\033[2mfaint\\033[0m \\033[9mstruck\\033[0m \\033[4:3;58:2::255:0:0mcurly\\033[0m\\n'\r";
+    otto.call(json!({"cmd": "type", "text": print}));
+    let styled = otto.wait_for("the styled spans", |o| {
+        let styled = o.call(json!({"cmd": "state"}))["terminals"]["1"]["styled"].clone();
+        styled.as_array()?.iter().any(|s| s["text"] == "curly").then_some(styled)
+    });
+    let span = |text: &str| styled.as_array().unwrap().iter().find(|s| s["text"] == text).cloned().unwrap();
+    // Two thirds of the way from the background (0x09090b) to the text (0xfafafa).
+    assert_eq!(span("faint")["fg"], 0xa9a9aa, "{styled}");
+    assert_eq!(span("struck")["strike"], true, "{styled}");
+    assert_eq!(span("curly")["underline"], json!({"curly": true, "color": 0xff0000}), "{styled}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_pane_header_names_the_directory_and_the_program_not_the_kind() {
     let root = support::temp(&format!("ottospace-e2e-header-{}", std::process::id()));
     std::fs::create_dir_all(root.join("app-api")).unwrap();
