@@ -4862,7 +4862,7 @@ impl Workspace {
             && !key.modifiers.modified()
             && let Some(id) = self.model.offer_enter()
         {
-            self.offer_send(Action::OfferAccept { window: id }, window, cx);
+            self.offer_send(Action::OfferAccept { window: id, axis: Axis::Right }, window, cx);
             cx.stop_propagation();
             return;
         }
@@ -6920,7 +6920,9 @@ impl Workspace {
             // Record the content's layout bounds: AX matches the real window to it; e2e reads it.
             .child(canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {}).absolute().size_full())
             .child(self.controls.mark(format!("pane:{id}")))
-            .child(content);
+            .child(content)
+            // Grouped offers' open list, over the body's top right, under the chip.
+            .children(self.offer_list(id, cx));
         // The click handler is on the content, not the padded body: a click in the 2pt gap would be
         // replayed at a point the app window does not cover, land on ottospace again, and loop.
         let inner = inner.on_mouse_down(

@@ -1,11 +1,13 @@
 //! A new window of a hosted app: where it went, and why, in the log; and the chip its app's pane
-//! shows while it floats (`Zoom opened “Zoom Meeting” · no slot for this window · Put in a pane ×`).
+//! shows while it floats (`Zoom opened “Zoom Meeting” · no slot for this window · ◫ split right ⊟ split down ×`).
 //! The core decides (`rules::decide`) and keeps the offer (`Model::offers`); this draws and hosts.
 
 use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, StatefulInteractiveElement,
     Styled, Window, div, rgb,
 };
+use ottospace_core::layout::Axis;
+use ottospace_core::model::offers::Offer;
 use ottospace_core::model::offers::Placed;
 use ottospace_core::model::{Action, Effect, Kind, Origin, PaneId};
 use ottospace_core::{rules, theme};
@@ -55,6 +57,14 @@ pub(crate) fn log(seen: &Seen, shape: &rules::Shape, decided: &rules::Decision, 
     );
 }
 
+/// One offer in words: `“Chat” · no slot for this window`.
+fn offer_words(offer: &Offer) -> String {
+    match offer.title.is_empty() {
+        true => format!("a window · {}", offer.why),
+        false => format!("“{}” · {}", offer.title, offer.why),
+    }
+}
+
 /// A `window_fixture` request's window.
 pub(crate) struct Fixture {
     pub(crate) pane: PaneId,
@@ -65,50 +75,69 @@ pub(crate) struct Fixture {
     pub(crate) modal: bool,
 }
 
-/// The chip's controls, for clicks and sneak labels: `offer:<window>`, `offer-dismiss:<window>`.
+/// The chip's controls, for clicks and sneak labels: `offer:<window>` (split right, or Bring it
+/// here in a pane that waits), `offer-down:<window>`, `offer-dismiss:<window>`, `offer-list:<pane>`.
 fn accept_control(window: u32) -> String {
     format!("offer:{window}")
+}
+
+fn down_control(window: u32) -> String {
+    format!("offer-down:{window}")
 }
 
 fn dismiss_control(window: u32) -> String {
     format!("offer-dismiss:{window}")
 }
 
+fn list_control(pane: PaneId) -> String {
+    format!("offer-list:{pane}")
+}
+
 impl Workspace {
-    /// The chip in app pane `pane`'s header while a window its app opened floats: what opened,
-    /// why it is in no pane, Put in a pane, ×. None with no offer.
+    /// One of the chip's small buttons.
+    fn offer_button(&self, id: String, label: impl Into<gpui::SharedString>, colour: u32) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(gpui::SharedString::from(id.clone()))
+            .flex_none()
+            .px_1()
+            .rounded_sm()
+            .cursor_pointer()
+            .text_color(rgb(colour))
+            .hover(|s| s.bg(rgb(theme::SELECTED)))
+            .child(label.into())
+            .child(self.controls.mark(id))
+            // The press must not reach the header or the pane: an unsteady click would start a drag.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    }
+
+    /// An offer's three choices: ◫ split right, ⊟ split down, ×.
+    fn offer_choices(&self, window: u32, cx: &mut Context<Self>) -> [AnyElement; 3] {
+        let send = |action: Action| {
+            cx.listener(move |this: &mut Self, _: &gpui::ClickEvent, window_: &mut Window, cx| {
+                this.offer_send(action.clone(), window_, cx)
+            })
+        };
+        let right = Action::OfferAccept { window, axis: Axis::Right };
+        let down = Action::OfferAccept { window, axis: Axis::Down };
+        [
+            self.offer_button(accept_control(window), "◫ split right", theme::PRIMARY).on_click(send(right)),
+            self.offer_button(down_control(window), "⊟ split down", theme::PRIMARY).on_click(send(down)),
+            self.offer_button(dismiss_control(window), "×", theme::MUTED)
+                .on_click(send(Action::OfferDismiss { window })),
+        ]
+        .map(IntoElement::into_any_element)
+    }
+
+    /// The chip in app pane `pane`'s header while windows its app opened float: one offer's
+    /// title, why it is in no pane and its three choices; several, `Zoom opened 3 windows ▾`,
+    /// whose list (`offer_list`) holds each. None with no offer.
     pub(crate) fn offer_header(&self, pane: PaneId, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let offer = self.model.offer_of(pane)?;
+        let offers = self.model.offers_at(pane);
+        let offer = offers.first()?;
         let app = match self.model.pane(pane).map(|p| &p.kind) {
             Some(Kind::App { name, .. }) => name.clone(),
             _ => return None,
         };
-        let window = offer.window;
-        let what = if offer.title.is_empty() {
-            format!("{app} opened a window · {}", offer.why)
-        } else {
-            format!("{app} opened “{}” · {}", offer.title, offer.why)
-        };
-        let button = |id: String, label: &'static str, colour: u32| {
-            div()
-                .id(gpui::SharedString::from(id.clone()))
-                .flex_none()
-                .px_1()
-                .rounded_sm()
-                .cursor_pointer()
-                .text_color(rgb(colour))
-                .hover(|s| s.bg(rgb(theme::SELECTED)))
-                .child(label)
-                .child(self.controls.mark(id))
-                // The press must not reach the header: an unsteady click would start a drag.
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        };
-        let accept = button(accept_control(window), "Put in a pane", theme::PRIMARY).on_click(
-            cx.listener(move |this, _, window_, cx| this.offer_send(Action::OfferAccept { window }, window_, cx)),
-        );
-        let dismiss = button(dismiss_control(window), "×", theme::MUTED).on_click(
-            cx.listener(move |this, _, window_, cx| this.offer_send(Action::OfferDismiss { window }, window_, cx)),
-        );
         let chip = div()
             .flex()
             .min_w_0()
@@ -117,11 +146,53 @@ impl Workspace {
             .px_1()
             .rounded_sm()
             .border_1()
+            .border_color(rgb(theme::BORDER_STRONG));
+        if offers.len() > 1 {
+            let open = self.model.offer_list == Some(pane);
+            let what = format!("{app} opened {} windows {}", offers.len(), if open { "▴" } else { "▾" });
+            let button = self.offer_button(list_control(pane), what, theme::TEXT).on_click(
+                cx.listener(move |this, _, window_, cx| this.offer_send(Action::OfferList { pane }, window_, cx)),
+            );
+            return Some(chip.child(button).into_any_element());
+        }
+        let what = format!("{app} opened {}", offer_words(offer));
+        let chip = chip.child(cut_text(what).text_color(rgb(theme::MUTED)));
+        Some(chip.children(self.offer_choices(offer.window, cx)).into_any_element())
+    }
+
+    /// The open list of app pane `pane`'s grouped offers, over the top right of its body: each
+    /// window, why it is in no pane, and its three choices.
+    pub(crate) fn offer_list(&self, pane: PaneId, cx: &mut Context<Self>) -> Option<AnyElement> {
+        (self.model.offer_list == Some(pane)).then_some(())?;
+        let offers = self.model.offers_at(pane);
+        let rows = offers.iter().map(|offer| {
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(cut_text(offer_words(offer)).flex_1().text_color(rgb(theme::TEXT)))
+                .children(self.offer_choices(offer.window, cx))
+        });
+        let list = div()
+            .id(gpui::SharedString::from(format!("offer-list-open:{pane}")))
+            .absolute()
+            .top_1()
+            .right_1()
+            .max_w(gpui::px(420.))
+            .p_1()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .rounded_sm()
+            .border_1()
             .border_color(rgb(theme::BORDER_STRONG))
-            .child(cut_text(what).text_color(rgb(theme::MUTED)))
-            .child(accept)
-            .child(dismiss);
-        Some(chip.into_any_element())
+            .bg(rgb(theme::RAISED))
+            .text_xs()
+            .occlude()
+            // A press here is the list's, not the pane's: it would enter the app.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .children(rows);
+        Some(list.into_any_element())
     }
 
     /// An empty pane that waits for a window its app remade, in its body: `Zoom replaced its
@@ -146,9 +217,9 @@ impl Workspace {
                 .child(label)
                 .child(self.controls.mark(id))
         };
-        let bring = button(accept_control(window), "Bring it here ↵", theme::PRIMARY).on_click(
-            cx.listener(move |this, _, window_, cx| this.offer_send(Action::OfferAccept { window }, window_, cx)),
-        );
+        let bring = button(accept_control(window), "Bring it here ↵", theme::PRIMARY).on_click(cx.listener(
+            move |this, _, window_, cx| this.offer_send(Action::OfferAccept { window, axis: Axis::Right }, window_, cx),
+        ));
         // ×: the pane closes; the window floats on.
         let close = button(format!("offer-close:{pane}"), "×", theme::MUTED)
             .on_click(cx.listener(move |this, _, window_, cx| this.close_pane(pane, window_, cx)));
@@ -173,8 +244,10 @@ impl Workspace {
         let Ok(id) = name.parse::<u32>() else { return false };
         match kind {
             "offer-close" => self.close_pane(id, window, cx),
-            "offer" => self.offer_send(Action::OfferAccept { window: id }, window, cx),
+            "offer" => self.offer_send(Action::OfferAccept { window: id, axis: Axis::Right }, window, cx),
+            "offer-down" => self.offer_send(Action::OfferAccept { window: id, axis: Axis::Down }, window, cx),
             "offer-dismiss" => self.offer_send(Action::OfferDismiss { window: id }, window, cx),
+            "offer-list" => self.offer_send(Action::OfferList { pane: id }, window, cx),
             _ => return false,
         }
         true

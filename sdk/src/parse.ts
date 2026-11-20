@@ -1735,6 +1735,7 @@ function model(value: unknown, at: string): Model {
     agent_mode: agentMode(o.agent_mode, `${at}.agent_mode`),
     slots: map(slot)(o.slots, `${at}.slots`),
     offers: list(offer)(o.offers, `${at}.offers`),
+    offer_list: orNull(num)(o.offer_list, `${at}.offer_list`),
     slot_dialog: orNull(slotDialog)(o.slot_dialog, `${at}.slot_dialog`),
     viewers: map(viewer)(o.viewers, `${at}.viewers`),
     // Absent from an older build's reply: none open.
