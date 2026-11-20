@@ -891,13 +891,17 @@ fn a_terminal_draws_box_and_block_characters_as_shapes() {
     let otto = Otto::launch("cell-art");
     otto.call(json!({"cmd": "split"}));
     let art = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["cell_art"].as_u64();
-    // Counts every frame's shapes: nothing on screen draws any yet.
-    let before = otto.wait_for("the count", art);
+    // Each character alone on a cleared screen: the count grows only if it is drawn as shapes.
     // `\342\224\202` is │, `\342\226\210` █: printf writes them, the typed line holds digits.
-    otto.call(json!({"cmd": "type", "text": "printf '\\342\\224\\202\\342\\226\\210 drawn\\n'\r"}));
-    otto.wait_for("the shapes drawn", |o| art(o).filter(|n| *n >= before + 2));
-    let lines = otto.call(json!({"cmd": "state"}))["terminals"]["1"]["lines"].clone();
-    assert!(lines.as_array().unwrap().iter().any(|l| l == "\u{2502}\u{2588} drawn"), "{lines}");
+    for (bytes, shown) in [("\\342\\224\\202", "\u{2502}"), ("\\342\\226\\210", "\u{2588}")] {
+        otto.call(json!({"cmd": "type", "text": format!("clear; printf '{bytes}\\n'\r")}));
+        let lines = |o: &Otto| o.call(json!({"cmd": "state"}))["terminals"]["1"]["lines"].clone();
+        otto.wait_for(shown, |o| lines(o).as_array()?.iter().any(|l| l == shown).then_some(()));
+        let before = otto.wait_for("the count", art);
+        // The prompt redraws under it: a frame that paints it again.
+        otto.call(json!({"cmd": "type", "text": "\r"}));
+        otto.wait_for("the shape drawn", |o| art(o).filter(|n| *n > before));
+    }
 }
 
 #[test]
