@@ -84,6 +84,7 @@ import type {
   CityDrawn,
   CityHovered,
   CityOn,
+  CityView,
   HomeNode,
   InboxReply,
   InboxRow,
@@ -2018,6 +2019,18 @@ function cityDrawn(value: unknown, at: string): CityDrawn {
     paints: num(o.paints, `${at}.paints`),
     render_us: orNull(num)(o.render_us, `${at}.render_us`),
     hovered: orNull(cityHovered)(o.hovered, `${at}.hovered`),
+    view: cityView(o.view, `${at}.view`),
+    grabbed: bool(o.grabbed, `${at}.grabbed`),
+  };
+}
+
+function cityView(value: unknown, at: string): CityView {
+  const o = fields(value, at);
+  return {
+    yaw: num(o.yaw, `${at}.yaw`),
+    pitch: num(o.pitch, `${at}.pitch`),
+    zoom: num(o.zoom, `${at}.zoom`),
+    pan: pair(o.pan, `${at}.pan`),
   };
 }
 

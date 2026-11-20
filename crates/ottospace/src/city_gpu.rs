@@ -323,6 +323,7 @@ fn buffer(device: &wgpu::Device, values: &[f32], usage: wgpu::BufferUsages) -> w
 mod tests {
     use super::*;
     use ottospace_core::atlas;
+    use ottospace_core::scene::View;
 
     /// Renders made-up repositories and writes each into the folder `CITY_PICTURE` names, as a
     /// BMP, with the time each step took: `CITY_PICTURE=/tmp cargo test -p ottospace --release
@@ -346,7 +347,7 @@ mod tests {
             let laid = started.elapsed();
             let lit = [(plan.places.iter().rev().find(|p| !p.group).unwrap().id.as_str(), 0xff6467)];
             let started = std::time::Instant::now();
-            let scene = ottospace_core::scene::scene(&plan, &lit, 1.6);
+            let scene = ottospace_core::scene::scene(&plan, &lit, 1.6, &View::default());
             let built = started.elapsed();
             let (w, h) = (1600, 1000);
             let started = std::time::Instant::now();
@@ -362,6 +363,42 @@ mod tests {
         }
     }
 
+    /// What a moving camera costs: each frame of a turn, its scene, render and read back, at a
+    /// Retina tab's size (2400 × 1500 pixels), for 5,000 and 20,000 files. Prints the mean and
+    /// the slowest tenth. `cargo test -p ottospace --release -- --ignored a_moving_camera_is_timed
+    /// --nocapture`. Needs a GPU.
+    #[test]
+    #[ignore = "needs a GPU; prints timings"]
+    fn a_moving_camera_is_timed() {
+        let gpu = Gpu::new().expect("a GPU");
+        for count in [5_000, 20_000] {
+            let files: Vec<(String, u64)> = (0..count)
+                .map(|i| {
+                    let deep = ["", "e1/", "e1/f2/", "e2/"][(i / 7) % 4];
+                    let r = (i as u64 * 7919) % 1000;
+                    (format!("d{}/{deep}g{}/f{i}.rs", i % 7, i % 5), 200 + r * r * r / 20_000)
+                })
+                .collect();
+            let plan = atlas::atlas(&atlas::repo(&files));
+            let (w, h) = (2400, 1500);
+            let mut times: Vec<f64> = (0..40)
+                .map(|step| {
+                    let view = View::default().orbited(step as f32 * 3., (step % 7) as f32).zoomed(0.9, [0., 0.]);
+                    let started = std::time::Instant::now();
+                    let scene = ottospace_core::scene::scene(&plan, &[], w as f32 / h as f32, &view);
+                    gpu.render(&scene, w, h).unwrap();
+                    started.elapsed().as_secs_f64() * 1000.
+                })
+                .collect();
+            times.sort_by(f64::total_cmp);
+            let mean = times.iter().sum::<f64>() / times.len() as f64;
+            println!(
+                "{count} files, {w}×{h}: mean {mean:.1} ms, slowest tenth from {:.1} ms",
+                times[times.len() * 9 / 10]
+            );
+        }
+    }
+
     /// An edge line is about one device pixel wide at 1× and at 2×: one box, the same view at
     /// both sizes, the rows brighter than its top face counted down the face's middle column at
     /// its back and front edges. No GPU (a CI runner without one): nothing to check.
@@ -369,7 +406,7 @@ mod tests {
     fn an_edge_is_one_device_pixel_at_any_scale() {
         let Ok(gpu) = Gpu::new() else { return eprintln!("no GPU: skipped") };
         let plan = atlas::atlas(&atlas::repo(&[("a.rs".into(), 40_000), ("b.rs".into(), 40_000)]));
-        let scene = ottospace_core::scene::scene(&plan, &[], 1.6);
+        let scene = ottospace_core::scene::scene(&plan, &[], 1.6, &View::default());
         let camera = scene.camera.unwrap();
         let building = scene.blocks.iter().find(|b| b.kind == Kind::Building).unwrap();
         let mid = (building.min[0] + building.max[0]) / 2.;

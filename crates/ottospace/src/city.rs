@@ -13,19 +13,43 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, Bounds, Context, Corners, Hsla, Pixels, Point, RenderImage, TextRun, Window, WindowId, canvas, div,
-    fill, point, prelude::*, px, rgb,
+    AnyElement, Bounds, Context, Corners, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point,
+    RenderImage, ScrollDelta, ScrollWheelEvent, SharedString, TextRun, Window, WindowId, canvas, div, fill, point,
+    prelude::*, px, rgb,
 };
+use ottospace_core::Action;
 use ottospace_core::atlas::{self, Atlas};
 use ottospace_core::empty::{self, Backdrop};
 use ottospace_core::model::Origin;
-use ottospace_core::model::city::At;
-use ottospace_core::scene::{self, Kind, Scene};
+use ottospace_core::model::city::{At, CameraStep};
+use ottospace_core::scene::{self, Camera, Kind, Scene, View};
 use ottospace_core::{status_bar, theme};
 
 use crate::city_gpu::{Gpu, Picture};
 use crate::home::Floor;
 use crate::{Workspace, rect};
+
+/// A drag of a city's camera: the place, the button, where it began and was last, and whether
+/// it moved past a click (a left press is a click until then).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CityDrag {
+    floor: Floor,
+    at: At,
+    button: MouseButton,
+    from: Point<Pixels>,
+    last: Point<Pixels>,
+    moving: bool,
+}
+
+/// A press that moves less than this (points) is a click: it focuses, never turns the camera.
+const CLICK_SLOP: f32 = 4.;
+/// Degrees the camera turns per point of a left drag, or of a trackpad's ⌥ scroll.
+const ORBIT_PER_POINT: f32 = 0.4;
+/// A mouse wheel's line zooms by this; a trackpad's ⌘ scroll by the second, per point.
+const ZOOM_PER_LINE: f32 = 1.15;
+const ZOOM_PER_POINT: f32 = 1.006;
+/// A reset eases back over this long; at once under Reduce Motion.
+const EASE: Duration = Duration::from_millis(200);
 
 /// How long `git ls-files` may take, how much it may say, and how many files a city has. Past
 /// any of them there is no city: half of one would put files where the whole one does not.
@@ -180,6 +204,15 @@ struct Key {
     plan: usize,
     lit: Vec<(String, u32)>,
     size: (u32, u32),
+    /// The camera's view, as bits: yaw, pitch, zoom, pan.
+    view: [u32; 5],
+}
+
+impl Key {
+    fn view(&self) -> View {
+        let [yaw, pitch, zoom, x, z] = self.view.map(f32::from_bits);
+        View { yaw, pitch, zoom, pan: [x, z] }
+    }
 }
 
 /// A district's name on its plate: where it starts and how wide the plate's edge is there, in
@@ -288,7 +321,7 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>) -> Result<Made, String> {
     let started = std::time::Instant::now();
     let lit: Vec<(&str, u32)> = key.lit.iter().map(|(id, colour)| (id.as_str(), *colour)).collect();
     let (w, h) = key.size;
-    let scene = scene::scene(plan, &lit, w as f32 / h as f32);
+    let scene = scene::scene(plan, &lit, w as f32 / h as f32, &key.view());
     let Picture { width, height, bgra } = gpu.render(&scene, w, h)?;
     let camera = scene.camera.ok_or("no camera")?;
     let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
@@ -355,6 +388,13 @@ impl Drawn {
         let made = self.picture(place)?;
         let share = |v: Pixels, from: Pixels, size: Pixels| f32::from(v - from) / f32::from(size);
         made.scene.hit(share(at.x, bounds.left(), bounds.size.width), share(at.y, bounds.top(), bounds.size.height))
+    }
+
+    /// A building (not a district or the ground) is under `at` in `floor`'s picture.
+    fn building_under(&self, floor: Floor, at: Point<Pixels>, hints: Bounds<Pixels>) -> bool {
+        let Some(i) = self.under(floor, at, hints) else { return false };
+        let made = self.places.get(&floor).and_then(|place| self.picture(place));
+        made.and_then(|made| made.scene.blocks.get(i)).is_some_and(|b| matches!(b.kind, Kind::Building | Kind::Lit(_)))
     }
 
     /// For the state of a test run: `floor`'s counts, its picture's size, where it and the lit
@@ -475,8 +515,10 @@ impl Workspace {
     /// pane too small for one (`empty::CITY_LEAST`). Asks for a picture when the plan, the lit
     /// files or the size changed; one of a folder, lit files and size already made, for another
     /// place, is painted at once.
-    pub(crate) fn render_city(&self, floor: Floor, at: At, lattice: AnyElement) -> AnyElement {
+    pub(crate) fn render_city(&self, floor: Floor, at: At, lattice: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         let Some(city) = self.model.city_at(at) else { return lattice };
+        let view = self.eased_view(at, city.view);
+        let easing = self.city_ease.get().is_some_and(|(of, ..)| of == at);
         // Not read yet (or too large): the place is still laid out, so its size is known.
         let plan = self.city.held.get(city.dir).cloned();
         // The checkout's own name: a file in its root is labelled with it.
@@ -498,6 +540,9 @@ impl Workspace {
         };
         let picture = canvas(
             move |floor_bounds, window, _| {
+                if easing {
+                    window.request_animation_frame();
+                }
                 let bounds = area(floor_bounds, hints.borrow().hints_at(floor));
                 let mut held = drawn.borrow_mut();
                 // Too small for a city: the place's whole floor, not the part under the hints.
@@ -513,15 +558,18 @@ impl Workspace {
                     window.refresh();
                 }
                 (place.bounds, place.small, place.measured, place.scale) = (bounds, small, true, scale);
+                let view = [view.yaw, view.pitch, view.zoom, view.pan[0], view.pan[1]].map(f32::to_bits);
                 let key = plan.as_ref().map(|plan| Key {
                     dir,
                     plan: Arc::as_ptr(plan) as usize,
                     lit,
                     size: (size(w), size(h)),
+                    view,
                 });
                 let key = key.filter(|key| !small && key.size.0 > 0 && key.size.1 > 0);
                 place.asked = key.clone();
-                // Each picture asked for once: not made, not on its way, not failed.
+                // Each picture asked for once: not made, not on its way, not failed. A camera
+                // that moved on leaves the picture of where it was to be skipped (`latest_each`).
                 if let (Some(key), Some(plan)) = (key, plan) {
                     let new = !held.pictures.contains_key(&key) && !held.failed.contains_key(&key);
                     if new && held.sent.insert(key.clone()) && jobs.send((floor, key, plan)).is_err() {
@@ -535,10 +583,180 @@ impl Workspace {
             move |_, drawn: Shared, window, cx| paint(&drawn, floor, home.borrow().hints_at(floor), window, cx),
         );
         let picture = picture.absolute().size_full();
-        if shows {
+        let backdrop = if shows {
             picture.into_any_element()
         } else {
             div().size_full().child(lattice).child(picture).into_any_element()
+        };
+        // The user's pointer moves its camera: a middle drag pans, a left drag past a click
+        // turns it, the wheel zooms, a double click on the ground puts it back.
+        div()
+            .id(SharedString::from(format!("city-{floor:?}")))
+            .size_full()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| this.city_press(floor, at, e, window, cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| this.city_press(floor, at, e, window, cx)),
+            )
+            .on_scroll_wheel(
+                cx.listener(move |this, e: &ScrollWheelEvent, window, cx| this.city_wheel(floor, at, e, window, cx)),
+            )
+            .child(backdrop)
+            .into_any_element()
+    }
+
+    /// The view a place's picture is made from: the model's, or on the way back to it after a
+    /// reset (eased, frames asked and counted; none under Reduce Motion).
+    fn eased_view(&self, at: At, to: View) -> View {
+        let Some((_, from, since)) = self.city_ease.get().filter(|(of, ..)| *of == at) else { return to };
+        let t = since.elapsed().as_secs_f32() / EASE.as_secs_f32();
+        if t >= 1. || crate::dial::calm() {
+            self.city_ease.set(None);
+            return to;
+        }
+        self.city_frames.set(self.city_frames.get() + 1);
+        // Ease out, the short way round.
+        let k = 1. - (1. - t).powi(3);
+        let turn = (to.yaw - from.yaw + 540.).rem_euclid(360.) - 180.;
+        let lerp = |a: f32, b: f32| a + (b - a) * k;
+        View {
+            yaw: from.yaw + turn * k,
+            pitch: lerp(from.pitch, to.pitch),
+            zoom: lerp(from.zoom, to.zoom),
+            pan: [lerp(from.pan[0], to.pan[0]), lerp(from.pan[1], to.pan[1])],
+        }
+        .clamped()
+    }
+
+    /// The camera a place's picture shows, and where it is: for the ground under the pointer.
+    fn city_camera(&self, floor: Floor, at: At) -> Option<(Camera, Bounds<Pixels>, [f32; 3])> {
+        let drawn = self.city_drawn.borrow();
+        let place = drawn.places.get(&floor)?;
+        let fit = drawn.picture(place)?.scene.fit?;
+        let b = place.bounds;
+        let aspect = f32::from(b.size.width) / f32::from(b.size.height);
+        Some((fit.camera(&self.model.city_view(at), aspect), b, fit.target))
+    }
+
+    /// The point of the plan under `p` (window points), as the camera now sees it.
+    fn city_ground(&self, floor: Floor, at: At, p: Point<Pixels>) -> Option<[f32; 2]> {
+        let (camera, b, _) = self.city_camera(floor, at)?;
+        let share = |v: Pixels, from: Pixels, size: Pixels| f32::from(v - from) / f32::from(size);
+        camera.ground(share(p.x, b.left(), b.size.width), share(p.y, b.top(), b.size.height))
+    }
+
+    fn city_step(&mut self, at: At, step: CameraStep, window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::CityCamera { at, step }, self.input, window, cx);
+    }
+
+    /// A press on a city: over the hints, theirs. A double click on the ground (a street, a
+    /// district's plate, the plan around it: no building) puts the camera back; a middle press grabs it to pan; a left press is
+    /// a click (the pane takes focus) until it moves past `CLICK_SLOP`.
+    fn city_press(&mut self, floor: Floor, at: At, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let hints = self.home.borrow().hints_at(floor).dilate(px(CLEAR));
+        if self.input != Origin::User || (hints.size.width > px(0.) && hints.contains(&e.position)) {
+            return;
+        }
+        if e.button == MouseButton::Left && e.click_count == 2 {
+            let building =
+                self.city_drawn.borrow().building_under(floor, e.position, self.home.borrow().hints_at(floor));
+            if !building && self.city_ground(floor, at, e.position).is_some() {
+                self.city_ease.set(Some((at, self.model.city_view(at), std::time::Instant::now())));
+                self.city_step(at, CameraStep::Reset, window, cx);
+            }
+            return;
+        }
+        let moving = e.button == MouseButton::Middle;
+        self.city_drag = Some(CityDrag { floor, at, button: e.button, from: e.position, last: e.position, moving });
+        if moving {
+            self.city_step(at, CameraStep::Grab, window, cx);
+        }
+    }
+
+    /// The pointer moved with a city's drag held: a left drag turns the camera (past a click),
+    /// a middle one moves the ground under the pointer with it.
+    pub(crate) fn city_drag_move(&mut self, e: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mut drag) = self.city_drag else { return };
+        if e.pressed_button != Some(drag.button) {
+            return self.city_release(window, cx);
+        }
+        let (dx, dy) = (f32::from(e.position.x - drag.last.x), f32::from(e.position.y - drag.last.y));
+        let far = (e.position - drag.from).magnitude() as f32;
+        if !drag.moving && far > CLICK_SLOP {
+            drag.moving = true;
+            self.city_step(drag.at, CameraStep::Grab, window, cx);
+        }
+        if drag.moving {
+            let step = match drag.button {
+                MouseButton::Middle => {
+                    let (Some(a), Some(b)) = (
+                        self.city_ground(drag.floor, drag.at, drag.last),
+                        self.city_ground(drag.floor, drag.at, e.position),
+                    ) else {
+                        drag.last = e.position;
+                        self.city_drag = Some(drag);
+                        return;
+                    };
+                    CameraStep::Pan { dx: a[0] - b[0], dz: a[1] - b[1] }
+                }
+                _ => CameraStep::Orbit { yaw: -dx * ORBIT_PER_POINT, pitch: dy * ORBIT_PER_POINT },
+            };
+            self.city_step(drag.at, step, window, cx);
+        }
+        drag.last = e.position;
+        self.city_drag = Some(drag);
+    }
+
+    /// The button went up: the drag ends where it is.
+    pub(crate) fn city_release(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(drag) = self.city_drag.take().filter(|drag| drag.moving) {
+            self.city_step(drag.at, CameraStep::Let, window, cx);
+        }
+    }
+
+    /// Esc during a drag of a city: the camera back where the drag began. The user's key only.
+    pub(crate) fn city_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(drag) = self.city_drag.filter(|drag| drag.moving && self.input == Origin::User) else { return false };
+        self.city_drag = None;
+        self.city_step(drag.at, CameraStep::Cancel, window, cx);
+        true
+    }
+
+    /// The wheel over a city: a mouse wheel's lines zoom about the point under the pointer; a
+    /// trackpad's scroll pans (the city follows the fingers), with ⌥ turns, with ⌘ zooms (GPUI
+    /// 0.2.2 delivers no pinch or rotate gesture).
+    fn city_wheel(&mut self, floor: Floor, at: At, e: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.input != Origin::User {
+            return;
+        }
+        let about = |this: &Self| {
+            let (_, _, target) = this.city_camera(floor, at)?;
+            let p = this.city_ground(floor, at, e.position)?;
+            Some([p[0] - target[0], p[1] - target[2]])
+        };
+        let step = match e.delta {
+            ScrollDelta::Lines(d) => {
+                about(self).map(|about| CameraStep::Zoom { factor: ZOOM_PER_LINE.powf(-d.y), about })
+            }
+            ScrollDelta::Pixels(d) => {
+                let (dx, dy) = (f32::from(d.x), f32::from(d.y));
+                if e.modifiers.alt {
+                    Some(CameraStep::Orbit { yaw: -dx * ORBIT_PER_POINT, pitch: dy * ORBIT_PER_POINT })
+                } else if e.modifiers.platform {
+                    about(self).map(|about| CameraStep::Zoom { factor: ZOOM_PER_POINT.powf(-dy), about })
+                } else {
+                    let a = self.city_ground(floor, at, e.position);
+                    let b = self.city_ground(floor, at, e.position + d);
+                    a.zip(b).map(|(a, b)| CameraStep::Pan { dx: a[0] - b[0], dz: a[1] - b[1] })
+                }
+            }
+        };
+        if let Some(step) = step {
+            self.city_step(at, step, window, cx);
+            cx.stop_propagation();
         }
     }
 
@@ -569,25 +787,30 @@ impl Workspace {
     /// For the state of a test run: the city of the first empty place on show that draws one
     /// (the main window's tab, else its empty panes by id, else a folded-out tab); null with none.
     pub(crate) fn city_snapshot(&self) -> serde_json::Value {
-        let mut floors: Vec<Floor> = (self.model.empty_places().into_iter())
+        let mut floors: Vec<(Floor, At)> = (self.model.empty_places().into_iter())
             .filter(|at| self.model.city_at(*at).is_some_and(|city| self.city.held.contains_key(city.dir)))
-            .map(|at| self.floor_of(at))
+            .map(|at| (self.floor_of(at), at))
             .collect();
-        floors.sort_by_key(|floor| match floor {
+        floors.sort_by_key(|(floor, _)| match floor {
             Floor::Main => (0, 0),
             Floor::Pane(id) => (1, *id),
             Floor::Out(tab) => (2, *tab),
         });
         // The first that drew a picture, else the first laid out.
         let drawn = self.city_drawn.borrow();
-        let painted = |floor: &&Floor| drawn.places.get(*floor).is_some_and(|place| drawn.picture(place).is_some());
+        let painted =
+            |(floor, _): &&(Floor, At)| drawn.places.get(floor).is_some_and(|place| drawn.picture(place).is_some());
         let first =
-            floors.iter().find(painted).or_else(|| floors.iter().find(|floor| drawn.places.contains_key(*floor)));
-        let Some(first) = first else { return serde_json::Value::Null };
-        let mut snapshot = drawn.snapshot(*first, self.city.came);
+            floors.iter().find(painted).or_else(|| floors.iter().find(|(floor, _)| drawn.places.contains_key(floor)));
+        let Some((floor, at)) = first else { return serde_json::Value::Null };
+        let mut snapshot = drawn.snapshot(*floor, self.city.came);
         // The places too small for a city, drawing their lattice.
-        let small = floors.iter().filter(|floor| drawn.places.get(*floor).is_some_and(|place| place.small));
-        snapshot["small"] = small.map(|floor| on(*floor)).collect::<Vec<_>>().into();
+        let small = floors.iter().filter(|(floor, _)| drawn.places.get(floor).is_some_and(|place| place.small));
+        snapshot["small"] = small.map(|(floor, _)| on(*floor)).collect::<Vec<_>>().into();
+        // Its camera, as the core keeps it, and whether a drag of one is in flight.
+        let v = self.model.city_view(*at);
+        snapshot["view"] = serde_json::json!({ "yaw": v.yaw, "pitch": v.pitch, "zoom": v.zoom, "pan": v.pan });
+        snapshot["grabbed"] = self.model.camera_grabbed().into();
         snapshot
     }
 

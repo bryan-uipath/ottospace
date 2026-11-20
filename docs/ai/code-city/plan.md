@@ -157,7 +157,24 @@ files, 4 MB of names or 10 s to read is not drawn (the lattice stays).
 **Frames**: none at rest. A picture is made when the file list, the lit set or the tab's size
 changes, and a paint happens then. A camera move (slice 7) would be the only animation.
 
-## The camera (proposed; the first slice has none: the whole repository, fixed)
+## The camera (built by the user's pointer, slice 7; following navigation proposed)
+
+Built (the owner, 2026-11-20: "rotate, zoom in / out, and move (i.e. hold the scroll wheel and
+drag)"): the view is the core's (`scene::View`: yaw, pitch, zoom as a share of the fitted
+distance, the point looked at moved over the plan), one per tab and folder (`Model::city_view`),
+moved by `Action::CityCamera` from the user only (a client's is refused), clamped (pitch 12° to
+80°, zoom 0.05 to 1, the point looked at over the plan; checked by the property test). The shell
+translates: a middle drag pans by the ground under the pointer (`Camera::ground`), the wheel's
+lines zoom about it, a left drag past 4 points turns (0.4° a point), a trackpad's scroll pans,
+⌥ turns, ⌘ zooms (GPUI 0.2.2 delivers no pinch or rotate). Esc during a drag cancels it to where
+it began (`Grab`, `Cancel`); a double click on the ground resets, eased over 200 ms (at once
+under Reduce Motion; `counts.city_frames` counts the frames). A move renders the picture again
+at most once a frame, the newest only (the picture's thread takes the newest job; a place's old
+key leaves the queue); input never waits for it. Kept in memory only: a restart starts fitted.
+The lit buildings: from a moved view nothing is cut down (they stay raised and coloured): the
+user looks where they choose, and nothing changes height while they turn.
+
+Proposed, as before:
 
 The map has a view, a centre and a zoom, apart from the layout, which never changes. A stable
 layout with a moving camera is how recall survives zoom: the district is where it was, the
@@ -327,7 +344,7 @@ issue waiting on them; for code, the task working in that folder asks a question
 | 4 | Agent markers and trails; the task's "needs you" as a beacon on its district | |
 | 5 | Coupling for the hovered building (one `git log`); hover itself is 2b | |
 | 6 | Height from churn | |
-| 7 | The camera in the core (a view from an `Action`), eased in the shell, Reduce Motion | |
+| 7 | The camera in the core (a view from an `Action`), eased in the shell, Reduce Motion | built: the user's pointer (2026-11-20); following navigation proposed |
 | 8 | The explorer pane (file-viewer.md, D), then the map beside it and the camera following it | needs D |
 | 9 | Inside a file: markdown headings first | |
 | 10 | Kept anchors, if drift is felt | |

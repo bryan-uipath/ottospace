@@ -338,8 +338,10 @@ impl Workspace {
         };
         let (view, drawn) = (cx.entity_id(), &self.home);
         let hints = empty::empty(surface, (f32::MAX, f32::MAX), false).hints;
+        // Over a city, the list's own: a press on it never turns the camera.
         let list = div()
             .relative()
+            .occlude()
             .flex()
             .flex_col()
             .items_center()
@@ -369,7 +371,7 @@ impl Workspace {
             Floor::Out(_) | Floor::Main => At::Tab(tab_id(floor, &self.model)),
         };
         // With a folder and `code_city`: its city, where the lattice was.
-        let backdrop = self.render_city(floor, at, lines.absolute().size_full().into_any_element());
+        let backdrop = self.render_city(floor, at, lines.absolute().size_full().into_any_element(), cx);
         div().relative().size_full().overflow_hidden().child(backdrop).child(place.child(list)).into_any_element()
     }
 
@@ -569,7 +571,7 @@ impl Workspace {
         );
         // A task's empty tab, with the `code_city` flag and its files read: the city is the floor.
         let tab = At::Tab(self.model.tabs[self.model.main_at()].id);
-        let floor = self.render_city(Floor::Main, tab, lines.absolute().size_full().into_any_element());
+        let floor = self.render_city(Floor::Main, tab, lines.absolute().size_full().into_any_element(), cx);
         div()
             .relative()
             .size_full()

@@ -1178,6 +1178,13 @@ struct Workspace {
     city: city::Reader,
     city_drawn: city::Shared,
     city_painter: city::Painter,
+    /// A drag of a city's camera in flight; a reset easing back (the place, from, since); the
+    /// frames the easing asked for (a test run's count: none at rest).
+    city_drag: Option<city::CityDrag>,
+    /// A test's `mouse` request holds the middle button: its moves are the middle button's drag.
+    middle_held: bool,
+    city_ease: Cell<Option<(ottospace_core::model::city::At, ottospace_core::scene::View, std::time::Instant)>>,
+    city_frames: Cell<usize>,
     status_fit: Cell<ottospace_core::status_bar::Fit>,
     status_said: Option<(u64, Option<u64>, bool)>,
     pr_opens: u32,
@@ -1612,6 +1619,8 @@ impl Workspace {
             zoom_asks = unsafe { ottospace_mac::window::zoom_asks(appkit.ns_view.as_ptr()) };
             // A press on the top row's spaces is theirs (a click, a drag along the row), never the window's move.
             unsafe { ottospace_mac::window::titlebar_holds(appkit.ns_view.as_ptr()) };
+            // A held wheel's drag reaches the view: it pans the code city.
+            unsafe { ottospace_mac::window::other_drags(appkit.ns_view.as_ptr()) };
         }
         // A run with hosting off never activates the app, so keep its window visible another
         // way. Not with hosting on: a floating ottospace would cover the live app window.
@@ -1774,6 +1783,10 @@ impl Workspace {
             city: city::Reader::new(),
             city_drawn: city::Shared::default(),
             city_painter: city::Painter::new(),
+            city_drag: None,
+            middle_held: false,
+            city_ease: Cell::new(None),
+            city_frames: Cell::new(0),
             status_fit: Cell::default(),
             status_said: None,
             pr_opens: 0,
@@ -2743,10 +2756,20 @@ impl Workspace {
                         alt: has(control::Modifier::Alt),
                         shift: has(control::Modifier::Shift),
                     };
-                    // The right button: a press or a release, never held for a drag.
+                    // The right button: a press or a release, never held for a drag. The middle one is
+                    // held: a move between its press and release is its drag.
                     let event = match (button, action) {
                         (control::Button::Right, MouseAction::Down) => Mouse { kind: MouseKind::RightDown, ..mouse },
                         (control::Button::Right, MouseAction::Up) => Mouse { kind: MouseKind::RightUp, ..mouse },
+                        (control::Button::Middle, MouseAction::Down) => {
+                            self.middle_held = true;
+                            Mouse { kind: MouseKind::MiddleDown, ..mouse }
+                        }
+                        (control::Button::Middle, MouseAction::Up) => {
+                            self.middle_held = false;
+                            Mouse { kind: MouseKind::MiddleUp, ..mouse }
+                        }
+                        (_, MouseAction::Move) if self.middle_held => Mouse { kind: MouseKind::MiddleDrag, ..mouse },
                         _ => self.pointer(*action, mouse),
                     };
                     self.abandoned = self.held.then(|| self.release_later(window, cx));
@@ -4093,6 +4116,8 @@ impl Workspace {
                 "new_windows_menu_item": self.new_window_asks[2],
                 // File lists the code city read (`code_city`): none with the flag off, none at rest.
                 "city_reads": self.city_reads(),
+                // Frames a city's camera asked for easing back after a reset: none at rest, none under Reduce Motion.
+                "city_frames": self.city_frames.get(),
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
                 // Frames the toast asked for as it came or went: none under Reduce Motion.
@@ -8103,7 +8128,7 @@ impl Workspace {
         root.on_key_down(cx.listener(Self::key_down))
             // Esc during a divider drag puts it back, before a terminal or a box sees the key.
             .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
-                if e.keystroke.key == "escape" && this.divider_escape(window, cx) {
+                if e.keystroke.key == "escape" && (this.divider_escape(window, cx) || this.city_escape(window, cx)) {
                     cx.stop_propagation();
                 }
             }))
@@ -8114,6 +8139,7 @@ impl Workspace {
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
                 this.mouse_move(e, cx);
                 this.city_hover(e.position, window, cx);
+                this.city_drag_move(e, window, cx);
                 this.annotate_move(e, window, cx);
                 this.bug_move(e, window, cx);
             }))
@@ -8137,8 +8163,11 @@ impl Workspace {
                     this.reorder_cancel(window, cx);
                     this.annotate_release(e.position, window, cx);
                     this.bug_release(e.position, window, cx);
+                    this.city_release(window, cx);
                 }),
             )
+            .on_mouse_up(MouseButton::Middle, cx.listener(|this, _, window, cx| this.city_release(window, cx)))
+            .on_mouse_up_out(MouseButton::Middle, cx.listener(|this, _, window, cx| this.city_release(window, cx)))
             // Released outside the window: a reorder is put back too.
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, window, cx| this.reorder_cancel(window, cx)))
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no

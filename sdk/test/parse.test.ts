@@ -136,6 +136,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       on: { pane: 3 }, pictures: 1, small: ["tab"], places: 10, groups: 3, picture: [1700, 1300], bounds: [340, 42, 850, 650], scale: 2, lit: [[620, 42, 17, 53]],
       lit_tops: [[628, 45]], labels: 3, failed: null, reads: 2, renders: 1, paints: 9, render_us: 9100,
       hovered: { file: true, lit: true, beacon: [590, 0, 80, 34] },
+      view: { yaw: 34, pitch: 52, zoom: 1, pan: [0, 0] }, grabbed: false,
     },
     closed_apps: [],
     apps_bar: { not_running: [], more: 0, more_open: false, all_count: 0, all_open: false, all: [], filter: "", filtering: false, undo: null },

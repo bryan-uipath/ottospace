@@ -57,6 +57,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.scroll({ pane: 1, lines: 40 }),
   (c) => c.mouse({ action: "down", x: 300, y: 60, clicks: 1, modifiers: ["shift"] }),
   (c) => c.mouse({ action: "down", button: "right", x: 300, y: 60, as: "user" }),
+  (c) => c.mouse({ action: "down", button: "middle", x: 300, y: 60, as: "user" }),
   (c) =>
     c.mouse({
       action: "wheel",

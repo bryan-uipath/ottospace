@@ -140,7 +140,9 @@ Design note: `docs/ai/attention/plan.md`.
   - `mouse` (`down`, `move`, `up`, `wheel`, `exit`, `enter`) and `drag` hand events to the window's
     own AppKit handlers, never posted. `wheel` takes `dx`, `dy`: lines, or with `precise` points,
     both rounded to whole numbers. `"button":"right"` makes a `down` or `up` the right button's
-    (a right click: a Repos worktree row's menu), never a drag.
+    (a right click: a Repos worktree row's menu), never a drag. `"button":"middle"` makes a `down` or
+    `up` the middle button's (a mouse's wheel, pressed), and every `move` between them its drag (the
+    code city's pan).
   - `"as":"user"` on `key`, `mouse` and `drag`: the event is `Origin::User`, for what a socket
     client is refused (sneak mode, a mark's wait, the quit question, a pin in the Apps section).
     Every key and pointer event a client sends is otherwise the client's. Outside a test run a
@@ -172,7 +174,10 @@ Design note: `docs/ai/attention/plan.md`.
     `picture` (its size in pixels), `bounds` and `scale` (where it was painted), `lit` (each lit
     building's rect), `lit_tops` (the middle of each one's top), `labels`, `failed` (why there is
     no picture), `reads`, `renders`, `paints`, `render_us`, `hovered` (the beacon of the box under
-    the user's pointer: `file`, `lit`, `beacon` its label's rect; null with none). `counts.city_reads`: the reads, a city on show or not. Never a path or a name.
+    the user's pointer: `file`, `lit`, `beacon` its label's rect; null with none), `view` (its camera:
+    `yaw`, `pitch`, `zoom`, `pan`) and `grabbed` (a drag of a city's camera is in flight).
+    `counts.city_frames`: frames a camera's reset asked for while easing back (none at rest, none
+    under Reduce Motion). `counts.city_reads`: the reads, a city on show or not. Never a path or a name.
     Null outside a test run and while none is on show. `OTTOSPACE_CITY_NO_GPU` (read only under
     `OTTOSPACE_E2E`) stands for a machine with no GPU: every picture fails, the lattice stays.
   - State fields `keys_known` (the ids of the key bindings the user knows) and `key_reference`

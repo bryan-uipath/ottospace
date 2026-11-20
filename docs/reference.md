@@ -1503,6 +1503,17 @@ moves only its own folder
 - Pointing at a building shows a beacon: a line up from it to its file's name over its folder;
   at a district, its folder. Over the hints, the hints win, and the beacon is never drawn over
   them. Hovering draws, and renders nothing again.
+- Its camera is yours to move, your pointer's only: drag with the middle button held (the
+  wheel, pressed) to pan; the mouse wheel zooms about the point under the pointer; a left drag
+  (past a click: under 4 points is still a click, which focuses the pane) turns it round the
+  point it looks at. On a trackpad, two-finger scroll pans, ⌥ with it turns, ⌘ with it zooms (no
+  pinch: GPUI 0.2.2 delivers none). Esc during a drag puts it back where the drag began; a
+  double click on the ground (no building) brings back the fitted view, eased (at once under
+  Reduce Motion). Pitch stays between 12° and 80°, zoom between a building filling the tab and
+  the whole city, the point looked at over the city. Each tab keeps its camera of each folder
+  while ottospace runs (not across a restart); a changed file list keeps it. Over the hints,
+  the hints win. A moved camera cuts no building down for the lit ones (those stay raised and
+  coloured).
 - No GPU, or a render that fails: the lattice.
 
 ### Displays

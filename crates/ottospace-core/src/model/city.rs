@@ -2,10 +2,13 @@
 //! show, which folder each is the map of, and which files are lit. The shell reads the folders'
 //! files and draws.
 
+use std::collections::BTreeMap;
+
 use crate::PaneId;
 use crate::features::Feature;
 use crate::model::Model;
 use crate::model::spaces::Owner;
+use crate::scene::View;
 use crate::tasks::TaskId;
 
 /// A file an agent is at, as its call names it (the last two parts of its path), and the
@@ -23,6 +26,46 @@ pub struct City<'a> {
     /// The checkout it is the map of.
     pub dir: &'a str,
     pub lit: Vec<Lit<'a>>,
+    /// Where the user turned, moved and zoomed its camera (the fitted view until they do).
+    pub view: View,
+}
+
+/// A step of the city's camera, the user's pointer's (the shell translates it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CameraStep {
+    /// Turned round the point looked at, in degrees.
+    Orbit {
+        yaw: f32,
+        pitch: f32,
+    },
+    /// The point looked at moved over the plan, in plan units.
+    Pan {
+        dx: f32,
+        dz: f32,
+    },
+    /// Nearer by `factor` (under 1: in), keeping `about` (plan units from the city's middle).
+    Zoom {
+        factor: f32,
+        about: [f32; 2],
+    },
+    /// A drag began: Esc puts the camera back to here (`Cancel`).
+    Grab,
+    /// The drag ended where it is.
+    Let,
+    Cancel,
+    /// The fitted view again (a double click on the ground).
+    Reset,
+}
+
+/// Only the user's pointer moves a city's camera: a client's drag is refused.
+pub(crate) const USERS_ALONE: &str = "only the user's pointer moves the city's camera";
+
+/// Each tab's camera of each folder, kept while ottospace runs (not across a restart), and the
+/// drag in flight with the view it started from.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Cameras {
+    views: BTreeMap<(u32, String), View>,
+    grab: Option<((u32, String), View)>,
 }
 
 /// An empty place on show: a tab with no pane (by its id), or an empty pane.
@@ -98,7 +141,65 @@ impl Model {
         });
         let lit = agents
             .flat_map(|(colour, files)| files.into_iter().map(move |(label, running)| Lit { label, colour, running }));
-        Some(City { dir, lit: lit.collect() })
+        let view = self.city_view(at);
+        Some(City { dir, lit: lit.collect(), view })
+    }
+
+    /// Whose camera a place's is: its tab's, of its folder. Panes of one tab share it.
+    fn camera_of(&self, at: At) -> Option<(u32, String)> {
+        let tab = match at {
+            At::Tab(id) => id,
+            At::Pane(pane) => self.tab_of(pane)?,
+        };
+        Some((tab, self.empty_folder(at)?.to_string()))
+    }
+
+    /// The camera of a place's city: as the user left it, else the fitted view.
+    pub fn city_view(&self, at: At) -> View {
+        self.camera_of(at).and_then(|key| self.cameras.views.get(&key).copied()).unwrap_or_default()
+    }
+
+    /// A drag of a city's camera is in flight: Esc cancels it.
+    pub fn camera_grabbed(&self) -> bool {
+        self.cameras.grab.is_some()
+    }
+
+    /// Moves a place's camera by the user's `step`. Clamped: never under the ground, never
+    /// past the city's footprint, never nearer than a building or farther than the whole city.
+    pub(crate) fn camera(&mut self, at: At, step: CameraStep) {
+        let Some(key) = self.camera_of(at).filter(|_| self.city_at(at).is_some()) else { return };
+        let now = self.cameras.views.get(&key).copied().unwrap_or_default();
+        let view = match step {
+            CameraStep::Orbit { yaw, pitch } => now.orbited(yaw, pitch),
+            CameraStep::Pan { dx, dz } => now.panned(dx, dz),
+            CameraStep::Zoom { factor, about } => now.zoomed(factor, about),
+            CameraStep::Grab => {
+                self.cameras.grab = Some((key, now));
+                return;
+            }
+            CameraStep::Let => {
+                self.cameras.grab = None;
+                return;
+            }
+            CameraStep::Cancel => match self.cameras.grab.take() {
+                Some((grabbed, from)) if grabbed == key => from,
+                _ => return,
+            },
+            CameraStep::Reset => View::default(),
+        };
+        // A step of no number moves nothing.
+        if view.sound() {
+            self.cameras.views.insert(key, view);
+        }
+    }
+
+    /// Every camera inside its clamps, and a drag only of a camera kept: for the model's check.
+    pub fn cameras_sound(&self) -> Result<(), String> {
+        let bad = self.cameras.views.iter().find(|(_, view)| !view.sound());
+        match bad {
+            Some((key, view)) => Err(format!("camera {key:?} out of its clamps: {view:?}")),
+            None => Ok(()),
+        }
     }
 }
 
@@ -110,6 +211,7 @@ mod tests {
     use crate::layout::Axis;
     use crate::model::{Action, Kind, Origin};
     use crate::repos::{Repo, Worktree};
+    use crate::scene::View;
     use crate::talk::Subject;
     use crate::transcript::{Event, Outcome, Text};
 
@@ -268,5 +370,54 @@ mod tests {
         let lit = city(&m).map(|city| city.lit.into_iter().map(|lit| (lit.label, lit.colour)).collect::<Vec<_>>());
         let colour = m.tasks.get(two).and_then(|task| task.colour);
         assert_eq!(lit, Some(vec![("src/main.rs", one), ("src/lib.rs", colour)]));
+    }
+
+    /// The user's camera moves, stays in its clamps, survives switching tabs, and comes back
+    /// to the fitted view on Reset; a client's step is refused; with the flag off nothing moves.
+    #[test]
+    fn the_users_camera_moves_within_its_clamps_and_a_clients_is_refused() {
+        let mut m = task_in_app();
+        let at = m.empty_places()[0];
+        let step = |m: &mut Model, step: CameraStep, origin: Origin| {
+            m.update(Action::CityCamera { at, step }.sent_by(origin));
+            m.city_at(at).map(|city| city.view)
+        };
+        assert_eq!(step(&mut m, CameraStep::Orbit { yaw: 30., pitch: 0. }, Origin::Socket), Some(View::default()));
+        let turned = step(&mut m, CameraStep::Orbit { yaw: 30., pitch: 90. }, Origin::User).unwrap();
+        assert_eq!((turned.yaw, turned.pitch), (View::default().yaw + 30., crate::scene::PITCH_RANGE.1));
+        let near = step(&mut m, CameraStep::Zoom { factor: 0.001, about: [0., 0.] }, Origin::User).unwrap();
+        assert_eq!(near.zoom, crate::scene::ZOOM_RANGE.0);
+        let moved = step(&mut m, CameraStep::Pan { dx: 5., dz: f32::NAN }, Origin::User).unwrap();
+        assert!(moved.sound() && moved.pan[0] > 0., "{moved:?}");
+        // Another tab and back: the same view. A new file list keeps it too (it is the tab's).
+        m.update(Action::SpaceOpen { space: Owner::Home });
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
+        assert_eq!(m.city_at(at).map(|city| city.view), Some(moved));
+        assert_eq!(step(&mut m, CameraStep::Reset, Origin::User), Some(View::default()));
+        // The flag off: nothing moves; on again, as it was.
+        m.update(Action::SetFeatures { features: Features::default() }.sent_by(Origin::System));
+        m.update(Action::CityCamera { at, step: CameraStep::Orbit { yaw: 10., pitch: 0. } });
+        let on = Features::parse_list("code_city").unwrap();
+        m.update(Action::SetFeatures { features: on }.sent_by(Origin::System));
+        assert_eq!(m.city_at(at).map(|city| city.view), Some(View::default()));
+    }
+
+    /// Esc during a drag puts the camera back where the drag began; a drag let go keeps it.
+    #[test]
+    fn a_cancelled_drag_puts_the_camera_back() {
+        let mut m = task_in_app();
+        let at = m.empty_places()[0];
+        let go = |m: &mut Model, step| drop(m.update(Action::CityCamera { at, step }));
+        go(&mut m, CameraStep::Grab);
+        go(&mut m, CameraStep::Orbit { yaw: 40., pitch: -5. });
+        go(&mut m, CameraStep::Pan { dx: 0.2, dz: 0.1 });
+        assert!(m.camera_grabbed());
+        go(&mut m, CameraStep::Cancel);
+        assert_eq!((m.city_view(at), m.camera_grabbed()), (View::default(), false));
+        go(&mut m, CameraStep::Grab);
+        go(&mut m, CameraStep::Orbit { yaw: 40., pitch: 0. });
+        go(&mut m, CameraStep::Let);
+        go(&mut m, CameraStep::Cancel);
+        assert_eq!(m.city_view(at).yaw, View::default().yaw + 40.);
     }
 }
