@@ -20,6 +20,7 @@ use serde::Deserialize;
 
 use crate::listen_live::{self, Live};
 use crate::listen_meter::{Hearing, Meter};
+use crate::overlays::Kept;
 use crate::{Workspace, config, listen_file, now_ms, rect};
 
 // ⌘⌃T: a transcript of the focused pane, or the one on stopped. The palette's Pause or Resume.
@@ -783,9 +784,11 @@ impl Workspace {
     /// The drawer on the transcript: its lines as they come, the last at the foot. Plain text,
     /// each line one line (`capture::plain` in the core): no markdown, no links. None on: idle.
     pub(crate) fn render_listen_view(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.model.listen.shown {
+        // Folded, still drawn while it slides back (`overlays::Kept`).
+        if !self.model.listen.shown && self.slides.ghost != Some(Kept::Transcript) {
             return None;
         }
+        self.slides.kept.set(Some(Kept::Transcript));
         let Some(on) = self.model.listen.on.as_ref() else { return Some(self.render_listen_idle(width, cx)) };
         // The app's name, as the file's header has it: a window's title is content.
         let source = Some(self.model.listen_head(on.source, false, 0).app);

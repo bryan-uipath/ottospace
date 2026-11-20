@@ -229,7 +229,8 @@ Design note: `docs/ai/attention/plan.md`.
   in the dial and Done's seal. The state's `counts.dial_frames` counts the frames the dial asked for because
   something in it moves: none at rest. `counts.seal_frames` and `counts.seal_spark_frames` do the
   same for Done's seal, fold and land (`seal.rs`), and `counts.repo_pulse_frames` for a Repos
-  dot's commit pulse; `counts.repo_pulses` counts the pulses (none under Reduce Motion).
+  dot's commit pulse; `counts.repo_pulses` counts the pulses (none under Reduce Motion);
+  `counts.overlay_frames` for a side overlay's slide out of its rail and back (`overlays.rs`).
 - A feature is done when both loops cover it. Extend `Request` and the state snapshot when a test
   needs to drive or read something new.
 

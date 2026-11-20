@@ -1,0 +1,21 @@
+# `overlay_panels`: a closed overlay slides back into its rail. Each shot right after the close,
+# as it slides (before: already gone). Made-up task and terminal lines.
+{"write":"home/settings.json","text":"{\"repos\": [], \"features\": {\"overlay_panels\": true}}\n"}
+{"until":"state.features","is":["overlay_panels"]}
+{"click":"top:new_workspace"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"type","pane":1,"text":"clear; echo left pane: build log\r"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"type","pane":2,"text":"clear; echo right pane: notes\r"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"f i x space t h e space l o g i n space l o o p","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"settle":500}
+{"shot":"drawer-open"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
+{"shot":"drawer-closing"}
+{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"settle":500}
+{"shot":"sidebar-open"}
+{"cmd":"key","keys":"cmd-shift-l","as":"user"}
+{"shot":"sidebar-closing"}

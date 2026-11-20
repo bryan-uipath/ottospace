@@ -16,6 +16,7 @@ use ottospace_core::talk::{self, Subject};
 use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::{Action, Axis, Kind, Mode, Origin, theme};
 
+use crate::overlays::Kept;
 use crate::terminal::{self, Terminal};
 use crate::{Tooltip, Workspace, collect, home, ui};
 
@@ -775,8 +776,11 @@ impl Workspace {
     /// The drawer on a task's conversation, `width` points wide. A press in it gives it the
     /// keyboard. The brief shows in place of the agent while it is asked for.
     pub(crate) fn render_talk(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let talk = self.model.talk.as_ref().filter(|talk| talk.open)?;
+        // Folded, still drawn while it slides back (`overlays::Kept`).
+        let ghost = self.slides.ghost == Some(Kept::Talk);
+        let talk = self.model.talk.as_ref().filter(|talk| talk.open || ghost)?;
         let header = self.talk_header(&talk.task, cx)?;
+        self.slides.kept.set(Some(Kept::Talk));
         let brief = self.model.brief.is_some() && self.model.brief == talk.task.task();
         // The dial is the conversation's: not over the brief, nor over the editor.
         let editor = self.model.editor_shown();

@@ -3916,7 +3916,7 @@ impl Workspace {
             "strip": marks.get(&Mark::Strip).copied().map(rect),
             "bar_header": marks.get(&Mark::BarHeader).copied().map(rect),
             // The side overlays as drawn (`overlay_panels`), at rest: the sidebar's and the drawer's
-            // place over the panes; null while closed or with the flag off.
+            // place over the panes, also while a closed one slides back; null once in, or with the flag off.
             "overlays": {
                 "sidebar": marks.get(&Mark::Overlay(true)).copied().map(rect),
                 "drawer": marks.get(&Mark::Overlay(false)).copied().map(rect),
@@ -4103,7 +4103,7 @@ impl Workspace {
                 "calendar_frames": self.timeline.day_frames.get(),
                 // The frames the seal of a Done asked for, and those with its sparks: none under Reduce Motion.
                 "seal_frames": self.seals.frames,
-                // Frames a side overlay's slide in asked for (`overlay_panels`): none under Reduce Motion.
+                // Frames a side overlay's slide in or back asked for (`overlay_panels`): none under Reduce Motion.
                 "overlay_frames": self.slides.frames,
                 "seal_spark_frames": self.seals.spark_frames,
                 // Commits that pulsed a checkout's dot, and the frames the pulses asked for: none
@@ -8492,19 +8492,13 @@ impl Render for Workspace {
         let drawer = if self.btw_drawn() { (drawer + btw::WIDTH).min(most).max(drawer) } else { drawer };
         self.drawer.width = drawer;
         // The drawer's place and its rail, always: the rail alone while it is collapsed, or an overlay.
+        let last = self.slides.kept.take();
         let (right, right_width, drawer_over) = self.render_right(drawer, cx);
-        let bar_over = self.model.sidebar.filter(|_| self.model.overlays());
-        let (left_in, right_in) = self.slides.step(bar_over.is_some(), drawer_over.is_some(), window);
-        let bar_over = bar_over.map(|section| {
-            let bar = self.render_bar(section, cx).into_any_element();
-            self.overlay(bar, true, SECTION, (TOP_BAR, RAIL, left_in))
-        });
         let inner = (drawer - drawer_rail::WIDTH).max(0.);
+        let (bar_over, drawer_over, left_in, right_in) = self.overlays_drawn(drawer_over, last, inner, window, cx);
         // The toast keeps clear of an overlay drawer or bar, as far in as it is.
         let toast_right = right_width + if drawer_over.is_some() { inner * right_in } else { 0. };
         let toast_left = if bar_over.is_some() { SECTION * left_in } else { 0. };
-        let drawer_over =
-            drawer_over.map(|body| self.overlay(body, false, inner, (TOP_BAR, drawer_rail::WIDTH, right_in)));
         // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
         // the buttons and the agent chip's badge.
         let centre = f32::from(window.viewport_size().width) - left;
