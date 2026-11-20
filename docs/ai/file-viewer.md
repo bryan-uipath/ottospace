@@ -66,6 +66,13 @@ A pane that shows a file, read only. Owner-approved plan: A the viewer, B a mark
   text (`syntax::fence`): a reply drawn again or streamed past a fence parses it no more. On the
   main thread a language's query is built aside, the lexer's colours until it is ready
   (`syntax::take_built` draws again; a reply's blocks are made again, `syntax::built`).
+  **One deadline per unit of work**, not per parse (an agent's reply is untrusted: 200 fences at
+  0.5 s each would hold the window 100 s): a reply drawn on the main thread has `MAIN_TOTAL`
+  (15 ms) for all its fences, a chunk of a viewed file 15 ms and at most `MAX_INNER` (32)
+  languages inside; a viewed markdown file's fences, on its read thread, `BUDGET` in all. What is
+  left when it runs out is the lexer's (or plain) and is not kept: the window draws again and the
+  next draw goes on. A parse that had at least half the time and still ran out is too slow for
+  the main thread: kept as the lexer's (or plain).
 - **Kept** in `layout.json` (and marks, workspaces) as `RecordKind::File { path, top }`.
 - **B, the fixture**: `crates/ottospace/tests/fixtures/markdown/fixture.md` and `checker.png`.
   Beside the tests, not in `docs/`: the renderer's unit test includes it, the e2e tests copy it,
