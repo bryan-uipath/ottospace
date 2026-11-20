@@ -435,6 +435,21 @@ mod tests {
     }
 
     #[test]
+    fn the_main_windows_space_takes_the_tab_it_shows_once_the_tabs_out_settle() {
+        let mut m = two();
+        m.update(Action::NewEmptyTab);
+        m.update(Action::TabOut { tab: None });
+        // A client's jump to a mark of a tab with nothing in it: the tab made for it goes, and the
+        // main window shows a tab of its workspace again.
+        let marks = r#"[{"id":"name:a","name":"a","target":{"tab":{"title":"app","task":null,"focused":null,"layout":null,"panes":[]}}}]"#;
+        let marks = serde_json::from_str(marks).expect("a mark");
+        m.update(Action::RestoreMarks { marks, extra: Default::default() }.sent_by(Origin::System));
+        m.update(Action::MarkGo { mark: crate::model::MarkRef::Place(0), axis: Axis::Down }.sent_by(Origin::Socket));
+        let last = m.spaces.iter().find(|space| space.of == m.tabs[m.main_at()].space).and_then(|space| space.last);
+        assert_eq!(last, Some(main_id(&m)));
+    }
+
+    #[test]
     fn fold_back_in_from_the_main_windows_row() {
         let mut m = two();
         m.update(Action::TabOut { tab: None });
