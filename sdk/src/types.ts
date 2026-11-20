@@ -1976,6 +1976,8 @@ export interface Snapshot {
    * title); the agents of every workspace; how many steps a narrow window shortened them (0 to 3).
    */
   status_bar: {
+    /** The mode's block at the bar's left, while a mode is on. */
+    mode: Rect | null;
     place: { text: string; rect: Rect | null } | null;
     meeting: { rect: Rect | null; join: Rect | null } | null;
     agents: { text: string; rect: Rect | null };

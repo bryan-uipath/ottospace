@@ -174,7 +174,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     ],
     badges: { "1": "FL" },
     status_bar: {
-      place: { text: "~/code/app · main ●", rect: [8, 879, 180, 19] },
+      mode: [8, 880, 63, 16],
+      place: { text: "~/code/app · main ●", rect: [111, 879, 180, 19] },
       meeting: { rect: [900, 879, 150, 19], join: null },
       agents: { text: "● 2 working · ● 1 needs you", rect: [1200, 879, 180, 19] },
       shrink: 0,

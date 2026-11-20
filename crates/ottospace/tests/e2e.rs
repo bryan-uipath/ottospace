@@ -10592,6 +10592,19 @@ fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in
     }
     // Wide enough for all whole, or (a runner's smaller window, a long temp path) the folder alone shortened.
     assert!(shown["shrink"].as_u64() <= Some(1), "{shown}");
+    // The mode: a block at the far left, in a slot kept empty in normal mode, so the folder stays put.
+    assert_eq!(shown["mode"], Value::Null, "{shown}");
+    let with_mode = |o: &Otto| {
+        o.user_key("cmd-p");
+        let b = o.wait_for("the mode's block", |o| Some(bar(o)).filter(|b| b["mode"].is_array()));
+        o.user_key("escape");
+        o.wait_for("no mode", |o| bar(o)["mode"].is_null().then_some(()));
+        b
+    };
+    let moded = with_mode(&otto);
+    let mode = rect(&moded["mode"]);
+    assert!(mode[0] + mode[2] <= place[0] && mode[0] >= status[0], "{moded}");
+    assert_eq!(rect(&moded["place"]["rect"])[0], place[0], "the folder moved for the mode: {moded}");
     // The meeting's title is drawn, never in the state.
     assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Team sync"));
     // A client's click copies nothing and joins nothing; the user's copies the path and joins.
@@ -10615,6 +10628,12 @@ fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in
     );
     let right = rect(&narrow["agents"]["rect"]);
     assert!(right[0] + right[2] <= 340.5, "{narrow}");
+    // The mode never shortens: its block whole, still first.
+    let moded = with_mode(&otto);
+    let (small, folder) = (rect(&moded["mode"]), rect(&moded["place"]["rect"]));
+    assert_eq!((small[2], small[0]), (mode[2], mode[0]), "{moded}");
+    assert!(small[0] + small[2] <= folder[0], "{moded}");
+    assert_eq!(folder[0], rect(&narrow["place"]["rect"])[0], "{moded}");
     // An app pane says its app; an empty pane nothing.
     otto.call(json!({"cmd": "app_fixture", "name": "Zoom Workplace", "user": true}));
     otto.wait_for("the app's name", |o| (bar(o)["place"]["text"] == "Zoom Workplace").then_some(()));
