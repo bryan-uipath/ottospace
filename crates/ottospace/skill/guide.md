@@ -409,7 +409,8 @@ tab that holds nothing is closed); `task_undo` brings them back to its space.
   answer to "Stop "<task>" and put it away?" (`state.confirm.later`). Done makes the task `done`
   and stops its idle agent; Later stops it and parks the task (`parked`). Either takes it off the
   drawer's rail and out of `spaces[].front`; its workspace stays on the top row. The notice bar
-  says `Done · <task>` with `undo` for six seconds (and `new_task`, the rect of its New task here).
+  says `Done · <task>` with `undo` for six seconds (and `new_task`, the rect of its New task here:
+  the user's too, yours is refused with "only the user takes New task here").
   A worktree the new-task box made for the task (`made` on the task: `repo`, `branch`, `path`,
   `removed`) is removed by its Done unless dirty or in use; a done task is under the Tasks
   section's `done_today` heading.

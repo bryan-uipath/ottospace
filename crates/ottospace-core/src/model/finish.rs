@@ -6,7 +6,7 @@
 
 use serde::Serialize;
 
-use super::{Action, Confirm, Effect, Model};
+use super::{Action, Confirm, Effect, Envelope, Model, Origin};
 use crate::notice::{self, Notice};
 use crate::talk::Subject;
 use crate::tasks::{State, TaskId};
@@ -14,6 +14,8 @@ use crate::transcript::{Entry, View};
 
 /// Why a client's Done, Later, Undo or answer to "Stop it and put it away?" is refused.
 pub const USERS_ALONE: &str = "only the user marks a task done or puts it away";
+/// Why a client's press of "Done · <task>"'s New task here is refused: the notice is the user's.
+pub const NEW_TASK_USERS: &str = "only the user takes New task here";
 /// Why Done does nothing while a turn runs: the composer's Stop is for that.
 pub const TURN_RUNS: &str = "its turn runs: Stop it first";
 /// Why Done kept the task's own worktree, when it was not git that said.
@@ -127,6 +129,17 @@ impl Model {
     /// The Done line offers New task here: its task's workspace is the one on show.
     pub fn done_here(&self) -> bool {
         self.finish.offer.as_ref().is_some_and(|offer| self.task_space(offer.task) == *self.space())
+    }
+
+    /// The user's New task here, while offered, is the new-task box opened (⌘N). Anyone else's
+    /// stays as sent, and is refused (`Model::refusal`); one not offered does nothing.
+    pub(crate) fn done_new_task(&self, sent: Envelope) -> Envelope {
+        match sent.action {
+            Action::DoneNewTask if sent.origin == Origin::User && self.done_here() => {
+                Action::OpenCompose { text: String::new() }.sent_by(sent.origin)
+            }
+            _ => sent,
+        }
     }
 
     /// "Done · <task>" while its Undo is offered.
@@ -417,7 +430,6 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Origin;
     use crate::model::chat::Primary;
     use crate::model::rail::RailItem;
     use crate::model::tests::started;
@@ -1019,5 +1031,25 @@ mod tests {
         assert!(m.done_here());
         m.update(Action::SpaceSelect { index: 0 });
         assert!(!m.done_here());
+    }
+
+    /// New task here is the user's alone: a client's or a timer's is refused and opens no box.
+    #[test]
+    fn only_the_user_takes_new_task_here() {
+        let mut m = in_its_worktree();
+        m.update(Action::TaskDone { id: 1 });
+        for origin in [Origin::Socket, Origin::System] {
+            assert_eq!(m.refusal(&Action::DoneNewTask, origin), Some(NEW_TASK_USERS));
+            assert_eq!(m.update(Action::DoneNewTask.sent_by(origin)), []);
+            assert!(m.compose.is_none(), "{origin:?} opened the box");
+        }
+        assert_eq!(m.refusal(&Action::DoneNewTask, Origin::User), None);
+        m.update(Action::DoneNewTask);
+        assert!(m.compose.is_some(), "the user's opens the box");
+        // Not offered (another workspace on show): nothing, the user's too.
+        m.update(Action::CloseCompose);
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::DoneNewTask);
+        assert!(m.compose.is_none());
     }
 }

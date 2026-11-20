@@ -341,7 +341,7 @@ impl Workspace {
                 None
             }
             ("notice", "new-task") => {
-                self.new_task(window, cx);
+                self.new_task_here(window, cx);
                 None
             }
             ("notice", "offer") => {

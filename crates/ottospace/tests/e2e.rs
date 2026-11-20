@@ -11671,6 +11671,11 @@ fn done_removes_its_clean_worktree_keeps_a_dirty_one_and_a_new_task_starts_in_th
     // New task here, on the line: the box in this workspace, its folder the repository.
     let bar = otto.call(json!({"cmd": "state"}))["notice_bar"].clone();
     assert_eq!(bar["text"], "Done · fix login", "{bar}");
+    // A client's click or label on it opens no box: the notice is the user's.
+    for theirs in [otto.click(at(rect(&bar["new_task"]), 0.5, 0.5), 1), sneak_to(&otto, "notice:new-task")] {
+        assert_eq!(theirs["state"]["compose"], Value::Null, "{theirs}");
+        assert_eq!(theirs["notice"], "only the user takes New task here", "{theirs}");
+    }
     otto.user_click(at(rect(&bar["new_task"]), 0.5, 0.5));
     let typed = otto.user_key("w r i t e space d o c s");
     assert_eq!(typed["compose_plan"]["dir"], "app", "{}", typed["compose_plan"]);

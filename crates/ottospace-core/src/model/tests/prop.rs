@@ -1604,6 +1604,7 @@ const MAKERS: &[Make] = &[
     |g| Action::TaskDone { id: g.task() },
     |g| Action::TaskLater { id: g.task() },
     |_| Action::DoneUndo,
+    |_| Action::DoneNewTask,
     |g| Action::LocalDay { day: g.rng.pick(&[0, 1_000_000, 86_400_000]) },
     |g| {
         // A task's own worktree half the time.
@@ -4065,6 +4066,9 @@ impl Run {
         // Only the user starts a capture: a client's or a timer's is refused, whatever the mode.
         let foreign = matches!(action, Action::CaptureStart { .. }) && origin != Origin::User;
         ensure!(!foreign || refused.is_some(), "a capture that is not the user's was not refused");
+        // Only the user takes "Done · <task>"'s New task here.
+        let foreign = matches!(action, Action::DoneNewTask) && origin != Origin::User;
+        ensure!(!foreign || refused.is_some(), "a New task here that is not the user's was not refused");
         // Only the user starts, marks, sends or cancels a bug report; only the shell says what it read.
         let foreign = match &action {
             Action::BugRepo { .. } => origin == Origin::Socket,
