@@ -1,0 +1,24 @@
+# Workspaces reordered by drag, in one order for the list and the top row. Four kept workspaces,
+# by name at first; each opened. Zoom's row carried above Arima (its line), dropped; then a space
+# carried along the top row (the others make room), dropped.
+{"cmd":"section","section":"workbook"}
+{"until":"workbooks","len":4}
+{"click":{"rect":"workbooks.0.row"}}
+{"click":{"rect":"workbooks.1.row"}}
+{"click":{"rect":"workbooks.2.row"}}
+{"click":{"rect":"workbooks.3.row"}}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"before"}
+{"hold":{"rect":"workbooks.3.row"},"by":[0,-70]}
+{"shot":"list-mid-drag"}
+{"cmd":"mouse","action":"up","x":-50,"y":-50,"as":"user"}
+{"drag":{"rect":"workbooks.3.row"},"at":[0.5,0.5],"by":[0,-80]}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"list-dropped"}
+{"hold":{"rect":"space_rects.1"},"by":[170,0]}
+{"shot":"row-mid-drag"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"cmd":"mouse","action":"up","x":-50,"y":-50,"as":"user"}
+{"drag":{"rect":"space_rects.1"},"at":[0.5,0.5],"by":[170,0]}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"after"}

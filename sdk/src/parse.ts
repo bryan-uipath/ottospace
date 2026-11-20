@@ -132,6 +132,7 @@ import type {
   SpaceRow,
   RowMenu,
   Owner,
+  ReorderItem,
   Tab,
   Task,
   TaskPopReply,
@@ -573,6 +574,17 @@ function owner(value: unknown, at: string): Owner {
     default:
       throw new Error(`${at}.kind: not a space: ${JSON.stringify(o.kind)}`);
   }
+}
+
+function reorder(value: unknown, at: string): { item: ReorderItem; to: number } {
+  const o = fields(value, at);
+  const item = fields(o.item, `${at}.item`);
+  if (item.kind !== "workbook" && item.kind !== "space") throw wrong(`${at}.item.kind`, "workbook or space", item.kind);
+  const carried: ReorderItem =
+    item.kind === "workbook"
+      ? { kind: "workbook", id: num(item.id, `${at}.item.id`) }
+      : { kind: "space", of: owner(item.of, `${at}.item.of`) };
+  return { item: carried, to: num(o.to, `${at}.to`) };
 }
 
 function layout(value: unknown, at: string): Layout {
@@ -1686,6 +1698,7 @@ function model(value: unknown, at: string): Model {
     palette: orNull(palette)(o.palette, `${at}.palette`),
     inspector: orNull(inspectorState)(o.inspector, `${at}.inspector`),
     confirm: orNull(confirm)(o.confirm, `${at}.confirm`),
+    reorder: orNull(reorder)(o.reorder, `${at}.reorder`),
     clip: orNull(clip)(o.clip, `${at}.clip`),
     keys: bool(o.keys, `${at}.keys`),
     visual: orNull(num)(o.visual, `${at}.visual`),

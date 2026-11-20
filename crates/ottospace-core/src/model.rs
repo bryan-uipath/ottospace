@@ -586,6 +586,16 @@ pub enum Action {
         pane: PaneId,
         axis: Axis,
     },
+    /// The user carries a row of the Workspaces section, or a space's item on the top row, over
+    /// place `to` among them: a drag starts or goes on (`Model::reorder`). The user's alone.
+    ReorderOver {
+        item: reorder::ReorderItem,
+        to: usize,
+    },
+    /// The drag's release: what it carries takes its place. The user's alone.
+    ReorderDrop,
+    /// Esc, or a release outside: the drag ends and nothing moves. The user's alone.
+    ReorderCancel,
     /// The focused pane trades places with its neighbour on that side. Focus stays on it.
     SwapDir {
         dir: Dir,
@@ -2329,6 +2339,9 @@ impl Action {
             | Action::DividerDrag { .. }
             | Action::DividerHold { .. }
             | Action::DividerEven { .. }
+            | Action::ReorderOver { .. }
+            | Action::ReorderDrop
+            | Action::ReorderCancel
             | Action::SwapDir { .. }
             | Action::MovePane { .. }
             | Action::Equalize
@@ -2740,6 +2753,9 @@ impl Action {
             | Action::DividerDrag { .. }
             | Action::DividerHold { .. }
             | Action::DividerEven { .. }
+            | Action::ReorderOver { .. }
+            | Action::ReorderDrop
+            | Action::ReorderCancel
             | Action::SwapDir { .. }
             | Action::MovePane { .. }
             | Action::Equalize
@@ -3483,6 +3499,7 @@ pub mod offers;
 pub mod overlay;
 mod pick;
 pub mod quit;
+pub mod reorder;
 pub mod repo_dots;
 pub mod slots;
 mod transcribe;
@@ -3820,6 +3837,8 @@ pub struct Model {
     /// The divider the user holds (`DividerHold`): its split at the press, and as the drag last left it.
     #[serde(skip)]
     divider: Option<(PaneId, Axis, (Node, Node))>,
+    /// The user's drag of a workspace's row or a space's item to another place (`ReorderOver`).
+    reorder: Option<reorder::Reorder>,
     #[serde(skip)]
     pub(crate) next_id: PaneId,
     #[serde(skip)]
@@ -4002,6 +4021,7 @@ impl Default for Model {
             ending: Vec::new(),
             by_user: false,
             divider: None,
+            reorder: None,
             next_id: 0,
             // Born settled: Home's tab is its last, as `settle_spaces` leaves it after any step.
             spaces: vec![Space { last: Some(HOME_TAB), ..Space::new(Owner::Home) }],
@@ -4437,6 +4457,8 @@ impl Model {
             Action::TabPlace { .. } => Some(TABS_USERS),
             // A divider follows the user's pointer: a client resizes with `resize`, a step at a time.
             Action::DividerDrag { .. } | Action::DividerHold { .. } | Action::DividerEven { .. } => Some(DIVIDER_USERS),
+            // So does a workspace's place in its list.
+            Action::ReorderOver { .. } | Action::ReorderDrop | Action::ReorderCancel => Some(reorder::REORDER_USERS),
             // So is which of a workspace's conversations is in front.
             Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
             // And which workspace the new task the user writes goes to.
@@ -4819,6 +4841,7 @@ impl Model {
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
         self.settle_row_menu();
+        self.settle_reorder();
         self.settle_bug(&mut effects);
         self.settle_listen();
         self.settle_overlays(overlays, &mut effects);
@@ -5570,6 +5593,9 @@ impl Model {
                     layout.even(pane, axis);
                 }
             }
+            Action::ReorderOver { item, to } => self.reorder_over(item, to),
+            Action::ReorderDrop => self.reorder_drop(),
+            Action::ReorderCancel => self.reorder = None,
             Action::DropPane { source, target, zone } => self.drop_pane(source, target, zone, effects),
             Action::PaneWants { pane, content, outer, window } => {
                 // Only an app pane has a window to measure: a fit is never a terminal's.
@@ -9823,6 +9849,9 @@ mod tests {
         Action::DividerDrag { .. },
         Action::DividerHold { .. },
         Action::DividerEven { .. },
+        Action::ReorderOver { .. },
+        Action::ReorderDrop,
+        Action::ReorderCancel,
         Action::SwapDir { .. },
         Action::MovePane { .. },
         Action::Equalize,
@@ -10178,6 +10207,9 @@ mod tests {
             Action::DividerDrag { pane: 1, axis: Right, ratio: 0.3 },
             Action::DividerHold { pane: 1, axis: Right },
             Action::DividerEven { pane: 1, axis: Right },
+            Action::ReorderOver { item: reorder::ReorderItem::Workbook { id: 1 }, to: 0 },
+            Action::ReorderDrop,
+            Action::ReorderCancel,
             Action::SwapDir { dir: Dir::Left },
             Action::MovePane { pane: None, tab: 0 },
             Action::Equalize,
@@ -10810,6 +10842,9 @@ mod tests {
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::DividerDrag { .. } | Action::DividerHold { .. } | Action::DividerEven { .. } => {
                         Some(DIVIDER_USERS)
+                    }
+                    Action::ReorderOver { .. } | Action::ReorderDrop | Action::ReorderCancel => {
+                        Some(reorder::REORDER_USERS)
                     }
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
                     Action::ComposeHere => Some(spaces::PIN_USERS),
@@ -11784,7 +11819,8 @@ mod tests {
         // A kept workspace is listed after the tasks, and takes the tab.
         m.update(Action::ClosePalette);
         m.update(Action::WorkbookNew { uid: "9f3a61c2d4e5b708".into() });
-        m.update(Action::SpaceSelect { index: 1 });
+        // The task's space, after the workspaces'.
+        m.update(Action::SpaceSelect { index: 2 });
         m.update(Action::PaletteTasks);
         assert_eq!(titles(&m), ["docs", "Workspace 2"]);
         m.update(Action::PaletteChoose { index: Some(1) });
@@ -12591,14 +12627,15 @@ mod tests {
         m.update(Action::SpaceSelect { index: 0 });
         m.update(click("/code/app-2"));
         assert_eq!((m.space(), m.workbooks.list.len(), m.panes.len()), (&WORKSPACE, 1, 1));
-        // From that workspace, a repository's own folder: a new one after it, named for the repository.
+        // From that workspace, a repository's own folder: a new one, named for the repository, in
+        // the workspaces' one order (by name: "app" before "fix/login").
         m.update(click("/code/app"));
         let second = Owner::Workbook { id: 2 };
         assert_eq!(
             (m.space(), m.space_title(&second), m.space_worktree(&second)),
             (&second, "app".into(), Some("/code/app"))
         );
-        assert_eq!(m.shown_spaces().iter().map(|s| s.of.clone()).collect::<Vec<_>>(), [Owner::Home, WORKSPACE, second]);
+        assert_eq!(m.shown_spaces().iter().map(|s| s.of.clone()).collect::<Vec<_>>(), [Owner::Home, second, WORKSPACE]);
         // Hidden: it comes back. Closed and kept: it opens again, its default kept.
         m.update(Action::SpaceHide { index: None });
         m.update(click("/code/app"));
@@ -15422,7 +15459,8 @@ mod tests {
         assert_eq!(m.talk.as_ref().map(|talk| &talk.task), Some(&there));
         // Its space is selected; the workspace's panes are on show again once it is.
         assert_eq!(m.space(), &Owner::Session { runner: "claude".into(), id: "there".into() });
-        m.update(Action::SpaceSelect { index: 2 });
+        // The workspace's, before the session's.
+        m.update(Action::SpaceSelect { index: 1 });
         // A click on one row, then on another: the selection is on the one clicked last.
         m.update(Action::SetSessions {
             found: vec![
@@ -15454,7 +15492,8 @@ mod tests {
         m.update(Action::SetSessions { found: found(), day: 0 });
         m.update(Action::SessionHide { runner: "codex".into(), id: "hidden".into() });
         m.update(Action::SessionAdopt { runner: "codex".into(), id: "adopted".into() });
-        m.update(Action::SpaceSelect { index: 2 });
+        // The workspace's: first after Home.
+        m.update(Action::SpaceSelect { index: 1 });
         let panes = |m: &Model| m.sessions_bar().rows.iter().map(|row| (row.id.clone(), row.pane)).collect::<Vec<_>>();
         assert_eq!(panes(&m), [("here".to_string(), Some(2)), ("past".to_string(), None)], "an idle one is in no pane");
         // The picker, the new-task box, the key reference and visual mode keep the focus where it
@@ -15483,7 +15522,8 @@ mod tests {
         m.update(Action::SetSessions { found: vec![session("claude", "here", "/code/app", true, 9)], day: 0 });
         // A second terminal there, beside the first: which is it is not known.
         m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right });
-        m.update(Action::MovePane { pane: None, tab: 1 });
+        let first = m.tab_panes().iter().position(|panes| panes.contains(&2)).unwrap_or_default();
+        m.update(Action::MovePane { pane: None, tab: first });
         assert_eq!(m.sessions_bar().rows[0].pane, None);
     }
 
@@ -16304,18 +16344,19 @@ mod tests {
         assert_eq!(spaces(&m), ["Home", "app-2"]);
         // A second repo: a workspace of its own, named for it.
         assert_eq!(m.update(Action::OpenRepo { path: "/code/app".into(), axis: Down }), [Effect::Opened(2)]);
-        assert_eq!((m.pane(2).unwrap().cwd.as_deref(), tab_titles(&m)), (Some("/code/app"), vec!["app-2", "app"]));
-        assert_eq!((m.active, m.tab_panes()), (1, vec![vec![1], vec![2], vec![]]));
-        assert_eq!(spaces(&m), ["Home", "app-2", "app"]);
+        // The workspaces in their one order: by name.
+        assert_eq!((m.pane(2).unwrap().cwd.as_deref(), tab_titles(&m)), (Some("/code/app"), vec!["app", "app-2"]));
+        assert_eq!((m.active, m.tab_panes()), (0, vec![vec![2], vec![1], vec![]]));
+        assert_eq!(spaces(&m), ["Home", "app", "app-2"]);
         // From a task's space, its tab in use: a workspace too, selected; the name is numbered.
         let a = add_task(&mut m, "a", State::Captured);
         m.update(Action::SpaceOpen { space: task_space(a) });
         term(&mut m);
         m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right });
-        assert_eq!((m.space_title(m.space()), m.active, m.tabs.len()), ("app 2".to_string(), 3, 5));
+        assert_eq!((m.space_title(m.space()), m.active, m.tabs.len()), ("app 2".to_string(), 1, 5));
         // A client's is the workspace selected last's: it makes none while there is one.
         m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right }.sent_by(Origin::Socket));
-        assert_eq!((m.space_title(m.space()), m.active, m.workbooks.list.len()), ("app 2".to_string(), 4, 3));
+        assert_eq!((m.space_title(m.space()), m.active, m.workbooks.list.len()), ("app 2".to_string(), 2, 3));
     }
 
     #[test]
@@ -17190,6 +17231,9 @@ mod tests {
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::DividerDrag { .. } | Action::DividerHold { .. } | Action::DividerEven { .. } => {
                         Some(DIVIDER_USERS)
+                    }
+                    Action::ReorderOver { .. } | Action::ReorderDrop | Action::ReorderCancel => {
+                        Some(reorder::REORDER_USERS)
                     }
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
                     Action::ComposeHere => Some(spaces::PIN_USERS),

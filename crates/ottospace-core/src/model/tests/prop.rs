@@ -20,6 +20,7 @@ use crate::listen::Heard;
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
 use crate::model::displays::Display;
 use crate::model::rail::RailItem;
+use crate::model::reorder::{Reorder, ReorderItem};
 use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::row_menu::MenuOf;
@@ -206,6 +207,18 @@ impl Gen<'_> {
         self.rng.coin().then(|| self.rng.pick(&[0, 1, 2, 5, usize::MAX]))
     }
 
+    /// What a reorder drag carries: a workbook's row or a space, there or not.
+    fn reorder_item(&mut self) -> ReorderItem {
+        match self.rng.coin() {
+            true => ReorderItem::Workbook { id: self.workbook() },
+            false => {
+                let shown: Vec<Owner> = self.m.shown_spaces().iter().map(|space| space.of.clone()).collect();
+                let of = if self.rng.one_in(4) { self.owner() } else { self.rng.pick(&shown) };
+                ReorderItem::Space { of }
+            }
+        }
+    }
+
     /// A workbook as a file may hold it: sound or not, with keys this build does not know.
     fn kept_workbook(&mut self) -> Workbook {
         let panes = vec![self.record(1), self.record(2)];
@@ -222,6 +235,7 @@ impl Gen<'_> {
             tabs: (0..self.rng.below(3)).map(|_| tab.clone()).collect(),
             task: self.rng.one_in(3).then(|| self.task()),
             worktree: self.rng.one_in(3).then(|| self.name(DIRS)),
+            order: self.rng.one_in(3).then(|| self.rng.pick(&[0, 1, 5, u32::MAX])),
             live: Vec::new(),
             kept: true,
             closing: None,
@@ -928,6 +942,9 @@ const MAKERS: &[Make] = &[
     },
     |g| Action::DividerHold { pane: g.pane(), axis: g.axis() },
     |g| Action::DividerEven { pane: g.pane(), axis: g.axis() },
+    |g| Action::ReorderOver { item: g.reorder_item(), to: g.rng.pick(&[0, 1, 2, 5, usize::MAX]) },
+    |_| Action::ReorderDrop,
+    |_| Action::ReorderCancel,
     |g| Action::SwapDir { dir: g.dir() },
     |g| Action::MovePane { pane: g.rng.coin().then(|| g.pane()), tab: g.index(g.m.tabs.len()) },
     |_| Action::Equalize,
@@ -2073,6 +2090,42 @@ fn check_decisions(m: &Model) -> Result<(), String> {
     Ok(())
 }
 
+/// The workbooks are by name, or each has its own place, in order: none lost or doubled by a drag;
+/// the top row in that order.
+/// A drag in flight carries a row listed or a space shown (not Home's), to a place among them.
+fn check_reorder(m: &Model) -> Result<(), String> {
+    let orders: Vec<Option<u32>> = m.workbooks.list.iter().map(|book| book.order).collect();
+    let by_name = orders.iter().all(Option::is_none);
+    let placed = orders.iter().all(Option::is_some) && orders.windows(2).all(|pair| pair[0] < pair[1]);
+    ensure!(by_name || placed, "workbooks' places {orders:?}");
+    // One order: the row is Home, the workspaces' spaces as the list has them, then the rest.
+    let place = |of: &Owner| match of {
+        Owner::Home => (0, 0),
+        _ => m
+            .workbooks
+            .list
+            .iter()
+            .position(|book| m.workbooks.space_of(&Owner::Workbook { id: book.id }) == *of)
+            .map_or((2, 0), |at| (1, at)),
+    };
+    let row: Vec<(u8, usize)> = m.spaces.iter().map(|space| place(&space.of)).collect();
+    ensure!(row.is_sorted(), "the row is not in the workspaces' order: {row:?}");
+    let Some(Reorder { item, to }) = m.reorder() else { return Ok(()) };
+    let len = match item {
+        ReorderItem::Workbook { id } => {
+            ensure!(m.workbooks.listed().any(|book| book.id == *id), "a drag carries workbook {id}, not listed");
+            m.workbooks.listed().count()
+        }
+        ReorderItem::Space { of } => {
+            let shown = m.shown_spaces().iter().any(|space| space.of == *of);
+            ensure!(shown && *of != Owner::Home && *to >= 1, "a drag carries space {of:?} to {to}");
+            m.shown_spaces().len()
+        }
+    };
+    ensure!(*to < len, "a drag's place {to} of {len}");
+    Ok(())
+}
+
 fn check(m: &Model) -> Result<(), String> {
     check_decisions(m)?;
     check_slots(m)?;
@@ -2082,6 +2135,7 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(m.overlays() || m.drawer_takes_room() != m.drawer_collapsed(), "the drawer's room with the flag off");
     check_offers(m)?;
     check_out(m)?;
+    check_reorder(m)?;
     // A bug report: only with a repository to file it in, over everything, its marks within bounds.
     if let Some(report) = &m.bug {
         ensure!(m.bug_repo.is_some(), "a bug report with no repository");

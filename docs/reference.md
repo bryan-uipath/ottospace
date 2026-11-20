@@ -99,6 +99,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⌥⇧←/→/↑/↓ or ⌘⌥⇧H/L/K/J | Resize: move the focused pane's split that way |
 | ⌘⌃= | Even out the splits of the tab |
 | Drag the divider between two panes | Resize those two: every other divider stays where it is, until a pane reaches its least (a tenth of its split) and pushes the next. Double-click evens it out with its row. Esc during the drag puts it back. A hosted app's window is sized once, on release. Yours alone: a client resizes with `resize` |
+| Drag a workspace's row in the Workspaces section, or its space on the top row | Move it there: one order for both (the top row shows the open ones in it, after Home; a task's or a session's space of no workspace comes after them). A line shows where a row lands; on the top row the others make room. Release drops it, Esc or a release elsewhere puts it back; a press that moves under 4 points is a click. The first drag ends the order by name: it is yours from then on, kept in the workspaces' files, and a new one goes last. A press on a space never moves the window; the top row's empty part still does. Yours alone |
 | ⌘⌃0 | Fit the focused pane to its app's window, when the app refused the pane's size |
 | ⌘⌃←/→/↑/↓ or ⌘⌃H/L/K/J | Swap the focused pane with its neighbour on that side |
 | ⌘⇧⌥1 … ⌘⇧⌥9 | Move the focused pane to that tab on the bar. US keyboard layout only |

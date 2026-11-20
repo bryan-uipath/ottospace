@@ -1,7 +1,7 @@
 //! Changes to ottospace's own window that GPUI does not expose.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use objc2::ffi::class_addMethod;
 use objc2::rc::Retained;
@@ -13,7 +13,7 @@ use objc2_app_kit::{
 };
 use objc2_core_foundation::CGPoint;
 use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags, CGScrollEventUnit};
-use objc2_foundation::NSPoint;
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 use ottospace_core::ax::Frame;
 
 /// One pointer event for `send_mouse`. `x`, `y`: points from the top-left of the view.
@@ -278,6 +278,44 @@ pub unsafe fn zoom_asks(ns_view: *mut c_void) -> bool {
 /// True once after each zoom `zoom_asks` turned away.
 pub fn take_zoom() -> bool {
     ZOOM_ASKED.swap(false, Ordering::SeqCst)
+}
+
+/// The part of the title bar the shell's own drags take (`x, y, w, h`, points from the view's
+/// top-left): a press there never moves the window.
+static HELD_TITLEBAR: std::sync::Mutex<[f64; 4]> = std::sync::Mutex::new([0.; 4]);
+/// The main window's view, the one `HELD_TITLEBAR` is of: a tab out's window (the same class) holds none.
+static HELD_VIEW: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+
+/// `_opaqueRectForWindowMoveWhenInTitlebar`: `HELD_TITLEBAR`, in AppKit's bottom-left points.
+extern "C-unwind" fn held_titlebar(this: &AnyObject, _: Sel) -> NSRect {
+    let main = std::ptr::eq(this as *const AnyObject as *const c_void, HELD_VIEW.load(Ordering::SeqCst));
+    let [x, y, w, h] = HELD_TITLEBAR.lock().ok().filter(|_| main).map_or([0.; 4], |held| *held);
+    let view = unsafe { &*(this as *const AnyObject as *const NSView) };
+    NSRect::new(NSPoint::new(x, view.bounds().size.height - y - h), NSSize::new(w, h))
+}
+
+/// Makes a press in `set_held_titlebar`'s rect the view's, never a move of the window: AppKit
+/// drags a transparent title bar's window unless the view under the press claims that part of it
+/// (the private `_opaqueRectForWindowMoveWhenInTitlebar`, as Zed's GPUI does). False: the class
+/// has its own, left alone.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread.
+pub unsafe fn titlebar_holds(ns_view: *mut c_void) -> bool {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    HELD_VIEW.store(ns_view, Ordering::SeqCst);
+    let class = AnyObject::class(view) as *const AnyClass as *mut AnyClass;
+    // SAFETY: `held_titlebar` takes the receiver and the selector, and returns an NSRect.
+    let imp: Imp = unsafe { std::mem::transmute(held_titlebar as extern "C-unwind" fn(_, _) -> NSRect) };
+    let types = c"{CGRect={CGPoint=dd}{CGSize=dd}}@:";
+    unsafe { class_addMethod(class, sel!(_opaqueRectForWindowMoveWhenInTitlebar), imp, types.as_ptr()) }.as_bool()
+}
+
+/// Where the title bar's own controls are now: `[x, y, w, h]`, points from the view's top-left.
+pub fn set_held_titlebar(rect: [f64; 4]) {
+    if let Ok(mut held) = HELD_TITLEBAR.lock() {
+        *held = rect;
+    }
 }
 
 /// Presses the window's zoom as its green button does (`performZoom:`). True if `zoom_asks`

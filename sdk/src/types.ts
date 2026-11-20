@@ -326,6 +326,9 @@ export type Owner =
   /** Decisions (the `decisions` flag): ephemeral, never kept. */
   | { kind: "decisions" };
 
+/** What the user's reorder drag carries: a row of the Workspaces section, or a space of the top row (never Home's). */
+export type ReorderItem = { kind: "workbook"; id: number } | { kind: "space"; of: Owner };
+
 /** A space of the top row: its tabs as places in `state.tabs`. Exactly one is `selected`: the tab on show is its. */
 export interface SpaceRow {
   of: Owner;
@@ -1158,6 +1161,8 @@ export interface Model {
   inspector: InspectorState | null;
   /** The quit question while it is up. */
   confirm: Confirm | null;
+  /** The user's drag of a Workspaces row or a top-row space, while it lasts: the place it takes if dropped now, among the rows listed or the spaces shown (Home at 0). Only the user drags one. */
+  reorder: { item: ReorderItem; to: number } | null;
   /** "Copied 3 lines", while it shows. */
   clip: Clip | null;
   keys: boolean;

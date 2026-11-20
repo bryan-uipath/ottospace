@@ -6673,6 +6673,110 @@ fn a_workspaces_row_opens_on_a_click_and_its_dots_rename_and_delete() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// Kept workspaces `names`, as files in `home` before a start: no tab saved in any.
+fn workbook_files_named(home: &Path, names: &[&str]) {
+    let dir = home.join("workbooks");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (n, name) in names.iter().enumerate() {
+        let uid = format!("{:016x}", 0xa0 + n);
+        let book = json!({"version": 2, "id": uid, "name": name, "tabs": []});
+        std::fs::write(dir.join(format!("{uid}.json")), book.to_string()).unwrap();
+    }
+}
+
+/// The top row's spaces shown, by kind and id: `workbook:2`, Home first.
+fn row_of(reply: &Value) -> Vec<String> {
+    let spaces = reply["spaces"].as_array().cloned().unwrap_or_default();
+    let shown = spaces.iter().filter(|space| space["hidden"] == false);
+    shown.map(|space| format!("{}:{}", space["of"]["kind"].as_str().unwrap_or(""), space["of"]["id"])).collect()
+}
+
+/// The owner: "drag-to-reorder workspaces … the workspace tab strip is the titlebar so it drags
+/// the whole window". A space pressed and moved along the top row is carried there; the window
+/// stays where it is. A client's drag, and a press on the row's empty part, move no space.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_space_dragged_along_the_top_row_lands_there_and_the_window_stays() {
+    let home = user_folder("reorder-row", r#"{"repos": []}"#);
+    workbook_files_named(&home, &["Arima", "Slack", "Zoom"]);
+    let otto = Otto::launch_with("reorder-row", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    otto.call(json!({"cmd": "section", "section": "workbook"}));
+    for row in otto.drawn()["workbooks"].as_array().cloned().unwrap_or_default() {
+        otto.user_click(at(rect(&row["row"]), 0.5, 0.5));
+    }
+    let before = otto.drawn();
+    let row = row_of(&before);
+    assert_eq!(row.len(), 4, "Home and three: {row:?}");
+    let space = |reply: &Value, place: usize| rect(&reply["space_rects"][place]);
+
+    // A client's drag moves nothing: the order is the user's.
+    let (first, third) = (space(&before, 1), space(&before, 3));
+    let (from, to) = (at(first, 0.5, 0.5), [third[0] + third[2] - 4.0, first[1] + first[3] / 2.0]);
+    let refused = otto.drag(from, to);
+    assert_eq!((row_of(&refused), &refused["state"]["reorder"]), (row.clone(), &Value::Null));
+
+    // Mid-drag the space is carried; Esc puts it back.
+    let mouse = |action: &str, p: [f64; 2]| {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "as": "user"}))
+    };
+    mouse("down", from);
+    mouse("move", [from[0] + 20.0, from[1]]);
+    let carried = mouse("move", to);
+    assert_eq!(carried["state"]["reorder"]["to"], 3, "{}", carried["state"]["reorder"]);
+    let escaped = otto.user_key("escape");
+    assert_eq!(escaped["state"]["reorder"], Value::Null);
+    mouse("up", to);
+    assert_eq!(row_of(&otto.drawn()), row);
+
+    // The user's: two places right, the window where it was.
+    let dropped = otto.user_drag(from, to);
+    let moved = vec![row[0].clone(), row[2].clone(), row[3].clone(), row[1].clone()];
+    assert_eq!((row_of(&dropped), &dropped["state"]["reorder"]), (moved.clone(), &Value::Null));
+    assert_eq!(otto.drawn()["window"], before["window"]);
+
+    // A press on the row's empty part, right of +, is the window's: no space is carried.
+    let plus = otto.control("top:new_workspace");
+    let empty = [plus[0] + plus[2] + 30.0, plus[1] + plus[3] / 2.0];
+    mouse("down", empty);
+    let over = mouse("move", at(space(&before, 1), 0.5, 0.5));
+    assert_eq!(over["state"]["reorder"], Value::Null);
+    let up = mouse("up", at(space(&before, 1), 0.5, 0.5));
+    assert_eq!(row_of(&up), moved);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A Workspaces row dragged above another moves there, in the user's order from then on: kept in
+/// the workspaces' files, so it is the order after a restart too.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_workspaces_row_dragged_above_another_moves_there_and_stays_after_a_restart() {
+    let home = user_folder("reorder-list", r#"{"repos": []}"#);
+    workbook_files_named(&home, &["Arima", "Slack", "Zoom"]);
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let mut otto = Otto::launch_with("reorder-list-1", &env);
+    otto.call(json!({"cmd": "section", "section": "workbook"}));
+    let before = otto.drawn();
+    assert_eq!(workspace_names(&before), ["Arima", "Slack", "Zoom"]);
+    let rows = |reply: &Value, n: usize| rect(&reply["workbooks"][n]["row"]);
+    let (zoom, arima) = (rows(&before, 2), rows(&before, 0));
+    let dropped = otto.user_drag(at(zoom, 0.5, 0.5), at(arima, 0.5, 0.1));
+    assert_eq!(workspace_names(&dropped), ["Zoom", "Arima", "Slack"]);
+    assert_eq!(dropped["state"]["reorder"], Value::Null);
+    // Released outside the list: put back.
+    let window = rect(&before["window"]);
+    let outside = otto.user_drag(at(rows(&dropped, 0), 0.5, 0.5), [window[2] - 40.0, window[3] / 2.0]);
+    assert_eq!(workspace_names(&outside), ["Zoom", "Arima", "Slack"]);
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+
+    let otto = Otto::launch_with("reorder-list-2", &env);
+    otto.call(json!({"cmd": "section", "section": "workbook"}));
+    assert_eq!(workspace_names(&otto.drawn()), ["Zoom", "Arima", "Slack"]);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The owner: "if i have a workspace w/o an active task, and i'm focused in it, and I press
 /// command+n for a new task and specify the task - the active workspace should now be attached
 /// to the task". In place, with its tabs; ⇧↵ and a client's task take nothing; the binding is
