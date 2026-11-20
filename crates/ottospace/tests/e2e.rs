@@ -15291,7 +15291,7 @@ fn an_offer_splits_right_or_down_and_several_group_in_one_chip() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn hovering_an_offer_chips_words_shows_its_whole_line_and_the_state_holds_no_title() {
-    let otto = Otto::launch_with("offer-tip", &[("OTTOSPACE_E2E_WINDOW", "700x674")]);
+    let otto = Otto::launch_with("offer-tip", &[("OTTOSPACE_E2E_WINDOW", "1024x674")]);
     otto.call(json!({"cmd": "split", "axis": "right"}));
     let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
     let pane = reply["state"]["focused"].as_u64().unwrap();
@@ -15303,6 +15303,7 @@ fn hovering_an_offer_chips_words_shows_its_whole_line_and_the_state_holds_no_tit
     let reply = otto.wait_for("the chip's words", drawn);
     assert_eq!(reply["offer_rects"]["tip"], Value::Null, "no tooltip before a hover");
     let line = rect(&reply["offer_rects"][&words]);
+    assert!(line[2] > 40., "words to point at: {line:?}");
     otto.mouse("move", at(line, 0.5, 0.5));
     let shown = |o: &Otto| Some(state(o)).filter(|s| !s["offer_rects"]["tip"].is_null());
     let reply = otto.wait_for("the tooltip", shown);

@@ -170,7 +170,7 @@ impl Workspace {
         // Hover: the whole line, cut short in a narrow pane. Not while a window is live: it would
         // draw under that window.
         let words = cut_text(what.clone())
-            .id(gpui::SharedString::from(format!("offer-words:{pane}")))
+            .id(gpui::SharedString::from(format!("offer-words:{}", offer.window)))
             .text_color(rgb(theme::MUTED))
             .child(mark(&self.marks, Mark::OfferWords(pane)))
             .when(self.model.live.is_none(), |words| {
