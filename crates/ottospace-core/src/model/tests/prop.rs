@@ -8158,6 +8158,45 @@ fn seed_47738_a_clients_restore_opens_no_fresh_start_box() {
     .unwrap();
 }
 
+/// A workspace deleted, its task dismissed and taken back (bound to another workspace), then the
+/// workspace's own Undo: it came back bound to the same task. The one bound since keeps it.
+#[test]
+fn seed_9509_a_workspace_taken_back_leaves_its_task_to_the_one_bound_since() {
+    replay(&[
+        Action::Open {
+            kind: Kind::App { window: 3, title: "w3".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: None,
+        }
+        .into(),
+        Action::TaskFromLine {
+            line: "#/a\u{300}\u{301}\u{302}مرحبا/ >\"\u{202e}abc' p0 >app".into(),
+            known: Known {
+                names: Names {
+                    agents: vec!["claude-opus-5-5".into(), "claude-opus-5-5".into(), "Claude Code".into()],
+                    skills: vec!["code-review".into(), "deploy".into()],
+                },
+                paths: vec![],
+                entries: vec!["/src/export".into()],
+            },
+            open: true,
+        }
+        .into(),
+        Action::AgentExited { task: Subject::Task(1) }.into(),
+        Action::WorkbookSaveAll {
+            uid: "00000000000000a3".into(),
+            cwds: vec![(3, "/code/app-2".into()), (2, "/tmp".into())],
+            histories: vec![(1, History { lines: vec![], command: None, saved: 0 })],
+        }
+        .into(),
+        Action::WorkbookRemove { workbook: 1, tab: None }.into(),
+        Action::RowDismiss { id: 1 }.into(),
+        Action::TaskUndo.into(),
+        Action::ListUndo.into(),
+    ])
+    .unwrap();
+}
+
 /// A Done's worktree, its git answers late (xreview of #274): Undo while git removes it (the
 /// default falls back, then the worktree is added back), Done while git makes it (removed once
 /// made), and a dirty one kept after an Undo (no notice for an act not the user's).
