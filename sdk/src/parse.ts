@@ -4,6 +4,7 @@
 
 import type {
   AppWindow,
+  CloneDrawn,
   Display,
   TabOut,
   BugMark,
@@ -263,6 +264,7 @@ function axis(value: unknown, at: string): Axis {
 
 function mode(value: unknown, at: string): Mode {
   if (value === "normal" || value === "app" || value === "pick" || value === "palette") return value;
+  if (value === "clone") return value;
   if (value === "inspect") return value;
   if (value === "visual" || value === "list" || value === "compose" || value === "sneak") return value;
   if (value === "confirm" || value === "mark" || value === "annotate" || value === "talk") return value;
@@ -1392,7 +1394,7 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  const owners = ["compose", "picker", "palette", "inspector", "apps", "mark", "workbook", "worktree", "note", "talk", "btw", "bug"];
+  const owners = ["compose", "picker", "palette", "clone", "inspector", "apps", "mark", "workbook", "worktree", "note", "talk", "btw", "bug"];
   if (typeof o.of !== "string" || !owners.includes(o.of)) {
     throw wrong(`${at}.of`, "compose, picker, apps, mark, workbook, note or talk", o.of);
   }
@@ -1705,12 +1707,35 @@ function workbook(value: unknown, at: string): Workbook {
   };
 }
 
+function cloneDrawn(value: unknown, at: string): CloneDrawn {
+  const o = fields(value, at);
+  const dialog = (value: unknown, at: string): CloneDrawn["dialog"] => {
+    const d = fields(value, at);
+    return {
+      rows: list(str)(d.rows, `${at}.rows`),
+      selected: num(d.selected, `${at}.selected`),
+      destination: orNull(str)(d.destination, `${at}.destination`),
+      said: orNull(str)(d.said, `${at}.said`),
+    };
+  };
+  const job = (value: unknown, at: string): CloneDrawn["job"] => {
+    const j = fields(value, at);
+    return {
+      repo: str(j.repo, `${at}.repo`),
+      dest: str(j.dest, `${at}.dest`),
+      line: str(j.line, `${at}.line`),
+      cancelled: bool(j.cancelled, `${at}.cancelled`),
+    };
+  };
+  return { dialog: orNull(dialog)(o.dialog, `${at}.dialog`), job: orNull(job)(o.job, `${at}.job`) };
+}
+
 function rowMenu(value: unknown, at: string): RowMenu {
   const o = fields(value, at);
   const item = (value: unknown, at: string): RowMenu["items"][number] => {
     const i = fields(value, at);
     const kind = i.item;
-    const kinds = ["rename", "delete", "remove", "keep", "pause", "resume", "delete_worktree"] as const;
+    const kinds = ["rename", "delete", "remove", "keep", "pause", "resume", "delete_worktree", "local_folder", "from_github"] as const;
     const known = kinds.find((k) => k === kind);
     if (known === undefined) throw wrong(`${at}.item`, "a menu item", kind);
     return {
@@ -2153,6 +2178,7 @@ export function snapshot(value: unknown): Snapshot {
     copied: orNull(str)(o.copied, "copied"),
     picker_rows: orNull(list(pickItem))(o.picker_rows, "picker_rows"),
     palette_rows: orNull(list(paletteRow))(o.palette_rows, "palette_rows"),
+    clone: orNull(cloneDrawn)(o.clone, "clone"),
     inspector: orNull(inspector)(o.inspector, "inspector"),
     field: orNull(field)(o.field, "field"),
     inbox: list(inboxRow)(o.inbox, "inbox"),

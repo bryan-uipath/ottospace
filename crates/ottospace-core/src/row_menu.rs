@@ -4,8 +4,8 @@
 //! No item has a letter: a key meant for what is behind the menu must never delete.
 //! Today a workspace's row and its tabs' rows have one, a temporary workspace's item on the top
 //! row (Keep), the drawer's transcript header (its ⋯: Pause or Resume), and a linked worktree's
-//! row of the Repos section (a right click: Delete worktree…); another row gets one by naming its
-//! items in `row_items`.
+//! row of the Repos section (a right click: Delete worktree…), and the Repos section's + (Local
+//! folder…, From GitHub…); another row gets one by naming its items in `row_items`.
 
 use serde::Serialize;
 
@@ -32,6 +32,10 @@ pub enum Item {
     Resume,
     /// A linked worktree's directory, after a question (`Confirm::delete`). Its branch stays.
     DeleteWorktree,
+    /// The Repos section's +: the folder picker, as before; or a repository cloned from GitHub.
+    LocalFolder,
+    #[serde(rename = "from_github")]
+    FromGitHub,
 }
 
 impl Item {
@@ -44,6 +48,8 @@ impl Item {
             Item::Pause => "Pause",
             Item::Resume => "Resume",
             Item::DeleteWorktree => "Delete worktree…",
+            Item::LocalFolder => "Local folder…",
+            Item::FromGitHub => "From GitHub…",
         }
     }
 }
@@ -55,6 +61,8 @@ pub enum MenuOf {
     Row(ListRow),
     Space(WorkbookId),
     Transcript,
+    /// The Repos section's +.
+    ReposAdd,
 }
 
 impl From<ListRow> for MenuOf {
@@ -112,6 +120,7 @@ impl Model {
             // On the top row: Keep, while it is temporary.
             MenuOf::Space(id) if !self.workbooks.is_kept(*id) => &[Item::Keep],
             MenuOf::Space(_) => &[],
+            MenuOf::ReposAdd => &[Item::LocalFolder, Item::FromGitHub],
             // One decision with the palette's and the menu bar's (`listen_pause_action`).
             MenuOf::Transcript => match self.listen_pause_action(0).filter(|_| self.listen.shown) {
                 Some(Action::ListenPause { .. }) => &[Item::Pause],
@@ -127,16 +136,19 @@ impl Model {
             MenuOf::Row(row) => self.list_rows().contains(row),
             MenuOf::Space(id) => self.shown_spaces().iter().any(|space| space.of == Owner::Workbook { id: *id }),
             MenuOf::Transcript => true,
+            // `OTTOSPACE_REPOS` names the list: nothing is added to it.
+            MenuOf::ReposAdd => self.sidebar == Some(crate::model::Section::Repos) && !self.repo_dirs.fixed,
         };
         there && !self.menu_items(of).is_empty()
     }
 
-    /// … on a row: its menu, the keys on its first item if a key opened it. On the row whose
-    /// menu is open: closed. `dots`: where the … is drawn.
+    /// … on a row: its menu, the keys on its first item if a key opened it (the +'s always: ↵
+    /// takes Local folder…, as the + did). On the row whose menu is open: closed. `dots`: where the … is drawn.
     pub(crate) fn row_menu_open(&mut self, row: MenuOf, dots: Option<Rect>, keys: bool) {
         let open = self.row_menu.take().is_some_and(|menu| menu.row == row);
         let listed = self.menu_there(&row);
-        self.row_menu = (!open && listed).then_some(RowMenu { row, selected: keys.then_some(0), dots });
+        let selected = (keys || row == MenuOf::ReposAdd).then_some(0);
+        self.row_menu = (!open && listed).then_some(RowMenu { row, selected, dots });
     }
 
     /// The … of the open menu as last drawn. Elsewhere than when it opened (a row above came or
@@ -175,6 +187,8 @@ impl Model {
         let (workbook, tab) = match (&menu.row, item) {
             (_, Item::Pause) => return Some(Action::ListenPause { at }),
             (_, Item::Resume) => return Some(Action::ListenResume { at }),
+            (_, Item::LocalFolder) => return Some(Action::RepoPickFolder),
+            (_, Item::FromGitHub) => return Some(Action::CloneOpen),
             (MenuOf::Row(ListRow::Repo(path)), Item::DeleteWorktree) => {
                 return Some(Action::WorktreeDelete { path: path.clone() });
             }
@@ -186,7 +200,7 @@ impl Model {
             Item::Rename => Some(Action::WorkbookEdit { workbook, tab }),
             Item::Delete | Item::Remove => Some(Action::WorkbookRemove { workbook, tab }),
             Item::Keep => Some(Action::WorkbookKeep { workbook }),
-            Item::Pause | Item::Resume | Item::DeleteWorktree => None,
+            Item::Pause | Item::Resume | Item::DeleteWorktree | Item::LocalFolder | Item::FromGitHub => None,
         }
     }
 
@@ -205,6 +219,8 @@ impl Model {
             Action::WorkbookKeep { workbook } => self.workbook_keep(workbook),
             action @ (Action::ListenPause { .. } | Action::ListenResume { .. }) => self.listen_act(action, effects),
             Action::WorktreeDelete { path } => self.worktree_delete_ask(path, effects),
+            Action::RepoPickFolder => effects.push(crate::model::Effect::PickRepoFolder),
+            Action::CloneOpen => self.clone_open(effects),
             _ => {}
         }
     }

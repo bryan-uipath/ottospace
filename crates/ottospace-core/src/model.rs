@@ -101,6 +101,8 @@ pub enum Mode {
     Pick,
     /// The command palette: keys filter commands and run one.
     Palette,
+    /// The clone dialog: keys type a repository and clone it.
+    Clone,
     /// The accessibility inspector's filter has the keyboard.
     Inspect,
     /// A cursor in a terminal's output: keys move it and select text to copy.
@@ -858,6 +860,33 @@ pub enum Action {
     RepoAdd {
         dir: String,
         found: Vec<Repo>,
+    },
+    /// The + menu's Local folder…: the system's folder picker, whose choice is a `RepoAdd`. Only the user's.
+    RepoPickFolder,
+    /// The + menu's From GitHub…: the clone dialog. Only the user's.
+    CloneOpen,
+    /// ↑ or ↓ in the clone dialog. Only the user's.
+    CloneMove {
+        delta: i32,
+    },
+    /// ↵ or a click on a row of the clone dialog: it clones into `<clone_dir>/<name>`. Only the user's.
+    CloneChoose {
+        index: Option<usize>,
+    },
+    /// Esc (`cancel`: a running clone stops, and its folder goes) or a click outside the dialog
+    /// (it closes, and a running clone goes on). Only the user's.
+    CloneClose {
+        cancel: bool,
+    },
+    /// gh's last line of clone `id`, for the dialog. The shell's alone.
+    CloneProgress {
+        id: u64,
+        line: String,
+    },
+    /// Clone `id` ended: what the shell read at its folder, or why not. The shell's alone.
+    CloneDone {
+        id: u64,
+        result: Result<Vec<Repo>, crate::clone::Failure>,
     },
     /// Stop listing the repository or group at `path`: its entry comes off the settings' `repos`,
     /// if it is named there as itself. Nothing on disk changes.
@@ -2357,7 +2386,12 @@ impl Action {
             | Action::WorkbookSaveAll { .. }
             | Action::WorkbookEdit { .. }
             // So is a new worktree's branch.
-            | Action::WorktreeEdit { .. } => true,
+            | Action::WorktreeEdit { .. }
+            // And the clone dialog's line.
+            | Action::CloneOpen
+            | Action::CloneMove { .. }
+            | Action::CloneChoose { .. }
+            | Action::CloneClose { .. } => true,
             | Action::TaskTalk { .. }
             | Action::TaskCard { .. }
             | Action::SessionOpen { .. }
@@ -2426,6 +2460,9 @@ impl Action {
             | Action::SetRepos { .. }
             | Action::SetRepoDirs { .. }
             | Action::RepoAdd { .. }
+            | Action::RepoPickFolder
+            | Action::CloneProgress { .. }
+            | Action::CloneDone { .. }
             | Action::RepoRemove { .. }
             | Action::WorktreeDelete { .. }
             | Action::OpenRepo { .. }
@@ -2861,6 +2898,13 @@ impl Action {
             | Action::SetRepos { .. }
             | Action::SetRepoDirs { .. }
             | Action::RepoAdd { .. }
+            | Action::RepoPickFolder
+            | Action::CloneOpen
+            | Action::CloneMove { .. }
+            | Action::CloneChoose { .. }
+            | Action::CloneClose { .. }
+            | Action::CloneProgress { .. }
+            | Action::CloneDone { .. }
             | Action::RepoRemove { .. }
             | Action::WorktreeDelete { .. }
             | Action::OpenRepo { .. }
@@ -3199,6 +3243,21 @@ pub enum Effect {
     /// file.
     SaveRepos {
         dirs: Vec<repos::RepoDir>,
+    },
+    /// The system's folder picker, for the Repos list: its choice comes back as `RepoAdd`.
+    PickRepoFolder,
+    /// Clone `remote` of `provider` into `dest` (`<clone_dir>/<name>`, made by this clone, never
+    /// one there already), then send `CloneDone`. `make_dir`: `clone_dir` may be made first.
+    Clone {
+        id: u64,
+        provider: crate::clone::Provider,
+        remote: crate::clone::Remote,
+        dest: String,
+        make_dir: bool,
+    },
+    /// Stop clone `id` and remove the folder it made; then `CloneDone` with `Cancelled`.
+    CloneCancel {
+        id: u64,
     },
     /// Say `text` in the toast as information: what the user's own step did.
     Told {
@@ -3548,6 +3607,7 @@ pub mod btw;
 mod bug;
 pub mod chat;
 pub mod city;
+mod clone;
 pub mod editor;
 pub mod finish;
 pub mod offers;
@@ -3824,6 +3884,14 @@ pub struct Model {
     /// The user's worktree deletes git is at: path, repository, branch.
     #[serde(skip)]
     pub(crate) deleting: Vec<worktrees::Deleting>,
+    /// The clone dialog, while open. Never in the state: what is typed may name a private repository.
+    #[serde(skip)]
+    pub clone: Option<crate::clone::Dialog>,
+    /// The clone on its way, the dialog open or not; and the last clone's id.
+    #[serde(skip)]
+    pub cloning: Option<crate::clone::Job>,
+    #[serde(skip)]
+    clone_asks: u64,
     /// What a mark waits for, while one has the keyboard. Also a workbook's name being typed.
     pub mark_input: Option<MarkInput>,
     /// The draft in the right bar, while there is one: `compose` is its title.
@@ -4062,6 +4130,9 @@ impl Default for Model {
             workbooks: Workbooks::default(),
             row_menu: None,
             deleting: Vec::new(),
+            clone: None,
+            cloning: None,
+            clone_asks: 0,
             mark_input: None,
             capture: None,
             bug: None,
@@ -4192,6 +4263,8 @@ impl Model {
             Mode::Pick
         } else if self.palette.is_some() {
             Mode::Palette
+        } else if self.clone.is_some() {
+            Mode::Clone
         } else if self.compose_keys() {
             Mode::Compose
         } else if self.talk.as_ref().is_some_and(|talk| talk.keys) {
@@ -4222,7 +4295,8 @@ impl Model {
     /// mode, sneak mode or the quit question has the keyboard.
     fn holds_keyboard(&self) -> bool {
         let boxed = self.compose_keys() || self.picker.is_some() || self.keys || self.annotated().is_some();
-        let boxed = boxed || self.palette.is_some() || self.inspector.as_ref().is_some_and(|i| i.filtering);
+        let boxed = boxed || self.palette.is_some() || self.clone.is_some();
+        let boxed = boxed || self.inspector.as_ref().is_some_and(|i| i.filtering);
         // The Apps section's filter is a text field with the keyboard, as the picker's is.
         let filtering = self.app_lists.filtering;
         let menu = self.row_menu.is_some();
@@ -4370,6 +4444,19 @@ impl Model {
             }
             // So do a directory added to the Repos list and one taken off it.
             Action::RepoAdd { .. } | Action::RepoRemove { .. } => Some(apps::USERS_ALONE),
+            // A clone writes a folder and the settings: no client or timer opens the dialog, types
+            // in it, clones or closes it. Only the shell says how a clone went.
+            Action::RepoPickFolder
+            | Action::CloneOpen
+            | Action::CloneMove { .. }
+            | Action::CloneChoose { .. }
+            | Action::CloneClose { .. } => Some(crate::clone::USERS_ALONE),
+            Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "clone") => {
+                Some(crate::clone::USERS_ALONE)
+            }
+            Action::CloneProgress { .. } | Action::CloneDone { .. } if origin == Origin::Socket => {
+                Some(crate::clone::SHELLS_ALONE)
+            }
             // ↵ on a meeting joins it, as its Join does.
             Action::ListChoose { .. } if self.sidebar == Some(Section::Calendar) && self.rail_focus.is_none() => {
                 Some(calendar::USERS_ALONE)
@@ -4760,7 +4847,12 @@ impl Model {
         if opens && (self.holds_keyboard() || self.mark_input.is_some()) {
             return Some("something else has the keyboard");
         }
-        let boxed = self.picker.is_some() || modal || self.palette.is_some();
+        // So does the clone dialog, but from the +'s own menu, which closes as it opens.
+        let held = (self.holds_keyboard() && self.row_menu.is_none()) || self.mark_input.is_some();
+        if matches!(action, Action::CloneOpen) && held {
+            return Some("something else has the keyboard");
+        }
+        let boxed = self.picker.is_some() || modal || self.palette.is_some() || self.clone.is_some();
         // The draft's title or a picture taking the keyboard is the box opening, in the bar.
         let opens = matches!(action, Action::OpenCompose { .. } | Action::CaptureTitle | Action::CaptureEdit { .. });
         // ⌘⇧N opens the box as ⌘N does; over an open one it makes an empty one the note
@@ -4779,6 +4871,7 @@ impl Model {
             return Some(match (self.picker.is_some(), self.palette.is_some()) {
                 (true, _) => "the picker is open",
                 (_, true) => commands::PALETTE_OPEN,
+                _ if self.clone.is_some() => crate::clone::OPEN,
                 _ => "the new-task box is open",
             });
         }
@@ -5202,6 +5295,7 @@ impl Model {
                 | Action::ToggleSection { .. }
                 | Action::FocusList
                 | Action::RepoAdd { .. }
+                | Action::CloneDone { .. }
                 | Action::SessionClick { .. }
                 | Action::CalendarDay { .. }
         );
@@ -5369,6 +5463,13 @@ impl Model {
                 self.repos_open.retain(|open| self.repo_dirs.dirs.iter().any(|dir| dir.path == *open));
             }
             Action::RepoAdd { dir, found } => self.repo_add(dir, found, effects),
+            Action::RepoPickFolder => effects.push(Effect::PickRepoFolder),
+            Action::CloneOpen => self.clone_open(effects),
+            Action::CloneMove { delta } => self.clone_move(delta),
+            Action::CloneChoose { index } => self.clone_choose(index, effects),
+            Action::CloneClose { cancel } => self.clone_close(cancel, effects),
+            Action::CloneProgress { id, line } => self.clone_progress(id, &line),
+            Action::CloneDone { id, result } => self.clone_done(id, result, effects),
             // A repository a live task works in: asked first (the trash is one hover away).
             Action::RepoRemove { path } if self.repo_worked_in(&path) && self.repo_dirs.to_remove(&path).is_ok() => {
                 self.leave(effects);
@@ -5778,6 +5879,13 @@ impl Model {
                         && palette.query.apply(edit)
                     {
                         palette.selected = 0;
+                    }
+                }
+                Some("clone") => {
+                    if let Some(dialog) = &mut self.clone
+                        && dialog.query.apply(edit)
+                    {
+                        (dialog.selected, dialog.said) = (0, None);
                     }
                 }
                 Some("picker") => {
@@ -8863,6 +8971,7 @@ impl Model {
         let boxed = self.compose_modal() || self.compose_keys();
         let apps = (self.app_lists.filtering && !boxed).then_some(("apps", &self.app_lists.filter));
         let palette = self.palette.as_ref().map(|palette| ("palette", &palette.query));
+        let palette = palette.or(self.clone.as_ref().map(|dialog| ("clone", &dialog.query)));
         let palette = palette.or(self.inspector.as_ref().filter(|i| i.filtering).map(|i| ("inspector", &i.filter)));
         picker.or(palette).or(note).or(apps).or(self.compose.as_ref().map(|field| ("compose", field)))
     }
@@ -8873,6 +8982,7 @@ impl Model {
         match of {
             "picker" => self.picker.as_ref().map(|picker| &picker.query),
             "palette" => self.palette.as_ref().map(|palette| &palette.query),
+            "clone" => self.clone.as_ref().map(|dialog| &dialog.query),
             "inspector" => self.inspector.as_ref().map(|inspector| &inspector.filter),
             "note" => self.note(),
             "bug" => self.bug.as_ref().and_then(crate::bug::Report::comment),
@@ -8907,6 +9017,7 @@ impl Model {
             Mode::Mark => "mark",
             Mode::Pick => "picker",
             Mode::Palette => "palette",
+            Mode::Clone => "clone",
             Mode::Inspect => "inspector",
             // The editor has the box's line: nothing types in it meanwhile.
             Mode::Compose if self.edits_compose() => return None,
@@ -10059,6 +10170,13 @@ mod tests {
         Action::SetRepos { .. },
         Action::SetRepoDirs { .. },
         Action::RepoAdd { .. },
+        Action::RepoPickFolder,
+        Action::CloneOpen,
+        Action::CloneMove { .. },
+        Action::CloneChoose { .. },
+        Action::CloneClose { .. },
+        Action::CloneProgress { .. },
+        Action::CloneDone { .. },
         Action::RepoRemove { .. },
         Action::OpenRepo { .. },
         Action::RepoClick { .. },
@@ -10423,6 +10541,13 @@ mod tests {
             Action::SetRepos { repos: Vec::new() },
             Action::SetRepoDirs { dirs: repos::RepoDirs::default() },
             Action::RepoAdd { dir: text(), found: Vec::new() },
+            Action::RepoPickFolder,
+            Action::CloneOpen,
+            Action::CloneMove { delta: 1 },
+            Action::CloneChoose { index: None },
+            Action::CloneClose { cancel: true },
+            Action::CloneProgress { id: 1, line: text() },
+            Action::CloneDone { id: 1, result: Err(crate::clone::Failure::NoGh) },
             Action::RepoRemove { path: text() },
             Action::OpenRepo { path: text(), axis: Right },
             Action::RepoClick { path: text(), axis: Right },
@@ -10831,6 +10956,21 @@ mod tests {
         }
     }
 
+    /// The clone dialog: the user's alone; a clone's news, the shell's.
+    fn clone_refused(action: &Action, origin: Origin) -> Option<&'static str> {
+        match action {
+            Action::RepoPickFolder
+            | Action::CloneOpen
+            | Action::CloneMove { .. }
+            | Action::CloneChoose { .. }
+            | Action::CloneClose { .. } => Some(crate::clone::USERS_ALONE),
+            Action::CloneProgress { .. } | Action::CloneDone { .. } if origin == Origin::Socket => {
+                Some(crate::clone::SHELLS_ALONE)
+            }
+            _ => None,
+        }
+    }
+
     /// A pin, a hide or their undo: refused from all but the user on its own ground.
     fn writes_settings(action: &Action) -> bool {
         let apps =
@@ -10998,6 +11138,7 @@ mod tests {
                     _ if agent_refused(action, origin).is_some() => agent_refused(action, origin),
                     _ if slot_refused(action, origin).is_some() => slot_refused(action, origin),
                     _ if offer_refused(action, origin).is_some() => offer_refused(action, origin),
+                    _ if clone_refused(action, origin).is_some() => clone_refused(action, origin),
                     Action::TaskTalk { .. }
                     | Action::TaskCard { .. }
                     | Action::SessionOpen { .. }
@@ -17389,6 +17530,7 @@ mod tests {
                     _ if agent_refused(action, origin).is_some() => agent_refused(action, origin),
                     _ if slot_refused(action, origin).is_some() => slot_refused(action, origin),
                     _ if offer_refused(action, origin).is_some() => offer_refused(action, origin),
+                    _ if clone_refused(action, origin).is_some() => clone_refused(action, origin),
                     Action::TaskTalk { .. }
                     | Action::TaskCard { .. }
                     | Action::SessionOpen { .. }
