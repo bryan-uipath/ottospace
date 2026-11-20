@@ -3,6 +3,7 @@
 # Then `>`: the commands, as ⌘⇧P lists them.
 {"cmd":"task_new","line":"fix the login loop"}
 {"cmd":"key","keys":"cmd-p","as":"user"}
+{"until":"goto_rows.0"}
 {"shot":"places"}
 {"cmd":"key","keys":"a p p tab","as":"user"}
 {"until":"goto_rows.6"}
