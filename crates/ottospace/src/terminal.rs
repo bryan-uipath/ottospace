@@ -581,6 +581,13 @@ impl Terminal {
         dirty
     }
 
+    /// Its program got (`on`) or lost the focus: `CSI I` or `CSI O`, if it asked (DECSET 1004).
+    pub fn focus(&self, on: bool) {
+        if self.term.lock().mode().contains(TermMode::FOCUS_IN_OUT) {
+            let _ = self.input.send(Msg::Input(if on { &b"\x1b[I"[..] } else { &b"\x1b[O"[..] }.to_vec().into()));
+        }
+    }
+
     pub fn exited(&self) -> bool {
         self.shared.exited.load(Acquire)
     }
