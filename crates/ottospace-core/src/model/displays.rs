@@ -324,7 +324,8 @@ impl Model {
         }
         // The main window's own parts with the keyboard: the keyboard is in the main window. A
         // new-task box opened from a tab out's window starts its task in that tab's workspace.
-        if self.compose.is_none() {
+        // A capture's draft is no such box: its task goes where the user is.
+        if self.compose.is_none() || self.capture.is_some() {
             self.compose_joins = None;
         } else if self.away.is_some() && self.compose_joins.is_none() {
             self.compose_joins = Some(self.space().clone());
@@ -683,6 +684,25 @@ mod tests {
         assert_eq!((m.away, m.joins()), (None, Some(of)));
         m.update(Action::CloseCompose);
         assert_eq!(m.compose_joins, None);
+    }
+
+    #[test]
+    fn a_draft_from_the_box_of_the_window_out_starts_its_task_where_the_user_is() {
+        let mut m = two();
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::NewEmptyTab);
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        let of = m.tabs[m.active].space.clone();
+        if let Owner::Workbook { id } = of {
+            m.update(Action::WorkbookKeep { workbook: id });
+        }
+        m.update(Action::TabOut { tab: None });
+        m.update(Action::OpenCompose { text: "fix it".into() });
+        // A capture takes the box's line: its task goes where the user is, not to the window out's.
+        let word = "k3f9a2c41b7d".into();
+        m.update(Action::CaptureStart { pane: None, draft: "d".into(), word, facts: vec![], images: true });
+        assert_eq!((m.compose_joins.clone(), m.joins()), (None, Some(m.space().clone())));
+        assert_ne!(m.joins(), Some(of));
     }
 
     #[test]
