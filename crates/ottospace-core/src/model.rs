@@ -6618,6 +6618,8 @@ impl Model {
                 self.copy_last += 1;
                 let ask = copy_ask::Ask::new(self.copy_last, now, text);
                 if self.copy_always.contains(&pane) && !ask.too_large {
+                    // Copied at once: an earlier ask on show (one refused) is no longer the last.
+                    self.copy_asks.remove(&pane);
                     effects.push(Effect::CopyText { text: ask.text });
                 } else {
                     // A newer ask replaces the one on show, with its own id and guard.
@@ -17565,6 +17567,10 @@ mod tests {
         assert_eq!(m.update(ask(1, &large, 4_000)), []);
         assert!(m.copy_asks[&1].too_large && m.copy_asks[&1].text.is_empty());
         assert_eq!(m.update(answer(1, id(&m, 1), Answer::Copy, 9_000)), []);
+        // Refused, then copied at once (always): the refusal is no longer on show.
+        m.update(ask(1, &large, 9_000));
+        assert_eq!(m.update(ask(1, "f", 9_000)), [Effect::CopyText { text: "f".into() }]);
+        assert!(!m.copy_asks.contains_key(&1));
         // Its pane closed: its ask and its "always" go.
         m.update(ask(1, "e", 9_000));
         m.update(Action::Close { pane: Some(1) });

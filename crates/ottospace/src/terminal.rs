@@ -125,7 +125,13 @@ impl EventListener for Listener {
                 }
             }
             // Never copied here: the user answers in the pane's header (`copy_ask`).
-            Event::ClipboardStore(_, text) => {
+            Event::ClipboardStore(_, mut text) => {
+                // Past the cap the ask is refused: only enough is kept to say so (`copy_ask::MOST`).
+                let mut cut = ottospace_core::copy_ask::MOST + 1;
+                while cut < text.len() && !text.is_char_boundary(cut) {
+                    cut += 1;
+                }
+                text.truncate(cut);
                 *self.0.copy.lock().unwrap_or_else(|e| e.into_inner()) = Some(text);
                 self.0.set_dirty()
             }

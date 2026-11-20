@@ -337,32 +337,33 @@ impl Workspace {
     pub(crate) fn copy_header(&self, pane: PaneId, cx: &mut Context<Self>) -> Option<AnyElement> {
         let ask = self.model.copy_asks.get(&pane)?;
         let id = ask.id;
-        // The header's `dir · program`: the program, else no name.
-        let title = self.titles.get(&pane).and_then(|t| t.rsplit_once(" · ")).map(|(_, program)| program.to_string());
-        let who = title.unwrap_or_else(|| "A program".into());
+        // Not named: the program in front now may not be the one that asked (it exited, or wrote
+        // from the background).
         let amount = if ask.chars == 1 { "1 character".into() } else { format!("{} characters", grouped(ask.chars)) };
-        let what = if ask.too_large {
-            format!("{who} wanted to copy {amount}: too much, refused")
-        } else {
-            let p = copy_ask::preview(&ask.text, 24);
-            let mut what = match p.blank {
-                true => format!("{who} wants to copy {amount} of blank space"),
-                false => format!("{who} wants to copy {amount} “{}{}”", p.shown, if p.partial { "…" } else { "" }),
-            };
-            if p.lines > 1 {
-                what.push_str(&format!(" · {} lines", grouped(p.lines)));
+        let p = copy_ask::preview(&ask.text, 24);
+        let what = match (ask.too_large, p.blank) {
+            (true, _) => "A program here wanted to copy over 100 KB: refused".to_string(),
+            (false, true) => format!("A program here wants to copy {amount} of blank space"),
+            (false, false) => {
+                format!("A program here wants to copy {amount} “{}{}”", p.shown, if p.partial { "…" } else { "" })
             }
-            if p.ends_with_newline {
-                what.push_str(" · ends with a newline");
-            }
-            what
         };
+        // What a paste would do that the preview cannot show: never cut, however narrow the pane.
+        let mut warnings = Vec::new();
+        if !ask.too_large && p.lines > 1 {
+            warnings.push(format!("{} lines", grouped(p.lines)));
+        }
+        if !ask.too_large && p.ends_with_newline {
+            warnings.push("ends with a newline".to_string());
+        }
+        let warning =
+            (!warnings.is_empty()).then(|| div().flex_none().text_color(rgb(theme::SNEAK)).child(warnings.join(" · ")));
         let send = |answer| {
             cx.listener(move |this: &mut Self, _: &gpui::ClickEvent, window: &mut Window, cx| {
-                this.offer_send(Action::CopyAnswer { pane, ask: id, answer, now: crate::now_ms() }, window, cx)
+                this.offer_send(Action::CopyAnswer { pane, ask: id, answer, now: crate::loop_ms() }, window, cx)
             })
         };
-        let colour = if ask.ready(crate::now_ms()) { theme::PRIMARY } else { theme::MUTED };
+        let colour = if ask.ready(crate::loop_ms()) { theme::PRIMARY } else { theme::MUTED };
         let buttons = (!ask.too_large).then(|| {
             [
                 self.offer_button(format!("copy:{pane}.{id}"), "Copy", colour).on_click(send(Answer::Copy)),
@@ -381,6 +382,7 @@ impl Workspace {
             .border_1()
             .border_color(rgb(theme::BORDER_STRONG))
             .child(cut_text(what).text_color(rgb(theme::MUTED)))
+            .children(warning)
             .children(buttons.into_iter().flatten())
             .child(dismiss.on_click(send(Answer::Dismiss)));
         Some(chip.into_any_element())
@@ -396,7 +398,7 @@ impl Workspace {
         };
         let parsed = name.split_once('.').and_then(|(pane, ask)| Some((pane.parse().ok()?, ask.parse().ok()?)));
         let Some((pane, ask)) = parsed else { return false };
-        self.offer_send(Action::CopyAnswer { pane, ask, answer, now: crate::now_ms() }, window, cx);
+        self.offer_send(Action::CopyAnswer { pane, ask, answer, now: crate::loop_ms() }, window, cx);
         true
     }
 
