@@ -550,14 +550,12 @@ fn a_quick_leave_is_not_undone_by_the_apps_own_activation() {
     // Three times: each leave lands before that check only by chance.
     for _ in 0..3 {
         assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
-        wait_or("the canary to be the front app", in_front, || {
-            ask_forward(canary.child.id());
-            (front_app().0 == canary.child.id()).then_some(())
-        });
+        bring_forward(canary.child.id(), "the canary");
         assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
         // Past two front-app checks.
         std::thread::sleep(Duration::from_millis(1200));
         assert_eq!(otto.call(json!({"cmd": "state"}))["mode"], "normal", "the leave stays");
+        assert_eq!(front_app().0, otto.child.id(), "and ottospace has the keyboard: {}", in_front());
     }
 }
 

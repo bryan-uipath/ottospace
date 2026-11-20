@@ -2054,7 +2054,7 @@ impl Workspace {
                     }
                 }
                 Effect::Parked(id) => {
-                    self.live_since = None;
+                    let live_since = self.live_since.take();
                     let keep = self.bars_leave();
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("park", serde_json::json!({ "pane": id, "window": hosted.window_id }));
@@ -2064,8 +2064,11 @@ impl Workspace {
                         let scale = window.scale_factor() as f64;
                         hosted.park(pane_rect(rect, keep, false, crop).size, scale, crop);
                         hosted.resume(scale);
-                        // `follow_front_app` must not take the app's late activation for the user's.
-                        self.left_live = Some((hosted.pid, Instant::now()));
+                        // Live under a second: `follow_front_app` may not have seen the app's own
+                        // activation from going live yet, and must not take it for the user's.
+                        if live_since.is_some_and(|at| at.elapsed() < Duration::from_secs(1)) {
+                            self.left_live = Some((hosted.pid, Instant::now()));
+                        }
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
                         // bar shows no mode. If the user moved to a third app, leave them there.
@@ -4369,8 +4372,11 @@ impl Workspace {
             // An app in front within a second of its pane leaving live (a click, a key, the return
             // key): its own late activation from going live, not the user's choice.
             let left = self.left_live.filter(|(_, at)| at.elapsed() < Duration::from_secs(1));
-            if left.is_some_and(|(pid, _)| front.is_some_and(|(front, _)| front == pid)) {
+            // Its keys would go to its parked window: ottospace takes them back.
+            let late = left.is_some_and(|(pid, _)| front.is_some_and(|(front, _)| front == pid));
+            if late && self.model.live.is_none() {
                 self.wanted = None;
+                cx.activate(true);
             }
         }
         let Some(pane) = self.wanted else { return };
