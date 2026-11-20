@@ -113,7 +113,7 @@ pub fn repo_dirs() -> RepoDirs {
     if let Some(list) = std::env::var_os("OTTOSPACE_REPOS") {
         let named = std::env::split_paths(&list).filter(|p| !p.as_os_str().is_empty());
         let dirs = named.map(|p| resolved(p.to_string_lossy().into_owned(), p, false)).collect();
-        return RepoDirs { dirs, fixed: true, worktrees: worktrees_dir() };
+        return RepoDirs { dirs, fixed: true, worktrees: worktrees_dir(), clone: clone_dir() };
     }
     let changed = NAMED.lock().ok().and_then(|named| named.clone());
     let settings = || get().settings.repos.iter().map(|entry| (entry.path().to_string(), entry.pinned())).collect();
@@ -121,7 +121,7 @@ pub fn repo_dirs() -> RepoDirs {
         let path = PathBuf::from(expand_home(&text, &user_home()));
         resolved(text, path, pinned)
     });
-    let mut dirs = RepoDirs { dirs: dirs.collect(), fixed: false, worktrees: worktrees_dir() };
+    let mut dirs = RepoDirs { dirs: dirs.collect(), fixed: false, worktrees: worktrees_dir(), clone: clone_dir() };
     dirs.settle();
     dirs
 }
@@ -134,6 +134,17 @@ pub fn worktrees_dir() -> Option<String> {
     let home = get().home.as_ref()?;
     let named = live().worktrees_dir.as_ref().map(|dir| home.join(expand_home(dir, &user_home())));
     let dir = named.unwrap_or_else(|| home.join("worktrees"));
+    dir.is_absolute().then(|| resolved(&dir).to_string_lossy().into_owned())
+}
+
+/// Where From GitHub… clones: `clone_dir` (`~` expanded; a relative path is inside the ottospace
+/// folder), else `~/code`. A test run has none unless its own settings name one: never the user's.
+/// Resolved, as `worktrees_dir` is.
+pub fn clone_dir() -> Option<String> {
+    let home = get().home.as_ref()?;
+    let named = live().clone_dir.as_ref().map(|dir| home.join(expand_home(dir, &user_home())));
+    let test = std::env::var_os("OTTOSPACE_E2E").is_some();
+    let dir = named.or_else(|| (!test).then(|| PathBuf::from(user_home()).join("code")))?;
     dir.is_absolute().then(|| resolved(&dir).to_string_lossy().into_owned())
 }
 

@@ -76,6 +76,7 @@ mod child;
 mod city;
 mod city_gpu;
 mod clipboard;
+mod clone;
 mod collect;
 mod commands;
 mod config;
@@ -1184,6 +1185,9 @@ struct Workspace {
     status_fit: Cell<ottospace_core::status_bar::Fit>,
     status_said: Option<(u64, Option<u64>, bool)>,
     pr_opens: u32,
+    /// The clones on their way (`clone.rs`), and the folder pickers Local folder… asked for (a test run shows none).
+    cloner: clone::Cloner,
+    folder_picks: u32,
     /// Socket calls that file a task and wait for the reader: (the call's number, what to file, where to reply).
     filing: Vec<(u64, Filing, Sender<String>)>,
     /// How many such calls there were: each has its own number.
@@ -1587,6 +1591,7 @@ impl Workspace {
                         this.read_sneak_app(window, cx);
                         this.tick_timeline(window, cx);
                         this.take_worktrees(window, cx);
+                        this.take_clones(window, cx);
                         this.tell_day(window, cx);
                         this.tick_prs(window, cx);
                         if ticks.every(60, 30) {
@@ -1784,6 +1789,8 @@ impl Workspace {
             status_fit: Cell::default(),
             status_said: None,
             pr_opens: 0,
+            cloner: clone::Cloner::new(),
+            folder_picks: 0,
             filing: Vec::new(),
             calls: 0,
             sessions: sessions::Poller::start(),
@@ -2184,6 +2191,11 @@ impl Workspace {
                 }
                 // Later reads of the list look where the model now does (also after "Unlist?" is
                 // answered); a file not written leaves them as the settings are.
+                Effect::PickRepoFolder => self.pick_repo(window, cx),
+                Effect::Clone { id, provider, remote, dest, make_dir } => {
+                    self.cloner.start(*id, *provider, remote.clone(), dest.clone(), *make_dir)
+                }
+                Effect::CloneCancel { id } => self.cloner.cancel(*id),
                 Effect::SaveRepos { dirs } => {
                     let said = self.error.take();
                     self.save_list(|| config::save_repos(dirs));
@@ -4002,6 +4014,8 @@ impl Workspace {
             "picker_rows": self.model.picker.as_ref().map(Picker::matches),
             // The command palette's rows as drawn, or null: each `command`, `name`, `group` and `key`.
             "palette_rows": self.palette_rows(cx),
+            // Test runs only: the clone dialog (its rows, the destination line, what it says) and the clone on its way.
+            "clone": std::env::var_os("OTTOSPACE_E2E").map(|_| self.clone_json()),
             // The text field that has the keyboard (the new-task box's line or the picker's
             // filter), or null: its text, cursor and selection.
             "field": self.field_snapshot(),
@@ -4101,6 +4115,8 @@ impl Workspace {
                 "pr_opens": self.pr_opens,
                 // "File…" choices: the open panel a test run does not show.
                 "file_prompts": self.file_prompts,
+                // Local folder… choices: the folder picker a test run does not show.
+                "folder_picks": self.folder_picks,
                 // Windows the picker's second step asked to host (a test run hosts none).
                 "window_picks": self.window_picks,
                 // "New window" asks by recipe: `open` with arguments, `tell` an Apple Event, its
@@ -4846,6 +4862,10 @@ impl Workspace {
         }
         if self.model.palette.is_some() {
             self.palette_key(event, window, cx);
+            return;
+        }
+        if self.model.clone.is_some() {
+            self.clone_key(event, window, cx);
             return;
         }
         if self.model.mode() == Mode::Inspect {
@@ -5717,20 +5737,21 @@ impl Workspace {
     pub(crate) fn bar_add(&mut self, section: Section, window: &Window, cx: &mut Context<Self>) {
         match section {
             Section::Tasks => self.new_task(window, cx),
-            Section::Repos => self.pick_repo(window, cx),
+            Section::Repos => self.open_row_menu(MenuOf::ReposAdd, false, window, cx),
             Section::Workbook => self.new_workspace(window, cx),
             _ => {}
         }
     }
 
-    /// The Repos section's +: the system's folder picker. Only for the user: a client opens no
-    /// panel over their work. Not in a test run: nothing could answer the panel.
-    fn pick_repo(&mut self, window: &Window, cx: &mut Context<Self>) {
+    /// Local folder…: the system's folder picker. Only for the user: a client opens no panel over
+    /// their work. Not in a test run (it counts the ask): nothing could answer the panel.
+    pub(crate) fn pick_repo(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.input != Origin::User {
             self.error = Some(ottospace_core::apps::USERS_ALONE.into());
             return;
         }
         if std::env::var_os("OTTOSPACE_E2E").is_some() {
+            self.folder_picks += 1;
             return;
         }
         let options =
@@ -5871,7 +5892,7 @@ impl Workspace {
     /// A directory added to the Repos list or taken off it. The list is read before, so what is
     /// listed already is known, and after, from the directories as they then are. If the
     /// settings were not written the directories are as before: the next try writes again.
-    fn change_repos(&mut self, action: Action, origin: Origin, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn change_repos(&mut self, action: Action, origin: Origin, window: &Window, cx: &mut Context<Self>) {
         // A refused one (a client's) leaves the toast and the list alone.
         if self.model.refusal(&action, origin).is_some() {
             self.dispatch(action, origin, window, cx);
@@ -6465,15 +6486,24 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(
-                    list_row("repos-empty-add", false)
-                        .flex()
-                        .items_center()
-                        .gap_1p5()
-                        .child(svg().path("icons/plus.svg").size(px(12.)).text_color(rgb(theme::PRIMARY)))
-                        .child("Add a repository")
-                        .child(self.controls.mark("repos-empty:add"))
-                        .on_click(cx.listener(|this, _, window, cx| this.bar_add(Section::Repos, window, cx))),
+                // The +'s two items, each a row: no menu to open first.
+                .children(
+                    [
+                        ("add", "Add a local folder…", Action::RepoPickFolder),
+                        ("clone", "Clone from GitHub…", Action::CloneOpen),
+                    ]
+                    .map(|(id, label, action)| {
+                        list_row(SharedString::from(format!("repos-empty-{id}")), false)
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(svg().path("icons/plus.svg").size(px(12.)).text_color(rgb(theme::PRIMARY)))
+                            .child(label)
+                            .child(self.controls.mark(format!("repos-empty:{id}")))
+                            .on_click(
+                                cx.listener(move |this, _, window, cx| this.row_menu_act(action.clone(), window, cx)),
+                            )
+                    }),
                 )
                 .child(div().px_2().text_xs().text_color(rgb(theme::MUTED)).child("Or drop its folder here."))
                 .into_any_element(),
@@ -7584,6 +7614,7 @@ impl Workspace {
             Mode::Normal => ("", ""),
             Mode::Pick => ("PICK", ""),
             Mode::Palette => ("COMMAND", ""),
+            Mode::Clone => ("CLONE", ""),
             Mode::Inspect => ("INSPECT", ""),
             Mode::App => ("APP", app_hint.as_str()),
             Mode::Visual => ("VISUAL", "esc"),
@@ -8644,6 +8675,7 @@ impl Render for Workspace {
             .children(self.model.sneak.as_ref().map(sneak::labels))
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
             .children(self.model.palette.as_ref().map(|palette| self.render_palette(palette, cx)))
+            .children(self.model.clone.as_ref().map(|dialog| self.render_clone(dialog, cx)))
             .children(self.render_pointing())
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
             // Over the window's own controls: the bug report's frozen picture.

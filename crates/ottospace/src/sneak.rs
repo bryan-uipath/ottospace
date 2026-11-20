@@ -351,7 +351,11 @@ impl Workspace {
                 None
             }
             ("repos-empty", "add") => {
-                self.bar_add(ottospace_core::Section::Repos, window, cx);
+                self.row_menu_act(Action::RepoPickFolder, window, cx);
+                None
+            }
+            ("repos-empty", "clone") => {
+                self.row_menu_act(Action::CloneOpen, window, cx);
                 None
             }
             ("repo-remove", _) => {

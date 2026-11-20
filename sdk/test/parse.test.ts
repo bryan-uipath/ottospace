@@ -102,6 +102,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     copied: null,
     picker_rows: null,
     palette_rows: null,
+    clone: null,
     inspector: null,
     field: null,
     inbox: [],
