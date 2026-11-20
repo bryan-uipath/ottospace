@@ -1398,6 +1398,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 | `multi_monitor` | Experimental | off | Multi-monitor (⌘⇧O): fold a tab out to its own window on another display |
 | `overlay_panels` | Experimental | off | Overlay panels (an experiment): the sidebar and the drawer float over the panes, moving nothing, and close after use |
 | `decisions` | Experimental | off | Decisions (⌘J): a workspace that shows what waits on you, one question at a time |
+| `code_city` | Experimental | off | Code city: an empty tab of a task draws the task's folder as a 3D city, its files where they were last time |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1435,6 +1436,8 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   - The state's `overlays` gives each one's rect (`sidebar`, `drawer`), null while closed.
 - `decisions` off: ⌘J is the next task only, no Decisions command or menu item, and one open
   closes. On, see [Decisions](#decisions) (design: [attention/decisions.md](ai/attention/decisions.md)).
+- `code_city` off: an empty tab of a task draws the lattice, and no file list is read. On, see
+  [Code city](#code-city) (design: [code-city/plan.md](ai/code-city/plan.md)).
 
 ### Decisions
 
@@ -1447,6 +1450,29 @@ hour (snoozed), Esc closes. Other… is typed in the drawer. ⌘L talks the card
 on its task; the right rail shows it. Panes you add close when you answer, skip or put off the
 card. A card answered elsewhere leaves; after the last, Decisions closes and the tab you came from is back. Never kept.
 Only you open, answer, skip or close it.
+
+### Code city
+
+With `code_city` on, an empty tab of a task draws the task's checkout as a city in 3D, rendered
+on the GPU, where the lattice was: a folder is a terrace stepped up from its parent's, a file a
+building on it, its ground sized by its size class (1 up to 2 KB, doubling to 128 KB) and its
+height by its length. A file is where it was the last time: the same files give
+the same plan, an edit that keeps a file's size class moves nothing, and a new file most times
+moves only its own folder
+(design and numbers: [code-city/plan.md](ai/code-city/plan.md)).
+
+- The file an agent of that checkout reads or edits now is tinted in its task's colour: while
+  the call runs, and after it while the agent still works and has run no other call. A shell
+  command lights none. The call names only the last two parts of a path, so two files that share
+  them are both lit.
+- The files are what `git ls-files` lists there (tracked, and new ones not ignored), read off
+  the main thread with the status bar's hardened git, only in a checkout listed in Repos, when
+  the tab comes on show and when the lit files change. No timer. Over 20,000 files, 4 MB of
+  names or 10 seconds: no city, the lattice stays.
+- It takes no click and no key, and nothing in it moves: a still picture, made again when the
+  files, the lit files or the tab's size change. The root's folders are named on their ground,
+  never behind the tab's hints; no path or name is in the socket's state or the logs.
+- No GPU, or a render that fails: the lattice.
 
 ### Displays
 
@@ -1615,7 +1641,7 @@ first brainstorm:
 - [zoom-meeting.md](ai/1-initial-brainstorm/zoom-meeting.md): Zoom meeting layout and participants.
 - [zoom-ax.md](ai/1-initial-brainstorm/zoom-ax.md): what a Zoom meeting exposes through accessibility, measured.
 - [accessibility.md](ai/1-initial-brainstorm/accessibility.md): reading app accessibility trees, toward sneak mode and agent actions.
-- [code-city/plan.md](ai/code-city/plan.md): the atlas, a map where a thing keeps its place, and the code city on it (the layout is built; nothing is on screen yet).
+- [code-city/plan.md](ai/code-city/plan.md): the atlas, a map where a thing keeps its place, and the code city on it. Built: the layout, and the city behind a task's empty tab, behind `code_city` (see [Code city](#code-city)).
 - [file-viewer.md](ai/file-viewer.md): the read-only file viewer pane, and what comes after it (the markdown pass, the explorer, comments).
 - [bug-reporter.md](ai/bug-reporter.md): marking a bug in ottospace's own window and handing it to an agent.
 - [fill-display.md](ai/fill-display.md): the window over the menu bar and the Dock (⌃⌘F, the green button): what macOS does, measured, and what is left to check by hand.

@@ -34,7 +34,7 @@ pub struct Node {
     /// members). 1 to `MOST`. A group's is not read: it weighs its children.
     pub footprint: u64,
     /// A second measure, 0 to 1, that is only drawn and moves nothing, so it may change often
-    /// (churn, a month's messages). Not drawn yet.
+    /// (churn, a month's messages). The code city's: a building's height (`scene::height`).
     pub height: Option<f32>,
     /// In the order they are laid out: one that keeps old things before new ones keeps them
     /// in place.
@@ -58,6 +58,20 @@ pub struct Place {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Atlas {
     pub places: Vec<Place>,
+}
+
+impl Atlas {
+    /// The leaves of a `repo` plan that a file's label names (`station::path_label`: the last
+    /// two parts of its path, or its name): each whose id is the label or ends with it after
+    /// a `/`. `folder` is the repository's own folder's name: a file in the root is labelled
+    /// `folder/name`.
+    pub fn labelled<'a>(&'a self, label: &'a str, folder: &'a str) -> impl Iterator<Item = &'a Place> {
+        let root = label.strip_prefix(folder).and_then(|rest| rest.strip_prefix('/')).filter(|_| !folder.is_empty());
+        let ends =
+            move |id: &str| id.strip_suffix(label).is_some_and(|before| before.is_empty() || before.ends_with('/'));
+        let named = move |id: &str| ends(id) || Some(id) == root;
+        self.places.iter().filter(move |place| !place.group && named(&place.id))
+    }
 }
 
 /// A group's weight: its children's sum, rounded up to 4, 5, 6 or 7 times a power of two
@@ -184,7 +198,8 @@ impl Folder<'_> {
         // A file and a folder may share a name in a list that is not git's: the file's id says so.
         let file = |(name, bytes): (&&str, &u64)| {
             let id = if self.folders.contains_key(name) { join(name) + "/" } else { join(name) };
-            Node { id, label: name.to_string(), footprint: file_weight(*bytes), ..Node::default() }
+            let height = Some(crate::scene::height(*bytes));
+            Node { id, label: name.to_string(), footprint: file_weight(*bytes), height, ..Node::default() }
         };
         let children = folders.chain(self.files.iter().map(file)).collect();
         Node { id: path.to_string(), label: label.to_string(), children, ..Node::default() }
@@ -270,6 +285,28 @@ mod tests {
     }
 
     #[test]
+    fn a_label_names_the_files_whose_path_ends_with_it() {
+        let files =
+            [("src/ui/mod.rs", 1), ("src/mod.rs", 1), ("ui/mod.rs", 1), ("gui/mod.rs", 1), ("ui/mod.rs.bak", 1)];
+        let city = city(&[&files[..], &[("top.rs", 1)]].concat());
+        fn named<'a>(city: &'a Atlas, label: &'a str) -> Vec<&'a str> {
+            city.labelled(label, "app").map(|place| place.id.as_str()).collect()
+        }
+        assert_eq!(named(&city, "ui/mod.rs"), ["src/ui/mod.rs", "ui/mod.rs"]);
+        assert_eq!(named(&city, "src/mod.rs"), ["src/mod.rs"]);
+        assert_eq!(named(&city, "mod.rs").len(), 4);
+        // A file in the root is labelled with the repository's folder: `/code/app/top.rs`.
+        assert_eq!(named(&city, "app/top.rs"), ["top.rs"]);
+        // A folder is never lit, nor a label that names nothing here (`file`: what is no path).
+        let none: Vec<&str> = Vec::new();
+        assert_eq!(
+            (named(&city, "ui"), named(&city, "file"), named(&city, "")),
+            (none.clone(), none.clone(), none.clone())
+        );
+        assert_eq!((named(&city, "app/mod.rs"), named(&city, "other/top.rs")), (none.clone(), none));
+    }
+
+    #[test]
     fn the_order_given_and_odd_paths_do_not_matter() {
         let one = city(&[("a/b.rs", 1), ("a/c.rs", 9000), ("d.rs", 1)]);
         let other = city(&[("d.rs", 5), ("/a//c.rs", 9000), ("", 7), ("///", 7), ("a/b.rs", 1), ("d.rs", 1)]);
@@ -288,7 +325,9 @@ mod tests {
         before.extend([("src/x.rs", 30_000), ("src/y.rs", 30_000)]);
         let mut edited = before.clone();
         edited[9].1 = 31_000;
-        assert_eq!(city(&before), city(&edited));
+        // Only its height, drawn and never laid out, changes.
+        let rects = |atlas: Atlas| atlas.places.into_iter().map(|p| (p.id, p.rect)).collect::<Vec<_>>();
+        assert_eq!(rects(city(&before)), rects(city(&edited)));
         // docs weighs 9, a step up 10: a tenth file fits, and nothing but it is new.
         let mut added = before.clone();
         added.push(("docs/a.md", 100));
@@ -592,6 +631,45 @@ mod tests {
                 still += usize::from(moved == 0);
             }
             (sum / seeds as f32, still as f32 / seeds as f32)
+        }
+
+        /// How long a plan takes, for the design note's costs:
+        /// `cargo test -p ottospace-core --release -- --ignored a_plan_is_timed --nocapture`.
+        /// There is no shorter path for one change: a change is the whole plan again.
+        #[test]
+        #[ignore = "prints timings; run it by name, in release"]
+        fn a_plan_is_timed() {
+            for count in [500, 5_000, 20_000, 50_000] {
+                let mut rng = Rng::new(count as u64);
+                let folder = |rng: &mut Rng| format!("d{}", rng.below(12));
+                let mut files: Vec<(String, u64)> = (0..count)
+                    .map(|i| {
+                        let folders: Vec<String> = (0..1 + rng.below(5)).map(|_| folder(&mut rng)).collect();
+                        (format!("{}/f{i}.rs", folders.join("/")), bytes(&mut rng))
+                    })
+                    .collect();
+                let timed = |files: &[(String, u64)]| {
+                    let started = std::time::Instant::now();
+                    let (mut tree, mut plan) = (0., 0.);
+                    for _ in 0..5 {
+                        let before = std::time::Instant::now();
+                        let root = repo(files);
+                        tree += before.elapsed().as_secs_f64();
+                        let before = std::time::Instant::now();
+                        let places = atlas(&root).places.len();
+                        plan += before.elapsed().as_secs_f64();
+                        assert!(places > files.len());
+                    }
+                    (tree * 200., plan * 200., started.elapsed().as_secs_f64() * 200.)
+                };
+                let whole = timed(&files);
+                files.push(("d0/d1/new.rs".into(), 5_000));
+                let after = timed(&files);
+                println!(
+                    "{count} files: tree {:.2} ms, plan {:.2} ms, both {:.2} ms; after one more file {:.2} ms",
+                    whole.0, whole.1, whole.2, after.2
+                );
+            }
         }
 
         /// The numbers in the design note: `cargo test -p ottospace-core atlas -- --nocapture`.

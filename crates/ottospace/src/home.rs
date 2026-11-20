@@ -59,6 +59,11 @@ pub struct Drawn {
 pub type Shared = Rc<RefCell<Drawn>>;
 
 impl Drawn {
+    /// Where an empty tab's key caps were drawn last: the code city keeps its names clear of them.
+    pub(crate) fn hints(&self) -> Bounds<Pixels> {
+        self.bare
+    }
+
     /// Where the text is, with room for a node beside it, in fractions of the area: the core
     /// puts no node there.
     pub fn keep_out(&self) -> Vec<Rect> {
@@ -484,11 +489,13 @@ impl Workspace {
                 paint_lattice(&shared, None, (bounds, [panel, legend]), build, window);
             },
         );
+        // A task's empty tab, with the `code_city` flag and its files read: the city is the floor.
+        let floor = self.render_city(lines.absolute().size_full().into_any_element());
         div()
             .relative()
             .size_full()
             .overflow_hidden()
-            .child(lines.absolute().size_full())
+            .child(floor)
             .children(nodes)
             .child(panel)
             .children(legend)

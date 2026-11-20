@@ -97,28 +97,43 @@ Costs, known:
 
 ## Drawing
 
-**Recommended: 2D, top down.** Quads in one GPUI canvas, built when the plan or the bounds
-change and kept (as the lattice's lines are: `home::Drawn::lattices`), painted again only when
-something changes. A hit test is a point in a rectangle. It reads at any size and behind text.
+**3D, in perspective, rendered on the GPU** (the owner's word, 2026-11-19: "I was expecting a
+3D view … in the background"; and wgpu, so the renderer can follow ottospace to Linux and
+Windows). It replaces the 2D plan this note first recommended.
 
-- District: its ground a step lighter per depth, a hairline border; names of the top districts
-  only, muted. Building: a quad inset one point (the gap is the street).
-- **Height without 3D**: shade (taller is lighter), and for the top class a second outline
-  inside the first, as stacked floors seen from above.
-- **Activity**: the building filled in the agent's colour. **Beacon**: a ring around the
-  building in the needs-you amber (`theme::SNEAK`), steady.
-- **Oblique** (the lattice's camera, `core::home::View`) would add real height, the thing a
-  skyline is remembered by, and would match Home's floor. Cost: every building is three paths,
-  not one quad (GPUI has no depth buffer: painted back to front), tall buildings hide the ones
-  behind, hit testing needs the projection, and labels do not fit. Not before 2D has been used.
+- **The scene is the core's** (`ottospace-core::scene`, pure, unit-tested): the ground; each
+  district a terrace standing on its parent's, stepped as the owner's city steps its own
+  (`TIER_LIFT` 13, 8, 4.6, 2.6, 1.7, then 1.1, in a tower's sixtieths, halved); each file a box
+  on its district, its height the owner's `buildingHeight` (`2 + 6·log2(1 + lines/10)`, 2 to 60),
+  lines guessed as bytes / 32 (lines would mean reading every file). Footprint stays the size
+  class: the owner's city sizes a file by its lines too, and churn-based height is slice 6.
+  In a city of few files (under about 400) the lots are large, so the tallest building is at
+  least 2.5 lot sides and streets a tenth of one: towers on streets, not slabs.
+- **The camera is the core's**: perspective, 30° field of view, looking down 38° from 34° off
+  the plan's front, as near as keeps every box inside the picture with 4% to spare, at any
+  shape of tab (tested). A point's projection is a pure function, for tests and later hit tests.
+- **A lit building is never hidden**: it stands above every terrace, and any building in the
+  line from the camera to its top is cut down below that line (tested over many lit buildings,
+  one and two at a time). Two lit buildings in line with each other may still overlap.
+- **The shell renders it offscreen** (`city_gpu.rs`, wgpu, the platform's own backends): boxes
+  instanced, a depth buffer, 4× multisampling, ambient light and one from above (sides darker
+  than tops), fog into the background colour, a lit building in its task's colour, unlit by the
+  light and the fog. The picture is read back once and painted by GPUI as an image, under the
+  hints, which get a dark backing that fades out at its edges (in a tab taller than the plan's
+  shape, the picture takes only the part below them: the city is as large there); the root's
+  folders are named on their ground, never behind the hints. On a thread of its own, made again only when the plan, the lit
+  files or the tab's size in pixels change: a frame paints the kept image. No GPU, or a failed render: the lattice,
+  and the state says why. No animation in this slice.
 
-**Level of detail** (by a place's size on screen, so it holds at any zoom): under 1 pt nothing;
-a district under 24 pt is one block with no buildings; buildings from 3 pt; a district's name
-from 120 pt wide; a building's name from 60 pt wide (only when zoomed in: never at rest behind
-a workspace).
+Why not paths (the "Oblique" alternative this note first named): GPUI has no depth buffer, so
+every building would be three paths painted back to front each frame, 15,000 paths at 5,000
+files; a rendered picture costs one image a frame however large the city.
 
-**Frames**: none at rest. A paint happens when the file list, the lit set, the bounds or the
-camera's target changes. A camera move is the only animation, and it ends.
+**Level of detail**: none needed for the GPU (50,000 boxes are one draw). A city over 20,000
+files, 4 MB of names or 10 s to read is not drawn (the lattice stays).
+
+**Frames**: none at rest. A picture is made when the file list, the lit set or the tab's size
+changes, and a paint happens then. A camera move (slice 7) would be the only animation.
 
 ## The camera (proposed; the first slice has none: the whole repository, fixed)
 
@@ -175,8 +190,10 @@ What ottospace knows today, exactly:
 - A shell command is `Shell`, never a guessed file. A search (`Grep`, `Glob`) names a folder.
 
 So, built: a building is lit, in its task's identity colour (`Task::colour`, the colour of its
-badge and tab), while its path ends with the label of a `Files` call of that task's
-conversation that runs now, or that was its last call while the agent still has the turn. No
+badge and tab), while its path ends with the label of a `Files` call that runs now, or that was
+the last call while the agent still has the turn, in the conversation of any task working in
+that checkout (two tasks in one checkout: each in its colour; a file in the root is labelled
+`<folder>/<name>` and matched so). No
 clock is read: the lit set changes only with an event. Two files that share their last two
 parts are both lit: honest about what is known, and wrong for one of them (open question 3).
 
@@ -261,8 +278,11 @@ issue waiting on them; for code, the task working in that folder asks a question
 
 - Paths and names are the person's. They are drawn, and kept in the shell's memory only. Not
   in the control socket's state, the event log, or anything written to disk.
-- The state gains, under the test gate only (`OTTOSPACE_E2E`): `atlas`, with counts (places, groups,
-  lit, builds, paints) and the lit rectangles. No id, label or path.
+- The state gains, under the test gate only (`OTTOSPACE_E2E`): `city`, with counts (places,
+  groups, reads, renders, paints, names drawn), the picture's size, where it and the lit
+  buildings are, the last render's time and why there is none (`failed`); `counts.city_reads`.
+  No id, label or path. `OTTOSPACE_CITY_NO_GPU` (read only under `OTTOSPACE_E2E`) stands for a
+  machine with no GPU.
 - A source's text is data, never instructions: a file named like a command is a label.
 - git is run with a fixed argv, in the task's folder, and never a hook, a pager or the network.
 
@@ -271,7 +291,7 @@ issue waiting on them; for code, the task working in that folder asks a question
 | # | Slice | State |
 |---|---|---|
 | 1 | The layout and the repository source, in the core, with the property test | built (this pull request) |
-| 2 | The backdrop behind `code_city`: the file list, the drawing, lit buildings, a shot scenario, an e2e test | built (stacked) |
+| 2 | The backdrop behind `code_city`: the file list, the city in 3D rendered on the GPU (by the owner's word, 2026-11-19), lit buildings, a shot scenario, an e2e test | built (stacked) |
 | 3 | The exact file of a call, shell-side, so a lit building is never a guess (question 3) | |
 | 4 | Agent markers and trails; the task's "needs you" as a beacon on its district | |
 | 5 | Hover: a building's path; coupling for the hovered building (one `git log`) | |
@@ -296,4 +316,4 @@ issue waiting on them; for code, the task working in that folder asks a question
 5. **Jira and Slack data**: which path, if any? A signed-in CLI with a fixed argv (as `gh`), a
    snapshot file an agent writes, or not in ottospace at all.
 6. **Home**: should Home's lattice become the Tasks map, or stay?
-7. **Oblique view**: wanted after 2D, or is top down the look?
+7. **Oblique view**: answered 2026-11-19: 3D, in perspective, on the GPU (Drawing).

@@ -37,10 +37,11 @@ pub enum Feature {
     MultiMonitor,
     OverlayPanels,
     Decisions,
+    CodeCity,
 }
 
 /// Every flag, in the order the docs and the palette list them.
-pub const ALL: [Feature; 8] = [
+pub const ALL: [Feature; 9] = [
     Feature::Marks,
     Feature::AppsSection,
     Feature::Transcripts,
@@ -49,6 +50,7 @@ pub const ALL: [Feature; 8] = [
     Feature::MultiMonitor,
     Feature::OverlayPanels,
     Feature::Decisions,
+    Feature::CodeCity,
 ];
 
 /// Flags whose feature is stable now: a setting of one is ignored, with a warning.
@@ -66,6 +68,7 @@ impl Feature {
             Feature::MultiMonitor => "multi_monitor",
             Feature::OverlayPanels => "overlay_panels",
             Feature::Decisions => "decisions",
+            Feature::CodeCity => "code_city",
         }
     }
 
@@ -78,7 +81,8 @@ impl Feature {
             | Feature::AgentMode
             | Feature::MultiMonitor
             | Feature::OverlayPanels
-            | Feature::Decisions => Stage::Experimental,
+            | Feature::Decisions
+            | Feature::CodeCity => Stage::Experimental,
         }
     }
 
@@ -105,6 +109,9 @@ impl Feature {
                 "Overlay panels (an experiment): the sidebar and the drawer float over the panes, moving nothing, and close after use"
             }
             Feature::Decisions => "Decisions (⌘J): a workspace that shows what waits on you, one question at a time",
+            Feature::CodeCity => {
+                "Code city: an empty tab of a task draws the task's folder as a 3D city, its files where they were last time"
+            }
         }
     }
 
@@ -123,6 +130,7 @@ impl Feature {
             Feature::MultiMonitor => "feature off: multi_monitor",
             Feature::OverlayPanels => "feature off: overlay_panels",
             Feature::Decisions => "feature off: decisions",
+            Feature::CodeCity => "feature off: code_city",
         }
     }
 }
@@ -236,7 +244,8 @@ mod tests {
                 Feature::AgentMode,
                 Feature::MultiMonitor,
                 Feature::OverlayPanels,
-                Feature::Decisions
+                Feature::Decisions,
+                Feature::CodeCity
             ])
         );
         let three = Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true);
@@ -247,10 +256,11 @@ mod tests {
                 .with(Feature::AgentMode, true)
                 .with(Feature::MultiMonitor, true)
                 .with(Feature::OverlayPanels, true)
-                .with(Feature::Decisions, true),
+                .with(Feature::Decisions, true)
+                .with(Feature::CodeCity, true),
             Features::all()
         );
-        let list = " decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
+        let list = " code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
         assert_eq!(Features::parse_list(list).unwrap(), Features::all());
         assert_eq!(Features::parse_list("").unwrap(), Features(Vec::new()));
         assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts, slots"));
@@ -358,7 +368,8 @@ mod tests {
                     ("agent_mode", false),
                     ("multi_monitor", false),
                     ("overlay_panels", false),
-                    ("decisions", false)
+                    ("decisions", false),
+                    ("code_city", false)
                 ]
             );
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
@@ -375,7 +386,7 @@ mod tests {
         assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
             wrong("bookmarks", &yes).unwrap(),
-            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions"
+            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city"
         );
         assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
         assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());

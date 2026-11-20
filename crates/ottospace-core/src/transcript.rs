@@ -605,6 +605,11 @@ impl Transcript {
         self.activity.pulse(&self.is())
     }
 
+    /// The labels of the files its agent is at now (`Activity::files`).
+    pub fn files(&self) -> Vec<(&str, bool)> {
+        self.activity.files(&self.is())
+    }
+
     fn is(&self) -> Is<'_> {
         let asking = self.cards.front().map(|card| card.label.as_str());
         let (live, watched, turn) = (self.live, self.watched && !self.live, self.turn.is_some());

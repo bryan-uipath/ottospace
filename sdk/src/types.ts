@@ -153,7 +153,16 @@ export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
 export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
 /** A feature flag (`features` in `settings.json`). Off, its requests answer "feature off: <name>". */
-export type Feature = "marks" | "apps_section" | "transcripts" | "slots" | "agent_mode" | "multi_monitor" | "overlay_panels" | "decisions";
+export type Feature =
+  | "marks"
+  | "apps_section"
+  | "transcripts"
+  | "slots"
+  | "agent_mode"
+  | "multi_monitor"
+  | "overlay_panels"
+  | "decisions"
+  | "code_city";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
@@ -1506,6 +1515,31 @@ export interface Home {
   counts: Record<Group, number>;
 }
 
+/** The code city in a task's empty tab (`code_city`): a picture rendered on the GPU. Counts and
+ * rectangles, no name. */
+export interface CityDrawn {
+  /** Folders and files placed, and how many of them are folders: null until a picture is made. */
+  places: number | null;
+  groups: number | null;
+  /** The picture's size in pixels (the floor's bounds times `scale`): null with none. */
+  picture: [number, number] | null;
+  /** Where the floor was painted last, in window points, and the window's scale. */
+  bounds: Rect;
+  scale: number;
+  /** Each lit building, in window points. */
+  lit: Rect[];
+  /** Root folders named on the last paint. */
+  labels: number;
+  /** Why there is no picture (no GPU, a failed render): the lattice is drawn instead. */
+  failed: string | null;
+  /** How often the file list was read, a picture made, and the city painted. */
+  reads: number;
+  renders: number;
+  paints: number;
+  /** How long the last picture took: scene, render and read back, in microseconds. */
+  render_us: number | null;
+}
+
 /** What the home screen drew, in window points. */
 export interface HomeDrawn {
   area: Rect;
@@ -1673,6 +1707,8 @@ export interface Snapshot {
   /** Null while the tab on show has a pane. */
   home: Home | null;
   home_drawn: HomeDrawn;
+  /** Null outside a test run, and while no city is drawn. */
+  city: CityDrawn | null;
   /** Names of `apps_bar.not_running`. */
   closed_apps: string[];
   apps_bar: AppsBar;

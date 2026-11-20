@@ -2218,6 +2218,12 @@ fn check(m: &Model) -> Result<(), String> {
     // Agent mode: every app pane has a grant, and only it, the flag on or off. One above Off is to
     // a task that works in the pane's workspace; a pane in no task's is Off. Off, no menu is open.
     ensure!(m.features.on(Feature::AgentMode) || m.agent.menu.is_none(), "the agent menu open with its flag off");
+    // The city is a task's empty tab's, and only with its flag.
+    let floor = *m.shown_space() != Owner::Home && m.tree_at(m.main_at()).is_none();
+    ensure!(
+        m.city().is_none() || (m.features.on(Feature::CodeCity) && floor),
+        "a city with its flag off or over panes"
+    );
     {
         let apps: Vec<PaneId> = m
             .tab_panes()

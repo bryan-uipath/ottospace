@@ -72,6 +72,8 @@ mod bug;
 mod calendar;
 mod chat_select;
 mod child;
+mod city;
+mod city_gpu;
 mod clipboard;
 mod collect;
 mod commands;
@@ -1133,6 +1135,11 @@ struct Workspace {
     /// The status bar: the focused folder's checkout, read off the main thread; how its segments
     /// were last shortened; the meeting it last said (`id`, minutes to go, Join), to draw again on a change.
     status_git: status_bar::Reader,
+    /// The code city behind a task's empty tab: its files, read off the main thread, and what
+    /// the last frame drew of it.
+    city: city::Reader,
+    city_drawn: city::Shared,
+    city_painter: city::Painter,
     status_fit: Cell<ottospace_core::status_bar::Fit>,
     status_said: Option<(u64, Option<u64>, bool)>,
     pr_opens: u32,
@@ -1418,6 +1425,7 @@ impl Workspace {
                         this.poll_sessions(window, cx);
                         this.read_titles(cx);
                         this.read_status_checkout(cx);
+                        this.read_city(cx);
                     }
                     this.listen_menu_bar(window, cx);
                     if ticks.every(60, 0) {
@@ -1720,6 +1728,9 @@ impl Workspace {
             pr_note: None,
             repo_pulse_frames: Cell::default(),
             status_git: status_bar::Reader::new(),
+            city: city::Reader::new(),
+            city_drawn: city::Shared::default(),
+            city_painter: city::Painter::new(),
             status_fit: Cell::default(),
             status_said: None,
             pr_opens: 0,
@@ -3999,6 +4010,10 @@ impl Workspace {
             // line with its list) and each node's click target by task id. Also how often
             // lattice lines were built and painted, here and in empty panes.
             "home_drawn": self.home.borrow().snapshot(),
+            // A test run only: the code city drawn in a task's empty tab (`code_city`): counts, the
+            // picture's size in pixels, where it and the lit buildings are, why there is none
+            // (`failed`). Never a file's name.
+            "city": std::env::var_os("OTTOSPACE_E2E").map(|_| self.city_snapshot(window.scale_factor())),
             // The pinned apps that are not running: `open_app` starts one. The Dock's and the
             // rest are in `apps_bar`: those are the user's to start.
             "closed_apps": self.pinned_closed().map(|app| app.name).collect::<Vec<_>>(),
@@ -4032,6 +4047,8 @@ impl Workspace {
                 "new_windows_open": self.new_window_asks[0],
                 "new_windows_tell": self.new_window_asks[1],
                 "new_windows_menu_item": self.new_window_asks[2],
+                // File lists the code city read (`code_city`): none with the flag off, none at rest.
+                "city_reads": self.city_reads(),
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
                 // Frames drawn while the calendar band's loading bar slides: none once a read lands.

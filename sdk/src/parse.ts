@@ -80,6 +80,7 @@ import type {
   Home,
   Glyph,
   HomeDrawn,
+  CityDrawn,
   HomeNode,
   InboxReply,
   InboxRow,
@@ -1385,7 +1386,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
   if (value === "multi_monitor") return value;
-  if (value === "overlay_panels" || value === "decisions") return value;
+  if (value === "overlay_panels" || value === "decisions" || value === "code_city") return value;
   throw wrong(at, "a feature", value);
 }
 
@@ -1977,6 +1978,24 @@ function home(value: unknown, at: string): Home {
   };
 }
 
+function cityDrawn(value: unknown, at: string): CityDrawn {
+  const o = fields(value, at);
+  return {
+    places: orNull(num)(o.places, `${at}.places`),
+    groups: orNull(num)(o.groups, `${at}.groups`),
+    picture: orNull(pair)(o.picture, `${at}.picture`),
+    bounds: rect(o.bounds, `${at}.bounds`),
+    scale: num(o.scale, `${at}.scale`),
+    lit: list(rect)(o.lit, `${at}.lit`),
+    labels: num(o.labels, `${at}.labels`),
+    failed: orNull(str)(o.failed, `${at}.failed`),
+    reads: num(o.reads, `${at}.reads`),
+    renders: num(o.renders, `${at}.renders`),
+    paints: num(o.paints, `${at}.paints`),
+    render_us: orNull(num)(o.render_us, `${at}.render_us`),
+  };
+}
+
 function homeDrawn(value: unknown, at: string): HomeDrawn {
   const o = fields(value, at);
   return {
@@ -2089,6 +2108,7 @@ export function snapshot(value: unknown): Snapshot {
     repos_bar: list(reposGroup)(o.repos_bar, "repos_bar"),
     home: orNull(home)(o.home, "home"),
     home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
+    city: orNull(cityDrawn)(o.city, "city"),
     closed_apps: list(str)(o.closed_apps, "closed_apps"),
     apps_bar: appsBar(o.apps_bar, "apps_bar"),
     apps: list(appEntry)(o.apps, "apps"),

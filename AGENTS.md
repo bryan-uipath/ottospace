@@ -166,6 +166,12 @@ Design note: `docs/ai/attention/plan.md`.
     (`room`) and its shaped width (`drawn`). Null outside a test run.
   - State field `viewers[n].marked_rect` (drawn): where a viewer's first marked line is drawn, while
     its pane shows. Null outside a test run.
+  - State field `city`: the code city in a task's empty tab (`code_city`): `places`, `groups`,
+    `picture` (its size in pixels), `bounds` and `scale` (where it was painted), `lit` (each lit
+    building's rect), `labels`, `failed` (why there is no picture), `reads`, `renders`, `paints`,
+    `render_us`. `counts.city_reads`: the reads, a city on show or not. Never a path or a name.
+    Null outside a test run and while none is on show. `OTTOSPACE_CITY_NO_GPU` (read only under
+    `OTTOSPACE_E2E`) stands for a machine with no GPU: every picture fails, the lattice stays.
   - State fields `keys_known` (the ids of the key bindings the user knows) and `key_reference`
     (while ⌘/ shows: its groups' row ids, the known ids, whether Known is open, its header's
     rect). Null outside a test run: what the user's keys are used for is never on the socket.

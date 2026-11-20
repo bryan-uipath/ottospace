@@ -3516,6 +3516,7 @@ mod agent;
 pub mod btw;
 mod bug;
 pub mod chat;
+pub mod city;
 pub mod editor;
 pub mod finish;
 pub mod offers;

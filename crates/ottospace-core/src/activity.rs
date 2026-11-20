@@ -213,6 +213,25 @@ impl Activity {
         self.latest = self.latest.max(at);
     }
 
+    /// The labels of the files the agent is at now: its `Files` calls that run, and its last
+    /// call if that was one and the agent still works. None for a conversation that is over (a
+    /// call its record never ended). No clock in it: a shell line names no file. With each,
+    /// whether its call runs still: one that ended may have made the file.
+    pub fn files(&self, is: &Is) -> Vec<(&str, bool)> {
+        if !is.live && !is.watched {
+            return Vec::new();
+        }
+        let running = self.running.iter().filter(|call| call.station == Station::Files).map(|call| call.label.as_str());
+        let works = self.pulse(is) == Pulse::Running;
+        let last =
+            self.last.as_ref().filter(|last| works && last.station == Station::Files).map(|last| last.label.as_str());
+        let mut files: Vec<(&str, bool)> =
+            running.map(|label| (label, true)).chain(last.map(|label| (label, false))).collect();
+        files.sort_unstable_by(|a, b| a.0.cmp(b.0).then(b.1.cmp(&a.1)));
+        files.dedup_by_key(|file| file.0);
+        files
+    }
+
     /// The centre's state, for a conversation in the state `is`. No clock in it.
     pub fn pulse(&self, is: &Is) -> Pulse {
         if self.error.is_some() {
@@ -477,6 +496,32 @@ mod tests {
 
     fn live<'a>() -> Is<'a> {
         Is { live: true, timed: true, ..Is::default() }
+    }
+
+    #[test]
+    fn the_files_an_agent_is_at_are_its_running_calls_and_its_last_while_it_works() {
+        let mut a = Activity::default();
+        a.message(0);
+        a.start("1", Station::Files, "src/a.rs", 1);
+        a.start("2", Station::Shell, "cargo test", 2);
+        let working = Is { turn: true, ..live() };
+        assert_eq!(a.files(&working), [("src/a.rs", true)]);
+        // Its last call was the shell's: the file's call ended, the agent is at no file.
+        a.end("1", false, 3);
+        assert_eq!(a.files(&working), []);
+        a.end("2", false, 4);
+        a.start("3", Station::Files, "src/b.rs", 5);
+        a.end("3", false, 6);
+        assert_eq!(a.files(&working), [("src/b.rs", false)]);
+        // Its turn over: none. A call that runs with no turn (asked before it): still there.
+        assert_eq!(a.files(&live()), []);
+        a.start("4", Station::Files, "src/c.rs", 7);
+        assert_eq!(a.files(&live()), [("src/c.rs", true)]);
+        // The same file again, its call running: said once, as running.
+        a.start("5", Station::Files, "src/b.rs", 8);
+        assert_eq!(a.files(&working), [("src/b.rs", true), ("src/c.rs", true)]);
+        // The conversation over, with a call its record never ended: none.
+        assert_eq!(a.files(&Is::default()), []);
     }
 
     #[test]

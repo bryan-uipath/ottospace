@@ -1,0 +1,15 @@
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a picture
+// made-up line of src/error.rs, for a pic
