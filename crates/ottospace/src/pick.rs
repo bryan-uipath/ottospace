@@ -7,11 +7,12 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use gpui::{AnyElement, Context, Window, div, prelude::*, px, rgb};
+use ottospace_core::ax::Frame;
 use ottospace_core::model::PickWindow;
 use ottospace_core::new_window::{self, Recipe};
 use ottospace_core::rules::{self, Shape};
 use ottospace_core::{Action, Axis, Origin, PaneId, PickItem, Picker, theme};
-use ottospace_mac::{ax, capture};
+use ottospace_mac::{ax, capture, recovery};
 use serde::Deserialize;
 
 use crate::{Hosted, Workspace, config, dialog, picker_title, with_facts};
@@ -52,6 +53,9 @@ impl Asked {
 struct FixtureWindow {
     window: u32,
     title: String,
+    /// Its size in points, at the top left of the menu bar's display: `[1280, 800]`.
+    #[serde(default)]
+    size: Option<[f64; 2]>,
 }
 
 /// A started `open` or `osascript`, waited for off the main thread so it leaves no zombie.
@@ -100,9 +104,17 @@ impl Workspace {
         let mut bundle = fixture.as_ref().and_then(|fixture| fixture.bundle.clone());
         let mut menu_item = fixture.as_ref().is_some_and(|fixture| fixture.new_window_item);
         let fixture = fixture.into_iter().flat_map(|fixture| fixture.windows);
-        let mut windows: Vec<PickWindow> = fixture.map(|w| PickWindow { window: w.window, title: w.title }).collect();
+        let made_up = |w: FixtureWindow| {
+            let frame = w.size.map(|[w, h]| Frame::new(0., 0., w, h)).unwrap_or_default();
+            PickWindow { window: w.window, title: w.title, frame, subrole: "AXStandardWindow".into() }
+        };
+        let mut windows: Vec<PickWindow> = fixture.map(made_up).collect();
         if let Some(pid) = self.pid_of(app) {
-            let read = |w: ax::Window| Some(PickWindow { window: w.id()?, title: w.title().unwrap_or_default() });
+            let read = |w: ax::Window| {
+                let (window, title) = (w.id()?, w.title().unwrap_or_default());
+                let frame = w.frame().map(recovery::to_frame).unwrap_or_default();
+                Some(PickWindow { window, title, frame, subrole: w.subrole().unwrap_or_default() })
+            };
             let mut skipped = Vec::new();
             for w in ax::Window::all_of(pid) {
                 // A window that closed while read has no id: said, not lost.
@@ -296,8 +308,14 @@ impl Workspace {
     /// that holds it already.
     pub(crate) fn render_window_picker(&self, picker: &Picker, app: &str, cx: &mut Context<Self>) -> AnyElement {
         let selected = picker.selected;
+        let details = self.model.picker_details();
         let rows = picker.matches().into_iter().enumerate().map(|(i, item)| {
             let muted = |text: String| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(text);
+            // One of several of its title: what tells it apart (`large · 1280×800`).
+            let detail = match item {
+                PickItem::Window { window: id, .. } => details.iter().find(|(w, _)| w == id).map(|(_, d)| d.clone()),
+                _ => None,
+            };
             let (icon, note) = match item {
                 // Opened for the pane: it closes with it.
                 PickItem::NewWindow { .. } => {
@@ -317,6 +335,7 @@ impl Workspace {
             dialog::filter_row(("pick", i), i == selected)
                 .child(icon)
                 .child(div().flex_1().min_w_0().truncate().child(item.label().to_string()))
+                .children(detail.map(muted))
                 .children(note)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.dispatch(Action::PickerChoose { index: Some(i) }, this.input, window, cx);

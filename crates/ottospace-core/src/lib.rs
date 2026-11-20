@@ -50,6 +50,7 @@ pub mod restore;
 pub mod row_menu;
 pub mod rules;
 pub mod runner;
+pub mod same_title;
 pub mod scene;
 pub mod scrollbar;
 pub mod seal;

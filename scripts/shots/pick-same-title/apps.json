@@ -1,0 +1,7 @@
+[
+  {"name": "Meetings", "windows": [
+    {"window": 30, "title": "Meetings Workplace", "size": [900, 600]},
+    {"window": 31, "title": "Meeting", "size": [1280, 800]},
+    {"window": 32, "title": "Meeting", "size": [320, 240]}
+  ]}
+]

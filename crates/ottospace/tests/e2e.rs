@@ -15690,6 +15690,28 @@ fn hovering_an_offer_chips_words_shows_its_whole_line_and_the_state_holds_no_tit
     otto.wait_for("no chip, no tooltip", gone);
 }
 
+/// Zoom's meeting opens windows of one title: in the offer list each of them gets a detail and a
+/// picture (a test run's fixture: a box of its shape), a window of its own title none. Neither
+/// title nor detail is in the state.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn offered_windows_of_one_title_are_told_apart_in_the_offer_list() {
+    let otto = Otto::launch("offer-same-title");
+    let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
+    let pane = reply["state"]["focused"].as_u64().unwrap();
+    for (title, size) in [("SECRET meeting", [1280, 800]), ("SECRET meeting", [400, 600]), ("Chat", [400, 600])] {
+        otto.call(json!({"cmd": "window_fixture", "pane": pane, "title": title, "size": size}));
+    }
+    otto.user_click(at(otto.control(&format!("offer-list:{pane}")), 0.5, 0.5));
+    let drawn = |o: &Otto| Some(o.drawn()).filter(|s| !s["offer_rects"]["thumb:800002"].is_null());
+    let reply = otto.wait_for("the list's pictures", drawn);
+    let (big, tall) = (rect(&reply["offer_rects"]["thumb:800001"]), rect(&reply["offer_rects"]["thumb:800002"]));
+    assert!(big[2] > tall[2] + 10., "each of its window's shape: {big:?} {tall:?}");
+    assert_eq!(reply["offer_rects"]["thumb:800003"], Value::Null, "a title of its own: none");
+    let said = reply.to_string();
+    assert!(!said.contains("SECRET") && !said.contains("1280×800") && !said.contains("400×600"), "{reply}");
+}
+
 /// Slots on screen (`slots` flag): ⋯ on an app pane's header opens the dialog, a checklist made
 /// from the pane's window (its id ticked); Keep makes the pane a filled slot, marked `slot`. Give
 /// Back leaves it waiting, saying what for; a window the slot selects is offered there, not in a

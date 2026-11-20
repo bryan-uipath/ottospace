@@ -65,6 +65,15 @@ fn offer_words(offer: &Offer) -> String {
     }
 }
 
+/// A thumbnail's box in points: a window's picture fits inside it, its shape kept.
+const THUMB: (f64, f64) = (64., 40.);
+
+/// The size, in points, a window `frame` of that shape is drawn at as a thumbnail.
+fn thumb_size(frame: &ottospace_core::ax::Frame) -> (f64, f64) {
+    let scale = (THUMB.0 / frame.w.max(1.)).min(THUMB.1 / frame.h.max(1.));
+    ((frame.w * scale).max(1.), (frame.h * scale).max(1.))
+}
+
 /// An offer chip's tooltip: its whole line, wrapped past the offer list's width. Where it is
 /// drawn is noted for a test run.
 struct OfferTip(gpui::SharedString, Marks);
@@ -187,12 +196,20 @@ impl Workspace {
     pub(crate) fn offer_list(&self, pane: PaneId, cx: &mut Context<Self>) -> Option<AnyElement> {
         (self.model.offer_list == Some(pane)).then_some(())?;
         let offers = self.model.offers_at(pane);
-        let rows = offers.iter().map(|offer| {
+        let details = self.model.offer_details(pane);
+        let rows = offers.iter().zip(details).map(|(offer, detail)| {
+            // One of several of its title: its detail, and a picture of it to tell it at a glance.
+            let thumb = detail.as_ref().and_then(|_| self.offer_thumb(offer));
+            let words = match detail {
+                Some(detail) => format!("{} · {detail}", offer_words(offer)),
+                None => offer_words(offer),
+            };
             div()
                 .flex()
                 .items_center()
                 .gap_1()
-                .child(cut_text(offer_words(offer)).flex_1().text_color(rgb(theme::TEXT)))
+                .children(thumb)
+                .child(cut_text(words).flex_1().text_color(rgb(theme::TEXT)))
                 .children(self.offer_choices(offer.window, cx))
         });
         let list = div()
@@ -215,6 +232,52 @@ impl Workspace {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .children(rows);
         Some(list.into_any_element())
+    }
+
+    /// A same-titled offer's picture, once taken. A test run's fixture window has none: a plain
+    /// box stands in, noted in `offer_rects`.
+    fn offer_thumb(&self, offer: &Offer) -> Option<AnyElement> {
+        let (w, h) = thumb_size(&offer.frame);
+        let held = div().flex_none().w(gpui::px(w as f32)).h(gpui::px(h as f32)).rounded_sm().relative();
+        let held = held.child(mark(&self.marks, Mark::OfferThumb(offer.window)));
+        if self.offer_fixtures.contains_key(&offer.window) {
+            return Some(held.bg(rgb(theme::BORDER_STRONG)).into_any_element());
+        }
+        let image = self.offer_thumbs.get(&offer.window)?.clone();
+        Some(held.child(gpui::img(image).size_full()).into_any_element())
+    }
+
+    /// The offer list of `pane` opened: one picture of each window that shares its title, off
+    /// the main thread. Kept in memory while the offer lasts, never on disk.
+    fn take_offer_thumbs(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
+        let offers = self.model.offers_at(pane);
+        let wanted = offers.iter().zip(self.model.offer_details(pane)).filter(|(_, detail)| detail.is_some());
+        let scale = f64::from(window.scale_factor());
+        let shots: Vec<(u32, usize, usize)> = wanted
+            .filter(|(offer, _)| !self.offer_fixtures.contains_key(&offer.window))
+            .map(|(offer, _)| {
+                let (w, h) = thumb_size(&offer.frame);
+                (offer.window, (w * scale).round() as usize, (h * scale).round() as usize)
+            })
+            .collect();
+        for (id, w, h) in shots {
+            cx.spawn(async move |this, cx| {
+                let png = cx.background_executor().spawn(async move {
+                    let rgba = ottospace_mac::capture::window_rgba(id, w, h).ok()?;
+                    ottospace_mac::image::png_from_rgba(w, h, &rgba)
+                });
+                let Some(png) = png.await else { return };
+                let image = std::sync::Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png));
+                let _ = this.update(cx, |this, cx| {
+                    // Still offered: else the picture is dropped.
+                    if this.model.offers.iter().any(|offer| offer.window == id) {
+                        this.offer_thumbs.insert(id, image);
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
     }
 
     /// An empty pane that waits for a window its app remade, in its body: `Zoom replaced its
@@ -257,7 +320,14 @@ impl Workspace {
             self.error = Some(why.into());
             return cx.notify();
         }
+        let list = match action {
+            Action::OfferList { pane } => Some(pane),
+            _ => None,
+        };
         self.dispatch(action, self.input, window, cx);
+        if let Some(pane) = list.filter(|pane| self.model.offer_list == Some(*pane)) {
+            self.take_offer_thumbs(pane, window, cx);
+        }
         cx.notify();
     }
 
@@ -321,6 +391,8 @@ impl Workspace {
         for id in gone {
             self.dispatch(Action::OfferGone { window: id }, Origin::System, window, cx);
         }
+        let offers = &self.model.offers;
+        self.offer_thumbs.retain(|id, _| offers.iter().any(|offer| offer.window == *id));
     }
 
     /// A new window that would float with an offer: the core gives it to a slot or to its app
