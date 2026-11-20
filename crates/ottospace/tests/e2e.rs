@@ -850,16 +850,18 @@ fn a_terminal_program_that_asks_for_the_kitty_keyboard_tells_shift_enter_from_en
     let lines = |o: &Otto| o.call(json!({"cmd": "state"}))["terminals"]["1"]["lines"].clone();
     let shown = |o: &Otto, line: &str| lines(o).as_array()?.iter().any(|l| l.as_str() == Some(line)).then_some(());
     // Pushes the protocol as Claude Code does (`CSI > 5 u`), reads one key with echo off, pops it,
-    // and prints what came without its escape.
+    // and prints what came in hex: ESC [ 1 3 ; 2 u is `1b5b31333b3275`.
     // Each round says it is ready with its own number: never the last round's line.
     let read_key = |round: usize| {
         format!(
             "stty -echo -icanon min 1 time 0; printf '\\033[>5u'; echo ready-$((0+{round})); \
              r=$(dd bs=16 count=1 2>/dev/null); printf '\\033[<u'; stty sane; \
-             echo \"got:$(printf %s \"$r\" | tr -d '\\033')\"\r"
+             echo \"got:$(printf %s \"$r\" | od -An -tx1 | tr -d ' \\n')\"\r"
         )
     };
-    for (round, (key, sent)) in [("shift-enter", "got:[13;2u"), ("escape", "got:[27u")].into_iter().enumerate() {
+    for (round, (key, sent)) in
+        [("shift-enter", "got:1b5b31333b3275"), ("escape", "got:1b5b323775")].into_iter().enumerate()
+    {
         otto.call(json!({"cmd": "type", "text": read_key(round)}));
         otto.wait_for("the program to ask", |o| shown(o, &format!("ready-{round}")));
         otto.call(json!({"cmd": "key", "keys": key}));

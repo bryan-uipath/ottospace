@@ -26,7 +26,7 @@ pub fn encode(key: &str, typed: Option<&str>, mods: Mods, app_cursor: bool, kitt
         return None; // ⌘ shortcuts belong to ottospace
     }
     if kitty.disambiguate
-        && let Some(bytes) = kitty_key(key, typed, mods, kitty.alternates)
+        && let Some(bytes) = kitty_key(key, mods, kitty.alternates)
     {
         return Some(bytes);
     }
@@ -63,7 +63,7 @@ pub fn encode(key: &str, typed: Option<&str>, mods: Mods, app_cursor: bool, kitt
 /// A key as the kitty protocol's disambiguate flag sends it, or `None` where that is the legacy
 /// form: text with no modifier but ⇧, ↵ ⇥ ⌫ alone, arrows and editing keys (`CSI 1 ; m A`).
 /// e.g. ⇧↵ → `CSI 13;2u`, Esc → `CSI 27u`, ⌃C → `CSI 99;5u`, ⌥← → `CSI 1;3D`.
-fn kitty_key(key: &str, typed: Option<&str>, mods: Mods, alternates: bool) -> Option<Vec<u8>> {
+fn kitty_key(key: &str, mods: Mods, alternates: bool) -> Option<Vec<u8>> {
     let param = 1 + mods.shift as u8 + 2 * mods.alt as u8 + 4 * mods.ctrl as u8;
     let csi_u = |code: u32, shifted: Option<char>| {
         let alternate = shifted.filter(|_| alternates).map_or(String::new(), |c| format!(":{}", c as u32));
@@ -84,7 +84,9 @@ fn kitty_key(key: &str, typed: Option<&str>, mods: Mods, alternates: bool) -> Op
             let mut chars = key.chars();
             match (chars.next(), chars.next()) {
                 (Some(c), None) if mods.ctrl || mods.alt => {
-                    let shifted = typed.and_then(|t| t.chars().next()).filter(|t| mods.shift && t != &c);
+                    // The shifted key of a letter, from the key itself: with ⌃ the typed text is
+                    // empty, with ⌥ it is another character (⌥⇧A types Å).
+                    let shifted = Some(c.to_ascii_uppercase()).filter(|_| mods.shift && c.is_ascii_alphabetic());
                     return csi_u(c.to_ascii_lowercase() as u32, shifted);
                 }
                 _ => return None,
@@ -219,8 +221,11 @@ mod tests {
         assert_eq!(kitty("c", None, ctrl), Some(b"\x1b[99;5u".to_vec()));
         assert_eq!(kitty("space", Some(" "), ctrl), Some(b"\x1b[32;5u".to_vec()));
         assert_eq!(kitty("left", None, alt), Some(b"\x1b[1;3D".to_vec()));
-        // With ⇧ too, the shifted key is sent beside it (flag 4): ⌃⇧A.
-        assert_eq!(kitty("a", Some("A"), Mods { ctrl: true, shift: true, ..NONE }), Some(b"\x1b[97:65;6u".to_vec()));
+        // With ⇧ too, the shifted key is sent beside it (flag 4): ⌃⇧A, whose typed text is empty,
+        // and ⌥⇧A, which types Å.
+        assert_eq!(kitty("a", None, Mods { ctrl: true, shift: true, ..NONE }), Some(b"\x1b[97:65;6u".to_vec()));
+        let alt_shift = Mods { alt: true, shift: true, ..NONE };
+        assert_eq!(kitty("a", Some("\u{c5}"), alt_shift), Some(b"\x1b[97:65;4u".to_vec()));
         let no_alternates = Kitty { disambiguate: true, alternates: false };
         let ctrl_shift = Mods { ctrl: true, shift: true, ..NONE };
         assert_eq!(encode("a", Some("A"), ctrl_shift, false, no_alternates), Some(b"\x1b[97;6u".to_vec()));
