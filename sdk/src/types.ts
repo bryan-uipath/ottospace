@@ -1195,10 +1195,22 @@ export interface Mark {
   buttons: { key: Rect | null; rename: Rect | null; remove: Rect | null };
 }
 
+/** A program's ask to copy: never its text. `id`: what the user's answer names; `at`: when it came (ms); `too_large` past 100 KB, refused. */
+export interface CopyAsk {
+  id: number;
+  at: number;
+  chars: number;
+  too_large: boolean;
+}
+
 /** `state` in a reply: the core's model. */
 export interface Model {
   /** Panes of every tab. */
   panes: Pane[];
+  /** Programs' asks to set the clipboard (OSC 52), by pane, waiting for the user: how much, never the text. */
+  copy_asks: Record<string, CopyAsk>;
+  /** Panes whose program the user let copy for the pane's life ("Always for this pane"). */
+  copy_always: PaneId[];
   /** The tabs of the workspaces. Home has none. */
   tabs: Tab[];
   /** Index into `tabs`; null while Home is on show. */

