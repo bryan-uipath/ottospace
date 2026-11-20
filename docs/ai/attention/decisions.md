@@ -31,7 +31,7 @@ person through what waits on them, one card at a time, in a 15-minute block.
 | Building block | Where |
 |---|---|
 | Needs you: a task state; the Tasks section and the status bar's `● n needs you` | `ottospace-core/src/tasks.rs` (`Group::NeedsYou`), `status_bar.rs` |
-| ⌘⇧N: the next task that needs you (`Action::TaskGo { id: None }`). ⌘J is bound to nothing | `ottospace/src/main.rs` `keymap()` (`cmd-shift-n` → `NextTask`; no `cmd-j`) |
+| ⌘J: the next task that needs you (`Action::TaskGo { id: None }`). ⌘⇧N is bound to nothing (#340) | `ottospace/src/main.rs` `keymap()` (`cmd-j` → `NextTask`) |
 | Ask cards: `AskUserQuestion` as a `Form` (1–8 questions, 1–8 options, Other…, multi-select, Review), answered through the runner's structured protocol (`Effect::AgentAnswers`). A runner offers them by `RunnerSpec::structured.asks`, never by its name | `ottospace-core/src/ask.rs`, `model/chat.rs` (`ask_key`, `Action::TalkAsk`), view `ottospace/src/conversation.rs` (`ask_card`) |
 | Permission cards: Allow (a) / Deny (d) / Show all (s) / Deny with a message (m) | `model/chat.rs` (`key`, `TalkAnswer`), `conversation.rs` (`chat_card`) |
 | Who answers: `TalkSend`, `TalkAnswer`, `TalkAsk`, `TalkExpand`, `TalkDenyNote` are refused from any origin but `User` (`chat::USERS_ALONE`); a client's key or click on a card picks and sends nothing (e2e `a_question_card_sends_the_users_pick`) | `Model::refusal` |
@@ -149,8 +149,8 @@ Nothing on screen. `ottospace-core/src/model/decisions.rs`.
   there (its words are typed where the composer is).
 - The seal (#278's) plays over the answered card while the next one already takes keys; at once
   under Reduce Motion.
-- To open it: the palette's "Decisions" and **⌘J** under the flag. ⌘J is bound to nothing today
-  (`keymap()`); it is the key decided for "where next", so Decisions is its first use. ⌘⇧N is
+- To open it: the palette's "Decisions" and **⌘J** under the flag. ⌘J is next task today
+  (`keymap()`, #340); under the flag it opens Decisions first, else the next task: one rule. ⌘⇧N is
   untouched here (the quick task and note take it in their own work).
 - e2e, under `OTTOSPACE_FEATURES=decisions`: two waiting tasks → open → answer → next → closes;
   skip; later; a client is refused. A `scripts/shots/` scenario with made-up tasks.
