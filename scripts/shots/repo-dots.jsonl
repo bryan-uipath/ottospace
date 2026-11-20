@@ -1,0 +1,19 @@
+# The Repos rows' dots: every checkout idle (the repository's own folder too), then a task's
+# agent at work in app-2 (the task's colour) and a task in app-3 that needs you (amber).
+# The stand-in `claude` leaves its first turn running.
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"fix the zoom >app-2"}
+{"cmd":"task_new","line":"review the map >app-3"}
+{"cmd":"section","section":"repos"}
+{"until":"repos_bar.0.rows.2"}
+{"settle":500}
+{"shot":"idle"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.transcript.turn"}
+{"cmd":"task_set_state","id":2,"state":"needs_you"}
+{"cmd":"section","section":"repos"}
+{"until":"repos_bar.0.rows.2"}
+{"settle":1500}
+{"shot":"working-and-needs-you"}

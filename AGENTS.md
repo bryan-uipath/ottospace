@@ -219,7 +219,8 @@ Design note: `docs/ai/attention/plan.md`.
 - `OTTOSPACE_REDUCE_MOTION` (read only under `OTTOSPACE_E2E`) stands for the system's Reduce Motion
   in the dial and Done's seal. The state's `counts.dial_frames` counts the frames the dial asked for because
   something in it moves: none at rest. `counts.seal_frames` and `counts.seal_spark_frames` do the
-  same for Done's seal, fold and land (`seal.rs`).
+  same for Done's seal, fold and land (`seal.rs`), and `counts.repo_pulse_frames` for a Repos
+  dot's commit pulse; `counts.repo_pulses` counts the pulses (none under Reduce Motion).
 - A feature is done when both loops cover it. Extend `Request` and the state snapshot when a test
   needs to drive or read something new.
 

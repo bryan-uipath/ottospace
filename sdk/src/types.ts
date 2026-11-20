@@ -670,6 +670,10 @@ export interface CheckoutRow {
   label: string;
   /** Its open pull request (read with gh), by numbers and kinds only; null if none. */
   pr: PullRequest | null;
+  /** Its dot: `working` while an agent or a session works there, `needs_you` while a task there needs the user, else `idle`. */
+  activity: "idle" | "working" | "needs_you";
+  /** A commit's pulse plays on its dot (about half a second after a commit is seen). */
+  pulsing: boolean;
   /** Where the row was laid out, scrolled out of view or not. Null while the section is not drawn. */
   row: Rect | null;
 }

@@ -887,6 +887,13 @@ pub enum Action {
     PrOpen {
         path: String,
     },
+    /// The checkouts' `HEAD` logs, by path, as the shell read them `at` (ms since 1970): their
+    /// length in bytes. `calm`: Reduce Motion is on: no pulse.
+    SetHeads {
+        heads: Vec<(String, u64)>,
+        at: u64,
+        calm: bool,
+    },
     /// Start from the tasks kept on disk. `floor`: new ids start above it (see `Tasks::restore`).
     RestoreTasks {
         tasks: Vec<Task>,
@@ -2366,6 +2373,7 @@ impl Action {
             | Action::WorktreeAdded { .. }
             | Action::WorktreeFailed { .. }
             | Action::SetPrs { .. }
+            | Action::SetHeads { .. }
             | Action::PrOpen { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
@@ -2793,6 +2801,7 @@ impl Action {
             | Action::WorktreeAdded { .. }
             | Action::WorktreeFailed { .. }
             | Action::SetPrs { .. }
+            | Action::SetHeads { .. }
             | Action::PrOpen { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
@@ -3467,6 +3476,7 @@ pub mod offers;
 pub mod overlay;
 mod pick;
 pub mod quit;
+pub mod repo_dots;
 pub mod slots;
 mod transcribe;
 mod viewer;
@@ -3579,6 +3589,9 @@ pub struct Model {
     /// people's text: never in the state (`checkout_pr` gives what may be).
     #[serde(skip)]
     pub prs: Vec<(String, Vec<crate::prs::Pr>, Vec<crate::prs::Branch>)>,
+    /// Each listed checkout's `HEAD` log as last read, for its dot's pulse (`repo_dots`).
+    #[serde(skip)]
+    heads: std::collections::BTreeMap<String, repo_dots::Head>,
     pub tasks: Tasks,
     /// What the new-task box's tags may name, as the shell last read it.
     #[serde(skip)]
@@ -3896,6 +3909,7 @@ impl Default for Model {
             repos_open: Vec::new(),
             repos_held: Vec::new(),
             prs: Vec::new(),
+            heads: Default::default(),
             tasks: Tasks::default(),
             known: compose::Known::default(),
             known_line: None,
@@ -4321,6 +4335,7 @@ impl Model {
             // A link opens in the user's browser; only ottospace tells what gh said.
             Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
             Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
+            Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
             Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
             Action::FieldEdit { .. }
             | Action::MarkSubmit
@@ -4771,6 +4786,7 @@ impl Model {
         self.tasks.finished(&states, self.now);
         self.settle_finish();
         self.repo_unhold();
+        self.heads_listed();
         // Only the user's own undo links a dismissed task's tabs again.
         let was_done = |id: &TaskId| states.iter().any(|(task, state)| task == id && *state == State::Done);
         let finished: Vec<TaskId> =
@@ -5217,6 +5233,7 @@ impl Model {
             Action::RepoRemove { path } => self.repo_remove(&path, effects),
             Action::RepoFold { path, fold } => self.repo_fold(&path, fold),
             Action::WorktreeEdit { repo } => self.worktree_edit(repo, effects),
+            Action::SetHeads { heads, at, calm } => self.set_heads(heads, at, calm),
             Action::SetPrs { repo, prs, branches } => {
                 // None to match (gh off, or a failed read): the repository has no marks.
                 self.prs.retain(|(of, ..)| *of != repo);
@@ -9840,6 +9857,7 @@ mod tests {
         Action::WorktreeAdded { .. },
         Action::WorktreeFailed { .. },
         Action::SetPrs { .. },
+        Action::SetHeads { .. },
         Action::PrOpen { .. },
         Action::RestoreTasks { .. },
         Action::TaskAdd { .. },
@@ -10195,6 +10213,7 @@ mod tests {
             Action::WorktreeAdded { repo: text(), path: text(), asked: text(), fresh: true, repos: Vec::new() },
             Action::WorktreeFailed { asked: text(), fresh: true, repos: Vec::new() },
             Action::SetPrs { repo: text(), prs: Vec::new(), branches: Vec::new() },
+            Action::SetHeads { heads: Vec::new(), at: 0, calm: false },
             Action::PrOpen { path: text() },
             Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
             Action::TaskAdd { title: text(), priority: 3, state: State::Running, tab: None, assign: Assign::default() },
@@ -10817,6 +10836,7 @@ mod tests {
                     }
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
+                    Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
                     Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
                     Action::NewWindowCame { .. } | Action::NewWindowFailed { .. } | Action::WindowEdited { .. }
@@ -17196,6 +17216,7 @@ mod tests {
                     }
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
+                    Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
                     Action::RowMenuDrawn { .. } if origin == Origin::Socket => Some(workbook::USERS_ALONE),
                     Action::NewWindowCame { .. } | Action::NewWindowFailed { .. } | Action::WindowEdited { .. }

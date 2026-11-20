@@ -63,6 +63,13 @@ pub fn checkout_of(dir: &Path) -> Option<(PathBuf, Option<String>)> {
     Some((top.to_path_buf(), branch(&git_dir(top)?)))
 }
 
+/// The length of a checkout's `HEAD` log (`<gitdir>/logs/HEAD`): it grows by a line per commit.
+/// One stat, no `git`. `None`: no log.
+pub fn head_log(checkout: &Path) -> Option<u64> {
+    let meta = fs::metadata(git_dir(checkout)?.join("logs").join("HEAD")).ok()?;
+    meta.is_file().then(|| meta.len())
+}
+
 /// A checkout's git folder: its `.git`, or where its `.git` file points (a linked worktree's).
 fn git_dir(dir: &Path) -> Option<PathBuf> {
     let dot_git = dir.join(".git");
