@@ -326,8 +326,8 @@ impl Hosted {
         stream.start_capture().map_err(|e| format!("{e:?}"))?;
         let title = window.title().filter(|t| !t.is_empty()).unwrap_or_else(|| format!("window {id}"));
         let pid = window.pid();
-        let (bundle, known_as) = ax::app_identity(pid);
-        let app = capture::name_of(pid).or(known_as).unwrap_or_default();
+        let (bundle, _) = ax::app_identity(pid);
+        let app = capture::name_of(pid).unwrap_or_default();
         give_back::remember(pid, id, recovery::to_frame(original));
         Ok(Self {
             window_id: id,

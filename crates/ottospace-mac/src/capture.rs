@@ -69,10 +69,18 @@ pub fn find_pid(pid: i32, keep: impl Fn(&ax::Window) -> bool) -> Result<Target, 
     target(ax::Window::main_where(pid, keep).ok_or("no window that may be put in a pane")?)
 }
 
-/// The name SCK reports for the process `pid`.
+/// The name of the process `pid`: SCK's, else AppKit's, else the process's own. SCK sometimes
+/// lists an app with an empty name.
 pub fn name_of(pid: i32) -> Option<String> {
-    let content = SCShareableContent::get().ok()?;
-    content.applications().iter().find(|a| a.process_id() == pid).map(|a| a.application_name())
+    let content = SCShareableContent::get().ok();
+    let listed =
+        content.and_then(|c| c.applications().iter().find(|a| a.process_id() == pid).map(|a| a.application_name()));
+    first_name([listed, ax::app_identity(pid).1, crate::process::name(pid)])
+}
+
+/// The first name that is not blank: `["", "Canary"]` gives "Canary".
+fn first_name(names: impl IntoIterator<Item = Option<String>>) -> Option<String> {
+    names.into_iter().flatten().find(|name| !name.trim().is_empty())
 }
 
 /// Pairs an AX window with its SCK window (matched by CGWindowID).
@@ -147,4 +155,31 @@ pub fn corner_radius(window: &SCWindow, scale: f64) -> Option<f64> {
     let run = run as f64;
     let sqrt_r = (1.0 + (1.0 + 4.0 * run).sqrt()) / 2.0;
     Some(if run == 0.0 { 0.0 } else { sqrt_r * sqrt_r / scale })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::first_name;
+
+    fn names(names: [Option<&str>; 3]) -> Option<String> {
+        first_name(names.map(|name| name.map(str::to_string)))
+    }
+
+    #[test]
+    fn a_blank_name_is_no_name() {
+        assert_eq!(names([Some(""), Some("Canary"), Some("canary")]).as_deref(), Some("Canary"));
+        assert_eq!(names([Some(" \t"), None, Some("canary")]).as_deref(), Some("canary"));
+    }
+
+    #[test]
+    fn the_first_name_present_wins() {
+        assert_eq!(names([Some("Canary"), Some("Other"), Some("canary")]).as_deref(), Some("Canary"));
+        assert_eq!(names([None, Some("Other"), Some("canary")]).as_deref(), Some("Other"));
+    }
+
+    #[test]
+    fn no_name_when_none_is_present() {
+        assert_eq!(names([None, None, None]), None);
+        assert_eq!(names([Some(""), Some(" "), None]), None);
+    }
 }
