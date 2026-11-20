@@ -764,7 +764,9 @@ impl Workspace {
                 move |this, e: &ScrollWheelEvent, _, cx| {
                     let height = this.cell.height;
                     if let Some(agent) = this.drawer.agents.get_mut(&subject) {
-                        agent.terminal.wheel(e.delta.pixel_delta(height).y.into(), height.into());
+                        // No cell here: a program that reads the mouse hears the wheel at the top left.
+                        let (at, mods) = (Default::default(), crate::mods(e.modifiers));
+                        agent.terminal.wheel(e.delta.pixel_delta(height).y.into(), height.into(), at, mods);
                         cx.notify();
                     }
                 }

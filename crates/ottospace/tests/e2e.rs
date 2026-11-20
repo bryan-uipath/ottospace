@@ -3054,18 +3054,124 @@ fn a_drag_past_the_top_selects_into_the_history_and_shift_extends() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_drag_selects_while_the_program_asks_for_the_mouse() {
-    // ottospace sends programs no mouse reports: a drag in vim or tmux selects, as in a shell.
-    let otto = Otto::launch("select-mouse-mode");
+fn a_terminal_wheel_goes_to_the_program_that_asks_and_shift_keeps_the_history() {
+    let otto = Otto::launch("wheel-modes");
     otto.call(json!({"cmd": "split"}));
     otto.bounds(&[1]);
-    otto.call(json!({"cmd": "type", "text": "printf '\\033[?1000h\\033[?1006h'; echo mouse-on\r"}));
-    let t = otto.wait_for("the output", |o| Some(term1(o)).filter(|t| shows(t, "mouse-on")));
-    let lines = t["lines"].as_array().expect("lines");
-    let row = lines.iter().position(|l| l.as_str() == Some("mouse-on")).expect("row") as f32 + 0.5;
-    otto.call(json!({"cmd": "mouse_down", "x": 0.25, "y": row}));
-    let reply = otto.call(json!({"cmd": "mouse_drag", "x": 4.75, "y": row}));
-    assert_eq!(reply["terminals"]["1"]["selection"], "mouse");
+    otto.call(json!({"cmd": "type", "text": "i=1; while [ $i -le 100 ]; do echo row-$i; i=$((i+1)); done\r"}));
+    otto.wait_for("a history", |o| Some(term1(o)).filter(|t| shows(t, "row-100")));
+    let state = otto.drawn();
+    let b = rect(&state["bounds"]["1"]);
+    let middle = [b[0] + b[2] / 2., b[1] + b[3] / 2.];
+    let wheel = |dy: f64, modifiers: &[&str]| {
+        otto.call(json!({"cmd": "mouse", "action": "wheel", "x": middle[0], "y": middle[1], "dy": dy, "modifiers": modifiers}))
+    };
+    let offset = |o: &Otto| term1(o)["display_offset"].as_u64().unwrap_or(0);
+    let line = |o: &Otto, start: &str| {
+        let lines = term1(o)["lines"].as_array()?.clone();
+        lines.iter().filter_map(|l| l.as_str()).find(|l| l.starts_with(start)).map(str::to_string)
+    };
+    // A program that turns `on`, says it is ready, reads what comes for half a second after the
+    // first byte, turns it off and prints it with `cat -v`; each round with its own number.
+    let read = |on: &str, off: &str, round: u32| {
+        let script = format!(
+            "stty -echo -icanon min 1 time 5; printf '{on}'; echo ready-$((0+{round})); \
+             r=$(dd bs=256 count=1 2>/dev/null); printf '{off}'; stty sane; echo \"got{round}:$r\" | cat -v\r"
+        );
+        otto.call(json!({"cmd": "type", "text": script}));
+        otto.wait_for("the program to ask", |o| line(o, &format!("ready-{round}")));
+    };
+
+    // The mouse asked for (1000, 1006), as Claude Code's full-screen view does: the wheel is the
+    // program's, as SGR reports (64 up), and the history stays put.
+    read("\\033[?1000h\\033[?1006h", "\\033[?1000l\\033[?1006l", 1);
+    wheel(2.0, &[]);
+    let got = otto.wait_for("the reports", |o| line(o, "got1:^["));
+    assert!(got.starts_with("got1:^[[<64;") && got.matches('M').count() == 2, "{got}");
+    assert_eq!(offset(&otto), 0);
+
+    // ⇧ and the wheel scroll the history, whatever the program asked; the program hears nothing.
+    read("\\033[?1000h\\033[?1006h", "\\033[?1000l\\033[?1006l", 2);
+    wheel(3.0, &["shift"]);
+    otto.wait_for("the history", |o| (offset(o) == 3).then_some(()));
+    otto.call(json!({"cmd": "scroll", "lines": -1000}));
+    wheel(-1.0, &[]);
+    let got = otto.wait_for("one report", |o| line(o, "got2:^["));
+    assert!(got.starts_with("got2:^[[<65;") && got.matches('M').count() == 1, "{got}");
+
+    // The alternate screen with no mouse asked for (less, man): ↑ and ↓ (1007).
+    read("\\033[?1049h", "\\033[?1049l", 3);
+    wheel(-1.0, &[]);
+    assert_eq!(otto.wait_for("the arrow", |o| line(o, "got3:^[")), "got3:^[[B");
+
+    // Modes a program left on ask for nothing at the prompt: the wheel scrolls the history.
+    otto.call(json!({"cmd": "type", "text": "printf '\\033[?1000h\\033[?1006h'; echo left-$((1+1))\r"}));
+    otto.wait_for("the modes left on", |o| line(o, "left-2"));
+    let before = offset(&otto);
+    wheel(2.0, &[]);
+    otto.wait_for("the history", |o| (offset(o) == before + 2).then_some(()));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_terminal_program_that_asks_for_the_mouse_gets_it_and_shift_or_option_selects() {
+    let otto = Otto::launch("mouse-reports");
+    otto.call(json!({"cmd": "split"}));
+    otto.bounds(&[1]);
+    let state = otto.drawn();
+    let (b, cell) = (rect(&state["bounds"]["1"]), state["cell"].as_array().expect("cell").clone());
+    let (w, h) = (cell[0].as_f64().unwrap_or(8.), cell[1].as_f64().unwrap_or(16.));
+    let point = |col: f64, row: f64| [b[0] + col * w, b[1] + (row + 0.5) * h];
+    let mouse = |action: &str, p: [f64; 2], modifiers: &[&str]| {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "modifiers": modifiers}))
+    };
+    let row_of = |o: &Otto, text: &str| {
+        let lines = term1(o)["lines"].as_array()?.clone();
+        lines.iter().position(|l| l.as_str() == Some(text))
+    };
+    // A program that turns `on`, says it is ready (its own number each round), reads what comes
+    // with echo off, turns it off and prints what came without its escapes.
+    let read = |on: &str, off: &str, round: u32| {
+        let script = format!(
+            "clear; stty -echo -icanon min 1 time 0; printf '{on}'; echo ready-$((0+{round})); \
+             r=$(dd bs=32 count=1 2>/dev/null); printf '{off}'; stty sane; \
+             echo \"got:$(printf %s \"$r\" | tr -d '\\033')\"\r"
+        );
+        otto.call(json!({"cmd": "type", "text": script}));
+        otto.wait_for("the program to ask", |o| row_of(o, &format!("ready-{round}")))
+    };
+    let got = |o: &Otto| {
+        term1(o)["lines"]
+            .as_array()?
+            .iter()
+            .filter_map(|l| l.as_str())
+            .find(|l| l.starts_with("got:"))
+            .map(str::to_string)
+    };
+
+    // A press is the program's (1000, 1006): the button and the cell, from 1.
+    let row = read("\\033[?1000h\\033[?1006h", "\\033[?1000l\\033[?1006l", 1);
+    mouse("down", point(2.5, row as f64), &[]);
+    let report = otto.wait_for("the press", got);
+    assert!(report.starts_with(&format!("got:[<0;3;{}M", row + 1)), "{report}");
+    mouse("up", point(2.5, row as f64), &[]);
+
+    // ⇧ or ⌥ held, a drag selects, the program reading the mouse or not.
+    otto.call(json!({"cmd": "type", "text": "clear; printf '\\033[?1000h\\033[?1006h'; echo mouse-on\r"}));
+    let row = otto.wait_for("the output", |o| row_of(o, "mouse-on")) as f64;
+    for held in ["shift", "alt"] {
+        mouse("down", point(0.25, row), &[held]);
+        mouse("move", point(4.75, row), &[held]);
+        let reply = mouse("up", point(4.75, row), &[held]);
+        assert_eq!(reply["terminals"]["1"]["selection"], "mouse", "{held}");
+    }
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    otto.call(json!({"cmd": "type", "text": "printf '\\033[?1000l\\033[?1006l'\r"}));
+
+    // Focus reports (1004): another pane takes the keyboard, the program hears it go.
+    read("\\033[?1004h", "\\033[?1004l", 3);
+    otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
+    assert_eq!(otto.wait_for("focus out", got), "got:[O");
 }
 
 #[test]

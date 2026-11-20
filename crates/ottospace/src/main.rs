@@ -52,7 +52,10 @@ use ottospace_core::sneak::{SneakKey, sneak_key};
 use ottospace_core::tasks::{
     Assign, Group, Heading, MAX_TITLE, PENDING_LINES, Pending, RowAction, State, Task, TaskId, TaskRow,
 };
-use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, clears_selection, edge_scroll, press, visual_key};
+use ottospace_core::terminal::{
+    Button, CellPoint, Pointer, VisualKey, cell_at, clears_selection, edge_scroll, press, press_is_the_programs,
+    visual_key,
+};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Origin, Pane, PaneId, PickItem, Picker, Rect, Section, Zone,
     cadence, theme,
@@ -968,6 +971,10 @@ struct Workspace {
     cell: Size<Pixels>,
     /// The terminal pane a mouse drag is selecting in.
     dragging: Option<PaneId>,
+    /// The terminal whose program got a press, the button, and the cell last reported.
+    reporting: Option<(PaneId, Button, CellPoint)>,
+    /// The terminal cell the pointer was last over: a move without a button is reported once a cell.
+    hovered: Option<(PaneId, usize, usize)>,
     /// During a pane drag: the pane under the pointer and the zone of it a drop would land on.
     drop_at: Option<(PaneId, Zone)>,
     /// The divider the button went down on, until it comes up.
@@ -1686,6 +1693,8 @@ impl Workspace {
             drawer: talk::Drawer::default(),
             cell: terminal::cell_size(window),
             dragging: None,
+            reporting: None,
+            hovered: None,
             drop_at: None,
             divider: None,
             reorder_from: None,
@@ -2915,7 +2924,7 @@ impl Workspace {
                 }
                 Request::Scroll { pane, lines } => {
                     match pane.or(self.model.focused).filter(|id| self.terminals.contains_key(id)) {
-                        Some(id) => self.wheel(id, ScrollDelta::Lines(point(0., lines)), cx),
+                        Some(id) => self.wheel(id, ScrollDelta::Lines(point(0., lines)), None, cx),
                         None => failure = Some("no terminal pane to scroll".into()),
                     }
                     None
@@ -4924,10 +4933,21 @@ impl Workspace {
     }
 
     /// The wheel or trackpad over a terminal pane.
-    fn wheel(&mut self, id: PaneId, delta: ScrollDelta, cx: &mut Context<Self>) {
+    fn wheel(
+        &mut self,
+        id: PaneId,
+        delta: ScrollDelta,
+        at: Option<(gpui::Point<Pixels>, Modifiers)>,
+        cx: &mut Context<Self>,
+    ) {
         let height = self.cell.height;
+        // Over a cell, for a program that reads the mouse; the socket's wheel names none: the top left.
+        let (cell, mods) = at.and_then(|(at, m)| Some((self.cell_under(id, at)?, crate::mods(m)))).unwrap_or_default();
+        // macOS turns ⇧ and a mouse wheel into a sideways scroll: that is the wheel here too.
+        let moved = delta.pixel_delta(height);
+        let dy = if mods.shift && moved.y == px(0.) { moved.x } else { moved.y };
         if let Some(terminal) = self.terminals.get_mut(&id) {
-            terminal.wheel(delta.pixel_delta(height).y.into(), height.into());
+            terminal.wheel(dy.into(), height.into(), cell, mods);
             cx.notify();
         }
     }
@@ -4945,6 +4965,13 @@ impl Workspace {
         if event.modifiers.platform && self.terminal_path_click(id, at, window, cx) {
             return;
         }
+        // A program that reads the mouse gets the press, unless ⇧ or ⌥ is held: those select.
+        let mods = crate::mods(event.modifiers);
+        if let Some(terminal) = self.terminals.get(&id).filter(|t| press_is_the_programs(t.mouse_mode(), mods)) {
+            terminal.report(Pointer::Press(Button::Left), at, mods);
+            self.reporting = Some((id, Button::Left, at));
+            return cx.notify();
+        }
         if let Some(terminal) = self.terminals.get(&id) {
             terminal.select_start(at, press(event.click_count, event.modifiers.shift));
             (self.dragging, self.drag_at) = (Some(id), None);
@@ -4952,8 +4979,56 @@ impl Workspace {
         }
     }
 
+    /// The right or middle button on a terminal: a program that reads the mouse gets it.
+    fn terminal_button(&mut self, id: PaneId, event: &MouseDownEvent, button: Button, cx: &mut Context<Self>) {
+        let (Some(at), mods) = (self.cell_under(id, event.position), crate::mods(event.modifiers)) else { return };
+        if let Some(terminal) = self.terminals.get(&id).filter(|t| press_is_the_programs(t.mouse_mode(), mods)) {
+            terminal.report(Pointer::Press(button), at, mods);
+            self.reporting = Some((id, button, at));
+            cx.notify();
+        }
+    }
+
+    /// The button a program got the press of comes up, anywhere: it hears the release.
+    fn terminal_release(&mut self, event: &gpui::MouseUpEvent) {
+        let Some((id, button, at)) = self.reporting.take() else { return };
+        let at = self.cell_under(id, event.position).unwrap_or(at);
+        if let Some(terminal) = self.terminals.get(&id) {
+            terminal.report(Pointer::Release(button), at, crate::mods(event.modifiers));
+        }
+    }
+
+    /// A move over a terminal whose program reads the mouse: reported once a cell, with the button
+    /// held (1002) or without (1003), as the program asked.
+    fn terminal_pointer_move(&mut self, event: &MouseMoveEvent) {
+        let mods = crate::mods(event.modifiers);
+        if let Some((id, button, last)) = self.reporting {
+            let Some(at) = self.cell_under(id, event.position).filter(|at| (at.row, at.col) != (last.row, last.col))
+            else {
+                return;
+            };
+            if let Some(terminal) = self.terminals.get(&id) {
+                terminal.report(Pointer::Move(Some(button)), at, mods);
+            }
+            self.reporting = Some((id, button, at));
+            return;
+        }
+        if event.pressed_button.is_some() {
+            return;
+        }
+        let over = self.cells.iter().find(|(_, c)| c.get().contains(&event.position)).map(|(id, _)| *id);
+        let Some((id, at)) = over.and_then(|id| Some((id, self.cell_under(id, event.position)?))) else { return };
+        if self.hovered.replace((id, at.row, at.col)) == Some((id, at.row, at.col)) {
+            return;
+        }
+        if let Some(terminal) = self.terminals.get(&id).filter(|t| t.mouse_mode().motion) {
+            terminal.report(Pointer::Move(None), at, mods);
+        }
+    }
+
     /// A drag extends the selection, even past the pane's edge. Released anywhere, it ends.
     fn mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        self.terminal_pointer_move(event);
         let Some(id) = self.dragging else { return };
         if event.pressed_button != Some(MouseButton::Left) {
             self.dragging = None;
@@ -6874,6 +6949,7 @@ impl Workspace {
             let mode = self.model.mode();
             let has_keys =
                 self.model.focused == Some(id) && matches!(mode, Mode::Normal | Mode::Visual) && !self.model.keys;
+            terminal.set_focus(has_keys);
             let grid = canvas(
                 |_, _, _| {},
                 move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, has_keys, window, cx),
@@ -6902,12 +6978,22 @@ impl Workspace {
             div()
                 .absolute()
                 .size_full()
-                .on_scroll_wheel(cx.listener(move |this, e: &ScrollWheelEvent, _, cx| this.wheel(id, e.delta, cx)))
+                .on_scroll_wheel(cx.listener(move |this, e: &ScrollWheelEvent, _, cx| {
+                    this.wheel(id, e.delta, Some((e.position, e.modifiers)), cx)
+                }))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                         this.terminal_mouse_down(id, e, window, cx)
                     }),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, e: &MouseDownEvent, _, cx| this.terminal_button(id, e, Button::Right, cx)),
+                )
+                .on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |this, e: &MouseDownEvent, _, cx| this.terminal_button(id, e, Button::Middle, cx)),
                 )
                 .child(grid)
                 .child(scrollbar)
@@ -8165,12 +8251,18 @@ impl Workspace {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, e: &gpui::MouseUpEvent, window, cx| {
+                    this.terminal_release(e);
                     (this.dragging, this.held) = (None, false);
                     // A reorder released anywhere but its list or row: put back.
                     this.reorder_cancel(window, cx);
                     this.annotate_release(e.position, window, cx);
                     this.bug_release(e.position, window, cx);
                 }),
+            )
+            .on_mouse_up(MouseButton::Right, cx.listener(|this, e: &gpui::MouseUpEvent, _, _| this.terminal_release(e)))
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(|this, e: &gpui::MouseUpEvent, _, _| this.terminal_release(e)),
             )
             // Released outside the window: a reorder is put back too.
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, window, cx| this.reorder_cancel(window, cx)))

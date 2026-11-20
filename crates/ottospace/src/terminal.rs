@@ -25,9 +25,10 @@ use gpui::{
     App, Bounds, ContentMask, FontStyle, FontWeight, Hsla, Pixels, Size, TextRun, UnderlineStyle, Window, fill, font,
     point, px, rgb, size,
 };
+use ottospace_core::keys::{self, Mods};
 use ottospace_core::terminal::{
-    CellPoint, Motion, Press, Proc, Processes, Scroll, SelectKind, Wheel, Work, running, saved_command,
-    selection_holds, utf8_locale, wheel_scrolls,
+    CellPoint, Motion, MouseMode, Pointer, Press, Proc, Processes, Scroll, SelectKind, Wheel, WheelGoes, Work,
+    mouse_report, running, saved_command, selection_holds, utf8_locale, wheel_goes,
 };
 use ottospace_core::workbook::{self, History};
 use ottospace_core::{clip, palette, settings, theme};
@@ -154,7 +155,8 @@ pub struct Span {
 /// What to paint: styled rows, and the cursor's (row, column) when it is visible.
 pub struct Screen {
     rows: Vec<Vec<Span>>,
-    cursor: Option<(usize, usize)>,
+    /// Row, column and the shape the program asked for (DECSCUSR): block, underline or beam.
+    cursor: Option<(usize, usize, CursorShape)>,
 }
 
 pub struct Terminal {
@@ -177,6 +179,10 @@ pub struct Terminal {
     touched: std::cell::Cell<bool>,
     /// The selection's text as last made: output that changes it clears the selection.
     kept: std::cell::RefCell<Option<String>>,
+    /// The pane had the keyboard when last drawn: a focus report goes once a change.
+    focused: std::cell::Cell<bool>,
+    /// Its child is the program itself (`run`, `edit`), not a shell that runs programs.
+    direct: bool,
 }
 
 /// A command waiting for the shell's prompt, and when the terminal's output last came.
@@ -198,7 +204,7 @@ impl Terminal {
         // `$OTTOSPACE_SHELL` replaces the login shell. Tests use it: a login shell with a heavy
         // profile can take a minute to reach a prompt on a busy machine.
         let shell = std::env::var("OTTOSPACE_SHELL").ok().map(|program| tty::Shell::new(program, Vec::new()));
-        Self::start(shell, vars, cwd, history)
+        Self::start(shell, vars, cwd, history, false)
     }
 
     /// Runs `program` with `args` through the user's login shell, for its `PATH`:
@@ -236,7 +242,7 @@ impl Terminal {
         };
         let mut argv = vec![flags.to_string(), script.to_string(), name.to_string()];
         argv.extend(args);
-        Self::start(Some(tty::Shell::new(shell, argv)), vars, cwd, None)
+        Self::start(Some(tty::Shell::new(shell, argv)), vars, cwd, None, true)
     }
 
     fn start(
@@ -244,6 +250,7 @@ impl Terminal {
         vars: &[(&str, String)],
         cwd: Option<&str>,
         history: Option<&History>,
+        direct: bool,
     ) -> io::Result<Self> {
         let grid = Grid { cols: 80, rows: 24 };
         let shared = Arc::new(Shared::default());
@@ -272,7 +279,7 @@ impl Terminal {
         let _ = shared.input.set(input.clone());
         event_loop.spawn();
         let (typed, offered) = (typed.into(), offered.into());
-        let (touched, kept) = (Default::default(), Default::default());
+        let (touched, kept, focused) = (Default::default(), Default::default(), Default::default());
         Ok(Self {
             term,
             shared,
@@ -286,6 +293,8 @@ impl Terminal {
             opened,
             touched,
             kept,
+            focused,
+            direct,
         })
     }
 
@@ -401,16 +410,63 @@ impl Terminal {
         }
     }
 
-    /// A wheel or trackpad move of `dy` pixels. Ignored while the program owns the wheel.
-    pub fn wheel(&mut self, dy: f32, line_height: f32) {
-        let mode = *self.term.lock().mode();
-        if !wheel_scrolls(mode.intersects(TermMode::MOUSE_MODE), mode.contains(TermMode::ALT_SCREEN)) {
-            return;
-        }
+    /// A wheel or trackpad move of `dy` pixels over cell `at`: the history scrolls, or the program
+    /// gets it as mouse reports or, on the alternate screen, as ↑ and ↓ (`wheel_goes`).
+    pub fn wheel(&mut self, dy: f32, line_height: f32, at: CellPoint, mods: Mods) {
+        let mode = self.mouse_mode();
+        let Some(goes) = wheel_goes(mode, mods.shift) else { return };
         let lines = self.wheel.lines(dy, line_height);
-        if lines != 0 {
-            self.scroll(Scroll::Lines(lines));
+        let up = lines > 0;
+        let each = match goes {
+            _ if lines == 0 => return,
+            WheelGoes::History => return self.scroll(Scroll::Lines(lines)),
+            WheelGoes::Reports => mouse_report(Pointer::Wheel { up }, at.col, at.row, mods, mode),
+            WheelGoes::Arrows => keys::encode(if up { "up" } else { "down" }, None, Mods::default(), self.app_cursor()),
+        };
+        if let Some(each) = each {
+            (0..lines.unsigned_abs()).for_each(|_| self.send(each.clone()));
         }
+    }
+
+    /// What the program asked of the mouse and the wheel.
+    pub fn mouse_mode(&self) -> MouseMode {
+        let mode = *self.term.lock().mode();
+        // Asked of the processes only when a mode is on: a mouse move comes here too.
+        let asks = mode.intersects(TermMode::MOUSE_MODE | TermMode::ALT_SCREEN);
+        MouseMode {
+            clicks: mode.contains(TermMode::MOUSE_REPORT_CLICK),
+            drags: mode.contains(TermMode::MOUSE_DRAG),
+            motion: mode.contains(TermMode::MOUSE_MOTION),
+            sgr: mode.contains(TermMode::SGR_MOUSE),
+            alt_screen: mode.contains(TermMode::ALT_SCREEN),
+            alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
+            program: asks && self.program_in_front(),
+        }
+    }
+
+    /// A program runs in front of the shell: one this terminal started itself (`run`, `edit`), or
+    /// one the shell runs now. At a prompt, none.
+    fn program_in_front(&self) -> bool {
+        (self.direct && !self.exited()) || self.running().is_some_and(|work| !work.background)
+    }
+
+    /// Tells a program that reads the mouse what the pointer did at `at`; false if it took nothing.
+    pub fn report(&self, pointer: Pointer, at: CellPoint, mods: Mods) -> bool {
+        let report = mouse_report(pointer, at.col, at.row, mods, self.mouse_mode());
+        report.map(|bytes| self.send(bytes)).is_some()
+    }
+
+    /// The pane got or lost the keyboard: a program that asked (DECSET 1004) hears `CSI I` or
+    /// `CSI O`, once a change.
+    pub fn set_focus(&self, on: bool) {
+        if self.focused.replace(on) != on && self.term.lock().mode().contains(TermMode::FOCUS_IN_OUT) {
+            self.send(if on { b"\x1b[I".to_vec() } else { b"\x1b[O".to_vec() });
+        }
+    }
+
+    /// Bytes for the program that are not typing: a report, the wheel's arrows.
+    fn send(&self, bytes: Vec<u8>) {
+        let _ = self.input.send(Msg::Input(bytes.into()));
     }
 
     /// True while the program shows the alternate screen (vim, less), which has no history.
@@ -650,10 +706,11 @@ impl Terminal {
             }
         }
         let at = content.cursor.point;
-        let cursor = (content.cursor.shape != CursorShape::Hidden)
-            .then(|| usize::try_from(at.line.0 + offset).ok().map(|row| (row, at.column.0)))
+        let shape = content.cursor.shape;
+        let cursor = (shape != CursorShape::Hidden)
+            .then(|| usize::try_from(at.line.0 + offset).ok().map(|row| (row, at.column.0, shape)))
             .flatten()
-            .filter(|(row, _)| *row < self.grid.rows); // scrolled back past it
+            .filter(|(row, ..)| *row < self.grid.rows); // scrolled back past it
         Screen { rows, cursor }
     }
 }
@@ -965,11 +1022,23 @@ pub fn paint(
             let _ = line.paint_background(origin, cell.height, window, cx);
             let _ = line.paint(origin, cell.height, window, cx);
         }
-        if let Some((row, col)) = screen.cursor {
+        if let Some((row, col, shape)) = screen.cursor {
             let origin = bounds.origin + point(cell.width * col as f32, cell.height * row as f32);
             let color: Hsla = rgb(palette::FOREGROUND).into();
-            // Solid block when this pane has the keyboard, faint when it does not.
-            window.paint_quad(fill(Bounds { origin, size: cell }, color.opacity(if focused { 0.6 } else { 0.2 })));
+            // The shape the program asked for when this pane has the keyboard, a faint block when not.
+            let (at, size) = match shape {
+                CursorShape::Beam if focused => (origin, size(px(2.), cell.height)),
+                CursorShape::Underline if focused => {
+                    (origin + point(px(0.), cell.height - px(2.)), size(cell.width, px(2.)))
+                }
+                _ => (origin, cell),
+            };
+            let alpha = match shape {
+                _ if !focused => 0.2,
+                CursorShape::HollowBlock => 0.3,
+                _ => 0.6,
+            };
+            window.paint_quad(fill(Bounds { origin: at, size }, color.opacity(alpha)));
         }
     });
 }

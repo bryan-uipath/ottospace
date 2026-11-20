@@ -1061,11 +1061,15 @@ the way.
 ## Terminal panes
 
 A terminal pane runs your shell on a PTY. The pane closes when the shell exits. It keeps 10,000
-lines of history. Typing returns to the bottom. In programs that use the mouse or the alternate
-screen (vim, less, htop) the wheel does nothing, and ⇧PageUp and friends go to the program.
+lines of history. Typing returns to the bottom. A program that asks for the mouse (vim, tmux,
+htop) gets its presses, drags and wheel; on the alternate screen without the mouse (less, man) the
+wheel is ↑ and ↓ (Claude Code's and Codex's full-screen views scroll this way). ⇧ and the wheel
+always scroll ottospace's own history. At a prompt, a mouse mode or alternate screen a program left
+on asks for nothing. ⇧PageUp and friends go to a program on the alternate screen.
 A click on a terminal focuses it and clears its selection; a drag there selects, even in an
-unfocused pane. ottospace sends programs no mouse reports: in vim, tmux or htop a drag selects as
-it does at a prompt. Paste is bracketed when the program asks for it.
+unfocused pane. While the program has the mouse, hold ⇧ or ⌥ to select (⌘-click still opens a
+path). A program that asks hears when its pane gets or loses the keyboard (focus events), and its
+cursor is the shape it asks for (block, underline or bar). Paste is bracketed when the program asks for it.
 Programs see `TERM=xterm-256color`, `COLORTERM=truecolor` (24-bit colour), `TERM_PROGRAM=ottospace`
 and `TERM_PROGRAM_VERSION`, whatever terminal started ottospace. When ottospace has neither `LANG`
 nor `LC_ALL` (started from the Dock), they get `LANG` from the system's region as UTF-8 (`de_CH.UTF-8`),
