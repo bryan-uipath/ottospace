@@ -1,0 +1,9 @@
+#!/bin/sh
+# A stand-in for gh: logged in; `repo clone` of slow/… says a line and waits, of missing/… says
+# GitHub's not-found, of anything else makes a repository where it is told.
+[ "$1" = auth ] && exit 0
+case "$3" in
+  slow/*) echo 'Receiving objects:  10%' >&2; exec sleep 60 ;;
+  missing/*) echo "GraphQL: Could not resolve to a Repository with the name '$3'." >&2; exit 1 ;;
+esac
+exec git init -q "$4"

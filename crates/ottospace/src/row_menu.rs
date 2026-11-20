@@ -31,6 +31,7 @@ fn dots_control(row: &MenuOf) -> Option<String> {
         MenuOf::Row(ListRow::WorkbookTab(id, at)) => Some(format!("workbook-tab-menu:{id}:{at}")),
         MenuOf::Space(id) => Some(format!("space-menu:{id}")),
         MenuOf::Transcript => Some("listen-menu".into()),
+        MenuOf::ReposAdd => Some("bar:add".into()),
         // A right click's: the row itself.
         MenuOf::Row(ListRow::Repo(path)) => Some(format!("repo:{path}")),
         _ => None,
@@ -78,7 +79,7 @@ impl Workspace {
     }
 
     /// Sends a menu action as whoever is acting; refused, the status bar says why.
-    fn row_menu_act(&mut self, action: Action, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn row_menu_act(&mut self, action: Action, window: &Window, cx: &mut Context<Self>) {
         if let Some(why) = self.model.refusal(&action, self.input).or(self.model.waits(&action)) {
             self.error = Some(why.into());
             return cx.notify();

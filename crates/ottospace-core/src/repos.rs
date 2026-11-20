@@ -51,6 +51,10 @@ pub struct RepoDirs {
     /// run with no folder of its own. Not in the state.
     #[serde(skip)]
     pub worktrees: Option<String>,
+    /// Where a clone goes (`clone_dir`, absolute). `None`: none is made, e.g. a test run with no
+    /// folder of its own. Not in the state.
+    #[serde(skip)]
+    pub clone: Option<String>,
 }
 
 const FIXED: &str = "OTTOSPACE_REPOS names the repositories: the settings are not read";
@@ -423,6 +427,7 @@ mod tests {
             dirs: vec![dir("~/code", "/home/code"), dir("/work/app", "/work/app")],
             fixed: false,
             worktrees: None,
+            clone: None,
         };
         assert_eq!(dirs.may_add("/tmp/new", true, false), Ok(true));
         // Opt-in: a folder that is not a repository's own is refused, even one that holds some.
@@ -438,7 +443,7 @@ mod tests {
         assert_eq!(dirs.to_remove("/home/code/app"), Err(through.into()));
         assert_eq!(dirs.to_remove("/else/app"), Err("app is not in Repos".into()));
         // An entry that did not resolve (`"repos": [""]`) is no repository's: not removed for one.
-        let unresolved = RepoDirs { dirs: vec![dir("", "")], fixed: false, worktrees: None };
+        let unresolved = RepoDirs { dirs: vec![dir("", "")], fixed: false, worktrees: None, clone: None };
         assert_eq!(unresolved.to_remove(""), Err("Not a directory: ".into()));
         // No more than the settings may hold; and none while the environment names them.
         dirs.dirs = (0..MAX_DIRS).map(|n| dir(&format!("/d{n}"), &format!("/d{n}"))).collect();

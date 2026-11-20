@@ -173,12 +173,18 @@ export type Feature =
   | "code_city";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
+/** The clone dialog and the clone on its way, in a test run. */
+export interface CloneDrawn {
+  dialog: { rows: string[]; selected: number; destination: string | null; said: string | null } | null;
+  job: { repo: string; dest: string; line: string; cancelled: boolean } | null;
+}
 /** Who has the keyboard. */
 export type Mode =
   | "normal"
   | "app"
   | "pick"
   | "palette"
+  | "clone"
   | "inspect"
   | "visual"
   | "list"
@@ -893,7 +899,7 @@ export type PickItem =
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
   /** Whose it is: the new-task line, the picker's or the Apps section's filter, a mark's name, a note on a capture, or a native conversation's composer (`talk`). */
-  of: "compose" | "picker" | "palette" | "inspector" | "apps" | "mark" | "workbook" | "worktree" | "note" | "talk" | "btw" | "bug";
+  of: "compose" | "picker" | "palette" | "clone" | "inspector" | "apps" | "mark" | "workbook" | "worktree" | "note" | "talk" | "btw" | "bug";
   text: string;
   cursor: number;
   /** Start and end, in text order. Equal: only a cursor. */
@@ -1162,7 +1168,7 @@ export interface RowMenu {
   selected: number | null;
   /** `why`: the item does nothing now, and why (drawn dimmed). */
   items: {
-    item: "rename" | "delete" | "remove" | "keep" | "pause" | "resume" | "delete_worktree";
+    item: "rename" | "delete" | "remove" | "keep" | "pause" | "resume" | "delete_worktree" | "local_folder" | "from_github";
     label: string;
     why: string | null;
     rect: Rect | null;
@@ -1804,6 +1810,10 @@ export interface Snapshot {
   palette_rows: PaletteRow[] | null;
   /** Go to's rows as listed (⌘P): places, or a place's files. Null outside a test run, and while it lists commands. */
   goto_rows: GoToRow[] | null;
+  /** Test runs only (else null): the clone dialog while open (its rows as `owner/name`, the row the keys
+   * are on, the full destination, what it says) and the clone on its way. Repository names are never in an
+   * ordinary reply. */
+  clone: CloneDrawn | null;
   /** The accessibility inspector, or null: counts and roles only, never the app's text. */
   inspector: Inspector | null;
   /** The open text field, or null. `state.compose` and `state.picker.query` stay its text. */

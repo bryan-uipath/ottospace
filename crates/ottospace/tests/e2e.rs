@@ -1770,6 +1770,176 @@ fn a_spaces_item_on_the_top_row_lights_while_work_goes_on_in_it() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// A stand-in for gh that logs its argv to `<root>/gh.argv`: logged in; `repo clone` of `slow/…`
+/// says a line and waits, of `missing/…` says GitHub's not-found, of anything else makes a
+/// repository at the destination it is given.
+fn clone_gh(root: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let gh = root.join("gh");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\n[ \"$1\" = auth ] && exit 0\n[ \"$1 $2\" = 'repo clone' ] || exit 1\n\
+         case \"$3\" in\n  slow/*) echo 'Receiving objects:  10%' >&2; exec sleep 60 ;;\n  \
+         missing/*) echo \"GraphQL: Could not resolve to a Repository with the name '$3'.\" >&2; exit 1 ;;\nesac\n\
+         echo \"Cloning into '$4'...\" >&2\nexec git init -q \"$4\"\n",
+        log = root.join("gh.argv").display()
+    );
+    std::fs::write(&gh, script).unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    gh
+}
+
+/// A test run whose `clone_dir` is `<root>/code` (not made yet) and whose gh is `clone_gh`'s.
+fn clone_run(name: &str) -> (Otto, PathBuf, PathBuf) {
+    let root = support::temp(&format!("ottospace-e2e-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let gh = clone_gh(&root);
+    let settings = json!({"clone_dir": root.join("code"), "restore_layout": false, "sessions": false}).to_string();
+    let home = user_folder(name, &settings);
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_GH", gh.to_str().unwrap()),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ];
+    let otto = Otto::launch_with(name, &env);
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    (otto, root, home)
+}
+
+/// The user's click on the Repos section's +: its menu, drawn.
+fn repos_plus(otto: &Otto) -> Value {
+    otto.user_click(at(otto.control("bar:add"), 0.5, 0.5));
+    otto.drawn()
+}
+
+/// What the clone dialog says, once it says something.
+fn clone_said(otto: &Otto) -> String {
+    let said = |o: &Otto| o.drawn()["clone"]["dialog"]["said"].as_str().map(str::to_string);
+    otto.wait_for("the clone dialog to say why", said)
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_repos_plus_offers_a_local_folder_and_a_pasted_github_repository_is_cloned_into_clone_dir() {
+    let (otto, root, home) = clone_run("clone");
+    let code = root.join("code");
+    let argv = || std::fs::read_to_string(root.join("gh.argv")).unwrap_or_default();
+    // Nothing listed: both ways are offered at once.
+    otto.control("repos-empty:add");
+    otto.control("repos-empty:clone");
+    // The +: Local folder… first, the keys on it; ↵ asks for a folder, as the + did.
+    let menu = repos_plus(&otto)["row_menu"].clone();
+    let labels: Vec<&Value> = menu["items"].as_array().unwrap().iter().map(|item| &item["label"]).collect();
+    assert_eq!((labels, &menu["selected"]), (vec![&json!("Local folder…"), &json!("From GitHub…")], &json!(0)));
+    otto.user_key("enter");
+    assert_eq!(otto.drawn()["counts"]["folder_picks"], 1);
+
+    // From GitHub…: a line that names no repository runs nothing, and says what it takes.
+    repos_plus(&otto);
+    assert_eq!(otto.user_key("down enter")["mode"], "clone");
+    for keys in [". . / x", "a / b / c", "o / - r f", "o / . ."] {
+        otto.user_key(&format!("{keys} enter"));
+        let dialog = otto.drawn()["clone"]["dialog"].clone();
+        assert_eq!(
+            (&dialog["rows"], &dialog["said"]),
+            (&json!([]), &json!("Paste owner/name, or a GitHub link")),
+            "{keys}"
+        );
+        otto.user_key("cmd-a backspace");
+    }
+    assert!(argv().is_empty(), "gh ran for a line that is no repository: {}", argv());
+
+    // `owner/name`: one row, its destination in full before ↵ (links: `clone::parse`'s tests).
+    otto.user_key("o c t o / h e l l o . g i t");
+    let dialog = &otto.drawn()["clone"]["dialog"];
+    let dest = code.join("hello").to_string_lossy().into_owned();
+    assert_eq!((&dialog["rows"], &dialog["destination"]), (&json!(["octo/hello"]), &json!(dest)), "{dialog}");
+    // `clone_dir` is not there: said, made only by the next ↵.
+    otto.user_key("enter");
+    assert_eq!(clone_said(&otto), format!("{} does not exist: ↵ makes it and clones", code.display()));
+    assert!(!code.exists() && argv().is_empty());
+    otto.user_key("enter");
+    let names = |s: &Value| -> Vec<String> {
+        s["state"]["repos"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap().to_string()).collect()
+    };
+    let listed = |o: &Otto| Some(o.drawn()).filter(|s| names(s) == ["hello"]);
+    let state = otto.wait_for("the clone to be listed", listed);
+    assert_eq!(state["notice"], format!("Cloned octo/hello into {dest}"));
+    assert_eq!((state["mode"].as_str(), state["clone"]["dialog"].is_null()), (Some("list"), true));
+    let settings: Value = serde_json::from_str(&std::fs::read_to_string(home.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["repos"], json!([dest]));
+    assert!(code.join("hello/.git").is_dir());
+    assert_eq!(
+        argv(),
+        format!(
+            "auth status --hostname github.com\nrepo clone octo/hello {dest} -- --progress --no-recurse-submodules\n"
+        )
+    );
+
+    // There already: refused, and gh does not clone.
+    otto.user_key("escape");
+    repos_plus(&otto);
+    otto.user_key("down enter o c t o / h e l l o enter");
+    assert_eq!(clone_said(&otto), format!("Already there: {dest}. Nothing was cloned"));
+    assert_eq!(argv().matches("repo clone").count(), 1, "{}", argv());
+    // Not found on GitHub: said in plain words, and its folder gone.
+    otto.user_key("cmd-a backspace m i s s i n g / r e p o enter");
+    assert_eq!(clone_said(&otto), "Not found on GitHub, or not yours to read: missing/repo");
+    assert!(!code.join("repo").exists());
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn esc_while_cloning_stops_it_and_removes_only_the_folder_it_made() {
+    let (otto, root, home) = clone_run("clone-cancel");
+    let code = root.join("code");
+    std::fs::create_dir_all(code.join("kept")).unwrap();
+    otto.user_click(at(otto.control("repos-empty:clone"), 0.5, 0.5));
+    otto.user_key("s l o w / r e p o enter");
+    let line = |o: &Otto| Some(o.drawn()).filter(|s| s["clone"]["job"]["line"] == "Receiving objects:  10%");
+    otto.wait_for("gh's line", line);
+    assert!(code.join("repo").is_dir());
+    otto.user_key("escape");
+    let said = |o: &Otto| Some(o.drawn()).filter(|s| s["clone"]["job"].is_null());
+    let state = otto.wait_for("the clone to stop", said);
+    assert_eq!(state["notice"], "Cancelled the clone of slow/repo: its folder was removed");
+    assert!(!code.join("repo").exists() && code.join("kept").is_dir());
+    assert_eq!(state["state"]["repos"], json!([]));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_client_neither_opens_types_in_nor_clones_from_the_clone_dialog() {
+    let (otto, root, home) = clone_run("clone-client");
+    // Its click on the + and its labels open nothing.
+    otto.click(at(otto.control("bar:add"), 0.5, 0.5), 1);
+    assert!(otto.drawn()["row_menu"].is_null());
+    for id in ["repos-empty:clone", "repos-empty:add"] {
+        sneak_to(&otto, id);
+        otto.user_key("escape");
+    }
+    let state = otto.drawn();
+    assert_eq!((&state["clone"]["dialog"], &state["counts"]["folder_picks"]), (&Value::Null, &json!(0)));
+    // The user's dialog: a client's keys neither type nor clone.
+    otto.user_click(at(otto.control("repos-empty:clone"), 0.5, 0.5));
+    let refused = otto.raw(&json!({"cmd": "key", "keys": "o c t o / h e l l o enter"}).to_string());
+    assert!(refused["error"].is_string(), "{refused}");
+    let state = otto.drawn();
+    assert_eq!((&state["clone"]["dialog"]["rows"], &state["clone"]["job"]), (&json!([]), &Value::Null));
+    assert!(!root.join("gh.argv").exists() && !root.join("code").exists());
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_folded_repositorys_name_has_a_dot_while_a_checkout_works_or_needs_you() {

@@ -12,6 +12,8 @@ use ottospace_core::prs::{self, Branch, Pr};
 
 /// How long gh and git may take for one repository.
 const TIMEOUT: Duration = Duration::from_secs(20);
+/// Why there is no gh to run: none found, or (a test run) no `OTTOSPACE_GH`.
+pub const NO_GH: &str = "gh is not installed";
 /// How long a missing or logged-out gh is believed before it is looked for again.
 const RECHECK: Duration = Duration::from_secs(5 * 60);
 
@@ -49,7 +51,7 @@ impl Reader {
                 let result = match ready.as_ref().map(|(gh, _)| gh.clone()) {
                     Some(Ok(gh)) => read(&gh, &job),
                     Some(Err(why)) => Err(why),
-                    None => Err("gh is not installed"),
+                    None => Err(NO_GH),
                 };
                 if done.send(Read { repo: job.repo, result }).is_err() {
                     return;
@@ -80,7 +82,7 @@ impl Reader {
 
 /// gh, if it is there and logged in to github.com. A test run uses only `OTTOSPACE_GH`, a
 /// stand-in: never the user's gh.
-fn gh() -> Result<PathBuf, &'static str> {
+pub fn gh() -> Result<PathBuf, &'static str> {
     let found = match std::env::var_os("OTTOSPACE_E2E") {
         Some(_) => std::env::var_os("OTTOSPACE_GH").map(PathBuf::from).filter(|p| p.is_file()),
         // An app started from the Dock has a short PATH: Homebrew's folders too.
@@ -94,7 +96,7 @@ fn gh() -> Result<PathBuf, &'static str> {
             dirs.map(|dir| dir.join("gh")).find(|p| p.is_file())
         }
     };
-    let gh = found.ok_or("gh is not installed")?;
+    let gh = found.ok_or(NO_GH)?;
     let mut status = command(&gh);
     status.args(["auth", "status", "--hostname", "github.com"]);
     let said = crate::child::run(status, TIMEOUT, 64 * 1024).map_err(|_| "gh did not answer")?;
@@ -102,7 +104,7 @@ fn gh() -> Result<PathBuf, &'static str> {
 }
 
 /// gh with no prompt, no colour, no update check.
-fn command(gh: &Path) -> Command {
+pub fn command(gh: &Path) -> Command {
     let mut command = Command::new(gh);
     for (name, value) in
         [("GH_PROMPT_DISABLED", "1"), ("GH_NO_UPDATE_NOTIFIER", "1"), ("NO_COLOR", "1"), ("GH_SPINNER_DISABLED", "1")]

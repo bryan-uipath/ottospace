@@ -10,7 +10,7 @@ macOS agent multiplexer: terminals and real app windows tiled in one workspace. 
 | `ottospace-mac` | macOS calls: AX, ScreenCaptureKit, displays, input | system APIs |
 | `ottospace-sessions` | Reads Claude Code and Codex session files: sessions of a directory, events, snapshot. A `SessionReader` per `RunnerId` | std, serde, read-only files, `ottospace-core` (pure: for `runner::RunnerId`, `activity::Station`). No network, clock, writes |
 | `ottospace-agents` | Speaks to agent CLIs in their structured modes: starts, sends, reads events. A `Wire` per `RunnerId` | std, serde_json, the two crates above; spawns child processes. No network of its own, clock decisions, or reading other apps |
-| `ottospace` | Shell: GPUI views, control socket. Turns input into `Action`s, carries out `Effect`s | everything; the network only to read the calendar feed (`calendar_ics`), through `/usr/bin/curl`, `https:` only, and the open pull requests of listed GitHub repositories, through the user's `gh` (`repos_prs`; `prs.rs`), read-only, a fixed argv |
+| `ottospace` | Shell: GPUI views, control socket. Turns input into `Action`s, carries out `Effect`s | everything; the network only to read the calendar feed (`calendar_ics`), through `/usr/bin/curl`, `https:` only, and the open pull requests of listed GitHub repositories, through the user's `gh` (`repos_prs`; `prs.rs`), read-only, a fixed argv; and, started only by the user, listing the user's repositories and cloning one the user chose, through the user's `gh` (`clone.rs`), each a fixed argv |
 
 Rules:
 
@@ -173,6 +173,12 @@ Design note: `docs/ai/attention/plan.md`.
     dim already in it, `bg`, `bold`, `italic`, `strike`, `underline` `{curly, color}`). Null outside a test run.
   - State field `counts.cell_art`: terminal cells drawn as shapes (box drawing, blocks), each frame's
     added up. Null outside a test run, as all of `counts`.
+  - State field `clone`: the clone dialog (From GitHub… of the Repos section's +) while open, its `rows`
+    (`owner/name`), `selected`, `destination` (in full) and `said`; and the clone on its way (`repo`,
+    `dest`, gh's last `line`, `cancelled`). `counts.folder_picks` counts Local folder…'s folder pickers
+    (a test run shows none). Null outside a test run: a repository's name is the user's data. Tests
+    drive the dialog with the user's keys and clicks, `clone_dir` from their own `OTTOSPACE_HOME`,
+    `OTTOSPACE_GH` a stand-in that makes a local repository; no request clones.
   - State field `repos_bar[n].name_cut`: a repository's name as drawn in its heading (`cut_text`), its box
     (`room`) and its shaped width (`drawn`). Null outside a test run.
   - State field `offer_rects`: where an offer chip's words (`words:<pane>`) and their tooltip (`tip`,

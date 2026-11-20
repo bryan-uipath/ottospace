@@ -65,6 +65,7 @@ broad: a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen
 /src/(.*/)?decisions(\.rs|/)                                                 decisions
 /src/(.*/)?pass(\.rs|/)                                                      pass
 /src/(.*/)?(worktree|worktrees|repos|prs)(\.rs|/)                            worktree|repo|pull_request
+/src/(.*/)?clone\.rs                                                          clone|repo
 /src/(.*/)?repo_dots(\.rs|/)                                                 checkouts_dot|repo
 /src/(.*/)?(home|spaces|zones|rail|drawer_rail|titlebar|slide)(\.rs|/)       rail|drawer|sidebar|collapse|home|workspace|space|window_buttons|focus_moves|secondary_bar|tab_strip
 /src/(.*/)?(overlay|overlays|fly|quick)(\.rs|/)                              overlay|rail|drawer|sidebar|collapse|new_task|quick_note

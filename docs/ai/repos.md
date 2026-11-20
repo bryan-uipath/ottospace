@@ -31,6 +31,44 @@ workspace of that checkout, else makes one with it as its default worktree: `doc
 - `open_repo` from a client: unchanged, only a path in `state.repos` (a group's repositories
   included, folded or not).
 
+## The + : Local folder… or From GitHub… (`MenuOf::ReposAdd`, `clone.rs`, `model/clone.rs`)
+
+- **The +** opens a row menu of two items, the keys on the first: ↵ is Local folder…, the folder
+  picker as before (`RepoPickFolder`, `Effect::PickRepoFolder`; a test run counts it,
+  `counts.folder_picks`, and shows none). From GitHub… opens the clone dialog (`CloneOpen`). The
+  empty section offers both as rows. Both, and every key, click or ↵ in the dialog, are the user's
+  alone; the shell's news of a clone (`CloneProgress`, `CloneDone`) is refused from a client.
+- **The line**: `owner/name`, `https://github.com/owner/name` (`.git`, a `/` after it) or
+  `git@github.com:owner/name(.git)` is one row (`clone::parse`); anything else is none, and ↵ says
+  what it takes. `owner`: letters, digits, `-`, not first or last, at most 39. `name`: letters,
+  digits, `.`, `_`, `-`, at most 100, not `.` or `-` first, not ending `.git`: never `..`, a
+  path, an option or a line of its own.
+- **Where**: `<clone_dir>/<name>` (`clone::destination`), shown in full under the row before ↵.
+  `clone_dir` is the setting (`~` expanded; relative: inside the ottospace folder), else `~/code`;
+  a test run has none unless its own settings name one. Missing: ↵ says so, and the next ↵ makes it.
+- **What runs** (the shell, `clone.rs`, a thread per clone, one clone at a time): refused before
+  any process if the destination is there (a link too); then `gh auth status --hostname
+  github.com` (`prs::gh`, the same gh lookup and stand-in: `OTTOSPACE_GH` only, in a test run);
+  then the folder is made with `mkdir` (never one there already; its device and inode kept) and
+  `gh repo clone <owner>/<name> <dest> -- --progress --no-recurse-submodules`, no shell, no
+  standard input, `GIT_TERMINAL_PROMPT=0`, gh's prompts and colours off, no `GIT_DIR`-like
+  variables, and `core.hooksPath=/dev/null` for that run only (`GIT_CONFIG_COUNT`, never written to
+  the clone's config), in a process group of its own, at most 30 minutes.
+- **Progress**: gh's last line in the dialog (cleaned, one line), five times a second at most.
+  Esc stops it: the group is killed and the folder goes, only if it is still the one this clone
+  made (not a link, the same inode). A click outside hides the dialog; the clone goes on and its
+  end is a toast.
+- **The end**: made, it is listed as Local's add lists one (`repo_add`: the end of `repos`, its row
+  selected) and said. Not: the dialog says why in plain words (`Failure::explain`: not logged in →
+  `gh auth login`, not found, there already, the network, else gh's last line), or a toast if it
+  is hidden; the folder this clone made goes.
+- **Names are the user's data**: the dialog and the clone are never in the ordinary state; a test
+  run's `clone` field shows them.
+- **A second provider** (GitLab, a plain URL) would be a `Provider` variant in the core, with its
+  own `parse` rules and destination name, and a `Source` in the shell giving the argv that clones
+  into an empty folder (`clone_argv`), and, with the list (next pull request), how it lists the
+  user's repositories and which remotes are its. Nothing is configurable now.
+
 ## The model (core: `repos.rs`, `model.rs`)
 
 - **A repository's name is a list row** (`ListRow::RepoHead`): ↵ or space on it folds or

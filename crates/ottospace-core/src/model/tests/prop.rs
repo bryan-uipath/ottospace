@@ -591,7 +591,8 @@ impl Gen<'_> {
         let dir = |g: &mut Self| if g.rng.one_in(4) { "/code".to_string() } else { g.name(DIRS) };
         let entry = |g: &mut Self| RepoDir { pinned: g.rng.one_in(3), ..RepoDir::new(&dir(g), "") };
         let dirs = (0..self.rng.below(4)).map(|_| entry(self)).map(|d| RepoDir { path: d.text.clone(), ..d }).collect();
-        RepoDirs { dirs, fixed: self.rng.below(4) == 0, worktrees: self.rng.coin().then(|| "/w".into()) }
+        let (fixed, worktrees) = (self.rng.below(4) == 0, self.rng.coin().then(|| "/w".into()));
+        RepoDirs { dirs, fixed, worktrees, clone: self.rng.coin().then(|| "/code".into()) }
     }
 
     /// Pull requests on the listed branches and others, with links good and bad.
@@ -1144,6 +1145,18 @@ const MAKERS: &[Make] = &[
     |g| Action::SetRepoDirs { dirs: g.repo_dirs() },
     |g| Action::RepoAdd { dir: g.name(DIRS), found: g.repos() },
     |g| Action::RepoRemove { path: g.name(DIRS) },
+    |_| Action::RepoPickFolder,
+    |_| Action::CloneOpen,
+    |g| Action::CloneMove { delta: g.delta() },
+    |g| Action::CloneChoose { index: g.rng.coin().then(|| g.index(3)) },
+    |g| Action::CloneClose { cancel: g.rng.coin() },
+    |g| Action::CloneProgress { id: g.rng.below(3) as u64, line: g.text() },
+    |g| {
+        use crate::clone::Failure;
+        let failure = g.rng.pick(&[Failure::NoGh, Failure::DirMissing, Failure::Exists, Failure::Cancelled]);
+        let result = if g.rng.coin() { Ok(g.repos()) } else { Err(failure) };
+        Action::CloneDone { id: g.rng.below(3) as u64, result }
+    },
     |g| Action::OpenRepo { path: g.repo_path(), axis: g.axis() },
     |g| Action::RepoClick { path: g.repo_path(), axis: g.axis() },
     |g| Action::RepoFold { path: g.repo_path(), fold: g.rng.pick(&[None, Some(true), Some(false)]) },
@@ -1964,6 +1977,7 @@ const OUT_MAKERS: [Make; 4] = [
 const WAYS_OUT: &[Action] = &[
     Action::ClosePicker,
     Action::ClosePalette,
+    Action::CloneClose { cancel: false },
     Action::InspectorFilter { on: false },
     Action::CloseKeys,
     Action::LeaveVisual,
@@ -2660,6 +2674,9 @@ fn check(m: &Model) -> Result<(), String> {
         (Some(("mark" | "workbook" | "worktree", field)), Some(name), ..) => std::ptr::eq(field, name),
         (Some(("picker", field)), None, Some(picker), ..) => std::ptr::eq(field, &picker.query),
         (Some(("palette", field)), None, None, ..) => m.palette.as_ref().is_some_and(|p| std::ptr::eq(field, &p.query)),
+        (Some(("clone", field)), None, None, ..) => {
+            m.palette.is_none() && m.clone.as_ref().is_some_and(|d| std::ptr::eq(field, &d.query))
+        }
         (Some(("inspector", field)), None, None, ..) => {
             m.inspector.as_ref().is_some_and(|i| i.filtering && std::ptr::eq(field, &i.filter))
         }
@@ -2673,7 +2690,7 @@ fn check(m: &Model) -> Result<(), String> {
     let has_keys = !m.keys
         && match m.mode() {
             Mode::Mark => renaming.is_some(),
-            Mode::Pick | Mode::Palette | Mode::Inspect => true,
+            Mode::Pick | Mode::Palette | Mode::Clone | Mode::Inspect => true,
             // The new-task box's line, unless the user's editor has it.
             Mode::Compose => !m.edits_compose(),
             // A bug report's comment, over any capture's note.
@@ -3028,6 +3045,7 @@ fn check(m: &Model) -> Result<(), String> {
                 m.shown_spaces().iter().any(|space| space.of == of) && !m.workbooks.is_kept(*id)
             }
             MenuOf::Transcript => m.listen.shown && !items.is_empty(),
+            MenuOf::ReposAdd => m.sidebar == Some(Section::Repos) && !m.repo_dirs.fixed,
         };
         ensure!(listed, "a menu of {:?}, which is not listed", menu.row);
         let on = menu.selected.is_none_or(|at| at < items.len());
@@ -5123,12 +5141,35 @@ impl Run {
                         "a change names no list or no app: {changes:?}"
                     );
                 }
+                // The folder picker and a clone: only the user's choice; a cancel, only of the clone on its way.
+                Effect::PickRepoFolder => {
+                    ensure!(
+                        user && matches!(action, Action::RepoPickFolder | Action::RowMenuChoose { .. }),
+                        "{origin:?}'s {action:?} picks a folder"
+                    )
+                }
+                Effect::Clone { remote, dest, .. } => {
+                    ensure!(user && matches!(action, Action::CloneChoose { .. }), "{origin:?}'s {action:?} cloned");
+                    let dir = m.repo_dirs.clone.as_deref().unwrap_or("");
+                    let inside = crate::clone::destination(dir, &remote.name).as_deref() == Some(dest.as_str());
+                    ensure!(inside, "cloned {remote:?} into {dest}, not one name inside {dir}");
+                    ensure!(m.cloning.as_ref().is_some_and(|job| job.dest == *dest), "a clone with no job");
+                }
+                Effect::CloneCancel { id } => {
+                    ensure!(user && matches!(action, Action::CloneClose { cancel: true }), "{origin:?} cancelled {id}");
+                }
                 Effect::SaveRepos { dirs } => {
-                    // Only the user adds, removes, moves or pins: what is written is what the list holds.
-                    ensure!(user && !m.repo_dirs.fixed, "{origin:?} wrote the settings: {dirs:?}");
+                    // Only the user adds, removes, moves or pins, or the end of a clone the user's ↵
+                    // started: what is written is what the list holds.
+                    let cloned = matches!(action, Action::CloneDone { .. }) && origin == Origin::System;
+                    ensure!((user || cloned) && !m.repo_dirs.fixed, "{origin:?} wrote the settings: {dirs:?}");
                     let acts = matches!(
                         action,
-                        Action::RepoAdd { .. } | Action::RepoRemove { .. } | Action::QuitConfirm | Action::ReorderDrop
+                        Action::RepoAdd { .. }
+                            | Action::RepoRemove { .. }
+                            | Action::QuitConfirm
+                            | Action::ReorderDrop
+                            | Action::CloneDone { .. }
                     );
                     ensure!(acts, "{action:?} wrote the Repos list");
                     ensure!(*dirs == m.repo_dirs.dirs, "written {dirs:?}, held {:?}", m.repo_dirs.dirs);
@@ -5223,8 +5264,11 @@ impl Run {
                     )
                 }
                 Effect::Told { text } => {
+                    let cloned = origin != Origin::Socket && matches!(action, Action::CloneDone { .. });
                     ensure!(
-                        (user && matches!(action, Action::RepoRemove { .. } | Action::QuitConfirm)) || answered,
+                        (user && matches!(action, Action::RepoRemove { .. } | Action::QuitConfirm))
+                            || answered
+                            || cloned,
                         "{origin:?} is told {text:?}"
                     )
                 }
@@ -5883,6 +5927,7 @@ fn code(sent: &Envelope) -> String {
         ("from", "crate::listen::Speaker"),
         ("why", "crate::listen::Ended"),
         ("read", "crate::viewer::Read"),
+        ("result", "crate::clone::Failure"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {
@@ -6048,7 +6093,7 @@ fn code(sent: &Envelope) -> String {
             _ if token == "Lines" && text.get(end + 1) == Some(&'{') => out += "crate::viewer::Lines",
             _ if c.is_uppercase()
                 && !(STRUCTS.contains(&token.as_str()) && text.get(end + 1) == Some(&'{'))
-                && !matches!(token.as_str(), "Some" | "None") =>
+                && !matches!(token.as_str(), "Some" | "None" | "Ok" | "Err") =>
             {
                 let named = field
                     .as_deref()
@@ -7042,8 +7087,10 @@ fn one_key_never_presses_in_an_app() {
 #[test]
 fn a_directory_with_no_text_is_not_removed() {
     replay(&[
-        Action::SetRepoDirs { dirs: RepoDirs { dirs: vec![RepoDir::new("", "")], fixed: false, worktrees: None } }
-            .sent_by(Origin::Socket),
+        Action::SetRepoDirs {
+            dirs: RepoDirs { dirs: vec![RepoDir::new("", "")], fixed: false, worktrees: None, clone: None },
+        }
+        .sent_by(Origin::Socket),
         Action::RepoRemove { path: "".into() }.sent_by(Origin::User),
     ])
     .unwrap();
@@ -7576,6 +7623,7 @@ fn a_repository_is_never_removed_by_a_path_that_is_no_directory() {
                 dirs: vec![RepoDir::new("", ""), RepoDir::new("  S'", "  S'")],
                 fixed: false,
                 worktrees: None,
+                clone: None,
             },
         }
         .sent_by(Origin::User),
@@ -7859,8 +7907,10 @@ fn seed_953_a_branch_being_typed_goes_with_its_repository() {
             repos: vec![Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![] }],
         }
         .sent_by(Origin::System),
-        Action::SetRepoDirs { dirs: RepoDirs { dirs: vec![], fixed: false, worktrees: Some("/w".into()) } }
-            .sent_by(Origin::User),
+        Action::SetRepoDirs {
+            dirs: RepoDirs { dirs: vec![], fixed: false, worktrees: Some("/w".into()), clone: None },
+        }
+        .sent_by(Origin::User),
         Action::WorktreeEdit { repo: "/code/app".into() }.sent_by(Origin::User),
         Action::SetRepos { repos: vec![] }.sent_by(Origin::System),
     ])
@@ -7873,8 +7923,10 @@ fn seed_953_a_branch_being_typed_goes_with_its_repository() {
 #[test]
 fn seed_1392_a_branch_typed_under_a_marks_wait_is_its_own_wait() {
     replay(&[
-        Action::SetRepoDirs { dirs: RepoDirs { dirs: vec![], fixed: false, worktrees: Some("/w".into()) } }
-            .sent_by(Origin::User),
+        Action::SetRepoDirs {
+            dirs: RepoDirs { dirs: vec![], fixed: false, worktrees: Some("/w".into()), clone: None },
+        }
+        .sent_by(Origin::User),
         Action::SetRepos {
             repos: vec![Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![] }],
         }
