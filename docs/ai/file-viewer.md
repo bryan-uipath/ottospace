@@ -60,7 +60,12 @@ A pane that shows a file, read only. Owner-approved plan: A the viewer, B a mark
   grammar's injections query; 3 deep at most). The file's own parse is the one budgeted up
   front; a language inside is parsed when its first line is drawn (each within the budget, else
   plain): a 2 MB markdown file has some 27,000 paragraphs, 2.3 s parsed all at once. A fence
-  never closed stays plain. Queries made for Neovim (`later_wins`) let a node's later pattern win.
+  never closed stays plain. Queries made for Neovim (`Here::later`) let a node's later pattern win.
+  The grammars are one table (`syntax::HERE`): a language without its row is the lexer's, so a
+  grammar is removed by its row and its dependency. A fence's colours are kept by language and
+  text (`syntax::fence`): a reply drawn again or streamed past a fence parses it no more. On the
+  main thread a language's query is built aside, the lexer's colours until it is ready
+  (`syntax::take_built` draws again; a reply's blocks are made again, `syntax::built`).
 - **Kept** in `layout.json` (and marks, workspaces) as `RecordKind::File { path, top }`.
 - **B, the fixture**: `crates/ottospace/tests/fixtures/markdown/fixture.md` and `checker.png`.
   Beside the tests, not in `docs/`: the renderer's unit test includes it, the e2e tests copy it,

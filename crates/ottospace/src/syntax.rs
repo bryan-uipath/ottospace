@@ -3,10 +3,12 @@
 //! grammar here, a file too large or a parse past its budget: `highlight`'s lexer, as before.
 //! Markdown, HTML and markdown's fences hold other languages: each parsed as its own layer.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::{ControlFlow, Range};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use ottospace_core::viewer::{GRAMMARS, Lang, lang_named};
@@ -24,71 +26,191 @@ const CHUNK: usize = 128;
 /// How deep languages nest: markdown, its paragraph, an HTML tag in it, that tag's script.
 const MAX_DEPTH: usize = 3;
 
-fn grammar(lang: Lang) -> Language {
-    match lang {
-        Lang::Rust => tree_sitter_rust::LANGUAGE.into(),
-        Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        Lang::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
-        Lang::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
-        Lang::Json => tree_sitter_json::LANGUAGE.into(),
-        Lang::Toml => tree_sitter_toml_ng::LANGUAGE.into(),
-        Lang::Python => tree_sitter_python::LANGUAGE.into(),
-        Lang::Bash => tree_sitter_bash::LANGUAGE.into(),
-        Lang::Go => tree_sitter_go::LANGUAGE.into(),
-        Lang::C => tree_sitter_c::LANGUAGE.into(),
-        Lang::Cpp => tree_sitter_cpp::LANGUAGE.into(),
-        Lang::Java => tree_sitter_java::LANGUAGE.into(),
-        Lang::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
-        Lang::Ruby => tree_sitter_ruby::LANGUAGE.into(),
-        Lang::Html => tree_sitter_html::LANGUAGE.into(),
-        Lang::Css => tree_sitter_css::LANGUAGE.into(),
-        Lang::Yaml => tree_sitter_yaml::LANGUAGE.into(),
-        Lang::Sql => tree_sitter_sequel::LANGUAGE.into(),
-        Lang::Swift => tree_sitter_swift::LANGUAGE.into(),
-        Lang::Kotlin => tree_sitter_kotlin_sg::LANGUAGE.into(),
-        Lang::Php => tree_sitter_php::LANGUAGE_PHP.into(),
-        Lang::PhpOnly => tree_sitter_php::LANGUAGE_PHP_ONLY.into(),
-        Lang::Lua => tree_sitter_lua::LANGUAGE.into(),
-        Lang::Make => tree_sitter_make::LANGUAGE.into(),
-        Lang::Xml => tree_sitter_xml::LANGUAGE_XML.into(),
-        Lang::Markdown => tree_sitter_md::LANGUAGE.into(),
-        Lang::MarkdownInline => tree_sitter_md::INLINE_LANGUAGE.into(),
-    }
+/// A grammar here: its parse tables, its highlights queries (its own patterns first: TypeScript's
+/// adds to JavaScript's, C++'s to C's), and whether of two patterns for one node the later wins
+/// (queries written for Neovim: `(string_scalar) @string` first, a key's after). A language with no
+/// row is coloured by the lexer: a grammar is removed by its row and its dependency.
+struct Here {
+    lang: Lang,
+    grammar: fn() -> Language,
+    queries: &'static [&'static str],
+    later: bool,
 }
 
-/// Its highlights query, its own patterns first. TypeScript's adds to JavaScript's; JSX's
-/// elements are JavaScript's and TSX's; C++'s adds to C's.
-fn highlights(lang: Lang) -> String {
-    let (script, jsx) = (tree_sitter_javascript::HIGHLIGHT_QUERY, tree_sitter_javascript::JSX_HIGHLIGHT_QUERY);
-    let typed = tree_sitter_typescript::HIGHLIGHTS_QUERY;
-    match lang {
-        Lang::Rust => tree_sitter_rust::HIGHLIGHTS_QUERY.into(),
-        Lang::TypeScript => format!("{typed}\n{script}"),
-        Lang::Tsx => format!("{typed}\n{jsx}\n{script}"),
-        Lang::JavaScript => format!("{jsx}\n{script}"),
-        Lang::Json => tree_sitter_json::HIGHLIGHTS_QUERY.into(),
-        Lang::Toml => tree_sitter_toml_ng::HIGHLIGHTS_QUERY.into(),
-        Lang::Python => tree_sitter_python::HIGHLIGHTS_QUERY.into(),
-        Lang::Bash => tree_sitter_bash::HIGHLIGHT_QUERY.into(),
-        Lang::Go => tree_sitter_go::HIGHLIGHTS_QUERY.into(),
-        Lang::C => tree_sitter_c::HIGHLIGHT_QUERY.into(),
-        Lang::Cpp => format!("{}\n{}", tree_sitter_cpp::HIGHLIGHT_QUERY, tree_sitter_c::HIGHLIGHT_QUERY),
-        Lang::Java => tree_sitter_java::HIGHLIGHTS_QUERY.into(),
-        Lang::CSharp => tree_sitter_c_sharp::HIGHLIGHTS_QUERY.into(),
-        Lang::Ruby => tree_sitter_ruby::HIGHLIGHTS_QUERY.into(),
-        Lang::Html => tree_sitter_html::HIGHLIGHTS_QUERY.into(),
-        Lang::Css => tree_sitter_css::HIGHLIGHTS_QUERY.into(),
-        Lang::Yaml => tree_sitter_yaml::HIGHLIGHTS_QUERY.into(),
-        Lang::Sql => tree_sitter_sequel::HIGHLIGHTS_QUERY.into(),
-        Lang::Swift => tree_sitter_swift::HIGHLIGHTS_QUERY.into(),
-        Lang::Kotlin => tree_sitter_kotlin_sg::HIGHLIGHTS_QUERY.into(),
-        Lang::Php | Lang::PhpOnly => tree_sitter_php::HIGHLIGHTS_QUERY.into(),
-        Lang::Lua => tree_sitter_lua::HIGHLIGHTS_QUERY.into(),
-        Lang::Make => tree_sitter_make::HIGHLIGHTS_QUERY.into(),
-        Lang::Xml => tree_sitter_xml::XML_HIGHLIGHT_QUERY.into(),
-        Lang::Markdown => tree_sitter_md::HIGHLIGHT_QUERY_BLOCK.into(),
-        Lang::MarkdownInline => tree_sitter_md::HIGHLIGHT_QUERY_INLINE.into(),
-    }
+const JS: &str = tree_sitter_javascript::HIGHLIGHT_QUERY;
+const JSX: &str = tree_sitter_javascript::JSX_HIGHLIGHT_QUERY;
+
+const HERE: &[Here] = &[
+    Here {
+        lang: Lang::Rust,
+        grammar: || tree_sitter_rust::LANGUAGE.into(),
+        queries: &[tree_sitter_rust::HIGHLIGHTS_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::TypeScript,
+        grammar: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        queries: &[tree_sitter_typescript::HIGHLIGHTS_QUERY, JS],
+        later: false,
+    },
+    Here {
+        lang: Lang::Tsx,
+        grammar: || tree_sitter_typescript::LANGUAGE_TSX.into(),
+        queries: &[tree_sitter_typescript::HIGHLIGHTS_QUERY, JSX, JS],
+        later: false,
+    },
+    Here {
+        lang: Lang::JavaScript,
+        grammar: || tree_sitter_javascript::LANGUAGE.into(),
+        queries: &[JSX, JS],
+        later: false,
+    },
+    Here {
+        lang: Lang::Json,
+        grammar: || tree_sitter_json::LANGUAGE.into(),
+        queries: &[tree_sitter_json::HIGHLIGHTS_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::Toml,
+        grammar: || tree_sitter_toml_ng::LANGUAGE.into(),
+        queries: &[tree_sitter_toml_ng::HIGHLIGHTS_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::Python,
+        grammar: || tree_sitter_python::LANGUAGE.into(),
+        queries: &[tree_sitter_python::HIGHLIGHTS_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::Bash,
+        grammar: || tree_sitter_bash::LANGUAGE.into(),
+        queries: &[tree_sitter_bash::HIGHLIGHT_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::Go,
+        grammar: || tree_sitter_go::LANGUAGE.into(),
+        queries: &[tree_sitter_go::HIGHLIGHTS_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::C,
+        grammar: || tree_sitter_c::LANGUAGE.into(),
+        queries: &[tree_sitter_c::HIGHLIGHT_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::Cpp,
+        grammar: || tree_sitter_cpp::LANGUAGE.into(),
+        queries: &[tree_sitter_cpp::HIGHLIGHT_QUERY, tree_sitter_c::HIGHLIGHT_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::Java,
+        grammar: || tree_sitter_java::LANGUAGE.into(),
+        queries: &[tree_sitter_java::HIGHLIGHTS_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::CSharp,
+        grammar: || tree_sitter_c_sharp::LANGUAGE.into(),
+        queries: &[tree_sitter_c_sharp::HIGHLIGHTS_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::Ruby,
+        grammar: || tree_sitter_ruby::LANGUAGE.into(),
+        queries: &[tree_sitter_ruby::HIGHLIGHTS_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::Html,
+        grammar: || tree_sitter_html::LANGUAGE.into(),
+        queries: &[tree_sitter_html::HIGHLIGHTS_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::Css,
+        grammar: || tree_sitter_css::LANGUAGE.into(),
+        queries: &[tree_sitter_css::HIGHLIGHTS_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::Yaml,
+        grammar: || tree_sitter_yaml::LANGUAGE.into(),
+        queries: &[tree_sitter_yaml::HIGHLIGHTS_QUERY],
+        later: true,
+    },
+    Here {
+        lang: Lang::Sql,
+        grammar: || tree_sitter_sequel::LANGUAGE.into(),
+        queries: &[tree_sitter_sequel::HIGHLIGHTS_QUERY],
+        later: true,
+    },
+    Here {
+        lang: Lang::Swift,
+        grammar: || tree_sitter_swift::LANGUAGE.into(),
+        queries: &[tree_sitter_swift::HIGHLIGHTS_QUERY],
+        later: true,
+    },
+    Here {
+        lang: Lang::Kotlin,
+        grammar: || tree_sitter_kotlin_sg::LANGUAGE.into(),
+        queries: &[tree_sitter_kotlin_sg::HIGHLIGHTS_QUERY],
+        later: true,
+    },
+    Here {
+        lang: Lang::Php,
+        grammar: || tree_sitter_php::LANGUAGE_PHP.into(),
+        queries: &[tree_sitter_php::HIGHLIGHTS_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::PhpOnly,
+        grammar: || tree_sitter_php::LANGUAGE_PHP_ONLY.into(),
+        queries: &[tree_sitter_php::HIGHLIGHTS_QUERY],
+        later: false,
+    },
+    Here {
+        lang: Lang::Lua,
+        grammar: || tree_sitter_lua::LANGUAGE.into(),
+        queries: &[tree_sitter_lua::HIGHLIGHTS_QUERY],
+        later: true,
+    },
+    Here {
+        lang: Lang::Make,
+        grammar: || tree_sitter_make::LANGUAGE.into(),
+        queries: &[tree_sitter_make::HIGHLIGHTS_QUERY],
+        later: true,
+    },
+    Here {
+        lang: Lang::Xml,
+        grammar: || tree_sitter_xml::LANGUAGE_XML.into(),
+        queries: &[tree_sitter_xml::XML_HIGHLIGHT_QUERY],
+        later: true,
+    },
+    Here {
+        lang: Lang::Markdown,
+        grammar: || tree_sitter_md::LANGUAGE.into(),
+        queries: &[tree_sitter_md::HIGHLIGHT_QUERY_BLOCK],
+        later: true,
+    },
+    Here {
+        lang: Lang::MarkdownInline,
+        grammar: || tree_sitter_md::INLINE_LANGUAGE.into(),
+        queries: &[tree_sitter_md::HIGHLIGHT_QUERY_INLINE],
+        later: true,
+    },
+];
+
+fn here(lang: Lang) -> Option<&'static Here> {
+    HERE.iter().find(|here| here.lang == lang)
+}
+
+fn grammar(lang: Lang) -> Option<Language> {
+    here(lang).map(|here| (here.grammar)())
 }
 
 /// Where it holds other languages: markdown's paragraphs, fences and front matter; HTML's
@@ -102,23 +224,6 @@ fn injections(lang: Lang) -> Option<&'static str> {
     }
 }
 
-/// True if of two patterns for one node the later wins: queries written for Neovim (`(string_scalar)
-/// @string` first, a key's after). Of the tree-sitter org's, the first wins.
-fn later_wins(lang: Lang) -> bool {
-    matches!(
-        lang,
-        Lang::Yaml
-            | Lang::Sql
-            | Lang::Swift
-            | Lang::Kotlin
-            | Lang::Lua
-            | Lang::Make
-            | Lang::Xml
-            | Lang::Markdown
-            | Lang::MarkdownInline
-    )
-}
-
 /// A language's queries, and each highlights capture's token by index.
 struct Made {
     highlights: Query,
@@ -128,11 +233,48 @@ struct Made {
 
 /// Its queries, made once, on its first use (a read thread, or a fence's block). `None`: they do
 /// not compile.
+static MADE: [OnceLock<Option<Made>>; GRAMMARS.len()] = [const { OnceLock::new() }; GRAMMARS.len()];
+/// Queries built aside so far: blocks kept from before one is ready are made again (`built`).
+static BUILT: AtomicUsize = AtomicUsize::new(0);
+/// Set when a query built aside is ready: the window draws again (`take_built`).
+static FRESH: AtomicBool = AtomicBool::new(false);
+
+/// How many queries were built aside: a reply's blocks made before are made again.
+pub fn built() -> usize {
+    BUILT.load(Ordering::SeqCst)
+}
+
+/// True once, after a query built aside is ready.
+pub fn take_built() -> bool {
+    FRESH.swap(false, Ordering::SeqCst)
+}
+
+/// True while `lang` has a grammar whose query is not built yet.
+fn pending(lang: Lang) -> bool {
+    here(lang).is_some() && MADE[lang as usize].get().is_none()
+}
+
 fn made(lang: Lang) -> Option<&'static Made> {
-    static MADE: [OnceLock<Option<Made>>; GRAMMARS.len()] = [const { OnceLock::new() }; GRAMMARS.len()];
-    let made = MADE[lang as usize].get_or_init(|| {
-        let language = grammar(lang);
-        let mut highlights = Query::new(&language, &highlights(lang)).ok()?;
+    let cell = &MADE[lang as usize];
+    if let Some(made) = cell.get() {
+        return made.as_ref();
+    }
+    // Never on the main thread (Swift's takes 0.2 s): built aside, plain or the lexer until then.
+    if !cfg!(test) && std::thread::current().name() == Some("main") {
+        static ASKED: [AtomicBool; GRAMMARS.len()] = [const { AtomicBool::new(false) }; GRAMMARS.len()];
+        if !ASKED[lang as usize].swap(true, Ordering::SeqCst) {
+            std::thread::spawn(move || {
+                made(lang);
+                BUILT.fetch_add(1, Ordering::SeqCst);
+                FRESH.store(true, Ordering::SeqCst);
+                ottospace_mac::wake::post();
+            });
+        }
+        return None;
+    }
+    let made = cell.get_or_init(|| {
+        let language = grammar(lang)?;
+        let mut highlights = Query::new(&language, &here(lang)?.queries.join("\n")).ok()?;
         // A predicate tree-sitter does not test (`#lua-match?`, `#is-not? local`) would let its
         // pattern match anything: Ruby's every variable a method.
         for pattern in 0..highlights.pattern_count() {
@@ -195,9 +337,11 @@ pub fn parse(lang: Lang, text: &str, budget: Duration) -> Option<Tree> {
     if text.len() > MAX_PARSE {
         return None;
     }
+    #[cfg(test)]
+    tests::PARSES.with(|parses| parses.set(parses.get() + 1));
     made(lang)?;
     let mut parser = Parser::new();
-    parser.set_language(&grammar(lang)).ok()?;
+    parser.set_language(&grammar(lang)?).ok()?;
     parse_with(&mut parser, text, budget)
 }
 
@@ -231,9 +375,6 @@ fn inside(lang: Lang, tree: &Tree, text: &str, bytes: Range<usize>) -> Vec<(Lang
         let Some(inner) = name.and_then(lang_named) else { continue };
         for capture in matched.captures().iter().filter(|capture| Some(capture.index) == content) {
             let inner = untagged(inner, text.get(capture.node.byte_range()).unwrap_or_default());
-            if made(inner).is_none() {
-                continue;
-            }
             let ranges = ranges(capture.node);
             if !unclosed(capture.node) && !ranges.is_empty() {
                 found.push((inner, ranges));
@@ -275,14 +416,36 @@ fn ranges(node: Node) -> Vec<tree_sitter::Range> {
 }
 
 /// A fenced block's runs, by byte in `code`: by the grammar `label` names if it parses within the
-/// budget, else `highlight`'s lexer, as before (plain for a label it does not know).
+/// budget, else `highlight`'s lexer, as before (plain for a label it does not know). Kept by
+/// language and text: a reply drawn again, or streamed past a fence, parses it no more.
 pub fn fence(label: &str, code: &str) -> Vec<Mark> {
-    let lang = lang_named(label).map(|lang| untagged(lang, code));
-    let parsed = lang.and_then(|lang| Some((lang, parse(lang, code, BUDGET)?)));
-    match parsed {
-        Some((lang, tree)) => Colours::new(lang, tree, code.to_string()).all(),
-        None => crate::highlight::marks(label, code),
+    type Kept = HashMap<(Lang, u64, usize), Vec<Mark>>;
+    static KEPT: LazyLock<Mutex<Kept>> = LazyLock::new(Mutex::default);
+    let Some(lang) = lang_named(label).map(|lang| untagged(lang, code)) else {
+        return crate::highlight::marks(label, code);
+    };
+    let mut hasher = DefaultHasher::new();
+    code.hash(&mut hasher);
+    let key = (lang, hasher.finish(), code.len());
+    if let Some(marks) = KEPT.lock().ok().and_then(|kept| kept.get(&key).cloned()) {
+        return marks;
     }
+    let (marks, waiting) = match parse(lang, code, BUDGET) {
+        Some(tree) => {
+            let colours = Colours::new(lang, tree, code.to_string());
+            (colours.all(), colours.waiting.get())
+        }
+        None => (crate::highlight::marks(label, code), pending(lang)),
+    };
+    // Its query not built yet: the lexer's for now, the grammar's when drawn again.
+    if !waiting && let Ok(mut kept) = KEPT.lock() {
+        // About a thousand fences: a long session's replies; forgotten all at once past it.
+        if kept.len() >= 1024 {
+            kept.clear();
+        }
+        kept.insert(key, marks.clone());
+    }
+    marks
 }
 
 /// A file's tree, the languages inside it as drawn, and its lines' colours as they are drawn.
@@ -295,6 +458,8 @@ pub struct Colours {
     chunks: RefCell<HashMap<usize, Vec<Vec<Mark>>>>,
     /// Each language inside it parsed so far, by its first byte: `None` past the budget (plain).
     inner: RefCell<HashMap<(Lang, usize), Option<Tree>>>,
+    /// Set when a layer was drawn plain for its query not built yet: not kept, drawn again.
+    waiting: Cell<bool>,
 }
 
 impl Colours {
@@ -308,7 +473,8 @@ impl Colours {
             lines.push(start..start + shown.len());
             start += line.len();
         }
-        Colours { lang, tree, text, lines, chunks: RefCell::default(), inner: RefCell::default() }
+        let (chunks, inner, waiting) = (RefCell::default(), RefCell::default(), Cell::new(false));
+        Colours { lang, tree, text, lines, chunks, inner, waiting }
     }
 
     pub fn lang(&self) -> Lang {
@@ -319,7 +485,11 @@ impl Colours {
     pub fn line(&self, at: usize) -> Vec<Mark> {
         let chunk = at / CHUNK;
         if !self.chunks.borrow().contains_key(&chunk) {
+            self.waiting.set(false);
             let made = self.colour(chunk * CHUNK..((chunk + 1) * CHUNK).min(self.lines.len()));
+            if self.waiting.get() {
+                return made.get(at % CHUNK).cloned().unwrap_or_default();
+            }
             self.chunks.borrow_mut().insert(chunk, made);
         }
         self.chunks.borrow().get(&chunk).and_then(|lines| lines.get(at % CHUNK)).cloned().unwrap_or_default()
@@ -367,7 +537,8 @@ impl Colours {
         }
         // A parser of its own: one stopped by its budget would resume where it stopped.
         let mut parser = Parser::new();
-        let set = parser.set_language(&grammar(lang)).is_ok() && parser.set_included_ranges(ranges).is_ok();
+        let set = grammar(lang).is_some_and(|grammar| parser.set_language(&grammar).is_ok())
+            && parser.set_included_ranges(ranges).is_ok();
         let tree = if set { parse_with(&mut parser, &self.text, BUDGET) } else { None };
         self.inner.borrow_mut().insert(key, tree.clone());
         tree
@@ -380,7 +551,10 @@ impl Colours {
         let bytes = first.start..last.end;
         let mut paint: Vec<Option<Token>> = vec![None; bytes.len()];
         for (lang, tree) in self.layers(bytes.clone()) {
-            let Some(Made { highlights: query, tokens, .. }) = made(lang) else { continue };
+            let Some(Made { highlights: query, tokens, .. }) = made(lang) else {
+                self.waiting.set(self.waiting.get() || pending(lang));
+                continue;
+            };
             // Code inside a string (`${name}`), a fence's code: plain, then its own colours.
             let plain = [query.capture_index_for_name("embedded"), query.capture_index_for_name("none")];
             let mut found: Vec<(usize, usize, usize, Option<Token>)> = Vec::new();
@@ -397,7 +571,7 @@ impl Colours {
             }
             // Outer before inner, so the inner is painted over it; one node's winning pattern first.
             // By the nodes' own ends: cut to these lines first, an outer and its inner could be one.
-            let later = later_wins(lang);
+            let later = here(lang).is_some_and(|here| here.later);
             found.sort_by_key(|(start, end, pattern, _)| {
                 (*start, std::cmp::Reverse(*end), if later { usize::MAX - pattern } else { *pattern })
             });
@@ -706,9 +880,41 @@ mod tests {
 
     #[test]
     fn every_query_compiles() {
-        for grammar in &GRAMMARS {
-            assert!(made(grammar.lang).is_some(), "{}", grammar.name);
+        for here in HERE {
+            assert!(made(here.lang).is_some(), "{:?}", here.lang);
         }
+    }
+
+    thread_local! {
+        /// Parses on this thread: a test's own.
+        pub(super) static PARSES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn parses(draw: impl FnOnce()) -> usize {
+        let before = PARSES.with(Cell::get);
+        draw();
+        PARSES.with(Cell::get) - before
+    }
+
+    #[test]
+    fn drawing_the_same_fences_twice_parses_nothing_the_second_time() {
+        let reply =
+            "Two made-up fences.\n\n```rust\nfn twice_a() -> u32 { 1 }\n```\n\n```py\ntwice_b = \"kale\"\n```\n";
+        assert_eq!(parses(|| drop(crate::markdown::parse(reply, None))), 2);
+        assert_eq!(parses(|| drop(crate::markdown::parse(reply, None))), 0, "drawn again: kept");
+    }
+
+    #[test]
+    fn a_streaming_fence_growing_by_a_line_parses_only_it_once() {
+        let done = "```rust\nfn streamed_a() {}\n```\n\n";
+        let streaming = |lines: usize| {
+            let body: String = (0..lines).map(|n| format!("let streamed_{n} = {n};\n")).collect();
+            format!("{done}```rust\n{body}")
+        };
+        parses(|| drop(crate::markdown::parse(&streaming(3), None)));
+        // One line more: the growing fence only, once; the closed one is kept.
+        assert_eq!(parses(|| drop(crate::markdown::parse(&streaming(4), None))), 1);
+        assert_eq!(parses(|| drop(crate::markdown::parse(&streaming(4), None))), 0);
     }
 
     #[test]
@@ -862,6 +1068,35 @@ mod tests {
             let (lexer, kb, within) = (start.elapsed(), text.len() / 1024, parsed <= BUDGET);
             println!("| {name} | {kb} | {made:.1?} | {parsed:.1?} | {within} | {chunk:.1?} | {lexer:.1?} |");
         }
+    }
+
+    /// A 200-line fence's cost on the calling thread (the main thread, in a reply): main's lexer on
+    /// every draw, against the grammar's first draw and a draw again (kept). The query is built
+    /// first, as it is aside in the app. `cargo test --release -p ottospace --bin ottospace --
+    /// --ignored --nocapture fence_timings`.
+    #[test]
+    #[ignore = "timings, by hand"]
+    fn fence_timings() {
+        let code: String = (0..200).map(|n| format!("    let row_{n} = sow(\"kale\", {n}); // made up\n")).collect();
+        let reply = format!("A made-up reply.\n\n```rust\n{code}```\n");
+        assert!(made(Lang::Rust).is_some());
+        let time = |draw: &dyn Fn()| {
+            let start = Instant::now();
+            draw();
+            start.elapsed()
+        };
+        // Main: the reply without colours, and the lexer's on the fence, each draw.
+        let shown = code.trim_end_matches('\n');
+        let plain = time(&|| drop(crate::markdown::parse(&reply.replace("```rust", "```made-up"), None)));
+        let lexer = time(&|| drop(crate::highlight::marks("rust", shown)));
+        let first = time(&|| drop(crate::markdown::parse(&reply, None)));
+        let again = time(&|| drop(crate::markdown::parse(&reply, None)));
+        let fence_again = time(&|| drop(fence("rust", shown)));
+        println!("| 200-line Rust fence, calling thread | main | this branch |");
+        println!("|---|---|---|");
+        println!("| the reply, first draw | {:.1?} | {first:.1?} |", plain + lexer);
+        println!("| the reply, drawn again | {:.1?} | {again:.1?} |", plain + lexer);
+        println!("| the fence's colours, drawn again | {lexer:.1?} | {fence_again:.1?} |");
     }
 
     /// Runs on character boundaries, in order, inside the line, whatever the text.
