@@ -4248,10 +4248,10 @@ impl Model {
     /// The terminal that ⌘C copies from and ⌘V pastes into: the focused pane, if it is a
     /// terminal and ottospace has the keyboard (no picker, key reference or live app).
     /// The terminal whose program has the focus (DECSET 1004's in and out): the one with the
-    /// keyboard, while ottospace's window is the active one. Another tab, the drawer, a box over
-    /// the panes or another app take it.
+    /// keyboard, while one of ottospace's windows is the active one. Another tab, the drawer, a
+    /// box, a menu or visual mode over the panes, or another app take it.
     pub fn focus_terminal(&self, window_active: bool) -> Option<PaneId> {
-        self.keyboard_terminal().filter(|_| window_active)
+        self.keyboard_terminal().filter(|_| window_active && !self.holds_keyboard())
     }
 
     pub fn keyboard_terminal(&self) -> Option<PaneId> {
@@ -17476,6 +17476,11 @@ mod tests {
         assert_eq!(m.focus_terminal(true), Some(1));
         // The key reference over the panes takes the keyboard.
         m.update(Action::ToggleKeys);
+        assert_eq!(m.focus_terminal(true), None);
+        m.update(Action::ToggleKeys);
+        assert_eq!(m.focus_terminal(true), Some(1));
+        // Visual mode in its own pane: the user selects, the program does not have the keys.
+        m.update(Action::ToggleVisual);
         assert_eq!(m.focus_terminal(true), None);
     }
 

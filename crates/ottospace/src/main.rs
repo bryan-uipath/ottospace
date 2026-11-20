@@ -1401,7 +1401,7 @@ impl Workspace {
             // so hand that pane back to its stream. Ignore the activation that the swap click
             // itself delivers late (the race that used to bounce windows straight back).
             cx.observe_window_activation(window, |this, window, cx| {
-                this.tell_focus(window);
+                this.tell_focus(cx);
                 if !window.is_window_active() {
                     this.left_on_activation = None;
                     return;
@@ -2081,6 +2081,8 @@ impl Workspace {
         self.with_origin(origin, |this| this.carry_out(&effects, window, cx));
         self.sync_out_windows(cx);
         self.follow_keys(cx);
+        // Before the next request: a key it types goes to a program already told it has the focus.
+        self.tell_focus(cx);
         cx.notify();
         effects
     }
@@ -4790,10 +4792,10 @@ impl Workspace {
 
     /// Fits each terminal's grid to its pane, redraws on new output, closes panes whose shell exited.
     /// A program that asked (DECSET 1004) hears when its terminal gets or loses the focus: the
-    /// pane's keyboard, its tab, ottospace's window (`Model::focus_terminal`). A test run's window
-    /// is never the active one: it counts as active.
-    fn tell_focus(&mut self, window: &Window) {
-        let active = window.is_window_active() || std::env::var_os("OTTOSPACE_E2E").is_some();
+    /// pane's keyboard, its tab, ottospace's windows (`Model::focus_terminal`). A test run's
+    /// windows are never the active ones: they count as active.
+    fn tell_focus(&mut self, cx: &App) {
+        let active = cx.active_window().is_some() || std::env::var_os("OTTOSPACE_E2E").is_some();
         let now = self.model.focus_terminal(active);
         let was = std::mem::replace(&mut self.focus_told, now);
         if was != now {
@@ -8733,7 +8735,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
         // Each state drawn: the program whose terminal got or lost the focus hears it.
-        self.tell_focus(window);
+        self.tell_focus(cx);
         // A frame: the tick runs each frame for a while, to take what follows it.
         ottospace_mac::wake::post();
         // Every task's letters, worked out once a frame for each badge drawn (`task_badge`).
