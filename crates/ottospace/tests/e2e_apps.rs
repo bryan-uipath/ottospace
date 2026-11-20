@@ -1524,7 +1524,7 @@ fn the_inspector_reads_a_hosted_canary_window_and_counts_its_roles() {
     otto.call(json!({"cmd": "open_app", "name": CANARY}));
     wait_for("the pane layout", || rect(&state()["bounds"]["1"]).filter(|b| b[2] > 1.0));
     // The user's palette opens it on the focused app pane; it reads the window off the UI thread.
-    otto.call(json!({"cmd": "key", "keys": "cmd-p i n s p e c t o r enter", "as": "user"}));
+    otto.call(json!({"cmd": "key", "keys": "cmd-shift-p i n s p e c t o r enter", "as": "user"}));
     let read = wait_for("the inspector's read", || {
         Some(state()["inspector"].clone()).filter(|i| i["counts"]["nodes"].as_u64() > Some(0))
     });

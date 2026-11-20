@@ -1081,6 +1081,14 @@ const MAKERS: &[Make] = &[
     |_| Action::PaletteOpen,
     |_| Action::PaletteTasks,
     |_| Action::PaletteFeatures,
+    |_| Action::PaletteGoTo,
+    |_| Action::GoToDrill,
+    |_| Action::GoToBack,
+    |g| Action::GoToFiles {
+        folder: g.repo_path(),
+        paths: g.names(&["a.rs", "src/b.rs", "\u{202e}c", ""], 4),
+        cut: g.rng.coin(),
+    },
     |g| Action::PaletteMove { delta: g.delta() },
     |g| Action::PaletteChoose { index: g.rng.coin().then(|| g.index(50)) },
     |_| Action::ClosePalette,
@@ -2590,6 +2598,16 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(palette.selected < matches.max(1), "the palette selects {} of {matches}", palette.selected);
         ensure!(!boxed && !m.keys && m.visual.is_none() && m.live.is_none(), "the palette is open with {:?}", m.mode());
         ensure!(matches!(m.mode(), Mode::Palette | Mode::Confirm), "the palette is open in {:?} mode", m.mode());
+        // Go-to never lists a place that went, and a drill never outlives its place.
+        if let Some(goto) = &palette.goto {
+            let gone = goto.places.iter().find(|row| !m.place_exists(&row.place));
+            ensure!(gone.is_none(), "go-to lists {gone:?}, gone");
+            let drill = goto.drill.as_ref().map(|drill| &drill.row.place);
+            ensure!(
+                drill.is_none_or(|place| goto.places.iter().any(|row| row.place == *place)),
+                "a drill into {drill:?}"
+            );
+        }
     }
     // The text field is the picker's filter, else the new-task box's line; with neither open
     // there is none. It has the keyboard in their modes only, and not under the key reference.
@@ -4349,6 +4367,9 @@ impl Run {
             Action::PaletteOpen
                 | Action::PaletteTasks
                 | Action::PaletteFeatures
+                | Action::PaletteGoTo
+                | Action::GoToDrill
+                | Action::GoToBack
                 | Action::PaletteMove { .. }
                 | Action::PaletteChoose { .. }
                 | Action::ClosePalette
@@ -5162,6 +5183,11 @@ impl Run {
                 }
                 Effect::Run { command } => {
                     ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")
+                }
+                // Files are listed only for the user's go-to, in a listed checkout.
+                Effect::ListFiles { folder } => {
+                    let goto = matches!(action, Action::GoToDrill | Action::FieldEdit { .. });
+                    ensure!(user && goto && m.repo_listed(folder), "{origin:?}'s {action:?} listed {folder:?}")
                 }
                 // The list is read again only for a folder an agent's session moved into, and a while after.
                 Effect::ReadRepos => {

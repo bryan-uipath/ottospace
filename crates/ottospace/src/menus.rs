@@ -86,6 +86,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 item("Label the Controls", SneakMode),
                 item("Fill the Whole Display", FillDisplay),
                 item("Command Palette…", commands::CommandPalette),
+                item("Go to Place or File…", commands::GoToPlace),
                 MenuItem::separator(),
                 item("Previous Day in Calendar", commands::CalendarBack),
                 item("Next Day in Calendar", commands::CalendarForward),

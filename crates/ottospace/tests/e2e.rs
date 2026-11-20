@@ -1007,7 +1007,7 @@ fn a_repository_is_added_by_the_user_kept_in_their_order_and_an_old_folder_is_on
     otto.call(json!({"cmd": "type", "text": format!("cd '{}' && pwd\r", dir("elsewhere/zed/src"))}));
     let pattern = format!("^{}$", regex::escape(&dir("elsewhere/zed/src")));
     otto.call(json!({"cmd": "wait", "pane": 1, "pattern": pattern, "timeout_ms": 40000}));
-    let reply = otto.user_key("cmd-p a d d space f o l d e r space t o space r e p o s enter");
+    let reply = otto.user_key("cmd-shift-p a d d space f o l d e r space t o space r e p o s enter");
     assert_eq!((names(&reply), listed()), (vec!["zed".to_string()], json!([dir("elsewhere/zed")])));
     assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(1)));
     otto.user_key("escape");
@@ -2591,7 +2591,7 @@ fn open_settings_edits_the_file_and_the_status_bar_says_what_is_wrong_until_it_i
 
     // The user's, from the palette: a Settings tab (in a workspace made for it, from Home), the
     // editor on the file, made `{}` first.
-    otto.user_key("cmd-p o p e n space s e t t i n g s");
+    otto.user_key("cmd-shift-p o p e n space s e t t i n g s");
     assert_eq!(otto.call(json!({"cmd": "state"}))["palette_rows"][0]["name"], "Open Settings");
     otto.user_key("enter");
     let args = otto.wait_for("the editor", |_| std::fs::read_to_string(bin.join("args")).ok());
@@ -5038,7 +5038,7 @@ fn a_feature_that_is_off_is_absent_and_features_turns_it_on_live() {
     assert_eq!(std::fs::read_to_string(home.join("marks.json")).unwrap(), kept, "marks.json is untouched");
 
     // Features… in the palette turns marks on: the settings say so, and the mark is back.
-    otto.user_key("cmd-p f e a t u r e s enter");
+    otto.user_key("cmd-shift-p f e a t u r e s enter");
     let listed = otto.user_key("m a r k s");
     assert_eq!(listed["state"]["palette"]["features"][0], json!({"feature": "marks", "on": false}), "{listed}");
     let on = otto.user_key("enter");
@@ -5047,7 +5047,7 @@ fn a_feature_that_is_off_is_absent_and_features_turns_it_on_live() {
     assert_eq!(settings["features"], json!({"marks": true}));
     assert_eq!(otto.call(json!({"cmd": "section", "section": "marks"}))["state"]["sidebar"], "marks");
     // A client's palette is refused, so no client turns a flag.
-    assert!(otto.raw(r#"{"cmd":"key","keys":"cmd-p"}"#)["state"]["palette"].is_null());
+    assert!(otto.raw(r#"{"cmd":"key","keys":"cmd-shift-p"}"#)["state"]["palette"].is_null());
 }
 
 /// The owner: Features… lists each flag on two lines (its name over its description), with no
@@ -5579,7 +5579,7 @@ fn a_long_list_fades_where_more_lies_beyond_and_a_short_one_nowhere() {
     assert!(still() || still(), "frames drawn at rest");
 
     // The palette: every command overflows it; one that matches fits.
-    let reply = otto.user_key("cmd-p");
+    let reply = otto.user_key("cmd-shift-p");
     assert_eq!(fades(&reply, "palette"), json!({"top": false, "bottom": true}), "{}", reply["overflow"]);
     let reply = otto.user_key("c o p y space s t a t e");
     assert_eq!(fades(&reply, "palette"), json!({"top": false, "bottom": false}));
@@ -9558,6 +9558,78 @@ fn focus_moves_across_the_zones_to_the_rails_and_back() {
     assert_eq!(otto.drawn()["mode"], "list");
 }
 
+/// ⌘P goes to a place by name, then to a file in it: a worktree's name and ↵ land in its
+/// workspace; Tab lists its files (git's), a name and ↵ open one in a viewer there. `>` runs a
+/// command. A client's ⌘P opens nothing, as a client's ⌘⇧P.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn go_to_finds_a_worktree_then_a_file_in_it_and_a_gt_runs_a_command() {
+    let root = support::temp(&format!("ottospace-e2e-goto-{}", std::process::id()));
+    let app = root.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    git(&app, &["init", "-q", "-b", "main"]);
+    std::fs::write(app.join("src/main.rs"), "fn main() {}\n").unwrap();
+    git(&app, &["add", "."]);
+    git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one"]);
+    let root = root.canonicalize().unwrap();
+    let fix = root.join("app-fix");
+    git(&app, &["worktree", "add", "-q", "-b", "fix", fix.to_str().unwrap()]);
+    // New and not ignored: listed too.
+    std::fs::write(fix.join("src/login.rs"), "// made-up\n").unwrap();
+    let settings = json!({"repos": [root.join("app")], "restore_layout": false}).to_string();
+    let home = user_folder("goto", &settings);
+    let otto = Otto::launch_with(
+        "goto",
+        &[("OTTOSPACE_HOME", home.to_str().unwrap()), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_CONFIG_NOSYSTEM", "1")],
+    );
+    let fix_path = fix.to_string_lossy().into_owned();
+    let listed = |o: &Otto| {
+        let s = o.call(json!({"cmd": "state"}));
+        s["state"]["repos"][0]["worktrees"].as_array()?.iter().any(|w| w["path"] == fix_path.as_str()).then_some(())
+    };
+    otto.wait_for("the worktree listed", listed);
+
+    // A client's ⌘P opens nothing.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-p"}));
+    assert_eq!((&reply["mode"], &reply["palette_rows"]), (&json!("normal"), &Value::Null));
+    // The user's: the worktree by name, then ↵ goes there as its Repos row does: a terminal in it.
+    let reply = otto.user_key("cmd-p a p p f i x");
+    assert_eq!(reply["mode"], "palette");
+    assert_eq!(reply["goto_rows"][0], json!({"place": "checkout", "name": "app-fix", "detail": "app · fix"}));
+    otto.user_key("enter");
+    let landed = |o: &Otto| {
+        let s = o.call(json!({"cmd": "state"}));
+        s["state"]["panes"].as_array()?.iter().any(|p| p["cwd"] == fix_path.as_str()).then_some(s)
+    };
+    let reply = otto.wait_for("a terminal in the worktree", landed);
+    assert_eq!(reply["mode"], "normal");
+
+    // Tab: its files, read by git; a name and ↵ open one in a viewer.
+    otto.user_key("cmd-p a p p f i x tab");
+    let file = |o: &Otto| {
+        let rows = o.call(json!({"cmd": "state"}))["goto_rows"].clone();
+        rows.as_array()?.iter().any(|row| row["file"] == "src/login.rs").then_some(())
+    };
+    otto.wait_for("the worktree's files", file);
+    let reply = otto.user_key("l o g i n");
+    assert_eq!(reply["goto_rows"], json!([{"file": "src/login.rs"}]));
+    otto.user_key("enter");
+    let path = fix.join("src/login.rs").to_string_lossy().into_owned();
+    let viewer = |o: &Otto| {
+        let s = o.call(json!({"cmd": "state"}));
+        s["state"]["panes"].as_array()?.iter().any(|p| p["kind"] == json!({"type": "file", "path": path})).then_some(())
+    };
+    otto.wait_for("the file in a viewer", viewer);
+
+    // `>`: the commands, as ⌘⇧P lists them; ↵ runs one.
+    let reply = otto.user_key("cmd-p > t e r m space b e l");
+    assert_eq!(reply["palette_rows"][0]["name"], "Terminal Below");
+    let panes = reply["state"]["panes"].as_array().map_or(0, Vec::len);
+    otto.user_key("enter");
+    let split = |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|s| pane_ids(s).len() > panes);
+    otto.wait_for("a terminal below", split);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
@@ -9573,7 +9645,7 @@ fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     assert_eq!(otto.user_key("cmd-shift-p")["mode"], "palette");
     assert_eq!(otto.user_key("cmd-shift-p")["mode"], "normal");
     // The user's opens it with every command, its group and its key.
-    let reply = otto.user_key("cmd-p");
+    let reply = otto.user_key("cmd-shift-p");
     assert_eq!(reply["mode"], "palette");
     let rows = reply["palette_rows"].as_array().expect("rows").clone();
     assert!(rows.len() > 30, "{rows:?}");
@@ -9598,14 +9670,14 @@ fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     let [top, below] = otto.bounds(&[1, 2])[..] else { panic!("two panes") };
     assert!(top[1] + top[3] <= below[1], "2 is below 1: {top:?} {below:?}");
     // A Developer command: the state, copied (a test run's clipboard is its own).
-    otto.user_key("cmd-p c o p y space s t a t e");
+    otto.user_key("cmd-shift-p c o p y space s t a t e");
     assert_eq!(state()["palette_rows"][0]["group"], "Developer");
     otto.user_key("enter");
     let copied = |o: &Otto| o.call(json!({"cmd": "state"}))["copied"].as_str().map(String::from);
     let copied = otto.wait_for("the state copied", copied);
     assert!(copied.starts_with("{\"ok\":true") && copied.contains("\"palette_rows\""), "{copied}");
     // ↑ from the first row wraps to the last; Esc closes it.
-    otto.user_key("cmd-p up");
+    otto.user_key("cmd-shift-p up");
     assert_eq!(state()["state"]["palette"]["selected"], rows.len() - 1);
     // The highlighted row is in view: at the end of the list, then back at its top once typing moves it.
     let thumb = |o: &Otto| {
@@ -9634,7 +9706,7 @@ fn move_tab_to_task_in_the_palette_lists_the_tasks_and_moves_the_tab() {
     let listed =
         |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|r| r["palette_rows"][0]["group"] == "Move to");
     // The command opens the palette again on the tasks, then the workspaces.
-    otto.user_key("cmd-p m o v e space t a b space t o enter");
+    otto.user_key("cmd-shift-p m o v e space t a b space t o enter");
     let reply = otto.wait_for("the tasks listed", listed);
     let all = vec![json!("fix login"), json!("docs"), json!("Workspace 2")];
     assert_eq!((names(&reply), &reply["mode"]), (all.clone(), &json!("palette")));
@@ -9645,7 +9717,7 @@ fn move_tab_to_task_in_the_palette_lists_the_tasks_and_moves_the_tab() {
     assert_eq!((tab_titles(&reply), &reply["mode"]), (vec![("Tab 1".to_string(), json!(2))], &json!("normal")));
     assert_eq!((reply["spaces"].as_array().map(Vec::len), &reply["workbook_offer"]), (Some(2), &json!("closed")));
     // And on to the other task: the first one's space, with no tab left, goes.
-    otto.user_key("cmd-p m o v e space t a b space t o enter");
+    otto.user_key("cmd-shift-p m o v e space t a b space t o enter");
     assert_eq!(names(&otto.wait_for("the tasks listed", listed)), all[..2]);
     let reply = otto.user_key("f i x enter");
     assert_eq!(tab_titles(&reply), [("Tab 1".to_string(), json!(1))]);
@@ -9659,7 +9731,7 @@ fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
     let otto = Otto::launch("inspector");
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     // From the palette, on a pane that is no app: it says so, and opens nothing.
-    otto.user_key("cmd-p i n s p e c t o r enter");
+    otto.user_key("cmd-shift-p i n s p e c t o r enter");
     let said = |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|r| r["notice"].is_string());
     let reply = otto.wait_for("the notice", said);
     assert!(reply["notice"].as_str().unwrap().contains("needs a focused app pane"), "{}", reply["notice"]);
@@ -9965,9 +10037,9 @@ fn a_layout_file_that_does_not_read_is_set_aside_and_restore_layout_false_starts
     let text = otto.call(json!({"cmd": "capture", "pane": 1, "history": true}))["text"].as_str().unwrap().to_string();
     assert!(!text.lines().any(|line| line == "typed-not-run"), "the command ran: {text}");
     // Start Fresh, a client's: refused. The user's: the file goes, and the quit writes none.
-    let theirs = otto.call(json!({"cmd": "key", "keys": "cmd-p"}));
+    let theirs = otto.call(json!({"cmd": "key", "keys": "cmd-shift-p"}));
     assert_eq!(theirs["state"]["palette"], Value::Null);
-    otto.call(json!({"cmd": "key", "keys": "cmd-p s t a r t space f r e s h enter", "as": "user"}));
+    otto.call(json!({"cmd": "key", "keys": "cmd-shift-p s t a r t space f r e s h enter", "as": "user"}));
     assert!(!home.join("layout.json").exists());
     assert!(std::fs::symlink_metadata(home.join("layout.json.bad")).is_err());
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "not the home's");
@@ -12252,7 +12324,7 @@ fn the_dial_counts_calls_by_station_and_keeps_the_users_collapse() {
     assert_eq!((frames(&otto), dial(&otto)["animating"].clone()), (collapsed, json!(false)), "none collapsed");
 
     // The user stops it (a running task is not gone on with from another run).
-    otto.user_key("cmd-p");
+    otto.user_key("cmd-shift-p");
     otto.user_key("s t o p space t h e space a g e n t");
     otto.user_key("enter");
     otto.wait_for("its end", |o| Some(dial(o)).filter(|d| d["pulse"] != "running" && d["pulse"] != "idle").map(|_| ()));
@@ -13199,7 +13271,7 @@ fn a_message_after_the_agent_ended_starts_it_again_and_is_sent() {
 
 /// The user's "Stop the Agent", from the palette: a native drawer has no Stop for the agent.
 fn stop_the_agent(otto: &Otto) {
-    otto.user_key("cmd-p");
+    otto.user_key("cmd-shift-p");
     otto.user_key("s t o p space t h e space a g e n t");
     otto.user_key("enter");
 }

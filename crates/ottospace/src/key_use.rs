@@ -27,11 +27,12 @@ pub struct Kept {
 }
 
 /// The bindings whose action is no command's.
-fn extras() -> [(Binding, Box<dyn gpui::Action>); 3] {
+fn extras() -> [(Binding, Box<dyn gpui::Action>); 4] {
     [
         (Binding::Copy, Box::new(CopySelection)),
         (Binding::Paste, Box::new(PasteText)),
         (Binding::Palette, Box::new(commands::CommandPalette)),
+        (Binding::GoTo, Box::new(commands::GoToPlace)),
     ]
 }
 
