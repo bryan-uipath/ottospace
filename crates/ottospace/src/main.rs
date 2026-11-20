@@ -8355,7 +8355,9 @@ impl Workspace {
                 true => {
                     let Some(word) = collect::new_word() else { return };
                     this.dispatch(Action::Tick { now: now_ms() }, this.input, window, cx);
-                    drop(this.dispatch(Action::QuickOpen { now: now_ms(), word }, this.input, window, cx))
+                    let transcript = this.listen_path().map(|path| path.to_string_lossy().into_owned());
+                    let open = Action::QuickOpen { now: now_ms(), word, transcript };
+                    drop(this.dispatch(open, this.input, window, cx))
                 }
                 false => cx.propagate(),
             }))

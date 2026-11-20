@@ -490,6 +490,11 @@ pub fn materials_dir(id: TaskId, word: &str) -> Option<String> {
     plain.then(|| format!("{id}-{word}"))
 }
 
+/// `dir` is a materials folder of task `id`'s: `<id>-<word>`, nothing else.
+pub fn own_dir(id: TaskId, dir: &str) -> bool {
+    dir.strip_prefix(&format!("{id}-")).and_then(|word| materials_dir(id, word)).as_deref() == Some(dir)
+}
+
 /// The folder and the capture's number, if `file` is what a task names a capture by:
 /// `<id>-<word>/<number>.json`, e.g. `7-k3f9a2c41b7d/1.json`. Nothing else is ever joined to
 /// the materials folder.
@@ -529,13 +534,8 @@ impl Task {
 
     /// The folder its captures are in, inside the materials folder. `None`: it has none.
     pub fn materials_dir(&self) -> Option<&str> {
-        let note = || self.note.as_deref().filter(|dir| self.note_dir_ok(dir));
+        let note = || self.note.as_deref().filter(|dir| own_dir(self.id, dir));
         self.materials.iter().find_map(|file| material_file(self.id, file)).map(|(dir, _)| dir).or_else(note)
-    }
-
-    /// `dir` is a materials folder of this task's: `<id>-<word>`, nothing else.
-    fn note_dir_ok(&self, dir: &str) -> bool {
-        dir.strip_prefix(&format!("{}-", self.id)).and_then(|word| materials_dir(self.id, word)).as_deref() == Some(dir)
     }
 
     /// The inbox heading for this task. `None`: not listed (cleaned, snoozed or dismissed).

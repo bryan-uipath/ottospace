@@ -538,7 +538,7 @@ pub struct Captured<T> {
 }
 
 impl<T> Captured<T> {
-    fn of(content: T) -> Self {
+    pub fn of(content: T) -> Self {
         Self { untrusted: true, warning: WARNING.into(), content }
     }
 }

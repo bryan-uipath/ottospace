@@ -158,8 +158,9 @@ impl Model {
             self.compose = Some(Field::new("", MAX_TITLE));
             self.compose_reset();
         }
-        // A draft is no box of the drawer: its task goes where the user is, also once filed.
-        self.compose_to = None;
+        // A draft is no box of the drawer: its task goes where the user is, also once filed. Nor
+        // a quick note: its pills are not the draft's.
+        (self.compose_to, self.quick) = (None, None);
         let at = self.now;
         let bar = self.capture.get_or_insert_with(|| Collection {
             draft,

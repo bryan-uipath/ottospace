@@ -1185,7 +1185,11 @@ const MAKERS: &[Make] = &[
     |g| Action::Tick { now: g.time() },
     |g| Action::OpenCompose { text: g.line() },
     // The shell's word is plain; a bad one keeps no note.
-    |g| Action::QuickOpen { now: g.time(), word: g.rng.pick(&["k3f9a2c41b7d", "w0rdw0rdw0rd", "../x"]).into() },
+    |g| Action::QuickOpen {
+        now: g.time(),
+        word: g.rng.pick(&["k3f9a2c41b7d", "w0rdw0rdw0rd", "../x"]).into(),
+        transcript: g.rng.coin().then(|| "/t/today.md".into()),
+    },
     |g| {
         use crate::model::quick::PillKind;
         Action::QuickPill { kind: g.rng.pick(&[PillKind::Meeting, PillKind::Transcript, PillKind::Front]) }
@@ -6248,7 +6252,19 @@ fn seed_50_the_quick_box_waits_for_the_palette() {
         set_features(&["marks", "transcripts", "multi_monitor", "overlay_panels", "decisions", "code_city"])
             .sent_by(Origin::System),
         Action::PaletteFeatures.into(),
-        Action::QuickOpen { now: u64::MAX, word: "w0rdw0rdw0rd".into() }.into(),
+        Action::QuickOpen { now: u64::MAX, word: "w0rdw0rdw0rd".into(), transcript: None }.into(),
+    ])
+    .unwrap();
+}
+
+/// ⌘⇧N in visual mode opened the box under it: it waits, as ⌘N's box does.
+#[test]
+fn seed_249_the_quick_box_waits_for_visual_mode() {
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        set_features(&["transcripts", "agent_mode", "overlay_panels", "decisions"]).sent_by(Origin::System),
+        Action::ToggleVisual.into(),
+        Action::QuickOpen { now: u64::MAX, word: "w0rdw0rdw0rd".into(), transcript: Some("/t/today.md".into()) }.into(),
     ])
     .unwrap();
 }

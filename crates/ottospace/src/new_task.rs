@@ -507,11 +507,8 @@ impl Workspace {
         use ottospace_core::model::{Owner, quick::Pill};
         let (pills, at) = (self.model.quick_pills()?, self.model.quick_at()?);
         let label = |pill: &Pill| match pill {
-            Pill::Meeting { event } => {
-                let title = self.model.calendar.events.iter().find(|e| e.id == *event).map(|e| e.title.clone());
-                format!("Meeting · {}", title.unwrap_or_default())
-            }
-            Pill::Transcript { .. } => {
+            Pill::Meeting(meeting) => format!("Meeting · {}", meeting.title),
+            Pill::Transcript(_) => {
                 format!("Transcript · {}", ottospace_core::calendar::clock(at, crate::calendar::zone_offset(at)))
             }
             Pill::Front { of: of @ Owner::Task { .. } } => format!("Task · {}", self.model.space_title(of)),

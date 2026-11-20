@@ -18,10 +18,11 @@ pub const QUICK_USERS: &str = "only the user opens the quick note box or takes o
 /// A piece of context to attach, as its pill shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pill {
-    /// The meeting on the calendar now, by its event's id. Its title is drawn, never in the state.
-    Meeting { event: u64 },
-    /// The transcript being written, and how far in it is (ms).
-    Transcript { at_ms: u64 },
+    /// The meeting on the calendar as the box opened: what is drawn is what is kept. Its title is
+    /// drawn, never in the state.
+    Meeting(NoteMeeting),
+    /// The transcript being written as the box opened: its file (the shell's) and how far in (ms).
+    Transcript(NoteTranscript),
     /// The workspace or task in front.
     Front { of: Owner },
 }
@@ -38,8 +39,8 @@ pub enum PillKind {
 impl Pill {
     pub fn kind(&self) -> PillKind {
         match self {
-            Pill::Meeting { .. } => PillKind::Meeting,
-            Pill::Transcript { .. } => PillKind::Transcript,
+            Pill::Meeting(_) => PillKind::Meeting,
+            Pill::Transcript(_) => PillKind::Transcript,
             Pill::Front { .. } => PillKind::Front,
         }
     }
@@ -47,7 +48,7 @@ impl Pill {
 
 /// The open quick box: when it opened, its pills, and the word its note's folder is named by.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Quick {
+pub(crate) struct Quick {
     pub now: u64,
     pub pills: Vec<Pill>,
     pub word: String,
@@ -64,21 +65,29 @@ impl Model {
         self.quick.as_ref().filter(|_| self.compose.is_some()).map(|quick| quick.now)
     }
 
-    /// ⌘⇧N: the box, centred, with what is there now as pills. Open already: nothing changes.
-    pub(super) fn quick_open(&mut self, now: u64, word: String, effects: &mut Vec<Effect>) {
-        if self.compose.is_some() {
+    /// ⌘⇧N: the box, centred, with what is there now as pills. `transcript`: the file of the one
+    /// being written, as the shell has it. Open already: only an empty box of the drawer's own
+    /// (nothing open yet) becomes it; else nothing changes.
+    pub(super) fn quick_open(&mut self, now: u64, word: String, transcript: Option<String>, effects: &mut Vec<Effect>) {
+        let empty = self.compose_line().is_some_and(String::is_empty) && self.capture.is_none() && self.quick.is_none();
+        if self.compose.is_some() && !empty {
             return;
         }
         let meeting = self.calendar.events.iter().find(|e| calendar::meeting(e) && e.start <= now && now < e.end);
-        let heard = self.listen.on.as_ref();
-        let front = Some(self.shown_space().clone()).filter(|of| *of != Owner::Home);
+        let meeting = meeting.map(|e| NoteMeeting { title: e.title.clone(), start: e.start, end: e.end });
+        let heard = self.listen.on.as_ref().zip(transcript);
+        let heard = heard.map(|(on, file)| NoteTranscript { file, at_ms: on.elapsed(now) });
+        // What the user is in: a tab out's window's, else the main window's.
+        let front = Some(self.space().clone()).filter(|of| *of != Owner::Home);
         let pills = meeting
-            .map(|e| Pill::Meeting { event: e.id })
+            .map(Pill::Meeting)
             .into_iter()
-            .chain(heard.map(|on| Pill::Transcript { at_ms: on.elapsed(now) }))
+            .chain(heard.map(Pill::Transcript))
             .chain(front.map(|of| Pill::Front { of }))
             .collect();
-        self.open_box(String::new(), false, effects);
+        if self.compose.is_none() {
+            self.open_box(String::new(), false, effects);
+        }
         self.quick = Some(Quick { now, pills, word });
     }
 
@@ -117,14 +126,8 @@ impl Model {
         let mut note = Note { filed: quick.now, ..Note::default() };
         for pill in &quick.pills {
             match pill {
-                Pill::Meeting { event } => {
-                    let e = self.calendar.events.iter().find(|e| e.id == *event);
-                    note.meeting = e.map(|e| NoteMeeting { title: e.title.clone(), start: e.start, end: e.end });
-                }
-                // The file is the shell's to name: it writes it.
-                Pill::Transcript { at_ms } => {
-                    note.transcript = Some(NoteTranscript { file: String::new(), at_ms: *at_ms })
-                }
+                Pill::Meeting(meeting) => note.meeting = Some(meeting.clone()),
+                Pill::Transcript(heard) => note.transcript = Some(heard.clone()),
                 Pill::Front { of } => note.front = Some(self.space_title(of)),
             }
         }
@@ -171,7 +174,7 @@ mod tests {
     }
 
     fn open(m: &mut Model, at: u64) {
-        m.update(Action::QuickOpen { now: at, word: WORD.into() });
+        m.update(Action::QuickOpen { now: at, word: WORD.into(), transcript: Some("/t/today.md".into()) });
     }
 
     fn type_line(m: &mut Model, text: &str) {
@@ -245,7 +248,7 @@ mod tests {
         m.update(Action::ListenStart { source: Source::Pane(1), mic: false, id: "t1".into(), at: 1_000 });
         open(&mut m, 61_000);
         let pill = m.quick_pills().into_iter().flatten().find(|pill| pill.kind() == PillKind::Transcript).cloned();
-        assert_eq!(pill, Some(Pill::Transcript { at_ms: 60_000 }));
+        assert_eq!(pill, Some(Pill::Transcript(NoteTranscript { file: "/t/today.md".into(), at_ms: 60_000 })));
     }
 
     /// ⌘↵ starts it now and shows its own space; the meeting is still its note's.
@@ -261,18 +264,61 @@ mod tests {
         assert_eq!(m.talk.as_ref().and_then(|talk| talk.task.task()), Some(id));
     }
 
+    /// What is drawn is what is kept: a calendar read again while it is open changes no pill. Its
+    /// plan says nothing starts; folded and reopened (⌘⇧R) it is still the quick note.
+    #[test]
+    fn its_pills_are_kept_as_drawn_and_it_stays_a_note_when_folded() {
+        let mut m = model();
+        open(&mut m, 600_000);
+        type_line(&mut m, "ask about it");
+        assert_eq!(m.compose_plan().map(|plan| plan.starts), Some(false));
+        let days = std::array::from_fn(|n| n as u64 * 86_400_000);
+        m.update(Action::CalendarRead { events: Some(vec![]), days, at: 1, held_from: 0 }.sent_by(Origin::System));
+        m.update(Action::OverlayDismiss);
+        assert!(m.compose.is_none());
+        m.update(Action::TalkToggle);
+        assert_eq!(m.quick_pills().map(<[Pill]>::len), Some(2), "back with its pills");
+        let effects = m.update(Action::ComposeEnter);
+        let note = &kept(&effects).expect("its note").1.note.as_ref().expect("a note").content;
+        assert_eq!(note.meeting.as_ref().map(|m| m.title.as_str()), Some(TITLE));
+        assert_eq!(m.tasks.list.last().map(|task| task.state), Some(State::Captured));
+    }
+
+    /// With nothing open the drawer's own empty box shows: ⌘⇧N makes it the quick note.
+    #[test]
+    fn the_empty_box_of_nothing_open_becomes_the_quick_note() {
+        let mut m = Model::default();
+        let features = Features::all().with(Feature::OverlayPanels, true);
+        m.update(Action::SetFeatures { features }.sent_by(Origin::System));
+        m.update(Action::OpenCompose { text: String::new() });
+        open(&mut m, 0);
+        assert!(m.quick_pills().is_some());
+    }
+
     /// No client opens it or takes off a pill; the flag off, ⌘⇧N does nothing.
     #[test]
     fn only_the_user_opens_it_or_takes_off_a_pill() {
         let mut m = model();
         for origin in [Origin::Socket, Origin::System] {
-            m.update(Action::QuickOpen { now: 600_000, word: WORD.into() }.sent_by(origin));
+            m.update(Action::QuickOpen { now: 600_000, word: WORD.into(), transcript: None }.sent_by(origin));
             assert!(m.compose.is_none(), "{origin:?}");
             assert_eq!(m.refusal(&Action::QuickPill { kind: PillKind::Front }, origin), Some(QUICK_USERS));
         }
         open(&mut m, 600_000);
         m.update(Action::QuickPill { kind: PillKind::Meeting }.sent_by(Origin::Socket));
         assert_eq!(m.quick_pills().map(<[Pill]>::len), Some(2));
+        // Nor types in it, files or closes it.
+        for theirs in [
+            Action::FieldEdit { edit: crate::edit::Edit::Insert("do X".into()) },
+            Action::ComposeSubmit { open: false },
+            Action::ComposeEnter,
+            Action::CloseCompose,
+            Action::OpenCompose { text: "x".into() },
+        ] {
+            assert!(m.refusal(&theirs, Origin::Socket).is_some(), "{theirs:?}");
+            m.update(theirs.sent_by(Origin::Socket));
+        }
+        assert!(m.quick_pills().is_some() && m.compose_line().is_some_and(String::is_empty));
         m.update(Action::ComposeEscape);
         let off = Features::all().with(Feature::OverlayPanels, false);
         m.update(Action::SetFeatures { features: off }.sent_by(Origin::System));
