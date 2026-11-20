@@ -44,35 +44,39 @@ impl Workspace {
         }
     }
 
-    /// The rows other than `id`'s whose middle is above `y`: the place it takes.
+    /// The place among the rows other than `id`'s for the pointer at `y`.
     fn row_place(&self, id: ottospace_core::workbook::WorkbookId, y: f32) -> usize {
         let middle = |row: u32| self.controls.bounds(&format!("workbook:{row}")).map(|b| f32::from(b.center().y));
         let rows = self.model.workbook_rows().into_iter().filter(|row| row.id != id);
-        rows.filter_map(|row| middle(row.id)).filter(|middle| *middle < y).count()
+        place_among(&rows.map(|row| middle(row.id)).collect::<Vec<_>>(), y)
     }
 
     /// The place on the top row of the space at `from`, drawn now at `drawn`, for the pointer at
     /// `x`: the others whose middle is left of it, as if it were not drawn, so none flickers as
-    /// they make room. Only those drawn count: a row short of room leaves some off.
+    /// they make room.
     fn space_place(&self, from: usize, drawn: usize, x: f32) -> usize {
         let width = self.controls.bounds(&format!("space:{from}")).map_or(0., |b| f32::from(b.size.width));
-        let others: Vec<usize> = (0..self.model.shown_spaces().len()).filter(|place| *place != from).collect();
-        for (at, place) in others.iter().enumerate() {
-            let Some(b) = self.controls.bounds(&format!("space:{place}")) else { continue };
+        let others = (0..self.model.shown_spaces().len()).filter(|place| *place != from);
+        let middle = |(at, place): (usize, usize)| {
             let shift = if at >= drawn { width } else { 0. };
-            if x < f32::from(b.center().x) - shift {
-                return at;
-            }
-        }
-        others.len()
+            self.controls.bounds(&format!("space:{place}")).map(|b| f32::from(b.center().x) - shift)
+        };
+        place_among(&others.enumerate().map(middle).collect::<Vec<_>>(), x)
     }
 
     /// Released over the list or the row: the item carried takes its place; one never carried
     /// (it moved less than `THRESHOLD`) was a click.
     pub(crate) fn reorder_released(&mut self, dragged: &DraggedItem, window: &Window, cx: &mut Context<Self>) {
-        self.reorder_from = None;
+        // Where it is let go counts: a drag of one move has no move after it began.
+        let at = window.mouse_position();
+        self.reorder_moved(&dragged.item, at, window, cx);
+        let near = self.reorder_from.take().is_some_and(|from| f64::from((at - from).magnitude()) < THRESHOLD);
         if self.model.reorder().is_some_and(|reorder| reorder.item == dragged.item) {
             self.dispatch(Action::ReorderDrop, self.input, window, cx);
+            return;
+        }
+        // A click only if it stayed put: a client's drag, refused, is no click either.
+        if !near {
             return;
         }
         match &dragged.item {
@@ -83,13 +87,34 @@ impl Workspace {
         }
     }
 
-    /// A release anywhere else, or Esc: the drag ends and nothing moves. True if one was carried.
-    pub(crate) fn reorder_cancel(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+    /// A release anywhere else, or Esc: the drag ends and nothing moves.
+    pub(crate) fn reorder_cancel(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.reorder_from = None;
-        if self.model.reorder().is_none() {
-            return false;
+        if self.model.reorder().is_some() {
+            self.dispatch(Action::ReorderCancel, self.input, window, cx);
         }
-        self.dispatch(Action::ReorderCancel, self.input, window, cx);
-        true
+    }
+}
+
+/// The place among others (each's middle, `None` if not drawn: scrolled out, or off a row short of
+/// room) for the pointer at `p`: before the first drawn one past it, else after the last drawn.
+/// e.g. [None, 10, 30, None], p 20 → 2; p 40 → 3.
+fn place_among(middles: &[Option<f32>], p: f32) -> usize {
+    let drawn = || middles.iter().enumerate().filter_map(|(at, middle)| Some((at, (*middle)?)));
+    match drawn().find(|(_, middle)| p < *middle) {
+        Some((at, _)) => at,
+        None => drawn().last().map_or(0, |(at, _)| at + 1),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::place_among;
+
+    #[test]
+    fn a_place_counts_what_is_not_drawn_where_it_lies() {
+        let middles = [None, Some(10.), Some(30.), None];
+        assert_eq!([0., 20., 40.].map(|p| place_among(&middles, p)), [1, 2, 3]);
+        assert_eq!(place_among(&[None, None], 5.), 0);
     }
 }

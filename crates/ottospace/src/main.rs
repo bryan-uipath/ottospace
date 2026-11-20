@@ -4667,7 +4667,9 @@ impl Workspace {
             return;
         }
         // Esc during a pane drag cancels it, and a `mouse` request's button is up again.
-        if key.key == "escape" && cx.has_active_drag() {
+        // Not a client's Esc over the user's reorder: only the user puts it back.
+        let users_reorder = self.model.reorder().is_some() && self.input != Origin::User;
+        if key.key == "escape" && cx.has_active_drag() && !users_reorder {
             self.reorder_cancel(window, cx);
             self.held = false;
             cx.stop_active_drag(window);
@@ -7214,9 +7216,7 @@ impl Workspace {
                     )
                     .on_drop(cx.listener(|this, dragged: &reorder::DraggedItem, window, cx| match dragged.item {
                         ReorderItem::Space { .. } => this.reorder_released(dragged, window, cx),
-                        ReorderItem::Workbook { .. } => {
-                            this.reorder_cancel(window, cx);
-                        }
+                        ReorderItem::Workbook { .. } => this.reorder_cancel(window, cx),
                     })),
             )
             .children(more)
@@ -8015,6 +8015,8 @@ impl Workspace {
                     this.bug_release(e.position, window, cx);
                 }),
             )
+            // Released outside the window: a reorder is put back too.
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, window, cx| this.reorder_cancel(window, cx)))
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {

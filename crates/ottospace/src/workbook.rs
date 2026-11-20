@@ -401,11 +401,16 @@ impl Workspace {
                 .relative()
                 .when(from.is_some_and(|from| from == place), |d| d.opacity(0.4))
                 .children(line)
-                .on_mouse_down(
-                    gpui::MouseButton::Left,
-                    cx.listener(|this, e: &gpui::MouseDownEvent, _, _| this.reorder_from = Some(e.position)),
-                )
-                .on_drag(dragged, move |_, offset, _, cx| cx.new(|_| crate::DragChip { label: chip.clone(), offset }))
+                // Not while its name is typed: a drag there selects text.
+                .when(!renaming, |d| {
+                    d.on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, e: &gpui::MouseDownEvent, _, _| this.reorder_from = Some(e.position)),
+                    )
+                    .on_drag(dragged, move |_, offset, _, cx| {
+                        cx.new(|_| crate::DragChip { label: chip.clone(), offset })
+                    })
+                })
                 .tooltip(tip(summary))
                 .on_hover(cx.listener(move |this, over: &bool, _, cx| this.row_hover(ListRow::Workbook(id), *over, cx)))
                 .children(fold)
@@ -480,9 +485,7 @@ impl Workspace {
         // Released over the list: the row carried lands; anything else is put back.
         let list = list.on_drop(cx.listener(|this, dragged: &DraggedItem, window, cx| match dragged.item {
             ReorderItem::Workbook { .. } => this.reorder_released(dragged, window, cx),
-            ReorderItem::Space { .. } => {
-                this.reorder_cancel(window, cx);
-            }
+            ReorderItem::Space { .. } => this.reorder_cancel(window, cx),
         }));
         let list = list.track_scroll(&self.list_scroll).children(empty).children(children);
         self.bars.tracked("workbooks", list, &self.list_scroll, theme::RAISED)

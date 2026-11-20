@@ -1501,6 +1501,9 @@ impl Model {
     pub(crate) fn restore_workbooks(&mut self, books: Vec<Workbook>) {
         let before = std::mem::take(&mut self.workbooks.list);
         self.workbooks.offer = None;
+        // Those with a place first: one with none (an older build's) is placed after them all.
+        let mut books = books;
+        books.sort_by_key(|book| book.order.is_none());
         for mut book in books {
             let known = self.workbooks.list.iter().any(|other| other.uid == book.uid);
             // A closing one stays as it is: only the user's Undo brings it back.

@@ -56,28 +56,28 @@ impl Model {
         self.reorder.as_ref()
     }
 
-    /// `item`'s place among the rows or spaces it moves in, and how many there are; and the least
-    /// place it may take (Home stays first). None: it is not there to move.
-    fn reorder_places(&self, item: &ReorderItem) -> Option<(usize, usize, usize)> {
+    /// How many places `item` moves among, and the least it may take (Home stays first). None:
+    /// it is not there to move.
+    fn reorder_places(&self, item: &ReorderItem) -> Option<(usize, usize)> {
         match item {
             ReorderItem::Workbook { id } => {
                 let listed: Vec<WorkbookId> = self.workbooks.listed().map(|book| book.id).collect();
-                Some((listed.iter().position(|book| book == id)?, listed.len(), 0))
+                listed.contains(id).then_some((listed.len(), 0))
             }
             // Only a workspace's: it goes among theirs, after Home and before every other.
             ReorderItem::Space { of } => {
                 let shown = self.shown_spaces();
                 let books = shown.iter().filter(|space| self.space_book(&space.of).is_some()).count();
                 // Its place among the shown is its place on the row (`settle_space_order`).
-                self.space_book(of)?;
-                Some((shown.iter().position(|space| space.of == *of)?, books + 1, 1))
+                let shown = self.space_book(of).is_some() && shown.iter().any(|space| space.of == *of);
+                shown.then_some((books + 1, 1))
             }
         }
     }
 
     /// The user carries `item` over place `to`: a drag starts, or goes on. Kept within the list.
     pub(crate) fn reorder_over(&mut self, item: ReorderItem, to: usize) {
-        self.reorder = self.reorder_places(&item).map(|(_, len, least)| Reorder { item, to: to.clamp(least, len - 1) });
+        self.reorder = self.reorder_places(&item).map(|(len, least)| Reorder { item, to: to.clamp(least, len - 1) });
     }
 
     /// The drop: the item carried takes its place. A workbook's makes the section's order the
@@ -248,6 +248,14 @@ mod tests {
         let mut again = Model::default();
         again.update(Action::RestoreWorkbooks { workbooks: read }.sent_by(Origin::System));
         assert_eq!(names(&again), ["Zoom", "Arima", "Slack", "Alpha"]);
+    }
+
+    #[test]
+    fn an_older_files_workspace_read_between_placed_ones_takes_none_of_their_places() {
+        let read = vec![file(UIDS[0], "A", Some(0)), file(UIDS[1], "Legacy", None), file(UIDS[2], "B", Some(1))];
+        let mut m = Model::default();
+        m.update(Action::RestoreWorkbooks { workbooks: read }.sent_by(Origin::System));
+        assert_eq!(names(&m), ["A", "B", "Legacy"]);
     }
 
     #[test]
