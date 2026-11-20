@@ -722,7 +722,7 @@ impl Terminal {
         let screen = self.screen();
         let rows = screen.rows.iter().enumerate();
         let spans = rows.flat_map(|(row, spans)| spans.iter().filter(|s| s.styled()).map(move |s| (row, s)));
-        let json = |(row, span)| {
+        let json = |(row, span): (usize, &Span)| {
             let mut value = serde_json::to_value(span).unwrap_or_default();
             value["row"] = row.into();
             value
@@ -732,7 +732,7 @@ impl Terminal {
 }
 
 /// `Terminal::screen`: the `rows` on show, styled, and the cursor.
-fn screen_of<T>(term: &Term<T>, rows: usize) -> Screen {
+fn screen_of<T: EventListener>(term: &Term<T>, rows: usize) -> Screen {
     let content = term.renderable_content();
     let mut lines: Vec<Vec<Span>> = (0..rows).map(|_| Vec::new()).collect();
     let offset = content.display_offset as i32;
@@ -1284,16 +1284,16 @@ mod tests {
     fn dim_strikethrough_and_underline_styles_are_drawn() {
         let fg = palette::FOREGROUND;
         let plain = |text: &str| (text.to_string(), fg, false, None);
-        let term = term(40, 2, "a\x1b[2mdim\x1b[0m\x1b[9mx\x1b[0m\x1b[4:3;58:2::255:0:0mc\x1b[4:2;59md\x1b[0m.");
+        let styled = term(40, 2, "a\x1b[2mdim\x1b[0m\x1b[9mx\x1b[0m\x1b[4:3;58:2::255:0:0mc\x1b[4:2;59md\x1b[0m.");
         assert_eq!(
-            spans(&term),
+            spans(&styled),
             [
                 plain("a"),
                 ("dim".into(), palette::dim(fg, palette::BACKGROUND), false, None),
                 ("x".into(), fg, true, None),
                 ("c".into(), fg, false, Some(Underline { curly: true, color: Some(0xff0000) })),
                 ("d".into(), fg, false, Some(Underline { curly: false, color: None })),
-                plain(".                                   "),
+                plain(&format!(".{}", " ".repeat(32))), // the rest of the 40 columns
             ]
         );
         // Dim reversed text dims toward its new background.
