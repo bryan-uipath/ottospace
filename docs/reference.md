@@ -979,7 +979,7 @@ the way.
 - **At the start**, if you are in no call, or still in an earlier one (on from 10 minutes before,
   or the meeting before, running over): a meeting notice on a [toast](#toasts) at the
   window's bottom right (◷, indigo: `Meeting:` the title and how long ago it started, **Join** if the meeting
-  has an `https:` link, × to dismiss; over a warning or information, under an error's card), which stays until
+  has an `https:` link, × to dismiss; it outranks a warning or information, not an error), which stays until
   you dismiss it, join, a call starts or the meeting ends; and a system notification with the
   alert sound, so you see it when ottospace is behind other windows. Once more 2 minutes later
   if you have not joined; never a third time. Only in a meeting's first 10 minutes: one you
@@ -1038,7 +1038,7 @@ the way.
   and `Today` on another day, from 7 days back to 7 on; its date's tooltip says when the feed was
   read. The section goes back to today when the day turns and at start; the band, the alerts and
   now's tick are always of today. The rail cell shows a steady amber dot while a meeting is 2
-  minutes off or runs, and a filled amber badge while its notice stands (also under an error's card). In list mode (⌘⌃E,
+  minutes off or runs, and a filled amber badge while its notice stands (also while an error outranks it). In list mode (⌘⌃E,
   which starts on the meeting that runs, else the next, else the day's last)
   `j`/`k` (↓/↑) go from meeting to meeting by start, the block scrolled into view, ↵ joins, ← and → go a day back and on, `t` back to today; the View menu and the
   palette have the same (`Previous Day in Calendar`, `Next Day in Calendar`, `Today in
@@ -1252,7 +1252,7 @@ click between two cards goes to the app.
 
 - **Level**: red for an error, amber for a warning (a move that did nothing, a retired setting, a
   global key not registered), blue for information, and amber on indigo for a meeting that started
-  (`meeting`: over a warning, under an error). A glyph says the level too: `!` in a circle, `▲`,
+  (`meeting`: it outranks a warning, not an error). A glyph says the level too: `!` in a circle, `▲`,
   `ⓘ`, `◷`. The state says a meeting's notice as `Meeting started`, never its title.
 - **Stacked**: at most three cards, the most pressing nearest the status bar, and of one level the
   newest; the others stack upward, then `+N more`. An error is not pushed up by information; when

@@ -79,8 +79,8 @@ fn card(card: Card) -> Div {
         .relative()
         .occlude()
         .w_full()
-        // Open, its glyph and buttons stay at the top, where they are at rest.
-        .map(|this| if card.open { this.min_h(height).items_start().py(px(OPEN_PAD)) } else { this.h(height) })
+        // Open, it grows upward: its glyph and buttons stay at the foot, where they are at rest.
+        .map(|this| if card.open { this.min_h(height).items_end().py(px(OPEN_PAD)) } else { this.h(height) })
         .child(pointed(card.on_hover))
         .rounded_md()
         .border_1()
@@ -186,8 +186,8 @@ pub(crate) fn stack(
 
 /// One card in a floating panel of its own, as wide as the panel and as tall as the card takes.
 pub(crate) fn piece(of: Card) -> Div {
-    // A column, its card not shrunk: taller than the panel until the panel follows.
-    div().size_full().flex().flex_col().child(card(of).flex_none())
+    // A column, its card not shrunk and at the foot: taller than the panel, upward, until the panel follows.
+    div().size_full().flex().flex_col().justify_end().child(card(of).flex_none())
 }
 
 /// "+N more" in a floating panel of its own, `mark` noting where.

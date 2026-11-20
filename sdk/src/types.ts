@@ -1648,7 +1648,7 @@ export interface Snapshot {
   font: { name: string; size: number };
   /** One character cell: `[w, h]` in points. */
   cell: [number, number];
-  /** What the last step said (why a request did nothing), else what the toast's top card says to the user. Not an error of this request. A client's refusal is here alone, never on the toast. */
+  /** What the last step said (why a request did nothing), else what the toast's first card (`cards[0]`, nearest the status bar) says to the user. Not an error of this request. A client's refusal is here alone, never on the toast. */
   notice: string | null;
   /** The level of `notice`, the reply's line: its card's colour when the toast shows it. */
   notice_level: NoticeLevel | null;

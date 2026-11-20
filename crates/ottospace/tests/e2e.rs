@@ -404,15 +404,16 @@ fn top_card(state: &Value) -> &Value {
     &state["toast"]["cards"][0]
 }
 
-/// The toast lies in the window's bottom right, over the panes, its foot over the status bar (and
-/// so over its `needs you`): with the drawer open, at its left.
+/// The toast lies in the window's bottom right, over the panes, its foot a gap over the status bar
+/// (24 points; and so over its `needs you`), or over the timeline's band (12 more) while it shows.
 fn in_bottom_right(state: &Value) {
     let (toast, window) = (rect(&state["toast"]["rect"]), rect(&state["window"]));
     let status = rect(&state["status_bar"]["agents"]["rect"]);
-    let fits = toast[0] + toast[2] > window[2] / 2.
+    let foot = toast[1] + toast[3];
+    let fits = toast[0] > 0.
         && toast[0] + toast[2] <= window[2]
-        && toast[1] > window[3] / 2.
-        && toast[1] + toast[3] <= status[1];
+        && foot <= status[1]
+        && foot >= window[3] - 24. - 12. - 8. - 2.;
     assert!(fits, "the toast {toast:?} in the window {window:?}, over the status bar's {status:?}");
 }
 
@@ -13520,7 +13521,8 @@ fn a_click_between_two_cards_reaches_the_pane_under_the_toast() {
 }
 
 /// The toast keeps clear of the sidebar and the drawer: over the panes as `overlay_panels` floats
-/// them, and beside the drawer that takes room with the flag off. No pane moves for it.
+/// them (in a window narrow enough that the sidebar narrows the card), and beside the drawer that
+/// takes room with the flag off. No pane moves for it.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_toast_keeps_clear_of_the_sidebar_and_the_drawer() {
@@ -13530,7 +13532,7 @@ fn the_toast_keeps_clear_of_the_sidebar_and_the_drawer() {
             Some(o.drawn()).filter(|s| s["toast"]["shown"] == 1.0 && top_card(s)["rect"].is_array())
         })
     };
-    let otto = Otto::launch_with("toast-overlays", &OVERLAYS);
+    let otto = Otto::launch_with("toast-overlays", &[OVERLAYS[0], OVERLAYS[1], ("OTTOSPACE_E2E_WINDOW", "700x674")]);
     let before = overlay_panes(&otto);
     otto.call(json!({"cmd": "repo_add", "path": long_path()}));
     let alone = toast(&otto);
@@ -13540,6 +13542,7 @@ fn the_toast_keeps_clear_of_the_sidebar_and_the_drawer() {
     let open = toast(&otto);
     let bar = rect(&open["overlays"]["sidebar"]);
     assert!(card(&open)[0] >= bar[0] + bar[2], "the card {:?} over the sidebar {bar:?}", card(&open));
+    assert!(card(&open)[2] < card(&alone)[2], "the sidebar narrowed no card: {:?}", card(&open));
     otto.user_key("escape");
     // The drawer over the panes: the card at its left.
     otto.user_key("cmd-n");
@@ -13587,6 +13590,9 @@ fn a_long_card_pointed_at_shows_its_whole_text_inside_the_window() {
     assert!(within(tall, stack), "the card {tall:?} is cut by its stack {stack:?}");
     assert!(within(tall, [0., 0., window[2], window[3]]), "the card {tall:?} leaves the window {window:?}");
     assert!(within(rect(&top_card(&open)["close"]), tall), "its × stays in it");
+    // Its × where it was at rest: a click aimed at it still takes it.
+    let was = at(rect(&top_card(&rest)["close"]), 0.5, 0.5);
+    assert!(within([was[0], was[1], 0., 0.], rect(&top_card(&open)["close"])), "its × left {was:?}");
     assert_eq!(open["frames"], frames, "no pane moved");
     // Off the card: one line again.
     otto.mouse("move", [card[0] - 40., card[1] - 200.]);

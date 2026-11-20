@@ -32,7 +32,7 @@ pub(crate) struct Toast {
     last: (Vec<Notice>, usize),
     /// Frames asked for because it moves (the state's `counts.toast_frames`, test runs).
     pub(crate) frames: u64,
-    /// Where the window last placed it: `[top, right, room]` (`toast::places`).
+    /// Where the window last placed it: `[bottom, right, room]` (`toast::places`).
     at: Cell<Option<[f32; 3]>>,
     /// The card the pointer is over: it shows its whole text.
     hover: Option<Notice>,
@@ -345,7 +345,7 @@ impl Workspace {
         Some(toast::stack(at, cards, more, self.toast.shown, mark(&self.marks, Mark::Toast)))
     }
 
-    /// The content of floating panel `at`: its card, or "+N more" under the last, at rest.
+    /// The content of floating panel `at`: its card, or "+N more" over the last, at rest.
     fn draw_toast_panel(&mut self, at: usize, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let marks = self.toast_panels[at].marks.clone();
         marks.borrow_mut().clear();
