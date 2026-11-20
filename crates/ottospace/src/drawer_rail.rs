@@ -35,15 +35,19 @@ impl Workspace {
     /// transcript, the new-task box, the conversation or a brief. Nothing: the drawer is collapsed,
     /// the rail alone. With the width drawn, and the body to draw over the panes as an overlay.
     pub(crate) fn render_right(&self, width: f32, cx: &mut Context<Self>) -> (AnyElement, f32, Option<AnyElement>) {
-        let inner = (width - WIDTH).max(0.);
-        let body = self.render_inspector(inner, cx).or_else(|| self.render_draft(cx));
-        let body = body.or_else(|| self.render_listen_view(inner, cx)).or_else(|| self.render_drawer(inner, cx));
+        let body = self.drawer_body((width - WIDTH).max(0.), cx);
         // An overlay (`overlay_panels`): the rail alone in its place, the body drawn over the panes.
         if self.model.overlays() {
             return (div().flex_none().h_full().flex().child(self.drawer_rail(cx)).into_any_element(), WIDTH, body);
         }
         let drawn = if body.is_some() { width } else { WIDTH };
         (div().flex_none().h_full().flex().children(body).child(self.drawer_rail(cx)).into_any_element(), drawn, None)
+    }
+
+    /// What the core says is in the drawer's place, `inner` wide: none while it is collapsed.
+    pub(crate) fn drawer_body(&self, inner: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let body = self.render_inspector(inner, cx).or_else(|| self.render_draft(cx));
+        body.or_else(|| self.render_listen_view(inner, cx)).or_else(|| self.render_drawer(inner, cx))
     }
 
     /// The column: the tasks and + scroll; at the foot a divider, then the transcript, always in view.

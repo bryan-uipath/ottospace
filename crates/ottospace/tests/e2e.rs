@@ -7965,6 +7965,100 @@ fn overlay_panels_a_socket_client_cannot_open_or_dismiss_them() {
     assert_eq!(otto.drawn()["state"]["sidebar"], "repos");
 }
 
+/// The owner: "a nice animation out but not a nice animation back in". Closed, each overlay plays its
+/// slide backwards into its rail, drawn only: a click there lands on the pane under it, a toggle
+/// turns it from where it is, and no frame is asked for once it is in. None under Reduce Motion.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn overlay_panels_slide_back_into_their_rails_taking_no_click() {
+    let otto = Otto::launch_with("overlay-close", &[OVERLAYS[0]]);
+    let before = overlay_panes(&otto);
+    let panes = pane_ids(&before);
+    let width = rect(&before["window"])[2];
+    let (first, second) =
+        (rect(&before["bounds"][panes[0].to_string()]), rect(&before["bounds"][panes[1].to_string()]));
+    // Each overlay's x as drawn, null once in its rail.
+    let drawn_x =
+        |state: &Value, side: &str| state["overlays"][side].as_array().map(|_| rect(&state["overlays"][side])[0]);
+    // Until it is in its rail: every x on the way is as far out as the last, or further.
+    let slides_in = |side: &str, out: fn(f64, f64) -> bool| {
+        let last = std::cell::Cell::new(drawn_x(&otto.drawn(), side));
+        otto.wait_for(&format!("the {side} back in its rail"), |otto| {
+            let now = drawn_x(&otto.drawn(), side);
+            if let (Some(was), Some(x)) = (last.get(), now) {
+                assert!(out(was, x) || was == x, "the {side} went back out of its rail: {was} then {x}");
+            }
+            last.set(now);
+            now.is_none().then_some(())
+        });
+    };
+    let at_rest = |side: &str, x: f64| {
+        otto.wait_for(&format!("the {side} at rest"), |otto| {
+            let drawn = otto.drawn();
+            drawn_x(&drawn, side).filter(|got| (got - x).abs() <= 1.).map(|_| drawn)
+        })
+    };
+    otto.user_click(at(second, 0.5, 0.5));
+    otto.user_key("cmd-shift-l");
+    at_rest("sidebar", 56.);
+    // ⌘⇧L: closed at once, still drawn where it was; a click on the pane under it focuses that pane.
+    let closed = otto.user_key("cmd-shift-l");
+    assert!(closed["state"]["sidebar"].is_null());
+    assert!(drawn_x(&closed, "sidebar").is_some(), "drawn as it slides back: {}", closed["overlays"]);
+    let under = [first[0].max(56.) + 10., first[1] + first[3] / 2.];
+    // The press's own reply: drawn as it lands, not after the release.
+    let press = |action: &str| json!({"cmd": "mouse", "action": action, "x": under[0], "y": under[1], "as": "user"});
+    let clicked = otto.call(press("down"));
+    otto.call(press("up"));
+    assert_eq!((&clicked["state"]["focused"], &clicked["state"]["sidebar"]), (&json!(panes[0]), &Value::Null));
+    assert!(
+        drawn_x(&clicked, "sidebar").is_some_and(|x| x + 260. > under[0]),
+        "the click was under it: {}",
+        clicked["overlays"]
+    );
+    slides_in("sidebar", |was, x| x < was);
+    // At rest: no frame asked for.
+    let frames = otto.drawn()["counts"]["overlay_frames"].clone();
+    assert!(frames.as_u64().is_some_and(|n| n > 0), "it slid: {frames}");
+    assert_eq!(otto.drawn()["counts"]["overlay_frames"], frames, "a frame asked for at rest");
+    // A toggle while it slides back turns it from where it is, not from out of sight.
+    otto.user_key("cmd-shift-l");
+    at_rest("sidebar", 56.);
+    otto.user_key("cmd-shift-l");
+    let again = otto.user_key("cmd-shift-l");
+    assert_eq!(again["state"]["sidebar"], "repos");
+    assert!(drawn_x(&again, "sidebar").is_some_and(|x| x > 56. - 130.), "from where it was: {}", again["overlays"]);
+    at_rest("sidebar", 56.);
+    otto.user_key("escape");
+    slides_in("sidebar", |was, x| x < was);
+
+    // The drawer's conversation, folded by ⌘⇧R: it slides back right, into its rail, showing it.
+    otto.call(json!({"cmd": "task_add", "title": "a conversation to fold"}));
+    otto.user_click(at(otto.control("rail:tasks"), 0.5, 0.5));
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    slides_in("sidebar", |was, x| x < was);
+    let open = otto.wait_for("the conversation at rest", |otto| {
+        let drawn = otto.drawn();
+        let r = drawn["overlays"]["drawer"].as_array().map(|_| rect(&drawn["overlays"]["drawer"]))?;
+        ((r[0] + r[2] - (width - 48.)).abs() <= 1.).then_some(r)
+    });
+    let folded = otto.user_key("cmd-shift-r");
+    assert_eq!(folded["drawer"]["collapsed"], true);
+    assert!(
+        drawn_x(&folded, "drawer").is_some_and(|x| x >= open[0]),
+        "drawn as it slides back: {}",
+        folded["overlays"]
+    );
+    slides_in("drawer", |was, x| x > was);
+
+    // Reduce Motion: closed, gone at once, and no frame asked for.
+    let calm = Otto::launch_with("overlay-close-calm", &OVERLAYS);
+    overlay_panes(&calm);
+    calm.user_key("cmd-shift-l");
+    let closed = calm.user_key("cmd-shift-l");
+    assert_eq!((&closed["overlays"]["sidebar"], &closed["counts"]["overlay_frames"]), (&Value::Null, &json!(0)));
+}
+
 /// The owner: the Tasks cell's needs-you mark showed only while Tasks was open. Now a dot at its
 /// icon's corner, whichever section is open, or none.
 #[test]

@@ -1441,7 +1441,10 @@ then does nothing (a toast says so). A preference is a normal setting.
     refused ("only the user opens or dismisses a side overlay").
   - An app you are in: its window is above ottospace and may cover part of an open overlay. The
     part that shows takes clicks; opening the sidebar takes the keyboard back and parks the app.
-  - The state's `overlays` gives each one's rect (`sidebar`, `drawer`), null while closed.
+  - Each slides out of its rail and, closed, back into it (none under Reduce Motion). Sliding back
+    it takes no click: one there goes to the pane under it.
+  - The state's `overlays` gives each one's rect (`sidebar`, `drawer`), also while it slides back;
+    null once closed.
 - `decisions` off: ⌘J is the next task only, no Decisions command or menu item, and one open
   closes. On, see [Decisions](#decisions) (design: [attention/decisions.md](ai/attention/decisions.md)).
 - `code_city` off: an empty tab of a task draws the lattice, and no file list is read. On, see

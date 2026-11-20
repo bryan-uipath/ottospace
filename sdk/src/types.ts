@@ -1646,7 +1646,7 @@ export interface Snapshot {
   /** The left column's title strip, and the open section's header (null: none open). */
   strip: Rect | null;
   bar_header: Rect | null;
-  /** The side overlays as drawn (`overlay_panels`): the sidebar's and the drawer's place over the panes; null while closed or with the flag off. */
+  /** The side overlays as drawn (`overlay_panels`): the sidebar's and the drawer's place over the panes, also while a closed one slides back; null once in, or with the flag off. */
   overlays: { sidebar: Rect | null; drawer: Rect | null };
   /** The Tasks rail cell's needs-you dot, whichever section is open (null: no task needs you). */
   tasks_dot: Rect | null;
