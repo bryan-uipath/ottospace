@@ -641,6 +641,7 @@ impl Gen<'_> {
             } else {
                 Default::default()
             },
+            note: self.rng.one_in(4).then(|| self.rng.pick(&["1-k3f9a2c41b7d", "2-w0rdw0rdw0rd", "../x"]).into()),
             materials: self.names(
                 &[
                     "1-k3f9a2c41b7d/1.json",
@@ -1183,6 +1184,16 @@ const MAKERS: &[Make] = &[
     |g| Action::SelectVisibleTab { index: g.index(g.m.tabs.len()) },
     |g| Action::Tick { now: g.time() },
     |g| Action::OpenCompose { text: g.line() },
+    // The shell's word is plain; a bad one keeps no note.
+    |g| Action::QuickOpen {
+        now: g.time(),
+        word: g.rng.pick(&["k3f9a2c41b7d", "w0rdw0rdw0rd", "../x"]).into(),
+        transcript: g.rng.coin().then(|| "/t/today.md".into()),
+    },
+    |g| {
+        use crate::model::quick::PillKind;
+        Action::QuickPill { kind: g.rng.pick(&[PillKind::Meeting, PillKind::Transcript, PillKind::Front]) }
+    },
     |_| Action::ComposeComplete,
     |g| Action::ComposeSubmit { open: g.rng.coin() },
     |_| Action::CloseCompose,
@@ -5173,6 +5184,23 @@ impl Run {
                     );
                     self.shell.kept.retain(|kept| !goes(kept));
                 }
+                // A quick note of the user's: the task's own folder, and nothing of a meeting in the state.
+                Effect::NoteKept { dir, brief } => {
+                    let task = m.tasks.get(brief.task).ok_or("a note for a task that is gone")?;
+                    ensure!(origin == Origin::User, "a client's {action:?} kept a note");
+                    ensure!(
+                        task.note.as_ref() == Some(dir) && task.materials_dir() == Some(dir),
+                        "task {} keeps its note in {dir:?}",
+                        task.id
+                    );
+                    let title =
+                        brief.note.as_ref().and_then(|note| note.content.meeting.as_ref()).map(|m| m.title.as_str());
+                    let state = serde_json::to_string(m).unwrap_or_default();
+                    ensure!(
+                        title.is_none_or(|title| title.is_empty() || !state.contains(&format!("\"{title}\""))),
+                        "a meeting's title in the state"
+                    );
+                }
                 Effect::CaptureKept { draft, dir, brief } => {
                     let task = m.tasks.get(brief.task).ok_or("a brief for a task that is gone")?;
                     let mut numbers: Vec<u32> = brief.materials.iter().map(|kept| kept.n).collect();
@@ -6216,6 +6244,72 @@ fn random_actions_keep_the_model_sound_for_long() {
 
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
+
+/// ⌘⇧N over the palette opened the quick box under it: it waits, as ⌘N's box does.
+#[test]
+fn seed_50_the_quick_box_waits_for_the_palette() {
+    replay(&[
+        set_features(&["marks", "transcripts", "multi_monitor", "overlay_panels", "decisions", "code_city"])
+            .sent_by(Origin::System),
+        Action::PaletteFeatures.into(),
+        Action::QuickOpen { now: u64::MAX, word: "w0rdw0rdw0rd".into(), transcript: None }.into(),
+    ])
+    .unwrap();
+}
+
+/// ⌘⇧N in visual mode opened the box under it: it waits, as ⌘N's box does.
+#[test]
+fn seed_249_the_quick_box_waits_for_visual_mode() {
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        set_features(&["transcripts", "agent_mode", "overlay_panels", "decisions"]).sent_by(Origin::System),
+        Action::ToggleVisual.into(),
+        Action::QuickOpen { now: u64::MAX, word: "w0rdw0rdw0rd".into(), transcript: Some("/t/today.md".into()) }.into(),
+    ])
+    .unwrap();
+}
+
+/// Decisions' tab folded out to another display, the user's Start agent on its card's task: it
+/// moved the main window off its tab.
+#[test]
+fn seed_123_start_agent_from_a_tab_out_keeps_the_main_windows_tab() {
+    let empty = || Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] };
+    let add = |title: &str, priority| {
+        Action::TaskAdd { title: title.into(), priority, state: State::Triaged, tab: None, assign: empty() }.into()
+    };
+    let display =
+        |uid: &str, x| Display { uid: uid.into(), frame: Frame { x, y: 0.0, w: 1728.0, h: 1117.0 }, scale: 2.0 };
+    let asked = Said::Permission {
+        ticket: 1,
+        tool: "AskUserQuestion".into(),
+        label: "AskUserQuestion".into(),
+        detail: Text::new(""),
+        len: 0,
+        cut: false,
+        claim: Text::new(""),
+        questions: vec![crate::ask::tests::question(2, false)],
+    };
+    replay(&[
+        add("a", 2),
+        add("b", 1),
+        Action::TaskTalk { id: 2 }.into(),
+        Action::TalkStart.into(),
+        Action::AgentStarted { task: Subject::Task(2), session: None, at: 1 }.sent_by(Origin::System),
+        Action::AgentEvents { task: Subject::Task(2), events: vec![Said::TurnStarted, asked], at: 5 }
+            .sent_by(Origin::System),
+        Action::DecisionsOpen.into(),
+        Action::WorkbookNew { uid: "00000000000000a2".into() }.into(),
+        Action::SetDisplays {
+            displays: vec![display("d1", 0.0), display("d2", 1728.0), display("d3", -1920.0)],
+            main: Some("d1".into()),
+        }
+        .sent_by(Origin::System),
+        Action::TabOut { tab: None }.into(),
+        Action::Focus { pane: 1 }.sent_by(Origin::System),
+        Action::TalkStart.into(),
+    ])
+    .unwrap();
+}
 
 /// A done task restored with its own worktree removed, its record from disk: opening it again
 /// (its card) added it back on a branch git refuses. A record is checked before it is added back.

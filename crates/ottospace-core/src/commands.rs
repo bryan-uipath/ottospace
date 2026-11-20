@@ -69,6 +69,7 @@ macro_rules! commands {
                     (Command::Transcribe | Command::PauseTranscript, _) => Some(Feature::Transcripts),
                     (Command::FoldTab, _) => Some(Feature::MultiMonitor),
                     (Command::Decisions, _) => Some(Feature::Decisions),
+                    (Command::QuickNote, _) => Some(Feature::OverlayPanels),
                     (Command::AgentMenu | Command::AgentOff | Command::AgentSee | Command::AgentAct, _) => {
                         Some(Feature::AgentMode)
                     }
@@ -107,6 +108,7 @@ commands! {
     CloseTab: "Close Tab", Tabs;
     FoldTab: "Fold Tab Out or In", Tabs;
     NewTask: "New Task", Tasks;
+    QuickNote: "Quick Note", Tasks;
     // After New Task: a query of a name ranks a later tie lower.
     MoveTabToTask: "Move Tab to…", Tabs;
     NextNeedsYou: "Next Task", Tasks;

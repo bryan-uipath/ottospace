@@ -92,6 +92,7 @@
 {"cmd":"displays_set","displays":[{"uid":"a","frame":[0,0,1728,1117]},{"uid":"b","frame":[1728,0,1920,1080],"scale":1}],"main":"a"}
 {"cmd":"calendar","day":"tomorrow","days":2}
 {"cmd":"calendar","day":"yesterday"}
+{"cmd":"note","task":7}
 {"cmd":"marks"}
 {"cmd":"mark_add","pane":1,"name":"notes","key":"n"}
 {"cmd":"mark_go","name":"notes","axis":"down"}

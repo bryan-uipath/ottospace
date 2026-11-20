@@ -270,6 +270,8 @@ struct KeptDraft {
     refs: Vec<Ref>,
     folder: Option<Taken>,
     theirs: bool,
+    /// It was the quick note box: its pills come back with it.
+    quick: Option<quick::Quick>,
 }
 
 /// A folder the user took from a path's dropdown.
@@ -1000,6 +1002,18 @@ pub enum Action {
     /// Open the new-task box, with `text` already in it (an agent's draft for the user to edit).
     OpenCompose {
         text: String,
+    },
+    /// ⌘⇧N: the quick note box (`overlay_panels`), its pills what is there at `now`; `word` names
+    /// its note's folder (made up by the shell). Only the user's.
+    QuickOpen {
+        now: u64,
+        word: String,
+        /// The file of the transcript being written, if one is.
+        transcript: Option<String>,
+    },
+    /// × on a pill of the quick box: that context is not attached. Only the user's.
+    QuickPill {
+        kind: quick::PillKind,
     },
     /// One edit to the text field that has the keyboard: the picker's filter, else the
     /// new-task box.
@@ -2321,6 +2335,7 @@ impl Action {
             | Action::PaletteFeatures
             | Action::InspectorFilter { on: true }
             | Action::OpenCompose { .. }
+            | Action::QuickOpen { .. }
             | Action::ToggleKeys
             | Action::ToggleVisual
             | Action::ToggleAxOverlay
@@ -2555,7 +2570,8 @@ impl Action {
             | Action::RowMenuChoose { .. }
             | Action::RowMenuClose
             | Action::WorkbookUndo
-            | Action::WorkbookReopen { .. } => false,
+            | Action::WorkbookReopen { .. }
+            | Action::QuickPill { .. } => false,
             | Action::SetAgents { .. }
             | Action::ComposeEnter
             | Action::AgentStarted { .. }
@@ -2699,7 +2715,7 @@ impl Action {
             | Action::AppsToggle { .. }
             | Action::AppsFilter { .. } => Some(Feature::AppsSection),
             Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => Some(Feature::MultiMonitor),
-            Action::OverlayDismiss => Some(Feature::OverlayPanels),
+            Action::OverlayDismiss | Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(Feature::OverlayPanels),
             Action::DecisionsOpen
             | Action::DecisionsAsk { .. }
             | Action::DecisionsSkip { .. }
@@ -3389,6 +3405,12 @@ pub enum Effect {
         dir: String,
         brief: Box<capture::Brief>,
     },
+    /// A quick note became task `brief.task`: its brief, with what its pills pointed at, goes in
+    /// `dir`, a new folder in the materials folder. The shell names the transcript's file.
+    NoteKept {
+        dir: String,
+        brief: Box<capture::Brief>,
+    },
     /// Bug report `word` went: its picture is dropped.
     BugDropped {
         word: String,
@@ -3531,6 +3553,7 @@ pub mod finish;
 pub mod offers;
 pub mod overlay;
 mod pick;
+pub mod quick;
 pub mod quit;
 pub mod reorder;
 pub mod repo_dots;
@@ -3699,6 +3722,9 @@ pub struct Model {
     /// The user's ⌘N opened the box over the panes, centred (`overlay_panels`): see `compose_centred`.
     #[serde(skip)]
     compose_centred: bool,
+    /// The quick note box (⌘⇧N): the box is it while this is set. Never in the state.
+    #[serde(skip)]
+    pub(crate) quick: Option<quick::Quick>,
     #[serde(skip)]
     terminals: Vec<TerminalInfo>,
     #[serde(skip)]
@@ -3996,6 +4022,7 @@ impl Default for Model {
             compose_to: None,
             compose_talked: false,
             compose_centred: false,
+            quick: None,
             terminals: Vec::new(),
             home: None,
             // Done is at the bottom, folded: what is finished is counted, not listed.
@@ -4486,6 +4513,9 @@ impl Model {
             // Done, Later and its Undo are the user's; so is the answer to "Stop it and put it away?".
             Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
             Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
+            Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
+            // Nor types in, files or closes the user's quick note: its pills are the user's to keep.
+            action if self.quick.is_some() && self.drafts(action) => Some(quick::QUICK_USERS),
             Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
             Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
             // A removed directory cannot be brought back: only the user asks, and answers.
@@ -4733,7 +4763,12 @@ impl Model {
         let boxed = self.picker.is_some() || modal || self.palette.is_some();
         // The draft's title or a picture taking the keyboard is the box opening, in the bar.
         let opens = matches!(action, Action::OpenCompose { .. } | Action::CaptureTitle | Action::CaptureEdit { .. });
-        let over_other = ((modal || self.palette.is_some()) && picker) || (boxed && opens);
+        // ⌘⇧N opens the box as ⌘N does; over an open one it makes an empty one the note
+        // (`quick_open`), but not under the palette or the picker.
+        let quick = matches!(action, Action::QuickOpen { .. });
+        let opens = opens || (quick && self.compose.is_none());
+        let under = quick && (self.picker.is_some() || self.palette.is_some());
+        let over_other = ((modal || self.palette.is_some()) && picker) || (boxed && opens) || under;
         // A conversation the user opens takes the drawer from the new task being written.
         let talks = matches!(action, Action::TaskTalk { .. } | Action::TaskCard { .. } | Action::SessionOpen { .. })
             && self.picker.is_none();
@@ -5026,7 +5061,8 @@ impl Model {
         // the user is doing. Not a refusal: the task is filed all the same.
         // ↵ with no row to take is "add and start".
         let action = match action {
-            Action::ComposeEnter if self.enter() == Enter::Add => Action::ComposeSubmit { open: true },
+            // In the quick box ↵ files a note: nothing starts.
+            Action::ComposeEnter if self.enter() == Enter::Add => Action::ComposeSubmit { open: self.quick.is_none() },
             action => action,
         };
         let action = match action {
@@ -5067,6 +5103,7 @@ impl Model {
                     | Action::PaletteTasks
                     | Action::PaletteFeatures
                     | Action::OpenCompose { .. }
+                    | Action::QuickOpen { .. }
                     | Action::ToggleKeys
                     | Action::ToggleVisual
                     | Action::ToggleAxOverlay
@@ -5717,28 +5754,10 @@ impl Model {
             Action::OpenCompose { .. } if self.by_user && self.compose_elsewhere() => self.compose_here(),
             Action::ComposeHere if self.compose_elsewhere() => self.compose_here(),
             Action::ComposeHere => {}
-            Action::OpenCompose { text } => {
-                if self.compose.is_none() {
-                    self.compose_to = Some((self.tabs[self.active].id, self.space().clone()));
-                    // Opened from the conversation's keys: Esc gives them back (`keys_back`).
-                    self.compose_talked = self.talk.as_ref().is_some_and(|talk| talk.open && talk.keys);
-                }
-                self.leave(effects);
-                self.compose = Some(Field::new(&text, MAX_TITLE));
-                // Paths read for another line say nothing of this one.
-                (self.known.paths, self.known.entries, self.known_line) = (Vec::new(), Vec::new(), None);
-                (self.known_typing, self.known_place) = (None, None);
-                self.compose_reset();
-                // An empty box takes back the line a conversation put aside, with what it pointed at.
-                if text.is_empty()
-                    && let Some(kept) = self.compose_kept.take()
-                {
-                    (self.compose, self.compose_refs, self.compose_folder) = (Some(kept.line), kept.refs, kept.folder);
-                    self.compose_theirs = kept.theirs;
-                }
-                // The user's box floats centred over the panes; with nothing open it stays the drawer's.
-                self.compose_centred = self.by_user && self.overlays() && !self.welcome();
-            }
+            Action::OpenCompose { text } => self.open_box(text, true, effects),
+            Action::QuickOpen { now, word, transcript } => self.quick_open(now, word, transcript, effects),
+            Action::QuickPill { kind } => self.quick_pill_off(kind),
+            Action::ComposeSubmit { open } if self.quick.is_some() => self.quick_submit(open, effects),
             // Not under the key reference or the quit question: the field is hidden there.
             Action::FieldEdit { .. } if self.field().is_none() => {}
             // To the field that has the keyboard: more than one can be open (the draft's title in
@@ -7396,9 +7415,10 @@ impl Model {
         if self.compose_host() == Some(Host::Drawer) {
             self.put_compose_aside();
         }
-        // The Decisions card's conversation is talked over where it is: Decisions stays on show.
+        // The Decisions card's conversation is talked over where it is: Decisions stays on show,
+        // the keyboard in a tab out's window too.
         let card =
-            *self.space() == Owner::Decisions && self.space_subject(&Owner::Decisions).as_ref() == Some(&subject);
+            *self.shown_space() == Owner::Decisions && self.space_subject(&Owner::Decisions).as_ref() == Some(&subject);
         if !card {
             self.open_space(self.subject_space(&subject), effects);
         }
@@ -7471,11 +7491,12 @@ impl Model {
     /// Closes the new-task box, its line kept for the box's next opening (`OpenCompose` empty).
     fn put_compose_aside(&mut self) {
         let line = self.compose.take().filter(|line| !line.text().is_empty());
-        let (refs, folder) = (std::mem::take(&mut self.compose_refs), self.compose_folder.take());
+        let (refs, folder, quick) =
+            (std::mem::take(&mut self.compose_refs), self.compose_folder.take(), self.quick.take());
         // An empty line takes no kept line's place, nor a client's line the user's.
         let users = self.compose_kept.as_ref().is_some_and(|kept| !kept.theirs);
         if let Some(line) = line.filter(|_| !(users && self.compose_theirs)) {
-            self.compose_kept = Some(KeptDraft { line, refs, folder, theirs: self.compose_theirs });
+            self.compose_kept = Some(KeptDraft { line, refs, folder, theirs: self.compose_theirs, quick });
         }
         self.compose_reset();
     }
@@ -7545,6 +7566,32 @@ impl Model {
         self.compose.as_ref().map(|_| host)
     }
 
+    /// Opens the new-task box with `text`. `kept`: an empty one takes back the line a
+    /// conversation put aside.
+    pub(crate) fn open_box(&mut self, text: String, kept: bool, effects: &mut Vec<Effect>) {
+        if self.compose.is_none() {
+            self.compose_to = Some((self.tabs[self.active].id, self.space().clone()));
+            // Opened from the conversation's keys: Esc gives them back (`keys_back`).
+            self.compose_talked = self.talk.as_ref().is_some_and(|talk| talk.open && talk.keys);
+        }
+        self.leave(effects);
+        self.compose = Some(Field::new(&text, MAX_TITLE));
+        // Paths read for another line say nothing of this one.
+        (self.known.paths, self.known.entries, self.known_line) = (Vec::new(), Vec::new(), None);
+        (self.known_typing, self.known_place) = (None, None);
+        self.compose_reset();
+        // An empty box takes back the line a conversation put aside, with what it pointed at.
+        if kept
+            && text.is_empty()
+            && let Some(kept) = self.compose_kept.take()
+        {
+            (self.compose, self.compose_refs, self.compose_folder) = (Some(kept.line), kept.refs, kept.folder);
+            (self.compose_theirs, self.quick) = (kept.theirs, kept.quick);
+        }
+        // The user's box floats centred over the panes; with nothing open it stays the drawer's.
+        self.compose_centred = self.by_user && self.overlays() && !self.welcome();
+    }
+
     /// The box is drawn centred over the dimmed panes, not in the drawer: the user's ⌘N with
     /// `overlay_panels` on. Still the drawer's box to every rule (`compose_host`); ↵ grows it into the drawer.
     /// Not while the user's editor has its line (⌃G), nor once nothing is open: the drawer has it then.
@@ -7567,7 +7614,7 @@ impl Model {
     pub(crate) fn compose_reset(&mut self) {
         (self.menu, self.compose_refs, self.compose_note) = (Menu::default(), Vec::new(), None);
         (self.path_shown, self.compose_folder, self.compose_worktree) = (None, None, false);
-        self.compose_centred = false;
+        (self.compose_centred, self.quick) = (false, None);
     }
 
     /// The folder the user took from the dropdown, as the line has it (`~/notes/`), while a word
@@ -7778,7 +7825,9 @@ impl Model {
         let draft = self.draft(self.compose_line()?);
         let default = self.default_agent();
         let agent = draft.agent.clone().unwrap_or_else(|| default.to_string());
-        let starts = agents::launch(Some(&agent), default, &self.models, String::new()).is_some();
+        // The quick note box's ↵ files it: nothing starts.
+        let starts =
+            self.quick.is_none() && agents::launch(Some(&agent), default, &self.models, String::new()).is_some();
         if let Some(folder) = self.compose_folder() {
             return Some(Plan { agent, starts, dir: Some(folder.to_string()), branch: None });
         }
@@ -10056,6 +10105,8 @@ mod tests {
         Action::SelectVisibleTab { .. },
         Action::Tick { .. },
         Action::OpenCompose { .. },
+        Action::QuickOpen { .. },
+        Action::QuickPill { .. },
         Action::FieldEdit { .. },
         Action::ComposeComplete,
         Action::ComposeSubmit { .. },
@@ -10412,6 +10463,8 @@ mod tests {
             Action::SelectVisibleTab { index: 0 },
             Action::Tick { now: 0 },
             Action::OpenCompose { text: text() },
+            Action::QuickOpen { now: 0, word: "k3f9a2c41b7d".into(), transcript: None },
+            Action::QuickPill { kind: quick::PillKind::Front },
             Action::FieldEdit { edit: Edit::Insert(text()) },
             Action::ComposeComplete,
             Action::ComposeSubmit { open: false },
@@ -11023,6 +11076,7 @@ mod tests {
                     _ if action.feature() == Some(Feature::Decisions) => Some(decisions::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
+                    Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
                     Action::WorktreeDelete { .. } => Some(crate::repos::DELETE_USERS),
                     Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
@@ -11051,7 +11105,7 @@ mod tests {
                     Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. } => false,
                     Action::NoticeDismiss { .. } => false,
                     // Its flag is off here: absent, it ends nothing.
-                    Action::OverlayDismiss => false,
+                    Action::OverlayDismiss | Action::QuickOpen { .. } | Action::QuickPill { .. } => false,
                     _ => origin == Origin::User,
                 };
                 assert_eq!(m.sneak.is_none(), ends, "{action:?} from {origin:?}");
@@ -17413,6 +17467,7 @@ mod tests {
                     _ if action.feature() == Some(Feature::Decisions) => Some(decisions::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
+                    Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
                     Action::WorktreeDelete { .. } => Some(crate::repos::DELETE_USERS),
                     Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),

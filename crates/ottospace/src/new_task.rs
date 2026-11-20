@@ -501,6 +501,61 @@ impl Workspace {
             .child(crate::mark(&self.marks, crate::Mark::CentredBox))
     }
 
+    /// The quick note box's pills: what its note will point at, each with × to leave it out, and
+    /// what its keys do. A meeting's title is drawn from the calendar here, never kept in the state.
+    fn quick_pills(&self, cx: &mut Context<Self>) -> Option<Div> {
+        use ottospace_core::model::{Owner, quick::Pill};
+        let (pills, at) = (self.model.quick_pills()?, self.model.quick_at()?);
+        let label = |pill: &Pill| match pill {
+            Pill::Meeting(meeting) => format!("Meeting · {}", meeting.title),
+            Pill::Transcript(_) => {
+                format!("Transcript · {}", ottospace_core::calendar::clock(at, crate::calendar::zone_offset(at)))
+            }
+            Pill::Front { of: of @ Owner::Task { .. } } => format!("Task · {}", self.model.space_title(of)),
+            Pill::Front { of } => format!("Workspace · {}", self.model.space_title(of)),
+        };
+        let pill = |pill: &Pill| {
+            let kind = pill.kind();
+            let name = serde_json::json!(kind).as_str().unwrap_or_default().to_string();
+            let off = div()
+                .id(gpui::SharedString::from(format!("pill-off:{name}")))
+                .relative()
+                .px_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_color(rgb(theme::MUTED))
+                .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+                .child("×")
+                .child(self.controls.mark(format!("pill:{name}")))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    drop(this.dispatch(Action::QuickPill { kind }, this.input, window, cx))
+                }));
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .max_w(px(260.))
+                .pl_2()
+                .py_0p5()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(theme::COMPOSE))
+                .text_xs()
+                .child(div().truncate().child(label(pill)))
+                .child(off)
+        };
+        let keys = div().text_xs().text_color(rgb(theme::MUTED)).child("↵ files it for later · ⌘↵ starts it now · Esc");
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().flex().flex_wrap().gap_1().children(pills.iter().map(pill)))
+                .child(keys),
+        )
+    }
+
     /// The new-task state's picks, lines and box (or, closed, the line to open it).
     fn new_task_body(&self, cx: &mut Context<Self>) -> Div {
         let open = self.model.compose.is_some();
@@ -621,6 +676,7 @@ impl Workspace {
             .child(div().flex_1())
             .children(pinned)
             .children(plan)
+            .children(self.quick_pills(cx))
             .children(open.then(|| self.new_task_content(cx)))
             .children(idle)
     }

@@ -177,9 +177,7 @@ fn draft_dir(draft: &str) -> Option<PathBuf> {
 
 /// A task's folder of captures, if `name` is one the core gives a task of this number.
 pub(crate) fn task_dir(task: TaskId, name: &str) -> Option<PathBuf> {
-    let word = name.strip_prefix(&format!("{task}-"))?;
-    let own = tasks::materials_dir(task, word).is_some_and(|dir| dir == name);
-    config::materials_dir().filter(|_| own).map(|dir| dir.join(name))
+    config::materials_dir().filter(|_| tasks::own_dir(task, name)).map(|dir| dir.join(name))
 }
 
 /// A word nobody can guess, 24 letters and digits: for a draft's task's folder and its brief's
@@ -621,6 +619,9 @@ impl Workspace {
             // Not a link, a pipe or a device: reading one could wait for ever.
             let read = read_plain(&dir.join("brief.json"), MAX_BRIEF_BYTES);
             let brief = read.and_then(|bytes| serde_json::from_slice::<Brief>(&bytes).ok());
+            // A note's label is ours, whatever the file says: its title is untrusted.
+            let brief =
+                brief.map(|brief| Brief { note: brief.note.map(|note| capture::Captured::of(note.content)), ..brief });
             let Some(brief) = brief.filter(|brief| brief.task == task) else {
                 self.no_brief.insert(name);
                 return None;
@@ -647,7 +648,8 @@ impl Workspace {
             Ok(id) => id,
             Err(why) => return control::error(why),
         };
-        match self.model.tasks.get(id).map(|task| task.materials.is_empty()) {
+        // A quick note's brief is in its folder too, with nothing captured.
+        match self.model.tasks.get(id).map(|task| task.materials_dir().is_none()) {
             None => return control::error(&format!("no task {id}")),
             Some(true) => return control::error(&format!("task {id} has no materials: nothing was captured for it")),
             Some(false) => {}
@@ -675,6 +677,32 @@ impl Workspace {
                 .to_string()
             }
             None => control::error(&format!("task {id}'s brief is not in its folder any more")),
+        }
+    }
+
+    /// `Effect::NoteKept`: a quick note's brief, the transcript's file named in it, in a new folder
+    /// of its task's. A folder of that name that is there already is never touched.
+    pub(crate) fn keep_note(&mut self, name: &str, brief: &Brief) {
+        let Some(dir) = task_dir(brief.task, name).filter(|dir| std::fs::symlink_metadata(dir).is_err()) else {
+            self.error = Some("note: its folder could not be made: what it was filed with was not kept".into());
+            return;
+        };
+        let text = capture::markdown_in(brief, dir.to_str());
+        let files = [("brief.md", text), ("brief.json", ottospace_core::pretty_json(brief))];
+        if let Err(err) = files.iter().try_for_each(|(file, text)| config::write_private(&dir, file, text.as_bytes())) {
+            self.error = Some(format!("note: could not keep what it was filed with: {err}"));
+        }
+    }
+
+    /// The `note` request: what task `id`'s quick note was filed with, read from its brief. Its
+    /// meeting's title is other people's text, labelled so. Read-only.
+    pub(crate) fn serve_note(&mut self, id: TaskId) -> String {
+        if self.model.tasks.get(id).is_none_or(|task| task.note.is_none()) {
+            return control::error(&format!("task {id} is no quick note"));
+        }
+        match self.brief_of(id).and_then(|shown| shown.brief.note.clone()) {
+            Some(note) => serde_json::json!({ "ok": true, "task": id, "note": note }).to_string(),
+            None => control::error(&format!("task {id}'s note is not in its folder any more")),
         }
     }
 

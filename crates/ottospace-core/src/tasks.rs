@@ -373,6 +373,9 @@ pub struct Task {
     /// and a new task 7 must not be handed an old one's captures. Not in the tasks folder.
     #[serde(default)]
     pub materials: Vec<String>,
+    /// A quick note's folder in the materials folder (`7-k3f9a2c41b7d`): its brief is there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     /// What was open that the task points at, from `^name` words, as it was when the task was
     /// added. Stored and shown; nothing acts on it yet.
     #[serde(default)]
@@ -492,6 +495,11 @@ pub fn materials_dir(id: TaskId, word: &str) -> Option<String> {
     plain.then(|| format!("{id}-{word}"))
 }
 
+/// `dir` is a materials folder of task `id`'s: `<id>-<word>`, nothing else.
+pub fn own_dir(id: TaskId, dir: &str) -> bool {
+    dir.strip_prefix(&format!("{id}-")).and_then(|word| materials_dir(id, word)).as_deref() == Some(dir)
+}
+
 /// The folder and the capture's number, if `file` is what a task names a capture by:
 /// `<id>-<word>/<number>.json`, e.g. `7-k3f9a2c41b7d/1.json`. Nothing else is ever joined to
 /// the materials folder.
@@ -531,7 +539,8 @@ impl Task {
 
     /// The folder its captures are in, inside the materials folder. `None`: it has none.
     pub fn materials_dir(&self) -> Option<&str> {
-        self.materials.iter().find_map(|file| material_file(self.id, file)).map(|(dir, _)| dir)
+        let note = || self.note.as_deref().filter(|dir| own_dir(self.id, dir));
+        self.materials.iter().find_map(|file| material_file(self.id, file)).map(|(dir, _)| dir).or_else(note)
     }
 
     /// The inbox heading for this task. `None`: not listed (cleaned, snoozed or dismissed).
@@ -640,6 +649,7 @@ impl Tasks {
             session: None,
             refs: Vec::new(),
             materials: Vec::new(),
+            note: None,
             title_generated: false,
             started_at: None,
             finished_at: None,
@@ -663,6 +673,13 @@ impl Tasks {
         if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
             task.materials = materials;
         }
+    }
+
+    /// Names the folder a quick note's brief is in, of a task just filed.
+    pub fn note(&mut self, id: TaskId, dir: String) -> Option<&Task> {
+        let task = self.list.iter_mut().find(|t| t.id == id)?;
+        task.note = Some(dir);
+        Some(task)
     }
 
     /// Names the project and repository of a task just filed from the new-task box.
@@ -1069,6 +1086,7 @@ mod tests {
             session: None,
             refs: Vec::new(),
             materials: Vec::new(),
+            note: None,
             title_generated: false,
             started_at: None,
             finished_at: None,

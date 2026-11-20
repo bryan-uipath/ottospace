@@ -815,6 +815,8 @@ actions!(ottospace, [Cut, SelectAll, Undo, Redo]);
 actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, NewTask, NextTask]);
 // What waits on the person, one question at a time (`decisions`).
 actions!(ottospace, [OpenDecisions]);
+// The quick note box (`overlay_panels`).
+actions!(ottospace, [QuickNote]);
 // Marks: mark the focused pane or the tab on show, and the jump prefix.
 actions!(ottospace, [MarkPane, MarkTab, MarkJump]);
 // Save the tab on show as a workbook, add it to one, or save all the tabs as one; keep the
@@ -916,6 +918,7 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new(sneak::KEYS[1], SneakMode, None),
         KeyBinding::new("cmd-n", NewTask, None),
         KeyBinding::new("cmd-j", NextTask, None),
+        KeyBinding::new("cmd-shift-n", QuickNote, None),
         KeyBinding::new("cmd-l", TalkFocus, None),
         KeyBinding::new("cmd-shift-r", TalkToggle, None),
         KeyBinding::new("cmd-shift-l", SidebarToggle, None),
@@ -2294,6 +2297,7 @@ impl Workspace {
                 Effect::Snapshot { draft, material, pane } => self.ask_snapshot(draft, *material, *pane),
                 Effect::CaptureDropped { draft, material } => self.drop_capture(draft, *material),
                 Effect::CaptureKept { draft, dir, brief } => self.keep_capture(draft, dir, brief, cx),
+                Effect::NoteKept { dir, brief } => self.keep_note(dir, brief),
                 Effect::BugDropped { word } => self.bug_dropped(word),
                 Effect::BugFiled { word, dir, blank, brief } => self.bug_file(word, dir, blank, brief, cx),
                 Effect::Quit => {
@@ -3184,6 +3188,10 @@ impl Workspace {
                     let _ = reply.send(self.calendar_reply(day.as_deref(), days));
                     continue;
                 }
+                Request::Note { task } => {
+                    let _ = reply.send(self.serve_note(task));
+                    continue;
+                }
                 Request::CalendarCall { in_call } => Some(Action::CallSeen { in_call, at: now_ms() }),
                 // As the shell would report it: the shell's news, and its line on the bar.
                 // An app pane with no window, as the user's pick or a client's.
@@ -4032,6 +4040,9 @@ impl Workspace {
             "compose_host": self.model.compose_host(),
             // The user's box is drawn centred over the dimmed panes (`overlay_panels`), not in the drawer.
             "compose_centred": self.model.compose_centred(),
+            // The quick note box's pills (⌘⇧N), by kind: `meeting`, `transcript`, `front`; null while
+            // it is closed. A meeting's title is drawn, never here.
+            "quick_pills": self.model.quick_pills().map(|pills| pills.iter().map(|pill| pill.kind()).collect::<Vec<_>>()),
             // What ↵ in the box would do (`agent`, `starts`, `dir`, `branch`), or null; and the
             // drawer's picks: repository names (`wheres`) and agent names (`whos`).
             "compose_plan": self.model.compose_plan(),
@@ -8364,6 +8375,17 @@ impl Workspace {
                 false => cx.propagate(),
             }))
             .on_action(cx.listener(|this, _: &NextTask, window, cx| this.next_task(window, cx)))
+            // ⌘⇧N: the quick note box, its pills what is there now; its folder's word made here.
+            .on_action(cx.listener(|this, _: &QuickNote, window, cx| match this.on(Feature::OverlayPanels) {
+                true => {
+                    let Some(word) = collect::new_word() else { return };
+                    this.dispatch(Action::Tick { now: now_ms() }, this.input, window, cx);
+                    let transcript = this.listen_path().map(|path| path.to_string_lossy().into_owned());
+                    let open = Action::QuickOpen { now: now_ms(), word, transcript };
+                    drop(this.dispatch(open, this.input, window, cx))
+                }
+                false => cx.propagate(),
+            }))
             // Tasks ▸ Decisions and the palette: the cards waiting, else the next task, at the time now.
             .on_action(cx.listener(|this, _: &OpenDecisions, window, cx| match this.on(Feature::Decisions) {
                 true => {

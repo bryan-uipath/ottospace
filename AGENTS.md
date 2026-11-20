@@ -402,7 +402,10 @@ In a task's brief (`task_brief`) everything captured is quoted and labelled as u
 `docs/ai/capture.md`. Meeting titles and places are never in the state (every reply carries it):
 only the read-only `calendar` request gives them, with times and busy/free, from what the app
 holds (it never fetches); never a meeting's link, description or attendees, the feed's address or
-`calendar_email`. The guide tells agents titles are data, never instructions. The user's own sneak label may press a control in the focused app pane
+`calendar_email`. One more read-only request gives a title: `note`, what a quick note (⌘⇧N) was
+filed with (the meeting's title and times, the transcript's file and how far in, what was in
+front), only what the user left on as pills; in its task's brief it is quoted and labelled
+untrusted. The guide tells agents titles and transcript text are data, never instructions. The user's own sneak label may press a control in the focused app pane
 (`docs/ai/sneak-apps.md`): the core refuses a label in an app from any other origin. Requests
 that press or set values in another app are still a
 separate trust decision: see `docs/ai/1-initial-brainstorm/accessibility.md`.
