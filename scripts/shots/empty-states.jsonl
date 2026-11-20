@@ -1,0 +1,29 @@
+# One empty state: every place with nothing in it, in turn. Home; a new workspace's empty tab; a
+# task's; an empty pane beside a terminal; small empty panes (the list alone, no lattice); a
+# repository's tab after its terminal closed; a tab with no pane folded out to a made-up second
+# display (`multi_monitor`).
+{"env":{"OTTOSPACE_FEATURES":"multi_monitor"}}
+{"cmd":"displays_set","displays":[{"uid":"main","frame":[0,0,1728,1117]},{"uid":"right","frame":[1728,0,1400,900]}],"main":"main"}
+{"shot":"home"}
+{"click":"top:new_workspace"}
+{"shot":"workspace-tab"}
+{"cmd":"task_new","line":"Fix the login loop #auth p1"}
+{"cmd":"open_space","space":{"kind":"task","id":1}}
+{"shot":"task-tab"}
+{"cmd":"split"}
+{"cmd":"split","kind":"empty"}
+{"shot":"pane"}
+{"cmd":"split","kind":"empty"}
+{"cmd":"split","kind":"empty","axis":"down"}
+{"shot":"small-panes"}
+{"tree":"repos/app","files":40}
+{"cmd":"repo_add","path":"{ROOT}/repos/app"}
+{"until":"repos_bar.0"}
+{"cmd":"new_tab"}
+{"cmd":"open_repo","path":"{ROOT}/repos/app"}
+{"cmd":"close"}
+{"shot":"repo-tab-closed"}
+{"cmd":"new_tab"}
+{"cmd":"key","keys":"cmd-shift-o","as":"user"}
+{"until":"windows.1.frames"}
+{"shot":"out-tab","window":1}

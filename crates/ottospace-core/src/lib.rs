@@ -20,6 +20,7 @@ pub mod complete;
 pub mod compose;
 pub mod diff;
 pub mod edit;
+pub mod empty;
 pub mod features;
 pub mod fill;
 pub mod fly;

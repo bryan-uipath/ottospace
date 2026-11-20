@@ -86,7 +86,7 @@ broad: a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen
 /src/(.*/)?(viewer|markdown|highlight|syntax)(\.rs|/)|^crates/ottospace/tests/fixtures/(markdown|code)/   viewer|markdown|a_code_file|cmd_click|native_conversation|tool_rows
 /src/(.*/)?(displays|out_window|display|fill)(\.rs|/)                        display|folds|draws_on
 /src/(.*/)?(palette|menus|row_menu|fuzz|commands)(\.rs|/)                    palette|command|done_row
-/src/(.*/)?(key_use|keycaps)(\.rs|/)                                         key|caps
+/src/(.*/)?(key_use|keycaps|empty)(\.rs|/)                                   key|caps|empty
 /src/(.*/)?(settings|config|features)(\.rs|/)                                settings|feature|font|marks_file
 /src/(.*/)?event_log(\.rs|/)                                                 log_says
 /src/(.*/)?(links|diff)(\.rs|/)                                              tool_rows|watched|cmd_click
