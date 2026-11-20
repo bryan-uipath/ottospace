@@ -119,9 +119,9 @@ Windows). It replaces the 2D plan this note first recommended.
   instanced, a depth buffer, 4× multisampling, ambient light and one from above (sides darker
   than tops), fog into the background colour, a lit building in its task's colour, unlit by the
   light and the fog. The picture is read back once and painted by GPUI as an image, under the
-  hints, which get a dark backing (in a tab taller than the plan's shape, the picture takes only
-  the part below them: the city is as large there); the root's folders are named on their
-  ground, never behind the hints. On a thread of its own, made again only when the plan, the lit
+  hints, which get a dark backing that fades out at its edges (in a tab taller than the plan's
+  shape, the picture takes only the part below them: the city is as large there); the root's
+  folders are named on their ground, never behind the hints. On a thread of its own, made again only when the plan, the lit
   files or the tab's size in pixels change: a frame paints the kept image. No GPU, or a failed render: the lattice,
   and the state says why. No animation in this slice.
 

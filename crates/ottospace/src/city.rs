@@ -32,8 +32,11 @@ const MOST_FILES: usize = 20_000;
 const KEPT: usize = 8;
 /// Names of the root's folders on their ground, at most.
 const MOST_NAMES: usize = 24;
-/// Room kept between a name and the empty tab's hints, and the hints' backing, in points.
+/// Room kept between a name and the empty tab's hints, in points.
 const CLEAR: f32 = 12.;
+/// The hints' backing fades out over this many points, in this many layers: no edge to see.
+const FEATHER: f32 = 40.;
+const LAYERS: usize = 8;
 
 /// What was asked last: the folder, the folders git may run in, and the files lit then, each
 /// with whether its call ran (a file an agent wrote may be new, once the call ends).
@@ -365,7 +368,14 @@ fn paint(drawn: &Shared, hints: Bounds<Pixels>, window: &mut Window, cx: &mut gp
     let _ = window.paint_image(bounds, Corners::default(), made.image.clone(), 0, false);
     let clear = hints.dilate(px(CLEAR));
     if hints.size.width > px(0.) {
-        window.paint_quad(fill(clear, Hsla::from(rgb(theme::BACKGROUND)).opacity(0.78)).corner_radii(px(CLEAR)));
+        // Faint wide pills under tighter ones: about 0.75 dark over the hints, nothing at the edge.
+        for i in 0..=LAYERS {
+            let d = FEATHER * (1. - i as f32 / LAYERS as f32);
+            let pill = px(d) + hints.size.height / 2.;
+            window.paint_quad(
+                fill(hints.dilate(px(d)), Hsla::from(rgb(theme::BACKGROUND)).opacity(0.14)).corner_radii(pill),
+            );
+        }
     }
     let style = window.text_style();
     let mut labels = 0;
