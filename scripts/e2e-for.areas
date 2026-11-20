@@ -61,7 +61,7 @@ broad: a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen
 /src/(.*/)?(sessions|activity|cadence|station|snapshot|claude|codex)(\.rs|/) session|dial|watched|tool_rows|native_conversation
 /src/(.*/)?(tasks|new_task|progress|list)(\.rs|/)                            tasks_|task_|new_task|a_done_row|inbox|later_asks
 /src/(.*/)?(finish|seal)(\.rs|/)                                             done|seal
-/src/(.*/)?decisions(\.rs|/)                                                 -
+/src/(.*/)?decisions(\.rs|/)                                                 decisions
 /src/(.*/)?pass(\.rs|/)                                                      pass
 /src/(.*/)?(worktree|worktrees|repos|prs)(\.rs|/)                            worktree|repo|pull_request
 /src/(.*/)?repo_dots(\.rs|/)                                                 checkouts_dot|repo

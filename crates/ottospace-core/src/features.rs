@@ -104,7 +104,7 @@ impl Feature {
             Feature::OverlayPanels => {
                 "Overlay panels (an experiment): the sidebar and the drawer float over the panes, moving nothing, and close after use"
             }
-            Feature::Decisions => "Decisions: a workspace that shows what waits on you, one question at a time",
+            Feature::Decisions => "Decisions (⌘J): a workspace that shows what waits on you, one question at a time",
         }
     }
 

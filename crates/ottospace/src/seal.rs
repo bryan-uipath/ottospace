@@ -42,6 +42,8 @@ pub(crate) struct Seals {
     pub(crate) frames: u64,
     /// Of those, the frames with sparks: none under Reduce Motion.
     pub(crate) spark_frames: u64,
+    /// A Decisions card answered: since when, and where its pane was. The next card already takes keys.
+    card: Option<(Instant, Bounds<Pixels>)>,
 }
 
 impl Workspace {
@@ -61,6 +63,35 @@ impl Workspace {
         let slot = item.as_ref().map(above);
         let bar = self.bar.height;
         self.seals.now = Some(Sealing { task, since: Instant::now(), panel, item, slot, bar });
+    }
+
+    /// A Decisions card was answered: its seal plays over the card pane, the next card under it.
+    /// None under Reduce Motion: the next card is there at once.
+    pub(crate) fn card_seal_start(&mut self, pane: ottospace_core::model::PaneId) {
+        let at = self.controls.bounds(&format!("pane:{pane}")).filter(|_| !crate::dial::calm());
+        self.seals.card = at.map(|at| (Instant::now(), at));
+    }
+
+    /// The card's seal now: the ring, tick and sparks at the pane's middle, fading as the
+    /// drawer's fold would. Draws nothing that takes a click.
+    pub(crate) fn render_card_seal(&mut self, window: &mut Window) -> Option<AnyElement> {
+        let (since, at) = self.seals.card?;
+        let t = since.elapsed().as_secs_f32() * 1000.;
+        // Decisions closed or off show: it plays on no other workspace.
+        let shown = *self.model.shown_space() == ottospace_core::model::Owner::Decisions;
+        let Some(mut frame) = seal::frame(t, false).filter(|_| shown && t < seal::FOLD_MS) else {
+            self.seals.card = None;
+            return None;
+        };
+        frame.ring_alpha *= 1. - frame.fold;
+        self.seals.frames += 1;
+        self.seals.spark_frames += u64::from(!frame.sparks.is_empty());
+        window.request_animation_frame();
+        let paint = move |bounds: Bounds<Pixels>, _: (), window: &mut Window, _: &mut gpui::App| {
+            paint_seal(&frame, bounds, window)
+        };
+        let layer = div().absolute().left(at.origin.x).top(at.origin.y).w(at.size.width).h(at.size.height);
+        Some(layer.child(canvas(|_, _, _| {}, paint).absolute().size_full()).into_any_element())
     }
 
     /// Where the rail keeps an empty place for the task landing, while it does.

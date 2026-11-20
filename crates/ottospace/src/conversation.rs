@@ -29,6 +29,7 @@ use ottospace_core::links::Target;
 use ottospace_core::model::chat::{self, Key, Primary};
 use ottospace_core::scrollbar::LATEST;
 use ottospace_core::talk::Subject;
+use ottospace_core::tasks::TaskId;
 use ottospace_core::transcript::{
     By, Call, Entry, Event, Item, MAX_CARDS, NoteKind, Notice, Status, Text, View, clean,
 };
@@ -1543,7 +1544,7 @@ impl Workspace {
     pub(crate) fn chat_card(&self, subject: &Subject, chat: &chat::Chat, cx: &mut Context<Self>) -> Option<Div> {
         let card = chat.transcript.cards.front()?;
         if let Some(form) = chat.form() {
-            return Some(self.ask_card(subject, chat, form, card.ticket, cx));
+            return Some(self.ask_card(subject, chat, form, card.ticket, None, cx));
         }
         let full = card.expanded.then(|| self.drawer.native.get(subject).and_then(|n| n.full(card.ticket))).flatten();
         let payload = full.unwrap_or_else(|| card.detail.text().to_string());
@@ -1643,14 +1644,24 @@ impl Workspace {
     /// its question, Send. A question is markdown: its last paragraph the question, what comes
     /// before it context, folded past `FOLD_LINES`. The options scroll with the cursor's row in
     /// view; the foot stays. The card grows to the drawer's height.
-    fn ask_card(&self, subject: &Subject, chat: &chat::Chat, form: &Form, ticket: u64, cx: &mut Context<Self>) -> Div {
+    /// `host`: the Decisions card's task, when the card is drawn there (`decision_body`): its keys
+    /// and clicks are `DecisionsAsk`, its controls `decision:…`. Else the drawer's.
+    pub(crate) fn ask_card(
+        &self,
+        subject: &Subject,
+        chat: &chat::Chat,
+        form: &Form,
+        ticket: u64,
+        host: Option<TaskId>,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let look = self.drawer.looks.get(subject);
         let (tab, row) = form.cursor;
         let n = form.questions.len();
         let tabs = (form.tabs() > 0).then(|| {
             let mut buttons: Vec<gpui::Stateful<Div>> = Vec::new();
             for at in 0..=n {
-                buttons.push(self.ask_tab(form, at, ticket, cx));
+                buttons.push(self.ask_tab(form, at, ticket, host, cx));
             }
             let review = buttons.pop();
             // Many tabs scroll sideways: Review stays reachable.
@@ -1689,8 +1700,8 @@ impl Workspace {
             scroll.scroll_to_item(row);
         }
         let rows: Vec<AnyElement> = match form.review() {
-            true => (0..n).map(|q| self.review_row(form, q, ticket, cx)).collect(),
-            false => (0..form.rows(tab)).map(|r| self.ask_row(form, tab, r, ticket, cx)).collect(),
+            true => (0..n).map(|q| self.review_row(form, q, ticket, host, cx)).collect(),
+            false => (0..form.rows(tab)).map(|r| self.ask_row(form, tab, r, ticket, host, cx)).collect(),
         };
         let rows = div()
             .id(ElementId::Name(format!("chat-ask-rows:{ticket}:{tab}").into()))
@@ -1702,14 +1713,14 @@ impl Workspace {
             .flex_col()
             .pb_1()
             .children(rows);
-        let question = (!form.review()).then(|| self.ask_question(subject, form, tab, ticket, cx));
+        let question = (!form.review()).then(|| self.ask_question(subject, form, tab, ticket, host, cx));
         let primary = |label: &'static str, tip: &'static str, act: Act| {
-            self.talk_button("chat-ask-send", label, tip)
+            self.button_of(ask_controls(host), "chat-ask-send", label, tip)
                 .bg(rgb(theme::PRIMARY))
                 .text_color(rgb(theme::BACKGROUND))
                 .font_weight(FontWeight::SEMIBOLD)
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    drop(this.dispatch(Action::TalkAsk { ticket, act }, this.input, window, cx))
+                    drop(this.dispatch(ask_action(host, ticket, act), this.input, window, cx))
                 }))
         };
         let (hint, send) = match () {
@@ -1725,14 +1736,17 @@ impl Workspace {
                 primary("Next", "Answer this one and go on", Act::Submit),
             ),
         };
+        // In Decisions Esc closes Decisions (its foot says so): the card's hint leaves it out.
+        let hint = if host.is_some() { hint.replace(" · Esc decline", "") } else { hint };
         let decline = self
-            .talk_button(
+            .button_of(
+                ask_controls(host),
                 "chat-ask-decline",
                 if form.tabs() > 0 { "Decline all" } else { "Decline" },
                 "Answer nothing; the agent goes on",
             )
             .on_click(cx.listener(move |this, _, window, cx| {
-                drop(this.dispatch(Action::TalkAsk { ticket, act: Act::Decline }, this.input, window, cx))
+                drop(this.dispatch(ask_action(host, ticket, Act::Decline), this.input, window, cx))
             }));
         let queued = chat.transcript.cards.len() - 1;
         let foot = div()
@@ -1769,7 +1783,14 @@ impl Workspace {
 
     /// A question's tab, or Review's (`at` = the questions' count): ✓ once answered, amber on
     /// Review if left, underlined while on show. A click shows it.
-    fn ask_tab(&self, form: &Form, at: usize, ticket: u64, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+    fn ask_tab(
+        &self,
+        form: &Form,
+        at: usize,
+        ticket: u64,
+        host: Option<TaskId>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<Div> {
         let n = form.questions.len();
         let answered = form.answered(at);
         let label = if at < n { clean(&form.name(at)) } else { "Review".to_string() };
@@ -1790,9 +1811,9 @@ impl Workspace {
             .text_color(rgb(color))
             .when(shown, |d| d.border_b_2().border_color(rgb(theme::PRIMARY)))
             .child(if answered { format!("✓ {label}") } else { label })
-            .child(self.controls.mark(format!("talk:chat-ask-tab:{at}")))
+            .child(self.controls.mark(format!("{}:chat-ask-tab:{at}", ask_controls(host))))
             .on_click(cx.listener(move |this, _, window, cx| {
-                drop(this.dispatch(Action::TalkAsk { ticket, act: Act::Show { tab: at } }, this.input, window, cx))
+                drop(this.dispatch(ask_action(host, ticket, Act::Show { tab: at }), this.input, window, cx))
             }))
     }
 
@@ -1800,7 +1821,15 @@ impl Workspace {
     /// context, folded behind "Show all · N lines" past `FOLD_LINES`. With no tabs, its header too.
     /// Its parts are the card's own children: in a short drawer the shown context alone shrinks
     /// (with the options), so the question, the options and the foot keep their room.
-    fn ask_question(&self, subject: &Subject, form: &Form, q: usize, ticket: u64, cx: &mut Context<Self>) -> Vec<Div> {
+    fn ask_question(
+        &self,
+        subject: &Subject,
+        form: &Form,
+        q: usize,
+        ticket: u64,
+        host: Option<TaskId>,
+        cx: &mut Context<Self>,
+    ) -> Vec<Div> {
         let question = &form.questions[q];
         let of = Links::Chat(subject.clone());
         let at = format!("ask:{ticket}:{q}");
@@ -1843,7 +1872,7 @@ impl Workspace {
                     .cursor_pointer()
                     .text_color(rgb(theme::PRIMARY))
                     .child(label)
-                    .child(self.controls.mark("talk:chat-ask-show-all"))
+                    .child(self.controls.mark(format!("{}:chat-ask-show-all", ask_controls(host))))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_ask_context(&who, ticket, q, cx)))
             });
             (body, show)
@@ -1881,7 +1910,14 @@ impl Workspace {
 
     /// Review's row for a question: its header and its answer, or "Not answered" in amber. A
     /// click goes back to it.
-    fn review_row(&self, form: &Form, q: usize, ticket: u64, cx: &mut Context<Self>) -> AnyElement {
+    fn review_row(
+        &self,
+        form: &Form,
+        q: usize,
+        ticket: u64,
+        host: Option<TaskId>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let name = clean(&form.name(q));
         let here = form.cursor.1 == q;
         let parts: Vec<String> = form.parts(q).iter().map(|part| clean(part)).collect();
@@ -1909,10 +1945,10 @@ impl Workspace {
             .hover(|s| s.bg(rgb(theme::SELECTED)))
             .child(div().flex_none().w(px(80.)).truncate().text_sm().text_color(rgb(theme::MUTED)).child(name))
             .child(answer)
-            .child(self.controls.mark(format!("talk:{id}")))
+            .child(self.controls.mark(format!("{}:{id}", ask_controls(host))))
             .on_click(cx.listener(move |this, _, window, cx| {
                 let act = Act::Row { question: n, row: q };
-                drop(this.dispatch(Action::TalkAsk { ticket, act }, this.input, window, cx))
+                drop(this.dispatch(ask_action(host, ticket, act), this.input, window, cx))
             }))
             .into_any_element()
     }
@@ -1935,7 +1971,15 @@ impl Workspace {
 
     /// One row of a question: its mark, its number key, its label and description; "Other…"
     /// last, its words in a field while the cursor is on it. A click picks it.
-    fn ask_row(&self, form: &Form, q: usize, row: usize, ticket: u64, cx: &mut Context<Self>) -> AnyElement {
+    fn ask_row(
+        &self,
+        form: &Form,
+        q: usize,
+        row: usize,
+        ticket: u64,
+        host: Option<TaskId>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let question = &form.questions[q];
         let (here, picked) = (form.cursor == (q, row), form.picked(q, row));
         let mark = match (question.multi, picked) {
@@ -1987,12 +2031,12 @@ impl Workspace {
             .child(div().flex_none().w(px(10.)).text_xs().text_color(rgb(theme::MUTED)).child(number))
             .child(body)
             // The press goes on to the drawer, which takes the keyboard: "Other…" is typed in next.
-            .child(self.controls.mark(format!("talk:{id}")))
+            .child(self.controls.mark(format!("{}:{id}", ask_controls(host))))
             // The field takes clicks in its own row: a click there places the cursor.
             .when(!(other && here), |d| {
                 d.on_click(cx.listener(move |this, _, window, cx| {
                     let act = Act::Row { question: q, row };
-                    drop(this.dispatch(Action::TalkAsk { ticket, act }, this.input, window, cx))
+                    drop(this.dispatch(ask_action(host, ticket, act), this.input, window, cx))
                 }))
             })
             .into_any_element()
@@ -2381,6 +2425,19 @@ fn code_text(text: &str) -> Div {
 /// `code_text`'s look on a div of its own (a selectable text's).
 fn code_style(d: Div) -> Div {
     d.font_family(crate::terminal::font_family()).text_xs().whitespace_nowrap()
+}
+
+/// A key or click on a question card: the drawer's `TalkAsk`, or the Decisions card's.
+pub(crate) fn ask_action(host: Option<TaskId>, ticket: u64, act: Act) -> Action {
+    match host {
+        Some(task) => Action::DecisionsAsk { task, ticket, act },
+        None => Action::TalkAsk { ticket, act },
+    }
+}
+
+/// Whose a question card's controls are, for their ids: the drawer's or the Decisions card's.
+fn ask_controls(host: Option<TaskId>) -> &'static str {
+    if host.is_some() { "decision" } else { "talk" }
 }
 
 /// A task item's box, ticked when done.

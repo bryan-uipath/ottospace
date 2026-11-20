@@ -68,6 +68,7 @@ macro_rules! commands {
                     (_, Group::Marks) => Some(Feature::Marks),
                     (Command::Transcribe | Command::PauseTranscript, _) => Some(Feature::Transcripts),
                     (Command::FoldTab, _) => Some(Feature::MultiMonitor),
+                    (Command::Decisions, _) => Some(Feature::Decisions),
                     (Command::AgentMenu | Command::AgentOff | Command::AgentSee | Command::AgentAct, _) => {
                         Some(Feature::AgentMode)
                     }
@@ -109,6 +110,7 @@ commands! {
     // After New Task: a query of a name ranks a later tie lower.
     MoveTabToTask: "Move Tab to…", Tabs;
     NextNeedsYou: "Next Task", Tasks;
+    Decisions: "Decisions", Tasks;
     // After Next Task: a query of its name ranks a later tie lower.
     NextSpace: "Next Tab Group", Tabs;
     PrevSpace: "Previous Tab Group", Tabs;
