@@ -691,6 +691,8 @@ export interface ReposGroup {
   header: Rect | null;
   /** Its checkouts are folded under its name: not drawn, not rows of list mode. */
   folded: boolean;
+  /** While folded, its name's dot for all its checkouts: needs you wins over working. Null while unfolded or every checkout is idle. */
+  dot: "working" | "needs_you" | null;
   rows: CheckoutRow[];
   /** Test runs only, while drawn: its name's box (`room`) and shaped width (`drawn`). Else null. */
   name_cut: { room: Rect; drawn: number } | null;

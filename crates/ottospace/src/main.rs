@@ -3417,10 +3417,11 @@ impl Workspace {
     }
 
     /// The Repos section as laid out: each repository's `name` and `path` with its `header`,
-    /// whether it is drawn `folded`, and its `rows` (a checkout's `path`, `branch`, `default`,
-    /// `label`, its dot's `activity` and whether a commit's pulse plays) each with its `row`. Rects
-    /// are in window points, scrolled out of view or not; null while the section is not drawn (a
-    /// folded repository's rows too). A test run's `name_cut`.
+    /// whether it is drawn `folded` (then its name's `dot`; null while unfolded or all idle), and its
+    /// `rows` (a checkout's `path`, `branch`, `default`, `label`, its dot's `activity` and whether a
+    /// commit's pulse plays) each with its `row`. Rects are in window points, scrolled out of view
+    /// or not; null while the section is not drawn (a folded repository's rows too). A test run's
+    /// `name_cut`.
     fn repos_bar(&self) -> Vec<serde_json::Value> {
         let marks = self.marks.borrow();
         let drawn = |mark: Mark| marks.get(&mark).copied().map(rect);
@@ -3443,12 +3444,15 @@ impl Workspace {
             let rows: Vec<serde_json::Value> = repo.checkouts().into_iter().map(row).collect();
             let at = marks.get(&Mark::Repo(n)).copied();
             let (header, folded) = (at.map(rect), self.model.repo_folded(repo));
+            // Its name's dot while folded: null while unfolded or every checkout is idle.
+            let dot = self.model.repo_dot(repo).map(|dot| dot.activity);
             // Test runs only: its name's box and shaped width (`cut_text`).
             let name_cut = cut_drawn(&repo.name, at);
             // The group's folder it is drawn under, if any.
             let group = self.model.repo_dirs.group_of(&repo.path).map(|dir| &dir.path);
             serde_json::json!({
-                "name": repo.name, "path": repo.path, "group": group, "header": header, "folded": folded, "rows": rows,
+                "name": repo.name, "path": repo.path, "group": group, "header": header, "folded": folded, "dot": dot,
+                "rows": rows,
                 "name_cut": name_cut,
             })
         };
@@ -6583,7 +6587,7 @@ impl Workspace {
         let tip =
             format!("{} · a folder of repositories from your old settings: remove it, add the ones you use", dir.path);
         let name = format!("{}/", dir.text.trim_end_matches('/'));
-        ui::section_heading(("repo-group", at), open, name, count, ui::State::focus(selected))
+        ui::section_heading(("repo-group", at), open, name, count, None, ui::State::focus(selected))
             .group("repo-name")
             .when(at > 0, |d| d.mt_1())
             .mb_1()
@@ -6623,7 +6627,9 @@ impl Workspace {
             let tip = ("icons/trash.svg", "Stop listing this repository (nothing on disk is touched)");
             self.icon_word(format!("repo-remove:{}", repo.path), tip, click, cx)
         });
-        ui::section_heading(("repo-head", n), !folded, repo.name.clone(), count, ui::State::focus(selected))
+        // Folded: one dot for its checkouts, none while all are idle.
+        let dot = self.model.repo_dot(repo).map(|dot| self.activity_dot(dot));
+        ui::section_heading(("repo-head", n), !folded, repo.name.clone(), count, dot, ui::State::focus(selected))
             .group("repo-name")
             .when(at > 0, |d| d.mt_1())
             .mb_1()

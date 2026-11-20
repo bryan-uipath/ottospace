@@ -71,8 +71,16 @@ The dot at a checkout row's left says what happens in that checkout (`Model::che
   checkout with no commit yet reads as an empty log, so its first commit pulses. Under Reduce Motion
   there is no pulse. Frames are asked for only while one plays (`counts.repo_pulse_frames`).
   Any `HEAD` move grows the log (a checkout of a branch, a reset, a pull): those pulse too.
-- A folded repository draws no rows: no dot, no pulse. A checkout no longer listed keeps no read.
-- The state's rows carry `activity` and `pulsing`; never a commit's message.
+- A folded repository draws no rows, so no row dots and no pulse: its name carries one dot after
+  its count (`Model::repo_dot`), by the same rule over all its checkouts: amber if a task in any
+  needs you (first by the Tasks order), else lit while any works (the task started last, in its
+  colour; the working colour for a session no task has), else none: no grey dot on a quiet folded
+  name. An unfolded name has none (its rows say it). It never pulses: a pulse is a checkout's,
+  and folded means quiet. Sessions are read for a folded repository's checkouts as for any
+  other's (the read covers every listed checkout), and still listed nowhere with Tasks closed.
+  A checkout no longer listed keeps no read.
+- The state's rows carry `activity` and `pulsing`, a repository its name's `dot` (`working`,
+  `needs_you`, null); never a commit's message.
 
 ## A new worktree (`WorktreeEdit`, `MarkSubmit`, `Effect::AddWorktree`, `WorktreeAdded`)
 

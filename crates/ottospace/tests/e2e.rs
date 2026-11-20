@@ -1484,6 +1484,51 @@ fn a_checkouts_dot_pulses_once_on_a_commit_and_lights_while_a_session_works_ther
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_folded_repositorys_name_has_a_dot_while_a_checkout_works_or_needs_you() {
+    // A real repository and a worktree of it; a made-up Claude Code session folder, empty for now.
+    let home = user_folder("repo-folded-dot", "{}").canonicalize().unwrap();
+    let (app, worktree, claude) = (home.join("src/app"), home.join("src/app-2"), home.join("claude"));
+    std::fs::create_dir_all(&app).unwrap();
+    git(&app, &["init", "-q", "-b", "main"]);
+    git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c"]);
+    git(&app, &["worktree", "add", "-q", "-b", "fix", "../app-2"]);
+    let dirs = json!({"claude": [claude], "codex": home.join("codex")});
+    let settings = json!({"repos": [app], "sessions": true, "session_dirs": dirs, "restore_layout": false});
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("GIT_CONFIG_GLOBAL", "/dev/null")];
+    let otto = Otto::launch_with("repo-folded-dot", &env);
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    let state =
+        otto.wait_for("the Repos rows", |o| Some(o.drawn()).filter(|s| !s["repos_bar"][0]["rows"][1]["row"].is_null()));
+    let fold = |o: &Otto| drop(o.user_click(at(rect(&o.drawn()["repos_bar"][0]["header"]), 0.25, 0.5)));
+    let head = |s: &Value| (s["repos_bar"][0]["folded"].clone(), s["repos_bar"][0]["dot"].clone());
+    // Unfolded: its rows say it. Folded, every checkout idle: no dot.
+    assert_eq!(head(&state), (json!(false), json!(null)));
+    fold(&otto);
+    assert_eq!(head(&otto.drawn()), (json!(true), json!(null)));
+
+    // A session at work in the worktree: read for the folded repository too, never listed.
+    let id = "11111111-1111-4111-8111-111111111111";
+    let project = claude.join("projects").join(ottospace_sessions::claude::slug(&worktree));
+    let fixture = format!("claude/projects/-work-app/{id}.jsonl");
+    session_fixture(&fixture, &project.join(format!("{id}.jsonl")), &worktree, Duration::ZERO);
+    let lit = |o: &Otto| Some(o.drawn()).filter(|s| s["repos_bar"][0]["dot"] == "working");
+    let state = otto.wait_for("the folded name's dot to light", lit);
+    assert_eq!((&state["repos_bar"][0]["folded"], &state["sessions_bar"]["total"]), (&json!(true), &json!(0)));
+
+    // A task there that needs you (folded while it does: it stays folded): amber wins.
+    fold(&otto);
+    otto.call(json!({"cmd": "task_new", "line": "review >app-2"}));
+    otto.call(json!({"cmd": "task_set_state", "id": 1, "state": "needs_you"}));
+    fold(&otto);
+    let amber = |o: &Otto| Some(o.drawn()).filter(|s| s["repos_bar"][0]["dot"] == "needs_you");
+    assert_eq!(otto.wait_for("the folded name's dot to turn amber", amber)["repos_bar"][0]["folded"], true);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_worktrees_pull_request_is_marked_from_a_stand_in_gh_and_only_the_users_click_opens_it() {
     use std::os::unix::fs::PermissionsExt;
     // A real repository whose origin is on github.com (never fetched), a worktree for each branch.

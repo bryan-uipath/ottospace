@@ -61,7 +61,7 @@ fn rows() -> Div {
     });
     let headings =
         [(true, State::Rest), (false, State::Rest), (true, State::Hover), (true, State::Focus)].map(|(open, state)| {
-            let h = super::section_heading(id(format!("heading{open}{state:?}")), open, "app-api", 3, state);
+            let h = super::section_heading(id(format!("heading{open}{state:?}")), open, "app-api", 3, None, state);
             case(format!("{} {state:?}", if open { "open" } else { "folded" }), width(h))
         });
     div().flex().flex_col().gap(px(theme::SPACE_2)).children(rows).child(group("section heading", headings))
