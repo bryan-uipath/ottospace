@@ -1398,7 +1398,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 | `multi_monitor` | Experimental | off | Multi-monitor (⌘⇧O): fold a tab out to its own window on another display |
 | `overlay_panels` | Experimental | off | Overlay panels (an experiment): the sidebar and the drawer float over the panes, moving nothing, and close after use |
 | `decisions` | Experimental | off | Decisions (⌘J): a workspace that shows what waits on you, one question at a time |
-| `code_city` | Experimental | off | Code city: an empty tab of a task draws the task's folder as a map, its files where they were last time |
+| `code_city` | Experimental | off | Code city: an empty tab of a task draws the task's folder as a 3D city, its files where they were last time |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1453,9 +1453,10 @@ Only you open, answer, skip or close it.
 
 ### Code city
 
-With `code_city` on, an empty tab of a task draws the task's checkout as a plan seen from
-above, where the lattice was: a folder is a district, a file a building sized by its size class
-(1 up to 2 KB, doubling to 128 KB). A file is where it was the last time: the same files give
+With `code_city` on, an empty tab of a task draws the task's checkout as a city in 3D, rendered
+on the GPU, where the lattice was: a folder is a terrace stepped up from its parent's, a file a
+building on it, its ground sized by its size class (1 up to 2 KB, doubling to 128 KB) and its
+height by its length. A file is where it was the last time: the same files give
 the same plan, an edit that keeps a file's size class moves nothing, and a new file most times
 moves only its own folder
 (design and numbers: [code-city/plan.md](ai/code-city/plan.md)).
@@ -1468,8 +1469,10 @@ moves only its own folder
   the main thread with the status bar's hardened git, only in a checkout listed in Repos, when
   the tab comes on show and when the lit files change. No timer. Over 20,000 files, 4 MB of
   names or 10 seconds: no city, the lattice stays.
-- It takes no click and no key, and nothing in it moves. Names of the large districts are
-  drawn; no path or name is in the socket's state or the logs.
+- It takes no click and no key, and nothing in it moves: a still picture, made again when the
+  files, the lit files or the tab's size change. The root's folders are named on their ground,
+  never behind the tab's hints; no path or name is in the socket's state or the logs.
+- No GPU, or a render that fails: the lattice.
 
 ### Displays
 

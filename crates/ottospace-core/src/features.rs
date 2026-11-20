@@ -110,7 +110,7 @@ impl Feature {
             }
             Feature::Decisions => "Decisions (⌘J): a workspace that shows what waits on you, one question at a time",
             Feature::CodeCity => {
-                "Code city: an empty tab of a task draws the task's folder as a map, its files where they were last time"
+                "Code city: an empty tab of a task draws the task's folder as a 3D city, its files where they were last time"
             }
         }
     }

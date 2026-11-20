@@ -1981,14 +1981,18 @@ function home(value: unknown, at: string): Home {
 function cityDrawn(value: unknown, at: string): CityDrawn {
   const o = fields(value, at);
   return {
-    places: num(o.places, `${at}.places`),
-    groups: num(o.groups, `${at}.groups`),
+    places: orNull(num)(o.places, `${at}.places`),
+    groups: orNull(num)(o.groups, `${at}.groups`),
+    picture: orNull(pair)(o.picture, `${at}.picture`),
+    bounds: rect(o.bounds, `${at}.bounds`),
+    scale: num(o.scale, `${at}.scale`),
     lit: list(rect)(o.lit, `${at}.lit`),
-    reads: num(o.reads, `${at}.reads`),
-    paints: num(o.paints, `${at}.paints`),
-    quads: num(o.quads, `${at}.quads`),
     labels: num(o.labels, `${at}.labels`),
-    paint_us: num(o.paint_us, `${at}.paint_us`),
+    failed: orNull(str)(o.failed, `${at}.failed`),
+    reads: num(o.reads, `${at}.reads`),
+    renders: num(o.renders, `${at}.renders`),
+    paints: num(o.paints, `${at}.paints`),
+    render_us: orNull(num)(o.render_us, `${at}.render_us`),
   };
 }
 

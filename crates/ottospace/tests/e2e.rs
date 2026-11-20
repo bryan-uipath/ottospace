@@ -15296,18 +15296,24 @@ fn bug_send_files_a_task_in_a_new_worktree_with_a_brief_of_no_titles() {
         assert!(std::fs::read(dir.join("report.png")).unwrap().starts_with(b"\x89PNG"));
     }
     assert!(otto.call(json!({"cmd": "state"}))["bug"]["report"].is_null());
+}
 
-/// The code city (flag `code_city`): a task's empty tab draws its checkout's files as a plan
-/// where the lattice was. The file the agent reads is lit, and only it; an ignored file is no
-/// building; nothing is read again while nothing changes; the state has counts and rectangles,
-/// never a name. With the flag off, no city and no read.
+/// The code city (flag `code_city`): a task's empty tab draws its checkout's files as a 3D
+/// picture rendered on the GPU, where the lattice was, as large as the tab in pixels. The file
+/// the agent reads is lit, and only it; an ignored file is no building; nothing is read or
+/// rendered again while nothing changes; the state has counts and rectangles, never a name. With
+/// no GPU (`OTTOSPACE_CITY_NO_GPU`), the lattice, and the state says why. With the flag off, no
+/// city and no read.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_reads() {
     const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
-    let setup = |name: &str, features: &str| {
+    let setup = |name: &str, features: &str, gpu: bool| {
         // None of the user's git settings: an ignore rule of theirs would hide a made-up file.
-        let extra = [("OTTOSPACE_FEATURES", features), ("GIT_CONFIG_GLOBAL", "/dev/null")];
+        let mut extra = vec![("OTTOSPACE_FEATURES", features), ("GIT_CONFIG_GLOBAL", "/dev/null")];
+        if !gpu {
+            extra.push(("OTTOSPACE_CITY_NO_GPU", "1"));
+        }
         let (root, _, env) = native_setup(name, &[], &extra);
         // A real, empty repository with made-up files: seven it lists, one it ignores.
         let app = root.join("repos/app");
@@ -15343,29 +15349,33 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
     };
     let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
 
-    let (root, otto) = setup("city", "code_city");
+    let (root, otto) = setup("city", "code_city", true);
     let lit = otto.wait_for("a lit building", |o| {
         Some(city(o)).filter(|city| city["lit"].as_array().is_some_and(|lit| !lit.is_empty()))
     });
     // Seven files and three folders (src, src/ui, docs): the ignored one is no building.
     assert_eq!((lit["places"].as_u64(), lit["groups"].as_u64()), (Some(10), Some(3)), "{lit}");
-    // One building is lit, inside the tab's area, and the state names no file.
+    // The picture is the tab's floor in pixels: never scaled.
+    let numbers = |v: &Value| v.as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect::<Vec<_>>();
+    let (bounds, scale, picture) = (numbers(&lit["bounds"]), lit["scale"].as_f64().unwrap(), numbers(&lit["picture"]));
+    assert_eq!(picture, [(bounds[2] * scale).round(), (bounds[3] * scale).round()], "{lit}");
+    assert_eq!(lit["failed"], Value::Null, "{lit}");
+    // One building is lit, inside the picture, and the state names no file.
     let rects = lit["lit"].as_array().unwrap();
     assert_eq!(rects.len(), 1, "{lit}");
-    let area = otto.call(json!({"cmd": "state"}))["home_drawn"]["area"].clone();
-    let numbers = |v: &Value| v.as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect::<Vec<_>>();
-    let (r, a) = (numbers(&rects[0]), numbers(&area));
+    let (r, a) = (numbers(&rects[0]), bounds);
     assert!(r[2] >= 1. && r[3] >= 1., "{lit}");
     assert!(r[0] >= a[0] && r[1] >= a[1] && r[0] + r[2] <= a[0] + a[2] && r[1] + r[3] <= a[1] + a[3], "{r:?} in {a:?}");
     assert!(!lit.to_string().contains("auth") && !lit.to_string().contains("src"), "{lit}");
     // At rest nothing is read again, however often the state is asked.
     // (The read the lit file asked for, if the first came before the agent's call, lands first.)
     std::thread::sleep(Duration::from_millis(1500));
-    let reads = city(&otto)["reads"].as_u64();
+    let (reads, renders) = (city(&otto)["reads"].as_u64(), city(&otto)["renders"].as_u64());
     assert_eq!(otto.call(json!({"cmd": "state"}))["counts"]["city_reads"].as_u64(), reads);
     for _ in 0..5 {
         std::thread::sleep(Duration::from_millis(300));
-        assert_eq!((city(&otto)["reads"].as_u64(), city(&otto)["lit"].clone()), (reads, lit["lit"].clone()));
+        let now = city(&otto);
+        assert_eq!((now["reads"].as_u64(), now["renders"].as_u64(), &now["lit"]), (reads, renders, &lit["lit"]));
     }
     // A pane in the tab covers the floor: no city. Closed: the same city, the same place.
     otto.call(json!({"cmd": "split"}));
@@ -15376,8 +15386,16 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 
+    // No GPU: the files are read, no picture is made, and the lattice is the floor.
+    let (root, otto) = setup("city-no-gpu", "code_city", false);
+    let failed = otto.wait_for("no picture", |o| Some(city(o)).filter(|city| !city["failed"].is_null()));
+    assert_eq!((&failed["failed"], &failed["picture"]), (&json!("no GPU (test)"), &Value::Null), "{failed}");
+    assert!(otto.call(json!({"cmd": "state"}))["home_drawn"]["lattice_builds"].as_u64() > Some(0));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+
     // The flag off: the lattice, and no read.
-    let (root, otto) = setup("city-off", "");
+    let (root, otto) = setup("city-off", "", true);
     std::thread::sleep(Duration::from_secs(2));
     let state = otto.call(json!({"cmd": "state"}));
     assert_eq!(

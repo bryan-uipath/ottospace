@@ -34,7 +34,7 @@ pub struct Node {
     /// members). 1 to `MOST`. A group's is not read: it weighs its children.
     pub footprint: u64,
     /// A second measure, 0 to 1, that is only drawn and moves nothing, so it may change often
-    /// (churn, a month's messages). Not drawn yet.
+    /// (churn, a month's messages). The code city's: a building's height (`scene::height`).
     pub height: Option<f32>,
     /// In the order they are laid out: one that keeps old things before new ones keeps them
     /// in place.
@@ -198,7 +198,8 @@ impl Folder<'_> {
         // A file and a folder may share a name in a list that is not git's: the file's id says so.
         let file = |(name, bytes): (&&str, &u64)| {
             let id = if self.folders.contains_key(name) { join(name) + "/" } else { join(name) };
-            Node { id, label: name.to_string(), footprint: file_weight(*bytes), ..Node::default() }
+            let height = Some(crate::scene::height(*bytes));
+            Node { id, label: name.to_string(), footprint: file_weight(*bytes), height, ..Node::default() }
         };
         let children = folders.chain(self.files.iter().map(file)).collect();
         Node { id: path.to_string(), label: label.to_string(), children, ..Node::default() }
@@ -324,7 +325,9 @@ mod tests {
         before.extend([("src/x.rs", 30_000), ("src/y.rs", 30_000)]);
         let mut edited = before.clone();
         edited[9].1 = 31_000;
-        assert_eq!(city(&before), city(&edited));
+        // Only its height, drawn and never laid out, changes.
+        let rects = |atlas: Atlas| atlas.places.into_iter().map(|p| (p.id, p.rect)).collect::<Vec<_>>();
+        assert_eq!(rects(city(&before)), rects(city(&edited)));
         // docs weighs 9, a step up 10: a tenth file fits, and nothing but it is new.
         let mut added = before.clone();
         added.push(("docs/a.md", 100));

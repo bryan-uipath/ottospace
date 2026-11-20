@@ -1,22 +1,26 @@
 //! The code city behind a task's empty tab (flag `code_city`): the checkout's files read off
-//! the main thread, and the plan drawn where the lattice was. Which folder and which files are
-//! lit is the core's (`Model::city`), and so is where each file is (`ottospace_core::atlas`).
+//! the main thread, and its picture rendered off it (`city_gpu`), painted where the lattice
+//! was. Which folder and which files are lit is the core's (`Model::city`), and so are where
+//! each file stands and the camera (`ottospace_core::atlas`, `ottospace_core::scene`).
 //! Design: `docs/ai/code-city/plan.md`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Hsla, Pixels, Point, TextRun, Window, canvas, fill, outline, point, prelude::*,
-    px, rgb, size,
+    AnyElement, Bounds, Context, Corners, Hsla, Pixels, RenderImage, TextRun, Window, canvas, div, fill, point,
+    prelude::*, px, rgb,
 };
-use ottospace_core::atlas::{self, Atlas, Place};
+use ottospace_core::atlas::{self, Atlas};
+use ottospace_core::scene::{self, Kind};
 use ottospace_core::{status_bar, theme};
 
+use crate::city_gpu::{Gpu, Picture};
 use crate::{Workspace, rect};
 
 /// How long `git ls-files` may take, how much it may say, and how many files a city has. Past
@@ -26,17 +30,10 @@ const MOST_BYTES: u64 = 4 << 20;
 const MOST_FILES: usize = 20_000;
 /// Cities kept, by folder: a task's tab shown again draws at once.
 const KEPT: usize = 8;
-/// A building narrower or lower than this, in points, is not drawn: its district's ground is.
-const SMALLEST: f32 = 3.;
-/// The gap round a building, in points: two of them are a street.
-const STREET: f32 = 1.5;
-/// A district of the root and a building this large, in points, have their names on them, if
-/// the name fits; at most `MOST_NAMES` buildings' a frame.
-const DISTRICT_NAMED: (f32, f32) = (90., 40.);
-const BUILDING_NAMED: (f32, f32) = (64., 34.);
-const MOST_NAMES: usize = 300;
-/// A building's name: quieter than a district's.
-const NAME: u32 = 0x52525c;
+/// Names of the root's folders on their ground, at most.
+const MOST_NAMES: usize = 24;
+/// Room kept between a name and the empty tab's hints, and the hints' backing, in points.
+const CLEAR: f32 = 28.;
 
 /// What was asked last: the folder, the folders git may run in, and the files lit then, each
 /// with whether its call ran (a file an agent wrote may be new, once the call ends).
@@ -48,25 +45,10 @@ pub struct Reader {
     jobs: Sender<(String, Vec<String>)>,
     reads: Receiver<(String, Option<Atlas>)>,
     asked: Option<Asked>,
-    held: HashMap<String, Rc<Atlas>>,
+    held: HashMap<String, Arc<Atlas>>,
     /// How many reads came: for the state of a test run.
     came: usize,
 }
-
-/// What the last frame drew of the city: for the state of a test run. No name is in it.
-#[derive(Default)]
-pub struct Drawn {
-    paints: usize,
-    places: usize,
-    groups: usize,
-    lit: Vec<[f32; 4]>,
-    /// Of the last paint: the quads and names drawn, and how long it took.
-    quads: usize,
-    labels: usize,
-    paint_us: u64,
-}
-
-pub type Shared = Rc<RefCell<Drawn>>;
 
 impl Reader {
     pub fn new() -> Self {
@@ -98,7 +80,7 @@ impl Reader {
                 self.held.clear();
             }
             match read {
-                Some(atlas) => self.held.insert(dir, Rc::new(atlas)),
+                Some(atlas) => self.held.insert(dir, Arc::new(atlas)),
                 None => self.held.remove(&dir),
             };
         }
@@ -142,95 +124,219 @@ fn read(dir: &Path, roots: &[String]) -> Option<Atlas> {
     (!files.is_empty()).then(|| atlas::atlas(&atlas::repo(&files)))
 }
 
+/// A picture asked for: the folder, its plan, the lit files (place ids, colours) and the size
+/// in pixels.
+#[derive(Clone, PartialEq)]
+struct Key {
+    dir: String,
+    plan: usize,
+    lit: Vec<(String, u32)>,
+    size: (u32, u32),
+}
+
+/// A picture made: where, in shares of it, the lit buildings and the root's folders' names are.
+struct Made {
+    key: Key,
+    image: Arc<RenderImage>,
+    lit: Vec<[f32; 4]>,
+    names: Vec<(String, (f32, f32))>,
+    places: usize,
+    groups: usize,
+    render_us: u64,
+}
+
+/// What the picture's thread said last, and what the last frame drew: for the state of a test
+/// run. No name or path is in it.
+#[derive(Default)]
+pub struct Drawn {
+    asked: Option<Key>,
+    made: Option<Made>,
+    /// Why there is no picture: no GPU, or the render failed. The lattice is drawn instead.
+    failed: Option<String>,
+    renders: usize,
+    paints: usize,
+    /// Of the last paint: where, in window points, and how many names.
+    bounds: Bounds<Pixels>,
+    labels: usize,
+}
+
+pub type Shared = Rc<RefCell<Drawn>>;
+
+/// Renders pictures on a thread of its own, the newest asked only. The GPU is opened at the
+/// first and kept; none (or `OTTOSPACE_CITY_NO_GPU` in a test run) and every picture fails.
+pub struct Painter {
+    jobs: Sender<(Key, Arc<Atlas>)>,
+    made: Receiver<(Key, Result<Made, String>)>,
+}
+
+impl Painter {
+    pub fn new() -> Self {
+        let gpu: RefCell<Option<Result<Gpu, String>>> = RefCell::new(None);
+        let (jobs, made) = crate::child::newest(move |(key, plan): (Key, Arc<Atlas>)| {
+            let mut gpu = gpu.borrow_mut();
+            let gpu = gpu.get_or_insert_with(|| {
+                let refused = std::env::var_os("OTTOSPACE_E2E").and(std::env::var_os("OTTOSPACE_CITY_NO_GPU"));
+                if refused.is_some() { Err("no GPU (test)".into()) } else { Gpu::new() }
+            });
+            let made = gpu.as_ref().map_err(Clone::clone).and_then(|gpu| make(gpu, &key, &plan));
+            (key, made)
+        });
+        Self { jobs, made }
+    }
+}
+
+/// The scene of `plan` and its picture, on the picture's thread.
+fn make(gpu: &Gpu, key: &Key, plan: &Atlas) -> Result<Made, String> {
+    let started = std::time::Instant::now();
+    let lit: Vec<(&str, u32)> = key.lit.iter().map(|(id, colour)| (id.as_str(), *colour)).collect();
+    let (w, h) = key.size;
+    let scene = scene::scene(plan, &lit, w as f32 / h as f32);
+    let Picture { width, height, bgra } = gpu.render(&scene, w, h)?;
+    let camera = scene.camera.ok_or("no camera")?;
+    let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
+    let image = Arc::new(RenderImage::new([image::Frame::new(image)]));
+    let lit = scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))).filter_map(|b| camera.bounds(b)).collect();
+    // A folder of the root is named at the front edge of its ground.
+    let plates = scene.blocks.iter().filter(|b| b.kind == Kind::Plate(1));
+    let named = plan.places.iter().filter(|p| p.group && p.depth == 1);
+    let names = named
+        .zip(plates)
+        .filter_map(|(place, b)| Some((place.label.clone(), camera.project([b.min[0], b.max[1], b.max[2]])?)))
+        .take(MOST_NAMES)
+        .collect();
+    let groups = plan.places.iter().filter(|p| p.group).count();
+    let render_us = started.elapsed().as_micros() as u64;
+    Ok(Made { key: key.clone(), image, lit, names, places: plan.places.len(), groups, render_us })
+}
+
 impl Drawn {
-    /// For the state of a test run: counts and where the lit buildings are, in window points.
-    pub fn snapshot(&self, reads: usize) -> serde_json::Value {
+    /// For the state of a test run: counts, the picture's size, where it and the lit buildings
+    /// are, in window points.
+    pub fn snapshot(&self, reads: usize, scale: f32) -> serde_json::Value {
+        let [x, y, w, h] = rect(self.bounds);
+        let lit: Vec<[f32; 4]> = (self.made.iter().flat_map(|made| &made.lit))
+            .map(|r| [x + r[0] * w, y + r[1] * h, r[2] * w, r[3] * h])
+            .collect();
+        let made = self.made.as_ref();
         serde_json::json!({
-            "places": self.places, "groups": self.groups, "lit": self.lit, "reads": reads, "paints": self.paints,
-            "quads": self.quads, "labels": self.labels, "paint_us": self.paint_us,
+            "places": made.map(|made| made.places), "groups": made.map(|made| made.groups),
+            "picture": made.map(|made| made.key.size), "bounds": [x, y, w, h], "scale": scale,
+            "lit": lit, "labels": self.labels, "failed": self.failed, "reads": reads,
+            "renders": self.renders, "paints": self.paints, "render_us": made.map(|made| made.render_us),
         })
     }
 }
 
-/// `place` within `bounds`, in points.
-fn within(place: &Place, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
-    let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-    let origin = bounds.origin + point(px(place.rect.x * w), px(place.rect.y * h));
-    Bounds { origin, size: size(px(place.rect.w * w), px(place.rect.h * h)) }
-}
-
-/// A building's quad inside `at`, its lot (the gap is the street). `None`: too small to draw;
-/// a lit one is drawn however small.
-fn building(at: Bounds<Pixels>, lit: bool) -> Option<Bounds<Pixels>> {
-    let (w, h) = (f32::from(at.size.width), f32::from(at.size.height));
-    if !lit && (w < SMALLEST || h < SMALLEST) {
-        return None;
+impl Workspace {
+    /// Asks for the city of the tab on show, on the titles' cadence; takes the pictures made.
+    /// Redraws when either came.
+    pub(crate) fn read_city(&mut self, cx: &mut Context<Self>) {
+        let key = self.model.city().map(|city| {
+            let lit = city.lit.iter().map(|lit| (lit.label.to_string(), lit.running)).collect();
+            (city.dir.to_string(), self.model.checkout_roots(), lit)
+        });
+        self.city.ask(key);
+        let mut redraw = self.city.take();
+        for (key, made) in self.city_painter.made.try_iter() {
+            let mut drawn = self.city_drawn.borrow_mut();
+            drawn.renders += 1;
+            redraw = true;
+            match made {
+                Ok(made) => (drawn.made, drawn.failed) = (Some(made), None),
+                // A failure of a picture no longer asked for says nothing.
+                Err(why) if drawn.asked.as_ref() == Some(&key) => drawn.failed = Some(why),
+                Err(_) => {}
+            }
+        }
+        if redraw {
+            cx.notify();
+        }
     }
-    let inset = STREET.min(w / 4.).min(h / 4.);
-    let origin = at.origin + point(px(inset), px(inset));
-    Some(Bounds { origin, size: size(px((w - 2. * inset).max(1.)), px((h - 2. * inset).max(1.))) })
+
+    /// The floor of a task's empty tab: the city's picture once one is made for its folder,
+    /// with the root's folders named and the hints backed; `lattice` until then, or with no
+    /// city, or no GPU. Asks for a picture when the plan, the lit files or the size changed.
+    pub(crate) fn render_city(&self, lattice: AnyElement) -> AnyElement {
+        let Some(city) = self.model.city() else { return lattice };
+        let Some(plan) = self.city.held.get(city.dir).cloned() else { return lattice };
+        // The checkout's own name: a file in its root is labelled with it.
+        let folder =
+            Path::new(city.dir).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let lit: Vec<(String, u32)> = (city.lit.iter())
+            .flat_map(|lit| {
+                let colour = theme::identity(lit.colour);
+                plan.labelled(lit.label, &folder).map(move |place| (place.id.clone(), colour)).collect::<Vec<_>>()
+            })
+            .collect();
+        let (dir, drawn, jobs) = (city.dir.to_string(), self.city_drawn.clone(), self.city_painter.jobs.clone());
+        let hints = self.home.borrow().hints();
+        let shows =
+            drawn.borrow().made.as_ref().is_some_and(|made| made.key.dir == dir && drawn.borrow().failed.is_none());
+        let picture = canvas(
+            move |bounds, window, _| {
+                // Pixels, as the window draws them: the picture is never scaled.
+                let scale = window.scale_factor();
+                let size = |v: Pixels| (f32::from(v) * scale).round() as u32;
+                let key = Key {
+                    dir,
+                    plan: Arc::as_ptr(&plan) as usize,
+                    lit,
+                    size: (size(bounds.size.width), size(bounds.size.height)),
+                };
+                let mut held = drawn.borrow_mut();
+                if held.asked.as_ref() != Some(&key) && key.size.0 > 0 && key.size.1 > 0 {
+                    let _ = jobs.send((key.clone(), plan));
+                    held.asked = Some(key);
+                }
+                held.bounds = bounds;
+                drop(held);
+                drawn
+            },
+            move |bounds, drawn: Shared, window, cx| paint(&drawn, bounds, hints, window, cx),
+        );
+        let picture = picture.absolute().size_full();
+        if shows {
+            picture.into_any_element()
+        } else {
+            div().size_full().child(lattice).child(picture).into_any_element()
+        }
+    }
+
+    /// For the state of a test run: what was drawn of the city on show; null with none.
+    pub(crate) fn city_snapshot(&self, scale: f32) -> serde_json::Value {
+        let on = self.model.city().is_some_and(|city| self.city.held.contains_key(city.dir));
+        if on { self.city_drawn.borrow().snapshot(self.city.came, scale) } else { serde_json::Value::Null }
+    }
+
+    /// File lists read so far, a city on show or not: for the counts of a test run.
+    pub(crate) fn city_reads(&self) -> usize {
+        self.city.came
+    }
 }
 
-/// Paints the plan: a district's ground a little lighter than what it lies in, with a line
-/// (stronger for a folder of the root); a building inside its lot, the gap the street; a lit
-/// building tinted and outlined in its agent's colour. Then the names that fit: a large
-/// district's, and a building's wide enough for its own.
-fn paint(
-    atlas: &Atlas,
-    lit: &HashMap<&str, u32>,
-    bounds: Bounds<Pixels>,
-    drawn: &Shared,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let started = std::time::Instant::now();
-    let (mut quads, mut groups, mut lit_at) = (0, 0, Vec::new());
-    let mut names: Vec<(&str, Point<Pixels>, f32, u32)> = Vec::new();
-    let ground = gpui::white().opacity(0.012);
-    for place in &atlas.places {
-        let at = within(place, bounds);
-        let (w, h) = (f32::from(at.size.width), f32::from(at.size.height));
-        if place.group {
-            groups += 1;
-            if w >= 1. && h >= 1. {
-                let line = if place.depth == 1 { theme::BORDER_STRONG } else { theme::BORDER };
-                window.paint_quad(fill(at, ground));
-                window.paint_quad(outline(at, Hsla::from(rgb(line)).opacity(0.8), gpui::BorderStyle::Solid));
-                quads += 2;
-            }
-            if place.depth == 1 && w >= DISTRICT_NAMED.0 && h >= DISTRICT_NAMED.1 {
-                names.push((&place.label, at.origin + point(px(STREET + 4.), px(STREET + 2.)), w, theme::MUTED));
-            }
-            continue;
-        }
-        let colour = lit.get(place.id.as_str());
-        let Some(lot) = building(at, colour.is_some()) else { continue };
-        match colour {
-            // A tint and a line, not a slab: a large file lit must not shout.
-            Some(colour) => {
-                let colour = Hsla::from(rgb(*colour));
-                window.paint_quad(fill(lot, colour.opacity(0.28)).corner_radii(px(2.)));
-                window.paint_quad(outline(lot, colour, gpui::BorderStyle::Solid));
-                quads += 2;
-                lit_at.push(rect(lot));
-            }
-            None => {
-                window.paint_quad(fill(lot, rgb(theme::RAISED)).corner_radii(px(2.)));
-                quads += 1;
-            }
-        }
-        // Under a district's own name there is no room for the first building's.
-        if w >= BUILDING_NAMED.0 && h >= BUILDING_NAMED.1 && names.len() < MOST_NAMES {
-            let colour = if colour.is_some() { theme::TEXT } else { NAME };
-            let (w, h) = (f32::from(lot.size.width), f32::from(lot.size.height));
-            names.push((&place.label, lot.origin + point(px(6.), px(h - 18.)), w, colour));
-        }
+/// The picture made for this folder, as large as the floor (a stale one stretched until the
+/// new one comes); a backing behind the hints, so they read over any building; and the root's
+/// folders' names, none behind the hints.
+fn paint(drawn: &Shared, bounds: Bounds<Pixels>, hints: Bounds<Pixels>, window: &mut Window, cx: &mut gpui::App) {
+    let mut drawn = drawn.borrow_mut();
+    let Some(made) = drawn.made.as_ref().filter(|made| Some(&made.key.dir) == drawn.asked.as_ref().map(|key| &key.dir))
+    else {
+        return;
+    };
+    if drawn.failed.is_some() {
+        return;
+    }
+    let _ = window.paint_image(bounds, Corners::default(), made.image.clone(), 0, false);
+    let clear = hints.dilate(px(CLEAR));
+    if hints.size.width > px(0.) {
+        window.paint_quad(fill(clear, Hsla::from(rgb(theme::BACKGROUND)).opacity(0.78)).corner_radii(px(CLEAR)));
     }
     let style = window.text_style();
     let mut labels = 0;
+    let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     // A name with a line break in it is not drawn: `shape_line` takes one line.
-    for (name, origin, room, colour) in names.into_iter().filter(|name| !name.0.contains(char::is_control)) {
-        let color = Hsla::from(rgb(colour));
+    for (name, (x, y)) in made.names.iter().filter(|(name, _)| !name.contains(char::is_control)) {
+        let color = Hsla::from(rgb(theme::MUTED));
         let run = TextRun {
             len: name.len(),
             font: style.font(),
@@ -239,72 +345,18 @@ fn paint(
             underline: None,
             strikethrough: None,
         };
-        let line = window.text_system().shape_line(name.to_string().into(), px(theme::TEXT_2XS), &[run], None);
-        // A name that does not fit its building is not cut: it is left out.
-        if f32::from(line.width) + 12. <= room && line.paint(origin, px(14.), window, cx).is_ok() {
+        let line = window.text_system().shape_line(name.clone().into(), px(theme::TEXT_2XS), &[run], None);
+        let at = bounds.origin + point(px(x * w + 4.), px(y * h + 2.));
+        let room = Bounds { origin: at, size: gpui::size(line.width, px(14.)) };
+        if !room.intersects(&clear)
+            && bounds.contains(&room.bottom_right())
+            && line.paint(at, px(14.), window, cx).is_ok()
+        {
             labels += 1;
         }
     }
-    let mut drawn = drawn.borrow_mut();
-    *drawn = Drawn {
-        paints: drawn.paints + 1,
-        places: atlas.places.len(),
-        groups,
-        lit: lit_at,
-        quads,
-        labels,
-        paint_us: started.elapsed().as_micros() as u64,
-    };
-}
-
-impl Workspace {
-    /// Asks for the city of the tab on show, on the titles' cadence; redraws when one came.
-    pub(crate) fn read_city(&mut self, cx: &mut Context<Self>) {
-        let key = self.model.city().map(|city| {
-            let lit = city.lit.iter().map(|lit| (lit.label.to_string(), lit.running)).collect();
-            (city.dir.to_string(), self.model.checkout_roots(), lit)
-        });
-        self.city.ask(key);
-        if self.city.take() {
-            cx.notify();
-        }
-    }
-
-    /// The city to draw in place of an empty tab's lattice: `None` with none on show, or none
-    /// read yet.
-    pub(crate) fn render_city(&self) -> Option<AnyElement> {
-        let city = self.model.city()?;
-        let atlas = self.city.held.get(city.dir)?.clone();
-        let lit: Vec<(String, u32)> =
-            city.lit.iter().map(|lit| (lit.label.to_string(), theme::identity(lit.colour))).collect();
-        // The checkout's own name: a file in its root is labelled with it.
-        let folder =
-            Path::new(city.dir).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-        let drawn = self.city_drawn.clone();
-        let plan = canvas(
-            |_, _, _| {},
-            move |bounds, _, window, cx| {
-                let colours: HashMap<&str, u32> = (lit.iter())
-                    .flat_map(|(label, colour)| {
-                        atlas.labelled(label, &folder).map(move |place| (place.id.as_str(), *colour))
-                    })
-                    .collect();
-                paint(&atlas, &colours, bounds, &drawn, window, cx);
-            },
-        );
-        Some(plan.absolute().size_full().into_any_element())
-    }
-
-    /// For the state of a test run: what was drawn of the city on show; null with none.
-    pub(crate) fn city_snapshot(&self) -> serde_json::Value {
-        let on = self.model.city().is_some_and(|city| self.city.held.contains_key(city.dir));
-        if on { self.city_drawn.borrow().snapshot(self.city.came) } else { serde_json::Value::Null }
-    }
-
-    /// File lists read so far, a city on show or not: for the counts of a test run.
-    pub(crate) fn city_reads(&self) -> usize {
-        self.city.came
-    }
+    drawn.paints += 1;
+    drawn.labels = labels;
 }
 
 #[cfg(test)]
@@ -322,33 +374,6 @@ mod tests {
             let started = std::time::Instant::now();
             let places = read(&top, &roots).map(|atlas| atlas.places.len());
             println!("{dir}: {places:?} places in {:.1} ms", started.elapsed().as_secs_f64() * 1000.);
-        }
-    }
-
-    /// What a frame costs before GPUI is handed a quad: the lit files found, each place put in
-    /// the window and each building's quad. `cargo test -p ottospace --release -- --ignored
-    /// a_frames_places_are_timed --nocapture`.
-    #[test]
-    #[ignore = "prints timings; run it by name, in release"]
-    fn a_frames_places_are_timed() {
-        for count in [500, 5_000, 20_000] {
-            let files: Vec<(String, u64)> = (0..count)
-                .map(|i| (format!("d{}/d{}/d{}/f{i}.rs", i % 12, i % 7, i % 5), 900 + i as u64 * 37))
-                .collect();
-            let atlas = atlas::atlas(&atlas::repo(&files));
-            let bounds = Bounds { origin: point(px(0.), px(0.)), size: size(px(1600.), px(1000.)) };
-            let (frames, mut quads) = (200, 0);
-            let started = std::time::Instant::now();
-            for _ in 0..frames {
-                let lit: HashMap<&str, u32> = (["d3/f3.rs", "d4/f404.rs"].iter())
-                    .flat_map(|label| atlas.labelled(label, "app").map(|place| (place.id.as_str(), 1)))
-                    .collect();
-                let buildings = atlas.places.iter().filter(|place| !place.group);
-                quads =
-                    buildings.filter_map(|place| building(within(place, bounds), lit.contains_key(&*place.id))).count();
-            }
-            let each = started.elapsed().as_secs_f64() * 1e6 / frames as f64;
-            println!("{count} files: {} places, {quads} buildings drawn, {each:.0} us a frame", atlas.places.len());
         }
     }
 }

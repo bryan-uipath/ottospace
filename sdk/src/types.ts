@@ -1515,20 +1515,29 @@ export interface Home {
   counts: Record<Group, number>;
 }
 
-/** What was drawn of the code city in a task's empty tab (`code_city`): counts, and no name. */
+/** The code city in a task's empty tab (`code_city`): a picture rendered on the GPU. Counts and
+ * rectangles, no name. */
 export interface CityDrawn {
-  /** Folders and files placed, and how many of them are folders. */
-  places: number;
-  groups: number;
+  /** Folders and files placed, and how many of them are folders: null until a picture is made. */
+  places: number | null;
+  groups: number | null;
+  /** The picture's size in pixels (the floor's bounds times `scale`): null with none. */
+  picture: [number, number] | null;
+  /** Where the floor was painted last, in window points, and the window's scale. */
+  bounds: Rect;
+  scale: number;
   /** Each lit building, in window points. */
   lit: Rect[];
-  /** How often the file list was read, and the city painted. */
-  reads: number;
-  paints: number;
-  /** Of the last paint: quads and names drawn, and how long it took, in microseconds. */
-  quads: number;
+  /** Root folders named on the last paint. */
   labels: number;
-  paint_us: number;
+  /** Why there is no picture (no GPU, a failed render): the lattice is drawn instead. */
+  failed: string | null;
+  /** How often the file list was read, a picture made, and the city painted. */
+  reads: number;
+  renders: number;
+  paints: number;
+  /** How long the last picture took: scene, render and read back, in microseconds. */
+  render_us: number | null;
 }
 
 /** What the home screen drew, in window points. */

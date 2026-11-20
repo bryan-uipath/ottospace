@@ -73,6 +73,7 @@ mod calendar;
 mod chat_select;
 mod child;
 mod city;
+mod city_gpu;
 mod clipboard;
 mod collect;
 mod commands;
@@ -1138,6 +1139,7 @@ struct Workspace {
     /// the last frame drew of it.
     city: city::Reader,
     city_drawn: city::Shared,
+    city_painter: city::Painter,
     status_fit: Cell<ottospace_core::status_bar::Fit>,
     status_said: Option<(u64, Option<u64>, bool)>,
     pr_opens: u32,
@@ -1728,6 +1730,7 @@ impl Workspace {
             status_git: status_bar::Reader::new(),
             city: city::Reader::new(),
             city_drawn: city::Shared::default(),
+            city_painter: city::Painter::new(),
             status_fit: Cell::default(),
             status_said: None,
             pr_opens: 0,
@@ -4002,9 +4005,10 @@ impl Workspace {
             // line with its list) and each node's click target by task id. Also how often
             // lattice lines were built and painted, here and in empty panes.
             "home_drawn": self.home.borrow().snapshot(),
-            // A test run only: the code city drawn in a task's empty tab (`code_city`): counts and
-            // the lit buildings' rectangles. Never a file's name.
-            "city": std::env::var_os("OTTOSPACE_E2E").map(|_| self.city_snapshot()),
+            // A test run only: the code city drawn in a task's empty tab (`code_city`): counts, the
+            // picture's size in pixels, where it and the lit buildings are, why there is none
+            // (`failed`). Never a file's name.
+            "city": std::env::var_os("OTTOSPACE_E2E").map(|_| self.city_snapshot(window.scale_factor())),
             // The pinned apps that are not running: `open_app` starts one. The Dock's and the
             // rest are in `apps_bar`: those are the user's to start.
             "closed_apps": self.pinned_closed().map(|app| app.name).collect::<Vec<_>>(),
