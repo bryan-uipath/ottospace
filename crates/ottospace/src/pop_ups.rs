@@ -6,6 +6,7 @@ use gpui::{
     AnyElement, AppContext, Context, InteractiveElement, IntoElement, MouseButton, ParentElement,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, rgb,
 };
+use ottospace_core::copy_ask::{self, Answer};
 use ottospace_core::layout::Axis;
 use ottospace_core::model::offers::Offer;
 use ottospace_core::model::offers::Placed;
@@ -330,8 +331,80 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A program's ask to copy (OSC 52) in its terminal's header: who, how much, what of it the
+    /// preview leaves out, and Copy · Always for this pane · ×. Only the user's click copies, on
+    /// the ask they saw, once it has been on show a moment (`copy_ask`): until then Copy is dim.
+    pub(crate) fn copy_header(&self, pane: PaneId, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let ask = self.model.copy_asks.get(&pane)?;
+        let id = ask.id;
+        // The header's `dir · program`: the program, else no name.
+        let title = self.titles.get(&pane).and_then(|t| t.rsplit_once(" · ")).map(|(_, program)| program.to_string());
+        let who = title.unwrap_or_else(|| "A program".into());
+        let amount = if ask.chars == 1 { "1 character".into() } else { format!("{} characters", grouped(ask.chars)) };
+        let what = if ask.too_large {
+            format!("{who} wanted to copy {amount}: too much, refused")
+        } else {
+            let p = copy_ask::preview(&ask.text, 24);
+            let mut what = match p.blank {
+                true => format!("{who} wants to copy {amount} of blank space"),
+                false => format!("{who} wants to copy {amount} “{}{}”", p.shown, if p.partial { "…" } else { "" }),
+            };
+            if p.lines > 1 {
+                what.push_str(&format!(" · {} lines", grouped(p.lines)));
+            }
+            if p.ends_with_newline {
+                what.push_str(" · ends with a newline");
+            }
+            what
+        };
+        let send = |answer| {
+            cx.listener(move |this: &mut Self, _: &gpui::ClickEvent, window: &mut Window, cx| {
+                this.offer_send(Action::CopyAnswer { pane, ask: id, answer, now: crate::now_ms() }, window, cx)
+            })
+        };
+        let colour = if ask.ready(crate::now_ms()) { theme::PRIMARY } else { theme::MUTED };
+        let buttons = (!ask.too_large).then(|| {
+            [
+                self.offer_button(format!("copy:{pane}.{id}"), "Copy", colour).on_click(send(Answer::Copy)),
+                self.offer_button(format!("copy-always:{pane}.{id}"), "Always for this pane", colour)
+                    .on_click(send(Answer::Always)),
+            ]
+        });
+        let dismiss = self.offer_button(format!("copy-dismiss:{pane}.{id}"), "×", theme::MUTED);
+        let chip = div()
+            .flex()
+            .min_w_0()
+            .items_center()
+            .gap_1()
+            .px_1()
+            .rounded_sm()
+            .border_1()
+            .border_color(rgb(theme::BORDER_STRONG))
+            .child(cut_text(what).text_color(rgb(theme::MUTED)))
+            .children(buttons.into_iter().flatten())
+            .child(dismiss.on_click(send(Answer::Dismiss)));
+        Some(chip.into_any_element())
+    }
+
+    /// A sneak label on a copy ask's pill (`copy:<pane>.<ask>`). False: not one of its controls.
+    fn click_copy(&mut self, kind: &str, name: &str, window: &Window, cx: &mut Context<Self>) -> bool {
+        let answer = match kind {
+            "copy" => Answer::Copy,
+            "copy-always" => Answer::Always,
+            "copy-dismiss" => Answer::Dismiss,
+            _ => return false,
+        };
+        let parsed = name.split_once('.').and_then(|(pane, ask)| Some((pane.parse().ok()?, ask.parse().ok()?)));
+        let Some((pane, ask)) = parsed else { return false };
+        self.offer_send(Action::CopyAnswer { pane, ask, answer, now: crate::now_ms() }, window, cx);
+        true
+    }
+
     /// A sneak label (or a click) on the chip. False: not one of its controls.
     pub(crate) fn click_offer(&mut self, kind: &str, name: &str, window: &Window, cx: &mut Context<Self>) -> bool {
+        if self.click_copy(kind, name, window, cx) {
+            return true;
+        }
         let Ok(id) = name.parse::<u32>() else { return false };
         match kind {
             "offer-close" => self.close_pane(id, window, cx),
@@ -457,4 +530,17 @@ impl Workspace {
         }
         Ok(())
     }
+}
+
+/// `1240` → `1,240`.
+fn grouped(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
 }
