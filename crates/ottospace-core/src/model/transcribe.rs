@@ -59,20 +59,27 @@ impl Model {
         self.panes.iter().filter(|pane| of_app(&pane.kind)).map(|pane| pane.id).collect()
     }
 
-    /// The red dot of the pane being heard, off show: none while its tab is on show (its header
-    /// has the dot), none for a source in no pane, and none in a hidden space (off the row).
-    pub fn listen_dot(&self) -> Option<listen::Dot> {
-        let pane = self.listen.pane()?;
-        let at = self.tab_panes().iter().position(|panes| panes.contains(&pane))?;
-        let tab = self.tabs.get(at).filter(|_| at != self.active)?;
-        if self.spaces().iter().any(|space| space.of == tab.space && space.hidden) {
-            return None;
+    /// The red dots of the panes heard (`listen_marked`) besides their headers': on each one's
+    /// space in the top row, and on its tab while its space is selected, on show or not (recording
+    /// stays in sight). None for a source in no pane, none in a hidden space (off the row).
+    pub fn listen_dots(&self) -> Vec<listen::Dot> {
+        let panes = self.tab_panes();
+        let mut dots = Vec::new();
+        for pane in self.listen_marked() {
+            let Some(tab) = panes.iter().position(|of| of.contains(&pane)).map(|at| &self.tabs[at]) else { continue };
+            if self.spaces().iter().any(|space| space.of == tab.space && space.hidden) {
+                continue;
+            }
+            let shown = tab.space == *self.shown_space();
+            for dot in
+                std::iter::once(listen::Dot::Space(tab.space.clone())).chain(shown.then_some(listen::Dot::Tab(tab.id)))
+            {
+                if !dots.contains(&dot) {
+                    dots.push(dot);
+                }
+            }
         }
-        Some(if tab.space == *self.shown_space() {
-            listen::Dot::Tab(tab.id)
-        } else {
-            listen::Dot::Space(tab.space.clone())
-        })
+        dots
     }
 
     /// The drawer shows the transcript only while nothing that takes keys is in it: the new-task
@@ -606,7 +613,7 @@ mod tests {
         );
         assert_eq!((m.listen.on.as_ref().map(|on| on.source), m.picker.is_none()), (Some(source), true));
         // In no pane: no dot anywhere but the rail; while it is on, no second picker.
-        assert_eq!(m.listen_dot(), None);
+        assert_eq!(m.listen_dots(), []);
         assert_eq!(m.update(picker(apps)), [Effect::Notice { text: listen::ONE_AT_A_TIME.into() }]);
         // An app the picker did not list is refused.
         m.update(Action::ListenStop { at: 6_000 });
@@ -662,26 +669,25 @@ mod tests {
         assert_eq!(m.transcripts.open, None, "a start shows the one on");
     }
 
-    /// The owner: "we show the record + time in 3 spots". The pane's own dot while its tab is on
-    /// show; off show, a dot on its tab (its space selected) or on its space in the top row.
+    /// The owner: "The Zoom workspace tab doesn't show 'recording' when selected". The dot is on
+    /// the space of the pane heard, and on its tab while its space is selected, on show or not.
     #[test]
-    fn the_dot_marks_the_tab_or_space_of_the_pane_heard_only_while_it_is_off_show() {
+    fn the_dot_marks_the_space_and_tab_of_the_pane_heard_selected_or_not() {
         let mut m = model();
         m.update(start(2));
-        assert_eq!(m.listen_dot(), None, "on show: the pane's header has it");
         let (tab, space) = (m.tabs[m.active].id, m.space().clone());
+        let both = vec![listen::Dot::Space(space.clone()), listen::Dot::Tab(tab)];
+        assert_eq!(m.listen_dots(), both, "on show: also its space and tab");
         m.update(Action::NewTab);
-        assert_eq!(m.listen_dot(), Some(listen::Dot::Tab(tab)));
+        assert_eq!(m.listen_dots(), both);
         m.update(Action::WorkbookNew { uid: "00000000000000a1".into() });
         assert_ne!(*m.space(), space);
-        assert_eq!(m.listen_dot(), Some(listen::Dot::Space(space)));
-        // Its pane's dot shows it: on show again, no dot elsewhere.
+        assert_eq!(m.listen_dots(), [listen::Dot::Space(space)], "its tab's row is not drawn");
         m.update(Action::ListenShow { on: true });
-        assert_eq!(m.listen_dot(), None);
+        assert_eq!(m.listen_dots(), both);
         // None on, none anywhere.
-        m.update(Action::NewTab);
         m.update(Action::ListenStop { at: 5_000 });
-        assert_eq!(m.listen_dot(), None);
+        assert_eq!(m.listen_dots(), []);
     }
 
     #[test]
@@ -981,6 +987,9 @@ mod tests {
         m.update(picker(vec![app(10, "Zoom", &["Zoom Meeting"], true), app(20, "Chrome", &[], false)]));
         m.update(Action::PickerChoose { index: Some(0) });
         assert_eq!(m.listen_marked(), [2, 3]);
+        // Its tab and space carry one dot each, as for a pane picked.
+        let both = vec![listen::Dot::Space(m.space().clone()), listen::Dot::Tab(m.tabs[m.active].id)];
+        assert_eq!(m.listen_dots(), both);
         // Ended by the shell: no mark at once.
         let ended = Action::ListenEnded { id: "p1".into(), why: Ended::AppQuit, at: 6_000 };
         m.update(Action::ListenBegan { id: "p1".into(), at: 5_000 }.sent_by(Origin::System));

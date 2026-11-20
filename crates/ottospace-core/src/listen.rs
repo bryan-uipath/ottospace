@@ -99,8 +99,8 @@ pub fn sound_rows(all: &[SoundApp]) -> Vec<SoundRow> {
     rows.collect()
 }
 
-/// Where the red dot of the pane being heard goes while its tab is not on show: on its tab in
-/// the second row (its space selected; a tab's id), else on its space in the top row.
+/// Where a red dot of the pane being heard goes besides its header (`Model::listen_dots`): its
+/// space in the top row, its tab in the second row (a tab's id).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Dot {
     Space(crate::model::Owner),

@@ -1777,7 +1777,7 @@ export interface Snapshot {
   /** Test runs only: where a transcript's controls were drawn, by id (`listen-start:3`,
    * `listen-header:<pane>`, `listen-stop:header-<pane>`, `listen-stop:view`, `listen-resume:view`,
    * `listen-menu`, `listen-view`,
-   * `listen-idle`, the off-show dot `listen-dot:space:<place>` or `listen-dot:tab:<id>`). Else null. */
+   * `listen-idle`, the tab and space dots `listen-dot:space:<place>` or `listen-dot:tab:<id>`). Else null. */
   listen_rects: Record<string, Rect> | null;
   /** Test runs only: where an offer chip's words (`words:<pane>`) and their tooltip (`tip`, while it shows) were drawn. Else null. */
   offer_rects: Record<string, Rect> | null;

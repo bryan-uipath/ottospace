@@ -7095,14 +7095,17 @@ impl Workspace {
             })
             .collect();
         let more = others - badges;
-        let dot = self.model.listen_dot();
+        let dots = self.model.listen_dots();
         // The heard pane's space left off for room: the count carries its dot.
-        let dot_in_more = matches!(&dot, Some(ottospace_core::listen::Dot::Space(of))
-            if !shown.iter().any(|(_, space)| space.of == *of));
+        let dot_in_more = dots.iter().any(|dot| {
+            matches!(dot, ottospace_core::listen::Dot::Space(of)
+            if !shown.iter().any(|(_, space)| space.of == *of))
+        });
         let spaces = shown.into_iter().map(|(place, space)| {
             let of = space.of.clone();
-            // The pane being heard is in this space, off show: a red dot at its corner.
-            let heard = (dot == Some(ottospace_core::listen::Dot::Space(of.clone())))
+            // The pane being heard is in this space, selected or not: a red dot at its corner.
+            let heard = dots
+                .contains(&ottospace_core::listen::Dot::Space(of.clone()))
                 .then(|| self.off_show_dot(format!("listen-dot:space:{place}"), cx).top(px(5.)).left(px(3.)));
             let on = of == selected;
             let small = of == Owner::Home || (compact && !on);
@@ -7436,7 +7439,7 @@ impl Workspace {
         }
         let colour = self.space_colour(&of);
         let chip = self.agent_chip(SPACE_TABS, cx);
-        let dot = self.model.listen_dot();
+        let dots = self.model.listen_dots();
         // The tab on show scrolls into view once, when it changes: a scroll may move it out again.
         // Asked after the row's layout: `scroll_to_item` reads the row's bounds of the frame before.
         let main = self.model.main_at();
@@ -7495,9 +7498,9 @@ impl Workspace {
                     .when(!active, |d| d.child(inner_shade(false, 6.)))
                     .hover(|s| s.text_color(rgb(theme::TEXT)))
                     .child(shown_mark(&self.marks, Mark::Tab(place)))
-                    // The pane being heard is in this tab, off show.
+                    // The pane being heard is in this tab, on show or not.
                     .children(
-                        (dot == Some(ottospace_core::listen::Dot::Tab(id)))
+                        dots.contains(&ottospace_core::listen::Dot::Tab(id))
                             .then(|| self.off_show_dot(format!("listen-dot:tab:{id}"), cx).top(px(6.)).left(px(3.))),
                     )
                     .children(
