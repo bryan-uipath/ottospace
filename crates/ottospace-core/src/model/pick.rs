@@ -153,7 +153,7 @@ impl Model {
         }
     }
 
-    /// No window came in time: the notice bar says so, and one that comes later stays outside.
+    /// No window came in time: a toast says so, and one that comes later stays outside.
     pub(super) fn new_window_late(&mut self, now: u64, effects: &mut Vec<Effect>) {
         if let Some(wait) = self.new_window.take_if(|wait| wait.since + new_window::WAIT_MS <= now) {
             effects.push(Effect::Failed { text: new_window::late(&wait.app) });

@@ -91,6 +91,7 @@ mod event_log;
 mod features;
 mod field;
 mod finish;
+mod float_panel;
 mod give_back;
 mod highlight;
 mod home;
@@ -106,7 +107,7 @@ mod markdown;
 mod marks;
 mod menus;
 mod new_task;
-mod notice_bar;
+mod notices;
 mod out_window;
 mod overlays;
 mod pass;
@@ -136,6 +137,7 @@ mod syntax;
 mod tags;
 mod talk;
 mod terminal;
+mod toast;
 mod trace;
 mod ui;
 mod viewer;
@@ -684,12 +686,12 @@ enum Mark {
     StatusPlace,
     StatusMeeting,
     StatusAgents,
-    /// The notice bar, its × and what it offers.
-    Notice,
-    NoticeClose,
-    NoticeOffer,
-    /// A workspace's Undo beside a higher notice.
-    NoticeUndo,
+    /// The toast's stack, and each card, its × and what it offers, by place from the top.
+    Toast,
+    ToastCard(usize),
+    ToastClose(usize),
+    ToastOffer(usize),
+    ToastNewTask(usize),
     /// The key reference's `Known · n`.
     KeysKnown,
     /// The new-task box's Switch, while it is pinned to another space.
@@ -979,7 +981,7 @@ struct Workspace {
     /// Pictures asked for and not taken yet, and the terminals whose visual cursor goes after one.
     pending: Vec<collect::Pending>,
     visual_after: Vec<PaneId>,
-    /// A global key that could not be registered, for the notice bar.
+    /// A global key that could not be registered, for the toast.
     key_notice: Option<String>,
     /// A test run's recording of its own window (`record_start`).
     recording: Option<record::Recording>,
@@ -1183,8 +1185,10 @@ struct Workspace {
     /// `error` as `bar_line` last saw it, and where its text was: the same words said again
     /// are a new line (a new `String`), e.g. the user's refusal after a client's same one.
     error_seen: (Option<String>, Option<usize>),
-    /// The notice bar's height as it opens and closes.
-    bar: notice_bar::Bar,
+    /// The toast as it comes and goes.
+    toast: notices::Toast,
+    /// The toast's floating panel, over a live app's window.
+    toast_panel: float_panel::Panel,
     /// False in e2e runs, which must never move the user's real windows.
     hosting: bool,
     /// While the window fills its display.
@@ -1273,7 +1277,7 @@ fn e2e_window() -> Option<(f32, f32)> {
 
 /// How long the `s` key snoozes a task: one hour.
 const SNOOZE_MS: u64 = 3_600_000;
-/// How long a step's information (`Effect::Told`) stays in the notice bar.
+/// How long a step's information (`Effect::Told`) stays in the toast.
 const TOLD_FOR: Duration = Duration::from_secs(8);
 
 /// Longest a `wait` request may run: 10 minutes.
@@ -1516,6 +1520,9 @@ impl Workspace {
                         if ticks.every(6, 0) && this.notice_changed() {
                             cx.notify();
                         }
+                        if ticks.every(3, 0) {
+                            this.sync_toast_panel(window, cx);
+                        }
                         // The header's time goes on while an agent runs.
                         let runs = this.model.talk.as_ref().is_some_and(|t| t.open && this.model.agent_runs(&t.task));
                         if runs && ticks.every(30, 0) {
@@ -1610,12 +1617,12 @@ impl Workspace {
         // A folder that could not be listed is left alone: writing could replace tasks it holds.
         let keeping = kept.error.is_none();
         model.update(Action::RestoreTasks { tasks: kept.tasks, floor: kept.highest }.sent_by(Origin::System));
-        // The first problem found at start, for the notice bar: settings, the font, then tasks.
+        // The first problem found at start, for the toast: settings, the font, then tasks.
         let unread = (unread > 0).then(|| format!("tasks: {unread} file(s) in the tasks folder could not be read"));
         let notice = config::get().error.clone().or(terminal::choose_font(window)).or(kept.error).or(unread);
         // A crashed run's drafts are deleted, not restored.
         editor::sweep();
-        // What `settings.json` says at start: what is wrong in it stays in the notice bar until mended.
+        // What `settings.json` says at start: what is wrong in it stays in the toast until mended.
         let settings_read = config::settings_stamp();
         if let Some(text) = config::get().home.as_ref().map(|_| config::settings_text().unwrap_or_default()) {
             model.update(Action::SettingsRead { text, written: false }.sent_by(Origin::System));
@@ -1753,7 +1760,8 @@ impl Workspace {
             broke: None,
             bar_line: notice::Held::default(),
             error_seen: (None, None),
-            bar: notice_bar::Bar::default(),
+            toast: notices::Toast::default(),
+            toast_panel: float_panel::Panel::default(),
             notice,
             settings_looked: settings_read,
             settings_read,
@@ -2257,7 +2265,7 @@ impl Workspace {
         if asked {
             self.error = (!unhosted.is_empty()).then(|| unhosted.join("; "));
         }
-        // The app wrote `settings.json`: the notice bar speaks of the file as written.
+        // The app wrote `settings.json`: the toast speaks of the file as written.
         let wrote = effects.iter().any(|effect| {
             matches!(effect, Effect::SaveApps { .. } | Effect::SaveRepos { .. } | Effect::SaveTasksView { .. })
         });
@@ -2463,7 +2471,7 @@ impl Workspace {
             || model.row_menu().is_some()
             || model.agent.menu.is_some()
             || clip.is_some_and(|clip| now.saturating_sub(clip.at) < clip::PULSE_MS + 100)
-            || self.bar.moves()
+            || self.toast.moves()
             || self.notice_changed()
             || talk.is_some_and(|talk| model.agent_runs(&talk.task))
             || self.stall.watching()
@@ -2592,7 +2600,7 @@ impl Workspace {
     /// Replies with the state. In a test run, not before a frame has drawn every action so far,
     /// so the bounds in the reply are of the new layout, never the one before it.
     fn answer(&mut self, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
-        if self.settles && (self.drawn_seq < self.seq || self.bar.moves() || self.notice_changed()) {
+        if self.settles && (self.drawn_seq < self.seq || self.toast.moves() || self.notice_changed()) {
             self.settling.push((Instant::now(), reply));
             cx.notify();
         } else {
@@ -2605,8 +2613,8 @@ impl Workspace {
     /// waited `SETTLE_LIMIT`, or all of them with `now` (the app quits), goes as it is, marked
     /// `"stale":true` if undrawn: the window drew no frame (hidden, or stuck).
     fn settle(&mut self, now: bool, window: &Window, cx: &mut Context<Self>) {
-        // Nor while the notice bar opens or closes: the bounds are of the layout at rest.
-        let drawn = self.drawn_seq >= self.seq && !self.bar.moves() && !self.notice_changed();
+        // Nor while the toast comes or goes: its rects are of it at rest.
+        let drawn = self.drawn_seq >= self.seq && !self.toast.moves() && !self.notice_changed();
         let (due, waiting) = std::mem::take(&mut self.settling)
             .into_iter()
             .partition(|(since, _)| drawn || now || since.elapsed() >= SETTLE_LIMIT);
@@ -3913,13 +3921,13 @@ impl Workspace {
             "font": terminal::font_in_use(),
             "cell": [f32::from(self.cell.width), f32::from(self.cell.height)],
             // What the last step said (a client's refusal is here alone, never on the user's bar),
-            // else what the notice bar says, or null. Not `error`: that key means the request failed.
+            // else what the toast says, or null. Not `error`: that key means the request failed.
             "notice": status.as_ref().map(Notice::public_text),
             // Its level: `info` (a restart to ask for), `warning` (a move that did nothing),
             // `meeting` (a meeting started: `notice` is "Meeting started") or `error`.
             "notice_level": status.as_ref().map(Notice::level),
-            // The bar as drawn: its rect, and its height while it opens or closes. Null: no bar.
-            "notice_bar": self.notice_snapshot(),
+            // The toast as drawn: its cards, and how far in while it comes or goes. Null: none.
+            "toast": self.toast_snapshot(),
             // Where each draft's row of the quit question is drawn, by its place in `confirm.unsent`.
             "quit_rows": self.quit_rows(),
             // How many problems the last read of `settings.json` found.
@@ -4051,6 +4059,8 @@ impl Workspace {
                 "city_reads": self.city_reads(),
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
+                // Frames the toast asked for as it came or went: none under Reduce Motion.
+                "toast_frames": self.toast.frames,
                 // Frames drawn while the calendar band's loading bar slides: none once a read lands.
                 "band_frames": self.timeline.band_frames.get(),
                 // Frames that drew the Calendar section's day: none at rest, its now line moves on the minute.
@@ -4590,7 +4600,7 @@ impl Workspace {
         // Only on a check, with windows hosted: it asks each display's mode, and this runs every frame.
         let spot = (check && !self.hosted.is_empty()).then(|| display::parking_spot(scale));
         let live = self.model.live;
-        // Under the notice bar as it is in this frame: the windows follow it as it opens and closes.
+        // The windows follow their panes as laid out in this frame.
         let limit = top_limit(window, cx);
         let keep = self.bars_leave();
         // While a divider is dragged, no window is resized: once more on release (`divider_released`), not each frame.
@@ -5799,7 +5809,7 @@ impl Workspace {
     /// listed already is known, and after, from the directories as they then are. If the
     /// settings were not written the directories are as before: the next try writes again.
     fn change_repos(&mut self, action: Action, origin: Origin, window: &Window, cx: &mut Context<Self>) {
-        // A refused one (a client's) leaves the notice bar and the list alone.
+        // A refused one (a client's) leaves the toast and the list alone.
         if self.model.refusal(&action, origin).is_some() {
             self.dispatch(action, origin, window, cx);
             return;
@@ -7076,7 +7086,7 @@ impl Workspace {
                     .tooltip(move |_, cx| {
                         // A temporary workspace's × discards it, Undo aside.
                         let tip = if temporary {
-                            "Close (⌘⌃W): not kept, Undo on the notice bar"
+                            "Close (⌘⌃W): not kept, Undo on the toast"
                         } else {
                             "Hide (⌘⌃W): nothing in it stops"
                         };
@@ -7649,12 +7659,6 @@ fn title_shadow() -> Div {
         blur_radius: px(14.),
         spread_radius: px(-8.),
     }])
-}
-
-/// `inner` as if it lay under the app, seen through a gap: a shadow falls on its top and bottom
-/// edges, `depth` points deep. The shadows take no room and no clicks; the caller sizes the result.
-pub(crate) fn recessed(inner: impl IntoElement, depth: f32) -> Div {
-    div().relative().overflow_hidden().child(inner).child(inner_shade(true, depth)).child(inner_shade(false, depth))
 }
 
 /// The shadow cast into a box from its top (`top`) or bottom edge, `depth` points deep: the box
@@ -8382,7 +8386,7 @@ impl Render for Workspace {
         let seal = self.render_seal(window, cx);
         let card_seal = self.render_card_seal(window);
         self.bars.begin();
-        self.move_notice_bar(window);
+        self.move_toast(window);
         // The Repos list, the tabs and spaces, and ⌘/'s Known are noted again only while drawn.
         let drawn_anew = |mark: &Mark| {
             matches!(
@@ -8392,6 +8396,10 @@ impl Render for Workspace {
                     | Mark::BarHeader
                     | Mark::TasksDot
                     | Mark::Tab(_)
+                    | Mark::ToastCard(_)
+                    | Mark::ToastClose(_)
+                    | Mark::ToastOffer(_)
+                    | Mark::ToastNewTask(_)
                     | Mark::Space(_)
                     | Mark::KeysKnown
                     | Mark::ComposeSwitch
@@ -8532,8 +8540,6 @@ impl Render for Workspace {
                     // Highest, the title strip: its shadow falls on all three zones.
                     .child(title_shadow()),
             )
-            // The notice bar, at the foot: nothing above it moves when it opens, but the content's foot.
-            .children(self.render_notice_bar(cx))
             // The meeting timeline, directly above the status bar.
             .children(self.render_timeline(cx))
             .child(self.render_status(window, cx))
@@ -8546,6 +8552,8 @@ impl Render for Workspace {
                     .map(ax_debug::Overlay::render),
             )
             .children(self.render_inspector_outline())
+            // The toast, over the panes at the top right: it takes no room. A live app's window is above it.
+            .children(self.render_toast(right_width, centre - right_width, cx))
             // Over everything of ottospace's own. It is never on while an app's window is.
             .children(self.render_row_menu(window, cx))
             .children(self.render_agent_menu(window, cx))
@@ -8797,7 +8805,7 @@ fn main() {
             let registered = hotkey::key_code(&name)
                 .ok_or_else(|| "it is not one of f13-f20".to_string())
                 .and_then(hotkey::register);
-            // A key another app holds is said in the notice bar too: stderr is seen by nobody.
+            // A key another app holds is said in the toast too: stderr is seen by nobody.
             let returns = registered.err().map(|err| format!("return key {} is off: {err}", name.to_uppercase()));
             if returns.is_none() {
                 let _ = RETURN_KEY.set(name.to_uppercase());

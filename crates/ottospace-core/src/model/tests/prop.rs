@@ -3396,11 +3396,11 @@ struct Run {
     /// The app elements labelled when nothing was last typed: a press must be of one of them,
     /// so every letter of its label was typed after the label was drawn.
     drawn_before: Vec<String>,
-    /// The notice bar's slot for a step's line, kept as the shell keeps it (`notice::Held`).
+    /// The toast's slot for a step's line, kept as the shell keeps it (`notice::Held`).
     held: crate::notice::Held,
 }
 
-/// What the notice bar shows: the step's line it holds, the settings' line, the editor's note.
+/// What the toast shows: the step's line it holds, the settings' line, the editor's note.
 fn bar(m: &Model, held: &crate::notice::Held) -> Option<crate::notice::Notice> {
     use crate::notice::{Kind, Notice};
     let settings = m.settings_line().map(|text| Notice { kind: m.settings_kind(), text });
@@ -4335,7 +4335,7 @@ impl Run {
             self.held = self.held.after(Some(crate::notice::Notice { kind, text }), origin);
             ensure!(
                 origin == Origin::User || bar(m, &self.held) == bar_before,
-                "{origin:?}'s refused {action:?} changed the notice bar: {:?}, was {bar_before:?}",
+                "{origin:?}'s refused {action:?} changed the toast: {:?}, was {bar_before:?}",
                 bar(m, &self.held)
             );
         }

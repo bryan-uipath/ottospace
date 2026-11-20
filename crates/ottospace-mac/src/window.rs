@@ -376,6 +376,37 @@ pub unsafe fn keep_on_top(ns_view: *mut c_void, click_through: bool) {
     }
 }
 
+/// Makes the view's panel (GPUI's pop-up, non-activating) float over other apps' ordinary
+/// windows, as a hosted app's is, while this app is not the front one: kept when it deactivates,
+/// on the one Space it was shown on (not every Space), out of ⌘` and Mission Control.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread.
+pub unsafe fn float_panel(ns_view: *mut c_void) {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    if let Some(window) = view.window() {
+        window.setLevel(NSFloatingWindowLevel);
+        window.setHidesOnDeactivate(false);
+        // A click does not make it key: the keys stay with the app in front.
+        let _: () = unsafe { msg_send![&*window, setBecomesKeyOnlyIfNeeded: true] };
+        // Managed, not Transient (which floats to the Space on show): it stays on its own.
+        let behavior = window.collectionBehavior()
+            & !(NSWindowCollectionBehavior::CanJoinAllSpaces | NSWindowCollectionBehavior::Transient);
+        window.setCollectionBehavior(
+            behavior | NSWindowCollectionBehavior::Managed | NSWindowCollectionBehavior::IgnoresCycle,
+        );
+    }
+}
+
+/// Whether the view's window is on the Space shown.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread.
+pub unsafe fn on_active_space(ns_view: *mut c_void) -> bool {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    view.window().is_some_and(|window| window.isOnActiveSpace())
+}
+
 /// Puts the window in front of other apps' windows without making this app the front app.
 /// For when another app is to keep the keyboard, with ottospace visible under its window.
 ///

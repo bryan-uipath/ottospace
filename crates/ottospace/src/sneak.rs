@@ -328,25 +328,19 @@ impl Workspace {
                     Action::TaskCard { id, ticket: ticket.filter(|_| at < ottospace_core::tasks::PENDING_LINES) }
                 })
             }
-            // The notice bar's × and its offer: the core takes both from the user alone.
-            ("notice", "close") => {
-                self.dismiss_notice(window, cx);
-                None
-            }
-            ("notice", "undo") => {
-                let shown = self.notice_shown().and_then(|shown| self.undo_beside(&shown));
-                if let Some(undo) = shown {
-                    self.take_undo_beside(&undo.text, window, cx);
-                }
-                None
-            }
-            ("notice", "new-task") => {
-                self.new_task_here(window, cx);
-                None
-            }
-            ("notice", "offer") => {
-                if let Some((drawn, _)) = self.notice_shown().and_then(|shown| self.notice_offer(&shown)) {
-                    self.take_notice_offer(drawn, window, cx);
+            // A toast card's ×, its offer and Done's New task here, `<n>:close`: the core takes each from the user alone.
+            ("toast", _) => {
+                let (at, what) = name.split_once(':').unwrap_or((name, ""));
+                let card = at.parse::<usize>().ok().and_then(|at| self.notice_stack().0.into_iter().nth(at));
+                match (card, what) {
+                    (Some(card), "close") => self.dismiss_card(&card, window, cx),
+                    (Some(card), "new-task") if self.offers_new_task(&card) => self.new_task_here(window, cx),
+                    (Some(card), "offer") => {
+                        if let Some((offer, _)) = self.notice_offer(&card) {
+                            self.take_notice_offer(&card, offer, window, cx);
+                        }
+                    }
+                    _ => {}
                 }
                 None
             }

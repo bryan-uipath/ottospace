@@ -831,7 +831,7 @@ pub enum Action {
     RestoreKeyUse {
         uses: KeyUse,
     },
-    /// × on the notice bar, or Esc when nothing else takes it: the notice of kind `notice` that says
+    /// × on the toast, or Esc when nothing else takes it: the notice of kind `notice` that says
     /// `text` goes. The user's alone.
     NoticeDismiss {
         notice: crate::notice::Kind,
@@ -1595,7 +1595,7 @@ pub enum Action {
     /// Take the last delete or update of a workbook back, or a temporary one's close.
     WorkbookUndo,
     /// The user's Undo on a closing temporary workspace's row: back on the row, selected, as it was.
-    /// Each closing one keeps its own until its time is up, whatever the notice bar offers since.
+    /// Each closing one keeps its own until its time is up, whatever the toast offers since.
     WorkbookReopen {
         workbook: WorkbookId,
     },
@@ -1791,7 +1791,7 @@ pub enum Action {
         id: Subject,
     },
     /// ✓ Done in a task's conversation header, ⌘↵ in it, or its offer under the last reply: the
-    /// task is done, its agent stopped, it leaves the rail; the notice bar's Undo brings it back.
+    /// task is done, its agent stopped, it leaves the rail; the toast's Undo brings it back.
     /// Not while a turn runs: Cancel (`TalkInterrupt`) is in its place. Only the user's.
     TaskDone {
         id: TaskId,
@@ -1801,7 +1801,7 @@ pub enum Action {
     TaskLater {
         id: TaskId,
     },
-    /// Undo on the notice bar's "Done · <task>": the task as it was. Only the user's.
+    /// Undo on the toast's "Done · <task>": the task as it was. Only the user's.
     DoneUndo,
     /// New task here on the notice bar's "Done · <task>": the new-task box, in the task's
     /// workspace. Only the user's. Never acted on: `done_new_task` turns the user's into `OpenCompose`.
@@ -1906,7 +1906,7 @@ pub enum Action {
         in_call: Option<bool>,
         at: u64,
     },
-    /// The meeting notice's Dismiss (× on the notice bar): no more alerts of that event. Only the user's.
+    /// The meeting notice's Dismiss (× on the toast): no more alerts of that event. Only the user's.
     CalendarDismiss {
         id: u64,
     },
@@ -3175,7 +3175,7 @@ pub enum Effect {
     SaveRepos {
         dirs: Vec<repos::RepoDir>,
     },
-    /// Say `text` in the notice bar as information: what the user's own step did.
+    /// Say `text` in the toast as information: what the user's own step did.
     Told {
         text: String,
     },
@@ -3225,12 +3225,12 @@ pub enum Effect {
     ApplySettings {
         settings: Box<crate::settings::Settings>,
     },
-    /// Say this in the notice bar, as an error: what the user asked for did not happen, found
+    /// Say this in the toast, as an error: what the user asked for did not happen, found
     /// later (a timer's step).
     Failed {
         text: String,
     },
-    /// Say this in the notice bar, as a warning: why a move of the user's did nothing.
+    /// Say this in the toast, as a warning: why a move of the user's did nothing.
     Notice {
         text: String,
     },
@@ -4774,7 +4774,7 @@ impl Model {
             // A click on a pane, an app's among them.
             | Action::Focus { .. }
             | Action::Enter { .. }
-            // The notice bar's "Open settings": the keyboard goes to the editor's tab.
+            // The toast's "Open settings": the keyboard goes to the editor's tab.
             | Action::EditSettings => Some(true),
             _ => None,
         }
@@ -9124,7 +9124,7 @@ impl Model {
     }
 
     /// `settings.json` read again: right, what applies as the app runs is told again; wrong,
-    /// the last good settings stay. The notice bar says which (`settings_line`).
+    /// the last good settings stay. The toast says which (`settings_line`).
     fn settings_read(&mut self, text: &str, written: bool, effects: &mut Vec<Effect>) {
         let settings = self.settings_file.read(text, written);
         // A dismissed line that is fixed, or says something else now, is dismissed no more.
@@ -9152,7 +9152,7 @@ impl Model {
         effects.push(Effect::ApplySettings { settings: Box::new(settings) });
     }
 
-    /// What the notice bar says of `settings.json`: its first problem, or the keys that need a restart.
+    /// What the toast says of `settings.json`: its first problem, or the keys that need a restart.
     pub fn settings_line(&self) -> Option<String> {
         self.settings_file.line()
     }
@@ -12573,7 +12573,7 @@ mod tests {
             m.update(action.clone().sent_by(origin));
             assert_eq!((line(&m), cursor(&m), m.mode()), ("mine", Some(3), Mode::Compose), "{action:?}");
         }
-        // The notice bar is beside the box too. Its ×: the notice goes, the line, the cursor and
+        // The toast is beside the box too. Its ×: the notice goes, the line, the cursor and
         // the keyboard stay. Its "Open settings": the editor's tab, and the line is put aside.
         let mut m = boxed();
         let dismiss = Action::NoticeDismiss { notice: crate::notice::Kind::SettingsProblem, text: "1:2".into() };

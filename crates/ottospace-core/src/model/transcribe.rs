@@ -207,7 +207,7 @@ impl Model {
                 }
             }
             Action::ListenWindows { id, windows, at } => self.listen_windows(&id, &windows, at, effects),
-            // The shell that reports the end says why on the notice bar (`Ended::said`).
+            // The shell that reports the end says why on the toast (`Ended::said`).
             Action::ListenFailed { id, .. } => {
                 self.listen_end(Some(&id), None, effects);
             }

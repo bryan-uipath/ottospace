@@ -31,8 +31,6 @@ pub(crate) struct Sealing {
     item: Option<Bounds<Pixels>>,
     /// Its place among the rail's tasks: kept empty until it lands, so the next does not move up under it.
     slot: Option<usize>,
-    /// The notice bar's height then: what it rose by since is cut from the drawer's foot.
-    bar: f32,
 }
 
 /// The seal playing, if one is, and the frames it asked for (`counts`, test runs).
@@ -61,8 +59,7 @@ impl Workspace {
             ids.filter_map(|id| self.controls.bounds(&control(id))).filter(|b| b.origin.y < at.origin.y).count()
         };
         let slot = item.as_ref().map(above);
-        let bar = self.bar.height;
-        self.seals.now = Some(Sealing { task, since: Instant::now(), panel, item, slot, bar });
+        self.seals.now = Some(Sealing { task, since: Instant::now(), panel, item, slot });
     }
 
     /// A Decisions card was answered: its seal plays over the card pane, the next card under it.
@@ -113,8 +110,6 @@ impl Workspace {
         self.seals.spark_frames += u64::from(!frame.sparks.is_empty());
         window.request_animation_frame();
         let sealing = self.seals.now.as_ref()?;
-        // Above the notice bar, which rises as Done's line opens: the content's foot rises with it.
-        let bar = px((self.bar.height - sealing.bar).max(0.));
         // The drawer's own header and conversation, drawn as they were, fading out under the ring.
         let subject = Subject::Task(sealing.task);
         let width = sealing.panel.map(|panel| panel.size.width);
@@ -136,10 +131,7 @@ impl Workspace {
                 .child(body)
         });
         let sealing = self.seals.now.as_ref()?;
-        let panel = sealing.panel.map(|mut panel| {
-            panel.size.height = (panel.size.height - bar).max(px(0.));
-            ghost_panel(panel, frame.clone(), content)
-        });
+        let panel = sealing.panel.map(|panel| ghost_panel(panel, frame.clone(), content));
         let landed = t >= seal::FOLD_MS;
         let item = sealing.item.filter(|_| landed).and_then(|item| self.ghost_item(sealing.task, item, &frame));
         let layer = div().absolute().top_0().left_0().size_full().children(panel).children(item);

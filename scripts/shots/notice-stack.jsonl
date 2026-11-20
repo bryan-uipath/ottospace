@@ -1,0 +1,15 @@
+# A temporary workspace closed (Undo), then a settings mistake: the error is the top card, and
+# the workspace's Undo stays in view under it, so it cannot run out unseen.
+{"cmd":"split"}
+{"cmd":"wait","pattern":"^\\$"}
+{"cmd":"type","text":"clear && for i in $(seq 1 60); do echo notices $i; done\r"}
+{"cmd":"wait","pattern":"^notices 60$"}
+{"click":"top:new_workspace"}
+{"click":"space-hide:1"}
+{"until":"notice_level","is":"info"}
+{"settle":300}
+{"shot":"undo"}
+{"write":"home/settings.json","text":"{\"repos\": [], \"tasks_view\": \"project\",}\n"}
+{"until":"notice_level","is":"error"}
+{"settle":300}
+{"shot":"error-and-undo"}

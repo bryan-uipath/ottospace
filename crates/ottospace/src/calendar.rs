@@ -1,5 +1,5 @@
 //! The meeting timeline's shell: reads the calendar feed off the main thread, draws the band
-//! (a started meeting is a notice on the notice bar: `notice_bar`), looks whether a call is
+//! (a started meeting is a notice on the toast: `notices`), looks whether a call is
 //! on, and alerts. The decisions are the core's (`ottospace_core::calendar`).
 //!
 //! The feed is ottospace's only network access: `/usr/bin/curl`, `https:` only, its link on curl's
@@ -678,7 +678,7 @@ impl Workspace {
             "band_line": calendar.band_shows().line(self.timeline.reduce_motion),
             "band_rect": drawn(Mark::Band),
             "band_retry": at("calendar-band-retry".into()),
-            // The meeting on the notice bar: where its Join and × are (null: not drawn).
+            // The meeting on the toast: where its Join and × are (null: not drawn).
             "banner": banner.map(|_| serde_json::json!({ "join": controls.0, "dismiss": controls.1 })),
             "alerts": calendar.given,
             // The Calendar section: its day (0 today, -1 yesterday) and that day's local midnight,

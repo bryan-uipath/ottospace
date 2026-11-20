@@ -1,7 +1,7 @@
 # Transcripts: what it hears, for the eye alone. The level meter and "Hearing speech" in the
 # drawer's header while made-up lines come (transcript-hearing/fixture.jsonl: a level every
 # 100 ms, then the volatile line); then "No sound for 30 s" once the levels stop; then the grey dot
-# of a stream lost, with the notice bar's why. A terminal pane stands in for an app's.
+# of a stream lost, with the toast's why. A terminal pane stands in for an app's.
 {"env":{"OTTOSPACE_FEATURES":"transcripts","OTTOSPACE_LISTEN_FIXTURE":"{ROOT}/fixture.jsonl"}}
 {"cmd":"split"}
 {"cmd":"wait","pattern":"^\\$"}

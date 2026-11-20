@@ -1,4 +1,5 @@
-//! The notice bar: one app-level message at the window's foot, by level.
+//! Notices: app-level messages, by level, drawn as toast cards over the window's top right.
+//! They take no room: the panes never move for one.
 
 use serde::Serialize;
 
@@ -147,7 +148,7 @@ impl Notice {
     }
 
     /// A level glyph, so the level is not said by colour alone. Never a cross: × is Dismiss.
-    /// An error's `!` is drawn in a filled circle (`notice_bar::glyph`).
+    /// An error's `!` is drawn in a filled circle (`ui::notice_line`).
     pub fn glyph(&self) -> &'static str {
         match self.level() {
             Level::Error => "!",
@@ -166,20 +167,30 @@ impl Notice {
     }
 }
 
-/// The one notice the bar shows of `live` (newest and most pressing first, as the shell lists
+/// The notice on top (the toast's first card, what Esc dismisses) of `live` (newest and most pressing first, as the shell lists
 /// them): the first of the highest level, so an error is not replaced by information. One the
 /// user dismissed (`hidden`) is not shown again while it says the same.
 pub fn shown(live: &[Notice], hidden: &[Notice]) -> Option<Notice> {
-    let live = live.iter().filter(|notice| !hidden.contains(notice));
-    // `max_by_key` gives the last of equals: reversed, the first.
-    live.rev().max_by_key(|notice| notice.level()).cloned()
+    stack(live, hidden).0.into_iter().next()
 }
 
-/// A workspace's Undo (`undo`, from `Workbooks::notice`) still offered while another notice
-/// (`shown`: an error, a meeting) has the bar: drawn beside it, so it cannot run out unseen. None
-/// while the bar says it itself, or the user dismissed it.
-pub fn undo_beside(shown: &Notice, undo: Option<Notice>, hidden: &[Notice]) -> Option<Notice> {
-    undo.filter(|undo| shown.kind != Kind::Undo && !hidden.contains(undo))
+/// How many cards the toast shows; the rest are "+N more".
+pub const CARDS: usize = 3;
+
+/// The toast's cards of `live` (as `shown` takes them): the most pressing first, of one level
+/// the newer, so the first is `shown`'s. At most `CARDS`, and how many more there are. Undos
+/// past them take the last places (both a workspace's and a task's), so none runs out unseen.
+pub fn stack(live: &[Notice], hidden: &[Notice]) -> (Vec<Notice>, usize) {
+    let mut all: Vec<Notice> = live.iter().filter(|notice| !hidden.contains(notice)).cloned().collect();
+    // Stable: of one level, the order they came in.
+    all.sort_by_key(|notice| std::cmp::Reverse(notice.level()));
+    // Past the first `CARDS - undos` places, Undos first; the top card stays the most pressing.
+    let undos = all.iter().filter(|notice| notice.kind == Kind::Undo).count().min(CARDS - 1);
+    let head = (CARDS - undos).min(all.len());
+    all[head..].sort_by_key(|notice| notice.kind != Kind::Undo);
+    let more = all.len().saturating_sub(CARDS);
+    all.truncate(CARDS);
+    (all, more)
 }
 
 /// Whether a failure of `by`'s step may take the place of the one `shown_by` caused: a
@@ -228,15 +239,13 @@ impl Held {
     }
 }
 
-/// The bar's height when open, in points.
-pub const HEIGHT: f32 = 28.;
-/// How long it takes to open or close, in milliseconds.
+/// How long the toast takes to come in or go, in milliseconds.
 pub const OPEN_MS: f32 = 180.;
 
-/// The bar's height `elapsed` ms after it began to move from `from` towards open or closed:
-/// eased out. With reduced motion it is there at once.
-pub fn height(from: f32, open: bool, elapsed: f32, reduced: bool) -> f32 {
-    let to = if open { HEIGHT } else { 0. };
+/// How far the toast is in (0: gone, 1: at rest) `elapsed` ms after it began to move from
+/// `from`: eased out. With reduced motion it is there at once. It takes no room either way.
+pub fn shown_in(from: f32, open: bool, elapsed: f32, reduced: bool) -> f32 {
+    let to = if open { 1. } else { 0. };
     let t = if reduced { 1. } else { (elapsed / OPEN_MS).clamp(0., 1.) };
     let eased = 1. - (1. - t).powi(3);
     from + (to - from) * eased
@@ -245,15 +254,27 @@ pub fn height(from: f32, open: bool, elapsed: f32, reduced: bool) -> f32 {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn a_workspaces_undo_shows_beside_a_higher_notice_unless_it_is_the_notice_or_dismissed() {
+    fn the_toast_stacks_three_most_pressing_first_and_an_undo_never_falls_off() {
         let said = |kind: Kind, text: &str| Notice { kind, text: text.into() };
-        let (undo, error) = (said(Kind::Undo, "Workspace closed"), said(Kind::Failed, "not saved"));
-        assert_eq!(undo_beside(&error, Some(undo.clone()), &[]), Some(undo.clone()));
-        assert_eq!(undo_beside(&said(Kind::Meeting, "standup"), Some(undo.clone()), &[]), Some(undo.clone()));
-        // The bar says it itself; none offered; dismissed.
-        assert_eq!(undo_beside(&undo, Some(undo.clone()), &[]), None);
-        assert_eq!(undo_beside(&error, None, &[]), None);
-        assert_eq!(undo_beside(&error, Some(undo.clone()), &[undo]), None);
+        let undo = said(Kind::Undo, "Workspace closed");
+        let (failed, unsaved) = (said(Kind::Failed, "no shell"), said(Kind::Unsaved, "not saved"));
+        let (meeting, keys) = (said(Kind::Meeting, "standup"), said(Kind::Keys, "⌃⌥⌘Space"));
+        assert_eq!(stack(&[], &[]), (vec![], 0));
+        // Most pressing first, of one level the first listed: the first card is `shown`'s.
+        let live = [keys.clone(), failed.clone(), meeting.clone(), unsaved.clone()];
+        let (cards, more) = stack(&live, &[]);
+        assert_eq!((cards.clone(), more), (vec![failed.clone(), unsaved.clone(), meeting.clone()], 1));
+        assert_eq!(shown(&live, &[]).as_ref(), cards.first());
+        // An Undo under three higher notices takes the last place: it does not run out unseen.
+        let live = [meeting.clone(), failed.clone(), undo.clone(), unsaved.clone(), keys.clone()];
+        assert_eq!(stack(&live, &[]), (vec![failed.clone(), unsaved.clone(), undo.clone()], 2));
+        // Two Undos (a workspace's, a task's) under three higher: both stay in view.
+        let done = said(Kind::Undo, "Done · fix it");
+        let live = [meeting.clone(), failed.clone(), undo.clone(), done.clone(), unsaved.clone()];
+        assert_eq!(stack(&live, &[]), (vec![failed.clone(), undo.clone(), done.clone()], 2));
+        assert_eq!(shown(&live, &[]), Some(failed.clone()));
+        // Dismissed: not a card, nor counted.
+        assert_eq!(stack(&[failed.clone(), undo.clone()], std::slice::from_ref(&undo)), (vec![failed], 0));
     }
 
     use super::*;
@@ -416,15 +437,15 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_eases_open_and_closed_and_is_there_at_once_with_reduced_motion() {
-        assert_eq!(height(0., true, 0., false), 0.);
-        assert_eq!(height(0., true, OPEN_MS, false), HEIGHT);
-        assert_eq!(height(0., true, 9_999., false), HEIGHT);
-        let half = height(0., true, OPEN_MS / 2., false);
-        assert!(half > HEIGHT / 2. && half < HEIGHT, "eased out: {half}");
-        assert_eq!(height(HEIGHT, false, OPEN_MS, false), 0.);
+    fn the_toast_eases_in_and_out_and_is_there_at_once_with_reduced_motion() {
+        assert_eq!(shown_in(0., true, 0., false), 0.);
+        assert_eq!(shown_in(0., true, OPEN_MS, false), 1.);
+        assert_eq!(shown_in(0., true, 9_999., false), 1.);
+        let half = shown_in(0., true, OPEN_MS / 2., false);
+        assert!(half > 0.5 && half < 1., "eased out: {half}");
+        assert_eq!(shown_in(1., false, OPEN_MS, false), 0.);
         // From where it was, if it turns back half way.
-        assert_eq!(height(10., false, 0., false), 10.);
-        assert_eq!((height(0., true, 0., true), height(HEIGHT, false, 0., true)), (HEIGHT, 0.));
+        assert_eq!(shown_in(0.4, false, 0., false), 0.4);
+        assert_eq!((shown_in(0., true, 0., true), shown_in(1., false, 0., true)), (1., 0.));
     }
 }

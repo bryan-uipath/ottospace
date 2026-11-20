@@ -134,7 +134,7 @@ pub enum Ended {
 }
 
 impl Ended {
-    /// What the notice bar says of it.
+    /// What the toast says of it.
     pub fn said(self) -> &'static str {
         match self {
             Ended::AppQuit => "Transcript stopped: the app quit",

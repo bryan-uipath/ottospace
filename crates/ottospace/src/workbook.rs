@@ -455,7 +455,7 @@ impl Workspace {
             children.extend(crate::well(tabs, 4.));
         }
         // Each closing temporary workspace under the others, with its own Undo until its time is up,
-        // whatever the notice bar offers since. Not a list row: Undo is its one act.
+        // whatever the toast offers since. Not a list row: Undo is its one act.
         for row in self.model.workbooks.closing_rows() {
             let id = row.id;
             let control = format!("workbook-reopen:{id}");
@@ -480,7 +480,7 @@ impl Workspace {
                 .child(undo);
             children.push(line.into_any_element());
         }
-        // A delete or an update is offered back on the notice bar: nothing here moves.
+        // A delete or an update is offered back on the toast: nothing here moves.
         let list = div().id("workbooks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         // Released over the list: the row carried lands; anything else is put back.
         let list = list.on_drop(cx.listener(|this, dragged: &DraggedItem, window, cx| match dragged.item {

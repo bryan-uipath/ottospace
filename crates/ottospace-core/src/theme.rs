@@ -68,7 +68,7 @@ pub const CONTROL: f32 = 22.;
 pub const ICON_SM: f32 = 14.;
 pub const ICON: f32 = 20.;
 
-/// The notice bar by level, `(background, text)`: apollo-ui's future-dark semantic tokens
+/// A notice's toast card by level, `(background, text)`: apollo-ui's future-dark semantic tokens
 /// `--color-{error,warning,info}-background` and `--color-{error,warning,info}-text`. A meeting:
 /// the band's meeting amber on indigo (Tailwind indigo-950), apart from a warning's brown.
 pub fn notice(level: crate::notice::Level) -> (u32, u32) {

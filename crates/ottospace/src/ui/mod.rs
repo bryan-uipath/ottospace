@@ -328,8 +328,8 @@ pub(crate) fn tooltip(text: SharedString, tip: Tip) -> Div {
         .child(text)
 }
 
-/// The notice bar's line, `notice::HEIGHT` tall in its level's colours: the level's glyph, then
-/// `text`; the caller adds what it offers and ×. An error's `!` sits in a filled circle: no cross
+/// A notice's line in its level's colours (a toast card's): the level's glyph, then `text`; the
+/// caller adds what it offers and ×. An error's `!` sits in a filled circle: no cross
 /// beside the text that could read as the ×.
 pub(crate) fn notice_line(level: notice::Level, glyph: &'static str, text: impl IntoElement) -> Div {
     let (background, ink) = theme::notice(level);
@@ -342,7 +342,6 @@ pub(crate) fn notice_line(level: notice::Level, glyph: &'static str, text: impl 
         _ => mark,
     };
     div()
-        .h(px(notice::HEIGHT))
         .px(px(theme::SPACE_3))
         .flex()
         .items_center()

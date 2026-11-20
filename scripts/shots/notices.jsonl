@@ -1,12 +1,13 @@
-# The notice bar: information, a warning and an error, each opening at the window's foot.
+# Notices over a terminal pane: information, a warning and an error, each a toast card at the
+# window's top right. The pane does not move for one.
 {"cmd":"split"}
 {"cmd":"wait","pattern":"^\\$"}
-{"cmd":"type","text":"clear && echo notices\r"}
-{"cmd":"wait","pattern":"^notices$"}
+{"cmd":"type","text":"clear && for i in $(seq 1 60); do echo notices $i; done\r"}
+{"cmd":"wait","pattern":"^notices 60$"}
 {"record":"start"}
 {"sleep_ms":500}
 {"write":"home/settings.json","text":"{\"repos\": [], \"suggest_dock_apps\": false}\n"}
-{"until":"notice_bar.height","is":28.0}
+{"until":"notice_level","is":"info"}
 {"sleep_ms":700}
 {"shot":"info"}
 {"write":"home/settings.json","text":"{\"repos\": [], \"calendar_window_hours\": 4}\n"}
@@ -18,6 +19,6 @@
 {"sleep_ms":700}
 {"shot":"error"}
 {"write":"home/settings.json","text":"{\"repos\": []}\n"}
-{"until":"notice_bar","is":null}
+{"until":"notice","is":null}
 {"sleep_ms":500}
 {"record":"stop"}

@@ -1951,9 +1951,12 @@ fn the_users_wheel_enters_a_parked_app_pane_and_its_first_scroll_reaches_the_app
     report(&format!("wheel: the client's wheel told why {told} ({notice})"));
 }
 
+/// A notice moves no hosted window. Over a live app's window the toast floats in a panel above
+/// it, at its place in ottospace's window: in view, and the user's click on a card acts. The app
+/// keeps the keyboard and gets no click.
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
-fn a_window_in_a_bottom_pane_stops_above_the_notice_bar() {
+fn a_notice_moves_no_hosted_window_and_floats_over_a_live_one() {
     const RIGHT: &str = r#"{"repos": [], "restore_layout": false}"#;
     let home = support::temp(&format!("otto-apps-notice-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
@@ -1966,41 +1969,93 @@ fn a_window_in_a_bottom_pane_stops_above_the_notice_bar() {
     host_and_park(&otto);
     let crop = || state()["crop"]["1"].as_f64().filter(|c| (16.0..=40.0).contains(c));
     let cropped = wait_for("the title bar's crop", crop);
-    // The one pane is the bottom pane too. Live: the window's title bar covers the pane's header.
-    assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
     let pane = || rect(&state()["bounds"]["1"]).filter(|b| b[2] > 1.0);
     let hosted = || rect(&state()["hosted"]["1"]);
-    let body = wait_for("the pane layout", pane);
     // Settled over its pane: two reads the same, and as tall as the pane and its title bar.
     let settled = || {
         let (a, b) = (hosted()?, hosted()?);
         (a == b && close(a[3], pane()?[3] + cropped)).then_some(a)
     };
-    let live = wait_for("the window over its pane", settled);
+    let enter = || {
+        assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
+        wait_for("the window over its pane", settled)
+    };
+    let live = enter();
+    let body = wait_for("the pane layout", pane);
+    let clicks = || canary.call(json!({"cmd": "state"}))["windows"][0]["clicks"].as_array().map(Vec::len);
+    let clicked = clicks();
 
-    // An error: the bar opens at the foot. The pane's top and the window's stay where they
-    // were, its title bar still on the header; both feet rise to the bar's top, never over it.
+    // An error: a card in the panel over the live window, at the window's top right. The pane and
+    // the window stay as they were.
     std::fs::write(home.join("settings.json"), "{ not json").expect("write settings");
-    let barred = wait_for("the notice bar", || Some(state()).filter(|s| s["notice_bar"]["height"] == 28.0));
-    let (bar, window) =
-        (rect(&barred["notice_bar"]["rect"]).expect("the bar"), rect(&barred["window"]).expect("frame"));
-    let higher = wait_for("the pane above the bar", || pane().filter(|b| close(b[3], body[3] - 28.0)));
-    assert!(close(higher[1], body[1]) && higher[1] + higher[3] <= bar[1] + 0.5, "{higher:?} over {bar:?}");
-    let moved = wait_for("the window above the bar", || settled().filter(|f| close(f[3], live[3] - 28.0)));
-    assert!(close(moved[0], live[0]) && close(moved[1], live[1]), "{moved:?} from {live:?}");
-    assert!(moved[1] + moved[3] <= window[1] + bar[1] + 0.5, "{moved:?} over {bar:?} in {window:?}");
+    let floats =
+        |s: &Value| (s["toast"]["panel"].is_array() && s["toast"]["cards"][0]["close"].is_array()).then(|| s.clone());
+    let shown = wait_for("the toast's panel", || floats(&state()));
+    let panel = rect(&shown["toast"]["panel"]).expect("the panel");
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!((pane(), settled()), (Some(body), Some(live)), "nothing moved");
+    let inside = panel[0] >= live[0]
+        && panel[0] + panel[2] <= live[0] + live[2]
+        && panel[1] >= live[1]
+        && panel[1] + panel[3] <= live[1] + live[3];
+    assert!(inside, "the panel {panel:?} over the live window {live:?}");
     assert_eq!(crop(), Some(cropped), "the title bar is still cropped");
+    assert_eq!(state()["mode"], "app", "the app keeps the keyboard");
 
-    // Parked, its picture stops there too: as tall as the pane, drawn in it.
+    // Real clicks, over the app's window. Needs `cliclick`.
+    if Command::new("cliclick").arg("-V").output().is_err() {
+        eprintln!("cliclick not found: clicks on the toast's panel not checked");
+        return;
+    }
+    // A rect of the toast's (in ottospace's window) on the screens: the panel's top left is the stack's.
+    let global = |s: &Value, r: [f64; 4]| {
+        let (panel, stack) =
+            (rect(&s["toast"]["panel"]).expect("the panel"), rect(&s["toast"]["rect"]).expect("the stack"));
+        (panel[0] + r[0] - stack[0] + r[2] / 2., panel[1] + r[1] - stack[1] + r[3] / 2.)
+    };
+    let card = &shown["toast"]["cards"][0];
+    // A click on the card's words does nothing, and the keys still go to the app.
+    let (x, y) = global(&shown, rect(&card["rect"]).expect("the card"));
+    click_at(x - 60., y, false);
+    let keys = || canary.call(json!({"cmd": "state"}))["windows"][0]["keys"].clone();
+    press("keystroke \"q\"");
+    wait_or("the key in the app", || keys().to_string(), || keys().as_array()?.iter().any(|k| k == "q").then_some(()));
+    // Its ×: the card goes, the app gets no click and stays in front.
+    let (x, y) = global(&shown, rect(&card["close"]).expect("its ×"));
+    click_at(x, y, false);
+    wait_for("the toast to go", || Some(state()).filter(|s| s["toast"].is_null()));
+    assert_eq!((clicks(), state()["mode"].clone()), (clicked, json!("app")), "the app got no click, kept the keys");
+    assert_front(canary.child.id(), "the canary");
+
+    // A workspace closed, then back in the app: its Undo floats too, and the user's click on it
+    // takes the workspace back.
     assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
-    let fits = |s: &[f64; 4]| s[2] > 100.0 && close(s[3], higher[3]);
-    let shown = wait_for("the parked picture", || rect(&state()["shown"]["1"]).filter(fits));
-    assert!(shown[1] + shown[3] <= bar[1] + 0.5, "{shown:?} over {bar:?}");
-
-    // Fixed: the bar closes and the pane is as tall as it was.
-    std::fs::write(home.join("settings.json"), RIGHT).expect("write settings");
-    wait_for("the bar to close", || Some(state()).filter(|s| s["notice_bar"].is_null()));
-    wait_for("the pane back down", || pane().filter(|b| close(b[1], body[1]) && close(b[3], body[3])));
+    let sneak = otto.call(json!({"cmd": "sneak"}));
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    let targets = sneak["sneak"]["targets"].as_array().cloned().unwrap_or_default();
+    let plus = targets.iter().find(|t| t["source"]["id"] == "top:new_workspace").expect("the top row's +");
+    let (px, py) = (plus["frame"]["x"].as_f64().unwrap() + 4., plus["frame"]["y"].as_f64().unwrap() + 4.);
+    for action in ["down", "up"] {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": px, "y": py, "as": "user"}));
+    }
+    let spaces = |s: &Value| s["spaces"].as_array().map(Vec::len);
+    let open = spaces(&state());
+    let closed = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-w", "as": "user"}));
+    assert_eq!(closed["workbook_offer"], "closed", "{closed}");
+    let fewer = spaces(&state());
+    assert!(fewer < open, "closed: {fewer:?} of {open:?}");
+    enter();
+    let undo = |s: &Value| {
+        let card = s["toast"]["cards"].as_array()?.iter().find(|c| c["offer"] == "undo")?.clone();
+        rect(&s["toast"]["panel"])?;
+        Some((s.clone(), rect(&card["offer_rect"])?))
+    };
+    let (s, offer) = wait_for("the Undo in the panel", || undo(&state()));
+    let (x, y) = global(&s, offer);
+    click_at(x, y, false);
+    // Back: as many workspaces as before it closed (an Undo that did nothing leaves one fewer).
+    wait_for("the workspace back", || Some(state()).filter(|s| s["workbook_offer"].is_null() && spaces(s) == open));
+    assert_eq!(clicks(), clicked, "the app got no click");
     let _ = std::fs::remove_dir_all(&home);
 }
 

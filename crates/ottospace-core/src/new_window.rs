@@ -15,7 +15,7 @@ pub const PICK_USERS: &str = "only the user asks an app for a new window";
 /// Why a client's word on a window is refused.
 pub const SHELLS_ALONE: &str = "only ottospace says what a window did";
 
-/// How long the picker waits for the new window before the notice bar says none came.
+/// How long the picker waits for the new window before a toast says none came.
 pub const WAIT_MS: u64 = 3_000;
 
 /// One way to ask for a new window.
@@ -67,7 +67,7 @@ pub fn recipe(bundle: Option<&str>, menu_item: bool) -> Option<Recipe> {
     own.or(menu_item.then_some(Recipe::MenuItem))
 }
 
-/// What the notice bar says when no window came in time.
+/// What a toast says when no window came in time.
 pub fn late(app: &str) -> String {
     format!("{app} opened no new window in {} seconds", WAIT_MS / 1000)
 }
