@@ -1,0 +1,7 @@
+# A made-up markdown file's source (opened at a line) beside it drawn: headings, emphasis, links,
+# front matter and fences coloured by their languages (`crates/ottospace/tests/fixtures/code/seeds.md`).
+{"cmd":"open_file","path":"{REPO}/crates/ottospace/tests/fixtures/code/seeds.md","line":1}
+{"cmd":"open_file","path":"{REPO}/crates/ottospace/tests/fixtures/code/seeds.md","beside":1}
+{"until":"state.viewers.1.most","exists":true}
+{"until":"state.viewers.2.most","exists":true}
+{"shot":"source-and-drawn"}

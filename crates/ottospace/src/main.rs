@@ -1458,6 +1458,10 @@ impl Workspace {
                     }
                     this.serve_control(window, cx);
                     this.sync_viewers(window, cx);
+                    // A grammar's query built aside: what was drawn plain or by the lexer, again.
+                    if crate::syntax::take_built() {
+                        cx.notify();
+                    }
                     this.take_tags(window, cx);
                     this.store_layout(false);
                     this.store_key_use(false);

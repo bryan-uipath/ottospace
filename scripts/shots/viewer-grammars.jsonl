@@ -1,0 +1,7 @@
+# Made-up Go and C# files side by side in viewers (`crates/ottospace/tests/fixtures/code`):
+# their colours, by grammar. Before/after for a change to the languages coloured.
+{"cmd":"open_file","path":"{REPO}/crates/ottospace/tests/fixtures/code/seeds.go"}
+{"cmd":"open_file","path":"{REPO}/crates/ottospace/tests/fixtures/code/Seeds.cs","beside":1}
+{"until":"state.viewers.1.most","exists":true}
+{"until":"state.viewers.2.most","exists":true}
+{"shot":"go-and-csharp"}

@@ -1,0 +1,12 @@
+/* A made-up seed shelf. */
+@media (max-width: 600px) {
+  .shelf > li.row {
+    color: #2a6;
+    margin: 4px 0;
+    font-family: "Menlo", monospace;
+  }
+}
+
+#kale:hover {
+  width: calc(100% - 12px);
+}

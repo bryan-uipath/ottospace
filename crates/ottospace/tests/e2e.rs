@@ -15075,14 +15075,40 @@ fn a_code_file_is_coloured_by_its_grammar_or_the_lexer_when_it_has_none_or_is_to
     let dir = std::fs::canonicalize(&dir).unwrap();
     let small = "fn made_up() {}\n".repeat(40);
     let large = "fn made_up() {}\n".repeat(2 * 1024 * 1024 / 16 + 1);
-    let cases =
-        [("small.rs", &small, json!("rust")), ("small.go", &small, Value::Null), ("large.rs", &large, Value::Null)];
+    let mut cases = vec![
+        ("small.rs", small.clone(), json!("rust")),
+        ("small.scss", small, Value::Null),
+        ("large.rs", large, Value::Null),
+    ];
+    // Each language's made-up file, by its extension or its whole name.
+    let code = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/code");
+    for (name, syntax) in [
+        ("seeds.go", "go"),
+        ("seeds.c", "c"),
+        ("seeds.cpp", "cpp"),
+        ("Seeds.java", "java"),
+        ("Seeds.cs", "csharp"),
+        ("seeds.rb", "ruby"),
+        ("seeds.html", "html"),
+        ("seeds.css", "css"),
+        ("seeds.yml", "yaml"),
+        ("seeds.sql", "sql"),
+        ("seeds.php", "php"),
+        ("seeds.lua", "lua"),
+        ("Makefile", "make"),
+        ("seeds.xml", "xml"),
+        ("seeds.md", "markdown"),
+    ] {
+        cases.push((name, std::fs::read_to_string(code.join(name)).unwrap(), json!(syntax)));
+    }
     let otto = Otto::launch("viewer-syntax");
     for (name, text, syntax) in cases {
         let file = dir.join(name);
         std::fs::write(&file, text).unwrap();
-        // Each in a viewer of its own: the newest pane.
-        let id = pane_ids(&otto.call(json!({"cmd": "open_file", "path": file}))).into_iter().max().unwrap();
+        // Each in a viewer of its own: the newest pane. Markdown at a line: its source.
+        let line = name.ends_with(".md").then_some(1);
+        let open = json!({"cmd": "open_file", "path": file, "line": line});
+        let id = pane_ids(&otto.call(open)).into_iter().max().unwrap();
         let drawn = viewer_read(&otto, id, line_count(&file))["viewers"][id.to_string()].clone();
         assert_eq!((&drawn["body"], &drawn["syntax"]), (&json!("lines"), &syntax), "{name}");
     }

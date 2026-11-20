@@ -89,8 +89,9 @@ pub struct Look {
     /// The user scrolled up: new text does not pull the view down.
     away: bool,
     open: HashSet<u64>,
-    /// Each reply's blocks, by entry, with the length of text they were made from.
-    parsed: HashMap<u64, (usize, Rc<Vec<Block>>)>,
+    /// Each reply's blocks, by entry, with the length of text they were made from and the
+    /// grammars' queries built by then (`syntax::built`): a fence's lexer colours, made again.
+    parsed: HashMap<u64, ((usize, usize), Rc<Vec<Block>>)>,
     /// The user opened the ended agent's stderr (`Drawer::details`), or the lines not understood.
     details: bool,
     unread: bool,
@@ -480,9 +481,10 @@ impl Workspace {
     }
 
     /// Parses the replies whose text changed, and reads the local images they show. True if a
-    /// picture was read: it is drawn now (a viewer's too).
+    /// picture was read, or a reply's fences gained their grammar's colours: drawn now.
     fn lay_out(&mut self) -> bool {
         let mut wanted: Vec<(String, Option<String>)> = Vec::new();
+        let mut recoloured = false;
         let subjects: Vec<Subject> = self.drawer.looks.keys().cloned().collect();
         for subject in subjects.iter().chain(self.model.talk.as_ref().map(|talk| &talk.task)) {
             let Some(chat) = self.model.chat(subject) else { continue };
@@ -492,12 +494,14 @@ impl Workspace {
             look.parsed.retain(|id, _| ids.contains(id));
             for item in chat.transcript.items() {
                 let Entry::Assistant { text, .. } = &item.entry else { continue };
-                if look.parsed.get(&item.id).is_some_and(|(len, _)| *len == text.len()) {
+                let made = (text.len(), crate::syntax::built());
+                if look.parsed.get(&item.id).is_some_and(|(was, _)| *was == made) {
                     continue;
                 }
+                recoloured |= look.parsed.get(&item.id).is_some_and(|((len, _), _)| *len == text.len());
                 let blocks = markdown::parse(text.text(), repo.as_deref());
                 images(&blocks, &mut |path| wanted.push((path.to_string(), repo.clone())));
-                look.parsed.insert(item.id, (text.len(), Rc::new(blocks)));
+                look.parsed.insert(item.id, (made, Rc::new(blocks)));
             }
         }
         for (path, repo) in wanted {
@@ -512,7 +516,7 @@ impl Workspace {
                 read_one = true;
             }
         }
-        read_one
+        read_one || recoloured
     }
 
     /// Follows the session the core says to watch, read-only, from its file: starts or ends the

@@ -529,7 +529,11 @@ function viewerDrawn(value: unknown, at: string): ViewerDrawn {
   }
   if (o.lines !== undefined) drawn.lines = num(o.lines, `${at}.lines`);
   if (o.syntax !== undefined) {
-    const langs = ["rust", "typescript", "tsx", "javascript", "json", "toml", "python", "bash"] as const;
+    const langs = [
+      "rust", "typescript", "tsx", "javascript", "json", "toml", "python", "bash", "go",
+      "c", "cpp", "java", "csharp", "ruby", "html", "css", "yaml", "sql",
+      "php", "lua", "make", "xml", "markdown"
+    ] as const;
     drawn.syntax = orNull(oneOf(langs, "a grammar"))(o.syntax, `${at}.syntax`);
   }
   if (o.marked_rect !== undefined) drawn.marked_rect = orNull(rect)(o.marked_rect, `${at}.marked_rect`);
