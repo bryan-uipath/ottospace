@@ -844,6 +844,36 @@ fn terminal_runs_a_typed_command() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_terminal_program_that_asks_hears_its_pane_and_tab_take_and_lose_the_focus() {
+    let otto = Otto::launch("focus-events");
+    otto.call(json!({"cmd": "split"}));
+    let lines = |o: &Otto| o.call(json!({"cmd": "state"}))["terminals"]["1"]["lines"].clone();
+    let shown = |o: &Otto, line: &str| lines(o).as_array()?.iter().any(|l| l.as_str() == Some(line)).then_some(());
+    // Turns focus events on (1004), says it is ready with its own number, reads `bytes` bytes with
+    // echo off, turns them off and prints what came in hex.
+    let read = |round: u32, bytes: u32| {
+        let script = format!(
+            "stty -echo -icanon min 1 time 0; printf '\\033[?1004h'; echo ready-$((0+{round})); \
+             r=$(dd bs=1 count={bytes} 2>/dev/null); printf '\\033[?1004l'; stty sane; \
+             echo \"got{round}:$(printf %s \"$r\" | od -An -tx1 | tr -d ' \\n')\"\r"
+        );
+        otto.call(json!({"cmd": "type", "pane": 1, "text": script}));
+        otto.wait_for("the program to ask", |o| shown(o, &format!("ready-{round}")));
+    };
+    // Another pane takes the keyboard: ESC [ O.
+    read(1, 3);
+    otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
+    otto.wait_for("focus out", |o| shown(o, "got1:1b5b4f"));
+    // Its pane gets it back, then another tab takes it, then its tab comes back: I, O, I.
+    otto.call(json!({"cmd": "focus", "pane": 1}));
+    read(2, 6);
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    otto.wait_for("out and in", |o| shown(o, "got2:1b5b4f1b5b49"));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_pane_header_names_the_directory_and_the_program_not_the_kind() {
     let root = support::temp(&format!("ottospace-e2e-header-{}", std::process::id()));
     std::fs::create_dir_all(root.join("app-api")).unwrap();
