@@ -683,6 +683,7 @@ impl Model {
                 layout: None,
                 focused: None,
                 display: None,
+                folder: None,
             };
             self.tabs.push(tab);
         }

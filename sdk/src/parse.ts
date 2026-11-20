@@ -83,6 +83,7 @@ import type {
   HomeDrawn,
   CityDrawn,
   CityHovered,
+  CityOn,
   HomeNode,
   InboxReply,
   InboxRow,
@@ -1990,9 +1991,18 @@ function home(value: unknown, at: string): Home {
   };
 }
 
+function cityOn(value: unknown, at: string): CityOn {
+  if (value === "tab") return value;
+  const o = fields(value, at);
+  if ("pane" in o) return { pane: num(o.pane, `${at}.pane`) };
+  return { out: num(o.out, `${at}.out`) };
+}
+
 function cityDrawn(value: unknown, at: string): CityDrawn {
   const o = fields(value, at);
   return {
+    on: cityOn(o.on, `${at}.on`),
+    pictures: num(o.pictures, `${at}.pictures`),
     places: orNull(num)(o.places, `${at}.places`),
     groups: orNull(num)(o.groups, `${at}.groups`),
     picture: orNull(pair)(o.picture, `${at}.picture`),

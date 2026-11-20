@@ -133,7 +133,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     home: { nodes: [], needs_you: [], counts: { needs_you: 0, running: 0, captured: 0, on_hold: 0, done: 0 } },
     home_drawn: { area: [0, 30, 1400, 846], panel: [80, 300, 520, 120], nodes: {}, heading: "Home", lattice_builds: 1, lattice_paints: 2 },
     city: {
-      places: 10, groups: 3, picture: [1700, 1300], bounds: [340, 42, 850, 650], scale: 2, lit: [[620, 42, 17, 53]],
+      on: { pane: 3 }, pictures: 1, places: 10, groups: 3, picture: [1700, 1300], bounds: [340, 42, 850, 650], scale: 2, lit: [[620, 42, 17, 53]],
       lit_tops: [[628, 45]], labels: 3, failed: null, reads: 2, renders: 1, paints: 9, render_us: 9100,
       hovered: { file: true, lit: true, beacon: [590, 0, 80, 34] },
     },
