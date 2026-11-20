@@ -33,7 +33,7 @@ const KEPT: usize = 8;
 /// Names of the root's folders on their ground, at most.
 const MOST_NAMES: usize = 24;
 /// Room kept between a name and the empty tab's hints, and the hints' backing, in points.
-const CLEAR: f32 = 28.;
+const CLEAR: f32 = 12.;
 
 /// What was asked last: the folder, the folders git may run in, and the files lit then, each
 /// with whether its call ran (a file an agent wrote may be new, once the call ends).

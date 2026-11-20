@@ -20,6 +20,10 @@ const UNIT: f32 = TALLEST / 60. * 0.5;
 const STREET: f32 = 0.0035;
 /// A building's footprint is its lot less this share on each side (at most `STREET`).
 const SETBACK: f32 = 0.12;
+/// In a city of few files (large lots), the tallest building is at least this many typical lot
+/// sides tall, and a street at least this share of one: towers on streets, not slabs.
+const TOWER: f32 = 2.5;
+const LOT_STREET: f32 = 0.12;
 /// A lit building's top stands at least this far above the highest terrace, so no terrace in
 /// front of it hides it.
 const LIT_ABOVE: f32 = 0.02;
@@ -216,20 +220,23 @@ pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
     let ground = Block { min: [0., -0.01, 0.], max: [WIDE, 0., 1.], kind: Kind::Ground };
     let mut blocks = vec![ground];
     let highest = atlas.places.iter().filter(|p| p.group).map(|p| terrace(p.depth)).fold(0f32, f32::max);
+    // A typical lot's side: e.g. 0.24 for 28 files, 0.018 for 5,000 (where the constants rule).
+    let lot = (WIDE / atlas.places.iter().filter(|p| !p.group).count().max(1) as f32).sqrt();
+    let (tallest, street) = (TALLEST.max(lot * TOWER), STREET.max(lot * LOT_STREET));
     for place in &atlas.places {
         let r = place.rect;
         let (x0, z0, x1, z1) = (r.x * WIDE, r.y, (r.x + r.w) * WIDE, r.y + r.h);
         let floor = terrace(place.depth - 1);
         if place.group {
-            let street = STREET.min((x1 - x0) / 4.).min((z1 - z0) / 4.);
+            let street = street.min((x1 - x0) / 4.).min((z1 - z0) / 4.);
             let (min, max) = ([x0 + street, floor, z0 + street], [x1 - street, terrace(place.depth), z1 - street]);
             blocks.push(Block { min, max, kind: Kind::Plate(place.depth) });
             continue;
         }
-        let set = |side: f32| (side * SETBACK).min(STREET);
+        let set = |side: f32| (side * SETBACK).min(street);
         let (sx, sz) = (set(x1 - x0), set(z1 - z0));
         let colour = lit.iter().find(|(id, _)| *id == place.id).map(|(_, colour)| *colour);
-        let mut top = floor + place.height.unwrap_or(0.).clamp(0., 1.).max(1. / 30.) * TALLEST;
+        let mut top = floor + place.height.unwrap_or(0.).clamp(0., 1.).max(1. / 30.) * tallest;
         if colour.is_some() {
             top = top.max(highest + LIT_ABOVE);
         }
@@ -296,6 +303,29 @@ mod tests {
         // 3,200 bytes: 100 lines, 2 + 6·log2(11).
         assert!((height(3_200) - (2. + 6. * 11f32.log2()) / 60.).abs() < 1e-6);
         assert_eq!(height(u64::MAX), 1.);
+    }
+
+    /// A city of few files has large lots: its buildings are towers on streets, not slabs. A
+    /// large one keeps the owner's heights.
+    #[test]
+    fn a_city_of_few_files_stands_as_towers_on_streets() {
+        let files: Vec<(String, u64)> = (0..12).map(|i| (format!("d{}/f{i}.rs", i % 3), 9_000)).collect();
+        let s = scene(&atlas(&repo(&files)), &[], 1.6);
+        let lot = (WIDE / 12.).sqrt();
+        let buildings: Vec<&Block> = s.blocks.iter().filter(|b| b.kind == Kind::Building).collect();
+        let tallest = buildings.iter().map(|b| b.max[1] - b.min[1]).fold(0., f32::max);
+        assert!(tallest >= lot, "{tallest} < {lot}");
+        // No two buildings closer than twice a large city's street.
+        for (i, a) in buildings.iter().enumerate() {
+            for b in &buildings[i + 1..] {
+                let gap = |k: usize| (b.min[k] - a.max[k]).max(a.min[k] - b.max[k]);
+                assert!(gap(0).max(gap(2)) >= 2. * STREET, "{a:?} {b:?}");
+            }
+        }
+        let big: Vec<(String, u64)> = (0..5_000).map(|i| (format!("d{}/f{i}.rs", i % 7), u64::MAX)).collect();
+        let s = scene(&atlas(&repo(&big)), &[], 1.6);
+        let tallest = s.blocks.iter().filter(|b| b.kind == Kind::Building).map(|b| b.max[1] - b.min[1]);
+        assert!((tallest.fold(0., f32::max) - TALLEST).abs() < 1e-6);
     }
 
     #[test]

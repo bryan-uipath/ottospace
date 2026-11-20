@@ -107,6 +107,8 @@ Windows). It replaces the 2D plan this note first recommended.
   on its district, its height the owner's `buildingHeight` (`2 + 6·log2(1 + lines/10)`, 2 to 60),
   lines guessed as bytes / 32 (lines would mean reading every file). Footprint stays the size
   class: the owner's city sizes a file by its lines too, and churn-based height is slice 6.
+  In a city of few files (under about 400) the lots are large, so the tallest building is at
+  least 2.5 lot sides and streets a tenth of one: towers on streets, not slabs.
 - **The camera is the core's**: perspective, 30° field of view, looking down 38° from 34° off
   the plan's front, as near as keeps every box inside the picture with 4% to spare, at any
   shape of tab (tested). A point's projection is a pure function, for tests and later hit tests.
