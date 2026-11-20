@@ -3,9 +3,15 @@
 
 pub(crate) mod gallery;
 
+use std::cell::Cell;
+use std::ops::Range;
+use std::rc::Rc;
+use std::time::Duration;
+
 use gpui::{
-    BoxShadow, CursorStyle, Div, ElementId, FontWeight, Refineable, SharedString, Stateful, StyleRefinement, Svg,
-    black, div, point, prelude::*, px, rgb, svg, transparent_black,
+    AnyElement, BoxShadow, CursorStyle, Div, ElementId, FontWeight, HighlightStyle, Hsla, Refineable, Rgba,
+    SharedString, Stateful, StyleRefinement, StyledText, Svg, black, canvas, div, point, prelude::*, px, rgb, svg,
+    transparent_black,
 };
 use ottospace_core::{Axis, notice, theme};
 
@@ -382,4 +388,82 @@ pub(crate) fn divider(id: impl Into<ElementId>, axis: Axis, state: State) -> Sta
         _ => line.group_hover(group.clone(), |s| s.bg(rgb(theme::SCROLL_THUMB_HOVER))),
     };
     d.group(group).relative().child(line)
+}
+
+/// One pass of `shimmer`'s band across its line; a frame each `SWEEP_FRAME` meanwhile.
+pub(crate) const SWEEP_MS: u64 = 2_400;
+const SWEEP_FRAME: Duration = Duration::from_millis(40);
+/// The band's half width, in letters, and the steps of its brightness.
+const BAND: f32 = 5.;
+const STEPS: f32 = 6.;
+/// How far toward `TEXT` the band's middle goes: ambient, not a call for attention.
+const LIFT: f32 = 0.7;
+
+/// Words of an agent at work: `MUTED`, a brighter band sweeping them left to right, at `phase`
+/// (0 to 1, one pass). None: still (Reduce Motion). Colours only: no layout changes with it.
+pub(crate) fn shimmer(text: impl Into<SharedString>, phase: Option<f32>) -> StyledText {
+    let text = text.into();
+    let (dim, lit) = (rgb(theme::MUTED), rgb(theme::TEXT));
+    let tone = |step: u8| {
+        let t = LIFT * f32::from(step) / STEPS;
+        let mix = |a: f32, b: f32| a + (b - a) * t;
+        HighlightStyle {
+            color: Some(Hsla::from(Rgba { r: mix(dim.r, lit.r), g: mix(dim.g, lit.g), b: mix(dim.b, lit.b), a: 1. })),
+            ..Default::default()
+        }
+    };
+    // From before the first letter to past the last: the band comes in and goes out.
+    let centre = phase.map(|phase| -BAND + phase.clamp(0., 1.) * (text.chars().count() as f32 + 2. * BAND));
+    let mut runs: Vec<(Range<usize>, u8)> = Vec::new();
+    for (n, (at, c)) in text.char_indices().enumerate() {
+        let near = centre.map_or(0., |centre| (1. - (n as f32 + 0.5 - centre).abs() / BAND).max(0.));
+        // Eased, in steps: neighbours of one step are one run.
+        let step = (near * near * (3. - 2. * near) * STEPS).round() as u8;
+        match runs.last_mut() {
+            Some((range, was)) if *was == step => range.end = at + c.len_utf8(),
+            _ => runs.push((at..at + c.len_utf8(), step)),
+        }
+    }
+    let runs: Vec<_> = runs.into_iter().map(|(range, step)| (range, tone(step))).collect();
+    StyledText::new(text).with_highlights(runs)
+}
+
+/// Keeps the shimmers on show moving: a frame each `SWEEP_FRAME` while one is drawn, none once
+/// none is. View state; `frames` is the state's `counts.shimmer_frames` (test runs).
+#[derive(Default)]
+pub(crate) struct Sweep {
+    asked: Rc<Cell<bool>>,
+    pub(crate) frames: Rc<Cell<u64>>,
+}
+
+impl Sweep {
+    /// Where the band is now, and an element to draw beside it that asks for the next frame
+    /// when painted. None under Reduce Motion (`calm`): still, and no frame.
+    pub(crate) fn now(&self, calm: bool) -> Option<(f32, AnyElement)> {
+        if calm {
+            return None;
+        }
+        let phase = (crate::now_ms() % SWEEP_MS) as f32 / SWEEP_MS as f32;
+        let (asked, frames) = (self.asked.clone(), self.frames.clone());
+        let next = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, cx| {
+                // Only a line on show asks; one wait at a time, however many lines sweep.
+                let shown = bounds.intersect(&window.content_mask().bounds);
+                if shown.size.width <= px(0.) || shown.size.height <= px(0.) || asked.replace(true) {
+                    return;
+                }
+                frames.set(frames.get() + 1);
+                let view = window.current_view();
+                window
+                    .spawn(cx, async move |cx| {
+                        cx.background_executor().timer(SWEEP_FRAME).await;
+                        asked.set(false);
+                        let _ = cx.update(|_, cx| cx.notify(view));
+                    })
+                    .detach();
+            },
+        );
+        Some((phase, next.absolute().inset_0().into_any_element()))
+    }
 }

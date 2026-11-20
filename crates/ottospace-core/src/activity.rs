@@ -174,6 +174,11 @@ impl Activity {
         }
     }
 
+    /// The label of the newest call that still runs.
+    pub(crate) fn running_label(&self) -> Option<&str> {
+        self.running.last().map(|call| call.label.as_str())
+    }
+
     pub(crate) fn end(&mut self, id: &str, failed: bool, at: u64) {
         let Some(place) = self.running.iter().position(|call| call.id == id) else { return };
         let call = self.running.remove(place);

@@ -33,7 +33,7 @@ use ottospace_core::tasks::TaskId;
 use ottospace_core::transcript::{
     By, Call, Entry, Event, Item, MAX_CARDS, NoteKind, Notice, Status, Text, View, clean,
 };
-use ottospace_core::{Action, Origin, theme};
+use ottospace_core::{Action, Origin, theme, working};
 
 use crate::highlight;
 use crate::markdown::{self, Align, Block, Callout, Span};
@@ -742,7 +742,7 @@ impl Workspace {
             .children(watching)
             .child(list)
             .children(latest.map(|button| div().flex().justify_center().py_0p5().child(button)))
-            .children(self.chat_working(chat))
+            .children(self.chat_working(subject, chat))
             .children(self.chat_card(subject, chat, cx))
             .children(self.chat_ended(subject, chat, cx))
             .child(self.chat_composer(subject, chat, cx))
@@ -1519,11 +1519,14 @@ impl Workspace {
         host.child(text).children(note).into_any_element()
     }
 
-    /// While a turn runs: what it waits on and for how long. Steady; Stop is at the composer.
-    fn chat_working(&self, chat: &chat::Chat) -> Option<Div> {
+    /// While a turn runs: what it waits on, else a verb, swept while it works (`ui::shimmer`); and
+    /// for how long. Stop is at the composer. Waiting on the user: still, as the card says why.
+    fn chat_working(&self, subject: &Subject, chat: &chat::Chat) -> Option<Div> {
         let turn = chat.transcript.turn.as_ref()?;
-        let secs = crate::now_ms().saturating_sub(turn.since) / 1000;
-        let doing = turn.tool.clone().unwrap_or_else(|| "thinking".into());
+        let (now, still) = (crate::now_ms(), self.working_still(subject));
+        let secs = now.saturating_sub(turn.since) / 1000;
+        let said: gpui::SharedString = working::line(turn.tool.as_deref(), turn.since, now, crate::dial::calm()).into();
+        let (phase, next) = self.sweep.now(still).unzip();
         Some(
             div()
                 .px_3()
@@ -1536,10 +1539,25 @@ impl Workspace {
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .child(crate::home::dot(theme::task(ottospace_core::tasks::Group::Running)))
-                .child(
-                    crate::cut_text(format!("Working · {} · {}:{:02}", clean(&doing), secs / 60, secs % 60)).flex_1(),
-                ),
+                .child(crate::cut_over(said.clone(), crate::ui::shimmer(said, phase)))
+                .child(div().flex_1().child(format!("· {}:{:02}", secs / 60, secs % 60)))
+                .children(next),
         )
+    }
+
+    /// What the state says of the working line: the verb it shows (null: what it waits on, the
+    /// turn's), and whether it sweeps. Null with no turn.
+    fn working_snapshot(&self, subject: &Subject, chat: &chat::Chat) -> serde_json::Value {
+        let Some(turn) = chat.transcript.turn.as_ref() else { return serde_json::Value::Null };
+        let verb = working::waits_on(turn.tool.as_deref())
+            .is_none()
+            .then(|| working::verb(turn.since, crate::now_ms(), crate::dial::calm()));
+        serde_json::json!({ "verb": verb, "shimmer": !self.working_still(subject) })
+    }
+
+    /// A working line drawn still: Reduce Motion, or something waits on the user (`working_sweeps`).
+    fn working_still(&self, subject: &Subject) -> bool {
+        crate::dial::calm() || !self.model.working_sweeps(subject)
     }
 
     /// The first permission request: what it would do, as the CLI asked it, one labelled line
@@ -2187,6 +2205,7 @@ impl Workspace {
                     "details_open": look.is_some_and(|look| look.details),
                     "unread_open": look.is_some_and(|look| look.unread),
                     "dial": self.dial_snapshot(&subject),
+                    "working": self.working_snapshot(&subject, chat),
                     // How much of the transcript is selected, never its text; whether it has the keys.
                     "selection": self.selection_snapshot(&subject),
                     "btw": crate::btw::snapshot(&self.model, &subject),

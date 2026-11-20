@@ -8514,7 +8514,18 @@ impl Model {
     /// A task's row as drawn, at `now`.
     fn task_row(&self, task: &Task, group: tasks::Group, now: u64) -> TaskRow {
         let current = self.tab_task() == Some(task.id);
-        let live = self.task_session(task).and_then(Found::doing);
+        let subject = Subject::Task(task.id);
+        let turn = self.chat(&subject).and_then(|chat| chat.transcript.turn.as_ref());
+        let waits = turn.and_then(|turn| crate::working::waits_on(turn.tool.as_deref()));
+        let running = group == tasks::Group::Running;
+        // Its native turn runs no call. A session read says no more than that a call runs.
+        let thinking = turn.filter(|_| running && waits.is_none()).map(|turn| turn.since);
+        // Before its session is read, the call its native turn waits on, cut as the chip's.
+        let call = || waits.map(|tool| tool.chars().take(talk::CHIP_LABEL).collect());
+        let live = self.task_session(task).and_then(Found::doing).or_else(call).filter(|_| thinking.is_none());
+        // As the drawer's while a native turn runs: still while a card waits.
+        let sweeps = turn.is_none() || self.working_sweeps(&subject);
+        let shimmer = running && sweeps && (live.is_some() || thinking.is_some());
         let (fact, worktree) = (tasks::fact(task, group, now), self.worktree_label(task.id));
         let cards = self.chat(&Subject::Task(task.id)).map(|chat| &chat.transcript.cards);
         let more = cards.map_or(0, |cards| cards.len().saturating_sub(tasks::PENDING_LINES));
@@ -8526,7 +8537,7 @@ impl Model {
             None => tasks::Pending::Permission,
         });
         let pending = pending.collect();
-        TaskRow { live, id: task.id, group, current, fact, worktree, pending, more }
+        TaskRow { live, thinking, shimmer, id: task.id, group, current, fact, worktree, pending, more }
     }
 
     /// The Tasks section's State view as drawn: Needs you, Running, Later (captured and on hold),

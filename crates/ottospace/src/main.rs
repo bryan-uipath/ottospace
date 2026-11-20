@@ -1083,6 +1083,8 @@ struct Workspace {
     chip_line: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The shown dial's moving parts: view state, stepped each frame it is drawn.
     dial_motion: RefCell<dial::DialMotion>,
+    /// The working lines' sweep (`ui::shimmer`): frames while one is drawn.
+    sweep: ui::Sweep,
     /// The seal, fold and land of the user's Done, while it plays.
     seals: seal::Seals,
     /// The centred new-task box leaving (`overlay_panels`): its ghost while it plays.
@@ -1752,6 +1754,7 @@ impl Workspace {
             controls: sneak::Controls::default(),
             chip_line: Rc::default(),
             dial_motion: RefCell::default(),
+            sweep: ui::Sweep::default(),
             seals: seal::Seals::default(),
             fly: fly::Fly::default(),
             slides: overlays::Slides::default(),
@@ -4127,6 +4130,8 @@ impl Workspace {
                 "city_reads": self.city_reads(),
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
+                // Frames a working line's sweep asked for: none at rest, none under Reduce Motion.
+                "shimmer_frames": self.sweep.frames.get(),
                 // Frames the toast asked for as it came or went: none under Reduce Motion.
                 "toast_frames": self.toast.frames,
                 // Frames drawn while the calendar band's loading bar slides: none once a read lands.
@@ -6270,7 +6275,10 @@ impl Workspace {
                             .children(row.worktree.clone().map(|name| muted().flex_none().child(name)))
                             .children(row.fact.clone().map(|fact| muted().flex_none().child(fact))),
                     )
-                    .children(row.live.clone().map(|live| muted().h(px(18.)).truncate().child(live)))
+                    .children(
+                        self.task_live(row)
+                            .map(|(live, next)| muted().relative().h(px(18.)).truncate().child(live).children(next)),
+                    )
                     .children(self.task_pending(id, row, cx)),
             )
             .child(actions)
@@ -6278,6 +6286,18 @@ impl Workspace {
             .when_some(progress::card_tip(self, id), |row, tip| row.tooltip(tip))
             .on_click(open_task(id, cx))
             .into_any_element()
+    }
+
+    /// A task's working line under its row: what its session does, else the verb of its turn;
+    /// swept while it runs (`ui::shimmer`).
+    fn task_live(&self, row: &TaskRow) -> Option<(gpui::StyledText, Option<AnyElement>)> {
+        let calm = dial::calm();
+        let text = match row.thinking {
+            Some(since) => ottospace_core::working::verb(since, now_ms(), calm).to_string(),
+            None => row.live.clone()?,
+        };
+        let (phase, next) = self.sweep.now(calm || !row.shimmer).unzip();
+        Some((ui::shimmer(text, phase), next))
     }
 
     /// A task's waiting cards, a line each under its row (`TaskRow::pending`): a question on
@@ -7885,8 +7905,13 @@ pub(crate) fn cut_text(text: impl Into<SharedString>) -> Div {
     // One line, as the cut shows: a line break would make the box taller and hide what follows it.
     let text: SharedString = text.into();
     let text: SharedString = if text.contains('\n') { text.replace('\n', " ").into() } else { text };
-    let room = div().flex().pr(px(1.)).child(Room(text.clone()));
-    let over = div().absolute().inset_0().truncate().child(text);
+    cut_over(text.clone(), text)
+}
+
+/// `cut_text` of one line, its letters drawn by `over` (the same text, styled: `ui::shimmer`).
+pub(crate) fn cut_over(text: SharedString, over: impl IntoElement) -> Div {
+    let room = div().flex().pr(px(1.)).child(Room(text));
+    let over = div().absolute().inset_0().truncate().child(over);
     div().relative().min_w_0().overflow_hidden().child(room).child(over)
 }
 
