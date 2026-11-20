@@ -15,6 +15,7 @@ pub mod calendar;
 pub mod capture;
 pub mod capture_model;
 pub mod clip;
+pub mod clone;
 pub mod commands;
 pub mod complete;
 pub mod compose;

@@ -340,6 +340,12 @@ pub fn pick<'a>(prs: &'a [Pr], branch: &Branch) -> Option<&'a Pr> {
 /// `owner/name` of a github.com remote's URL, lower case: `git@github.com:o/r.git`,
 /// `ssh://git@github.com/o/r`, `https://github.com/o/r.git`. None for any other host or shape.
 pub fn slug(url: &str) -> Option<String> {
+    let (owner, name) = github_path(url)?;
+    (plain(owner) && plain(name)).then(|| format!("{owner}/{name}").to_lowercase())
+}
+
+/// The owner and name of a github.com URL of one of `slug`'s shapes, as written: unchecked.
+pub fn github_path(url: &str) -> Option<(&str, &str)> {
     let url = url.trim();
     let rest = ["git@github.com:", "ssh://git@github.com/", "https://github.com/"]
         .iter()
@@ -347,7 +353,7 @@ pub fn slug(url: &str) -> Option<String> {
     let rest = rest.trim_end_matches('/');
     let rest = rest.strip_suffix(".git").unwrap_or(rest);
     match rest.split('/').collect::<Vec<_>>()[..] {
-        [owner, name] if plain(owner) && plain(name) => Some(format!("{owner}/{name}").to_lowercase()),
+        [owner, name] => Some((owner, name)),
         _ => None,
     }
 }

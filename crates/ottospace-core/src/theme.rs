@@ -158,7 +158,7 @@ pub fn accent(mode: Mode) -> u32 {
         Mode::Normal => PRIMARY,
         Mode::App => APP,
         Mode::Pick => PICK,
-        Mode::Palette => COMMAND,
+        Mode::Palette | Mode::Clone => COMMAND,
         Mode::Inspect => INSPECT,
         Mode::Visual => VISUAL,
         Mode::List => LIST,

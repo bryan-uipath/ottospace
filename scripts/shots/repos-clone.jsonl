@@ -1,0 +1,27 @@
+{"env":{"OTTOSPACE_GH":"{ROOT}/gh"}}
+# The Repos section's +: Local folder… (↵ at once) or From GitHub…. The dialog: a pasted
+# repository and where it goes in full; a failure in plain words; a clone on its way; listed.
+{"cmd":"section","section":"repos"}
+{"settle":true}
+{"shot":"before"}
+{"click":"bar:add"}
+{"settle":300}
+{"shot":"choice"}
+{"cmd":"key","keys":"down enter o c t o / h e l l o","as":"user"}
+{"settle":300}
+{"shot":"destination"}
+{"cmd":"key","keys":"cmd-a backspace m i s s i n g / r e p o enter","as":"user"}
+{"until":"clone.dialog.said"}
+{"settle":300}
+{"shot":"failure"}
+{"cmd":"key","keys":"cmd-a backspace s l o w / r e p o enter","as":"user"}
+{"until":"clone.job.line","is":"Receiving objects:  10%"}
+{"settle":300}
+{"shot":"cloning"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"until":"clone.job","is":null}
+{"click":"bar:add"}
+{"cmd":"key","keys":"down enter o c t o / h e l l o enter","as":"user"}
+{"until":"repos_bar.0"}
+{"settle":300}
+{"shot":"cloned"}
