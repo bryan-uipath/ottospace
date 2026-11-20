@@ -854,12 +854,12 @@ fn a_terminal_programs_copy_waits_in_its_header_and_only_the_users_click_copies(
     let ask = &asked["state"]["copy_asks"]["1"];
     assert_eq!((ask["chars"].as_u64(), ask["too_large"].as_bool()), (Some(10), Some(false)), "{ask}");
     assert_eq!(asked["copied"], Value::Null, "nothing is copied by itself");
-    // A client's click on Copy is refused: the ask waits, the clipboard stays.
+    // Once the ask has been on show a moment (`copy_ask::GUARD_MS`): a client's click on Copy is
+    // refused for who sent it, the ask waits and the clipboard stays; the user's click copies.
+    std::thread::sleep(std::time::Duration::from_millis(600));
     let copy = at(otto.control(&format!("copy:1.{}", ask["id"])), 0.5, 0.5);
     let clicked = otto.click(copy, 1);
     assert!(clicked["state"]["copy_asks"]["1"].is_object() && clicked["copied"].is_null(), "{clicked}");
-    // The user's click, once the ask has been on show a moment (`copy_ask::GUARD_MS`), copies.
-    std::thread::sleep(std::time::Duration::from_millis(600));
     otto.user_click(copy);
     let copied = otto.wait_for("the copy", |o| Some(state(o)).filter(|s| s["copied"] == "hello-clip"));
     assert_eq!(copied["state"]["copy_asks"], json!({}));

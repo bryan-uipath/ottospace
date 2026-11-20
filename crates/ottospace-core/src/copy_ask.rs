@@ -23,7 +23,7 @@ pub struct Ask {
     pub id: u64,
     /// When it came (ms): Copy acts from `at + GUARD_MS`.
     pub at: u64,
-    /// The characters Copy would put on the clipboard, all of them.
+    /// The characters Copy would put on the clipboard, all of them (past the cap: those kept).
     pub chars: usize,
     /// Over `MOST` bytes: refused, nothing held; the user can only dismiss it.
     pub too_large: bool,
@@ -72,19 +72,23 @@ fn breaks(c: char) -> bool {
     matches!(c, '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}')
 }
 
-/// A control or format character (Cc, Cf: bidi overrides and isolates, zero-width spaces and
-/// joiners, the BOM, tags): it draws nothing, or reorders what is drawn.
+/// A control, format or default-ignorable character (bidi overrides and isolates, zero-width
+/// spaces and joiners, the BOM, variation selectors, the grapheme joiner, Hangul fillers, tags):
+/// it draws nothing, or reorders what is drawn.
 fn invisible(c: char) -> bool {
     c.is_control()
         || matches!(c as u32,
-            0xad | 0x600..=0x605 | 0x61c | 0x6dd | 0x70f | 0x890..=0x891 | 0x8e2 | 0x180e
-            | 0x200b..=0x200f | 0x202a..=0x202e | 0x2060..=0x2064 | 0x2066..=0x206f | 0xfeff
-            | 0xfff9..=0xfffb | 0x110bd | 0x110cd | 0x13430..=0x1343f | 0x1bca0..=0x1bca3
-            | 0x1d173..=0x1d17a | 0xe0001 | 0xe0020..=0xe007f)
+            0xad | 0x34f | 0x600..=0x605 | 0x61c | 0x6dd | 0x70f | 0x890..=0x891 | 0x8e2
+            | 0x115f..=0x1160 | 0x17b4..=0x17b5 | 0x180b..=0x180f | 0x200b..=0x200f | 0x202a..=0x202e
+            | 0x2060..=0x206f | 0x3164 | 0xfe00..=0xfe0f | 0xfeff | 0xffa0 | 0xfff0..=0xfffb
+            | 0x110bd | 0x110cd | 0x13430..=0x1343f | 0x1bca0..=0x1bca3 | 0x1d173..=0x1d17a
+            | 0xe0000..=0xe0fff)
 }
 
 /// The pill's view of `text`: e.g. `"ls -la\nrm x"` shows `ls -la`, partial, 2 lines.
 pub fn preview(text: &str, most: usize) -> Preview {
+    // CR LF is one line break.
+    let text = &text.replace("\r\n", "\n");
     let first = text.split(breaks).next().unwrap_or_default();
     let mut marked = false;
     let mut shown = String::new();
@@ -98,7 +102,8 @@ pub fn preview(text: &str, most: usize) -> Preview {
     }
     let lines = text.split(breaks).count() - usize::from(text.ends_with(breaks));
     let ends_with_newline = text.ends_with(breaks);
-    let blank = text.chars().all(|c| c.is_whitespace() || invisible(c));
+    // Spaces and line breaks alone: an invisible character is marked, not called blank.
+    let blank = text.chars().all(char::is_whitespace);
     let partial = marked || first.chars().count() > most || first.len() < text.len();
     Preview { shown, partial, lines: lines.max(1), ends_with_newline, blank }
 }
@@ -155,9 +160,20 @@ mod tests {
 
     #[test]
     fn a_blank_text_says_so() {
-        for text in ["   ", "\n\n", " \u{200b}\t", ""] {
+        for text in ["   ", "\n\n", " \t", ""] {
             assert!(preview(text, 40).blank, "{text:?}");
         }
-        assert!(!preview(" a ", 40).blank);
+        // Not blank: a letter, or a control or invisible character, which the preview marks.
+        for text in [" a ", "\x1b", " \u{200b}"] {
+            assert!(!preview(text, 40).blank, "{text:?}");
+        }
+        let joined = preview("a\u{34f}", 40);
+        assert_eq!((joined.shown.as_str(), joined.partial), ("a\u{fffd}", true), "a grapheme joiner");
+    }
+
+    #[test]
+    fn cr_lf_is_one_line_break() {
+        let p = preview("one\r\ntwo\r\n", 40);
+        assert_eq!((p.shown.as_str(), p.lines, p.ends_with_newline), ("one", 2, true));
     }
 }

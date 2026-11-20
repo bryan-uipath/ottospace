@@ -4765,13 +4765,15 @@ impl Workspace {
                 exited.push(*id);
             }
         }
-        // A program asked to set the clipboard: the core holds it for the user (`copy_ask`).
-        let asked = !asks.is_empty();
+        // A program asked to set the clipboard: the core holds it for the user (`copy_ask`), timed
+        // by the loop's clock, which no clock change moves.
+        let mut waiting = false;
         for (pane, text) in asks {
-            self.dispatch(Action::CopyAsked { pane, text, now: now_ms() }, Origin::System, window, cx);
+            self.dispatch(Action::CopyAsked { pane, text, now: loop_ms() }, Origin::System, window, cx);
+            waiting |= self.model.copy_asks.get(&pane).is_some_and(|ask| !ask.too_large);
         }
         // Its Copy wakes once the guard has passed: drawn again then.
-        if asked {
+        if waiting {
             cx.spawn(async move |this, cx| {
                 let guard = ottospace_core::copy_ask::GUARD_MS + 20;
                 cx.background_executor().timer(Duration::from_millis(guard)).await;
