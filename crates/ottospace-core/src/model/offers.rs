@@ -94,6 +94,8 @@ impl Model {
         if let Some(p) = self.panes.iter_mut().find(|p| p.id == pane) {
             (p.kind, p.fit) = (Kind::Empty, None);
         }
+        // An empty pane is no app's: a mark of it stands for none, as with a slot that ended.
+        self.marks.forget_pane(pane);
         self.offer_panes.insert(pane);
         true
     }

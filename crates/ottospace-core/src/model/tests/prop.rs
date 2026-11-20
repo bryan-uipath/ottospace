@@ -7889,6 +7889,26 @@ fn seed_150464_a_reference_copies_a_panes_title_not_the_look() {
     .unwrap();
 }
 
+/// An app pane with a mark, emptied because its window went while another of its app was offered
+/// there: the mark still stood for the pane. It stands for none, as with a slot that ended.
+#[test]
+fn seed_373_a_pane_emptied_for_an_offer_loses_its_mark() {
+    let seen = r#"{"pid":0,"window":10,"title":"OFFEREDTITLE ","identifier":"slotseen.other","subrole":"AXStandardWindow","frame":{"x":2000.0,"y":0.0,"w":400.0,"h":300.0}}"#;
+    replay(&[
+        split(Axis::Down, Kind::Terminal),
+        Action::Open {
+            kind: Kind::App { window: 9, title: "w9".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: None,
+        }
+        .into(),
+        Action::MarkToggle { of: MarkOf::Pane(None), uid: "u1".into(), cwds: vec![] }.into(),
+        by(Origin::System, window_offered(2, seen, "no slot for this window")),
+        by(Origin::System, Action::WindowGone { pane: 2, app_running: true, at: 201000000 }),
+    ])
+    .unwrap();
+}
+
 /// A Done's worktree, its git answers late (xreview of #274): Undo while git removes it (the
 /// default falls back, then the worktree is added back), Done while git makes it (removed once
 /// made), and a dirty one kept after an Undo (no notice for an act not the user's).
