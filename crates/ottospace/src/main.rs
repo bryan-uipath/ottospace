@@ -151,9 +151,24 @@ struct Frame(CVPixelBuffer);
 // CVPixelBuffer is a CF object; retain/release are thread-safe.
 unsafe impl Send for Frame {}
 
+/// The part of the window a stream frame shows: its size in points, below `crop` points.
+#[derive(Clone, Copy, Default)]
+struct Shows {
+    size: (f64, f64),
+    crop: f64,
+}
+
+/// The frame held and what it shows, and what the stream is set to show. One lock: a frame is
+/// checked against, and stamped with, the configuration of its time.
+#[derive(Default)]
+struct Held {
+    frame: Option<(Frame, Shows)>,
+    asked: Shows,
+}
+
 #[derive(Default)]
 struct Latest {
-    frame: Mutex<Option<Frame>>,
+    frame: Mutex<Held>,
     dirty: AtomicBool,
     /// Configured stream size as `width << 32 | height`. Frames of any other size are transitional
     /// (mid-reconfigure or mid-move) and render as a small window on black, so they're dropped.
@@ -166,16 +181,15 @@ struct Latest {
     samples: AtomicU64,
     /// The frame held is from before the stream last started: a capture waits for a new one.
     old: AtomicBool,
-    /// The shape (width / height, as `f64` bits) of the part of the window the stream shows.
-    shape: AtomicU64,
 }
 
 impl Latest {
     fn expect(&self, config: &SCStreamConfiguration) {
-        self.expected.store((config.width() as u64) << 32 | config.height() as u64, Relaxed);
-        let source = config.source_rect().size;
-        let shape = if source.height > 0.0 { source.width / source.height } else { 0.0 };
-        self.shape.store(shape.to_bits(), Relaxed);
+        let source = config.source_rect();
+        if let Ok(mut held) = self.frame.lock() {
+            held.asked = Shows { size: (source.size.width, source.size.height), crop: source.origin.y };
+            self.expected.store((config.width() as u64) << 32 | config.height() as u64, Relaxed);
+        }
     }
 }
 
@@ -191,16 +205,16 @@ impl SCStreamOutputTrait for Output {
         }
         let buffer = unsafe { CVPixelBuffer::wrap_under_get_rule(ptr as CVPixelBufferRef) };
         let size = (buffer.get_width() as u64) << 32 | buffer.get_height() as u64;
-        if size != self.0.expected.load(Relaxed) {
-            return;
-        }
-        // Not the window at its old size, scaled to fit until its app draws it at the new one.
-        let shape = f64::from_bits(self.0.shape.load(Relaxed));
-        if sample.content_rect().is_some_and(|c| !hosting::of_shape(shape, (c.size.width, c.size.height))) {
-            return;
-        }
-        if let Ok(mut slot) = self.0.frame.lock() {
-            *slot = Some(Frame(buffer));
+        // Held only if of the size asked, its content of the asked shape (not the old window scaled
+        // to fit); one held that no longer shows what is asked is drawn at its own size (`held`).
+        if let Ok(mut held) = self.0.frame.lock() {
+            let (w, h) = held.asked.size;
+            let shape = if h > 0.0 { w / h } else { 0.0 };
+            let content = sample.content_rect().map(|c| (c.size.width, c.size.height));
+            if size != self.0.expected.load(Relaxed) || content.is_some_and(|c| !hosting::of_shape(shape, c)) {
+                return;
+            }
+            held.frame = Some((Frame(buffer), held.asked));
             self.0.old.store(false, Relaxed);
             self.0.dirty.store(true, Relaxed);
         }
@@ -494,7 +508,16 @@ impl Hosted {
     }
 
     fn frame(&self) -> Option<CVPixelBuffer> {
-        self.latest.frame.lock().ok()?.as_ref().map(|f| f.0.clone())
+        self.latest.frame.lock().ok()?.frame.as_ref().map(|f| f.0.0.clone())
+    }
+
+    /// The frame held; and, when it shows another part of the window than the stream now does,
+    /// where it is drawn and whether its top is cut.
+    fn held(&self) -> Option<(CVPixelBuffer, Option<([f64; 4], bool)>)> {
+        let held = self.latest.frame.lock().ok()?;
+        let (Frame(buffer), shows) = held.frame.as_ref()?;
+        let stale = hosting::stale_at(shows.size, shows.crop, held.asked.size, held.asked.crop);
+        Some((buffer.clone(), stale.map(|at| (at, shows.crop > 0.0))))
     }
 }
 
@@ -6745,13 +6768,17 @@ impl Workspace {
             self.render_annotate(material, cx)
         } else if let Some(hosted) = self.hosted.get(&id) {
             // While live, keep showing the last frame under the real window, so any gap during a swap is invisible.
-            match hosted.frame() {
-                Some(buffer) => {
+            match hosted.held() {
+                Some((buffer, stale)) => {
                     // At its own size at the top left, where the live window sits: a window smaller
                     // than the pane is neither stretched nor centred.
                     let preview = hosted.preview.clone();
                     let (radius, cropped) = (hosted.radius, hosted.shown_crop > 0.0);
                     let content = size(px(hosted.content.width as f32), px(hosted.content.height as f32));
+                    // Until a frame of the new size comes, the old one as the window was, and its corners.
+                    let stale = stale.map(|([x, y, w, h], cut)| {
+                        (point(px(x as f32), px(y as f32)), size(px(w as f32), px(h as f32)), cut)
+                    });
                     div()
                         .absolute()
                         .top_0()
@@ -6764,7 +6791,13 @@ impl Workspace {
                                 this.app_wheel(id, e, window, cx)
                             }),
                         )
-                        .child(surface(buffer).size_full())
+                        .overflow_hidden()
+                        .child(match stale {
+                            Some((at, held, _)) => {
+                                surface(buffer).absolute().left(at.x).top(at.y).w(held.width).h(held.height)
+                            }
+                            None => surface(buffer).size_full(),
+                        })
                         // Record where the preview is drawn (e2e reads it), and mask the window's
                         // corners there: the ring is the whole window's, clipped to the preview,
                         // so a window cut off by the pane gets no corners at the cut.
@@ -6772,7 +6805,12 @@ impl Workspace {
                             canvas(
                                 move |bounds, _, _| preview.set(bounds),
                                 move |bounds, _, window, _| {
-                                    let whole = Bounds { origin: bounds.origin, size: content };
+                                    let (whole, cropped) = match stale {
+                                        Some((at, held, cut)) => {
+                                            (Bounds { origin: bounds.origin + at, size: held }, cut)
+                                        }
+                                        None => (Bounds { origin: bounds.origin, size: content }, cropped),
+                                    };
                                     paint_corner_mask(whole, bounds, radius, cropped, window)
                                 },
                             )
