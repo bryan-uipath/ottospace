@@ -1233,6 +1233,7 @@ function reposGroup(value: unknown, at: string): ReposGroup {
     group: orNull(str)(o.group, `${at}.group`),
     header: orNull(rect)(o.header, `${at}.header`),
     folded: bool(o.folded, `${at}.folded`),
+    dot: orNull(oneOf(["working", "needs_you"] as const, "a folded repository's dot"))(o.dot, `${at}.dot`),
     rows: list(checkoutRow)(o.rows, `${at}.rows`),
     name_cut: orNull(cutText)(o.name_cut, `${at}.name_cut`),
   };

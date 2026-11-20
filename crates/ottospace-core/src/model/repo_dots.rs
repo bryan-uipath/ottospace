@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use super::Model;
 use crate::activity::Pulse;
+use crate::repos::Repo;
 use crate::talk::Subject;
 use crate::tasks::{Group, Task, TaskId};
 
@@ -56,19 +57,35 @@ impl Model {
     /// task has at work there.
     pub fn checkout_dot(&self, path: &str, now: u64) -> Dot {
         let pulse = self.heads.get(path).and_then(|head| pulse(head.pulsed?, now));
+        let (activity, task) = self.activity(&[path]);
+        Dot { activity, task, pulse }
+    }
+
+    /// A folded repository's name: one dot for all its checkouts, by the rule of one (`activity`
+    /// over them all); `None` while unfolded (its rows say it) or every checkout is idle. No pulse.
+    pub fn repo_dot(&self, repo: &Repo) -> Option<Dot> {
+        let checkouts = repo.checkouts();
+        let paths: Vec<&str> = checkouts.iter().map(|c| c.path.as_str()).collect();
+        let (activity, task) = self.activity(&paths);
+        (self.repo_folded(repo) && activity != Activity::Idle).then_some(Dot { activity, task, pulse: None })
+    }
+
+    /// What happens in the checkouts at `paths`: a task there that needs the user, first by the
+    /// Tasks section's order; else the task at work that started last; else a session no task has.
+    fn activity(&self, paths: &[&str]) -> (Activity, Option<TaskId>) {
+        let in_paths = |dir: Option<&str>| dir.is_some_and(|dir| paths.contains(&dir));
         let there: Vec<&Task> =
-            self.tasks.list.iter().filter(|t| t.undone() && self.task_worktree(t.id) == Some(path)).collect();
+            self.tasks.list.iter().filter(|t| t.undone() && in_paths(self.task_worktree(t.id))).collect();
         let needs = there.iter().filter(|t| t.group() == Some(Group::NeedsYou)).min_by_key(|t| (t.priority, t.id));
         if let Some(task) = needs {
-            return Dot { activity: Activity::NeedsYou, task: Some(task.id), pulse };
+            return (Activity::NeedsYou, Some(task.id));
         }
         let working = there.iter().filter(|t| self.task_works(t)).max_by_key(|t| (t.started_at, t.created, t.id));
         if let Some(task) = working {
-            return Dot { activity: Activity::Working, task: Some(task.id), pulse };
+            return (Activity::Working, Some(task.id));
         }
-        let session = self.at_work.iter().any(|s| s.repo == path && !self.tasks.adopted(&s.runner, &s.id));
-        let activity = if session { Activity::Working } else { Activity::Idle };
-        Dot { activity, task: None, pulse }
+        let session = self.at_work.iter().any(|s| in_paths(Some(&s.repo)) && !self.tasks.adopted(&s.runner, &s.id));
+        (if session { Activity::Working } else { Activity::Idle }, None)
     }
 
     /// A task's agent works: its turn runs (the drawer's dial), or the session it follows is active.
@@ -209,6 +226,50 @@ mod tests {
         assert_eq!(dot(&m, WT), (Activity::NeedsYou, Some(3)));
         m.tasks.list[2].snoozed_until = Some(10);
         assert_eq!(dot(&m, WT), (Activity::Working, Some(2)), "a snoozed task does not need you now");
+    }
+
+    /// The repository's name's dot: (activity, task), `None` for none.
+    fn head(m: &Model) -> Option<(Activity, Option<TaskId>)> {
+        m.repo_dot(&m.repos[0]).map(|dot| (dot.activity, dot.task))
+    }
+
+    fn fold(m: &mut Model, fold: bool) {
+        m.update(Action::RepoFold { path: APP.into(), fold: Some(fold) });
+    }
+
+    #[test]
+    fn a_folded_repositorys_name_has_a_dot_only_while_a_checkout_is_not_idle() {
+        let mut m = listed();
+        sessions(&mut m, WT, &[("s1", true)]);
+        assert_eq!(head(&m), None, "unfolded: its rows say it");
+        fold(&mut m, true);
+        assert_eq!(head(&m), Some((Activity::Working, None)), "a session no task has: the working colour");
+        sessions(&mut m, WT, &[("s1", false)]);
+        assert_eq!(head(&m), None, "all idle: no grey dot");
+        // The repository's own folder counts too.
+        sessions(&mut m, APP, &[("s2", true)]);
+        assert_eq!(head(&m), Some((Activity::Working, None)));
+        assert_eq!(m.repo_dot(&m.repos[0]).and_then(|dot| dot.pulse), None, "never a pulse");
+    }
+
+    #[test]
+    fn a_folded_repositorys_dot_takes_the_task_the_rows_would_across_its_checkouts() {
+        let mut m = listed();
+        for (id, dir, s) in [(1, APP, "s1"), (2, WT, "s2")] {
+            task(&mut m, id, dir, State::Running);
+            m.tasks.list[id as usize - 1].session = Some(Link { runner: "claude".into(), id: s.into(), state: None });
+        }
+        sessions(&mut m, WT, &[("s1", true), ("s2", true)]);
+        // Folded while busy: held folded.
+        fold(&mut m, true);
+        assert_eq!(head(&m), Some((Activity::Working, Some(2))), "the one started last, in either checkout");
+        task(&mut m, 3, APP, State::NeedsYou);
+        task(&mut m, 4, WT, State::NeedsYou);
+        m.tasks.list[3].priority = 1;
+        assert_eq!(head(&m), Some((Activity::NeedsYou, Some(4))), "needs you wins, first by the Tasks order");
+        assert_eq!(dot(&m, APP), (Activity::NeedsYou, Some(3)), "each row keeps its own");
+        fold(&mut m, false);
+        assert_eq!(head(&m), None);
     }
 
     #[test]

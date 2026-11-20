@@ -217,13 +217,15 @@ pub(crate) fn fold_mark(open: bool) -> Svg {
     svg().path(if open { "icons/fold-open.svg" } else { "icons/fold-closed.svg" }).flex_none().size(px(8.))
 }
 
-/// A group's heading in a list: a chevron (`open`: ▾), its name and how many it holds, then room
-/// for its actions. A dim row's hover and selection, a row's height; a click anywhere folds it.
+/// A group's heading in a list: a chevron (`open`: ▾), its name and how many it holds, a `mark`
+/// after it if any (a folded repository's dot), then room for its actions. A dim row's hover and
+/// selection, a row's height; a click anywhere folds it.
 pub(crate) fn section_heading(
     id: impl Into<ElementId>,
     open: bool,
     name: impl Into<SharedString>,
     count: usize,
+    mark: Option<Div>,
     state: State,
 ) -> Stateful<Div> {
     let muted = |d: Div| d.flex_none().text_size(px(theme::TEXT_XS)).text_color(rgb(theme::MUTED));
@@ -237,6 +239,7 @@ pub(crate) fn section_heading(
         .child(div().flex_none().w(px(10.)).child(fold_mark(open).text_color(rgb(theme::MUTED))))
         .child(cut_text(name).flex_shrink().text_size(px(theme::TEXT_XS)))
         .child(muted(div()).child(format!("· {count}")))
+        .children(mark)
         .child(div().flex_1())
 }
 

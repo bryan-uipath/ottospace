@@ -1,6 +1,7 @@
 # The Repos rows' dots: every checkout idle (the repository's own folder too), then a task's
 # agent at work in app-2 (the task's colour) and a task in app-3 that needs you (amber).
-# The stand-in `claude` leaves its first turn running.
+# The stand-in `claude` leaves its first turn running. Then app folded: its name's one dot, amber
+# (a task there needs you), then lit in task 1's colour once that one no longer does.
 {"cmd":"split","kind":"empty"}
 {"cmd":"task_new","line":"fix the zoom >app-2"}
 {"cmd":"task_new","line":"review the map >app-3"}
@@ -17,3 +18,10 @@
 {"until":"repos_bar.0.rows.2"}
 {"settle":1500}
 {"shot":"working-and-needs-you"}
+{"click":"repo-fold:{ROOT}/repos/app"}
+{"until":"repos_bar.0.folded","is":true}
+{"settle":500}
+{"shot":"folded-needs-you"}
+{"cmd":"task_set_state","id":2,"state":"on_hold"}
+{"settle":800}
+{"shot":"folded-working"}
