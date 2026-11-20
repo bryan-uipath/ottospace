@@ -1154,8 +1154,8 @@ struct Workspace {
     known: Vec<(i32, HashSet<u32>)>,
     /// When the live pane went live.
     live_since: Option<Instant>,
-    /// The app a click in a live pane's gap took the keyboard from, and when.
-    left_by_click: Option<(i32, Instant)>,
+    /// The app of the pane that last left live, and when: its own activation may land after.
+    left_live: Option<(i32, Instant)>,
     /// How often a pane went live, for tests.
     went_live: u64,
     /// The pane parked because ottospace became active, until it is no longer active.
@@ -1732,7 +1732,7 @@ impl Workspace {
             sessions_quiet_told: false,
             known: Vec::new(),
             live_since: None,
-            left_by_click: None,
+            left_live: None,
             went_live: 0,
             left_on_activation: None,
             front_hosted: None,
@@ -2075,7 +2075,7 @@ impl Workspace {
                     }
                 }
                 Effect::Parked(id) => {
-                    self.live_since = None;
+                    let live_since = self.live_since.take();
                     let keep = self.bars_leave();
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("park", serde_json::json!({ "pane": id, "window": hosted.window_id }));
@@ -2085,6 +2085,11 @@ impl Workspace {
                         let scale = window.scale_factor() as f64;
                         hosted.park(pane_rect(rect, keep, false, crop).size, scale, crop);
                         hosted.resume(scale);
+                        // Live under a second: `follow_front_app` may not have seen the app's own
+                        // activation from going live yet, and must not take it for the user's.
+                        if live_since.is_some_and(|at| at.elapsed() < Duration::from_secs(1)) {
+                            self.left_live = Some((hosted.pid, Instant::now()));
+                        }
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
                         // bar shows no mode. If the user moved to a third app, leave them there.
@@ -4395,11 +4400,14 @@ impl Workspace {
             // window ottospace does not hold, or may not hold, is the user's business.
             let shown = front.and_then(|(_, window)| window);
             self.wanted = self.hosted.iter().find(|(_, h)| Some(h.window_id) == shown).map(|(id, _)| *id);
-            // An app in front within a second of a click that left it: its own late activation
-            // from going live, not the user's choice.
-            let left = self.left_by_click.filter(|(_, at)| at.elapsed() < Duration::from_secs(1));
-            if left.is_some_and(|(pid, _)| front.is_some_and(|(front, _)| front == pid)) {
+            // An app in front within a second of its pane leaving live (a click, a key, the return
+            // key): its own late activation from going live, not the user's choice.
+            let left = self.left_live.filter(|(_, at)| at.elapsed() < Duration::from_secs(1));
+            // Its keys would go to its parked window: ottospace takes them back.
+            let late = left.is_some_and(|(pid, _)| front.is_some_and(|(front, _)| front == pid));
+            if late && self.model.live.is_none() {
                 self.wanted = None;
+                cx.activate(true);
             }
         }
         let Some(pane) = self.wanted else { return };
@@ -5485,10 +5493,8 @@ impl Workspace {
                 if self.injected {
                     return;
                 }
-                // Soon after going live the app's activation may still be on its way.
-                // `follow_front_app` must not enter a pane again for it, and ottospace takes
-                // the keyboard back once it has landed.
-                self.left_by_click = Some((pid, Instant::now()));
+                // Soon after going live the app's activation may still be on its way: ottospace
+                // takes the keyboard back once it has landed.
                 cx.activate(true);
                 cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(Duration::from_millis(250)).await;
