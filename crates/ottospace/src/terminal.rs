@@ -880,7 +880,9 @@ fn program_env() -> HashMap<String, String> {
         vars.into_iter().map(|(name, value)| (name.to_string(), value.to_string())).collect();
     let set = ["LANG", "LC_ALL"].iter().any(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()));
     let exists = |locale: &str| std::path::Path::new("/usr/share/locale").join(locale).is_dir();
-    if let Some(lang) = utf8_locale(set, ottospace_mac::locale::identifier().as_deref(), exists) {
+    // The system's locale is read only when it is needed.
+    let system = (!set).then(ottospace_mac::locale::identifier).flatten();
+    if let Some(lang) = utf8_locale(set, system.as_deref(), exists) {
         env.insert("LANG".into(), lang);
     }
     env

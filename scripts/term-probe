@@ -45,10 +45,10 @@ row "ruler"          '|123456789|123456789|'
 row "ascii"          '|abcdefghi|abcdefghi|'
 row "claude glyphs"  '|⏺ ⎿ ✻ ✳ ·|⧉ ↯ ● → ✓|'
 row "braille"        '|⠁⠃⠇⡇⣇⣧⣷⣿⠿|⠋⠙⠹⠸⠼⠴⠦⠧⠇|'
-row "cjk (2 each)"   '|日本語漢字|中文字符串|'
-row "emoji (2 each)" '|👍🚀✅🎉❌|🔥💡📦🧪⚡|'
+row "cjk (2 each)"   '|日本語漢 |中文字符 |'
+row "emoji (2 each)" '|👍🚀✅🎉 |🔥💡📦🧪 |'
 row "zwj, vs16"      '|👨‍👩‍👧   ❤️ ✌️ |'
-row "combining"      '|cafe\314\201 n\314\203o|e\314\201e\314\201e\314\201e\314\201 |'
+row "combining"      '|cafe\314\201 n\314\203o  |e\314\201e\314\201e\314\201e\314\201     |'
 row "powerline/nerd" '|\356\202\260\356\202\262\356\202\240\357\204\241\357\220\230    |'
 }
 
@@ -70,10 +70,11 @@ row "title (OSC 0)"  'set to "term-probe title"'
 }
 
 replies() {
-[ -t 0 ] || { section "Replies: skipped, stdin is not a terminal"; return; }
+[ -t 0 ] && [ -t 1 ] || { section "Replies: skipped, not a terminal"; return; }
 section "Replies (what the terminal answers when a program asks)"
 old=$(stty -g)
-trap 'stty "$old"' EXIT INT
+trap 'stty "$old"' EXIT
+trap 'exit 130' INT TERM HUP
 stty -echo -icanon min 0 time 4
 ask() {
   printf '%s' "$2"
@@ -98,5 +99,10 @@ stty "$old"
 }
 
 [ $# -eq 0 ] && set -- env colour style glyphs box links replies
-for part in "$@"; do "$part"; done
+for part in "$@"; do
+  case $part in
+    env|colour|style|glyphs|box|links|replies) "$part" ;;
+    *) echo "term-probe: no part '$part' (env colour style glyphs box links replies)" >&2; exit 2 ;;
+  esac
+done
 printf '\nterm-probe done: %s\n' "$*"
