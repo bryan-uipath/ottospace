@@ -19,6 +19,7 @@
 {"tree":"repos/app","files":40}
 {"write":"home/settings.json","text":"{\"repos\": [\"{ROOT}/repos/app\"], \"restore_layout\": false}\n"}
 {"until":"repos_bar.0"}
+{"cmd":"new_tab"}
 {"cmd":"open_repo","path":"{ROOT}/repos/app"}
 {"cmd":"close"}
 {"shot":"repo-tab-closed"}

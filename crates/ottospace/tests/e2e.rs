@@ -2176,7 +2176,9 @@ fn every_empty_place_shows_the_one_empty_state() {
     let ids = ["open_app", "terminal", "new_task"];
     // The rows of `prefix` drawn, each with its frame, top to bottom.
     let rows = |o: &Otto, prefix: &str| -> Vec<(&str, [f64; 4])> {
-        ids.iter().filter_map(|id| Some((*id, o.control_opt(&format!("{prefix}:{id}"))?))).collect()
+        let drawn = o.controls();
+        let find = |id: &str| drawn.iter().find(|(c, _)| *c == format!("{prefix}:{id}")).map(|(_, frame)| *frame);
+        ids.iter().filter_map(|id| Some((*id, find(id)?))).collect()
     };
     let list = |o: &Otto, prefix: &str| {
         let rows = rows(o, prefix);
@@ -2195,7 +2197,7 @@ fn every_empty_place_shows_the_one_empty_state() {
         let a = &state["home_drawn"]["area"];
         [0, 1, 2, 3].map(|i| a[i].as_f64().unwrap())
     };
-    otto.call(json!({"cmd": "new_workspace"}));
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
     let tab = list(&otto, "home");
     assert_eq!(names(&tab), ids);
     assert_eq!(tab[0].1[3], home[0].1[3]);

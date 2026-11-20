@@ -120,6 +120,8 @@ impl Workspace {
         // Its controls are its window's: noted apart, never as the main window's (sneak, tests).
         std::mem::swap(&mut self.controls, &mut self.out_controls);
         self.controls.begin();
+        // Its own modifiers light its empty panes' caps.
+        self.caps_drawn.set(keycaps::held(window));
         let tree = self.model.tree_at(at).map(|root| self.render_node(root, cx));
         let empty = tree.is_none().then(|| self.render_empty(Floor::Out(tab), None, keycaps::held(window), cx));
         let of = self.model.tabs[at].space.clone();

@@ -1077,9 +1077,9 @@ tab after its last pane closed, an empty pane (a split, ⌘T, a pane whose conte
 with no pane folded out to its own window. The lattice, and over it, just above the middle, the
 rows of what fills it, each its key as caps (as the keymap has it; a held ⌘ lights them) and a
 click does what the key does: Open an app (⌘E), Terminal (⌘D), New task (⌘N; it starts in that
-workspace). A row shows only where its key fills that place: an empty pane and a folded-out tab
-show Open an app alone (beside a pane ⌘D splits, never fills; a folded-out window's ⌘D and ⌘N act
-on the main window). A pane smaller than 240 × 160 points shows its row without the lattice. A
+workspace). A row shows only where its key fills that place: an empty pane shows Open an app alone
+(beside a pane ⌘D splits, never fills, and ⌘N fills nothing); a folded-out tab shows Terminal and
+New task (its picker opens in the main window and fills that window's tab). A pane smaller than 240 × 160 points shows its row without the lattice. A
 click in an empty pane focuses it. What differs, on purpose: Home has its heading, its tasks and
 its legend; a pane a mark could not fill says why first (and Open *app*, for an app's pane); a
 slot that waits says what for; an app's replaced window offers the new one.
