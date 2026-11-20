@@ -4150,8 +4150,10 @@ impl Run {
         // the tab made for it is on show.
         let tab_now = m.tabs[m.main_at()].id;
         let left_home = tab_before == HOME_TAB && !tabs_before.contains(&tab_now);
-        // "New window" for a new tab: its window came, in the tab made for it.
-        let new_window_tab = matches!(action, Action::NewWindowCame { .. }) && !tabs_before.contains(&tab_now);
+        // "New window" for a new tab, asked from the tab on show: its window came, in the tab made for it.
+        let asked_here = waited.as_ref().is_some_and(|wait| wait.tab_of.is_some() && wait.tab == tab_before);
+        let new_window_tab =
+            matches!(action, Action::NewWindowCame { .. }) && asked_here && !tabs_before.contains(&tab_now);
         ensure!(
             tab_now == tab_before
                 || !m.tabs.iter().any(|tab| tab.id == tab_before)
