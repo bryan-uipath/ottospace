@@ -68,11 +68,12 @@ pub fn capture_pixels(shown: (f64, f64), scale: f64) -> (u32, u32) {
     (whole(w * scale).max(1.0) as u32, whole(h * scale).max(1.0) as u32)
 }
 
-/// Whether a frame's content fills it. Just after the stream is set to a new size, a frame of that
-/// size may still be the window at its old size, scaled to fit with a band left empty (a 640×420
-/// window in a 654×575 frame: content 654×429). Only the shapes are compared, so any unit will do.
-pub fn fills(frame: (f64, f64), content: (f64, f64)) -> bool {
-    content.0 > 0.0 && (content.1 * frame.0 / content.0 - frame.1).abs() <= 1.0
+/// Whether a frame's content has `shape` (width / height): that of the part of the window the
+/// stream was set to show. Just after it is set to a new size, a frame of that size may still be
+/// the window at its old size, scaled to fit with a band left empty (a 640×420 window in a 654×575
+/// frame: content 654×429). Shapes only, so any unit will do. No shape known (0): nothing to compare.
+pub fn of_shape(shape: f64, content: (f64, f64)) -> bool {
+    shape <= 0.0 || (content.1 > 0.0 && (content.0 / content.1 / shape - 1.0).abs() <= 0.001)
 }
 
 /// Where windows are parked: a display's bottom-right corner with no display to its right or
@@ -226,14 +227,19 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_of_the_window_at_its_old_size_does_not_fill_it() {
-        // As ScreenCaptureKit gave them on CI: the canary resized from 640×420 to its pane, then drawn.
-        assert!(!fills((654.0, 575.0), (654.000_015, 429.187_51)));
-        assert!(fills((654.0, 575.0), (654.0, 575.0)));
-        // In points on a 2× display, or a pixel short from rounding: the same shape.
-        assert!(fills((1308.0, 1150.0), (654.0, 575.0)));
-        assert!(fills((1283.0, 800.0), (641.5, 400.0)));
-        assert!(!fills((654.0, 575.0), (0.0, 0.0)));
+    fn a_frame_of_the_window_at_its_old_size_is_not_of_the_shape_shown() {
+        // As ScreenCaptureKit gave them on CI: the canary resized from 640×420 to show 654×575.
+        let shown = 654.0 / 575.0;
+        assert!(!of_shape(shown, (654.000_015, 429.187_51)));
+        assert!(of_shape(shown, (654.0, 575.0)));
+        // In points on a 2× display: the same shape.
+        assert!(of_shape(shown, (327.0, 287.5)));
+        // A band at the side only: 3968×100 left in a frame for 4000×100.
+        assert!(!of_shape(4000.0 / 100.0, (3968.0, 100.0)));
+        // Under `MOST_PIXELS` the frame is rounded down, not the content: 1504×3000 at 2× fits 2718×5421.54.
+        assert_eq!(capture_pixels((1504.0, 3000.0), 2.0), (2718, 5423));
+        assert!(of_shape(1504.0 / 3000.0, (2718.0, 5421.54)));
+        assert!(of_shape(0.0, (654.0, 429.0)) && !of_shape(shown, (654.0, 0.0)));
     }
 
     #[test]
