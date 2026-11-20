@@ -1,0 +1,9 @@
+# In a narrow pane the offer chip cuts its line short; the pointer on its words shows the whole
+# title and the reason in a tooltip (the pointer just left of ◫). Before this, no tooltip.
+{"cmd":"split","axis":"right"}
+{"cmd":"app_fixture","name":"Meetings","user":true}
+{"cmd":"window_fixture","pane":2,"title":"Quarterly planning review","size":[1200,800]}
+{"until":"state.offers.0"}
+{"hover":"offer:800001","at":[-0.25,0.5]}
+{"settle":1200}
+{"shot":"hover"}

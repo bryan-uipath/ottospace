@@ -3,8 +3,8 @@
 //! The core decides (`rules::decide`) and keeps the offer (`Model::offers`); this draws and hosts.
 
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, StatefulInteractiveElement,
-    Styled, Window, div, rgb,
+    AnyElement, AppContext, Context, InteractiveElement, IntoElement, MouseButton, ParentElement,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, rgb,
 };
 use ottospace_core::layout::Axis;
 use ottospace_core::model::offers::Offer;
@@ -14,7 +14,7 @@ use ottospace_core::{rules, theme};
 
 use ottospace_core::slot::Seen as SlotSeen;
 
-use crate::{Hosted, Workspace, capture, cut_text, event_log};
+use crate::{Hosted, Mark, Marks, Workspace, capture, cut_text, event_log, mark};
 
 /// What a new window was, for the log line. Never its title.
 pub(crate) struct Seen<'a> {
@@ -62,6 +62,17 @@ fn offer_words(offer: &Offer) -> String {
     match offer.title.is_empty() {
         true => format!("a window · {}", offer.why),
         false => format!("“{}” · {}", offer.title, offer.why),
+    }
+}
+
+/// An offer chip's tooltip: its whole line, wrapped past the offer list's width. Where it is
+/// drawn is noted for a test run.
+struct OfferTip(gpui::SharedString, Marks);
+
+impl gpui::Render for OfferTip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let tip = crate::ui::tooltip(self.0.clone(), crate::ui::Tip::Hint).max_w(gpui::px(420.));
+        tip.relative().child(mark(&self.1, Mark::OfferTip))
     }
 }
 
@@ -156,7 +167,18 @@ impl Workspace {
             return Some(chip.child(button).into_any_element());
         }
         let what = format!("{app} opened {}", offer_words(offer));
-        let chip = chip.child(cut_text(what).text_color(rgb(theme::MUTED)));
+        // Hover: the whole line, cut short in a narrow pane. Not while a window is live: it would
+        // draw under that window.
+        let words = cut_text(what.clone())
+            .id(gpui::SharedString::from(format!("offer-words:{}", offer.window)))
+            .text_color(rgb(theme::MUTED))
+            .child(mark(&self.marks, Mark::OfferWords(pane)))
+            .when(self.model.live.is_none(), |words| {
+                let marks = self.marks.clone();
+                words
+                    .tooltip(move |_, cx| gpui::AnyView::from(cx.new(|_| OfferTip(what.clone().into(), marks.clone()))))
+            });
+        let chip = chip.child(words);
         Some(chip.children(self.offer_choices(offer.window, cx)).into_any_element())
     }
 

@@ -1117,6 +1117,8 @@ A new window of a hosted app never splits a pane by itself. It stays a free wind
 over its app's pane, and it is offered in that pane's header:
 `Zoom opened “Zoom Meeting” · no slot for this window · ◫ split right ⊟ split down ×`. ◫ splits it
 in to the right of the app's pane, ⊟ below it (a click, or its sneak label); × leaves it floating.
+In a narrow pane the chip cuts its line short: the pointer on its words shows the whole title and
+the reason in a tooltip (not while an app's window is live: it would be drawn under that window).
 Several windows offered by one pane group in one chip, `Zoom opened 3 windows ▾`: ▾ opens their
 list over the pane's top right, each window with the same three choices. The offer
 goes when you choose, when the window closes, or when it goes in a pane another way; its pane

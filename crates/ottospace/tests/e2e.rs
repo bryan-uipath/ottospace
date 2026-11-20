@@ -15411,6 +15411,39 @@ fn an_offer_splits_right_or_down_and_several_group_in_one_chip() {
     assert!(otto.control_opt("offer-down:800002").is_some());
 }
 
+/// In a narrow pane the offer chip cuts its line short; the pointer on its words shows the whole
+/// line, title and reason, in a tooltip drawn inside the window. The tooltip takes no click meant
+/// for the chip, and the title is never in the state.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn hovering_an_offer_chips_words_shows_its_whole_line_and_the_state_holds_no_title() {
+    let otto = Otto::launch_with("offer-tip", &[("OTTOSPACE_E2E_WINDOW", "1024x674")]);
+    otto.call(json!({"cmd": "split", "axis": "right"}));
+    let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
+    let pane = reply["state"]["focused"].as_u64().unwrap();
+    let title = "SECRET quarterly planning review";
+    otto.call(json!({"cmd": "window_fixture", "pane": pane, "title": title, "size": [1200, 800]}));
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    let words = format!("words:{pane}");
+    let drawn = |o: &Otto| Some(state(o)).filter(|s| !s["offer_rects"][&words].is_null());
+    let reply = otto.wait_for("the chip's words", drawn);
+    assert_eq!(reply["offer_rects"]["tip"], Value::Null, "no tooltip before a hover");
+    let line = rect(&reply["offer_rects"][&words]);
+    assert!(line[2] > 40., "words to point at: {line:?}");
+    otto.mouse("move", at(line, 0.5, 0.5));
+    let shown = |o: &Otto| Some(state(o)).filter(|s| !s["offer_rects"]["tip"].is_null());
+    let reply = otto.wait_for("the tooltip", shown);
+    let (tip, window) = (rect(&reply["offer_rects"]["tip"]), rect(&reply["window"]));
+    let inside = tip[0] >= 0. && tip[1] >= 0. && tip[0] + tip[2] <= window[2] && tip[1] + tip[3] <= window[3];
+    assert!(inside && tip[2] > line[2], "a whole line, inside the window: {tip:?} {line:?} {window:?}");
+    assert!(!reply.to_string().contains("SECRET"), "{reply}");
+    // The chip's ⊟ still takes the user's click.
+    let reply = otto.user_click(at(otto.control("offer-down:800001"), 0.5, 0.5));
+    assert_eq!(reply["state"]["offers"], json!([]), "{reply}");
+    let gone = |o: &Otto| Some(o.drawn()).filter(|s| s["offer_rects"].as_object().is_some_and(|r| r.is_empty()));
+    otto.wait_for("no chip, no tooltip", gone);
+}
+
 /// Slots on screen (`slots` flag): ⋯ on an app pane's header opens the dialog, a checklist made
 /// from the pane's window (its id ticked); Keep makes the pane a filled slot, marked `slot`. Give
 /// Back leaves it waiting, saying what for; a window the slot selects is offered there, not in a

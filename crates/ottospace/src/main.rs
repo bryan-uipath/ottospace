@@ -740,6 +740,9 @@ enum Mark {
     Overlay(bool),
     /// A viewer's first marked line: a test run's `marked_rect`.
     ViewerMarked(PaneId),
+    /// An offer chip's words, by pane, and their tooltip: a test run's `offer_rects`.
+    OfferWords(PaneId),
+    OfferTip,
 }
 
 type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
@@ -4141,6 +4144,16 @@ impl Workspace {
             // what was heard never reaches a client.
             "listen_lines": self.listen_lines(),
             "listen_rects": self.listen_rects(),
+            // Test runs only: where an offer chip's words (`words:<pane>`) and their tooltip
+            // (`tip`, while it shows) were drawn. Never the words. Null outside a test run.
+            "offer_rects": std::env::var_os("OTTOSPACE_E2E").map(|_| {
+                let named = |(mark, bounds): (&Mark, &Bounds<Pixels>)| match mark {
+                    Mark::OfferWords(pane) => Some((format!("words:{pane}"), rect(*bounds))),
+                    Mark::OfferTip => Some(("tip".to_string(), rect(*bounds))),
+                    _ => None,
+                };
+                marks.iter().filter_map(named).collect::<BTreeMap<_, _>>()
+            }),
             // Test runs only: where each Tasks heading's fold mark, name and count were drawn
             // (`done:fold`, `done:label`, `done:count`). Null outside a test run.
             "heading_rects": std::env::var_os("OTTOSPACE_E2E").map(|_| {
@@ -8471,6 +8484,8 @@ impl Render for Workspace {
                     | Mark::StatusMeeting
                     | Mark::StatusAgents
                     | Mark::Overlay(_)
+                    | Mark::OfferWords(_)
+                    | Mark::OfferTip
             )
         };
         self.marks.borrow_mut().retain(|mark, _| !drawn_anew(mark));
