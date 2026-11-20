@@ -33,10 +33,14 @@ impl Workspace {
             return;
         }
         let to = match item {
-            ReorderItem::Workbook { id } => self.row_place(*id, carried.is_some(), f32::from(at.y)),
+            ReorderItem::Workbook { id } => self.row_place(*id, f32::from(at.y)),
             ReorderItem::Space { of } => {
                 let Some(from) = self.model.shown_spaces().iter().position(|space| space.of == *of) else { return };
-                self.space_place(from, carried.is_some(), f32::from(at.x))
+                // The room it takes now, kept while it is not drawn: the row's drop area stays as wide.
+                if let Some(b) = self.controls.bounds(&format!("space:{from}")) {
+                    self.reorder_room = f32::from(b.size.width);
+                }
+                self.space_place(from, f32::from(at.x))
             }
         };
         if carried != Some(to) {
@@ -45,31 +49,28 @@ impl Workspace {
     }
 
     /// The place among the rows other than `id`'s for the pointer at `y`, as if `id`'s were not
-    /// drawn (`hidden`: it is not, being carried), so the place holds as the others close up.
-    fn row_place(&self, id: ottospace_core::workbook::WorkbookId, hidden: bool, y: f32) -> usize {
+    /// drawn, so the place holds as the others close up.
+    fn row_place(&self, id: ottospace_core::workbook::WorkbookId, y: f32) -> usize {
         let bounds = |row: u32| self.controls.bounds(&format!("workbook:{row}"));
         let rows = self.model.workbook_rows();
         let from = rows.iter().position(|row| row.id == id).unwrap_or(rows.len());
-        let height = bounds(id).filter(|_| !hidden).map_or(0., |b| f32::from(b.size.height));
-        let middle = |(at, row): (usize, u32)| {
-            let shift = if at > from { height } else { 0. };
-            bounds(row).map(|b| f32::from(b.center().y) - shift)
-        };
+        let after = rows.iter().skip(from + 1).map(|row| row.id);
+        let shift = closes_up(bounds(id), after.filter_map(bounds).next(), |b| b.origin.y);
+        let middle =
+            |(at, row): (usize, u32)| bounds(row).map(|b| f32::from(b.center().y) - if at > from { shift } else { 0. });
         let others = rows.iter().enumerate().filter(|(_, row)| row.id != id).map(|(at, row)| (at, row.id));
         place_among(&others.map(middle).collect::<Vec<_>>(), y)
     }
 
     /// The place on the top row of the space at `from` for the pointer at `x`: the others whose
-    /// middle is left of it, as if it were not drawn (`hidden`: it is not, being carried).
-    fn space_place(&self, from: usize, hidden: bool, x: f32) -> usize {
-        let width = self.controls.bounds(&format!("space:{from}")).filter(|_| !hidden);
-        let width = width.map_or(0., |b| f32::from(b.size.width));
-        let others = (0..self.model.shown_spaces().len()).filter(|place| *place != from);
-        let middle = |place: usize| {
-            let shift = if place > from { width } else { 0. };
-            self.controls.bounds(&format!("space:{place}")).map(|b| f32::from(b.center().x) - shift)
-        };
-        place_among(&others.map(middle).collect::<Vec<_>>(), x)
+    /// middle is left of it, as if it were not drawn.
+    fn space_place(&self, from: usize, x: f32) -> usize {
+        let bounds = |place: usize| self.controls.bounds(&format!("space:{place}"));
+        let len = self.model.shown_spaces().len();
+        let shift = closes_up(bounds(from), (from + 1..len).filter_map(bounds).next(), |b| b.origin.x);
+        let middle =
+            |place: usize| bounds(place).map(|b| f32::from(b.center().x) - if place > from { shift } else { 0. });
+        place_among(&(0..len).filter(|place| *place != from).map(middle).collect::<Vec<_>>(), x)
     }
 
     /// Released over the list or the row: the item carried takes its place; one never carried
@@ -104,15 +105,24 @@ impl Workspace {
     }
 }
 
+/// How far the ones after the item carried move up or left once it is not drawn: from its start to
+/// the next one's, as the last frame drew them (gap and anything under it too). None drawn: 0.
+fn closes_up(
+    carried: Option<gpui::Bounds<Pixels>>,
+    next: Option<gpui::Bounds<Pixels>>,
+    along: impl Fn(&gpui::Bounds<Pixels>) -> Pixels,
+) -> f32 {
+    carried.zip(next).map_or(0., |(carried, next)| f32::from(along(&next) - along(&carried)))
+}
+
 /// Where the item carried lands: a bar in the accent colour on the edge of the one it goes before
-/// (`end`: after). `across`: the top row's, upright; else a Workspaces row's, level.
+/// (`end`: after; the top row's only). `across`: the top row's, upright; else a Workspaces row's, level.
 pub(crate) fn bar(controls: &Controls, across: bool, end: bool) -> Div {
     let bar = div().absolute().rounded_full().bg(rgb(theme::PRIMARY)).child(controls.mark("reorder-bar"));
     match (across, end) {
         (true, false) => bar.top_0().bottom_0().left_0().w(px(2.)),
         (true, true) => bar.top_0().bottom_0().right_0().w(px(2.)),
-        (false, false) => bar.left_0().right_0().h(px(2.)).top(px(-3.)),
-        (false, true) => bar.left_0().right_0().h(px(2.)).bottom(px(-3.)),
+        (false, _) => bar.left_0().right_0().h(px(2.)).top(px(-3.)),
     }
 }
 

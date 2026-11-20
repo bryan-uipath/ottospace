@@ -972,6 +972,8 @@ struct Workspace {
     divider: Option<divider::Hold>,
     /// Where the button went down on a Workspaces row or a top-row space: a drag starts past a few points.
     reorder_from: Option<gpui::Point<Pixels>>,
+    /// The width of the space a reorder drag carries, as last drawn: the top row keeps it as room.
+    reorder_room: f32,
     /// A `mouse` request holds the button down: a move before its release is a drag.
     held: bool,
     /// Releases a button no request came back for. Replaced, so stopped, by each `mouse` request.
@@ -1687,6 +1689,7 @@ impl Workspace {
             drop_at: None,
             divider: None,
             reorder_from: None,
+            reorder_room: 0.,
             held: false,
             abandoned: None,
             injected: false,
@@ -7079,9 +7082,9 @@ impl Workspace {
         let badges =
             if !compact || fits(others) { others } else { (0..others).rev().find(|n| fits(n + 1)).unwrap_or(0) };
         let mut room_for = badges;
-        let placed: Vec<(usize, &Space)> = shown.into_iter().enumerate().collect();
-        let mut shown: Vec<_> = placed
+        let mut shown: Vec<(usize, &Space)> = shown
             .into_iter()
+            .enumerate()
             .filter(|(_, space)| {
                 let keep = space.of == selected || space.of == Owner::Home || room_for > 0;
                 if keep && space.of != selected && space.of != Owner::Home {
@@ -7091,12 +7094,16 @@ impl Workspace {
             })
             .collect();
         // The space carried is not drawn: the others close up, sized as with it, and a bar shows
-        // where it lands: before the one at `to` among them, or after the last (true).
-        let mut bar = None;
-        if let Some((from, to)) = self.space_carried(cx) {
+        // where it lands: before the one at `to` among them, else after the last drawn before (true).
+        let (mut bar, carried) = (None, self.space_carried(cx));
+        if let Some((from, to)) = carried {
             shown.retain(|(place, _)| *place != from);
-            let before = shown.get(to).map(|(place, _)| (*place, false));
-            bar = before.or(shown.last().map(|(place, _)| (*place, true)));
+            let target = (0..self.model.shown_spaces().len()).filter(|place| *place != from).nth(to);
+            let drawn = shown.iter().map(|(place, _)| *place);
+            bar = match target {
+                Some(at) if drawn.clone().any(|place| place == at) => Some((at, false)),
+                _ => drawn.filter(|place| target.is_none_or(|at| *place < at)).last().map(|place| (place, true)),
+            };
         }
         let more = others - badges;
         let dot = self.model.listen_dot();
@@ -7357,6 +7364,8 @@ impl Workspace {
                     .flex()
                     .overflow_hidden()
                     .children(spaces)
+                    // The carried space's room, at the end: a release where the row was still drops.
+                    .when(carried.is_some(), |d| d.child(div().flex_none().w(px(self.reorder_room))))
                     // The window is not moved from here: a press on a space is the space's.
                     .child(
                         canvas(

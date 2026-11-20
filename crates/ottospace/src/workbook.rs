@@ -351,14 +351,14 @@ impl Workspace {
         });
         let others: Vec<u32> =
             rows.iter().map(|row| row.id).filter(|id| carried.is_none_or(|(c, _)| c != *id)).collect();
-        let bar =
-            carried.and_then(|(_, to)| others.get(to).map(|id| (*id, false)).or(others.last().map(|id| (*id, true))));
+        let before = carried.and_then(|(_, to)| others.get(to).copied());
         let mut children = Vec::new();
         let mut index = 0;
         for row in rows.into_iter() {
             let (id, selected) = (row.id, self.model.list == Some(index));
             index += 1;
             if carried.is_some_and(|(c, _)| c == id) {
+                index += if row.unfolded { row.tabs.len() } else { 0 };
                 continue;
             }
             let renaming = typing(id, None);
@@ -393,7 +393,7 @@ impl Workspace {
             let shown = self.dots_shown(&ListRow::Workbook(id));
             let dots = self.row_dots(ListRow::Workbook(id), shown, cx);
             // Where it lands: a bar in the gap, drawn over it, so no row moves.
-            let line = bar.filter(|(at, _)| *at == id).map(|(_, end)| crate::reorder::bar(&self.controls, false, end));
+            let line = (before == Some(id)).then(|| crate::reorder::bar(&self.controls, false, false));
             let dragged = DraggedItem { item: ReorderItem::Workbook { id }, place: 0 };
             let book = crate::sidebar_row(ElementId::Name(format!("workbook:{id}").into()), selected)
                 .relative()
@@ -448,6 +448,11 @@ impl Workspace {
                 tabs.push(tab_row.into_any_element());
             }
             children.extend(crate::well(tabs, 4.));
+        }
+        // After the last row (and anything listed under it): a bar at the list's end.
+        if carried.is_some() && before.is_none() {
+            let end = div().relative().h(px(0.)).child(crate::reorder::bar(&self.controls, false, false));
+            children.push(end.into_any_element());
         }
         // Each closing temporary workspace under the others, with its own Undo until its time is up,
         // whatever the toast offers since. Not a list row: Undo is its one act.
