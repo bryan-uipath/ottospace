@@ -3771,6 +3771,13 @@ impl Run {
             let gone = now.is_none() && m.features.on(Feature::Slots) && !closed_with(m, &action, &closing_was, *id);
             ensure!(!gone || origin != Origin::Socket, "{origin:?}'s {action:?} cleared slot {id}");
             ensure!(!gone || m.pane(*id).is_none() || users, "{origin:?}'s {action:?} cleared slot {id}");
+            // A window of its own app keeps it a slot: only Clear makes it an app pane (an app's quit then closed it).
+            let own = matches!(m.pane(*id).map(|p| &p.kind), Some(Kind::App { bundle, name, .. })
+                if crate::marks::same_app((bundle.as_deref(), name), (run.bundle.as_deref(), &run.name)));
+            ensure!(
+                !gone || !own || matches!(action, Action::SlotClear { .. }),
+                "{action:?} ended slot {id} with its app in it"
+            );
             let Some(now) = now else { continue };
             ensure!(users || now.slot == run.slot, "{origin:?}'s {action:?} changed slot {id}");
             ensure!(

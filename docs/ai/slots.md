@@ -202,7 +202,8 @@ Rejected:
   kept across a restart: window ids start again, and a remembered id could hide another window.
 - **⌘E Put something else here** opens the picker into that pane; choosing ends the slot (the
   user's act; the pane is then what was picked). Built in the core's `PickerChoose`: a client's pick
-  opens beside the slot.
+  opens beside the slot. A window of the slot's own app is not something else: picked, it fills the
+  slot, which stays one (Zoom picked into a Zoom slot, then quit, leaves it Absent, not closed).
 
 ### Away: a window that goes and comes back
 

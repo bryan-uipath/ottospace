@@ -8933,9 +8933,10 @@ impl Model {
         self.leave(effects);
         self.leave_visual(effects);
         let target = beside.or(self.focused);
-        // What the user picked into a slot that waits: the slot ends, and its pane takes it.
+        // What the user picked into a slot that waits: its pane takes it, and the slot ends unless
+        // it is a window of the slot's own app.
         if let Some(slot) = self.slot_pick.take().filter(|slot| self.by_user && target == Some(*slot)) {
-            self.slot_end(slot);
+            self.slot_picked(slot, &kind);
         }
         let empty = target.filter(|t| self.pane(*t).is_some_and(|p| p.kind == Kind::Empty));
         let id = match empty.and_then(|t| self.panes.iter_mut().find(|p| p.id == t)) {
