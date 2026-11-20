@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io;
 use std::os::fd::AsFd;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Acquire, Ordering::Relaxed, Ordering::Release};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Acquire, Ordering::Relaxed, Ordering::Release};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -30,7 +30,7 @@ use ottospace_core::terminal::{
     selection_holds, utf8_locale, wheel_scrolls,
 };
 use ottospace_core::workbook::{self, History};
-use ottospace_core::{clip, palette, settings, theme};
+use ottospace_core::{cell_art, clip, palette, settings, theme};
 use ottospace_mac::process;
 use ottospace_mac::time::utc_offset;
 
@@ -145,6 +145,14 @@ impl Dimensions for Grid {
 #[derive(serde::Serialize)]
 pub struct Span {
     text: String,
+    /// Its first column, and the columns it covers.
+    #[serde(skip)]
+    col: usize,
+    #[serde(skip)]
+    cells: usize,
+    /// One character the font may not have (`⎿`, `日`, `█`): drawn by itself, centred in its cells.
+    #[serde(skip)]
+    alone: bool,
     fg: u32,
     bg: Option<u32>,
     bold: bool,
@@ -693,15 +701,28 @@ fn screen_of<T: EventListener>(term: &Term<T>, rows: usize) -> Screen {
             curly: cell.flags.contains(Flags::UNDERCURL),
             color: cell.underline_color().map(colour),
         });
-        let c = if cell.c == '\t' || cell.flags.contains(Flags::HIDDEN) { ' ' } else { cell.c };
+        let hidden = cell.c == '\t' || cell.flags.contains(Flags::HIDDEN);
+        let mut text = String::from(if hidden { ' ' } else { cell.c });
+        // Its zero-width characters: a combining accent, an emoji's joiner or presentation selector.
+        if !hidden {
+            text.extend(cell.zerowidth().into_iter().flatten());
+        }
+        let (col, wide) = (cell.point.column.0, cell.flags.contains(Flags::WIDE_CHAR));
+        let alone = !text.is_ascii() || wide;
         match row.last_mut() {
             Some(s)
-                if (s.fg, s.bg, s.bold, s.italic, s.strike, s.underline)
-                    == (fg, bg, bold, italic, strike, underline) =>
+                if !alone
+                    && !s.alone
+                    && (s.fg, s.bg, s.bold, s.italic, s.strike, s.underline)
+                        == (fg, bg, bold, italic, strike, underline) =>
             {
-                s.text.push(c)
+                s.text.push_str(&text);
+                s.cells += 1;
             }
-            _ => row.push(Span { text: c.to_string(), fg, bg, bold, italic, strike, underline }),
+            _ => {
+                let cells = if wide { 2 } else { 1 };
+                row.push(Span { text, col, cells, alone, fg, bg, bold, italic, strike, underline })
+            }
         }
     }
     let at = content.cursor.point;
@@ -990,39 +1011,54 @@ pub fn paint(
     let chosen = terminal_font();
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for (r, spans) in screen.rows.iter().enumerate() {
-            let text: String = spans.iter().map(|s| s.text.as_str()).collect();
-            let drawn = |s: &Span| s.bg.is_some() || s.strike || s.underline.is_some();
-            if text.trim_end().is_empty() && !spans.iter().any(drawn) {
-                continue;
+            let y = bounds.origin.y + cell.height * r as f32;
+            let at = |s: &Span| point(bounds.origin.x + cell.width * s.col as f32, y);
+            // Backgrounds first, a cell's full width and height: no seams between rows.
+            for s in spans {
+                if let Some(bg) = s.bg {
+                    let size = size(cell.width * s.cells as f32, cell.height);
+                    window.paint_quad(fill(Bounds { origin: at(s), size }, Hsla::from(rgb(bg))));
+                }
             }
-            let runs: Vec<TextRun> = spans
-                .iter()
-                .map(|s| {
-                    let mut font = font(chosen.font.clone());
-                    if s.bold {
-                        font.weight = FontWeight::BOLD;
-                    }
-                    if s.italic {
-                        font.style = FontStyle::Italic;
-                    }
-                    TextRun {
-                        len: s.text.len(),
-                        font,
-                        color: rgb(s.fg).into(),
-                        background_color: s.bg.map(|bg| rgb(bg).into()),
-                        underline: s.underline.map(|u| UnderlineStyle {
-                            thickness: px(1.),
-                            color: u.color.map(|c| rgb(c).into()),
-                            wavy: u.curly,
-                        }),
-                        strikethrough: s.strike.then(|| StrikethroughStyle { thickness: px(1.), color: None }),
-                    }
-                })
-                .collect();
-            let line = window.text_system().shape_line(text.into(), px(chosen.font_size), &runs, None);
-            let origin = bounds.origin + point(px(0.), cell.height * r as f32);
-            let _ = line.paint_background(origin, cell.height, window, cx);
-            let _ = line.paint(origin, cell.height, window, cx);
+            for s in spans.iter().filter(|s| !s.text.trim().is_empty() || s.underline.is_some() || s.strike) {
+                let first = s.text.chars().next().unwrap_or(' ');
+                if let Some(pieces) =
+                    s.alone.then(|| cell_art::pieces(first, f32::from(cell.width), f32::from(cell.height))).flatten()
+                {
+                    paint_art(&pieces, at(s), rgb(s.fg).into(), window);
+                    ART_CELLS.fetch_add(1, Relaxed);
+                    continue;
+                }
+                let mut font = font(chosen.font.clone());
+                if s.bold {
+                    font.weight = FontWeight::BOLD;
+                }
+                if s.italic {
+                    font.style = FontStyle::Italic;
+                }
+                let run = TextRun {
+                    len: s.text.len(),
+                    font,
+                    color: rgb(s.fg).into(),
+                    background_color: None,
+                    underline: s.underline.map(|u| UnderlineStyle {
+                        thickness: px(1.),
+                        color: u.color.map(|c| rgb(c).into()),
+                        wavy: u.curly,
+                    }),
+                    strikethrough: s.strike.then(|| StrikethroughStyle { thickness: px(1.), color: None }),
+                };
+                // A run of plain characters: each glyph on its column. One character alone: centred
+                // in its cells, whatever font fell back for it (`⎿` is 13 points wide in Hiragino).
+                let force = (!s.alone).then_some(cell.width);
+                let text = s.text.clone().into();
+                let line = window.text_system().shape_line(text, px(chosen.font_size), &[run], force);
+                let mut origin = at(s);
+                if s.alone {
+                    origin.x += (cell.width * s.cells as f32 - line.width) / 2.;
+                }
+                let _ = line.paint(origin, cell.height, window, cx);
+            }
         }
         if let Some((row, col)) = screen.cursor {
             let origin = bounds.origin + point(cell.width * col as f32, cell.height * row as f32);
@@ -1031,6 +1067,41 @@ pub fn paint(
             window.paint_quad(fill(Bounds { origin, size: cell }, color.opacity(if focused { 0.6 } else { 0.2 })));
         }
     });
+}
+
+/// Box-drawing and block cells drawn as shapes since start (`counts.cell_art`, test runs).
+static ART_CELLS: AtomicU64 = AtomicU64::new(0);
+
+pub fn art_cells() -> u64 {
+    ART_CELLS.load(Relaxed)
+}
+
+/// A cell's shapes (`cell_art::pieces`) from its top-left `origin`, in `color`.
+fn paint_art(pieces: &[cell_art::Piece], origin: gpui::Point<Pixels>, color: Hsla, window: &mut Window) {
+    let at = |[x, y]: [f32; 2]| origin + point(px(x), px(y));
+    for piece in pieces {
+        match *piece {
+            cell_art::Piece::Rect { x, y, w, h, alpha } => {
+                window.paint_quad(fill(Bounds { origin: at([x, y]), size: size(px(w), px(h)) }, color.opacity(alpha)))
+            }
+            cell_art::Piece::Arc { from, to, corner, width } => {
+                let mut path = gpui::PathBuilder::stroke(px(width));
+                path.move_to(at(from));
+                path.curve_to(at(to), at(corner));
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, color);
+                }
+            }
+            cell_art::Piece::Line { from, to, width } => {
+                let mut path = gpui::PathBuilder::stroke(px(width));
+                path.move_to(at(from));
+                path.line_to(at(to));
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, color);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1174,6 +1245,36 @@ mod tests {
         );
         // Dim reversed text dims toward its new background.
         assert_eq!(spans(&term(4, 1, "\x1b[2;7mr"))[0].1, palette::dim(palette::BACKGROUND, fg));
+    }
+
+    /// A combining accent and an emoji's presentation selector are drawn with their cell.
+    #[test]
+    fn zero_width_characters_are_drawn_with_their_cell() {
+        let term = term(10, 1, "cafe\u{301}\u{2764}\u{fe0f}");
+        let row: String = spans(&term).into_iter().map(|span| span.0).collect();
+        assert!(row.starts_with("cafe\u{301}\u{2764}\u{fe0f}"), "{row:?}");
+    }
+
+    /// Plain characters run together; one the font may not have stands alone on its columns, so
+    /// the text after it keeps its own (`⎿` from a fallback font is wider than a cell).
+    #[test]
+    fn a_character_the_font_may_lack_is_placed_alone_on_its_columns() {
+        let term = term(10, 1, "a\u{23bf}b\u{65e5}c\u{2502}");
+        let screen = screen_of(&term, 1);
+        let placed: Vec<(&str, usize, usize, bool)> =
+            screen.rows[0].iter().map(|s| (s.text.as_str(), s.col, s.cells, s.alone)).collect();
+        assert_eq!(
+            placed,
+            [
+                ("a", 0, 1, false),
+                ("\u{23bf}", 1, 1, true),
+                ("b", 2, 1, false),
+                ("\u{65e5}", 3, 2, true),
+                ("c", 5, 1, false),
+                ("\u{2502}", 6, 1, true),
+                ("   ", 7, 3, false),
+            ]
+        );
     }
 
     /// What clients read keeps a cell's zero-width characters: a combining accent, a joiner.

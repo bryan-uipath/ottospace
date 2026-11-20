@@ -164,6 +164,8 @@ Design note: `docs/ai/attention/plan.md`.
     fade (`top`/`bottom`, the tab row's `left`/`right`). Null outside a test run.
   - State field `terminals[n].styled`: each span on show drawn with a style (`row`, `text`, `fg` with
     dim already in it, `bg`, `bold`, `italic`, `strike`, `underline` `{curly, color}`). Null outside a test run.
+  - State field `counts.cell_art`: terminal cells drawn as shapes (box drawing, blocks), each frame's
+    added up. Null outside a test run, as all of `counts`.
   - State field `repos_bar[n].name_cut`: a repository's name as drawn in its heading (`cut_text`), its box
     (`room`) and its shaped width (`drawn`). Null outside a test run.
   - State field `offer_rects`: where an offer chip's words (`words:<pane>`) and their tooltip (`tip`,
