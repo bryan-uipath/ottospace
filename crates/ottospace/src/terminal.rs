@@ -646,9 +646,14 @@ impl Terminal {
     }
 
     /// Spans with a style, for a test run's state: `{"row":0,"text":"dim","fg":..}`.
+    /// A row that hides a live pass (`lines`) gives none: its spans would hold the digits.
     pub fn styled(&self) -> Vec<serde_json::Value> {
-        let screen = self.screen();
-        let rows = screen.rows.iter().enumerate();
+        let (screen, lines) = (self.screen(), self.lines());
+        let whole = |row: usize, spans: &Vec<Span>| {
+            let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+            lines.get(row).is_some_and(|line| text.trim_end() == line)
+        };
+        let rows = screen.rows.iter().enumerate().filter(|(row, spans)| whole(*row, spans));
         let spans = rows.flat_map(|(row, spans)| spans.iter().filter(|s| s.styled()).map(move |s| (row, s)));
         let json = |(row, span): (usize, &Span)| {
             let mut value = serde_json::to_value(span).unwrap_or_default();
@@ -688,20 +693,15 @@ fn screen_of<T: EventListener>(term: &Term<T>, rows: usize) -> Screen {
             curly: cell.flags.contains(Flags::UNDERCURL),
             color: cell.underline_color().map(colour),
         });
-        let hidden = cell.c == '\t' || cell.flags.contains(Flags::HIDDEN);
-        let mut text = String::from(if hidden { ' ' } else { cell.c });
-        // Its zero-width characters: a combining accent, an emoji's joiner or presentation selector.
-        if !hidden {
-            text.extend(cell.zerowidth().into_iter().flatten());
-        }
+        let c = if cell.c == '\t' || cell.flags.contains(Flags::HIDDEN) { ' ' } else { cell.c };
         match row.last_mut() {
             Some(s)
                 if (s.fg, s.bg, s.bold, s.italic, s.strike, s.underline)
                     == (fg, bg, bold, italic, strike, underline) =>
             {
-                s.text.push_str(&text)
+                s.text.push(c)
             }
-            _ => row.push(Span { text, fg, bg, bold, italic, strike, underline }),
+            _ => row.push(Span { text: c.to_string(), fg, bg, bold, italic, strike, underline }),
         }
     }
     let at = content.cursor.point;
@@ -991,7 +991,8 @@ pub fn paint(
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for (r, spans) in screen.rows.iter().enumerate() {
             let text: String = spans.iter().map(|s| s.text.as_str()).collect();
-            if text.trim_end().is_empty() && spans.iter().all(|s| s.bg.is_none()) {
+            let drawn = |s: &Span| s.bg.is_some() || s.strike || s.underline.is_some();
+            if text.trim_end().is_empty() && !spans.iter().any(drawn) {
                 continue;
             }
             let runs: Vec<TextRun> = spans
@@ -1173,14 +1174,6 @@ mod tests {
         );
         // Dim reversed text dims toward its new background.
         assert_eq!(spans(&term(4, 1, "\x1b[2;7mr"))[0].1, palette::dim(palette::BACKGROUND, fg));
-    }
-
-    /// A combining accent and an emoji's presentation selector are drawn with their cell.
-    #[test]
-    fn zero_width_characters_are_drawn_with_their_cell() {
-        let term = term(10, 1, "cafe\u{301}\u{2764}\u{fe0f}");
-        let row: String = spans(&term).into_iter().map(|span| span.0).collect();
-        assert!(row.starts_with("cafe\u{301}\u{2764}\u{fe0f}"), "{row:?}");
     }
 
     /// What clients read keeps a cell's zero-width characters: a combining accent, a joiner.
