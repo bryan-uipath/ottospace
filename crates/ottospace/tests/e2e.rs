@@ -1168,7 +1168,11 @@ fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_o
     let theirs = |action: &str| json!({"cmd": "mouse", "action": action, "button": "right", "x": p[0], "y": p[1]});
     otto.call(theirs("down"));
     otto.call(theirs("up"));
-    assert!(otto.drawn()["row_menu"].is_null());
+    let state = otto.drawn();
+    assert!(state["row_menu"].is_null(), "{}", state["row_menu"]);
+    // Refused, and said: out of the way of what is said next.
+    assert!(state["notice"].as_str().is_some_and(|n| n.starts_with("only the user")), "{}", state["notice"]);
+    otto.dismiss_notice();
 
     // The user's: at the pointer, inside the window, one item.
     let state = right_click(p);
