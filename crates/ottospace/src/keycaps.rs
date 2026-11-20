@@ -1,8 +1,10 @@
-//! Key caps: a key from the keymap as one small box per key, and what to do in an empty tab
-//! listed with them. The same list on the home screen and in an empty tab.
+//! Key caps: a key from the keymap as one small box per key, and what to do in an empty place
+//! listed with them. One list on the home screen, in an empty tab and in an empty pane; which
+//! rows each shows is the core's (`ottospace_core::empty`).
 
-use gpui::{Context, Div, Keymap, Keystroke, Modifiers, Stateful, Window, div, prelude::*, px, rgb};
+use gpui::{Context, Div, Keymap, Keystroke, Modifiers, SharedString, Stateful, Window, div, prelude::*, px, rgb};
 use ottospace_core::commands::Command;
+use ottospace_core::empty::Hint;
 use ottospace_core::{Action, Axis, Kind, Picker, theme};
 
 use crate::{Workspace, commands, key_use, ui};
@@ -41,7 +43,7 @@ impl Workspace {
     /// A modifier changed: the list is drawn again only if it is on show and its lit caps differ
     /// from those drawn. ⇧ while typing beside an empty tab draws nothing.
     pub(crate) fn modifiers_changed(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.model.layout.is_some() {
+        if self.model.layout.is_some() && !self.model.panes.iter().any(|pane| pane.kind == Kind::Empty) {
             return;
         }
         let keymap = cx.key_bindings();
@@ -54,18 +56,28 @@ impl Workspace {
         }
     }
 
-    /// What to do in an empty tab, a row each: its key's caps, then what it does. A click does
-    /// what the key does. `held`: the modifiers down now, whose caps are lit.
-    pub(crate) fn fill_list(&self, held: Modifiers, cx: &mut Context<Self>) -> Div {
+    /// What to do in an empty place, a row each: its key's caps, then what it does. A click does
+    /// what the key does. `hints`: the rows, in order; `prefix`: their controls' (`home:open_app`).
+    /// `held`: the modifiers down now, whose caps are lit.
+    pub(crate) fn hint_list(&self, hints: &[Hint], prefix: &str, held: Modifiers, cx: &mut Context<Self>) -> Div {
         self.caps_drawn.set(held);
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
-        let row = |id: &'static str, command: Command, label: &'static str, fired: bool| -> Stateful<Div> {
+        // This row's picker open is its chord, pressed: its caps stay lit. A terminal fills the
+        // tab at once, so its row has nothing to show.
+        let picking = matches!(self.model.picker, Some(Picker { axis: Axis::Right, new_tab: false, .. }));
+        let row = |hint: Hint| -> Stateful<Div> {
+            let command = match hint {
+                Hint::OpenApp => Command::PickPane,
+                Hint::Terminal => Command::SplitRight,
+                Hint::NewTask => Command::NewTask,
+            };
             let stroke = stroke(&keymap, command);
+            let fired = hint == Hint::OpenApp && picking;
             // Their room also with no key, so the labels line up.
             let keys = div().min_w(px(48.)).children(stroke.map(|stroke| key_caps(&stroke, held, fired)));
-            div()
-                .id(id)
+            let row = div()
+                .id(SharedString::from(format!("{prefix}:{}", hint.id())))
                 .relative()
                 .px_2()
                 .py_1()
@@ -77,25 +89,21 @@ impl Workspace {
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(theme::SELECTED)))
                 .child(keys)
-                .child(label)
-                .child(self.controls.mark(format!("home:{id}")))
+                .child(hint.label())
+                .child(self.controls.mark(format!("{prefix}:{}", hint.id())));
+            match hint {
+                Hint::OpenApp => {
+                    row.on_click(cx.listener(|this, _, window, cx| this.open_picker(Axis::Right, false, window, cx)))
+                }
+                Hint::Terminal => row.on_click(cx.listener(|this, _, window, cx| {
+                    let split = Action::Split { axis: Axis::Right, kind: Kind::Terminal };
+                    this.dispatch(split, this.input, window, cx);
+                })),
+                // ⌘N's box: in a workspace ↵ starts the task there, on Home in a space of its own.
+                Hint::NewTask => row.on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx))),
+            }
         };
-        // This row's picker open is its chord, pressed: its caps stay lit. A terminal fills the
-        // tab at once, so its row has nothing to show.
-        let picking = matches!(self.model.picker, Some(Picker { axis: Axis::Right, new_tab: false, .. }));
-        let open_app = row("open_app", Command::PickPane, "Open an app", picking);
-        let open_app = open_app.on_click(cx.listener(|this, _, window, cx| {
-            this.open_picker(Axis::Right, false, window, cx);
-        }));
-        let terminal = row("terminal", Command::SplitRight, "Terminal", false);
-        let terminal = terminal.on_click(cx.listener(|this, _, window, cx| {
-            let split = Action::Split { axis: Axis::Right, kind: Kind::Terminal };
-            this.dispatch(split, this.input, window, cx);
-        }));
-        // ⌘N's box: in a workspace ↵ starts the task there, on Home in a space of its own.
-        let new_task = row("new_task", Command::NewTask, "New task", false);
-        let new_task = new_task.on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)));
-        div().flex().flex_col().gap_1().child(open_app).child(terminal).child(new_task)
+        div().flex().flex_col().gap_1().children(hints.iter().map(|hint| row(*hint)))
     }
 }
 

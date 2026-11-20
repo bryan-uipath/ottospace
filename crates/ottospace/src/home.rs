@@ -1,5 +1,6 @@
-//! Draws the lattice: the home screen, an empty tab's floor and the patch in an empty pane.
-//! Where tasks sit is the core's choice (`ottospace_core::home`); this file only draws.
+//! Draws the lattice: the home screen, and the one empty state of an empty tab, an empty pane
+//! and a folded-out tab with no pane. Where tasks sit, and what an empty place shows, are the
+//! core's (`ottospace_core::home`, `ottospace_core::empty`); this file only draws.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -9,6 +10,7 @@ use gpui::{
     AnyElement, App, Bounds, Context, Div, EntityId, FontWeight, Hsla, Modifiers, Path, PathBuilder, Pixels, Point,
     SharedString, Window, canvas, div, point, prelude::*, px, relative, rgb, svg,
 };
+use ottospace_core::empty::{self, Surface};
 use ottospace_core::home::{HOME, Home, NEAR, View};
 use ottospace_core::model::HOME as HOME_NAME;
 use ottospace_core::tasks::{Group, TaskId};
@@ -16,12 +18,11 @@ use ottospace_core::{PaneId, Rect, theme};
 
 use crate::{HOME_ICON, Workspace, open_task, rect, task_tags_cell, task_title_cells};
 
-/// The patch of lattice in an empty pane: a nearer, smaller view of the same floor.
-const PATCH: View = View { cx: 0.5, horizon: 0.05, fx: 0.58, fy: 0.91, sin: 0.5, cos: 0.866, dist: 3.9, lo: -3, hi: 4 };
 /// Where the new-task box starts, as a part of the height.
 const BOX_TOP: f32 = 0.18;
-/// The room kept under an empty tab's key caps, so they sit above the floor.
-const FLOOR_ROOM: f32 = 160.;
+/// The room kept under an empty place's key caps, a share of its height, so they sit above the
+/// floor: 160 points of a window's 846.
+const FLOOR_ROOM: f32 = 0.19;
 /// Lines are cut into pieces about this long, in points, so each can fade by itself.
 const PIECE: f32 = 24.;
 /// Half the side of a node's click target, and the room kept between a node and the text.
@@ -29,6 +30,15 @@ const TARGET: f32 = 14.;
 const ROOM: f32 = TARGET + 4.;
 /// Where the text is until a first frame has measured it: the box, then the legend.
 const FIRST_GUESS: [Rect; 2] = [Rect { x: 0.26, y: 0., w: 0.48, h: 0.63 }, Rect { x: 0., y: 0.9, w: 0.36, h: 0.1 }];
+
+/// Where a lattice is drawn: the main window's tab (Home, or an empty tab), an empty pane, or a
+/// folded-out tab with no pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Floor {
+    Main,
+    Pane(PaneId),
+    Out(u32),
+}
 
 /// What a lattice's lines were built for: its bounds, and the text the lines fade behind.
 type Key = (Bounds<Pixels>, [Bounds<Pixels>; 2]);
@@ -43,15 +53,15 @@ pub struct Drawn {
     /// The heading drawn over the key caps: Home's name, none in an empty tab.
     heading: Option<&'static str>,
     panel: Bounds<Pixels>,
-    /// An empty tab's key caps: apart from Home's, whose nodes keep clear of its own text.
-    bare: Bounds<Pixels>,
+    /// An empty place's key caps, by where: apart from Home's, whose nodes keep clear of its text.
+    bare: HashMap<Floor, Bounds<Pixels>>,
     legend: Bounds<Pixels>,
     /// Each node's click target.
     nodes: Vec<(TaskId, Bounds<Pixels>)>,
     /// Built lines by where they are drawn (`None`: the home screen), with the bounds and
     /// text they were built for. Building is the costly part; a frame that changes neither
     /// paints the kept paths.
-    lattices: HashMap<Option<PaneId>, (Key, Lines)>,
+    lattices: HashMap<Floor, (Key, Lines)>,
     builds: usize,
     paints: usize,
 }
@@ -61,7 +71,7 @@ pub type Shared = Rc<RefCell<Drawn>>;
 impl Drawn {
     /// Where an empty tab's key caps were drawn last: the code city keeps its names clear of them.
     pub(crate) fn hints(&self) -> Bounds<Pixels> {
-        self.bare
+        self.bare.get(&Floor::Main).copied().unwrap_or_default()
     }
 
     /// Where the text is, with room for a node beside it, in fractions of the area: the core
@@ -203,7 +213,7 @@ fn build_lattice(
 /// Paints the lines kept for `slot`, building them first if the bounds or the text moved.
 fn paint_lattice(
     drawn: &Shared,
-    slot: Option<PaneId>,
+    slot: Floor,
     key: Key,
     build: impl FnOnce() -> Vec<(Path<Pixels>, Hsla)>,
     window: &mut Window,
@@ -258,33 +268,84 @@ pub fn dot(color: u32) -> Div {
     div().size(px(8.)).flex_none().rounded_full().bg(rgb(color))
 }
 
-/// An empty pane: a patch of the lattice with one place waiting, and a hint under it.
-pub fn empty_pane(hint: SharedString, pane: PaneId, drawn: &Shared) -> impl IntoElement + use<> {
-    let drawn = drawn.clone();
-    let lines = canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| {
-            // The patch fades out all round, so no edge of it looks cut off.
-            let build = || {
-                let (centre, half) = (bounds.center(), bounds.size.map(|side| f32::from(side) / 2.));
-                let fade = Quiet { centre, radius: (half.width, half.height), left: 0. };
-                let keep = |at| (1. - ((fade.reach(at) - 0.25) / 0.7).clamp(0., 1.)).powi(2);
-                build_lattice(&PATCH, bounds, (0.75, 8.2), keep)
-            };
-            paint_lattice(&drawn, Some(pane), (bounds, Default::default()), build, window);
-        },
-    );
-    let patch = div().relative().w(px(480.)).max_w_full().h(px(280.)).child(lines.absolute().size_full());
-    div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .max_w_full()
-        .child(patch.child(node(&PATCH, (0, 1), theme::task(Group::Captured))))
-        .child(div().text_sm().text_color(rgb(theme::MUTED)).child(hint))
+/// The lattice of an empty place, faded behind its key caps (`panel`) and Home's legend, and in
+/// a haze just under the horizon, where the lines would run together.
+fn build_floor(
+    bounds: Bounds<Pixels>,
+    panel: Bounds<Pixels>,
+    legend: Option<Bounds<Pixels>>,
+) -> Vec<(Path<Pixels>, Hsla)> {
+    let around = |b: Bounds<Pixels>, room: (f32, f32), left: f32| Quiet {
+        centre: b.center(),
+        radius: (f32::from(b.size.width) / 2. + room.0, f32::from(b.size.height) / 2. + room.1),
+        left,
+    };
+    let text = around(panel, (150., 120.), 0.05);
+    let legend = legend.map(|legend| around(legend, (110., 40.), 0.));
+    let horizon = bounds.origin.y + bounds.size.height * HOME.horizon;
+    let haze = |at: Point<Pixels>| (f32::from(at.y - horizon) / 120.).clamp(0., 1.);
+    let keep = |at| text.keep(at) * legend.as_ref().map_or(1., |legend| legend.keep(at)) * haze(at);
+    build_lattice(&HOME, bounds, (0.6, 19.), keep)
+}
+
+/// The rows of Home's list, or an empty tab's.
+fn empty_hints(on_home: bool) -> &'static [empty::Hint] {
+    empty::empty(if on_home { Surface::Home } else { Surface::Tab }, (0., 0.)).hints
 }
 
 impl Workspace {
+    /// An empty pane, or a folded-out tab with no pane: the one empty state, as an empty tab's.
+    /// Its key caps just above the middle, `above` over them (why a mark left it empty), and the
+    /// lattice behind, none in a pane too small for it (`empty::SMALL`). `held`: the modifiers
+    /// down now.
+    pub(crate) fn render_empty(
+        &self,
+        floor: Floor,
+        above: Option<AnyElement>,
+        held: Modifiers,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (surface, prefix) = match floor {
+            Floor::Out(tab) => (Surface::OutTab, format!("empty-out:{tab}")),
+            Floor::Pane(id) => (Surface::Pane, format!("empty:{id}")),
+            Floor::Main => (Surface::Tab, "home".to_string()),
+        };
+        let (view, drawn) = (cx.entity_id(), &self.home);
+        let hints = empty::empty(surface, (f32::MAX, f32::MAX)).hints;
+        let list = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_2()
+            .child(measure(drawn, view, move |drawn, bounds| {
+                std::mem::replace(drawn.bare.entry(floor).or_default(), bounds) != bounds
+            }))
+            .children(above)
+            .child(self.hint_list(hints, &prefix, held, cx));
+        let shared = drawn.clone();
+        let lines = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let size = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+                if !empty::empty(surface, size).backdrop {
+                    return;
+                }
+                let panel = shared.borrow().bare.get(&floor).copied().unwrap_or_default();
+                let build = || build_floor(bounds, panel, None);
+                paint_lattice(&shared, floor, (bounds, [panel, Bounds::default()]), build, window);
+            },
+        );
+        let place = div().absolute().inset_0().pb(relative(FLOOR_ROOM)).px_4().flex().items_center().justify_center();
+        div()
+            .relative()
+            .size_full()
+            .overflow_hidden()
+            .child(lines.absolute().size_full())
+            .child(place.child(list))
+            .into_any_element()
+    }
+
     /// The home screen: the lattice with a node for each listed task, its heading and key caps
     /// with the tasks that need the user under them, and a legend. `None`: an empty tab of a
     /// workspace, the lattice and the key caps only. `held`: the modifiers down now.
@@ -359,7 +420,7 @@ impl Workspace {
             .items_center()
             .gap_2()
             .children(heading)
-            .child(div().pt_2().child(self.fill_list(held, cx)));
+            .child(div().pt_2().child(self.hint_list(empty_hints(on_home), "home", held, cx)));
 
         let rows: Vec<_> = (home.needs_you.iter().enumerate())
             .map(|(i, task)| {
@@ -415,7 +476,7 @@ impl Workspace {
             .flex_col()
             .gap_3()
             .child(measure(drawn, view, move |drawn, bounds| {
-                let panel = if on_home { &mut drawn.panel } else { &mut drawn.bare };
+                let panel = if on_home { &mut drawn.panel } else { drawn.bare.entry(Floor::Main).or_default() };
                 std::mem::replace(panel, bounds) != bounds
             }))
             .child(line)
@@ -424,7 +485,7 @@ impl Workspace {
         // Home's text near the top; an empty tab's caps just above the middle, the floor under them.
         let panel = match on_home {
             true => div().absolute().top(relative(BOX_TOP)).left_0().w_full(),
-            false => div().absolute().inset_0().pb(px(FLOOR_ROOM)).items_center(),
+            false => div().absolute().inset_0().pb(relative(FLOOR_ROOM)).items_center(),
         };
         let panel = panel.px_4().flex().justify_center().child(text);
 
@@ -469,24 +530,14 @@ impl Workspace {
             },
             move |bounds, _, window, _| {
                 let drawn = shared.borrow();
-                let (panel, legend) =
-                    if on_home { (drawn.panel, drawn.legend) } else { (drawn.bare, Bounds::default()) };
-                drop(drawn);
-                // The lines go quiet behind the text (the box and its list, the legend), and in
-                // a haze just under the horizon, where they would run together.
-                let build = || {
-                    let around = |b: Bounds<Pixels>, room: (f32, f32), left: f32| Quiet {
-                        centre: b.center(),
-                        radius: (f32::from(b.size.width) / 2. + room.0, f32::from(b.size.height) / 2. + room.1),
-                        left,
-                    };
-                    let (text, legend) = (around(panel, (150., 120.), 0.05), around(legend, (110., 40.), 0.));
-                    let horizon = bounds.origin.y + bounds.size.height * HOME.horizon;
-                    let haze = |at: Point<Pixels>| (f32::from(at.y - horizon) / 120.).clamp(0., 1.);
-                    let keep = |at| text.keep(at) * if any { legend.keep(at) } else { 1. } * haze(at);
-                    build_lattice(&HOME, bounds, (0.6, 19.), keep)
+                let (panel, legend) = if on_home {
+                    (drawn.panel, drawn.legend)
+                } else {
+                    (drawn.bare.get(&Floor::Main).copied().unwrap_or_default(), Bounds::default())
                 };
-                paint_lattice(&shared, None, (bounds, [panel, legend]), build, window);
+                drop(drawn);
+                let build = || build_floor(bounds, panel, any.then_some(legend));
+                paint_lattice(&shared, Floor::Main, (bounds, [panel, legend]), build, window);
             },
         );
         // A task's empty tab, with the `code_city` flag and its files read: the city is the floor.

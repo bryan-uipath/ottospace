@@ -2118,7 +2118,7 @@ fn the_home_screen_shows_tasks_as_nodes_until_a_pane_opens() {
     let reply = otto.call(json!({"cmd": "split", "kind": "empty"}));
     assert!(reply["home"].is_null() && otto.control_opt("home:terminal").is_none(), "a pane takes the list's place");
     otto.bounds(&pane_ids(&reply));
-    // The empty pane's patch is kept too: a terminal printing beside it does not build it again.
+    // The empty pane's lattice is kept too: a terminal printing beside it does not build it again.
     otto.call(json!({"cmd": "split"}));
     let printed = |o: &Otto, word: &str| {
         o.call(json!({"cmd": "type", "pane": 2, "text": format!("echo {word}-$((6*7))\r")}));
@@ -2127,8 +2127,8 @@ fn the_home_screen_shows_tasks_as_nodes_until_a_pane_opens() {
     };
     let (builds, paints) = printed(&otto, "one");
     let (again, later) = (printed(&otto, "two"), printed(&otto, "three"));
-    assert_eq!((again.0, later.0), (builds, builds), "the terminal's frames built the patch again");
-    assert!(later.1 > paints, "the patch was painted with the terminal's frames");
+    assert_eq!((again.0, later.0), (builds, builds), "the terminal's frames built the lattice again");
+    assert!(later.1 > paints, "the lattice was painted with the terminal's frames");
     // Home is still its screen.
     assert!(otto.call(json!({"cmd": "select_space", "index": 0}))["home"].is_object());
 }
@@ -2137,7 +2137,7 @@ fn the_home_screen_shows_tasks_as_nodes_until_a_pane_opens() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn an_empty_tab_lists_what_fills_it_and_a_row_does_what_its_key_does() {
     let otto = Otto::launch("empty-tab-keys");
-    // Two rows, Open an app over Terminal, lined up: on the home screen and in a task's empty tab.
+    // Rows, Open an app over Terminal, lined up: on the home screen and in a task's empty tab.
     let rows = |o: &Otto| {
         let [app, terminal] = ["home:open_app", "home:terminal"].map(|id| o.control(id));
         assert!(app[0] == terminal[0] && app[1] + app[3] <= terminal[1], "a list: {app:?} {terminal:?}");
@@ -2164,6 +2164,68 @@ fn an_empty_tab_lists_what_fills_it_and_a_row_does_what_its_key_does() {
     otto.call(json!({"cmd": "new_tab"}));
     let app = otto.control("home:open_app");
     assert_eq!(otto.user_click(at(app, 0.5, 0.5))["mode"], "pick");
+}
+
+/// One empty state (`ottospace_core::empty`): Home, a workspace's empty tab, a task's and an empty
+/// pane show the same list, the same rows in the same order and size, just above their middle; a
+/// pane shows only the row whose key fills it, ⌘E, and its click picks what goes in that pane.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn every_empty_place_shows_the_one_empty_state() {
+    let otto = Otto::launch("empty-states");
+    let ids = ["open_app", "terminal", "new_task"];
+    // The rows of `prefix` drawn, each with its frame, top to bottom.
+    let rows = |o: &Otto, prefix: &str| -> Vec<(&str, [f64; 4])> {
+        ids.iter().filter_map(|id| Some((*id, o.control_opt(&format!("{prefix}:{id}"))?))).collect()
+    };
+    let list = |o: &Otto, prefix: &str| {
+        let rows = rows(o, prefix);
+        for pair in rows.windows(2) {
+            let ((_, a), (_, b)) = (pair[0], pair[1]);
+            assert!(a[0] == b[0] && a[1] + a[3] <= b[1] && a[3] == b[3], "one list, in order: {rows:?}");
+        }
+        rows
+    };
+    let names = |rows: &[(&str, [f64; 4])]| rows.iter().map(|(id, _)| id.to_string()).collect::<Vec<_>>();
+    let home = list(&otto, "home");
+    assert_eq!(names(&home), ids);
+    // A workspace's empty tab and a task's: the same rows, the same height, above the middle.
+    let area = |o: &Otto| {
+        let state = o.call(json!({"cmd": "state"}));
+        let a = &state["home_drawn"]["area"];
+        [0, 1, 2, 3].map(|i| a[i].as_f64().unwrap())
+    };
+    otto.call(json!({"cmd": "new_workspace"}));
+    let tab = list(&otto, "home");
+    assert_eq!(names(&tab), ids);
+    assert_eq!(tab[0].1[3], home[0].1[3]);
+    let floor = area(&otto);
+    assert!(tab[0].1[1] + tab[0].1[3] < floor[1] + floor[3] / 2., "{tab:?} over the middle of {floor:?}");
+    otto.call(json!({"cmd": "task_new", "line": "Fix the login loop #auth"}));
+    otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+    assert_eq!(names(&list(&otto, "home")), ids);
+    // An empty pane beside a terminal: ⌘E's row alone, as tall, just above its middle, centred.
+    otto.call(json!({"cmd": "split"}));
+    let reply = otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let ids_now = pane_ids(&reply);
+    let empty = *ids_now.last().unwrap();
+    let pane = otto.bounds(&[empty])[0];
+    let own = list(&otto, &format!("empty:{empty}"));
+    assert_eq!(names(&own), ["open_app"], "a pane: only what fills it");
+    let row = own[0].1;
+    assert_eq!(row[3], home[0].1[3]);
+    let (middle, centre) = (pane[1] + pane[3] / 2., row[0] + row[2] / 2.);
+    assert!(row[1] + row[3] < middle && row[1] > pane[1], "{row:?} in {pane:?}");
+    assert!((centre - (pane[0] + pane[2] / 2.)).abs() < 2., "{row:?} centred in {pane:?}");
+    assert_eq!(otto.control_opt("home:open_app"), None, "the tab's list goes when a pane opens");
+    // The user's click on it picks what goes in that pane: ↵ takes the first, a terminal, there.
+    let focused = otto.call(json!({"cmd": "focus", "pane": ids_now[0]}));
+    assert_eq!(focused["state"]["focused"], json!(ids_now[0]));
+    assert_eq!(otto.user_click(at(row, 0.5, 0.5))["mode"], "pick");
+    let reply = otto.call(json!({"cmd": "key", "keys": "enter", "as": "user"}));
+    let kind =
+        reply["state"]["panes"].as_array().unwrap().iter().find(|p| p["id"] == json!(empty)).unwrap()["kind"].clone();
+    assert_eq!((kind["type"].as_str(), pane_ids(&reply).len()), (Some("terminal"), ids_now.len()), "{reply}");
 }
 
 /// The owner's design: Home's heading is its house and name; an empty workspace is the floor

@@ -461,7 +461,7 @@ impl Workspace {
     /// Why an empty pane is empty, if a mark's tab left it so: drawn in the pane.
     pub(crate) fn unfilled_why(&self, pane: PaneId) -> Option<String> {
         let empty = self.model.marks.unfilled().iter().find(|empty| empty.pane == pane)?;
-        Some(format!("{} · ⌘E to pick something else", empty.why))
+        Some(empty.why.clone())
     }
 
     /// The Marks section: each mark's kind, name, letter, whether it is open, and its buttons.
