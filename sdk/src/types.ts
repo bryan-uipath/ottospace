@@ -1591,7 +1591,7 @@ export interface Toast {
   rect: Rect | null;
   /** How far in it is: less than 1 while it comes or goes. */
   shown: number;
-  /** The floating panel over a live app's window, on the screens, or null: drawn in ottospace's window. */
+  /** The rect around the floating panels (one a card) over a live app's window, on the screens, or null: drawn in ottospace's window. */
   panel: Rect | null;
 }
 

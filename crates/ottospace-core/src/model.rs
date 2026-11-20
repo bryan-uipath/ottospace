@@ -1803,7 +1803,7 @@ pub enum Action {
     },
     /// Undo on the toast's "Done · <task>": the task as it was. Only the user's.
     DoneUndo,
-    /// New task here on the notice bar's "Done · <task>": the new-task box, in the task's
+    /// New task here on the toast's "Done · <task>": the new-task box, in the task's
     /// workspace. Only the user's. Never acted on: `done_new_task` turns the user's into `OpenCompose`.
     DoneNewTask,
     /// The local day began at `day` (ms since 1970): what Done today counts from. The shell's.

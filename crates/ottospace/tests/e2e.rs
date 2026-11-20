@@ -12121,7 +12121,7 @@ fn done_removes_its_clean_worktree_keeps_a_dirty_one_and_a_new_task_starts_in_th
     let bar = top_card(&otto.call(json!({"cmd": "state"}))).clone();
     assert_eq!(bar["text"], "Done · fix login", "{bar}");
     // A client's click or label on it opens no box: the notice is the user's.
-    for theirs in [otto.click(at(rect(&bar["new_task"]), 0.5, 0.5), 1), sneak_to(&otto, "notice:new-task")] {
+    for theirs in [otto.click(at(rect(&bar["new_task"]), 0.5, 0.5), 1), sneak_to(&otto, "toast:0:new-task")] {
         assert_eq!(theirs["state"]["compose"], Value::Null, "{theirs}");
         assert_eq!(theirs["notice"], "only the user takes New task here", "{theirs}");
     }
@@ -13471,6 +13471,75 @@ fn notices_stack_three_cards_and_more_and_reduce_motion_moves_none() {
         after["toast"]
     );
     assert_eq!(after["toast"]["cards"].as_array().map(Vec::len), Some(3));
+}
+
+/// Whether `inner` lies in `outer`, both `[x, y, w, h]`, to half a point.
+fn within(inner: [f64; 4], outer: [f64; 4]) -> bool {
+    let (right, bottom) =
+        (inner[0] + inner[2] <= outer[0] + outer[2] + 0.5, inner[1] + inner[3] <= outer[1] + outer[3] + 0.5);
+    inner[0] >= outer[0] - 0.5 && inner[1] >= outer[1] - 0.5 && right && bottom
+}
+
+/// A made-up folder that is not there, its path too long for a card's one line.
+fn long_path() -> String {
+    format!("/made-up/{}", "a-long-folder-name/".repeat(10))
+}
+
+/// The gap between two cards is the pane's: the user's click there focuses the pane under the
+/// toast. A click on a card's own body does not reach it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_click_between_two_cards_reaches_the_pane_under_the_toast() {
+    let home = user_folder("toast-gap", r#"{"repos": []}"#);
+    let otto = Otto::launch_with("toast-gap", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    otto.call(json!({"cmd": "split", "axis": "right"}));
+    // Two cards: a folder that is not there, and a settings file that does not read.
+    otto.call(json!({"cmd": "repo_add", "path": long_path()}));
+    std::fs::write(home.join("settings.json"), "{ not json").unwrap();
+    let two = otto.wait_for("two cards at rest", |o| {
+        Some(o.drawn()).filter(|s| s["toast"]["shown"] == 1.0 && s["toast"]["cards"][1]["rect"].is_array())
+    });
+    let (first, second) = (rect(&two["toast"]["cards"][0]["rect"]), rect(&two["toast"]["cards"][1]["rect"]));
+    let gap = [first[0] + first[2] / 2., (first[1] + first[3] + second[1]) / 2.];
+    assert!(second[1] - (first[1] + first[3]) >= 4., "a gap between {first:?} and {second:?}");
+    let pane = rect(&two["frames"]["2"]);
+    assert!(within([gap[0], gap[1], 0., 0.], pane), "the gap {gap:?} over pane 2 {pane:?}");
+    // On a card: the pane under it gets nothing.
+    assert_eq!(otto.call(json!({"cmd": "focus", "pane": 1}))["state"]["focused"], 1);
+    assert_eq!(otto.user_click(at(first, 0.3, 0.5))["state"]["focused"], 1, "a card's body is its own");
+    // Between them: pane 2 takes the focus, and both cards stay.
+    let clicked = otto.user_click(gap);
+    assert_eq!(clicked["state"]["focused"], 2, "the click in the gap reached pane 2");
+    assert_eq!(otto.drawn()["toast"]["cards"].as_array().map(Vec::len), Some(2));
+}
+
+/// A card whose text is cut shows all of it while the pointer is over it: taller, whole inside
+/// the window and its stack, its × in it, no pane moved. The pointer gone, it is one line again.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_long_card_pointed_at_shows_its_whole_text_inside_the_window() {
+    let otto = Otto::launch("toast-hover");
+    otto.call(json!({"cmd": "repo_add", "path": long_path()}));
+    let rest = otto.wait_for("the card at rest", |o| {
+        Some(o.drawn()).filter(|s| s["toast"]["shown"] == 1.0 && top_card(s)["rect"].is_array())
+    });
+    let (card, frames) = (rect(&top_card(&rest)["rect"]), rest["frames"].clone());
+    assert_eq!(top_card(&rest)["kind"], "failed", "{}", rest["toast"]);
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    otto.mouse("move", at(card, 0.3, 0.5));
+    let open = otto.wait_for("the card taller", |o| {
+        Some(state(o)).filter(|s| top_card(s)["rect"].as_array().is_some_and(|r| r[3].as_f64() > Some(card[3] + 10.)))
+    });
+    let (tall, stack) = (rect(&top_card(&open)["rect"]), rect(&open["toast"]["rect"]));
+    let window = rect(&open["window"]);
+    assert_eq!(tall[..3], card[..3], "it grows downward only");
+    assert!(within(tall, stack), "the card {tall:?} is cut by its stack {stack:?}");
+    assert!(within(tall, [0., 0., window[2], window[3]]), "the card {tall:?} leaves the window {window:?}");
+    assert!(within(rect(&top_card(&open)["close"]), tall), "its × stays in it");
+    assert_eq!(open["frames"], frames, "no pane moved");
+    // Off the card: one line again.
+    otto.mouse("move", [card[0] - 40., card[1] + card[3] + 200.]);
+    otto.wait_for("one line again", |o| Some(state(o)).filter(|s| top_card(s)["rect"] == top_card(&rest)["rect"]));
 }
 
 #[test]

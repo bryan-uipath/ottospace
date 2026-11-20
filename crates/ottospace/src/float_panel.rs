@@ -1,8 +1,9 @@
 //! A floating panel: a small borderless window of ottospace's over a live app's window, for what
-//! must stay in view there (the toast's cards). Non-activating: it never takes the keyboard or
+//! must stay in view there (a card of the toast). Non-activating: it never takes the keyboard or
 //! brings ottospace forward, and a click on it reaches what it draws. It is sized to what it
-//! draws, so a click beside that goes to the window under it. Generic: the workspace draws it
-//! (`Draw`) and says where it goes; what to show, and when, is the caller's.
+//! draws, so a click beside that goes to the window under it: what has gaps takes a panel a
+//! piece. Generic: the workspace draws it (`Draw`) and says where it goes; what to show, and
+//! when, is the caller's.
 
 use gpui::{
     AnyElement, AnyWindowHandle, Bounds, Context, Render, WeakEntity, Window, WindowBackgroundAppearance, WindowBounds,
@@ -12,21 +13,22 @@ use ottospace_core::ax::Frame;
 
 use crate::{Marks, Workspace, ns_view};
 
-/// Draws the panel's content, in the panel's window.
-pub(crate) type Draw = fn(&mut Workspace, &mut Window, &mut Context<Workspace>) -> AnyElement;
-/// The panel a workspace keeps for one use.
-pub(crate) type Slot = fn(&mut Workspace) -> &mut Panel;
+/// Draws the content of the caller's panel `at`, in the panel's window.
+pub(crate) type Draw = fn(&mut Workspace, usize, &mut Window, &mut Context<Workspace>) -> AnyElement;
+/// The panel `at` of those a workspace keeps for one use.
+pub(crate) type Slot = fn(&mut Workspace, usize) -> &mut Panel;
 
 /// The panel's root: the workspace draws it.
 struct View {
     ws: WeakEntity<Workspace>,
     draw: Draw,
+    at: usize,
 }
 
 impl Render for View {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let draw = self.draw;
-        let drawn = self.ws.update(cx, |ws, cx| draw(ws, window, cx));
+        let (draw, at) = (self.draw, self.at);
+        let drawn = self.ws.update(cx, |ws, cx| draw(ws, at, window, cx));
         drawn.unwrap_or_else(|_| div().into_any_element())
     }
 }
@@ -59,6 +61,7 @@ impl Panel {
         &mut self,
         want: Option<Frame>,
         redraw: bool,
+        at: usize,
         draw: Draw,
         slot: Slot,
         cx: &mut Context<Workspace>,
@@ -85,7 +88,7 @@ impl Panel {
             None if !self.opening => {
                 self.opening = true;
                 let ws = cx.entity().downgrade();
-                cx.defer(move |cx| open(ws, frame, draw, slot, cx));
+                cx.defer(move |cx| open(ws, frame, at, draw, slot, cx));
             }
             None => {}
         }
@@ -100,7 +103,7 @@ fn place(window: &Window, frame: Frame) {
     }
 }
 
-fn open(ws: WeakEntity<Workspace>, frame: Frame, draw: Draw, slot: Slot, cx: &mut gpui::App) {
+fn open(ws: WeakEntity<Workspace>, frame: Frame, at: usize, draw: Draw, slot: Slot, cx: &mut gpui::App) {
     let bounds = Bounds {
         origin: point(px(frame.x as f32), px(frame.y as f32)),
         size: size(px(frame.w as f32), px(frame.h as f32)),
@@ -119,7 +122,7 @@ fn open(ws: WeakEntity<Workspace>, frame: Frame, draw: Draw, slot: Slot, cx: &mu
         ..Default::default()
     };
     let view = ws.clone();
-    let opened = cx.open_window(options, move |_, cx| cx.new(|_| View { ws: view, draw }));
+    let opened = cx.open_window(options, move |_, cx| cx.new(|_| View { ws: view, draw, at }));
     let handle: Option<AnyWindowHandle> = opened.ok().map(Into::into);
     if let Some(handle) = handle {
         let _ = handle.update(cx, |_, window, _| {
@@ -131,7 +134,7 @@ fn open(ws: WeakEntity<Workspace>, frame: Frame, draw: Draw, slot: Slot, cx: &mu
         });
     }
     let _ = ws.update(cx, |ws, cx| {
-        let panel = slot(ws);
+        let panel = slot(ws, at);
         panel.opening = false;
         match (handle, panel.frame) {
             (Some(handle), Some(now)) => {

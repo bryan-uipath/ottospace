@@ -1,7 +1,8 @@
 //! The app's notices, drawn as cards of the toast (`toast`): the window's top right, over the
 //! panes, taking no room. Which notices show, in what order, their level and who may dismiss one
 //! are the core's (`ottospace_core::notice`). While a live app's window is in front, over the
-//! panes, the cards are drawn in a floating panel above it (`float_panel`), at the same place.
+//! panes, each card is drawn in a floating panel of its own above it (`float_panel`), at the same
+//! place: a click between two cards is the app's.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -14,7 +15,7 @@ use ottospace_core::notice::{self, Kind, Notice, Offer};
 
 use ottospace_mac::recovery::to_frame;
 
-use crate::{Mark, SPACE_TABS, TOLD_FOR, TOP_BAR, Workspace, ax, mark, on_screen, toast};
+use crate::{Mark, SPACE_TABS, TOLD_FOR, TOP_BAR, Workspace, ax, float_panel, mark, on_screen, toast};
 
 /// A card's click handler.
 type Click = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -31,11 +32,29 @@ pub(crate) struct Toast {
     last: (Vec<Notice>, usize),
     /// Frames asked for because it moves (the state's `counts.toast_frames`, test runs).
     pub(crate) frames: u64,
-    /// Where the window last placed it: `[top, right, room]` (`toast::place`).
+    /// Where the window last placed it: `[top, right, room]` (`toast::places`).
     at: Cell<Option<[f32; 3]>>,
-    /// What the floating panel last drew, and where it is in the window (`[x, y]`).
-    in_panel: (Vec<Notice>, usize),
-    panel_at: Cell<[f32; 2]>,
+    /// The card the pointer is over: it shows its whole text.
+    hover: Option<Notice>,
+    /// What the floating panels last drew (the cards, how many more, the one pointed at), and
+    /// where each lies in the window.
+    in_panel: ((Vec<Notice>, usize), Option<Notice>),
+    panel_at: Vec<[f32; 4]>,
+}
+
+/// Whether `card` is the card that said `drawn`. A meeting's line ages ("started 1m ago")
+/// between frames: its card is still the meeting's.
+fn same(card: &Notice, drawn: &Notice) -> bool {
+    card == drawn || (card.kind == Kind::Meeting && drawn.kind == Kind::Meeting)
+}
+
+/// The rect around `rects`, `[x, y, w, h]` each. None: there are none.
+fn around(rects: impl IntoIterator<Item = [f64; 4]>) -> Option<[f64; 4]> {
+    let join = |a: [f64; 4], b: [f64; 4]| {
+        let (x, y) = (a[0].min(b[0]), a[1].min(b[1]));
+        [x, y, (a[0] + a[2]).max(b[0] + b[2]) - x, (a[1] + a[3]).max(b[1] + b[3]) - y]
+    };
+    rects.into_iter().reduce(join)
 }
 
 impl Toast {
@@ -47,9 +66,10 @@ impl Toast {
 
 impl Default for Toast {
     fn default() -> Self {
-        let (at, in_panel, panel_at) = (Cell::new(None), (Vec::new(), 0), Cell::new([0.; 2]));
-        let last = (Vec::new(), 0);
-        Self { open: false, from: 0., since: Instant::now(), shown: 0., last, frames: 0, at, in_panel, panel_at }
+        let (at, in_panel, panel_at) = (Cell::new(None), ((Vec::new(), 0), None), Vec::new());
+        let (last, hover) = ((Vec::new(), 0), None);
+        let (open, from, since, shown, frames) = (false, 0., Instant::now(), 0., 0);
+        Self { open, from, since, shown, last, frames, at, hover, in_panel, panel_at }
     }
 }
 
@@ -151,11 +171,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Whether the card that said `drawn` is still in the toast. A meeting's line ages ("started
-    /// 1m ago") between frames: its card is still the meeting's.
+    /// Whether the card that said `drawn` is still in the toast.
     fn card_there(&self, drawn: &Notice) -> bool {
-        let same = |card: &Notice| card == drawn || (card.kind == Kind::Meeting && drawn.kind == Kind::Meeting);
-        self.notice_stack().0.iter().any(same)
+        self.notice_stack().0.iter().any(|card| same(card, drawn))
     }
 
     /// The meeting `shown` is about, if it is one: its id, and whether it has a link to join.
@@ -206,6 +224,8 @@ impl Workspace {
     pub(crate) fn move_toast(&mut self, window: &Window) {
         let stack = self.notice_stack();
         let (open, toast) = (!stack.0.is_empty(), &mut self.toast);
+        // A card that went is pointed at no more: no leave is told of it.
+        toast.hover.take_if(|hover| !stack.0.iter().any(|card| same(card, hover)));
         if open != toast.open {
             (toast.open, toast.from, toast.since) = (open, toast.shown, Instant::now());
         }
@@ -225,17 +245,18 @@ impl Workspace {
         }
     }
 
-    /// The toast's cards: each a level glyph, the text (in full on hover), what it offers, and ×.
-    /// `panel`: for the floating panel, whose clicks act in the main window, noted in its marks.
+    /// The toast's cards: each a level glyph, the text (whole while pointed at), what it offers,
+    /// and ×. `panel`: for the floating panels, whose clicks act in the main window, each card
+    /// noted in its own panel's marks.
     fn toast_cards(&self, panel: bool, cx: &mut Context<Self>) -> Option<(Vec<toast::Card>, usize)> {
         let (shown, more) = self.toast.last.clone();
         // The panel shows them at rest; the window as far in as they are.
         if shown.is_empty() || (!panel && self.toast.shown == 0.) {
             return None;
         }
-        let marks = if panel { &self.toast_panel.marks } else { &self.marks };
         let label = |id: String| (!panel).then(|| self.controls.mark(id));
         let cards = shown.into_iter().enumerate().map(|(at, notice)| {
+            let marks = if panel { &self.toast_panels[at].marks } else { &self.marks };
             let offer = self.notice_offer(&notice).map(|(offer, _)| {
                 let drawn = notice.clone();
                 let take = move |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
@@ -249,7 +270,8 @@ impl Workspace {
             });
             // "Done · <task>": a new task in its workspace, which stays.
             let new_task = self.offers_new_task(&notice).then(|| {
-                let open = |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| this.new_task_here(window, cx);
+                let open =
+                    |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| this.new_task_here(window, cx);
                 toast::button(("toast-new-task", at))
                     .child("New task here ⌘N")
                     .child(mark(marks, Mark::ToastNewTask(at)))
@@ -265,11 +287,24 @@ impl Workspace {
                 .child(mark(marks, Mark::ToastClose(at)))
                 .children(label(format!("toast:{at}:close")))
                 .on_click(self.card_click(panel, dismiss, cx));
+            let over = notice.clone();
+            let on_hover = cx.listener(move |this, hovered: &bool, window, cx| {
+                if *hovered {
+                    this.toast.hover = Some(over.clone());
+                } else {
+                    this.toast.hover.take_if(|hover| same(hover, &over));
+                }
+                // Its own window draws it again: the panel's, or the main one.
+                window.refresh();
+                cx.notify();
+            });
             toast::Card {
                 level: notice.level(),
                 glyph: notice.glyph(),
                 title: None,
                 text: SharedString::from(notice.text.clone()),
+                open: self.toast.hover.as_ref().is_some_and(|hover| same(hover, &notice)),
+                on_hover: Box::new(on_hover),
                 actions: offer.into_iter().chain(new_task).collect(),
                 close,
                 marks: vec![mark(marks, Mark::ToastCard(at)).into_any_element()],
@@ -297,84 +332,115 @@ impl Workspace {
     }
 
     /// The toast in the window, over the panes' top right: `right` points from the window's edge,
-    /// clear of the drawer and its rail; `room`, the panes' width. None while the panel shows it.
+    /// clear of the drawer and its rail; `room`, the panes' width. None while the panels show it.
     pub(crate) fn render_toast(&self, right: f32, room: f32, cx: &mut Context<Self>) -> Option<Div> {
         let at = [TOP_BAR + SPACE_TABS + 8., right, room];
         self.toast.at.set(Some(at));
-        if self.toast_panel.drawn().is_some() {
+        if self.toast_floats().is_some() {
             return None;
         }
         let (cards, more) = self.toast_cards(false, cx)?;
         Some(toast::stack(at, cards, more, self.toast.shown, mark(&self.marks, Mark::Toast)))
     }
 
-    /// The floating panel's content: the same cards, at rest.
-    fn draw_toast_panel(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        self.toast_panel.marks.borrow_mut().clear();
-        match self.toast_cards(true, cx) {
-            Some((cards, more)) => {
-                toast::panel(cards, more, mark(&self.toast_panel.marks, Mark::Toast)).into_any_element()
-            }
+    /// The content of floating panel `at`: its card, or "+N more" under the last, at rest.
+    fn draw_toast_panel(&mut self, at: usize, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let marks = self.toast_panels[at].marks.clone();
+        marks.borrow_mut().clear();
+        let Some((cards, more)) = self.toast_cards(true, cx) else { return div().into_any_element() };
+        let count = cards.len();
+        match cards.into_iter().nth(at) {
+            Some(card) => toast::piece(at, card).into_any_element(),
+            None if at == count && more > 0 => toast::more_piece(more, mark(&marks, Mark::Toast)).into_any_element(),
             None => div().into_any_element(),
         }
     }
 
-    /// Each tick: the toast floats in its panel while a live app's window lies over its place and
+    /// The floating panels' frame together on the screens, once each has drawn its piece. None:
+    /// the window draws the toast.
+    fn toast_floats(&self) -> Option<Frame> {
+        let wanted = self.toast_panels.iter().filter(|panel| panel.frame().is_some());
+        let drawn: Option<Vec<Frame>> = wanted.map(float_panel::Panel::drawn).collect();
+        let [x, y, w, h] = around(drawn?.into_iter().map(|f| [f.x, f.y, f.w, f.h]))?;
+        Some(Frame::new(x, y, w, h))
+    }
+
+    /// Each tick: the toast floats in its panels while a live app's window lies over its place and
     /// that app is in front, ottospace's window on the Space shown; else the window draws it. Its
     /// cards come from here then: the window under the app may draw no frame.
     pub(crate) fn sync_toast_panel(&mut self, window: &Window, cx: &mut Context<Self>) {
         let stack = self.notice_stack();
-        let place = self.toast.at.get().filter(|_| !stack.0.is_empty()).map(|at| {
-            // A notice's card has no title.
-            let height = toast::height(stack.0.iter().map(|_| false), stack.1);
-            toast::place(at, f32::from(window.viewport_size().width), height)
-        });
-        let screen = place.map(|[x, y, w, h]| {
+        let (cards, more) = (stack.0.len(), stack.1 > 0);
+        // Each piece as tall as its panel drew it (a card pointed at is taller), else as at rest.
+        let height = |at: usize| {
+            let (key, rest) =
+                if at < cards { (Mark::ToastCard(at), toast::rest(false)) } else { (Mark::Toast, toast::MORE) };
+            let panel = &self.toast_panels[at];
+            let drawn = panel.drawn().and_then(|_| panel.marks.borrow().get(&key).map(|b| f32::from(b.size.height)));
+            drawn.unwrap_or(rest)
+        };
+        let heights: Vec<f32> = (0..cards + usize::from(more)).map(height).collect();
+        let width = f32::from(window.viewport_size().width);
+        let places = self.toast.at.get().map(|at| toast::places(at, width, &heights, more)).unwrap_or_default();
+        let screen = |[x, y, w, h]: [f32; 4]| {
             to_frame(on_screen(Bounds { origin: point(px(x), px(y)), size: size(px(w), px(h)) }, window, cx))
-        });
+        };
+        let frames: Vec<Frame> = places.iter().copied().map(screen).collect();
         let live = self.model.live.and_then(|pane| self.hosted.get(&pane));
-        let over = |f: &Frame| {
+        let over = |f: [f64; 4]| {
             let a = live.map(|h| h.placed).unwrap_or_default();
-            a.origin.x < f.x + f.w
-                && f.x < a.origin.x + a.size.width
-                && a.origin.y < f.y + f.h
-                && f.y < a.origin.y + a.size.height
+            a.origin.x < f[0] + f[2]
+                && f[0] < a.origin.x + a.size.width
+                && a.origin.y < f[1] + f[3]
+                && f[1] < a.origin.y + a.size.height
         };
         let front = live.is_some_and(|h| ax::is_active(h.pid))
             && crate::ns_view(window).is_some_and(|view| {
                 // SAFETY: GPUI's own view, on the main thread.
                 unsafe { ottospace_mac::window::on_active_space(view) }
             });
-        let want = screen.filter(|f| front && over(f));
-        if let (Some(_), Some([x, y, ..])) = (want, place) {
-            self.toast.panel_at.set([x, y]);
+        let floats = front && around(frames.iter().map(|f| [f.x, f.y, f.w, f.h])).is_some_and(over);
+        if floats {
+            self.toast.panel_at.clone_from(&places);
             self.toast.last.clone_from(&stack);
         }
-        let redraw = self.toast.in_panel != self.toast.last;
-        self.toast.in_panel.clone_from(&self.toast.last);
-        let was = self.toast_panel.frame().is_some();
-        self.toast_panel.sync(want, redraw, Self::draw_toast_panel, |ws| &mut ws.toast_panel, cx);
+        let now = (self.toast.last.clone(), self.toast.hover.clone());
+        let redraw = self.toast.in_panel != now;
+        self.toast.in_panel = now;
+        let was = self.toast_panels.iter().any(|panel| panel.frame().is_some());
+        for at in 0..toast::PIECES {
+            let want = frames.get(at).copied().filter(|_| floats);
+            let slot: float_panel::Slot = |ws, at| &mut ws.toast_panels[at];
+            self.toast_panels[at].sync(want, redraw, at, Self::draw_toast_panel, slot, cx);
+        }
         // The window draws it again, or stops.
-        if was != want.is_some() {
+        if was != floats {
             cx.notify();
         }
     }
 
-    /// Where the toast's part `mark` is, in the window's points: the panel's, while it draws them,
-    /// moved by where it lies in the window.
+    /// Where the toast's part `mark` is, in the window's points: its panel's, while the panels
+    /// draw them, moved by where that lies in the window. The stack: around all of them.
     fn toast_rect(&self, mark: Mark) -> Option<[f32; 4]> {
-        if self.toast_panel.drawn().is_none() {
+        if self.toast_floats().is_none() {
             return self.marks.borrow().get(&mark).copied().map(crate::rect);
         }
-        let [x, y] = self.toast.panel_at.get();
-        let [mx, my, w, h] = self.toast_panel.marks.borrow().get(&mark).copied().map(crate::rect)?;
+        let at = match mark {
+            Mark::ToastCard(at) | Mark::ToastClose(at) | Mark::ToastOffer(at) | Mark::ToastNewTask(at) => at,
+            _ => {
+                let all = around(self.toast.panel_at.iter().map(|place| place.map(f64::from)))?;
+                return Some(all.map(|v| v as f32));
+            }
+        };
+        let [x, y, ..] = *self.toast.panel_at.get(at)?;
+        let [mx, my, w, h] = self.toast_panels.get(at)?.marks.borrow().get(&mark).copied().map(crate::rect)?;
         Some([x + mx, y + my, w, h])
     }
 
     /// The toast in the state: null while it shows nothing.
     pub(crate) fn toast_snapshot(&self) -> serde_json::Value {
         let (shown, more) = &self.toast.last;
-        let panel = self.toast_panel.drawn();
+        let panel = self.toast_floats();
         if shown.is_empty() || (self.toast.shown == 0. && panel.is_none()) {
             return serde_json::Value::Null;
         }
@@ -406,9 +472,9 @@ impl Workspace {
             "more": more,
             // Where the stack is drawn, and how far in it is: less than 1 while it moves.
             "rect": drawn(Mark::Toast),
-            // The floating panel it is drawn in over a live app's window, `[x, y, w, h]` on the
-            // screens (Accessibility's coordinates), or null: in ottospace's window. Its top left
-            // is `rect`'s.
+            // The floating panels it is drawn in over a live app's window (one a card), around all
+            // of them: `[x, y, w, h]` on the screens (Accessibility's coordinates), or null: in
+            // ottospace's window. Its top left is `rect`'s.
             "panel": panel.map(|f| [f.x, f.y, f.w, f.h]),
             "shown": self.toast.shown,
         })
@@ -419,7 +485,7 @@ impl Workspace {
     /// The calendar's banner in the state: where its Join and Dismiss are, while a card shows
     /// the meeting.
     pub(crate) fn meeting_controls(&self) -> (Option<[f32; 4]>, Option<[f32; 4]>) {
-        let shown = self.toast.shown > 0. || self.toast_panel.drawn().is_some();
+        let shown = self.toast.shown > 0. || self.toast_floats().is_some();
         let at = self.toast.last.0.iter().position(|n| n.kind == Kind::Meeting).filter(|_| shown);
         let Some(at) = at else { return (None, None) };
         let drawn = |mark: Mark| self.toast_rect(mark);

@@ -1951,9 +1951,10 @@ fn the_users_wheel_enters_a_parked_app_pane_and_its_first_scroll_reaches_the_app
     report(&format!("wheel: the client's wheel told why {told} ({notice})"));
 }
 
-/// A notice moves no hosted window. Over a live app's window the toast floats in a panel above
-/// it, at its place in ottospace's window: in view, and the user's click on a card acts. The app
-/// keeps the keyboard and gets no click.
+/// A notice moves no hosted window. Over a live app's window the toast floats above it, a panel
+/// a card, at its place in ottospace's window: in view, and the user's click on a card acts. The
+/// app keeps the keyboard and gets no click, but one between two cards. A long card pointed at
+/// shows its whole text, its panel as tall.
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
 fn a_notice_moves_no_hosted_window_and_floats_over_a_live_one() {
@@ -2020,12 +2021,67 @@ fn a_notice_moves_no_hosted_window_and_floats_over_a_live_one() {
     let keys = || canary.call(json!({"cmd": "state"}))["windows"][0]["keys"].clone();
     press("keystroke \"q\"");
     wait_or("the key in the app", || keys().to_string(), || keys().as_array()?.iter().any(|k| k == "q").then_some(()));
-    // Its ×: the card goes, the app gets no click and stays in front.
-    let (x, y) = global(&shown, rect(&card["close"]).expect("its ×"));
+    // Its ×, where it is with the pointer over the card: the card goes, the app gets no click and stays in front.
+    let shown = state();
+    let (x, y) = global(&shown, rect(&shown["toast"]["cards"][0]["close"]).expect("its ×"));
     click_at(x, y, false);
     wait_for("the toast to go", || Some(state()).filter(|s| s["toast"].is_null()));
     assert_eq!((clicks(), state()["mode"].clone()), (clicked, json!("app")), "the app got no click, kept the keys");
     assert_front(canary.child.id(), "the canary");
+
+    // Two cards (a folder that is not there, its path long; a settings file that does not read),
+    // a panel each: a click between them is the app's.
+    let long = format!("/made-up/{}", "a-long-folder-name/".repeat(10));
+    otto.call(json!({"cmd": "repo_add", "path": long}));
+    std::fs::write(home.join("settings.json"), "[ not json").expect("write settings");
+    let two = |s: &Value| {
+        let (first, second) = (rect(&s["toast"]["cards"][0]["rect"])?, rect(&s["toast"]["cards"][1]["rect"])?);
+        rect(&s["toast"]["panel"])?;
+        Some((s.clone(), first, second))
+    };
+    let (s, first, second) = wait_for("two cards in their panels", || two(&state()));
+    assert!(second[1] - (first[1] + first[3]) >= 4., "a gap between {first:?} and {second:?}");
+    let (x, y) = global(&s, [first[0], first[1] + first[3], first[2], second[1] - first[1] - first[3]]);
+    click_at(x, y, false);
+    wait_or(
+        "the click between the cards in the app",
+        || format!("{:?}", clicks()),
+        || (clicks() == clicked.map(|n| n + 1)).then_some(()),
+    );
+    assert_eq!(state()["toast"]["cards"].as_array().map(Vec::len), Some(2), "both cards stay");
+    report("toast: a click between two cards reached the app");
+
+    // The pointer over the long card: its whole text, the card and the panels' frame taller by as much.
+    let long_card = |s: &Value| {
+        let cards = s["toast"]["cards"].as_array()?;
+        let at = cards.iter().position(|card| card["kind"] == "failed")?;
+        Some((rect(&cards[at]["rect"])?, rect(&s["toast"]["rect"])?, rect(&s["toast"]["panel"])?))
+    };
+    let (card, stack, panel) = long_card(&state()).expect("the long card");
+    let (x, y) = global(&s, card);
+    let moved = Command::new("cliclick").arg(format!("m:{:.0},{y:.0}", x - 60.)).status().expect("run cliclick");
+    assert!(moved.success(), "cliclick failed");
+    // Taller, and its panel moved to fit by the next tick.
+    let grown = |s: &Value| {
+        long_card(s).filter(|(tall, now, _)| tall[3] > card[3] + 10. && close(now[3], stack[3] + tall[3] - card[3]))
+    };
+    let (tall, stack_now, panel_now) =
+        wait_or("the long card taller", || state()["toast"].to_string(), || grown(&state()));
+    let more = tall[3] - card[3];
+    let whole = tall[1] >= stack_now[1] && tall[1] + tall[3] <= stack_now[1] + stack_now[3] + 0.5;
+    assert!(whole, "the card {tall:?} is cut by its stack {stack_now:?}");
+    assert!(close(panel_now[3], panel[3] + more), "the panels {panel_now:?}, were {panel:?}");
+    assert_eq!((pane(), state()["mode"].clone()), (Some(body), json!("app")), "nothing moved, the app has the keys");
+    report(&format!("toast: a long card pointed at grew by {more} pt in its panel"));
+    // The pointer away: one line again.
+    let away = Command::new("cliclick").arg(format!("m:{:.0},{y:.0}", panel[0] - 100.)).status().expect("run cliclick");
+    assert!(away.success(), "cliclick failed");
+    wait_or(
+        "the long card at one line",
+        || state()["toast"].to_string(),
+        || long_card(&state()).filter(|(now, ..)| close(now[3], card[3])),
+    );
+    let clicked = clicked.map(|n| n + 1);
 
     // A workspace closed, then back in the app: its Undo floats too, and the user's click on it
     // takes the workspace back.
@@ -2038,7 +2094,9 @@ fn a_notice_moves_no_hosted_window_and_floats_over_a_live_one() {
     for action in ["down", "up"] {
         otto.call(json!({"cmd": "mouse", "action": action, "x": px, "y": py, "as": "user"}));
     }
-    let spaces = |s: &Value| s["spaces"].as_array().map(Vec::len);
+    // The spaces on the top row: a closed one is off it while its Undo stands.
+    let spaces =
+        |s: &Value| s["spaces"].as_array().map(|all| all.iter().filter(|space| space["hidden"] != true).count());
     let open = spaces(&state());
     let closed = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-w", "as": "user"}));
     assert_eq!(closed["workbook_offer"], "closed", "{closed}");

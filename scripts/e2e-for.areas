@@ -21,7 +21,7 @@ broad: nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_ope
 broad: the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in_a_narrow_window
 broad: the_key_reference_fits_the_window_and_the_wheel_closes_nothing
 broad: a_long_list_fades_where_more_lies_beyond_and_a_short_one_nowhere
-broad: the_notice_bar_sits_at_the_foot_moves_nothing_above_and_only_the_user_dismisses_it
+broad: a_notice_is_a_toast_at_the_top_right_moves_no_pane_and_only_the_user_dismisses_it
 broad: the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view
 broad: tabs_and_layout_come_back_after_quitting_and_no_agent_starts
 broad: the_timeline_band_spans_the_workday_directly_above_the_status_bar
@@ -70,7 +70,7 @@ broad: a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen
 # No e2e test of its own yet: give it a row of its tests when it has some.
 /src/(.*/)?bug(\.rs|/)                                                       ^bug_
 /src/(.*/)?(atlas|city|city_gpu|scene)(\.rs|/)                                city|home|status_bar
-/src/(.*/)?(notice|notice_bar|give_back)(\.rs|/)                             notice|undo
+/src/(.*/)?(notice|notices|toast|float_panel|give_back)(\.rs|/)              notice|undo|toast
 /src/(.*/)?(confirm|quit)(\.rs|/)                                            quit|cmd_q|asks_first|closing
 /src/(.*/)?(sneak|sneak_place|sneak_apps)(\.rs|/)                            sneak
 /src/(.*/)?marks(\.rs|/)                                                     mark

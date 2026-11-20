@@ -1246,8 +1246,9 @@ shell that did not start, why a move of yours did nothing, a key that needs a re
 a toast: cards at the window's top right, under the top row and the tabs, over the panes. It
 takes no room: no pane, terminal or hosted window moves or resizes when one comes or goes. It
 slides in from the right and fades, and is there at once under the system's Reduce Motion. A
-live app window over the top-right pane is in front of ottospace's window, so it hides the toast
-while that pane is live.
+live app window over the top-right pane is in front of ottospace's window: while that app is in
+front, each card floats above it in a small panel of its own, which never takes the keyboard; a
+click between two cards goes to the app.
 
 - **Level**: red for an error, amber for a warning (a move that did nothing, a retired setting, a
   global key not registered), blue for information, and amber on indigo for a meeting that started
@@ -1257,7 +1258,8 @@ while that pane is live.
   `+N more`. An error is not pushed down by information; when it goes, the next comes up. A
   workspace's or a task's **Undo** never runs out unseen: under three higher notices it takes the
   third card.
-- **One line**: text too long is cut with an ellipsis, and the hover shows all of it. A settings
+- **One line**: text too long is cut with an ellipsis; point at the card and it shows all of it,
+  wrapped (at most eight lines), the cards under it moving down meanwhile. A settings
   problem offers **Open settings**; a meeting with a link, **Join**; a workspace deleted or updated,
   **Undo** (only your click takes it back).
 - **Dismiss**: × on a card, or Esc (the top card) when no mode and no terminal takes it. Only you dismiss a

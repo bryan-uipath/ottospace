@@ -213,7 +213,7 @@ pub struct Listen {
 pub const WINDOW_GONE: u64 = 10_000;
 /// Nothing heard this long after a session ended: the transcript ends.
 pub const ARMED_MAX: u64 = 30 * 60_000;
-/// What the notice bar says then.
+/// What the toast says then.
 pub const ARMED_ENDED: &str = "Transcript stopped: nothing heard for 30 minutes after the meeting";
 
 /// A transcript's meeting, as the app's windows tell it (`ListenWindows`). Its windows are those the

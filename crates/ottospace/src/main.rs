@@ -1187,8 +1187,8 @@ struct Workspace {
     error_seen: (Option<String>, Option<usize>),
     /// The toast as it comes and goes.
     toast: notices::Toast,
-    /// The toast's floating panel, over a live app's window.
-    toast_panel: float_panel::Panel,
+    /// The toast's floating panels, over a live app's window: one a piece (`toast::PIECES`).
+    toast_panels: [float_panel::Panel; toast::PIECES],
     /// False in e2e runs, which must never move the user's real windows.
     hosting: bool,
     /// While the window fills its display.
@@ -1761,7 +1761,7 @@ impl Workspace {
             bar_line: notice::Held::default(),
             error_seen: (None, None),
             toast: notices::Toast::default(),
-            toast_panel: float_panel::Panel::default(),
+            toast_panels: Default::default(),
             notice,
             settings_looked: settings_read,
             settings_read,
