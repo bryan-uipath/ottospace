@@ -632,6 +632,8 @@ export interface SessionRow {
   quoted_title: string | null;
   /** The model in short: `opus-4.7`, `gpt-6`. */
   model: string | null;
+  /** What it waits on you for, while its runner says it does (flag `session_waits`). */
+  waits_for: "permission" | "question" | "input" | null;
 }
 
 /** An app that is not running, in the Apps section. */

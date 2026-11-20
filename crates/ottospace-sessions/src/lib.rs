@@ -24,6 +24,7 @@ use std::path::{Component, Path, PathBuf};
 
 use ottospace_core::activity::Station;
 use ottospace_core::runner::RunnerId;
+use ottospace_core::sessions::WaitsFor;
 
 /// Where the runners keep their files on this machine, by the environment.
 pub struct ConfigDirs {
@@ -239,6 +240,21 @@ pub trait SessionReader: Send + Sync {
     fn path_of(&self, _cwd: &Path, _id: &str) -> Option<PathBuf> {
         None
     }
+    /// The sessions its runner records as waiting on the user now, from its process records
+    /// alone: no transcript is opened. A record may outlive its process: check the holder.
+    fn waits(&self) -> Vec<Waiting> {
+        Vec::new()
+    }
+}
+
+/// A session its runner's process record says waits on the user, and why, from a fixed table.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Waiting {
+    pub id: String,
+    pub holder: Holder,
+    pub waits_for: WaitsFor,
+    /// When the record's status last changed (Unix milliseconds).
+    pub since: Option<u64>,
 }
 
 /// The reader of `runner`'s sessions under `dirs`. `None`: the runner has no folder there.

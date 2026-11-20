@@ -110,6 +110,62 @@ pub struct Link {
     pub state: Option<State>,
 }
 
+/// What a session's agent waits on the user for, from its runner's fixed words (never its text).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitsFor {
+    /// To run a tool, reach the network, or the like.
+    Permission,
+    /// An answer to its question.
+    Question,
+    /// Some other input its runner names.
+    Input,
+}
+
+impl WaitsFor {
+    pub fn label(self) -> &'static str {
+        match self {
+            WaitsFor::Permission => "permission",
+            WaitsFor::Question => "question",
+            WaitsFor::Input => "input",
+        }
+    }
+}
+
+/// A session that waits on the user now, by its runner's record of its live process.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Wait {
+    pub runner: String,
+    pub id: String,
+    pub waits_for: WaitsFor,
+    /// When it started waiting (milliseconds since 1970), if the record says.
+    #[serde(default)]
+    pub since: Option<u64>,
+    /// The terminal pane its process runs in: one below the pane's shell. None: not one of ours.
+    #[serde(default)]
+    pub pane: Option<PaneId>,
+}
+
+/// What is kept of the waits the shell read: of a known runner, with a plain id, each once.
+pub fn waits_kept(waits: Vec<Wait>) -> Vec<Wait> {
+    let mut kept: Vec<Wait> = Vec::new();
+    for wait in waits {
+        let plain = !wait.id.is_empty() && wait.id.len() <= 128 && !wait.id.chars().any(char::is_control);
+        let again = kept.iter().any(|w| (&w.runner, &w.id) == (&wait.runner, &wait.id));
+        if RunnerId::named(&wait.runner).is_some() && plain && !again {
+            kept.push(wait);
+        }
+    }
+    kept.truncate(MAX_FOUND);
+    kept
+}
+
+/// What a task adopted from a session that waits on the user should be: needs you, at once.
+/// `link` as in `follow`: a state someone else set since is theirs to keep.
+pub fn waiting(link: Option<State>, state: State) -> Option<State> {
+    (link == Some(state) && state != State::NeedsYou).then_some(State::NeedsYou)
+}
+
 /// A session as the shell read it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Found {
@@ -168,6 +224,8 @@ pub struct Row {
     pub quoted_title: Option<String>,
     /// The model in short: `opus-4.7`, `gpt-6`.
     pub model: Option<String>,
+    /// What it waits on the user for, while its runner says it does (`session_waits`).
+    pub waits_for: Option<WaitsFor>,
 }
 
 impl Row {
@@ -459,6 +517,35 @@ mod tests {
     }
 
     #[test]
+    fn a_waiting_session_needs_you_at_once_unless_someone_else_set_its_task() {
+        assert_eq!(waiting(Some(State::Running), State::Running), Some(State::NeedsYou));
+        assert_eq!(waiting(Some(State::Captured), State::Captured), Some(State::NeedsYou));
+        assert_eq!(waiting(Some(State::NeedsYou), State::NeedsYou), None, "once");
+        assert_eq!(waiting(Some(State::Running), State::Parked), None, "the user's hold stays");
+        assert_eq!(waiting(None, State::Running), None);
+    }
+
+    #[test]
+    fn waits_kept_are_of_a_known_runner_with_a_plain_id_each_once() {
+        let wait = |runner: &str, id: &str| Wait {
+            runner: runner.into(),
+            id: id.into(),
+            waits_for: WaitsFor::Permission,
+            since: None,
+            pane: None,
+        };
+        let kept = waits_kept(vec![
+            wait("claude", "a"),
+            wait("claude", "a"),
+            wait("gemini", "b"),
+            wait("claude", "c\u{1b}[31m"),
+            wait("claude", ""),
+            wait("codex", "d"),
+        ]);
+        assert_eq!(kept.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(), ["a", "d"]);
+    }
+
+    #[test]
     fn a_row_is_named_by_its_title_else_its_repository() {
         let (runner, id, name) = ("claude".to_string(), "a".to_string(), "app".to_string());
         let row = Row {
@@ -471,6 +558,7 @@ mod tests {
             pane: None,
             quoted_title: None,
             model: None,
+            waits_for: None,
         };
         assert_eq!(row.title(), "app");
         assert_eq!(Row { quoted_title: Some("Fix the form".into()), ..row }.title(), "Fix the form");

@@ -355,6 +355,11 @@ impl Terminal {
         foreground.and_then(process::cwd).or_else(|| process::cwd(self.child as i32))
     }
 
+    /// The shell's process id: a program run in this terminal is below it.
+    pub fn shell_pid(&self) -> u32 {
+        self.child
+    }
+
     /// The shell's own directory, whatever program is in front of it.
     pub fn shell_cwd(&self) -> Option<String> {
         process::cwd(self.child as i32)

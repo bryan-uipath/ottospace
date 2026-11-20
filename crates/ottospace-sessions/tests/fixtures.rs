@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use ottospace_core::activity::Station;
 use ottospace_core::runner::RunnerId;
+use ottospace_core::sessions::WaitsFor;
 use ottospace_sessions::claude::Claude;
 use ottospace_sessions::codex::Codex;
 use ottospace_sessions::git::checkouts;
@@ -126,6 +127,25 @@ fn claude_lists_sessions_started_in_a_directory_or_below() {
     ];
     assert_eq!(claude.sessions(&dirs).unwrap().len(), 3);
     assert!(claude.sessions(&[]).unwrap().is_empty());
+}
+
+#[test]
+fn claude_says_which_sessions_wait_on_the_user_by_their_process_records() {
+    use ottospace_core::sessions::WaitsFor::{Input, Permission, Question};
+    let mut waits: Vec<(String, u32, WaitsFor, Option<u64>)> =
+        claude().waits().into_iter().map(|w| (w.id, w.holder.pid, w.waits_for, w.since)).collect();
+    waits.sort_by_key(|w| w.1);
+    let wait = |n: u32, pid, waits_for, since| (format!("33333333-3333-4333-8333-33333333330{n}"), pid, waits_for, Some(since));
+    // A dialog the user opened waits on nobody; an id that is not a name is no session; busy and idle are not waiting.
+    assert_eq!(
+        waits,
+        [
+            wait(1, 4300, Permission, 1_794_474_200_000),
+            wait(2, 4301, Question, 1_794_474_201_000),
+            wait(4, 4303, Input, 1_794_474_203_000),
+        ]
+    );
+    assert!(codex().waits().is_empty(), "Codex records no process");
 }
 
 #[test]

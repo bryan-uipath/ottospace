@@ -38,10 +38,11 @@ pub enum Feature {
     OverlayPanels,
     Decisions,
     CodeCity,
+    SessionWaits,
 }
 
 /// Every flag, in the order the docs and the palette list them.
-pub const ALL: [Feature; 9] = [
+pub const ALL: [Feature; 10] = [
     Feature::Marks,
     Feature::AppsSection,
     Feature::Transcripts,
@@ -51,6 +52,7 @@ pub const ALL: [Feature; 9] = [
     Feature::OverlayPanels,
     Feature::Decisions,
     Feature::CodeCity,
+    Feature::SessionWaits,
 ];
 
 /// Flags whose feature is stable now: a setting of one is ignored, with a warning.
@@ -69,6 +71,7 @@ impl Feature {
             Feature::OverlayPanels => "overlay_panels",
             Feature::Decisions => "decisions",
             Feature::CodeCity => "code_city",
+            Feature::SessionWaits => "session_waits",
         }
     }
 
@@ -82,7 +85,8 @@ impl Feature {
             | Feature::MultiMonitor
             | Feature::OverlayPanels
             | Feature::Decisions
-            | Feature::CodeCity => Stage::Experimental,
+            | Feature::CodeCity
+            | Feature::SessionWaits => Stage::Experimental,
         }
     }
 
@@ -112,6 +116,9 @@ impl Feature {
             Feature::CodeCity => {
                 "Code city: an empty tab of a task draws the task's folder as a 3D city, its files where they were last time"
             }
+            Feature::SessionWaits => {
+                "Waiting sessions: a Claude Code you started in a terminal needs you while it asks for permission or an answer"
+            }
         }
     }
 
@@ -131,6 +138,7 @@ impl Feature {
             Feature::OverlayPanels => "feature off: overlay_panels",
             Feature::Decisions => "feature off: decisions",
             Feature::CodeCity => "feature off: code_city",
+            Feature::SessionWaits => "feature off: session_waits",
         }
     }
 }
@@ -245,7 +253,8 @@ mod tests {
                 Feature::MultiMonitor,
                 Feature::OverlayPanels,
                 Feature::Decisions,
-                Feature::CodeCity
+                Feature::CodeCity,
+                Feature::SessionWaits
             ])
         );
         let three = Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true);
@@ -257,10 +266,11 @@ mod tests {
                 .with(Feature::MultiMonitor, true)
                 .with(Feature::OverlayPanels, true)
                 .with(Feature::Decisions, true)
-                .with(Feature::CodeCity, true),
+                .with(Feature::CodeCity, true)
+                .with(Feature::SessionWaits, true),
             Features::all()
         );
-        let list = " code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
+        let list = " session_waits,code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
         assert_eq!(Features::parse_list(list).unwrap(), Features::all());
         assert_eq!(Features::parse_list("").unwrap(), Features(Vec::new()));
         assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts, slots"));
@@ -369,7 +379,8 @@ mod tests {
                     ("multi_monitor", false),
                     ("overlay_panels", false),
                     ("decisions", false),
-                    ("code_city", false)
+                    ("code_city", false),
+                    ("session_waits", false)
                 ]
             );
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
@@ -386,7 +397,7 @@ mod tests {
         assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
             wrong("bookmarks", &yes).unwrap(),
-            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city"
+            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits"
         );
         assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
         assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());

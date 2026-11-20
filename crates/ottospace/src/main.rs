@@ -3502,15 +3502,22 @@ impl Workspace {
         // Closed, only the sessions that tasks still follow are looked at, and only their files.
         let Some(poller) = &mut self.sessions else { return };
         let model = &self.model;
-        poller.ask(open, || model.followed_sessions(), model.worked_sessions(), now, day_start(now));
+        let waiting = model.features.on(Feature::SessionWaits);
+        poller.ask(open, || model.followed_sessions(), model.worked_sessions(), waiting, now, day_start(now));
         let (read, stopped) = (poller.take(), poller.stopped());
-        let (mut found, mut seen, mut worked) = (None, None, Vec::new());
+        let (mut found, mut seen, mut worked, mut waits) = (None, None, Vec::new(), None);
         for read in read {
             match read {
                 sessions::Read::Found(list) => found = Some(list),
                 sessions::Read::Seen(list) => seen = Some(list),
                 sessions::Read::Work(list) => worked.extend(list),
+                sessions::Read::Waits(list) => waits = Some(list),
             }
+        }
+        if let Some(list) = waits.filter(|_| waiting) {
+            let waits = list.into_iter().map(|(wait, pid)| ottospace_core::sessions::Wait { pane: self.pane_of_process(pid), ..wait }).collect();
+            self.dispatch(Action::SessionsWaiting { waits }, Origin::System, window, cx);
+            cx.notify();
         }
         for (work, cwd) in worked {
             self.dispatch(Action::SessionWork { work, cwd }, Origin::System, window, cx);
@@ -3543,6 +3550,20 @@ impl Workspace {
                 Some("sessions: the reader stopped; sessions are not listed until ottospace starts again".into());
             cx.notify();
         }
+    }
+
+    /// The terminal pane whose shell process `pid` runs below, by its parents: `claude` → `zsh`.
+    fn pane_of_process(&self, pid: u32) -> Option<PaneId> {
+        let mut at = i32::try_from(pid).ok()?;
+        // A program a few levels down (`npx`, a wrapper script); never past launchd.
+        for _ in 0..16 {
+            let shell = self.terminals.iter().find(|(_, terminal)| terminal.shell_pid() as i32 == at);
+            if let Some((id, _)) = shell {
+                return Some(*id);
+            }
+            at = ottospace_mac::process::parent(at).filter(|parent| *parent > 1)?;
+        }
+        None
     }
 
     fn tasks_bar(&self) -> serde_json::Value {
@@ -6118,7 +6139,11 @@ impl Workspace {
             .top(px(3.5))
             .child(button("session-adopt", "Track", "Track as a task"))
             .child(button("session-hide", "Hide", "Hide"));
-        let color = if row.active { theme::task(Group::Running) } else { theme::BORDER_STRONG };
+        let color = match (row.waits_for, row.active) {
+            (Some(_), _) => theme::task(Group::NeedsYou),
+            (None, true) => theme::task(Group::Running),
+            (None, false) => theme::BORDER_STRONG,
+        };
         let (runner, id, card) = (row.runner.clone(), row.id.clone(), row.clone());
         sidebar_row(ElementId::Name(format!("session:{key}").into()), selected)
             .group("session-row")

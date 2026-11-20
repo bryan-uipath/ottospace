@@ -24,7 +24,7 @@ use crate::model::reorder::{Reorder, ReorderItem};
 use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::row_menu::MenuOf;
-use crate::sessions::{Link, Seen};
+use crate::sessions::{Link, Seen, Wait, WaitsFor};
 use crate::sneak_apps;
 use crate::transcript::{Event as Said, Outcome, Text, View};
 use crate::workbook::{self, History, Workbook, WorkbookId};
@@ -1254,6 +1254,15 @@ const MAKERS: &[Make] = &[
         Action::SessionsSeen { seen: (0..g.rng.below(4)).map(|_| seen(g)).collect() }
     },
     |g| {
+        let wait = |g: &mut Gen| {
+            let (runner, id) = g.session();
+            let waits_for = g.rng.pick(&[WaitsFor::Permission, WaitsFor::Question, WaitsFor::Input]);
+            let (since, pane) = (g.rng.coin().then(|| g.time()), g.rng.coin().then(|| g.pane()));
+            Wait { runner, id, waits_for, since, pane }
+        };
+        Action::SessionsWaiting { waits: (0..g.rng.below(3)).map(|_| wait(g)).collect() }
+    },
+    |g| {
         let found = (0..g.rng.below(3)).map(|_| g.found()).collect();
         Action::SessionsAtWork { found }
     },
@@ -2072,6 +2081,16 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 
 /// Decisions: none with the flag off; while open, its card is the queue's first, the queue not
 /// empty, its one card pane in its one tab, "at of of" its title; closed, nothing of it is left.
+/// A waiting session counts once, as a task's or by itself; with its flag off, not at all.
+fn check_waits(m: &Model) -> Result<(), String> {
+    let (all, free) = (m.agents().needs_you, m.waits_unadopted().count());
+    ensure!(all >= free, "needs you {all}, fewer than the {free} waits");
+    ensure!(m.features.on(Feature::SessionWaits) || free == 0, "{free} waits counted with the flag off");
+    let adopted = m.waits_unadopted().filter(|w| m.tasks.adopted(&w.runner, &w.id)).count();
+    ensure!(adopted == 0, "{adopted} waits of a task's session counted besides its task");
+    Ok(())
+}
+
 fn check_decisions(m: &Model) -> Result<(), String> {
     let cards: Vec<PaneId> = m.panes.iter().filter(|p| p.kind == Kind::Decision).map(|p| p.id).collect();
     let tabs: Vec<&crate::model::Tab> = m.tabs.iter().filter(|tab| tab.space == Owner::Decisions).collect();
@@ -2145,6 +2164,7 @@ fn check_reorder(m: &Model) -> Result<(), String> {
 
 fn check(m: &Model) -> Result<(), String> {
     check_decisions(m)?;
+    check_waits(m)?;
     check_slots(m)?;
     // With the overlays on, the panes' room never depends on the sidebar or the drawer being open.
     ensure!(!m.overlays() || !(m.sidebar_takes_room() || m.drawer_takes_room()), "an overlay takes the panes' room");
@@ -5647,6 +5667,7 @@ fn code(sent: &Envelope) -> String {
         "Known",
         "Found",
         "Seen",
+        "Wait",
         "Link",
         "Target",
         "Frame",
@@ -5692,6 +5713,7 @@ fn code(sent: &Envelope) -> String {
         ("content", "Content"),
         ("view", "TasksView"),
         ("range", "sessions::Range"),
+        ("waits_for", "WaitsFor"),
         ("runner", "RunnerId"),
         // A conversation's: `TaskStop { id: Task(1) }`.
         ("task", "Subject"),
@@ -6212,6 +6234,39 @@ fn random_actions_keep_the_model_sound_for_long() {
 
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
+
+/// A waiting session's pane in another tab: a click on its row (from a timer here) showed that
+/// tab. A row's click stays in the tab on show; only ⌘J goes to another.
+#[test]
+fn seed_513_a_waiting_sessions_row_does_not_change_the_tab() {
+    let wait = |id: &str, waits_for, pane| Wait { runner: "claude".into(), id: id.into(), waits_for, since: None, pane };
+    let found = |id: &str, last_activity, active| Found {
+        runner: "claude".into(),
+        id: id.into(),
+        cwd: "/code/app".into(),
+        repo: "/code/app".into(),
+        started: Some(1),
+        last_activity,
+        active,
+        station: None,
+        label: None,
+        title: None,
+        model: None,
+        held: false,
+    };
+    replay(&[
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::SetSessions { found: vec![found("s1", Some(999000), true), found("s2", Some(5), false)], day: 0 }
+            .sent_by(Origin::User),
+        Action::SelectTab { index: 1 }.sent_by(Origin::User),
+        Action::SessionsWaiting {
+            waits: vec![wait("s9", WaitsFor::Input, Some(7)), wait("s2", WaitsFor::Permission, Some(1))],
+        }
+        .sent_by(Origin::User),
+        Action::SessionClick { runner: "claude".into(), id: "s2".into() }.sent_by(Origin::System),
+    ])
+    .unwrap();
+}
 
 /// A done task restored with its own worktree removed, its record from disk: opening it again
 /// (its card) added it back on a branch git refuses. A record is checked before it is added back.

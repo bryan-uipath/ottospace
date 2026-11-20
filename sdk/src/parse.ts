@@ -1208,6 +1208,10 @@ function sessionRow(value: unknown, at: string): SessionRow {
     pane: orNull(num)(o.pane, `${at}.pane`),
     quoted_title: orNull(str)(o.quoted_title, `${at}.quoted_title`),
     model: orNull(str)(o.model, `${at}.model`),
+    waits_for: orNull(oneOf(["permission", "question", "input"] as const, "what a session waits for"))(
+      o.waits_for,
+      `${at}.waits_for`,
+    ),
   };
 }
 

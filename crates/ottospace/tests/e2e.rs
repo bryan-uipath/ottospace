@@ -2590,6 +2590,45 @@ fn session_fixture(fixture: &str, to: &Path, cwd: &Path, age: Duration) {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_session_waiting_in_a_terminal_needs_you_and_cmd_j_goes_to_its_pane() {
+    // A made-up Claude Code folder: a program in pane 1 writes its process record, as Claude Code
+    // does while a permission prompt is open, and stays. No repository is listed, Tasks is closed.
+    let home = user_folder("session-waits", "");
+    let records = home.join("claude/sessions");
+    std::fs::create_dir_all(&records).unwrap();
+    let dirs = json!({"claude": [home.join("claude")], "codex": home.join("codex")});
+    let settings = json!({"repos": [], "sessions": true, "session_dirs": dirs, "restore_layout": false});
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("OTTOSPACE_FEATURES", "session_waits")];
+    let otto = Otto::launch_with("session-waits", &env);
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split", "axis": "right"}));
+    // Short (`● 1`) when the bar is narrow, as at CI's window size.
+    let agents = |o: &Otto| o.call(json!({"cmd": "state"}))["status_bar"]["agents"]["text"].clone();
+    let needs_one = |text: &Value| text == "● 1 needs you" || text == "● 1";
+    assert_eq!(agents(&otto), "No agents");
+    let record = r#"{"pid":%d,"sessionId":"22222222-2222-4222-8222-222222222222","status":"waiting","waitingFor":"permission prompt","updatedAt":%d000,"statusUpdatedAt":%d000}"#;
+    let line = format!(
+        "now=$(date +%s); printf '{}' $$ $now $now > {}/$$.json; exec sleep 300\r",
+        record,
+        records.display()
+    );
+    otto.call(json!({"cmd": "type", "pane": 1, "text": line}));
+    otto.wait_for("needs you", |o| Some(agents(o)).filter(needs_one));
+
+    // ⌘J: no task needs you, so the pane it waits in (the core's tests: a client's goes nowhere).
+    assert_eq!(otto.call(json!({"cmd": "focus", "pane": 2}))["state"]["focused"], 2);
+    assert_eq!(otto.user_key("cmd-j")["state"]["focused"], 1);
+
+    // It is answered (its record says busy): nothing needs you.
+    let file = std::fs::read_dir(&records).unwrap().flatten().next().unwrap().path();
+    let busy = std::fs::read_to_string(&file).unwrap().replace(r#""status":"waiting""#, r#""status":"busy""#);
+    std::fs::write(&file, busy).unwrap();
+    otto.wait_for("nothing needs you", |o| Some(agents(o)).filter(|text| text == "No agents"));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     let home = user_folder("sessions", "");
     fake_repo(&home.join("src/app"));

@@ -1106,6 +1106,11 @@ pub enum Action {
     SessionsSeen {
         seen: Vec<sessions::Seen>,
     },
+    /// The sessions that wait on the user now, by their runners' process records, each with the
+    /// terminal pane it runs in when the shell found one. Replaces the last. The shell's alone.
+    SessionsWaiting {
+        waits: Vec<sessions::Wait>,
+    },
     /// Make a task of a session: named after its repository, in its directory, worked by its
     /// runner, and linked to it, so the session is listed as that task from now on.
     SessionAdopt {
@@ -2462,6 +2467,7 @@ impl Action {
             | Action::SetSessions { .. }
             | Action::SessionQuiet { .. }
             | Action::SessionsSeen { .. }
+            | Action::SessionsWaiting { .. }
             | Action::SessionsAtWork { .. }
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
@@ -2705,6 +2711,7 @@ impl Action {
             | Action::DecisionsSkip { .. }
             | Action::DecisionsLater { .. }
             | Action::DecisionsClose => Some(Feature::Decisions),
+            Action::SessionsWaiting { .. } => Some(Feature::SessionWaits),
             Action::ListenStart { .. }
             | Action::ListenToggle { .. }
             | Action::ListenPause { .. }
@@ -3723,6 +3730,9 @@ pub struct Model {
     /// Of the sessions last read (Tasks or Repos open), those at work: for the checkouts' dots.
     #[serde(skip)]
     at_work: Vec<Found>,
+    /// Sessions that wait on the user now (`session_waits`), as the shell last read them.
+    #[serde(skip)]
+    session_waits: Vec<sessions::Wait>,
     /// How long an adopted session is quiet before its task needs the user. 0: never.
     #[serde(skip)]
     session_quiet_ms: u64,
@@ -4004,6 +4014,7 @@ impl Default for Model {
             local_day: 0,
             found: Vec::new(),
             at_work: Vec::new(),
+            session_waits: Vec::new(),
             session_quiet_ms: sessions::QUIET_MS,
             hidden: Vec::new(),
             sessions_range: sessions::Range::default(),
@@ -5449,6 +5460,12 @@ impl Model {
             Action::TaskGo { id: None } if self.by_user => {
                 if let Some(id) = self.tasks.next().map(|task| task.id) {
                     self.talk_to(Subject::Task(id), false, effects);
+                } else {
+                    // No task needs you: a session in a terminal that waits on you does.
+                    let pane = self.waits_unadopted().find_map(|w| self.wait_pane(w));
+                    if let Some(pane) = pane {
+                        self.focus(pane, effects);
+                    }
                 }
             }
             Action::TaskGo { id } => {
@@ -5937,6 +5954,11 @@ impl Model {
                 let seen = seen.into_iter().map(|s| (s.runner, s.id, s.active, Some(s.last_activity)));
                 self.follow_sessions(seen.collect());
             }
+            Action::SessionsWaiting { waits } => {
+                self.session_waits = sessions::waits_kept(waits);
+                let waiting = self.session_waits.iter().map(|w| (w.runner.clone(), w.id.clone(), false, None));
+                self.follow_sessions(waiting.collect());
+            }
             Action::SessionAdopt { runner, id } => {
                 if let Some(session) = self.session(&runner, &id).cloned() {
                     // A session at work is a task that runs; an idle one is one saved for later.
@@ -5965,7 +5987,7 @@ impl Model {
             Action::SessionClick { runner, id } => {
                 let row =
                     self.list_rows().into_iter().position(|row| row == ListRow::Session(runner.clone(), id.clone()));
-                let pane = self.session(&runner, &id).and_then(|s| self.session_pane(s));
+                let pane = self.session(&runner, &id).and_then(|s| self.found_pane(s));
                 match (pane, row) {
                     (Some(pane), _) => {
                         self.list = None;
@@ -5980,7 +6002,7 @@ impl Model {
                 }
             }
             Action::SessionOpen { runner, id } => {
-                let pane = self.session(&runner, &id).and_then(|s| self.session_pane(s));
+                let pane = self.session(&runner, &id).and_then(|s| self.found_pane(s));
                 self.talk_to(Subject::Session { runner, id }, false, effects);
                 // It runs in a terminal of the tab on show: that one is focused too.
                 if let Some(pane) = pane {
@@ -8608,7 +8630,10 @@ impl Model {
             let (.., active, last) = seen.iter().find(|(runner, id, ..)| (runner, id) == (&link.runner, &link.id))?;
             // Our own agent's last writes, just stopped, are no work of the session's.
             let active = *active && !self.ours_at(&link.runner, &link.id, *last);
-            let next = sessions::follow(active, *last, link.state, task.state, self.now, self.session_quiet_ms)?;
+            let next = match self.waiting(&link.runner, &link.id) {
+                Some(_) => sessions::waiting(link.state, task.state)?,
+                None => sessions::follow(active, *last, link.state, task.state, self.now, self.session_quiet_ms)?,
+            };
             Some((task.id, next))
         };
         let moves: Vec<(TaskId, State)> = self.tasks.list.iter().filter_map(follows).collect();
@@ -8700,6 +8725,25 @@ impl Model {
         linked.into_iter().filter_map(key).take(progress::MAX_SESSIONS).collect()
     }
 
+    /// A session's wait on the user, while `session_waits` is on.
+    fn waiting(&self, runner: &str, id: &str) -> Option<&sessions::Wait> {
+        let on = self.features.on(Feature::SessionWaits);
+        self.session_waits.iter().filter(|_| on).find(|w| w.runner == runner && w.id == id)
+    }
+
+    /// The waits of sessions that are no task's and not hidden: each needs the user as a task would.
+    pub(crate) fn waits_unadopted(&self) -> impl Iterator<Item = &sessions::Wait> {
+        let hidden = |w: &&sessions::Wait| self.hidden.iter().any(|(runner, id)| (runner, id) == (&w.runner, &w.id));
+        let on = self.features.on(Feature::SessionWaits);
+        let free = move |w: &&sessions::Wait| on && !hidden(w) && !self.tasks.adopted(&w.runner, &w.id);
+        self.session_waits.iter().filter(free)
+    }
+
+    /// The terminal pane a waiting session runs in, if it is still one.
+    fn wait_pane(&self, wait: &sessions::Wait) -> Option<PaneId> {
+        wait.pane.filter(|id| self.pane(*id).is_some_and(|pane| pane.kind == Kind::Terminal))
+    }
+
     /// The sessions that are no task's and not hidden, in the order listed. At most `MAX_FOUND`.
     fn unadopted(&self) -> impl Iterator<Item = &Found> {
         let hidden = |s: &&Found| self.hidden.iter().any(|(runner, id)| (runner, id) == (&s.runner, &s.id));
@@ -8734,6 +8778,14 @@ impl Model {
         (another.is_none() && session.active && at_work == 1).then_some(pane.id)
     }
 
+    /// The terminal pane of the tab on show a listed session runs in: its wait's, else
+    /// `session_pane`'s guess. A row's click never changes the tab; ⌘J may (`wait_pane`).
+    fn found_pane(&self, session: &Found) -> Option<PaneId> {
+        let shown = self.layout.as_ref().map(Node::leaves).unwrap_or_default();
+        let wait = self.waiting(&session.runner, &session.id).and_then(|w| self.wait_pane(w));
+        wait.filter(|pane| shown.contains(pane)).or_else(|| self.session_pane(session))
+    }
+
     /// The Elsewhere group as drawn, at the time of the last `Tick`: sessions found that are
     /// no task's, active first, those in the range alone.
     pub fn sessions_bar(&self) -> sessions::Bar {
@@ -8746,11 +8798,12 @@ impl Model {
             id: s.id.clone(),
             name: self.session_name(s),
             active: s.active,
-            doing: s.doing(),
+            doing: self.waiting(&s.runner, &s.id).map(|w| format!("needs you · {}", w.waits_for.label())).or(s.doing()),
             age: s.last_activity.map(|at| tasks::age(at, self.now)),
-            pane: self.session_pane(s),
+            pane: self.found_pane(s),
             quoted_title: s.title.clone(),
             model: s.model.clone(),
+            waits_for: self.waiting(&s.runner, &s.id).map(|w| w.waits_for),
         };
         let rows = drawn.map(row).collect();
         sessions::Bar { count: shown.len(), total: shown.len() + out.len(), range, collapsed, rows }
@@ -10040,6 +10093,7 @@ mod tests {
         Action::SetSessions { .. },
         Action::SessionQuiet { .. },
         Action::SessionsSeen { .. },
+        Action::SessionsWaiting { .. },
         Action::SessionsAtWork { .. },
         Action::SessionAdopt { .. },
         Action::SessionHide { .. },
@@ -10392,6 +10446,7 @@ mod tests {
             Action::SetSessions { found: Vec::new(), day: 0 },
             Action::SessionQuiet { ms: 0 },
             Action::SessionsSeen { seen: Vec::new() },
+            Action::SessionsWaiting { waits: Vec::new() },
             Action::SessionsAtWork { found: Vec::new() },
             Action::SessionAdopt { runner: text(), id: text() },
             Action::SessionHide { runner: text(), id: text() },
@@ -15510,6 +15565,79 @@ mod tests {
         }
         let bar = m.sessions_bar();
         assert_eq!((bar.count, bar.rows.last().map(|row| row.id.as_str())), (sessions::MAX_FOUND, Some("s0204")));
+    }
+
+    #[test]
+    fn a_session_waiting_in_a_terminal_needs_you_and_j_goes_to_its_pane() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        term(&mut m); // pane 1
+        term(&mut m); // pane 2, focused
+        let wait = |id: &str, pane| sessions::Wait {
+            runner: "claude".into(),
+            id: id.into(),
+            waits_for: sessions::WaitsFor::Permission,
+            since: Some(5),
+            pane,
+        };
+        let waits = |m: &mut Model, waits| m.update(Action::SessionsWaiting { waits }.sent_by(Origin::System));
+        waits(&mut m, vec![wait("t", Some(1))]);
+        assert_eq!(m.agents().needs_you, 1, "counted with the tasks that need you");
+        // Its row says why and names its pane.
+        m.update(Action::ToggleGroup { heading: Heading::Sessions }); // folded at first
+        m.update(Action::SetSessions { found: vec![session("claude", "t", "/code/app", false, 1)], day: 0 });
+        let row = m.sessions_bar().rows.remove(0);
+        assert_eq!((row.doing.as_deref(), row.pane), (Some("needs you · permission"), Some(1)));
+        assert_eq!(row.waits_for, Some(sessions::WaitsFor::Permission));
+        // ⌘J: no task needs you, so the waiting session's pane. A client's ⌘J does not go there.
+        m.update(Action::TaskGo { id: None }.sent_by(Origin::Socket));
+        assert_eq!(m.focused, Some(2));
+        m.update(Action::TaskGo { id: None });
+        assert_eq!(m.focused, Some(1));
+        // A pane that is gone, or none: counted, but ⌘J has nowhere to go.
+        waits(&mut m, vec![wait("t", Some(99)), wait("u", None)]);
+        assert_eq!(m.agents().needs_you, 2);
+        m.update(Action::Focus { pane: 2 });
+        m.update(Action::TaskGo { id: None });
+        assert_eq!(m.focused, Some(2));
+        // Hidden by the user: not counted. The flag off: none counted, rows as before.
+        m.update(Action::SessionHide { runner: "claude".into(), id: "t".into() });
+        assert_eq!(m.agents().needs_you, 1);
+        m.update(Action::SetFeatures { features: Features::all().with(Feature::SessionWaits, false) });
+        assert_eq!(m.agents().needs_you, 0);
+        // It stops waiting: nothing is counted.
+        m.update(Action::SetFeatures { features: Features::all() });
+        waits(&mut m, Vec::new());
+        assert_eq!(m.agents().needs_you, 0);
+    }
+
+    #[test]
+    fn an_adopted_task_needs_you_while_its_session_waits_and_runs_again_after() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        let now = 1_000_000;
+        m.update(Action::Tick { now }.sent_by(Origin::System));
+        let found = |active| vec![session("claude", "s1", "/code/app", active, now)];
+        m.update(Action::SetSessions { found: found(true), day: 0 }.sent_by(Origin::System));
+        m.update(Action::SessionAdopt { runner: "claude".into(), id: "s1".into() });
+        let state = |m: &Model| m.tasks.list[0].state;
+        assert_eq!(state(&m), State::Running);
+        let wait = sessions::Wait {
+            runner: "claude".into(),
+            id: "s1".into(),
+            waits_for: sessions::WaitsFor::Question,
+            since: None,
+            pane: None,
+        };
+        m.update(Action::SessionsWaiting { waits: vec![wait] }.sent_by(Origin::System));
+        // At once, not after the quiet minutes; and a write just before it asked does not undo it.
+        assert_eq!((state(&m), m.agents().needs_you), (State::NeedsYou, 1), "the task, counted once");
+        m.update(Action::SetSessions { found: found(true), day: 0 }.sent_by(Origin::System));
+        assert_eq!(state(&m), State::NeedsYou);
+        // Answered: it works again.
+        m.update(Action::SessionsWaiting { waits: Vec::new() }.sent_by(Origin::System));
+        m.update(Action::SetSessions { found: found(true), day: 0 }.sent_by(Origin::System));
+        assert_eq!(state(&m), State::Running);
     }
 
     #[test]

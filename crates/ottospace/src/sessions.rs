@@ -19,7 +19,7 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use ottospace_core::progress::{Clock, Tokens, Work};
 use ottospace_core::repos::Repo;
 use ottospace_core::runner::RunnerId;
-use ottospace_core::sessions::{Found, Seen};
+use ottospace_core::sessions::{Found, Seen, Wait};
 use ottospace_sessions::report::IDLE_AFTER_MS;
 use ottospace_sessions::snapshot::Snapshot;
 use ottospace_sessions::tally;
@@ -62,6 +62,8 @@ pub enum Read {
     Seen(Vec<Seen>),
     /// Each with the folder its records last said the agent works in.
     Work(Vec<(Work, Option<String>)>),
+    /// The sessions that wait on the user, each with its runner's process (`session_waits`).
+    Waits(Vec<(Wait, u32)>),
 }
 
 /// The most bytes of one session read in one round. A long transcript is caught up over several.
@@ -84,7 +86,8 @@ struct Follow {
 }
 
 pub struct Poller {
-    ask: Sender<Ask>,
+    /// A round, and whether it also says which sessions wait on the user.
+    ask: Sender<(Ask, bool)>,
     found: Receiver<Read>,
     /// The last round asked for was for the open section.
     open: bool,
@@ -103,7 +106,7 @@ impl Poller {
     /// by itself): then nothing is ever read.
     pub fn start() -> Option<Self> {
         let dirs = config::session_dirs()?;
-        let (ask, asked) = channel::<Ask>();
+        let (ask, asked) = channel::<(Ask, bool)>();
         let (send, found) = channel();
         let (reads, slow_reads) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
         let (count, slow_count) = (reads.clone(), slow_reads.clone());
@@ -122,7 +125,7 @@ impl Poller {
             // How far each task's session was read for its work, and what it added up to.
             let mut tallies: HashMap<Key, (tally::Reader, Clock, Vec<u64>)> = HashMap::new();
             // Ends when the window is gone.
-            while let Ok(ask) = asked.recv() {
+            while let Ok((ask, waiting)) = asked.recv() {
                 let (work, day) = match &ask {
                     Ask::All(_, work, day) | Ask::Adopted(_, _, work, day) => (work.clone(), *day),
                 };
@@ -147,10 +150,16 @@ impl Poller {
                             locate(&runners, &repos::scan(), &mut files);
                             count.fetch_add(1, Ordering::Relaxed);
                         }
-                        slow_count.fetch_add(1, Ordering::Relaxed);
+                        if !keys.is_empty() || !work.is_empty() {
+                            slow_count.fetch_add(1, Ordering::Relaxed);
+                        }
                         Read::Seen(seen(&keys, &files, &mut last, now))
                     }
                 };
+                // Before what was seen: a task whose session waits is not taken for one at rest.
+                if waiting && send.send(Read::Waits(waits(&runners))).is_err() {
+                    break;
+                }
                 if send.send(read).is_err() {
                     break;
                 }
@@ -177,7 +186,16 @@ impl Poller {
     /// the section opens, then every `EVERY_MS`. With it closed: only the files of the sessions
     /// tasks still follow, at once when it closes, then every `SLOW_MS`; and nothing at all
     /// when there are none. `adopted` says which those are: asked only when a slow round is due.
-    pub fn ask(&mut self, open: bool, adopted: impl FnOnce() -> Vec<Key>, work: Vec<WorkKey>, now: u64, day: u64) {
+    /// `waiting`: every round, open or closed, also reads which sessions wait on the user.
+    pub fn ask(
+        &mut self,
+        open: bool,
+        adopted: impl FnOnce() -> Vec<Key>,
+        work: Vec<WorkKey>,
+        waiting: bool,
+        now: u64,
+        day: u64,
+    ) {
         if open != self.open {
             (self.open, self.asked) = (open, None);
         }
@@ -186,11 +204,11 @@ impl Poller {
         if due && !self.waiting && !self.stopped {
             let ask = if open { Ask::All(now, work, day) } else { Ask::Adopted(now, adopted(), work, day) };
             // No task follows a session: nothing to look at until the next slow round is due.
-            if matches!(&ask, Ask::Adopted(_, keys, work, _) if keys.is_empty() && work.is_empty()) {
+            if matches!(&ask, Ask::Adopted(_, keys, work, _) if keys.is_empty() && work.is_empty() && !waiting) {
                 self.asked = Some(now);
                 return;
             }
-            match self.ask.send(ask) {
+            match self.ask.send((ask, waiting)) {
                 Ok(()) => (self.waiting, self.asked) = (true, Some(now)),
                 Err(_) => self.stopped = true,
             }
@@ -351,6 +369,20 @@ fn as_found(session: &SessionRef, repo: &std::path::Path, now: u64) -> Found {
         // whose process lives and is the one that wrote it (`sessions::holds`).
         held: session.runner.spec().disk.held && session.holders.iter().any(holds),
     }
+}
+
+/// The sessions whose runner's record says they wait on the user and whose process lives, each
+/// with that process: the window finds its pane. Records alone: no transcript is opened.
+fn waits(runners: &[&dyn SessionReader]) -> Vec<(Wait, u32)> {
+    let mut out = Vec::new();
+    for runner in runners {
+        for wait in runner.waits().into_iter().filter(|wait| holds(&wait.holder)) {
+            let (runner, id) = (runner.runner().name().to_string(), wait.id);
+            let (waits_for, since, pane) = (wait.waits_for, wait.since, None);
+            out.push((Wait { runner, id, waits_for, since, pane }, wait.holder.pid));
+        }
+    }
+    out
 }
 
 /// True if the process a runner's record names lives, and is not another program with the pid
