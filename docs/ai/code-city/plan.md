@@ -141,11 +141,18 @@ Windows). It replaces the 2D plan this note first recommended.
   a thread of its own, made again only when the plan, the lit files or the tab's size in pixels
   change: a frame paints the kept image. No GPU, or a failed render: the lattice, and the state
   says why.
-- **Hover** (the owner's city's callout): the user's pointer over a building shows a beacon, a
-  line rising from its top to a label with its name over its folder; over a district, its
-  folder. The hit is the core's ray; the beacon is drawn by GPUI over the picture, so hovering
-  renders nothing again. Over the hints, the hints win and no beacon is drawn over them. A
-  client's pointer shows none. Primary, never amber: amber is the beacon of "needs you" (below).
+- **Hover: a beam** (the owner's word, 2026-11-20: "a straight-up beam with a dot that shows the
+  filename"; the owner's city's PR beams, bright under the avatar and fading toward the ground).
+  The user's pointer over a building raises a thin beam straight up from its top's middle, a
+  fixed height in the world (`scene::BEAM`, 0.15 of the plan's depth, lower where the picture's
+  top is nearer: `Scene::beam`, tested), so it stays vertical under any camera; a dot at its
+  end, and the file's path beside the dot, cut in the middle if long. Over a district, the
+  same from its plate with the folder's path. The hit is the core's ray; GPUI draws the beam
+  between the two projected points, faint at the box and brightest at the dot, fading in over
+  120 ms (at once under Reduce Motion), so hovering renders nothing again. Over the hints, the
+  hints win; a beam is lowered until it clears them, else not drawn. A client's pointer shows
+  none. Text colour, never amber: amber is the beacon of "needs you" (below). A lit building
+  has a steady, thinner beam in its task's colour, no label.
 
 Why not paths (the "Oblique" alternative this note first named): GPUI has no depth buffer, so
 every building would be three paths painted back to front each frame, 15,000 paths at 5,000
