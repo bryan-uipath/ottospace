@@ -9,6 +9,7 @@ use ottospace_core::ax::truncate as cap;
 use ottospace_core::links::{self, Target};
 use ottospace_core::transcript::{clean, cut as head};
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use pulldown_cmark::{Alignment, BlockQuoteKind, CodeBlockKind, Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
@@ -25,11 +26,14 @@ pub const MAX_CODE_LINES: usize = 400;
 pub struct Caps {
     pub blocks: usize,
     pub code_lines: usize,
+    /// How long its fences' grammars may take, all together (`syntax::fence`): a reply's are
+    /// coloured on the main thread, a file's on its read thread.
+    pub colour: Duration,
 }
 
-pub const CHAT: Caps = Caps { blocks: MAX_BLOCKS, code_lines: MAX_CODE_LINES };
+pub const CHAT: Caps = Caps { blocks: MAX_BLOCKS, code_lines: MAX_CODE_LINES, colour: crate::syntax::MAIN_TOTAL };
 /// A file the viewer reads is at most 5 MB: this draws all of most, and stops before a stall.
-pub const FILE: Caps = Caps { blocks: 20_000, code_lines: 20_000 };
+pub const FILE: Caps = Caps { blocks: 20_000, code_lines: 20_000, colour: crate::syntax::BUDGET };
 /// Containers nested deeper than this are drawn flat.
 const MAX_DEPTH: usize = 12;
 /// The image files a thumbnail is drawn for.
@@ -205,6 +209,8 @@ struct Builder<'a> {
     /// Footnotes by name: their numbers, in the order first referred to; their text once defined.
     numbers: HashMap<String, usize>,
     notes: Vec<(String, Vec<Block>)>,
+    /// The time its fences' grammars may take: the rest is the lexer's (`Caps::colour`).
+    colour_until: crate::syntax::Until,
 }
 
 /// `text`, a reply's markdown, as blocks. `repo`: the task's repository, whose files may be links.
@@ -234,6 +240,7 @@ pub fn parse_with(text: &str, repo: Option<&str>, caps: Caps) -> Vec<Block> {
         suffixes: HashMap::new(),
         numbers: HashMap::new(),
         notes: Vec::new(),
+        colour_until: crate::syntax::Until::new(caps.colour),
     };
     // Merged: a bare address or a mention is found whole.
     for event in TextMergeStream::new(Parser::new_ext(text, options)) {
@@ -493,7 +500,10 @@ impl Builder<'_> {
                 let shown: Vec<String> = lines.iter().take(most).map(|line| cap(line, MAX_LINE)).collect();
                 let more = lines.len().saturating_sub(most);
                 let shown = shown.join("\n");
-                let marks = label.as_deref().map(|label| crate::syntax::fence(label, &shown)).unwrap_or_default();
+                let marks = label
+                    .as_deref()
+                    .map(|label| crate::syntax::fence(label, &shown, &mut self.colour_until))
+                    .unwrap_or_default();
                 self.block(Block::Code { label, shown, copy, more, marks });
             }
             Frame::Table { align, mut rows, row, cell } => {
