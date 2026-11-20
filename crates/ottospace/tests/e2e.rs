@@ -6444,15 +6444,16 @@ fn plus_makes_a_new_empty_temporary_workspace_each_time_back_after_a_restart_whi
         // A client's click on + makes nothing: a workspace is the user's file.
         let refused = otto.click(plus, 1);
         assert!(names(&refused).is_empty() && workbook_files(&home).is_empty(), "{refused}");
-        // The user's: a new workspace after the selected space, one empty tab, selected.
+        // The user's: a new workspace, one empty tab, selected; the workspaces before the task's
+        // space (one order: the list's).
         let made = otto.user_click(plus);
         assert_eq!(names(&made), ["Workspace 2"]);
         assert_eq!(
             row(&made),
             [
                 ("home".into(), false, json!([])),
-                ("task".into(), false, json!([0])),
-                ("workbook".into(), true, json!([1]))
+                ("workbook".into(), true, json!([0])),
+                ("task".into(), false, json!([1]))
             ],
             "{made}"
         );
@@ -6481,8 +6482,8 @@ fn plus_makes_a_new_empty_temporary_workspace_each_time_back_after_a_restart_whi
         assert!(workbook_files(&home).is_empty(), "{:?}", workbook_files(&home));
         let kept: Vec<bool> = (1..=3).map(|id| space_kept(&third, id) == json!(true)).collect();
         assert_eq!(kept, [false, false, false], "{}", third["spaces"]);
-        assert_eq!(third["state"]["tabs"][0]["space"]["kind"], "task");
-        assert_eq!(third["state"]["tabs"][1]["space"]["kind"], "workbook");
+        assert_eq!(third["state"]["tabs"][0]["space"]["kind"], "workbook");
+        assert_eq!(third["state"]["tabs"][3]["space"]["kind"], "task");
         // Ready for a terminal: ⌘D opens one in the new workspace's empty tab.
         let filled = otto.user_key("cmd-d");
         assert_eq!((pane_ids(&filled), &filled["state"]["focused"]), (vec![1, 2], &json!(2)));
@@ -8354,14 +8355,14 @@ fn a_new_task_from_home_opens_its_space_and_takes_no_tab_of_a_workspace() {
     });
 
     // From Home, a click on a repository's row: a terminal there, in a new workspace named for
-    // it, selected.
+    // it, selected. The workspaces in one order, by name: "app" first.
     otto.user_key("cmd-l");
     otto.user_key("cmd-ctrl-1");
     otto.call(json!({"cmd": "section", "section": "repos"}));
     let row = format!("repo:{}", app.display());
     let opened = otto.user_click(at(otto.control(&row), 0.5, 0.5));
-    let tab = opened["state"]["tabs"][2].clone();
-    assert_eq!((&tab["space"], &tab["title"], &opened["state"]["active"]), (&book(2), &json!("app"), &json!(2)));
+    let tab = opened["state"]["tabs"][0].clone();
+    assert_eq!((&tab["space"], &tab["title"], &opened["state"]["active"]), (&book(2), &json!("app"), &json!(0)));
     assert_eq!(opened["workbooks"][0]["name"], "app", "{}", opened["workbooks"]);
     let pane = opened["state"]["focused"].clone();
     // A task started from Home, for that folder: a space of its own. The workspace keeps its
@@ -8373,20 +8374,20 @@ fn a_new_task_from_home_opens_its_space_and_takes_no_tab_of_a_workspace() {
         owners(&second),
         [
             home_of,
-            json!([book(1), [0], false]),
-            json!([task(1), [1], false]),
-            json!([book(2), [2], false]),
+            json!([book(2), [0], false]),
+            json!([book(1), [1], false]),
+            json!([task(1), [2], false]),
             json!([task(2), [3], true])
         ]
     );
-    assert_eq!(second["state"]["tabs"][2], tab);
+    assert_eq!(second["state"]["tabs"][0], tab);
     assert!(pane_ids(&second).contains(&pane.as_u64().unwrap()), "{}", second["state"]["panes"]);
     otto.user_key("cmd-l");
 
     // One selection: the drawer is on the selected space's agent, none on a workspace's.
     let shown = otto.user_key("cmd-ctrl-2");
     assert_eq!((&shown["state"]["active"], &shown["state"]["talk"]), (&json!(0), &Value::Null));
-    let shown = otto.user_key("cmd-ctrl-3");
+    let shown = otto.user_key("cmd-ctrl-4");
     assert_eq!((&shown["state"]["talk"]["task"], &shown["state"]["talk"]["open"]), (&json!(1), &json!(true)));
     // Closed, it stays closed.
     otto.user_key("cmd-shift-r");
@@ -8395,23 +8396,23 @@ fn a_new_task_from_home_opens_its_space_and_takes_no_tab_of_a_workspace() {
     // A click on a task's row: its space, and the drawer on it.
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     let clicked = otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
-    assert_eq!((&clicked["state"]["active"], &clicked["state"]["talk"]["task"]), (&json!(1), &json!(1)));
+    assert_eq!((&clicked["state"]["active"], &clicked["state"]["talk"]["task"]), (&json!(2), &json!(1)));
 
     // The user's drag of a second-row tab onto a task on the top row moves it there.
     otto.user_key("cmd-shift-r");
-    otto.user_key("cmd-ctrl-2");
+    otto.user_key("cmd-ctrl-3");
     otto.user_key("cmd-t");
-    let from = rect(&otto.drawn()["tabs"][0]);
+    let from = rect(&otto.drawn()["tabs"][1]);
     let dragged = otto.user_drag(at(from, 0.5, 0.5), at(otto.control("space:4"), 0.5, 0.5));
     let moved = dragged["state"]["tabs"].as_array().unwrap().iter().find(|t| t["id"] == mine.0["id"]).cloned();
     assert_eq!(moved.map(|t| t["space"].clone()), Some(task(2)), "{}", dragged["spaces"]);
     let counts = |at: usize| dragged["spaces"][at]["tabs"].as_array().map(Vec::len);
-    assert_eq!((counts(1), counts(4)), (Some(1), Some(2)), "{}", dragged["spaces"]);
+    assert_eq!((counts(2), counts(4)), (Some(1), Some(2)), "{}", dragged["spaces"]);
     // Hidden, a space leaves the row and its agent goes on; its row in Tasks brings it back.
-    let hidden = otto.call(json!({"cmd": "hide_space", "index": 2}));
-    assert_eq!((&hidden["spaces"][2]["hidden"], &hidden["state"]["agents"]), (&json!(true), &json!([1, 2])));
+    let hidden = otto.call(json!({"cmd": "hide_space", "index": 3}));
+    assert_eq!((&hidden["spaces"][3]["hidden"], &hidden["state"]["agents"]), (&json!(true), &json!([1, 2])));
     let back = otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
-    assert_eq!((&back["spaces"][2]["hidden"], &back["spaces"][2]["selected"]), (&json!(false), &json!(true)));
+    assert_eq!((&back["spaces"][3]["hidden"], &back["spaces"][3]["selected"]), (&json!(false), &json!(true)));
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
 }
