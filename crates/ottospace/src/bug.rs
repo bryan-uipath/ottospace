@@ -36,7 +36,7 @@ pub(crate) fn repo_facts(settings: &Settings) -> Option<RepoFacts> {
 pub(crate) struct Frozen {
     word: String,
     size: (usize, usize),
-    rgba: Arc<Vec<u8>>,
+    rgba: Vec<u8>,
     image: Arc<gpui::Image>,
 }
 
@@ -130,7 +130,6 @@ impl Workspace {
                 let started = this.model.bug.as_ref().is_some_and(|report| report.word == word_kept);
                 if let Some((rgba, png)) = shot.filter(|_| started) {
                     let image = Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png));
-                    let rgba = Arc::new(rgba);
                     this.bug_shot = Some(Frozen { word: word_kept.clone(), size: (w, h), rgba, image });
                 }
             });
@@ -206,7 +205,7 @@ impl Workspace {
             let (w, h) = shot.size;
             // Pixels a point: the picture's width over the window's.
             let scale = w as f64 / pictured.captured.content.window[0].max(1.0);
-            let rgba = blanked(shot.rgba.as_ref().clone(), w, scale, &blank);
+            let rgba = blanked(shot.rgba, w, scale, &blank);
             let png = ottospace_mac::image::png_from_rgba(w, h, &rgba)?;
             let drawn = ottospace_mac::image::annotate(&png, &shapes(&pictured), theme::SNEAK, scale)?;
             let taken = config::write_private(&dir, "report.png", &png);
@@ -501,5 +500,24 @@ impl Workspace {
                 drawn.collect::<std::collections::BTreeMap<String, [f32; 4]>>()
             }),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An app pane's rect in points is filled at the picture's scale, and only what is in the picture.
+    #[test]
+    fn a_blanked_rect_is_filled_at_the_pictures_scale_and_cut_at_its_edge() {
+        let filled = |rgba: &[u8]| rgba.chunks_exact(4).map(|p| p[3] == 255).collect::<Vec<bool>>();
+        // 4×4 pixels of a 2×2 point window: the point at (1, 0) is the top right four pixels.
+        let top_right = blanked(vec![0; 64], 4, 2.0, &[[1.0, 0.0, 1.0, 1.0]]);
+        let want = [0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0].map(|v| v == 1);
+        assert_eq!(filled(&top_right), want);
+        // Past the edges, or before them: no panic, the part inside.
+        let past = blanked(vec![0; 64], 4, 2.0, &[[-1.0, 1.0, 9.0, 9.0]]);
+        assert_eq!(filled(&past), [[false; 8], [true; 8]].concat());
+        assert_eq!(blanked(vec![0; 64], 4, 2.0, &[]), vec![0; 64]);
     }
 }

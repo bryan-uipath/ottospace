@@ -723,7 +723,8 @@ window; Screen Recording), then lays it over the window:
   the marks (`report.annotated.png`), each mark's place and your comment, and, fenced as
   untrusted data, the build, the OS version, what was drawn under each mark (control ids, pane
   numbers and kinds, rects: no text) and the event log's last 50 lines (names and numbers only).
-  No folder for worktrees: nothing is filed, and the notice bar says so.
+  No folder for worktrees: nothing is filed, and the notice bar says so. Done keeps that
+  worktree unless the repository is in Repos.
 - The picture may show anything ottospace draws at that moment (a meeting title, a transcript, a
   terminal's text). It stays on this Mac.
 - Only your click or key starts, marks or cancels a report: a socket client's key, click or
