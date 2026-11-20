@@ -2590,41 +2590,65 @@ fn session_fixture(fixture: &str, to: &Path, cwd: &Path, age: Duration) {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_session_waiting_in_a_terminal_needs_you_and_cmd_j_goes_to_its_pane() {
-    // A made-up Claude Code folder: a program in pane 1 writes its process record, as Claude Code
-    // does while a permission prompt is open, and stays. No repository is listed, Tasks is closed.
-    let home = user_folder("session-waits", "");
-    let records = home.join("claude/sessions");
-    std::fs::create_dir_all(&records).unwrap();
-    let dirs = json!({"claude": [home.join("claude")], "codex": home.join("codex")});
+fn a_session_in_a_terminal_needs_you_the_same_way_for_every_runner() {
+    // Made-up Claude Code and Codex folders, and a stand-in for each CLI: `sleep` run under the
+    // runner's name, in the session's folder. No repository is listed; Tasks is closed.
+    let home = user_folder("session-waits", "").canonicalize().unwrap();
+    let (claude, codex, work) = (home.join("claude"), home.join("codex"), home.join("work"));
+    std::fs::create_dir_all(claude.join("sessions")).unwrap();
+    std::fs::create_dir_all(work.join("crates")).unwrap();
+    // Claude Code's transcript, just written; Codex's, last written ten minutes ago (in `crates`).
+    let id = "11111111-1111-4111-8111-111111111111";
+    let transcript = claude.join("projects").join(ottospace_sessions::claude::slug(&work)).join(format!("{id}.jsonl"));
+    session_fixture(&format!("claude/projects/-work-app/{id}.jsonl"), &transcript, &work, Duration::ZERO);
+    let rollout = "sessions/2026/11/12/rollout-2026-11-12T09-30-00-c0de0001-0000-4000-8000-000000000001.jsonl";
+    session_fixture(&format!("codex/{rollout}"), &codex.join(rollout), &work, Duration::from_secs(600));
+    // $1 the program's name, $2 its folder, $3 a record to write as Claude Code does (PID, NOW).
+    let stand_in = home.join("stand-in.sh");
+    let script = "cd \"$2\" || exit 1\n[ -n \"$3\" ] && printf '%s' \"$3\" | sed \"s/PID/$$/; s/NOW/$(date +%s)000/\" > \"$RECORDS/$$.json\"\nexec -a \"$1\" sleep 300\n";
+    std::fs::write(&stand_in, script).unwrap();
+    let dirs = json!({"claude": [claude], "codex": codex});
     let settings = json!({"repos": [], "sessions": true, "session_dirs": dirs, "restore_layout": false});
     std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
     let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("OTTOSPACE_FEATURES", "session_waits")];
     let otto = Otto::launch_with("session-waits", &env);
     otto.call(json!({"cmd": "split"}));
     otto.call(json!({"cmd": "split", "axis": "right"}));
-    // Short (`● 1`) when the bar is narrow, as at CI's window size.
+    otto.call(json!({"cmd": "split", "axis": "right"}));
+    // Short (`● 2`) when the bar is narrow, as at CI's window size.
     let agents = |o: &Otto| o.call(json!({"cmd": "state"}))["status_bar"]["agents"]["text"].clone();
-    let needs_one = |text: &Value| text == "● 1 needs you" || text == "● 1";
+    let needs = |n: u32| move |text: &Value| *text == format!("● {n} needs you") || *text == format!("● {n}");
     assert_eq!(agents(&otto), "No agents");
-    let record = r#"{"pid":%d,"sessionId":"22222222-2222-4222-8222-222222222222","status":"waiting","waitingFor":"permission prompt","updatedAt":%d000,"statusUpdatedAt":%d000}"#;
-    let line = format!(
-        "now=$(date +%s); printf '{}' $$ $now $now > {}/$$.json; exec sleep 300\r",
-        record,
-        records.display()
+    let record = format!(
+        r#"{{"pid":PID,"sessionId":"{id}","status":"waiting","waitingFor":"permission prompt","updatedAt":NOW}}"#
     );
-    otto.call(json!({"cmd": "type", "pane": 1, "text": line}));
-    otto.wait_for("needs you", |o| Some(agents(o)).filter(needs_one));
+    let run = |pane: u32, line: String| otto.call(json!({"cmd": "type", "pane": pane, "text": format!("{line}\r")}));
+    let records = claude.join("sessions");
+    run(
+        1,
+        format!(
+            "RECORDS='{}' /bin/bash '{}' claude '{}' '{record}'",
+            records.display(),
+            stand_in.display(),
+            work.display()
+        ),
+    );
+    run(
+        2,
+        format!("RECORDS=/dev/null /bin/bash '{}' codex '{}' ''", stand_in.display(), work.join("crates").display()),
+    );
+    // Claude Code says it waits for permission: at once. Codex says nothing: its turn, being quiet.
+    otto.wait_for("both need you", |o| Some(agents(o)).filter(needs(2)));
 
-    // ⌘J: no task needs you, so the pane it waits in (the core's tests: a client's goes nowhere).
-    assert_eq!(otto.call(json!({"cmd": "focus", "pane": 2}))["state"]["focused"], 2);
+    // ⌘J: no task needs you, so the first of their panes.
+    assert_eq!(otto.call(json!({"cmd": "focus", "pane": 3}))["state"]["focused"], 3);
     assert_eq!(otto.user_key("cmd-j")["state"]["focused"], 1);
 
-    // It is answered (its record says busy): nothing needs you.
+    // Answered (its record says busy): only Codex's turn is left.
     let file = std::fs::read_dir(&records).unwrap().flatten().next().unwrap().path();
     let busy = std::fs::read_to_string(&file).unwrap().replace(r#""status":"waiting""#, r#""status":"busy""#);
     std::fs::write(&file, busy).unwrap();
-    otto.wait_for("nothing needs you", |o| Some(agents(o)).filter(|text| text == "No agents"));
+    otto.wait_for("one needs you", |o| Some(agents(o)).filter(needs(1)));
 }
 
 #[test]

@@ -335,25 +335,32 @@ resumed.
 
 ## Waiting on the user
 
-A `claude` typed in a terminal pane is a watched session: its file says when it writes, not
-whether it waits. Flag `session_waits` (built, Experimental) reads what Claude Code itself says.
+A `claude` or `codex` typed in a terminal pane is a watched session. Flag `session_waits`
+(Experimental) makes "this terminal session needs you" one notion, shown one way for every
+runner (owner, 2026-11-20): per-runner differences live in `RunnerSpec` only.
 
-**What the files say (Claude Code 2.1.329, read from its bundle; no live sample yet).** The
-interactive CLI writes its process record, `sessions/<pid>.json`, with `status` `busy`, `idle`
-or `waiting`, and while waiting `waitingFor`: `permission prompt`, `sandbox request`, `worker
-request`, `goal proposal` (a permission), `input needed` (a question, an MCP elicitation), or
-`dialog open` (a dialog the user opened: waits on nobody). `statusUpdatedAt` is when it began.
-The question's text is not in the record; the transcript has the tool call only once it runs.
-Undocumented: a version that changes it reads as not waiting, never as waiting.
+**The common floor (every runner).** Each sessions round (5 s open, 20 s closed) the shell finds
+each terminal pane with a runner's CLI in front of its shell (`RunnerId::of_program`, the first
+argument's name, up to three levels below the shell) and that CLI's session: the one its process
+record names (`Disk::held`), else the one last active of those started in the folder it runs in.
+`Action::SessionsInPanes` (System only). Once its file has been quiet `session_quiet_minutes`, the
+rule adopted tasks follow, it needs you: "needs you · your turn" (`InPane::needs`).
 
-**Built.** Each sessions round (5 s open, 20 s closed) reads the records alone
-(`SessionReader::waits`), keeps those whose process lives (`holds`), and finds the pane by
-walking the process's parents to a terminal's shell. `Action::SessionsWaiting` (System only) →
-an adopted task needs you at once (`sessions::waiting`); an unadopted one counts in `needs you`,
-colours its Elsewhere row, and ⌘J reaches its pane when no task needs you. No text, no install,
-no new socket request. Codex: no process record, not seen.
+**A runner that says why (`Disk::waits`).** Faster and more specific, never different in kind:
+it needs you at once with the reason, "needs you · permission", "question" or "input". Claude Code
+2.1.329 (read from its bundle; checked against a made-up record only) writes `status: waiting`
+and `waitingFor` in `sessions/<pid>.json`: `permission prompt`, `sandbox request`, `worker
+request`, `goal proposal` (permission), `input needed` (question), `dialog open` (one the user
+opened: no wait). The record must hold (`holds`). No question text is in it. A version that
+changes the words reads as no reason: the floor still applies.
 
-**Hooks: not built, recommended second.** Verified 2026-11-20 (code.claude.com/docs/en/hooks,
+**Where it shows.** A task adopted from it needs you with it; one no task has counts in the status
+bar's `needs you`, its Elsewhere row's dot takes the needs-you colour, and ⌘J, with no task
+needing you, focuses its pane (only the user's ⌘J; a row's click never changes the tab). Known
+gaps: two CLIs of one runner in one folder share the session last active; a session outside
+our panes is not seen.
+
+**Hooks: slice 2.** Verified 2026-11-20 (code.claude.com/docs/en/hooks,
 /settings; learn.chatgpt.com Codex config pages):
 
 - Claude Code: `Notification` (matchers `permission_prompt`, fired after about 6 s, and
@@ -370,24 +377,18 @@ no new socket request. Codex: no process record, not seen.
   exist behind `features.hooks` (`hooks.json`, project ones only when trusted); their event list
   was not checked.
 
-Proposed slice 2, for the owner:
+Decided (owner, 2026-11-20), slices to come:
 
-1. **Signal**: both. The record (built) needs nothing installed and says permission or question;
-   a hook adds Codex, the question's text (`PermissionRequest`'s `tool_input`, `Notification`'s
-   `message`), and no 5–20 s poll. Without the hook nothing breaks.
-2. **Install**: a palette command, "Claude Code: install waiting hook…", run by the user alone,
-   that shows the exact JSON and the file (`~/.claude/settings.json`), writes only an entry
-   marked as ottospace's, and a matching "remove". Never a project file, never on start.
-   `--settings` applies only to agents ottospace starts, which already speak stream-json.
-3. **Trust**: one request, `session_waiting {session, kind, text?}`, answered only with
-   `$OTTOSPACE_PANE` and that pane's pass (a pass minted per terminal, as `pass.rs` does per
-   task), and only if that pane's process tree holds the session's process. It marks that one
-   session waiting or not: no task, no typing, no focus. `text` is untrusted: control characters
-   stripped, 200 characters at most, drawn quoted and never in a brief unlabelled. A hook from a
-   repository's own settings can at most say its own session waits.
-4. **Answer from the card**: not in the first slices. Answering types into the terminal, as
-   strong as a shell; only the user's own key may do it, and a TUI's prompt keys change between
-   versions. A Decisions card for a terminal session says why and offers "Go to the pane".
+1. **Install**: one palette command, the user's alone, with a full preview of every file and
+   entry, and a matching Remove: user-level files only, entries marked as ottospace's, never a
+   project file, never replacing an existing Codex `notify`.
+2. **Trust**: one request, `session_waiting {session, kind, text?}`, answered only with
+   `$OTTOSPACE_PANE` and that pane's own pass, and only for the session of the CLI in that pane.
+   It marks that session waiting or not: no task, no typing, no focus. `text` is untrusted:
+   control characters stripped, 200 characters at most, drawn quoted. A repository's own hook
+   can at most say its own session waits.
+3. **Decisions**: a card for a terminal session says why it waits and offers "Go to the pane".
+   No answering from the card: that types into a terminal, as strong as a shell.
 
 ## Privacy
 

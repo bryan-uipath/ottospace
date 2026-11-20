@@ -240,21 +240,24 @@ pub trait SessionReader: Send + Sync {
     fn path_of(&self, _cwd: &Path, _id: &str) -> Option<PathBuf> {
         None
     }
-    /// The sessions its runner records as waiting on the user now, from its process records
-    /// alone: no transcript is opened. A record may outlive its process: check the holder.
-    fn waits(&self) -> Vec<Waiting> {
-        Vec::new()
+    /// What its runner records of process `pid`, when it records processes (`Disk::held`): the
+    /// session it holds and, if the runner says (`Disk::waits`), what it waits on the user for.
+    /// From the process records alone: no transcript is opened. The caller knows `pid` lives.
+    fn process(&self, _pid: u32) -> Option<Process> {
+        None
     }
 }
 
-/// A session its runner's process record says waits on the user, and why, from a fixed table.
+/// A runner's record of one live process.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Waiting {
+pub struct Process {
+    /// The session it holds: a name (`station::is_name`).
     pub id: String,
-    pub holder: Holder,
-    pub waits_for: WaitsFor,
-    /// When the record's status last changed (Unix milliseconds).
-    pub since: Option<u64>,
+    /// From a fixed table of the runner's words. None: it does not wait on the user, or says not.
+    pub waits_for: Option<WaitsFor>,
+    /// When the record was last written (Unix milliseconds): a process started later only has
+    /// the pid of the one that wrote it (`ottospace_core::sessions::holds`).
+    pub recorded: Option<u64>,
 }
 
 /// The reader of `runner`'s sessions under `dirs`. `None`: the runner has no folder there.

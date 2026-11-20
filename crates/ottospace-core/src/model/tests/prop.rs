@@ -24,7 +24,7 @@ use crate::model::reorder::{Reorder, ReorderItem};
 use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::row_menu::MenuOf;
-use crate::sessions::{Link, Seen, Wait, WaitsFor};
+use crate::sessions::{InPane, Link, Seen, WaitsFor};
 use crate::sneak_apps;
 use crate::transcript::{Event as Said, Outcome, Text, View};
 use crate::workbook::{self, History, Workbook, WorkbookId};
@@ -1254,13 +1254,19 @@ const MAKERS: &[Make] = &[
         Action::SessionsSeen { seen: (0..g.rng.below(4)).map(|_| seen(g)).collect() }
     },
     |g| {
-        let wait = |g: &mut Gen| {
+        let at = |g: &mut Gen| {
             let (runner, id) = g.session();
-            let waits_for = g.rng.pick(&[WaitsFor::Permission, WaitsFor::Question, WaitsFor::Input]);
-            let (since, pane) = (g.rng.coin().then(|| g.time()), g.rng.coin().then(|| g.pane()));
-            Wait { runner, id, waits_for, since, pane }
+            let kinds = [
+                None,
+                Some(WaitsFor::Permission),
+                Some(WaitsFor::Question),
+                Some(WaitsFor::Input),
+                Some(WaitsFor::Turn),
+            ];
+            let (pane, last_activity, waits_for) = (g.pane(), g.rng.coin().then(|| g.time()), g.rng.pick(&kinds));
+            InPane { pane, runner, id, last_activity, waits_for }
         };
-        Action::SessionsWaiting { waits: (0..g.rng.below(3)).map(|_| wait(g)).collect() }
+        Action::SessionsInPanes { found: (0..g.rng.below(3)).map(|_| at(g)).collect() }
     },
     |g| {
         let found = (0..g.rng.below(3)).map(|_| g.found()).collect();
@@ -2086,7 +2092,7 @@ fn check_waits(m: &Model) -> Result<(), String> {
     let (all, free) = (m.agents().needs_you, m.waits_unadopted().count());
     ensure!(all >= free, "needs you {all}, fewer than the {free} waits");
     ensure!(m.features.on(Feature::SessionWaits) || free == 0, "{free} waits counted with the flag off");
-    let adopted = m.waits_unadopted().filter(|w| m.tasks.adopted(&w.runner, &w.id)).count();
+    let adopted = m.waits_unadopted().filter(|(at, _)| m.tasks.adopted(&at.runner, &at.id)).count();
     ensure!(adopted == 0, "{adopted} waits of a task's session counted besides its task");
     Ok(())
 }
@@ -5667,7 +5673,7 @@ fn code(sent: &Envelope) -> String {
         "Known",
         "Found",
         "Seen",
-        "Wait",
+        "InPane",
         "Link",
         "Target",
         "Frame",
@@ -6235,11 +6241,41 @@ fn random_actions_keep_the_model_sound_for_long() {
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
 
+/// Heads read while Repos was not open were kept until the next step cleared them: a client's
+/// refused action then changed the model. They are kept only while Repos shows.
+#[test]
+fn seed_527_heads_read_with_repos_closed_are_not_kept() {
+    replay(&[
+        Action::SetRepos {
+            repos: vec![Repo {
+                name: "app".into(),
+                path: "/code/app".into(),
+                branch: Some("main".into()),
+                worktrees: vec![Worktree { name: "app-2".into(), path: "/code/app-2".into(), branch: None }],
+            }],
+        }
+        .sent_by(Origin::User),
+        set_features(&["agent_mode", "overlay_panels", "code_city"]).sent_by(Origin::User),
+        Action::FocusList.sent_by(Origin::User),
+        Action::SetHeads { heads: vec![("/code/app".into(), 80), ("/code/app-2".into(), 240)], at: 988, calm: true }
+            .sent_by(Origin::System),
+        Action::Open { kind: Kind::Empty, axis: Axis::Down, beside: None }.sent_by(Origin::User),
+        Action::CalendarRetry.sent_by(Origin::Socket),
+    ])
+    .unwrap();
+}
+
 /// A waiting session's pane in another tab: a click on its row (from a timer here) showed that
 /// tab. A row's click stays in the tab on show; only ⌘J goes to another.
 #[test]
 fn seed_513_a_waiting_sessions_row_does_not_change_the_tab() {
-    let wait = |id: &str, waits_for, pane| Wait { runner: "claude".into(), id: id.into(), waits_for, since: None, pane };
+    let at = |id: &str, waits_for, pane| InPane {
+        pane,
+        runner: "claude".into(),
+        id: id.into(),
+        last_activity: None,
+        waits_for,
+    };
     let found = |id: &str, last_activity, active| Found {
         runner: "claude".into(),
         id: id.into(),
@@ -6259,8 +6295,8 @@ fn seed_513_a_waiting_sessions_row_does_not_change_the_tab() {
         Action::SetSessions { found: vec![found("s1", Some(999000), true), found("s2", Some(5), false)], day: 0 }
             .sent_by(Origin::User),
         Action::SelectTab { index: 1 }.sent_by(Origin::User),
-        Action::SessionsWaiting {
-            waits: vec![wait("s9", WaitsFor::Input, Some(7)), wait("s2", WaitsFor::Permission, Some(1))],
+        Action::SessionsInPanes {
+            found: vec![at("s9", Some(WaitsFor::Input), 7), at("s2", Some(WaitsFor::Permission), 1)],
         }
         .sent_by(Origin::User),
         Action::SessionClick { runner: "claude".into(), id: "s2".into() }.sent_by(Origin::System),

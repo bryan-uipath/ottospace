@@ -35,6 +35,13 @@ impl RunnerId {
     pub fn named(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|id| id.name() == name)
     }
+
+    /// The runner whose program a process runs, by its first argument's last part:
+    /// `/opt/bin/claude` → Claude. A wrapper's (`node`) is none.
+    pub fn of_program(arg0: &str) -> Option<Self> {
+        let name = arg0.rsplit('/').next().unwrap_or(arg0);
+        Self::ALL.into_iter().find(|id| id.spec().terminal.program == name)
+    }
 }
 
 /// Everything the core and the shell need to know of a runner.
@@ -131,6 +138,9 @@ pub struct Disk {
     /// Its records say where the agent works now, and the agent itself moves it (a `cd`, a
     /// worktree it entered): a task follows its agent into a worktree it made.
     pub cwd_moves: bool,
+    /// Its record of a live process says when that session waits on the user, and why:
+    /// `sessions::InPane::waits_for` is known at once, not only after the session goes quiet.
+    pub waits: bool,
 }
 
 /// What can be done with a session started elsewhere. Stated even where the answer is no, so the
@@ -192,7 +202,7 @@ const CLAUDE: RunnerSpec = RunnerSpec {
         side_question: true,
     },
     // `sessions/<pid>.json` names the process; each record carries the `cwd` the agent is in.
-    disk: Disk { held: true, cwd: true, cwd_moves: true },
+    disk: Disk { held: true, cwd: true, cwd_moves: true, waits: true },
     attach: Attach {
         watch: Support::Yes,
         take_over_when_idle: Support::Yes,
@@ -227,7 +237,7 @@ const CODEX: RunnerSpec = RunnerSpec {
     },
     // No process is recorded; `session_meta` carries `cwd`. A `turn_context`'s `cwd` is the
     // client's choice for the turn, never the agent's: ottospace sets none, so it never moves.
-    disk: Disk { held: false, cwd: true, cwd_moves: false },
+    disk: Disk { held: false, cwd: true, cwd_moves: false, waits: false },
     attach: Attach {
         // Probe 2026-11-13: the rollout grows per item; a call's start is on disk before it ends.
         watch: Support::Yes,
@@ -243,6 +253,15 @@ const CODEX: RunnerSpec = RunnerSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_is_a_runners_by_its_programs_name() {
+        assert_eq!(RunnerId::of_program("claude"), Some(RunnerId::Claude));
+        assert_eq!(RunnerId::of_program("/opt/homebrew/bin/codex"), Some(RunnerId::Codex));
+        for none in ["node", "claude-x", "", "/claude/sh", "Claude"] {
+            assert_eq!(RunnerId::of_program(none), None, "{none:?}");
+        }
+    }
 
     #[test]
     fn each_runner_is_its_spec_and_its_name() {

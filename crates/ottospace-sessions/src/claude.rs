@@ -175,13 +175,13 @@ impl SessionReader for Claude {
         self.tail(session).model
     }
 
-    fn waits(&self) -> Vec<crate::Waiting> {
-        let records = self.config_dirs.iter().flat_map(|config| records(config));
-        let wait = |(id, holder, record): (String, crate::Holder, Value)| {
-            let since = record["statusUpdatedAt"].as_u64();
-            Some(crate::Waiting { id, holder, waits_for: waits_for(&record)?, since })
-        };
-        records.filter_map(wait).collect()
+    fn process(&self, pid: u32) -> Option<crate::Process> {
+        let mut records = self.config_dirs.iter().flat_map(|config| records(config));
+        // Of two records of one pid (a reused pid, a second config dir), the one written last.
+        let mut mine: Vec<_> = records.by_ref().filter(|(_, holder, _)| holder.pid == pid).collect();
+        mine.sort_by_key(|(_, holder, _)| holder.recorded);
+        let (id, holder, record) = mine.pop()?;
+        Some(crate::Process { waits_for: waits_for(&record), id, recorded: holder.recorded })
     }
 
     /// The name the user gave the session (`custom-title`), else the one Claude Code's own model

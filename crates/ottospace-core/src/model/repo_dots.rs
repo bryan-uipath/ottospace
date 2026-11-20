@@ -81,6 +81,10 @@ impl Model {
     /// The checkouts' `HEAD` logs as read `at` (`SetHeads`): one that grew since the last read
     /// pulses, unless `calm` (Reduce Motion). The first read of a checkout only records it.
     pub(crate) fn set_heads(&mut self, heads: Vec<(String, u64)>, at: u64, calm: bool) {
+        // Kept only while Repos shows (`heads_listed`): else a later step, even a refused one, drops them.
+        if self.sidebar != Some(super::Section::Repos) {
+            return;
+        }
         for (path, log) in heads {
             if !self.repo_listed(&path) {
                 continue;

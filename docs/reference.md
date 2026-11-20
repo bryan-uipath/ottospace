@@ -1407,7 +1407,7 @@ then does nothing (a toast says so). A preference is a normal setting.
 | `overlay_panels` | Experimental | off | Overlay panels (an experiment): the sidebar and the drawer float over the panes, moving nothing, and close after use |
 | `decisions` | Experimental | off | Decisions (⌘J): a workspace that shows what waits on you, one question at a time |
 | `code_city` | Experimental | off | Code city: an empty tab of a task draws the task's folder as a 3D city, its files where they were last time |
-| `session_waits` | Experimental | off | Waiting sessions: a Claude Code you started in a terminal needs you while it asks for permission or an answer |
+| `session_waits` | Experimental | off | Waiting sessions: an agent CLI you started in a terminal pane needs you when its turn ends, at once when it asks |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1450,14 +1450,15 @@ then does nothing (a toast says so). A preference is a normal setting.
   closes. On, see [Decisions](#decisions) (design: [attention/decisions.md](ai/attention/decisions.md)).
 - `code_city` off: an empty tab of a task draws the lattice, and no file list is read. On, see
   [Code city](#code-city) (design: [code-city/plan.md](ai/code-city/plan.md)).
-- `session_waits` off: a session counts as needing you only through a task adopted from it, once
-  quiet. On, every sessions round (5 s with Tasks open, 20 s closed) also reads Claude Code's
-  process records (`sessions/<pid>.json`, no transcript): one whose live process records
-  `"status": "waiting"` waits for permission, a question or other input. A task adopted from it
-  needs you at once; one no task has counts in the status bar's `needs you`, its Elsewhere row's
-  dot is the needs-you colour, and ⌘J, with no task needing you, focuses the terminal pane it
-  runs in (found by its process's parents). Nothing is installed and nothing is typed into it.
-  Codex records no process: not seen (design: [sessions.md](ai/sessions.md#waiting-on-the-user)).
+- `session_waits` off: a session needs you only through a task adopted from it, once quiet. On,
+  every sessions round (5 s with Tasks open, 20 s closed) finds each terminal pane with an agent
+  CLI in front of its shell (its program's name) and that CLI's session. The same for every
+  runner: it needs you once its file has been quiet `session_quiet_minutes` ("needs you · your
+  turn"); a runner that says why it waits needs you at once, with the reason ("needs you ·
+  permission", "question", "input"; today Claude Code, by its process record). A task adopted
+  from it needs you with it; one no task has counts in the status bar's `needs you`, its Elsewhere
+  row's dot is the needs-you colour, and ⌘J, with no task needing you, focuses its pane. Nothing is
+  installed and nothing is typed into it (design: [sessions.md](ai/sessions.md#waiting-on-the-user)).
 
 ### Decisions
 

@@ -3503,20 +3503,23 @@ impl Workspace {
         let Some(poller) = &mut self.sessions else { return };
         let model = &self.model;
         let waiting = model.features.on(Feature::SessionWaits);
-        poller.ask(open, || model.followed_sessions(), model.worked_sessions(), waiting, now, day_start(now));
+        let terminals = &self.terminals;
+        let panes = || pane_runners(terminals);
+        poller.ask(open, || model.followed_sessions(), model.worked_sessions(), waiting, panes, now, day_start(now));
         let (read, stopped) = (poller.take(), poller.stopped());
-        let (mut found, mut seen, mut worked, mut waits) = (None, None, Vec::new(), None);
+        let (mut found, mut seen, mut worked, mut in_panes) = (None, None, Vec::new(), None);
         for read in read {
             match read {
                 sessions::Read::Found(list) => found = Some(list),
                 sessions::Read::Seen(list) => seen = Some(list),
                 sessions::Read::Work(list) => worked.extend(list),
-                sessions::Read::Waits(list) => waits = Some(list),
+                sessions::Read::InPanes(list) => in_panes = Some(list),
             }
         }
-        if let Some(list) = waits.filter(|_| waiting) {
-            let waits = list.into_iter().map(|(wait, pid)| ottospace_core::sessions::Wait { pane: self.pane_of_process(pid), ..wait }).collect();
-            self.dispatch(Action::SessionsWaiting { waits }, Origin::System, window, cx);
+        if let Some(found) = in_panes.filter(|_| waiting) {
+            // The time too: a session's turn is counted from it.
+            self.dispatch(Action::Tick { now }, Origin::System, window, cx);
+            self.dispatch(Action::SessionsInPanes { found }, Origin::System, window, cx);
             cx.notify();
         }
         for (work, cwd) in worked {
@@ -3550,20 +3553,6 @@ impl Workspace {
                 Some("sessions: the reader stopped; sessions are not listed until ottospace starts again".into());
             cx.notify();
         }
-    }
-
-    /// The terminal pane whose shell process `pid` runs below, by its parents: `claude` → `zsh`.
-    fn pane_of_process(&self, pid: u32) -> Option<PaneId> {
-        let mut at = i32::try_from(pid).ok()?;
-        // A program a few levels down (`npx`, a wrapper script); never past launchd.
-        for _ in 0..16 {
-            let shell = self.terminals.iter().find(|(_, terminal)| terminal.shell_pid() as i32 == at);
-            if let Some((id, _)) = shell {
-                return Some(*id);
-            }
-            at = ottospace_mac::process::parent(at).filter(|parent| *parent > 1)?;
-        }
-        None
     }
 
     fn tasks_bar(&self) -> serde_json::Value {
@@ -7814,6 +7803,27 @@ fn list_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
 
 /// The time now, in milliseconds since 1970. The core has no clock: actions carry this.
 /// When the local day of `now` began (milliseconds since 1970), by the system's time zone: with
+/// Each terminal pane with an agent runner in front of its shell: the first process found below
+/// the shell, at most three levels down, whose program is a runner's (`RunnerId::of_program`).
+fn pane_runners(terminals: &HashMap<PaneId, Terminal>) -> Vec<sessions::PaneProc> {
+    use ottospace_mac::process;
+    let mut found = Vec::new();
+    for (pane, terminal) in terminals {
+        let mut queue = vec![(terminal.shell_pid() as i32, 0)];
+        while let Some((pid, depth)) = queue.pop() {
+            let arg0 = process::args(pid).and_then(|args| args.into_iter().next());
+            if let Some(runner) = arg0.as_deref().and_then(ottospace_core::runner::RunnerId::of_program) {
+                found.extend(process::cwd(pid).map(|cwd| (*pane, runner, pid as u32, PathBuf::from(cwd))));
+                break;
+            }
+            if depth < 3 {
+                queue.extend(process::children(pid).into_iter().map(|child| (child, depth + 1)));
+            }
+        }
+    }
+    found
+}
+
 /// the offset at that midnight, not now's, so a clock change during the day does not move it.
 fn day_start(now: u64) -> u64 {
     use core_foundation::date::CFDate;

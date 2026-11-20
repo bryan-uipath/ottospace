@@ -117,7 +117,7 @@ impl Feature {
                 "Code city: an empty tab of a task draws the task's folder as a 3D city, its files where they were last time"
             }
             Feature::SessionWaits => {
-                "Waiting sessions: a Claude Code you started in a terminal needs you while it asks for permission or an answer"
+                "Waiting sessions: an agent CLI you started in a terminal pane needs you when its turn ends, at once when it asks"
             }
         }
     }

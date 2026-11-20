@@ -16,10 +16,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
+use ottospace_core::model::PaneId;
 use ottospace_core::progress::{Clock, Tokens, Work};
 use ottospace_core::repos::Repo;
 use ottospace_core::runner::RunnerId;
-use ottospace_core::sessions::{Found, Seen, Wait};
+use ottospace_core::sessions::{Found, InPane, Seen};
 use ottospace_sessions::report::IDLE_AFTER_MS;
 use ottospace_sessions::snapshot::Snapshot;
 use ottospace_sessions::tally;
@@ -62,8 +63,8 @@ pub enum Read {
     Seen(Vec<Seen>),
     /// Each with the folder its records last said the agent works in.
     Work(Vec<(Work, Option<String>)>),
-    /// The sessions that wait on the user, each with its runner's process (`session_waits`).
-    Waits(Vec<(Wait, u32)>),
+    /// The sessions whose runners run in terminal panes (`session_waits`).
+    InPanes(Vec<InPane>),
 }
 
 /// The most bytes of one session read in one round. A long transcript is caught up over several.
@@ -86,8 +87,8 @@ struct Follow {
 }
 
 pub struct Poller {
-    /// A round, and whether it also says which sessions wait on the user.
-    ask: Sender<(Ask, bool)>,
+    /// A round, and with `session_waits` on the runners in terminal panes, to read their sessions.
+    ask: Sender<(Ask, Option<Vec<PaneProc>>)>,
     found: Receiver<Read>,
     /// The last round asked for was for the open section.
     open: bool,
@@ -106,7 +107,7 @@ impl Poller {
     /// by itself): then nothing is ever read.
     pub fn start() -> Option<Self> {
         let dirs = config::session_dirs()?;
-        let (ask, asked) = channel::<(Ask, bool)>();
+        let (ask, asked) = channel::<(Ask, Option<Vec<PaneProc>>)>();
         let (send, found) = channel();
         let (reads, slow_reads) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
         let (count, slow_count) = (reads.clone(), slow_reads.clone());
@@ -125,7 +126,7 @@ impl Poller {
             // How far each task's session was read for its work, and what it added up to.
             let mut tallies: HashMap<Key, (tally::Reader, Clock, Vec<u64>)> = HashMap::new();
             // Ends when the window is gone.
-            while let Ok((ask, waiting)) = asked.recv() {
+            while let Ok((ask, panes)) = asked.recv() {
                 let (work, day) = match &ask {
                     Ask::All(_, work, day) | Ask::Adopted(_, _, work, day) => (work.clone(), *day),
                 };
@@ -157,7 +158,9 @@ impl Poller {
                     }
                 };
                 // Before what was seen: a task whose session waits is not taken for one at rest.
-                if waiting && send.send(Read::Waits(waits(&runners))).is_err() {
+                if let Some(panes) = panes
+                    && send.send(Read::InPanes(in_panes(&runners, &panes))).is_err()
+                {
                     break;
                 }
                 if send.send(read).is_err() {
@@ -186,13 +189,15 @@ impl Poller {
     /// the section opens, then every `EVERY_MS`. With it closed: only the files of the sessions
     /// tasks still follow, at once when it closes, then every `SLOW_MS`; and nothing at all
     /// when there are none. `adopted` says which those are: asked only when a slow round is due.
-    /// `waiting`: every round, open or closed, also reads which sessions wait on the user.
+    /// `waiting`: every round, open or closed, also reads the sessions of the runners `panes` finds.
+    #[allow(clippy::too_many_arguments)] // reason: each is the window's; a struct would be built only here
     pub fn ask(
         &mut self,
         open: bool,
         adopted: impl FnOnce() -> Vec<Key>,
         work: Vec<WorkKey>,
         waiting: bool,
+        panes: impl FnOnce() -> Vec<PaneProc>,
         now: u64,
         day: u64,
     ) {
@@ -208,7 +213,7 @@ impl Poller {
                 self.asked = Some(now);
                 return;
             }
-            match self.ask.send((ask, waiting)) {
+            match self.ask.send((ask, waiting.then(panes))) {
                 Ok(()) => (self.waiting, self.asked) = (true, Some(now)),
                 Err(_) => self.stopped = true,
             }
@@ -371,16 +376,31 @@ fn as_found(session: &SessionRef, repo: &std::path::Path, now: u64) -> Found {
     }
 }
 
-/// The sessions whose runner's record says they wait on the user and whose process lives, each
-/// with that process: the window finds its pane. Records alone: no transcript is opened.
-fn waits(runners: &[&dyn SessionReader]) -> Vec<(Wait, u32)> {
+/// A runner's process in front of a terminal pane's shell: the pane, the runner, its pid, and
+/// the folder it runs in.
+pub type PaneProc = (PaneId, RunnerId, u32, PathBuf);
+
+/// The session of each runner in a pane. A runner that records its processes names it
+/// (`Disk::held`), and says what it waits for (`Disk::waits`); for any other, the session last
+/// active of those started in the folder it runs in. One with no file yet is left for later.
+fn in_panes(runners: &[&dyn SessionReader], panes: &[PaneProc]) -> Vec<InPane> {
     let mut out = Vec::new();
-    for runner in runners {
-        for wait in runner.waits().into_iter().filter(|wait| holds(&wait.holder)) {
-            let (runner, id) = (runner.runner().name().to_string(), wait.id);
-            let (waits_for, since, pane) = (wait.waits_for, wait.since, None);
-            out.push((Wait { runner, id, waits_for, since, pane }, wait.holder.pid));
-        }
+    for (pane, id, pid, cwd) in panes {
+        let Some(runner) = runners.iter().find(|r| r.runner() == *id) else { continue };
+        let disk = &id.spec().disk;
+        let holder =
+            |p: &ottospace_sessions::Process| holds(&ottospace_sessions::Holder { pid: *pid, recorded: p.recorded });
+        let process = runner.process(*pid).filter(|p| disk.held && holder(p));
+        let sessions = runner.sessions(std::slice::from_ref(cwd)).unwrap_or_default();
+        let mine = |s: &&SessionRef| match &process {
+            Some(process) => s.id == process.id,
+            None => s.parent.is_none() && s.cwd == *cwd,
+        };
+        // Newest first: of several in one folder, the one last active.
+        let Some(session) = sessions.iter().find(mine) else { continue };
+        let waits_for = process.and_then(|p| p.waits_for).filter(|_| disk.waits);
+        let (runner, id, last_activity) = (id.name().to_string(), session.id.clone(), session.last_activity);
+        out.push(InPane { pane: *pane, runner, id, last_activity, waits_for });
     }
     out
 }
