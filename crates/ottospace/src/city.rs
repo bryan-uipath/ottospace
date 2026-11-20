@@ -402,10 +402,15 @@ impl Workspace {
             let Some(city) = self.model.city_at(at) else { continue };
             let floor = self.floor_of(at);
             floors.insert(floor);
-            // Read only for a place a frame laid out large enough for a city.
-            if !self.city_drawn.borrow().places.get(&floor).is_some_and(|place| place.measured && !place.small) {
+            // Read only for a place a frame laid out large enough for a city; a place not laid
+            // out yet (a tab that became a pane) keeps its folder's read, not asked again.
+            let drawn = self.city_drawn.borrow();
+            let place = drawn.places.get(&floor).filter(|place| place.measured);
+            let kept = place.is_none() && self.city.asked.contains_key(city.dir);
+            if !(place.is_some_and(|place| !place.small) || kept) {
                 continue;
             }
+            drop(drawn);
             let roots = roots.get_or_insert_with(|| self.model.checkout_roots()).clone();
             let lit = &mut on_show.entry(city.dir.to_string()).or_insert_with(|| (roots, Vec::new())).1;
             for one in &city.lit {

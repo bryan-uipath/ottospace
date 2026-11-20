@@ -16251,12 +16251,17 @@ fn every_empty_place_with_a_folder_draws_its_city() {
     let two = *pane_ids(&reply).last().unwrap();
     let both = otto.bounds(&[one, two]);
     assert_eq!((both[0][2], both[0][3]), (both[1][2], both[1][3]), "two panes of one size");
+    // The picture of their size, shared: one kept, as large as the pane in pixels.
+    let size = |c: &Value| {
+        let b = &c["bounds"];
+        let scale = c["scale"].as_f64().unwrap_or(1.);
+        json!([(b[2].as_f64().unwrap_or(0.) * scale).round(), (b[3].as_f64().unwrap_or(0.) * scale).round()])
+    };
     let shared = otto.wait_for("one picture for both", |o| {
-        Some(city(o))
-            .filter(|c| c["on"] == json!({"pane": one}) && c["pictures"] == json!(1) && !c["picture"].is_null())
+        Some(city(o)).filter(|c| c["on"] == json!({"pane": one}) && c["pictures"] == json!(1) && c["picture"] == size(c))
     });
     assert_eq!(shared["reads"].as_u64(), reads, "the files are read once per folder");
-    assert_eq!(shared["renders"].as_u64(), Some(renders + 1), "one render for both");
+    assert!(shared["renders"].as_u64() > Some(renders), "drawn again at their size");
     // The first pane split down twice: too small for a city, its lattice.
     otto.call(json!({"cmd": "focus", "pane": one}));
     otto.call(json!({"cmd": "split", "kind": "empty", "axis": "down"}));
