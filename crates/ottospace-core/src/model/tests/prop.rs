@@ -1985,9 +1985,8 @@ fn check_out(m: &Model) -> Result<(), String> {
     }
     // The selection history names the main window's tab, never one out.
     let main = m.tabs[m.main_at()].id;
-    for space in &m.spaces {
-        let names_out = space.last.is_some_and(|last| m.is_out(last) && last != main);
-        ensure!(!names_out || space.of != *m.shown_space(), "the selected space's last tab is out");
+    for space in m.spaces.iter().filter(|space| space.of == *m.shown_space()) {
+        ensure!(space.last == Some(main), "the selected space's last tab is {:?}, not {main}", space.last);
     }
     Ok(())
 }
