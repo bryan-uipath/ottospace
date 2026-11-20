@@ -64,10 +64,11 @@ impl Model {
     /// A folded repository's name: one dot for all its checkouts, by the rule of one (`activity`
     /// over them all); `None` while unfolded (its rows say it) or every checkout is idle. No pulse.
     pub fn repo_dot(&self, repo: &Repo) -> Option<Dot> {
+        self.repo_folded(repo).then_some(())?;
         let checkouts = repo.checkouts();
         let paths: Vec<&str> = checkouts.iter().map(|c| c.path.as_str()).collect();
         let (activity, task) = self.activity(&paths);
-        (self.repo_folded(repo) && activity != Activity::Idle).then_some(Dot { activity, task, pulse: None })
+        (activity != Activity::Idle).then_some(Dot { activity, task, pulse: None })
     }
 
     /// What happens in the checkouts at `paths`: a task there that needs the user, first by the

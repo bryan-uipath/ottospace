@@ -22,6 +22,6 @@
 {"until":"repos_bar.0.folded","is":true}
 {"settle":500}
 {"shot":"folded-needs-you"}
-{"cmd":"task_set_state","id":2,"state":"on_hold"}
+{"cmd":"task_set_state","id":2,"state":"parked"}
 {"settle":800}
 {"shot":"folded-working"}

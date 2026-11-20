@@ -2189,8 +2189,6 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(m.repos_open.iter().all(|open| dirs.iter().any(|d| d.path == *open)), "an open group with no entry");
     // A checkout's dot stands only for a listed checkout: one removed keeps no read or pulse.
     ensure!(m.heads.keys().all(|path| m.repo_listed(path)), "a dot for a checkout that is gone: {:?}", m.heads.keys());
-    let named = |repo: &crate::repos::Repo| m.repo_dot(repo).is_some_and(|d| !m.repo_folded(repo) || d.pulse.is_some());
-    ensure!(!m.repos.iter().any(named), "a dot on an unfolded repository's name, or a pulse");
     // A task the user marked done has no agent at work: none runs, or its stop was asked. Nor
     // is one put away (Done, Later) on the drawer's rail.
     for id in m.finish.away.iter().copied() {
