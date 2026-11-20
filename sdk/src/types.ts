@@ -656,6 +656,8 @@ export interface ReposGroup {
   /** Its checkouts are folded under its name: not drawn, not rows of list mode. */
   folded: boolean;
   rows: CheckoutRow[];
+  /** Test runs only, while drawn: its name's box (`room`) and shaped width (`drawn`). Else null. */
+  name_cut: { room: Rect; drawn: number } | null;
 }
 
 /** A checkout's row in the Repos section. */
@@ -1701,9 +1703,6 @@ export interface Snapshot {
   /** Test runs only: each scroll area laid out (not a terminal), also one that fits, and which edges fade:
    * `top`, `bottom` down a list, `left`, `right` across the tab row. Else null. */
   overflow: Record<string, Record<string, boolean>> | null;
-  /** Test runs only: each text a row cut with "…" laid out, by text: its box (`room`) and the
-   * whole text's shaped width (`drawn`). Else null. */
-  cut_texts: Record<string, { room: Rect; drawn: number }> | null;
   /** The capture key, and what was drawn of the draft or the brief in the right bar. */
   capture: {
     /** The registered capture key, or null. */

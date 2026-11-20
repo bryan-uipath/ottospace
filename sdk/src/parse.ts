@@ -1207,6 +1207,7 @@ function reposGroup(value: unknown, at: string): ReposGroup {
     header: orNull(rect)(o.header, `${at}.header`),
     folded: bool(o.folded, `${at}.folded`),
     rows: list(checkoutRow)(o.rows, `${at}.rows`),
+    name_cut: orNull(cutText)(o.name_cut, `${at}.name_cut`),
   };
 }
 
@@ -2093,7 +2094,6 @@ export function snapshot(value: unknown): Snapshot {
     row_menu: orNull(rowMenu)(o.row_menu, "row_menu"),
     scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),
     overflow: orNull(map(map(bool)))(o.overflow, "overflow"),
-    cut_texts: orNull(map(cutText))(o.cut_texts, "cut_texts"),
     capture: captureDrawn(o.capture, "capture"),
     bug: bugDrawn(o.bug, "bug"),
     spaces: list(spaceRow)(o.spaces, "spaces"),
