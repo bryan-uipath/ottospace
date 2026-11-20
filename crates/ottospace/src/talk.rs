@@ -3,6 +3,7 @@
 //! conversation shows and who has the keyboard (`Model::talk`); this file starts the agent the
 //! core asks for (`Effect::StartAgent`) and draws it. See `docs/ai/task-conversation.md`.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -466,6 +467,34 @@ impl Workspace {
         self.task_badge_of(id, size, false)
     }
 
+    /// A task's badge on the top row, its state in its border (`Model::task_activity`): amber
+    /// while it needs you; at work, the border breathes at `breath` (setting `breathing`), or with
+    /// none (Reduce Motion) the badge has the working dot.
+    pub(crate) fn activity_badge(
+        &self,
+        id: TaskId,
+        size: f32,
+        breath: Option<f32>,
+        breathing: &Cell<bool>,
+    ) -> Option<Div> {
+        use ottospace_core::model::repo_dots::Activity;
+        let task = self.model.tasks.live(id)?;
+        let badges = self.badges.borrow();
+        let mono = badges.iter().find(|(of, _)| *of == Subject::Task(id)).map(|(_, mono)| mono.clone())?;
+        let mut border = rgb(theme::identity(task.colour));
+        let mut dot = None;
+        match (self.model.task_activity(task), breath) {
+            (Activity::NeedsYou, _) => border = rgb(theme::task(Group::NeedsYou)),
+            (Activity::Working, Some(breath)) => {
+                border.a = breath;
+                breathing.set(true);
+            }
+            (Activity::Working, None) => dot = Some(theme::task(Group::Running)),
+            (Activity::Idle, _) => {}
+        }
+        Some(badge_in(&mono, border, dot, size))
+    }
+
     fn task_badge_of(&self, id: TaskId, size: f32, state: bool) -> Option<Div> {
         let task = self.model.tasks.live(id)?;
         let badges = self.badges.borrow();
@@ -477,6 +506,11 @@ impl Workspace {
 /// A badge: `mono` in a rounded square bordered in an identity colour, and a state's dot at
 /// its corner. The one look of a task on the top row, its row and the drawer.
 pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> Div {
+    badge_in(mono, rgb(colour), state, size)
+}
+
+/// `badge`, its border any colour: a working one's breathes.
+fn badge_in(mono: &str, border: gpui::Rgba, state: Option<u32>, size: f32) -> Div {
     let dot = (size * 0.36).max(7.);
     let square = div()
         .size_full()
@@ -485,7 +519,7 @@ pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> D
         .justify_center()
         .rounded(px(size / 4.))
         .border_2()
-        .border_color(rgb(colour))
+        .border_color(border)
         .bg(rgb(theme::SELECTED))
         .text_size(px((size * 0.4).max(9.)))
         .text_color(rgb(theme::TEXT))

@@ -94,6 +94,8 @@ pub struct SpaceRow {
     pub worktree: Option<String>,
     /// What its item on the top row shows before its name.
     pub glyph: Glyph,
+    /// What its item says of the work in it (`space_activity`): idle, working or needs you.
+    pub indicator: super::repo_dots::Activity,
     /// False for a temporary workspace: closing it discards it. Every other space is true.
     pub kept: bool,
 }
@@ -108,7 +110,7 @@ pub enum Glyph {
     Tasks,
     /// A workspace of no task holding one app pane and nothing else: that app's icon, by name.
     App { name: String },
-    /// Its name alone: a workspace's glyph, a session's monogram while small.
+    /// No icon of its own: a workspace's quiet dot (lit by `space_activity`), a session's monogram while small.
     Name,
 }
 
@@ -171,6 +173,7 @@ impl Model {
             front: self.front(&space.of),
             worktree: self.space_worktree(&space.of).map(String::from),
             glyph: self.glyph(&space.of),
+            indicator: self.space_activity(&space.of),
             kept: self.space_kept(&space.of),
         };
         self.spaces.iter().map(row).collect()

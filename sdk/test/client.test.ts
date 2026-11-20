@@ -32,7 +32,7 @@ test("state: the typed snapshot is the whole reply", async () => {
     // Home alone: no tab, and none on show.
     assert.deepEqual([start.state.tabs, start.state.active], [[], null]);
     assert.deepEqual(start.spaces, [
-      { of: { kind: "home" }, hidden: false, selected: true, tabs: [], tasks: [], front: null, worktree: null, glyph: { kind: "home" }, kept: true },
+      { of: { kind: "home" }, hidden: false, selected: true, tabs: [], tasks: [], front: null, worktree: null, glyph: { kind: "home" }, indicator: "idle", kept: true },
     ]);
     assert.equal(start.notice, null);
     // No pane: the home screen, with nothing on it yet.

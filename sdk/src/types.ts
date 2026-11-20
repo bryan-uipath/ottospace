@@ -385,11 +385,13 @@ export interface SpaceRow {
   worktree: string | null;
   /** What its item on the top row shows before its name. */
   glyph: Glyph;
+  /** What its item says, by a Repos checkout dot's rule: `needs_you` while a task of it needs the user, `working` while a task's agent (or a session no task has, in its worktree) works, else `idle`. */
+  indicator: "idle" | "working" | "needs_you";
   /** False for a temporary workspace (no task, no default worktree, never renamed or kept): the user's close discards it. True for every other space. */
   kept: boolean;
 }
 
-/** A top-row item's glyph: Home's house, a task's badges, the icon of the one app pane a workspace of no task holds alone (by the app's name), or the name alone. */
+/** A top-row item's glyph: Home's house, a task's badges, the icon of the one app pane a workspace of no task holds alone (by the app's name), or the name alone (a workspace's quiet dot). */
 export type Glyph = { kind: "home" } | { kind: "tasks" } | { kind: "app"; name: string } | { kind: "name" };
 
 /** The active tab's split tree. `ratio`: the share of the split that `a` (left or top) takes. */
