@@ -2990,21 +2990,8 @@ fn a_parked_panes_picture_is_its_window_pixel_for_pixel() {
     let parked = window_pixels(canary_window, &support::temp(&format!("canary-parked-{}.bmp", std::process::id())));
     let real = grey(&parked, 0, px(crop), w, h);
 
-    // The window live over its pane, for the soft signal below.
-    assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
-    // Over its pane and drawn at ottospace's scale: it may have been parked on another display.
-    let spot = point(&s["parking"]).expect("parking spot");
-    wait_for("the window to go live at ottospace's scale", || {
-        let away = rect(&state()["hosted"]["1"]).is_some_and(|f| !close(f[0], spot[0]));
-        let at = canary.call(json!({"cmd": "state"}))["windows"][0]["scale"].as_f64() == Some(scale);
-        (away && at).then_some(())
-    });
-    std::thread::sleep(Duration::from_millis(500));
-    let live = window_pixels(canary_window, &support::temp(&format!("canary-sharp-{}.bmp", std::process::id())));
-    let real_live = grey(&live, 0, px(crop), w, h);
-    assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
-
-    let [x, y, sw, sh] = stripes_box(&real, w).expect("the canary's stripes in its window");
+    let parked_box = stripes_box(&real, w).expect("the canary's stripes in its window");
+    let [x, y, sw, sh] = parked_box;
     // The rows below the columns too.
     let sh = (2 * sh).min(h - y);
     let part = |g: &[f64]| -> Vec<f64> { (y..y + sh).flat_map(|row| g[row * w + x..][..sw].to_vec()).collect() };
@@ -3018,33 +3005,49 @@ fn a_parked_panes_picture_is_its_window_pixel_for_pixel() {
          {:.1}% of the stripes' pixels within 8 levels of the window's",
         same * 100.0
     ));
-    // Soft signal, never a failure: the app kept old-size content stretched while parked (GPUI
-    // missing the resize when size and display change at once). ottospace shows it faithfully.
-    let same_live = within(&stripes_real, &part(&real_live));
-    if same_live < 0.98 {
-        let line = format!(
-            "soft signal, parked window not redrawn: its stripes {:?} (x, y, w, h), live {:?}; {:.1}% of the \
-             parked stripes' pixels within 8 levels of the live window's",
-            stripes_box(&real, w),
-            stripes_box(&real_live, w),
-            same_live * 100.0
-        );
-        report(&line);
-        // Kept with the failures' folders, though nothing failed.
-        let dir = support::out().join("failures");
-        let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(dir.join(format!("parked-window-not-redrawn-{}.txt", std::process::id())), line);
-    }
     // The stripes and the text above them, from each.
     let (left, top) = (x.saturating_sub(40), y.saturating_sub(120));
     keep_crop("picture", &drawn, [px(shown[0]) + left, px(shown[1]) + top, sw + 80, sh + 140]);
     keep_crop("window", &parked, [left, px(crop) + top, sw + 80, sh + 140]);
-    keep_crop("live", &live, [left, px(crop) + top, sw + 80, sh + 140]);
     assert!(
         sharp_picture >= 0.95 * sharp_real,
         "the picture is as sharp as the window: {sharp_picture} vs {sharp_real}"
     );
     assert!(same >= 0.98, "the picture is the window's pixels: {:.1}% within 8 levels", same * 100.0);
+
+    // Soft signal, never a failure: the window live over its pane against itself parked. The app
+    // may keep old-size content stretched while parked (GPUI missing a resize that changes display).
+    assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
+    // Over its pane and drawn at ottospace's scale: it may have been parked on another display.
+    let spot = point(&s["parking"]).expect("parking spot");
+    wait_for("the window to go live at ottospace's scale", || {
+        let away = rect(&state()["hosted"]["1"]).is_some_and(|f| !close(f[0], spot[0]));
+        let at = canary.call(json!({"cmd": "state"}))["windows"][0]["scale"].as_f64() == Some(scale);
+        (away && at).then_some(())
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    let live = window_pixels(canary_window, &support::temp(&format!("canary-sharp-{}.bmp", std::process::id())));
+    assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
+    keep_crop("live", &live, [left, px(crop) + top, sw + 80, sh + 140]);
+    if live.0 < w || live.1 < px(crop) + h {
+        report(&format!("sharp: the live window is {}×{} px, not compared with the parked one", live.0, live.1));
+        return;
+    }
+    let real_live = grey(&live, 0, px(crop), w, h);
+    let same_live = within(&stripes_real, &part(&real_live));
+    if same_live < 0.98 {
+        let line = format!(
+            "soft signal, parked window not redrawn: its stripes {parked_box:?} (x, y, w, h), live {:?}; {:.1}% of \
+             the parked stripes' pixels within 8 levels of the live window's",
+            stripes_box(&real_live, w),
+            same_live * 100.0
+        );
+        report(&line);
+        // Kept beside the failures' folders, though nothing failed.
+        let dir = support::out().join("failures");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join(format!("parked-window-not-redrawn-{}.txt", std::process::id())), line);
+    }
 }
 
 #[test]
