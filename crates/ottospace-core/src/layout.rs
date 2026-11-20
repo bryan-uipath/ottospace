@@ -294,31 +294,47 @@ impl Node {
             return false;
         }
         *ratio = now;
-        a.hold(on, was, now, true);
-        b.hold(on, 1.0 - was, 1.0 - now, false);
+        a.hold(on, (0.0, was), (0.0, now));
+        b.hold(on, (was, 1.0), (now, 1.0));
         true
     }
 
-    /// This node's extent on `on` went from `was` to `now`, at its end (`at_end`: its right or
-    /// bottom) or its start: its dividers on `on` keep their place, but the one nearest the edge
-    /// moved, e.g. 1 | 2 | 3 shrunk at its end: 3 shrinks, 1 and 2 keep their width.
-    fn hold(&mut self, on: Axis, was: f32, now: f32, at_end: bool) {
-        if (was - now).abs() <= f32::EPSILON || was <= 0.0 || now <= 0.0 {
+    /// The split whose divider is `pane`'s right or bottom border, as it is at a press and as the
+    /// drag last left it: what `drag_held` counts from.
+    pub fn held(&mut self, pane: u32, on: Axis) -> Option<(Node, Node)> {
+        self.border(pane, on, true).map(|split| (split.clone(), split.clone()))
+    }
+
+    /// `drag` while the pointer holds the divider, counted from its split at the press (`held.0`):
+    /// a drag back, or Esc, also puts back a divider it pushed. False, and nothing moves, if the
+    /// split is not as the drag last left it (`held.1`), e.g. a pane split meanwhile: the hold is over.
+    pub fn drag_held(&mut self, pane: u32, on: Axis, held: &mut (Node, Node), to: f32) -> bool {
+        let Some(split) = self.border(pane, on, true).filter(|split| **split == held.1) else { return false };
+        *split = held.0.clone();
+        split.drag(pane, on, to);
+        held.1 = split.clone();
+        true
+    }
+
+    /// This node's span on `on` went from `was` to `now` (start and end, as shares of the dragged
+    /// split): its dividers on `on` stay where they are, while each side keeps `MIN_SHARE`, e.g.
+    /// 1 | 2 | 3 shrunk at its end: 3 shrinks, 1 and 2 keep their width.
+    fn hold(&mut self, on: Axis, was: (f32, f32), now: (f32, f32)) {
+        if was == now {
             return;
         }
         match self {
             Node::Leaf(_) => {}
             Node::Split { axis, a, b, .. } if *axis != on => {
-                a.hold(on, was, now, at_end);
-                b.hold(on, was, now, at_end);
+                a.hold(on, was, now);
+                b.hold(on, was, now);
             }
             Node::Split { ratio, a, b, .. } => {
-                // The side away from the edge keeps its extent, while each side keeps `MIN_SHARE`.
-                let r = *ratio;
-                let to = if at_end { r * was / now } else { 1.0 - (1.0 - r) * was / now };
-                *ratio = to.clamp(MIN_SHARE, 1.0 - MIN_SHARE);
-                a.hold(on, r * was, *ratio * now, at_end);
-                b.hold(on, (1.0 - r) * was, (1.0 - *ratio) * now, at_end);
+                let at = was.0 + *ratio * (was.1 - was.0);
+                *ratio = ((at - now.0) / (now.1 - now.0)).clamp(MIN_SHARE, 1.0 - MIN_SHARE);
+                let to = now.0 + *ratio * (now.1 - now.0);
+                a.hold(on, (was.0, at), (now.0, to));
+                b.hold(on, (at, was.1), (to, now.1));
             }
         }
     }
@@ -685,6 +701,29 @@ mod tests {
         row.sound_ratios().unwrap();
         let [(_, _, _), (_, two, _), (_, three, _)] = sizes(&row)[..] else { panic!() };
         assert_eq!((two, three), (10., 90.), "each keeps a tenth of its split");
+    }
+
+    #[test]
+    fn a_pushed_divider_moves_alone_and_a_held_drag_back_puts_it_back() {
+        // 1 | ((2 | 3) | 4), borders at 500, 725 and 950 of 1000: 4 is at its least.
+        let mut row = Leaf(1).insert(Some(1), 2, Right).insert(Some(2), 4, Right).insert(Some(2), 3, Right);
+        let Node::Split { b, .. } = &mut row else { panic!() };
+        let Node::Split { ratio, .. } = &mut **b else { panic!() };
+        *ratio = 0.9;
+        let widths = |row: &Node| sizes(row).iter().map(|s| s.1).collect::<Vec<_>>();
+        assert_eq!(widths(&row), [500., 225., 225., 50.]);
+        let (before, mut held) = (row.clone(), row.held(1, Right).unwrap());
+        // 4 grows to keep its tenth and pushes its own divider; the one between 2 and 3 stays at 725.
+        assert!(row.drag_held(1, Right, &mut held, 0.4));
+        assert_eq!(widths(&row), [400., 325., 215., 60.]);
+        // Back where it began, as Esc asks: every divider is where it was.
+        assert!(row.drag_held(1, Right, &mut held, 0.5));
+        assert_eq!(row, before);
+        // The split changed by anything else: the hold is over, nothing moves.
+        assert!(row.even(3, Right));
+        let evened = row.clone();
+        assert!(!row.drag_held(1, Right, &mut held, 0.3));
+        assert_eq!(row, evened);
     }
 
     #[test]

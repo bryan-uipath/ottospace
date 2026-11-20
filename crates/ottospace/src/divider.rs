@@ -6,7 +6,7 @@ use gpui::{
     App, Context, DragMoveEvent, EmptyView, MouseButton, MouseDownEvent, Pixels, Point, Window, div, prelude::*,
 };
 use gpui::{px, relative};
-use ottospace_core::{Action, Axis, PaneId, layout::Node};
+use ottospace_core::{Action, Axis, Origin, PaneId, layout::Node};
 
 use crate::{Workspace, ui};
 
@@ -55,6 +55,7 @@ impl Workspace {
                     // Drawn this frame: the share as it is now.
                     let from = along(axis, e.position);
                     this.divider = Some(Hold { divider, start: ratio, from, cancelled: false });
+                    this.dispatch(Action::DividerHold { pane, axis }, this.input, window, cx);
                 }),
             )
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.divider_released(cx)))
@@ -113,7 +114,9 @@ impl Workspace {
     /// Esc during a drag: the divider goes back to where the drag began, and later moves of this
     /// drag do nothing. True if it was taken.
     pub(crate) fn divider_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(hold) = self.divider_held(cx).filter(|hold| !hold.cancelled) else { return false };
+        // The user's own key: a client's Esc would end the drag, and the core refuses it the way back.
+        let users = self.input == Origin::User;
+        let Some(hold) = self.divider_held(cx).filter(|hold| users && !hold.cancelled) else { return false };
         let (pane, axis) = (hold.divider.pane, hold.divider.axis);
         self.divider = Some(Hold { cancelled: true, ..hold });
         self.dispatch(Action::DividerDrag { pane, axis, ratio: hold.start }, self.input, window, cx);

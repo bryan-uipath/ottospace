@@ -566,11 +566,17 @@ pub enum Action {
         dir: Dir,
     },
     /// The divider that is `pane`'s right (`axis` is `Right`) or bottom border was dragged to
-    /// share `ratio` of its split (`Node::drag`); the other dividers keep their place. The user's alone.
+    /// share `ratio` of its split (`Node::drag_held`); the other dividers keep their place. Only
+    /// while held (`DividerHold`), counted from the press. The user's alone.
     DividerDrag {
         pane: PaneId,
         axis: Axis,
         ratio: f32,
+    },
+    /// The pointer went down on that divider: a drag is counted from its split as it is now. The user's alone.
+    DividerHold {
+        pane: PaneId,
+        axis: Axis,
     },
     /// That divider double-clicked: evened out as `Equalize` would its row. The user's alone.
     DividerEven {
@@ -2167,6 +2173,7 @@ impl Action {
                 | Action::FocusCycle { .. }
                 | Action::Resize { .. }
                 | Action::DividerDrag { .. }
+                | Action::DividerHold { .. }
                 | Action::DividerEven { .. }
                 | Action::SwapDir { .. }
                 | Action::MovePane { .. }
@@ -2275,6 +2282,7 @@ impl Action {
             | Action::FocusCycle { .. }
             | Action::Resize { .. }
             | Action::DividerDrag { .. }
+            | Action::DividerHold { .. }
             | Action::DividerEven { .. }
             | Action::SwapDir { .. }
             | Action::MovePane { .. }
@@ -2673,6 +2681,7 @@ impl Action {
             | Action::FocusCycle { .. }
             | Action::Resize { .. }
             | Action::DividerDrag { .. }
+            | Action::DividerHold { .. }
             | Action::DividerEven { .. }
             | Action::SwapDir { .. }
             | Action::MovePane { .. }
@@ -3740,6 +3749,9 @@ pub struct Model {
     /// The action being run is the user's own. False between actions.
     #[serde(skip)]
     by_user: bool,
+    /// The divider the user holds (`DividerHold`): its split at the press, and as the drag last left it.
+    #[serde(skip)]
+    divider: Option<(PaneId, Axis, (Node, Node))>,
     #[serde(skip)]
     pub(crate) next_id: PaneId,
     #[serde(skip)]
@@ -3914,6 +3926,7 @@ impl Default for Model {
             switching: Vec::new(),
             ending: Vec::new(),
             by_user: false,
+            divider: None,
             next_id: 0,
             // Born settled: Home's tab is its last, as `settle_spaces` leaves it after any step.
             spaces: vec![Space { last: Some(HOME_TAB), ..Space::new(Owner::Home) }],
@@ -4336,7 +4349,7 @@ impl Model {
             // Which space a tab is of is the user's to say.
             Action::TabPlace { .. } => Some(TABS_USERS),
             // A divider follows the user's pointer: a client resizes with `resize`, a step at a time.
-            Action::DividerDrag { .. } | Action::DividerEven { .. } => Some(DIVIDER_USERS),
+            Action::DividerDrag { .. } | Action::DividerHold { .. } | Action::DividerEven { .. } => Some(DIVIDER_USERS),
             // So is which of a workspace's conversations is in front.
             Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
             // And which workspace the new task the user writes goes to.
@@ -5437,9 +5450,17 @@ impl Model {
                 }
             }
             Action::DividerDrag { pane, axis, ratio } => {
-                if let Some(layout) = self.tree_mut(pane) {
-                    layout.drag(pane, axis, ratio);
+                // Only the divider held, its split as the drag left it: a pane split meanwhile ends the drag.
+                let held = self.divider.take().filter(|(p, a, _)| (*p, *a) == (pane, axis));
+                if let Some((_, _, mut held)) = held
+                    && self.tree_mut(pane).is_some_and(|layout| layout.drag_held(pane, axis, &mut held, ratio))
+                {
+                    self.divider = Some((pane, axis, held));
                 }
+            }
+            Action::DividerHold { pane, axis } => {
+                let held = self.tree_mut(pane).and_then(|layout| layout.held(pane, axis));
+                self.divider = held.map(|held| (pane, axis, held));
             }
             Action::DividerEven { pane, axis } => {
                 if let Some(layout) = self.tree_mut(pane) {
@@ -9677,6 +9698,7 @@ mod tests {
         Action::FocusCycle { .. },
         Action::Resize { .. },
         Action::DividerDrag { .. },
+        Action::DividerHold { .. },
         Action::DividerEven { .. },
         Action::SwapDir { .. },
         Action::MovePane { .. },
@@ -10023,6 +10045,7 @@ mod tests {
             Action::FocusCycle { delta: 1 },
             Action::Resize { dir: Dir::Left },
             Action::DividerDrag { pane: 1, axis: Right, ratio: 0.3 },
+            Action::DividerHold { pane: 1, axis: Right },
             Action::DividerEven { pane: 1, axis: Right },
             Action::SwapDir { dir: Dir::Left },
             Action::MovePane { pane: None, tab: 0 },
@@ -10646,7 +10669,9 @@ mod tests {
                     | Action::TalkStart
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
-                    Action::DividerDrag { .. } | Action::DividerEven { .. } => Some(DIVIDER_USERS),
+                    Action::DividerDrag { .. } | Action::DividerHold { .. } | Action::DividerEven { .. } => {
+                        Some(DIVIDER_USERS)
+                    }
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
                     Action::ComposeHere => Some(spaces::PIN_USERS),
                     Action::RailSelect { .. } | Action::ListenShow { .. } | Action::ListenOpenPast { .. } => {
@@ -16252,14 +16277,23 @@ mod tests {
             let refused = m.refusal(&Action::DividerDrag { pane: 1, axis: Right, ratio: 0.3 }, origin);
             assert_eq!(refused, Some(DIVIDER_USERS));
             assert_eq!(m.refusal(&Action::DividerEven { pane: 1, axis: Right }, origin), Some(DIVIDER_USERS));
+            assert_eq!(m.refusal(&Action::DividerHold { pane: 1, axis: Right }, origin), Some(DIVIDER_USERS));
         }
+        // No divider held: nothing to drag.
+        m.update(Action::DividerDrag { pane: 1, axis: Right, ratio: 0.3 });
+        assert_eq!(shares(&m), [(1, 50.0), (2, 50.0)]);
+        m.update(Action::DividerHold { pane: 1, axis: Right });
         m.update(Action::DividerDrag { pane: 1, axis: Right, ratio: 0.3 });
         assert_eq!(shares(&m), [(1, 30.0), (2, 70.0)]);
         // Focus stays where it was: a drag is no click on a pane.
         assert_eq!(m.focused, Some(2));
         m.update(Action::DividerEven { pane: 1, axis: Right });
         assert_eq!(shares(&m), [(1, 50.0), (2, 50.0)]);
+        // An evened split is not as the drag left it: the hold is over.
+        m.update(Action::DividerDrag { pane: 1, axis: Right, ratio: 0.2 });
+        assert_eq!(shares(&m), [(1, 50.0), (2, 50.0)]);
         // A background tab's divider moves too (a tab out shows one).
+        m.update(Action::DividerHold { pane: 1, axis: Right });
         m.update(Action::DividerDrag { pane: 1, axis: Right, ratio: 0.2 });
         m.update(Action::NewTab);
         m.update(Action::DividerDrag { pane: 1, axis: Right, ratio: 0.4 });
@@ -17012,7 +17046,9 @@ mod tests {
                     | Action::TalkStart
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
-                    Action::DividerDrag { .. } | Action::DividerEven { .. } => Some(DIVIDER_USERS),
+                    Action::DividerDrag { .. } | Action::DividerHold { .. } | Action::DividerEven { .. } => {
+                        Some(DIVIDER_USERS)
+                    }
                     Action::TalkFront { .. } | Action::TalkCycle { .. } => Some(spaces::FRONT_USERS),
                     Action::ComposeHere => Some(spaces::PIN_USERS),
                     Action::RailSelect { .. } | Action::ListenShow { .. } | Action::ListenOpenPast { .. } => {

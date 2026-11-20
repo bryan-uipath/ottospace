@@ -4497,7 +4497,9 @@ impl Workspace {
             // Only on a check: reading a window's size is a synchronous accessibility call.
             // An app that resized its own window: the preview and the click rule follow it.
             // The window was asked for the pane's size: what it has now is what it kept.
+            // Not during a divider's drag: the window was not asked for the pane's size yet.
             if check
+                && !dragging
                 && let Some(kept) = hosted.show(scale)
                 && let Some(frame) = self.frames.get(id)
                 && drawn.contains(id)
