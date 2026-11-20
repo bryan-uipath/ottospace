@@ -1139,6 +1139,13 @@ fn a_repository_folds_and_the_users_plus_makes_a_worktree_there() {
         (&open["repos_bar"][0]["folded"], open["repos_bar"][0]["rows"][0]["row"].is_null()),
         (&json!(false), false)
     );
+    // A name is a row's height, as far from app's last row above it as from its first row below.
+    let bar = &open["repos_bar"];
+    let app_rows = bar[0]["rows"].as_array().unwrap();
+    let last = rect(&app_rows[app_rows.len() - 1]["row"]);
+    let (web, first) = (rect(&bar[1]["header"]), rect(&bar[1]["rows"][0]["row"]));
+    assert_eq!(web[3], first[3], "a name is not a row's height: {bar}");
+    assert_eq!(web[1] - (last[1] + last[3]), first[1] - (web[1] + web[3]), "uneven around a name: {bar}");
     // In list mode ← folds the selected row's repository and selects its name; → unfolds.
     let reply = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-e left"}));
     assert_eq!((&reply["state"]["list"], &otto.drawn()["repos_bar"][0]["folded"]), (&json!(0), &json!(true)));
@@ -1149,6 +1156,9 @@ fn a_repository_folds_and_the_users_plus_makes_a_worktree_there() {
     let plus = format!("repo-add:{app}");
     otto.mouse("move", at(rect(&otto.drawn()["repos_bar"][0]["header"]), 0.5, 0.5));
     let frame = otto.control(&plus);
+    let head = rect(&otto.drawn()["repos_bar"][0]["header"]);
+    let middle = |r: [f64; 4]| r[1] + r[3] / 2.;
+    assert!((middle(frame) - middle(head)).abs() <= 1., "+ {frame:?} off the middle of its name {head:?}");
     let reply = otto.click(at(frame, 0.5, 0.5), 1);
     assert!(reply["state"]["mark_input"].is_null(), "a client's click opened {}", reply["state"]["mark_input"]);
     otto.mouse("move", at(frame, 0.5, 0.5));
