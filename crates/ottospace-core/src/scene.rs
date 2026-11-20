@@ -70,7 +70,7 @@ pub struct Scene {
 
 /// A building's height, 0 to 1, from a file's size: the owner's city's `buildingHeight`
 /// (`2 + 6·log2(1 + lines/10)`, from 2 to 60), its lines guessed as bytes / 32.
-pub fn height(bytes: u64) -> f32 {
+pub(crate) fn height(bytes: u64) -> f32 {
     let lines = bytes as f32 / 32.;
     (2. + 6. * (1. + lines / 10.).log2()).clamp(2., 60.) / 60.
 }
@@ -193,9 +193,13 @@ fn frame(blocks: &[Block], aspect: f32) -> Option<Camera> {
         })
     };
     // Nearer frames tighter: the nearest distance that still fits.
+    // Far enough for any shape: a very narrow picture needs the camera far back.
     let (mut near, mut far) = (0.01f32, 100f32);
-    if !fits(&at(far)) {
-        return None;
+    while !fits(&at(far)) {
+        if far > 1e6 {
+            return None;
+        }
+        (near, far) = (far, far * 4.);
     }
     for _ in 0..40 {
         let mid = (near + far) / 2.;
@@ -233,7 +237,7 @@ pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
         blocks.push(Block { min: [x0 + sx, floor, z0 + sz], max: [x1 - sx, top, z1 - sz], kind });
     }
     let Some(camera) = frame(&blocks, aspect) else { return Scene { blocks, camera: None } };
-    clear_sight(&mut blocks, camera.eye);
+    clear_sight(&mut blocks, camera.eye, highest + LIT_ABOVE);
     Scene { blocks, camera: Some(camera) }
 }
 
@@ -242,16 +246,25 @@ fn top(block: &Block) -> [f32; 3] {
     [(block.min[0] + block.max[0]) / 2., block.max[1], (block.min[2] + block.max[2]) / 2.]
 }
 
-/// Cuts down every plain building that stands in the line from `eye` to a lit building's top,
-/// to just below that line. Lowering hides nothing new, so one pass per lit building is enough.
-fn clear_sight(blocks: &mut [Block], eye: [f32; 3]) {
-    let tops: Vec<[f32; 3]> = blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))).map(top).collect();
-    for to in tops {
-        for block in blocks.iter_mut().filter(|b| b.kind == Kind::Building) {
-            // Only where the line comes down to it: the line is lowest where it leaves the box.
-            let Some((_, leaves)) = block.crossed(eye, to) else { continue };
-            let below = eye[1] + (to[1] - eye[1]) * leaves - 1e-4;
-            block.max[1] = below.max(block.min[1]);
+/// Cuts down every building that stands in the line from `eye` to a lit building's top, to just
+/// below that line; a lit one no lower than `lit_floor`, still above every terrace. A lit one cut
+/// has a new line of its own, so again until nothing is cut.
+fn clear_sight(blocks: &mut [Block], eye: [f32; 3], lit_floor: f32) {
+    let lit = |b: &Block| matches!(b.kind, Kind::Lit(_));
+    for _ in 0..8 {
+        let mut cut = false;
+        for to in blocks.iter().filter(|b| lit(b)).map(top).collect::<Vec<_>>() {
+            for block in blocks.iter_mut().filter(|b| b.kind == Kind::Building || lit(b)) {
+                // Only where the line comes down to it: the line is lowest where it leaves the box.
+                let Some((_, leaves)) = block.crossed(eye, to).filter(|(_, leaves)| *leaves < 0.999) else { continue };
+                let floor = if lit(block) { lit_floor } else { block.min[1] };
+                let below = (eye[1] + (to[1] - eye[1]) * leaves - 1e-4).max(floor);
+                cut |= below < block.max[1];
+                block.max[1] = below.min(block.max[1]);
+            }
+        }
+        if !cut {
+            return;
         }
     }
 }
@@ -301,7 +314,7 @@ mod tests {
     #[test]
     fn every_box_is_in_the_picture_at_any_shape() {
         let atlas = many();
-        for aspect in [0.5, 1., 1.6, 3.] {
+        for aspect in [0.02, 0.5, 1., 1.6, 3., 40.] {
             let s = scene(&atlas, &[], aspect);
             let camera = s.camera.unwrap();
             for block in &s.blocks {
@@ -344,8 +357,9 @@ mod tests {
         let mut cut = 0;
         for aspect in [0.6, 1.6] {
             for (i, id) in leaves.iter().enumerate().step_by(7) {
-                // One lit, then two (the next one along).
-                for lit in [vec![(*id, 1)], vec![(*id, 1), (leaves[(i + 40) % leaves.len()], 2)]] {
+                // One lit, then two: far apart, and neighbours (one may stand in front of the other).
+                let (far, next) = (leaves[(i + 40) % leaves.len()], leaves[(i + 1) % leaves.len()]);
+                for lit in [vec![(*id, 1)], vec![(*id, 1), (far, 2)], vec![(*id, 1), (next, 2)]] {
                     let plain = scene(&atlas, &[], aspect);
                     let s = scene(&atlas, &lit, aspect);
                     let eye = s.camera.unwrap().eye;

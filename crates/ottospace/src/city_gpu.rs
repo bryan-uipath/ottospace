@@ -68,7 +68,8 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
 "#;
 
 fn rgb(hex: u32) -> [f32; 3] {
-    [(hex >> 16 & 0xff) as f32 / 255., (hex >> 8 & 0xff) as f32 / 255., (hex & 0xff) as f32 / 255.]
+    let c = gpui::rgb(hex);
+    [c.r, c.g, c.b]
 }
 
 /// A box's top colour. Quiet behind the hints, and still a skyline: buildings well above the
@@ -155,8 +156,21 @@ impl Gpu {
         Ok(Self { device, queue, pipeline, layout })
     }
 
-    /// `scene` as a picture `width` × `height` pixels. `None` with no camera.
+    /// `scene` as a picture `width` × `height` pixels, or why there is none.
     pub fn render(&self, scene: &Scene, width: u32, height: u32) -> Result<Picture, String> {
+        // An error of the GPU's (out of memory, a lost device) fails the picture; uncaught, wgpu
+        // panics.
+        let memory = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let valid = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let picture = self.draw(scene, width, height);
+        let errors = [pollster::block_on(valid.pop()), pollster::block_on(memory.pop())];
+        match errors.into_iter().flatten().next() {
+            Some(error) => Err(format!("render: {error}")),
+            None => picture,
+        }
+    }
+
+    fn draw(&self, scene: &Scene, width: u32, height: u32) -> Result<Picture, String> {
         let camera = scene.camera.ok_or("no camera")?;
         let limit = self.device.limits().max_texture_dimension_2d;
         if width == 0 || height == 0 || width > limit || height > limit {

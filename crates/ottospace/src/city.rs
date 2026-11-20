@@ -80,8 +80,10 @@ impl Reader {
                 self.held.clear();
             }
             match read {
-                Some(atlas) => self.held.insert(dir, Arc::new(atlas)),
-                None => self.held.remove(&dir),
+                // The same plan read again keeps its `Arc`: its picture is not made again.
+                Some(atlas) if self.held.get(&dir).is_some_and(|held| **held == atlas) => {}
+                Some(atlas) => drop(self.held.insert(dir, Arc::new(atlas))),
+                None => drop(self.held.remove(&dir)),
             };
         }
         any
@@ -158,6 +160,8 @@ pub struct Drawn {
     /// Of the last paint: where, in window points, and how many names.
     bounds: Bounds<Pixels>,
     labels: usize,
+    /// Pictures replaced: GPUI keeps each in the window's atlas until it is dropped.
+    retired: Vec<Arc<RenderImage>>,
 }
 
 pub type Shared = Rc<RefCell<Drawn>>;
@@ -173,12 +177,19 @@ impl Painter {
     pub fn new() -> Self {
         let gpu: RefCell<Option<Result<Gpu, String>>> = RefCell::new(None);
         let (jobs, made) = crate::child::newest(move |(key, plan): (Key, Arc<Atlas>)| {
-            let mut gpu = gpu.borrow_mut();
-            let gpu = gpu.get_or_insert_with(|| {
+            let mut held = gpu.borrow_mut();
+            let opened = held.get_or_insert_with(|| {
                 let refused = std::env::var_os("OTTOSPACE_E2E").and(std::env::var_os("OTTOSPACE_CITY_NO_GPU"));
                 if refused.is_some() { Err("no GPU (test)".into()) } else { Gpu::new() }
             });
-            let made = gpu.as_ref().map_err(Clone::clone).and_then(|gpu| make(gpu, &key, &plan));
+            // A panic in the GPU's code fails this picture, and the GPU is opened again next time.
+            let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                opened.as_ref().map_err(Clone::clone).and_then(|gpu| make(gpu, &key, &plan))
+            }));
+            let made = made.unwrap_or_else(|_| {
+                *held = None;
+                Err("the render panicked".into())
+            });
             (key, made)
         });
         Self { jobs, made }
@@ -242,11 +253,22 @@ impl Workspace {
             drawn.renders += 1;
             redraw = true;
             match made {
-                Ok(made) => (drawn.made, drawn.failed) = (Some(made), None),
+                Ok(made) => {
+                    let old = drawn.made.replace(made);
+                    drawn.retired.extend(old.map(|old| old.image));
+                    drawn.failed = None;
+                }
                 // A failure of a picture no longer asked for says nothing.
-                Err(why) if drawn.asked.as_ref() == Some(&key) => drawn.failed = Some(why),
+                Err(why) if drawn.asked.as_ref() == Some(&key) => {
+                    let old = drawn.made.take();
+                    drawn.retired.extend(old.map(|old| old.image));
+                    drawn.failed = Some(why);
+                }
                 Err(_) => {}
             }
+        }
+        for image in std::mem::take(&mut self.city_drawn.borrow_mut().retired) {
+            cx.drop_image(image, None);
         }
         if redraw {
             cx.notify();
@@ -269,7 +291,7 @@ impl Workspace {
             })
             .collect();
         let (dir, drawn, jobs) = (city.dir.to_string(), self.city_drawn.clone(), self.city_painter.jobs.clone());
-        let hints = self.home.borrow().hints();
+        let home = self.home.clone();
         let shows =
             drawn.borrow().made.as_ref().is_some_and(|made| made.key.dir == dir && drawn.borrow().failed.is_none());
         let picture = canvas(
@@ -285,14 +307,17 @@ impl Workspace {
                 };
                 let mut held = drawn.borrow_mut();
                 if held.asked.as_ref() != Some(&key) && key.size.0 > 0 && key.size.1 > 0 {
-                    let _ = jobs.send((key.clone(), plan));
+                    if jobs.send((key.clone(), plan)).is_err() {
+                        held.failed = Some("the picture's thread ended".into());
+                    }
                     held.asked = Some(key);
                 }
                 held.bounds = bounds;
                 drop(held);
                 drawn
             },
-            move |bounds, drawn: Shared, window, cx| paint(&drawn, bounds, hints, window, cx),
+            // The hints as this frame laid them out.
+            move |bounds, drawn: Shared, window, cx| paint(&drawn, bounds, home.borrow().hints(), window, cx),
         );
         let picture = picture.absolute().size_full();
         if shows {
