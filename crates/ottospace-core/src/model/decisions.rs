@@ -65,6 +65,15 @@ pub struct Run {
 }
 
 impl Model {
+    /// ⌘J, what needs the person next (owner, 2026-11-19): with `decisions` on, Decisions, which
+    /// with no card waiting is the next task too; off, the next task.
+    pub fn next_needs_you(&self) -> Action {
+        match self.features.on(Feature::Decisions) {
+            true => Action::DecisionsOpen,
+            false => Action::TaskGo { id: None },
+        }
+    }
+
     /// The card on show in Decisions: its task and ticket.
     pub fn decision_card(&self) -> Option<(TaskId, u64)> {
         self.decisions.as_ref().map(|run| (run.task, run.ticket))
@@ -220,19 +229,19 @@ impl Model {
         }
     }
 
-    /// A tab of Decisions on show, its card the queue's first. Open already: shown. Nothing
-    /// waits: nothing opens.
+    /// ⌘J, what needs the person next: a tab of Decisions on show, its card the queue's first.
+    /// Open already: shown. Nothing waits: the next task, `TaskGo { id: None }` (owner, 2026-11-19).
     fn open_decisions(&mut self, effects: &mut Vec<Effect>) {
         if let Some(run) = &self.decisions {
             let pane = run.pane;
             return self.focus(pane, effects);
         }
+        let queue = self.decision_queue();
+        let Some(first) = queue.first().cloned() else { return self.act(Action::TaskGo { id: None }, effects) };
         // Not from a window out: Decisions is the main window's.
         if self.away.is_some() {
             return;
         }
-        let queue = self.decision_queue();
-        let Some(first) = queue.first().cloned() else { return };
         let from = Some(self.tabs[self.active].id);
         self.leave(effects);
         self.leave_visual(effects);
@@ -514,9 +523,37 @@ mod tests {
         assert!(
             !m.tabs.iter().any(|t| t.space == Owner::Decisions) && !m.panes.iter().any(|p| p.kind == Kind::Decision)
         );
-        // Nothing waits: nothing opens.
+    }
+
+    /// ⌘J with no card waiting goes to the next task that needs the person, by `TaskGo`'s rule;
+    /// with the flag off ⌘J is that rule alone.
+    #[test]
+    fn with_nothing_waiting_it_goes_to_the_next_task_as_next_task_does() {
+        let (mut m, a, b) = two();
+        assert_eq!(m.next_needs_you(), Action::DecisionsOpen);
+        for (task, n) in [(b, 3), (a, 2)] {
+            m.update(Action::DecisionsOpen);
+            m.update(Action::DecisionsAsk { task, ticket: 1, act: Act::Number { n } });
+        }
+        let c = live(&mut m, "docs", 2);
+        m.update(Action::TaskTalk { id: a });
+        assert!(m.decision_queue().is_empty() && m.tasks.next().is_some_and(|t| t.id == c));
+        // A client's is refused: nothing moves.
+        let (talk, active) = (m.talk.clone(), m.active);
+        m.update(Action::DecisionsOpen.sent_by(Origin::Socket));
+        assert_eq!((&m.talk, m.active), (&talk, active));
+        // The user's: c's space and conversation, as `TaskGo { id: None }` gives.
         m.update(Action::DecisionsOpen);
-        assert!(m.decisions.is_none());
+        assert!(m.decisions.is_none() && !on_show(&m));
+        assert_eq!(m.talk.as_ref().map(|talk| talk.task.clone()), Some(Subject::Task(c)));
+        assert_eq!(*m.shown_space(), m.task_space(c));
+        // Nothing needs the person either: nothing happens, as for ⌘J with the flag off.
+        let mut m = Model::in_workspace();
+        let (tabs, active) = (m.tabs.len(), m.active);
+        m.update(Action::DecisionsOpen);
+        assert_eq!((m.decisions.is_none(), m.talk.is_none(), m.tabs.len(), m.active), (true, true, tabs, active));
+        m.update(Action::SetFeatures { features: crate::features::Features::all().with(Feature::Decisions, false) });
+        assert_eq!(m.next_needs_you(), Action::TaskGo { id: None });
     }
 
     #[test]

@@ -249,7 +249,7 @@ impl Binding {
             B::MarkJump => "Go to mark by letter",
             B::MarkNumber => "Go to mark",
             B::NewTask => "New task",
-            B::NextNeedsYou => "Next that needs you",
+            B::NextNeedsYou => "What needs you next",
             B::TalkFocus => "Type to the agent",
             B::DrawerToggle => "Collapse / open drawer",
             B::SidebarToggle => "Collapse / open sidebar",

@@ -79,6 +79,7 @@ mod config;
 mod confirm;
 mod control;
 mod conversation;
+mod decisions;
 mod dial;
 mod dialog;
 mod divider;
@@ -766,6 +767,8 @@ actions!(
 // The Edit menu items for a text field.
 actions!(ottospace, [Cut, SelectAll, Undo, Redo]);
 actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, NewTask, NextTask]);
+// What waits on the person, one question at a time (`decisions`).
+actions!(ottospace, [OpenDecisions]);
 // Marks: mark the focused pane or the tab on show, and the jump prefix.
 actions!(ottospace, [MarkPane, MarkTab, MarkJump]);
 // Save the tab on show as a workbook, add it to one, or save all the tabs as one; keep the
@@ -1887,6 +1890,7 @@ impl Workspace {
             ottospace_core::model::finish::USERS_ALONE,
             ottospace_core::model::finish::NEW_TASK_USERS,
             ottospace_core::tasks::CLEAR_USERS,
+            ottospace_core::model::decisions::USERS_ALONE,
         ];
         if let Some(why) =
             self.model.refusal(&action, origin).filter(|why| origin == Origin::Socket && said.contains(why))
@@ -1921,7 +1925,14 @@ impl Workspace {
             self.tick_now();
         }
         let name = trace::name(&action);
+        // An answer on the Decisions card: its seal plays over the pane while the next card takes keys.
+        let answering = matches!(action, Action::DecisionsAsk { .. }).then(|| self.model.decision_card()).flatten();
         let effects = self.model.update(action.sent_by(origin));
+        if answering.is_some() && self.model.decision_card().is_some_and(|card| Some(card) != answering) {
+            if let Some(pane) = self.model.decisions.as_ref().map(|run| run.pane) {
+                self.card_seal_start(pane);
+            }
+        }
         self.seq += 1;
         let made: Vec<String> = effects.iter().map(|effect| trace::name(effect)).collect();
         let fields =
@@ -4766,6 +4777,11 @@ impl Workspace {
         if self.model.mode() == Mode::Talk {
             return self.talk_key(event, window, cx);
         }
+        // The Decisions card has the keyboard: its numbers answer, S skips, L puts off, Esc closes.
+        if self.model.keyboard_decision() && self.decision_key(event, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if self.model.keyboard_viewer().is_some() && self.viewer_key(event, window, cx) {
             cx.stop_propagation();
             return;
@@ -5014,7 +5030,8 @@ impl Workspace {
     /// ⌘J: the next task that needs you.
     fn next_task(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.dispatch(Action::Tick { now: now_ms() }, self.input, window, cx);
-        self.dispatch(Action::TaskGo { id: None }, self.input, window, cx);
+        // Decisions first under its flag (`Model::next_needs_you`).
+        self.dispatch(self.model.next_needs_you(), self.input, window, cx);
     }
 
     /// Reads the Apps and Repos lists again.
@@ -6789,6 +6806,7 @@ impl Workspace {
                 Kind::Empty if let Some(body) = self.offer_body(id, cx) => body,
                 // A slot that waits says what for, and what it offers.
                 Kind::Slot { .. } if let Some(body) = self.slot_body(id, cx) => body,
+                Kind::Decision => self.decision_body(cx),
                 _ => {
                     // A pane a mark's tab could not fill says why.
                     let hint = self.unfilled_why(id).unwrap_or_else(|| "⌘E to pick what goes here".into());
@@ -6975,7 +6993,9 @@ impl Workspace {
             let small = of == Owner::Home || (compact && !on);
             // A temporary workspace's name is muted and italic (selected or not); its tip says it closes without saving.
             let temporary = !self.model.space_kept(&of);
-            let title = self.model.space_title(&of);
+            // Decisions' one tab has no strip: its row reads as the tab, "Decisions · 1 of 2".
+            let decisions_tab = self.model.tabs.iter().find(|tab| of == Owner::Decisions && tab.space == of);
+            let title = decisions_tab.map_or_else(|| self.model.space_title(&of), |tab| tab.title.clone());
             let tip: SharedString =
                 if temporary { format!("{title} · {}", workbook::TEMPORARY_TIP) } else { title.clone() }.into();
             let colour = self.space_colour(&of);
@@ -7112,6 +7132,8 @@ impl Workspace {
                     let line = div().absolute().top_0().left_0().right_0().h(px(2.)).bg(rgb(colour));
                     d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)).child(line)
                 })
+                // Decisions: how far through its cards, over its line.
+                .children((of == Owner::Decisions).then(|| self.decisions_progress()).flatten())
                 .hover(|s| s.text_color(rgb(theme::TEXT)))
                 .child(mark(&self.marks, Mark::Space(place)))
                 .children(heard)
@@ -8187,6 +8209,14 @@ impl Workspace {
                 false => cx.propagate(),
             }))
             .on_action(cx.listener(|this, _: &NextTask, window, cx| this.next_task(window, cx)))
+            // Tasks ▸ Decisions and the palette: the cards waiting, else the next task, at the time now.
+            .on_action(cx.listener(|this, _: &OpenDecisions, window, cx| match this.on(Feature::Decisions) {
+                true => {
+                    this.dispatch(Action::Tick { now: now_ms() }, this.input, window, cx);
+                    drop(this.dispatch(Action::DecisionsOpen, this.input, window, cx))
+                }
+                false => cx.propagate(),
+            }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
                 this.dispatch(Action::Split { axis: Axis::Right, kind: Kind::Terminal }, this.input, window, cx);
             }))
@@ -8327,6 +8357,7 @@ impl Render for Workspace {
         self.dial_motion.borrow_mut().moving = false;
         // Before anything is drawn this frame: where the drawer and the rail were is last frame's.
         let seal = self.render_seal(window, cx);
+        let card_seal = self.render_card_seal(window);
         self.bars.begin();
         self.move_notice_bar(window);
         // The Repos list, the tabs and spaces, and ⌘/'s Known are noted again only while drawn.
@@ -8506,6 +8537,7 @@ impl Render for Workspace {
             .children(self.model.confirm.as_ref().map(|confirm| self.render_confirm(confirm, cx)))
             .when(self.gallery, |d| d.child(ui::gallery::view()))
             .children(seal)
+            .children(card_seal)
             .child(frame_probe(self.frame_start.clone(), self.renders, self.seq))
     }
 }

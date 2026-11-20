@@ -362,10 +362,33 @@ impl Workspace {
                 }
             }
             ("talk", "chat-deny-note", _) => Action::TalkDenyNote,
-            // A question card's rows and buttons: `chat-ask:<question>:<row>`.
-            ("talk", _, _) if name.starts_with("chat-ask") => {
-                let shown_subject = shown.clone();
-                let shown = self.model.shown_chat().and_then(|chat| chat.transcript.cards.front());
+            // The Decisions card's Skip and Later, as their clicks.
+            ("decision", "skip" | "later", _) => {
+                let Some((task, ticket)) = self.model.decisions.as_ref().map(|run| (run.task, run.ticket)) else {
+                    return true;
+                };
+                match name {
+                    "skip" => Action::DecisionsSkip { task, ticket },
+                    _ => {
+                        let until = crate::now_ms().saturating_add(ottospace_core::model::decisions::LATER_MS);
+                        Action::DecisionsLater { task, ticket, until }
+                    }
+                }
+            }
+            // A question card's rows and buttons: `chat-ask:<question>:<row>`. The drawer's, or the
+            // Decisions card's (`decision:`), whose card is the run's.
+            ("talk" | "decision", _, _) if name.starts_with("chat-ask") => {
+                let host = self.model.decisions.as_ref().map(|run| run.task).filter(|_| kind == "decision");
+                let shown_subject = host.map(Subject::Task).or(shown.clone());
+                let cards =
+                    shown_subject.as_ref().and_then(|subject| self.model.chat(subject)).map(|c| &c.transcript.cards);
+                let shown = match host {
+                    Some(_) => {
+                        let ticket = self.model.decisions.as_ref().map(|run| run.ticket);
+                        cards.and_then(|cards| cards.iter().find(|card| Some(card.ticket) == ticket))
+                    }
+                    None => self.model.shown_chat().and_then(|chat| chat.transcript.cards.front()),
+                };
                 let Some(ticket) = shown.map(|card| card.ticket) else { return true };
                 let row = name.strip_prefix("chat-ask:").and_then(|at| at.split_once(':'));
                 let row = row.and_then(|(q, r)| {
@@ -388,7 +411,7 @@ impl Workspace {
                         None => return true,
                     },
                 };
-                Action::TalkAsk { ticket, act }
+                crate::conversation::ask_action(host, ticket, act)
             }
             // The editor and the card under it: the keyboard goes there.
             ("talk", "editor-terminal" | "editor-card", _) => {
@@ -485,8 +508,13 @@ pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> D
 impl Workspace {
     /// A small button of the drawer's header, named for sneak mode and tests.
     pub(crate) fn talk_button(&self, name: &'static str, label: &str, tip: &'static str) -> Stateful<Div> {
+        self.button_of("talk", name, label, tip)
+    }
+
+    /// `talk_button`, its control `<of>:<name>`: the Decisions card's are `decision:…`.
+    pub(crate) fn button_of(&self, of: &str, name: &'static str, label: &str, tip: &'static str) -> Stateful<Div> {
         ui::button(name, ui::Button::Ghost(ui::Face::Label(label.to_string().into())), ui::State::Rest)
-            .child(self.controls.mark(format!("talk:{name}")))
+            .child(self.controls.mark(format!("{of}:{name}")))
             .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
             // The press must not reach the drawer, which takes the keyboard on a press.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

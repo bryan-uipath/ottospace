@@ -20,6 +20,9 @@ person through what waits on them, one card at a time, in a 15-minute block.
   shows the card's task. Splits and the ⌘E picker still add panes; they close when the card is
   answered, and the next card starts as one pane again.
 - **Opening Decisions is the person's own act.** Nothing opens it for them.
+- **⌘J under the flag, now** (owner, 2026-11-19): what needs you next. Cards waiting: Decisions,
+  the first card; none: the next task (`TaskGo { id: None }`, as ⌘J does with the flag off); open:
+  its card. The core decides which (`Model::next_needs_you`).
 - **Evidence drill-in** (later): a card lists its evidence, each a source and a location; a click
   opens it in a pane with the ordinary viewer at the cited rows (open-at-line: #313).
 - **⌘J** opens Decisions, and after a focus block on a "where next" card. **⌘⇧N** goes to the
@@ -216,8 +219,7 @@ role that prepares cards (plan.md §3).
 4. **Panes added to a card** close on the person's own answer, a terminal running something too.
    Ask first, as closing a temporary workspace does, or move them to the task's workspace (what
    slice 1 does when Decisions ends)?
-5. **⌘J** now for Decisions, under the flag, before the remap: acceptable?
-6. **The number key answers at once** on a single-select question. On a multi-question card it
+5. **The number key answers at once** on a single-select question. On a multi-question card it
    picks, and ↵ sends: acceptable, or should Decisions show one question per card?
-7. **The recommendation**: today an option is "recommended" only if the agent says so in its label.
+6. **The recommendation**: today an option is "recommended" only if the agent says so in its label.
    Should ottospace ask agents for it (the guide), or should a presenter role choose?

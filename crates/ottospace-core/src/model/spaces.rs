@@ -727,9 +727,11 @@ impl Model {
         // The box stays over it, pinned where it was opened (`compose_space`): a change of space takes no line.
         // Not under an app, the list, visual mode or a picture being drawn on.
         let free = self.live.is_none() && self.list.is_none() && self.visual.is_none() && self.annotated().is_none();
+        // In Decisions the keys stay on the card: the drawer takes them only when asked (⌘L, a click).
         let keys = open
             && drawer_keys
             && free
+            && *self.shown_space() != Owner::Decisions
             && origin == Origin::User
             && self.talk_live(&subject)
             && self.compose_host() != Some(Host::Drawer);

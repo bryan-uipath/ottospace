@@ -10795,6 +10795,115 @@ fn a_question_card_sends_the_users_pick() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Two made-up tasks whose agents each wait on a question card, under `decisions`. Returns the
+/// app, the fake's record, and the test's folder.
+fn decisions_setup(name: &str) -> (Otto, PathBuf, PathBuf) {
+    let questions = json!([{"question": "Which colour?", "header": "Colour", "multiSelect": false,
+        "options": [{"label": "Red", "description": "warm"}, {"label": "Blue", "description": "cool"}]}]);
+    let (root, record, env) = native_setup(name, &ask_fixtures(questions), &[("OTTOSPACE_FEATURES", "decisions")]);
+    let otto = launch_env(name, &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "pick a colour >app"}));
+    otto.call(json!({"cmd": "task_new", "line": "pick a size >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.start_task(2);
+    let asks = |o: &Otto, id: &str| {
+        o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"][id]["transcript"]["cards"][0]["ask"].is_object()
+    };
+    otto.wait_for("two question cards", |o| (asks(o, "1") && asks(o, "2")).then_some(()));
+    (otto, record, root)
+}
+
+fn decisions(o: &Otto) -> Value {
+    o.call(json!({"cmd": "state"}))["state"]["decisions"].clone()
+}
+
+/// ⌘J opens Decisions on the first card, "1 of 2"; a number answers it at once and the next card
+/// shows; the last answer closes it, and the tab it was opened from is back; then ⌘J is the next task. The
+/// state has ids and counts, never the question.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn decisions_answers_card_by_card_and_closes_after_the_last() {
+    let (otto, record, root) = decisions_setup("decisions");
+    let from = otto.call(json!({"cmd": "state"}))["state"]["active"].clone();
+    otto.user_key("cmd-j");
+    let open = otto.wait_for("Decisions", |o| Some(decisions(o)).filter(|d| d.is_object()));
+    assert_eq!((&open["at"], &open["of"]), (&json!(1), &json!(2)), "{open}");
+    let said = open.to_string();
+    assert!(["Colour", "Which colour", "Blue", "warm"].iter().all(|w| !said.contains(w)), "{said}");
+    let first = open["task"].clone();
+    let state = otto.call(json!({"cmd": "state"}));
+    let tab = &state["state"]["tabs"][state["state"]["active"].as_u64().unwrap() as usize];
+    assert_eq!(tab["title"], "Decisions · 1 of 2", "{tab}");
+    // 2: Blue, sent at once; the other card is on show, under Done's seal.
+    let seals = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["seal_frames"].as_u64().unwrap_or(0);
+    let sealed = seals(&otto);
+    otto.user_key("2");
+    let reply = otto.wait_for("the answer", |_| ask_reply(&record));
+    assert_eq!(reply["updatedInput"]["answers"], json!({"Which colour?": "Blue"}));
+    let next = otto.wait_for("the next card", |o| Some(decisions(o)).filter(|d| d["task"] != first));
+    assert_eq!((&next["at"], &next["of"]), (&json!(2), &json!(2)), "{next}");
+    otto.wait_for("the seal's frames", |o| (seals(o) > sealed).then_some(()));
+    otto.user_key("1");
+    otto.wait_for("Decisions closed", |o| decisions(o).is_null().then_some(()));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["active"], from);
+    // Nothing waits: ⌘J goes to the next task that needs you, as with the flag off.
+    otto.call(json!({"cmd": "task_add", "title": "waits", "state": "needs_you"}));
+    let j = otto.user_key("cmd-j");
+    let task = &j["state"]["talk"]["task"];
+    let list = j["state"]["tasks"]["list"].as_array().cloned().unwrap_or_default();
+    let needs = list.iter().find(|t| t["id"] == *task).map(|t| t["state"].clone());
+    assert!(j["state"]["decisions"].is_null() && needs == Some(json!("needs_you")), "{}", j["state"]["talk"]);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// S skips a card (left for next time) and L puts its task off (snoozed): both send nothing, and
+/// Decisions closes after the last.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn decisions_skip_and_later_send_nothing() {
+    let (otto, record, root) = decisions_setup("decisions-skip");
+    otto.user_key("cmd-j");
+    let open = otto.wait_for("Decisions", |o| Some(decisions(o)).filter(|d| d.is_object()));
+    otto.user_key("s");
+    let next = otto.wait_for("the next card", |o| Some(decisions(o)).filter(|d| d["task"] != open["task"]));
+    assert_eq!(next["at"], 2, "{next}");
+    otto.user_key("l");
+    otto.wait_for("Decisions closed", |o| decisions(o).is_null().then_some(()));
+    assert_eq!(ask_reply(&record), None, "nothing answered");
+    let tasks = otto.call(json!({"cmd": "state"}))["state"]["tasks"]["list"].clone();
+    let snoozed =
+        |id: &Value| tasks.as_array().unwrap().iter().find(|t| t["id"] == *id).unwrap()["snoozed_until"].clone();
+    assert!(snoozed(&next["task"]).is_number() && snoozed(&open["task"]).is_null(), "{tasks}");
+    // Next time: the skipped card, alone.
+    otto.user_key("cmd-j");
+    let again = otto.wait_for("Decisions again", |o| Some(decisions(o)).filter(|d| d.is_object()));
+    assert_eq!((&again["task"], &again["of"]), (&open["task"], &json!(1)), "{again}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A client neither opens Decisions nor answers, skips or closes it: its ⌘J, number keys, S and
+/// Esc do nothing, and its reply says why.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn decisions_refuses_a_client() {
+    let (otto, record, root) = decisions_setup("decisions-client");
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-j"}));
+    assert!(reply["state"]["decisions"].is_null(), "{reply}");
+    assert_eq!(reply["notice"], "only the user opens, answers, skips, puts off or closes Decisions");
+    otto.user_key("cmd-j");
+    let open = otto.wait_for("Decisions", |o| Some(decisions(o)).filter(|d| d.is_object()));
+    otto.call(json!({"cmd": "key", "keys": "2 s escape"}));
+    let reply = otto.raw(&json!({"cmd": "close"}).to_string());
+    assert_eq!(reply["error"], "only the user opens, answers, skips, puts off or closes Decisions", "{reply}");
+    assert_eq!((decisions(&otto), ask_reply(&record)), (open, None));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The stand-in `claude`'s side answer (`side.jsonl`): as 2.1.327 sends it, `{ID}` its request's id.
 fn side_fixture(answer: &str) -> String {
     let progress = json!({"type": "system", "subtype": "control_request_progress", "request_id": "{ID}",

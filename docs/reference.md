@@ -133,7 +133,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧R | Collapse the drawer into its rail, or open it again (with no chat: the transcript). The agent and the transcript go on, and the rail always shows. Also the → at the right end of the drawer's header (its key in the tooltip). Collapsed, a click on a rail item, ⌘⌥] / ⌘⌥[ or the [agent chip](#the-agent-chip) opens it too; open, a click on the item it shows collapses it, as on the left rail. It opens what it collapsed: the transcript, or the new-task box. Only yours: a socket client's is refused, and so are its ⌘N, the + buttons and `compose` while you collapsed the drawer |
 | ⌘⇧L | Collapse the sidebar into the left rail, or open it again on the section open last. Also the ← at the right end of the sidebar's header (its key in the tooltip). Collapsed, a click on a section's icon opens it; a click on the open section's icon collapses it again |
 | ⌘⇧A | Collapse the conversation's [dial](#the-agent-dial) to its marker beside the badge, or open it again (a click on either does the same). Kept per task |
-| ⌘J | Next task: the space and chat of the first task that needs you |
+| ⌘J | Next task: the space and chat of the first task that needs you. With the `decisions` [flag](#features) on, what needs you next: [Decisions](#decisions) while a card waits, else the next task |
 | ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
 | ⌘⌃V | With the `agent_mode` [flag](#features) on: the robot's menu on the focused app pane (Off, See, See and act): what the task of its workspace may do there. ↓ ↑ move, ↵ takes, any other key closes. Also Agent Mode… and Agent Mode: Off / See / See and Act (the palette). Only yours: a client's key, click or label sets nothing |
 | ⌘⌃T | With the `transcripts` [flag](#features) on: stop the transcript that is on, from any pane; else start one of the focused app pane. With focus on no such pane, the status bar says "focus an app pane to transcribe it". Also Start or Stop Transcribing (View, the palette). The app's audio is heard by ScreenCaptureKit (Screen Recording covers it) and transcribed by Apple's on-device recogniser: nothing leaves the Mac. The first start may ask the system for its speech model ("Downloading speech model…"). Below macOS 26 it says "transcripts need macOS 26". While one is on: the header of the pane heard (for an app picked, of each pane of its windows) shows a red dot (a click shows the transcript in the drawer) and Stop; while its tab is not on show, a red dot on that tab, or on its workspace in the top row (a click brings the pane back); the drawer's rail has the transcript's red dot; the drawer's transcript header says "Transcribing <app>" with the time, the level, Stop, and ⋯ with Pause or Resume (paused: "Paused" and Resume where the level was); → or ⌘⇧R collapses the drawer into its rail, and it records on. Pause or Resume Transcribing is also in the palette and the View menu, and the menu bar's red dot has Stop, Pause or Resume, and Show. Only yours: a socket client's ⌘⌃T, click or label starts and stops nothing |
@@ -1397,7 +1397,7 @@ then does nothing (the notice bar says so). A preference is a normal setting.
 | `agent_mode` | Experimental | off | Agent mode (⌘⌃V): let a workspace's task see an app pane, from the robot in its header |
 | `multi_monitor` | Experimental | off | Multi-monitor (⌘⇧O): fold a tab out to its own window on another display |
 | `overlay_panels` | Experimental | off | Overlay panels (an experiment): the sidebar and the drawer float over the panes, moving nothing, and close after use |
-| `decisions` | Experimental | off | Decisions: a workspace that shows what waits on you, one question at a time |
+| `decisions` | Experimental | off | Decisions (⌘J): a workspace that shows what waits on you, one question at a time |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1433,8 +1433,20 @@ then does nothing (the notice bar says so). A preference is a normal setting.
   - An app you are in: its window is above ottospace and may cover part of an open overlay. The
     part that shows takes clicks; opening the sidebar takes the keyboard back and parks the app.
   - The state's `overlays` gives each one's rect (`sidebar`, `drawer`), null while closed.
-- `decisions` off: no Decisions workspace; one open closes. On: the model only so far (nothing on
-  screen opens it yet; design: [attention/decisions.md](ai/attention/decisions.md)).
+- `decisions` off: ⌘J is the next task only, no Decisions command or menu item, and one open
+  closes. On, see [Decisions](#decisions) (design: [attention/decisions.md](ai/attention/decisions.md)).
+
+### Decisions
+
+With `decisions` on, ⌘J (Tasks ▸ Decisions, the palette) opens Decisions (with nothing waiting, it
+goes to the next task, as ⌘J does with the flag off): a workspace of one pane, a card, for each question a task's agent waits on
+(a question card, `AskUserQuestion`). The card on show stays first; then P1 first, then the one
+waiting longest. Its place on the top row reads "Decisions · 2 of 5" over a thin bar. On the card: 1–9 answer (one single-select question: sent at once, the agent
+resumes), ↑↓ move, space picks, ↵ sends, S skips it (shown next time), L puts its task off for an
+hour (snoozed), Esc closes. Other… is typed in the drawer. ⌘L talks the card over in the drawer,
+on its task; the right rail shows it. Panes you add close when you answer, skip or put off the
+card. A card answered elsewhere leaves; after the last, Decisions closes and the tab you came from is back. Never kept.
+Only you open, answer, skip or close it.
 
 ### Displays
 
