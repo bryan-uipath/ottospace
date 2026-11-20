@@ -68,11 +68,14 @@ pub struct Space {
     /// the space's own.
     #[serde(skip)]
     pub(crate) front: Option<TaskId>,
+    /// It has its place on the row: false until the step that made it ends (`settle_space_order`).
+    #[serde(skip)]
+    pub(crate) placed: bool,
 }
 
 impl Space {
     pub(crate) fn new(of: Owner) -> Self {
-        Space { of, hidden: false, last: None, joined: Vec::new(), front: None }
+        Space { of, hidden: false, last: None, joined: Vec::new(), front: None, placed: false }
     }
 }
 

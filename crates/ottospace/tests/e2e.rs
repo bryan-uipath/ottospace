@@ -6869,7 +6869,8 @@ fn row_of(reply: &Value) -> Vec<String> {
 
 /// The owner: "drag-to-reorder workspaces … the workspace tab strip is the titlebar so it drags
 /// the whole window". A space pressed and moved along the top row is carried there; the window
-/// stays where it is. A client's drag, and a press on the row's empty part, move no space.
+/// stays where it is. A client's drag, and a press on the row's empty part, move no space. A
+/// task's tab of no workspace moves too; the Workspaces list stays as it was.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_space_dragged_along_the_top_row_lands_there_and_the_window_stays() {
@@ -6918,6 +6919,17 @@ fn a_space_dragged_along_the_top_row_lands_there_and_the_window_stays() {
     assert_eq!(over["state"]["reorder"], Value::Null);
     let up = mouse("up", at(space(&before, 1), 0.5, 0.5));
     assert_eq!(row_of(&up), moved);
+
+    // A task's tab, of no workspace, dragged between two workspaces' lands there; the list stays.
+    otto.call(json!({"cmd": "task_add", "title": "fix", "state": "running"}));
+    let opened = otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+    assert_eq!(row_of(&opened).last().map(String::as_str), Some("task:1"), "{:?}", row_of(&opened));
+    let shown = otto.drawn();
+    let names = workspace_names(&shown);
+    let dropped = otto.user_drag(at(space(&shown, 4), 0.5, 0.5), at(space(&shown, 2), 0.1, 0.5));
+    let between = vec![moved[0].clone(), moved[1].clone(), "task:1".into(), moved[2].clone(), moved[3].clone()];
+    assert_eq!((row_of(&dropped), workspace_names(&dropped)), (between, names));
+    assert_eq!(otto.drawn()["window"], before["window"]);
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }

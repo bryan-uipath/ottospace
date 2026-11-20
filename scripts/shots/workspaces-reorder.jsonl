@@ -1,6 +1,7 @@
 # Workspaces reordered by drag, in one order for the list and the top row. Four kept workspaces,
 # by name at first; each opened. Zoom's row carried above Arima (its line), dropped; then a space
-# carried along the top row (the others make room), dropped.
+# carried along the top row (the others make room), dropped. Then a task's tab, of no workspace,
+# carried from the row's end to between two workspaces' and dropped: the list stays as it was.
 {"cmd":"section","section":"workbook"}
 {"until":"workbooks","len":4}
 {"click":{"rect":"workbooks.0.row"}}
@@ -22,3 +23,14 @@
 {"drag":{"rect":"space_rects.1"},"at":[0.5,0.5],"by":[170,0]}
 {"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
 {"shot":"after"}
+{"cmd":"task_add","title":"Fix the flaky test"}
+{"cmd":"open_space","space":{"kind":"task","id":1}}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"task-before"}
+{"hold":{"rect":"space_rects.5"},"by":[-140,0]}
+{"shot":"task-mid-drag"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"cmd":"mouse","action":"up","x":-50,"y":-50,"as":"user"}
+{"drag":{"rect":"space_rects.5"},"at":[0.5,0.5],"by":[-140,0]}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"task-dropped"}

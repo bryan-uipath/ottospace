@@ -555,6 +555,8 @@ impl Model {
         {
             self.select_tab(at, effects);
         }
+        // The row as the file has it: no space here is new (`settle_space_order`).
+        self.spaces.iter_mut().for_each(|space| space.placed = true);
         // A tab of no space goes to the selected workspace.
         self.last_spaces = vec![self.space().clone()];
         self.last_spaces.retain(|of| matches!(of, Owner::Task { .. } | Owner::Workbook { .. }));

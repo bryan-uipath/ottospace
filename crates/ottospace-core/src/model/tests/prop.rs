@@ -2115,18 +2115,18 @@ fn check_reorder(m: &Model) -> Result<(), String> {
     let by_name = orders.iter().all(Option::is_none);
     let placed = orders.iter().all(Option::is_some) && orders.windows(2).all(|pair| pair[0] < pair[1]);
     ensure!(by_name || placed, "workbooks' places {orders:?}");
-    // One order: the row is Home, the workspaces' spaces as the list has them, then the rest.
-    let place = |of: &Owner| match of {
-        Owner::Home => (0, 0),
-        _ => m
-            .workbooks
-            .list
-            .iter()
-            .position(|book| m.workbooks.space_of(&Owner::Workbook { id: book.id }) == *of)
-            .map_or((2, 0), |at| (1, at)),
-    };
-    let row: Vec<(u8, usize)> = m.spaces.iter().map(|space| place(&space.of)).collect();
-    ensure!(row.is_sorted(), "the row is not in the workspaces' order: {row:?}");
+    // The row: Home first, each open space once (a tab's), every one placed.
+    let row: Vec<&Owner> = m.spaces.iter().map(|space| &space.of).collect();
+    ensure!(row.first() == Some(&&Owner::Home), "the row does not start with Home: {row:?}");
+    let once = row.iter().enumerate().all(|(at, of)| !row[..at].contains(of));
+    let open = m.tabs.iter().all(|tab| row.contains(&&tab.space))
+        && row[1..].iter().all(|of| m.tabs.iter().any(|tab| tab.space == **of));
+    ensure!(once && open, "the row is not the open spaces: {row:?}");
+    ensure!(m.spaces.iter().all(|space| space.placed), "a space with no place on the row");
+    // One order: the workspaces' spaces, wherever the others are, as the list has them.
+    let book = |of: &Owner| m.space_book(of).and_then(|book| m.workbooks.list.iter().position(|b| b.id == book.id));
+    let books: Vec<usize> = row.iter().filter_map(|of| book(of)).collect();
+    ensure!(books.is_sorted(), "the row's workspaces are not in the list's order: {books:?}");
     let Some(Reorder { item, to }) = m.reorder() else { return Ok(()) };
     let len = match item {
         ReorderItem::Workbook { id } => {

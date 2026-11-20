@@ -1,12 +1,12 @@
-//! The user's drag that reorders the workspaces: a row of the Workspaces section, or its space on
-//! the top row. One order, the workbooks' (kept in their files): the top row shows the open ones
-//! in it, after Home; a space of no workspace (a task's, a session's) comes after them all, in
-//! its own order (`settle_space_order`). The shell says where the pointer is (`ReorderOver`); the
-//! core says what moves.
+//! The user's drag that reorders: a row of the Workspaces section, or any space on the top row but
+//! Home. The workspaces have one order, the workbooks' (kept in their files): their spaces take
+//! their places on the row in it. A space of no workspace (a task's, a session's) keeps its own
+//! place on the row, and the workspaces' go around it (`settle_space_order`). The shell says where
+//! the pointer is (`ReorderOver`); the core says what moves.
 
 use serde::{Deserialize, Serialize};
 
-use super::{Model, Owner};
+use super::{Model, Owner, Space};
 use crate::workbook::WorkbookId;
 
 /// Why a client's reorder is refused: the order follows the user's pointer.
@@ -18,7 +18,7 @@ pub const REORDER_USERS: &str = "only the user drags a workspace to another plac
 pub enum ReorderItem {
     /// A row of the Workspaces section.
     Workbook { id: WorkbookId },
-    /// A workspace's space on the top row (its task's, while bound to one). Never Home's.
+    /// A space on the top row: a workspace's (its task's, while bound to one) or another. Never Home's.
     Space { of: Owner },
 }
 
@@ -64,13 +64,10 @@ impl Model {
                 let listed: Vec<WorkbookId> = self.workbooks.listed().map(|book| book.id).collect();
                 listed.contains(id).then_some((listed.len(), 0))
             }
-            // Only a workspace's: it goes among theirs, after Home and before every other.
+            // Anywhere after Home.
             ReorderItem::Space { of } => {
                 let shown = self.shown_spaces();
-                let books = shown.iter().filter(|space| self.space_book(&space.of).is_some()).count();
-                // Its place among the shown is its place on the row (`settle_space_order`).
-                let shown = self.space_book(of).is_some() && shown.iter().any(|space| space.of == *of);
-                shown.then_some((books + 1, 1))
+                (*of != Owner::Home && shown.iter().any(|space| space.of == *of)).then_some((shown.len(), 1))
             }
         }
     }
@@ -89,16 +86,20 @@ impl Model {
                 let listed: Vec<bool> = self.workbooks.list.iter().map(|book| book.closing.is_none()).collect();
                 self.workbooks_move(id, to, &listed);
             }
-            // The same move in the one order, among the workspaces on the row (after Home).
+            // Moved on the row; a workspace's moves the same in the one order, among the
+            // workspaces on the row (hidden too): past another space, the list does not change.
             ReorderItem::Space { of } => {
+                let shown: Vec<bool> = self.spaces.iter().map(|space| !space.hidden).collect();
+                let Some(from) = self.spaces.iter().position(|space| space.of == of) else { return };
+                if !move_among(&mut self.spaces, from, to, &shown) {
+                    return;
+                }
                 let Some(id) = self.space_book(&of).map(|book| book.id) else { return };
-                let shown: Vec<Owner> = self.shown_spaces().iter().map(|space| space.of.clone()).collect();
-                let on_row = |book: &crate::workbook::Workbook| {
-                    let of = self.workbooks.space_of(&Owner::Workbook { id: book.id });
-                    book.closing.is_none() && shown.contains(&of)
-                };
-                let on_row: Vec<bool> = self.workbooks.list.iter().map(on_row).collect();
-                self.workbooks_move(id, to.saturating_sub(1), &on_row);
+                let books: Vec<WorkbookId> =
+                    self.spaces.iter().filter_map(|space| self.space_book(&space.of)).map(|book| book.id).collect();
+                let Some(place) = books.iter().position(|book| *book == id) else { return };
+                let on_row: Vec<bool> = self.workbooks.list.iter().map(|book| books.contains(&book.id)).collect();
+                self.workbooks_move(id, place, &on_row);
             }
         }
     }
@@ -112,21 +113,34 @@ impl Model {
         }
     }
 
-    /// After every step: the top row in the one order. Home first, then each workspace's space as
-    /// the section lists it, then every other space in the order it had.
+    /// After every step (Home already first): the top row in the one order. A space of no
+    /// workspace keeps its place; the workspaces' spaces take the other places, as the section
+    /// lists them. One new this step: a workspace's just after the one before it in the list on
+    /// the row (else just after Home), any other last. e.g. [Home, A, task, B], the list B, A:
+    /// [Home, B, task, A]; then C new, listed last: [Home, B, task, A, C]; a task new: at the end.
     pub(crate) fn settle_space_order(&mut self) {
-        let place = |of: &Owner| -> (u8, usize) {
-            if *of == Owner::Home {
-                return (0, 0);
-            }
+        let list = |of: &Owner| {
             let id = self.space_book(of).map(|book| book.id);
-            let book = id.and_then(|id| self.workbooks.list.iter().position(|book| book.id == id));
-            book.map_or((2, 0), |at| (1, at))
+            id.and_then(|id| self.workbooks.list.iter().position(|book| book.id == id))
         };
-        let keys: Vec<(u8, usize)> = self.spaces.iter().map(|space| place(&space.of)).collect();
-        let mut keyed: Vec<_> = keys.into_iter().zip(std::mem::take(&mut self.spaces)).collect();
-        keyed.sort_by_key(|(key, _)| *key);
-        self.spaces = keyed.into_iter().map(|(_, space)| space).collect();
+        let keys: Vec<Option<usize>> = self.spaces.iter().map(|space| list(&space.of)).collect();
+        let keyed = keys.into_iter().zip(std::mem::take(&mut self.spaces));
+        let (mut row, new): (Vec<_>, Vec<_>) = keyed.partition(|(_, space)| space.placed || space.of == Owner::Home);
+        // The workspaces' places, filled in the list's order.
+        let mut books: Vec<_> = row.iter().filter(|(key, _)| key.is_some()).cloned().collect();
+        books.sort_by_key(|(key, _)| *key);
+        for (slot, book) in row.iter_mut().filter(|(key, _)| key.is_some()).zip(books) {
+            *slot = book;
+        }
+        let (mut fresh, others): (Vec<_>, Vec<_>) = new.into_iter().partition(|(key, _)| key.is_some());
+        fresh.sort_by_key(|(key, _)| *key);
+        for (key, space) in fresh {
+            // Home is first (`settle_spaces`).
+            let after = row.iter().rposition(|(other, _)| other.is_some() && *other < key).unwrap_or(0);
+            row.insert(after + 1, (key, space));
+        }
+        row.extend(others);
+        self.spaces = row.into_iter().map(|(_, space)| Space { placed: true, ..space }).collect();
     }
 
     /// After every step: a drag whose row or space is gone (deleted, closed, hidden) ends, and its
@@ -313,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn the_list_and_the_top_row_share_one_order_and_a_tasks_space_comes_after() {
+    fn the_list_and_the_top_row_share_one_order_and_a_new_tasks_space_comes_last() {
         let mut m = Model::default();
         for uid in ["00000000000000e1", "00000000000000e2", "00000000000000e3"] {
             m.update(Action::WorkbookNew { uid: uid.into() });
@@ -332,14 +346,131 @@ mod tests {
         drag(&mut m, "Workspace 4", 0);
         assert_eq!(names(&m)[0], "Workspace 4");
         assert_eq!(row(&m), row_with(&m));
-        // A space dragged on the row: the list follows. Not past the task's, nor the task's at all.
+        // A space dragged on the row to its end, past the task's: the list follows.
         let first = row(&m)[1].clone();
         m.update(Action::ReorderOver { item: ReorderItem::Space { of: first.clone() }, to: 9 });
-        assert_eq!(m.reorder().map(|r| r.to), Some(4));
+        assert_eq!(m.reorder().map(|r| r.to), Some(5));
         m.update(Action::ReorderDrop);
-        assert_eq!((books(&m).last(), row(&m)), (Some(&first), row_with(&m)));
-        m.update(Action::ReorderOver { item: ReorderItem::Space { of: Owner::Task { id: 1 } }, to: 1 });
+        let mut after = row_with(&m);
+        after.swap(4, 5);
+        assert_eq!((books(&m).last(), row(&m)), (Some(&first), after));
+    }
+
+    /// Home, three kept workspaces a, b, c (listed so), and task 1's space at the row's end.
+    fn three_and_a_task() -> (Model, [Owner; 4]) {
+        let mut m = Model::default();
+        for uid in ["00000000000000e1", "00000000000000e2", "00000000000000e3"] {
+            m.update(Action::WorkbookNew { uid: uid.into() });
+            m.update(Action::WorkbookKeep { workbook: m.workbooks.list.last().map_or(0, |book| book.id) });
+        }
+        let (state, assign) = (crate::tasks::State::Running, Default::default());
+        m.update(Action::TaskAdd { title: "fix".into(), priority: 1, state, tab: None, assign });
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
+        let [_, a, b, c, t] = <[Owner; 5]>::try_from(row(&m)).expect("Home, three and a task");
+        assert_eq!(t, Owner::Task { id: 1 });
+        (m, [a, b, c, t])
+    }
+
+    fn carry(m: &mut Model, of: &Owner, to: usize) {
+        m.update(Action::ReorderOver { item: ReorderItem::Space { of: of.clone() }, to });
+        m.update(Action::ReorderDrop);
+    }
+
+    fn listed(m: &Model) -> Vec<Owner> {
+        m.workbook_rows().into_iter().map(|row| Owner::Workbook { id: row.id }).collect()
+    }
+
+    #[test]
+    fn a_tasks_tab_goes_anywhere_after_home_and_the_list_stays() {
+        let (mut m, [a, b, c, t]) = three_and_a_task();
+        let list = listed(&m);
+        carry(&mut m, &t, 2);
+        assert_eq!(row(&m), [Owner::Home, a.clone(), t.clone(), b.clone(), c.clone()]);
+        // Before Home: just after it.
+        m.update(Action::ReorderOver { item: ReorderItem::Space { of: t.clone() }, to: 0 });
+        assert_eq!(m.reorder().map(|r| r.to), Some(1));
+        m.update(Action::ReorderDrop);
+        assert_eq!(row(&m), [Owner::Home, t, a, b, c]);
+        assert_eq!(listed(&m), list);
+    }
+
+    #[test]
+    fn a_workspace_dragged_past_a_tasks_tab_moves_in_the_list_only_among_the_workspaces() {
+        let (mut m, [a, b, c, t]) = three_and_a_task();
+        carry(&mut m, &t, 2);
+        // a past the task's tab alone: the list is as it was.
+        carry(&mut m, &a, 2);
+        assert_eq!(row(&m), [Owner::Home, t.clone(), a.clone(), b.clone(), c.clone()]);
+        assert_eq!(listed(&m), [a.clone(), b.clone(), c.clone()]);
+        // a past b: the list too.
+        carry(&mut m, &a, 3);
+        assert_eq!(row(&m), [Owner::Home, t, b.clone(), a.clone(), c.clone()]);
+        assert_eq!(listed(&m), [b, a, c]);
+    }
+
+    #[test]
+    fn a_tasks_tab_keeps_its_place_as_the_workspaces_around_it_close_come_back_and_move() {
+        let (mut m, [a, b, c, t]) = three_and_a_task();
+        carry(&mut m, &t, 2);
+        let hide = |m: &mut Model, of: &Owner| {
+            let index = row(m).iter().position(|shown| shown == of);
+            m.update(Action::SpaceHide { index });
+        };
+        // a closed: the task's tab is second; a back: where it was, before it.
+        hide(&mut m, &a);
+        assert_eq!(row(&m), [Owner::Home, t.clone(), b.clone(), c.clone()]);
+        m.update(Action::SpaceOpen { space: a.clone() });
+        assert_eq!(row(&m), [Owner::Home, a.clone(), t.clone(), b.clone(), c.clone()]);
+        // c dragged first in the list: the workspaces' places take the list's order, the task's stays.
+        let Owner::Workbook { id } = c else { panic!("a workspace's space") };
+        m.update(Action::ReorderOver { item: ReorderItem::Workbook { id }, to: 0 });
+        m.update(Action::ReorderDrop);
+        assert_eq!(row(&m), [Owner::Home, c.clone(), t.clone(), a.clone(), b.clone()]);
+        // c removed: the ones after it move up one.
+        m.update(Action::WorkbookRemove { workbook: id, tab: None });
+        assert_eq!(row(&m), [Owner::Home, t, a, b]);
+    }
+
+    #[test]
+    fn a_new_workspace_goes_after_the_one_before_it_in_the_list_and_a_new_tasks_tab_last() {
+        let (mut m, [a, b, c, t]) = three_and_a_task();
+        carry(&mut m, &t, 1);
+        // Listed last: after c, the task's tab where it was; a new task's tab at the end.
+        m.update(Action::WorkbookNew { uid: "00000000000000e4".into() });
+        let d = row(&m)[5].clone();
+        assert_eq!(listed(&m).last(), Some(&d));
+        assert_eq!(row(&m), [Owner::Home, t.clone(), a.clone(), b.clone(), c.clone(), d.clone()]);
+        let (state, assign) = (crate::tasks::State::Running, Default::default());
+        m.update(Action::TaskAdd { title: "two".into(), priority: 1, state, tab: None, assign });
+        m.update(Action::SpaceSelect { index: 2 });
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 2 } });
+        assert_eq!(row(&m), [Owner::Home, t, a, b, c, d, Owner::Task { id: 2 }]);
+    }
+
+    #[test]
+    fn a_carried_tasks_tab_that_closes_ends_the_drag() {
+        let (mut m, [.., t]) = three_and_a_task();
+        m.update(Action::ReorderOver { item: ReorderItem::Space { of: t.clone() }, to: 1 });
+        assert_eq!(m.reorder().map(|r| r.to), Some(1));
+        m.update(Action::SpaceHide { index: Some(4) });
         assert_eq!(m.reorder(), None);
+        // Not dropped: the row is as it was, the task's off it.
+        assert_eq!(row(&m).len(), 4);
+    }
+
+    #[test]
+    fn a_tasks_tabs_place_comes_back_from_the_layout_file() {
+        let (mut m, [a, b, c, t]) = three_and_a_task();
+        carry(&mut m, &t, 2);
+        let file = m.layout_file(&[], &[], 0);
+        let mut again = Model::default();
+        again.update(Action::RestoreTasks { tasks: m.tasks.list.clone(), floor: 9 }.sent_by(Origin::System));
+        again.update(Action::RestoreWorkbooks { workbooks: m.workbooks.list.clone() }.sent_by(Origin::System));
+        let layout = Box::new(file);
+        again.update(
+            Action::RestoreLayout { layout, gone: Vec::new(), home: None, launch: true }.sent_by(Origin::System),
+        );
+        assert_eq!(row(&again), [Owner::Home, a, t, b, c]);
     }
 
     #[test]
