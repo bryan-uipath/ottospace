@@ -387,7 +387,7 @@ needs-you badges (keep the home buttons only).
   ⌘N. Too much at once: three surfaces each asking for the first action.
 - **Hour 1**: ⌘N, ⌘D/⌘E, ⌘W, ⌘T, clicking a task, the chat, ⌘L, ⌘C/⌘V, the return key when an
   app has the keyboard. Meets: APP mode (and how to get out), permission cards, needs-you.
-- **Week 1**: ⌘P, ⌘/, ⌘1–9, splits and resize, capture, `#`/`>`/`@` tags, snooze, sessions
+- **Week 1**: ⌘⇧P, ⌘/, ⌘1–9, splits and resize, capture, `#`/`>`/`@` tags, snooze, sessions
   elsewhere, calendar. Can ignore for a week: visual mode, sneak, list mode, marks, workbooks,
   swap/move-to-tab chords, ⌘⌃0 fit, ⌘⌃F, inspector, ax overlay, ⌘⇧⌥1–9, all `^`/`$`/`/` tags.
   That is roughly 70 of the ~100 global chords and 11 of the 14 modes.
@@ -398,7 +398,7 @@ needs-you badges (keep the home buttons only).
    row, panes with their ×, the sidebar icons. One key shown on each empty state, as a key cap.
 2. **In context, once**: a key cap that appears on the thing it acts on the first time it would
    help, then never again (hint-once, below).
-3. **On demand**: ⌘P (every action, with its key) and ⌘/ (keys you have not learned).
+3. **On demand**: ⌘⇧P (every action, with its key) and ⌘/ (keys you have not learned).
 
 ### Mechanisms, judged
 
@@ -412,7 +412,7 @@ needs-you badges (keep the home buttons only).
 - **Hint-once with a persisted seen set — recommend, sparingly.** Candidates, each shown on the
   element it concerns, as a key cap that fades after 4 s or on use: ⌘L on the chat header the
   first time a chat opens; the return key on the APP chip the first time an app takes the keyboard
-  (this is the one that strands people); ⌘P in the status bar after the first menu-bar use; ⇧↵ in
+  (this is the one that strands people); ⌘⇧P in the status bar after the first menu-bar use; ⇧↵ in
   the new-task field on first open; ⌘B on a pane header only if marks are on. Retire a hint
   forever when its key is used once (shared with §4.4's counts) or after it was shown three times.
   At most one hint on screen. Store: `<home>/seen.json`. No hint text longer than a key cap and
