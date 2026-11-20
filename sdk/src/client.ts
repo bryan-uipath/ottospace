@@ -421,8 +421,8 @@ export class Client {
   compose(args: { text?: string } = {}): Promise<Snapshot> {
     return this.snapshot({ cmd: "compose", ...args });
   }
-  /** For tests, as `mouse`: files or folders dropped on the open new-task box. */
-  composeDrop(args: { paths: string[] }): Promise<Snapshot> {
+  /** For tests, as `mouse`: files or folders dropped on the open new-task box, or with `pane` on that pane as the user's drop. */
+  composeDrop(args: { paths: string[]; pane?: number }): Promise<Snapshot> {
     return this.snapshot({ cmd: "compose_drop", ...args });
   }
   /** Opens the space of the first task that needs the user. */

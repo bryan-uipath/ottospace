@@ -160,6 +160,9 @@ Design note: `docs/ai/attention/plan.md`.
   - `sneak_app_tree`: a fixture tree as if read from the focused pane's window while sneak mode
     is on (a test run hosts no window), so its elements get labels. The state's `app_presses`
     (null outside a test run) lists each press a label asked for.
+  - `compose_drop` with `"pane"`: files dropped on that pane as the user's own drop (`Action::PaneDrop`:
+    a terminal types the quoted paths). Outside a test run only the user drops files; `type` is a
+    client's way to type.
   - State field `overflow`: each scroll area laid out (not a terminal), also one that fits, and which of its edges
     fade (`top`/`bottom`, the tab row's `left`/`right`). Null outside a test run.
   - State field `repos_bar[n].name_cut`: a repository's name as drawn in its heading (`cut_text`), its box

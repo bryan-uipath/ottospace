@@ -1184,6 +1184,24 @@ mod tests {
         assert_eq!(m.update(Action::TalkSend), [], "sent once");
     }
 
+    /// Files dropped on the conversation: their paths go into the message, quoted; a client's drop,
+    /// or a name with a line break, puts nothing there.
+    #[test]
+    fn a_dropped_file_goes_into_the_message_as_its_path() {
+        let mut m = two_live();
+        let one = first(&m);
+        let drop =
+            |paths: &[&str]| Action::TalkDrop { paths: paths.iter().map(|p| p.to_string()).collect(), unreadable: 0 };
+        m.update(drop(&["/tmp/a.png"]).sent_by(Origin::Socket));
+        assert_eq!(m.chat(&one).map(|chat| chat.draft.text()), Some(""));
+        typed(&mut m, "look at ");
+        m.update(drop(&["/tmp/a.png", "/tmp/it's"]));
+        assert_eq!(m.chat(&one).map(|chat| chat.draft.text()), Some("look at '/tmp/a.png' '/tmp/it'\\''s' "));
+        m.update(drop(&["/tmp/a\nb"]));
+        assert_eq!(m.chat(&one).map(|chat| chat.draft.text()), Some("look at '/tmp/a.png' '/tmp/it'\\''s' "));
+        assert_eq!(m.clip.as_ref().map(|clip| clip.text.as_str()), Some(crate::clip::DROP_REFUSED));
+    }
+
     #[test]
     fn the_composer_sends_once_per_turn_and_only_the_users() {
         let mut m = two_live();

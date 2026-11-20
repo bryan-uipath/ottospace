@@ -1330,6 +1330,12 @@ const MAKERS: &[Make] = &[
         Action::Copied { pane: g.rng.coin().then(|| g.pane()), verb, amount: g.amount() }
     },
     |g| Action::Paste { pane: g.pane(), amount: g.amount() },
+    // Files dropped from Finder: plain names, or one with a line break, which types nothing.
+    |g| {
+        let paths = vec![if g.rng.coin() { "/tmp/it's here".into() } else { "/tmp/a\nb".into() }];
+        Action::PaneDrop { pane: g.pane(), paths, unreadable: g.rng.below(2) }
+    },
+    |g| Action::TalkDrop { paths: vec![g.text()], unreadable: 0 },
     // The Apps section: what the settings, the Dock and the scan say, and the user's pins.
     |g| {
         let entry = |g: &mut Gen| {
@@ -5159,6 +5165,17 @@ impl Run {
                 Effect::SaveFeature { feature, on } => {
                     let listed = listed_flags.iter().any(|(f, was)| f == feature && was != on);
                     ensure!(user && listed, "{origin:?}'s {action:?} wrote the flag {feature:?} {on}")
+                }
+                // Dropped paths are typed only by the user's drop, into the terminal it gave the
+                // keyboard to, quoted and with no line break.
+                Effect::TypeDrop { pane, text } => {
+                    let dropped = user && matches!(action, Action::PaneDrop { pane: on, .. } if on == *pane);
+                    let terminal = m.pane(*pane).is_some_and(|p| p.kind == Kind::Terminal);
+                    let breaks = text.chars().any(|c| c.is_control() || crate::capture::is_break(c));
+                    ensure!(
+                        dropped && terminal && m.focused == Some(*pane) && !breaks,
+                        "{origin:?}'s {action:?} typed {text:?}"
+                    );
                 }
                 // The user's clipboard goes only into a terminal, by their own ⌘V or ↵, and says so.
                 Effect::Paste { pane } => {

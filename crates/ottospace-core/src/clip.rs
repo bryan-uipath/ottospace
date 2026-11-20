@@ -9,6 +9,10 @@ use crate::model::{Action, PaneId};
 
 /// Why a client's paste, or its answer to "Paste 4 lines?", is refused.
 pub const USERS_ALONE: &str = "only the user pastes their clipboard";
+/// Files dropped from Finder are the user's own act: no client types a path this way (`type` is theirs).
+pub const DROP_USERS: &str = "only the user drops files";
+/// What a pane or the message box says when a drop types nothing.
+pub const DROP_REFUSED: &str = "Nothing typed: a dropped name holds a control character, or is not text";
 
 /// How long the title strip and the status bar say "Copied 3 lines".
 pub const NOTICE_MS: u64 = 2_000;
@@ -157,6 +161,21 @@ impl PasteAsk {
     }
 }
 
+/// Dropped files' paths as a terminal types them, as Terminal and iTerm do: each in single quotes
+/// (a `'` in a name as `'\''`), a space between and one after, no line break, so nothing in a
+/// name is read by a shell and nothing runs until the user presses ↵. `None`: a name holds a
+/// control character or a line break of any kind (U+2028 too: a program may read it as one,
+/// and run what follows), or there are none.
+/// e.g. `["/tmp/a b", "/tmp/it's"]` → `'/tmp/a b' '/tmp/it'\''s' `.
+pub fn dropped(paths: &[String]) -> Option<String> {
+    let breaks = |c: char| c.is_control() || crate::capture::is_break(c);
+    if paths.is_empty() || paths.iter().any(|path| path.chars().any(breaks)) {
+        return None;
+    }
+    let quote = |path: &String| format!("'{}'", path.replace('\'', "'\\''"));
+    Some(paths.iter().map(quote).collect::<Vec<_>>().join(" ") + " ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +256,33 @@ mod tests {
         assert_eq!(PasteAsk::answer("escape", plain, false), None);
         let ask = |lines| PasteAsk { pane: 1, amount: Amount { lines, chars: 9, newline: true } };
         assert_eq!((ask(1).title(), ask(4).title()), ("Paste 1 line?".into(), "Paste 4 lines?".into()));
+    }
+
+    #[test]
+    fn dropped_names_are_quoted_whole_and_never_run() {
+        let drop = |paths: &[&str]| dropped(&paths.iter().map(|p| p.to_string()).collect::<Vec<_>>());
+        assert_eq!(drop(&["/tmp/a.txt"]).as_deref(), Some("'/tmp/a.txt' "));
+        assert_eq!(drop(&["/tmp/a b", "/tmp/c"]).as_deref(), Some("'/tmp/a b' '/tmp/c' "));
+        // A quote ends the quoted part, is escaped, and opens it again.
+        assert_eq!(drop(&["/tmp/it's"]).as_deref(), Some("'/tmp/it'\\''s' "));
+        // Nothing a shell would read: $(), backticks, ;, &, |, *, ~, $VAR, a leading -, unicode.
+        for name in [
+            "/tmp/$(rm -rf ~)",
+            "/tmp/`id`",
+            "/tmp/a;b",
+            "/tmp/a&b|c",
+            "/tmp/*",
+            "~/x",
+            "/tmp/$HOME",
+            "-rf",
+            "/tmp/日本 🚀",
+        ] {
+            assert_eq!(drop(&[name]), Some(format!("'{name}' ")), "{name}");
+        }
+        // A line break, a carriage return, a tab, an escape, a nul: nothing typed at all.
+        for name in ["/tmp/a\nrm -rf ~", "/tmp/a\rb", "/tmp/a\tb", "/tmp/a\x1b[31m", "/tmp/a\0b", "/tmp/a\u{2028}b"] {
+            assert_eq!(drop(&["/tmp/ok", name]), None, "{name:?}");
+        }
+        assert_eq!(drop(&[]), None);
     }
 }
