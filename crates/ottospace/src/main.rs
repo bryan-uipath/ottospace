@@ -1220,6 +1220,19 @@ const SETTLE_LIMIT: Duration = Duration::from_secs(5);
 /// How much of a test run's window stays on screen, in points, at the corner it sits in.
 const E2E_SLIVER: f32 = 12.;
 
+/// A test run's window size, `OTTOSPACE_E2E_WINDOW=1024x674` (CI's screen), read only under
+/// `OTTOSPACE_E2E`. macOS keeps it no larger than the screen. 8000 at most: 100000 ended the app at start.
+fn e2e_window() -> Option<(f32, f32)> {
+    std::env::var_os("OTTOSPACE_E2E")?;
+    let value = std::env::var("OTTOSPACE_E2E_WINDOW").ok()?;
+    let size = value.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
+    let size = size.filter(|&(w, h): &(f32, f32)| (100. ..=8_000.).contains(&w) && (100. ..=8_000.).contains(&h));
+    if size.is_none() {
+        eprintln!("OTTOSPACE_E2E_WINDOW={value:?} is not WIDTHxHEIGHT, 100 to 8000 each: the window is 1400x900");
+    }
+    size
+}
+
 /// How long the `s` key snoozes a task: one hour.
 const SNOOZE_MS: u64 = 3_600_000;
 /// How long a step's information (`Effect::Told`) stays in the notice bar.
@@ -8302,7 +8315,8 @@ fn main() {
             ottospace_mac::window::show_about(env!("CARGO_PKG_VERSION"), &build_of(commit, date));
         });
         cx.set_menus(menus::app_menus(&features::startup()));
-        let mut bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
+        let (width, height) = e2e_window().unwrap_or((1400., 900.));
+        let mut bounds = Bounds::centered(None, size(px(width), px(height)), cx);
         // A test run stays out of the user's way: a background app that never takes the keyboard,
         // with its window at a free corner of the screens, all but a sliver of it off screen.
         // (A sliver, because a window with nothing showing is not drawn, and tests wait on layout.)

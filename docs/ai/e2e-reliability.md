@@ -80,6 +80,24 @@ frame goes.
 - `reliability.yml`: nightly and by hand, `cargo e2e` and `cargo e2e-apps` five times each on
   macOS runners, tallied in the summary. The nightly run opens or updates one issue, "Flaky tests".
 
+## CI's window, and which tests to run
+
+Twice a test passed locally and failed on CI only because CI's screen is 1024 points wide: the
+1400x900 window is 1024x674 there (#289, #311). `OTTOSPACE_E2E_WINDOW=1024x674`, read only under
+`OTTOSPACE_E2E`, gives a local run that window; macOS keeps one larger than the screen no larger,
+as on CI.
+
+With CI's runners backed up, pull requests merge on local evidence. The rule: before one does,
+`scripts/e2e-for --run --ci-size` runs the e2e tests the change can affect, at CI's window, one at
+a time under nextest, and its summary goes in the pull request. The selection is a table, not
+analysis: tests the diff adds or changes in `e2e.rs` (and the tests that name a helper it
+changes, through other helpers too), the tests of each changed path's area
+(`scripts/e2e-for.areas`: a path regex, a test-name regex), and a smoke set. `main.rs`,
+`model.rs` and the like take a broad set, one or two tests of each area. A path the table does
+not know, a dependency, the harness: it prints the full-suite command instead of guessing, and
+`--run` runs nothing. `scripts/e2e-for --check` keeps the table to the tests and files there
+are.
+
 ## Nothing left in `$TMPDIR`
 
 Runs had left about 12,000 files there: a lock per launch, settings folders, unit tests' folders.

@@ -80,6 +80,12 @@ Design: [docs/ai/e2e-reliability.md](ai/e2e-reliability.md).
   `timeline.jsonl` (every request, its time and frame numbers), `trace.jsonl` (the app's own
   events), on a timeout `sample.txt` (where every thread of the app was), and `screenshot.png`
   when the window server allows it. `results.jsonl` beside it holds each test's times and waits.
+- `scripts/e2e-for [<base>]` (default `origin/main`) lists the e2e tests your change can affect,
+  each with why it was picked; `--run` runs them one at a time under nextest, `--ci-size` at CI's
+  window (`OTTOSPACE_E2E_WINDOW=1024x674`; CI's screen is 1024 wide). A path its table
+  (`scripts/e2e-for.areas`) does not know gives the full-suite command instead. Before a pull
+  request merges on local evidence, run `scripts/e2e-for --run --ci-size` and paste its summary.
+- `OTTOSPACE_E2E_WINDOW=<w>x<h> cargo e2e -- <test>` runs one test at another window size.
 - `scripts/e2e-repeat 5 [filter]` runs the suite 5 times and tallies each test's failures,
   the slowest tests and the slowest waits (`--apps` for `cargo e2e-apps`, which takes the
   keyboard: prefer the Reliability workflow). `scripts/e2e-report <folder>` tallies again.
