@@ -4941,16 +4941,22 @@ fn features_lists_each_flag_on_two_lines_and_finds_it_by_id_or_name() {
     let reply = otto.call(json!({"cmd": "state"}));
     let rows = reply["palette_rows"].as_array().expect("rows").clone();
     assert_eq!(rows.len(), 9, "{rows:?}");
-    // The first rows two lines tall; a row scrolled out of the list has no rect.
-    for row in &rows[..2] {
-        assert!(rect(&row["rect"])[3] > 1.8 * one && row["stage_rect"].is_array(), "{row} against {one}");
-    }
+    // The first row whole (a rect is the part that shows), two lines tall, as is the next.
+    let whole = |reply: &Value| {
+        let rows = &reply["palette_rows"];
+        let (first, next) = (rect(&rows[0]["rect"])[3], rect(&rows[1]["rect"])[3]);
+        assert!(first > 1.8 * one && first == next && rows[0]["stage_rect"].is_array(), "{rows} against {one}");
+    };
+    whole(&reply);
     for row in &rows {
         // No group column, a flask for Experimental; the name has no id or stage in it.
         assert_eq!((&row["group_rect"], &row["stage"]), (&Value::Null, &json!("Experimental")), "{row}");
         assert!(!row["name"].as_str().unwrap_or("").contains('_'), "{row}");
     }
     assert_eq!((&rows[8]["name"], &rows[8]["on"]), (&json!("Code city"), &json!(false)));
+    // A filter typed and cleared: the first row whole again.
+    otto.user_key("z z");
+    whole(&otto.user_key("backspace backspace"));
     // Its id's letters or its name finds it, first (the core test types `code_city` itself).
     for query in ["c o d e c i t y", "c i t y"] {
         let found = otto.user_key(&format!("cmd-a backspace {query}"));

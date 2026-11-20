@@ -272,13 +272,13 @@ impl Workspace {
         // The highlighted row comes into view when it or the query changes (↑↓, typing, a paste).
         let list = u8::from(palette.tasks.is_some()) + 2 * u8::from(palette.features.is_some());
         let now = (list, palette.query.text().to_string(), palette.selected);
-        let shown = SHOWN.replace(Some(now.clone()));
-        // Another list starts at its top: the commands' offset would cut its first row (Features…).
-        if shown.as_ref().is_some_and(|(was, ..)| *was != list) {
-            self.bars.step("palette", ottospace_core::scrollbar::Step::Top);
-        }
-        if shown != Some(now) {
-            self.bars.scroll_to_item("palette", palette.selected);
+        if SHOWN.replace(Some(now.clone())) != Some(now) {
+            // The first row: the top. Scrolling it into view measures against the list's last
+            // height (one row, or none), which cut a two-line first row (Features…).
+            match palette.selected {
+                0 => self.bars.step("palette", ottospace_core::scrollbar::Step::Top),
+                at => self.bars.scroll_to_item("palette", at),
+            }
         }
         DRAWN.with_borrow_mut(|drawn| drawn.clear());
         // The group column only where rows may differ in it: the commands, not tasks or flags.
