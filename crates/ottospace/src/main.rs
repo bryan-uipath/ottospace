@@ -596,6 +596,8 @@ const TOP_BAR: f32 = 40.;
 const SPACE_TABS: f32 = 30.;
 /// Height of the status bar, at the window's foot.
 const STATUS_BAR: f32 = 24.;
+/// The longest word the status bar's mode says (`render_status`): its slot's width.
+const LONGEST_MODE: &str = "WORKSPACE";
 /// How narrow a space of the top row gets before the row clips, and how wide.
 const MIN_SPACE: f32 = 72.;
 /// What a space wants with its title: past the row's room for that many, the others are badges.
@@ -718,8 +720,9 @@ enum Mark {
     DayGap(usize),
     DayNow,
     DayNowLabel,
-    /// The status bar, and its place, meeting and agents segments.
+    /// The status bar, its mode's block, and its place, meeting and agents segments.
     Status,
+    StatusMode,
     StatusPlace,
     StatusMeeting,
     StatusAgents,
@@ -7666,8 +7669,9 @@ impl Workspace {
         let pending = self.model.viewer_pending();
         // What the middle keeps whole (the hint is cut): the room left is the segments'.
         let kept = [back.as_deref(), clip.as_deref(), pending.as_deref()];
-        let middle = kept.iter().flatten().map(|text| status_bar::width(window, text) + 12.).sum::<f32>()
-            + if mode.is_empty() { 0. } else { status_bar::width(window, mode) + 16. + 12. };
+        // The mode's slot, at the far left: as wide as the longest word, so nothing moves when a mode comes or goes.
+        let slot = status_bar::width(window, LONGEST_MODE).max(status_bar::width(window, mode)) + 2. * theme::SPACE_2;
+        let middle = kept.iter().flatten().map(|text| status_bar::width(window, text) + 12.).sum::<f32>() + slot + 12.;
         let segments = self.status_segments(middle, window, cx);
         self.status_fit.set(segments.fit);
         div()
@@ -7682,9 +7686,13 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(theme::MUTED))
             .child(mark(&self.marks, Mark::Status))
+            // Who has the keyboard: the mode's block, or the slot empty. It takes no click.
+            .child(div().flex_none().w(px(slot)).flex().when(!mode.is_empty(), |d| {
+                d.child(ui::pill(mode, ui::Pill::Mode(color)).relative().child(mark(&self.marks, Mark::StatusMode)))
+            }))
             // Where you are: the focused pane's folder and branch, or its app.
             .children(segments.place)
-            // The middle: the mode and what it says. Its hover names the build.
+            // The middle: what the mode says, and short messages. Its hover names the build.
             .child(
                 div()
                     .id("status-space")
@@ -7699,7 +7707,6 @@ impl Workspace {
                         let (commit, date) = (option_env!("OTTOSPACE_COMMIT"), option_env!("OTTOSPACE_BUILD_DATE"));
                         AnyView::from(cx.new(|_| Tooltip(version_line(env!("CARGO_PKG_VERSION"), commit, date).into())))
                     })
-                    .when(!mode.is_empty(), |d| d.child(ui::pill(mode, ui::Pill::Mode(color))))
                     .child(cut_text(hint))
                     // A count or `g` typed in the viewer, waiting for its move (`10j`).
                     .children(pending.map(|typed| div().flex_none().text_color(rgb(theme::TEXT)).child(typed)))
@@ -8533,6 +8540,7 @@ impl Render for Workspace {
                     | Mark::KeysKnown
                     | Mark::ComposeSwitch
                     | Mark::Heading(..)
+                    | Mark::StatusMode
                     | Mark::StatusPlace
                     | Mark::StatusMeeting
                     | Mark::StatusAgents
