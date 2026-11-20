@@ -231,9 +231,9 @@ whether the regression is real and accepted.
   push to `main` (`ci.yml` calls it; a newer push cancels the run). While main's or `check` fails, the issue
   "main is red" lists the failed tests and the commits since the last green run; it closes itself.
 - `.github/workflows/e2e.yml`, on pull requests with the label `pr-e2e`: `macos.yml` with the e2e
-  tests `scripts/e2e-for` selects from the diff (all of them without the script), no app-window
+  tests `scripts/e2e-for` selects from the diff (all of them when the diff reaches every test), no app-window
   suite; `pr-e2e-apps` adds it. Otherwise a pull request's e2e evidence is a local `scripts/e2e-for`
-  run's summary in its body (`cargo e2e` while the script is missing).
+  run's summary in its body.
 - `.github/workflows/app-windows.yml`, by hand: `cargo e2e-apps`, or one test repeated.
 - `.github/workflows/reliability.yml`, nightly and by hand (`repeat`, `test`): `cargo e2e` and
   `cargo e2e-apps` five times each, tallied. The nightly run keeps the issue "Flaky tests".

@@ -247,7 +247,7 @@ Design note: `docs/ai/attention/plan.md`.
   older push leaves it alone) (`issues: write` and
   `actions: read` on that job only). A red main is fixed before more lands.
 - On a pull request, `.github/workflows/e2e.yml`, by label: `pr-e2e` runs `macos.yml` with the e2e
-  tests `scripts/e2e-for` selects from the diff (all of them while the script is missing), no
+  tests `scripts/e2e-for` selects from the diff (all of them when the diff reaches every test), no
   app-window suite; `pr-e2e-apps` adds `cargo e2e-apps`. One job either way. Another label tests
   nothing. Not a required check.
 - Unused code is deleted, or its `cfg`/visibility fixed. A library's `pub` item that no crate uses
@@ -330,8 +330,7 @@ Design note: `docs/ai/attention/plan.md`.
 - A tool, CLI, parser or CI change pastes the command's output instead.
 - A pull request's checks are Linux only: no e2e, no picture, no compile of `ottospace-mac` or the
   shell (see "CI"). So a visual change's before and after pictures are in its body (Shots runs only
-  with `pr-shots`), and its e2e evidence is the summary of a local `scripts/e2e-for` run (`cargo e2e`
-  while the script is missing) pasted in the body, or a green `pr-e2e` run (`pr-e2e-apps` for hosting, parking or adopting windows).
+  with `pr-shots`), and its e2e evidence is the summary of a local `scripts/e2e-for --run --ci-size` run pasted in the body, or a green `pr-e2e` run (`pr-e2e-apps` for hosting, parking or adopting windows).
 
 ## Install scripts
 

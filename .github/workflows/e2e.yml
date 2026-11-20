@@ -1,7 +1,7 @@
 name: E2E
 
 # A pull request's one macOS run, by label: `pr-e2e` runs macos.yml with the e2e tests the diff
-# selects (`scripts/e2e-for`; every e2e test until it exists), `pr-e2e-apps` adds `cargo
+# selects (`scripts/e2e-for`; every e2e test if the diff reaches all), `pr-e2e-apps` adds `cargo
 # e2e-apps`. Both labels start the same one job. Without a label no Mac is taken: ci.yml's Linux
 # `check` is a pull request's only check. Not a required check.
 on:

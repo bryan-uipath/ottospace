@@ -9,7 +9,7 @@ on:
   workflow_call:
     inputs:
       subset:
-        description: Only the e2e tests the diff selects (scripts/e2e-for), when it exists
+        description: Only the e2e tests the diff selects (scripts/e2e-for)
         type: boolean
         default: false
       apps:
@@ -82,7 +82,7 @@ jobs:
           cargo test --workspace --locked 2>&1 | tee "$RUNNER_TEMP/logs/unit.log"
       # `cargo e2e` under nextest (`.config/nextest.toml`): each test in its own process, one at a
       # time, up to three tries. One that passes on a retry is flaky: the summary says so. On a
-      # pull request, the tests scripts/e2e-for selects from the diff, when the script exists.
+      # pull request, the tests scripts/e2e-for selects from the diff: all of them if it reaches all.
       - name: E2E
         id: e2e
         continue-on-error: true
@@ -91,11 +91,15 @@ jobs:
           SUBSET: ${{ inputs.subset }}
         run: |
           set -o pipefail
-          if [ "$SUBSET" = true ] && [ -x scripts/e2e-for ]; then
-            scripts/e2e-for "$(git rev-parse HEAD^1)" --run --ci-size
+          full() { cargo nextest run -p ottospace --test e2e --run-ignored only --profile e2e --locked; }
+          if [ "$SUBSET" = true ]; then
+            # Exit 3: it ran nothing, the diff reaches every test (a dependency, the harness, a path
+            # its table does not know).
+            rc=0
+            scripts/e2e-for "$(git rev-parse HEAD^1)" --run --ci-size || rc=$?
+            if [ "$rc" = 3 ]; then full; else (exit "$rc"); fi
           else
-            [ "$SUBSET" = true ] && echo "scripts/e2e-for not here: every e2e test"
-            cargo nextest run -p ottospace --test e2e --run-ignored only --profile e2e --locked
+            full
           fi 2>&1 | tee "$RUNNER_TEMP/logs/e2e.log"
       - name: E2E summary
         if: ${{ !cancelled() }}
