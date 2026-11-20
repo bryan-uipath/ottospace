@@ -1105,6 +1105,9 @@ or `en_US.UTF-8` when macOS has no such locale. `scripts/term-probe` prints a te
 card of colours, styles, glyphs and replies, to compare terminals side by side.
 A program asking for the terminal's colours (OSC 10, 11, 12 and 4, e.g. to pick a light or dark
 theme) or its size in points (CSI 14 t) gets the answer. It never reads the clipboard (OSC 52).
+Each character sits on its own columns, whatever font draws it, and box-drawing and block
+characters (`│ ╭ █ ▛ ░`) are drawn as shapes that fill their cell, so boxes and block art have no
+gaps between rows. Double lines (`═ ║`) are the font's.
 Its header names its directory, and the program in front of the shell while one runs:
 `app-api · cargo test`. An app pane's header shows the app's icon and the window's title; an
 empty pane's, nothing.

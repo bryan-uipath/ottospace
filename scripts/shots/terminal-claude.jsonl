@@ -1,0 +1,7 @@
+# Output shaped like Claude Code's in a terminal: block-art logo, ⏺ and ⎿ lines, a diff, a boxed
+# input, a braille spinner, CJK and emoji, each against a column ruler. Glyphs sit on their cells.
+{"cmd":"split"}
+{"cmd":"wait","pattern":"^\\$"}
+{"cmd":"type","text":"clear; {ROOT}/claude-like.sh\r"}
+{"cmd":"wait","pattern":"^claude-like done$"}
+{"shot":"claude-like"}

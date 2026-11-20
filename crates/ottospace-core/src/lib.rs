@@ -14,6 +14,7 @@ pub mod cadence;
 pub mod calendar;
 pub mod capture;
 pub mod capture_model;
+pub mod cell_art;
 pub mod clip;
 pub mod commands;
 pub mod complete;
