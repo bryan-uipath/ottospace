@@ -3,6 +3,7 @@
 //! core's (`model::reorder`).
 
 use gpui::{Context, Div, Pixels, Point, Window, div, prelude::*, px, rgb};
+use ottospace_core::list::ListRow;
 use ottospace_core::model::reorder::ReorderItem;
 use ottospace_core::{Action, theme};
 
@@ -14,6 +15,9 @@ pub(crate) struct DraggedItem {
     pub(crate) item: ReorderItem,
     pub(crate) place: usize,
 }
+
+/// The Workspaces list's gap between rows (`gap_1`).
+pub(crate) const GAP: f32 = 4.;
 
 /// How far the pointer goes from the press before a press is a drag: less is a click.
 const THRESHOLD: f64 = 4.;
@@ -33,7 +37,21 @@ impl Workspace {
             return;
         }
         let to = match item {
-            ReorderItem::Workbook { id } => self.row_place(*id, f32::from(at.y)),
+            ReorderItem::Workbook { id } => {
+                // The room it takes now, to the next row (gap and its tabs too), kept while it is not
+                // drawn: the list's height holds, so a list scrolled to its end does not jump.
+                let bounds = |row: u32| self.controls.bounds(&format!("workbook:{row}"));
+                if let Some(b) = bounds(*id) {
+                    let rows = self.model.workbook_rows();
+                    let next = rows.iter().skip_while(|row| row.id != *id).skip(1).find_map(|row| bounds(row.id));
+                    self.reorder_room = closes_up(Some(b), next, |b| b.origin.y).max(f32::from(b.size.height) + GAP);
+                    // Not drawn while carried: its hover would never end.
+                    if self.row_hovered == Some(ListRow::Workbook(*id)) {
+                        self.row_hovered = None;
+                    }
+                }
+                self.row_place(*id, f32::from(at.y))
+            }
             ReorderItem::Space { of } => {
                 let Some(from) = self.model.shown_spaces().iter().position(|space| space.of == *of) else { return };
                 // The room it takes now, kept while it is not drawn: the row's drop area stays as wide.

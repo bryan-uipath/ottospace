@@ -449,9 +449,10 @@ impl Workspace {
             }
             children.extend(crate::well(tabs, 4.));
         }
-        // After the last row (and anything listed under it): a bar at the list's end.
-        if carried.is_some() && before.is_none() {
-            let end = div().relative().h(px(0.)).child(crate::reorder::bar(&self.controls, false, false));
+        // The carried row's room, at the list's end (its height holds); after the last row, the bar on it.
+        if carried.is_some() {
+            let end = div().relative().flex_none().h(px((self.reorder_room - crate::reorder::GAP).max(0.)));
+            let end = end.children(before.is_none().then(|| crate::reorder::bar(&self.controls, false, false)));
             children.push(end.into_any_element());
         }
         // Each closing temporary workspace under the others, with its own Undo until its time is up,

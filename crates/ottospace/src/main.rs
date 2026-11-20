@@ -972,7 +972,8 @@ struct Workspace {
     divider: Option<divider::Hold>,
     /// Where the button went down on a Workspaces row or a top-row space: a drag starts past a few points.
     reorder_from: Option<gpui::Point<Pixels>>,
-    /// The width of the space a reorder drag carries, as last drawn: the top row keeps it as room.
+    /// The room the item a reorder drag carries took, as last drawn (a space's width, a row's
+    /// height and gap): its row or list keeps it while it is not drawn.
     reorder_room: f32,
     /// A `mouse` request holds the button down: a move before its release is a drag.
     held: bool,
