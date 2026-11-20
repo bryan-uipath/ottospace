@@ -238,6 +238,11 @@ function appWindow(value: unknown, at: string): AppWindow {
   return out;
 }
 
+function cutText(value: unknown, at: string): { room: Rect; drawn: number } {
+  const o = fields(value, at);
+  return { room: rect(o.room, `${at}.room`), drawn: num(o.drawn, `${at}.drawn`) };
+}
+
 function tabOut(value: unknown, at: string): TabOut {
   const o = fields(value, at);
   return { tab: num(o.tab, `${at}.tab`), display: num(o.display, `${at}.display`) };
@@ -1202,6 +1207,7 @@ function reposGroup(value: unknown, at: string): ReposGroup {
     header: orNull(rect)(o.header, `${at}.header`),
     folded: bool(o.folded, `${at}.folded`),
     rows: list(checkoutRow)(o.rows, `${at}.rows`),
+    name_cut: orNull(cutText)(o.name_cut, `${at}.name_cut`),
   };
 }
 

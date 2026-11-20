@@ -3325,8 +3325,9 @@ impl Workspace {
 
     /// The Repos section as laid out: each repository's `name` and `path` with its `header`,
     /// whether it is drawn `folded`, and its `rows` (a checkout's `path`, `branch`, `default`,
-    /// `label`, its dot's `activity` and whether a commit's pulse plays) each with its `row`. Rects are in window points, scrolled out of view or not; null
-    /// while the section is not drawn (a folded repository's rows too).
+    /// `label`, its dot's `activity` and whether a commit's pulse plays) each with its `row`. Rects
+    /// are in window points, scrolled out of view or not; null while the section is not drawn (a
+    /// folded repository's rows too). A test run's `name_cut`.
     fn repos_bar(&self) -> Vec<serde_json::Value> {
         let marks = self.marks.borrow();
         let drawn = |mark: Mark| marks.get(&mark).copied().map(rect);
@@ -3347,11 +3348,15 @@ impl Workspace {
                 row
             };
             let rows: Vec<serde_json::Value> = repo.checkouts().into_iter().map(row).collect();
-            let (header, folded) = (drawn(Mark::Repo(n)), self.model.repo_folded(repo));
+            let at = marks.get(&Mark::Repo(n)).copied();
+            let (header, folded) = (at.map(rect), self.model.repo_folded(repo));
+            // Test runs only: its name's box and shaped width (`cut_text`).
+            let name_cut = cut_drawn(&repo.name, at);
             // The group's folder it is drawn under, if any.
             let group = self.model.repo_dirs.group_of(&repo.path).map(|dir| &dir.path);
             serde_json::json!({
                 "name": repo.name, "path": repo.path, "group": group, "header": header, "folded": folded, "rows": rows,
+                "name_cut": name_cut,
             })
         };
         self.model.repos.iter().enumerate().map(group).collect()
@@ -7645,16 +7650,107 @@ pub(crate) fn cut_text(text: impl Into<SharedString>) -> Div {
     // One line, as the cut shows: a line break would make the box taller and hide what follows it.
     let text: SharedString = text.into();
     let text: SharedString = if text.contains('\n') { text.replace('\n', " ").into() } else { text };
-    // The clear copy a letter at a time, as the cut adds them up (unkerned): a text that fits is
-    // never cut (`ToTo`, emoji, accents). Past `EACH` letters, the rest in one piece: it is cut anyway.
-    const EACH: usize = 128;
-    let split = text.char_indices().nth(EACH).map_or(text.len(), |(at, _)| at);
-    let letters = text[..split].chars().map(|c| SharedString::from(c.to_string()));
-    let rest = (split < text.len()).then(|| SharedString::from(text[split..].to_string()));
-    // Opacity, not a clear colour: emoji are painted in theirs.
-    let room = div().flex().pr(px(1.)).whitespace_nowrap().opacity(0.).child("\u{200b}").children(letters);
+    let room = div().flex().pr(px(1.)).child(Room(text.clone()));
     let over = div().absolute().inset_0().truncate().child(text);
-    div().relative().min_w_0().overflow_hidden().child(room.children(rest)).child(over)
+    div().relative().min_w_0().overflow_hidden().child(room).child(over)
+}
+
+/// `cut_text`'s room: its letters' widths added up unkerned, as GPUI's cut adds them, so a text
+/// that fits is never cut (`ToTo`, emoji, accents); and no less than the text as shaped, which a
+/// pair can widen (`_j`). Rounded up once: a text per letter rounded each, a point more a letter at
+/// most (`notes · 2` vs `flow-workbench   · 2`).
+struct Room(SharedString);
+
+impl IntoElement for Room {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for Room {
+    /// The text's shaped width.
+    type RequestLayoutState = Pixels;
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, Pixels) {
+        let style = window.text_style();
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let width =
+            |piece: &str| window.text_system().layout_line(piece, font_size, &[style.to_run(piece.len())], None).width;
+        // Past `EACH` letters, the rest in one piece: it is cut anyway.
+        const EACH: usize = 128;
+        let text = &self.0;
+        let split = text.char_indices().nth(EACH).map_or(text.len(), |(at, _)| at);
+        let letters = text[..split].chars().fold(px(0.), |sum, c| sum + width(c.encode_utf8(&mut [0; 4])));
+        let rest = if split < text.len() { width(&text[split..]) } else { px(0.) };
+        let shaped = width(text);
+        let mut layout = gpui::Style::default();
+        // As tall as a text's line: unrounded (`window.line_height()` rounds, and moved rows' words).
+        let tall = style.line_height.to_pixels(font_size.into(), window.rem_size());
+        layout.size = size((letters + rest).max(shaped).ceil(), tall).map(Into::into);
+        (window.request_layout(layout, [], cx), shaped)
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        shaped: &mut Pixels,
+        _: &mut Window,
+        _: &mut App,
+    ) {
+        if std::env::var_os("OTTOSPACE_E2E").is_some() {
+            CUT_TEXTS.with_borrow_mut(|cuts| cuts.push((self.0.clone(), bounds, *shaped)));
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut Pixels,
+        _: &mut (),
+        _: &mut Window,
+        _: &mut App,
+    ) {
+    }
+}
+
+thread_local! {
+    /// Test runs only: each text `cut_text` laid out this frame, its room's bounds, its shaped width.
+    static CUT_TEXTS: RefCell<Vec<(SharedString, Bounds<Pixels>, Pixels)>> = RefCell::default();
+}
+
+/// A test run's `cut_text` of `text` drawn within `within`: its `room` (rect) and its shaped
+/// width (`drawn`, unrounded). Null outside a test run.
+fn cut_drawn(text: &str, within: Option<Bounds<Pixels>>) -> serde_json::Value {
+    let within = within.filter(|_| std::env::var_os("OTTOSPACE_E2E").is_some());
+    let Some(within) = within else { return serde_json::Value::Null };
+    CUT_TEXTS.with_borrow(|cuts| {
+        let found = cuts.iter().find(|(cut, room, _)| cut == text && within.contains(&room.origin));
+        found.map_or(
+            serde_json::Value::Null,
+            |(_, room, drawn)| serde_json::json!({"room": rect(*room), "drawn": f32::from(*drawn)}),
+        )
+    })
 }
 
 /// A row of a secondary-bar list. A button at rest: its outline shows. Hover lifts it.
@@ -8128,6 +8224,8 @@ impl Render for Workspace {
         self.drawn_seq = self.seq;
         self.output = false;
         self.frame_start.set(Some(Instant::now()));
+        // `cut_texts` lists this frame's texts only.
+        CUT_TEXTS.with_borrow_mut(Vec::clear);
         for pane in &self.model.panes {
             self.cells.entry(pane.id).or_default();
             self.frames.entry(pane.id).or_default();

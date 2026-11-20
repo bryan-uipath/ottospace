@@ -656,6 +656,8 @@ export interface ReposGroup {
   /** Its checkouts are folded under its name: not drawn, not rows of list mode. */
   folded: boolean;
   rows: CheckoutRow[];
+  /** Test runs only, while drawn: its name's box (`room`) and shaped width (`drawn`). Else null. */
+  name_cut: { room: Rect; drawn: number } | null;
 }
 
 /** A checkout's row in the Repos section. */
