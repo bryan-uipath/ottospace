@@ -1,4 +1,4 @@
-# cargo-nextest, for the e2e job in CI (`.github/workflows/ci.yml`). Locally `cargo e2e` and
+# cargo-nextest, for the macOS job in CI (`.github/workflows/macos.yml`). Locally `cargo e2e` and
 # `scripts/e2e-repeat` need no nextest.
 
 [profile.e2e]

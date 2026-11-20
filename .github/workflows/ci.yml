@@ -19,9 +19,10 @@ permissions:
 
 # A new push to the same PR or branch cancels the run it supersedes: a burst of merges tests main's
 # newest tip. A merge group's ref (`gh-readonly-queue/main/pr-<n>-<sha>`) is its own: groups never
-# cancel each other.
+# cancel each other. A re-run of a push to main is its own group: one of an older push must not
+# cancel the newest run, whose `main-red` speaks for main.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'push' && github.run_attempt > 1 && format('-rerun-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 env:
@@ -121,11 +122,14 @@ jobs:
           # A re-run of an older push must not speak for main: only the newest run does.
           newest="$(gh run list --workflow ci.yml --branch main --event push --limit 1 --json databaseId --jq '.[0].databaseId')"
           if [ "$newest" != "$GITHUB_RUN_ID" ]; then echo "a newer run ($newest) speaks for main"; exit 0; fi
+          # macOS failed with no suite named: a timeout, or a step outside the suites.
+          [ "$RESULT" = success ] || [ -n "$FAILED" ] || FAILED="macOS: $RESULT, no suite named: see the run"
           [ "$CHECK" = success ] || FAILED="$(printf 'check (Linux): %s\n%s' "$CHECK" "$FAILED")"
-          # Only an issue this job wrote: anyone can open one with the title. gh names the
+          # Only an issue this job wrote: anyone can open one with the title, or thirty (the
+          # search asks for the author too, so theirs cannot fill the page). gh names the
           # token's author `app/github-actions` (older ones `github-actions[bot]`): no user's login.
           mine='[.[] | select(.title == "main is red" and (.author.login == "app/github-actions" or .author.login == "github-actions[bot]"))][0].number // empty'
-          number="$(gh issue list --state open --search 'in:title "main is red"' --json number,title,author --jq "$mine")"
+          number="$(gh issue list --state open --search 'in:title "main is red" author:app/github-actions' --json number,title,author --jq "$mine")"
           if [ "$RESULT" = success ] && [ "$CHECK" = success ]; then
             if [ -n "$number" ]; then gh issue close "$number" --comment "Green again at $GITHUB_SHA: $RUN_URL"; fi
             exit 0
@@ -154,7 +158,7 @@ jobs:
           { echo "## main is red"; echo; cat "$body"; } >> "$GITHUB_STEP_SUMMARY"
           # Red again: the closed issue is opened again, so there is one issue, not one per flip.
           if [ -z "$number" ]; then
-            number="$(gh issue list --state closed --search 'in:title "main is red" sort:updated-desc' --json number,title,author --jq "$mine")"
+            number="$(gh issue list --state closed --search 'in:title "main is red" author:app/github-actions sort:updated-desc' --json number,title,author --jq "$mine")"
             [ -z "$number" ] || gh issue reopen "$number"
           fi
           if [ -n "$number" ]; then
