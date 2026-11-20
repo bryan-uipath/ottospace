@@ -22,6 +22,6 @@
 {"until":"clone.job","is":null}
 {"click":"bar:add"}
 {"cmd":"key","keys":"down enter o c t o / h e l l o enter","as":"user"}
-{"until":"repos_bar.1"}
+{"until":"repos_bar.0"}
 {"settle":300}
 {"shot":"cloned"}
