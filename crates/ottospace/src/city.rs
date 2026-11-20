@@ -291,11 +291,12 @@ impl Workspace {
             })
             .collect();
         let (dir, drawn, jobs) = (city.dir.to_string(), self.city_drawn.clone(), self.city_painter.jobs.clone());
-        let home = self.home.clone();
+        let (home, hints) = (self.home.clone(), self.home.clone());
         let shows =
             drawn.borrow().made.as_ref().is_some_and(|made| made.key.dir == dir && drawn.borrow().failed.is_none());
         let picture = canvas(
-            move |bounds, window, _| {
+            move |floor, window, _| {
+                let bounds = area(floor, hints.borrow().hints());
                 // Pixels, as the window draws them: the picture is never scaled.
                 let scale = window.scale_factor();
                 let size = |v: Pixels| (f32::from(v) * scale).round() as u32;
@@ -317,7 +318,7 @@ impl Workspace {
                 drawn
             },
             // The hints as this frame laid them out.
-            move |bounds, drawn: Shared, window, cx| paint(&drawn, bounds, home.borrow().hints(), window, cx),
+            move |_, drawn: Shared, window, cx| paint(&drawn, home.borrow().hints(), window, cx),
         );
         let picture = picture.absolute().size_full();
         if shows {
@@ -339,11 +340,21 @@ impl Workspace {
     }
 }
 
-/// The picture made for this folder, as large as the floor (a stale one stretched until the
-/// new one comes); a backing behind the hints, so they read over any building; and the root's
+/// The part of the floor the picture takes: below the hints when that band is no wider than the
+/// plan's shape (a tall tab: the city is as large there, and no building is behind them); else
+/// all of it.
+fn area(floor: Bounds<Pixels>, hints: Bounds<Pixels>) -> Bounds<Pixels> {
+    let below = Bounds::from_corners(point(floor.left(), hints.bottom() + px(CLEAR)), floor.bottom_right());
+    let tall = below.size.height > px(0.) && below.size.width <= below.size.height * 1.6;
+    if hints.size.width > px(0.) && tall { below } else { floor }
+}
+
+/// The picture made for this folder, as large as its area (a stale one stretched until the new
+/// one comes); a backing behind the hints, so they read over any building; and the root's
 /// folders' names, none behind the hints.
-fn paint(drawn: &Shared, bounds: Bounds<Pixels>, hints: Bounds<Pixels>, window: &mut Window, cx: &mut gpui::App) {
+fn paint(drawn: &Shared, hints: Bounds<Pixels>, window: &mut Window, cx: &mut gpui::App) {
     let mut drawn = drawn.borrow_mut();
+    let bounds = drawn.bounds;
     let Some(made) = drawn.made.as_ref().filter(|made| Some(&made.key.dir) == drawn.asked.as_ref().map(|key| &key.dir))
     else {
         return;
