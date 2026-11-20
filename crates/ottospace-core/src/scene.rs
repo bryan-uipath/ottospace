@@ -42,6 +42,8 @@ const YAW: f32 = 34.;
 const FOV: f32 = 30.;
 /// Room kept round the city in the picture, a share of each side.
 const MARGIN: f32 = 0.04;
+/// A beam rises this high above a box's top (plan units: the plan is 1 deep), at most.
+const BEAM: f32 = 0.15;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
@@ -356,6 +358,25 @@ impl Scene {
         let near = hits.filter_map(|(i, b)| Some((b.crossed(camera.eye, to)?.0, i)));
         near.min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, i)| i)
     }
+
+    /// Box `i`'s beam: from the middle of its top straight up `BEAM` (vertical in the world, so
+    /// under any camera), its end lowered to stay `MARGIN` inside the picture's top. Never the ground's.
+    pub fn beam(&self, i: usize) -> Option<([f32; 3], [f32; 3])> {
+        let (camera, block) = (self.camera?, self.blocks.get(i).filter(|b| b.kind != Kind::Ground)?);
+        let foot = block.top();
+        let up = |h: f32| [foot[0], foot[1] + h, foot[2]];
+        let inside = |h: f32| camera.project(up(h)).is_some_and(|(_, y)| y >= MARGIN);
+        if inside(BEAM) {
+            return Some((foot, up(BEAM)));
+        }
+        // The highest end still inside: none higher than the top itself.
+        let (mut low, mut high) = (0f32, BEAM);
+        for _ in 0..24 {
+            let mid = (low + high) / 2.;
+            if inside(mid) { low = mid } else { high = mid }
+        }
+        Some((foot, up(low)))
+    }
 }
 
 /// Cuts down every building that stands in the line from `eye` to a lit building's top, to just
@@ -571,6 +592,30 @@ mod tests {
         let kerb = [(a.min[0] + a.max[0]) / 2., a.max[1], a.min[2] + 1e-4];
         let (x, y) = s.camera.unwrap().project(kerb).unwrap();
         assert_eq!(s.hit(x, y).map(|i| &s.blocks[i]), Some(a));
+    }
+
+    /// A beam stands straight up from the middle of a box's top, `BEAM` tall where the picture
+    /// has room, lower where it has not, its end never above the picture's margin.
+    #[test]
+    fn a_beam_rises_straight_up_and_stays_in_the_picture() {
+        let atlas = many();
+        for aspect in [0.5, 1.6, 4.] {
+            let s = scene(&atlas, &[], aspect);
+            let camera = s.camera.unwrap();
+            let mut full = 0;
+            for (i, b) in s.blocks.iter().enumerate().skip(1) {
+                let (foot, end) = s.beam(i).unwrap();
+                assert_eq!(foot, b.top());
+                assert_eq!((end[0], end[2]), (foot[0], foot[2]), "vertical");
+                assert!(end[1] >= foot[1] && end[1] <= foot[1] + BEAM + 1e-6, "{foot:?} {end:?}");
+                let (_, y) = camera.project(end).unwrap();
+                assert!(y >= MARGIN - 1e-4, "{aspect}: {y}");
+                assert!(y < camera.project(foot).unwrap().1 || end[1] == foot[1], "up in the picture");
+                full += usize::from(end[1] == foot[1] + BEAM);
+            }
+            assert!(full > 0, "{aspect}: some beam has its whole height");
+        }
+        assert_eq!(scene(&atlas, &[], 1.6).beam(0), None, "the ground has none");
     }
 
     #[test]

@@ -1603,6 +1603,8 @@ export interface CityDrawn {
   /** Each lit building, in window points, and the middle of its top. */
   lit: Rect[];
   lit_tops: [number, number][];
+  /** Each lit building's beam as drawn: its foot and its dot, `[x0, y0, x1, y1]`. */
+  lit_beams: [number, number, number, number][];
   /** Districts named on the last paint. */
   labels: number;
   /** Why there is no picture (no GPU, a failed render): the lattice is drawn instead. */
@@ -1613,13 +1615,16 @@ export interface CityDrawn {
   paints: number;
   /** How long the last picture took: scene, render and read back, in microseconds. */
   render_us: number | null;
-  /** The beacon of the box under the user's pointer: a file's or a district's, lit, its label. */
+  /** The beam of the box under the user's pointer: a file's or a district's, lit, its label. */
   hovered: CityHovered | null;
 }
 
 export interface CityHovered {
   file: boolean;
   lit: boolean;
+  /** Its foot and its dot, `[x0, y0, x1, y1]`. */
+  beam: [number, number, number, number];
+  /** Its label, beside the dot. */
   beacon: Rect;
 }
 

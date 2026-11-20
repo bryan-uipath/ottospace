@@ -2068,6 +2068,7 @@ function cityDrawn(value: unknown, at: string): CityDrawn {
     scale: num(o.scale, `${at}.scale`),
     lit: list(rect)(o.lit, `${at}.lit`),
     lit_tops: list(point)(o.lit_tops, `${at}.lit_tops`),
+    lit_beams: list(segment)(o.lit_beams, `${at}.lit_beams`),
     labels: num(o.labels, `${at}.labels`),
     failed: orNull(str)(o.failed, `${at}.failed`),
     reads: num(o.reads, `${at}.reads`),
@@ -2080,7 +2081,18 @@ function cityDrawn(value: unknown, at: string): CityDrawn {
 
 function cityHovered(value: unknown, at: string): CityHovered {
   const o = fields(value, at);
-  return { file: bool(o.file, `${at}.file`), lit: bool(o.lit, `${at}.lit`), beacon: rect(o.beacon, `${at}.beacon`) };
+  return {
+    file: bool(o.file, `${at}.file`),
+    lit: bool(o.lit, `${at}.lit`),
+    beam: segment(o.beam, `${at}.beam`),
+    beacon: rect(o.beacon, `${at}.beacon`),
+  };
+}
+
+/** A line from one point to another: `[x0, y0, x1, y1]`. */
+function segment(value: unknown, at: string): [number, number, number, number] {
+  if (!Array.isArray(value) || value.length !== 4) throw wrong(at, "[x0, y0, x1, y1]", value);
+  return [num(value[0], at), num(value[1], at), num(value[2], at), num(value[3], at)];
 }
 
 function homeDrawn(value: unknown, at: string): HomeDrawn {
