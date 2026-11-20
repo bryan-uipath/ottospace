@@ -1090,15 +1090,18 @@ mod tests {
             (Some(WORKTREE), "Delete this worktree?".into(), false)
         );
         assert!(m.row_menu().is_none());
-        // ↵ and Esc keep it; only the user's ⌘⌫ deletes.
+        // As the app's other questions: the user's ↵ deletes; Esc or any other key keeps it.
         let cmd = Mods { cmd: true, ..Mods::default() };
         for (key, mods) in
-            [("enter", Mods::default()), ("escape", Mods::default()), ("backspace", Mods::default()), ("d", cmd)]
+            [("escape", Mods::default()), ("backspace", cmd), ("y", Mods::default()), ("enter", cmd), ("d", cmd)]
         {
             assert_eq!(Confirm::answer_delete(key, mods, Origin::User), Some(Action::QuitCancel), "{key}");
         }
-        assert_eq!(Confirm::answer_delete("backspace", cmd, Origin::User), Some(Action::QuitConfirm));
-        assert_eq!(Confirm::answer_delete("backspace", cmd, Origin::Socket), None);
+        assert_eq!(Confirm::answer_delete("enter", Mods::default(), Origin::User), Some(Action::QuitConfirm));
+        for origin in [Origin::Socket, Origin::System] {
+            assert_eq!(Confirm::answer_delete("enter", Mods::default(), origin), None);
+            assert_eq!(Confirm::answer_delete("escape", Mods::default(), origin), None);
+        }
         let mut no = worktree_menu(WORKTREE);
         no.update(Action::RowMenuChoose { index: Some(0) });
         assert!(no.update(Action::QuitCancel).is_empty() && no.confirm.is_none());
@@ -1178,6 +1181,17 @@ mod tests {
     #[test]
     fn only_the_user_deletes_a_worktree() {
         let mut m = worktree_menu(WORKTREE);
+        // A client's right click on the row, or a move in its open menu: refused in a worktree's words.
+        let right_click =
+            Action::RowMenu { row: crate::list::ListRow::Repo(WORKTREE.into()).into(), dots: None, keys: false };
+        for action in [
+            right_click,
+            Action::RowMenuMove { delta: 1 },
+            Action::RowMenuChoose { index: Some(0) },
+            Action::RowMenuClose,
+        ] {
+            assert_eq!(m.refusal(&action, Origin::Socket), Some(crate::repos::DELETE_USERS), "{action:?}");
+        }
         for origin in [Origin::Socket, Origin::System] {
             let theirs = Action::WorktreeDelete { path: WORKTREE.into() };
             assert_eq!(m.refusal(&theirs, origin), Some(crate::repos::DELETE_USERS));

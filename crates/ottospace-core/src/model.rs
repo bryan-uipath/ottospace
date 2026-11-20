@@ -201,11 +201,11 @@ impl Confirm {
         }
     }
 
-    /// What a key does to "Delete this worktree?": No is the default. Only the user's ⌘⌫ deletes;
-    /// any other key of theirs keeps it. A client's: `None`, refused (`repos::DELETE_USERS`).
+    /// What a key does to "Delete this worktree?", as the app's other questions: the user's ↵
+    /// deletes; Esc, or any other key of theirs, keeps it. A client's: `None`, refused (`repos::DELETE_USERS`).
     pub fn answer_delete(key: &str, mods: Mods, origin: Origin) -> Option<Action> {
         match (key, origin) {
-            ("backspace", Origin::User) if mods == Mods { cmd: true, ..Mods::default() } => Some(Action::QuitConfirm),
+            ("enter", Origin::User) if mods == Mods::default() => Some(Action::QuitConfirm),
             (_, Origin::User) => Some(Action::QuitCancel),
             _ => None,
         }
@@ -4364,6 +4364,16 @@ impl Model {
             // The flags too: a client turning one off would end what it holds (a transcript).
             Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
                 Some("only ottospace reads settings.json")
+            }
+            // A worktree row's menu holds only Delete worktree…: its own words, not a workspace's.
+            Action::RowMenu { row: crate::row_menu::MenuOf::Row(ListRow::Repo(_)), .. } => Some(repos::DELETE_USERS),
+            Action::RowMenuMove { .. } | Action::RowMenuChoose { .. } | Action::RowMenuClose
+                if self
+                    .row_menu
+                    .as_ref()
+                    .is_some_and(|menu| matches!(menu.row, crate::row_menu::MenuOf::Row(ListRow::Repo(_)))) =>
+            {
+                Some(repos::DELETE_USERS)
             }
             // A workbook is the user's file, and opening one starts their apps.
             Action::SpaceOpen { space: Owner::Workbook { .. } }

@@ -202,7 +202,7 @@ impl Workspace {
                         .child(said)
                         .child("Its folder goes, and cannot be brought back. git keeps one with changes."),
                 )
-                .child(dialog::hint("⌘⌫ delete · ↵ esc keep"));
+                .child(dialog::hint("↵ delete · esc keep"));
             return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
                 .flex()
                 .items_center()

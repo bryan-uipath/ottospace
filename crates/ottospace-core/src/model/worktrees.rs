@@ -429,7 +429,7 @@ impl Model {
         self.linked_worktree(path).is_some() && self.worktree_busy(path).is_none() && !asked
     }
 
-    /// Delete worktree…: the question first, No its default. In use: why not, and no question.
+    /// Delete worktree…: the question first. In use: why not, and no question.
     pub(crate) fn worktree_delete_ask(&mut self, path: String, effects: &mut Vec<Effect>) {
         if let Some(why) = self.worktree_busy(&path) {
             return effects.push(Effect::Notice { text: why.into() });

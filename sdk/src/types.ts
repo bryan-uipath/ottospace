@@ -1030,7 +1030,7 @@ export interface Confirm {
   later: [TaskId, string] | null;
   /** Not the quit question: "Close <title>? It has unsaved changes" for this owned app pane. Only the user answers it. */
   edited: PaneId | null;
-  /** Not the quit question: "Delete this worktree?" for the linked one at this path. ⌘⌫ deletes; ↵ keeps it. Only the user answers it. */
+  /** Not the quit question: "Delete this worktree?" for the linked one at this path. ↵ deletes; Esc or any other key keeps it. Only the user answers it. */
   delete: string | null;
   /** The quit question's running agents, by their conversation's name. */
   agents: string[];

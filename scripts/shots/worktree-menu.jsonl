@@ -1,5 +1,5 @@
 # A linked worktree's right click: its menu at the pointer (Delete worktree…), the question
-# before it goes (⌘⌫ deletes, ↵ keeps), and a worktree a terminal is in: the item dimmed, with why.
+# before it goes (↵ deletes, esc keeps), and a worktree a terminal is in: the item dimmed, with why.
 {"cmd":"section","section":"repos"}
 {"until":"repos_bar.1"}
 {"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
@@ -10,7 +10,7 @@
 {"click":"row-menu:0"}
 {"until":"state.confirm.delete","is":"{ROOT}/repos/canvas-app-2"}
 {"shot":"delete-ask"}
-{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"key","keys":"escape","as":"user"}
 {"until":"mode","is":"normal"}
 {"cmd":"open_repo","path":"{ROOT}/repos/canvas-app-3"}
 {"click":"repo:{ROOT}/repos/canvas-app-3","button":"right","at":[0.35,0.5]}
