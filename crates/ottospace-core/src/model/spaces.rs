@@ -550,7 +550,7 @@ impl Model {
 
     /// After every step: Home first and shown, with its one empty tab; each tab's space on the
     /// row, its tabs side by side in row order (Home's last); a space with no tab gone, as one
-    /// whose workbook is; the selected space shown, and the tab on show its last.
+    /// whose workbook is.
     pub(crate) fn settle_spaces(&mut self, origin: Origin, step: &HomeStep) {
         let gone: Vec<Owner> = self.spaces.iter().map(|s| s.of.clone()).filter(|of| !self.owner_valid(of)).collect();
         for tab in self.tabs.iter_mut().filter(|tab| gone.contains(&tab.space)) {
@@ -569,7 +569,11 @@ impl Model {
         first.hidden = false;
         self.spaces.insert(0, first);
         self.regroup();
-        // The main window's: a tab out is no space's selection.
+    }
+
+    /// After every step, once the tabs out settled: the main window's space shown, its tab that
+    /// space's last, and the workspace selected last. A tab out is no space's selection.
+    pub(crate) fn settle_selected(&mut self) {
         let main = self.main_at();
         let (of, id) = (self.tabs[main].space.clone(), self.tabs[main].id);
         // The workspace selected last: where a stray tab goes.

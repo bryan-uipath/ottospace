@@ -1985,9 +1985,8 @@ fn check_out(m: &Model) -> Result<(), String> {
     }
     // The selection history names the main window's tab, never one out.
     let main = m.tabs[m.main_at()].id;
-    for space in &m.spaces {
-        let names_out = space.last.is_some_and(|last| m.is_out(last) && last != main);
-        ensure!(!names_out || space.of != *m.shown_space(), "the selected space's last tab is out");
+    for space in m.spaces.iter().filter(|space| space.of == *m.shown_space()) {
+        ensure!(space.last == Some(main), "the selected space's last tab is {:?}, not {main}", space.last);
     }
     Ok(())
 }
@@ -8242,6 +8241,27 @@ fn seed_33152_a_new_window_for_a_new_tab_shows_its_tab() {
             },
         }
         .into(),
+    ])
+    .unwrap();
+}
+
+/// A client's jump to a mark while a tab is out: the main window's tab moved when the tabs out
+/// settled, after its space took the tab before as its last. The next step, refused, put it right.
+#[test]
+fn seed_37143_the_main_windows_space_keeps_the_tab_it_shows_after_a_tab_out_settles() {
+    let marks = "[{\"id\":\"name:flicker\",\"name\":\"flicker\",\"target\":{\"tab\":{\"title\":\"app\",\"task\":3,\"focused\":4,\"layout\":null,\"panes\":[]}}}]";
+    let display =
+        |uid: &str, x| Display { uid: uid.into(), frame: Frame { x, y: 0.0, w: 1728.0, h: 1117.0 }, scale: 2.0 };
+    replay(&[
+        restore_marks(marks, "{}").into(),
+        Action::SetDisplays { displays: vec![display("d1", 0.0), display("d2", 1728.0)], main: Some("d2".into()) }
+            .sent_by(Origin::System),
+        Action::NewTab.into(),
+        Action::EditSettings.into(),
+        Action::NewTab.into(),
+        Action::TabOut { tab: None }.into(),
+        Action::MarkGo { mark: MarkRef::Place(0), axis: Axis::Down }.sent_by(Origin::Socket),
+        Action::CalendarJoin { id: 9 }.sent_by(Origin::System),
     ])
     .unwrap();
 }

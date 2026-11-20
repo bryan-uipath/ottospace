@@ -4779,6 +4779,8 @@ impl Model {
         self.settle_decisions(origin, drawer_keys, &mut effects);
         self.settle_spaces(origin, &home);
         self.settle_out(out_from.clone(), origin == Origin::User, &mut effects);
+        // After the tabs out: a fold-in may move the main window's tab (seed 37143).
+        self.settle_selected();
         self.settle_confirm();
         // A terminal opened now, wherever its tab went (Home's go to a workspace), starts in its space's default.
         for effect in &effects {
