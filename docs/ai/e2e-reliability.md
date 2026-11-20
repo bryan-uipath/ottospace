@@ -125,7 +125,8 @@ stays parked (30+ complete frames with the new geometry: stripes from row 170, 6
 instead of 124 and 48). ScreenCaptureKit and the pane show that faithfully; `enter` brings it back
 to 2× and it redraws. Likely GPUI 0.2.2 missing a resize when size and display change together
 (inferred, not proven). The test now compares with the parked window's own pixels
-(`screencapture -l`, before `enter`), and when the parked window differs from the live one it
+(one ScreenCaptureKit picture before `enter`: `screencapture -l` gives no content for a window
+parked off screen), and when the parked window differs from the live one it
 reports `soft signal, parked window not redrawn` and writes
 `failures/parked-window-not-redrawn-<pid>.txt`, failing nothing. A test that compares with a
 reference should take it at the same moment, from the thing it claims to mirror.

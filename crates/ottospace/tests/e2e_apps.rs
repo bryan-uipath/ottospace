@@ -2984,10 +2984,16 @@ fn a_parked_panes_picture_is_its_window_pixel_for_pixel() {
     let (w, h) = (px(shown[2]), px(shown[3]));
     let picture = grey(&drawn, px(shown[0]), px(shown[1]), w, h);
 
-    // The window itself, still parked: what the pane must show, whatever the app drew in it.
+    // The window itself, still parked: what the pane must show, whatever the app drew in it. One
+    // ScreenCaptureKit picture: `screencapture -l` gives none of a window parked off screen.
     let crop = s["crop"]["1"].as_f64().unwrap_or(0.0);
     let canary_window = s["state"]["panes"][0]["kind"]["window"].as_u64().expect("the canary's window number");
-    let parked = window_pixels(canary_window, &support::temp(&format!("canary-parked-{}.bmp", std::process::id())));
+    let frame = rect(&s["hosted"]["1"]).expect("the parked window's frame");
+    let (pw, ph) = (px(frame[2]), px(frame[3]));
+    ottospace_mac::capture::init();
+    let parked =
+        ottospace_mac::capture::window_rgba(canary_window as u32, pw, ph).expect("a picture of the parked window");
+    let parked = (pw, ph, parked);
     let real = grey(&parked, 0, px(crop), w, h);
 
     let parked_box = stripes_box(&real, w).expect("the canary's stripes in its window");
