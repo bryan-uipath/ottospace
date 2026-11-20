@@ -5729,6 +5729,7 @@ impl Workspace {
             Kind::App { title, name, .. } if title.is_empty() => name.clone(),
             Kind::App { title, .. } => title.clone(),
             Kind::File { path } => viewer::name_and_dir(path).0,
+            Kind::Decision => ottospace_core::model::decisions::NAME.into(),
         }
     }
 
@@ -6443,6 +6444,7 @@ impl Workspace {
             Kind::Empty => "Empty pane".into(),
             Kind::Slot { name, .. } => format!("Slot · {name}").into(),
             Kind::File { .. } => "File".into(),
+            Kind::Decision => ottospace_core::model::decisions::NAME.into(),
         };
         // A marked pane says so, with its letter: ⌘B gives no other sign while the Marks list is shut.
         let marked = self.model.mark_of(MarkOf::Pane(Some(id))).filter(|_| self.on(Feature::Marks));

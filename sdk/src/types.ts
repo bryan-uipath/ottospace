@@ -153,7 +153,7 @@ export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
 export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
 /** A feature flag (`features` in `settings.json`). Off, its requests answer "feature off: <name>". */
-export type Feature = "marks" | "apps_section" | "transcripts" | "slots" | "agent_mode" | "multi_monitor" | "overlay_panels";
+export type Feature = "marks" | "apps_section" | "transcripts" | "slots" | "agent_mode" | "multi_monitor" | "overlay_panels" | "decisions";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
@@ -245,7 +245,9 @@ export type PaneKind =
   /** A slot that waits for a window of this app (the `slots` flag). Where it is: `slots`. */
   | { type: "slot"; name: string; bundle?: string }
   /** A file, read only (`open_file`). Its view: `state.viewers`. */
-  | { type: "file"; path: string };
+  | { type: "file"; path: string }
+  /** The Decisions workspace's card (the `decisions` flag). What it shows: `state.decisions`. */
+  | { type: "decision" };
 
 /** What the viewer read of its file: never its text. */
 export type ViewerRead =
@@ -320,7 +322,9 @@ export type Owner =
   | { kind: "home" }
   | { kind: "task"; id: TaskId }
   | { kind: "session"; runner: string; id: string }
-  | { kind: "workbook"; id: number };
+  | { kind: "workbook"; id: number }
+  /** Decisions (the `decisions` flag): ephemeral, never kept. */
+  | { kind: "decisions" };
 
 /** A space of the top row: its tabs as places in `state.tabs`. Exactly one is `selected`: the tab on show is its. */
 export interface SpaceRow {
@@ -1199,6 +1203,23 @@ export interface Model {
   slot_dialog: SlotDialog | null;
   /** Each file viewer's view, by pane id. */
   viewers: Record<string, Viewer>;
+  /** The Decisions workspace while it is open (the `decisions` flag), else null. */
+  decisions: Decisions | null;
+}
+
+/**
+ * The Decisions workspace: its tab and card pane, the card on show (`task`, `ticket`), "`at` of
+ * `of`", and the cards left, on show first. Ids, priorities and times only: never a question's
+ * words. Only the user opens it, answers, skips, puts off or closes it.
+ */
+export interface Decisions {
+  tab: number;
+  pane: PaneId;
+  task: TaskId;
+  ticket: number;
+  at: number;
+  of: number;
+  queue: { task: TaskId; ticket: number; priority: number; since: number }[];
 }
 
 /** A slot: a pane that keeps its place and waits for a window the user named. */

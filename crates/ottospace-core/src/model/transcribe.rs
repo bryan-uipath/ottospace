@@ -13,7 +13,7 @@ impl Model {
         let kind = pane.and_then(|pane| self.pane(pane)).map(|pane| &pane.kind);
         let (fixture, available) = (self.listen.fixture, self.listen.available);
         match kind {
-            None | Some(Kind::Empty) => Some(listen::FOCUS_APP),
+            None | Some(Kind::Empty | Kind::Decision) => Some(listen::FOCUS_APP),
             Some(Kind::Terminal) if !fixture => Some(listen::FOCUS_APP),
             Some(Kind::App { .. }) if !fixture && !available => Some(listen::NO_SOURCE),
             Some(_) => None,

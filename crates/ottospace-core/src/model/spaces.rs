@@ -29,6 +29,8 @@ pub enum Owner {
     Workbook {
         id: WorkbookId,
     },
+    /// Decisions (`decisions`): ephemeral, one at most, never kept. Its conversation is its card's task's.
+    Decisions,
 }
 
 impl Owner {
@@ -171,10 +173,11 @@ impl Model {
         self.spaces.iter().map(row).collect()
     }
 
-    /// Whether a space is kept: all but a temporary workspace's.
+    /// Whether a space is kept: all but a temporary workspace's and Decisions.
     pub fn space_kept(&self, of: &Owner) -> bool {
         match of {
             Owner::Workbook { id } => self.workbooks.is_kept(*id),
+            Owner::Decisions => false,
             _ => true,
         }
     }
@@ -204,9 +207,9 @@ impl Model {
     pub fn glyph(&self, of: &Owner) -> Glyph {
         match of {
             Owner::Home => Glyph::Home,
-            Owner::Task { .. } if !self.space_badges(of).is_empty() => Glyph::Tasks,
-            Owner::Task { .. } => Glyph::Name,
-            Owner::Session { .. } => Glyph::Name,
+            // Decisions: its card's task's badge.
+            Owner::Task { .. } | Owner::Decisions if !self.space_badges(of).is_empty() => Glyph::Tasks,
+            Owner::Task { .. } | Owner::Session { .. } | Owner::Decisions => Glyph::Name,
             Owner::Workbook { .. } => {
                 let panes = self.tab_panes();
                 let leaves: Vec<_> = self.space_tabs(of).into_iter().flat_map(|at| panes[at].clone()).collect();
@@ -220,6 +223,9 @@ impl Model {
 
     /// A space's tasks, the most urgent first.
     pub fn space_tasks(&self, of: &Owner) -> Vec<TaskId> {
+        if *of == Owner::Decisions {
+            return self.front(of).into_iter().collect();
+        }
         let mut tasks = self.members(of);
         tasks.sort_by_key(|id| self.urgency(*id));
         tasks
@@ -240,6 +246,10 @@ impl Model {
 
     /// The task in front in a space: the one set, while it is in it, else the space's own.
     pub fn front(&self, of: &Owner) -> Option<TaskId> {
+        // Decisions holds no task: its card's is in front.
+        if *of == Owner::Decisions {
+            return self.decision_card().map(|(task, _)| task);
+        }
         let members = self.members(of);
         let set = self.spaces.iter().find(|space| space.of == *of).and_then(|space| space.front);
         // A task the user put away (Done, Later) is never in front: with none else, none is.
@@ -266,6 +276,7 @@ impl Model {
     pub fn space_subject(&self, of: &Owner) -> Option<Subject> {
         match of {
             Owner::Session { runner, id } => Some(Subject::Session { runner: runner.clone(), id: id.clone() }),
+            // Decisions: its card's task (`front`): the drawer talks it over, the right rail shows it.
             _ => self.front(of).map(Subject::Task),
         }
     }
@@ -292,6 +303,7 @@ impl Model {
             }
             Owner::Session { runner, id } => self.session_title(runner, id),
             Owner::Workbook { id } => self.workbooks.get(*id).map(|book| book.name.clone()).unwrap_or_default(),
+            Owner::Decisions => super::decisions::NAME.into(),
         }
     }
 
@@ -322,6 +334,7 @@ impl Model {
             Owner::Home | Owner::Session { .. } => true,
             Owner::Task { id } => self.tasks.live(*id).is_some(),
             Owner::Workbook { id } => self.workbooks.get(*id).is_some(),
+            Owner::Decisions => self.decisions.is_some(),
         }
     }
 
@@ -363,7 +376,7 @@ impl Model {
             }),
             Owner::Session { runner, id } => Some(super::short_title(&self.session_title(runner, id))),
             Owner::Workbook { id } => self.workbooks.get(*id).map(|book| book.name.clone()),
-            Owner::Home => None,
+            Owner::Home | Owner::Decisions => None,
         };
         self.leave(effects);
         self.leave_visual(effects);

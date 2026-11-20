@@ -708,28 +708,9 @@ impl Model {
                 }
             }
             Action::TalkAsk { ticket, act } => {
-                let Some(chat) = self.shown_chat_mut().filter(|chat| chat.front_is(ticket) && !chat.deny) else {
-                    return;
-                };
-                let subject = chat.subject.clone();
-                match act {
-                    Act::Decline if chat.transcript.form_mut().is_some() => {
-                        chat.transcript.answer(false);
-                        let message = Some(ask::DECLINED.to_string());
-                        effects.push(Effect::AgentAnswer { task: subject.clone(), ticket, allow: false, message });
-                    }
-                    Act::Submit => {
-                        let Some((_, answers)) = chat.transcript.reply() else { return };
-                        effects.push(Effect::AgentAnswers { task: subject.clone(), ticket, answers });
-                    }
-                    act => {
-                        if let Some(form) = chat.transcript.form_mut() {
-                            form.act(act);
-                        }
-                        return;
-                    }
+                if let Some(subject) = self.shown_chat().map(|chat| chat.subject.clone()) {
+                    self.ask_act(&subject, ticket, act, effects);
                 }
-                self.chat_state(&subject);
             }
             // Not while the editor has the draft: the message would have nowhere to be typed.
             Action::TalkDenyNote if shown.as_ref().is_some_and(|subject| self.edits(subject)) => {}
@@ -773,6 +754,31 @@ impl Model {
             }
             _ => {}
         }
+    }
+
+    /// A key or click on `subject`'s question card `ticket`, while its agent runs: a move or a
+    /// pick, ↵ (the answers go) or Esc (declined). The drawer's (`TalkAsk`) or Decisions' card's.
+    pub(super) fn ask_act(&mut self, subject: &Subject, ticket: u64, act: Act, effects: &mut Vec<Effect>) {
+        let waits = |chat: &&mut Chat| chat.transcript.live && chat.front_is(ticket) && !chat.deny;
+        let Some(chat) = self.chat_mut(subject).filter(waits) else { return };
+        match act {
+            Act::Decline if chat.transcript.form_mut().is_some() => {
+                chat.transcript.answer(false);
+                let message = Some(ask::DECLINED.to_string());
+                effects.push(Effect::AgentAnswer { task: subject.clone(), ticket, allow: false, message });
+            }
+            Act::Submit => {
+                let Some((_, answers)) = chat.transcript.reply() else { return };
+                effects.push(Effect::AgentAnswers { task: subject.clone(), ticket, answers });
+            }
+            act => {
+                if let Some(form) = chat.transcript.form_mut() {
+                    form.act(act);
+                }
+                return;
+            }
+        }
+        self.chat_state(subject);
     }
 
     /// The task follows its native agent: running while a turn runs, needs you while a request

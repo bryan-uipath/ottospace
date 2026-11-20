@@ -60,6 +60,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       offers: [],
       slot_dialog: null,
       viewers: {},
+      decisions: null,
     },
     bounds: {},
     frames: {},

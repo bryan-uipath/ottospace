@@ -858,7 +858,8 @@ impl Model {
         // A slot is an app pane's record with a `slot` key: an older build reads a plain app pane.
         let extra: Extra = self.slot_record(pane.id).map(|slot| ("slot".to_string(), slot)).into_iter().collect();
         let kind = match &pane.kind {
-            Kind::Empty => RecordKind::Empty,
+            // A Decisions card ends with its run: nothing to keep.
+            Kind::Empty | Kind::Decision => RecordKind::Empty,
             Kind::Terminal => RecordKind::Terminal,
             Kind::App { title, bundle, name, .. } => {
                 let (bundle, name, title) = (bundle.clone(), name.clone(), kept_title(title, 512));
@@ -886,6 +887,9 @@ impl Model {
                 let pane = self.pane(id).ok_or_else(|| format!("no pane {id}"))?;
                 if pane.kind == Kind::Empty {
                     return Err("an empty pane has nothing to mark".into());
+                }
+                if pane.kind == Kind::Decision {
+                    return Err("a Decisions card ends with its run: nothing to mark".into());
                 }
                 let record = self.record(pane, cwds);
                 // What the file would not read back is not marked: an app with no name, a

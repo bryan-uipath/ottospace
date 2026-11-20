@@ -779,6 +779,10 @@ impl Model {
         cwds: &[(PaneId, String)],
         histories: &[(PaneId, History)],
     ) -> Result<TabRecord, String> {
+        // Decisions ends with its run: none of it is kept.
+        if self.tabs.get(index).is_some_and(|tab| tab.space == crate::model::Owner::Decisions) {
+            return Err(crate::model::decisions::UNKEPT.into());
+        }
         let record = self.tab_record(index, cwds, histories).ok_or("no tab to save")?;
         if record.panes.iter().all(|pane| pane.kind == RecordKind::Empty) {
             return Err(EMPTY.into());

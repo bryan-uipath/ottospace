@@ -295,7 +295,7 @@ impl Model {
                     let book = self.workbooks.get(*id).filter(|book| book.closing.is_none())?;
                     ("workbook", None, Some(book.uid.clone()), Some(book.name.clone()).filter(|_| !book.kept))
                 }
-                Owner::Session { .. } => return None,
+                Owner::Session { .. } | Owner::Decisions => return None,
             };
             let tasks: Vec<TaskId> = space.joined.iter().copied().filter(|id| known(Some(*id)).is_some()).collect();
             let front = self.front(&space.of).filter(|id| tasks.contains(id));
@@ -306,7 +306,9 @@ impl Model {
         let mut spaces: Vec<(Owner, Option<u32>, SavedSpace)> = self.spaces.iter().filter_map(kept).collect();
         let (mut records, mut links, mut selected) = (Vec::new(), Vec::new(), None);
         // Home's own tab is not kept: it is always there.
-        let tabs = self.tabs.iter().enumerate().filter(|(_, tab)| tab.id != HOME_TAB && !closing(&tab.space));
+        // Nor Decisions: it ends with the run.
+        let ephemeral = |of: &Owner| closing(of) || *of == Owner::Decisions;
+        let tabs = self.tabs.iter().enumerate().filter(|(_, tab)| tab.id != HOME_TAB && !ephemeral(&tab.space));
         for (index, tab) in tabs.take(MAX_TABS) {
             let Some(mut record) = self.tab_record(index, cwds, &histories) else { continue };
             let space = spaces.iter().position(|(of, ..)| *of == tab.space);

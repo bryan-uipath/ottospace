@@ -68,6 +68,9 @@ pub enum Kind {
     },
     /// A file, read only (`viewer`): its view is the model's `viewers`, by pane.
     File { path: String },
+    /// The Decisions workspace's card (`decisions`): what it shows is the model's `decisions`.
+    /// Never made from an action's kind: only `DecisionsOpen`.
+    Decision,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1592,6 +1595,29 @@ pub enum Action {
     TalkExpand {
         ticket: u64,
     },
+    /// The user's ⌘J or palette command: the Decisions workspace (`decisions`), with the first
+    /// card of its queue on show. Nothing waits: nothing opens. Open already: it shows.
+    DecisionsOpen,
+    /// A key or click on the Decisions card (`ask::Act`), of task `task`'s card `ticket`: as
+    /// `TalkAsk`. A number on a card of one single-select question picks and sends.
+    DecisionsAsk {
+        task: TaskId,
+        ticket: u64,
+        act: crate::ask::Act,
+    },
+    /// S: the card on show is left for the next time; the next one shows.
+    DecisionsSkip {
+        task: TaskId,
+        ticket: u64,
+    },
+    /// L: the card's task is snoozed until `until` (ms since 1970); the next one shows.
+    DecisionsLater {
+        task: TaskId,
+        ticket: u64,
+        until: u64,
+    },
+    /// Esc on the card, or its workspace closed: Decisions ends, nothing answered.
+    DecisionsClose,
     /// A key or click on the shown question card (`ask::Act`), `ticket` as in `TalkAnswer`: a
     /// move, a pick, ↵ (the answers go) or Esc (declined). Only the user's.
     TalkAsk {
@@ -2090,7 +2116,8 @@ impl Action {
     }
 
     /// Whether it would put a slot's kind in a pane, which only `SlotMake` and a slot's own
-    /// steps do: a slot made that way would have nothing to wait for.
+    /// steps do: a slot made that way would have nothing to wait for. Nor a Decisions card,
+    /// which only `DecisionsOpen` makes.
     fn makes_slot_kind(&self) -> bool {
         let kind = match self {
             Action::Split { kind, .. }
@@ -2100,7 +2127,7 @@ impl Action {
             Action::SlotHosted { kind, .. } => kind.as_ref(),
             _ => None,
         };
-        matches!(kind, Some(Kind::Slot { .. }))
+        matches!(kind, Some(Kind::Slot { .. } | Kind::Decision))
     }
 
     /// Whether it would put a file in a pane by a path the viewer does not open (`viewer::sound`).
@@ -2203,6 +2230,7 @@ impl Action {
                 | Action::TabOut { .. }
                 | Action::TabIn { .. }
                 | Action::KeyWindow { .. }
+                | Action::DecisionsOpen
         )
     }
 
@@ -2247,7 +2275,9 @@ impl Action {
             | Action::TalkStart
             | Action::TalkKeys { on: true }
             | Action::BtwOpen
-            | Action::BtwKeys { on: true } => true,
+            | Action::BtwKeys { on: true }
+            // Its card takes the keys in its pane.
+            | Action::DecisionsOpen => true,
             Action::Split { .. }
             | Action::Open { .. }
             | Action::Adopt { .. }
@@ -2553,7 +2583,11 @@ impl Action {
             | Action::BugApps { .. }
             | Action::BugCancel
             | Action::BugSend { .. }
-            | Action::BugRepo { .. } => false,
+            | Action::BugRepo { .. }
+            | Action::DecisionsAsk { .. }
+            | Action::DecisionsSkip { .. }
+            | Action::DecisionsLater { .. }
+            | Action::DecisionsClose => false,
         }
     }
 
@@ -2581,6 +2615,11 @@ impl Action {
             | Action::AppsFilter { .. } => Some(Feature::AppsSection),
             Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => Some(Feature::MultiMonitor),
             Action::OverlayDismiss => Some(Feature::OverlayPanels),
+            Action::DecisionsOpen
+            | Action::DecisionsAsk { .. }
+            | Action::DecisionsSkip { .. }
+            | Action::DecisionsLater { .. }
+            | Action::DecisionsClose => Some(Feature::Decisions),
             Action::ListenStart { .. }
             | Action::ListenToggle { .. }
             | Action::ListenPause { .. }
@@ -3379,6 +3418,7 @@ pub enum TabAt {
 
 pub mod zones;
 
+pub mod decisions;
 pub mod displays;
 pub mod rail;
 pub mod spaces;
@@ -3784,6 +3824,11 @@ pub struct Model {
     /// The user's `windows` rules, as the settings say: a slot is offered no window they ignore.
     #[serde(skip)]
     window_rules: Vec<crate::rules::Rule>,
+    /// The Decisions workspace, while open. In the state: ids, counts and times, never a question.
+    pub decisions: Option<decisions::Run>,
+    /// When each waiting card was first seen waiting, for the queue's age.
+    #[serde(skip)]
+    pub(crate) waiting: Vec<decisions::Seen>,
 }
 
 impl Default for Model {
@@ -3936,6 +3981,8 @@ impl Default for Model {
             offers: Vec::new(),
             offer_panes: Default::default(),
             window_rules: Vec::new(),
+            decisions: None,
+            waiting: Vec::new(),
         };
         // Home's own tab, on show.
         let home =
@@ -4289,6 +4336,14 @@ impl Model {
             {
                 Some(workbook::USERS_ALONE)
             }
+            // Decisions is the person's own block: only they open it, answer, skip, put off or close it.
+            Action::DecisionsOpen
+            | Action::DecisionsAsk { .. }
+            | Action::DecisionsSkip { .. }
+            | Action::DecisionsLater { .. }
+            | Action::DecisionsClose => Some(decisions::USERS_ALONE),
+            // Nor closes its card or its workspace, or moves its card out (`touches_decisions`).
+            action if origin == Origin::Socket && self.touches_decisions(action) => Some(decisions::USERS_ALONE),
             // Done, Later and its Undo are the user's; so is the answer to "Stop it and put it away?".
             Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
             Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
@@ -4681,6 +4736,7 @@ impl Model {
         let finished: Vec<TaskId> =
             fronts_were.into_iter().filter(|id| origin == Origin::User && !was_done(id)).collect();
         self.settle_tasks(undo && origin == Origin::User, &finished);
+        self.settle_decisions(origin, drawer_keys, &mut effects);
         self.settle_spaces(origin, &home);
         self.settle_out(out_from.clone(), origin == Origin::User, &mut effects);
         self.settle_confirm();
@@ -4797,6 +4853,10 @@ impl Model {
             return effects;
         }
         // A capture of a pane out: an end of the user's modes, as any move of theirs, and no more.
+        // The Decisions card stays in its tab, and its tab in the main window.
+        if self.moves_decision_out(&action) {
+            return effects;
+        }
         if self.captures_out(&action) {
             effects.push(Effect::Notice { text: displays::CAPTURE_HERE.into() });
             return effects;
@@ -6477,6 +6537,11 @@ impl Model {
             | Action::TalkEscape
             | Action::TalkInterrupt
             | Action::TalkView { .. }) => self.chat_act(action, effects),
+            action @ (Action::DecisionsOpen
+            | Action::DecisionsAsk { .. }
+            | Action::DecisionsSkip { .. }
+            | Action::DecisionsLater { .. }
+            | Action::DecisionsClose) => self.decisions_act(action, effects),
             action @ (Action::BtwOpen
             | Action::BtwKeys { .. }
             | Action::BtwAsk
@@ -7116,7 +7181,12 @@ impl Model {
         if self.compose_host() == Some(Host::Drawer) {
             self.put_compose_aside();
         }
-        self.open_space(self.subject_space(&subject), effects);
+        // The Decisions card's conversation is talked over where it is: Decisions stays on show.
+        let card =
+            *self.space() == Owner::Decisions && self.space_subject(&Owner::Decisions).as_ref() == Some(&subject);
+        if !card {
+            self.open_space(self.subject_space(&subject), effects);
+        }
         if let Subject::Task(id) = &subject {
             self.set_front(*id);
         }
@@ -7355,7 +7425,7 @@ impl Model {
         for pane in &self.panes {
             let id = Some(pane.id as u32);
             match &pane.kind {
-                Kind::Empty | Kind::Slot { .. } | Kind::File { .. } => {}
+                Kind::Empty | Kind::Slot { .. } | Kind::File { .. } | Kind::Decision => {}
                 Kind::Terminal => {
                     let info = self.terminals.iter().find(|info| info.pane == pane.id);
                     let cwd = info.and_then(|info| info.cwd.clone()).or(pane.cwd.clone());
@@ -8850,6 +8920,7 @@ impl Model {
             Kind::Terminal => Some("a terminal"),
             Kind::File { .. } => Some("a file"),
             Kind::Empty | Kind::Slot { .. } => Some("empty"),
+            Kind::Decision => Some("a Decisions card"),
         };
         if let Some(kind) = kind {
             return Some(format!("pane {id} is {kind}: fit is for an app pane whose window refused the pane's size"));
@@ -9907,6 +9978,11 @@ mod tests {
         Action::TalkSend,
         Action::TalkAnswer { .. },
         Action::TalkExpand { .. },
+        Action::DecisionsOpen,
+        Action::DecisionsAsk { .. },
+        Action::DecisionsSkip { .. },
+        Action::DecisionsLater { .. },
+        Action::DecisionsClose,
         Action::TalkAsk { .. },
         Action::TalkDenyNote,
         Action::TalkEscape,
@@ -10268,6 +10344,11 @@ mod tests {
             Action::TalkSend,
             Action::TalkAnswer { allow: false, ticket: 1 },
             Action::TalkExpand { ticket: 1 },
+            Action::DecisionsOpen,
+            Action::DecisionsAsk { task: 1, ticket: 1, act: crate::ask::Act::Submit },
+            Action::DecisionsSkip { task: 1, ticket: 1 },
+            Action::DecisionsLater { task: 1, ticket: 1, until: 0 },
+            Action::DecisionsClose,
             Action::TalkAsk { ticket: 1, act: crate::ask::Act::Submit },
             Action::TalkDenyNote,
             Action::TalkEscape,
@@ -10673,6 +10754,7 @@ mod tests {
                         Some(crate::new_window::SHELLS_ALONE)
                     }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
+                    _ if action.feature() == Some(Feature::Decisions) => Some(decisions::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
                     Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
@@ -17014,6 +17096,7 @@ mod tests {
                         Some(crate::new_window::SHELLS_ALONE)
                     }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
+                    _ if action.feature() == Some(Feature::Decisions) => Some(decisions::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
                     Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),

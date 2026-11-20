@@ -39,7 +39,7 @@ pub fn place(pane: Option<&Pane>, cwd: Option<&str>) -> Option<Place> {
             Some(Place::Folder(dir.to_string()))
         }
         Kind::App { name, .. } | Kind::Slot { name, .. } => Some(Place::App(name.clone())),
-        Kind::Empty => None,
+        Kind::Empty | Kind::Decision => None,
     }
 }
 
