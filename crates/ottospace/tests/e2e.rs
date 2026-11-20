@@ -399,6 +399,24 @@ fn rect(value: &Value) -> [f64; 4] {
     [r[0], r[1], r[2], r[3]]
 }
 
+/// The toast's top card: what Esc dismisses. Null with no toast.
+fn top_card(state: &Value) -> &Value {
+    &state["toast"]["cards"][0]
+}
+
+/// The toast lies in the window's bottom right, over the panes, its foot a gap over the status bar
+/// (24 points; and so over its `needs you`), or over the timeline's band (12 more) while it shows.
+fn in_bottom_right(state: &Value) {
+    let (toast, window) = (rect(&state["toast"]["rect"]), rect(&state["window"]));
+    let status = rect(&state["status_bar"]["agents"]["rect"]);
+    let foot = toast[1] + toast[3];
+    let fits = toast[0] > 0.
+        && toast[0] + toast[2] <= window[2]
+        && foot <= status[1]
+        && foot >= window[3] - 24. - 12. - 8. - 2.;
+    assert!(fits, "the toast {toast:?} in the window {window:?}, over the status bar's {status:?}");
+}
+
 /// The point at fractions `fx`, `fy` of a rect.
 fn at(r: [f64; 4], fx: f64, fy: f64) -> [f64; 2] {
     [r[0] + r[2] * fx, r[1] + r[3] * fy]
@@ -948,7 +966,7 @@ fn a_repository_is_added_by_the_user_kept_in_their_order_and_an_old_folder_is_on
     let reply = otto.call(json!({"cmd": "section", "section": "repos"}));
     assert_eq!((names(&reply), &reply["state"]["repo_dirs"]["dirs"]), (vec![], &json!([])));
     otto.control("repos-empty:add");
-    // Not a repository, even a folder that holds two: said in the notice bar, nothing written.
+    // Not a repository, even a folder that holds two: said on a toast, nothing written.
     for folder in ["plain", "elsewhere"] {
         let reply = add(&otto, &dir(folder));
         assert_eq!(reply["notice"].as_str(), Some(format!("Not a repository: {}", dir(folder)).as_str()));
@@ -3663,7 +3681,7 @@ fn choosing_an_app_in_the_picker_lists_new_window_then_its_windows() {
     let reply = otto.call(json!({"cmd": "key", "keys": "enter", "as": "user"}));
     let (open, app) = (reply["counts"]["new_windows_open"].as_u64(), reply["state"]["new_window"]["app"].as_str());
     assert_eq!((open, app), (Some(1), Some("Lumen")), "{reply}");
-    // None comes: about 3 seconds later the notice bar says so, and the wait ends.
+    // None comes: about 3 seconds later a toast says so, and the wait ends.
     let reply = otto.wait_for("the late window's notice", |o| {
         let reply = o.call(json!({"cmd": "state"}));
         (reply["notice"] == "Lumen opened no new window in 3 seconds").then_some(reply)
@@ -5454,9 +5472,9 @@ impl Otto {
         self.call(event("up"))
     }
 
-    /// The user's click on the notice bar's ×: the state after it, the next notice in its place.
+    /// The user's click on the top toast card's ×: the state after it, the next notice in its place.
     fn dismiss_notice(&self) -> Value {
-        let close = rect(&self.drawn()["notice_bar"]["close"]);
+        let close = rect(&top_card(&self.drawn())["close"]);
         self.user_click(at(close, 0.5, 0.5));
         self.drawn()
     }
@@ -6326,25 +6344,24 @@ fn agent_argv(dir: &Path, name: &str) -> Option<Vec<String>> {
 }
 
 /// The owner's report: "Workspace deleted" showed above the section's rows and pushed them down.
-/// It is on the notice bar at the foot: nothing above it moves, Undo is the user's alone, × ends it.
+/// It is a toast card at the bottom right: nothing moves, Undo is the user's alone, × ends it.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_deleted_workspace_is_offered_back_on_the_notice_bar_and_nothing_above_it_moves() {
+fn a_deleted_workspace_is_offered_back_on_a_toast_and_nothing_moves() {
     let home = user_folder("workspace-deleted", r#"{"repos": [], "restore_layout": false}"#);
     let otto = Otto::launch_with("workspace-deleted", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     let names = |reply: &Value| -> Vec<String> {
         let rows = reply["workbooks"].as_array().cloned().unwrap_or_default();
         rows.iter().filter_map(|row| row["name"].as_str().map(str::to_string)).collect()
     };
-    // The bar fully open with the offer, or gone: it grows and shrinks over a few frames.
+    // The toast fully in with the offer, or gone: it slides over a few frames.
     let bar = |open: bool| {
         let met = move |o: &Otto| {
             let reply = o.drawn();
-            let drawn = &reply["notice_bar"];
-            let shown = drawn["height"] == 28.0 && drawn["kind"] == "undo";
-            (if open { shown } else { drawn.is_null() }).then_some(reply)
+            let shown = reply["toast"]["shown"] == 1.0 && top_card(&reply)["kind"] == "undo";
+            (if open { shown } else { reply["toast"].is_null() }).then_some(reply)
         };
-        otto.wait_for("the notice bar", met)
+        otto.wait_for("the toast", met)
     };
     // The rows of the first two workspaces, and the section's header.
     let above = |reply: &Value| (reply["workbooks"][0]["row"].clone(), reply["workbooks"][1]["row"].clone());
@@ -6358,24 +6375,22 @@ fn a_deleted_workspace_is_offered_back_on_the_notice_bar_and_nothing_above_it_mo
     let before = bar(false);
     assert_eq!(names(&before), ["Workspace 2", "Workspace 3", "Workspace 4"]);
 
-    // The user's `x` deletes the last: information at the foot, with Undo and ×.
+    // The user's `x` deletes the last: information on a card, with Undo and ×.
     otto.user_key("x");
     let shown = bar(true);
-    let drawn = &shown["notice_bar"];
+    let drawn = top_card(&shown);
     assert_eq!(
         (names(&shown).len(), &shown["workbook_offer"], &drawn["level"], &drawn["text"], &drawn["offer"]),
         (2, &json!("deleted"), &json!("info"), &json!("Workspace deleted"), &json!("undo"))
     );
-    let (window, at_rest) = (rect(&shown["window"]), rect(&drawn["rect"]));
-    assert_eq!(at_rest[1] + at_rest[3], window[3] - 24.0, "{at_rest:?} in {window:?}");
-    // Nothing above it moves: the rows that stay and the section's header.
+    in_bottom_right(&shown);
+    // Nothing moves: the rows that stay and the section's header.
     assert_eq!((above(&shown), &shown["bar_header"]), (above(&before), &before["bar_header"]));
-    assert!(rect(&shown["workbooks"][1]["row"])[1] < at_rest[1]);
 
     // A client's click on Undo, its label on it, and its click on × are refused: the offer stands.
     let (undo, close) = (at(rect(&drawn["offer_rect"]), 0.5, 0.5), at(rect(&drawn["close"]), 0.5, 0.5));
     otto.click(undo, 1);
-    sneak_to(&otto, "notice:offer");
+    sneak_to(&otto, "toast:0:offer");
     otto.call(json!({"cmd": "key", "keys": "escape"}));
     otto.click(close, 1);
     let stands = bar(true);
@@ -6424,34 +6439,40 @@ fn a_temporary_workspaces_dots_on_the_top_row_keep_it() {
     assert!(otto.control_opt("space-menu:1").is_none(), "a kept one has no …");
 }
 
-/// A workspace's Undo stays on the bar when an error takes it: beside the error, its text and its
-/// own Undo, the user's alone. Taken, the workspace is back and only the error is left.
+/// A workspace's Undo stays in view when an error comes: its own card under the error's, its Undo
+/// the user's alone. Taken, the workspace is back and only the error is left.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_workspaces_undo_stays_beside_a_higher_notice() {
-    let home = user_folder("notice-undo-beside", r#"{"repos": []}"#);
-    let otto = Otto::launch_with("notice-undo-beside", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let home = user_folder("notice-undo-stack", r#"{"repos": []}"#);
+    let otto = Otto::launch_with("notice-undo-stack", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
     let closed = otto.user_key("cmd-ctrl-w");
     assert_eq!(closed["workbook_offer"], "closed", "{closed}");
     std::fs::write(home.join("settings.json"), "{ not json").unwrap();
     let both = otto.wait_for("the error over the Undo", |o| {
         let s = o.drawn();
-        (s["notice_bar"]["level"] == "error" && s["notice_bar"]["undo"]["rect"].is_array()).then_some(s)
+        let cards = &s["toast"]["cards"];
+        (cards[0]["level"] == "error" && cards[1]["offer_rect"].is_array()).then_some(s)
     });
-    let bar = &both["notice_bar"];
-    assert_eq!((&bar["kind"], &bar["undo"]["text"]), (&json!("settings_problem"), &json!("Workspace closed")), "{bar}");
-    let undo = at(rect(&bar["undo"]["rect"]), 0.5, 0.5);
+    let (error, below) = (top_card(&both), &both["toast"]["cards"][1]);
+    assert_eq!(
+        (&error["kind"], &below["kind"], &below["text"]),
+        (&json!("settings_problem"), &json!("undo"), &json!("Workspace closed")),
+        "{both}"
+    );
+    let undo = at(rect(&below["offer_rect"]), 0.5, 0.5);
     // A client's click takes nothing back.
     assert_eq!(otto.click(undo, 1)["workbook_offer"], "closed");
     // Nor does a client's sneak label; the user's takes it back.
-    assert_eq!(sneak_to(&otto, "notice:undo")["workbook_offer"], "closed");
+    assert_eq!(sneak_to(&otto, "toast:1:offer")["workbook_offer"], "closed");
     let (_, labels) = sneak(&otto);
-    let label = labels.get("notice:undo").cloned().unwrap_or_default();
+    let label = labels.get("toast:1:offer").cloned().unwrap_or_default();
     let back = otto.call(json!({"cmd": "key", "keys": letters(&label), "as": "user"}));
     assert_eq!((&back["workbook_offer"], space_kept(&back, 1)), (&Value::Null, json!(false)), "{back}");
     let after = otto.drawn();
-    assert_eq!((&after["notice_bar"]["level"], &after["notice_bar"]["undo"]), (&json!("error"), &Value::Null));
+    let cards = after["toast"]["cards"].as_array().map(Vec::len);
+    assert_eq!((&top_card(&after)["level"], cards), (&json!("error"), Some(1)));
 }
 
 /// × on a temporary workspace whose terminal runs something asks first, as ⌘Q does: closed, the
@@ -6603,11 +6624,11 @@ fn plus_makes_a_new_empty_temporary_workspace_each_time_back_after_a_restart_whi
         );
         let offered = otto.wait_for("the offer", |o: &Otto| {
             let reply = o.drawn();
-            (reply["notice_bar"]["height"] == 28.0 && reply["notice_bar"]["kind"] == "undo").then_some(reply)
+            (reply["toast"]["shown"] == 1.0 && top_card(&reply)["kind"] == "undo").then_some(reply)
         });
-        assert_eq!(offered["notice_bar"]["text"], "Workspace closed");
+        assert_eq!(top_card(&offered)["text"], "Workspace closed");
         // The user's Undo: back on the row, selected, with its terminal.
-        let back = otto.user_click(at(rect(&offered["notice_bar"]["offer_rect"]), 0.5, 0.5));
+        let back = otto.user_click(at(rect(&top_card(&offered)["offer_rect"]), 0.5, 0.5));
         assert_eq!((row(&back).len(), &back["state"]["focused"], names(&back).len()), (shown, &json!(2), 3), "{back}");
         otto.call(json!({"cmd": "quit"}));
         exits(&mut otto);
@@ -6729,7 +6750,7 @@ fn a_workspaces_row_opens_on_a_click_and_its_dots_rename_and_delete() {
     let deleted = otto.user_click(at(rect(&open["row_menu"]["items"][1]["rect"]), 0.5, 0.5));
     assert_eq!((names(&deleted), &deleted["workbook_offer"]), (vec!["Workspace 3".to_string()], &json!("deleted")));
     assert_eq!(deleted["row_menu"], Value::Null);
-    // The undo is offered on the notice bar, not above the rows: when it runs out (six seconds)
+    // The undo is offered on a toast, not above the rows: when it runs out (six seconds)
     // no row moves, and the menu stays under its …. A label opened it: the keys are on its first item.
     otto.drawn();
     let (_, labels) = sneak(&otto);
@@ -6737,7 +6758,7 @@ fn a_workspaces_row_opens_on_a_click_and_its_dots_rename_and_delete() {
     assert_eq!((&open["row_menu"]["workbook"], &open["row_menu"]["selected"]), (&json!(2), &json!(0)));
     let gone = otto.wait_for("the offer to run out", |otto| {
         let state = otto.drawn();
-        (state["workbook_offer"].is_null() && state["notice_bar"].is_null()).then_some(state)
+        (state["workbook_offer"].is_null() && state["toast"].is_null()).then_some(state)
     });
     assert_eq!((names(&gone), &gone["row_menu"]["workbook"]), (vec!["Workspace 3".to_string()], &json!(2)));
     // Keep, the second item: kept, so × below keeps it listed.
@@ -8127,7 +8148,7 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     );
     // The bar offers it back, saying what the save kept.
     let offered = otto.wait_for("the offer on the bar", |o| {
-        let bar = o.drawn()["notice_bar"].clone();
+        let bar = top_card(&o.drawn()).clone();
         (bar["kind"] == "undo").then_some(bar)
     });
     assert!(offered["text"].as_str().is_some_and(|text| text.starts_with("Saved \"dri\": ")), "{offered}");
@@ -8392,13 +8413,13 @@ fn the_agent_chip_brings_a_closed_conversation_back() {
     assert!(drawn[1] >= tab[1] && drawn[1] + drawn[3] <= tab[1] + tab[3], "{drawn:?} on the tab row {tab:?}");
     assert!(drawn[0] >= tab[0] + tab[2], "{drawn:?} right of the tabs {tab:?}");
     assert_eq!(closed["tabs"], two["tabs"], "the tabs did not move");
-    // A notice opens at the window's foot: the tab row and the chip stay where they are.
+    // A notice comes as a toast: the tab row and the chip stay where they are.
     std::fs::write(home.join("settings.json"), "{ not json").unwrap();
-    let barred = |o: &Otto| Some(o.drawn()).filter(|state| state["notice_bar"]["height"] == 28.0);
-    let noticed = otto.wait_for("the notice bar", barred);
+    let barred = |o: &Otto| Some(o.drawn()).filter(|state| state["toast"]["shown"] == 1.0);
+    let noticed = otto.wait_for("the toast", barred);
     assert_eq!((rect(&noticed["agent_chip"]["rect"]), rect(&noticed["tabs"][2])), (drawn, tab));
     std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
-    let mended = |o: &Otto| Some(o.drawn()).filter(|s| s["notice_bar"].is_null() && s["settings_errors"] == 0);
+    let mended = |o: &Otto| Some(o.drawn()).filter(|s| s["toast"].is_null() && s["settings_errors"] == 0);
     otto.wait_for("the bar gone", mended);
     // Tabs to the row's end: the chip is its badge alone, still there to click.
     let short = (0..40).find_map(|_| Some(otto.user_key("cmd-t")).filter(|state| state["agent_chip"]["short"] == true));
@@ -9550,41 +9571,46 @@ fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
     otto.call(json!({"cmd": "calendar_call", "in_call": true}));
     std::thread::sleep(Duration::from_millis(1_200));
     assert_eq!(calendar(&otto)["alerts"], 0);
-    // In no call: both running meetings alert, and the notice bar shows the later one, at the
-    // foot: Join its offer, × its Dismiss. Its title is drawn, never in the state.
+    // In no call: both running meetings alert, and a toast card shows the later one, at the top
+    // right: Join its offer, × its Dismiss. Its title is drawn, never in the state.
     otto.call(json!({"cmd": "calendar_call", "in_call": false}));
     let banner = otto.wait_for("the banner", |o| {
         let c = calendar(o);
         (c["alerts"] == 2 && c["banner"]["join"].is_array()).then(|| c["banner"].clone())
     });
     let shown = otto.drawn();
-    let bar = &shown["notice_bar"];
+    let bar = top_card(&shown);
     let said = (&bar["kind"], &bar["level"], &bar["text"], &bar["offer"]);
     assert_eq!(said, (&json!("meeting"), &json!("meeting"), &json!("Meeting started"), &json!("join")), "{bar}");
     assert_eq!((&banner["join"], &banner["dismiss"]), (&bar["offer_rect"], &bar["close"]));
-    // At the foot, right above the timeline's band (the band's top line is its border).
-    let band = rect(&shown["calendar"]["band"]["rect"]);
-    assert!((rect(&bar["rect"])[1] + 28.0 - band[1]).abs() <= 1.0, "above the band {band:?}: {bar}");
+    // Over the panes at the bottom right, over the timeline's band.
+    in_bottom_right(&shown);
+    let (card, band) = (rect(&bar["rect"]), rect(&shown["calendar"]["band"]["rect"]));
+    assert!(card[1] + card[3] <= band[1], "{card:?} over the band {band:?}");
     let state = shown.to_string();
     assert!(!state.contains("Design review") && !state.contains("example.zoom.us"), "{state}");
-    // An error outranks it; mended, the meeting is back.
+    // An error outranks it: the top card. The meeting's stays under it, Join still there; mended, it is on top again.
     let settings = std::fs::read_to_string(home.join("settings.json")).unwrap();
     std::fs::write(home.join("settings.json"), "{ not json").unwrap();
     let covered = otto.wait_for("the error over it", |o| {
         let s = o.drawn();
-        (s["notice_bar"]["level"] == "error" && s["notice_bar"]["height"] == 28.0).then_some(s)
+        (top_card(&s)["level"] == "error" && s["toast"]["shown"] == 1.0).then_some(s)
     });
     assert_eq!(
-        (&covered["calendar"]["banner"]["join"], covered["calendar"]["alerts"].as_u64()),
-        (&Value::Null, Some(2))
+        (
+            &covered["toast"]["cards"][1]["kind"],
+            &covered["calendar"]["banner"]["join"],
+            covered["calendar"]["alerts"].as_u64()
+        ),
+        (&json!("meeting"), &covered["toast"]["cards"][1]["offer_rect"], Some(2))
     );
     std::fs::write(home.join("settings.json"), &settings).unwrap();
-    otto.wait_for("the meeting back", |o| (o.drawn()["notice_bar"]["kind"] == "meeting").then_some(()));
+    otto.wait_for("the meeting back", |o| (top_card(&o.drawn())["kind"] == "meeting").then_some(()));
     // The user's own move that did nothing: the meeting stands over it, in the reply as on the bar.
     let plain = home.canonicalize().unwrap().to_string_lossy().into_owned();
     otto.call(json!({"cmd": "repo_add", "path": plain}));
     let over = otto.drawn();
-    let said = (&over["notice"], &over["notice_level"], &over["notice_bar"]["kind"]);
+    let said = (&over["notice"], &over["notice_level"], &top_card(&over)["kind"]);
     assert_eq!(said, (&json!("Meeting started"), &json!("meeting"), &json!("meeting")), "{over}");
     // A client's click on Join opens nothing; on Dismiss, its Esc or its sneak labels, it
     // dismisses nothing.
@@ -9592,11 +9618,11 @@ fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
     // A client's request that did nothing reads why: the meeting on the user's bar does not cover it.
     let failed = otto.raw(r#"{"cmd":"open_app","name":"Finder"}"#);
     let theirs = otto.drawn();
-    assert_eq!((&theirs["notice"], &theirs["notice_bar"]["kind"]), (&failed["error"], &json!("meeting")), "{failed}");
+    assert_eq!((&theirs["notice"], &top_card(&theirs)["kind"]), (&failed["error"], &json!("meeting")), "{failed}");
     otto.click(centre(&banner["dismiss"]), 1);
     otto.call(json!({"cmd": "key", "keys": "escape"}));
-    sneak_to(&otto, "notice:offer");
-    sneak_to(&otto, "notice:close");
+    sneak_to(&otto, "toast:0:offer");
+    sneak_to(&otto, "toast:0:close");
     let after = calendar(&otto);
     assert_eq!((&after["joins"], after["banner"].is_object()), (&json!(0), true), "{after}");
     // The user's Join opens the link (counted in a test run) and ends that banner; the other
@@ -11841,7 +11867,7 @@ fn done_on_an_idle_task_leaves_the_rail_and_undo_brings_it_back() {
     let space = state["spaces"].as_array().unwrap().iter().find(|s| s["of"]["kind"] == "task").cloned();
     let space = space.expect("its workspace stays on the row");
     assert_eq!((&space["of"]["id"], &space["front"]), (&json!(1), &Value::Null), "{space}");
-    let bar = &state["notice_bar"];
+    let bar = top_card(&state);
     assert_eq!((&bar["text"], &bar["offer"]), (&json!("Done · fix login"), &json!("undo")), "{bar}");
     // In Tasks, under Done today, open.
     let sections = state["tasks_bar"]["sections"].as_array().cloned().unwrap_or_default();
@@ -11880,7 +11906,7 @@ fn a_done_task_leaves_its_repo_row_and_its_workspaces_item_until_undo() {
     otto.user_click(at(rect(&finish(&otto)["rects"]["done"]), 0.5, 0.5));
     otto.wait_for("done", |o| (task_state(o) == "done").then_some(()));
     assert_eq!(marked(&otto), (false, Some(json!("name"))), "the workspace stays, with no task's badge");
-    let bar = otto.call(json!({"cmd": "state"}))["notice_bar"].clone();
+    let bar = top_card(&otto.call(json!({"cmd": "state"}))).clone();
     otto.user_click(at(rect(&bar["offer_rect"]), 0.5, 0.5));
     assert_eq!(task_state(&otto), json!("needs_you"));
     assert_eq!(marked(&otto), (true, Some(json!("tasks"))));
@@ -11920,7 +11946,7 @@ fn an_undo_stops_dones_seal() {
     let counts = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["seal_frames"].clone();
     otto.user_click(at(otto.control("talk"), 0.5, 0.5));
     otto.user_key("cmd-enter");
-    let bar = otto.call(json!({"cmd": "state"}))["notice_bar"].clone();
+    let bar = top_card(&otto.call(json!({"cmd": "state"}))).clone();
     otto.user_click(at(rect(&bar["offer_rect"]), 0.5, 0.5));
     assert_eq!((task_state(&otto), rail_of(&otto)), (json!("needs_you"), vec![json!(1)]));
     let after = counts(&otto);
@@ -12062,7 +12088,7 @@ fn branch_there(app: &str, branch: &str) -> bool {
 
 /// Done on a task whose box made its worktree: dirty (an untracked file), it is kept and the
 /// line says why; clean, git removes it (no `--force`) and its branch stays. The workspace
-/// stays on the row, its folder back on the repository, and the line's New task here opens the
+/// stays on the row, its folder back on the repository, and its card's New task here opens the
 /// box in it: the next task starts in `app`, in that same workspace.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
@@ -12074,7 +12100,7 @@ fn done_removes_its_clean_worktree_keeps_a_dirty_one_and_a_new_task_starts_in_th
     std::fs::write(Path::new(&made).join("notes.md"), "made-up").unwrap();
     otto.user_click(at(rect(&finish(&otto)["rects"]["done"]), 0.5, 0.5));
     let bar = otto.wait_for("why it was kept", |o| {
-        let bar = o.call(json!({"cmd": "state"}))["notice_bar"].clone();
+        let bar = top_card(&o.call(json!({"cmd": "state"}))).clone();
         bar["text"].as_str().is_some_and(|t| t.contains("Kept")).then_some(bar)
     });
     assert_eq!(bar["text"], "Done · fix login · Kept the worktree: 1 uncommitted change", "{bar}");
@@ -12094,11 +12120,11 @@ fn done_removes_its_clean_worktree_keeps_a_dirty_one_and_a_new_task_starts_in_th
     assert!(branch_there(&app, "fix-login"), "the branch stays");
     let space = selected_space(&otto);
     assert_eq!((&space["worktree"], &space["front"]), (&json!(app), &Value::Null), "{space}");
-    // New task here, on the line: the box in this workspace, its folder the repository.
-    let bar = otto.call(json!({"cmd": "state"}))["notice_bar"].clone();
+    // New task here, on its card: the box in this workspace, its folder the repository.
+    let bar = top_card(&otto.call(json!({"cmd": "state"}))).clone();
     assert_eq!(bar["text"], "Done · fix login", "{bar}");
     // A client's click or label on it opens no box: the notice is the user's.
-    for theirs in [otto.click(at(rect(&bar["new_task"]), 0.5, 0.5), 1), sneak_to(&otto, "notice:new-task")] {
+    for theirs in [otto.click(at(rect(&bar["new_task"]), 0.5, 0.5), 1), sneak_to(&otto, "toast:0:new-task")] {
         assert_eq!(theirs["state"]["compose"], Value::Null, "{theirs}");
         assert_eq!(theirs["notice"], "only the user takes New task here", "{theirs}");
     }
@@ -12127,7 +12153,7 @@ fn done_keeps_a_worktree_a_terminal_is_in() {
     otto.call(json!({"cmd": "type", "pane": pane, "text": format!("cd '{made}' && echo IN''SIDE\r")}));
     otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^INSIDE$"}));
     otto.user_click(at(rect(&finish(&otto)["rects"]["done"]), 0.5, 0.5));
-    let bar = otto.call(json!({"cmd": "state"}))["notice_bar"].clone();
+    let bar = top_card(&otto.call(json!({"cmd": "state"}))).clone();
     assert_eq!(bar["text"], "Done · fix login · Kept the worktree: a terminal is in it", "{bar}");
     std::thread::sleep(Duration::from_millis(300));
     assert!(Path::new(&made).join(".git").is_file(), "kept");
@@ -13283,23 +13309,22 @@ fn a_tasks_x_hides_it_and_its_row_brings_it_back() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn the_notice_bar_sits_at_the_foot_moves_nothing_above_and_only_the_user_dismisses_it() {
+fn a_notice_is_a_toast_at_the_bottom_right_moves_no_pane_and_only_the_user_dismisses_it() {
     const RIGHT: &str = r#"{"repos": [], "restore_layout": false}"#;
     const WRONG: &str = "{\n  \"repos\": [],\n  \"restore_layout\": false,\n}\n";
-    let home = user_folder("notice-bar", RIGHT);
-    let otto = Otto::launch_with("notice-bar", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let home = user_folder("notices", RIGHT);
+    let otto = Otto::launch_with("notices", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     let file = home.join("settings.json");
-    // The bar fully open at `level`, or gone (`None`): it grows and shrinks over a few frames.
+    // The toast fully in, its top card at `level`, or gone (`None`): it slides over a few frames.
     let bar = |level: Option<&str>| {
         let level = level.map(String::from);
         let met = move |o: &Otto| {
             let reply = o.drawn();
-            let (drawn, said) = (&reply["notice_bar"], level.as_deref());
-            let open = drawn["height"] == 28.0 && drawn["level"].as_str() == said;
-            let gone = level.is_none() && reply["notice_bar"].is_null();
+            let open = reply["toast"]["shown"] == 1.0 && top_card(&reply)["level"].as_str() == level.as_deref();
+            let gone = level.is_none() && reply["toast"].is_null();
             (open || gone).then_some(reply)
         };
-        otto.wait_for("the notice bar", met)
+        otto.wait_for("the toast", met)
     };
     let read = |errors: u64| {
         otto.wait_for("the file read", |o| Some(o.drawn()).filter(|reply| reply["settings_errors"] == errors));
@@ -13312,7 +13337,7 @@ fn the_notice_bar_sits_at_the_foot_moves_nothing_above_and_only_the_user_dismiss
     let shown = bar(Some("error"));
     assert_eq!(shown["notice"], "settings.json:4:1 trailing comma");
     otto.call(json!({"cmd": "key", "keys": "escape"}));
-    assert_eq!(bar(Some("error"))["notice_bar"]["kind"], "settings_problem");
+    assert_eq!(top_card(&bar(Some("error")))["kind"], "settings_problem");
     otto.user_key("escape");
     let gone = bar(None);
     assert_eq!((&gone["notice"], &gone["settings_errors"]), (&Value::Null, &json!(1)), "dismissed, not fixed");
@@ -13329,26 +13354,25 @@ fn the_notice_bar_sits_at_the_foot_moves_nothing_above_and_only_the_user_dismiss
     let tab = |reply: &Value| rect(reply["tabs"].as_array().unwrap().iter().find(|tab| !tab.is_null()).unwrap());
     std::fs::write(&file, WRONG).unwrap();
     let shown = bar(Some("error"));
-    let (drawn, at_rest) = (&shown["notice_bar"], rect(&shown["notice_bar"]["rect"]));
+    let drawn = top_card(&shown);
     assert_eq!(
         (&drawn["level"], &drawn["text"], &drawn["offer"]),
         (&json!("error"), &shown["notice"], &json!("open_settings"))
     );
-    // Full width, at the foot: right above the status bar (24 high; no timeline in a test run).
-    let window = rect(&shown["window"]);
-    assert_eq!((at_rest[0], at_rest[2], at_rest[3]), (0.0, window[2], 28.0), "{at_rest:?} in {window:?}");
-    assert_eq!(at_rest[1] + at_rest[3], window[3] - 24.0, "{at_rest:?} in {window:?}");
-    // Nothing above it moves: the top row, the strip, the tab row and the pane's top. Only the
-    // pane's foot rises by the bar's height, to the bar's top.
-    for key in ["strip", "bar_header"] {
+    // A card at the window's bottom right, over the pane, under the tab row.
+    in_bottom_right(&shown);
+    // In ottospace's own window: no live app's window is over it (a test run hosts none).
+    assert_eq!(shown["toast"]["panel"], Value::Null);
+    assert!(shown["counts"]["toast_frames"].as_u64() > Some(0), "it slid in: {}", shown["counts"]);
+    let (card, was) = (rect(&drawn["rect"]), rect(&before["frames"][&pane]));
+    let over = card[1] >= tab(&shown)[1] + tab(&shown)[3] && card[1] + card[3] <= was[1] + was[3];
+    assert!(over, "{card:?} over {was:?}");
+    // Nothing moves: the top row, the strip, the tab row, the pane and its header.
+    for key in ["strip", "bar_header", "space_rects"] {
         assert_eq!(shown[key], before[key], "{key}");
     }
-    assert_eq!((&shown["space_rects"], tab(&shown)), (&before["space_rects"], tab(&before)));
-    let (was, is) = (rect(&before["frames"][&pane]), rect(&shown["frames"][&pane]));
-    assert_eq!((is[0], is[1], is[2], is[3]), (was[0], was[1], was[2], was[3] - 28.0));
     let header = |reply: &Value| rect(&reply["headers"][&pane]);
-    assert_eq!(header(&shown), header(&before));
-    assert!(is[1] + is[3] <= at_rest[1], "the pane {is:?} reaches over the bar {at_rest:?}");
+    assert_eq!((rect(&shown["frames"][&pane]), header(&shown), tab(&shown)), (was, header(&before), tab(&before)));
 
     // A client cannot dismiss it: not by a click on ×, not by Esc. The user's Esc is the terminal's.
     let close = at(rect(&drawn["close"]), 0.5, 0.5);
@@ -13356,13 +13380,13 @@ fn the_notice_bar_sits_at_the_foot_moves_nothing_above_and_only_the_user_dismiss
     otto.call(json!({"cmd": "key", "keys": "escape"}));
     otto.user_key("escape");
     // Nor by its sneak label, nor does a client's label on the offer open the settings.
-    sneak_to(&otto, "notice:close");
-    assert_eq!(sneak_to(&otto, "notice:offer")["state"]["tabs"].as_array().map(Vec::len), Some(2));
-    assert_eq!(bar(Some("error"))["notice_bar"]["text"], shown["notice"]);
-    // The user's click on ×: the bar closes and the rest is back where it was.
+    sneak_to(&otto, "toast:0:close");
+    assert_eq!(sneak_to(&otto, "toast:0:offer")["state"]["tabs"].as_array().map(Vec::len), Some(2));
+    assert_eq!(top_card(&bar(Some("error")))["text"], shown["notice"]);
+    // The user's click on ×: the toast goes, and the pane is still where it was.
     otto.user_click(close);
     let gone = bar(None);
-    assert_eq!((rect(&gone["frames"][&pane]), tab(&gone)), (was, tab(&before)));
+    assert_eq!((rect(&gone["frames"][&pane]), header(&gone), tab(&gone)), (was, header(&before), tab(&before)));
     // Fixed: nothing to say.
     std::fs::write(&file, RIGHT).unwrap();
     read(0);
@@ -13372,10 +13396,10 @@ fn the_notice_bar_sits_at_the_foot_moves_nothing_above_and_only_the_user_dismiss
     std::fs::write(&file, r#"{"repos": [], "restore_layout": false, "terminal": {"font_size": 15}}"#).unwrap();
     let info = bar(Some("info"));
     assert_eq!(
-        (&info["notice"], &info["notice_bar"]["offer"]),
+        (&info["notice"], &top_card(&info)["offer"]),
         (&json!("settings.json: restart to apply terminal"), &Value::Null)
     );
-    // A warning takes its place: why the user's own move did nothing.
+    // A warning goes on top of it: why the user's own move did nothing.
     let plain = home.canonicalize().unwrap().to_string_lossy().into_owned();
     otto.call(json!({"cmd": "repo_add", "path": plain}));
     let warned = bar(Some("warning"));
@@ -13384,25 +13408,195 @@ fn the_notice_bar_sits_at_the_foot_moves_nothing_above_and_only_the_user_dismiss
     let failed = otto.raw(r#"{"cmd":"open_app","name":"Finder"}"#);
     assert!(failed["error"].is_string(), "{failed}");
     let stands = bar(Some("warning"));
-    assert_eq!(stands["notice_bar"]["text"], warned["notice"]);
+    assert_eq!(top_card(&stands)["text"], warned["notice"]);
     assert_eq!(stands["notice"], failed["error"]);
-    // Dismissed, the information it covered shows again; an error covers both.
+    // Both stand, the warning on top, the information under it.
+    let kinds =
+        |s: &Value| s["toast"]["cards"].as_array().unwrap().iter().map(|c| c["kind"].clone()).collect::<Vec<_>>();
+    assert_eq!(kinds(&stands), [json!("refused"), json!("settings_restart")], "{}", stands["toast"]);
+    // Dismissed, the information is on top again; an error goes over both.
     // By the user's own sneak label on ×.
     let (_, labels) = sneak(&otto);
-    otto.user_key(&letters(&labels["notice:close"]));
+    otto.user_key(&letters(&labels["toast:0:close"]));
     assert_eq!(bar(Some("info"))["notice"], info["notice"]);
     std::fs::write(&file, "{ not json").unwrap();
-    assert_eq!(bar(Some("error"))["notice_bar"]["kind"], "settings_problem");
+    assert_eq!(top_card(&bar(Some("error")))["kind"], "settings_problem");
 
-    // With nothing on the bar, a client's request that did nothing is answered in its reply
-    // alone: no bar opens, and nothing under the top row moves.
+    // With nothing on the toast, a client's request that did nothing is answered in its reply
+    // alone: no toast comes, and nothing moves.
     std::fs::write(&file, RIGHT).unwrap();
     read(0);
     let rest = bar(None);
     let failed = otto.raw(r#"{"cmd":"open_app","name":"Finder"}"#);
     let after = otto.drawn();
-    assert_eq!((&after["notice"], &after["notice_bar"]), (&failed["error"], &Value::Null));
+    assert_eq!((&after["notice"], &after["toast"]), (&failed["error"], &Value::Null));
     assert_eq!((rect(&after["frames"][&pane]), tab(&after)), (rect(&rest["frames"][&pane]), tab(&rest)));
+}
+
+/// Four notices at once: three cards, the most pressing on top, and "+1 more". Under Reduce
+/// Motion the toast is there at once: no frame asked for its motion.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn notices_stack_three_cards_and_more_and_reduce_motion_moves_none() {
+    let home = user_folder("notice-stack", r#"{"repos": []}"#);
+    // Found at start: a layout that does not read (an error).
+    std::fs::write(home.join("layout.json"), "{not json").unwrap();
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("OTTOSPACE_REDUCE_MOTION", "1")];
+    let otto = Otto::launch_with("notice-stack", &env);
+    // A temporary workspace closed (Undo), a key that needs a restart, and the user's move that did nothing.
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    assert_eq!(otto.user_key("cmd-ctrl-w")["workbook_offer"], "closed");
+    std::fs::write(home.join("settings.json"), r#"{"repos": [], "terminal": {"font_size": 15}}"#).unwrap();
+    otto.wait_for("the restart line", |o| {
+        Some(o.drawn()).filter(|s| {
+            s["settings_errors"] == 0
+                && s["toast"]["more"] == 0
+                && s["toast"]["cards"].as_array().map(Vec::len) == Some(3)
+        })
+    });
+    let plain = home.canonicalize().unwrap().to_string_lossy().into_owned();
+    otto.call(json!({"cmd": "repo_add", "path": plain}));
+    let four = otto.wait_for("four notices", |o| Some(o.drawn()).filter(|s| s["toast"]["more"] == 1));
+    let kinds: Vec<Value> = four["toast"]["cards"].as_array().unwrap().iter().map(|c| c["kind"].clone()).collect();
+    assert_eq!(kinds, [json!("start"), json!("refused"), json!("undo")], "{}", four["toast"]);
+    in_bottom_right(&four);
+    // Each card over the one before it: the first nearest the status bar.
+    let card = |n: usize| rect(&four["toast"]["cards"][n]["rect"]);
+    assert!(card(1)[1] + card(1)[3] <= card(0)[1] && card(2)[1] + card(2)[3] <= card(1)[1], "{}", four["toast"]);
+    assert_eq!((&four["toast"]["shown"], &four["counts"]["toast_frames"]), (&json!(1.0), &json!(0)));
+    // Esc dismisses the top card: the next comes up, and the one past three takes the last place.
+    let next = otto.user_key("escape");
+    let after = otto.drawn();
+    assert!(next["ok"] != false, "{next}");
+    assert_eq!(
+        (&top_card(&after)["kind"], &after["toast"]["more"]),
+        (&json!("refused"), &json!(0)),
+        "{}",
+        after["toast"]
+    );
+    assert_eq!(after["toast"]["cards"].as_array().map(Vec::len), Some(3));
+}
+
+/// Whether `inner` lies in `outer`, both `[x, y, w, h]`, to half a point.
+fn within(inner: [f64; 4], outer: [f64; 4]) -> bool {
+    let (right, bottom) =
+        (inner[0] + inner[2] <= outer[0] + outer[2] + 0.5, inner[1] + inner[3] <= outer[1] + outer[3] + 0.5);
+    inner[0] >= outer[0] - 0.5 && inner[1] >= outer[1] - 0.5 && right && bottom
+}
+
+/// A made-up folder that is not there, its path too long for a card's one line.
+fn long_path() -> String {
+    format!("/made-up/{}", "a-long-folder-name/".repeat(10))
+}
+
+/// The gap between two cards is the pane's: the user's click there focuses the pane under the
+/// toast. A click on a card's own body does not reach it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_click_between_two_cards_reaches_the_pane_under_the_toast() {
+    let home = user_folder("toast-gap", r#"{"repos": []}"#);
+    let otto = Otto::launch_with("toast-gap", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    // Pane 1, and pane 2 at its right, under the toast.
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split", "axis": "right"}));
+    // Two cards: a folder that is not there, and a settings file that does not read.
+    otto.call(json!({"cmd": "repo_add", "path": long_path()}));
+    std::fs::write(home.join("settings.json"), "{ not json").unwrap();
+    let two = otto.wait_for("two cards at rest", |o| {
+        Some(o.drawn()).filter(|s| s["toast"]["shown"] == 1.0 && s["toast"]["cards"][1]["rect"].is_array())
+    });
+    // The second card over the first.
+    let (first, second) = (rect(&two["toast"]["cards"][0]["rect"]), rect(&two["toast"]["cards"][1]["rect"]));
+    let gap = [first[0] + first[2] / 2., (second[1] + second[3] + first[1]) / 2.];
+    assert!(first[1] - (second[1] + second[3]) >= 4., "a gap between {second:?} and {first:?}");
+    let pane = rect(&two["frames"]["2"]);
+    assert!(within([gap[0], gap[1], 0., 0.], pane), "the gap {gap:?} over pane 2 {pane:?}");
+    // On a card: the pane under it gets nothing.
+    assert_eq!(otto.call(json!({"cmd": "focus", "pane": 1}))["state"]["focused"], 1);
+    assert_eq!(otto.user_click(at(first, 0.3, 0.5))["state"]["focused"], 1, "a card's body is its own");
+    // Between them: pane 2 takes the focus, and both cards stay.
+    let clicked = otto.user_click(gap);
+    assert_eq!(clicked["state"]["focused"], 2, "the click in the gap reached pane 2");
+    assert_eq!(otto.drawn()["toast"]["cards"].as_array().map(Vec::len), Some(2));
+}
+
+/// The toast keeps clear of the sidebar and the drawer: over the panes as `overlay_panels` floats
+/// them (in a window narrow enough that the sidebar narrows the card), and beside the drawer that
+/// takes room with the flag off. No pane moves for it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_toast_keeps_clear_of_the_sidebar_and_the_drawer() {
+    let card = |s: &Value| rect(&top_card(s)["rect"]);
+    let toast = |otto: &Otto| {
+        otto.wait_for("the card at rest", |o| {
+            Some(o.drawn()).filter(|s| s["toast"]["shown"] == 1.0 && top_card(s)["rect"].is_array())
+        })
+    };
+    let otto = Otto::launch_with("toast-overlays", &[OVERLAYS[0], OVERLAYS[1], ("OTTOSPACE_E2E_WINDOW", "700x674")]);
+    let before = overlay_panes(&otto);
+    otto.call(json!({"cmd": "repo_add", "path": long_path()}));
+    let alone = toast(&otto);
+    assert_eq!(alone["bounds"], before["bounds"], "a notice moved a pane");
+    // The sidebar over the panes: the card at its right.
+    otto.user_key("cmd-shift-l");
+    let open = toast(&otto);
+    let bar = rect(&open["overlays"]["sidebar"]);
+    assert!(card(&open)[0] >= bar[0] + bar[2], "the card {:?} over the sidebar {bar:?}", card(&open));
+    assert!(card(&open)[2] < card(&alone)[2], "the sidebar narrowed no card: {:?}", card(&open));
+    otto.user_key("escape");
+    // The drawer over the panes: the card at its left.
+    otto.user_key("cmd-n");
+    let boxed = toast(&otto);
+    let drawer = rect(&boxed["overlays"]["drawer"]);
+    let right = card(&boxed)[0] + card(&boxed)[2];
+    assert!(right <= drawer[0], "the card {:?} over the drawer {drawer:?}", card(&boxed));
+    in_bottom_right(&boxed);
+    assert_eq!(boxed["bounds"], before["bounds"], "a pane moved");
+
+    // The flag off: the drawer takes room, and the card stays over the panes.
+    let off = Otto::launch_with("toast-overlays-off", &[]);
+    overlay_panes(&off);
+    off.call(json!({"cmd": "repo_add", "path": long_path()}));
+    off.user_key("cmd-n");
+    let boxed = toast(&off);
+    assert_eq!(boxed["drawer"]["collapsed"], false, "{}", boxed["drawer"]);
+    let panes_right = boxed["frames"].as_object().unwrap().values().map(|f| rect(f)).map(|f| f[0] + f[2]);
+    let panes_right = panes_right.fold(0., f64::max);
+    assert!(card(&boxed)[0] + card(&boxed)[2] <= panes_right, "the card {:?} past the panes", card(&boxed));
+}
+
+/// A card whose text is cut shows all of it while the pointer is over it: taller upward, whole
+/// inside the window and its stack, over the status bar, its × in it, no pane moved. The pointer gone, it is one line again.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_long_card_pointed_at_shows_its_whole_text_inside_the_window() {
+    let otto = Otto::launch("toast-hover");
+    otto.call(json!({"cmd": "repo_add", "path": long_path()}));
+    let rest = otto.wait_for("the card at rest", |o| {
+        Some(o.drawn()).filter(|s| s["toast"]["shown"] == 1.0 && top_card(s)["rect"].is_array())
+    });
+    let (card, frames) = (rect(&top_card(&rest)["rect"]), rest["frames"].clone());
+    assert_eq!(top_card(&rest)["kind"], "failed", "{}", rest["toast"]);
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    otto.mouse("move", at(card, 0.3, 0.5));
+    let open = otto.wait_for("the card taller", |o| {
+        Some(state(o)).filter(|s| top_card(s)["rect"].as_array().is_some_and(|r| r[3].as_f64() > Some(card[3] + 10.)))
+    });
+    let (tall, stack) = (rect(&top_card(&open)["rect"]), rect(&open["toast"]["rect"]));
+    let window = rect(&open["window"]);
+    assert_eq!([tall[0], tall[2], tall[1] + tall[3]], [card[0], card[2], card[1] + card[3]], "it grows upward only");
+    let status = rect(&open["status_bar"]["agents"]["rect"]);
+    assert!(tall[1] + tall[3] <= status[1], "the card {tall:?} over the status bar's {status:?}");
+    assert!(within(tall, stack), "the card {tall:?} is cut by its stack {stack:?}");
+    assert!(within(tall, [0., 0., window[2], window[3]]), "the card {tall:?} leaves the window {window:?}");
+    assert!(within(rect(&top_card(&open)["close"]), tall), "its × stays in it");
+    // Its × where it was at rest: a click aimed at it still takes it.
+    let was = at(rect(&top_card(&rest)["close"]), 0.5, 0.5);
+    assert!(within([was[0], was[1], 0., 0.], rect(&top_card(&open)["close"])), "its × left {was:?}");
+    assert_eq!(open["frames"], frames, "no pane moved");
+    // Off the card: one line again.
+    otto.mouse("move", [card[0] - 40., card[1] - 200.]);
+    otto.wait_for("one line again", |o| Some(state(o)).filter(|s| top_card(s)["rect"] == top_card(&rest)["rect"]));
 }
 
 #[test]
@@ -13515,7 +13709,7 @@ fn a_terminal_opened_on_home_is_in_a_new_workspace_and_home_holds_none() {
     );
     assert!(made["home"].is_null(), "a workspace is on show: {made}");
     // Temporary (no task, no repository, no name): its × closes it. Home is on show, it leaves
-    // the list, and the terminal goes on while the notice bar offers it back.
+    // the list, and the terminal goes on while a toast offers it back.
     let hidden = otto.user_key("cmd-ctrl-w");
     assert_eq!((top_row(&hidden), pane_ids(&hidden), workspace_names(&hidden).len()), (vec![home(true)], vec![1], 0));
     assert_eq!(hidden["workbook_offer"], "closed");

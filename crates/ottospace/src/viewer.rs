@@ -428,7 +428,7 @@ impl Workspace {
     }
 
     /// A key while the focused viewer has the keyboard. True: it was the viewer's. Esc with
-    /// nothing typed and no lines marked is left for the notice bar, a shortcut for its binding.
+    /// nothing typed and no lines marked is left for the toast, a shortcut for its binding.
     pub(crate) fn viewer_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) -> bool {
         let Some(key) = key_name(event) else { return false };
         // Not the viewer's (a shortcut such as ⌃Tab): it goes on to its binding, and drops a count.

@@ -95,7 +95,7 @@ draft's or a brief's picture of an app in the right bar. The structure snapshot 
 | A mode of its own | No: annotate mode, as a capture's picture. The field is the comment |
 | Esc while a comment is typed | Ends the comment; Esc again cancels the report |
 | No comment typed | The task is "Bug report", in fixed words |
-| No folder for worktrees | Nothing is filed; the notice bar says so and the report stays |
+| No folder for worktrees | Nothing is filed; a toast says so and the report stays |
 | The repository not in Repos | Its worktree is made all the same; it is not listed |
 | No picture (no Screen Recording) | The report works over the window as it is; the brief says no picture was kept |
 

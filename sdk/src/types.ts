@@ -1564,25 +1564,35 @@ export interface AppEntry {
 /** A notice's level, least pressing first: a meeting that started is over a warning, under an error. */
 export type NoticeLevel = "info" | "warning" | "meeting" | "error";
 
-/** The notice bar: one message, full width at the window's foot. */
-export interface NoticeBar {
+/** A toast card: one notice. */
+export interface ToastCard {
   /** What it is about: `failed`, `refused`, `unsaved`, `told`, `settings_problem`, `settings_retired`, `settings_restart`, `start`, `keys`, `editor`, `meeting`, `undo`. */
   kind: string;
   level: NoticeLevel;
   /** A meeting's is `Meeting started`: its title is never in the state. */
   text: string;
-  /** What it offers beside the text: `open_settings`, `join` (a meeting's link), `undo` (a workspace deleted, updated or, temporary, closed), or null. */
+  /** What it offers beside the text: `open_settings`, `join` (a meeting's link), `undo` (a workspace deleted, updated or, temporary, closed; a task done), or null. Only the user's click takes it. */
   offer: string | null;
   offer_rect: Rect | null;
   /** Its ×. Only the user's click dismisses. */
   close: Rect | null;
   /** On "Done · <task>": its New task here (⌘N), where; else null. */
   new_task: Rect | null;
-  /** A workspace's Undo still offered beside a higher notice (an error, a meeting): its text and its Undo's rect. Only the user's click takes it. */
-  undo: { text: string; rect: Rect | null } | null;
   rect: Rect | null;
-  /** How much of it shows: less than 28 while it opens or closes. The panes' feet are this much higher. */
-  height: number;
+}
+
+/** The toast: notices as cards at the window's bottom right, over the panes. It takes no room. */
+export interface Toast {
+  /** At most three, the most pressing first: what Esc dismisses. An Undo is never past them. */
+  cards: ToastCard[];
+  /** How many notices more than the cards. */
+  more: number;
+  /** Where the stack is drawn; while `panel` is set, it and the cards' rects are from the panel's top left. */
+  rect: Rect | null;
+  /** How far in it is: less than 1 while it comes or goes. */
+  shown: number;
+  /** The rect around the floating panels (one a card) over a live app's window, on the screens, or null: drawn in ottospace's window. */
+  panel: Rect | null;
 }
 
 /** The reply to most requests: the full state after the request. */
@@ -1638,12 +1648,12 @@ export interface Snapshot {
   font: { name: string; size: number };
   /** One character cell: `[w, h]` in points. */
   cell: [number, number];
-  /** What the last step said (why a request did nothing), else what the notice bar says to the user. Not an error of this request. A client's refusal is here alone, never on the bar. */
+  /** What the last step said (why a request did nothing), else what the toast's first card (`cards[0]`, nearest the status bar) says to the user. Not an error of this request. A client's refusal is here alone, never on the toast. */
   notice: string | null;
-  /** The level of `notice`, the reply's line: the bar's colour when the bar shows it. */
+  /** The level of `notice`, the reply's line: its card's colour when the toast shows it. */
   notice_level: NoticeLevel | null;
-  /** The notice bar as drawn, or null while it takes no room. */
-  notice_bar: NoticeBar | null;
+  /** The toast as drawn, or null while it shows nothing. It takes no room: no pane moves for it. */
+  toast: Toast | null;
   /** Where each draft row of the quit question is drawn, in `confirm.unsent`'s order. */
   quit_rows: Rect[];
   /** How many problems the last read of `settings.json` found: the first is in `notice`. */
@@ -1745,7 +1755,7 @@ export interface Snapshot {
   workbooks: Workbook[];
   /** Temporary workspaces the user closed, each with its own Undo (the user's alone) until its time is up. */
   workbooks_closing: Array<{ id: number; name: string; undo: Rect | null }>;
-  /** What the notice bar offers to take back (`kind` `undo`), while it offers. */
+  /** What the toast offers to take back (`kind` `undo`), while it offers. */
   workbook_offer: "deleted" | "updated" | "closed" | null;
   /** The open menu of a row of the bar, or null. */
   row_menu: RowMenu | null;
@@ -1839,7 +1849,7 @@ export interface Snapshot {
   /**
    * The meeting timeline, if `calendar_ics` is set: counts, times (ms) and stages only. No title or
    * place: every reply carries the state, and those are only in `calendar`'s own reply. `banner`: while a meeting runs and no call is on,
-   * where its Join and Dismiss are on the notice bar (null while an error covers it). `joins`: in a test run, links a Join opened.
+   * where its card's Join and Dismiss are on the toast (null while its card is not drawn). `joins`: in a test run, links a Join opened.
    */
   calendar: {
     on: boolean;

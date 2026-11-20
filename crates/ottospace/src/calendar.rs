@@ -1,5 +1,5 @@
 //! The meeting timeline's shell: reads the calendar feed off the main thread, draws the band
-//! (a started meeting is a notice on the notice bar: `notice_bar`), looks whether a call is
+//! (a started meeting is a notice on the toast: `notices`), looks whether a call is
 //! on, and alerts. The decisions are the core's (`ottospace_core::calendar`).
 //!
 //! The feed is ottospace's only network access: `/usr/bin/curl`, `https:` only, its link on curl's
@@ -25,7 +25,7 @@ use serde_json::json;
 use crate::{Mark, Tooltip, Workspace, config, event_log, mark, now_ms, progress, words};
 
 /// The band's height above the status bar, its 1-point top line included; hover takes all of it.
-const BAND: f32 = 12.;
+pub(crate) const BAND: f32 = 12.;
 /// Below the top line: what lanes and hover slices divide.
 const INNER: f32 = BAND - 1.;
 /// Calls and blocks are drawn between these margins; overlapping calls split the room into lanes
@@ -678,7 +678,7 @@ impl Workspace {
             "band_line": calendar.band_shows().line(self.timeline.reduce_motion),
             "band_rect": drawn(Mark::Band),
             "band_retry": at("calendar-band-retry".into()),
-            // The meeting on the notice bar: where its Join and × are (null: not drawn).
+            // The meeting on the toast: where its Join and × are (null: not drawn).
             "banner": banner.map(|_| serde_json::json!({ "join": controls.0, "dismiss": controls.1 })),
             "alerts": calendar.given,
             // The Calendar section: its day (0 today, -1 yesterday) and that day's local midnight,

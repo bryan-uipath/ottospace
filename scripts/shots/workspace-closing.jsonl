@@ -1,5 +1,5 @@
 # Two temporary workspaces closed one after the other: each keeps its own Undo on its row in the
-# Workspaces section (italic, "Closing"), the notice bar offers the latest; a third still open.
+# Workspaces section (italic, "Closing"), a toast offers the latest; a third still open.
 {"click":"top:new_workspace"}
 {"click":"top:new_workspace"}
 {"click":"top:new_workspace"}

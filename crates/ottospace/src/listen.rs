@@ -707,7 +707,7 @@ impl Workspace {
     }
 
     /// A pane's header after its transcript's sound stopped coming: a grey dot, why, and × (the
-    /// user's Stop) to put it away. The notice bar says more.
+    /// user's Stop) to put it away. The toast says more.
     fn listen_lost(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .flex()

@@ -44,7 +44,7 @@ pub struct Finishing {
     pub(crate) resume: Vec<TaskId>,
 }
 
-/// "Done · <task>" on the notice bar, with Undo, until `until` (ms since 1970).
+/// "Done · <task>" on the toast, with Undo, until `until` (ms since 1970).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DoneOffer {
     pub task: TaskId,

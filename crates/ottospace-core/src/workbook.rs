@@ -662,7 +662,7 @@ impl Workbooks {
         self.offer.as_ref().map(|offer| offer.change)
     }
 
-    /// The offer as the notice bar says it, at the window's foot: nothing in the section moves.
+    /// The offer as the toast says it: nothing in the section moves.
     pub fn notice(&self) -> Option<Notice> {
         let offer = self.offer.as_ref()?;
         let text = offer.note.clone().unwrap_or_else(|| offer.change.title().into());
@@ -1964,7 +1964,7 @@ mod tests {
     }
 
     #[test]
-    fn a_delete_is_offered_back_on_the_notice_bar_and_only_the_user_takes_it_or_dismisses_it() {
+    fn a_delete_is_offered_back_on_a_toast_and_only_the_user_takes_it_or_dismisses_it() {
         use crate::notice::{Kind as Notices, Level, Offer};
         let dismiss = |text: &str| Action::NoticeDismiss { notice: Notices::Undo, text: text.into() };
         let mut m = saved();

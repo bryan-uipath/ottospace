@@ -30,7 +30,7 @@ sneak label and its rect in the state), the tooltip and the click.
 | `panel_header` | the top of a panel (the sidebar) | its title in capitals; the caller adds its actions, last its collapse arrow (`Button::Icon`) |
 | `rail_cell` | a cell of the left or right rail | `Side::Left`/`Right`; `open`: raised in the panel's background with an accent bar on the window's edge and no line toward the panel, joined to it |
 | `tooltip` | text under the pointer | `Hint`: a tooltip. `Drag`: what a dragged pane or tab carries |
-| `notice_line` | the notice bar's line | by `notice::Level`: its colours and glyph |
+| `notice_line` | a toast card's line | by `notice::Level`: its colours and glyph |
 | `divider` | the grab of the line between two panes | by `Axis`: `Right` a vertical line, `Down` a horizontal one. `DIVIDER_GRAB` across (a pane's border and padding each side), the resize pointer; hover lights a line down its middle, `Pressed` (dragging) brighter |
 
 ## Rules

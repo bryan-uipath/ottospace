@@ -14,7 +14,8 @@ import type {
   AgentLine,
   Btw,
   CalendarFetch,
-  NoticeBar,
+  Toast,
+  ToastCard,
   NoticeLevel,
   AppEntry,
   Feature,
@@ -903,7 +904,7 @@ function noticeUndo(value: unknown, at: string): { text: string; rect: Rect | nu
   return { text: str(o.text, `${at}.text`), rect: orNull(rect)(o.rect, `${at}.rect`) };
 }
 
-function noticeBar(value: unknown, at: string): NoticeBar {
+function toastCard(value: unknown, at: string): ToastCard {
   const o = fields(value, at);
   return {
     kind: str(o.kind, `${at}.kind`),
@@ -913,9 +914,18 @@ function noticeBar(value: unknown, at: string): NoticeBar {
     offer_rect: orNull(rect)(o.offer_rect, `${at}.offer_rect`),
     close: orNull(rect)(o.close, `${at}.close`),
     new_task: orNull(rect)(o.new_task, `${at}.new_task`),
-    undo: orNull(noticeUndo)(o.undo, `${at}.undo`),
     rect: orNull(rect)(o.rect, `${at}.rect`),
-    height: num(o.height, `${at}.height`),
+  };
+}
+
+function toast(value: unknown, at: string): Toast {
+  const o = fields(value, at);
+  return {
+    cards: list(toastCard)(o.cards, `${at}.cards`),
+    more: num(o.more, `${at}.more`),
+    rect: orNull(rect)(o.rect, `${at}.rect`),
+    shown: num(o.shown, `${at}.shown`),
+    panel: orNull(rect)(o.panel, `${at}.panel`),
   };
 }
 
@@ -2072,7 +2082,7 @@ export function snapshot(value: unknown): Snapshot {
     cell: pair(o.cell, "cell"),
     notice: orNull(str)(o.notice, "notice"),
     notice_level: orNull(noticeLevel)(o.notice_level, "notice_level"),
-    notice_bar: orNull(noticeBar)(o.notice_bar, "notice_bar"),
+    toast: orNull(toast)(o.toast, "toast"),
     quit_rows: list(rect)(o.quit_rows, "quit_rows"),
     settings_errors: num(o.settings_errors, "settings_errors"),
     editor: orNull(editor)(o.editor, "editor"),

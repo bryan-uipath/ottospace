@@ -1,4 +1,4 @@
-# The status bar: what needs you and a copy's notice, under a setting it cannot read (the notice bar).
+# The status bar: what needs you and a copy's notice, under a setting it cannot read (a toast).
 {"cmd":"split"}
 {"cmd":"task_add","title":"Approve the retry plan","state":"needs_you"}
 {"cmd":"wait","pattern":"^\\$"}

@@ -23,7 +23,7 @@ running, and the rest of the design is not built: see the
 | [File viewer](#file-viewer): a file read only in a pane (markdown drawn, code coloured and text with line numbers, pictures), reloaded when it changes, vim moves with counts, ⌃G edits it beside | Works today |
 | Key bindings and a status bar showing the mode (`APP`, `PICK`…; none when normal) | Works today |
 | [Status bar](#status-bar): where you are, what's next, who's working | Works today |
-| [Notice bar](#notice-bar): one app-level message, full width at the window's foot, red, amber or blue by level (error, warning, information) | Works today |
+| [Toasts](#toasts): app-level messages as cards at the window's bottom right, over the panes (they take no room), red, amber or blue by level (error, warning, information) | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page (in a terminal a click beside the thumb is the terminal's). They follow the system's "Show scroll bars" setting. A list's edge fades where more lies beyond it; tabs past the second row's width scroll across | Works today |
@@ -54,7 +54,7 @@ running, and the rest of the design is not built: see the
 | Workspaces: + on the top row or in the Workspaces section makes a new, empty one, listed there; temporary (its name muted and italic) until it gets a task, a repository, a name or Keep, and then kept between runs. ⌘⇧S saves a tab into one (its splits, each terminal's directory, each app), to open again from the section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | Tabs and layout come back after quitting: every tab (with its task and workspace), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
-| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; a soft pulse as one comes near; a meeting notice on the notice bar, a notification and a sound when one has started and you are in no call | Works today |
+| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; a soft pulse as one comes near; a meeting notice on a toast, a notification and a sound when one has started and you are in no call | Works today |
 
 ### Roadmap: designed, not built
 
@@ -92,7 +92,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 |---|---|
 | ⌘D | Split right, new terminal |
 | ⌘⇧D | Split down, new terminal |
-| ⌘E / ⌘⇧E | Pick what goes in a new pane, right of / below the focused one: a terminal, a file (File…: the open panel, then a [file viewer](#file-viewer)) or a running app. A running app lists "New window" next (only an app named below, or one with a menu item titled "New Window"), then its windows, a pop-up it floated too: each by title, "in pane N" if a pane holds it (choosing that one shows its pane). A window of the list is shared: given back when its pane closes. New window opens one of the app's own (Chrome, Edge, Brave and other Chromium browsers by `--new-window`, VS Code and its forks by `-n`, Safari, Finder, Terminal and iTerm2 by an Apple Event, any other app by its "New Window" menu item); it goes to the tab it was asked from, even if you moved on; it is owned: closing its pane closes it, asking first when the app says it has unsaved changes. No window within about 3 seconds, or an ask that failed: the notice bar says so. Type to filter: then every installed app that matches is offered too, under "Not running" (those of the `apps` setting first); choosing one starts it in the background. ↑/↓ or ⌃N/⌃P move, ↵ opens, Esc closes |
+| ⌘E / ⌘⇧E | Pick what goes in a new pane, right of / below the focused one: a terminal, a file (File…: the open panel, then a [file viewer](#file-viewer)) or a running app. A running app lists "New window" next (only an app named below, or one with a menu item titled "New Window"), then its windows, a pop-up it floated too: each by title, "in pane N" if a pane holds it (choosing that one shows its pane). A window of the list is shared: given back when its pane closes. New window opens one of the app's own (Chrome, Edge, Brave and other Chromium browsers by `--new-window`, VS Code and its forks by `-n`, Safari, Finder, Terminal and iTerm2 by an Apple Event, any other app by its "New Window" menu item); it goes to the tab it was asked from, even if you moved on; it is owned: closing its pane closes it, asking first when the app says it has unsaved changes. No window within about 3 seconds, or an ask that failed: a toast says so. Type to filter: then every installed app that matches is offered too, under "Not running" (those of the `apps` setting first); choosing one starts it in the background. ↑/↓ or ⌃N/⌃P move, ↵ opens, Esc closes |
 | ⌘W | Close the focused pane. With the keyboard in the drawer's conversation: Later on its task |
 | ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Focus the pane in that direction. Past the leftmost pane, ← goes to the open section's list (on the row it was left on), then to the left rail; with no section open, straight to the rail. Past the rightmost pane, → goes into the drawer's conversation (as ⌘L), or the accessibility inspector's rows while it has the drawer's place. On the rail ↑/↓ move (its cell gets a pink ring), → and ↵ open it; ←, or Esc, goes back to the pane you came from. Only your own keys cross: a client's move stops at the panes |
 | ⌘] / ⌘[ | Focus the next / previous pane |
@@ -234,7 +234,7 @@ a click that would put it aside waits too.
   `<worktrees_dir>/<repo>/<branch>`; the drawer says "making its worktree …", and the agent
   starts there once it is made. A workspace of that one task takes it as its default; with
   other tasks there, only this task works there. A name a local or remote branch has already:
-  nothing is made, the notice bar says so, and the task waits unstarted in the checkout (its
+  nothing is made, a toast says so, and the task waits unstarted in the checkout (its
   Start starts it there). Only your choice and your ↵: a socket client's key, click or ↵
   makes no worktree.
 - **When it cannot.** A name the line has no room for (it holds 500 characters) is not put in
@@ -302,7 +302,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    from home (`~`), or a worktree's from its folder name (`fix-login/crates`); a long one has
    `…` in its middle, and the hover has all of it; in a narrow drawer the model and mode are
    cut first. Before the agent starts: where it would start (a session gone on with: where it
-   started). A folder that is gone (a worktree removed) starts no agent: the notice bar says
+   started). A folder that is gone (a worktree removed) starts no agent: a toast says
    so. It stays once the agent ended. Under the header of a native conversation, its
    [dial](#the-agent-dial). Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
@@ -313,7 +313,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    task leaves the rail, its workspace stays on the top row. In about 0.8 s, no sound: the drawer
    seals into a green ring with a tick that draws itself and a few sparks, slides into the rail,
    and the task's rail item pops with a ✓ on its corner before it goes. With Reduce Motion the
-   tick shows still and the drawer fades, no sparks. The notice bar says
+   tick shows still and the drawer fades, no sparks. A toast says
    `Done · <task>` with Undo for six seconds: Undo brings it back as it was, in front; New task
    here (⌘N) opens the box in that workspace. A worktree the new-task box made for the task is
    removed (`git worktree remove`, never `--force`; its branch stays, and Undo adds it back):
@@ -725,7 +725,7 @@ window; Screen Recording), then lays it over the window:
   the marks (`report.annotated.png`), each mark's place and your comment, and, fenced as
   untrusted data, the build, the OS version, what was drawn under each mark (control ids, pane
   numbers and kinds, rects: no text) and the event log's last 50 lines (names and numbers only).
-  No folder for worktrees: nothing is filed, and the notice bar says so. Done keeps that
+  No folder for worktrees: nothing is filed, and a toast says so. Done keeps that
   worktree unless the repository is in Repos.
 - The picture may show anything ottospace draws at that moment (a meeting title, a transcript, a
   terminal's text). It stays on this Mac.
@@ -823,7 +823,7 @@ workspace.
 - **Close**: × on its space (⌘⌃W) takes it off the top row. A kept one: nothing in it stops, it
   stays listed, and its row opens it again as it was. With its last tab closed it leaves the row
   too. A temporary one closed (×, ⌘⌃W, its last tab closed or moved away) leaves the list at
-  once: `Workspace closed` shows on the [notice bar](#notice-bar) for six seconds with Undo,
+  once: `Workspace closed` shows on a [toast](#toasts) for six seconds with Undo,
   which brings it back on the row as it was; its terminals and apps run until then, and close
   when its time is up (× on the bar ends it at once). Each closed one keeps its own Undo: under
   the others in the Workspaces section it shows, italic, with `Closing` and Undo until its own
@@ -849,14 +849,14 @@ workspace.
   name selected: type over it, ↵ keeps it, Esc keeps it as it is. No two workspaces share a name
   (`DRI`, `DRI 2`).
 - **Save again** on a tab that came from a workspace, or was saved into one, updates that tab of
-  it. The notice bar says what it kept, with Undo, for six seconds.
+  it. A toast says what it kept, with Undo, for six seconds.
 - **Open**: click its row, or ⌘⌃E and ↵. Its space comes back on the top row, selected. Each of
   its saved tabs that is not open opens in a new tab, in order, and the
   first is selected; a tab of it that is open already is kept, not opened twice. With none saved
   and none open it gets one empty tab. A workspace of
   one saved tab opens it under the workspace's name; of several, each tab under its own title. Each
   terminal starts a new shell in its directory; if the directory is gone it starts in your home
-  folder, and the notice bar says so. Above its prompt, in grey, are the lines it kept, then
+  folder, and a toast says so. Above its prompt, in grey, are the lines it kept, then
   `── saved <date> ──`. A command it kept is typed on the prompt, not run: ↵ runs it, or edit or
   clear it first. The divider names it too (`↵ runs: npm run dev`). The program itself did not
   survive: this is not session restore. Each app pane gets a window of its app as a tab's mark does: one no
@@ -873,7 +873,7 @@ workspace.
   on a temporary one.
   In the menu ↓ ↑ move, ↵ takes the item the keys are on; Esc, any other key or a click
   outside closes it. In list mode `r` and `x` rename and delete with no menu. Deleting leaves the open
-  tabs alone; `Workspace deleted` shows on the [notice bar](#notice-bar) for six seconds, with
+  tabs alone; `Workspace deleted` shows on a [toast](#toasts) for six seconds, with
   Undo (`u` in list mode) and ×, which ends the offer. Nothing in the section moves.
 - Kept lines and commands can hold secrets a tool printed, or a token in a command line. They
   stay in your workspace files, plain text with escape sequences taken out, at most 64 KB a
@@ -881,11 +881,11 @@ workspace.
   passwords, `user:pass@` URLs, `Authorization:` headers; a private key block is left out), and
   a command holding any is not kept. This is best effort: a secret of another shape is kept as
   printed. Set `workbook_scrollback_lines` to `0` and no terminal text is saved at all. The save
-  says what it kept in the notice bar, and the row says `history` while a workspace holds any;
+  says what it kept in a toast, and the row says `history` while a workspace holds any;
   deleting the workspace deletes its file. Never in the control socket's state (it counts them:
   `lines`, `has_command`).
 - Kept in `~/.ottospace/workbooks`, one file each, readable by you alone. A file there that
-  ottospace cannot read is counted in the notice bar and left as it is. A build from before
+  ottospace cannot read is counted in a toast and left as it is. A build from before
   workspaces could be empty does not read a file with no saved tab: it counts it and leaves it.
 - Only you make, save, open, rename or delete a workspace: a socket client's key, click or label is
   refused. The state lists them (`workbooks`: names, tabs and pane kinds, no directories).
@@ -906,7 +906,7 @@ written a second after a change and at quit, readable by you alone.
   its badge colour is in the task's file. A tab of a task that is gone or dismissed comes back as
   a tab of no task.
 - **Terminals** start a new shell in the folder they were in (one that is gone: your home folder,
-  and the notice bar says so). As a [workspace](#workspaces)'s do, they show their last lines in
+  and a toast says so). As a [workspace](#workspaces)'s do, they show their last lines in
   grey above the prompt, and a program that ran in front is typed on the prompt, not run: ↵ runs
   it. The same setting (`workbook_scrollback_lines`; `0` keeps no terminal text) and the same
   cleaning apply: escape sequences taken out, credential-shaped text hidden, capped. The program
@@ -977,9 +977,9 @@ the way.
   Accessibility, Display) the colour steps up instead, with no movement. Nothing else in
   ottospace pulses.
 - **At the start**, if you are in no call, or still in an earlier one (on from 10 minutes before,
-  or the meeting before, running over): a meeting notice on the [notice bar](#notice-bar) at the
-  window's foot (◷, indigo: `Meeting:` the title and how long ago it started, **Join** if the meeting
-  has an `https:` link, × to dismiss; over a warning or information, under an error), which stays until
+  or the meeting before, running over): a meeting notice on a [toast](#toasts) at the
+  window's bottom right (◷, indigo: `Meeting:` the title and how long ago it started, **Join** if the meeting
+  has an `https:` link, × to dismiss; it outranks a warning or information, not an error), which stays until
   you dismiss it, join, a call starts or the meeting ends; and a system notification with the
   alert sound, so you see it when ottospace is behind other windows. Once more 2 minutes later
   if you have not joined; never a third time. Only in a meeting's first 10 minutes: one you
@@ -996,8 +996,8 @@ the way.
 - **Join** opens the meeting's link with the app that handles it (Zoom for a Zoom link), only
   when you click it or choose it, and only an `https:` link. Never by itself.
 - **The feed** is read at start and every `calendar_refresh_minutes` (5), off the main thread,
-  through `/usr/bin/curl`: `https:` only, no redirects (a feed that has moved is not read: the
-  notice bar asks for its final address), only from a host on the internet (looked up once,
+  through `/usr/bin/curl`: `https:` only, no redirects (a feed that has moved is not read: a
+  toast asks for its final address), only from a host on the internet (looked up once,
   checked, and curl pinned to that address), at most 5 MB, 30 seconds. A proxy set in your
   environment (`https_proxy`) applies. With `gh` for pull requests (`repos_prs`), it is ottospace's only network access. The link is handed to curl on its standard input, not in
   its arguments, and is never shown, logged or put in the state. A read that fails keeps the
@@ -1038,7 +1038,7 @@ the way.
   and `Today` on another day, from 7 days back to 7 on; its date's tooltip says when the feed was
   read. The section goes back to today when the day turns and at start; the band, the alerts and
   now's tick are always of today. The rail cell shows a steady amber dot while a meeting is 2
-  minutes off or runs, and a filled amber badge while its notice stands (also under an error that covers it). In list mode (⌘⌃E,
+  minutes off or runs, and a filled amber badge while its notice stands (also while an error outranks it). In list mode (⌘⌃E,
   which starts on the meeting that runs, else the next, else the day's last)
   `j`/`k` (↓/↑) go from meeting to meeting by start, the block scrolled into view, ↵ joins, ← and → go a day back and on, `t` back to today; the View menu and the
   palette have the same (`Previous Day in Calendar`, `Next Day in Calendar`, `Today in
@@ -1153,7 +1153,7 @@ it is still among all apps. Each of these writes `~/.ottospace/settings.json` (`
 - The file is read again at each write, and one entry is added to or taken off the list as it is
   then: a line you added by hand since ottospace started, or one another ottospace wrote, stays.
 - Only the list changed is touched: every other key and the file's spacing stay.
-- Not written, with a notice in the notice bar, and the pin then lasts until ottospace quits:
+- Not written, with a notice in a toast, and the pin then lasts until ottospace quits:
   a file that is not a JSON object; a list that is not a list of names (`"apps": ["Slack", 3]`):
   nothing in it is dropped for not being understood; a `settings.json` that is a link to a file
   that is not there.
@@ -1236,41 +1236,45 @@ under `/tmp`) and runs your editor on it, with the same command line as Open Set
 in the drawer. The file is removed when the editor exits. At start, files a crashed run left there
 are deleted, not restored: a draft lives in the app while the editor runs, and nowhere else after.
 Up to 100000 characters come back (the new-task line: its own limit); more, the first part is kept
-and the notice bar says so. Control characters other than a line break go, as a paste's do; a tab
+and a toast says so. Control characters other than a line break go, as a paste's do; a tab
 is four spaces.
 
-## Notice bar
+## Toasts
 
 What ottospace has to say about itself (a settings file it cannot read, a file not saved, a
-shell that did not start, why a move of yours did nothing, a key that needs a restart) shows in
-one bar, the window's width, at the window's foot: above the meeting timeline and the status
-bar. Nothing above it moves when it opens (the top row, the tabs, the sidebar and the panes' tops
-stay under the pointer): the content's foot rises by its height. It grows upwards, and is there at
-once under the system's Reduce Motion. A live app window in a bottom pane stops above it too.
+shell that did not start, why a move of yours did nothing, a key that needs a restart) shows as
+a toast: cards at the window's bottom right, over the panes, just above the status bar (and the
+timeline's band), clear of the sidebar and the drawer. It takes no room: no pane, terminal or hosted window moves or resizes when one comes or goes. It
+slides in from the right and fades, and is there at once under the system's Reduce Motion. A
+live app window over the bottom-right pane is in front of ottospace's window: while that app is in
+front, each card floats above it in a small panel of its own, which never takes the keyboard; a
+click between two cards goes to the app.
 
 - **Level**: red for an error, amber for a warning (a move that did nothing, a retired setting, a
   global key not registered), blue for information, and amber on indigo for a meeting that started
-  (`meeting`: over a warning, under an error). A glyph says the level too: `!` in a circle, `▲`,
+  (`meeting`: it outranks a warning, not an error). A glyph says the level too: `!` in a circle, `▲`,
   `ⓘ`, `◷`. The state says a meeting's notice as `Meeting started`, never its title.
-- **One at a time**: the most pressing, and of those the newest. An error is not replaced by
-  information; when it goes, what it covered shows. One exception: a workspace's **Undo** never
-  runs out unseen. While an error or a meeting covers it, its text and its own Undo stay at the
-  bar's right, beside what covers it (`Workspace closed · Undo`).
-- **One line**: text too long is cut with an ellipsis, and the hover shows all of it. A settings
+- **Stacked**: at most three cards, the most pressing nearest the status bar, and of one level the
+  newest; the others stack upward, then `+N more`. An error is not pushed up by information; when
+  it goes, the next takes its place. A
+  workspace's or a task's **Undo** never runs out unseen: under three higher notices it takes the
+  third card.
+- **One line**: text too long is cut with an ellipsis; point at the card and it shows all of it,
+  wrapped (at most eight lines), growing upward, the cards over it moving up meanwhile. A settings
   problem offers **Open settings**; a meeting with a link, **Join**; a workspace deleted or updated,
   **Undo** (only your click takes it back).
-- **Dismiss**: × on the bar, or Esc when no mode and no terminal takes it. Only you dismiss a
+- **Dismiss**: × on a card, or Esc (the first card, nearest the status bar) when no mode and no terminal takes it. Only you dismiss a
   notice: a socket client cannot, and its failure never takes the place of what your own step
   said. A dismissed settings line comes back when it says something else.
 - **How long**: as before. What a step did goes after 8 seconds; a settings problem stays until
   the file is right; a failure stays until the next one, or until dismissed.
-- **Whose**: the bar is yours. Why a step did nothing, and what it did, is an answer to the one
-  who took the step: your own shows on the bar; a socket client's (or a timer's) is in the
-  reply's `notice` alone, so a refused client opens no bar, moves nothing of yours and
+- **Whose**: the toast is yours. Why a step did nothing, and what it did, is an answer to the one
+  who took the step: your own shows on the toast; a socket client's (or a timer's) is in the
+  reply's `notice` alone, so a refused client opens no toast, moves nothing of yours and
   closes no menu of yours. What is wrong with the app itself shows whoever's step found it, and
   a client's success clears only a client's line.
 
-| Kind | Level | About | Another sender's on the bar |
+| Kind | Level | About | Another sender's on the toast |
 |---|---|---|---|
 | `failed` | error | the app: a step of yours or a timer's that failed; of a client's, a shell or agent that did not start, `settings.json` not written, a window of yours it moved back on screen | yes, never over what your own step said |
 | `refused` | warning | the sender: why its step did nothing | no: the reply's `notice` |
@@ -1301,7 +1305,7 @@ first. Again while that tab is open brings it forward; quitting the editor close
 you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
 the editor running again ([Restoring the layout](#restoring-the-layout)).
 
-A change is read when the file is saved: what is wrong in it is said in the notice bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `worktrees_dir`, `transcripts_dir`, `repos_prs`, `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `paste_confirm` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+A change is read when the file is saved: what is wrong in it is said in a toast (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `worktrees_dir`, `transcripts_dir`, `repos_prs`, `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `paste_confirm` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
 
 ```json
@@ -1363,17 +1367,17 @@ A change is read when the file is saved: what is wrong in it is said in the noti
 | `calendar_ics` | The [meeting timeline](#meeting-timeline)'s calendar feed: an `https://` link (to a host on the internet, not an address or `localhost`) or a file's path (`/…` or `~/…`). Never shown: a private feed's link holds a secret | none: no timeline |
 | `calendar_workday` | The workday the timeline's band spans: `"HH:MM-HH:MM"`, local 24-hour time, the start at least an hour before the end (`"06:00-22:00"`; `24:00` ends the day). `calendar_window_hours`, from before, is retired: the status bar asks to remove it, and the rest applies | `"09:00-17:00"` |
 | `calendar_refresh_minutes` | How often the feed is read again, at least 1 | `5` |
-| `calendar_notify` | A meeting that starts while you are in no call, or in another call, shows a meeting notice on the notice bar, a notification and a sound | `true` |
+| `calendar_notify` | A meeting that starts while you are in no call, or in another call, shows a meeting notice on a toast, a notification and a sound | `true` |
 | `calendar_notify_for` | Which meetings alert: `all`, or only those with a Zoom, Meet or Teams `links` | `all` |
 | `calendar_email` | Your address among a meeting's attendees in the feed: a meeting you declined is left out. Kept on this machine, never shown. A feed with no attendees (Outlook's published calendars) cannot say who declined: use `calendar_hide_free` | none: nothing is left out |
 | `calendar_hide_free` | Leave out entries that keep the time free (Outlook's FREE, `TRANSP:TRANSPARENT`): the band, the section, the alerts and the `calendar` request | `false` |
 | `calendar_colors` | Colours by title, first match wins: `[{"match": "1:1", "color": "teal"}]`. `match`: plain text the title holds, case ignored (not a pattern); `color`: `red`, `indigo`, `orange`, `pink`, `lime`, `purple`, `tan` or `teal`. At most 64. A rule wins over a focus block's green | none: colours by kind |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
-| `features` | [Feature flags](#features), by name: `true` or `false`. A name that is no flag is a mistake, named in the notice bar with the flags there are; the others still apply | each flag's default |
+| `features` | [Feature flags](#features), by name: `true` or `false`. A name that is no flag is a mistake, named in a toast with the flags there are; the others still apply | each flag's default |
 | `paste_confirm` | When ⌘V into a terminal asks first: `multiline` (text with a line break, even a last one, bracketed paste or not: a shell may run each line) or `never` | `multiline` |
 
 A mistake in the file (a key that does not exist, a wrong value, a font that is not installed) is
-shown in the notice bar. That key takes its default and the others still apply. If the file is
+shown in a toast. That key takes its default and the others still apply. If the file is
 not a JSON object, every default applies.
 
 ## Features
@@ -1386,7 +1390,7 @@ Palette ▸ Features… lists each flag with its stage and whether it is on; cho
 other way, writes it to `settings.json` and applies at once.
 
 A flag is temporary and about readiness: it goes when its feature is stable, and a setting of it
-then does nothing (the notice bar says so). A preference is a normal setting.
+then does nothing (a toast says so). A preference is a normal setting.
 
 | Feature | Stage | Default | What it is |
 | --- | --- | --- | --- |
@@ -1619,7 +1623,7 @@ A window goes back to its original frame, read back to be sure. If it would not 
 there (at least 120×60 points of its top inside a screen's visible area: an original on a display
 since unplugged, say) or the app refuses, it goes to the middle of the main screen, at its own size
 or the screen's. A window found already off screen when hosted is recorded at the middle of the
-main screen, and the notice bar says so. If an app replaced its window while hosted, its windows
+main screen, and a toast says so. If an app replaced its window while hosted, its windows
 left in the parking spot come back instead. ottospace only moves and sizes windows: it never
 minimises or hides them, nor moves them to another Space.
 

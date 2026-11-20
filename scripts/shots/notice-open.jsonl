@@ -1,0 +1,13 @@
+# A card whose text is cut, then the pointer over it: its whole text, wrapped, in the card. No
+# pane moves for it.
+{"cmd":"split"}
+{"cmd":"wait","pattern":"^\\$"}
+{"cmd":"type","text":"clear && for i in $(seq 1 60); do echo notices $i; done\r"}
+{"cmd":"wait","pattern":"^notices 60$"}
+{"cmd":"repo_add","path":"/made-up/a-long-folder-name/a-long-folder-name/a-long-folder-name/a-long-folder-name/a-long-folder-name/a-long-folder-name/a-long-folder-name"}
+{"until":"notice_level","is":"error"}
+{"settle":300}
+{"shot":"cut"}
+{"hover":{"rect":"toast.cards.0.rect"},"at":[0.3,0.5]}
+{"settle":300}
+{"shot":"open"}

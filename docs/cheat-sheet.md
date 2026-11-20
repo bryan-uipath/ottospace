@@ -11,7 +11,7 @@ ottospace            # opens on the Repos list
 - First run: grant your terminal Accessibility (ottospace will not start without it) and Screen Recording (for app panes), in System Settings ▸ Privacy & Security.
 - Repos lists each repository's name over its checkouts, one line each: a dot (lit while an agent works there, amber while a task there needs you, one pulse per commit), the branch, `default` on the repository's own folder. The chevron (or a click on the name) folds a repository; a count shows while folded. Point at a name: + makes a worktree (an existing branch, or a new one from HEAD), the trash stops listing it. Click a row: the workspace of that checkout (its default worktree, else one with a task there), else a new workspace for it, named for its branch, with a terminal there. A workspace's new terminals and tasks start in its default worktree; tasks of one workspace in different worktrees name theirs on their rows. A task whose agent makes a worktree and works there follows it (its workspace too, when it is its one task). A row a task works in carries the task's badge until it is done (Terminal, on hover, opens a terminal anyway). A done task shows only in Tasks' Done: not on a row, nor on the top row, where its workspace stays under its name.
 - The status bar (bottom left) shows who has the keyboard when it is not the focused pane's: `APP`, `PICK`, `COMMAND`, `INSPECT`, `LIST`, `TASK`, `VISUAL`, `SNEAK`, `QUIT?`. Nothing there: normal. Its left end says where you are (the folder, `~/code/app · main ●`, a dot for changes in a checkout listed in Repos; a click copies the path), its right end the next meeting (`Team sync in 12 min`, `now · Join`) and the agents (`● 2 working · ● 1 needs you`; a click goes to the next that needs you); the version is under About ottospace (⌘P, or the app menu) and the hover of the bar's empty middle.
-- A coloured bar at the window's foot is a notice: red an error, amber a warning, blue information, indigo a meeting that started. × or Esc dismisses it; a settings problem offers Open settings, a meeting Join.
+- A card at the window's bottom right, over the status bar (a toast), is a notice: red an error, amber a warning, blue information, indigo a meeting that started. Up to three stack, the most pressing at the foot, the others upward, then `+N more`; nothing moves for them. × dismisses a card, Esc the lowest one; a settings problem offers Open settings, a meeting Join.
 - Stuck in an app? Click ottospace's rail or top bar. Or press the return key: F18, which most keyboards lack, so map Caps Lock to it (see [the return key](reference.md#the-return-key)) or start with `OTTOSPACE_RETURN_KEY=f13` (f13 to f20). The status bar names the key in use.
 
 ## Panes and tabs
@@ -101,15 +101,15 @@ workspace; tabs of nothing (a dismissed task's, a client's) go to the workspace 
 | Make a new, empty one | + on the top row, or in the Workspaces section's header: "Workspace 2", one empty tab, selected. It never takes the tab on show |
 | Reorder | Drag its row in the Workspaces section, or its space on the top row: one order for both, kept. Esc puts it back |
 | Take it off the top row | Its ×, or ⌘⌃W. Nothing in it stops; it stays listed, and its row opens it again |
-| Close a temporary one for good | Its ×, ⌘⌃W, or close its last tab: off the list; Undo on the notice bar, and on its row in the Workspaces section, for six seconds. A terminal in it runs a program: asked first |
+| Close a temporary one for good | Its ×, ⌘⌃W, or close its last tab: off the list; Undo on a toast, and on its row in the Workspaces section, for six seconds. A terminal in it runs a program: asked first |
 | Keep a temporary one | Its row's … ▸ Keep, the … on its item on the top row, File ▸ Keep Workspace, or rename it. A task or a Repos click keeps it too |
 | Save the tab on show | ⌘⇧S. In a workspace: into that one. Elsewhere: as a new one; type its name, ↵ |
 | Add the tab on show to one | ⌘⌃E, then `a` on its row. Or File ▸ Add Tab to Workspace… |
 | Save every tab on the bar as one | File ▸ Save All Tabs as Workspace |
-| Update a tab of it after changing it | ⌘⇧S again on that tab. Undo on the notice bar at the foot (six seconds) |
+| Update a tab of it after changing it | ⌘⇧S again on that tab. Undo on a toast (six seconds) |
 | Open it | Workspaces, click it. Or ⌘⌃E, ↵. Its saved tabs open in order; one already open is kept. None saved: one empty tab |
 | See, open, rename or remove one of its tabs | ▸ on its row (⌘⌃E: space), then the tab's row: click opens it; its … has Rename, Remove |
-| Rename or delete it | Point at its row: … opens a menu with Rename, Delete. Or ⌘⌃E, then `r`, `x`. Undo on the notice bar at the foot (six seconds), or `u`, puts a deleted one back |
+| Rename or delete it | Point at its row: … opens a menu with Rename, Delete. Or ⌘⌃E, then `r`, `x`. Undo on a toast (six seconds), or `u`, puts a deleted one back |
 
 A saved tab keeps the splits, each app, and each terminal's directory, last 500 lines and the command
 running in it. Opened, a terminal shows those lines above its prompt with the command typed on
@@ -152,7 +152,7 @@ Key Counts forgets it.
 | Get a closed conversation back | ⌘⇧R (it opens what it collapsed: the transcript, the new-task box), its item on the rail, or click the agent chip at the right end of the tab row (the top row, with one tab): the badge and what the agent does (`Working · cargo test`, `Needs you`), amber while it needs you. A click on the selected space on the top row opens it too |
 | See what an agent is doing | The dial under a native conversation's header: its calls by station (Shell, Files, Network…, each named), lit and pulsing while one runs (larger for more at once), the centre turning while the model thinks, a red dot for a failure since your last message, the ring for the context used. Hover for counts and tokens. A click or ⌘⇧A collapses it to a marker beside the badge |
 | Chat with Claude Code in the drawer | ↵ send, ⇧↵ new line, Esc leaves; Esc Esc, or Stop at the composer's right while a turn runs, stops the turn. Once the agent ended, ↵ or Resume session (at the composer's right) goes on with its session; an ended agent says why, a stop and its resume are one thin divider, and Show details opens what its program printed. Hover a message: Copy, Copy as Markdown; a code block has its own Copy, an opened call's input and output one on hover. Drag to select text (double-click a word, triple-click a line), ⌘C copies, ⌘A all of the transcript, Esc clears. An edit shows its diff under its call. A link opens on your click only. A permission card: `a` allow (this one request), `d` deny, `m` deny with a message, `s` show all (needed before `a` on a long one); ↵ does nothing there. A question card (the agent asks you): ↑↓ or `j`/`k` move, space picks, `1`–`9` pick a row, type on Other… for your own words, ↵ sends (several questions: ↵ answers and goes on, ⇥ / ⇧⇥ between, Review's ↵ sends; one left goes as no answer), Esc declines. ⌘⇧K or "btw" at the composer's foot: a side question to the running agent, in a column beside the conversation (↵ asks, Esc back; "Use as my answer" fills the card's Other… or the composer, unsent; × closes; Claude Code only). `Chat \| Terminal` in the header switches to the CLI's TUI and back (`conversation_view` sets the default). The model and the folder the agent runs in are at the drawer's foot (with a mode that acts unasked: `haiku-5.5 · auto · ~/code/app`; hover it for the whole path); hover the title for mode and time |
-| Finish a task's conversation | ✓ Done in its header (or ⌘↵ in it): done, its agent stopped, off the rail; Undo on the notice bar for 6 s, or New task here ⌘N. Its own worktree (made by the box) is removed unless dirty or in use; the branch stays. Later (or × on its rail item, ⌘W in the drawer): stopped, parked in Tasks, resumed from its row; asks first while a turn runs. While a turn runs, no Done: the composer's Stop stops that turn |
+| Finish a task's conversation | ✓ Done in its header (or ⌘↵ in it): done, its agent stopped, off the rail; Undo on a toast for 6 s, or New task here ⌘N. Its own worktree (made by the box) is removed unless dirty or in use; the branch stays. Later (or × on its rail item, ⌘W in the drawer): stopped, parked in Tasks, resumed from its row; asks first while a turn runs. While a turn runs, no Done: the composer's Stop stops that turn |
 | Switch between running agents | Click its task on the top row, or ⌘⌃1 … ⌘⌃9 |
 | See a task's tabs | Click its row, or ⌘J for the next that needs you: its space |
 | Let a task see an app pane (the `agent_mode` flag) | The robot in the pane's header, or ⌘⌃V: Off, See, See and act (presses come later). Only that workspace's task may read it, and every read is a row in its chat |
@@ -219,7 +219,7 @@ ottospace ctl '{"cmd":"state"}' | jq --argjson pane "$OTTOSPACE_PANE" '.state.ta
 ## Settings
 
 `~/.ottospace/settings.json`, read at start. ⌘, (Open Settings) edits it in `$VISUAL`/`$EDITOR`; on
-save the notice bar says what is wrong (`settings.json:3:1 trailing comma`) or which keys need a
+save a toast says what is wrong (`settings.json:3:1 trailing comma`) or which keys need a
 restart, and the rest applies at once:
 
 ```json
@@ -241,7 +241,7 @@ restart, and the rest applies at once:
 }
 ```
 
-A mistake in a key (one that does not exist, or a wrong value) shows in the notice bar: that key
+A mistake in a key (one that does not exist, or a wrong value) shows in a toast: that key
 takes its default and the others still apply. If the file is not a JSON object at all, every
 setting takes its default.
 
@@ -255,7 +255,7 @@ setting takes its default.
 
 The Calendar section (third on the rail, under Tasks, only while `calendar_ics` is set) draws a day as Outlook's day view: blocks as tall as they last, overlaps side by side, over an hour free pressed into a band (`2 h free`), all-day events in a strip at the top, and now's line across in the accent colour with the time; it opens with now in view, and ⌘⌃E starts on the meeting that runs (else the next); `‹ ›` in its header (← → in list mode) go a day back and on, 7 each way, `Today` (`t`) comes back; ↵ or `Join` opens a meeting's link. Its rail cell has an amber dot near a meeting, a filled badge while its notice stands.
 
-`calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a band of the workday (`calendar_workday`, `"09:00-17:00"`) above the status bar, hover a block for its details (now's tick: the next meeting and when the feed was read), a pulse from 10 minutes before, and at the start, if you are in no call (or still in an earlier one), a meeting notice on the notice bar (Join, × to dismiss) and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link; `calendar_email` (your address in the feed) leaves out meetings you declined; `calendar_hide_free: true` leaves out free entries (a feed without attendees); `calendar_colors` colours by title (`[{"match": "1:1", "color": "teal"}]`). On the band calls sit in lanes over faint blocks of time held; a block that starts with `Focus` or `Deep Work` and has no call link is green.
+`calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a band of the workday (`calendar_workday`, `"09:00-17:00"`) above the status bar, hover a block for its details (now's tick: the next meeting and when the feed was read), a pulse from 10 minutes before, and at the start, if you are in no call (or still in an earlier one), a meeting notice on a toast (Join, × to dismiss) and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link; `calendar_email` (your address in the feed) leaves out meetings you declined; `calendar_hide_free: true` leaves out free entries (a feed without attendees); `calendar_colors` colours by title (`[{"match": "1:1", "color": "teal"}]`). On the band calls sit in lanes over faint blocks of time held; a block that starts with `Focus` or `Deep Work` and has no call link is green.
 
 `windows` rules name windows ottospace leaves alone (`ignore`), or say where a new window of a hosted app goes (`split`, `float`), by `app`, `title`, `identifier` and `subrole`: [reference](reference.md#settings).
 

@@ -1,6 +1,6 @@
 # Temporary workspaces: two made with +, their names muted on the top row and in the section; a
 # temporary one's menu offers Keep, in the section and on the top row; kept, its name is plain;
-# the other closed with ×, off the list, Undo on the notice bar.
+# the other closed with ×, off the list, Undo on a toast.
 {"click":"top:new_workspace"}
 {"click":"top:new_workspace"}
 {"cmd":"section","section":"workbook"}

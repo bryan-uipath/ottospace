@@ -46,7 +46,7 @@ Checked against the code, 2026-11-19.
 | Capture (⌃⌥⌘Space): a pane frozen, annotated, its text read once, a task's brief | Built | [capture.md](../capture.md) |
 | Pick on screen: task context picked in panes | Designed, not built | [pick-and-app-profiles.md](../pick-and-app-profiles.md) |
 | Notice bar: one app-level message with Undo; a system notification and sound for a meeting that started | Built | reference "Notice bar", `ottospace/src/calendar.rs` |
-| A toast of ottospace's own: notices as cards over the panes' top right, so no pane moves | **Not on main.** Open in #299. "Toast" on main is only a kind of other apps' window that hosting skips | `rules.rs`; #299 |
+| A toast of ottospace's own: notices as cards over the panes' bottom right, above the status bar, so no pane moves | **Not on main.** Open in #299. "Toast" on main is only a kind of other apps' window that hosting skips | `rules.rs`; #299 |
 | App-window hosting: an inactive window is parked off-screen with one pixel on a display, its pane an SCK stream | Built | [hosting-windows.md](../hosting-windows.md) |
 | Focus blocks that hide Slack, with an agent that can break through | Designed (roadmap line), no note of its own | reference roadmap; [plan.md](../1-initial-brainstorm/plan.md): Phases row F, Constraints (Notifications) |
 
