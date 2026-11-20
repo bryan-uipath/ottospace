@@ -8136,6 +8136,28 @@ fn seed_26930_a_viewers_count_goes_when_the_sidebar_overlay_takes_the_keyboard()
     .unwrap();
 }
 
+/// A client's restore emptied a workspace whose drawer was folded: clearing the fold showed the
+/// fresh start's box. It stays folded, for ⌘⇧R.
+#[test]
+fn seed_47738_a_clients_restore_opens_no_fresh_start_box() {
+    replay(&[
+        Action::OpenCompose { text: "$deploy x >>مرحبا\\/".into() }.into(),
+        Action::ComposeSubmit { open: true }.into(),
+        Action::SpaceHideAsked {
+            index: None,
+            running: vec![
+                Running { pane: 2, program: None, background: false },
+                Running { pane: 3, program: None, background: false },
+            ],
+        }
+        .into(),
+        set_features(&["slots", "multi_monitor", "overlay_panels"]).into(),
+        by(Origin::System, Action::NewTab),
+        by(Origin::Socket, restore_tasks("[]", 0)),
+    ])
+    .unwrap();
+}
+
 /// A Done's worktree, its git answers late (xreview of #274): Undo while git removes it (the
 /// default falls back, then the worktree is added back), Done while git makes it (removed once
 /// made), and a dirty one kept after an Undo (no notice for an act not the user's).
