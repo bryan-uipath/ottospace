@@ -5059,7 +5059,7 @@ fn features_lists_each_flag_on_two_lines_and_finds_it_by_id_or_name() {
     let otto = Otto::launch_with("flag-rows", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     // A one-line list: the commands, each with its group column.
-    let commands = otto.user_key("cmd-p");
+    let commands = otto.user_key("cmd-shift-p");
     let one = rect(&commands["palette_rows"][0]["rect"])[3];
     assert!(commands["palette_rows"][0]["group_rect"].is_array(), "{}", commands["palette_rows"][0]);
     otto.user_key("f e a t u r e s enter");
