@@ -596,11 +596,11 @@ function owner(value: unknown, at: string): Owner {
 function reorder(value: unknown, at: string): { item: ReorderItem; to: number } {
   const o = fields(value, at);
   const item = fields(o.item, `${at}.item`);
-  if (item.kind !== "workbook" && item.kind !== "space") throw wrong(`${at}.item.kind`, "workbook or space", item.kind);
-  const carried: ReorderItem =
-    item.kind === "workbook"
-      ? { kind: "workbook", id: num(item.id, `${at}.item.id`) }
-      : { kind: "space", of: owner(item.of, `${at}.item.of`) };
+  let carried: ReorderItem;
+  if (item.kind === "workbook") carried = { kind: "workbook", id: num(item.id, `${at}.item.id`) };
+  else if (item.kind === "space") carried = { kind: "space", of: owner(item.of, `${at}.item.of`) };
+  else if (item.kind === "repo") carried = { kind: "repo", path: str(item.path, `${at}.item.path`) };
+  else throw wrong(`${at}.item.kind`, "workbook, space or repo", item.kind);
   return { item: carried, to: num(o.to, `${at}.to`) };
 }
 

@@ -612,8 +612,8 @@ pub enum Action {
         pane: PaneId,
         axis: Axis,
     },
-    /// The user carries a row of the Workspaces section, or a space's item on the top row, over
-    /// place `to` among them: a drag starts or goes on (`Model::reorder`). The user's alone.
+    /// The user carries a row of the Workspaces section, a space's item on the top row, or a
+    /// repository's name in the Repos section, over place `to` among them: a drag starts or goes on (`Model::reorder`). The user's alone.
     ReorderOver {
         item: reorder::ReorderItem,
         to: usize,
@@ -3998,7 +3998,7 @@ pub struct Model {
     /// The divider the user holds (`DividerHold`): its split at the press, and as the drag last left it.
     #[serde(skip)]
     divider: Option<(PaneId, Axis, (Node, Node))>,
-    /// The user's drag of a workspace's row or a space's item to another place (`ReorderOver`).
+    /// The user's drag of a workspace's row, a space's item or a repository to another place (`ReorderOver`).
     reorder: Option<reorder::Reorder>,
     #[serde(skip)]
     pub(crate) next_id: PaneId,
@@ -5838,7 +5838,7 @@ impl Model {
                 }
             }
             Action::ReorderOver { item, to } => self.reorder_over(item, to),
-            Action::ReorderDrop => self.reorder_drop(),
+            Action::ReorderDrop => self.reorder_drop(effects),
             Action::ReorderCancel => self.reorder = None,
             Action::DropPane { source, target, zone } => self.drop_pane(source, target, zone, effects),
             Action::PaneWants { pane, content, outer, window } => {

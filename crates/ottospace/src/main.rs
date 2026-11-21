@@ -6646,13 +6646,22 @@ impl Workspace {
         let mut items: Vec<AnyElement> = Vec::new();
         let (mut index, mut at) = (0, 0);
         let mut group: Option<String> = None;
+        // The repository carried, while the drag lasts, is not drawn, nor its checkouts: a bar above
+        // the entry it goes before (after the last: at the list's end) shows where it lands.
+        let carried = self.model.reorder().filter(|_| cx.has_active_drag()).and_then(|reorder| match &reorder.item {
+            ReorderItem::Repo { path } => Some((path.clone(), reorder.to)),
+            _ => None,
+        });
+        let before =
+            carried.as_ref().and_then(|(path, to)| self.repo_entry_paths().into_iter().filter(|p| p != path).nth(*to));
+        let line = |path: &str| (before.as_deref() == Some(path)).then(|| reorder::bar(&self.controls, false, false));
         for (n, repo) in self.model.repos.iter().enumerate() {
             let checkouts = repo.checkouts();
             let of = self.model.repo_dirs.group_of(&repo.path).cloned();
             if of.as_ref().map(|dir| &dir.path) != group.as_ref() {
                 group = of.as_ref().map(|dir| dir.path.clone());
                 if let Some(dir) = &of {
-                    items.push(self.repo_group(at, dir, cx).into_any_element());
+                    items.push(self.repo_group(at, dir, cx).children(line(&dir.path)).into_any_element());
                     at += 1;
                 }
             }
@@ -6661,7 +6670,13 @@ impl Workspace {
                 continue;
             }
             let folded = self.model.repo_folded(repo);
-            items.push(self.repo_heading(n, at, repo, folded, checkouts.len(), cx).into_any_element());
+            if carried.as_ref().is_some_and(|(path, _)| *path == repo.path) {
+                at += 1 + if folded { 0 } else { checkouts.len() };
+                index += checkouts.len();
+                continue;
+            }
+            let heading = self.repo_heading(n, at, repo, folded, checkouts.len(), cx).children(line(&repo.path));
+            items.push(heading.into_any_element());
             at += 1;
             let typing =
                 matches!(&self.model.mark_input, Some(MarkInput::Worktree { repo: of, .. }) if *of == repo.path);
@@ -6679,6 +6694,13 @@ impl Workspace {
                 index += 1;
             }
             items.extend(well(group, 0.));
+        }
+        // The carried one's room, at the list's end (its height holds); after the last entry, the bar on it.
+        if carried.is_some() {
+            let end = div().relative().flex_none().h(px(self.reorder_room));
+            items.push(
+                end.children(before.is_none().then(|| reorder::bar(&self.controls, false, false))).into_any_element(),
+            );
         }
         // A pulse plays: the next frame, and none once it is over.
         if pulsing.get() {
@@ -6724,6 +6746,11 @@ impl Workspace {
                     this.add_repo(path, this.input, window, cx);
                 }
                 cx.notify();
+            }))
+            // Released over the list: the repository carried lands; anything else is put back.
+            .on_drop(cx.listener(|this, dragged: &reorder::DraggedItem, window, cx| match dragged.item {
+                ReorderItem::Repo { .. } => this.reorder_released(dragged, window, cx),
+                ReorderItem::Workbook { .. } | ReorderItem::Space { .. } => this.reorder_cancel(window, cx),
             }));
         self.bars.tracked(
             "repos",
@@ -6862,7 +6889,17 @@ impl Workspace {
         });
         // Folded: one dot for its checkouts, none while all are idle.
         let dot = self.model.repo_dot(repo).map(|dot| self.activity_dot(dot));
+        // Its name drags it to another place: one the settings name as itself.
+        let own = self.model.repo_dirs.dirs.iter().any(|dir| dir.path == repo.path) && !self.model.repo_dirs.fixed;
+        let dragged = own.then(|| reorder::DraggedItem { item: ReorderItem::Repo { path: path.clone() }, place: 0 });
         ui::section_heading(("repo-head", n), !folded, repo.name.clone(), count, dot, ui::State::focus(selected))
+            .when_some(dragged, |d, dragged| {
+                d.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, e: &MouseDownEvent, _, _| this.reorder_from = Some(e.position)),
+                )
+                .on_drag(dragged, |_, _, _, cx| cx.new(|_| gpui::EmptyView))
+            })
             .group("repo-name")
             .when(at > 0, |d| d.mt_1())
             .mb_1()
@@ -7647,7 +7684,7 @@ impl Workspace {
                     )
                     .on_drop(cx.listener(|this, dragged: &reorder::DraggedItem, window, cx| match dragged.item {
                         ReorderItem::Space { .. } => this.reorder_released(dragged, window, cx),
-                        ReorderItem::Workbook { .. } => this.reorder_cancel(window, cx),
+                        ReorderItem::Workbook { .. } | ReorderItem::Repo { .. } => this.reorder_cancel(window, cx),
                     })),
             )
             .children(more)

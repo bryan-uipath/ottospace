@@ -1,0 +1,14 @@
+# Repositories reordered by drag in Repos. notes folded; its name carried above design-system's
+# (not drawn, a bar where it lands), put back, then dropped there: second, still folded.
+{"cmd":"section","section":"repos"}
+{"until":"repos_bar.2"}
+{"click":"repo-fold:{ROOT}/repos/notes"}
+{"until":"repos_bar.2.folded","is":true}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"before"}
+{"hold":"repo-fold:{ROOT}/repos/notes","by":[0,-66]}
+{"shot":"mid-drag"}
+{"cmd":"mouse","action":"up","x":-50,"y":-50,"as":"user"}
+{"drag":"repo-fold:{ROOT}/repos/notes","by":[0,-66]}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"after"}

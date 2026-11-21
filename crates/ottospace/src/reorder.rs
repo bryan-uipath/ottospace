@@ -1,6 +1,6 @@
-//! The user's drag of a Workspaces row or a top-row space to another place: the pointer turned
-//! into a place among them (`Action::ReorderOver`). What moves, and where it may go, is the
-//! core's (`model::reorder`).
+//! The user's drag of a Workspaces row, a top-row space or a repository's name to another place:
+//! the pointer turned into a place among them (`Action::ReorderOver`). What moves, and where it
+//! may go, is the core's (`model::reorder`).
 
 use gpui::{Context, Div, Pixels, Point, Window, div, prelude::*, px, rgb};
 use ottospace_core::list::ListRow;
@@ -60,6 +60,16 @@ impl Workspace {
                 }
                 self.space_place(from, f32::from(at.x))
             }
+            ReorderItem::Repo { path } => {
+                let bounds = |path: &str| self.controls.bounds(&format!("repo-fold:{path}"));
+                // The room it takes now, to the next entry's name (its checkouts too).
+                if let Some(b) = bounds(path) {
+                    let paths = self.repo_entry_paths();
+                    let next = paths.iter().skip_while(|p| *p != path).skip(1).find_map(|p| bounds(p));
+                    self.reorder_room = closes_up(Some(b), next, |b| b.origin.y).max(f32::from(b.size.height));
+                }
+                self.repo_place(path, f32::from(at.y))
+            }
         };
         if carried != Some(to) {
             self.dispatch(Action::ReorderOver { item: item.clone(), to }, self.input, window, cx);
@@ -77,6 +87,25 @@ impl Workspace {
         let middle =
             |(at, row): (usize, u32)| bounds(row).map(|b| f32::from(b.center().y) - if at > from { shift } else { 0. });
         let others = rows.iter().enumerate().filter(|(_, row)| row.id != id).map(|(at, row)| (at, row.id));
+        place_among(&others.map(middle).collect::<Vec<_>>(), y)
+    }
+
+    /// The Repos entries' paths as drawn (`Model::repo_entries`): a repository's own, a group's folder.
+    pub(crate) fn repo_entry_paths(&self) -> Vec<String> {
+        let dirs = &self.model.repo_dirs.dirs;
+        self.model.repo_entries().into_iter().map(|at| dirs[at].path.clone()).collect()
+    }
+
+    /// The place among the Repos entries other than `path`'s for the pointer at `y`, as if its
+    /// name and checkouts were not drawn.
+    fn repo_place(&self, path: &str, y: f32) -> usize {
+        let bounds = |path: &str| self.controls.bounds(&format!("repo-fold:{path}"));
+        let paths = self.repo_entry_paths();
+        let from = paths.iter().position(|p| p == path).unwrap_or(paths.len());
+        let shift = closes_up(bounds(path), paths.iter().skip(from + 1).find_map(|p| bounds(p)), |b| b.origin.y);
+        let middle =
+            |(at, p): (usize, &String)| bounds(p).map(|b| f32::from(b.center().y) - if at > from { shift } else { 0. });
+        let others = paths.iter().enumerate().filter(|(_, p)| *p != path);
         place_among(&others.map(middle).collect::<Vec<_>>(), y)
     }
 
@@ -99,7 +128,11 @@ impl Workspace {
         self.reorder_moved(&dragged.item, at, window, cx);
         let near = self.reorder_from.take().is_some_and(|from| f64::from((at - from).magnitude()) < THRESHOLD);
         if self.model.reorder().is_some_and(|reorder| reorder.item == dragged.item) {
-            self.dispatch(Action::ReorderDrop, self.input, window, cx);
+            match dragged.item {
+                // From the settings as they are now: an entry written by hand since stays.
+                ReorderItem::Repo { .. } => self.change_repos(Action::ReorderDrop, self.input, window, cx),
+                _ => drop(self.dispatch(Action::ReorderDrop, self.input, window, cx)),
+            }
             return;
         }
         // A click only if it stayed put: a client's drag, refused, is no click either.
@@ -110,6 +143,9 @@ impl Workspace {
             ReorderItem::Workbook { id } => self.click_workbook("workbook", *id, None, window, cx),
             ReorderItem::Space { .. } => {
                 self.dispatch(Action::SpaceClick { index: dragged.place }, self.input, window, cx);
+            }
+            ReorderItem::Repo { path } => {
+                self.dispatch(Action::RepoFold { path: path.clone(), fold: None }, self.input, window, cx);
             }
         }
     }
@@ -134,7 +170,7 @@ fn closes_up(
 }
 
 /// Where the item carried lands: a bar in the accent colour on the edge of the one it goes before
-/// (`end`: after; the top row's only). `across`: the top row's, upright; else a Workspaces row's, level.
+/// (`end`: after; the top row's only). `across`: the top row's, upright; else a list row's, level.
 pub(crate) fn bar(controls: &Controls, across: bool, end: bool) -> Div {
     let bar = div().absolute().rounded_full().bg(rgb(theme::PRIMARY)).child(controls.mark("reorder-bar"));
     match (across, end) {
