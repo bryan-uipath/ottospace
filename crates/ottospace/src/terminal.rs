@@ -1273,6 +1273,7 @@ mod tests {
             format!("{}x{}", size.num_cols * size.cell_width, size.num_lines * size.cell_height)
         });
         assert_eq!(answer(&Event::TextAreaSizeRequest(reply), Some([783.2, 432.])).as_deref(), Some("783x432"));
+    }
 
     /// Spans of row 0 as (text, fg, strike, underline).
     fn spans(term: &Term<VoidListener>) -> Vec<(String, u32, bool, Option<Underline>)> {
